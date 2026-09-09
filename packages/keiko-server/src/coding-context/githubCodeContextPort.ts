@@ -10,6 +10,7 @@
 // rejected before spawn.
 
 import {
+  CommandTimeoutError,
   GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
   runCommand,
   type RunCommandDeps,
@@ -22,8 +23,13 @@ import type { CommandResult, CommandRule, WorkspaceInfo } from "@oscharko-dev/ke
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/server-log.js";
+import { errorKindOf } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import { GITHUB_CODE_CONTEXT_ALLOWED_SUBCOMMANDS } from "./githubCodeContextConnector.js";
-import type { GitHubCodeContextApiPort } from "./githubCodeContextConnector.js";
+import type {
+  GitHubCodeContextApiPort,
+  GitHubCodeContextReadContext,
+} from "./githubCodeContextConnector.js";
 
 const GH_API_TIMEOUT_MS = 30_000;
 // DERIVED, never restated. The spawn boundary this port runs under caps stdout+stderr at
@@ -64,15 +70,22 @@ export const GH_CODE_CONTEXT_COMMAND_RULES: readonly CommandRule[] = Object.free
  * command itself did not succeed) and `gh-invalid-json` (the command succeeded and returned a
  * complete body that is not JSON) — a truncated read is neither, and reporting it as either one
  * sends the operator after a defect that does not exist.
+ *
+ * `gh-transient-failure` (#3384 B5-13) is likewise its own member, not a shade of `gh-failed`: a
+ * wall-time timeout, a GitHub-side rate limit, or a GitHub-side 5xx are conditions the operator
+ * should retry, never the same diagnosis as an object that genuinely is not readable (closed,
+ * transferred, a pull request, or truly denied). Collapsing them, as this port first did, sent the
+ * operator a specific but false "the issue is closed/transferred/a PR" diagnosis for a failure that
+ * had nothing to do with the issue at all.
  */
 export type GitHubCodeContextPortErrorCode =
-  "gh-denied" | "gh-failed" | "gh-output-truncated" | "gh-invalid-json";
+  "gh-denied" | "gh-failed" | "gh-transient-failure" | "gh-output-truncated" | "gh-invalid-json";
 
 export class GitHubCodeContextPortError extends Error {
   readonly code: GitHubCodeContextPortErrorCode;
 
-  constructor(code: GitHubCodeContextPortErrorCode) {
-    super(`github code context port: ${code}`);
+  constructor(code: GitHubCodeContextPortErrorCode, cause?: unknown) {
+    super(`github code context port: ${code}`, { cause });
     this.code = code;
   }
 }
@@ -87,8 +100,8 @@ export interface GitHubCodeContextPortOptions {
   // Activity-log port for the runCommand termination-evidence seam (AGENTS.md §8 Rule 1).
   // Defaults to processServerLogSink() — the same process-wide sink every other server
   // composition site uses — so production logging works with no wiring required; tests inject a
-  // buffered sink to assert on the emitted line. This port carries no per-request correlation id
-  // of its own (readJson takes only an argv), so every line is stamped UNKNOWN_CORRELATION_ID.
+  // buffered sink to assert on the emitted line. Reads accept the caller's correlation; legacy
+  // callers without one use UNKNOWN_CORRELATION_ID.
   readonly activityLog?: ServerLogSink | undefined;
 }
 
@@ -107,13 +120,34 @@ function assertReadOnlyGhApiArgv(argv: readonly string[]): void {
 function runDepsFor(options: GitHubCodeContextPortOptions): RunCommandDeps {
   return {
     workspace: options.workspace,
-    policy: GOVERNED_GIT_REMOTE_SANDBOX_POLICY,
+    // This is transient source data, including the repository's provenance URL. Ordinary context
+    // such as GITHUB_REPOSITORY must survive; credential values and secret shapes remain scrubbed.
+    policy: { ...GOVERNED_GIT_REMOTE_SANDBOX_POLICY, outputScrub: "credentials-only" },
     commandRules: GH_CODE_CONTEXT_COMMAND_RULES,
     spawn: options.spawn ?? nodeSpawnFn,
     resolveExecutable: options.resolveExecutable,
     processEnv: options.processEnv,
     now: options.now ?? ((): number => Date.now()),
   };
+}
+
+// The gh CLI reports an API-shaped failure as `gh: <message> (HTTP <status>)` on stderr. This
+// extracts ONLY the 3-digit status class needed to tell a transient GitHub-side condition (rate
+// limit, 5xx) apart from an exit that means the object genuinely is not readable — the message
+// text itself is discarded immediately and never logged (ADR-0173 body-free evidence).
+function githubHttpStatusClassOf(stderr: string): "rate-limited" | "server-error" | undefined {
+  const match = /\(HTTP (\d{3})\)/u.exec(stderr);
+  const status = match === null ? undefined : Number(match[1]);
+  if (status === 403 || status === 429) return "rate-limited";
+  if (status !== undefined && status >= 500 && status <= 599) return "server-error";
+  return undefined;
+}
+
+// A non-zero exit is transient — worth retrying, not a verdict about the object — when GitHub's own
+// response signals a rate limit or a server error. Anything else (a plain 404-shaped denial, a
+// missing scope) keeps its existing "gh-failed" classification.
+function isTransientGhExit(result: CommandResult): boolean {
+  return githubHttpStatusClassOf(result.stderr) !== undefined;
 }
 
 // Defence in depth only: the spawn boundary already refuses to hand back more than
@@ -124,8 +158,8 @@ function parseBoundedJson(stdout: string): unknown {
   }
   try {
     return JSON.parse(stdout);
-  } catch {
-    throw new GitHubCodeContextPortError("gh-invalid-json");
+  } catch (error) {
+    throw new GitHubCodeContextPortError("gh-invalid-json", error);
   }
 }
 
@@ -134,6 +168,7 @@ async function runGhApi(
   runDeps: RunCommandDeps,
   timeoutMs: number,
   activityLog: ServerLogSink,
+  context: GitHubCodeContextReadContext,
 ): Promise<CommandResult> {
   try {
     return await runCommand(
@@ -142,18 +177,28 @@ async function runGhApi(
         args: argv,
         cwd: undefined,
         timeoutMs,
-        signal: new AbortController().signal,
+        signal: context.signal ?? new AbortController().signal,
         onTerminated: (evidence): void => {
-          logCommandTermination(activityLog, UNKNOWN_CORRELATION_ID, evidence);
+          logCommandTermination(
+            activityLog,
+            context.correlationId ?? UNKNOWN_CORRELATION_ID,
+            evidence,
+          );
         },
       },
       runDeps,
     );
-  } catch {
+  } catch (error) {
     // Timeout, cancellation, or spawn failure: surface a content-free code only. Every one of these
     // REJECTS in the spawn boundary, so a resolved result can never be a disguised timeout — which
-    // is what lets the truncation check below mean the byte cap and nothing else.
-    throw new GitHubCodeContextPortError("gh-failed");
+    // is what lets the truncation check below mean the byte cap and nothing else. A wall-time
+    // timeout is transient (#3384 B5-13): the boundary rejects with `CommandTimeoutError` rather
+    // than resolving a `CommandResult` with `timedOut: true`, so it must be classified HERE, before
+    // that distinction is lost to the generic `gh-failed` code.
+    if (error instanceof CommandTimeoutError) {
+      throw new GitHubCodeContextPortError("gh-transient-failure", error);
+    }
+    throw new GitHubCodeContextPortError("gh-failed", error);
   }
 }
 
@@ -164,17 +209,55 @@ export function createGitHubCodeContextApiPort(
   const timeoutMs = options.timeoutMs ?? GH_API_TIMEOUT_MS;
   const activityLog = options.activityLog ?? processServerLogSink();
   return {
-    readJson: async (argv: readonly string[]): Promise<unknown> => {
-      assertReadOnlyGhApiArgv(argv);
-      const result = await runGhApi(argv, runDeps, timeoutMs, activityLog);
-      // Truncation is classified FIRST, and it outranks both later branches for the same reason:
-      // hitting the cap kills the child and replaces stdout with a marker, so the very same run
-      // also presents as a non-zero exit (the kill) or as unparsable output (the marker). Reading
-      // either of those first turns "the response did not fit" into "gh failed" or "GitHub sent
-      // invalid JSON" — two defects that are not there.
-      if (result.truncated) throw new GitHubCodeContextPortError("gh-output-truncated");
-      if (result.exitCode !== 0) throw new GitHubCodeContextPortError("gh-failed");
-      return parseBoundedJson(result.stdout);
+    readJson: async (argv, context = {}): Promise<unknown> => {
+      try {
+        assertReadOnlyGhApiArgv(argv);
+        const result = await runGhApi(argv, runDeps, timeoutMs, activityLog, context);
+        // Truncation is classified FIRST, and it outranks both later branches for the same reason:
+        // hitting the cap kills the child and replaces stdout with a marker, so the very same run
+        // also presents as a non-zero exit (the kill) or as unparsable output (the marker). Reading
+        // either of those first turns "the response did not fit" into "gh failed" or "GitHub sent
+        // invalid JSON" — two defects that are not there.
+        if (result.truncated) throw new GitHubCodeContextPortError("gh-output-truncated");
+        if (result.exitCode !== 0) {
+          throw new GitHubCodeContextPortError(
+            isTransientGhExit(result) ? "gh-transient-failure" : "gh-failed",
+          );
+        }
+        const parsed = parseBoundedJson(result.stdout);
+        recordRead(activityLog, context, undefined, Buffer.byteLength(result.stdout, "utf8"));
+        return parsed;
+      } catch (error) {
+        recordRead(activityLog, context, error);
+        throw error;
+      }
     },
   };
+}
+
+function recordRead(
+  log: ServerLogSink,
+  context: GitHubCodeContextReadContext,
+  error: unknown,
+  byteCount = 0,
+): void {
+  log.write({
+    category: "process",
+    op: "coding-context.github.read",
+    correlationId: context.correlationId ?? UNKNOWN_CORRELATION_ID,
+    ...(error === undefined ? {} : { level: "warn", errorKind: errorKindOf(error) }),
+    extra: {
+      byteCount,
+      outcome: readOutcome(context, error),
+      ...(error === undefined
+        ? {}
+        : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
+    },
+  });
+}
+
+function readOutcome(context: GitHubCodeContextReadContext, error: unknown): string {
+  if (context.signal?.aborted === true) return "cancelled";
+  if (error === undefined) return "succeeded";
+  return error instanceof GitHubCodeContextPortError ? error.code : "failed";
 }

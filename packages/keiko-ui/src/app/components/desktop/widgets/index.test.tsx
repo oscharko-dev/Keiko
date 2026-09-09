@@ -446,10 +446,25 @@ vi.mock("./coding-workbench/CodingWorkbenchWindow", () => ({
     readonly onOpenGit?: (target: {
       readonly root: string | null;
       readonly binding: "repository" | "task-workspace";
+      readonly repositoryDialog?: "clone";
+      readonly descriptionReview?: {
+        readonly ownerAndRepo: string;
+        readonly prNumber: number;
+        readonly proposalId?: string;
+        readonly snapshotDigest?: string;
+      };
     }) => void;
   }) => (
     <div data-testid="coding-workbench-window">
       Coding Workbench
+      <button
+        type="button"
+        onClick={() =>
+          onOpenGit?.({ root: null, binding: "repository", repositoryDialog: "clone" })
+        }
+      >
+        Clone for issue
+      </button>
       <button
         type="button"
         onClick={() => onOpenGit?.({ root: selectedRoot ?? null, binding: "repository" })}
@@ -462,6 +477,35 @@ vi.mock("./coding-workbench/CodingWorkbenchWindow", () => ({
       >
         Open coding task Git
       </button>
+      <button
+        type="button"
+        onClick={() =>
+          onOpenGit?.({
+            root: "/repo",
+            binding: "repository",
+            descriptionReview: {
+              ownerAndRepo: "oscharko/Wegwerf-Repo",
+              prNumber: 7,
+              proposalId: "prop-1",
+              snapshotDigest: "d".repeat(64),
+            },
+          })
+        }
+      >
+        Review exact draft
+      </button>
+      <button
+        type="button"
+        onClick={() =>
+          onOpenGit?.({
+            root: "/repo",
+            binding: "repository",
+            descriptionReview: { ownerAndRepo: "oscharko/Wegwerf-Repo", prNumber: 7 },
+          })
+        }
+      >
+        Write the description
+      </button>
     </div>
   ),
 }));
@@ -469,8 +513,12 @@ vi.mock("./cards/git-client/GitClientWindow", () => ({
   GitClientWindow: ({
     projectId,
     onOpenEditorFile,
+    initialRepositoryDialog,
+    onRepositoryConnected,
   }: {
     readonly projectId?: string;
+    readonly initialRepositoryDialog?: string;
+    readonly onRepositoryConnected?: (root: string) => void;
     readonly onOpenEditorFile?:
       | ((request: {
           readonly root: string;
@@ -481,6 +529,11 @@ vi.mock("./cards/git-client/GitClientWindow", () => ({
   }): ReactNode => (
     <div data-testid="git-client-window">
       {projectId ?? "unbound"}
+      {initialRepositoryDialog === "clone" ? (
+        <button type="button" onClick={() => onRepositoryConnected?.("/repos/cloned")}>
+          Complete issue clone
+        </button>
+      ) : null}
       <button
         type="button"
         onClick={() =>
@@ -1585,6 +1638,55 @@ describe("workspace widget renderer registry", () => {
     );
   });
 
+  // #3390 — the Workbench hands the description over in two degrees of knowledge: the retained
+  // proposal while its holder still has it, and the pull request alone once that holder has let it
+  // lapse. Both must arrive at the pull request window; the second is the one that used to leave the
+  // operator on an empty form with no way back to the description they were just offered.
+  it("hands both a retained description proposal and a bare pull request to the PR window", async () => {
+    const ctx = makeCtx();
+    render(<>{WIN_TYPES.coding.render({}, ctx)}</>);
+    await screen.findByTestId("coding-workbench-window");
+
+    fireEvent.click(screen.getByRole("button", { name: "Review exact draft" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("governedPullRequest", {
+      projectPath: "/repo",
+      descriptionOwnerAndRepo: "oscharko/Wegwerf-Repo",
+      descriptionPrNumber: 7,
+      descriptionProposalId: "prop-1",
+      descriptionSnapshotDigest: "d".repeat(64),
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Write the description" }));
+    expect(ctx.openWindow).toHaveBeenLastCalledWith("governedPullRequest", {
+      projectPath: "/repo",
+      descriptionOwnerAndRepo: "oscharko/Wegwerf-Repo",
+      descriptionPrNumber: 7,
+      descriptionProposalId: undefined,
+      descriptionSnapshotDigest: undefined,
+    });
+  });
+
+  it("opens the PR window on the handed-over pull request even without a retained proposal", async () => {
+    const ctx = makeCtx();
+    render(
+      <>
+        {WIN_TYPES.governedPullRequest.render(
+          {
+            projectPath: "/repo",
+            descriptionOwnerAndRepo: "oscharko/Wegwerf-Repo",
+            descriptionPrNumber: 7,
+          },
+          ctx,
+        )}
+      </>,
+    );
+
+    expect(await screen.findByLabelText("Description pull request number")).toHaveValue("7");
+    expect(screen.getByLabelText("Description repository (owner/repo)")).toHaveValue(
+      "oscharko/Wegwerf-Repo",
+    );
+  });
+
   it("wires hub callbacks for quality, regenerated runs, connector management, figma, and chat history", async () => {
     const ctx = makeCtx();
     const view = render(<>{WIN_TYPES.quality.render({}, ctx)}</>);
@@ -1725,6 +1827,31 @@ describe("active workspace binding override (Issue #446)", () => {
     render(<>{WIN_TYPES.editor.render({}, boundCtx(null, selectedRoot))}</>);
 
     expect(await screen.findByTestId("editor-widget")).toHaveTextContent(`${selectedRoot}:`);
+  });
+
+  it("hands issue cloning to Git and selects the registered checkout in its originating Coding window", async () => {
+    const ctx = makeCtx();
+    const view = render(<>{WIN_TYPES.coding.render({}, ctx)}</>);
+    fireEvent.click(await screen.findByRole("button", { name: "Clone for issue" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("governedGit", {
+      rootBinding: "coding-repository",
+      repositoryDialog: "clone",
+      repositoryReturnWindow: ctx.windowId,
+    });
+    view.rerender(
+      <>
+        {WIN_TYPES.governedGit.render(
+          { repositoryDialog: "clone", repositoryReturnWindow: "coding-source" },
+          ctx,
+        )}
+      </>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "Complete issue clone" }));
+    expect(ctx.updateWindow).toHaveBeenCalledWith("coding-source", {
+      cfg: { repositoryPath: "/repos/cloned" },
+    });
+    expect(ctx.focusWindow).toHaveBeenCalledWith("coding-source");
+    expect(ctx.updateCfg).toHaveBeenCalledWith({ repositoryReturnWindow: "" });
   });
 
   it("preserves an explicit dormant Coding Workbench repository selection for Git", async () => {

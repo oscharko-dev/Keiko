@@ -118,6 +118,10 @@ describe("E2E state directory (#2955 follow-up)", () => {
       // `realpathSync` from the subject and this is the assertion that goes red — on Linux too.
       expect(e2eStateDir("unit-fixture", link)).toBe(join(real, "keiko-e2e", "unit-fixture"));
       expect(e2eStateDir("unit-fixture", link).startsWith(link)).toBe(false);
+      // The real CLI requires workspace-local state under its existing .keiko exemption.
+      expect(e2eStateDir("unit-fixture", link, ".keiko")).toBe(
+        join(real, ".keiko", "unit-fixture"),
+      );
     } finally {
       rmSync(link, { force: true });
       rmSync(real, { force: true, recursive: true });

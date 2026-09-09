@@ -12,6 +12,8 @@ import type {
   CommandTerminationEvidence,
   GitDeliveryActionKind,
   GitDeliveryApprovalRequirement,
+  GitDeliveryBlockReason,
+  GitDeliveryExecutionErrorCode,
   GitDeliveryExecutionResult,
   GitDeliveryRepoPolicyPack,
   GitSyncOperation,
@@ -81,6 +83,10 @@ export const KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK: GitDeliveryRepoPolicyPack = {
 };
 
 export interface GitDeliveryExecutionSeams {
+  readonly processEnv?: NodeJS.ProcessEnv | undefined;
+  readonly beforeCommitRefUpdate?: (() => boolean) | undefined;
+  readonly beforeIndexUpdate?: (() => boolean) | undefined;
+  readonly signal?: AbortSignal | undefined;
   readonly adapterFactory?: ((workspace: WorkspaceInfo) => GitLocalMutationAdapter) | undefined;
   readonly snapshotReader?:
     ((workspace: WorkspaceInfo) => Promise<GitWorktreeSnapshot>) | undefined;
@@ -462,6 +468,26 @@ export function logGitDeliveryNoSpawnRefusal(
   });
 }
 
+// The interactive pinned-push path's post-push `git branch --set-upstream-to=…` follow-up
+// (git-publish-node.ts's `applyUpstreamTrackingIfRequested`, #3394 review, ADR-0085 D6) could not
+// establish tracking — either the local-only command exited non-zero or the run itself was
+// terminated/denied. Deliberately its OWN op, never folded into `git.delivery.mutation.failed`: the
+// governed push already succeeded by the time this can fire, so this line must never read, to an
+// operator or `keiko support analyze`, as "the push failed" — it is visibility for "why does this
+// freshly pushed branch show no upstream" only. Body-free by construction: the callback that invokes
+// this carries no branch/remote/error payload at all.
+export function logGitDeliveryUpstreamTrackingFailed(
+  activityLog: ServerLogSink,
+  correlationId: string | undefined,
+): void {
+  activityLog.write({
+    level: "warn",
+    category: "diagnostic",
+    op: "git.delivery.push.upstream-tracking-failed",
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+  });
+}
+
 export function readWorktreeSnapshotFor(
   workspace: WorkspaceInfo,
   seams: GitDeliveryExecutionSeams,
@@ -522,8 +548,11 @@ function adapterFor(
 ): GitLocalMutationAdapter {
   if (seams.adapterFactory !== undefined) return seams.adapterFactory(workspace);
   return createNodeGitMutationAdapter({
+    beforeCommitRefUpdate: seams.beforeCommitRefUpdate,
+    beforeIndexUpdate: seams.beforeIndexUpdate,
+    signal: seams.signal,
     workspace,
-    processEnv: process.env,
+    processEnv: seams.processEnv ?? process.env,
     now,
     // Deps-level evidence port (PR #3354 review 3887021650): a governed git mutation that times
     // out or is aborted must leave its Windows tree-kill disposition in the activity log, tagged
@@ -611,7 +640,12 @@ interface GitDeliveryLifecycleRecordInput {
   readonly activityLog: ServerLogSink;
   readonly correlationId: string | undefined;
   readonly authorityDenied: boolean;
+  /** The provider adapter's closed failure words and counts (#3390), logged with the mutation. */
+  readonly failureDetail?: GitDeliveryFailureDetail | undefined;
 }
+
+/** What an adapter may say about a failed provider call, body-free: closed words and counts. */
+export type GitDeliveryFailureDetail = Readonly<Record<string, string | number | undefined>>;
 
 // Returns the lifecycle it actually recorded so a caller that answers the client from the same
 // fact (executeGovernedMutation) reports the governance block it persisted, rather than projecting
@@ -623,7 +657,7 @@ export function recordGitDeliveryLifecycle(
     ? authorityDeniedGitDeliveryLifecycle(input.result)
     : input.result;
   persistGitDeliveryEvidence(input.deps, lifecycle, input.snapshot, input.repoId, input.now);
-  logGitDeliveryMutation(input.activityLog, lifecycle, input.correlationId);
+  logGitDeliveryMutation(input.activityLog, lifecycle, input.correlationId, input.failureDetail);
   return lifecycle;
 }
 
@@ -752,21 +786,73 @@ const UNSUCCESSFUL_MUTATION_STATUSES: ReadonlySet<string> = new Set([
   "recovery-required",
 ]);
 
+/**
+ * The closed, body-free failure words a provider adapter attaches to a failed execution result
+ * (#3390): a rejection reason, a create failure class and the identity validation that failed.
+ * Rehearsal run-15's pull request existed on GitHub while the log said only `internal-error`; with
+ * these on the mutation line the failing step is reconstructable from the log alone. Anything that
+ * is not a short closed word never reaches the log.
+ */
+export function executionFailureDetail(
+  outcome: GitMutationLifecycleResult["outcome"],
+  detail: GitDeliveryFailureDetail = {},
+): Readonly<Record<string, string | number>> {
+  if (outcome.status !== "failed" && outcome.status !== "recovery-required") return {};
+  const result: unknown = outcome.executionResult;
+  const admitted: Record<string, string | number> = {};
+  const admit = (key: string, value: unknown): void => {
+    if (closedFailureDetailValue(value)) admitted[key] = value;
+  };
+  for (const key of FAILURE_DETAIL_KEYS) {
+    if (typeof result === "object" && result !== null) admit(key, Reflect.get(result, key));
+    admit(key, detail[key]);
+  }
+  return admitted;
+}
+
+/** A closed word or a safe integer: the only value shapes a failure detail may carry onto the log. */
+function closedFailureDetailValue(value: unknown): value is string | number {
+  return (
+    (typeof value === "string" && /^[a-z][a-z-]{0,39}$/u.test(value)) ||
+    (typeof value === "number" && Number.isSafeInteger(value))
+  );
+}
+
+const FAILURE_DETAIL_KEYS = [
+  "rejectionReason",
+  "failureClass",
+  "identityIssue",
+  "stdoutBytes",
+  "stderrBytes",
+  "exitCode",
+] as const;
+
+function executionErrorCodeOf(
+  outcome: GitMutationLifecycleResult["outcome"],
+): GitDeliveryExecutionErrorCode | undefined {
+  return outcome.status === "failed" || outcome.status === "recovery-required"
+    ? (outcome.executionResult.errorCode ?? "internal-error")
+    : undefined;
+}
+
+function policyBlockReasonOf(
+  outcome: GitMutationLifecycleResult["outcome"],
+): GitDeliveryBlockReason | undefined {
+  return outcome.status === "blocked" && outcome.category === "policy-block"
+    ? outcome.blockReason
+    : undefined;
+}
+
 export function logGitDeliveryMutation(
   log: ServerLogSink,
   result: GitMutationLifecycleResult,
   correlationId: string | undefined,
+  failureDetail: GitDeliveryFailureDetail = {},
 ): void {
   const { outcome, envelope, phaseReached, preflight } = result;
   const unsuccessful = UNSUCCESSFUL_MUTATION_STATUSES.has(outcome.status);
-  const executionErrorCode =
-    outcome.status === "failed" || outcome.status === "recovery-required"
-      ? (outcome.executionResult.errorCode ?? "internal-error")
-      : undefined;
-  const blockReason =
-    outcome.status === "blocked" && outcome.category === "policy-block"
-      ? outcome.blockReason
-      : undefined;
+  const executionErrorCode = executionErrorCodeOf(outcome);
+  const blockReason = policyBlockReasonOf(outcome);
   log.write({
     // Without an explicit level this line defaulted to `info`, so a FAILED governed mutation or
     // push was filtered out entirely under `KEIKO_LOG_LEVEL=warn` — the threshold an operator
@@ -791,6 +877,7 @@ export function logGitDeliveryMutation(
         outcome.status === "approval-required" ? outcome.requiredApprovers.length : 0,
       blockReason,
       executionErrorCode,
+      ...executionFailureDetail(outcome, failureDetail),
     },
   });
 }

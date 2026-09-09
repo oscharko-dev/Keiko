@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { parseCodingToolRequest } from "./codingToolIpc.js";
+import { codingToolRequiredActionClasses, parseCodingToolRequest } from "./codingToolIpc.js";
 
 const changeset = {
   patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
@@ -17,6 +17,32 @@ describe("coding tool IPC exact changesets", () => {
     });
 
     expect(parseCodingToolRequest(body, 262_144)).toBeUndefined();
+  });
+});
+
+describe("coding tool IPC authority effects", () => {
+  it("requires workspace-write for both proposing and redeeming a stage operation", () => {
+    const base = {
+      action: "git",
+      operation: "stage",
+      actionId: "stage-1",
+      paths: ["src/a.ts"],
+    } as const;
+    expect(
+      codingToolRequiredActionClasses({
+        ...base,
+        idempotencyKey: "stage-propose",
+        phase: "propose",
+      }),
+    ).toEqual(["workspace-write"]);
+    expect(
+      codingToolRequiredActionClasses({
+        ...base,
+        idempotencyKey: "stage-execute",
+        phase: "execute",
+        proposalId: "stage-1",
+      }),
+    ).toEqual(["workspace-write"]);
   });
 });
 
@@ -89,6 +115,69 @@ describe("coding tool IPC repository discovery", () => {
   });
 });
 
+describe("coding tool IPC repository search (#3386 H1)", () => {
+  const search = {
+    action: "search",
+    actionId: "search-1",
+    idempotencyKey: "search-key",
+    repositoryRequest: {
+      kind: "search",
+      mode: "literal",
+      query: "parseConfig",
+      caseSensitive: false,
+      includeGlobs: [],
+      excludeGlobs: [],
+      maxResults: 50,
+    },
+  };
+  const read = {
+    action: "search",
+    actionId: "search-2",
+    idempotencyKey: "search-key-2",
+    repositoryRequest: {
+      kind: "read",
+      path: "src/a.ts",
+      startLine: 1,
+      endLine: 10,
+      maxBytes: 4096,
+    },
+  };
+
+  it("admits an exact search request and an exact ranged-read handoff, never restating the contract's limits", () => {
+    expect(parseCodingToolRequest(JSON.stringify(search), 262_144)).toEqual(search);
+    expect(parseCodingToolRequest(JSON.stringify(read), 262_144)).toEqual(read);
+  });
+
+  it("rejects a query beyond the contract's own bound instead of a locally restated one", () => {
+    const oversized = {
+      ...search,
+      repositoryRequest: { ...search.repositoryRequest, query: "q".repeat(201) },
+    };
+    expect(parseCodingToolRequest(JSON.stringify(oversized), 262_144)).toBeUndefined();
+  });
+
+  it.each([
+    ["an unknown envelope key", { workspaceRoot: "/private" }],
+    ["a missing repositoryRequest", { repositoryRequest: undefined }],
+    [
+      "an unknown nested repository-request key",
+      { repositoryRequest: { ...search.repositoryRequest, untrusted: "x" } },
+    ],
+    [
+      "a non-relative read path",
+      { repositoryRequest: { ...read.repositoryRequest, path: "/etc/passwd" } },
+    ],
+    [
+      "an oversized maxResults beyond the contract's returned-hits limit",
+      { repositoryRequest: { ...search.repositoryRequest, maxResults: 51 } },
+    ],
+  ])("rejects %s before a search request exists", (_name, extra) => {
+    expect(
+      parseCodingToolRequest(JSON.stringify({ ...search, ...extra }), 262_144),
+    ).toBeUndefined();
+  });
+});
+
 describe("coding tool IPC auxiliary requests", () => {
   it("admits only model-safe skill fields", () => {
     const body = {
@@ -127,6 +216,10 @@ describe("coding tool IPC approval proofs", () => {
   it.each([
     { action: "command", commandId: "typecheck" },
     { action: "verification", verifierId: "typecheck" },
+    // 3941816393: a "git ci" observation and a generic "connector" read redeem a Workbench-issued
+    // approval through the exact same wire shape as command/verification.
+    { action: "git", operation: "ci" },
+    { action: "connector", scope: "issue-tracker.write" },
   ] as const)("admits an exact $action proof and preserves its action binding", (action) => {
     const request = {
       ...action,
@@ -135,6 +228,51 @@ describe("coding tool IPC approval proofs", () => {
       approvalProof: proof,
     };
     expect(parseCodingToolRequest(JSON.stringify(request), 262_144)).toEqual(request);
+  });
+
+  it("rejects an invalid proof on a git ci observation before the request exists", () => {
+    expect(
+      parseCodingToolRequest(
+        JSON.stringify({
+          action: "git",
+          operation: "ci",
+          actionId: "call-1",
+          idempotencyKey: "call-1",
+          approvalProof: { ...proof, approvalDigest: "not-a-digest" },
+        }),
+        262_144,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("rejects an invalid proof on a connector request before the request exists", () => {
+    expect(
+      parseCodingToolRequest(
+        JSON.stringify({
+          action: "connector",
+          scope: "issue-tracker.write",
+          actionId: "call-1",
+          idempotencyKey: "call-1",
+          approvalProof: { ...proof, approvalId: "" },
+        }),
+        262_144,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("still admits an egress request with no approvalProof field defined", () => {
+    // #3941816393: egress deliberately never gained an approvalProof (only connector did) --
+    // pinned so a future shared refactor of simpleNamedRequest cannot silently widen it.
+    const request = {
+      action: "egress",
+      target: "https://example.test",
+      actionId: "e-1",
+      idempotencyKey: "e-1",
+    };
+    expect(parseCodingToolRequest(JSON.stringify(request), 262_144)).toEqual(request);
+    expect(
+      parseCodingToolRequest(JSON.stringify({ ...request, approvalProof: proof }), 262_144),
+    ).toBeUndefined();
   });
 
   it.each([
@@ -157,14 +295,59 @@ describe("coding tool IPC approval proofs", () => {
   });
 });
 
+describe("coding tool IPC targeted verification", () => {
+  const request = {
+    action: "verification" as const,
+    actionId: "targeted-1",
+    idempotencyKey: "targeted-1",
+    verifierId: "targeted-test",
+  };
+
+  it("carries one bounded contained target into the governed verification request", () => {
+    expect(
+      parseCodingToolRequest(
+        JSON.stringify({ ...request, targetPath: "src/math.test.ts" }),
+        262_144,
+      ),
+    ).toEqual({ ...request, targetPath: "src/math.test.ts" });
+  });
+
+  it.each([undefined, "", "/tmp/x.test.ts", "../x.test.ts", ".env", "secrets/.env"])(
+    "rejects missing, escaping, absolute, or sensitive target %s",
+    (targetPath) => {
+      expect(
+        parseCodingToolRequest(JSON.stringify({ ...request, targetPath }), 262_144),
+      ).toBeUndefined();
+    },
+  );
+
+  it("rejects a targetPath on a non-targeted verifier", () => {
+    expect(
+      parseCodingToolRequest(
+        JSON.stringify({ ...request, verifierId: "test", targetPath: "src/math.test.ts" }),
+        262_144,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("normalizes the provider wire's empty targetPath for an ordinary verifier", () => {
+    expect(
+      parseCodingToolRequest(
+        JSON.stringify({ ...request, verifierId: "test", targetPath: "" }),
+        262_144,
+      ),
+    ).toEqual({ ...request, verifierId: "test" });
+  });
+});
+
 /**
  * Where the shipped OpenCode runtime's edit containment actually lives.
  *
  * `decideSupervisedFileEdit` (supervisedCodingPolicy) also performs a realpath containment check,
  * but it is reached only from `supervisedCodingRuntimeEvent`, which requires a permission ask in
- * `supervised-coding` mode — and the generated child tool source asks for permission ONLY in
- * `governed-assist` (opencodeRuntimeAdapter: `KEIKO_CODING_MODE !== "governed-assist"` returns
- * early). For the bundled OpenCode child that branch therefore never runs. The containment the edit
+ * `supervised-coding` mode — and the generated child source asks for EDIT permission only when its
+ * captured mode is `governed-assist` (opencodeRuntimeAdapter's explicit mode/action branch). For
+ * the bundled OpenCode child that branch therefore never runs. The containment the edit
  * path really depends on is (1) THIS parse boundary and (2) the `keiko-tools` contained writer's
  * `assertContained` / `assertNoSymlink` / realpath-parent checks at the effect edge.
  *
@@ -204,5 +387,61 @@ describe("coding tool IPC edit containment is the live workspace-escape gate", (
     ["an empty path", ""],
   ])("rejects %s before an edit request exists", (_name, file) => {
     expect(parseCodingToolRequest(editBody(file), 262_144)).toBeUndefined();
+  });
+});
+
+describe("coding tool IPC CI observation (#3388)", () => {
+  function ciBody(extra: Record<string, unknown>): string {
+    return JSON.stringify({
+      action: "git",
+      operation: "ci",
+      actionId: "ci-1",
+      idempotencyKey: "ci-key",
+      ...extra,
+    });
+  }
+
+  it("admits a CI request with no forceFresh", () => {
+    expect(parseCodingToolRequest(ciBody({}), 262_144)).toEqual({
+      action: "git",
+      operation: "ci",
+      actionId: "ci-1",
+      idempotencyKey: "ci-key",
+    });
+  });
+
+  it.each([
+    ["forceFresh true", true],
+    ["forceFresh false", false],
+  ])("admits an explicit %s", (_name, forceFresh) => {
+    expect(parseCodingToolRequest(ciBody({ forceFresh }), 262_144)).toEqual({
+      action: "git",
+      operation: "ci",
+      actionId: "ci-1",
+      idempotencyKey: "ci-key",
+      forceFresh,
+    });
+  });
+
+  it("admits forceFresh alongside an approvalProof (3941816393)", () => {
+    const proof = { approvalId: "ci-1", approvalDigest: "b".repeat(64) };
+    expect(
+      parseCodingToolRequest(ciBody({ forceFresh: true, approvalProof: proof }), 262_144),
+    ).toEqual({
+      action: "git",
+      operation: "ci",
+      actionId: "ci-1",
+      idempotencyKey: "ci-key",
+      forceFresh: true,
+      approvalProof: proof,
+    });
+  });
+
+  it.each([
+    ["a non-boolean forceFresh", { forceFresh: "true" }],
+    ["an unexpected extra key alongside forceFresh", { forceFresh: true, extra: "SENTINEL" }],
+    ["an unexpected extra key with no forceFresh", { extra: "SENTINEL" }],
+  ])("rejects %s before a CI observation request exists", (_name, extra) => {
+    expect(parseCodingToolRequest(ciBody(extra), 262_144)).toBeUndefined();
   });
 });

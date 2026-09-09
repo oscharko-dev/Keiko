@@ -3,12 +3,13 @@
 // runner applies migrations whose 1-based index > current user_version.
 
 import type { DatabaseSync } from "node:sqlite";
+import { migrateJourneyOutcomeProjection } from "./journeyOutcomeMigration.js";
 import {
   migrateLegacyProjectManifests,
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 20;
+export const SCHEMA_VERSION = 32;
 
 interface Migration {
   readonly version: number;
@@ -632,6 +633,438 @@ CREATE INDEX idx_coding_runtime_settled_oldest
   WHERE terminal_at IS NOT NULL;
 `;
 
+// V21 (issue #3385, epic #3384) — in-product, repository-scoped authorization for the GitHub issue
+// reader. It replaces an environment variable (`GITHUB_CONNECTOR_AUTHORIZED`) that was read at
+// process launch and therefore applied to whatever project the process happened to start in: a
+// deployment could not authorize one repository without authorizing every repository the same
+// process later opened.
+//
+// The row is deliberately content-free and carries no credential. `repository_id` is the same
+// content-free identity the task workspace derives from the repository root (`deriveRepositoryId`),
+// never a path, a remote URL or an owner/name pair — the UI database forbids credential-class
+// columns outright (store/forbidden-fields.test.ts), and credentials keep coming from the existing
+// `gh` CLI boundary. `revision` is the monotonic server-owned counter that makes a stale write
+// detectable, exactly as it does for memory_autonomy_policy.
+const V21_SQL = `
+CREATE TABLE github_issue_reader_authorization (
+  repository_id TEXT NOT NULL PRIMARY KEY,
+  authorized INTEGER NOT NULL,
+  revision INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL,
+  CHECK (authorized IN (0, 1) AND revision >= 0 AND length(repository_id) BETWEEN 1 AND 128)
+) STRICT;
+`;
+
+// V22 (issue #3385, epic #3384) — the content-free projection of the GitHub issue a coding run was
+// accepted for, on the run's own ledger row rather than in a second table: a run carries at most one
+// issue binding and it is immutable for the run's life, so a separate keyed store would only add a
+// join and a place for the two to disagree. Every column is nullable because generic runs have none.
+//
+// Exactly the seven fields of `CodingWorkbenchIssueBinding`, and nothing the issue itself says:
+// `issue_repository_id` is the same derived id the task workspace uses (`deriveRepositoryId`),
+// `issue_remote_digest`/`issue_id_digest`/`issue_content_revision_digest`/`issue_binding_digest`
+// are sha256 hex, `issue_number` is the displayed number and `issue_default_base_ref` the
+// server-resolved branch a published pull request targets. No title, body, comment, URL, remote
+// URL or owner/name pair reaches SQLite (store/forbidden-fields.test.ts pins the exact column set).
+// The existing `binding_digest` column is the EXECUTION binding's digest and is unrelated; the
+// `issue_` prefix keeps the two apart by name. Column-level CHECKs hold the same bounds the
+// contract validator enforces, so a row that bypasses the store cannot hold an out-of-range value.
+const V22_SQL = `
+ALTER TABLE coding_runtime_snapshots ADD COLUMN issue_repository_id TEXT
+  CHECK (issue_repository_id IS NULL OR length(issue_repository_id) BETWEEN 1 AND 128);
+ALTER TABLE coding_runtime_snapshots ADD COLUMN issue_remote_digest TEXT
+  CHECK (issue_remote_digest IS NULL OR length(issue_remote_digest) = 64);
+ALTER TABLE coding_runtime_snapshots ADD COLUMN issue_number INTEGER
+  CHECK (issue_number IS NULL OR issue_number BETWEEN 1 AND 1000000000);
+ALTER TABLE coding_runtime_snapshots ADD COLUMN issue_id_digest TEXT
+  CHECK (issue_id_digest IS NULL OR length(issue_id_digest) = 64);
+ALTER TABLE coding_runtime_snapshots ADD COLUMN issue_default_base_ref TEXT
+  CHECK (issue_default_base_ref IS NULL OR length(issue_default_base_ref) BETWEEN 1 AND 255);
+ALTER TABLE coding_runtime_snapshots ADD COLUMN issue_content_revision_digest TEXT
+  CHECK (issue_content_revision_digest IS NULL OR length(issue_content_revision_digest) = 64);
+ALTER TABLE coding_runtime_snapshots ADD COLUMN issue_binding_digest TEXT
+  CHECK (issue_binding_digest IS NULL OR length(issue_binding_digest) = 64);
+`;
+
+const V23_SQL = `
+ALTER TABLE coding_runtime_snapshots ADD COLUMN verified_commit_result TEXT
+  CHECK (verified_commit_result IS NULL OR (length(verified_commit_result) <= 8192 AND json_valid(verified_commit_result)));
+`;
+
+// Additive even for checkouts that already ran the verified-commit migration.
+const V24_SQL = `
+ALTER TABLE coding_runtime_snapshots ADD COLUMN draft_delivery_record TEXT
+  CHECK (draft_delivery_record IS NULL OR (length(draft_delivery_record) <= 8192 AND json_valid(draft_delivery_record)));
+`;
+
+// Retains the original successful, body-free commit proof when a later proposal replaces the
+// latest result. Only the draft store writes this receipt, atomically with its bound remote intent.
+const V25_SQL = `
+ALTER TABLE coding_runtime_snapshots ADD COLUMN draft_delivery_source_receipt TEXT
+  CHECK (draft_delivery_source_receipt IS NULL OR (length(draft_delivery_source_receipt) <= 8192 AND json_valid(draft_delivery_source_receipt)));
+`;
+
+// Cumulative accounting is keyed to the accepted task and remote PR, not a runtime/head that
+// changes on recovery. Closed bounded receipts contain counts and identities, never authority.
+const V26_SQL = `
+ALTER TABLE coding_runtime_snapshots ADD COLUMN last_successful_verified_commit TEXT
+  CHECK (last_successful_verified_commit IS NULL OR (length(last_successful_verified_commit) <= 8192 AND json_valid(last_successful_verified_commit)));
+ALTER TABLE coding_runtime_snapshots ADD COLUMN ci_observation_revision INTEGER NOT NULL DEFAULT 0
+  CHECK (ci_observation_revision BETWEEN 0 AND 1000000);
+ALTER TABLE coding_runtime_snapshots ADD COLUMN ci_readiness_record TEXT
+  CHECK (ci_readiness_record IS NULL OR (length(ci_readiness_record) <= 8192 AND json_valid(ci_readiness_record)));
+CREATE TABLE coding_runtime_ci_repair_budgets (
+  task_digest TEXT NOT NULL CHECK (length(task_digest) = 64),
+  remote_digest TEXT NOT NULL CHECK (length(remote_digest) = 64),
+  pr_number INTEGER NOT NULL CHECK (pr_number BETWEEN 1 AND 1000000000),
+  revision INTEGER NOT NULL CHECK (revision >= 0),
+  record_json TEXT NOT NULL CHECK (length(record_json) <= 65536 AND json_valid(record_json)),
+  PRIMARY KEY (task_digest, remote_digest, pr_number)
+) STRICT;
+`;
+
+// Original V27 is immutable. V32 upgrades its blob to the bounded, content-free projection.
+const V27_SQL = `
+CREATE TABLE git_journey_outcomes (
+  remote_digest TEXT NOT NULL CHECK (length(remote_digest) = 64),
+  pr_number INTEGER NOT NULL CHECK (pr_number BETWEEN 1 AND 1000000000),
+  run_id TEXT NOT NULL CHECK (length(run_id) BETWEEN 1 AND 128),
+  revision INTEGER NOT NULL CHECK (revision >= 0),
+  state TEXT NOT NULL CHECK (length(state) BETWEEN 1 AND 64),
+  reason TEXT NOT NULL CHECK (length(reason) BETWEEN 1 AND 64),
+  observed_at TEXT NOT NULL,
+  outcome_json TEXT NOT NULL CHECK (length(outcome_json) <= 8192 AND json_valid(outcome_json)),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (remote_digest, pr_number)
+) STRICT;
+`;
+
+// V28 (issue #3400, epic #3384, contract correction 3) — widens the `relationships` table-level
+// CHECK to admit the new `git-change` object kind (source AND target), and adds the git-change
+// Chat scope column. This is the first migration to widen the V5 CHECK, so it follows the v20
+// table-rebuild precedent for a table-level CHECK SQLite cannot ALTER — but `relationships` has a
+// child with a live foreign key (`relationship_lifecycle_history.relationship_id REFERENCES
+// relationships(id) ON DELETE CASCADE`), which V20's rebuild target (coding_runtime_snapshots)
+// does not. Migrations run inside one transaction (runMigrations, "BEGIN"), so
+// `PRAGMA foreign_keys` cannot be toggled here (SQLite silently no-ops a pragma write mid-
+// transaction) and stays ON throughout. A plain `DROP TABLE relationships` under FK enforcement
+// therefore cascades and deletes every `relationship_lifecycle_history` row (ADR-0031, verified
+// empirically against node:sqlite before this migration was written). The sequence below avoids
+// that by construction:
+//   1. RENAME relationships -> relationships_v27. SQLite's ALTER TABLE RENAME rewrites the
+//      REFERENCES clause TEXT of every other table's schema that names the renamed table, so
+//      relationship_lifecycle_history's foreign key now reads "REFERENCES relationships_v27(id)".
+//   2. CREATE the new `relationships` table (already under its final name) with the widened CHECK,
+//      copy every row across, and recreate its indexes. No table currently has a foreign key
+//      naming "relationships", so this step is inert for constraints.
+//   3. Rebuild relationship_lifecycle_history under a fresh `REFERENCES relationships(id)` clause
+//      (a straight copy — its own CHECK and columns are unchanged) so its foreign key re-points at
+//      the LIVE table by name, then swap it in.
+//   4. Only now is `relationships_v27` unreferenced by any foreign key, so DROP TABLE is safe: no
+//      history row is cascaded away. `relationship_audit_entries.relationship_id` carries no
+//      REFERENCES clause (schema.ts V5), so it needs no rebuild.
+// restoreV13SchemaFixture, UI_STORE_FINGERPRINT_TABLES and the forbidden-fields pin are updated in
+// the same commit (epic correction 2, seam (a)).
+const V28_SQL = `
+ALTER TABLE relationships RENAME TO relationships_v27;
+
+-- Index names are unique DATABASE-WIDE, not per-table. The rename above carries every index
+-- bound to "relationships" over to "relationships_v27" under its ORIGINAL name (index names never
+-- gain the parent table's new name), so each must be dropped before a same-named index can be
+-- created on the new "relationships" table below.
+DROP INDEX idx_relationships_source;
+DROP INDEX idx_relationships_target;
+DROP INDEX idx_relationships_type;
+DROP INDEX idx_relationships_lifecycle;
+DROP INDEX uniq_relationships_produces_evidence_source;
+DROP INDEX uniq_relationships_starts_workflow_target;
+
+CREATE TABLE relationships (
+  id                  TEXT NOT NULL PRIMARY KEY,
+  schema_version      TEXT NOT NULL,
+  workspace_scope_id  TEXT NOT NULL,
+  scope_kind          TEXT NOT NULL,
+  scope_coordinate    TEXT NOT NULL,
+  type                TEXT NOT NULL,
+  source_kind         TEXT NOT NULL,
+  source_id           TEXT NOT NULL,
+  target_kind         TEXT NOT NULL,
+  target_id           TEXT NOT NULL,
+  lifecycle           TEXT NOT NULL,
+  created_at          INTEGER NOT NULL,
+  updated_at          INTEGER NOT NULL,
+  etag                TEXT NOT NULL,
+  confidence          REAL,
+  summary             TEXT,
+  CHECK (
+    schema_version IN ('1')
+    AND type IN (
+      'reads-context','proposes-patch','uses-tool','starts-workflow',
+      'produces-evidence','references-document','depends-on'
+    )
+    AND lifecycle IN (
+      'draft','active','archived','superseded','revoked','blocked','stale'
+    )
+    AND scope_kind IN ('user','workspace','project','workflow','global')
+    AND source_kind IN (
+      'memory','capsule','capsule-set','workflow-run','evidence-run',
+      'workspace-path','chat','tool','patch-proposal',
+      'agent','connector','data-source','skill','mcp-tool','git-change'
+    )
+    AND target_kind IN (
+      'memory','capsule','capsule-set','workflow-run','evidence-run',
+      'workspace-path','chat','tool','patch-proposal',
+      'agent','connector','data-source','skill','mcp-tool','git-change'
+    )
+    AND created_at >= 0
+    AND updated_at >= created_at
+    AND (confidence IS NULL OR (confidence >= 0.0 AND confidence <= 1.0))
+    AND (summary IS NULL OR length(summary) <= 240)
+  )
+) STRICT;
+
+INSERT INTO relationships (
+  id, schema_version, workspace_scope_id, scope_kind, scope_coordinate, type,
+  source_kind, source_id, target_kind, target_id, lifecycle, created_at, updated_at,
+  etag, confidence, summary
+)
+SELECT
+  id, schema_version, workspace_scope_id, scope_kind, scope_coordinate, type,
+  source_kind, source_id, target_kind, target_id, lifecycle, created_at, updated_at,
+  etag, confidence, summary
+FROM relationships_v27;
+
+CREATE INDEX idx_relationships_source
+  ON relationships(workspace_scope_id, source_kind, source_id);
+CREATE INDEX idx_relationships_target
+  ON relationships(workspace_scope_id, target_kind, target_id);
+CREATE INDEX idx_relationships_type
+  ON relationships(workspace_scope_id, type, lifecycle);
+CREATE INDEX idx_relationships_lifecycle
+  ON relationships(workspace_scope_id, lifecycle, updated_at);
+
+CREATE UNIQUE INDEX uniq_relationships_produces_evidence_source
+  ON relationships(workspace_scope_id, source_kind, source_id)
+  WHERE type = 'produces-evidence' AND lifecycle IN ('draft','active','archived');
+
+CREATE UNIQUE INDEX uniq_relationships_starts_workflow_target
+  ON relationships(workspace_scope_id, target_kind, target_id)
+  WHERE type = 'starts-workflow' AND lifecycle IN ('draft','active','archived');
+
+CREATE TABLE relationship_lifecycle_history_v28 (
+  id              TEXT NOT NULL PRIMARY KEY,
+  relationship_id TEXT NOT NULL REFERENCES relationships(id) ON DELETE CASCADE,
+  from_state      TEXT NOT NULL,
+  to_state        TEXT NOT NULL,
+  occurred_at     INTEGER NOT NULL,
+  summary         TEXT,
+  CHECK (
+    from_state IN ('draft','active','archived','superseded','revoked','blocked','stale')
+    AND to_state IN ('draft','active','archived','superseded','revoked','blocked','stale')
+    AND occurred_at >= 0
+    AND (summary IS NULL OR length(summary) <= 240)
+  )
+) STRICT;
+
+INSERT INTO relationship_lifecycle_history_v28 (
+  id, relationship_id, from_state, to_state, occurred_at, summary
+)
+SELECT id, relationship_id, from_state, to_state, occurred_at, summary
+FROM relationship_lifecycle_history;
+
+DROP TABLE relationship_lifecycle_history;
+
+ALTER TABLE relationship_lifecycle_history_v28 RENAME TO relationship_lifecycle_history;
+
+CREATE INDEX idx_relationship_lifecycle_relationship
+  ON relationship_lifecycle_history(relationship_id, occurred_at);
+
+DROP TABLE relationships_v27;
+
+ALTER TABLE chats ADD COLUMN git_change_scope_json TEXT
+  CHECK (git_change_scope_json IS NULL OR (length(git_change_scope_json) <= 32768 AND json_valid(git_change_scope_json)));
+`;
+
+// #3401: the durable, deduplicated automatic-description job record, keyed by run so a restart or a
+// repeated terminal-success signal for the same stable head never dispatches a second generation
+// attempt (AC "no duplicate model work"). `revision` is the CAS guard every write bumps by exactly
+// one; a write whose expected revision has moved underneath it is rejected by the caller before it
+// ever reaches this table (codingRuntimeDescriptionJobStore.ts). `phase = 'dispatched'` marks an
+// in-flight attempt with no `status_json` yet; a row still `dispatched` after a process restart is
+// reconciled to a closed `blocked` status by the same store, never silently resumed or lost. A new
+// head for the same run REPLACES this row (supersedes the prior attempt) rather than appending a
+// second one — the run's description status is always exactly one durable fact, matching how
+// `draft_delivery_record` and `ci_readiness_record` are each one fact per run. Content-free: no
+// title, body, diff, prompt or provider payload — see `WorkbenchDescriptionStatus`.
+const V29_SQL = `
+CREATE TABLE coding_runtime_description_jobs (
+  run_id TEXT NOT NULL CHECK (length(run_id) BETWEEN 1 AND 128),
+  remote_digest TEXT NOT NULL CHECK (length(remote_digest) = 64),
+  base_sha TEXT NOT NULL CHECK (length(base_sha) IN (40, 64)),
+  head_sha TEXT NOT NULL CHECK (length(head_sha) IN (40, 64)),
+  generation_version INTEGER NOT NULL CHECK (generation_version >= 1),
+  revision INTEGER NOT NULL CHECK (revision >= 0),
+  phase TEXT NOT NULL CHECK (phase IN ('dispatched', 'settled')),
+  status_json TEXT CHECK (status_json IS NULL OR (length(status_json) <= 4096 AND json_valid(status_json))),
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (run_id),
+  CHECK ((phase = 'dispatched') = (status_json IS NULL))
+) STRICT;
+`;
+
+// V30 (owner audit finding b2-2, PR #3394) — widens the `coding_runtime_snapshots.failure_code`
+// table-level CHECK to admit two literals `CODING_WORKBENCH_RUNTIME_FAILURE_CODES` already declares
+// but the V20 constraint (frozen at 19 members) rejects: `issue-context-unavailable` (#3390, added
+// after V20 shipped) and `question-answer-rejected` (a rejected free-text answer to a non-custom
+// question, distinct from the authority code `authority-resolution-failed`). Exactly the V20
+// precedent: SQLite cannot ALTER a table-level CHECK, so the table is rebuilt. No column is added or
+// removed and no other CHECK clause changes, so — like V20 — this migration needs no
+// `legacySchemaTestFixture.ts` rollback fragment (see that file's header comment) and no
+// `coding_runtime_ci_repair_budgets`/`git_journey_outcomes`/`coding_runtime_description_jobs`
+// sibling table is touched. `coding_runtime_snapshots` has no live foreign-key child (unlike
+// `relationships` in V28), so the direct create/copy/drop/rename sequence V20 used is safe here too.
+const V30_SQL = `
+CREATE TABLE coding_runtime_snapshots_v30 (
+  run_id TEXT NOT NULL PRIMARY KEY,
+  schema_version TEXT NOT NULL,
+  state TEXT NOT NULL,
+  revision INTEGER NOT NULL,
+  requested_mode TEXT NOT NULL,
+  runtime_source TEXT NOT NULL,
+  model_source TEXT NOT NULL,
+  failure_code TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  terminal_at TEXT,
+  recovery_acknowledged_at TEXT,
+  predecessor_run_id TEXT,
+  task_digest TEXT NOT NULL,
+  workspace_digest TEXT NOT NULL,
+  operator_digest TEXT NOT NULL,
+  authority_digest TEXT NOT NULL,
+  binding_digest TEXT NOT NULL,
+  provenance_digest TEXT NOT NULL,
+  tool_call_count INTEGER NOT NULL DEFAULT 0,
+  patch_byte_count INTEGER NOT NULL DEFAULT 0,
+  model_request_count INTEGER NOT NULL DEFAULT 0,
+  recovery_handle TEXT,
+  result_status TEXT
+    CHECK (result_status IS NULL OR result_status IN ('cancelled','failed','signalled','succeeded')),
+  exit_code INTEGER
+    CHECK (exit_code IS NULL OR exit_code BETWEEN 0 AND 255),
+  stdout_byte_count INTEGER
+    CHECK (stdout_byte_count IS NULL OR stdout_byte_count BETWEEN 0 AND 1073741824),
+  stdout_line_count INTEGER
+    CHECK (stdout_line_count IS NULL OR stdout_line_count BETWEEN 0 AND 1000000),
+  stdout_sha256 TEXT
+    CHECK (stdout_sha256 IS NULL OR length(stdout_sha256) = 64),
+  stdout_truncated INTEGER
+    CHECK (stdout_truncated IS NULL OR stdout_truncated IN (0,1)),
+  stderr_byte_count INTEGER
+    CHECK (stderr_byte_count IS NULL OR stderr_byte_count BETWEEN 0 AND 1073741824),
+  stderr_line_count INTEGER
+    CHECK (stderr_line_count IS NULL OR stderr_line_count BETWEEN 0 AND 1000000),
+  stderr_sha256 TEXT
+    CHECK (stderr_sha256 IS NULL OR length(stderr_sha256) = 64),
+  stderr_truncated INTEGER
+    CHECK (stderr_truncated IS NULL OR stderr_truncated IN (0,1)),
+  issue_repository_id TEXT
+    CHECK (issue_repository_id IS NULL OR length(issue_repository_id) BETWEEN 1 AND 128),
+  issue_remote_digest TEXT
+    CHECK (issue_remote_digest IS NULL OR length(issue_remote_digest) = 64),
+  issue_number INTEGER
+    CHECK (issue_number IS NULL OR issue_number BETWEEN 1 AND 1000000000),
+  issue_id_digest TEXT
+    CHECK (issue_id_digest IS NULL OR length(issue_id_digest) = 64),
+  issue_default_base_ref TEXT
+    CHECK (issue_default_base_ref IS NULL OR length(issue_default_base_ref) BETWEEN 1 AND 255),
+  issue_content_revision_digest TEXT
+    CHECK (issue_content_revision_digest IS NULL OR length(issue_content_revision_digest) = 64),
+  issue_binding_digest TEXT
+    CHECK (issue_binding_digest IS NULL OR length(issue_binding_digest) = 64),
+  verified_commit_result TEXT
+    CHECK (verified_commit_result IS NULL OR (length(verified_commit_result) <= 8192 AND json_valid(verified_commit_result))),
+  draft_delivery_record TEXT
+    CHECK (draft_delivery_record IS NULL OR (length(draft_delivery_record) <= 8192 AND json_valid(draft_delivery_record))),
+  draft_delivery_source_receipt TEXT
+    CHECK (draft_delivery_source_receipt IS NULL OR (length(draft_delivery_source_receipt) <= 8192 AND json_valid(draft_delivery_source_receipt))),
+  last_successful_verified_commit TEXT
+    CHECK (last_successful_verified_commit IS NULL OR (length(last_successful_verified_commit) <= 8192 AND json_valid(last_successful_verified_commit))),
+  ci_observation_revision INTEGER NOT NULL DEFAULT 0
+    CHECK (ci_observation_revision BETWEEN 0 AND 1000000),
+  ci_readiness_record TEXT
+    CHECK (ci_readiness_record IS NULL OR (length(ci_readiness_record) <= 8192 AND json_valid(ci_readiness_record))),
+  CHECK (
+    schema_version = '1'
+    AND state IN ('starting','ready','running','paused','awaiting-approval','stopping','succeeded','failed','cancelled','taken-over','recovery-required')
+    AND requested_mode IN ('governed-assist','supervised-coding','autonomous-delivery')
+    AND runtime_source IN ('keiko-sidecar','codex-cli-adapter','delivery-runner')
+    AND model_source IN ('keiko-model-gateway','openai-api-key-through-gateway','chatgpt-codex-subscription-profile')
+    AND (failure_code IS NULL OR failure_code IN ('runtime-unavailable','active-run-conflict','invalid-intent','approval-activation-failed','authority-resolution-failed','authority-expired','authority-replayed','task-drift','workspace-drift','project-drift','branch-drift','scope-drift','budget-drift','authority-budget-exceeded','source-drift','runtime-failed','revoked','recovery-required','replay-cap-exhausted','issue-context-unavailable','question-answer-rejected'))
+    AND revision >= 0
+    AND tool_call_count BETWEEN 0 AND 1000000
+    AND patch_byte_count BETWEEN 0 AND 1073741824
+    AND model_request_count BETWEEN 0 AND 1000000
+    AND length(run_id) BETWEEN 1 AND 128
+    AND length(task_digest) BETWEEN 1 AND 128
+    AND length(workspace_digest) BETWEEN 1 AND 128
+    AND length(operator_digest) BETWEEN 1 AND 128
+    AND length(authority_digest) BETWEEN 1 AND 128
+    AND length(binding_digest) BETWEEN 1 AND 128
+    AND length(provenance_digest) BETWEEN 1 AND 128
+    AND (recovery_handle IS NULL OR length(recovery_handle) BETWEEN 1 AND 128)
+  )
+) STRICT;
+
+INSERT INTO coding_runtime_snapshots_v30 (
+  run_id, schema_version, state, revision, requested_mode, runtime_source, model_source,
+  failure_code, created_at, updated_at, terminal_at, recovery_acknowledged_at,
+  predecessor_run_id, task_digest, workspace_digest, operator_digest, authority_digest,
+  binding_digest, provenance_digest, tool_call_count, patch_byte_count, model_request_count,
+  recovery_handle, result_status, exit_code, stdout_byte_count, stdout_line_count,
+  stdout_sha256, stdout_truncated, stderr_byte_count, stderr_line_count, stderr_sha256,
+  stderr_truncated, issue_repository_id, issue_remote_digest, issue_number, issue_id_digest,
+  issue_default_base_ref, issue_content_revision_digest, issue_binding_digest,
+  verified_commit_result, draft_delivery_record, draft_delivery_source_receipt,
+  last_successful_verified_commit, ci_observation_revision, ci_readiness_record
+)
+SELECT
+  run_id, schema_version, state, revision, requested_mode, runtime_source, model_source,
+  failure_code, created_at, updated_at, terminal_at, recovery_acknowledged_at,
+  predecessor_run_id, task_digest, workspace_digest, operator_digest, authority_digest,
+  binding_digest, provenance_digest, tool_call_count, patch_byte_count, model_request_count,
+  recovery_handle, result_status, exit_code, stdout_byte_count, stdout_line_count,
+  stdout_sha256, stdout_truncated, stderr_byte_count, stderr_line_count, stderr_sha256,
+  stderr_truncated, issue_repository_id, issue_remote_digest, issue_number, issue_id_digest,
+  issue_default_base_ref, issue_content_revision_digest, issue_binding_digest,
+  verified_commit_result, draft_delivery_record, draft_delivery_source_receipt,
+  last_successful_verified_commit, ci_observation_revision, ci_readiness_record
+FROM coding_runtime_snapshots;
+
+DROP TABLE coding_runtime_snapshots;
+
+ALTER TABLE coding_runtime_snapshots_v30 RENAME TO coding_runtime_snapshots;
+
+CREATE UNIQUE INDEX uniq_coding_runtime_active_slot
+  ON coding_runtime_snapshots((1))
+  WHERE terminal_at IS NULL;
+CREATE INDEX idx_coding_runtime_recent_active
+  ON coding_runtime_snapshots(terminal_at, updated_at DESC, run_id);
+CREATE INDEX idx_coding_runtime_settled_oldest
+  ON coding_runtime_snapshots(terminal_at, updated_at, run_id)
+  WHERE terminal_at IS NOT NULL;
+`;
+
+// V31 (#3401): bind durable generation to the accepted task, authority and optional delivery.
+// Existing rendered results lack that proof and become stale, so an upgrade cannot bless them.
+const V31_SQL = `
+ALTER TABLE coding_runtime_description_jobs ADD COLUMN generation_binding TEXT
+  CHECK (generation_binding IS NULL OR (length(generation_binding) <= 512 AND json_valid(generation_binding)));
+UPDATE coding_runtime_description_jobs
+  SET status_json = json_set(status_json, '$.state', 'stale', '$.reason', 'stale-snapshot')
+  WHERE status_json IS NOT NULL AND json_extract(status_json, '$.state') IN ('current', 'partial', 'fallback');
+`;
+
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through packages/keiko-server/src/store/index.ts, so no packaged surface
 // change.
@@ -656,6 +1089,18 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 18, sql: V18_SQL },
   { version: 19, sql: V19_SQL },
   { version: 20, sql: V20_SQL },
+  { version: 21, sql: V21_SQL },
+  { version: 22, sql: V22_SQL },
+  { version: 23, sql: V23_SQL },
+  { version: 24, sql: V24_SQL },
+  { version: 25, sql: V25_SQL },
+  { version: 26, sql: V26_SQL },
+  { version: 27, sql: V27_SQL },
+  { version: 28, sql: V28_SQL },
+  { version: 29, sql: V29_SQL },
+  { version: 30, sql: V30_SQL },
+  { version: 31, sql: V31_SQL },
+  { version: 32, sql: "", apply: migrateJourneyOutcomeProjection },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {

@@ -45,6 +45,11 @@ import type {
 } from "./memory-operations.js";
 import type { DiscussionMode } from "./discussion-intelligence.js";
 import { isCodingWorkbenchMode, type CodingWorkbenchMode } from "./coding-workbench.js";
+// The Chat git-change description-status vocabulary is the SAME frozen outcome vocabulary
+// #3399 owns (epic #3384 correction 3, one outcome-vocabulary table) — imported so the array
+// below is checked at compile time rather than independently restated (see F29 in the epic
+// #3384 final audit: this was previously a bare literal array with no compile-time link).
+import type { PrDescriptionApplicationState } from "./pr-description-application.js";
 // Path-free aggregate of the deterministic context-assembly pass (ADR-0052 / ADR-0057 D1).
 // ContextLaneId is a fixed 8-member string literal union, never a path; ContextBudgetPressure
 // is a 4-value enum. Importing these is intra-package (contracts → contracts), not a sibling edge.
@@ -170,6 +175,72 @@ export type ChatLocalKnowledgeScope =
       readonly connectedAtMs: number;
     };
 
+// Issue #3400 (epic #3384) — the FROZEN description-status vocabulary (contract correction 3).
+// `current`: the artifact is complete/partial/fallback AND the snapshot re-check found no drift.
+// `stale`: the re-check found the repository has moved (a different base, head, merge base or
+// snapshot digest) or the snapshot expired — regardless of the underlying artifact outcome.
+// `partial`/`fallback`/`failed`: the artifact outcome itself, on an otherwise-current snapshot.
+// `blocked`: a prerequisite is missing (no resolved PR, no admissible description authority, an
+// unmet approval) — never a `GitChangeSnapshotOutcome` and never persisted on the snapshot itself.
+export const CHAT_GIT_CHANGE_DESCRIPTION_STATUSES = [
+  "current",
+  "stale",
+  "partial",
+  "fallback",
+  "blocked",
+  "failed",
+] as const satisfies readonly PrDescriptionApplicationState[];
+export type ChatGitChangeDescriptionStatus = (typeof CHAT_GIT_CHANGE_DESCRIPTION_STATUSES)[number];
+
+// Issue #3400 (epic #3384) — the closed set of reasons a connect/refresh request may block on,
+// per the issue's Baseline Delta. Never a raw git error string. ONE owner: the browser
+// (`api.ts`) and the server (`gitChangeRoutes.ts`) both import this constant rather than each
+// hand-restating the same 11-member set (F30 in the epic #3384 final audit).
+export const GIT_CHANGE_BLOCKED_REASONS = [
+  "detached-head",
+  "unborn-head",
+  "missing-ref",
+  "no-pull-request",
+  "ambiguous-pull-request",
+  "reader-unauthorized",
+  "remote-unresolved",
+  "repository-unavailable",
+  "snapshot-unavailable",
+  "snapshot-failed",
+  "chat-project-unavailable",
+] as const;
+export type GitChangeBlockedReason = (typeof GIT_CHANGE_BLOCKED_REASONS)[number];
+
+// Issue #3400 (epic #3384, contract corrections 2 and 6) — a THIRD Chat scope list, sibling to
+// `connectedScopes`/`localKnowledgeScopes`, never overloading either. Every field is a
+// server-issued, content-free fact: no raw diff, no filesystem path, no provider payload, no
+// browser-authored repository identity. `remoteDigest` (not `repositoryId`) is the "same
+// repository" key (correction 6). `relationshipId` names the immutable, archive-only
+// `reads-context` edge (relationships.ts) this scope entry projects; a refresh archives it and
+// creates a new one (correction 4) rather than mutating this record in place.
+export interface ChatGitChangeScope {
+  readonly kind: "git-change";
+  readonly relationshipId: string;
+  readonly remoteDigest: string;
+  /** Server-rendered, safe label for display only — e.g. a branch comparison or "PR #123". */
+  readonly comparisonLabel: string;
+  readonly baseRef: string;
+  readonly headRef: string;
+  readonly baseSha: string;
+  readonly headSha: string;
+  readonly mergeBaseSha: string;
+  readonly snapshotDigest: string;
+  readonly pullRequestNumber?: number;
+  readonly fileCount: number;
+  readonly totalFiles: number;
+  readonly omittedFiles: number;
+  readonly truncatedFiles: number;
+  readonly descriptionStatus: ChatGitChangeDescriptionStatus;
+  /** Server-held exact description proposal selected by the latest successful Chat turn. */
+  readonly descriptionProposalId?: string;
+  readonly connectedAtMs: number;
+}
+
 export interface Chat {
   readonly id: string;
   readonly projectPath: string;
@@ -193,6 +264,10 @@ export interface Chat {
   // When both are present, `localKnowledgeScope` equals `localKnowledgeScopes[0]`.
   readonly localKnowledgeScopes?: readonly ChatLocalKnowledgeScope[];
   readonly localKnowledgeScope: ChatLocalKnowledgeScope | undefined;
+  // Issue #3400 (epic #3384) — a THIRD, sibling scope list carrying only server-issued Git-change
+  // facts (contract correction 2). Unlike `connectedScopes`/`localKnowledgeScopes` there is no
+  // single-source legacy field: this scope kind was never overloaded onto an earlier shape.
+  readonly gitChangeScopes?: readonly ChatGitChangeScope[];
   // Path-free server-issued concurrency token for the canonical retrieval-semantic grounding
   // scope. Voice queues echo it back so a final captured under one source set cannot later
   // retrieve under another; lifecycle metadata does not alter the token.
@@ -267,6 +342,11 @@ export interface UpdateChatPatch {
   // (absent) leaves the binding untouched while `null` explicitly clears it.
   readonly localKnowledgeScopes?: readonly ChatLocalKnowledgeScope[] | null;
   readonly localKnowledgeScope?: ChatLocalKnowledgeScope | null;
+  // Issue #3400 — set `gitChangeScopes` to bind a list of Git-change scope entries (null clears
+  // ALL). No legacy single-source field exists for this scope kind. `undefined` (absent) leaves
+  // the binding untouched; every entry is server-issued (git-change route handlers only — never
+  // accepted verbatim from an arbitrary PATCH caller without server-side re-validation).
+  readonly gitChangeScopes?: readonly ChatGitChangeScope[] | null;
 }
 
 export interface NewChatMessage {
@@ -433,6 +513,73 @@ export function parseUpdateMemoryAutonomyPolicyWire(
     Number(candidate.expectedRevision) >= 0
     ? {
         requestedMode: candidate.requestedMode,
+        expectedRevision: Number(candidate.expectedRevision),
+      }
+    : undefined;
+}
+
+/**
+ * The GitHub issue reader's authorization for the currently selected repository (#3385).
+ *
+ * `repositoryId` is the content-free identity the task workspace derives; no path, remote or
+ * credential crosses this boundary. `revision` is the server-owned counter a client echoes back so a
+ * stale grant cannot overwrite a newer revocation.
+ */
+export interface GitHubIssueReaderAuthorizationWire {
+  readonly repositoryId: string;
+  readonly authorized: boolean;
+  readonly revision: number;
+}
+
+export interface UpdateGitHubIssueReaderAuthorizationWire {
+  /**
+   * Which repository the grant applies to, as its registered project path.
+   *
+   * The caller names it because the server has no reliable notion of "the current repository": the
+   * launch path is a start-up snapshot that opening another repository never updates, so resolving
+   * from it stored a grant against the wrong repository. It is intent, not authority — the server
+   * accepts the value only if it is already a registered project, and derives the content-free
+   * repository identity itself, so a request can neither invent a path nor reach a repository the
+   * user has not opened.
+   */
+  readonly repositoryPath: string;
+  readonly authorized: boolean;
+  readonly expectedRevision: number;
+}
+
+const AUTHORIZATION_UPDATE_KEYS: ReadonlySet<string> = new Set([
+  "repositoryPath",
+  "authorized",
+  "expectedRevision",
+]);
+
+// Transport bound only: a non-empty, NUL-free string of at most this many UTF-16 code units.
+// Whether the value is an absolute, registered project path is deliberately not judged here — the
+// server's registration check owns path semantics (#3385).
+export const MAX_GITHUB_ISSUE_READER_REPOSITORY_PATH_CHARS = 4096;
+
+function isBoundedRepositoryPath(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value.length <= MAX_GITHUB_ISSUE_READER_REPOSITORY_PATH_CHARS &&
+    !value.includes("\0")
+  );
+}
+
+export function parseUpdateGitHubIssueReaderAuthorizationWire(
+  value: unknown,
+): UpdateGitHubIssueReaderAuthorizationWire | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const candidate = value as Record<string, unknown>;
+  const extra = Object.keys(candidate).filter((key) => !AUTHORIZATION_UPDATE_KEYS.has(key));
+  if (extra.length > 0 || !isBoundedRepositoryPath(candidate.repositoryPath)) return undefined;
+  return typeof candidate.authorized === "boolean" &&
+    Number.isSafeInteger(candidate.expectedRevision) &&
+    Number(candidate.expectedRevision) >= 0
+    ? {
+        repositoryPath: candidate.repositoryPath,
+        authorized: candidate.authorized,
         expectedRevision: Number(candidate.expectedRevision),
       }
     : undefined;

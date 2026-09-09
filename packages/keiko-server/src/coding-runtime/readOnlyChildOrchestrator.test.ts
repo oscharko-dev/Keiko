@@ -8,7 +8,10 @@ import type {
   CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchRuntimeEvent,
 } from "@oscharko-dev/keiko-contracts";
-import { createReadOnlyChildOrchestrator } from "./readOnlyChildOrchestrator.js";
+import {
+  createReadOnlyChildOrchestrator,
+  ReadOnlyChildTrustViolationError,
+} from "./readOnlyChildOrchestrator.js";
 import type {
   ReadOnlyChildBudgetCharger,
   ReadOnlyChildCancellationSource,
@@ -20,6 +23,7 @@ import type {
   ReadOnlyChildToolAttempt,
 } from "./readOnlyChildOrchestrator.js";
 import type { ReadOnlyChildEnvelope } from "./readOnlyChildEnvelope.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
 
 const CHILD_RUN_ID = "chr_child-1" as CodeTaskChildRunId;
 const READ: ReadOnlyChildToolAttempt = { toolClass: "workspace-read" };
@@ -106,6 +110,7 @@ function scriptedRunner(attempts: readonly ReadOnlyChildToolAttempt[]): ReadOnly
 
 interface Harness {
   readonly events: CodingWorkbenchRuntimeEvent[];
+  readonly logs: ServerLogEvent[];
   readonly deps: ReadOnlyChildOrchestratorDeps;
 }
 
@@ -118,9 +123,11 @@ function harness(
   } = {},
 ): Harness {
   const events: CodingWorkbenchRuntimeEvent[] = [];
+  const logs: ServerLogEvent[] = [];
   let seq = 0;
   return {
     events,
+    logs,
     deps: {
       runner,
       charger: overrides.charger ?? { chargeParentToolCall: () => true },
@@ -128,6 +135,7 @@ function harness(
       emit: (event): void => {
         events.push(event);
       },
+      activityLog: { write: (event): void => void logs.push(event) },
       clock: overrides.clock ?? { now: () => 0 },
       newEventId: () => `event-run-${String((seq += 1))}`,
     },
@@ -164,6 +172,12 @@ function eventOfKind(
   return found;
 }
 
+function logOfOp(logs: readonly ServerLogEvent[], op: string): ServerLogEvent {
+  const found = logs.find((log) => log.op === op);
+  if (found === undefined) throw new Error(`missing log with op ${op}`);
+  return found;
+}
+
 const CHILD_ORIGIN: ReadOnlyChildEnvelope = {
   parentRunId: "run-2387",
   childRunId: "chr_parent-child" as CodeTaskChildRunId,
@@ -183,7 +197,7 @@ describe("createReadOnlyChildOrchestrator", () => {
         return true;
       },
     };
-    const { events, deps } = harness(scriptedRunner([READ, READ, READ]), { charger });
+    const { events, logs, deps } = harness(scriptedRunner([READ, READ, READ]), { charger });
     const outcome = await createReadOnlyChildOrchestrator(deps).handleChildRequest(
       childRequest(),
       contextFor(),
@@ -198,6 +212,15 @@ describe("createReadOnlyChildOrchestrator", () => {
     const completed = eventOfKind(events, "child-run-completed");
     expect(completed).toMatchObject({ auxiliaryOutcome: "accepted", childResultCount: 3 });
     expect(validateCodingWorkbenchRuntimeEvent(completed).ok).toBe(true);
+    // §AC7: a healthy primary sink attempts exactly one durable terminal write, on the ACCEPTED
+    // path too — not only on a crash/denial.
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({
+      op: "coding-runtime.read-only-child.completed",
+      correlationId: "run-2387",
+      level: "info",
+      extra: { childRunId: CHILD_RUN_ID, terminal: "accepted" },
+    });
   });
 
   it("treats an explicit zero result count as a valid accepted outcome", async () => {
@@ -217,7 +240,7 @@ describe("createReadOnlyChildOrchestrator", () => {
   });
 
   it("denies a mutation attempt from within the read-only child", async () => {
-    const { deps } = harness(scriptedRunner([{ toolClass: "workspace-write" }]));
+    const { logs, deps } = harness(scriptedRunner([{ toolClass: "workspace-write" }]));
     const outcome = await createReadOnlyChildOrchestrator(deps).handleChildRequest(
       childRequest(),
       contextFor(),
@@ -227,6 +250,13 @@ describe("createReadOnlyChildOrchestrator", () => {
       status: "denied",
       capability: "child-agent",
       reasonCode: "workspace-write-denied",
+    });
+    // §AC7: an ordinary gate denial is a durable terminal too, not only a crash/trust-violation.
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({
+      op: "coding-runtime.read-only-child.completed",
+      level: "warn",
+      extra: { childRunId: CHILD_RUN_ID, terminal: "denied", reasonCode: "workspace-write-denied" },
     });
   });
 
@@ -250,7 +280,7 @@ describe("createReadOnlyChildOrchestrator", () => {
   });
 
   it("denies a nested child before any run when the caller is itself a child, and still audits it", async () => {
-    const { events, deps } = harness(scriptedRunner([READ]));
+    const { events, logs, deps } = harness(scriptedRunner([READ]));
     const outcome = await createReadOnlyChildOrchestrator(deps).handleChildRequest(
       childRequest(),
       contextFor({ originChildEnvelope: CHILD_ORIGIN }),
@@ -260,6 +290,14 @@ describe("createReadOnlyChildOrchestrator", () => {
     const completed = eventOfKind(events, "child-run-completed");
     expect(completed).toMatchObject({ auxiliaryOutcome: "denied", childResultCount: 0 });
     expect(validateCodingWorkbenchRuntimeEvent(completed).ok).toBe(true);
+    // §AC7: admission denial (never reaching runChild at all) is a durable terminal too — this is
+    // the path the crash-only fix left unaudited on the primary activity sink.
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({
+      op: "coding-runtime.read-only-child.completed",
+      correlationId: "run-2387",
+      extra: { childRunId: CHILD_RUN_ID, terminal: "denied", reasonCode: "nested-child-denied" },
+    });
   });
 
   it("reports limit-reached when the parent budget is exhausted mid-run", async () => {
@@ -270,7 +308,7 @@ describe("createReadOnlyChildOrchestrator", () => {
         return charges <= 2;
       },
     };
-    const { deps } = harness(scriptedRunner([READ, READ, READ, READ]), { charger });
+    const { logs, deps } = harness(scriptedRunner([READ, READ, READ, READ]), { charger });
     const outcome = await createReadOnlyChildOrchestrator(deps).handleChildRequest(
       childRequest(8),
       contextFor(),
@@ -279,6 +317,16 @@ describe("createReadOnlyChildOrchestrator", () => {
     expect(outcome).toMatchObject({
       status: "limit-reached",
       reasonCode: "parent-budget-exceeded",
+    });
+    // §AC7: an exhausted-budget terminal is a durable terminal too.
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({
+      op: "coding-runtime.read-only-child.completed",
+      extra: {
+        childRunId: CHILD_RUN_ID,
+        terminal: "limit-reached",
+        reasonCode: "parent-budget-exceeded",
+      },
     });
   });
 
@@ -309,7 +357,7 @@ describe("createReadOnlyChildOrchestrator", () => {
         return true;
       },
     };
-    const { events, deps } = harness(runner, {
+    const { events, logs, deps } = harness(runner, {
       charger,
       cancellation: { stopReason: () => cancelState.reason },
     });
@@ -321,6 +369,12 @@ describe("createReadOnlyChildOrchestrator", () => {
     expect(charges).toBe(0);
     expect(eventOfKind(events, "child-run-completed")).toMatchObject({
       auxiliaryOutcome: "stopped",
+    });
+    // §AC7: a cascaded stop is a durable terminal too.
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({
+      op: "coding-runtime.read-only-child.completed",
+      extra: { childRunId: CHILD_RUN_ID, terminal: "stopped", reasonCode: "parent-stopped" },
     });
   });
 
@@ -411,17 +465,135 @@ describe("createReadOnlyChildOrchestrator", () => {
     });
   });
 
+  // Residual finding from the #3407 catalog migration review: the child's mandatory tool-catalog
+  // bind now rejects a fabricated tool call or malformed arguments strictly before any tool -- and
+  // so before any workspace read -- ever executes (productionReadOnlyChildRunner.test.ts: "fails
+  // closed when the model calls a tool it was never given" / "fails closed on a non-string
+  // relativePath"). That refusal never reaches this orchestrator's gate, so a runner MUST signal it
+  // with `ReadOnlyChildTrustViolationError` rather than an opaque throw -- a trust-boundary refusal
+  // is a closed `denied`, never the `unavailable` this file reserves for lost infrastructure.
+  it("classifies a fabricated tool call as denied, not unavailable, charging nothing", async () => {
+    let charges = 0;
+    const charger: ReadOnlyChildBudgetCharger = {
+      chargeParentToolCall: () => {
+        charges += 1;
+        return true;
+      },
+    };
+    const runner: ReadOnlyChildRunner = {
+      run: () => Promise.reject(new ReadOnlyChildTrustViolationError("fabricated-tool-denied")),
+    };
+    const { events, logs, deps } = harness(runner, { charger });
+    const outcome = await createReadOnlyChildOrchestrator(deps).handleChildRequest(
+      childRequest(),
+      contextFor(),
+    );
+    expect(outcome).toMatchObject({ status: "denied", reasonCode: "fabricated-tool-denied" });
+    // No tool call was ever charged against the parent budget -- nothing reached the point where a
+    // read could have touched the workspace.
+    expect(charges).toBe(0);
+    expect(eventOfKind(events, "child-run-completed")).toMatchObject({
+      auxiliaryOutcome: "denied",
+      childResultCount: 0,
+    });
+    // §AC7: the crash/trust-violation path keeps its richer diagnostic write (runner-failed) AND
+    // now also gets the same generic durable terminal write every other terminal gets
+    // (completed) — one additional diagnostic line, not a replacement.
+    expect(logs).toHaveLength(2);
+    expect(logOfOp(logs, "coding-runtime.read-only-child.runner-failed")).toMatchObject({
+      correlationId: "run-2387",
+      errorKind: "ReadOnlyChildTrustViolationError",
+      extra: {
+        childRunId: CHILD_RUN_ID,
+        terminal: "denied",
+        reasonCode: "fabricated-tool-denied",
+      },
+    });
+    expect(logOfOp(logs, "coding-runtime.read-only-child.completed")).toMatchObject({
+      correlationId: "run-2387",
+      extra: { childRunId: CHILD_RUN_ID, terminal: "denied", reasonCode: "fabricated-tool-denied" },
+    });
+  });
+
+  it("classifies malformed tool arguments as denied, not unavailable, charging nothing", async () => {
+    let charges = 0;
+    const charger: ReadOnlyChildBudgetCharger = {
+      chargeParentToolCall: () => {
+        charges += 1;
+        return true;
+      },
+    };
+    const runner: ReadOnlyChildRunner = {
+      run: () =>
+        Promise.reject(new ReadOnlyChildTrustViolationError("malformed-tool-arguments-denied")),
+    };
+    const { events, deps } = harness(runner, { charger });
+    const outcome = await createReadOnlyChildOrchestrator(deps).handleChildRequest(
+      childRequest(),
+      contextFor(),
+    );
+    expect(outcome).toMatchObject({
+      status: "denied",
+      reasonCode: "malformed-tool-arguments-denied",
+    });
+    expect(charges).toBe(0);
+    expect(eventOfKind(events, "child-run-completed")).toMatchObject({
+      auxiliaryOutcome: "denied",
+      childResultCount: 0,
+    });
+  });
+
+  it("still latches a governance terminal reached before a trust-violation-shaped throw", async () => {
+    // If the gate already latched a real governance terminal (e.g. a parent stop) before the
+    // runner rejects, that latched terminal is authoritative -- never overridden by the error the
+    // runner happened to throw on its way out.
+    const runner: ReadOnlyChildRunner = {
+      run: (input) => {
+        input.gate({ toolClass: "workspace-write" });
+        return Promise.reject(new ReadOnlyChildTrustViolationError("fabricated-tool-denied"));
+      },
+    };
+    const { deps } = harness(runner);
+    const outcome = await createReadOnlyChildOrchestrator(deps).handleChildRequest(
+      childRequest(),
+      contextFor(),
+    );
+    expect(outcome).toMatchObject({ status: "denied", reasonCode: "workspace-write-denied" });
+  });
+
   it("emits a content-free redacted diagnostic tying the opaque runner fault to an event id", async () => {
     const runner: ReadOnlyChildRunner = {
       run: () => Promise.reject(new Error("secret stack trace: sk-should-never-leak")),
     };
-    const { events, deps } = harness(runner);
+    const { events, logs, deps } = harness(runner);
     await createReadOnlyChildOrchestrator(deps).handleChildRequest(childRequest(), contextFor());
     const diagnostic = eventOfKind(events, "failure-redacted");
     expect(diagnostic).toMatchObject({ failureCode: "failure-redacted", retryable: false });
     expect(typeof diagnostic.eventId).toBe("string");
     expect(diagnostic.eventId.length).toBeGreaterThan(0);
     expect(validateCodingWorkbenchRuntimeEvent(diagnostic).ok).toBe(true);
+    expect(logs).toHaveLength(2);
+    const runnerFailed = logOfOp(logs, "coding-runtime.read-only-child.runner-failed");
+    expect(runnerFailed).toMatchObject({
+      correlationId: "run-2387",
+      errorKind: "Error",
+      extra: {
+        childRunId: CHILD_RUN_ID,
+        terminal: "unavailable",
+        reasonCode: "child-runner-error",
+      },
+    });
+    expect(Array.isArray(runnerFailed.extra?.frames)).toBe(true);
+    expect(Array.isArray(runnerFailed.extra?.causeChain)).toBe(true);
+    expect(logOfOp(logs, "coding-runtime.read-only-child.completed")).toMatchObject({
+      correlationId: "run-2387",
+      extra: {
+        childRunId: CHILD_RUN_ID,
+        terminal: "unavailable",
+        reasonCode: "child-runner-error",
+      },
+    });
+    expect(JSON.stringify(logs)).not.toContain("sk-should-never-leak");
   });
 
   it("re-checks authority after the runner resolves: a mid-run revocation yields stopped, not accepted", async () => {

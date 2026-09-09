@@ -416,6 +416,27 @@ describe("runUiCli", () => {
     }
   });
 
+  it("keeps the ambient UI environment when a local Git mutation environment is injected", async () => {
+    const { io } = captureIo();
+    const captured: UiHandlerDeps[] = [];
+    const deps: UiCliDeps = {
+      staticRoot,
+      hashesFile: join(staticRoot, "csp-hashes.json"),
+      localGitMutationEnv: { HOME: "/private/evaluation-home", PATH: "/usr/bin" },
+      createServer: ({ handlerDeps }) => {
+        captured.push(handlerDeps);
+        return fakeServer({});
+      },
+    };
+    try {
+      const code = await runUiCli([], io, { HOME: "/host/home", PATH: "/usr/bin" }, deps);
+      expect(code).toBe(0);
+      expect(captured[0]?.env.HOME).toBe("/host/home");
+    } finally {
+      closeHandlerDeps(captured[0]);
+    }
+  });
+
   // The activity-log sink mkdirs `<stateDir>/logs` the moment it is CONSTRUCTED. Two things
   // therefore have to hold on the injected-server path: the state directory comes from the CLI's
   // own resolution (launch cwd + the effective env, NOT `process.env`), and no sink is built at

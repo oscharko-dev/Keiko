@@ -9,9 +9,16 @@
     "tsBuildInfoFile": "dist/.tsbuildinfo"
   },
   "include": ["src"],
-  "exclude": ["dist", "node_modules", "**/*.test.ts"],
+  "exclude": ["dist", "node_modules", "**/*.test.ts", "src/__fixtures__/**"],
   "references": [
-    { "path": "../keiko-contracts/tsconfig.json" },
-    { "path": "../keiko-security/tsconfig.json" }
+    {
+      "path": "../keiko-contracts/tsconfig.json"
+    },
+    {
+      "path": "../keiko-security/tsconfig.json"
+    },
+    {
+      "path": "../keiko-tool-catalog/tsconfig.json"
+    }
   ]
 }

@@ -44,6 +44,7 @@ import type {
   GitDeliveryMergeReadiness,
   GitDeliveryPullRequestState,
 } from "./git-delivery-provider.js";
+import type { GitPreflightFindingCode } from "./git-preflight.js";
 import {
   isGitDeliveryBranchProtection,
   isGitDeliveryChecksState,
@@ -150,6 +151,43 @@ export const GIT_DELIVERY_RECOVERY_ACTION_HINTS: readonly GitDeliveryRecoveryAct
   "recover-via-strategy",
   "wait-for-provider",
 ] as const;
+
+/**
+ * The ONE recovery hint per preflight finding code (#3394 review). Both surfaces that explain a
+ * blocked delivery read this table -- the action sheet (keiko-server's actionSheetProjection) and
+ * the evidence/audit projection (keiko-tools' git-mutation-evidence) -- so an operator, or
+ * `keiko support analyze`, sees the same recommended action for the same failure wherever they
+ * look. The two hand-maintained tables it replaces had drifted apart on five codes; the reconciled
+ * values are the ones each finding actually calls for: a detached head is repaired through a
+ * recovery strategy (there is no upstream to configure), a wrong or missing branch is re-targeted,
+ * and an unreachable remote is waited for rather than blindly retried.
+ */
+export const GIT_PREFLIGHT_RECOVERY_ACTION_HINT: Readonly<
+  Record<GitPreflightFindingCode, GitDeliveryRecoveryActionHint>
+> = {
+  "detached-head": "recover-via-strategy",
+  "branch-already-exists": "adjust-policy-target",
+  "base-branch-missing": "adjust-policy-target",
+  "switch-target-missing": "adjust-policy-target",
+  "no-changes-to-stage": "stage-changes",
+  "nothing-staged-to-unstage": "stage-changes",
+  "nothing-staged-to-commit": "stage-changes",
+  "untracked-files-impacted": "stage-changes",
+  "no-upstream-configured": "configure-upstream",
+  "nothing-to-push": "retry",
+  "non-fast-forward": "resolve-conflicts",
+  "remote-alias-missing": "configure-upstream",
+  "remote-unreachable": "wait-for-provider",
+  "operation-in-progress": "abort-in-progress-operation",
+  "no-operation-to-abort": "retry",
+  "recovery-target-unset": "recover-via-strategy",
+  "dirty-worktree-impacts-recovery": "recover-via-strategy",
+  // The branch moved since the caller previewed/approved it: re-preview and re-approve -- a retry.
+  "verified-commit-drifted": "retry",
+  // The caller named a source branch that is not the one checked out: re-target the push (or check
+  // the named branch out) and preview again.
+  "source-branch-not-checked-out": "adjust-policy-target",
+};
 
 export interface GitDeliveryRecoveryHint {
   readonly actionHint: GitDeliveryRecoveryActionHint;

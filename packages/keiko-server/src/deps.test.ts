@@ -16,7 +16,7 @@ import {
 import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { WorkspaceFs, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
+import type { WorkspaceFs, WorkspaceInfo, WorkspaceStat } from "@oscharko-dev/keiko-workspace";
 import type {
   KnowledgeCapsuleId,
   KnowledgeSourceId,
@@ -28,6 +28,9 @@ import type {
 import { ATLASSIAN_CONNECTOR_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/atlassian-connectors";
 import { DEFAULT_CONTEXT_PROFILE } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
+import { composeCodingContextConnectors } from "./coding-context/codingContextRoutes.js";
+import { gitHubCodeContextPortFor } from "./coding-context/githubIssueReaderAuthorization.js";
+import { deriveRepositoryId } from "./task-workspace/naming.js";
 import { resolveAtlassianActionApprovalRegistry } from "./atlassian/actionApprovals.js";
 import { resolveAtlassianSyncJobRegistry } from "./atlassian/syncService.js";
 import {
@@ -50,6 +53,7 @@ import type {
 import {
   buildRedactor,
   buildUiHandlerDeps,
+  createLiveCodingChildModelPortFactory,
   createOperatorProvisioningQualification,
   currentGatewayEgressConfig,
   currentRedactionSecrets,
@@ -92,6 +96,7 @@ import {
   setServerLogger,
 } from "./observability/index.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { resolvePrDescriptionApplicationServiceForContext } from "./gitDelivery/prDescriptionRoutes.js";
 
 const tmpDirs: string[] = [];
 
@@ -116,6 +121,42 @@ function tmp(prefix: string): string {
   const d = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
   tmpDirs.push(d);
   return d;
+}
+
+function snapshotWorkspace(): WorkspaceInfo {
+  const root = tmp("snapshot-composition-");
+  const git = (...args: string[]): void => {
+    execFileSync("git", ["-c", "commit.gpgsign=false", ...args], {
+      cwd: root,
+      stdio: "ignore",
+      env: {
+        PATH: process.env.PATH,
+        HOME: "/nonexistent",
+        GIT_CONFIG_NOSYSTEM: "1",
+        GIT_CONFIG_GLOBAL: "/dev/null",
+      },
+    });
+  };
+  git("init", "-q", "-b", "main");
+  git("config", "user.name", "Fixture");
+  git("config", "user.email", "fixture@example.invalid");
+  writeFileSync(join(root, "source.txt"), "transient snapshot content\n");
+  git("add", "source.txt");
+  git("commit", "-qm", "base");
+  git("checkout", "-qb", "feature");
+  writeFileSync(join(root, "source.txt"), "changed transient snapshot content\n");
+  git("commit", "-qam", "change");
+  return {
+    root,
+    selectedRoot: root,
+    name: undefined,
+    version: undefined,
+    testFramework: "unknown",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
 }
 
 function isolatedMemoryEnv(env: Readonly<Record<string, string>> = {}): Record<string, string> {
@@ -482,6 +523,44 @@ describe("buildRedactor", () => {
 });
 
 describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
+  it("keeps snapshot content scoped to one live server composition and discards it on disposal", async () => {
+    const workspace = snapshotWorkspace();
+    const depsA = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("snapshot-evidence-a-"),
+      env: {},
+    });
+    const depsB = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("snapshot-evidence-b-"),
+      env: {},
+    });
+    const a = depsA.gitChangeSnapshotService;
+    const b = depsB.gitChangeSnapshotService;
+    try {
+      if (a === undefined || b === undefined) throw new Error("snapshot service not composed");
+      const input = {
+        workspace,
+        baseRef: "main",
+        headRef: "feature",
+        accessScope: {},
+        correlationId: "snapshot-composition",
+      };
+      const first = await a.capture(input);
+      const second = await b.capture(input);
+      if (first.reference === undefined || second.reference === undefined)
+        throw new Error("snapshot capture failed");
+      expect(a.read(first.reference, input.accessScope, input.correlationId)).toBeDefined();
+      expect(b.read(first.reference, input.accessScope, input.correlationId)).toBeUndefined();
+      await depsA.dispose?.();
+      expect(a.read(first.reference, input.accessScope, input.correlationId)).toBeUndefined();
+      expect(b.read(second.reference, input.accessScope, input.correlationId)).toBeDefined();
+    } finally {
+      await depsA.dispose?.();
+      await depsB.dispose?.();
+    }
+  });
+
   it("uses the injected store unchanged when supplied", () => {
     const store = createInMemoryUiStore();
     const evidenceDir = tmp("ev-");
@@ -1089,6 +1168,195 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     void deps.dispose?.();
   });
 
+  // Review repair (#3399/#3400 production-wiring, description-production-wiring item): the
+  // description authority minted for the composed production runtime must reach BOTH of its
+  // production consumers -- prDescriptionRoutes.ts under `gitDeliveryDescriptionAuthority` and
+  // chat-handlers.ts's git-change turn admission under `gitChangeDescriptionAuthorityPort` (read
+  // via that module's documented optional-cast seam). Before this fix, `assembleUiHandlerDeps`
+  // exposed only the first field, so a real `buildUiHandlerDeps()` composition left
+  // `gitChangeDescriptionAuthorityPort` permanently `undefined` and every Chat turn on a
+  // git-change-connected chat denied closed regardless of any live authority record.
+  it("threads the SAME minted description authority onto both its production consumer field names", () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-runtime-description-authority-"),
+      env: {},
+      uiDbPath: join(tmp("ui-runtime-description-authority-"), "keiko-ui.db"),
+      codingRuntimeStartConfirmationConsumer: { consume: () => undefined },
+      codingRuntimeProductionPorts: {
+        backend: {
+          createRun: (): never => {
+            throw new Error("backend must not be reached");
+          },
+        },
+        secureWorkspaceTextRead: {
+          readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+        },
+        editorAgentClient: {
+          action: () => Promise.reject(new Error("editor must not be reached")),
+        },
+      },
+    });
+
+    expect(deps.codingRuntimeHostQualified).toBe(true);
+    expect(deps.gitDeliveryDescriptionAuthority).toBeDefined();
+    expect(deps.gitChangeDescriptionAuthorityPort).toBeDefined();
+    expect(deps.gitChangeDescriptionAuthorityPort).toBe(deps.gitDeliveryDescriptionAuthority);
+    void deps.dispose?.();
+  });
+
+  // Final-audit F4 (#3400 Chat-connected git-change): `deps.mintDescriptionAuthority` must reach
+  // production composition too, or gitChangeRoutes.ts's connect flow has no mint capability to call
+  // and every Chat turn on a connected chat denies closed regardless of the read port above being
+  // wired. Proven end to end: mint a scope through the composed function, then read it back
+  // through the composed read port under the SAME key.
+  it("threads a real mint capability onto deps.mintDescriptionAuthority (F4)", () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-runtime-description-authority-mint-"),
+      env: {},
+      uiDbPath: join(tmp("ui-runtime-description-authority-mint-"), "keiko-ui.db"),
+      codingRuntimeStartConfirmationConsumer: { consume: () => undefined },
+      codingRuntimeProductionPorts: {
+        backend: {
+          createRun: (): never => {
+            throw new Error("backend must not be reached");
+          },
+        },
+        secureWorkspaceTextRead: {
+          readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+        },
+        editorAgentClient: {
+          action: () => Promise.reject(new Error("editor must not be reached")),
+        },
+      },
+    });
+
+    expect(deps.mintDescriptionAuthority).toBeDefined();
+    expect(deps.gitChangeDescriptionAuthorityPort).toBeDefined();
+    const scope = {
+      remoteDigest: "a".repeat(64),
+      pr: { baseRef: "main", headRef: "feature/x" },
+      snapshotDigest: "b".repeat(64),
+    };
+    const nowIso = new Date().toISOString();
+    deps.mintDescriptionAuthority?.({
+      scope,
+      requestedMode: "governed-assist",
+      nowIso,
+      correlationId: "description-test",
+    });
+    expect(deps.gitChangeDescriptionAuthorityPort?.current(scope, nowIso)).toBeDefined();
+    void deps.dispose?.();
+  });
+
+  // Final-audit F7, relocated to the actual shared resolver after the dead global service was
+  // removed: both a background Workbench producer and HTTP review/approve/apply must receive the
+  // same stateful service from the exact composed deps identity.
+  it("resolves one shared PrDescriptionApplicationService from the composed deps identity (F7)", () => {
+    const store = createInMemoryUiStore();
+    const evidenceDir = tmp("ev-pr-description-service-");
+    const root = tmp("pr-description-project-");
+    store.createProject(root);
+    const deps = buildUiHandlerDeps({
+      // A fake env-only Gateway profile — never a real network target — so
+      // `createProductionPrDescriptionGeneration` composes a real generation deps object over a
+      // real (but unreachable) Gateway instance, exactly like production would for a configured
+      // deployment.
+      configPath: join(evidenceDir, "missing-keiko.config.json"),
+      evidenceDir,
+      env: {
+        KEIKO_MODEL_EXAMPLE_CHAT_MODEL_BASE_URL: "https://models.example.invalid/openai/v1",
+        KEIKO_MODEL_EXAMPLE_CHAT_MODEL_API_KEY: "fake-test-key",
+      },
+      store,
+    });
+
+    expect(deps.prDescriptionGeneration).toBeDefined();
+    const workspace: WorkspaceInfo = {
+      root,
+      selectedRoot: root,
+      name: undefined,
+      version: undefined,
+      testFramework: "unknown",
+      sourceDirs: [],
+      testDirs: [],
+      languages: [],
+      ignoreLines: [],
+    };
+    const accessScope = {};
+    const context = (): {
+      readonly workspace: WorkspaceInfo;
+      readonly repository: string;
+      readonly prNumber: number;
+      readonly accessScope: object;
+      readonly authorityDigest: string;
+      readonly correlationId: string;
+      readonly stillAuthorized: () => boolean;
+    } => ({
+      workspace,
+      repository: "octo/repo",
+      prNumber: 17,
+      accessScope,
+      authorityDigest: "a".repeat(64),
+      correlationId: "description-test",
+      stillAuthorized: (): boolean => true,
+    });
+    const request = { projectId: root, ownerAndRepo: "octo/repo", prNumber: 17 };
+    const first = resolvePrDescriptionApplicationServiceForContext(deps, request, context);
+    const repeated = resolvePrDescriptionApplicationServiceForContext(deps, request, context);
+    expect(first.ok).toBe(true);
+    expect(repeated.ok).toBe(true);
+    if (!first.ok || !repeated.ok) throw new Error("expected shared description service");
+    expect(repeated.service).toBe(first.service);
+
+    void deps.dispose?.();
+    store.close();
+  });
+
+  it("leaves the shared description service unavailable when no model profile is configured (F7)", () => {
+    const store = createInMemoryUiStore();
+    const root = tmp("pr-description-unavailable-project-");
+    store.createProject(root);
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-pr-description-service-unavailable-"),
+      env: {},
+      store,
+    });
+
+    expect(deps.prDescriptionGeneration).toBeUndefined();
+    const workspace: WorkspaceInfo = {
+      root,
+      selectedRoot: root,
+      name: undefined,
+      version: undefined,
+      testFramework: "unknown",
+      sourceDirs: [],
+      testDirs: [],
+      languages: [],
+      ignoreLines: [],
+    };
+    const accessScope = {};
+    const result = resolvePrDescriptionApplicationServiceForContext(
+      deps,
+      { projectId: root, ownerAndRepo: "octo/repo", prNumber: 17 },
+      () => ({
+        workspace,
+        repository: "octo/repo",
+        prNumber: 17,
+        accessScope,
+        authorityDigest: "a".repeat(64),
+        correlationId: "description-test",
+        stillAuthorized: (): boolean => true,
+      }),
+    );
+    expect(result.ok).toBe(false);
+
+    void deps.dispose?.();
+    store.close();
+  });
+
   it("wires production Local Knowledge encryption for heading metadata and retrieval citations", async () => {
     const uiDir = tmp("ui-lk-");
     const evidenceDir = tmp("ev-lk-");
@@ -1200,18 +1468,27 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     deps.memoryVault?.close();
   });
 
-  it("composes the connected-context GitHub port for the launch project", async () => {
+  // Relocated, not dropped. This asserted that assembly composes a GitHub port for the launch
+  // project — the very snapshot that made the port a start-up fact: it won over the per-request
+  // port whenever Keiko started with a project, so the grant was evaluated for the repository the
+  // caller was working in while `gh` stayed confined to the launch directory. Production now
+  // composes none, and the invariant that survives is the one that always mattered: a GitHub port
+  // must be reachable for the repository actually being read.
+  it("composes no launch-time GitHub port, and reaches one for the working repository", async () => {
     const projectDir = tmp("coding-context-project-");
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("coding-context-evidence-"),
-      env: isolatedMemoryEnv({ GITHUB_CONNECTOR_AUTHORIZED: "true" }),
+      env: isolatedMemoryEnv(),
       initialProjectPath: projectDir,
       uiDbPath: join(tmp("coding-context-ui-"), "keiko-ui.db"),
     });
 
     try {
-      expect(deps.codingContextGitHubPort).toBeDefined();
+      expect(deps.codingContextGitHubPort).toBeUndefined();
+      expect(gitHubCodeContextPortFor(projectDir, {})).toBeDefined();
+      // A repository the caller never names still yields no port.
+      expect(gitHubCodeContextPortFor(undefined, {})).toBeUndefined();
     } finally {
       await deps.dispose?.();
     }
@@ -1228,39 +1505,75 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     writeGhStub(injectedBin, "injected");
     writeGhStub(ambientBin, "ambient");
     vi.stubEnv("PATH", ambientBin);
-    const deps = buildUiHandlerDeps({
-      configPath: undefined,
-      evidenceDir: tmp("coding-context-env-evidence-"),
-      env: isolatedMemoryEnv({
-        GITHUB_CONNECTOR_AUTHORIZED: "true",
-        GH_TOKEN: "test-injected-token",
-        HOME: tmp("coding-context-env-home-"),
-        PATH: injectedBin,
-      }),
-      initialProjectPath: tmp("coding-context-env-project-"),
-      uiDbPath: join(tmp("coding-context-env-ui-"), "keiko-ui.db"),
+    // The port is now built per request rather than at assembly, so the environment invariant is
+    // asserted on the factory both composition sites call: the composed environment wins over the
+    // ambient PATH, which is what keeps a stray `gh` on the operator's machine out of the read path.
+    const port = gitHubCodeContextPortFor(tmp("coding-context-env-project-"), {
+      GH_TOKEN: "test-injected-token",
+      HOME: tmp("coding-context-env-home-"),
+      PATH: injectedBin,
     });
 
-    try {
-      await expect(
-        deps.codingContextGitHubPort?.readJson(["api", "repos/example/project/issues/1"]),
-      ).resolves.toEqual({ source: "injected" });
-    } finally {
-      await deps.dispose?.();
-    }
+    await expect(port?.readJson(["api", "repos/example/project/issues/1"])).resolves.toEqual({
+      source: "injected",
+    });
   });
 
-  it("does not compose the connected-context GitHub port without authorization", async () => {
+  // #3385 relocated this pin rather than dropping it. Its invariant is "an unauthorized deployment
+  // cannot read GitHub", and that invariant now lives one layer down: the port is composed
+  // unconditionally because it is an inert `gh api /repos/...` invoker, and the authorization is a
+  // repository-scoped, server-persisted grant re-read on every composition. Asserting the port is
+  // absent would no longer test the invariant; asserting the composed connector config denies the
+  // read does, end to end through the real deps graph.
+  it("denies the GitHub connector for a launch project with no stored authorization", async () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("coding-context-disabled-evidence-"),
-      env: isolatedMemoryEnv({ GITHUB_CONNECTOR_AUTHORIZED: "false" }),
+      env: isolatedMemoryEnv(),
       initialProjectPath: tmp("coding-context-disabled-project-"),
       uiDbPath: join(tmp("coding-context-disabled-ui-"), "keiko-ui.db"),
     });
 
     try {
-      expect(deps.codingContextGitHubPort).toBeUndefined();
+      expect(composeCodingContextConnectors(deps).connectorConfig).toMatchObject({
+        github_connector_authorized: false,
+      });
+    } finally {
+      await deps.dispose?.();
+    }
+  });
+
+  it("admits the GitHub connector only for the exact repository that was authorized", async () => {
+    const projectDir = tmp("coding-context-scoped-project-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("coding-context-scoped-evidence-"),
+      env: isolatedMemoryEnv(),
+      initialProjectPath: projectDir,
+      uiDbPath: join(tmp("coding-context-scoped-ui-"), "keiko-ui.db"),
+    });
+
+    try {
+      // A grant for a DIFFERENT repository must not authorize this one.
+      deps.store.updateGitHubIssueReaderAuthorization(
+        deriveRepositoryId(tmp("coding-context-other-project-")),
+        true,
+        0,
+      );
+      expect(composeCodingContextConnectors(deps).connectorConfig).toMatchObject({
+        github_connector_authorized: false,
+      });
+
+      deps.store.updateGitHubIssueReaderAuthorization(deriveRepositoryId(projectDir), true, 0);
+      expect(composeCodingContextConnectors(deps).connectorConfig).toMatchObject({
+        github_connector_authorized: true,
+      });
+
+      // Revoking takes effect on the next read, with no restart.
+      deps.store.updateGitHubIssueReaderAuthorization(deriveRepositoryId(projectDir), false, 1);
+      expect(composeCodingContextConnectors(deps).connectorConfig).toMatchObject({
+        github_connector_authorized: false,
+      });
     } finally {
       await deps.dispose?.();
     }
@@ -1495,7 +1808,10 @@ describe("buildUiHandlerDeps — coding-sidecar model-source wiring", () => {
     expect(deps.codingWorkbenchEvidenceStore).not.toBe(deps.evidenceStore);
   });
 
-  it("creates a server-owned autonomous delivery approval store by default", () => {
+  // #2958 (KEIKO-0115/KEIKO-0135): the autonomous-delivery approval store this used to assert was
+  // deleted with its unmounted route group. The deployment ceiling outlives it and must still fail
+  // closed to undefined, which the mounted readers translate to `governed-assist`.
+  it("leaves the autonomous delivery deployment ceiling unset when nothing configures one", () => {
     const deps = buildUiHandlerDeps({
       configPath: undefined,
       evidenceDir: tmp("ev-autonomous-store-"),
@@ -1503,8 +1819,8 @@ describe("buildUiHandlerDeps — coding-sidecar model-source wiring", () => {
       store: createInMemoryUiStore(),
     });
 
-    expect(deps.autonomousDeliveryApprovalStore).toBeDefined();
     expect(deps.autonomousDeliveryDeploymentCeiling).toBeUndefined();
+    expect("autonomousDeliveryApprovalStore" in deps).toBe(false);
   });
 
   it("derives the OpenAI API-key-through-gateway model source from the selected coding-safe provider", () => {
@@ -1564,6 +1880,47 @@ describe("buildUiHandlerDeps — coding-sidecar model-source wiring", () => {
     );
 
     expect(deps.codingSidecarGatewayModelSourceResolver?.()).toBe("openai-api-key-through-gateway");
+  });
+
+  it("stops resolving a removed child model while another gateway provider remains", () => {
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-child-model-generation-"),
+      env: {},
+      store: createInMemoryUiStore(),
+    });
+    const removed: ModelProviderConfig = {
+      modelId: "removed-coding-model",
+      baseUrl: "https://removed.example.invalid/v1",
+      apiKey: "fake-removed-key",
+      timeoutMs: 30_000,
+      maxRetries: 2,
+      retryBaseDelayMs: 500,
+    };
+    const retained: ModelProviderConfig = {
+      ...removed,
+      modelId: "retained-coding-model",
+      baseUrl: "https://retained.example.invalid/v1",
+      apiKey: "fake-retained-key",
+    };
+    const gatewayConfig = (providers: readonly ModelProviderConfig[]): GatewayConfig =>
+      parseGatewayConfig({
+        providers,
+        circuitBreaker: { failureThreshold: 5, cooldownMs: 30_000, halfOpenProbes: 2 },
+        capabilities: providers.map(verifiedCodingCapability),
+      });
+
+    const runtimeConfig = deps.gatewayConfig;
+    if (runtimeConfig === undefined) throw new Error("expected runtime gateway config");
+    const childModelPortFactory = createLiveCodingChildModelPortFactory(
+      runtimeConfig,
+      deps.modelPortFactory,
+    );
+    runtimeConfig.set(gatewayConfig([removed, retained]), true);
+    expect(childModelPortFactory(removed.modelId)).toBeDefined();
+    runtimeConfig.set(gatewayConfig([retained]), true);
+    expect(childModelPortFactory(removed.modelId)).toBeUndefined();
+    expect(childModelPortFactory(retained.modelId)).toBeDefined();
   });
 });
 

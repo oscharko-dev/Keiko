@@ -471,6 +471,75 @@ describe("WindowFrame content zoom controls", () => {
     expect(linkedAllFilesRoots).toHaveBeenCalledWith("prompt-enhancer-1");
   });
 
+  // A window whose own content takes focus while it initializes must not raise itself over the
+  // window the user moved to. Observed in CI as a "Close Files window" click that could never land:
+  // the editor window's content (Monaco, the workspace-trust banner) grabbed focus after the user
+  // had raised the Files window, and every focus grab put the editor back on top. Audit C061 /
+  // WCAG 2.4.11 covers TABBING into a lower window, which the shell records as
+  // `inputModality="keyboard"`; content autofocus is neither a Tab nor a pointer press.
+  it("does not raise a background window when its own content steals focus from another window", () => {
+    vi.useFakeTimers();
+    document.documentElement.dataset.inputModality = "pointer";
+    const focus = vi.fn();
+    const other = document.createElement("section");
+    other.className = "window";
+    const otherControl = document.createElement("button");
+    other.append(otherControl);
+    document.body.append(other);
+
+    render(
+      <WindowFrame
+        win={appWindow({ id: "editor-1", type: "editor" })}
+        top={false}
+        connState={null}
+        linkRevision={0}
+        api={api({ focus })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const frame = screen.getByRole("region");
+    fireEvent.focus(frame, { relatedTarget: otherControl });
+    vi.advanceTimersByTime(50);
+
+    expect(focus).not.toHaveBeenCalled();
+    other.remove();
+    delete document.documentElement.dataset.inputModality;
+    vi.useRealTimers();
+  });
+
+  // The accessibility behaviour the handler exists for still holds: tabbing into a lower window
+  // raises it, so the focused control cannot stay hidden behind the top window.
+  it("raises a background window when the user tabs into it from another window", () => {
+    vi.useFakeTimers();
+    document.documentElement.dataset.inputModality = "keyboard";
+    const focus = vi.fn();
+    const other = document.createElement("section");
+    other.className = "window";
+    const otherControl = document.createElement("button");
+    other.append(otherControl);
+    document.body.append(other);
+
+    render(
+      <WindowFrame
+        win={appWindow({ id: "editor-1", type: "editor" })}
+        top={false}
+        connState={null}
+        linkRevision={0}
+        api={api({ focus })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    fireEvent.focus(screen.getByRole("region"), { relatedTarget: otherControl });
+    vi.advanceTimersByTime(1);
+
+    expect(focus).toHaveBeenCalledWith("editor-1");
+    other.remove();
+    delete document.documentElement.dataset.inputModality;
+    vi.useRealTimers();
+  });
+
   it("defers focus long enough for selectable text drags to start", () => {
     vi.useFakeTimers();
     registerWindowRender("promptEnhancer", () => (
@@ -1807,6 +1876,96 @@ function FocusRestoreHarness({
     </div>
   );
 }
+
+// #3390: a button inside a window may open ANOTHER window. The opener's deferred raise (one tick
+// after a click on an interactive control) then put the opener back over the window it had just
+// opened, every time -- the Coding Workbench covered the Pull Request window its own "Review exact
+// draft" had opened, and nothing in that window could be clicked. Two things hold now: an opened
+// window receives focus, and a deferred raise yields to wherever focus has moved.
+describe("WindowFrame windows opened from inside a window (#3390)", () => {
+  it("does not let the deferred raise cover a window that took focus in the meantime", () => {
+    vi.useFakeTimers();
+    registerWindowRender("coding", () => <button type="button">Review exact draft</button>);
+    const focus = vi.fn();
+    render(
+      <>
+        <WindowFrame
+          win={appWindow({ id: "coding-1", type: "coding", w: 900, h: 700 })}
+          top
+          connState={null}
+          linkRevision={0}
+          api={api({ focus })}
+          wsRef={createRef<HTMLElement>()}
+        />
+        {/* A stand-in for the opened window: any focusable element carrying the window's id. */}
+        <button type="button" className="window" data-window-id="pr-1">
+          Pull Request
+        </button>
+      </>,
+    );
+    const review = screen.getByRole("button", { name: "Review exact draft" });
+    review.focus();
+    fireEvent.pointerDown(review, { button: 0 });
+    // The click's own handler opened another window, which took focus.
+    screen.getByRole("button", { name: "Pull Request" }).focus();
+    vi.advanceTimersByTime(1);
+    expect(focus).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("still raises the window one tick after a click on a control that kept focus inside it", () => {
+    vi.useFakeTimers();
+    registerWindowRender("coding", () => <button type="button">Refresh</button>);
+    const focus = vi.fn();
+    render(
+      <WindowFrame
+        win={appWindow({ id: "coding-1", type: "coding", w: 900, h: 700 })}
+        top={false}
+        connState={null}
+        linkRevision={0}
+        api={api({ focus })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+    const refresh = screen.getByRole("button", { name: "Refresh" });
+    refresh.focus();
+    fireEvent.pointerDown(refresh, { button: 0 });
+    vi.advanceTimersByTime(1);
+    expect(focus).toHaveBeenCalledWith("coding-1");
+    vi.useRealTimers();
+  });
+
+  it("moves focus into a window opened through the render context", () => {
+    vi.useFakeTimers();
+    registerWindowRender("coding", (_cfg, ctx) => (
+      <button type="button" onClick={() => ctx.openWindow("governedPullRequest")}>
+        Review exact draft
+      </button>
+    ));
+    const add = vi.fn(() => "pr-1");
+    render(
+      <>
+        <WindowFrame
+          win={appWindow({ id: "coding-1", type: "coding", w: 900, h: 700 })}
+          top
+          connState={null}
+          linkRevision={0}
+          api={api({ add })}
+          wsRef={createRef<HTMLElement>()}
+        />
+        {/* A stand-in for the opened window: any focusable element carrying the window's id. */}
+        <button type="button" className="window" data-window-id="pr-1">
+          Pull Request
+        </button>
+      </>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Review exact draft" }));
+    expect(add).toHaveBeenCalledWith("governedPullRequest", undefined);
+    vi.advanceTimersByTime(20);
+    expect(document.activeElement).toHaveAttribute("data-window-id", "pr-1");
+    vi.useRealTimers();
+  });
+});
 
 describe("WindowFrame close/minimize focus restore (GEN-UI-FOCUS-012)", () => {
   it("moves focus to the new top window after closing the top window — never <body>", async () => {

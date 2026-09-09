@@ -86,6 +86,11 @@ export const VERIFICATION_COMMAND_RULES: readonly CommandRule[] = Object.freeze(
     allowedSubcommands: Object.freeze(["vitest", "jest"]),
     denyFlags: Object.freeze(["-c", "--call"]),
   },
+  {
+    executable: "node",
+    requiredLeadingFlags: Object.freeze(["--test"]),
+    denyFlags: Object.freeze(["-e", "--eval", "-p", "--print", "-r", "--require", "--import"]),
+  },
   ...DEFAULT_COMMAND_RULES,
 ]);
 
@@ -250,18 +255,22 @@ function scriptNameMatchesKind(step: VerificationStep): boolean {
 }
 
 function isValidTargetedStep(step: VerificationStep): boolean {
-  if (step.scriptName !== undefined || step.command !== "npx" || step.args.length < 2) {
+  if (step.scriptName !== undefined || step.args.length < 2) {
     return false;
   }
-  if (step.args[0] === "vitest") {
-    return (
-      step.args[1] === "run" &&
-      step.args.length >= 3 &&
-      step.args.slice(2).every(isGeneratedTargetPath)
-    );
+  if (step.command === "node") {
+    return step.args[0] === "--test" && step.args.slice(1).every(isGeneratedTargetPath);
   }
-  if (step.args[0] === "jest") {
-    return step.args.length >= 2 && step.args.slice(1).every(isGeneratedTargetPath);
+  if (step.command !== "npx") return false;
+  return isValidNpxTargetedArgs(step.args);
+}
+
+function isValidNpxTargetedArgs(args: readonly string[]): boolean {
+  if (args[0] === "vitest") {
+    return args[1] === "run" && args.length >= 3 && args.slice(2).every(isGeneratedTargetPath);
+  }
+  if (args[0] === "jest") {
+    return args.length >= 2 && args.slice(1).every(isGeneratedTargetPath);
   }
   return false;
 }
@@ -486,7 +495,13 @@ function overallStatus(
     return "failed";
   }
   const allOk = results.every((r) => r.status === "passed" || r.status === "skipped");
-  return allOk ? "passed" : "failed";
+  if (!allOk) return "failed";
+  // The same KEIKO-0848 class one step further (#3390): a report whose EVERY step was skipped
+  // executed nothing either. Reporting it as "passed" told the coding model its verification had
+  // succeeded, while the verified-commit proof -- which requires at least one executed, passing
+  // step -- refused that very report; the model then abandoned the delivery (rehearsal run-16).
+  // "skipped" is the honest word: nothing failed, and nothing was proven.
+  return results.some((r) => r.status === "passed") ? "passed" : "skipped";
 }
 
 function countByStatus(results: readonly VerificationResult[]): Record<VerificationStatus, number> {

@@ -1,0 +1,1200 @@
+{
+  "schemaVersion": 1,
+  "decision": "ADR-0175",
+  "implementation": "architecture-only",
+  "budgetDispositions": [
+    "committed",
+    "released",
+    "not-reserved",
+    "commit-uncertain",
+    "release-uncertain"
+  ],
+  "owners": {
+    "genericTypes": "keiko-contracts",
+    "digestPrimitives": "keiko-security",
+    "descriptorsCompiler": "keiko-tool-catalog",
+    "handlers": "existing-domain-owners",
+    "policy": "existing-policy-evaluators",
+    "runtimeBinding": "keiko-server",
+    "adapterProjections": "catalog-compiler",
+    "workspaceSearch": "keiko-workspace",
+    "evidence": "existing-activity-log"
+  },
+  "axes": {
+    "toolRef": "canonicalId + contractVersion; semantic input/result/effect change requires a new version",
+    "alias": "profile-local ASCII name; never identity or authority",
+    "catalogRevision": "immutable digest of sorted descriptor references and profile/compatibility declarations",
+    "profile": "id + version; immutable intent and native extension set",
+    "adapterDialect": "id + version; exact representable schema semantics",
+    "adapterRuntime": "id + pinned version; compatibility requires explicit requalification",
+    "descriptorDigest": "semantic descriptor digest; changes invalidate bindings and result schema",
+    "projectionDigest": "full profile/adapter semantic digest; changes invalidate offers, cursors and generated source"
+  },
+  "digests": {
+    "descriptor": {
+      "domain": "keiko.tool-descriptor.v1",
+      "fields": [
+        "toolRef",
+        "description",
+        "inputSchema",
+        "resultSchema",
+        "effects",
+        "actionMapping",
+        "policyReferences",
+        "handlerRequirement",
+        "bounds",
+        "idempotency",
+        "cancellation"
+      ]
+    },
+    "projection": {
+      "domain": "keiko.tool-projection.v1",
+      "fields": [
+        "catalogRevision",
+        "profile",
+        "adapterDialect",
+        "adapterRuntime",
+        "nativeExtensions",
+        "tools.toolRef",
+        "tools.alias",
+        "tools.description",
+        "tools.inputSchema",
+        "tools.resultSchema",
+        "tools.effects",
+        "tools.actionMapping",
+        "tools.policyReferences",
+        "tools.handlerRequirement",
+        "tools.bounds",
+        "tools.descriptorDigest",
+        "compatibility"
+      ]
+    },
+    "catalog": {
+      "domain": "keiko.tool-catalog.v1",
+      "fields": ["sortedDescriptorDigests", "profiles", "compatibility"]
+    },
+    "request": {
+      "domain": "keiko.tool-request.v1",
+      "fields": [
+        "toolRef",
+        "projectionDigest",
+        "workspaceIdentity",
+        "workspaceRevision",
+        "canonicalArguments",
+        "nonce"
+      ]
+    },
+    "cursor": {
+      "domain": "keiko.tool-cursor.v1",
+      "fields": [
+        "toolRef",
+        "requestDigest",
+        "workspaceIdentity",
+        "workspaceRevision",
+        "profile",
+        "projectionDigest",
+        "expiresAt",
+        "budgetReservationId",
+        "nonce",
+        "pageSequence"
+      ]
+    }
+  },
+  "bounds": {
+    "maxArgumentBytes": 262144,
+    "maxResultBytes": 262144,
+    "maxSchemaDepth": 16,
+    "maxObjectKeys": 128,
+    "maxArrayItems": 1000,
+    "maxStringBytes": 65536,
+    "maxCursorBytes": 4096,
+    "maxCursorLifetimeMs": 300000,
+    "maxCompatibilityLifetimeMs": 604800000,
+    "maxQueryCharacters": 200,
+    "maxSearchHits": 50,
+    "maxSearchFiles": 2000,
+    "maxSearchFileBytes": 524288,
+    "maxSearchDurationMs": 5000,
+    "maxSnippetBytes": 512,
+    "maxSearchOutputBytes": 65536,
+    "maxSearchGlobsPerList": 32,
+    "maxSearchGlobCharacters": 200,
+    "maxSearchInventory": 50000,
+    "maxSearchYieldCandidates": 32
+  },
+  "statuses": {
+    "completed": ["none"],
+    "denied": [
+      "authority-invalid",
+      "authority-expired",
+      "authority-revoked",
+      "hard-denial",
+      "approval-required",
+      "approval-rejected",
+      "budget-exhausted",
+      "workspace-denied",
+      "effect-denied"
+    ],
+    "invalid": [
+      "unknown-tool",
+      "unoffered-tool",
+      "ambiguous-alias",
+      "invalid-arguments",
+      "version-mismatch",
+      "projection-mismatch",
+      "unsupported-capability",
+      "cursor-invalid",
+      "cursor-expired",
+      "cursor-replayed",
+      "workspace-stale",
+      "replay-conflict",
+      "recovery-required"
+    ],
+    "busy": ["invocation-in-flight", "capacity-exhausted"],
+    "cancelled": ["explicit-cancellation", "parent-cancelled"],
+    "timeout": ["deadline-exceeded"],
+    "failed": [
+      "handler-unavailable",
+      "handler-mismatch",
+      "handler-failed",
+      "result-contract-failed",
+      "effect-outcome-unknown",
+      "budget-port-failed"
+    ]
+  },
+  "recovery": {
+    "status": "invalid",
+    "reason": "recovery-required",
+    "condition": "A persisted binding cannot be resumed under its exact immutable identity and no live directional compatibility entry accepts it. No automatic replay or latest rebinding; human-selected restart gets a new invocation."
+  },
+  "readiness": ["ready", "unavailable", "dry-run", "unsupported", "mismatch"],
+  "phases": {
+    "projection": {
+      "op": "tool-catalog.projection",
+      "required": ["correlationId", "catalogRevision", "profile", "projectionDigest", "readiness"]
+    },
+    "bind-ready": {
+      "op": "tool-catalog.bind-ready",
+      "required": [
+        "correlationId",
+        "catalogRevision",
+        "profile",
+        "projectionDigest",
+        "readiness",
+        "handlerSetDigest"
+      ]
+    },
+    "bind-unavailable": {
+      "op": "tool-catalog.bind-unavailable",
+      "required": [
+        "correlationId",
+        "catalogRevision",
+        "profile",
+        "projectionDigest",
+        "readiness",
+        "reason"
+      ]
+    },
+    "invocation-started": {
+      "op": "tool-catalog.invocation-started",
+      "required": [
+        "correlationId",
+        "catalogRevision",
+        "profile",
+        "projectionDigest",
+        "invocationId",
+        "toolRef",
+        "state",
+        "reservationId",
+        "reason"
+      ]
+    },
+    "terminal": {
+      "op": "tool-catalog.invocation-settled",
+      "required": [
+        "correlationId",
+        "catalogRevision",
+        "profile",
+        "projectionDigest",
+        "invocationId",
+        "toolRef",
+        "status",
+        "reason",
+        "durationMs",
+        "settlementId",
+        "effectStarted",
+        "budgetDisposition",
+        "reservationId"
+      ]
+    },
+    "discarded": {
+      "op": "tool-catalog.completion-discarded",
+      "required": [
+        "correlationId",
+        "catalogRevision",
+        "profile",
+        "projectionDigest",
+        "invocationId",
+        "toolRef",
+        "settlementId",
+        "reason"
+      ]
+    }
+  },
+  "evidenceAllowed": [
+    "op",
+    "correlationId",
+    "parentCorrelationId",
+    "catalogRevision",
+    "profile",
+    "projectionDigest",
+    "descriptorDigest",
+    "handlerSetDigest",
+    "invocationId",
+    "toolRef",
+    "readiness",
+    "state",
+    "status",
+    "reason",
+    "reservationId",
+    "settlementId",
+    "durationMs",
+    "effectStarted",
+    "budgetDisposition",
+    "inputBytes",
+    "outputBytes",
+    "resultCount",
+    "truncated",
+    "errorKind",
+    "frames",
+    "causeChain"
+  ],
+  "evidenceForbidden": [
+    "arguments",
+    "query",
+    "path",
+    "scopePath",
+    "snippet",
+    "symbol",
+    "content",
+    "schema",
+    "output",
+    "prompt",
+    "credentials",
+    "endpoint",
+    "message",
+    "rawText"
+  ],
+  "interfaces": {
+    "ToolRef": {
+      "ownerIssue": 3406,
+      "fields": ["canonicalId", "contractVersion"]
+    },
+    "ToolDescriptor": {
+      "ownerIssue": 3406,
+      "fields": [
+        "toolRef",
+        "description",
+        "inputSchema",
+        "resultSchema",
+        "effects",
+        "actionMapping",
+        "policyReferences",
+        "handlerRequirement",
+        "bounds",
+        "idempotency",
+        "cancellation",
+        "descriptorDigest"
+      ]
+    },
+    "CatalogProfile": {
+      "ownerIssue": 3406,
+      "fields": [
+        "profile",
+        "catalogRevision",
+        "toolRefs",
+        "nativeExtensions",
+        "adapterDialect",
+        "adapterRuntime",
+        "compatibility"
+      ]
+    },
+    "CompiledToolProjection": {
+      "ownerIssue": 3406,
+      "fields": [
+        "catalogRevision",
+        "profile",
+        "adapterDialect",
+        "adapterRuntime",
+        "tools",
+        "nativeExtensions",
+        "projectionDigest"
+      ]
+    },
+    "ToolResultEnvelope": {
+      "ownerIssue": 3406,
+      "fields": [
+        "schemaVersion",
+        "invocationId",
+        "toolRef",
+        "projectionDigest",
+        "status",
+        "reason",
+        "effectStarted",
+        "metrics",
+        "page",
+        "data"
+      ]
+    },
+    "CatalogManifest": {
+      "ownerIssue": 3406,
+      "fields": [
+        "schemaVersion",
+        "catalogRevision",
+        "profile",
+        "projectionDigest",
+        "toolRefs",
+        "descriptorDigests",
+        "bounds",
+        "compatibility"
+      ]
+    },
+    "LifecycleOperationContract": {
+      "ownerIssue": 3412,
+      "fields": ["schemaVersion", "phase", "op", "requiredFields", "provenance"]
+    },
+    "CatalogToolBinder": {
+      "ownerIssue": 3413,
+      "fields": [
+        "projection",
+        "handlerBindings",
+        "authorityPort",
+        "budgetPort",
+        "approvalPort",
+        "logPort"
+      ]
+    },
+    "BoundToolSet": {
+      "ownerIssue": 3413,
+      "fields": ["catalogRevision", "profile", "projectionDigest", "handlerSetDigest", "readiness"]
+    },
+    "OfferedToolSet": {
+      "ownerIssue": 3413,
+      "fields": ["binding", "offerId", "toolRefs", "expiresAt"]
+    },
+    "DispatchContext": {
+      "ownerIssue": 3413,
+      "fields": [
+        "binding",
+        "offerId",
+        "invocationId",
+        "correlationId",
+        "workspaceIdentity",
+        "workspaceRevision",
+        "authority",
+        "action",
+        "idempotencyKey",
+        "signal",
+        "deadlineAt",
+        "budgetPort"
+      ]
+    },
+    "CursorBinding": {
+      "ownerIssue": 3413,
+      "fields": [
+        "toolRef",
+        "requestDigest",
+        "workspaceIdentity",
+        "workspaceRevision",
+        "profile",
+        "projectionDigest",
+        "expiresAt",
+        "budgetReservationId",
+        "nonce",
+        "pageSequence"
+      ]
+    },
+    "InvocationReceipt": {
+      "ownerIssue": 3413,
+      "fields": [
+        "invocationId",
+        "reservationId",
+        "settlementId",
+        "budgetDisposition",
+        "effectStarted",
+        "status"
+      ]
+    },
+    "BoundToolInvocation": {
+      "ownerIssue": 3409,
+      "fields": ["kind", "toolRef", "projectionDigest", "offerId", "arguments"]
+    },
+    "LegacyToolInvocation": {
+      "ownerIssue": 3409,
+      "fields": ["kind", "name", "arguments", "legacyBinding"]
+    },
+    "HarnessRunBinding": {
+      "ownerIssue": 3409,
+      "fields": ["runId", "signal", "budgetPort", "runCounters", "runSettlement"]
+    },
+    "H1Handler": {
+      "ownerIssue": 3386,
+      "fields": ["request", "result", "readiness", "signal", "containment", "evidence"]
+    },
+    "OpenCodeProjection": {
+      "ownerIssue": 3414,
+      "fields": [
+        "projection",
+        "source",
+        "launchProfile",
+        "protocol",
+        "ipc",
+        "prompt",
+        "configuration"
+      ]
+    },
+    "H1Provenance": {
+      "ownerIssue": 3414,
+      "fields": [
+        "schemaVersion",
+        "integrationPr",
+        "sourceHead",
+        "treeDigest",
+        "verificationRef",
+        "reviewRef",
+        "catalogRevision",
+        "profile",
+        "projectionDigest",
+        "handlerSetDigest",
+        "currentHead"
+      ]
+    },
+    "ChildProjection": {
+      "ownerIssue": 3407,
+      "fields": [
+        "projection",
+        "boundInvocation",
+        "inheritedAuthority",
+        "budgetPort",
+        "signal",
+        "eventSink"
+      ]
+    },
+    "EditorProjection": {
+      "ownerIssue": 3408,
+      "fields": ["projection", "boundInvocation", "activeSubset", "policyPort", "eventSink"]
+    },
+    "CatalogCloseout": {
+      "ownerIssue": 3415,
+      "fields": [
+        "schemaVersion",
+        "currentHead",
+        "artifactDigest",
+        "catalogRevision",
+        "profiles",
+        "projectionDigests",
+        "handlerSetDigests",
+        "h1EvidenceRef",
+        "h1EvidenceDigest",
+        "migrationCount",
+        "checks",
+        "platform",
+        "runtime"
+      ]
+    }
+  },
+  "consumers": {
+    "3406": {
+      "inputs": [],
+      "outputs": [
+        "ToolRef",
+        "ToolDescriptor",
+        "CatalogProfile",
+        "CompiledToolProjection",
+        "ToolResultEnvelope",
+        "CatalogManifest"
+      ]
+    },
+    "3412": {
+      "inputs": [],
+      "outputs": ["LifecycleOperationContract"]
+    },
+    "3413": {
+      "inputs": ["CompiledToolProjection", "ToolResultEnvelope", "LifecycleOperationContract"],
+      "outputs": [
+        "CatalogToolBinder",
+        "BoundToolSet",
+        "OfferedToolSet",
+        "DispatchContext",
+        "CursorBinding",
+        "InvocationReceipt"
+      ]
+    },
+    "3409": {
+      "inputs": ["CatalogToolBinder", "OfferedToolSet", "InvocationReceipt", "ToolResultEnvelope"],
+      "outputs": ["BoundToolInvocation", "LegacyToolInvocation", "HarnessRunBinding"]
+    },
+    "3386": {
+      "inputs": ["ToolRef"],
+      "outputs": ["H1Handler"]
+    },
+    "3414": {
+      "inputs": ["CompiledToolProjection", "BoundToolInvocation", "CatalogToolBinder", "H1Handler"],
+      "outputs": ["OpenCodeProjection", "H1Provenance"]
+    },
+    "3407": {
+      "inputs": [
+        "CompiledToolProjection",
+        "BoundToolInvocation",
+        "CatalogToolBinder",
+        "OpenCodeProjection"
+      ],
+      "outputs": ["ChildProjection"]
+    },
+    "3408": {
+      "inputs": ["CompiledToolProjection", "BoundToolInvocation", "CatalogToolBinder"],
+      "outputs": ["EditorProjection"]
+    },
+    "3415": {
+      "inputs": [
+        "CatalogManifest",
+        "LifecycleOperationContract",
+        "InvocationReceipt",
+        "HarnessRunBinding",
+        "OpenCodeProjection",
+        "H1Provenance",
+        "ChildProjection",
+        "EditorProjection"
+      ],
+      "outputs": ["CatalogCloseout"]
+    },
+    "3390": {
+      "inputs": ["CatalogCloseout"],
+      "outputs": []
+    }
+  },
+  "inventory": [
+    {
+      "id": "generic-gateway",
+      "path": "packages/keiko-contracts/src/gateway.ts",
+      "probe": "interface ToolDefinition",
+      "disposition": "migrate/delete",
+      "ownerIssue": 3409,
+      "scope": "name/description/parameters; GatewayRequest.tools and normalized provider calls"
+    },
+    {
+      "id": "generic-tool-port",
+      "path": "packages/keiko-contracts/src/tools.ts",
+      "probe": "interface ToolPort",
+      "disposition": "migrate/delete",
+      "ownerIssue": 3409,
+      "scope": "ToolCallRequest/ToolCallResult; one temporary additive bridge"
+    },
+    {
+      "id": "digest-primitives",
+      "path": "packages/keiko-security/src/hashing.ts",
+      "probe": "function canonicalise",
+      "disposition": "retain owner",
+      "ownerIssue": 3406,
+      "scope": "canonicalise and sha256Hex; validate before canonicalizing"
+    },
+    {
+      "id": "legacy-schema",
+      "path": "packages/keiko-tools/src/schemas.ts",
+      "probe": "TOOL_DEFINITIONS",
+      "disposition": "derive projection",
+      "ownerIssue": 3409,
+      "scope": "read_file,list_files,inspect_package_scripts,run_command,propose_patch,apply_patch"
+    },
+    {
+      "id": "legacy-host",
+      "path": "packages/keiko-tools/src/registry.ts",
+      "probe": "class WorkspaceToolHost",
+      "disposition": "migrate/delete",
+      "ownerIssue": 3409,
+      "scope": "name switch and bespoke argument parsers; retain domain execution"
+    },
+    {
+      "id": "editor-schema",
+      "path": "packages/keiko-tools/src/editor-agent-schemas.ts",
+      "probe": "EDITOR_AGENT_TOOL_DEFINITIONS",
+      "disposition": "derive projection",
+      "ownerIssue": 3408,
+      "scope": "nine descriptors; no count implies active availability"
+    },
+    {
+      "id": "editor-host",
+      "path": "packages/keiko-tools/src/editor-agent-tool-host.ts",
+      "probe": "class EditorAgentToolHost",
+      "disposition": "migrate/delete",
+      "ownerIssue": 3408,
+      "scope": "schema/parser/host alignment; retain Editor governance"
+    },
+    {
+      "id": "editor-route",
+      "path": "packages/keiko-server/src/editor/agentProducerRoute.ts",
+      "probe": "tool",
+      "disposition": "derive projection",
+      "ownerIssue": 3408,
+      "scope": "active subset/count and production sink"
+    },
+    {
+      "id": "opencode-schema",
+      "path": "packages/keiko-server/src/coding-runtime/opencodeToolSchemas.ts",
+      "probe": "OPENCODE_TOOL_SOURCE_DEFINITIONS",
+      "disposition": "derive projection",
+      "ownerIssue": 3414,
+      "scope": "sixteen Keiko tools and native question/todowrite; canonical repo search (keiko.repo.search@1, H1 #3386) implemented and projected, tracked non-authorizing via GOVERNED_TOOL_CONTRACT_PINS.pendingH1 until #3414 removes it"
+    },
+    {
+      "id": "opencode-launch",
+      "path": "packages/keiko-server/src/coding-runtime/opencodeLaunchProfile.ts",
+      "probe": "OPENCODE_MODEL_VISIBLE_TOOL_NAMES",
+      "disposition": "derive projection",
+      "ownerIssue": 3414,
+      "scope": "prompt, tools enablement and permissions"
+    },
+    {
+      "id": "opencode-source",
+      "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts",
+      "probe": "OPENCODE_TOOL_SOURCE_DEFINITIONS",
+      "disposition": "derive projection",
+      "ownerIssue": 3414,
+      "scope": "generated source; retain process adapter owner"
+    },
+    {
+      "id": "opencode-protocol",
+      "path": "packages/keiko-server/src/coding-runtime/opencodeProtocol.ts",
+      "probe": "OPENCODE_TOOL_SOURCE_DEFINITIONS",
+      "disposition": "derive projection",
+      "ownerIssue": 3414,
+      "scope": "allowlist, protocol parser and tool schema digest"
+    },
+    {
+      "id": "opencode-ipc",
+      "path": "packages/keiko-server/src/coding-runtime/codingToolIpc.ts",
+      "probe": "CodingToolResult",
+      "disposition": "derive projection",
+      "ownerIssue": 3414,
+      "scope": "actions/capabilities/bounds/results; transport remains server-owned"
+    },
+    {
+      "id": "sidecar-transport",
+      "path": "packages/keiko-server/src/coding-sidecar-gateway.ts",
+      "probe": "function parseTools",
+      "disposition": "derive projection",
+      "ownerIssue": 3414,
+      "scope": "arbitrary runtime definitions are transport only; never governed authority"
+    },
+    {
+      "id": "live-authority",
+      "path": "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts",
+      "probe": "createCodingToolAuthorityPort",
+      "disposition": "retain owner",
+      "ownerIssue": 3413,
+      "scope": "live action and Authority Envelope evaluation"
+    },
+    {
+      "id": "governed-delegate",
+      "path": "packages/keiko-server/src/coding-runtime/codingToolGovernedDelegate.ts",
+      "probe": "createCodingToolGovernedDelegate",
+      "disposition": "retain owner",
+      "ownerIssue": 3413,
+      "scope": "existing dispatch ports and governed result owner"
+    },
+    {
+      "id": "handler-composition",
+      "path": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts",
+      "probe": "createProductionManagedWorktreeToolFacade",
+      "disposition": "retain owner",
+      "ownerIssue": 3386,
+      "scope": "read/edit/verification/Git handlers and optional readiness"
+    },
+    {
+      "id": "child-host",
+      "path": "packages/keiko-server/src/coding-runtime/productionReadOnlyChildRunner.ts",
+      "probe": "childRegistrationSet",
+      "disposition": "derive projection",
+      "ownerIssue": 3407,
+      "scope": "moved from the hand-typed READ_FILE_TOOL definition (#3407): the child tool is now keiko.child.workspace.read@1 bound through childRegistrationSet()/createKeikoToolCatalog; retired mapping: probe READ_FILE_TOOL, disposition migrate/delete; exact parser, inherited budget and transient sink retained"
+    },
+    {
+      "id": "harness-executor",
+      "path": "packages/keiko-harness/src/catalog-budget.ts",
+      "probe": "descriptorRunsCommand",
+      "disposition": "derive projection",
+      "ownerIssue": 3409,
+      "scope": "moved from executor.ts RUN_COMMAND_TOOL (#3409/#3411); command charge now derives from effects.includes(\"command-execution\"); outer counter retained in catalog-runtime.ts"
+    },
+    {
+      "id": "gateway-openai",
+      "path": "packages/keiko-model-gateway/src/openai-adapter.ts",
+      "probe": "tools",
+      "disposition": "derive projection",
+      "ownerIssue": 3409,
+      "scope": "provider projection and normalized bound return"
+    },
+    {
+      "id": "realtime-compatibility",
+      "path": "packages/keiko-model-gateway/src/realtime-voice-adapter.ts",
+      "probe": "requestRealtimeNegotiation",
+      "disposition": "retain owner",
+      "ownerIssue": 3409,
+      "scope": "provider-native tool request types were removed at #3415 closeout; the media/transcription negotiation owner remains and never accepts or forwards tools"
+    },
+    {
+      "id": "cli-composition",
+      "path": "packages/keiko-cli/src/run.ts",
+      "probe": "DryRunToolPort",
+      "disposition": "retain owner",
+      "ownerIssue": 3409,
+      "scope": "default dry-run remains nonproductive"
+    },
+    {
+      "id": "server-composition",
+      "path": "packages/keiko-server/src/run-engine.ts",
+      "probe": "DryRunToolPort",
+      "disposition": "retain owner",
+      "ownerIssue": 3409,
+      "scope": "default dry-run remains nonproductive"
+    },
+    {
+      "id": "sdk-composition",
+      "path": "packages/keiko-sdk/src/run-agent.ts",
+      "probe": "runAgent",
+      "disposition": "derive projection",
+      "ownerIssue": 3409,
+      "scope": "public SDK boundary; backend required for productive calls"
+    },
+    {
+      "id": "harness-sink",
+      "path": "packages/keiko-server/src/sink.ts",
+      "probe": "QueueEventSink",
+      "disposition": "retain owner",
+      "ownerIssue": 3409,
+      "scope": "run-terminal durability does not prove invocation lifecycle durability"
+    },
+    {
+      "id": "workspace-search",
+      "path": "packages/keiko-workspace/src/repoSearch.ts",
+      "probe": "contentLane",
+      "disposition": "retain owner",
+      "ownerIssue": 3386,
+      "scope": "existing bounded lexical facade; raw coordinate calculation stays here"
+    },
+    {
+      "id": "workspace-scan",
+      "path": "packages/keiko-workspace/src/repoSearchScan.ts",
+      "probe": "contentLane",
+      "disposition": "retain owner",
+      "ownerIssue": 3386,
+      "scope": "raw match coordinates before separate snippet redaction"
+    },
+    {
+      "id": "workspace-raw-read",
+      "path": "packages/keiko-workspace/src/discovery.ts",
+      "probe": "readWorkspaceFileForEditing",
+      "disposition": "retain owner",
+      "ownerIssue": 3386,
+      "scope": "same descriptor containment/deny/link/size guard chain"
+    },
+    {
+      "id": "editor-raw-lane",
+      "path": "packages/keiko-server/src/editor/workspaceSearchRoutes.ts",
+      "probe": "EDITOR_SEARCH_LANE",
+      "disposition": "retain owner",
+      "ownerIssue": 3408,
+      "scope": "existing exact Editor lane selector; coding server gets no raw-read exemption"
+    },
+    {
+      "id": "diagnostic-generator",
+      "path": "scripts/generate-op-catalog.mjs",
+      "probe": "operation",
+      "disposition": "retain owner",
+      "ownerIssue": 3412,
+      "scope": "extend existing bracket-depth scanner; catalog is separate from tool metadata"
+    },
+    {
+      "id": "diagnostic-sink",
+      "path": "packages/keiko-server/src/diagnostics-log.ts",
+      "probe": "operation",
+      "disposition": "retain owner",
+      "ownerIssue": 3413,
+      "scope": "existing operation to op adaptation and structured diagnostics"
+    },
+    {
+      "id": "activity-redaction",
+      "path": "packages/keiko-server/src/observability/log-redaction.ts",
+      "probe": "redact",
+      "disposition": "retain owner",
+      "ownerIssue": 3413,
+      "scope": "body-free allowlisted lifecycle fields only"
+    },
+    {
+      "id": "browser-contract",
+      "path": "packages/keiko-contracts/src/coding-workbench-runtime.ts",
+      "probe": "toolCalls",
+      "disposition": "derive projection",
+      "ownerIssue": 3413,
+      "scope": "BFF-only JSON-safe output; no executable/authority/root material"
+    },
+    {
+      "id": "editor-policy",
+      "path": "packages/keiko-contracts/src/editor-agent-governance.ts",
+      "probe": "EDITOR_AGENT_ACTION_EFFECT_CLASS",
+      "disposition": "retain owner",
+      "ownerIssue": 3408,
+      "scope": "action/effect/workbench/risk tables stay authoritative; catalog derives references"
+    },
+    {
+      "id": "coding-facade",
+      "path": "packages/keiko-server/src/coding-runtime/codingToolFacade.ts",
+      "probe": "createCodingToolFacade",
+      "disposition": "retain owner",
+      "ownerIssue": 3413,
+      "scope": "authority admission and projected result bounds; binder reuses ports"
+    },
+    {
+      "id": "opencode-readiness",
+      "path": "packages/keiko-server/src/coding-runtime/productionOpenCodeActivation.ts",
+      "probe": "unavailableReason",
+      "disposition": "retain owner",
+      "ownerIssue": 3413,
+      "scope": "runtime-disabled, loopback, secure-read and platform qualification are live readiness"
+    },
+    {
+      "id": "opencode-composition",
+      "path": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts",
+      "probe": "create",
+      "disposition": "derive projection",
+      "ownerIssue": 3414,
+      "scope": "process/provider boundary; compiled projection binding at launch"
+    },
+    {
+      "id": "coding-port-composition",
+      "path": "packages/keiko-server/src/coding-runtime/productionCodingRuntimePorts.ts",
+      "probe": "ready",
+      "disposition": "retain owner",
+      "ownerIssue": 3413,
+      "scope": "production runtime port availability; static intent is not ready"
+    },
+    {
+      "id": "codex-disabled",
+      "path": "packages/keiko-server/src/coding-runtime/codexRuntimeComposition.ts",
+      "probe": "disabled",
+      "disposition": "retain owner",
+      "ownerIssue": 3413,
+      "scope": "ADR-0163/closed3316 activation remains denied"
+    },
+    {
+      "id": "support-analyzer",
+      "path": "packages/keiko-cli/src/support-analyze.ts",
+      "probe": "analyzeLogText",
+      "disposition": "retain owner",
+      "ownerIssue": 3413,
+      "scope": "runtime phase reconstruction and gaps; generator does not edit analyzer"
+    },
+    {
+      "id": "gateway-normalization",
+      "path": "packages/keiko-model-gateway/src/normalize.ts",
+      "probe": "toolCalls",
+      "disposition": "derive projection",
+      "ownerIssue": 3409,
+      "scope": "normalize returned calls to exact bound identities"
+    },
+    {
+      "id": "coding-assist-policy",
+      "path": "packages/keiko-server/src/coding-runtime/supervisedCodingPolicy.ts",
+      "probe": "SupervisedCodingDecisionStatus",
+      "disposition": "retain owner",
+      "ownerIssue": 3413,
+      "scope": "supervised/assist policy, no catalog-granted authority"
+    },
+    {
+      "id": "coding-delivery-policy",
+      "path": "packages/keiko-server/src/coding-runtime/autonomousDeliveryPolicy.ts",
+      "probe": "decideAutonomousDeliveryOperation",
+      "disposition": "retain owner",
+      "ownerIssue": 3413,
+      "scope": "full access and mode-independent hard denials -- this exact source was removed in #2958 (commit f60e7bc230e06cd0e58fde0e89904e330b97cf05); ownership of the concern is retained, not the file, verified below through inventoryMigrations' three replacement probes"
+    }
+  ],
+  "examples": {
+    "projection": {
+      "correlationId": "correlation-1",
+      "catalogRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "profile": {
+        "id": "managed-opencode",
+        "version": 1
+      },
+      "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "readiness": "ready",
+      "op": "tool-catalog.projection"
+    },
+    "bind-ready": {
+      "correlationId": "correlation-1",
+      "catalogRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "profile": {
+        "id": "managed-opencode",
+        "version": 1
+      },
+      "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "readiness": "ready",
+      "handlerSetDigest": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "op": "tool-catalog.bind-ready"
+    },
+    "bind-unavailable": {
+      "correlationId": "correlation-1",
+      "catalogRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "profile": {
+        "id": "managed-opencode",
+        "version": 1
+      },
+      "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "readiness": "unavailable",
+      "reason": "handler-unavailable",
+      "op": "tool-catalog.bind-unavailable"
+    },
+    "invocation-started": {
+      "correlationId": "correlation-1",
+      "catalogRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "profile": {
+        "id": "managed-opencode",
+        "version": 1
+      },
+      "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "invocationId": "invocation-1",
+      "toolRef": {
+        "canonicalId": "keiko.repo.search",
+        "contractVersion": 1
+      },
+      "state": "started",
+      "reservationId": "reservation-1",
+      "reason": "none",
+      "op": "tool-catalog.invocation-started"
+    },
+    "terminal": {
+      "correlationId": "correlation-1",
+      "catalogRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "profile": {
+        "id": "managed-opencode",
+        "version": 1
+      },
+      "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "invocationId": "invocation-1",
+      "toolRef": {
+        "canonicalId": "keiko.repo.search",
+        "contractVersion": 1
+      },
+      "status": "completed",
+      "reason": "none",
+      "durationMs": 10,
+      "settlementId": "settlement-1",
+      "effectStarted": true,
+      "budgetDisposition": "committed",
+      "op": "tool-catalog.invocation-settled",
+      "reservationId": "reservation-1"
+    },
+    "discarded": {
+      "correlationId": "correlation-1",
+      "catalogRevision": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "profile": {
+        "id": "managed-opencode",
+        "version": 1
+      },
+      "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "invocationId": "invocation-1",
+      "toolRef": {
+        "canonicalId": "keiko.repo.search",
+        "contractVersion": 1
+      },
+      "settlementId": "settlement-1",
+      "reason": "late-completion",
+      "op": "tool-catalog.completion-discarded"
+    }
+  },
+  "pagination": {
+    "reasons": [
+      "none",
+      "result-cap",
+      "byte-cap",
+      "file-cap",
+      "inventory-cap",
+      "time-cap",
+      "cancelled",
+      "oversized-file",
+      "denied-file",
+      "stale-index"
+    ],
+    "cursorBinding": "single-use opaque server reference; exact CursorBinding; every page reauthorized and budgeted"
+  },
+  "resultExamples": {
+    "completed": {
+      "schemaVersion": 1,
+      "invocationId": "invocation-1",
+      "toolRef": {
+        "canonicalId": "keiko.repo.search",
+        "contractVersion": 1
+      },
+      "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "status": "completed",
+      "reason": "none",
+      "effectStarted": true,
+      "metrics": {
+        "inputBytes": 2,
+        "outputBytes": 2,
+        "resultCount": 0,
+        "durationMs": 1
+      },
+      "page": {
+        "truncated": false,
+        "reason": "none",
+        "cursor": null
+      },
+      "data": {
+        "matches": []
+      }
+    },
+    "denied": {
+      "schemaVersion": 1,
+      "invocationId": "invocation-1",
+      "toolRef": {
+        "canonicalId": "keiko.repo.search",
+        "contractVersion": 1
+      },
+      "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "status": "denied",
+      "reason": "authority-invalid",
+      "effectStarted": false,
+      "metrics": {
+        "inputBytes": 2,
+        "outputBytes": 2,
+        "resultCount": 0,
+        "durationMs": 1
+      },
+      "page": null,
+      "data": null
+    },
+    "invalid": {
+      "schemaVersion": 1,
+      "invocationId": "invocation-1",
+      "toolRef": {
+        "canonicalId": "keiko.repo.search",
+        "contractVersion": 1
+      },
+      "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "status": "invalid",
+      "reason": "unknown-tool",
+      "effectStarted": false,
+      "metrics": {
+        "inputBytes": 2,
+        "outputBytes": 2,
+        "resultCount": 0,
+        "durationMs": 1
+      },
+      "page": null,
+      "data": null
+    },
+    "busy": {
+      "schemaVersion": 1,
+      "invocationId": "invocation-1",
+      "toolRef": {
+        "canonicalId": "keiko.repo.search",
+        "contractVersion": 1
+      },
+      "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "status": "busy",
+      "reason": "invocation-in-flight",
+      "effectStarted": false,
+      "metrics": {
+        "inputBytes": 2,
+        "outputBytes": 2,
+        "resultCount": 0,
+        "durationMs": 1
+      },
+      "page": null,
+      "data": null
+    },
+    "cancelled": {
+      "schemaVersion": 1,
+      "invocationId": "invocation-1",
+      "toolRef": {
+        "canonicalId": "keiko.repo.search",
+        "contractVersion": 1
+      },
+      "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "status": "cancelled",
+      "reason": "explicit-cancellation",
+      "effectStarted": false,
+      "metrics": {
+        "inputBytes": 2,
+        "outputBytes": 2,
+        "resultCount": 0,
+        "durationMs": 1
+      },
+      "page": null,
+      "data": null
+    },
+    "timeout": {
+      "schemaVersion": 1,
+      "invocationId": "invocation-1",
+      "toolRef": {
+        "canonicalId": "keiko.repo.search",
+        "contractVersion": 1
+      },
+      "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "status": "timeout",
+      "reason": "deadline-exceeded",
+      "effectStarted": false,
+      "metrics": {
+        "inputBytes": 2,
+        "outputBytes": 2,
+        "resultCount": 0,
+        "durationMs": 1
+      },
+      "page": null,
+      "data": null
+    },
+    "failed": {
+      "schemaVersion": 1,
+      "invocationId": "invocation-1",
+      "toolRef": {
+        "canonicalId": "keiko.repo.search",
+        "contractVersion": 1
+      },
+      "projectionDigest": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "status": "failed",
+      "reason": "handler-unavailable",
+      "effectStarted": false,
+      "metrics": {
+        "inputBytes": 2,
+        "outputBytes": 2,
+        "resultCount": 0,
+        "durationMs": 1
+      },
+      "page": null,
+      "data": null
+    }
+  },
+  "inventoryMigrations": {
+    "coding-delivery-policy": {
+      "removedInCommit": "f60e7bc230e06cd0e58fde0e89904e330b97cf05",
+      "removalIssue": 2958,
+      "ownerIssue": 3413,
+      "replacements": [
+        {
+          "path": "packages/keiko-server/src/coding-runtime/codingToolAuthorityPort.ts",
+          "probe": "codingWorkbenchPolicyEffectFor("
+        },
+        {
+          "path": "packages/keiko-contracts/src/coding-workbench.ts",
+          "probe": "export function codingWorkbenchPolicyEffectFor("
+        },
+        {
+          "path": "packages/keiko-server/src/gitDelivery/runBoundAuthority.ts",
+          "probe": "export function authorizeGitDelivery("
+        }
+      ]
+    }
+  }
+}

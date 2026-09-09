@@ -220,6 +220,36 @@ const CLI_HEAVY_PACKAGE_ALLOWED_SUBPATHS = /^@oscharko-dev\/keiko-server\/creden
 
 const IMPORT_POLICY_RULES = [
   {
+    name: "adr-0175-tool-catalog-pure-imports",
+    matchesFile: (path, mode) =>
+      mode === "fixtures"
+        ? path.startsWith(`${FIXTURE_ROOT}/tool-catalog-pure/`)
+        : path.startsWith("packages/keiko-tool-catalog/src/"),
+    matchesSpecifier: (specifier, path) => {
+      if (/^@oscharko-dev\/keiko-(contracts|security)($|\/)/u.test(specifier)) return false;
+      return (
+        !specifier.startsWith(".") ||
+        !candidateImportPaths(specifier, path).some((candidate) =>
+          candidate.startsWith("packages/keiko-tool-catalog/src/"),
+        )
+      );
+    },
+    matchesImportKind: (kind) => kind !== "raw-coordinate-lane",
+  },
+  {
+    // ADR-0165 D2: selecting a raw lane through the public search barrel is as
+    // sensitive as importing editor-read. Check the property even when its value
+    // is indirect; a variable, shorthand or computed literal cannot evade this.
+    name: "adr-0165-raw-coordinate-owner",
+    matchesFile: (path, mode) =>
+      mode === "fixtures"
+        ? path.startsWith(`${FIXTURE_ROOT}/raw-coordinate-owner/`)
+        : !path.startsWith("packages/keiko-workspace/src/") &&
+          path !== "packages/keiko-server/src/editor/workspaceSearchRoutes.ts",
+    matchesSpecifier: (specifier) => specifier === "contentLane",
+    matchesImportKind: (kind) => kind === "raw-coordinate-lane",
+  },
+  {
     name: "adr-0005-owned-root-containment-allowed-callers",
     matchesFile: (path, mode) =>
       mode === "fixtures"
@@ -487,6 +517,9 @@ function callExpressionEntry(node) {
 }
 
 function importSpecifierEntry(node) {
+  if ((ts.isIdentifier(node) || isStringLiteralLike(node)) && node.text === "contentLane") {
+    return { node, specifier: node.text, kind: "raw-coordinate-lane" };
+  }
   return moduleSpecifierEntry(node) ?? importTypeEntry(node) ?? callExpressionEntry(node);
 }
 

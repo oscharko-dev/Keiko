@@ -182,3 +182,17 @@ export const isSafeGitRef = (value: unknown): value is string => {
   if (value.includes(":")) return false;
   return true;
 };
+
+// A GitHub "owner/repo" slug — shared by every PR-lifecycle route (create/update, mark-ready) so the
+// pattern is asserted exactly once (#3389: factored out of prRoutes.ts to break the import cycle a
+// prMarkReadyExecution.ts -> prRoutes.ts dependency would otherwise create).
+const OWNER_AND_REPO_RE = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+
+export const isOwnerAndRepo = (value: unknown): value is string =>
+  typeof value === "string" && OWNER_AND_REPO_RE.test(value);
+
+// A GitHub provider-assigned PR number, always carried as a decimal-digit string on the wire.
+const PR_NUMBER_RE = /^[1-9]\d{0,9}$/;
+
+export const isPrNumberString = (value: unknown): value is string =>
+  typeof value === "string" && PR_NUMBER_RE.test(value);

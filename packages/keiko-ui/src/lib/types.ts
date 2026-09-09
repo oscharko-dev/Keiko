@@ -439,6 +439,8 @@ export type {
   GatewayReadinessReport,
   GatewayReadinessRequest,
   GatewayReadinessVerifiedCapabilities,
+  ChatGitChangeScope,
+  ChatGitChangeDescriptionStatus,
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 // #2906 review (comment 3865167721): the one predicate for "does this entry behave like a
 // navigable directory" -- a real directory, or a symlink the walk resolved to one -- so

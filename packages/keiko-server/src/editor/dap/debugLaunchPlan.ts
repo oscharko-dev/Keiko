@@ -36,12 +36,15 @@ import {
 } from "./debugLaunchCatalog.js";
 import { isSafeDapSocketBasename, isSha256Digest } from "./debugLaunchSecurityPredicates.js";
 import { inspectWorkspaceRootIdentity } from "../../workspace-root-identity.js";
+import type { ServerLogSink } from "../../observability/server-log.js";
+import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../../correlation.js";
 
 const CAPSULE_ROOT = "/keiko-execution-root" as const;
 const CAPSULE_RUNTIME_ROOT = "/run/keiko-debug" as const;
 const NPM_USER_CONFIG_PATH = "/opt/keiko-debug/npm-user-config" as const;
 const NPM_GLOBAL_CONFIG_PATH = "/opt/keiko-debug/npm-global-config" as const;
 const NPM_CLI_PATH = "/opt/keiko-runtime/npm/bin/npm-cli.js" as const;
+const NPM_RUNTIME_ROOT = "/opt/keiko-runtime/npm" as const;
 const PLAN_TTL_MS = 30_000;
 
 export interface ApprovedDebugArtifact {
@@ -103,6 +106,7 @@ export interface DebugLaunchPlanDeps {
   readonly now: () => number;
   readonly epoch: () => number;
   readonly planCapsule?: typeof planStrictDebugCapsule | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
 }
 
 type OpaqueTarget =
@@ -482,42 +486,76 @@ function launchRequest(
   });
 }
 
-function immutableMounts(
+function npmRuntimeArtifact(artifact: ApprovedDebugArtifact): boolean {
+  return (
+    artifact.capsulePath === NPM_RUNTIME_ROOT ||
+    artifact.capsulePath.startsWith(`${NPM_RUNTIME_ROOT}/`)
+  );
+}
+
+function targetRuntimeClosure(
   context: DebugLaunchRuntimeContext,
-): readonly DebugCapsuleImmutableMount[] {
-  return [
+  targetKind: DebugLaunchTarget["kind"],
+): readonly ApprovedDebugArtifact[] {
+  return targetKind === "catalog"
+    ? context.runtimeClosure
+    : context.runtimeClosure.filter((artifact) => !npmRuntimeArtifact(artifact));
+}
+
+function selectTargetArtifacts(
+  context: DebugLaunchRuntimeContext,
+  targetKind: DebugLaunchTarget["kind"],
+): readonly ApprovedDebugArtifact[] {
+  return Object.freeze([
     context.adapter,
     context.node,
-    context.npm,
-    context.shell,
-    context.npmUserConfig,
-    context.npmGlobalConfig,
-    ...context.runtimeClosure,
-  ].map((artifact) => ({
-    hostPath: artifact.realPath,
-    capsulePath: artifact.capsulePath,
-    identityDigest: artifact.identityDigest,
-  }));
+    ...(targetKind === "catalog"
+      ? [context.npm, context.shell, context.npmUserConfig, context.npmGlobalConfig]
+      : []),
+    ...targetRuntimeClosure(context, targetKind),
+  ]);
+}
+
+function immutableMounts(
+  artifacts: readonly ApprovedDebugArtifact[],
+): readonly DebugCapsuleImmutableMount[] {
+  return Object.freeze(
+    artifacts.map((artifact) => ({
+      hostPath: artifact.realPath,
+      capsulePath: artifact.capsulePath,
+      identityDigest: artifact.identityDigest,
+    })),
+  );
+}
+
+function targetRuntimeDigest(
+  context: DebugLaunchRuntimeContext,
+  artifacts: readonly ApprovedDebugArtifact[],
+): string {
+  return sha256Json([context.runtimeMount.identityDigest, immutableMounts(artifacts)]);
 }
 
 function provisioningArtifacts(
-  context: DebugLaunchRuntimeContext,
+  backend: ApprovedDebugArtifact,
+  artifacts: readonly ApprovedDebugArtifact[],
 ): readonly ApprovedDebugArtifact[] {
-  return [
-    context.adapter,
-    context.node,
-    context.npm,
-    context.shell,
-    context.backendExecutable,
-    context.npmUserConfig,
-    context.npmGlobalConfig,
-    ...context.runtimeClosure,
-  ];
+  return Object.freeze([backend, ...artifacts]);
 }
 
 export function deriveDebugProvisioningDigest(context: DebugLaunchRuntimeContext): string {
   return deriveCanonicalDebugProvisioningDigest(
-    provisioningArtifacts(context).map(artifactIdentity),
+    provisioningArtifacts(context.backendExecutable, selectTargetArtifacts(context, "catalog")).map(
+      artifactIdentity,
+    ),
+  );
+}
+
+function planProvisioningDigest(
+  context: DebugLaunchRuntimeContext,
+  artifacts: readonly ApprovedDebugArtifact[],
+): string {
+  return deriveCanonicalDebugProvisioningDigest(
+    provisioningArtifacts(context.backendExecutable, artifacts).map(artifactIdentity),
   );
 }
 
@@ -526,6 +564,10 @@ export function deriveStrictDebugCapsuleInput(
   input: DebugCapsuleLayer2Input,
   context: DebugLaunchRuntimeContext,
   runtimeDigest: string,
+  artifacts: readonly ApprovedDebugArtifact[] = selectTargetArtifacts(
+    context,
+    input.binding.targetKind,
+  ),
 ): StrictDebugCapsuleInput {
   const backendName = basename(context.backendExecutable.realPath);
   const backendExecutables = {
@@ -551,7 +593,7 @@ export function deriveStrictDebugCapsuleInput(
     runtimeMountQualified: true,
     adapterCapsuleExecutable: context.adapter.capsulePath,
     adapterArgs: Object.freeze([...input.adapter.args]),
-    immutableMounts: immutableMounts(context),
+    immutableMounts: immutableMounts(artifacts),
     runtimeIdentityDigest: runtimeDigest,
     containerImage: context.containerImage,
   };
@@ -572,18 +614,12 @@ function artifactIdentity(artifact: ApprovedDebugArtifact): DebugSpawnArtifactId
   });
 }
 
-function spawnArtifacts(context: DebugLaunchRuntimeContext): readonly DebugSpawnArtifactIdentity[] {
+function spawnArtifacts(
+  context: DebugLaunchRuntimeContext,
+  artifacts: readonly ApprovedDebugArtifact[],
+): readonly DebugSpawnArtifactIdentity[] {
   return Object.freeze(
-    [
-      context.backendExecutable,
-      context.adapter,
-      context.node,
-      context.npm,
-      context.shell,
-      context.npmUserConfig,
-      context.npmGlobalConfig,
-      ...context.runtimeClosure,
-    ].map(artifactIdentity),
+    provisioningArtifacts(context.backendExecutable, artifacts).map(artifactIdentity),
   );
 }
 
@@ -592,6 +628,7 @@ interface SpawnEnvelopeInput {
   readonly candidate: OpaqueTarget;
   readonly context: DebugLaunchRuntimeContext;
   readonly target: DebugLaunchTarget;
+  readonly artifacts: readonly ApprovedDebugArtifact[];
   readonly capsule: Layer2DebugCapsulePlan["capsule"];
   readonly endpoint: Layer2DebugCapsulePlan["endpoint"];
   readonly clock: { readonly epoch: number; readonly expiresAtMs: number };
@@ -600,7 +637,7 @@ interface SpawnEnvelopeInput {
 }
 
 function spawnEnvelope(args: SpawnEnvelopeInput): DebugSpawnEnvelope {
-  const { input, candidate, context, target, capsule, endpoint, clock } = args;
+  const { input, candidate, context, target, artifacts, capsule, endpoint, clock } = args;
   const runtimeDirectoryIdentity: DebugRuntimeDirectoryIdentity = Object.freeze({
     realPath: context.runtimeMount.hostRealPath,
     identityDigest: context.runtimeMount.identityDigest,
@@ -625,7 +662,7 @@ function spawnEnvelope(args: SpawnEnvelopeInput): DebugSpawnEnvelope {
     temp: input.adapter.temp,
     cwd: CAPSULE_ROOT,
     endpoint,
-    artifacts: spawnArtifacts(context),
+    artifacts: spawnArtifacts(context, artifacts),
     workspaceIdentity: Object.freeze({ ...context.workspaceIdentity }),
     targetIdentityDigest: target.targetIdentityDigest,
     targetReference: Object.freeze({ ...candidate }),
@@ -654,16 +691,58 @@ async function buildPlan(
   const candidate = parseOpaqueDebugTarget(input.candidate);
   const context = await deps.resolveContext(input);
   validateDebugLaunchContext(input, context);
-  const provisioningDigest = deriveDebugProvisioningDigest(context);
   assertDebugLaunchEnvironment(context);
   const target = deriveTarget(candidate, context);
   if (target.kind !== input.binding.targetKind) throw new DebugCapsulePlanError();
+  const artifacts = selectTargetArtifacts(context, target.kind);
+  const provisioningDigest = planProvisioningDigest(context, artifacts);
   const execution = executionFor(target, context);
   assertExecutionPolicy(execution, context);
   const finalTarget = deriveTarget(candidate, context);
   if (finalTarget.targetIdentityDigest !== target.targetIdentityDigest)
     throw new DebugCapsulePlanError();
-  return assemblePlan(deps, input, context, target, execution, candidate, provisioningDigest);
+  const plan = assemblePlan({
+    deps,
+    input,
+    context,
+    target,
+    execution,
+    candidate,
+    artifacts,
+    provisioningDigest,
+  });
+  recordRuntimeSelection(
+    deps.activityLog,
+    input.correlationId,
+    target.kind,
+    artifacts.length,
+    plan,
+  );
+  return plan;
+}
+
+function recordRuntimeSelection(
+  activityLog: ServerLogSink | undefined,
+  correlationId: string | undefined,
+  targetKind: DebugLaunchTarget["kind"],
+  selectedArtifactCount: number,
+  plan: Layer2DebugCapsulePlan,
+): void {
+  activityLog?.write({
+    category: "process",
+    op: "dap.debug-runtime.selected",
+    correlationId:
+      correlationId !== undefined && isValidCorrelationId(correlationId)
+        ? correlationId
+        : UNKNOWN_CORRELATION_ID,
+    extra: {
+      targetKind,
+      selectedArtifactCount,
+      provisionedArtifactCount: plan.spawnEnvelope.artifacts.length,
+      runtimeIdentityDigest: plan.runtimeIdentityDigest,
+      provisioningDigest: plan.provisioningDigest,
+    },
+  });
 }
 
 function assertExecutionPolicy(
@@ -762,28 +841,33 @@ function finalLayer2Plan(args: FinalLayer2PlanInput): Layer2DebugCapsulePlan {
   }) as unknown as Layer2DebugCapsulePlan;
 }
 
-function assemblePlan(
-  deps: DebugLaunchPlanDeps,
-  input: DebugCapsuleLayer2Input,
-  context: DebugLaunchRuntimeContext,
-  target: DebugLaunchTarget,
-  execution: ClosedDebugExecution,
-  candidate: OpaqueTarget,
-  provisioningDigest: string,
-): Layer2DebugCapsulePlan {
-  const runtimeDigest = sha256Json([context.runtimeMount.identityDigest, immutableMounts(context)]);
+interface AssemblePlanInput {
+  readonly deps: DebugLaunchPlanDeps;
+  readonly input: DebugCapsuleLayer2Input;
+  readonly context: DebugLaunchRuntimeContext;
+  readonly target: DebugLaunchTarget;
+  readonly execution: ClosedDebugExecution;
+  readonly candidate: OpaqueTarget;
+  readonly artifacts: readonly ApprovedDebugArtifact[];
+  readonly provisioningDigest: string;
+}
+
+function assemblePlan(args: AssemblePlanInput): Layer2DebugCapsulePlan {
+  const { deps, input, context, target } = args;
+  const { execution, candidate, artifacts, provisioningDigest } = args;
+  const runtimeDigest = targetRuntimeDigest(context, artifacts);
   const capsule = (deps.planCapsule ?? planStrictDebugCapsule)(
-    deriveStrictDebugCapsuleInput(input, context, runtimeDigest),
+    deriveStrictDebugCapsuleInput(input, context, runtimeDigest, artifacts),
   );
   assertCapsuleBackend(context, capsule);
   const clock = planClock(deps, input.binding.activationRevision);
   const endpoint = endpointPlan(context);
-  const launch = launchRequest(execution, context);
   const envelope = spawnEnvelope({
     input,
     candidate,
     context,
     target,
+    artifacts,
     capsule,
     endpoint,
     clock,
@@ -808,7 +892,7 @@ function assemblePlan(
     clock,
     endpoint,
     launchIdentityDigest,
-    launchRequest: launch,
+    launchRequest: launchRequest(execution, context),
     provisioningDigest,
   });
 }

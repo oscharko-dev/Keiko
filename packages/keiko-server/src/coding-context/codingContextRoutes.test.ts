@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
 import { URL } from "node:url";
@@ -7,19 +10,30 @@ import type {
   CodingWorkbenchMode,
 } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { composeCodingContextConnectors, handleCodingContextPack } from "./codingContextRoutes.js";
 import type { GitHubCodeContextApiPort } from "./githubCodeContextConnector.js";
 import type { JiraCodeContextHttpPort } from "./jiraCodeContextConnector.js";
 import type { RouteContext, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { githubIssueReaderRepositoryId } from "./githubIssueReaderAuthorization.js";
 import {
   editorAgentAuthorityRegistry,
   editorAgentWorkspaceRootDigest,
 } from "../editor/agentAuthorityRegistry.js";
+import type { ServerLogEvent } from "../observability/server-log.js";
 
-const WORKSPACE_ROOT = "/workspace/project";
+// Real directories: the grant identity is a digest of the realpath'd root, and a path that does
+// not resolve has no identity. `/workspace/project` used to stand here and passed only while the
+// reader digested the string it was given — the very split that let a symlinked checkout be granted
+// under one id and looked up under another.
+const WORKSPACE_ROOT = mkdtempSync(join(tmpdir(), "keiko-ctx-route-root-"));
+const OTHER_ROOT = mkdtempSync(join(tmpdir(), "keiko-ctx-route-other-"));
+
+afterAll(() => {
+  for (const root of [WORKSPACE_ROOT, OTHER_ROOT]) rmSync(root, { recursive: true, force: true });
+});
 const TEST_NOW = "2026-07-07T13:00:00.000Z";
 
 function requestWithBody(body: unknown): IncomingMessage {
@@ -57,15 +71,36 @@ function fakeJiraPort(): JiraCodeContextHttpPort {
   };
 }
 
+const PROJECT_ROOT = WORKSPACE_ROOT;
+
+/**
+ * #3385: the GitHub reader's authorization is a server-persisted, repository-scoped store row, not
+ * an environment variable. This double answers for exactly one repository root, so a test can prove
+ * the grant is scoped rather than global.
+ */
+function authorizationStore(
+  authorizedRoot: string | undefined,
+): Pick<UiHandlerDeps["store"], "readGitHubIssueReaderAuthorization"> {
+  const authorizedId =
+    authorizedRoot === undefined ? undefined : githubIssueReaderRepositoryId(authorizedRoot);
+  return {
+    readGitHubIssueReaderAuthorization: (repositoryId: string) =>
+      repositoryId === authorizedId ? { repositoryId, authorized: true, revision: 1 } : undefined,
+  };
+}
+
 function depsFor(overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
   return {
     env: {
-      GITHUB_CONNECTOR_AUTHORIZED: "true",
       JIRA_CONNECTOR_AUTHORIZED: "true",
     },
     autonomousDeliveryDeploymentCeiling: "autonomous-delivery",
     codingContextGitHubPort: fakeGitHubPort(),
     codingContextJiraPort: fakeJiraPort(),
+    preferredProjectPath: PROJECT_ROOT,
+    store: authorizationStore(PROJECT_ROOT),
+    // The grant covers one remote repository, and the refs these fixtures request name it.
+    codingContextGitHubRemoteResolver: () => Promise.resolve("oscharko-dev/Keiko"),
     ...overrides,
   } as UiHandlerDeps;
 }
@@ -338,7 +373,7 @@ describe("coding context pack route", () => {
       ctxFor(packRequest()),
       depsFor({
         autonomousDeliveryDeploymentCeiling: "governed-assist",
-        env: { GITHUB_CONNECTOR_AUTHORIZED: "true", JIRA_CONNECTOR_AUTHORIZED: "true" },
+        env: { JIRA_CONNECTOR_AUTHORIZED: "true" },
       }),
     );
 
@@ -382,7 +417,7 @@ describe("coding context pack route", () => {
     const result = await handleCodingContextPack(
       ctxFor(packRequest()),
       depsFor({
-        env: { GITHUB_CONNECTOR_AUTHORIZED: "true" },
+        env: {},
       }),
     );
 
@@ -392,6 +427,59 @@ describe("coding context pack route", () => {
     expect(blocked[0]).toMatchObject({ source: "jira", reason: "missing-credentials" });
   });
 
+  // #3385 relocated the environment-variable pin here and strengthened it: the grant is per
+  // repository, so a repository with no row of its own is denied even while another repository is
+  // authorized in the same process. On the retired env gate this case could not be expressed at all.
+  it("blocks the GitHub reader for a repository that carries no stored authorization", async () => {
+    const result = await handleCodingContextPack(
+      ctxFor(packRequest()),
+      depsFor({
+        // Set deliberately: the retired global gate would authorize this read, so leaving it absent
+        // let the case pass under BOTH implementations and proved nothing about the new one.
+        env: { GITHUB_CONNECTOR_AUTHORIZED: "true" },
+        store: authorizationStore(OTHER_ROOT) as UiHandlerDeps["store"],
+      }),
+    );
+
+    expect(result.status).toBe(200);
+    expect(bodyOf(result).blocked).toContainEqual(
+      expect.objectContaining({ source: "github", reason: "missing-credentials" }),
+    );
+  });
+
+  // CWE-863 (CodeRabbit #3933343129 / #3933343148 / #3933343163): the store grant says GitHub
+  // reading is turned on for THIS checkout; it says nothing about which remote repository. Before
+  // this route-level pin, an authorized checkout could read any owner/repo the `gh` credentials
+  // reached, because nothing here compared the requested ref against the checkout's own resolved
+  // remote. The grant below targets the right checkout root and `codingContextGitHubRemoteResolver`
+  // (set in `depsFor`) resolves it to "oscharko-dev/Keiko", but the ref names a different repository
+  // and must still be denied end-to-end through the real route, not only at the connector unit.
+  it("blocks a GitHub ref naming a different repository than the checkout's own remote", async () => {
+    const result = await handleCodingContextPack(
+      ctxFor(
+        packRequest({
+          refs: [
+            {
+              source: "github",
+              objectKind: "issue",
+              ownerAndRepo: "attacker/private",
+              objectId: "1",
+            },
+          ],
+        }),
+      ),
+      depsFor(),
+    );
+
+    expect(result.status).toBe(200);
+    const body = bodyOf(result);
+    expect(body.blocked).toHaveLength(1);
+    expect(body.blocked).toContainEqual(
+      expect.objectContaining({ source: "github", reason: "missing-credentials" }),
+    );
+    expect(body.items).toHaveLength(0);
+  });
+
   it("degrades unusable Jira configuration to missing credentials", async () => {
     const result = await handleCodingContextPack(
       ctxFor(packRequest()),
@@ -399,8 +487,10 @@ describe("coding context pack route", () => {
         codingContextGitHubPort: undefined,
         codingContextJiraPort: undefined,
         preferredProjectPath: undefined,
+        // GitHub is denied through the store, not by withholding a port: the fallback port now
+        // follows the authority's repository root, so an absent launch path no longer suppresses it.
+        store: authorizationStore(undefined) as UiHandlerDeps["store"],
         env: {
-          GITHUB_CONNECTOR_AUTHORIZED: "true",
           JIRA_CONNECTOR_AUTHORIZED: "true",
           KEIKO_JIRA_BASE_URL: "http://invalid.example.com",
           KEIKO_JIRA_EMAIL: "operator@example.com",
@@ -419,12 +509,24 @@ describe("coding context pack route", () => {
     const composed = composeCodingContextConnectors(
       depsFor({
         codingContextGitHubPort: undefined,
-        preferredProjectPath: "/workspace/project",
-        env: { GITHUB_CONNECTOR_AUTHORIZED: "true" },
+        env: {},
       }),
     );
 
     expect(composed.connectorConfig.github_connector_authorized).toBe(true);
+  });
+
+  it("composes the fallback port but denies the read when the repository is not authorized", () => {
+    const composed = composeCodingContextConnectors(
+      depsFor({
+        codingContextGitHubPort: undefined,
+        // Same reason as above: with the retired variable set, only the persisted grant can deny.
+        env: { GITHUB_CONNECTOR_AUTHORIZED: "true" },
+        store: authorizationStore(undefined) as UiHandlerDeps["store"],
+      }),
+    );
+
+    expect(composed.connectorConfig.github_connector_authorized).toBe(false);
   });
 
   it("does not emit an upstream diagnostic for invalid fallback Jira configuration", async () => {
@@ -561,5 +663,65 @@ describe("coding context pack route", () => {
     expect(result.status).toBe(502);
     const error = bodyOf(result).error as Record<string, unknown>;
     expect(error.correlationId).toBe("req-thread-0123456789");
+  });
+
+  // Review 3941762925 [P2]: `buildCodeContextPack`'s sanitisation evidence
+  // (`codeContextConnector.ts:319`, `emitSanitizationEvidence`) only reaches the log when a caller
+  // injects `activityLog`/`correlationId` into its deps. This route composed `connectorConfig` and
+  // `connectors` but never threaded `deps.activityLog` or `ctx.correlationId` into the
+  // `buildCodeContextPack` call, so a hostile issue body was sanitised with no trace in the
+  // customer log. Pins the fix at `codingContextRoutes.ts`'s `handleCodingContextPack`.
+  it("threads the route's activityLog and correlationId so sanitisation evidence reaches the log", async () => {
+    const hostileGitHubPort: GitHubCodeContextApiPort = {
+      readJson: (argv) =>
+        Promise.resolve(
+          argv[1]?.includes("/comments") === true
+            ? []
+            : {
+                title: "\u202Emalicious title\u200B",
+                body: "clean prefix\u202E hostile suffix",
+                html_url: "",
+              },
+        ),
+    };
+    const events: ServerLogEvent[] = [];
+    const request = packRequest({
+      refs: [
+        {
+          source: "github",
+          objectKind: "issue",
+          ownerAndRepo: "oscharko-dev/Keiko",
+          objectId: "1989",
+        },
+      ],
+    });
+    const ctx = { ...ctxFor(request), correlationId: "req-sanitize-0123456789" };
+
+    const result = await handleCodingContextPack(
+      ctx,
+      depsFor({
+        codingContextGitHubPort: hostileGitHubPort,
+        activityLog: { write: (event) => void events.push(event) },
+      }),
+    );
+
+    expect(result.status).toBe(200);
+    const line = events.find(
+      (event) =>
+        event.op === "coding-context.pack" &&
+        (event.extra as Record<string, unknown> | undefined)?.outcome === "sanitized",
+    );
+    expect(line).toBeDefined();
+    expect(line?.category).toBe("security");
+    expect(line?.correlationId).toBe("req-sanitize-0123456789");
+    const extra = line?.extra as Record<string, unknown>;
+    expect(extra.sanitizedItemCount).toBe(1);
+    expect(extra.sanitizedTitleBytesRemoved).toBeGreaterThan(0);
+    expect(extra.sanitizedBodyBytesRemoved).toBeGreaterThan(0);
+
+    // Body-free: never the raw or sanitised issue title/body.
+    const serialized = JSON.stringify(line);
+    expect(serialized).not.toContain("malicious title");
+    expect(serialized).not.toContain("hostile suffix");
   });
 });

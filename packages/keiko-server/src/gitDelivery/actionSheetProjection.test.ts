@@ -17,9 +17,13 @@ import { KEIKO_DEFAULT_LOCAL_GIT_POLICY_PACK } from "./execution.js";
 import { KEIKO_DEFAULT_PUBLISH_POLICY_PACK } from "./pushExecution.js";
 import { KEIKO_DEFAULT_PR_POLICY_PACK } from "./prExecution.js";
 
+// #3394 review, finding 1: `headSha` matches every push fixture's own `verifiedCommitSha` default
+// ("a".repeat(40)) below, so the new `verified-commit-drifted` preflight check does not spuriously
+// fire for scenarios that never intended to exercise drift.
 const CLEAN_SNAPSHOT: GitWorktreeSnapshot = {
   headDetached: false,
   currentBranchName: "feature/x",
+  headSha: "a".repeat(40),
   stagedFileCount: 3,
   unstagedFileCount: 0,
   untrackedFileCount: 0,
@@ -180,6 +184,30 @@ describe("buildActionSheetFromFacts", () => {
     expect(sheet.recovery.some((hint) => hint.actionHint === "wait-for-provider")).toBe(true);
   });
 
+  it("mirrors a detached-head preflight block into the shared recover-via-strategy hint (#3394)", () => {
+    // The hint comes from the ONE contracts table both projections read; the retired server-local
+    // table said "configure-upstream" here, which the evidence projection never did.
+    const sheet = buildActionSheetFromFacts(
+      facts({ worktreeSnapshot: { ...CLEAN_SNAPSHOT, headDetached: true } }),
+    );
+    expect(sheet.state).toBe("blocked");
+    expect(sheet.blocked?.cause).toBe("preflight");
+    expect(sheet.blocked?.expectedBlockers).toContainEqual({
+      source: "preflight",
+      severity: "blocking",
+      remediation: "user-actionable",
+      reasonCode: "detached-head",
+    });
+    const hints = sheet.recovery.map((hint) => hint.actionHint);
+    expect(hints).toContain("recover-via-strategy");
+    expect(hints).not.toContain("configure-upstream");
+    // The hint carries the concrete governed strategy (contract: present iff recover-via-strategy).
+    // CLEAN_SNAPSHOT stages three files, so the worktree counts as dirty and the strategy that
+    // preserves those changes while re-attaching the head is stash-and-reset.
+    const strategyHint = sheet.recovery.find((hint) => hint.actionHint === "recover-via-strategy");
+    expect(strategyHint?.suggestedRecoveryStrategy).toBe("stash-and-reset");
+  });
+
   it("emits a recover-via-strategy hint with a concrete strategy for a dirty recovery", () => {
     const recoveryInputs: GitDeliveryResolvedInputs = {
       kind: "recovery",
@@ -255,9 +283,12 @@ describe("buildActionSheetFromFacts", () => {
 // the opposite of what will happen. The packs below are the PRODUCTION packs imported from the
 // executing routes — not copies — so this test moves with them.
 
+// The push names CLEAN_SNAPSHOT's checked-out branch: `source-branch-not-checked-out` (#3394 review)
+// refuses a push whose named source is not the checkout, before policy is even consulted.
 const PUSH_TO_DEV: GitDeliveryResolvedInputs = {
   kind: "push",
-  sourceBranchName: "feat/x",
+  verifiedCommitSha: "a".repeat(40),
+  sourceBranchName: "feature/x",
   remoteAlias: "origin",
   remoteBranchName: "dev",
   forcePush: false,
@@ -295,6 +326,7 @@ const REPO_GATE_PUSH: GitDeliveryRepoPolicyPack = {
 
 const PR_ONTO_UNLISTED_BASE: GitDeliveryResolvedInputs = {
   kind: "pr-create",
+  verifiedCommitSha: "a".repeat(40),
   headBranchName: "feat/x",
   baseBranchName: "scratch/experiment",
   titleByteLength: 20,

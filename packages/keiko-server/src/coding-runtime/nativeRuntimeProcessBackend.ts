@@ -4,8 +4,16 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { Readable, Writable } from "node:stream";
-import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-sandbox";
+import {
+  copyRuntimeGatewayConfinement,
+  GATEWAY_UNSUPPORTED_ON_HOST_REASON,
+  type LongLivedRuntimeQualification,
+  type RuntimeGatewayConfinement,
+} from "@oscharko-dev/keiko-sandbox";
 
+import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import { encodeLaunchPacket, validateLaunchPacketRequest } from "./nativeRuntimeProcessProtocol.js";
 import {
   invalidRequest,
@@ -43,6 +51,17 @@ export interface NativeRuntimeProcessBackendOptions {
   readonly workspaceRoot: string;
   readonly identity?: Pick<LongLivedRuntimeQualification, "platform" | "arch" | "backend">;
   readonly spawnHelper?: NativeRuntimeHelperSpawn | undefined;
+  /**
+   * When a caller attaches a gateway-allowlist policy (ADR-0043 D14, #2951), every launch through
+   * this backend fails closed: the native launch-packet protocol has no field for a network
+   * policy, and no backend behind the Windows Job Object / native helper protocol can bind that
+   * process to exactly one loopback destination today. This option exists so a caller CAN express
+   * "this run requires gateway confinement" and get an honest refusal rather than an unconfined
+   * spawn; it does not (yet) enforce anything at the OS level.
+   */
+  readonly gatewayConfinement?: RuntimeGatewayConfinement | undefined;
+  /** Activity-log port for the closed gateway-confinement refusal below; defaults to the process sink. */
+  readonly activityLog?: ServerLogSink | undefined;
 }
 
 export interface NativeRuntimeRecoveryPort {
@@ -56,6 +75,8 @@ interface ValidatedBackendOptions {
   readonly workspaceRoot: string;
   readonly identity: Pick<LongLivedRuntimeQualification, "platform" | "arch" | "backend">;
   readonly spawnHelper: NativeRuntimeHelperSpawn;
+  readonly gatewayConfinement?: RuntimeGatewayConfinement | undefined;
+  readonly activityLog: ServerLogSink;
 }
 
 export function createNativeRuntimeProcessBackend(
@@ -93,6 +114,13 @@ class NativeRuntimeProcessBackend implements RuntimeProcessBackend {
   }
 
   public spawnOwnedTree(request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree {
+    try {
+      assertGatewayConfinementUnsupported(this.options.gatewayConfinement, request);
+    } catch (error) {
+      recordNativeConfinementFailure(this.options.activityLog, request.runId, error);
+      throw error;
+    }
+    recordNativeConfinementUnavailable(this.options.activityLog, request.runId, this.identity);
     const paths = validateLaunchPacketRequest(request, {
       ...this.options,
       safeRealFile,
@@ -139,6 +167,7 @@ function validateBackendOptions(
     throw new Error("native-runtime-config-invalid");
   }
   const runtimeRoots = options.runtimeRoots.map(safeRealDirectory);
+  const gatewayConfinement = validGatewayConfinement(options.gatewayConfinement);
   return {
     helperPath,
     ...(expectedHelperSha256 === undefined ? {} : { expectedHelperSha256 }),
@@ -152,7 +181,72 @@ function validateBackendOptions(
         backend: "windows-job-object" as const,
       }),
     spawnHelper: options.spawnHelper ?? spawnNativeHelper,
+    activityLog: options.activityLog ?? processServerLogSink(),
+    ...(gatewayConfinement === undefined ? {} : { gatewayConfinement }),
   };
+}
+
+/**
+ * Body-free evidence for the closed native-lane gateway-confinement refusal (ADR-0043 D14, #2951):
+ * the macOS dev-lane path already records `runtime.confinement.failed` for the same class of
+ * refusal (`devLaneRuntimeProcessBackend.ts`'s `recordConfinementFailure`); this backend must not
+ * fail silently just because its refusal is synchronous and pre-spawn. Same op, same shape, same
+ * correlation id — a support bundle reconstructs either lane's refusal identically.
+ */
+function recordNativeConfinementFailure(sink: ServerLogSink, runId: string, error: unknown): void {
+  sink.write({
+    category: "process",
+    level: "error",
+    op: "runtime.confinement.failed",
+    correlationId: runId,
+    errorKind: errorKindOf(error),
+    extra: { frames: keikoStackFrames(error), causeChain: causeChain(error) },
+  });
+}
+
+/**
+ * Legacy process-supervision callers without a gateway policy remain observable. Production
+ * OpenCode always supplies its policy; an unsupported native network boundary refuses before
+ * reaching this line and emits runtime.confinement.failed instead (ADR-0043 D14, #2951).
+ */
+function recordNativeConfinementUnavailable(
+  sink: ServerLogSink,
+  runId: string,
+  identity: NativeRuntimeProcessBackend["identity"],
+): void {
+  sink.write({
+    category: "process",
+    level: "info",
+    op: "runtime.confinement.unavailable",
+    correlationId: runId,
+    extra: { platform: identity.platform, arch: identity.arch, backend: identity.backend },
+  });
+}
+
+function validGatewayConfinement(
+  value: RuntimeGatewayConfinement | undefined,
+): RuntimeGatewayConfinement | undefined {
+  if (value === undefined) return undefined;
+  const closed = copyRuntimeGatewayConfinement(value);
+  if (closed === undefined) throw new Error("native-runtime-config-invalid");
+  return closed;
+}
+
+/**
+ * Fails a gateway-confined launch closed rather than spawning it unconfined (ADR-0043 D14, ADR-0140
+ * D6, #2951). The reason text is imported from keiko-sandbox, not restated, so this backend reports
+ * the identical "unsupported-on-this-host" refusal `planIsolatedRun` would produce for the same
+ * unsupported host instead of a second, independently-worded string.
+ */
+function assertGatewayConfinementUnsupported(
+  policy: RuntimeGatewayConfinement | undefined,
+  request: RuntimeSupervisorLaunchRequest,
+): void {
+  if (policy === undefined) return;
+  if (policy.runId !== request.runId || policy.treeBindingId !== request.treeBindingId) {
+    throw new Error("runtime-gateway-confinement-drift");
+  }
+  throw new Error(GATEWAY_UNSUPPORTED_ON_HOST_REASON);
 }
 
 function validExpectedHelperSha256(value: string | undefined): string | undefined {

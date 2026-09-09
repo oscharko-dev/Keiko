@@ -10,6 +10,7 @@ import {
   ERROR_CODES,
   GatewayEgressError,
   GatewayError,
+  MalformedToolCallError,
   ModelRefusalError,
   ProviderError,
   RateLimitError,
@@ -26,9 +27,24 @@ import {
   SseIdleTimeoutError,
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
-import { normalizeChatResponse, textFromContent } from "./normalize.js";
+import {
+  createGatewayToolCatalogBridge,
+  retainMeasuredCatalogFailureUsage,
+} from "./toolCatalogBridge.js";
+import {
+  bindNormalizedToolCalls,
+  normalizeChatResponse,
+  parseNormalizedToolCalls,
+  textFromContent,
+} from "./normalize.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import { assertValidGatewaySamplingParameters } from "./types.js";
+import { providerOutputTokenLimit } from "./output-token-limit.js";
+import {
+  openAiCompatiblePromptMessage,
+  openAiCompatiblePromptTools,
+  type OpenAiCompatiblePromptMessage,
+} from "./prompt-token-accounting.js";
 import {
   logEndpointHost,
   logLevelEnabled,
@@ -38,7 +54,6 @@ import {
   type ModelGatewayLogSink,
 } from "./observability.js";
 import type {
-  ChatMessageContentPart,
   CostClass,
   FinishReason,
   GatewayRequest,
@@ -47,6 +62,7 @@ import type {
   NormalizedResponse,
   NormalizedToolCall,
   ProviderAdapter,
+  ToolDefinition,
   UsageMetadata,
 } from "./types.js";
 
@@ -109,20 +125,29 @@ function logChatDispatch(log: ModelGatewayLogSink, op: string, fields: ChatDispa
   log.write({ level: "info", category: "gateway", op, extra: { ...fields } });
 }
 
+function cancellationWasDeadline(signal: AbortSignal | undefined): boolean {
+  return (
+    signal?.aborted === true &&
+    signal.reason instanceof DOMException &&
+    signal.reason.name === "TimeoutError"
+  );
+}
+
+function requestAbortError(
+  signal: AbortSignal,
+  modelId: string,
+  secrets: readonly string[],
+  phase = "",
+): CancelledError | TimeoutError {
+  const suffix = phase.length === 0 ? "" : ` ${phase}`;
+  return cancellationWasDeadline(signal)
+    ? new TimeoutError(`request for '${modelId}' timed out${suffix}`, secrets)
+    : new CancelledError(`request for '${modelId}' cancelled${suffix}`, secrets);
+}
+
 interface ChatRequestBody {
   readonly model: string;
-  readonly messages: readonly {
-    readonly role: string;
-    readonly content: ChatRequestMessageContent | null;
-    readonly tool_call_id?: string | undefined;
-    readonly tool_calls?:
-      | readonly {
-          readonly id: string;
-          readonly type: "function";
-          readonly function: { readonly name: string; readonly arguments: string };
-        }[]
-      | undefined;
-  }[];
+  readonly messages: readonly OpenAiCompatiblePromptMessage[];
   readonly tools?: unknown;
   readonly response_format?: unknown;
   readonly temperature?: number;
@@ -135,12 +160,10 @@ interface ChatRequestBody {
   readonly stream_options?: { readonly include_usage: boolean };
 }
 
-type ChatRequestMessageContent =
-  | string
-  | readonly (
-      | { readonly type: "text"; readonly text: string }
-      | { readonly type: "image_url"; readonly image_url: { readonly url: string } }
-    )[];
+interface DispatchedResponse {
+  readonly response: Response;
+  readonly signal: AbortSignal;
+}
 
 // GEN-AI-GATEWAY-002 (RB-4): honor Azure deployment routing for chat providers instead of silently
 // misrouting an Azure-configured provider to the OpenAI-compatible path. Mirrors the voice adapters'
@@ -159,92 +182,56 @@ function chatCompletionsUrl(config: ModelProviderConfig): string {
   return `${trimmed}/chat/completions`;
 }
 
-function buildMessageContent(
-  content: string,
-  parts: readonly ChatMessageContentPart[] | undefined,
-): ChatRequestMessageContent {
-  if (parts === undefined) return content;
-  return parts.map((part) =>
-    part.type === "text"
-      ? { type: "text" as const, text: part.text }
-      : { type: "image_url" as const, image_url: { url: part.image_url.url } },
-  );
+// Always returns the array shape: the plain-string case is handled at the call site so this
+// helper itself never mixes return types (sonarjs/function-return-type).
+type ProviderGatewayRequest = GatewayRequest & {
+  readonly tools?: readonly ToolDefinition[] | undefined;
+};
+
+function toolsField(tools: readonly ToolDefinition[] | undefined): Pick<ChatRequestBody, "tools"> {
+  if (tools === undefined) return {};
+  return { tools: openAiCompatiblePromptTools(tools) };
 }
 
-function buildMessage(
-  message: GatewayRequest["messages"][number],
-): ChatRequestBody["messages"][number] {
-  const toolCalls = message.toolCalls?.map((call) => ({
-    id: call.id,
-    type: "function" as const,
-    function: { name: call.name, arguments: JSON.stringify(call.arguments) },
-  }));
+function responseFormatField(
+  request: ProviderGatewayRequest,
+): Pick<ChatRequestBody, "response_format"> {
+  const format = request.responseFormat;
+  if (format?.type !== "json_schema") return {};
   return {
-    role: message.role,
-    content:
-      message.role === "assistant" && toolCalls !== undefined && toolCalls.length > 0
-        ? null
-        : buildMessageContent(message.content, message.contentParts),
-    ...(message.role === "tool" && message.toolCallId !== undefined
-      ? { tool_call_id: message.toolCallId }
-      : {}),
-    ...(toolCalls !== undefined && toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+    response_format: {
+      type: "json_schema",
+      json_schema: {
+        schema: format.schema,
+        ...(format.name !== undefined ? { name: format.name } : {}),
+        ...(format.strict !== undefined ? { strict: format.strict } : {}),
+      },
+    },
   };
 }
 
-const COMPLETION_TOKEN_PARAMETER_MODEL_RE = /^(?:gpt-5|o[134])(?:[.-]|$)/iu;
-
-function outputTokenLimit(
+// The four scalar sampling knobs the provider accepts unchanged from the gateway request; grouped
+// so buildBody's own complexity stays under the repository ceiling (AGENTS.md §6).
+function samplingFields(
   request: GatewayRequest,
-  config: ModelProviderConfig,
-): Pick<ChatRequestBody, "max_tokens" | "max_completion_tokens"> {
-  if (request.maxOutputTokens === undefined) return {};
-  const parameter =
-    config.outputTokenParameter ??
-    (COMPLETION_TOKEN_PARAMETER_MODEL_RE.test(config.modelId)
-      ? "max_completion_tokens"
-      : "max_tokens");
-  return parameter === "max_completion_tokens"
-    ? { max_completion_tokens: request.maxOutputTokens }
-    : { max_tokens: request.maxOutputTokens };
-}
-
-// eslint-disable-next-line complexity
-function buildBody(request: GatewayRequest, config: ModelProviderConfig): ChatRequestBody {
-  assertValidGatewaySamplingParameters(request);
-  const messages = request.messages.map(buildMessage);
-  const base: ChatRequestBody = { model: request.modelId, messages };
-  const tools =
-    request.tools === undefined
-      ? undefined
-      : request.tools.map((t) => ({
-          type: "function",
-          function: { name: t.name, description: t.description, parameters: t.parameters },
-        }));
-  const responseFormat =
-    request.responseFormat?.type === "json_schema"
-      ? {
-          type: "json_schema",
-          json_schema: {
-            schema: request.responseFormat.schema,
-            ...(request.responseFormat.name !== undefined
-              ? { name: request.responseFormat.name }
-              : {}),
-            ...(request.responseFormat.strict !== undefined
-              ? { strict: request.responseFormat.strict }
-              : {}),
-          },
-        }
-      : undefined;
+): Pick<ChatRequestBody, "temperature" | "top_p" | "seed" | "reasoning_effort"> {
   return {
-    ...base,
-    ...(tools ? { tools } : {}),
-    ...(responseFormat ? { response_format: responseFormat } : {}),
     ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
     ...(request.topP !== undefined ? { top_p: request.topP } : {}),
     ...(request.seed !== undefined ? { seed: request.seed } : {}),
     ...(request.reasoningEffort !== undefined ? { reasoning_effort: request.reasoningEffort } : {}),
-    ...outputTokenLimit(request, config),
+  };
+}
+
+function buildBody(request: ProviderGatewayRequest, config: ModelProviderConfig): ChatRequestBody {
+  assertValidGatewaySamplingParameters(request);
+  return {
+    model: request.modelId,
+    messages: request.messages.map(openAiCompatiblePromptMessage),
+    ...toolsField(request.tools),
+    ...responseFormatField(request),
+    ...samplingFields(request),
+    ...providerOutputTokenLimit(request.maxOutputTokens, config),
   };
 }
 
@@ -257,7 +244,10 @@ function buildBody(request: GatewayRequest, config: ModelProviderConfig): ChatRe
 export const STREAM_IDLE_TIMEOUT_MS = 60_000;
 
 // `include_usage` requests a final usage-only chunk so token accounting survives.
-function buildStreamBody(request: GatewayRequest, config: ModelProviderConfig): ChatRequestBody {
+function buildStreamBody(
+  request: ProviderGatewayRequest,
+  config: ModelProviderConfig,
+): ChatRequestBody {
   return {
     ...buildBody(request, config),
     stream: true,
@@ -317,6 +307,79 @@ function usageFromChunk(chunk: unknown): { prompt: number; completion: number } 
   };
 }
 
+interface ToolCallDeltaEntry {
+  readonly id: string;
+  readonly name: string;
+  readonly argumentsText: string;
+}
+type ToolCallAccumulator = Map<number, ToolCallDeltaEntry>;
+
+// Standard OpenAI-compatible streaming shape: `delta.tool_calls` carries one fragment per call,
+// indexed by `index`, with `id`/`function.name` arriving once and `function.arguments` arriving as
+// concatenated JSON-text fragments across chunks.
+function toolCallDeltasFromChunk(chunk: unknown): readonly unknown[] | undefined {
+  const choice = firstStreamChoice(chunk);
+  const delta = choice !== undefined && isRecord(choice.delta) ? choice.delta : undefined;
+  const raw = delta?.tool_calls;
+  return Array.isArray(raw) ? raw : undefined;
+}
+
+function stringOrUndefined(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
+}
+
+function nonEmptyOrFallback(value: string | undefined, fallback: string): string {
+  return value === undefined || value.length === 0 ? fallback : value;
+}
+
+function toolCallDeltaFields(raw: unknown): {
+  id: string | undefined;
+  name: string | undefined;
+  argumentsText: string | undefined;
+} {
+  const record = isRecord(raw) ? raw : {};
+  const fn = isRecord(record.function) ? record.function : undefined;
+  return {
+    id: stringOrUndefined(record.id),
+    name: stringOrUndefined(fn?.name),
+    argumentsText: stringOrUndefined(fn?.arguments),
+  };
+}
+
+function mergedToolCallDelta(
+  existing: ToolCallDeltaEntry | undefined,
+  raw: unknown,
+): ToolCallDeltaEntry {
+  const delta = toolCallDeltaFields(raw);
+  return {
+    id: nonEmptyOrFallback(delta.id, existing?.id ?? ""),
+    name: nonEmptyOrFallback(delta.name, existing?.name ?? ""),
+    argumentsText: (existing?.argumentsText ?? "") + nonEmptyOrFallback(delta.argumentsText, ""),
+  };
+}
+
+function applyToolCallDelta(accumulator: ToolCallAccumulator, chunk: unknown): void {
+  const deltas = toolCallDeltasFromChunk(chunk);
+  if (deltas === undefined) return;
+  for (const raw of deltas) {
+    if (!isRecord(raw) || typeof raw.index !== "number") continue;
+    accumulator.set(raw.index, mergedToolCallDelta(accumulator.get(raw.index), raw));
+  }
+}
+
+// Reuses the same normalizer the buffered (non-streaming) path uses (normalize.ts
+// `parseNormalizedToolCalls`) instead of a second argument-parsing implementation.
+function assembledToolCalls(accumulator: ToolCallAccumulator): readonly NormalizedToolCall[] {
+  const ordered = [...accumulator.entries()].sort(([left], [right]) => left - right);
+  return parseNormalizedToolCalls(
+    ordered.map(([, entry]) => ({
+      id: entry.id,
+      type: "function",
+      function: { name: entry.name, arguments: entry.argumentsText },
+    })),
+  );
+}
+
 function retryAfterMs(response: Response): number | null {
   const header = response.headers.get("retry-after");
   if (header === null) {
@@ -330,16 +393,47 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function redactUnknown(value: unknown, secrets: readonly string[]): unknown {
+// Locally defined (not in @oscharko-dev/keiko-security's gateway error taxonomy) for the same
+// reason GatewayToolCatalogError lives in toolCatalogBridge.ts rather than there: it is
+// gateway-internal, thrown and caught entirely within this package. Never the provider's fault —
+// the gateway's OWN redaction pass refused to keep walking a pathologically deep response body —
+// so recordProviderFailure (gateway.ts) excludes it from circuit breaker accounting the same way
+// it already excludes CancelledError/ConfigInvalidError (review findings on PR #3394 against
+// gateway.ts:161 and openai-adapter.ts:444: an untyped RangeError from this recursion used to slip
+// through both). Extends MalformedToolCallError so it carries a real, already-catalogued
+// GATEWAY_MALFORMED_TOOL_CALL code and is redacted/retryable=false like every sibling GatewayError,
+// without minting a new ERROR_CODES entry for one call site. Deterministic on the payload shape, so
+// retrying the identical response can never succeed.
+export class ResponseRedactionError extends MalformedToolCallError {}
+
+// KEIKO-0778 sibling (see qualityIntelligence/redaction.ts and promptEnhancement/redaction.ts,
+// which already fix the identical defect for their own deepRedact): without a ceiling, a
+// pathologically deep tool-call-arguments or JSON-mode structured-output payload drives this
+// recursion into an uncaught, untyped RangeError instead of the typed GatewayError every other
+// gateway failure surfaces. No cycle guard is needed here: this value always originates from
+// JSON.parse (normalize.ts), whose output is a tree, never a graph. 32 mirrors the sibling ceiling
+// exactly — it comfortably covers any real tool schema or structured-output shape while
+// empirically staying well clear of the engine's own stack limit (this repeatedly overflowed at
+// ~3,000 levels of nesting in this runtime; a well-formed production payload is nowhere near even
+// this constant, let alone that limit).
+const MAX_REDACT_DEPTH = 32;
+
+function redactUnknown(value: unknown, secrets: readonly string[], depth = 0): unknown {
+  if (depth >= MAX_REDACT_DEPTH) {
+    throw new ResponseRedactionError(
+      "gateway response payload exceeds the maximum redaction depth",
+      secrets,
+    );
+  }
   if (typeof value === "string") {
     return redact(value, secrets);
   }
   if (Array.isArray(value)) {
-    return value.map((item) => redactUnknown(item, secrets));
+    return value.map((item) => redactUnknown(item, secrets, depth + 1));
   }
   if (isRecord(value)) {
     return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [key, redactUnknown(item, secrets)]),
+      Object.entries(value).map(([key, item]) => [key, redactUnknown(item, secrets, depth + 1)]),
     );
   }
   return value;
@@ -370,6 +464,27 @@ function redactResponse(
     toolCalls: response.toolCalls.map((call) => redactToolCall(call, secrets)),
     structuredOutput: redactRecord(response.structuredOutput, secrets),
   };
+}
+
+function providerReportedUsage(payload: unknown): boolean {
+  if (!isRecord(payload) || !isRecord(payload.usage)) return false;
+  return [payload.usage.prompt_tokens, payload.usage.completion_tokens].every(
+    (value) => typeof value === "number" && Number.isSafeInteger(value) && value >= 0,
+  );
+}
+
+function bindCatalogResponse(
+  response: NormalizedResponse,
+  secrets: readonly string[],
+  bind: (calls: readonly NormalizedToolCall[]) => readonly NormalizedToolCall[],
+  usageReported: boolean,
+): NormalizedResponse {
+  try {
+    return bindNormalizedToolCalls(redactResponse(response, secrets), bind);
+  } catch (error) {
+    if (usageReported) retainMeasuredCatalogFailureUsage(error, response.usage);
+    throw error;
+  }
 }
 
 function configuredSecrets(secrets: readonly string[]): readonly string[] {
@@ -498,19 +613,27 @@ function* emitRedactedDelta(
   yield redact(emitNow, secrets);
 }
 
-// Records the finish-reason/usage carried on a streaming chunk onto the
+interface StreamAccumulator {
+  content: string;
+  finishReason: FinishReason;
+  prompt: number;
+  completion: number;
+  usageReported: boolean;
+  readonly toolCalls: ToolCallAccumulator;
+}
+
+// Records the finish-reason/usage/tool-call deltas carried on a streaming chunk onto the
 // in-flight response accumulator, when present.
-function applyChunkMetadata(
-  chunk: unknown,
-  acc: { finishReason: FinishReason; prompt: number; completion: number },
-): void {
+function applyChunkMetadata(chunk: unknown, acc: StreamAccumulator): void {
   const finish = finishReasonFromChunk(chunk);
   if (finish !== undefined) acc.finishReason = finish;
   const usage = usageFromChunk(chunk);
   if (usage !== undefined) {
     acc.prompt = usage.prompt;
     acc.completion = usage.completion;
+    acc.usageReported = providerReportedUsage(chunk);
   }
+  applyToolCallDelta(acc.toolCalls, chunk);
 }
 
 // Emits whatever content is still held in the buffer once the stream ends —
@@ -540,18 +663,26 @@ export class OpenAiAdapter implements ProviderAdapter {
   ): Promise<NormalizedResponse> => {
     const secrets = [config.apiKey, config.baseUrl];
     if (request.cancellationSignal?.aborted === true) {
-      throw new CancelledError(
-        `request for '${config.modelId}' cancelled before dispatch`,
+      throw requestAbortError(
+        request.cancellationSignal,
+        config.modelId,
         secrets,
+        "before dispatch",
       );
     }
     const start = this.now();
-    const response = await this.dispatch(request, config, secrets);
+    const catalog = createGatewayToolCatalogBridge(request, this.now, this.log);
+    const dispatched = await this.dispatch(
+      { ...request, tools: catalog.tools.length === 0 ? undefined : catalog.tools },
+      config,
+      secrets,
+    );
+    const { response } = dispatched;
     if (!response.ok) {
-      const errorPayload = await this.readErrorBody(response);
+      const errorPayload = await this.readErrorBody(response, config, secrets, dispatched.signal);
       mapHttpError(response, config.modelId, secrets, errorPayload);
     }
-    const payload = await this.readBody(response, config, secrets);
+    const payload = await this.readBody(response, config, secrets, dispatched.signal);
     const normalized = normalizeChatResponse(
       payload,
       config.modelId,
@@ -563,12 +694,20 @@ export class OpenAiAdapter implements ProviderAdapter {
       request.responseFormat?.type === "json_schema",
     );
     assertUsableAssistantResponse(normalized, config.modelId, secrets);
-    return redactResponse(normalized, secrets);
+    return bindCatalogResponse(
+      normalized,
+      secrets,
+      catalog.bindCalls,
+      providerReportedUsage(payload),
+    );
   };
 
-  // Streaming chat path (Layer 1): yields redacted content-delta tokens as they
-  // arrive, then a terminal `done` with the assembled, redacted NormalizedResponse.
-  // Tool-call streaming is out of scope — only `choices[0].delta.content` is surfaced.
+  // Streaming chat path (Layer 1): yields redacted content-delta tokens as they arrive, then a
+  // terminal `done` with the assembled, redacted, catalog-bound NormalizedResponse. Tool calls are
+  // accumulated from `choices[0].delta.tool_calls` fragments across chunks and bound against the
+  // advertised catalog only once fully assembled at `done` — never exposed mid-stream, and never
+  // reaching the caller unbound if the catalog rejects them (catalog.bindCalls throws, so this
+  // generator throws before yielding `done`).
   callStream = async function* (
     this: OpenAiAdapter,
     request: GatewayRequest,
@@ -576,24 +715,47 @@ export class OpenAiAdapter implements ProviderAdapter {
   ): AsyncGenerator<GatewayStreamChunk> {
     const secrets = [config.apiKey, config.baseUrl];
     if (request.cancellationSignal?.aborted === true) {
-      throw new CancelledError(
-        `request for '${config.modelId}' cancelled before dispatch`,
+      throw requestAbortError(
+        request.cancellationSignal,
+        config.modelId,
         secrets,
+        "before dispatch",
       );
     }
     const start = this.now();
-    const response = await this.dispatch(request, config, secrets, true);
+    const catalog = createGatewayToolCatalogBridge(request, this.now, this.log);
+    const dispatched = await this.dispatch(
+      { ...request, tools: catalog.tools.length === 0 ? undefined : catalog.tools },
+      config,
+      secrets,
+      true,
+    );
+    const { response } = dispatched;
     if (!response.ok) {
-      const errorPayload = await this.readErrorBody(response);
+      const errorPayload = await this.readErrorBody(response, config, secrets, dispatched.signal);
       mapHttpError(response, config.modelId, secrets, errorPayload);
     }
-    const acc = { content: "", finishReason: "stop" as FinishReason, prompt: 0, completion: 0 };
-    for await (const token of this.streamDeltas(response, config, secrets, acc)) {
+    const acc: StreamAccumulator = {
+      content: "",
+      finishReason: "stop",
+      prompt: 0,
+      completion: 0,
+      usageReported: false,
+      toolCalls: new Map(),
+    };
+    for await (const token of this.streamDeltas(
+      response,
+      config,
+      secrets,
+      acc,
+      dispatched.signal,
+    )) {
       yield { type: "delta", token };
     }
     const assembled = this.assembleResponse(config, start, acc);
     assertUsableAssistantResponse(assembled, config.modelId, secrets);
-    yield { type: "done", response: redactResponse(assembled, secrets) };
+    const bound = bindCatalogResponse(assembled, secrets, catalog.bindCalls, acc.usageReported);
+    yield { type: "done", response: bound };
   };
 
   // Iterates the SSE stream, yielding redacted content tokens while mutating `acc`.
@@ -606,7 +768,8 @@ export class OpenAiAdapter implements ProviderAdapter {
     response: Response,
     config: ModelProviderConfig,
     secrets: readonly string[],
-    acc: { content: string; finishReason: FinishReason; prompt: number; completion: number },
+    acc: StreamAccumulator,
+    signal: AbortSignal,
   ): AsyncGenerator<string> {
     const buffer = { pending: "" };
     const activeSecrets = configuredSecrets(secrets);
@@ -620,7 +783,7 @@ export class OpenAiAdapter implements ProviderAdapter {
       }
       yield* flushPendingBuffer(buffer, secrets);
     } catch (error) {
-      throw this.withPartialUsage(this.mapStreamError(error, config, secrets), acc);
+      throw this.withPartialUsage(this.mapStreamError(error, config, secrets, signal), acc);
     }
   }
 
@@ -643,7 +806,7 @@ export class OpenAiAdapter implements ProviderAdapter {
   private assembleResponse(
     config: ModelProviderConfig,
     start: number,
-    acc: { content: string; finishReason: FinishReason; prompt: number; completion: number },
+    acc: StreamAccumulator,
   ): NormalizedResponse {
     const usage: UsageMetadata = {
       requestId: this.deps.requestId,
@@ -656,7 +819,7 @@ export class OpenAiAdapter implements ProviderAdapter {
       modelId: config.modelId,
       content: acc.content,
       finishReason: acc.finishReason,
-      toolCalls: [],
+      toolCalls: assembledToolCalls(acc.toolCalls),
       structuredOutput: null,
       usage,
     };
@@ -671,9 +834,13 @@ export class OpenAiAdapter implements ProviderAdapter {
     error: unknown,
     config: ModelProviderConfig,
     secrets: readonly string[],
+    signal: AbortSignal,
   ): Error {
     if (error instanceof CancelledError || error instanceof TimeoutError) {
       return error;
+    }
+    if (signal.aborted) {
+      return requestAbortError(signal, config.modelId, secrets, "while reading stream");
     }
     if (error instanceof SseIdleTimeoutError) {
       return new TimeoutError(
@@ -691,11 +858,11 @@ export class OpenAiAdapter implements ProviderAdapter {
   }
 
   private async dispatch(
-    request: GatewayRequest,
+    request: ProviderGatewayRequest,
     config: ModelProviderConfig,
     secrets: readonly string[],
     stream = false,
-  ): Promise<Response> {
+  ): Promise<DispatchedResponse> {
     const timeoutSignal = AbortSignal.timeout(config.timeoutMs);
     const cancel = request.cancellationSignal;
     const signal = cancel ? AbortSignal.any([timeoutSignal, cancel]) : timeoutSignal;
@@ -716,7 +883,7 @@ export class OpenAiAdapter implements ProviderAdapter {
       stream,
     });
     try {
-      return await gatewayFetch(url, {
+      const response = await gatewayFetch(url, {
         method: "POST",
         headers,
         body,
@@ -725,27 +892,24 @@ export class OpenAiAdapter implements ProviderAdapter {
         log: this.log,
         ...(config.egress !== undefined ? { egress: config.egress } : {}),
       });
+      return { response, signal };
     } catch (error) {
-      throw this.mapDispatchError(error, config, cancel, timeoutSignal, secrets);
+      throw this.mapDispatchError(error, config, signal, secrets);
     }
   }
 
   private mapDispatchError(
     error: unknown,
     config: ModelProviderConfig,
-    cancel: AbortSignal | undefined,
-    timeout: AbortSignal,
+    signal: AbortSignal,
     secrets: readonly string[],
   ): Error {
-    if (cancel?.aborted === true) {
-      return new CancelledError(`request for '${config.modelId}' cancelled`, secrets);
+    if (signal.aborted) {
+      return requestAbortError(signal, config.modelId, secrets);
     }
     const egressError = mapOutboundEgressError(error, secrets);
     if (egressError !== undefined) {
       return egressError;
-    }
-    if (timeout.aborted) {
-      return new TimeoutError(`request for '${config.modelId}' timed out`, secrets);
     }
     if (error instanceof DOMException && error.name === "TimeoutError") {
       return new TimeoutError(`request for '${config.modelId}' timed out`, secrets);
@@ -757,18 +921,30 @@ export class OpenAiAdapter implements ProviderAdapter {
     response: Response,
     config: ModelProviderConfig,
     secrets: readonly string[],
+    signal: AbortSignal,
   ): Promise<unknown> {
     try {
       return await readJsonCapped(response);
     } catch {
+      if (signal.aborted) {
+        throw requestAbortError(signal, config.modelId, secrets, "while reading body");
+      }
       throw new TransportError(`provider sent an unreadable body for '${config.modelId}'`, secrets);
     }
   }
 
-  private async readErrorBody(response: Response): Promise<unknown> {
+  private async readErrorBody(
+    response: Response,
+    config: ModelProviderConfig,
+    secrets: readonly string[],
+    signal: AbortSignal,
+  ): Promise<unknown> {
     try {
       return await readJsonCapped(response);
     } catch {
+      if (signal.aborted) {
+        throw requestAbortError(signal, config.modelId, secrets, "while reading error body");
+      }
       return null;
     }
   }

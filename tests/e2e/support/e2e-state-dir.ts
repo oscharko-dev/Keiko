@@ -28,8 +28,12 @@ import { join } from "node:path";
  * `KEIKO_E2E_STATE_DIR=""` and resolved the state directory to a relative path inside the checkout;
  * the code-task helpers already guarded against that, and consolidating settles on their contract.
  */
-export function e2eStateDir(stateId: string, tempRoot: string = tmpdir()): string {
+export function e2eStateDir(
+  stateId: string,
+  tempRoot: string = tmpdir(),
+  directory: "keiko-e2e" | ".keiko" = "keiko-e2e",
+): string {
   const override = process.env.KEIKO_E2E_STATE_DIR;
   if (override !== undefined && override.length > 0) return override;
-  return join(realpathSync(tempRoot), "keiko-e2e", stateId);
+  return join(realpathSync(tempRoot), directory, stateId);
 }

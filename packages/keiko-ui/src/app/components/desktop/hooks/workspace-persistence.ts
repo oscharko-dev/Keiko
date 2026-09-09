@@ -1,5 +1,9 @@
 "use client";
 
+import {
+  GITHUB_ISSUE_NUMBER_MAX,
+  isGitHubOwnerAndRepo,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { sanitizeEditorRootSessionsJson } from "@/lib/editor-root-sessions";
 // KEIKO-0628: isSecretShapedString + its helpers live in a leaf module so tests/qa's cross-package
 // parity test can consume them without pulling this file's WIN_TYPES/WIN_META imports into the
@@ -93,6 +97,16 @@ const INTERNAL_CFG_KEYS: Readonly<Partial<Record<WindowType, readonly string[]>>
   // The Coding Workbench can explicitly open the user-selected repository rather than an active
   // task worktree. Retain only this closed marker, never an arbitrary binding instruction.
   governedGit: ["rootBinding"],
+  // Epic #3384 (#3401 "Review description"): the governed pull request window carries the exact
+  // server-held retained description proposal it must review. Each key has a closed value shape
+  // (owner/repo, positive integer, opaque reference, sha256 digest) so a reload restores the same
+  // binding the Workbench opened and never a hostile or free-form value.
+  governedPullRequest: [
+    "descriptionOwnerAndRepo",
+    "descriptionPrNumber",
+    "descriptionProposalId",
+    "descriptionSnapshotDigest",
+  ],
   figma: ["snapshotRunId", "selectedScreenIdsJson", "selectedScreenName"],
   figmaView: ["snapshotRunId", "selectedScreenIdsJson", "selectedScreenName"],
   figmaJson: ["snapshotRunId", "screenId", "selectedScreenIdsJson", "selectedScreenName"],
@@ -119,8 +133,37 @@ function sanitizeCodingRepositoryBinding(value: unknown): AppWindow["cfg"][strin
   return value === "coding-repository" ? value : undefined;
 }
 
+const SHA256_HEX_DIGEST = /^[a-f0-9]{64}$/u;
+
+// The owner/repo vocabulary and the issue/PR number ceiling are owned by keiko-contracts
+// (`github-issue-reference.ts`); this boundary reuses them rather than restating either rule.
+function sanitizeGitHubOwnerAndRepo(value: unknown): AppWindow["cfg"][string] {
+  return typeof value === "string" && isGitHubOwnerAndRepo(value) ? value : undefined;
+}
+
+function sanitizePullRequestNumber(value: unknown): AppWindow["cfg"][string] {
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value > 0 &&
+    value <= GITHUB_ISSUE_NUMBER_MAX
+    ? value
+    : undefined;
+}
+
+function sanitizeOpaqueReferenceValue(value: unknown): AppWindow["cfg"][string] {
+  return typeof value === "string" && isSafeOpaqueReference(value) ? value : undefined;
+}
+
+function sanitizeSha256Digest(value: unknown): AppWindow["cfg"][string] {
+  return typeof value === "string" && SHA256_HEX_DIGEST.test(value) ? value : undefined;
+}
+
 const CLOSED_CONFIG_VALUE_SANITIZERS: Readonly<Record<string, ClosedConfigValueSanitizer>> = {
   "governedGit:rootBinding": sanitizeCodingRepositoryBinding,
+  "governedPullRequest:descriptionOwnerAndRepo": sanitizeGitHubOwnerAndRepo,
+  "governedPullRequest:descriptionPrNumber": sanitizePullRequestNumber,
+  "governedPullRequest:descriptionProposalId": sanitizeOpaqueReferenceValue,
+  "governedPullRequest:descriptionSnapshotDigest": sanitizeSha256Digest,
 };
 
 function isFiniteNumber(value: unknown): value is number {

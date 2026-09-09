@@ -5,8 +5,12 @@
   "appPath": "packaged-cli-ui",
   "route": "/",
   "evidencePath": "docs/git-delivery/evidence/477",
-  "generatedAt": "2026-06-27T11:39:22.409Z",
-  "governedRoutes": ["/api/git-delivery/pr/preview", "/api/git-delivery/pr/execute"],
+  "generatedAt": "2026-09-09T00:48:51.596Z",
+  "governedRoutes": [
+    "/api/git-delivery/pr/preview",
+    "/api/git-delivery/pr/approve",
+    "/api/git-delivery/pr/execute"
+  ],
   "windowRegistration": {
     "kind": "governedPullRequest",
     "seededVia": "keiko.workspace.v4",
@@ -23,7 +27,7 @@
     "createdPrNumberSurfaced": true
   },
   "requestLedger": {
-    "previewRequests": 1,
+    "previewRequests": 2,
     "executeRequests": 2
   },
   "notes": [

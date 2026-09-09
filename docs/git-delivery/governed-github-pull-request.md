@@ -68,12 +68,31 @@ The PR surface is always registered. It becomes operational when the project wor
 authenticate through its own credential sources, provider readiness is available, and policy allows or
 approval-gates the requested action.
 
+## Mandatory commit pinning and the live-head re-read (ADR-0086 D12)
+
+`GitDeliveryPrCreateInputs` / `GitDeliveryPrUpdateInputs` carry a mandatory `verifiedCommitSha` (a
+complete Git object id, contract-validated) — a request shaped without it is a `400`, never a silent
+default. Immediately before dispatching the `gh api` create/update mutation, the Node adapter re-reads
+the named branch's live head and refuses with `precondition-failed` (no mutation call at all) when it no
+longer matches; after a successful mutation it re-reads once more and reports drift rather than a false
+"succeeded" if the branch moved in that narrow window. This closes the same approval-vs-drift gap
+ADR-0085 D6 closes for `push`: an approval binds a claim to a specific `verifiedCommitSha`, but only a
+live re-read proves the target branch still points there when the claim is redeemed. The PR preview
+response carries `headCommitSha` from the live snapshot for `GovernedPullRequestCard.tsx` to capture and
+resubmit as `verifiedCommitSha` on approve/execute — the user never types a commit SHA by hand.
+
 ## Tests and evidence
 
 - contracts: `git-pull-request.test.ts` (synthesis determinism, readiness derivation, recommendation,
   exhaustive rejection taxonomy, guards).
+- contracts: `git-delivery.test.ts` — `verifiedCommitSha` is mandatory and validated on `pr-create` /
+  `pr-update` inputs (PR #3394 review).
 - tools: `git-pr-gateway.test.ts` (argv builders, GitHub-error classifier, effective policy, lifecycle
   gates with a fake adapter).
+- tools: `git-pr-node.test.ts` — the reviewer's exact #3394 scenario: a `pr-create` claim approved
+  against head commit A is replayed after the branch moved to commit C; the pre-dispatch live-head
+  check refuses with `precondition-failed` and the create mutation is never spawned. The equivalent
+  case is proven for `pr-update`.
 - server: `gitDelivery/prRoutes.test.ts` (route guards, policy block, content-free evidence,
   normalized rejection, approval-gated hold — all with a fake adapter, no `gh`, no network).
 - ui: `GovernedPullRequestCard.test.tsx` + `.a11y.test.tsx` (metadata seeding, dispatch payloads,

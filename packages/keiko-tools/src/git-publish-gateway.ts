@@ -33,6 +33,10 @@ import type {
   GitDeliveryRepoPolicyPack,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  isGitObjectId,
+  isSafeGitRefName,
+} from "@oscharko-dev/keiko-contracts/runtime/git-repository";
+import {
   evaluateGitDeliveryEffectivePolicy,
   evaluateGitPolicy,
   gitDeliveryPolicyTargetBranchName,
@@ -60,6 +64,14 @@ import type { CommandRule } from "./types.js";
 
 export interface GitPushCommand {
   readonly kind: "push";
+  /**
+   * Server-approved immutable source, mandatory (#3394 review, finding 1). Every governed push is
+   * now pinned to the exact commit its preview/approval was minted against — there is no more
+   * unpinned, branch-name-only push. Tracking updates are a separate, best-effort local action (see
+   * `applyUpstreamTrackingIfRequested` in git-publish-node.ts) run only after a successful pinned
+   * push, never folded into the push argv itself.
+   */
+  readonly verifiedCommitSha: string;
   readonly sourceBranchName: string;
   readonly remoteAlias: string;
   readonly remoteBranchName: string;
@@ -73,6 +85,7 @@ export interface GitPushCommand {
 // The operands handed to the executor. forcePush is intentionally ABSENT: the adapter can never force
 // push because no force operand reaches it.
 export interface GitPublishExecRequest {
+  readonly verifiedCommitSha: string;
   readonly sourceBranchName: string;
   readonly remoteAlias: string;
   readonly remoteBranchName: string;
@@ -265,11 +278,17 @@ export function gitPublishRejectionFor(reason: GitPublishRejectionReason): GitPu
 }
 
 // ─── Dedicated push allowlist + pure argv builder (force refused) ────────────────────────────
-// A closed allowlist permitting ONLY `push`. Structurally separate from the local mutation rules and
-// the read-only inspection rules. Mirrors their defence-in-depth flag denials so a smuggled global flag
-// is rejected before spawn even though argv is built only from typed operands.
+// A closed allowlist permitting `push` and, as of #3394, the single local-only `branch
+// --set-upstream-to=…` bookkeeping step the pinned-push follow-up runs (Decision Point A): it is a
+// config-only, no-object-write, no-network invocation, run through this SAME sandboxed executor
+// immediately after a successful pinned push, so it belongs to this allowlist rather than either the
+// read-only inspection rules or the local mutation rules (a push must never flow through the local
+// write adapter — Force 1, ADR-0085 — but this is not a push). Structurally separate from both those
+// rule sets. Mirrors their defence-in-depth flag denials so a smuggled global flag is rejected before
+// spawn even though argv is built only from typed operands; `-d`/`--delete` stays denied so `branch`
+// can never be used for anything but the one `--set-upstream-to` shape this file builds.
 
-export const GIT_PUBLISH_ALLOWED_SUBCOMMANDS: readonly string[] = Object.freeze(["push"]);
+export const GIT_PUBLISH_ALLOWED_SUBCOMMANDS: readonly string[] = Object.freeze(["push", "branch"]);
 
 export const GIT_PUBLISH_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
   {
@@ -339,22 +358,55 @@ function assertRef(value: string, label: string): string {
   return value;
 }
 
-// Builds the single governed push argv. An explicit `src:dst` refspec is always used so the push target
-// is never inferred from ambient `push.default` config. AC4: a force push is REFUSED here — there is no
-// branch in this builder that can emit a force flag.
+// Builds the single governed push argv. `verifiedCommitSha` is mandatory (#3394 review, finding 1),
+// so every push now pins an explicit `<sha>:refs/heads/<target>` refspec — the plain branch-name
+// `src:dst` shape is unreachable by construction and no longer built here. AC4: a force push is
+// REFUSED here — there is no branch in this builder that can emit a force flag.
 export function buildPushArgv(command: GitPushCommand): readonly string[] {
   if (command.forcePush) {
     throw new GitPublishArgvError("force push is not permitted (AC4 — blocked by default)");
   }
   const remote = assertRef(command.remoteAlias, "remoteAlias");
-  const source = assertRef(command.sourceBranchName, "sourceBranchName");
   const target = assertRef(command.remoteBranchName, "remoteBranchName");
-  const argv = ["push"];
-  if (command.setUpstreamTracking) {
-    argv.push("--set-upstream");
+  return verifiedPushArgv(command, remote, target);
+}
+
+// `setUpstreamTracking` is no longer refused here: `-u` silently no-ops on a raw-SHA source (a raw
+// commit is not "a branch" from `--set-upstream`'s point of view), so the refusal used to exist only
+// to stop a combination that would otherwise silently fail to track. The Node adapter now runs the
+// local-only `git branch --set-upstream-to=…` follow-up explicitly after a successful pinned push
+// (see `applyUpstreamTrackingIfRequested`, git-publish-node.ts), so the combination is handled rather
+// than refused.
+function verifiedPushArgv(
+  command: GitPushCommand,
+  remote: string,
+  target: string,
+): readonly string[] {
+  if (
+    !isGitObjectId(command.verifiedCommitSha) ||
+    !isSafeGitRefName(target) ||
+    target.startsWith("refs/")
+  ) {
+    throw new GitPublishArgvError("verified push requires an immutable commit and a branch target");
   }
-  argv.push(remote, `${source}:${target}`);
-  return argv;
+  return ["push", remote, `${command.verifiedCommitSha}:refs/heads/${target}`];
+}
+
+// The local-only, no-network follow-up that establishes upstream tracking after a pinned-SHA push
+// (§0.1 / Decision Point A): a raw commit source cannot be tracked via `push --set-upstream`, so
+// tracking is configured as a separate, ordinary `git branch --set-upstream-to=<remote>/<target>
+// <source>` once the pinned push has already succeeded. Pure argv builder — the Node adapter runs it
+// through the SAME sandboxed publish executor as the push itself, best-effort (a failure here never
+// undoes or fails the push, which already succeeded).
+export function buildSetUpstreamToArgv(
+  remoteAlias: string,
+  remoteBranchName: string,
+  sourceBranchName: string,
+): readonly string[] {
+  const remote = assertRef(remoteAlias, "remoteAlias");
+  const target = assertRef(remoteBranchName, "remoteBranchName");
+  const source = assertRef(sourceBranchName, "sourceBranchName");
+  return ["branch", `--set-upstream-to=${remote}/${target}`, source];
 }
 
 // ─── Lifecycle orchestration ─────────────────────────────────────────────────────────────────
@@ -385,6 +437,7 @@ export interface GitPublishLifecycleResult {
 function pushResolvedInputs(command: GitPushCommand): GitDeliveryPushInputs {
   return {
     kind: "push",
+    verifiedCommitSha: command.verifiedCommitSha,
     sourceBranchName: command.sourceBranchName,
     remoteAlias: command.remoteAlias,
     remoteBranchName: command.remoteBranchName,
@@ -566,6 +619,7 @@ async function runPublishAdapter(
     // Build the argv eagerly so a force-push refusal (AC4) is a structured failure, never a spawn.
     buildPushArgv(command);
     return await adapter.publish({
+      verifiedCommitSha: command.verifiedCommitSha,
       sourceBranchName: command.sourceBranchName,
       remoteAlias: command.remoteAlias,
       remoteBranchName: command.remoteBranchName,

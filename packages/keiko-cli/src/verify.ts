@@ -158,7 +158,10 @@ export async function runVerifyCli(args: readonly string[], io: CliIo): Promise<
     } else {
       await renderText(report, io);
     }
-    return report.overallStatus === "passed" ? 0 : 1;
+    // "skipped" (every step skipped, nothing executed) is reported as such since #3390 instead of
+    // masquerading as "passed"; for the operator's CLI it is still not a failure -- exit 0, with
+    // the summary naming what did not run.
+    return report.overallStatus === "passed" || report.overallStatus === "skipped" ? 0 : 1;
   } catch (error) {
     if (error instanceof WorkspaceError) {
       io.err(`Error [${error.code}]: ${error.message}\n`);

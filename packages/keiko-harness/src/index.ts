@@ -101,3 +101,14 @@ export type {
   HarnessCompactionPort,
   HarnessCompactionResult,
 } from "./context-compaction-port.js";
+export type {
+  HarnessCatalogFactory,
+  HarnessCatalogContext,
+  HarnessToolExecutionEvidence,
+} from "./catalog-runtime.js";
+export type { HarnessBudgetContext } from "./catalog-budget.js";
+export { createLegacyPortCatalogFactory } from "./legacy-port-catalog.js";
+export {
+  createEditorAgentCatalogFactory,
+  editorAgentRegistrationSet,
+} from "./editor-agent-catalog.js";

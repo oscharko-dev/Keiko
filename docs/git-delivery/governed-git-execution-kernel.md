@@ -71,7 +71,7 @@ Preflight is a pure function of `(resolvedInputs, GitWorktreeSnapshot)`. The sna
 
 Each finding carries:
 
-- `code` — a closed, specific code (e.g. `branch-already-exists`, `no-upstream-configured`,
+- `code` — a closed, specific code (e.g. `branch-already-exists`, `verified-commit-drifted`,
   `nothing-staged-to-commit`, `remote-unreachable`).
 - `severity` — `blocking` (halts) or `advisory` (informs).
 - `remediation` — `user-actionable` (the operator can fix it) or `internal` (a kernel/caller fault).

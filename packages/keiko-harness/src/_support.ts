@@ -1,3 +1,7 @@
+import type {
+  CatalogToolDispatchOutcome,
+  BoundToolInvocation,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 // Shared deterministic test fixtures: stub clock, scripted model port, recording tool
 // port, and a RunContext builder. No real timers, network, or fs (ADR-0004 test rules).
 
@@ -7,6 +11,22 @@ import type {
   NormalizedToolCall,
   ToolDefinition,
 } from "@oscharko-dev/keiko-model-gateway";
+import {
+  createInitialToolCatalog,
+  compileToolProjection,
+  createToolInvocationNormalizer,
+  lookupCatalogTool,
+  catalogJsonBytes,
+} from "@oscharko-dev/keiko-tool-catalog";
+import type {
+  CatalogToolPort,
+  GatewayToolCatalogAdvertisement,
+} from "@oscharko-dev/keiko-contracts/runtime/governed-tool-bridge";
+import {
+  bindHarnessCatalog,
+  type HarnessCatalogFactory,
+  type HarnessCatalogContext,
+} from "./catalog-runtime.js";
 import { Emitter } from "./emitter.js";
 import { MemoryEventSink } from "./sinks.js";
 import { newCounters, type RunContext } from "./context.js";
@@ -66,7 +86,18 @@ export function response(overrides: Partial<NormalizedResponse> = {}): Normalize
 }
 
 export function toolCall(id: string, name = "read_file"): NormalizedToolCall {
-  return { id, name, arguments: {} };
+  return {
+    id,
+    name,
+    arguments:
+      name === "read_file"
+        ? { path: "fixture.txt" }
+        : name === "run_command"
+          ? { command: "npm" }
+          : name === "apply_patch" || name === "propose_patch"
+            ? { diff: "fixture-diff" }
+            : {},
+  };
 }
 
 // A model port that returns scripted responses (one per call), or throws scripted errors.
@@ -88,7 +119,24 @@ export function scriptedModel(script: readonly (NormalizedResponse | Error)[]): 
         if (item instanceof Error) {
           return Promise.reject(item);
         }
-        return Promise.resolve(item ?? response());
+        const selected = item ?? response();
+        const normalizer =
+          request.toolCatalog === undefined
+            ? undefined
+            : createToolInvocationNormalizer({
+                catalog: request.toolCatalog.catalog,
+                projection: request.toolCatalog.projection,
+                offered: request.toolCatalog.offered,
+              });
+        return Promise.resolve({
+          ...selected,
+          toolCalls: selected.toolCalls.map((call) => ({
+            ...call,
+            ...(normalizer === undefined
+              ? {}
+              : { invocation: normalizer.bindAlias(call.name, call.arguments, 0) }),
+          })),
+        });
       },
     },
   };
@@ -157,5 +205,131 @@ export function buildContext(options: CtxOptions): { ctx: RunContext; sink: Memo
     cancelReason: undefined,
     cancelledAtState: undefined,
   };
+  ctx.catalog = bindHarnessCatalog(ctx, "run-1", catalogTestFactory(ctx.tools));
   return { ctx, sink };
+}
+
+// Unit transport fixture only. Runtime authority/settlement is proved by the server binder suites.
+export function catalogTestFactory(tools: ToolPort): HarnessCatalogFactory {
+  return (context): CatalogToolPort => {
+    const advertisement = unitAdvertisement();
+    const { catalog, projection } = advertisement;
+    let invocationSequence = 0;
+    return {
+      kind: "catalog",
+      offer: (): GatewayToolCatalogAdvertisement => advertisement,
+      execute: async (request): Promise<CatalogToolDispatchOutcome> => {
+        const invocation = createToolInvocationNormalizer({
+          catalog,
+          projection,
+          offered: advertisement.offered,
+        }).normalize(request.invocation, 0);
+        const tool = projection.tools.find(
+          (entry) => entry.toolRef.canonicalId === invocation.toolRef.canonicalId,
+        );
+        const descriptor = lookupCatalogTool(catalog, invocation.toolRef);
+        if (tool === undefined || descriptor === undefined)
+          throw new TypeError("Unknown unit tool");
+        const invocationId = `unit-invocation-${String(++invocationSequence)}`;
+        const reservation = context.budgetPort.reserve(descriptor, context, invocationId);
+        if (reservation === undefined || !context.budgetPort.check(reservation, context))
+          throw new TypeError("Unit budget denied");
+        const result = await tools.execute({
+          toolCallId: request.toolCallId,
+          toolName: tool.alias,
+          arguments: invocation.arguments as Record<string, unknown>,
+          signal: request.signal,
+        });
+        context.budgetPort.commit(reservation);
+        observeUnitResult(context, descriptor.toolRef, result);
+        return unitOutcome(invocation, invocationId, reservation.reservationId, result);
+      },
+    };
+  };
+}
+function observeUnitResult(
+  context: HarnessCatalogContext,
+  toolRef: import("@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog").ToolRef,
+  result: ToolCallResult,
+): void {
+  context.observeExecution({
+    toolRef,
+    toolCallId: result.toolCallId,
+    commandExecuted: result.commandExecuted === true,
+    durationMs: result.durationMs,
+    ...(result.metadata === undefined ? {} : { metadata: result.metadata }),
+  });
+}
+
+export function prepareToolResponse(ctx: RunContext): void {
+  if (ctx.catalog === undefined || ctx.lastResponse === undefined)
+    throw new TypeError("Missing unit catalog");
+  const { catalog, projection, offered } = ctx.catalog.port.offer();
+  const normalizer = createToolInvocationNormalizer({ catalog, projection, offered });
+  ctx.catalog.normalizer = normalizer;
+  ctx.lastResponse = {
+    ...ctx.lastResponse,
+    toolCalls: ctx.lastResponse.toolCalls.map((call) => ({
+      ...call,
+      invocation: normalizer.bindAlias(call.name, call.arguments, ctx.clock.now()),
+    })),
+  };
+}
+
+function unitAdvertisement(): GatewayToolCatalogAdvertisement {
+  const catalog = createInitialToolCatalog();
+  const projection = compileToolProjection(catalog, { id: "legacy-native", version: 1 });
+  return {
+    kind: "bound",
+    catalog,
+    projection,
+    offered: {
+      binding: {
+        catalogRevision: catalog.catalogRevision,
+        profile: projection.profile,
+        projectionDigest: projection.projectionDigest,
+        handlerSetDigest: projection.projectionDigest,
+        readiness: "ready",
+      },
+      offerId: "unit-offer",
+      toolRefs: projection.tools.map((tool) => tool.toolRef),
+      expiresAt: "2100-01-01T00:00:00.000Z",
+    },
+  };
+}
+
+function unitOutcome(
+  invocation: BoundToolInvocation,
+  invocationId: string,
+  reservationId: string,
+  result: ToolCallResult,
+): CatalogToolDispatchOutcome {
+  return {
+    kind: "settled",
+    receipt: {
+      invocationId,
+      reservationId: reservationId,
+      settlementId: invocationId,
+      budgetDisposition: "committed",
+      effectStarted: true,
+      status: "completed",
+    },
+    result: {
+      schemaVersion: 1,
+      invocationId,
+      toolRef: invocation.toolRef,
+      projectionDigest: invocation.projectionDigest,
+      status: "completed",
+      reason: "none",
+      effectStarted: true,
+      metrics: {
+        inputBytes: catalogJsonBytes(invocation.arguments),
+        outputBytes: catalogJsonBytes(result.output),
+        resultCount: 1,
+        durationMs: result.durationMs,
+      },
+      page: { truncated: false, reason: "none", cursor: null },
+      data: result.output,
+    },
+  };
 }

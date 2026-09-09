@@ -1,3 +1,4 @@
+import type { CodingWorkbenchIssueStartIntent } from "./coding-workbench-runtime-actions";
 import { useCallback, useRef, type Dispatch, type RefObject } from "react";
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type {
@@ -57,7 +58,7 @@ export interface RuntimeResources {
 }
 
 export interface RuntimeMutationActions {
-  readonly start: (taskIntent: string) => Promise<void>;
+  readonly start: (taskIntent: string, issue?: CodingWorkbenchIssueStartIntent) => Promise<void>;
   readonly decideApproval: (decision: CodingWorkbenchRuntimeApprovalDecision) => Promise<void>;
   readonly stop: () => Promise<void>;
   readonly takeover: () => Promise<void>;
@@ -322,8 +323,8 @@ export function useCodingWorkbenchRuntimeMutations(
 ): RuntimeMutationActions {
   const enqueueMutation = useRuntimeMutationQueue(input);
   const start = useCallback(
-    (taskIntent: string): Promise<void> =>
-      enqueueMutation("start", (current) => createStartMutation(taskIntent, current)),
+    (taskIntent: string, issue?: CodingWorkbenchIssueStartIntent): Promise<void> =>
+      enqueueMutation("start", (current) => createStartMutation(taskIntent, current, issue)),
     [enqueueMutation],
   );
   const decideApproval = useCallback(

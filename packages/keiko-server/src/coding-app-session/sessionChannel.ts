@@ -60,9 +60,11 @@ export interface CodingAppSessionChannel {
   readonly subscribe: (
     cookieToken: string | undefined,
     listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
+    options?: { readonly deferAdmissionReleaseOnBackpressure?: boolean },
   ) => {
     readonly snapshot: CodingAppSessionChannelSnapshot;
     readonly live: boolean;
+    readonly stop: () => void;
     readonly detach: () => void;
   };
 }
@@ -123,6 +125,7 @@ function subscribeToContent(
   listener: (snapshot: CodingAppSessionChannelSnapshot) => boolean,
   admission: LiveSubscriptionAdmission,
   diagnostics: ServerDiagnosticSink | undefined,
+  deferAdmissionReleaseOnBackpressure: boolean,
 ): ReturnType<CodingAppSessionChannel["subscribe"]> {
   const session = registry.verify(cookieToken);
   const snapshot =
@@ -130,7 +133,7 @@ function subscribeToContent(
       ? contentFreeCodingAppSessionChannelSnapshot()
       : projectContent(session, contentSource);
   if (session === undefined || contentSource?.subscribeContent === undefined) {
-    return { snapshot, live: false, detach: (): void => undefined };
+    return inactiveSubscription(snapshot);
   }
   return liveSubscription({
     registry,
@@ -141,6 +144,7 @@ function subscribeToContent(
     admission,
     diagnostics,
     correlationId: session.sessionId,
+    deferAdmissionReleaseOnBackpressure,
   });
 }
 
@@ -173,6 +177,17 @@ interface LiveSubscriptionAdmission {
   readonly release: () => void;
 }
 
+function inactiveSubscription(
+  snapshot: CodingAppSessionChannelSnapshot,
+): ReturnType<CodingAppSessionChannel["subscribe"]> {
+  return {
+    snapshot,
+    live: false,
+    stop: (): void => undefined,
+    detach: (): void => undefined,
+  };
+}
+
 function rejectedSourceSubscription(
   source: ReturnType<NonNullable<CodingAppSessionContentSource["subscribeContent"]>> | undefined,
   detach: () => void,
@@ -180,21 +195,29 @@ function rejectedSourceSubscription(
 ): ReturnType<CodingAppSessionChannel["subscribe"]> {
   source?.detach();
   detach();
-  return { snapshot, live: false, detach: (): void => undefined };
+  return inactiveSubscription(snapshot);
 }
 
 interface LiveLifecycle {
   active: boolean;
+  released: boolean;
   sourceDetach: () => void;
   expiryTimer?: ReturnType<typeof setInterval>;
 }
 
-function makeDetach(lifecycle: LiveLifecycle, admission: LiveSubscriptionAdmission): () => void {
-  return (): void => {
-    if (!lifecycle.active) return;
+function stopLiveSource(lifecycle: LiveLifecycle): void {
+  if (lifecycle.active) {
     lifecycle.active = false;
     if (lifecycle.expiryTimer !== undefined) clearInterval(lifecycle.expiryTimer);
     lifecycle.sourceDetach();
+  }
+}
+
+function makeDetach(lifecycle: LiveLifecycle, admission: LiveSubscriptionAdmission): () => void {
+  return (): void => {
+    stopLiveSource(lifecycle);
+    if (lifecycle.released) return;
+    lifecycle.released = true;
     admission.release();
   };
 }
@@ -206,6 +229,7 @@ function makePublish(
   detach: () => void,
   diagnostics: ServerDiagnosticSink | undefined,
   correlationId: string,
+  deferAdmissionReleaseOnBackpressure: boolean,
 ): (content: CodingAppSessionChannelContent | null) => void {
   return (content: CodingAppSessionChannelContent | null): void => {
     if (!lifecycle.active) return;
@@ -214,12 +238,14 @@ function makePublish(
       const accepted = listener(
         valid ? snapshotForContent(content) : contentFreeCodingAppSessionChannelSnapshot(),
       );
-      if (!valid || !accepted) {
+      if (!valid) {
+        detach();
+      } else if (!accepted) {
         // KEIKO-0225: previously a listener returning `false` silently detached with nothing to
         // diagnose. Report backpressure once so operators can see a stream that dropped.
-        if (valid && !accepted)
-          recordSseFailure(diagnostics, correlationId, "sse-backpressure", "Error");
-        detach();
+        recordSseFailure(diagnostics, correlationId, "sse-backpressure", "Error");
+        if (deferAdmissionReleaseOnBackpressure) stopLiveSource(lifecycle);
+        else detach();
       }
     } catch (error) {
       recordSseFailure(
@@ -242,6 +268,7 @@ interface LiveSubscriptionInput {
   readonly admission: LiveSubscriptionAdmission;
   readonly diagnostics: ServerDiagnosticSink | undefined;
   readonly correlationId: string;
+  readonly deferAdmissionReleaseOnBackpressure: boolean;
 }
 
 function liveSubscription(
@@ -256,25 +283,41 @@ function liveSubscription(
     admission,
     diagnostics,
     correlationId,
+    deferAdmissionReleaseOnBackpressure,
   } = input;
-  if (!admission.acquire()) return { snapshot, live: false, detach: (): void => undefined };
-  const lifecycle: LiveLifecycle = { active: true, sourceDetach: (): void => undefined };
+  if (!admission.acquire()) return inactiveSubscription(snapshot);
+  const lifecycle: LiveLifecycle = {
+    active: true,
+    released: false,
+    sourceDetach: (): void => undefined,
+  };
   const detach = makeDetach(lifecycle, admission);
+  const stop = (): void => {
+    stopLiveSource(lifecycle);
+  };
   const validity = (): boolean => registry.inspect(cookieToken) !== undefined;
-  const publish = makePublish(lifecycle, validity, listener, detach, diagnostics, correlationId);
+  const publish = makePublish(
+    lifecycle,
+    validity,
+    listener,
+    detach,
+    diagnostics,
+    correlationId,
+    deferAdmissionReleaseOnBackpressure,
+  );
   const sourceSubscription = contentSource.subscribeContent?.(publish);
   if (!sourceSubscription?.admitted)
     return rejectedSourceSubscription(sourceSubscription, detach, snapshot);
   if (!lifecycle.active) {
     sourceSubscription.detach();
-    return { snapshot, live: false, detach: (): void => undefined };
+    return { snapshot, live: false, stop, detach };
   }
   lifecycle.sourceDetach = sourceSubscription.detach;
   lifecycle.expiryTimer = setInterval(() => {
     if (!validity()) publish(null);
   }, 1_000);
   lifecycle.expiryTimer.unref();
-  return { snapshot, live: true, detach };
+  return { snapshot, live: true, stop, detach };
 }
 
 function makeLiveSubscriptionAdmission(): LiveSubscriptionAdmission {
@@ -325,7 +368,15 @@ export function createCodingAppSessionChannel(
     sessionCount: (): number => registry.sessionCount(),
     verifySession: (cookieToken: string | undefined): AppSession | undefined =>
       registry.verify(cookieToken),
-    subscribe: (cookieToken, listener) =>
-      subscribeToContent(registry, contentSource, cookieToken, listener, admission, diagnostics),
+    subscribe: (cookieToken, listener, options) =>
+      subscribeToContent(
+        registry,
+        contentSource,
+        cookieToken,
+        listener,
+        admission,
+        diagnostics,
+        options?.deferAdmissionReleaseOnBackpressure ?? false,
+      ),
   };
 }

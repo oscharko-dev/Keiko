@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 1,
+  "evidenceKind": "keiko-code-task-real-binary-v1",
+  "scenarioId": "real-binary-lane",
+  "evidenceClass": "production-functional",
+  "sourceCommitSha": "3af295760373908725ebc6391de722e100093d3e",
+  "platformTarget": "macos-arm64",
+  "result": "passed",
+  "runtime": {
+    "name": "opencode-compatible",
+    "version": "1.17.17",
+    "target": "macos-arm64"
+  },
+  "run": {
+    "correlationId": "run-323714776050205645524193586379146780693",
+    "activityLogSha256": "28c6b54d82bf10000d3394583b8ab46b34c3eacc6ed87719a1d50c84a19fa086"
+  },
+  "limits": {
+    "admission": {
+      "maxPromptTokens": 128000,
+      "maxOutputTokens": 4096,
+      "maxInputMessages": 512,
+      "maxRequestBytes": 1048576
+    },
+    "contextWindow": 45056,
+    "inputTokens": 40960,
+    "outputTokens": 4096,
+    "gatewayRequestCount": 8,
+    "gatewayCatalogBindingRequestCount": 8
+  },
+  "missingPayload": {
+    "unavailableReason": "payload-missing"
+  },
+  "h1Search": {
+    "toolCallId": "h1-real-binary-search",
+    "hitCount": 1,
+    "pathDigest": "5d37297cbe5b4756da49c9b31a48bbd98dde814391111d02e58f6f6cb5c2aa1a",
+    "snippetDigest": "7f1d494aa3797a6091f1e4483b0204ca46db94cc5153468d9b7647a5626ec9b4",
+    "startLine": 1,
+    "endLine": 1,
+    "readTargetDerivedFromResult": true
+  },
+  "managedCatalog": {
+    "binding": {
+      "catalogRevision": "713b56bb6f032cb64aae480fe7de9b07aece4b05a1e4cd645e620aae27721f4b",
+      "profile": {
+        "id": "opencode",
+        "version": 1
+      },
+      "projectionDigest": "201df77730101f5fc1c1d16fe297314d25193f8c5463dc329e6bd5c4b0eaa8ae",
+      "handlerSetDigest": "cfddd9ec048916c047952291e4c83e2ff50765708d4c7b237490f969b6942869"
+    },
+    "settlementCount": 4,
+    "proof": {
+      "kind": "managed-search-read",
+      "searchSettled": true,
+      "boundedReadSettled": true,
+      "causalHandoff": true
+    }
+  }
+}

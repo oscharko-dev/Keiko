@@ -1019,6 +1019,42 @@ describe("runCli", () => {
     expect(report.fileFloors).toEqual([]);
   });
 
+  it("refreshes only measured source counts while preserving every governed floor and metric", async () => {
+    fixture({
+      floors: {
+        "packages/keiko-a/src/a.ts": { governance: "absolute", tolerance: 0, lines: 90 },
+      },
+    });
+    writeJson(root, "packages/keiko-a/src/a.ts", {});
+    writeJson(root, "packages/keiko-a/src/b.ts", {});
+    const before = JSON.parse(readFileSync(join(root, "baseline.json"), "utf8"));
+    const destination = join(root, "inventory-refreshed.json");
+    capture();
+
+    await run("--refresh-source-inventory", "--write-baseline", destination);
+
+    const written = JSON.parse(readFileSync(destination, "utf8"));
+    expect(written).toEqual({
+      ...before,
+      packages: {
+        "keiko-a": { ...before.packages["keiko-a"], files: 2 },
+      },
+    });
+    expect(out).toEqual(["coverage-source-inventory: refreshed 1 package count(s); 1 changed."]);
+    expect(JSON.parse(readFileSync(join(root, "baseline.json"), "utf8"))).toEqual(before);
+    expect(process.exitCode).toBeUndefined();
+  });
+
+  it("refuses an inventory-only refresh when the governed package set is incomplete", async () => {
+    fixture();
+    writeJson(root, "packages/keiko-b/package.json", { name: "@oscharko-dev/keiko-b" });
+    capture();
+
+    await expect(
+      run("--refresh-source-inventory", "--write-baseline", join(root, "inventory-refreshed.json")),
+    ).rejects.toThrow(/package inventory differs from the workspace: missing=1, stale=0/u);
+  });
+
   // An enforcement pass that governs nothing must not read as a satisfied one: a dropped --baseline
   // in CI wiring would otherwise retire the per-file gate in silence.
   it("refuses to report file-floor PASS when the store governs nothing", async () => {

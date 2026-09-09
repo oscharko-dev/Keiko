@@ -1,6 +1,10 @@
+import { draftDeliveryReview } from "../app/components/desktop/widgets/coding-workbench/_draftDeliveryTestSupport";
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchRuntimePendingApprovalReview,
+  CodingWorkbenchRuntimeApprovalReviewChannelPayload,
+} from "@oscharko-dev/keiko-contracts";
 
 import {
   useCodingWorkbenchApprovalReview,
@@ -36,6 +40,32 @@ function active(): CodingWorkbenchRuntimeApprovalReviewChannelPayload {
   return { session: "active", pending: REVIEW };
 }
 
+function commitReview(runId = "run-1"): CodingWorkbenchRuntimePendingApprovalReview {
+  return {
+    ...REVIEW,
+    verifiedCommit: {
+      message: "fix: never copy this message into a diagnostic",
+      result: {
+        schemaVersion: "1",
+        status: "approval-required",
+        reason: "approval-required",
+        recordedAt: "2026-09-04T10:00:00.000Z",
+        proposalId: REVIEW.requestId,
+        runId,
+        envelopeDigest: "a".repeat(64),
+        runtimeAuthorityDigest: "b".repeat(64),
+        workspaceDigest: "c".repeat(64),
+        repositoryDigest: "d".repeat(64),
+        baseSha: "1".repeat(40),
+        parentSha: "2".repeat(40),
+        stagedTreeDigest: "3".repeat(64),
+        messageDigest: "4".repeat(64),
+        verificationEvidenceId: "verification-3386",
+      },
+    },
+  };
+}
+
 async function flushRead(): Promise<void> {
   await act(async () => {
     await Promise.resolve();
@@ -53,6 +83,70 @@ describe("useCodingWorkbenchApprovalReview", () => {
   afterEach(() => {
     vi.clearAllMocks();
     vi.restoreAllMocks();
+  });
+
+  it("#3386: publishes a matching commit and records only its bounded facts", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    getApprovalReviewMock.mockResolvedValue({ session: "active", pending: commitReview() });
+    const { result } = renderHook(() => useCodingWorkbenchApprovalReview(RUN));
+    await waitFor(() => expect(result.current.status).toBe("ready"));
+    expect(result.current.review).toEqual(commitReview());
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "[keiko] verified commit review ready: files 2 tree 333333333333",
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("never copy");
+    expect(JSON.stringify(warn.mock.calls)).not.toContain("src/alpha.ts");
+  });
+
+  it("#3386: refuses a commit from another run even when the permission identifier matches", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    getApprovalReviewMock.mockResolvedValue({
+      session: "active",
+      pending: commitReview("other-run"),
+    });
+    const { result } = renderHook(() => useCodingWorkbenchApprovalReview(RUN));
+    await waitFor(() => expect(result.current.status).toBe("unavailable"));
+    expect(result.current.review).toBeNull();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "[keiko] verified commit review unavailable: binding-mismatch",
+    );
+  });
+
+  it.each(["push", "pull-request"] as const)(
+    "#3387: logs only bounded %s review facts",
+    async (action) => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+      const pending = draftDeliveryReview(action);
+      getApprovalReviewMock.mockResolvedValue({ session: "active", pending });
+      const { result } = renderHook(() =>
+        useCodingWorkbenchApprovalReview({ ...RUN, permissionRequestId: pending.requestId }),
+      );
+      await waitFor(() => expect(result.current.status).toBe("ready"));
+      const phase = action === "push" ? "push-proposed" : "pr-proposed";
+      expect(warn).toHaveBeenCalledExactlyOnceWith(
+        `[keiko] draft delivery review ready: ${phase} head 333333333333`,
+      );
+      expect(JSON.stringify(warn.mock.calls)).not.toMatch(
+        /Original template|reviewed delivery|owner|Closes/u,
+      );
+    },
+  );
+
+  it("#3387: hides delivery review from another run and records the closed failure", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const pending = draftDeliveryReview("pull-request");
+    getApprovalReviewMock.mockResolvedValue({ session: "active", pending });
+    const { result } = renderHook(() =>
+      useCodingWorkbenchApprovalReview({
+        runId: "other-run",
+        permissionRequestId: pending.requestId,
+      }),
+    );
+    await waitFor(() => expect(result.current.status).toBe("unavailable"));
+    expect(result.current.review).toBeNull();
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "[keiko] draft delivery review unavailable: binding-mismatch",
+    );
   });
 
   it("stays idle and reads nothing while no approval is pending", async () => {

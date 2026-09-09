@@ -25,6 +25,11 @@ import {
   checkArchitectureImportPolicy,
   countImportPolicyViolationsByRule,
 } from "./check-import-policy.mjs";
+import { checkGovernedToolContractNegatives } from "./check-governed-tool-contract.mjs";
+import {
+  checkToolCatalogConformanceNegatives,
+  checkToolCatalogSemanticNegatives,
+} from "./check-tool-catalog-conformance.mjs";
 import { runBareSpecifierVisibilityProbe } from "./lib/bare-specifier-visibility-probe.mjs";
 
 const RULES_FILE = ".dependency-cruiser.cjs";
@@ -78,6 +83,7 @@ const INCLUDE_ONLY_OVERRIDE =
 // import-policy expectations below cover literal import specifiers dependency-cruiser does not
 // expose as source graph edges in this repository configuration.
 const EXPECTED_DEPCRUISER_RULE_COUNTS = {
+  "adr-0019-direction-2c-tool-catalog-only-contracts-security": 1,
   "adr-0128-connectors-only-contracts-security": 1,
   "adr-0019-direction-1-contracts-leaf": 1,
   "adr-0019-direction-2-security-only-contracts": 1,
@@ -159,6 +165,12 @@ function assertProductionIncludeOnlyIsCovered() {
 }
 
 const EXPECTED_IMPORT_POLICY_RULE_COUNTS = {
+  // Two distinct violations: bad-import.ts (a Node core-module import) and
+  // forbidden-package-dependency.ts (a third-party provider SDK import) — the #3415
+  // negative-fixture matrix's "forbidden package dependency" attack class, added alongside the
+  // existing Node-builtin fixture rather than replacing it.
+  "adr-0175-tool-catalog-pure-imports": 2,
+  "adr-0165-raw-coordinate-owner": 1,
   "adr-0005-owned-root-authority-implementation-private": 1,
   "adr-0005-owned-root-containment-allowed-callers": 1,
   "adr-0005-owned-root-lookup-allowed-callers": 1,
@@ -189,6 +201,16 @@ if (missingDist.length > 0) {
   for (const entrypoint of missingDist) {
     console.error(`  - ${entrypoint}`);
   }
+  process.exit(1);
+}
+
+const contractNegativeErrors = [
+  ...checkGovernedToolContractNegatives(process.cwd()),
+  ...checkToolCatalogConformanceNegatives(),
+  ...(await checkToolCatalogSemanticNegatives(process.cwd())),
+];
+if (contractNegativeErrors.length > 0) {
+  for (const error of contractNegativeErrors) console.error(`arch-check-negative: ${error}`);
   process.exit(1);
 }
 

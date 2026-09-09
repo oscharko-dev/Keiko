@@ -102,6 +102,8 @@ export interface UiCliDeps {
   readonly currentExecArgv?: () => readonly string[];
   // Test seam for local .env discovery. Defaults to process.cwd().
   readonly cwd?: string | undefined;
+  /** Test-harness seam scoped to governed local Git mutation subprocesses. */
+  readonly localGitMutationEnv?: EnvSource | undefined;
   // Test seam for the process-lifecycle log lines (`process.started`/`process.exiting`/
   // `process.heartbeat`). The real path builds a file sink via `createFileServerLogSink`, which
   // the injected-server tests must not do (see `startUiServer`'s comment). Injecting a fake sink
@@ -786,6 +788,7 @@ async function buildHandlerDepsOrReport(
   cwd: string,
   effectiveEnv: EnvSource,
   io: CliIo,
+  localGitMutationEnv: EnvSource | undefined,
 ): Promise<UiHandlerDeps | number> {
   const { buildUiHandlerDeps, UiStoreError } = await loadServerModule();
   try {
@@ -795,6 +798,7 @@ async function buildHandlerDepsOrReport(
       uiDbPath: parsed.uiDbPath,
       initialProjectPath: cwd,
       env: effectiveEnv,
+      ...(localGitMutationEnv === undefined ? {} : { localGitMutationEnv }),
     });
   } catch (error) {
     if (error instanceof UiStoreError) {
@@ -1191,6 +1195,7 @@ async function launchUiFromDeps(
     cwd,
     withDefaultLocalRuntimeStateEnv(stateDir, parsed, effectiveEnv, cwd),
     io,
+    deps.localGitMutationEnv,
   );
   if (typeof handlerDeps === "number") return handlerDeps;
   try {

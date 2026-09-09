@@ -16,7 +16,13 @@ import type { IncomingMessage, Server } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runMigrations } from "./store/schema.js";
+import {
+  createRelationshipStorePort,
+  type RelationshipHandlerDeps,
+} from "./relationship-handlers.js";
 import { UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "./index.js";
@@ -29,7 +35,7 @@ import {
 import { clearAllGroundedTurns, groundedTurnRegistry } from "./grounded-turn-registry.js";
 import type { GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import type { ConnectedContextPack } from "@oscharko-dev/keiko-contracts/connected-context";
-import type { GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
+import type { ChatGitChangeScope, GroundedAnswer } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { KnowledgeCapsuleId } from "@oscharko-dev/keiko-contracts";
 import {
   DEFAULT_CHAT_LIST_LIMIT as DEFAULT_CHAT_LIST_PAGE,
@@ -1071,6 +1077,292 @@ describe("POST /api/chats", () => {
 
 // ─── Route 19: PATCH /api/chats ──────────────────────────────────────────────
 describe("PATCH /api/chats", () => {
+  it("persists clearing git-change scopes from the disconnect patch", async () => {
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "t", "m");
+    store.updateChat(chat.id, {
+      gitChangeScopes: [
+        {
+          kind: "git-change",
+          relationshipId: "rel-disconnect",
+          remoteDigest: "d".repeat(64),
+          comparisonLabel: "main...feature/x",
+          baseRef: "main",
+          headRef: "feature/x",
+          baseSha: "a".repeat(40),
+          headSha: "b".repeat(40),
+          mergeBaseSha: "c".repeat(40),
+          snapshotDigest: "e".repeat(64),
+          fileCount: 1,
+          totalFiles: 1,
+          omittedFiles: 0,
+          truncatedFiles: 0,
+          descriptionStatus: "current",
+          connectedAtMs: 10,
+        },
+      ],
+    });
+
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(chat.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({ gitChangeScopes: null }),
+    });
+
+    expect(res.status).toBe(200);
+    expect(store.findChatById(chat.id)?.gitChangeScopes).toBeUndefined();
+  });
+
+  it("rejects malformed git-change scopes without changing the stored binding", async () => {
+    store.createProject(projDir);
+    const chat = store.createChat(projDir, "t", "m");
+    const res = await fetch(url(`/api/chats?id=${encodeURIComponent(chat.id)}`), {
+      method: "PATCH",
+      headers: PATCH_HEADERS,
+      body: JSON.stringify({ gitChangeScopes: [{ kind: "git-change" }] }),
+    });
+
+    expect(res.status).toBe(400);
+    expect(store.findChatById(chat.id)?.gitChangeScopes).toBeUndefined();
+  });
+
+  // #3400-AC3 — a PATCH must be bound to a server-issued relationship, never a client-authored
+  // one: the browser must not be able to redirect a chat's connected comparison to an arbitrary
+  // relationship, snapshot, or (via a different chat's real relationship id) another chat's
+  // git-change scope by constructing the request body itself.
+  describe("gitChangeScopes relationship binding (#3400-AC3)", () => {
+    function gitChangeScopeFixture(
+      overrides: Partial<ChatGitChangeScope> = {},
+    ): ChatGitChangeScope {
+      return {
+        kind: "git-change",
+        relationshipId: "rel-bound",
+        remoteDigest: "d".repeat(64),
+        comparisonLabel: "main...feature/x",
+        baseRef: "main",
+        headRef: "feature/x",
+        baseSha: "a".repeat(40),
+        headSha: "b".repeat(40),
+        mergeBaseSha: "c".repeat(40),
+        snapshotDigest: "e".repeat(64),
+        fileCount: 1,
+        totalFiles: 1,
+        omittedFiles: 0,
+        truncatedFiles: 0,
+        descriptionStatus: "current",
+        connectedAtMs: 10,
+        ...overrides,
+      };
+    }
+
+    function buildRelationshipDeps(workspaceId = "ws-1"): {
+      readonly relationship: RelationshipHandlerDeps;
+      readonly db: DatabaseSync;
+    } {
+      const db = new DatabaseSync(":memory:");
+      db.exec("PRAGMA foreign_keys = ON");
+      runMigrations(db);
+      let t = 1000;
+      let n = 0;
+      const relationshipStore = createRelationshipStorePort({
+        db,
+        redactString: (s: string): string => s,
+        now: () => ++t,
+        newId: () => `rel-${String(++n).padStart(8, "0")}`,
+      });
+      return {
+        relationship: {
+          scopeResolver: (): { readonly workspaceId: string } => ({ workspaceId }),
+          store: relationshipStore,
+        },
+        db,
+      };
+    }
+
+    function createActiveGitChangeRelationship(
+      relationship: RelationshipHandlerDeps,
+      workspaceId: string,
+      chatId: string,
+      snapshotDigest: string,
+    ): string {
+      const created = relationship.store.createRelationship(
+        {
+          workspaceId,
+          scope: { kind: "workspace", workspaceId },
+          type: "reads-context",
+          source: { kind: "chat", id: chatId },
+          target: { kind: "git-change", id: `gc_${snapshotDigest}` },
+          lifecycleState: "active",
+        },
+        (result) => ({
+          workspaceId,
+          kind: "relationship.created",
+          relationshipId: result.relationship.id,
+          actor: { surface: "chat", redactedActorId: "test-fixture" },
+          summary: "test-fixture relationship",
+          payload: {},
+        }),
+      );
+      return created.relationship.id;
+    }
+
+    it("rejects a gitChangeScopes entry with no matching relationship at all", async () => {
+      const { relationship } = buildRelationshipDeps();
+      await restartWithDeps({ relationship });
+      store.createProject(projDir);
+      const chat = store.createChat(projDir, "t", "m");
+
+      const res = await fetch(url(`/api/chats?id=${encodeURIComponent(chat.id)}`), {
+        method: "PATCH",
+        headers: PATCH_HEADERS,
+        body: JSON.stringify({ gitChangeScopes: [gitChangeScopeFixture()] }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(store.findChatById(chat.id)?.gitChangeScopes).toBeUndefined();
+    });
+
+    it("rejects a gitChangeScopes entry whose relationship belongs to a different chat", async () => {
+      const { relationship } = buildRelationshipDeps();
+      await restartWithDeps({ relationship });
+      store.createProject(projDir);
+      const chat = store.createChat(projDir, "t", "m");
+      const otherChat = store.createChat(projDir, "t2", "m2");
+      const digest = "e".repeat(64);
+      const relationshipId = createActiveGitChangeRelationship(
+        relationship,
+        "ws-1",
+        otherChat.id,
+        digest,
+      );
+
+      const res = await fetch(url(`/api/chats?id=${encodeURIComponent(chat.id)}`), {
+        method: "PATCH",
+        headers: PATCH_HEADERS,
+        body: JSON.stringify({
+          gitChangeScopes: [gitChangeScopeFixture({ relationshipId, snapshotDigest: digest })],
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(store.findChatById(chat.id)?.gitChangeScopes).toBeUndefined();
+    });
+
+    it("rejects a gitChangeScopes entry whose relationship was archived (stale reuse)", async () => {
+      const { relationship } = buildRelationshipDeps();
+      await restartWithDeps({ relationship });
+      store.createProject(projDir);
+      const chat = store.createChat(projDir, "t", "m");
+      const digest = "e".repeat(64);
+      const relationshipId = createActiveGitChangeRelationship(
+        relationship,
+        "ws-1",
+        chat.id,
+        digest,
+      );
+      const etag = relationship.store.getEtag("ws-1", relationshipId);
+      if (etag === undefined) throw new Error("expected an etag for the fixture relationship");
+      relationship.store.updateLifecycle(
+        { workspaceId: "ws-1", id: relationshipId, currentEtag: etag, to: "archived" },
+        (result) => ({
+          workspaceId: "ws-1",
+          kind: "relationship.updated",
+          relationshipId: result.relationship.id,
+          actor: { surface: "chat", redactedActorId: "test-fixture" },
+          summary: "test-fixture archive",
+          payload: {},
+        }),
+      );
+
+      const res = await fetch(url(`/api/chats?id=${encodeURIComponent(chat.id)}`), {
+        method: "PATCH",
+        headers: PATCH_HEADERS,
+        body: JSON.stringify({
+          gitChangeScopes: [gitChangeScopeFixture({ relationshipId, snapshotDigest: digest })],
+        }),
+      });
+
+      expect(res.status).toBe(400);
+      expect(store.findChatById(chat.id)?.gitChangeScopes).toBeUndefined();
+    });
+
+    it("accepts a gitChangeScopes entry bound to this chat's own active relationship", async () => {
+      const { relationship } = buildRelationshipDeps();
+      await restartWithDeps({ relationship });
+      store.createProject(projDir);
+      const chat = store.createChat(projDir, "t", "m");
+      const digest = "e".repeat(64);
+      const relationshipId = createActiveGitChangeRelationship(
+        relationship,
+        "ws-1",
+        chat.id,
+        digest,
+      );
+      // Mirrors production: `persistConnectedScope` (gitChangeRoutes.ts) writes the canonical
+      // scope to the chat's own `gitChangeScopes` in the same connect that creates the
+      // relationship — a relationship never exists without a matching canonical entry already
+      // persisted on the chat.
+      store.updateChat(chat.id, {
+        gitChangeScopes: [gitChangeScopeFixture({ relationshipId, snapshotDigest: digest })],
+      });
+
+      const res = await fetch(url(`/api/chats?id=${encodeURIComponent(chat.id)}`), {
+        method: "PATCH",
+        headers: PATCH_HEADERS,
+        body: JSON.stringify({
+          gitChangeScopes: [gitChangeScopeFixture({ relationshipId, snapshotDigest: digest })],
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      expect(store.findChatById(chat.id)?.gitChangeScopes).toMatchObject([{ relationshipId }]);
+    });
+
+    // Reviewer 3941860533 [P2] — a PATCH that keeps the two fields the relationship binds
+    // (`relationshipId`, `snapshotDigest`) but changes every other identity field must be
+    // rejected in effect: the persisted entry must still be the server's own canonical record,
+    // never the browser's tampered values. Repro basis: reviewer extended the acceptance test
+    // with a second PATCH changing `pullRequestNumber` to 999 and `headSha` to another valid
+    // hash and observed the real (pre-fix) endpoint return 200 with the tampered values stored.
+    it("ignores tampered identity fields and persists the chat's own canonical scope", async () => {
+      const { relationship } = buildRelationshipDeps();
+      await restartWithDeps({ relationship });
+      store.createProject(projDir);
+      const chat = store.createChat(projDir, "t", "m");
+      const digest = "e".repeat(64);
+      const relationshipId = createActiveGitChangeRelationship(
+        relationship,
+        "ws-1",
+        chat.id,
+        digest,
+      );
+      const canonical = gitChangeScopeFixture({ relationshipId, snapshotDigest: digest });
+      store.updateChat(chat.id, { gitChangeScopes: [canonical] });
+
+      const res = await fetch(url(`/api/chats?id=${encodeURIComponent(chat.id)}`), {
+        method: "PATCH",
+        headers: PATCH_HEADERS,
+        body: JSON.stringify({
+          gitChangeScopes: [
+            gitChangeScopeFixture({
+              relationshipId,
+              snapshotDigest: digest,
+              pullRequestNumber: 999,
+              headSha: "f".repeat(40),
+              remoteDigest: "9".repeat(64),
+            }),
+          ],
+        }),
+      });
+
+      expect(res.status).toBe(200);
+      const persisted = store.findChatById(chat.id)?.gitChangeScopes;
+      expect(persisted).toMatchObject([{ relationshipId, headSha: "b".repeat(40) }]);
+      expect(persisted?.[0]).not.toHaveProperty("pullRequestNumber", 999);
+      expect(persisted?.[0]?.remoteDigest).toBe("d".repeat(64));
+    });
+  });
+
   it("cancels a queued status update when the request aborts", async () => {
     store.createProject(projDir);
     const chat = store.createChat(projDir, "t", "m");

@@ -1,5 +1,6 @@
+import { gatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { OpenAiAdapter, STREAM_IDLE_TIMEOUT_MS } from "./openai-adapter.js";
+import { OpenAiAdapter, ResponseRedactionError, STREAM_IDLE_TIMEOUT_MS } from "./openai-adapter.js";
 import {
   AuthenticationError,
   CancelledError,
@@ -38,6 +39,17 @@ function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
   });
 }
 
+// 4,000 levels of {"a": ...} nesting: comfortably past the ~3,000-level point this repeatedly
+// overflowed the stack at in this runtime (empirically confirmed while building the redaction
+// depth guard), yet a tiny (~24KB) payload well under the adapter's response-size cap.
+function deeplyNestedJson(depth: number): string {
+  let value: unknown = "leaf";
+  for (let i = 0; i < depth; i += 1) {
+    value = { a: value };
+  }
+  return JSON.stringify(value);
+}
+
 function adapterWith(fetchImpl: typeof fetch): OpenAiAdapter {
   let tick = 0;
   return new OpenAiAdapter({
@@ -49,6 +61,25 @@ function adapterWith(fetchImpl: typeof fetch): OpenAiAdapter {
       return tick;
     },
   });
+}
+
+function responseThatAbortsAfterChunk(chunk: string, abort: () => void): Response {
+  let readCount = 0;
+  const stream = new ReadableStream<Uint8Array>(
+    {
+      pull(controller): void {
+        if (readCount === 0) {
+          controller.enqueue(new TextEncoder().encode(chunk));
+        } else {
+          abort();
+          controller.error(new DOMException("response body aborted", "AbortError"));
+        }
+        readCount += 1;
+      },
+    },
+    { highWaterMark: 0 },
+  );
+  return new Response(stream, { status: 200 });
 }
 
 describe("OpenAiAdapter.call", () => {
@@ -347,6 +378,73 @@ describe("OpenAiAdapter.call", () => {
     ).rejects.toBeInstanceOf(CancelledError);
   });
 
+  it("distinguishes an outer request deadline from an operator cancellation", async () => {
+    const deadline = new AbortController();
+    const adapter = adapterWith((_url, init) => {
+      deadline.abort(new DOMException("deadline exceeded", "TimeoutError"));
+      expect(init?.signal?.aborted).toBe(true);
+      return Promise.reject(new DOMException("request aborted", "AbortError"));
+    });
+    await expect(
+      adapter.call({ ...REQUEST, cancellationSignal: deadline.signal }, CONFIG),
+    ).rejects.toBeInstanceOf(TimeoutError);
+  });
+
+  it("preserves the first abort cause when cancellation follows the provider deadline", async () => {
+    const cancellation = new AbortController();
+    const adapter = adapterWith((_url, init) => {
+      const signal = init?.signal;
+      if (signal === undefined || signal === null) {
+        return Promise.reject(new Error("expected a dispatch signal"));
+      }
+      return new Promise((_resolve, reject) => {
+        signal.addEventListener(
+          "abort",
+          () => {
+            cancellation.abort();
+            queueMicrotask(() => {
+              reject(new DOMException("request aborted", "AbortError"));
+            });
+          },
+          { once: true },
+        );
+      });
+    });
+
+    await expect(
+      adapter.call(
+        { ...REQUEST, cancellationSignal: cancellation.signal },
+        { ...CONFIG, timeoutMs: 1 },
+      ),
+    ).rejects.toBeInstanceOf(TimeoutError);
+  });
+
+  it.each([
+    {
+      label: "deadline",
+      reason: new DOMException("deadline exceeded", "TimeoutError"),
+      expected: TimeoutError,
+    },
+    {
+      label: "operator cancellation",
+      reason: new DOMException("operator cancelled", "AbortError"),
+      expected: CancelledError,
+    },
+  ])("classifies a $label while reading a buffered body", async ({ reason, expected }) => {
+    const cancellation = new AbortController();
+    const adapter = adapterWith(() =>
+      Promise.resolve(
+        responseThatAbortsAfterChunk("{", () => {
+          cancellation.abort(reason);
+        }),
+      ),
+    );
+
+    await expect(
+      adapter.call({ ...REQUEST, cancellationSignal: cancellation.signal }, CONFIG),
+    ).rejects.toBeInstanceOf(expected);
+  });
+
   it("never includes the raw response body verbatim in a thrown error", async () => {
     const leakedKey = ["sk-", "leak-aaaaaaaaaaaaaaaaaaaa"].join("");
     const secretBody = { error: `contains ${leakedKey} internal trace` };
@@ -384,8 +482,8 @@ describe("OpenAiAdapter.call", () => {
                   {
                     id: "call_1",
                     function: {
-                      name: "search",
-                      arguments: JSON.stringify({ token: customSecret }),
+                      name: "read_file",
+                      arguments: JSON.stringify({ path: customSecret }),
                     },
                   },
                 ],
@@ -396,7 +494,10 @@ describe("OpenAiAdapter.call", () => {
         }),
       ),
     );
-    const result = await adapter.call(REQUEST, { ...CONFIG, apiKey: customSecret });
+    const result = await adapter.call(
+      { ...REQUEST, toolCatalog: gatewayCatalogAdvertisement(0, ["read_file"]) },
+      { ...CONFIG, apiKey: customSecret },
+    );
     const serialized = JSON.stringify(result);
     expect(serialized).not.toContain(customSecret);
     expect(serialized).toContain("[REDACTED]");
@@ -425,6 +526,41 @@ describe("OpenAiAdapter.call", () => {
     expect(serialized).not.toContain(customSecret);
   });
 
+  it("rejects a pathologically deep tool-call-arguments payload with a typed ResponseRedactionError, not a raw RangeError (review finding, PR #3394)", async () => {
+    // RED reasoning: before the depth guard, redactUnknown recursed once per level of JSON
+    // nesting with no ceiling, so this call rejected with a raw, untyped `RangeError: Maximum
+    // call stack size exceeded` — not a GatewayError at all — and lost structured errorKind
+    // classification (openai-adapter.ts:444, bindCatalogResponse's catch only re-throws).
+    const adapter = adapterWith(() =>
+      Promise.resolve(
+        jsonResponse({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                content: "",
+                tool_calls: [
+                  {
+                    id: "call_1",
+                    function: { name: "read_file", arguments: deeplyNestedJson(4000) },
+                  },
+                ],
+              },
+              finish_reason: "tool_calls",
+            },
+          ],
+        }),
+      ),
+    );
+    const rejection = adapter.call(
+      { ...REQUEST, toolCatalog: gatewayCatalogAdvertisement(0, ["read_file"]) },
+      CONFIG,
+    );
+    await expect(rejection).rejects.toBeInstanceOf(GatewayError);
+    await expect(rejection).rejects.toBeInstanceOf(ResponseRedactionError);
+    await expect(rejection).rejects.toMatchObject({ code: ERROR_CODES.MALFORMED_TOOL_CALL });
+  });
+
   it("throws TimeoutError when fetch aborts with a TimeoutError DOMException", async () => {
     const adapter = adapterWith(() =>
       Promise.reject(new DOMException("timed out", "TimeoutError")),
@@ -451,7 +587,7 @@ describe("OpenAiAdapter.call", () => {
     await adapter.call(
       {
         ...REQUEST,
-        tools: [{ name: "search", description: "find", parameters: { type: "object" } }],
+        toolCatalog: gatewayCatalogAdvertisement(0, ["read_file"]),
         responseFormat: {
           type: "json_schema",
           name: "test_schema",
@@ -468,7 +604,7 @@ describe("OpenAiAdapter.call", () => {
         json_schema: { name?: string; strict?: boolean; schema?: unknown };
       };
     };
-    expect(body.tools[0]?.function.name).toBe("search");
+    expect(body.tools[0]?.function.name).toBe("read_file");
     expect(body.response_format.type).toBe("json_schema");
     expect(body.response_format.json_schema).toMatchObject({
       name: "test_schema",
@@ -808,6 +944,44 @@ describe("OpenAiAdapter.callStream", () => {
     );
   });
 
+  it.each([undefined, -1])(
+    "does not retain provider usage with prompt count %s from a rejected streamed tool call",
+    async (promptTokens) => {
+      const adapter = adapterWith(() =>
+        Promise.resolve(
+          sseResponse([
+            `data: ${JSON.stringify({
+              choices: [
+                {
+                  delta: {
+                    tool_calls: [
+                      {
+                        index: 0,
+                        id: "call-1",
+                        function: { name: "read_file", arguments: "{}" },
+                      },
+                    ],
+                  },
+                },
+              ],
+            })}\n`,
+            `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: "tool_calls" }] })}\n`,
+            `data: ${JSON.stringify({
+              choices: [],
+              usage: { prompt_tokens: promptTokens, completion_tokens: 7 },
+            })}\n`,
+            "data: [DONE]\n",
+          ]),
+        ),
+      );
+
+      await expect(collectStream(adapter.callStream(REQUEST, CONFIG))).rejects.toMatchObject({
+        reason: "unoffered-tool",
+        partialUsage: undefined,
+      });
+    },
+  );
+
   it("redacts a configured secret leaked inside a streamed delta token", async () => {
     const customSecret = "opaque-stream-token-value-987";
     const adapter = adapterWith(() =>
@@ -945,6 +1119,40 @@ describe("OpenAiAdapter.callStream", () => {
     await expect(collectStream(adapter.callStream(REQUEST, CONFIG))).rejects.toBeInstanceOf(
       TransportError,
     );
+  });
+
+  it.each([
+    {
+      label: "deadline",
+      reason: new DOMException("deadline exceeded", "TimeoutError"),
+      expected: TimeoutError,
+    },
+    {
+      label: "operator cancellation",
+      reason: new DOMException("operator cancelled", "AbortError"),
+      expected: CancelledError,
+    },
+  ])("classifies a $label after streamed usage", async ({ reason, expected }) => {
+    const cancellation = new AbortController();
+    const response = responseThatAbortsAfterChunk(usageLine(41, 7), () => {
+      cancellation.abort(reason);
+    });
+    const adapter = adapterWith(() => Promise.resolve(response));
+
+    let thrown: unknown;
+    try {
+      await collectStream(
+        adapter.callStream({ ...REQUEST, cancellationSignal: cancellation.signal }, CONFIG),
+      );
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(expected);
+    expect((thrown as GatewayError).partialUsage).toEqual({
+      promptTokens: 41,
+      completionTokens: 7,
+      streamedChars: 0,
+    });
   });
 });
 

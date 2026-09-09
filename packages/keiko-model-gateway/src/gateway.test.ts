@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Gateway } from "./gateway.js";
+import { ResponseRedactionError } from "./openai-adapter.js";
 import { createScriptedGatewayClock } from "./replay.js";
 import {
   CancelledError,
@@ -221,6 +222,31 @@ describe("Gateway.chat", () => {
       code: ERROR_CODES.PROXY_BLOCKED_BY_POLICY,
     });
     expect(calls).toBe(1);
+  });
+
+  it("does not count a ResponseRedactionError as a breaker fault — consecutiveFailures stays 0 and state stays closed (review finding, PR #3394)", async () => {
+    // RED reasoning: recordProviderFailure previously excluded only CancelledError and
+    // ConfigInvalidError, so a ResponseRedactionError — thrown by openai-adapter.ts's redaction
+    // depth guard when a response body nests pathologically deep, never the provider's fault —
+    // still incremented consecutiveFailures and could eventually trip the breaker for an
+    // otherwise healthy model.
+    let calls = 0;
+    const gateway = new Gateway(config([provider({ maxRetries: 3 })]), {
+      adapter: fakeAdapter(() => {
+        calls += 1;
+        return Promise.reject(
+          new ResponseRedactionError(
+            "gateway response payload exceeds the maximum redaction depth",
+          ),
+        );
+      }),
+      clock: createScriptedGatewayClock(),
+    });
+    await expect(gateway.chat(REQUEST)).rejects.toBeInstanceOf(ResponseRedactionError);
+    // Not retryable, so exactly one adapter call regardless of the configured maxRetries.
+    expect(calls).toBe(1);
+    expect(gateway.circuitStatus("example-chat-model").consecutiveFailures).toBe(0);
+    expect(gateway.circuitStatus("example-chat-model").state).toBe("closed");
   });
 
   it("passes the remaining end-to-end timeout budget to retry attempts", async () => {

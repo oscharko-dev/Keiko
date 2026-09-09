@@ -37,6 +37,10 @@ const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
     ["@oscharko-dev/keiko-contracts", "@oscharko-dev/keiko-security"],
   ],
   ["@oscharko-dev/keiko-contracts", []],
+  [
+    "@oscharko-dev/keiko-tool-catalog",
+    ["@oscharko-dev/keiko-contracts", "@oscharko-dev/keiko-security"],
+  ],
   // Reusable OS/container egress-isolation strategy (ADR-0043). A near-leaf: its only workspace
   // dependency is keiko-contracts (for the SandboxPolicy/attestation types). Spawning stays in
   // keiko-tools, which depends on this package to apply the wrapper at the single exec boundary.
@@ -81,6 +85,7 @@ const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
       "@oscharko-dev/keiko-workspace",
       "@oscharko-dev/keiko-tools",
       "@oscharko-dev/keiko-evidence",
+      "@oscharko-dev/keiko-tool-catalog",
     ],
   ],
   [
@@ -114,7 +119,11 @@ const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
   ],
   [
     "@oscharko-dev/keiko-model-gateway",
-    ["@oscharko-dev/keiko-contracts", "@oscharko-dev/keiko-security"],
+    [
+      "@oscharko-dev/keiko-contracts",
+      "@oscharko-dev/keiko-security",
+      "@oscharko-dev/keiko-tool-catalog",
+    ],
   ],
   [
     "@oscharko-dev/keiko-quality-intelligence",
@@ -149,6 +158,7 @@ const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
       "@oscharko-dev/keiko-model-gateway",
       "@oscharko-dev/keiko-workspace",
       "@oscharko-dev/keiko-sandbox",
+      "@oscharko-dev/keiko-tool-catalog",
       "@oscharko-dev/keiko-tools",
       "@oscharko-dev/keiko-harness",
       "@oscharko-dev/keiko-workflows",
@@ -176,6 +186,7 @@ const ALLOWED_WORKSPACE_DEPENDENCIES = new Map([
       "@oscharko-dev/keiko-sandbox",
       "@oscharko-dev/keiko-security",
       "@oscharko-dev/keiko-workspace",
+      "@oscharko-dev/keiko-tool-catalog",
     ],
   ],
   [

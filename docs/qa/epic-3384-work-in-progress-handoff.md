@@ -1,0 +1,261 @@
+# Epic #3384: prequalification checkpoint — September 7, 2026
+
+Work resumed on September 7 from the clean September 6 preservation checkpoint. This remains a
+historical prequalification record, not epic completion, merge readiness, or issue-closeout
+evidence. At this checkpoint PR #3394 is open, native auto-merge is not armed, and the controlled
+repository matrix is 0/5. Later results belong to the canonical #3390 per-flow artifacts and
+manifest, exact-head PR checks and postmerge H1 provenance. This document stays frozen with the
+qualification source; its checkpoint counts are not rolling completion claims.
+
+The earlier handoff records remain available in this file's Git history. They are historical;
+especially their attempt numbers, USD 100 allowance and active-automation statements must not be
+used as the current operating state.
+
+## Accepted objective and authority
+
+Complete Epic #3384 and the applicable issues referenced by PR #3394, including mandatory #3408.
+The criterion-level inventory is [the acceptance map](epic-3384-acceptance-evidence-map.md).
+The operator permits normal feature-branch commits/pushes, review replies, validated fixes,
+protected integration into `dev`, actual `dev` verification, fulfilled-issue closure, and deletion
+of the merged working branch. Those delivery actions remain pending. Never force-push, push
+straight to `dev`, bypass checks, or resolve a finding merely to obtain green status.
+
+The controlled real-model repository is `oscharko/Wegwerf-Repo`. Five complete flows are required:
+issues #1/#3/#4/#5/#6 in Ask/Supervised/Full/Supervised/Full order. At least one must observe an
+actual required-CI failure and a model-authored repair on a different, passing head. Signing and
+notarization on all platforms and unrelated Atlassian work are excluded. Runtime confinement
+remains required. The existing durable model ledger enforces one aggregate USD 50 ceiling;
+retain all attempts and reservations. Its admission charges are not provider invoices.
+
+## Current implementation and executed verification
+
+September 7, 06:00 UTC checkpoint: actual attempt 37 preserved valid model-authored
+regression tests, then the next provider request expired at the configured 30-second deadline.
+The adapter now distinguishes structured deadline expiry from operator cancellation, including
+pre-dispatch cancellation; 116 focused adapter/gateway/resilience tests passed after a failing
+regression. The private qualification profile now allows 180 seconds per request. Attempt 38
+was refused before provider dispatch because the declared 1,050,000-token context reservation
+exceeded the remaining ledger allowance. The private profile is now bounded to the actual
+49,152-token coding geometry (40,960 input plus 8,192 output), with native compaction retained;
+no ledger entry or aggregate ceiling was reset or widened. Attempt 39 preserved
+the prior test edits and produced an implementation repair; independent functional and CI
+checks passed 10/10 and 3/3. Its next model request was refused by the durable spend ceiling
+before staging or commit. The model-authored files remain in the managed workspace. The
+completed-flow count remains 0/5; additional model allowance awaits explicit owner authorization. The final
+post-run model bytes still fail the independent triple-MAX boundary: three `Number.MAX_VALUE`
+inputs yield `Infinity` instead of finite `Number.MAX_VALUE`. Existing tests do not cover this
+case. No approval artifact was issued. The preserved next-run guidance requires a genuine
+failing regression before repairing this defect and completing delivery.
+
+Reviewer comment 3946898238 is addressed by retaining both expected and observed remote-head
+SHAs in the existing body-free reconciliation event. The mismatch regression failed before
+the change, then both delivery service suites passed (56 tests), including redaction checks.
+At the preceding source `4143d71a`, an isolated full server run passed 13,726 tests (16 skipped),
+all twelve cold imports passed, and targeted delivery coverage passed. These results do not
+claim final qualification for subsequent source changes.
+
+The next integrated checkpoint fixes directory-scoped Git diff inspection through bounded
+Git-owned changed paths, with scope, sibling-prefix, deduplication, truncation and authority
+boundaries preserved. Per-file truncation now propagates to the enclosing review result.
+A new catalog gate producer reuses the existing qualification report writer and governed CI
+reader. It binds exact clean source, full protection facts, required check app identities and
+complete pagination; output must remain outside the real source checkout, including symlink
+aliases. Forty-eight producer/consumer/closeout tests passed. The exact failed Core quality
+Knip job was reproduced locally and repaired by making an internally used constant private;
+the unchanged gate and fifteen direct manifest tests then passed.
+
+The earlier cold ESM import hazard, issue intake, governed Git delivery, CI continuation,
+description handling and runtime recovery have received extensive repairs. This checkpoint adds
+a fix for a newly observed process crash after workspace revocation: catalog settlement used the
+live authority context as a clock, then threw again while handling an already-denied operation.
+Settlement now advances an anchored monotonic clock independently of that context. The fallback
+invocation registry anchors lazily, preserving construction order and authority checks at effects.
+Failure, cancellation, deadline and deferred-context regressions preserve body-free lifecycle
+logging. The operation catalog is regenerated from its producer.
+
+The subsequent real attempt 33 exposed two more delivery defects. Typed GitHub metadata now uses
+the existing credential-only scrub without corrupting branch names or SHAs that also occur in
+ordinary environment values; every altered machine response is rejected before parsing. A fresh
+operator start retains a bounded proven predecessor or one unique acknowledged local draft when
+an older run lost that edge. Existing PR identity, fresh authority and durable verified source are
+required; no historical row or approval is rewritten. Provider description requests project the
+supported strict schema while preserving all full local validation. The combined source is
+`68732ec6`; its adapter, orchestrator and description targets passed 128, 129 and 112 tests.
+
+Review then found that the real SQLite store rejected the acknowledged terminal recovery row
+selected by that lineage repair. `7ae8282b` admits only that narrowly proven predecessor state and
+adds the actual predecessor id to the existing body-free start event. The failing real-store
+reproduction now passes through restart, selection and draft adoption. The orchestrator and store
+targets passed 130 and 40 tests, including rejection of terminal rows without acknowledgement;
+full typecheck and scoped lint passed. The two review threads carry fix and test references and
+are resolved. This is regression evidence, not a successful production continuation.
+
+Attempt 34 then exposed a stale inherited CI observation. Post-PR edit and verification admission
+correctly failed closed, but the tool projection hid the supported next step behind a generic
+failure. `e01e4b8d` exposes `ci-observation-required` and records that admission reason on the
+existing activity log. The real SQLite regression preserves the initial denial, refreshes current
+readiness through its owning store, then admits the same edit without creating a repair ledger.
+With the additional boundary tests in `e391c61d`, the four owning suites passed 128 tests; the
+broader transcript/authority/managed-tool targets passed 112 tests. Full root typecheck and scoped
+lint passed. Expired authority and exhausted budgets retain their hard denials.
+
+Attempt 35 at `bcbd35b1` stopped before creating a successor run. Its actual headed-browser trace
+showed the expired tool-calling proof leaving recovery Retry disabled: the qualification harness
+refreshed model readiness only inside the normal issue-bind branch. Continuations now perform the
+existing guarded model qualification before either start path. Three regressions failed before
+the repair; both affected suites pass 54 tests, including refusal before recovery acknowledgement
+when model qualification fails. Typecheck, scoped lint, formatting and E2E wiring passed. The
+acknowledged predecessor and all model-authored files remain intact; no completed flow is claimed.
+
+The two subsequent external-audit review findings are also repaired: known audit facts require
+their matching scenario, and external audit receipt metadata must use the closed body-free schema
+with valid values. Four regressions failed before these repairs and 115 focused tests pass after
+them. These qualification changes reopen the `bcbd35b1` source freeze; its completed runtime packet
+remains historical, source-limited evidence. The separate catalog-closeout gate receipt producer
+is still being completed, and the actual external audit result remains unavailable.
+
+Attempt 36 at `a56e467f` successfully refreshed the provider tool-calling proof and started an
+acknowledged successor. Its fresh CI request exposed a different recovery deadlock: local commit
+`4b7a1b1a` was ahead of the retained published PR head, so read-only reconciliation incorrectly
+rejected the remote observation. The owning reconciliation now validates the exact retained remote
+independently of local repairs, while proposal and effect-time candidate checks remain intact.
+It also retries its own recovery record after a transient provider failure without overwriting a
+concurrent proposal or approval. The three observed regressions failed before repair; 55 owning
+tests pass, including unchanged/ahead/dirty worktrees and both concurrency paths. Correlated remote
+head-match evidence is emitted through the existing activity log. The attempt was interrupted
+without changing the retained model files; 0/5 complete flows remains the truthful count.
+
+Actual results, with their source limits:
+
+| Verification                               | Result                                             | Source / limitation                                                                       |
+| ------------------------------------------ | -------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| Full package coverage                      | 1,981 files; 40,468 tests passed; 51 tests skipped | Exact clean `f8088db2`; before the final clock repair                                     |
+| Full UI coverage                           | 447 files; 8,028 tests passed; one skipped         | `44cf0537`; UI source unchanged afterward                                                 |
+| Script coverage                            | 207 files; 5,234 tests passed; 26 skipped          | `b844b272`; covered script source unchanged afterward                                     |
+| Full server suite on Node 24               | 713 files; 13,699 tests passed                     | `b844b272`; before the final clock repair                                                 |
+| Full server suite after delivery repairs   | 713 files passed; 13,712 tests passed; 16 skipped  | Product bytes at `68732ec6`; later fixture changes only correct omitted optional fields   |
+| Cold route entry imports on Node 24        | 12 passed                                          | `b844b272`                                                                                |
+| Final clock repair regression target       | 70 tests passed                                    | Both affected bridge/authority suites; ESLint, Prettier and server TypeScript also passed |
+| Browser publication                        | All 12 cases passed                                | Actual `5be376e6` producer output retained; source hashes verified                        |
+| Browser CI and Git-connected Chat fixtures | 2 and 4 cases passed                               | `5be376e6`; deterministic fixtures, not real-model qualification                          |
+| Final intake and affected visual captures  | Four selected targets passed                       | `f8088db2`; actual redirected producer artifacts archived and verified                    |
+
+The complete six-case commit-browser rerun was repeated after the workspace-revocation repair at
+exact source `344e835a`. All six cases passed, including Ask, Supervised and Full approval
+semantics, staged-drift refusal and explicit denial. The tracked
+`docs/design-system/evidence/3386/journey-proof.json` records this as
+production-composed deterministic browser evidence with `modelQualification: false`; it does not
+replace a real-model flow.
+
+The #2952 native calibration/candidate pair was regenerated at exact source `503b5abe` after the
+CI-observation and qualification repairs. The native pair used pinned Node 24.18.0, completed two warmups and 30
+measured samples per arm, and passed its owning performance gate. The H1 verification passed three
+production-managed files / 83 tests; independent review accepted all ten criteria and bound the
+661-path owned-source closure at the refreshed `503b5abe` source. These are exact-source
+prequalification facts. H1 explicitly does
+not establish packaged real-runtime, live-provider or final merge-head qualification, and either
+receipt must be regenerated if its owned source changes.
+
+The tracked visual receipts for #3385, #3386, #3388, #3389, #3400 and #3401 were rechecked on
+September 7. All 47 recorded source hashes match the checkout: 5/5, 8/8, 11/11, 8/8, 8/8 and 7/7
+respectively. The #3385/#3386 captures were produced at `f8088db2`; the other retained captures
+remain source-valid because their recorded owners are byte-identical. They are deterministic
+browser evidence, not live-model or final frozen-source qualification.
+
+The September 6 checkpoint also passed full root TypeScript checking, the generated operation
+catalog check, and the local Sonar analyzer. On the September 7 resume audit, exact PR head
+`344e835a` had no unresolved review threads but required CI was red: deterministic OpenCode startup
+timing, scripted CI-repair budget expectations and a UI debugging fixture failed. The coverage
+aggregate therefore stopped before producing the required SonarCloud context. These concrete
+failures were repaired in `6a141383`, `14815a85` and `3a6e9b70`; current-head full checks still
+must complete. The refreshed browser, H1 and native evidence does not override required checks.
+After the `68732ec6` delivery repairs and test-fixture typing correction, full root typecheck,
+architecture and negative architecture checks, operation-catalog validation, error-observability
+validation and local Sonar passed. The full server suite also passed all 12 cold route import
+cases; no `server.js` or `routes.js` warm-up import was required.
+
+At `fe441237`, the isolated pinned-runtime qualification passed two real-binary browser tests,
+41 same-run macOS confinement checks, all five consumers against a freshly staged Node 24 npm
+artifact, and three actual native compaction/lifecycle cases. The compactable case observed native
+compaction and retry after a 513-message overflow; the irreducible case failed closed. These are
+source-specific scripted-gateway proofs, not paid-model flow completion. Local Sonar also passed
+on that head. The full coverage run exposed a stale generated source inventory for `keiko-tools`
+(70 recorded, 71 actual after the typed-metadata helper): 40,493 tests passed and that one inventory
+test failed. Fresh UI coverage and the existing coverage-quality evaluation passed. `4c8fed68`
+adds an inventory-only mode to the existing generator and produces exactly the 70-to-71 correction;
+all coverage metrics and file floors remain unchanged. Its 68 owning tests, lint and format passed.
+
+The combined `503b5abe` source also passed full root typecheck, full root/UI lint, format, local
+Sonar, architecture and negative architecture, operation-catalog, error-observability,
+context-quality and E2E-wiring checks. Its external audit binding passed 152 targeted tests,
+including exact opaque artifact/receipt identity and rejection of unrelated post-freeze files.
+The actual external audit and completed live-flow evidence remain separate prerequisites.
+
+## Real-model delivery: 0/5 completed
+
+[Wegwerf-Repo PR #7](https://github.com/oscharko/Wegwerf-Repo/pull/7) is an actual draft for
+[issue #1](https://github.com/oscharko/Wegwerf-Repo/issues/1), with verified commit
+`aec3a459ea09f2efb939c21f3b35395e91b811c9`, an actual push and previously passing required `ci`
+on that head. It has not been merged and the issue is open. Independent review found opposite-sign
+maximum-value overflow in its average implementation; that model-authored repair is still required.
+
+Attempt 32 failed before editing because recovered PR/CI binding admission was unavailable.
+Attempt 33 at `14815a85` ran the real model, observed failing regressions, repaired and verified
+the selected candidate, and committed `4b7a1b1a4b7f206a270c0e9af5b08d0e22c97b97` locally. It then
+failed delivery before pushing; PR7 still points to the earlier `aec3a459` head. The metadata and
+lineage defects above explain that failure. Independent review of the retained model commit found
+that `[1, 1, -1]` and `[MAX, MAX, -MAX]` incorrectly average to zero and `[MAX, -MAX/2]` overflows.
+Attempt 34 at `fe441237` recovered the proven PR lineage and made real model calls, then repeated
+the stale-CI admission failure above without editing any file. The owning test process was
+interrupted and its failure trace and support-analysis timeline retained privately. Attempt 35
+will recover that exact retained worktree through normal startup/recovery and refresh CI before
+editing, after source and required prequalification inputs are frozen.
+Do not recreate the workspace, discard its Git history, manually author the fixture repair, or
+claim a completed run from the runtime's terminal status alone.
+
+## Active sequence
+
+1. Complete the remaining full checks after the corrected regression targets. Verify
+   local/remote PR heads, review comments and required checks before freezing; do not treat a
+   missing SonarCloud context as a pass.
+2. Verify that the six-case #3386 journey receipt, all tracked visual source hashes, current H1
+   checkpoint and #2952 pair still bind the chosen source. Rerun only an owning producer whose
+   source closure changed. Never substitute an older checkout's artifact or restamp a prior run.
+3. Complete any remaining non-#3390 source/evidence corrections, then freeze one clean source F for
+   all five flows. A later landing descendant may contain only the validator's allowed
+   qualification artifacts; never broaden that allowlist to conceal source drift.
+4. Start the prepared real attempt 35 at F and follow the activity log first. Observe real failing
+   regressions, model repair, passing verification, actual governed delivery and independent
+   exact-head rubric review. Drive description application, ready intent, explicit governed merge
+   and actual issue closure through Keiko. Then complete the other four issues from each actual
+   merged base. Preserve the shared ledger and per-flow receipts.
+5. Before accepting flow 2, the prepared legitimate median CI fixture may be introduced through
+   a normally checked fixture PR. Its amendment must predate acceptance. A first-head-correct model
+   result is not CI-repair evidence; do not manufacture a failure or suppress a check.
+6. In the prepared clean isolated F checkout, run real-binary qualification, same-run macOS
+   confinement, fresh packaged-artifact/five-consumer proofs, and the three actual-native
+   compaction/lifecycle tests. Retain private outputs separately from real-model receipts. Complete
+   the real two-turn Git-connected Chat refinement/application and negative-effect scenarios.
+7. Complete the final source-bound acceptance audit, full applicable gates, required GitHub checks
+   and review settlement. Only then integrate through the protected path, verify actual `dev`,
+   record genuine H1 postmerge provenance, close fulfilled issues and delete the merged branch.
+
+The separately required `keiko-issue-audit` is an operator-run external process, as fixed by
+issue #3390 comment 5545472383. Its tool/instructions or completed exact-source output have been
+requested from the operator and are not available at this checkpoint. The in-repository validator
+may bind an opaque external result; it must not execute, reproduce, substitute for, or invent that
+audit. The remaining independent implementation and live-flow work can proceed meanwhile.
+
+All 324 review conversations were resolved at the September 7 `7ae8282b` observation, including
+the two SQLite/lineage logging findings. New comments and checks after that audit
+require another read. Only CodeRabbit's oversized-PR coverage failure is excluded; concrete
+findings and other reviewers remain in scope.
+
+## Private restoration material
+
+The operator-local checkpoint directory `.codex/task-checkpoints/keiko-3384-2026-09-06` contains
+restoration instructions, retained live state, the shared ledger, selected audit logs/receipts,
+fixture-preparation scripts and the failed browser trace. It is private and is not committed or
+uploaded. It deliberately excludes dependency installations and unrelated repository copies.
+Configuration is read from the operator's existing local files; no credentials belong in this
+handoff, Git history, review comments or qualification evidence.

@@ -12,6 +12,9 @@ export interface CodingToolProducerBinding {
 }
 
 export interface CodingToolMutationGuard {
+  /** Server-held one-use delivery execution lease, never populated from IPC. */
+  readonly deliveryApproval?: object;
+  readonly stageApproval?: object;
   /** Must be called at the final governed mutation/commit boundary. */
   readonly check: () => boolean;
   /** Server-private live authority projection for narrower auxiliary composition. */

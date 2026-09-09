@@ -36,6 +36,7 @@ import {
   createHandleLocalMutation,
   type GitDeliveryLocalErrorBody,
 } from "./localMutationRoutes.js";
+import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryExecutionSeams } from "./execution.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 import {
@@ -551,6 +552,99 @@ describe("local mutation routes — governed execution (direct handler + seams)"
     );
     expect(res.status).toBe(200);
     expect((res.body as { status: string }).status).toBe("succeeded");
+  });
+
+  // Final-audit F1/#3390 (ADR-0138 D2): before this fix, the coarse admission gate hard-denied
+  // EVERY local mutation with "approval-required" in governed-assist mode and no production path
+  // ever redeemed it — a governed-assist stage/unstage/branch-create/branch-switch was permanently
+  // unreachable regardless of any approval the human granted, contradicting AGENTS.md's
+  // governed-assist contract ("asks before workspace edits", not permanent deny). FAILING BEFORE
+  // THE FIX: the handler below returned 403 GIT_DELIVERY_AUTHORITY_DENIED at
+  // `gitDeliveryAuthorityDenial`, before ever reaching the pack's own approval-gated decision.
+  it("stages a change once approved in governed-assist mode, and fails-before the fix without that wiring", async () => {
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const command = { kind: "stage" as const, pathspecs: ["a.txt"], includeUntracked: false };
+    const approvalGatedPack: GitDeliveryRepoPolicyPack = {
+      schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+      repoId: "repo",
+      rules: [{ actionKind: "stage", decision: "approval-gated", requiredApprovers: [] }],
+      defaultRule: { decision: "blocked" },
+    };
+    const issued = approvalStore.issue({
+      binding: { projectId, operation: "local-mutation", command },
+      approvedByUserId: "local-operator",
+      nowMs: 1_700_000_000_000,
+    });
+    const adapter = recordingAdapter();
+    const handler = createHandleLocalMutation(
+      {
+        pattern: STAGE,
+        allowedKeys: new Set(["schemaVersion", "projectId", "approval", "pathspecs"]),
+        parse: () => ({ ok: true, command }),
+      },
+      {
+        execution: seams({
+          adapterFactory: () => adapter.adapter,
+          policyPacks: { repoPack: approvalGatedPack },
+          approvalStore,
+        }),
+      },
+    );
+    const governedAssistDeps = deps({
+      gitDeliveryAuthority: permittedGitDeliveryAuthority(
+        () => projectId,
+        () => projectId,
+        "governed-assist",
+      ),
+    });
+    const res = await handler(
+      ctxFor(STAGE, { schemaVersion: "1", projectId, approval: issued.approval }),
+      governedAssistDeps,
+    );
+    expect(res.status).toBe(200);
+    expect((res.body as { status: string }).status).toBe("succeeded");
+    expect(adapter.calls()).toEqual(["stage"]);
+  });
+
+  // Unlike a delivery effect (commit/push/…), a local mutation has no downstream soft
+  // "approval-required" response of its own to fall back to — the coarse admission gate IS the
+  // approval-required enforcement point here, so refusing without a matching claim surfaces as its
+  // ordinary 403 GIT_DELIVERY_AUTHORITY_DENIED, never a silent allow and never "mode-denied".
+  it("refuses with approval-required (never mode-denied, never a silent allow) in governed-assist mode when no claim is offered", async () => {
+    const approvalGatedPack: GitDeliveryRepoPolicyPack = {
+      schemaVersion: GIT_DELIVERY_POLICY_SCHEMA_VERSION,
+      repoId: "repo",
+      rules: [{ actionKind: "stage", decision: "approval-gated", requiredApprovers: [] }],
+      defaultRule: { decision: "blocked" },
+    };
+    const adapter = recordingAdapter();
+    const handler = createHandleLocalMutation(
+      {
+        pattern: STAGE,
+        allowedKeys: new Set(["schemaVersion", "projectId", "approval", "pathspecs"]),
+        parse: () => ({
+          ok: true,
+          command: { kind: "stage", pathspecs: ["a.txt"], includeUntracked: false },
+        }),
+      },
+      {
+        execution: seams({
+          adapterFactory: () => adapter.adapter,
+          policyPacks: { repoPack: approvalGatedPack },
+        }),
+      },
+    );
+    const governedAssistDeps = deps({
+      gitDeliveryAuthority: permittedGitDeliveryAuthority(
+        () => projectId,
+        () => projectId,
+        "governed-assist",
+      ),
+    });
+    const res = await handler(ctxFor(STAGE, { schemaVersion: "1", projectId }), governedAssistDeps);
+    expect(res.status).toBe(403);
+    expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
+    expect(adapter.calls()).toEqual([]);
   });
 });
 

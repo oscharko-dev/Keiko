@@ -14,12 +14,20 @@ export interface CodingRuntimeRunOperation {
 
 export interface CodingRuntimeTaskDispatchRequest extends CodingRuntimeRunOperation {
   readonly taskIntent: string;
+  /** Request-scoped diagnostic join; never persisted or forwarded to the model. */
+  readonly correlationId?: string | undefined;
+  /** Transient server-owned context; never user intent, persistence or skill authorization. */
+  readonly initialContext?: string | undefined;
 }
 
 export interface CodingRuntimeTaskDispatcher {
   readonly dispatch: (
     request: CodingRuntimeTaskDispatchRequest,
   ) => Promise<CodingRuntimeTaskDispatchResult>;
+  /** Replaces one operator-paused turn after interrupting it at the native adapter boundary. */
+  readonly replace?:
+    | ((request: CodingRuntimeTaskDispatchRequest) => Promise<CodingRuntimeTaskDispatchResult>)
+    | undefined;
   readonly abort: (request: CodingRuntimeRunOperation) => Promise<boolean>;
 }
 
@@ -57,22 +65,9 @@ export function createProductionCodingRuntimeHost(
     launchResolver: runtime.mintLaunch,
     approvalAuthority: runtime.approvalAuthority,
     taskDispatcher: runtime.taskDispatcher,
-    ...runtimeInteractionPorts(runtime),
-    ...(runtime.safeActivityProjection
-      ? { safeActivityProjection: runtime.safeActivityProjection }
-      : {}),
-    ...(runtime.researchGrants ? { researchGrants: runtime.researchGrants } : {}),
-    ...(runtime.pendingResearchApprovals
-      ? { pendingResearchApprovals: runtime.pendingResearchApprovals }
-      : {}),
     cancellationRegistry: runtime.cancellationRegistry,
-    ...(runtime.runtimeCapabilityAuthenticator
-      ? { runtimeCapabilityAuthenticator: runtime.runtimeCapabilityAuthenticator }
-      : {}),
-    ...(runtime.gitDeliveryAuthority ? { gitDeliveryAuthority: runtime.gitDeliveryAuthority } : {}),
-    ...(runtime.openCodeGatewayReadinessRegistry
-      ? { openCodeGatewayReadinessRegistry: runtime.openCodeGatewayReadinessRegistry }
-      : {}),
+    ...runtimeInteractionPorts(runtime),
+    ...optionalRuntimeCapabilities(runtime),
   };
 }
 
@@ -83,4 +78,38 @@ function runtimeInteractionPorts(
     ...(runtime.questionPort ? { questionPort: runtime.questionPort } : {}),
     ...(runtime.permissionPort ? { permissionPort: runtime.permissionPort } : {}),
   };
+}
+
+// Every one of these is an OPTIONAL pass-through: present on `QualifiedProductionCodingRuntime`
+// only when the resolver supplied it, forwarded onto `ProductionCodingRuntimeHost` unchanged. A
+// per-field ternary here would grow `createProductionCodingRuntimeHost`'s cyclomatic complexity by
+// one per capability (AGENTS.md §6's complexity <=10 ceiling), so the ONE decision — "was it
+// supplied?" — is a single loop over the closed key list instead of N branches.
+const OPTIONAL_RUNTIME_CAPABILITY_KEYS = [
+  "safeActivityProjection",
+  "researchGrants",
+  "pendingResearchApprovals",
+  "runtimeCapabilityAuthenticator",
+  "gitDeliveryAuthority",
+  "gitDeliveryDescriptionAuthority",
+  "mintDescriptionAuthority",
+  "attachVerifiedHeadNotifier",
+  "openCodeGatewayReadinessRegistry",
+  "toolFacadeBridge",
+] as const;
+
+type OptionalRuntimeCapabilities = Pick<
+  ProductionCodingRuntimeHost,
+  (typeof OPTIONAL_RUNTIME_CAPABILITY_KEYS)[number]
+>;
+
+function optionalRuntimeCapabilities(
+  runtime: QualifiedProductionCodingRuntime,
+): OptionalRuntimeCapabilities {
+  const capabilities: Partial<OptionalRuntimeCapabilities> = {};
+  for (const key of OPTIONAL_RUNTIME_CAPABILITY_KEYS) {
+    const value = runtime[key];
+    if (value !== undefined) Object.assign(capabilities, { [key]: value });
+  }
+  return capabilities;
 }

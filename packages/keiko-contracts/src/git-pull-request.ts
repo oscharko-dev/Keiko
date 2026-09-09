@@ -34,6 +34,11 @@ import type {
 // Pinned schema version. A breaking change adds a NEW literal member; this one is never mutated.
 export const GIT_PULL_REQUEST_SCHEMA_VERSION = "1" as const;
 
+export {
+  isGitPullRequestIdentity,
+  type GitPullRequestIdentity,
+} from "./git-pull-request-identity.js";
+
 // ─── Change type (input to metadata synthesis) ──────────────────────────────────────────────────────
 
 export type GitPrChangeType = "feat" | "fix" | "refactor" | "docs" | "chore" | "test" | "mixed";
@@ -583,6 +588,8 @@ function deriveLabelBasis(
 // cap was truncated into a DIFFERENT issue plus a stray ref ("12345678" → #1234567 and #8). These
 // refs reach the PR preview, where a consumer rendering them as closing keywords would close
 // unrelated issues on merge. A run longer than the cap now matches nothing rather than truncating.
+// Only server-owned creation from a frozen issue binding may add a closing directive (#3387);
+// these branch-inferred suggestions remain advisory Refs under ADR-0086 D9.
 const BRANCH_ISSUE_RE = /(?:^|[/_-])(?:issue[-/])?(\d{1,7})(?=$|[/_-])/gi;
 
 export function gitPullRequestLinkageSuggestionsFor(

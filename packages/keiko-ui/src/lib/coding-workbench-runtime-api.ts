@@ -2,8 +2,10 @@
 
 import type {
   CodingWorkbenchMode,
+  CodingWorkbenchIssueBindingFailure,
   CodingWorkbenchRuntimeApprovalDecisionRequest,
   CodingWorkbenchRuntimeApprovalReviewChannelPayload,
+  CodingWorkbenchRuntimeQuestionAnswerRequest,
   CodingWorkbenchRuntimeQuestionsChannelPayload,
   CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
@@ -26,9 +28,14 @@ import {
   validateCodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
 import { validateCodingWorkbenchRuntimeResearchChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research";
+import {
+  isWorkbenchDescriptionDraftReview,
+  type WorkbenchDescriptionDraftReview,
+} from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
 import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
 import { createSameOriginApiEventSource } from "./safe-event-source";
+import { runtimeIssueFailure } from "./coding-workbench-issue-errors";
 import { secureRandomId } from "./secure-random";
 
 const RUNTIME_ROOT = "/api/coding-workbench/runtime";
@@ -43,16 +50,19 @@ export interface CodingWorkbenchRuntimeApiError {
    * server-side diagnostic record — a rejected start must never be a dead button (F-09a).
    */
   readonly correlationId?: string;
+  readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure;
 }
 
 export function codingWorkbenchRuntimeApiError(error: unknown): CodingWorkbenchRuntimeApiError {
   if (error instanceof ApiError) {
+    const issueBindingFailure = runtimeIssueFailure(error);
     return {
       code: error.code,
       message: error.message,
       retryable:
         error.status === 0 || error.status === 408 || error.status === 429 || error.status >= 500,
       ...(error.correlationId === undefined ? {} : { correlationId: error.correlationId }),
+      ...(issueBindingFailure === undefined ? {} : { issueBindingFailure }),
     };
   }
   return {
@@ -119,8 +129,46 @@ function approvalReviewChannelValidator(
   return validated(path, value, validateCodingWorkbenchRuntimeApprovalReviewChannelPayload);
 }
 
+export interface CodingWorkbenchDescriptionDraftResult {
+  readonly outcome: "draft";
+  readonly draft: WorkbenchDescriptionDraftReview;
+}
+
+function isDescriptionDraftResult(value: unknown): value is CodingWorkbenchDescriptionDraftResult {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const result = value as Record<string, unknown>;
+  return result.outcome === "draft" && isWorkbenchDescriptionDraftReview(result.draft);
+}
+
+function descriptionDraftValidator(
+  proposalId: string,
+  snapshotDigest: string,
+  draftDigest: string,
+): (path: string, value: unknown) => CodingWorkbenchDescriptionDraftResult {
+  return (path, value): CodingWorkbenchDescriptionDraftResult => {
+    if (
+      isDescriptionDraftResult(value) &&
+      value.draft.proposalId === proposalId &&
+      value.draft.artifact.binding.snapshotDigest === snapshotDigest &&
+      value.draft.artifact.artifactDigest === draftDigest
+    ) {
+      return value;
+    }
+    throw new ApiError(
+      "CONTRACT_VALIDATION_FAILED",
+      `BFF response for ${path} failed contract validation.`,
+      502,
+    );
+  };
+}
+
 function runPath(runId: string, suffix = ""): string {
   return `${RUNTIME_ROOT}/runs/${encodeURIComponent(runId)}${suffix}`;
+}
+
+function enrichRuntimeIssueFailure(error: ApiError, envelope: unknown): void {
+  const failure = runtimeIssueFailure(envelope);
+  if (failure !== undefined) Object.assign(error, { issueBindingFailure: failure });
 }
 
 function postSnapshot<T>(
@@ -136,7 +184,7 @@ function postSnapshot<T>(
       body: JSON.stringify(body),
       ...(signal ? { signal } : {}),
     },
-    { validator: snapshotValidator },
+    { validator: snapshotValidator, enrichError: enrichRuntimeIssueFailure },
   );
 }
 
@@ -144,11 +192,6 @@ function postSnapshot<T>(
 export interface CodingWorkbenchRuntimeOperationRequest {
   readonly requestId: string;
   readonly expectedRevision: number;
-}
-
-export interface CodingWorkbenchRuntimeQuestionAnswerBody extends CodingWorkbenchRuntimeOperationRequest {
-  readonly questionId: string;
-  readonly answers: readonly (readonly string[])[];
 }
 
 export interface CodingWorkbenchRuntimeQuestionRejectBody extends CodingWorkbenchRuntimeOperationRequest {
@@ -300,6 +343,23 @@ export function getCodingWorkbenchRuntimeApprovalReview(
   );
 }
 
+/** Reads the exact transient server-held draft for a generic run with no pull-request target. */
+export function getCodingWorkbenchRuntimeDescriptionDraft(
+  runId: string,
+  proposalId: string,
+  snapshotDigest: string,
+  draftDigest: string,
+  signal?: AbortSignal,
+): Promise<CodingWorkbenchDescriptionDraftResult> {
+  const query = new URLSearchParams({ proposalId, snapshotDigest });
+  const path = `${runPath(runId, "/description-draft")}?${query.toString()}`;
+  return bffFetchJson(
+    path,
+    { cache: "no-store", ...(signal ? { signal } : {}) },
+    { validator: descriptionDraftValidator(proposalId, snapshotDigest, draftDigest) },
+  );
+}
+
 /**
  * List the run's required questions over the authenticated app-session channel (#2478). The server
  * keeps the run revision unchanged because listing is a read. An unpaired window receives the
@@ -323,9 +383,13 @@ export function listCodingWorkbenchRuntimeQuestions(
   );
 }
 
+// The answer body imports the contract type directly (epic #3384 defect A) rather than
+// re-declaring the requestId/expectedRevision/questionId/answers shape locally: the server route
+// parses this exact wire body with parseCodingWorkbenchRuntimeQuestionAnswerRequest, so there is
+// exactly one definition of what an answer looks like, not two that can drift apart.
 export function answerCodingWorkbenchRuntimeQuestion(
   runId: string,
-  input: CodingWorkbenchRuntimeQuestionAnswerBody,
+  input: CodingWorkbenchRuntimeQuestionAnswerRequest,
   signal?: AbortSignal,
 ): Promise<CodingWorkbenchRuntimeSnapshot> {
   return postSnapshot(runPath(runId, "/questions/answer"), input, signal);

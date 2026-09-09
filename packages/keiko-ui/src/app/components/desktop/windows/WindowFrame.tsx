@@ -800,6 +800,34 @@ function raiseWindowForInteraction(api: WorkspaceApi, id: string): void {
   api.focus(id);
 }
 
+// Audit C061 / WCAG 2.4.11 is about TABBING into a lower, overlapped window: the focused control
+// must not stay hidden behind the top window. It is not about focus a window's own content takes
+// while it initializes. Monaco mounting, a workspace-trust banner or a dialog autofocusing all fire
+// the same capture-phase focus event, and raising on those let a still-loading window jump over the
+// window the user had moved to in the meantime — observed as a "Close Files window" click that
+// could never land because the editor kept re-raising itself over it.
+//
+// Two facts separate the two cases, both already recorded by the product:
+//   * the app shell writes `document.documentElement.dataset.inputModality` and sets it to
+//     `keyboard` only for a bare Tab keydown (pointer presses set `pointer`), and
+//   * a focus stolen by a window's own content arrives while the previously focused element sits
+//     in ANOTHER window.
+// Raise when the modality says the user tabbed here, or when the focus did not come out of a
+// different window at all. A pointer press never needs this path: `onPointerDown` raises first.
+function focusCameFromAnotherWindow(relatedTarget: EventTarget | null): boolean {
+  if (!(relatedTarget instanceof Element)) return false;
+  const previousWindow = relatedTarget.closest(".window");
+  if (previousWindow === null) return false;
+  return previousWindow !== relatedTarget.ownerDocument.activeElement?.closest(".window");
+}
+
+function raisesOnKeyboardFocus(relatedTarget: EventTarget | null): boolean {
+  const tabbed =
+    typeof document !== "undefined" &&
+    document.documentElement.dataset.inputModality === "keyboard";
+  return tabbed || !focusCameFromAnotherWindow(relatedTarget);
+}
+
 function delayedFocusStillTargetsWindow(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) return true;
   const activeElement = document.activeElement;
@@ -864,7 +892,24 @@ function WindowFrameImpl({
     [api, win.id],
   );
   const openWindow = useCallback(
-    (type: WindowType, cfg?: AppWindow["cfg"]): string | null => api.add(type, cfg),
+    (type: WindowType, cfg?: AppWindow["cfg"]): string | null => {
+      const id = api.add(type, cfg);
+      // #3390: a window opened from inside another window receives focus, as on any desktop. The
+      // opener's own deferred raise (see `focusWindowForTarget`) yields to wherever focus has
+      // moved, so the new window also stays on top instead of landing behind its opener. Deferred
+      // one frame: the element exists only after React has committed the added window.
+      if (id !== null) {
+        requestAnimationFrame(() => {
+          const opened = document.querySelector<HTMLElement>(
+            `.window[data-window-id="${CSS.escape(id)}"]`,
+          );
+          if (opened !== null && !opened.contains(document.activeElement)) {
+            opened.focus({ preventScroll: true });
+          }
+        });
+      }
+      return id;
+    },
     [api],
   );
   const openEditorFile = useCallback<WorkspaceApi["openEditorFile"]>(
@@ -1008,7 +1053,13 @@ function WindowFrameImpl({
         return;
       }
       if (isInteractiveControlTarget(target)) {
-        window.setTimeout(() => api.focus(win.id), 0);
+        window.setTimeout(() => {
+          // #3390: a control inside this window may itself have opened ANOTHER window, which
+          // took focus and the top of the stack in the meantime. Raising this window regardless
+          // put the Coding Workbench back over the Pull Request window its own "Review exact
+          // draft" had just opened, every time -- the same guard the text-entry branch applies.
+          if (delayedFocusStillTargetsWindow(target)) api.focus(win.id);
+        }, 0);
         return;
       }
       api.focus(win.id);
@@ -1308,8 +1359,10 @@ function WindowFrameImpl({
       // behind the top window; Cmd/Alt+Arrows also only act on the topZ window.
       // The !top guard matters: makeFocus bumps z unconditionally, so without it
       // every Tab step inside the top window would trigger a state update.
-      onFocusCapture={() => {
-        if (!top) window.setTimeout(() => api.focus(win.id), 0);
+      onFocusCapture={(event) => {
+        if (!top && raisesOnKeyboardFocus(event.relatedTarget)) {
+          window.setTimeout(() => api.focus(win.id), 0);
+        }
       }}
     >
       <div className="win-frame-clip">

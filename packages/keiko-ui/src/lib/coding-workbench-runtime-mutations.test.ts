@@ -114,6 +114,22 @@ describe("mutationResultMatchesCurrentTruth", () => {
 });
 
 describe("createStartMutation", () => {
+  it("preserves the accepted issue intent and digest through the production start client", async () => {
+    const issue = {
+      issueRef: "https://github.com/owner/repo/issues/42",
+      expectedIssueBindingDigest: "a".repeat(64),
+    };
+    const mutation = createStartMutation(
+      "implement the issue",
+      stateWithRun(null, { canStart: true }),
+      issue,
+    );
+    await mutation.run();
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith(
+      expect.objectContaining(issue),
+    );
+  });
+
   it("refuses to start while the runtime readiness gate is closed", () => {
     expect(() => createStartMutation("task", stateWithRun(null))).toThrowError(
       expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }),

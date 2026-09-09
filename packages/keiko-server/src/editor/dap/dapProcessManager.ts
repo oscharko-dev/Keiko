@@ -273,6 +273,7 @@ async function prepareReservedStartup(
   try {
     plan = await deps.validateCapsulePlan.validateAndRederive({
       candidate: input.planCandidate,
+      correlationId: input.identity.sessionId,
       binding,
       adapter: {
         providerId: spec.providerId,

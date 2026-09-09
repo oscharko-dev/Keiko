@@ -29,7 +29,8 @@
     "@oscharko-dev/keiko-security": "0.3.17",
     "@oscharko-dev/keiko-model-gateway": "0.3.17",
     "@oscharko-dev/keiko-workspace": "0.3.17",
-    "@oscharko-dev/keiko-tools": "0.3.17"
+    "@oscharko-dev/keiko-tools": "0.3.17",
+    "@oscharko-dev/keiko-tool-catalog": "0.3.17"
   },
   "private": true
 }

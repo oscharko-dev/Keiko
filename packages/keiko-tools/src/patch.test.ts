@@ -736,6 +736,42 @@ describe("applyPatch — fail-closed", () => {
 });
 
 describe("applyPatch — multi-file atomicity (rollback)", () => {
+  it("rolls back after live authority revocation without guarding remediation", () => {
+    write("src/a.txt", "A0\n");
+    write("src/b.txt", "B0\n");
+    const diff =
+      modifyFirstLineDiff("src/a.txt", "A0", "A1") + modifyFirstLineDiff("src/b.txt", "B0", "B1");
+    let allowed = true;
+    const writes: string[] = [];
+    const writer = {
+      writeFileUtf8: (path: string, content: string): void => {
+        writes.push(content);
+        writeFileSync(path, content);
+        allowed = false;
+      },
+      mkdirp: (): void => {
+        /* Existing files need no directory creation. */
+      },
+      remove: (path: string): void => {
+        rmSync(path);
+      },
+      rename: (): void => {
+        throw new Error("Unexpected rename");
+      },
+    };
+    expect(() =>
+      applyPatch(info, diff, {
+        applyEnabled: true,
+        signal: liveSignal(),
+        writer,
+        beforeEffect: () => allowed,
+      }),
+    ).toThrow(CommandCancelledError);
+    expect(read("src/a.txt")).toBe("A0\n");
+    expect(read("src/b.txt")).toBe("B0\n");
+    expect(writes).toEqual(["A1\n", "A0\n"]);
+  });
+
   it("rolls back the first write when a later write fails", () => {
     write("src/a.txt", "A0\n");
     write("src/b.txt", "B0\n");

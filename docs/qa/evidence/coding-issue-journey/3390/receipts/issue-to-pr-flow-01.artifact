@@ -1,0 +1,212 @@
+{
+  "evidenceKind": "code-task-qualification-flow-evidence",
+  "schemaVersion": 1,
+  "flowId": "issue-to-pr-flow-01",
+  "ordinal": 1,
+  "repository": "oscharko/Wegwerf-Repo",
+  "issueNumber": 1,
+  "mode": "governed-assist",
+  "issueReference": "https://github.com/oscharko/Wegwerf-Repo/issues/1",
+  "issueState": "closed",
+  "issueClosedAt": "2026-09-08T23:29:15Z",
+  "taskRunId": "run-327433209386417116119108710076185657356",
+  "pullRequestReference": "https://github.com/oscharko/Wegwerf-Repo/pull/42",
+  "pullRequestNumber": 42,
+  "pullRequestHeadSha": "b3fca14aa0a05f6d3c4f7caf9b39080e1d8b02ca",
+  "pullRequestState": "merged",
+  "pullRequestMergedAt": "2026-09-08T23:29:14Z",
+  "mergeCommitSha": "f5626e86df75add99667d2f396237a458396bfd0",
+  "requiredChecks": {
+    "observation": "observed",
+    "headSha": "b3fca14aa0a05f6d3c4f7caf9b39080e1d8b02ca",
+    "requirementsVersion": "1",
+    "requirementsDigest": "bf8f080d9d5dca4aec5de1413d150c6fec7be858e88858c3b311905d78b7e58a",
+    "evidenceRef": "ci-af84d7cbbbaead8cbc8a75961a4ef8990bccf35b2fbf6b1305f72397337feb49",
+    "total": 1,
+    "passed": 1,
+    "failed": 0,
+    "pending": 0
+  },
+  "authorityObservation": {
+    "requestedMode": "governed-assist",
+    "effectiveMode": "governed-assist",
+    "approvalRequestCount": 18,
+    "approvalRequests": [
+      {
+        "actionClass": "command-execution",
+        "actionKind": "ci-observe",
+        "requestCount": 3
+      },
+      {
+        "actionClass": "command-execution",
+        "actionKind": "verification-command",
+        "requestCount": 8
+      },
+      {
+        "actionClass": "delivery-substrate",
+        "actionKind": "commit",
+        "requestCount": 1
+      },
+      {
+        "actionClass": "delivery-substrate",
+        "actionKind": "pull-request",
+        "requestCount": 1
+      },
+      {
+        "actionClass": "delivery-substrate",
+        "actionKind": "push",
+        "requestCount": 1
+      },
+      {
+        "actionClass": "workspace-write",
+        "actionKind": "file-edit",
+        "requestCount": 3
+      },
+      {
+        "actionClass": "workspace-write",
+        "actionKind": "git-stage",
+        "requestCount": 1
+      }
+    ],
+    "approvedProposalActions": [
+      {
+        "actionKind": "commit",
+        "approvalCount": 1
+      },
+      {
+        "actionKind": "git-stage",
+        "approvalCount": 1
+      },
+      {
+        "actionKind": "pull-request",
+        "approvalCount": 1
+      },
+      {
+        "actionKind": "push",
+        "approvalCount": 1
+      }
+    ],
+    "effectStartedTools": [
+      {
+        "canonicalId": "keiko.changeset.edit",
+        "contractVersion": 1,
+        "invocationCount": 3
+      },
+      {
+        "canonicalId": "keiko.ci.status",
+        "contractVersion": 1,
+        "invocationCount": 3
+      },
+      {
+        "canonicalId": "keiko.git.commit",
+        "contractVersion": 1,
+        "invocationCount": 1
+      },
+      {
+        "canonicalId": "keiko.git.execute",
+        "contractVersion": 1,
+        "invocationCount": 4
+      },
+      {
+        "canonicalId": "keiko.git.pullrequest",
+        "contractVersion": 1,
+        "invocationCount": 1
+      },
+      {
+        "canonicalId": "keiko.git.push",
+        "contractVersion": 1,
+        "invocationCount": 1
+      },
+      {
+        "canonicalId": "keiko.git.stage",
+        "contractVersion": 1,
+        "invocationCount": 1
+      },
+      {
+        "canonicalId": "keiko.git.status",
+        "contractVersion": 1,
+        "invocationCount": 2
+      },
+      {
+        "canonicalId": "keiko.repo.search",
+        "contractVersion": 1,
+        "invocationCount": 4
+      },
+      {
+        "canonicalId": "keiko.verification.run",
+        "contractVersion": 1,
+        "invocationCount": 8
+      },
+      {
+        "canonicalId": "keiko.workspace.discover",
+        "contractVersion": 1,
+        "invocationCount": 1
+      },
+      {
+        "canonicalId": "keiko.workspace.read",
+        "contractVersion": 1,
+        "invocationCount": 7
+      }
+    ],
+    "toolInvocationCount": 36,
+    "effectStartedCount": 36,
+    "completedToolCount": 32,
+    "deniedToolCount": 0,
+    "failedToolCount": 4,
+    "otherToolCount": 0
+  },
+  "rubricReview": {
+    "flowId": "issue-to-pr-flow-01",
+    "taskRunId": "run-327433209386417116119108710076185657356",
+    "repository": "oscharko/Wegwerf-Repo",
+    "issueNumber": 1,
+    "pullRequestNumber": 42,
+    "pullRequestHeadSha": "b3fca14aa0a05f6d3c4f7caf9b39080e1d8b02ca",
+    "sourceCommitSha": "3af295760373908725ebc6391de722e100093d3e",
+    "rubricDigest": "62117fee53c43f2d69b9adf8e0511aeb6c225028e5663ce189d4b0382f356c03",
+    "reviewId": "flow-01-run-51-review",
+    "reviewDigest": "caae0fe5538dcfdd55988c94c8dd94d350c1a473ddb943d70242073e50d3a5cc",
+    "verdict": "approved",
+    "criteriaTotal": 10,
+    "criteriaPassed": 10
+  },
+  "stageEvidence": {
+    "issueToPr": {
+      "scenarioId": "issue-to-pr-governed-assist",
+      "receiptDigest": "43d43876840aef9166ea7139713a4618535382f39a30b2557906cc481fe6149f"
+    },
+    "ciRepair": null,
+    "description": {
+      "scenarioId": "description-auto-draft-and-apply",
+      "receiptDigest": "264bc45e5e0c7d6e2230dc202dbc2a618d5eb70e672ef2c76da549265f74e63f"
+    },
+    "markReady": {
+      "scenarioId": "mark-ready-intent",
+      "receiptDigest": "c3a3be729f5b55dbc16781ab5639a3a935def7fa960381ef68b46f644d57e425"
+    },
+    "governedMerge": {
+      "scenarioId": "human-merge-and-closure",
+      "receiptDigest": "d21d85cdd64bc421b07ceef766da597d2f41fb69d6e7795c6131b2ed82d90c40"
+    }
+  },
+  "transitions": [
+    "issue-accepted",
+    "coding-task-started",
+    "verified-commit",
+    "pushed-head",
+    "draft-pull-request",
+    "required-checks-observed",
+    "description-applied",
+    "ready-for-review",
+    "merge-observed",
+    "issue-closure-observed"
+  ],
+  "observedAt": "2026-09-08T23:29:17.333Z",
+  "sourceCommitSha": "3af295760373908725ebc6391de722e100093d3e",
+  "spend": {
+    "budgetNanoUsd": 100000000000,
+    "chargedDeltaNanoUsd": 908445000,
+    "cumulativeChargedNanoUsd": 908445000,
+    "remainingNanoUsd": 99091555000
+  }
+}

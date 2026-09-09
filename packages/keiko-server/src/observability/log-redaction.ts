@@ -36,7 +36,7 @@
 // route TEMPLATE by `route-template.ts` — literal route segments survive, every other segment is
 // digested — and everything else that starts at the filesystem root is refused.
 //
-// NAMED ESCAPE HATCHES: ONE VALUE-KEYED, THREE FIELD-NAME-KEYED (ADR-0173 D4, D11 g29)
+// NAMED ESCAPE HATCHES: ONE VALUE-KEYED, FOUR FIELD-NAME-KEYED (ADR-0173 D4, D11 g29)
 //
 // `path` above is a VALUE-shape escape hatch: `redactLogString` recognises a path-shaped STRING
 // and hands it to `redactRoutePath`, whatever field it arrived under. `frames`, `causeChain` and
@@ -64,12 +64,15 @@
 //     code-declared vocabulary — never foreign text. Every OTHER guard (secret,
 //     personal-identifier, structured-payload, length, path) still applies at full strength.
 //
-// All three hatches share the fail-closed direction every other guard in this file takes: an
+// `clientNote` additionally admits only the exact issue-intake sentence grammar declared below.
+// It remains untrusted browser input: no wildcard text, paths, endpoints or credentials fit it.
+//
+// The hatches share the fail-closed direction every other guard in this file takes: an
 // element or value the reducer does not recognise is DROPPED outright, never echoed and never
 // replaced with a marker in its place — a marker would still tell an adversary their forged element
 // was seen.
 //
-// All three name-keyed guards fire ONLY at the top level of `extra` — `redactLogObject`'s own
+// All name-keyed guards fire ONLY at the top level of `extra` — `redactLogObject`'s own
 // direct call from `redactLogFields` — never at any nested depth. The trust they extend is a
 // promise this log's OWN producers make about their own top-level `frames`/`causeChain`/
 // `diagnosticSummary` fields; the same field name nested inside some unrelated object merely
@@ -627,6 +630,33 @@ function redactProseAllowedValue(value: string): string {
   return value;
 }
 
+// Browser intake and commit review events use a closed sentence grammar. Only these exact code-owned operations,
+// bounded decimal issue numbers and a short hex digest may survive under top-level clientNote.
+// This does not admit arbitrary browser prose or broaden any other field's redaction.
+const BODY_FREE_CLIENT_NOTE_PATTERNS: readonly RegExp[] = [
+  /^\[keiko\] shared diff viewport focused$/u,
+  /^\[keiko\] draft delivery review ready: (?:push-proposed|pr-proposed) head [a-f0-9]{12}$/u,
+  /^\[keiko\] draft delivery review unavailable: binding-mismatch$/u,
+  /^\[keiko\] draft delivery review displayed: (?:idle|loading|ready|unavailable)$/u,
+  /^\[keiko\] journey displayed: (?:awaiting-ready-approval|keiko-technical-ready|ready-for-human-review|awaiting-human-requirements|merged-awaiting-issue-closure|completed|blocked|cancelled|recovery-required|stale) head [a-f0-9]{12}$/u,
+  /^\[keiko\] journey action: (?:refresh|propose-ready) (?:started|completed|failed)$/u,
+  /^\[keiko\] journey unavailable: binding-mismatch$/u,
+  /^\[keiko\] CI readiness displayed: (?:technical-ready|pending|failed|blocked|unknown|stale|unobserved) head [a-f0-9]{12}$/u,
+  /^\[keiko\] draft delivery displayed: (?:push-proposed|pushing|pushed|pr-proposed|creating-pr|draft-created|recovery-required) reason (?:approval-required|in-flight|completed|authority-denied|remote-drift|issue-drift|provider-failed|ambiguous-remote|approval-invalid|payload-changed|restart-reconciliation|preflight-failed) head [a-f0-9]{12}$/u,
+  /^\[keiko\] git stage review (?:idle|loading|ready|unavailable): files (?:0|[1-9]\d{0,5}|1000000)$/u,
+  /^\[keiko\] verified commit result displayed: (?:succeeded|blocked|failed|recovery-required|verification-failed|drift) tree [0-9a-f]{12}$/u,
+  /^\[keiko\] verified commit review unavailable: binding-mismatch$/u,
+  /^\[keiko\] verified commit review ready: files (?:0|[1-9]\d{0,5}|1000000) tree [0-9a-f]{12}$/u,
+  /^\[keiko\] coding workbench issue (?:preview (?:requested|cancelled)|removed before start)$/u,
+  /^\[keiko\] coding workbench issue preview ready: issue [1-9]\d{0,9}$/u,
+  /^\[keiko\] coding workbench issue accepted: issue [1-9]\d{0,9} binding [0-9a-f]{12}$/u,
+  /^\[keiko\] coding workbench issue preview failed: (?:invalid-reference|repository-mismatch|auth-required|issue-unavailable|clone-failed|authority-denied|cancelled|unknown|unavailable-runtime)$/u,
+  // Owner audit b3-21 — GitClientWindow.tsx's repository-dialog handoff note (a closed
+  // "clone"/"open" mode, never browser-authored text); without this it matched no pattern above
+  // and collapsed to the generic shape marker, losing which dialog mode was handed off.
+  /^\[keiko\] git repository dialog handoff: (?:clone|open)$/u,
+];
+
 // Mirrors `redactGuardedArrayField`'s depth/name gate for the scalar hatch. `undefined` means
 // "not this field" (wrong depth, wrong name, or a non-string value under this name — which cannot
 // happen through the one producer that ever sets it, but degrades to the generic path rather than
@@ -636,8 +666,14 @@ function redactGuardedScalarField(
   fieldValue: unknown,
   depth: number,
 ): string | undefined {
-  if (depth !== MAX_LOG_FIELD_DEPTH || name !== "diagnosticSummary") return undefined;
-  return typeof fieldValue === "string" ? redactProseAllowedValue(fieldValue) : undefined;
+  if (depth !== MAX_LOG_FIELD_DEPTH || typeof fieldValue !== "string") return undefined;
+  if (name === "diagnosticSummary") return redactProseAllowedValue(fieldValue);
+  if (
+    name === "clientNote" &&
+    BODY_FREE_CLIENT_NOTE_PATTERNS.some((pattern) => pattern.test(fieldValue))
+  )
+    return fieldValue;
+  return undefined;
 }
 
 // Resolves what a single ACCEPTED field (past the count/reserved/name-shape gates already applied

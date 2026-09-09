@@ -10,6 +10,10 @@
 import type { AuditRedactionConfig } from "@oscharko-dev/keiko-contracts";
 
 const REDACTED = "[REDACTED]";
+/** The exact text `redact` substitutes for a secret. Exported so a consumer that must recognise a
+ * scrubbed value in otherwise structured output (a host path in a test runner's stack frame,
+ * #3390) matches this one constant instead of restating it. */
+export const REDACTION_PLACEHOLDER: string = REDACTED;
 
 // Bearer <token>: keep the scheme, drop the credential.
 const BEARER_PATTERN = /\bBearer\s+[\w.\-+/=]+/gi;

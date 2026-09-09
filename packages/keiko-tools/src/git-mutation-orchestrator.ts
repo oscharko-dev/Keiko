@@ -72,6 +72,8 @@ export interface GitStageCommand {
   readonly kind: "stage";
   readonly pathspecs: readonly string[];
   readonly includeUntracked: boolean;
+  readonly worktreeDigest?: string;
+  readonly verified?: import("./git-mutation-adapter.js").GitVerifiedCommitPrecondition;
 }
 
 export interface GitUnstageCommand {
@@ -83,6 +85,7 @@ export interface GitCommitCommand {
   readonly kind: "commit";
   readonly message: string;
   readonly allowEmpty: boolean;
+  readonly verified?: import("./git-mutation-adapter.js").GitVerifiedCommitPrecondition;
 }
 
 export interface GitAbortCommand {
@@ -355,6 +358,17 @@ function resolvePolicyGate(
 
 // ─── Phase 5: execution dispatch ─────────────────────────────────────────────────────────────
 
+function dispatchStage(
+  command: GitStageCommand,
+  adapter: GitLocalMutationAdapter,
+): Promise<GitDeliveryExecutionResult> {
+  return adapter.stage({
+    pathspecs: command.pathspecs,
+    ...(command.worktreeDigest === undefined ? {} : { worktreeDigest: command.worktreeDigest }),
+    ...(command.verified === undefined ? {} : { verified: command.verified }),
+  });
+}
+
 function dispatchExecution(
   command: GitMutationCommand,
   adapter: GitLocalMutationAdapter,
@@ -368,11 +382,15 @@ function dispatchExecution(
     case "branch-switch":
       return adapter.switchBranch({ branchName: command.branchName });
     case "stage":
-      return adapter.stage({ pathspecs: command.pathspecs });
+      return dispatchStage(command, adapter);
     case "unstage":
       return adapter.unstage({ pathspecs: command.pathspecs });
     case "commit":
-      return adapter.commit({ message: command.message, allowEmpty: command.allowEmpty });
+      return adapter.commit({
+        message: command.message,
+        allowEmpty: command.allowEmpty,
+        ...(command.verified === undefined ? {} : { verified: command.verified }),
+      });
     case "abort":
       return adapter.abort({ operationToAbort: command.operationToAbort });
     case "recovery":

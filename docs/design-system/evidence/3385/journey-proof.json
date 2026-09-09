@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "issue": 3385,
+  "passed": true,
+  "evidenceClass": "production-composed-deterministic-browser",
+  "modelQualification": false,
+  "checkedAt": "2026-09-06T20:37:57.436Z",
+  "assertions": [
+    "auth-refusal-no-run",
+    "mismatch-no-run",
+    "malicious-input-no-run",
+    "stale-preview-no-workspace",
+    "grant-revoked-before-start-no-run",
+    "real-managed-git-workspace",
+    "qualification-reload-reaccepts-same-workspace-before-issue-bound-start",
+    "default-base-preserved",
+    "initial-model-context-causality",
+    "model-edit-in-managed-workspace",
+    "snapshot-binding-after-reload",
+    "body-free-correlated-activity-log"
+  ],
+  "rawContentRecorded": false
+}
