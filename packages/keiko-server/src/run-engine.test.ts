@@ -452,7 +452,7 @@ describe("applyRun — verification egress probe threading", () => {
     );
     vi.doMock("@oscharko-dev/keiko-workflows", () => ({
       ...actualWorkflows,
-      generateUnitTests: (input: unknown, deps: Record<string, unknown>): Promise<unknown> => {
+      generateUnitTests: (_input: unknown, deps: Record<string, unknown>): Promise<unknown> => {
         capturedDeps = deps;
         return Promise.resolve({ status: "completed" });
       },

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { RetrievalQuery } from "@oscharko-dev/keiko-contracts/connected-context";
-import { PathEscapeError } from "@oscharko-dev/keiko-security/errors/workspace";
+import { _PathEscapeError } from "@oscharko-dev/keiko-security/errors/workspace";
 import { memFs } from "./_memfs.js";
 import { RepoSearchInvalidQueryError } from "./errors.js";
 import { nodeWorkspaceFs, type WorkspaceFs } from "./fs.js";
@@ -302,6 +302,5 @@ describe("importGraphAdapter (real fs symlink containment)", () => {
       { nowMs: FIXED_NOW },
     );
     expect(atoms).toEqual([]);
-    void PathEscapeError;
   });
 });

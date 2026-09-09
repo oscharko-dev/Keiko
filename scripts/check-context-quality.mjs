@@ -410,7 +410,7 @@ function observationContainsSecret(observation, secret) {
 
 // command-shape fidelity checks against the truncated + clean fixtures. Returns an ordered list of
 // {name, pass} so the aggregate can both score the fraction AND surface the two hard sub-invariants.
-function commandChecks(truncatedRaw, truncatedObs, cleanRaw, cleanObs, secret) {
+function commandChecks(truncatedRaw, truncatedObs, _cleanRaw, cleanObs, secret) {
   const excerptsWithinCap = (obs) =>
     obs.excerpts.every((excerpt) => excerpt.bytes <= MAX_OBSERVATION_EXCERPT_BYTES) &&
     obs.excerpts.reduce((sum, excerpt) => sum + utf8Bytes(excerpt.text), 0) <=

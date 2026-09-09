@@ -1286,7 +1286,7 @@ function visitClosureEdge(state, originPath, requirement) {
   seedClosurePackage(state, edge, entry, identity, requirement);
 }
 
-function seedClosurePackage(state, edge, entry, identity, requirement) {
+function seedClosurePackage(state, edge, _entry, identity, requirement) {
   if (state.visited.has(edge)) return;
   state.visited.add(edge);
   const directory = join(state.installRoot, edge);

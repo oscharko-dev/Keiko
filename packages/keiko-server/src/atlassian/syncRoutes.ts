@@ -418,7 +418,6 @@ async function startSyncGoverned(
   if (outcome.kind === "review-required") {
     // The raw request `authority` is validated separately above and must not ride into the
     // pending-approval payload; peel it off and forward only the sync-start fields.
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars -- rest-sibling omit of body.authority
     const { authority: _authority, ...syncStart } = body;
     return createAtlassianPendingApprovalResult(deps, {
       connectorId,

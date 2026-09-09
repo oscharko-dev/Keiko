@@ -368,7 +368,7 @@ async function proveRunChangesView(
 // stale-while-revalidate contract; this end-to-end assertion is a lightweight guard that the
 // contract survives all the way through the real render tree in a real browser session.
 async function proveChangesRefreshPreservesFocusAndContent(
-  page: Page,
+  _page: Page,
   fileButton: Locator,
   diffPane: Locator,
 ): Promise<void> {

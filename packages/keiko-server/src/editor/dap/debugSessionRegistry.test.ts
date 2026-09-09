@@ -400,7 +400,7 @@ describe("DebugSessionRegistry canonical lifecycle", () => {
   it("retains evidencePending capacity until both terminal records reconcile", async () => {
     let failTerminal = true;
     const { append, registry } = setup();
-    append.mockImplementation((partition: string, evidence: DebugLifecycleEvidence) => {
+    append.mockImplementation((_partition: string, evidence: DebugLifecycleEvidence) => {
       if (failTerminal && evidence.eventKind === "teardown")
         return Promise.reject(new Error("private"));
       return Promise.resolve();

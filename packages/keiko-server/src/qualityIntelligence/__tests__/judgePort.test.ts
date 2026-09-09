@@ -828,7 +828,7 @@ describe("createQiJudgePort.judge — gateway call", () => {
 
   it("propagates AbortError when the model call is cancelled", async () => {
     const controller = new AbortController();
-    const { port: fakePort } = fakeModelPort("");
+    const { port: _fakePort } = fakeModelPort("");
     const abortingPort: ModelPort = {
       call: (_req: GatewayRequest, _sig: AbortSignal): Promise<NormalizedResponse> => {
         controller.abort();
@@ -837,7 +837,6 @@ describe("createQiJudgePort.judge — gateway call", () => {
     };
     const { deps } = depsFor("chat-model-1", "", {
       portFactory: (_id: string): ModelPort => {
-        void fakePort;
         return abortingPort;
       },
     });

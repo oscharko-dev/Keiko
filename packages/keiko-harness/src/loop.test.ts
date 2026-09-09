@@ -337,7 +337,7 @@ describe("runLoop — limit breaches each map to their category", () => {
         }),
       listTools: () => [{ name: "read_file", description: "read", parameters: {} }],
     };
-    const { ctx, sink } = buildContext({
+    const { ctx, _sink } = buildContext({
       task: INVESTIGATE,
       model: port,
       tools: readTool,
@@ -346,7 +346,6 @@ describe("runLoop — limit breaches each map to their category", () => {
     const outcome = await runLoop(ctx);
     expect(outcome).toBe("completed");
     expect(ctx.counters.commandExecutions).toBe(0);
-    void sink;
   });
 
   it("non-retryable model error -> failed with HARNESS_MODEL_ERROR", async () => {

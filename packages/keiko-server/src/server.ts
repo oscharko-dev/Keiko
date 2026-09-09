@@ -513,7 +513,7 @@ function reportTopLevelFailure(
   res: ServerResponse,
   correlationId: string,
   handlerDeps: UiHandlerDeps,
-  context: RequestLogContext,
+  _context: RequestLogContext,
   error: unknown,
 ): void {
   emitServerDiagnostic(

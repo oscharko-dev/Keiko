@@ -236,7 +236,7 @@ export function createTerminalState(progress: HtmlManualIndexingProgress): HtmlM
 export async function executeJob(
   jobId: string,
   base: HtmlManualPodJob,
-  controller: AbortController,
+  _controller: AbortController,
   run: ManualPodJobRunner,
   diagnostics?: ServerDiagnosticSink,
 ): Promise<void> {

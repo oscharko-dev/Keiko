@@ -2687,8 +2687,7 @@ describe("coding-sidecar gateway", () => {
         _config: GatewayConfig,
         modelId: string,
       ): ((request: GatewayRequest) => Promise<NormalizedResponse>) => {
-        return (request: GatewayRequest): Promise<NormalizedResponse> => {
-          void request;
+        return (_request: GatewayRequest): Promise<NormalizedResponse> => {
           return Promise.resolve(assistantResponse(modelId));
         };
       },
@@ -2748,8 +2747,7 @@ describe("coding-sidecar gateway", () => {
           _config: GatewayConfig,
           modelId: string,
         ): ((request: GatewayRequest) => Promise<NormalizedResponse>) => {
-          return (request: GatewayRequest): Promise<NormalizedResponse> => {
-            void request;
+          return (_request: GatewayRequest): Promise<NormalizedResponse> => {
             return Promise.resolve(assistantResponse(modelId));
           };
         },
@@ -2798,8 +2796,7 @@ describe("coding-sidecar gateway", () => {
         _config: GatewayConfig,
         modelId: string,
       ): ((request: GatewayRequest) => Promise<NormalizedResponse>) => {
-        return (request: GatewayRequest): Promise<NormalizedResponse> => {
-          void request;
+        return (_request: GatewayRequest): Promise<NormalizedResponse> => {
           return Promise.resolve(assistantResponse(modelId));
         };
       },
@@ -2939,8 +2936,7 @@ describe("coding-sidecar gateway", () => {
     const deps = depsValue(
       configValue(provider(), capability()),
       (): ((request: GatewayRequest) => Promise<NormalizedResponse>) => {
-        return (request: GatewayRequest): Promise<NormalizedResponse> => {
-          void request;
+        return (_request: GatewayRequest): Promise<NormalizedResponse> => {
           return Promise.reject(gatewayError);
         };
       },

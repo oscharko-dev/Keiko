@@ -346,8 +346,7 @@ describe("createGatewayAtlassianHttpBodyPort", () => {
     const credentials = resolver();
     const controller = new AbortController();
     controller.abort();
-    const fetchImpl = ((input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-      void input;
+    const fetchImpl = ((_input: string | URL | Request, init?: RequestInit): Promise<Response> => {
       return Promise.reject(
         Object.assign(new Error("aborted"), {
           name: init?.signal?.aborted === true ? "AbortError" : "TypeError",

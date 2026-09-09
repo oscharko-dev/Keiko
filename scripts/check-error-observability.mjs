@@ -522,7 +522,7 @@ async function buildConsolidationClusterRecords() {
   );
 }
 
-function consolidationOptions(records, sink) {
+function consolidationOptions(_records, sink) {
   let edgeCounter = 0;
   let reviewCounter = 0;
   const nextEdgeId = () => {

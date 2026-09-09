@@ -246,7 +246,6 @@ const unsupportedCandidateRunner: TestGenerationRunner = async (args) => {
     return undefined;
   }
   const { verification: _verification, ...rest } = candidate;
-  void _verification;
   return {
     ...rest,
     unsupportedVerificationReason:

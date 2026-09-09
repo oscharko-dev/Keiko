@@ -260,4 +260,3 @@ describe("enumerations", () => {
 
 // Keep the policy type import referenced so the type-only import is not pruned.
 const _policyTypeWitness: LargeDocumentResourcePolicy = DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY;
-void _policyTypeWitness;

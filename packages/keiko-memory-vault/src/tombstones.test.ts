@@ -469,10 +469,9 @@ describe("GEN-PERF-PERSISTENCE-014: forget-suppression presence check performs n
     listTombstonesByScopeRows(db, userScope, cipher);
     expect(openStringCalls()).toBeGreaterThan(2000);
 
-    const { cipher: cipher2, openStringCalls: calls2 } = countingCipher();
+    const { cipher: _cipher2, openStringCalls: calls2 } = countingCipher();
     // `cipher2` is unused by the presence query (it takes no cipher) — proving no decrypt is even
     // possible on this path. We assert on the count staying at zero.
-    void cipher2;
     const start = performance.now();
     const presence = selectForgetSuppressionBodyHashPresence(
       db,

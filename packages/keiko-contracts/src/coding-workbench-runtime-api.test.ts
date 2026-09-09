@@ -426,7 +426,6 @@ describe("Coding Workbench runtime API contracts", () => {
     };
     expect(validateCodingWorkbenchRuntimeSseEvent(event)).toEqual({ ok: true, value: event });
     const { eventKind: _eventKind, ...statusFields } = event;
-    void _eventKind;
     const status = { ...statusFields, kind: "status" as const };
     expect(validateCodingWorkbenchRuntimeSseEvent(status)).toMatchObject({ ok: true });
     expect(

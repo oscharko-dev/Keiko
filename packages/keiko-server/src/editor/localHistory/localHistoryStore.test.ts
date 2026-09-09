@@ -200,7 +200,7 @@ describe("editor local-history store", () => {
     expect(store.list(fx.scope, "src/renamed.ts", 1_100)).toEqual([]);
 
     // Rename the on-disk file so the read path can still find it (reKey does not touch disk).
-    const oldAbs = join(fx.root, "src", "app.ts");
+    const _oldAbs = join(fx.root, "src", "app.ts");
     const newAbs = join(fx.root, "src", "renamed.ts");
     const content = "before rename\n";
     writeFileSync(newAbs, content, "utf8");
@@ -229,7 +229,6 @@ describe("editor local-history store", () => {
     // A same-path re-key is a no-op.
     expect(store.reKey(fx.scope, "src/renamed.ts", "src/renamed.ts")).toBe(0);
     // Referencing oldAbs suppresses the unused-var lint.
-    void oldAbs;
   });
 
   // Regression: #2906 round 2. handleFilesRename invokes reKey for DIRECTORY renames too, but a

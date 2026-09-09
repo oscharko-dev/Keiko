@@ -107,7 +107,23 @@ export default defineConfig(
     rules: {
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/explicit-function-return-type": "error",
-      "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_" }],
+      // The underscore prefix is this repository's "deliberately unused" marker, and it was only
+      // honoured for arguments: every other position needed a `void x;` statement to stay quiet.
+      // typescript-eslint 8.69.0 started reporting those as meaningless, which is correct — they
+      // discard nothing. State the convention once here instead, in every position the codebase
+      // uses it, and a rest-destructure that exists to omit a key needs no marker at all.
+      "@typescript-eslint/no-unused-vars": [
+        "error",
+        {
+          args: "all",
+          argsIgnorePattern: "^_",
+          caughtErrors: "all",
+          caughtErrorsIgnorePattern: "^_",
+          destructuredArrayIgnorePattern: "^_",
+          ignoreRestSiblings: true,
+          varsIgnorePattern: "^_",
+        },
+      ],
       complexity: ["error", 10],
       "max-lines-per-function": ["error", { max: 50, skipBlankLines: true, skipComments: true }],
       "no-console": "warn",

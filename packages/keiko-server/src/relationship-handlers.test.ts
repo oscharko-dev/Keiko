@@ -687,7 +687,7 @@ describe("POST /api/relationships (create + validate-before-persist)", () => {
 
 describe("PATCH /api/relationships/:id (optimistic concurrency + If-Match)", () => {
   async function seed(
-    store: ReturnType<typeof createRelationshipStorePort>,
+    _store: ReturnType<typeof createRelationshipStorePort>,
     deps: UiHandlerDeps,
   ): Promise<{ id: string; etag: string }> {
     const req = makeReq({
@@ -701,7 +701,6 @@ describe("PATCH /api/relationships/:id (optimistic concurrency + If-Match)", () 
     // is the opaque string used by If-Match. `relationship.etag` is the legacy numeric
     // updated_at field (see store/relationships.ts:225) and is NOT a valid If-Match token.
     const body = res.body as { relationship: { id: string }; etag: string };
-    void store;
     return { id: body.relationship.id, etag: body.etag };
   }
 

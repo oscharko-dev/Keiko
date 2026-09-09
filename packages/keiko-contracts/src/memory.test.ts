@@ -1477,7 +1477,4 @@ const _unusedTypeAnchor = (): void => {
     createdAt: 0,
   };
   const _b: MemoryAuditRecordId = audit("ar-1");
-  void _a;
-  void _b;
 };
-void _unusedTypeAnchor;

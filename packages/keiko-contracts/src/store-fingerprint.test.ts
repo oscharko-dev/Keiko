@@ -21,7 +21,6 @@ describe("isStoreFingerprint", () => {
 
   it("accepts a valid fingerprint with keySource omitted (plaintext store)", () => {
     // exactOptionalPropertyTypes forbids `keySource: undefined`; destructure-to-exclude instead.
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { keySource: _keySource, ...rest } = validFingerprint();
     expect(isStoreFingerprint({ ...rest, encryptionMode: "plaintext" })).toBe(true);
   });
@@ -36,7 +35,6 @@ describe("isStoreFingerprint", () => {
     for (const encryptionMode of ["encrypted", "migrating"] as const) {
       expect(isStoreFingerprint({ ...validFingerprint(), encryptionMode })).toBe(true);
     }
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { keySource: _keySource, ...rest } = validFingerprint();
     expect(isStoreFingerprint({ ...rest, encryptionMode: "plaintext" })).toBe(true);
   });
@@ -128,7 +126,6 @@ describe("isStoreFingerprint", () => {
   });
 
   it("rejects an object missing a required field", () => {
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const { store: _store, ...withoutStore } = validFingerprint();
     expect(isStoreFingerprint(withoutStore)).toBe(false);
   });
