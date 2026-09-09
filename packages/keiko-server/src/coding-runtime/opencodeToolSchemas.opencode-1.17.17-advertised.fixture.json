@@ -1,0 +1,451 @@
+[
+  {
+    "name": "keiko_changeset_edit",
+    "description": "Apply one strict unified-diff changeset through workspace governance. Supply changeset with patch, files, and selectedFiles; each files entry has file and expectedContentHash. For existing files, copy the exact whole-file digest from the most recent keiko_workspace_read. On a hash mismatch, re-read and rebuild the patch. For a new file, use a /dev/null source diff and the empty-content SHA-256 e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855. Include every intended path in files and selectedFiles. Inspect the result and current files before retrying a failed edit.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "changeset": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "patch": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 65536,
+              "pattern": "^(?:(?:(?:diff --git [^\\r\\n]+ [^\\r\\n]+\\r?\\n)(?:index [^\\r\\n]+\\r?\\n)?)?--- (?:a/|/dev/null)|:[0-7]{6} [0-7]{6} [a-f0-9]{7,64} [a-f0-9]{7,64} M [^\\r\\n]+\\r?\\n@@ )",
+              "description": "Strict unified diff for every listed file. Start each file with `--- a/<path>` and `+++ b/<path>` (or `/dev/null`), followed by one or more `@@ -old +new @@` hunks. A single-file `:100644 ... M <path>` raw-index header is accepted only as a compatibility fallback and is normalized before validation."
+            },
+            "files": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 50,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 512,
+                    "pattern": "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$"
+                  },
+                  "expectedContentHash": {
+                    "type": "string",
+                    "pattern": "^[a-f0-9]{64}$",
+                    "description": "SHA-256 digest returned by keiko_workspace_read."
+                  }
+                },
+                "required": ["file", "expectedContentHash"]
+              },
+              "description": "Every file changed by patch, bound to its last governed read digest."
+            },
+            "selectedFiles": {
+              "type": "array",
+              "minItems": 1,
+              "maxItems": 50,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$"
+              },
+              "description": "Optional subset of files to apply; each entry must occur in files."
+            }
+          },
+          "required": ["patch", "files"]
+        }
+      },
+      "required": ["changeset"]
+    }
+  },
+  {
+    "name": "keiko_child_agent",
+    "description": "Run one bounded, one-layer read-only child agent toward an objective.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "objective": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        "maxToolCalls": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 32
+        }
+      },
+      "required": ["objective", "maxToolCalls"]
+    }
+  },
+  {
+    "name": "keiko_ci_status",
+    "description": "Observe the accepted run's CI readiness.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "forceFresh": {
+          "type": "boolean",
+          "description": "Set true to bypass the cached readiness snapshot and force one fresh provider read."
+        }
+      },
+      "required": ["forceFresh"]
+    }
+  },
+  {
+    "name": "keiko_git_commit",
+    "description": "Create a commit proposal over the staged changes. This call does not create a commit. First complete staging and rerun verification until it reports verification: { commitProof: \"recorded\" }. This call waits for any required operator decision. When the recorded status is ready or the fresh approvalDisposition is ready (approvalDisposition: \"ready\"), immediately call keiko_git_execute with the matching kind and proposalId: authorization is already present. An immutable recorded receipt may retain status approval-required; the fresh disposition is authoritative for this continuation. A denied proposal authorizes no effect. Proposing never executes the effect.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "message": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 8192,
+          "description": "Proposed commit message. This proposes only; a human approval is required."
+        }
+      },
+      "required": ["message"]
+    }
+  },
+  {
+    "name": "keiko_git_diff",
+    "description": "Read one bounded Git diff (working-tree or staged) for given paths.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": "string",
+          "enum": ["working-tree", "index"]
+        },
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "description": "Workspace-relative paths to diff; denied or ignored paths never appear."
+        }
+      },
+      "required": ["scope", "paths"]
+    }
+  },
+  {
+    "name": "keiko_git_execute",
+    "description": "Execute a stage, commit, push or pull-request proposal using its matching kind and returned proposalId when its status is ready or approvalDisposition: \"ready\" is present. The fresh disposition means approval has already been granted even if an immutable receipt still says approval-required. Stage execution mutates the Git index and must complete before commit-grade verification; proposal tools alone perform no Git mutation.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["stage", "commit", "push", "pull-request"]
+        },
+        "proposalId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^(?:stage|delivery|commit)-[0-9]{1,39}$",
+          "description": "The proposalId returned by the matching propose-phase tool call."
+        }
+      },
+      "required": ["kind", "proposalId"]
+    }
+  },
+  {
+    "name": "keiko_git_push",
+    "description": "Propose pushing the last verified commit by its exact SHA. This call waits for any required operator decision. When the recorded status is ready or the fresh approvalDisposition is ready (approvalDisposition: \"ready\"), immediately call keiko_git_execute with the matching kind and proposalId: authorization is already present. An immutable recorded receipt may retain status approval-required; the fresh disposition is authoritative for this continuation. A denied proposal authorizes no effect. Proposing never executes the effect.",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "keiko_git_stage",
+    "description": "Create a non-mutating proposal to stage one or more workspace-relative paths. This call does not mutate the Git index. Execute staging before rerunning verification for commit proof. This call waits for any required operator decision. When the recorded status is ready or the fresh approvalDisposition is ready (approvalDisposition: \"ready\"), immediately call keiko_git_execute with the matching kind and proposalId: authorization is already present. An immutable recorded receipt may retain status approval-required; the fresh disposition is authoritative for this continuation. A denied proposal authorizes no effect. Proposing never executes the effect.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "paths": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 50,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          },
+          "description": "Workspace-relative paths to propose staging."
+        }
+      },
+      "required": ["paths"]
+    }
+  },
+  {
+    "name": "keiko_git_status",
+    "description": "Read the workspace's current Git status.",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
+    "name": "keiko_pull_request",
+    "description": "Propose opening a draft pull request with the given title. This call waits for any required operator decision. When the recorded status is ready or the fresh approvalDisposition is ready (approvalDisposition: \"ready\"), immediately call keiko_git_execute with the matching kind and proposalId: authorization is already present. An immutable recorded receipt may retain status approval-required; the fresh disposition is authoritative for this continuation. A denied proposal authorizes no effect. Proposing never executes the effect.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "^[^\\0\\r\\n]+$",
+          "description": "Proposed draft pull-request title."
+        }
+      },
+      "required": ["title"]
+    }
+  },
+  {
+    "name": "keiko_repository_search",
+    "description": "Search tracked workspace text. Choose lexical (keywords), literal (exact text), regex (bounded pattern), or symbol (exact identifier). Results contain bounded excerpts with path and line range; use a returned path/startLine/endLine with keiko_workspace_read.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["lexical", "literal", "regex", "symbol"],
+          "description": "lexical: natural-language keyword match. literal: exact substring. regex: bounded, ReDoS-safe pattern. symbol: exact identifier (no whitespace)."
+        },
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "description": "Search text for the selected mode."
+        },
+        "caseSensitive": {
+          "type": "boolean"
+        },
+        "includeGlobs": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": "Workspace-relative glob patterns to restrict the search to."
+        },
+        "excludeGlobs": {
+          "type": "array",
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "description": "Workspace-relative glob patterns to exclude from the search."
+        },
+        "maxResults": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "description": "Maximum number of bounded content excerpts to return."
+        }
+      },
+      "required": ["mode", "query", "caseSensitive", "includeGlobs", "excludeGlobs", "maxResults"]
+    }
+  },
+  {
+    "name": "keiko_research_fetch",
+    "description": "Fetch one public https URL for read-only research.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": "string",
+          "minLength": 9,
+          "maxLength": 512,
+          "pattern": "^https://"
+        }
+      },
+      "required": ["target"]
+    }
+  },
+  {
+    "name": "keiko_skill",
+    "description": "Invoke one approved, read-only skill by its pinned identifier.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "skillId": {
+          "type": "string",
+          "pattern": "^skl_[a-z0-9][a-z0-9-]{0,62}@[0-9]{1,4}(?:\\.[0-9]{1,4}){0,2}$",
+          "maxLength": 80
+        }
+      },
+      "required": ["skillId"]
+    }
+  },
+  {
+    "name": "keiko_verification",
+    "description": "Run one named verification gate (test, typecheck, lint or build). Ordinary working-tree tests use an empty targetPath and may pass without commit proof; targeted-test requires one workspace-relative test path. For a commit, execute a ready stage proposal, or an approval-required stage proposal after approval, then rerun verification and proceed only when the result reports verification: { commitProof: \"recorded\" }. A candidate-not-staged result with nextAction stage-then-verify requires staging and another verification run.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "verifierId": {
+          "type": "string",
+          "enum": ["test", "targeted-test", "typecheck", "lint", "build"]
+        },
+        "targetPath": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 4096,
+          "pattern": "^(?:$|(?![\\\\/])(?!.*(?:^|/)\\.\\.?(?:/|$))(?!.*\\\\).+)$",
+          "description": "Use an empty string for ordinary gates; targeted-test requires one workspace-relative test path."
+        }
+      },
+      "required": ["verifierId", "targetPath"]
+    }
+  },
+  {
+    "name": "keiko_workspace_discover",
+    "description": "Find exact workspace-relative file paths through bounded repository discovery. Search by short filename or path keywords; * returns a bounded overview. Denied and ignored paths never appear.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "description": "Case-insensitive filename/path keywords. Use a short distinctive term such as safeActivity, timeline, or composer. Use * only when a bounded repository overview is necessary."
+        },
+        "maxResults": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100,
+          "description": "Maximum number of matching workspace-relative file paths to return."
+        }
+      },
+      "required": ["query", "maxResults"]
+    }
+  },
+  {
+    "name": "keiko_workspace_read",
+    "description": "Read one bounded repository text window. startLine is 1-based; maxLines sets the window height. The result reports totalLines, nextStartLine when truncated, and the whole-file SHA-256 digest required as expectedContentHash by keiko_changeset_edit. Copy that digest exactly; never calculate a hash from a partial window.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "relativePath": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^(?![\\\\/])(?!.*(?:^|/)\\.\\.?(/|$))(?!.*\\\\).+$"
+        },
+        "startLine": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000,
+          "description": "1-based first line of the returned window; pass 1 to start at the file head."
+        },
+        "maxLines": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000,
+          "description": "Window height in lines; startLine 1 with maxLines 5000 reads a small file whole. The result reports totalLines and, when truncated, nextStartLine; the digest always covers the whole file."
+        }
+      },
+      "required": ["relativePath", "startLine", "maxLines"]
+    }
+  },
+  {
+    "name": "question",
+    "description": "Use this tool when you need to ask the user questions during execution. This allows you to:\n1. Gather user preferences or requirements\n2. Clarify ambiguous instructions\n3. Get decisions on implementation choices as you work\n4. Offer choices to the user about what direction to take.\n\nUsage notes:\n- When `custom` is enabled (default), a \"Type your own answer\" option is added automatically; don't include \"Other\" or catch-all options\n- Answers are returned as arrays of labels; set `multiple: true` to allow selecting more than one\n- If you recommend a specific option, make that the first option in the list and add \"(Recommended)\" at the end of the label\n",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "questions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "question": {
+                "type": "string",
+                "description": "Complete question"
+              },
+              "header": {
+                "type": "string",
+                "description": "Very short label (max 30 chars)"
+              },
+              "options": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "label": {
+                      "type": "string",
+                      "description": "Display text (1-5 words, concise)"
+                    },
+                    "description": {
+                      "type": "string",
+                      "description": "Explanation of choice"
+                    }
+                  },
+                  "required": ["label", "description"]
+                },
+                "description": "Available choices"
+              },
+              "multiple": {
+                "type": "boolean",
+                "description": "Allow selecting multiple choices"
+              }
+            },
+            "required": ["question", "header", "options"]
+          },
+          "description": "Questions to ask"
+        }
+      },
+      "required": ["questions"]
+    }
+  },
+  {
+    "name": "todowrite",
+    "description": "Create and maintain a structured task list for the current coding session. Tracks progress, organizes multi-step work, and surfaces status to the user.\n\n## When to use\nUse proactively when:\n- The task requires 3+ distinct steps or actions (not just 3 tool calls for a single conceptual step)\n- The work is non-trivial and benefits from planning\n- The user provides multiple tasks (numbered or comma-separated) or explicitly asks for a todo list\n- New instructions arrive - capture them as todos\n- You start a task - mark it `in_progress` (only one at a time) before working\n- You finish a task - mark it `completed` and add any follow-ups discovered during the work\n\n## When NOT to use\nSkip when:\n- The work is a single, straightforward task (or <3 trivial steps)\n- The request is purely informational or conversational\n- Tracking adds no organizational value\n\n## States\n- `pending` - not started\n- `in_progress` - actively working (exactly ONE at a time)\n- `completed` - finished successfully\n- `cancelled` - no longer needed\n\n## Rules\n- Update status in real time; don't batch completions\n- Mark `completed` only after the required work is actually done, including any required verification. Never based on intent.\n- Keep exactly one `in_progress` while work remains\n- If blocked or partial, keep it `in_progress` and add a follow-up todo describing the blocker\n- Preserve user-provided commands verbatim (flags, args, order)\n- Items should be specific and actionable; break large work into smaller steps\n\n## Examples\n\nUse it:\n- \"Add a dark mode toggle and run the tests\" -> multi-step feature + explicit verification\n- \"Rename getCwd -> getCurrentWorkingDirectory across the repo\" -> grep reveals 15 occurrences in 8 files\n- \"Implement registration, catalog, cart, checkout\" -> multiple complex features\n\nSkip it:\n- \"How do I print Hello World in Python?\" -> informational\n- \"Add a comment to calculateTotal\" -> single edit\n- \"Run npm install and tell me what happened\" -> one command\n\nWhen in doubt, use it.\n",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {
+        "todos": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "content": {
+                "type": "string",
+                "description": "Brief description of the task"
+              },
+              "status": {
+                "type": "string",
+                "description": "Current status of the task: pending, in_progress, completed, cancelled"
+              },
+              "priority": {
+                "type": "string",
+                "description": "Priority level of the task: high, medium, low"
+              }
+            },
+            "required": ["content", "status", "priority"]
+          },
+          "description": "The updated todo list"
+        }
+      },
+      "required": ["todos"]
+    }
+  }
+]

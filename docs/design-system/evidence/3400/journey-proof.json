@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "issue": 3400,
+  "checkedAt": "2026-09-06T20:18:20.910Z",
+  "passed": true,
+  "evidenceClass": "production-ui-deterministic-browser-fixture",
+  "modelQualification": false,
+  "liveAuthenticationQualification": false,
+  "cases": [
+    "two normal Chat turns refine one connected pull request",
+    "server-held proposal reviewed before approval",
+    "exact final body displayed",
+    "fork and upstream remote ordering cannot author the target",
+    "repeated approval still permits only one apply",
+    "disconnect persists through the mounted PATCH route"
+  ],
+  "observations": {
+    "connectedChatTurns": 2,
+    "reviewRequests": 1,
+    "browserApprovalRequests": 1,
+    "directDuplicateApprovals": 1,
+    "applyRequests": 1,
+    "rejectedApplyReplays": 1,
+    "providerUpdates": 1,
+    "serverResolvedOrigin": true,
+    "exactFinalBodyDisplayed": true,
+    "appliedControlDisabled": true,
+    "appliedStatusContrastRatio": 6.870066810271513,
+    "disconnectPersisted": true,
+    "appliedCapture": {
+      "screenshot": "docs/design-system/evidence/3400/09-applied.png",
+      "screenshotSha256": "b3bf74ae2338e607c62cb17f6a373ba0011b9927312a2efaaff8afe66f49e52c"
+    }
+  },
+  "sourceHashes": {
+    "tests/e2e/git-change-chat-3400.spec.ts": "9047fcf321a78098b1d08a1e21a5dd26ce4cd06238094961415c78727205a20c",
+    "tests/e2e/config/playwright.git-change-chat-3400.config.ts": "d24e0151b791783a91bcc56829ed3b6ca84b72a2660304f39465ebbc3cbf2e85",
+    "tests/e2e/support/git-change-chat-3400.ts": "3dc35f2495b8d05589978d0d9c7c98d1692cc91a6c0b3744cf102be6a8cc0354",
+    "tests/e2e/support/pr-description-visual-evidence.ts": "b8fd2796d695925ac8bf2bb5e5a6442bf5a9e2940440b2c36502a14899998889",
+    "packages/keiko-ui/src/app/components/desktop/GitChangeScopePill.tsx": "777bc2f7dc0c468c2f134cf853c08a072bdd853ddf6610d312b0e6ed360e6531",
+    "packages/keiko-ui/src/app/components/desktop/ChatWindow.tsx": "32d119badfe7b60b854472aa16f6162b44dcae9d7a247fe10775a46498d44198",
+    "packages/keiko-ui/src/lib/api.ts": "06449c4452e62ea24a5c6fc6126de3d589ba3be99bfd65d5404d0d58ee42163a",
+    "packages/keiko-ui/src/lib/coding-workbench-lazy-fetchers.ts": "ee098fa12d955ed5c6c12bea5e712eebd327d1dc430b02a022ba8997b20dbe6b"
+  },
+  "rawContentRecorded": false
+}

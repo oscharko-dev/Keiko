@@ -2,6 +2,7 @@ import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 
 import type {
+  CodingWorkbenchSidecarGatewayRunMetadata,
   CodingWorkbenchRuntimeEvidenceClass,
   CodingWorkbenchRuntimeUnavailableReason,
 } from "@oscharko-dev/keiko-contracts";
@@ -47,6 +48,8 @@ export interface ProductionOpenCodeActivationInput {
     OpenCodeGatewayReadinessRegistry,
     "waitForObservedRequest" | "verifyObserved" | "clear"
   >;
+  readonly resolveGatewayRunMetadata?:
+    ((modelId: string) => CodingWorkbenchSidecarGatewayRunMetadata | undefined) | undefined;
   /** Explicit test/composition override; packaged production constructs its own verified port. */
   readonly secureWorkspaceTextRead?: SecureWorkspaceTextReadPort | undefined;
   /** Live active-task-workspace root resolution for the dev-lane secure-read port. */
@@ -73,6 +76,24 @@ export type ProductionOpenCodeActivationResult =
       readonly unavailableReason: CodingWorkbenchRuntimeUnavailableReason;
     };
 
+export interface ProductionOpenCodeLoopbackEndpoints {
+  readonly gatewayUrl: string;
+  readonly toolFacadeUrl: string;
+}
+
+/** Derives both sidecar endpoints from the one attested BFF loopback origin. */
+export function productionOpenCodeLoopbackEndpoints(
+  env: NodeJS.ProcessEnv,
+): ProductionOpenCodeLoopbackEndpoints | undefined {
+  const loopback = loopbackBaseUrl(env);
+  return loopback === undefined
+    ? undefined
+    : {
+        gatewayUrl: `${loopback}/api/coding-sidecar/gateway`,
+        toolFacadeUrl: `${loopback}/api/coding-sidecar/tool`,
+      };
+}
+
 /**
  * Assembles the production OpenCode runtime ports from a discovered runtime: the attested
  * packaged portable artifact where one exists, otherwise the explicitly opted-in supported dev-lane
@@ -89,8 +110,8 @@ export function resolveProductionOpenCodeActivation(
   if (runtime.unavailableReason !== undefined) {
     return { unavailableReason: runtime.unavailableReason };
   }
-  const loopback = loopbackBaseUrl(input.env);
-  if (loopback === undefined) return { unavailableReason: "loopback-unavailable" };
+  const endpoints = productionOpenCodeLoopbackEndpoints(input.env);
+  if (endpoints === undefined) return { unavailableReason: "loopback-unavailable" };
   const secureWorkspaceTextRead = resolveSecureRead(input, runtime.portable);
   if (secureWorkspaceTextRead === undefined) {
     return { unavailableReason: "secure-read-unavailable" };
@@ -101,7 +122,13 @@ export function resolveProductionOpenCodeActivation(
       backend: createProductionOpenCodeBackend({
         portable: runtime.portable,
         runtimeStateRoot: input.runtimeStateDir,
-        gatewayUrl: `${loopback}/api/coding-sidecar/gateway`,
+        gatewayUrl: endpoints.gatewayUrl,
+        resolveGatewayRunMetadata:
+          input.resolveGatewayRunMetadata ??
+          ((): CodingWorkbenchSidecarGatewayRunMetadata | undefined => undefined),
+        // ADR-0043 D11-D14 (#3390): the SAME single attested loopback origin as the model
+        // gateway above, never a second listener's own port.
+        toolFacadeUrl: endpoints.toolFacadeUrl,
         runtimeEvidence: input.runtimeEvidence,
         gatewayReadiness: input.gatewayReadiness,
         ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
@@ -111,7 +138,7 @@ export function resolveProductionOpenCodeActivation(
       editorAgentClient:
         input.editorAgentClient ??
         new EditorAgentHttpClient({
-          baseUrl: loopback,
+          baseUrl: new URL(endpoints.gatewayUrl).origin,
           transport: createFetchEditorAgentHttpTransport(input.fetch ?? fetch),
         }),
     },

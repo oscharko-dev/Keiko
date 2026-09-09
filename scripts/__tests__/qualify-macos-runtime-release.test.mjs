@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -13,6 +13,7 @@ import {
   qualifyMacosRuntimeRelease,
   runQualificationCommand,
   runQuietQualificationCommand,
+  writeQualificationEvidenceReceipt,
 } from "../qualify-macos-runtime-release.mjs";
 import { RUNTIME_QUALIFICATION_SUITE } from "../runtime-activation-manifest.mjs";
 
@@ -255,6 +256,106 @@ describe("macOS runtime qualification", () => {
     expect(() => assertSameExecutable(staged, execution, "manager")).toThrow(
       "manager bytes are invalid",
     );
+  });
+
+  it("writes a receipt.json + artifact pair the #3390 checker reads (audit F8)", () => {
+    const receiptsDir = root();
+    writeQualificationEvidenceReceipt({
+      receiptsDir,
+      scenarioId: "packaged-macos-arm64-reference",
+      receipt: { sourceCommitSha: COMMIT, platformTarget: "macos-arm64", result: "passed" },
+      recordedAt: "2026-09-04T12:00:00Z",
+    });
+    expect(
+      JSON.parse(
+        readFileSync(join(receiptsDir, "packaged-macos-arm64-reference.receipt.json"), "utf8"),
+      ),
+    ).toEqual({
+      scenarioId: "packaged-macos-arm64-reference",
+      commitSha: COMMIT,
+      platform: "macos-arm64",
+      testStatus: "passed",
+      recordedAt: "2026-09-04T12:00:00Z",
+      provenance: "real-model",
+    });
+  });
+
+  it("bridges a real qualification receipt into #3390 evidence when --qualification-receipts is set (audit F8)", () => {
+    const value = fixture();
+    const receiptsDir = root();
+    const runFn = vi.fn((_command, args) => (args[0] === "--activate" ? "active" : ""));
+    const runQuietFn = vi.fn();
+    qualifyMacosRuntimeRelease(
+      {
+        "execution-app-root": "/Applications/KeikoQualification-fixture.app",
+        "qualification-receipts": receiptsDir,
+        "scenario-id": "packaged-macos-arm64-reference",
+        "source-commit-sha": COMMIT,
+        "stage-root": value.stageRoot,
+        target: value.target,
+      },
+      {
+        executionAppRootFn: () => value.executionAppRoot,
+        platform: "darwin",
+        runFn,
+        runQuietFn,
+      },
+    );
+    const receiptJson = JSON.parse(
+      readFileSync(join(receiptsDir, "packaged-macos-arm64-reference.receipt.json"), "utf8"),
+    );
+    expect(receiptJson).toMatchObject({
+      scenarioId: "packaged-macos-arm64-reference",
+      commitSha: COMMIT,
+      platform: "macos-arm64",
+      testStatus: "passed",
+      provenance: "real-model",
+    });
+    const artifact = readFileSync(join(receiptsDir, "packaged-macos-arm64-reference.artifact"));
+    expect(JSON.parse(artifact.toString("utf8"))).toMatchObject({ result: "passed" });
+  });
+
+  it("writes nothing when --qualification-receipts is not set", () => {
+    const value = fixture();
+    const receiptsDir = root();
+    qualifyMacosRuntimeRelease(
+      {
+        "execution-app-root": "/Applications/KeikoQualification-fixture.app",
+        "source-commit-sha": COMMIT,
+        "stage-root": value.stageRoot,
+        target: value.target,
+      },
+      {
+        executionAppRootFn: () => value.executionAppRoot,
+        platform: "darwin",
+        runFn: vi.fn((_command, args) => (args[0] === "--activate" ? "active" : "")),
+        runQuietFn: vi.fn(),
+      },
+    );
+    // No throw and no --scenario-id required: the bridge is opt-in.
+    expect(readdirSync(receiptsDir)).toEqual([]);
+  });
+
+  it("requires --scenario-id when writing qualification evidence", () => {
+    const receiptsDir = root();
+    const value = fixture();
+    expect(() =>
+      qualifyMacosRuntimeRelease(
+        {
+          "execution-app-root": "/Applications/KeikoQualification-fixture.app",
+          "qualification-receipts": receiptsDir,
+          "source-commit-sha": COMMIT,
+          "stage-root": value.stageRoot,
+          target: value.target,
+        },
+        {
+          executionAppRootFn: () => value.executionAppRoot,
+          platform: "darwin",
+          runFn: vi.fn((_command, args) => (args[0] === "--activate" ? "active" : "")),
+          runQuietFn: vi.fn(),
+        },
+      ),
+    ).toThrow("--scenario-id is required");
   });
 
   it("closes command execution on status, stderr, and spawn failures", () => {

@@ -1647,6 +1647,7 @@ describe("createLspProcessManager", () => {
   });
 
   it("persists an unsolicited uncontained root exit and blocks a post-restart manager", async () => {
+    const log = captureServerLog();
     const port = memoryRuntimeStatePort();
     const firstController = createFakeLspProcess();
     const first = createLspProcessManager({
@@ -1664,6 +1665,12 @@ describe("createLspProcessManager", () => {
       leaseState: "active",
       leaseReason: "tree-unconfirmed",
     });
+    expect(
+      findOwnershipLog(log, "retained-unconfirmed", {
+        reason: "tree-unconfirmed",
+        childPid: 4242,
+      }),
+    ).toBeDefined();
 
     const replacementSpawn = vi.fn<LspSpawnFn>();
     const afterRestart = createLspProcessManager({

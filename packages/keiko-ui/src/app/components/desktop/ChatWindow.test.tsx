@@ -186,6 +186,9 @@ function renderStatefulWindow(
   session: ChatSessionApi,
   props: { readonly onOpenRunResult?: ((message: ChatMessage) => void) | undefined } = {},
 ): void {
+  const chatWindowProps: ComponentProps<typeof ChatWindow> = {
+    ...(props.onOpenRunResult === undefined ? {} : { onOpenRunResult: props.onOpenRunResult }),
+  };
   function StatefulWindow(): React.JSX.Element {
     const [draft, setDraftState] = useState(session.draft);
     return (
@@ -199,7 +202,7 @@ function renderStatefulWindow(
           },
         }}
       >
-        <ChatWindow onOpenRunResult={props.onOpenRunResult} />
+        <ChatWindow {...chatWindowProps} />
       </ChatSessionProvider>
     );
   }
@@ -474,7 +477,14 @@ describe("ChatWindow cancel button", () => {
     expect(cancelSend).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps connected resource details out of the chat header", () => {
+  // Issue #982 originally pinned this header to the grounding dropdown alone, with no
+  // `.scope-pill` and no `.chat-ctx` blob. Epic #3384 (#3400) reverses the first half: the
+  // desktop connection/relationship engine's ConnectedScopePill is now mounted next to the
+  // grounding control precisely so a connected source is visible with its own disconnect
+  // action (this repo's #184/#532 UI has existed since #982 but was never wired in — a gap
+  // the epic closes). The narrower invariant survives unrelaxed: no raw path or excerpt blob
+  // (`.chat-ctx`) ever renders here — only the pill's basename label and disconnect control.
+  it("shows the connected resource as a named, disconnectable scope pill in the chat header", () => {
     const chat = makeChat({
       connectedScopes: [{ kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 }],
     });
@@ -488,8 +498,52 @@ describe("ChatWindow cancel button", () => {
       "Live Files context",
     );
     expect(container.querySelector(".scope-grounding")).toHaveAttribute("data-connected", "true");
-    expect(container.querySelector(".scope-pill")).toBeNull();
+    expect(document.querySelector(".chat-scope-header")).toContainElement(
+      container.querySelector(".scope-pill"),
+    );
+    expect(screen.getByText("File: a.ts")).toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Disconnect File: a.ts (src/a.ts) from chat" }),
+    ).toBeInTheDocument();
     expect(container.querySelector(".chat-ctx")).toBeNull();
+  });
+
+  // Issue #3400 — before GitChangeScopePill was mounted into ChatScopeHeaderImpl, a chat
+  // connected to a git-change comparison rendered no indication of it anywhere: the status,
+  // counts, and refresh/disconnect actions this component provides were unreachable.
+  it("renders the connected git-change scope in the chat header", () => {
+    const chat = makeChat({
+      gitChangeScopes: [
+        {
+          kind: "git-change",
+          relationshipId: "rel-chat-header-1",
+          remoteDigest: "d".repeat(64),
+          comparisonLabel: "main...feature/chat-header",
+          baseRef: "main",
+          headRef: "feature/chat-header",
+          baseSha: "a".repeat(40),
+          headSha: "b".repeat(40),
+          mergeBaseSha: "c".repeat(40),
+          snapshotDigest: "e".repeat(64),
+          fileCount: 3,
+          totalFiles: 3,
+          omittedFiles: 0,
+          truncatedFiles: 0,
+          descriptionStatus: "current",
+          connectedAtMs: 10,
+        },
+      ],
+    });
+    const { container } = render(
+      <ChatSessionProvider value={makeSession({ activeChat: chat })}>
+        <ChatWindow linkedRoot="/proj" />
+      </ChatSessionProvider>,
+    );
+
+    expect(document.querySelector(".chat-scope-header")).toContainElement(
+      container.querySelector(".scope-pill"),
+    );
+    expect(screen.getByText("main...feature/chat-header")).toBeInTheDocument();
   });
 
   it("does not render the cancel button when not sending", () => {

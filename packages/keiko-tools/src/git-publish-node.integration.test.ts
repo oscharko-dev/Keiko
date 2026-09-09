@@ -18,6 +18,7 @@ import { buildGitDeliveryEvidenceRecord } from "./git-mutation-evidence.js";
 import { GIT_MUTATION_ALLOWED_SUBCOMMANDS } from "./git-mutation-adapter.js";
 import { readGitWorktreeSnapshot } from "./git-worktree-snapshot-node.js";
 import { createNodeGitPublishAdapter } from "./git-publish-node.js";
+import { defaultResolveExecutable, nodeSpawnFn, type SpawnFn } from "./exec.js";
 import {
   GIT_PUBLISH_ALLOWED_SUBCOMMANDS,
   runGitPublish,
@@ -31,6 +32,9 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 let remote: string;
 let work: string;
 let info: WorkspaceInfo;
+let transportError = "";
+let transportArguments: readonly string[] = [];
+const APPROVED_URL = "https://github.com/owner/repository.git";
 
 const GIT_INTEGRATION_TIMEOUT_MS = 20_000;
 
@@ -58,7 +62,7 @@ function workspaceInfo(rootPath: string): WorkspaceInfo {
   };
 }
 
-function publishAdapter(): ReturnType<typeof createNodeGitPublishAdapter> {
+function publishAdapter(beforeSpawn?: () => void): ReturnType<typeof createNodeGitPublishAdapter> {
   // Only PATH is forwarded — deliberately no HOME and no credential, so the governed remote lane
   // falls back to the ephemeral empty home and this suite stays hermetic against a local-filesystem
   // remote. The credential lane itself is pinned by the unit suite in git-publish-node.test.ts,
@@ -67,7 +71,30 @@ function publishAdapter(): ReturnType<typeof createNodeGitPublishAdapter> {
     workspace: info,
     processEnv: { PATH: process.env.PATH ?? "" },
     now: () => Date.now(),
+    verifiedRemoteUrl: APPROVED_URL,
+    // No HTTP credential subprocess runs against the substituted local transport. The separate
+    // credential-protocol suite exercises gh; keep this Git integration independent of its install.
+    resolveExecutable: (command, deps): string =>
+      command === "gh" ? process.execPath : defaultResolveExecutable(command, deps),
+    // Replace only the network transport; retain the actual Git arguments and configuration.
+    spawn: localTransport(beforeSpawn),
   });
+}
+
+function localTransport(beforeSpawn?: () => void): SpawnFn {
+  return (command, args, options) => {
+    transportArguments = [...args];
+    beforeSpawn?.();
+    const child = nodeSpawnFn(
+      command,
+      args.map((arg) => (arg === APPROVED_URL ? remote : arg)),
+      options,
+    );
+    child.stderr?.on("data", (chunk: Buffer) => {
+      transportError += chunk.toString("utf8");
+    });
+    return child;
+  };
 }
 
 // A pack permitting push to the `feat/` namespace within the publish ceiling (blocks force).
@@ -87,6 +114,11 @@ const SAFE_PACK: GitDeliveryRepoPolicyPack = {
   defaultRule: { decision: "blocked" },
 };
 
+// #3394 review: `verifiedCommitSha` defaults to the WORK repo's actual current HEAD (read fresh, at
+// call time) so every existing test in this file — none of which cares about drift — keeps
+// publishing a command whose pinned commit genuinely matches local state, without each needing to
+// know or restate it. A test that DOES want to exercise a stale/moved commit overrides it explicitly
+// (see "publishes the approved commit even if the local source branch moves before dispatch" below).
 function pushCommand(overrides: Partial<GitPushCommand> = {}): GitPushCommand {
   return {
     kind: "push",
@@ -95,6 +127,7 @@ function pushCommand(overrides: Partial<GitPushCommand> = {}): GitPushCommand {
     remoteBranchName: "feat/x",
     forcePush: false,
     setUpstreamTracking: false,
+    verifiedCommitSha: git(work, ["rev-parse", "HEAD"]).trim(),
     ...overrides,
   };
 }
@@ -103,11 +136,20 @@ async function governedPush(
   command: GitPushCommand,
   pack: GitDeliveryRepoPolicyPack = SAFE_PACK,
 ): Promise<GitPublishLifecycleResult> {
-  const snapshot = await readGitWorktreeSnapshot({
+  const raw = await readGitWorktreeSnapshot({
     workspace: info,
     processEnv: { PATH: process.env.PATH ?? "" },
     now: () => Date.now(),
   });
+  // #3394 review (Decision Point A): mirrors draftDeliveryEffects.ts's `pushSnapshot` exactly. This
+  // file exercises ONLY the issue-bound canonical-URL dispatch path (`publishAdapter()` always wires
+  // `verifiedRemoteUrl`), which trusts its OWN, stronger drift protection (the caller re-reads and
+  // reconciles the actual remote head after every attempt) rather than the interactive route's new
+  // local-head preflight comparison — so it must still be able to publish the exact previously
+  // approved commit even after this SAME workspace has advanced locally in the meantime (ADR-0085 D1:
+  // "a moving local branch can never substitute another commit after approval" — which also means an
+  // ADVANCING one must never BLOCK publishing the exact commit that was approved).
+  const snapshot = { ...raw, headSha: command.verifiedCommitSha };
   return runGitPublish(
     { command, approval: { required: false } },
     {
@@ -121,6 +163,8 @@ async function governedPush(
 }
 
 beforeEach(() => {
+  transportError = "";
+  transportArguments = [];
   const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-publish-")));
   remote = join(base, "remote.git");
   work = join(base, "work");
@@ -139,6 +183,68 @@ afterEach(() => {
 });
 
 describe("governed remote publish (Node) — AC5", () => {
+  it("installs only the trusted host-scoped HTTPS credential helper after the reset", async () => {
+    const commit = git(work, ["rev-parse", "HEAD"]).trim();
+    expect(
+      (await publishAdapter().publish(pushCommand({ verifiedCommitSha: commit }))).outcome,
+    ).toBe("succeeded");
+    const helper = transportArguments.find((arg) =>
+      arg.startsWith("credential.https://github.com.helper="),
+    );
+    expect(helper).toContain(" auth git-credential");
+    expect(transportArguments.indexOf(helper ?? "")).toBeGreaterThan(
+      transportArguments.lastIndexOf("credential.helper="),
+    );
+    expect(transportArguments).toContain("http.followRedirects=false");
+  });
+
+  it.each(["pushurl", "insteadOf", "pushInsteadOf", "multiple-urls"])(
+    "keeps the approved destination when live %s configuration changes at dispatch",
+    async (kind) => {
+      const commit = git(work, ["rev-parse", "HEAD"]).trim();
+      const diverted = join(work, "..", "diverted.git");
+      git(join(work, ".."), ["init", "--bare", "-q", diverted]);
+      const adapter = publishAdapter(() => {
+        if (kind === "pushurl") git(work, ["config", "remote.origin.pushurl", diverted]);
+        else if (kind === "multiple-urls") {
+          git(work, ["config", "--add", "remote.origin.pushurl", remote]);
+          git(work, ["config", "--add", "remote.origin.pushurl", diverted]);
+        } else {
+          git(work, ["config", `url.${diverted}.${kind}`, remote]);
+          git(work, ["config", "--add", `url.${diverted}.${kind}`, APPROVED_URL]);
+        }
+      });
+      const result = await adapter.publish(pushCommand({ verifiedCommitSha: commit }));
+      expect(result.outcome, JSON.stringify({ result, transportError })).toBe("succeeded");
+      expect(git(remote, ["rev-parse", "refs/heads/feat/x"]).trim()).toBe(commit);
+      expect(git(diverted, ["for-each-ref", "--format=%(refname)"])).toBe("");
+    },
+    GIT_INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    "publishes the approved commit even if the local source branch moves before dispatch",
+    async () => {
+      const verifiedCommitSha = git(work, ["rev-parse", "HEAD"]).trim();
+      expect(
+        (await governedPush(pushCommand({ setUpstreamTracking: true }))).lifecycle.outcome.status,
+      ).toBe("succeeded");
+      const approved = pushCommand({ verifiedCommitSha });
+      writeFileSync(join(work, "a.txt"), "unapproved later change\n");
+      git(work, ["add", "--", "a.txt"]);
+      git(work, ["commit", "-q", "-m", "feat(x): later"]);
+      const movedHead = git(work, ["rev-parse", "HEAD"]).trim();
+      expect(movedHead).not.toBe(verifiedCommitSha);
+
+      const result = await governedPush(approved);
+      expect(result.lifecycle.outcome.status).toBe("succeeded");
+      expect(git(remote, ["rev-parse", "refs/heads/feat/x"]).trim()).toBe(verifiedCommitSha);
+      expect(git(work, ["rev-parse", "HEAD"]).trim()).toBe(movedHead);
+      expect(result.lifecycle.envelope.resolvedInputs).toMatchObject({ verifiedCommitSha });
+    },
+    GIT_INTEGRATION_TIMEOUT_MS,
+  );
+
   it(
     "publishes the branch to the remote through the dedicated push allowlist",
     async () => {
@@ -263,9 +369,130 @@ describe("governed remote publish (Node) — AC5", () => {
   );
 
   it("keeps push out of the LOCAL mutation allowlist and inside the publish allowlist", () => {
-    expect(GIT_PUBLISH_ALLOWED_SUBCOMMANDS).toEqual(["push"]);
+    // #3394 review, §0.1: `branch` joined the publish allowlist for the local-only
+    // `--set-upstream-to` tracking follow-up; push itself still never reaches the local allowlist.
+    expect(GIT_PUBLISH_ALLOWED_SUBCOMMANDS).toEqual(["push", "branch"]);
     expect(GIT_MUTATION_ALLOWED_SUBCOMMANDS).not.toContain("push");
   });
+});
+
+// #3394 review, Decision Point A (§0.1): the interactive route (no canonical GitHub URL wired) must
+// dispatch through the SAME remote-alias pinned-refspec path as any other remote host, never through
+// `runVerifiedPush` (which requires a literal GitHub URL and would refuse with `precondition-failed`
+// for every non-GitHub / interactive push once `verifiedCommitSha` becomes mandatory). No URL
+// substitution is needed here at all: "origin" already IS the real bare remote this suite created.
+function interactivePublishAdapter(
+  onUpstreamTrackingFailure?: () => void,
+): ReturnType<typeof createNodeGitPublishAdapter> {
+  return createNodeGitPublishAdapter({
+    workspace: info,
+    processEnv: { PATH: process.env.PATH ?? "" },
+    now: () => Date.now(),
+    // No `verifiedRemoteUrl` — this is the exact seam shape `pushExecution.ts`'s `publishAdapterFor`
+    // uses for every real interactive push (no canonical URL is ever wired for that route).
+    spawn: nodeSpawnFn,
+    ...(onUpstreamTrackingFailure === undefined ? {} : { onUpstreamTrackingFailure }),
+  });
+}
+
+describe("governed remote publish (Node) — interactive route, remote-alias pinned dispatch (#3394)", () => {
+  it(
+    "pins the refspec to the exact verified commit and publishes through the plain remote alias (no canonical URL)",
+    async () => {
+      const verifiedCommitSha = git(work, ["rev-parse", "HEAD"]).trim();
+      const result = await interactivePublishAdapter().publish({
+        remoteAlias: "origin",
+        sourceBranchName: "feat/x",
+        remoteBranchName: "feat/x",
+        setUpstreamTracking: false,
+        verifiedCommitSha,
+      });
+      expect(result.outcome).toBe("succeeded");
+      expect(git(remote, ["rev-parse", "refs/heads/feat/x"]).trim()).toBe(verifiedCommitSha);
+    },
+    GIT_INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    "still establishes upstream tracking via the local-only follow-up when requested, even though the wire refspec is a raw commit",
+    async () => {
+      const verifiedCommitSha = git(work, ["rev-parse", "HEAD"]).trim();
+      // Before this fix: `git push --set-upstream origin <sha>:refs/heads/feat/x` succeeds and
+      // creates the remote branch, but `-u` silently no-ops on a raw-SHA source — no tracking is
+      // configured. The Node adapter now runs a separate, local-only `git branch
+      // --set-upstream-to=origin/feat/x feat/x` immediately after a successful pinned push.
+      const result = await interactivePublishAdapter().publish({
+        remoteAlias: "origin",
+        sourceBranchName: "feat/x",
+        remoteBranchName: "feat/x",
+        setUpstreamTracking: true,
+        verifiedCommitSha,
+      });
+      expect(result.outcome).toBe("succeeded");
+      expect(git(remote, ["rev-parse", "refs/heads/feat/x"]).trim()).toBe(verifiedCommitSha);
+      expect(git(work, ["rev-parse", "--abbrev-ref", "feat/x@{upstream}"]).trim()).toBe(
+        "origin/feat/x",
+      );
+    },
+    GIT_INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    "still reports the push as succeeded even if the best-effort tracking follow-up cannot run, and reports the failure through onUpstreamTrackingFailure",
+    async () => {
+      // `sourceBranchName` is unused by the pinned push argv itself (the wire refspec is built from
+      // `verifiedCommitSha`, never the branch name), but the local-only tracking follow-up DOES need
+      // it (`git branch --set-upstream-to=<alias>/<target> <source>`) — an empty value fails that
+      // follow-up's own argv validation (a thrown `GitPublishArgvError`, caught before any spawn)
+      // while leaving the push completely unaffected, proving the best-effort contract: only the
+      // local convenience config write is lost, never the governed, security-relevant push itself.
+      // Before this fix there was no `onUpstreamTrackingFailure` seam at all — the failure was
+      // silently discarded with no evidence anywhere (AGENTS.md §7/§8); this proves the seam fires
+      // exactly once instead.
+      let failureCount = 0;
+      const verifiedCommitSha = git(work, ["rev-parse", "HEAD"]).trim();
+      const result = await interactivePublishAdapter(() => {
+        failureCount += 1;
+      }).publish({
+        remoteAlias: "origin",
+        sourceBranchName: "",
+        remoteBranchName: "feat/x",
+        setUpstreamTracking: true,
+        verifiedCommitSha,
+      });
+      expect(result.outcome).toBe("succeeded");
+      expect(git(remote, ["rev-parse", "refs/heads/feat/x"]).trim()).toBe(verifiedCommitSha);
+      expect(failureCount).toBe(1);
+    },
+    GIT_INTEGRATION_TIMEOUT_MS,
+  );
+
+  it(
+    "reports onUpstreamTrackingFailure when the follow-up command itself exits non-zero (not just when its argv cannot be built)",
+    async () => {
+      // Unlike the empty-`sourceBranchName` case above, `"no-such-local-branch"` is a perfectly
+      // valid ref NAME (passes `buildSetUpstreamToArgv`'s own validation) but does not exist as a
+      // local branch in this fixture — `git branch --set-upstream-to=…` spawns for real and exits
+      // non-zero. `onTerminated` does NOT fire for this shape (exec.ts's `terminate()` only covers a
+      // run the harness itself force-terminated — timeout/abort/output-cap — never an ordinary exit),
+      // so `onUpstreamTrackingFailure` is the ONLY seam that can observe this failure.
+      let failureCount = 0;
+      const verifiedCommitSha = git(work, ["rev-parse", "HEAD"]).trim();
+      const result = await interactivePublishAdapter(() => {
+        failureCount += 1;
+      }).publish({
+        remoteAlias: "origin",
+        sourceBranchName: "no-such-local-branch",
+        remoteBranchName: "feat/x",
+        setUpstreamTracking: true,
+        verifiedCommitSha,
+      });
+      expect(result.outcome).toBe("succeeded");
+      expect(git(remote, ["rev-parse", "refs/heads/feat/x"]).trim()).toBe(verifiedCommitSha);
+      expect(failureCount).toBe(1);
+    },
+    GIT_INTEGRATION_TIMEOUT_MS,
+  );
 });
 
 function contentFreeSnapshot(): {

@@ -1,8 +1,9 @@
 {
   "purpose": "Suites that exist as npm scripts but run in no workflow lane, Playwright configs that have no owning npm script at all, spec files no script can reach, and /api paths a spec names that this server deliberately does not mount. A debt register, not an exemption list: scripts/check-e2e-suite-wiring.mjs fails on any suite, config, spec or path missing from here, and fails again on any entry that has since been wired, given a script, made reachable, mounted, or deleted, so these lists can only shrink. suiteProtection records the strongest concrete event class for every E2E script; any change to that class fails the gate until the baseline is updated through an explicit reviewed change.",
   "recordedBy": "#2629 (epic #2285 Wave 2); configsWithoutScript added by #2891 (audit KEIKO-0077); suiteProtection added by #3120 (audits KEIKO-0151 and KEIKO-0256); specsWithoutLane and externalApiPaths added by #2955 (audits KEIKO-0078, KEIKO-0080, KEIKO-0094)",
-  "note": "Every entry predates the gate that records it; none was added to silence a failure. Wiring one is a CI-minute decision owned by the suite area, not by this file. The creation date is in git history rather than duplicated here, where it could only drift. test:e2e:editor-perf is deliberate: it is driven by the D12 evidence regeneration flow (docs/qa/perf-evidence.md), not by a lane.",
+  "note": "Every entry predates the gate that records it; none was added to silence a failure. Wiring one is a CI-minute decision owned by the suite area, not by this file. The creation date is in git history rather than duplicated here, where it could only drift. test:e2e:editor-perf is deliberate: it is driven by the D12 evidence regeneration flow (docs/qa/perf-evidence.md), not by a lane. test:e2e:coding-issue-journey:live (epic #3384, #3390) is deliberate as well: it composes the production factory against a real Model Gateway profile and an operator-controlled repository and fails closed with qualification-input-unavailable when those inputs are absent, so no hosted lane can run it; it is executed by the release owner on a prepared host and its manifest is validated by check:coding-issue-journey-evidence.",
   "suites": [
+    "test:e2e:coding-issue-journey:live",
     "test:e2e:coding-workbench-1990",
     "test:e2e:coding-workbench-1991",
     "test:e2e:coding-workbench-1992",
@@ -24,6 +25,12 @@
     "test:e2e:code-task:authority": "scheduled-nonblocking",
     "test:e2e:code-task:opencode-tracer": "scheduled-nonblocking",
     "test:e2e:code-task:real-binary": "scheduled-nonblocking",
+    "test:e2e:coding-issue-ci": "scheduled-nonblocking",
+    "test:e2e:coding-issue-commit": "scheduled-nonblocking",
+    "test:e2e:coding-issue-handoff": "scheduled-nonblocking",
+    "test:e2e:coding-issue-intake": "scheduled-nonblocking",
+    "test:e2e:coding-issue-journey:live": "unwired",
+    "test:e2e:coding-issue-publish": "scheduled-nonblocking",
     "test:e2e:coding-workbench-1990": "unwired",
     "test:e2e:coding-workbench-1991": "unwired",
     "test:e2e:coding-workbench-1992": "unwired",
@@ -44,6 +51,7 @@
     "test:e2e:file-history-2531": "scheduled-nonblocking",
     "test:e2e:formatting-1380": "scheduled-nonblocking",
     "test:e2e:git-branch-sync-1576": "scheduled-nonblocking",
+    "test:e2e:git-change-chat": "scheduled-nonblocking",
     "test:e2e:git-changes-1575": "scheduled-nonblocking",
     "test:e2e:git-client-closeout-1578": "scheduled-nonblocking",
     "test:e2e:git-delivery-475": "scheduled-nonblocking",
@@ -78,7 +86,7 @@
     "playwright.issue-1405-human-loop.config.ts"
   ],
   "configsWithoutScriptReasons": {
-    "playwright.code-task-real-binary.config.ts": "Issue #2483 — drives code-task-authority.spec.ts against a staged, approved real OpenCode payload discovered through the production macOS dev-lane path, with no resolver/supervisor/KEIKO_OPENCODE_REAL_* seam to substitute. It requires that payload staged on the machine, so it is operator-run on a prepared checkout; a hosted runner has nothing to discover and the script could only ever fail.",
+    "playwright.code-task-real-binary.config.ts": "Issue #2483 \u2014 drives code-task-authority.spec.ts against a staged, approved real OpenCode payload discovered through the production macOS dev-lane path, with no resolver/supervisor/KEIKO_OPENCODE_REAL_* seam to substitute. It requires that payload staged on the machine, so it is operator-run on a prepared checkout; a hosted runner has nothing to discover and the script could only ever fail.",
     "playwright.issue-1405-human-loop.config.ts": "human-loop-1405.spec.ts renders a hand-authored HTML replica instead of driving the real app or the real AgentGateCard (open finding KEIKO-0140 / GEN-TEST-E2E-003). Giving it a script and a lane would gate on a fixture already known not to exercise the component it claims to cover. The script lands when that finding is repaired or the suite is rewritten."
   },
   "specsWithoutLaneNote": "A spec file declares nothing about how it runs, so before #2955 nothing enumerated tests/e2e/*.spec.ts at all and eleven specs sat there reachable from no script. A spec is reachable when a test:e2e:* command names its path, a config's LITERAL testMatch names it, or the command greps a tag the spec declares. The shared config's \"**/*.spec.ts\" glob does NOT count: it collects every spec in the tree while its only script greps @smoke, so honouring it would report total coverage over a lane that runs eight. Each entry states why no lane can run it yet; reasons are in specsWithoutLaneReasons, keyed by the same file name.",
@@ -86,10 +94,10 @@
   "specsWithoutLaneReasons": {
     "human-loop-1405.spec.ts": "The same open finding that keeps its config scriptless (KEIKO-0140 / GEN-TEST-E2E-003, see configsWithoutScriptReasons for playwright.issue-1405-human-loop.config.ts): the spec renders a hand-authored HTML replica instead of driving the real app or the real AgentGateCard. It is named only by that config, which no script runs, so it is unreachable in this dimension too. Both entries leave together when the finding is repaired or the suite is rewritten."
   },
-  "externalApiPathsNote": "/api paths a retained spec names that no route in the server's API_ROUTES table serves. The gate reads that table from the BUILT packages/keiko-server/dist rather than re-deriving it from routes.ts, because the table is composed from route groups — some built by factory calls, and at least one defined but deliberately never spread — so a source scan would bless routes the product does not mount. An entry here is a path that is deliberately not an HTTP route, not an excuse for a stale journey; reasons are in externalApiPathReasons.",
+  "externalApiPathsNote": "/api paths a retained spec names that no route in the server's API_ROUTES table serves. The gate reads that table from the BUILT packages/keiko-server/dist rather than re-deriving it from routes.ts, because the table is composed from route groups, some built by factory calls, so a source scan would bless patterns the product does not mount. It formerly also held a group that was defined but never spread (AUTONOMOUS_DELIVERY_ROUTE_GROUP); #2958 deleted that group outright, so reading the built table is now about factory-composed groups rather than an unspread one. An entry here is a path that is deliberately not an HTTP route, not an excuse for a stale journey; reasons are in externalApiPathReasons.",
   "externalApiPaths": ["/api/desktop/chat/voice-turn", "/api/voice/control"],
   "externalApiPathReasons": {
     "/api/voice/control": "The realtime voice control plane is a WebSocket UPGRADE path (VOICE_CONTROL_PATH in packages/keiko-server/src/voice-realtime.ts, re-opened for loopback in server.ts), not an entry in API_ROUTES. voice-realtime.smoke.spec.ts and voice-dialogue.smoke.spec.ts name it to recognise and stub that socket, never to issue an HTTP request against it.",
-    "/api/desktop/chat/voice-turn": "Deliberately UNMOUNTED, and asserted as such: packages/keiko-server/src/routes.test.ts pins that no provider-native realtime assistant tool route is registered. voice-dialogue.smoke.spec.ts names the path to prove the browser never calls it — the reference is the negative assertion itself, so a mounted route would be the defect."
+    "/api/desktop/chat/voice-turn": "Deliberately UNMOUNTED, and asserted as such: packages/keiko-server/src/routes.test.ts pins that no provider-native realtime assistant tool route is registered. voice-dialogue.smoke.spec.ts names the path to prove the browser never calls it \u2014 the reference is the negative assertion itself, so a mounted route would be the defect."
   }
 }

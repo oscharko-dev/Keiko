@@ -40,6 +40,11 @@ function isSafeTarget(target: string): boolean {
 // its repository from the /api/projects listing rather than from the filesystem.
 const PROJECT_PATH = "keiko-git-publish-476";
 
+// #3394 review: the reviewed head SHA every preview reports back — a well-formed, stable object id
+// is enough for this fixture (no real git object backs it), since the only thing under test here is
+// that the browser captures it from preview and resubmits it as `verifiedCommitSha` at execute time.
+const HEAD_COMMIT_SHA = "a".repeat(40);
+
 function previewBody(remoteBranchName: string): unknown {
   const safe = isSafeTarget(remoteBranchName);
   return {
@@ -47,6 +52,7 @@ function previewBody(remoteBranchName: string): unknown {
     remoteAlias: "origin",
     remoteBranchName,
     sourceBranchName: remoteBranchName,
+    headCommitSha: HEAD_COMMIT_SHA,
     riskClass: "publish",
     wouldCreateRemoteBranch: false,
     wouldTriggerChecks: true,
@@ -67,6 +73,7 @@ interface PostedRequest {
   readonly remoteBranchName?: unknown;
   readonly sourceBranchName?: unknown;
   readonly projectId?: unknown;
+  readonly verifiedCommitSha?: unknown;
 }
 
 function readPosted(route: Route): PostedRequest {
@@ -200,12 +207,37 @@ interface RouteLedger {
   executeBodies: PostedRequest[];
 }
 
+// #3394 review: pre-existing gap, unrelated to this fix — confirmed still present at the
+// freeze commit (epic #3384 correction 5 made `pushPropose` (api.ts's `proposePush`) mint via
+// POST /api/git-delivery/push/approve unconditionally before every execute, but this fixture never
+// mocked that route, so it fell through to the real running server and failed with
+// GIT_DELIVERY_PUSH_UNKNOWN_PROJECT (the browser-side project listing above is never registered
+// server-side). Mocked here, alongside the fix under test, purely so this spec's own "safe target
+// reaches succeeded" proof — and this fix's own capture-and-resend assertion on the execute body —
+// are reachable at all.
+const APPROVE_ROUTE = "**/api/git-delivery/push/approve**";
+
+function approveBody(): unknown {
+  return {
+    schemaVersion: "1",
+    approval: {
+      schemaVersion: "1",
+      approvalId: "e2e-476-approval",
+      approvalToken: "e2e-476-token",
+    },
+    expiresAt: new Date(Date.now() + 300_000).toISOString(),
+  };
+}
+
 async function interceptGovernedPushRoutes(page: Page, ledger: RouteLedger): Promise<void> {
   await page.route(PREVIEW_ROUTE, async (route) => {
     const posted = readPosted(route);
     ledger.previewBodies.push(posted);
     const target = typeof posted.remoteBranchName === "string" ? posted.remoteBranchName : "";
     await route.fulfill(jsonBody(previewBody(target)));
+  });
+  await page.route(APPROVE_ROUTE, async (route) => {
+    await route.fulfill(jsonBody(approveBody()));
   });
   await page.route(EXECUTE_ROUTE, async (route) => {
     ledger.executeBodies.push(readPosted(route));
@@ -338,6 +370,11 @@ async function assertSafeTargetSucceeds(page: Page, ledger: RouteLedger): Promis
     .poll(() => ledger.executeBodies.length, { message: "governed push execute called" })
     .toBe(1);
   expect(ledger.executeBodies.at(-1)?.remoteBranchName).toBe(SAFE_BRANCH);
+  // #3394 review: the browser captures `headCommitSha` from the preview response it just evaluated
+  // and resubmits it as `verifiedCommitSha` on the execute (mint + execute) call — never independently
+  // re-derived at click time. This is the direct browser-level proof of the capture-and-resend
+  // contract; the server-side fail-closed enforcement is proven by pushRoutes.test.ts.
+  expect(ledger.executeBodies.at(-1)?.verifiedCommitSha).toBe(HEAD_COMMIT_SHA);
 }
 
 function writeEvidenceManifest(ledger: RouteLedger): void {
@@ -349,7 +386,11 @@ function writeEvidenceManifest(ledger: RouteLedger): void {
     route: "/",
     evidencePath: "docs/git-delivery/evidence/476",
     generatedAt: new Date().toISOString(),
-    governedRoutes: ["/api/git-delivery/push/preview", "/api/git-delivery/push/execute"],
+    governedRoutes: [
+      "/api/git-delivery/push/preview",
+      "/api/git-delivery/push/approve",
+      "/api/git-delivery/push/execute",
+    ],
     windowRegistration: {
       kind: "governedGit",
       seededVia: "keiko.workspace.v4",

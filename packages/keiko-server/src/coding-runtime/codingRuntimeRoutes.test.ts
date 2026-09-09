@@ -14,6 +14,7 @@ import {
 import { createCodingAppSessionChannel } from "../coding-app-session/sessionChannel.js";
 import { APP_SESSION_COOKIE_NAME } from "../coding-app-session/sessionCookie.js";
 import { createSessionRegistry } from "../coding-app-session/sessionRegistry.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   API_ROUTES,
   STREAMING,
@@ -21,11 +22,13 @@ import {
   type HandlerOutcome,
   type RouteContext,
   type RouteDefinition,
+  type RouteResult,
 } from "../routes.js";
 import {
   CODING_RUNTIME_ROUTE_GROUP,
   handleCodingRuntimeApproval,
   handleCodingRuntimeApprovalReview,
+  handleCodingRuntimeDescriptionDraft,
   handleCodingRuntimeEvents,
   handleCodingRuntimeFollowUp,
   handleCodingRuntimePause,
@@ -62,12 +65,13 @@ function context(
   params: Record<string, string> = {},
   path = "/api/coding-workbench/runtime/runs",
   cookie?: string,
+  correlationId?: string,
 ): RouteContext {
   const req = new PassThrough() as unknown as RouteContext["req"];
   req.headers = cookie === undefined ? {} : { cookie };
   queueMicrotask(() => (req as unknown as PassThrough).end(body));
   return {
-    correlationId: undefined,
+    correlationId,
     req,
     res: new FakeResponse() as unknown as RouteContext["res"],
     params,
@@ -119,6 +123,11 @@ function runtime(
   },
 ): UiHandlerDeps {
   const calls: unknown[] = [];
+  // codingRuntimeRoutes.ts's mutation() funnel and the direct listQuestions call site now thread
+  // ctx.correlationId as an extra positional argument into these four methods (review 3941746512):
+  // captured separately from `calls`/`__calls` so the existing exact-shape assertions on that array
+  // stay untouched.
+  const correlationIds: (string | undefined)[] = [];
   const orchestrator = {
     start: (body: unknown) => {
       calls.push(body);
@@ -132,21 +141,28 @@ function runtime(
     pause: () => Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot }),
     resume: () => Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot }),
     revokeResearch: () => Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot }),
-    submitFollowUp: (_runId: string, body: unknown) => {
+    submitFollowUp: (_runId: string, body: unknown, correlationId?: string) => {
       calls.push(body);
+      correlationIds.push(correlationId);
       return Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot });
     },
-    answerQuestion: (_runId: string, body: unknown) => {
+    answerQuestion: (_runId: string, body: unknown, correlationId?: string) => {
       calls.push(body);
+      correlationIds.push(correlationId);
       return Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot });
     },
-    rejectQuestion: () => Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot }),
-    listQuestions: () =>
-      Promise.resolve({
+    rejectQuestion: (_runId: string, _body: unknown, correlationId?: string) => {
+      correlationIds.push(correlationId);
+      return Promise.resolve({ ok: true as const, snapshot: runtimeSnapshot });
+    },
+    listQuestions: (_runId: string, _body: unknown, correlationId?: string) => {
+      correlationIds.push(correlationId);
+      return Promise.resolve({
         ok: true as const,
         snapshot: runtimeSnapshot,
         questions: { schemaVersion: "1" as const, questions: [] },
-      }),
+      });
+    },
     status: () => runtimeSnapshot,
     getSnapshot: (runId: string) => (runId === "run-1" ? runtimeSnapshot : undefined),
     pendingResearchAsk: (runId: string) =>
@@ -168,6 +184,15 @@ function runtime(
             fileCount: 2,
             addedLines: 12,
             deletedLines: 4,
+          }
+        : undefined,
+    reviewDescriptionDraft: (runId: string, proposalId: string, snapshotDigest: string) =>
+      runId === "run-1" && proposalId === "proposal-1" && snapshotDigest === "b".repeat(64)
+        ? {
+            schemaVersion: "1",
+            proposalId,
+            expiresAt: "2026-09-05T18:00:00.000Z",
+            artifact: { markdown: "## Exact generic draft" },
           }
         : undefined,
   };
@@ -194,6 +219,7 @@ function runtime(
     codingRuntimeOrchestrator: orchestrator,
     codingRuntimeEventHub: eventHub,
     __calls: calls,
+    __correlationIds: correlationIds,
     ...overrides,
   } as unknown as UiHandlerDeps;
 }
@@ -222,6 +248,7 @@ describe("coding runtime routes", () => {
         "GET /api/coding-workbench/runtime/runs/:runId/events",
         "GET /api/coding-workbench/runtime/runs/:runId/research",
         "GET /api/coding-workbench/runtime/runs/:runId/approval-review",
+        "GET /api/coding-workbench/runtime/runs/:runId/description-draft",
         "POST /api/coding-workbench/runtime/runs/:runId/approvals",
         "POST /api/coding-workbench/runtime/runs/:runId/stop",
         "POST /api/coding-workbench/runtime/runs/:runId/takeover",
@@ -303,6 +330,146 @@ describe("coding runtime routes", () => {
     expect(answered).toMatchObject({ status: 200, body: snapshot });
     // The route response projects only the content-free snapshot, never the answer text.
     expect(JSON.stringify(answered.body)).not.toContain("untrusted-answer-text");
+  });
+
+  // Review 3941746512: the per-request ctx.correlationId used to stop at this route boundary --
+  // the orchestrator's follow-up/answer/reject/list methods had no correlationId parameter at all,
+  // so a question-mutation transport failure could only ever correlate by run id. Proves every one
+  // of the four question/follow-up routes now forwards ctx.correlationId through to the
+  // orchestrator call.
+  it("threads ctx.correlationId into every follow-up/question orchestrator call", async () => {
+    const session = pairedAppSession();
+    const runPath = "/api/coding-workbench/runtime/runs";
+    const correlationId = "route-correlation-id-1";
+    const handlers = [
+      handleCodingRuntimeFollowUp,
+      handleCodingRuntimeQuestionAnswer,
+      handleCodingRuntimeQuestionReject,
+      handleCodingRuntimeQuestionList,
+    ];
+    for (const handler of handlers) {
+      const deps = runtime({ codingAppSessionChannel: session.channel });
+      await expect(
+        handler(context("{}", { runId: "run-1" }, runPath, session.cookie, correlationId), deps),
+      ).resolves.toMatchObject({ status: 200 });
+      expect(
+        (deps as unknown as { __correlationIds: (string | undefined)[] }).__correlationIds,
+      ).toContain(correlationId);
+    }
+  });
+
+  // Epic #3384 defect B: every refused mutation used to return its 400/403 with nothing in the
+  // activity log. Before this fix neither case below wrote a line; the mutation() funnel now emits
+  // exactly one body-free warn line per refusal, naming which operation and which closed reason.
+  it("#3384 defect B: logs a body-free refusal when a mutation body is malformed", async () => {
+    const session = pairedAppSession();
+    const records: unknown[] = [];
+    const deps = runtime({
+      codingAppSessionChannel: session.channel,
+      activityLog: { write: (event: unknown) => void records.push(event) },
+    });
+    const refused = await handleCodingRuntimeQuestionAnswer(
+      context("not-json", { runId: "run-1" }, "/api/coding-workbench/runtime/runs", session.cookie),
+      deps,
+    );
+    expect(refused).toMatchObject({ status: 400 });
+    expect(records).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        category: "process",
+        op: "coding-runtime.operation.refused",
+        // The fixture's context() carries no correlation id; the log line must still fall back to
+        // the sanctioned UNKNOWN_CORRELATION_ID rather than silently omitting the field
+        // (AGENTS.md §8 rule 1).
+        correlationId: UNKNOWN_CORRELATION_ID,
+        extra: { operation: "answer", runId: "run-1", reason: "invalid-intent" },
+      }),
+    ]);
+  });
+
+  it("#3384 defect B: logs the closed failure code the runtime returned, e.g. replay-cap-exhausted", async () => {
+    const session = pairedAppSession();
+    const records: unknown[] = [];
+    const deps = runtime({
+      codingAppSessionChannel: session.channel,
+      activityLog: { write: (event: unknown) => void records.push(event) },
+    });
+    (
+      deps.codingRuntimeOrchestrator as unknown as {
+        answerQuestion: (
+          runId: string,
+          body: unknown,
+        ) => Promise<{ readonly ok: false; readonly failureCode: string }>;
+      }
+    ).answerQuestion = () =>
+      Promise.resolve({ ok: false as const, failureCode: "replay-cap-exhausted" });
+    const refused = await handleCodingRuntimeQuestionAnswer(
+      context(
+        JSON.stringify({
+          requestId: "req-1",
+          expectedRevision: 2,
+          questionId: "que_1",
+          answers: [["ok"]],
+        }),
+        { runId: "run-1" },
+        "/api/coding-workbench/runtime/runs",
+        session.cookie,
+      ),
+      deps,
+    );
+    expect(refused).toMatchObject({ status: 400 });
+    expect(records).toEqual([
+      expect.objectContaining({
+        op: "coding-runtime.operation.refused",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        extra: { operation: "answer", runId: "run-1", reason: "replay-cap-exhausted" },
+      }),
+    ]);
+  });
+
+  it("returns and logs the closed question-answer-rejected reason from the runtime", async () => {
+    const session = pairedAppSession();
+    const records: unknown[] = [];
+    const deps = runtime({
+      codingAppSessionChannel: session.channel,
+      activityLog: { write: (event: unknown) => void records.push(event) },
+    });
+    (
+      deps.codingRuntimeOrchestrator as unknown as {
+        answerQuestion: () => Promise<{
+          readonly ok: false;
+          readonly failureCode: "question-answer-rejected";
+        }>;
+      }
+    ).answerQuestion = () =>
+      Promise.resolve({ ok: false, failureCode: "question-answer-rejected" });
+
+    const refused = await handleCodingRuntimeQuestionAnswer(
+      context(
+        JSON.stringify({
+          requestId: "req-answer-rejected",
+          expectedRevision: 2,
+          questionId: "que_1",
+          answers: [["free text"]],
+        }),
+        { runId: "run-1" },
+        "/api/coding-workbench/runtime/runs",
+        session.cookie,
+      ),
+      deps,
+    );
+
+    expect(refused).toMatchObject({
+      status: 400,
+      body: { error: { code: "CODING_RUNTIME_QUESTION_ANSWER_REJECTED" } },
+    });
+    expect(records).toContainEqual(
+      expect.objectContaining({
+        op: "coding-runtime.operation.refused",
+        extra: { operation: "answer", runId: "run-1", reason: "question-answer-rejected" },
+      }),
+    );
+    expect(JSON.stringify(records)).not.toContain("free text");
   });
 
   it("#2478: serves the paired question list as the channel payload with the active session facet", async () => {
@@ -457,6 +624,27 @@ describe("coding runtime routes", () => {
 
     expect(result.status).toBe(404);
     expect(JSON.stringify(result.body)).not.toContain("src/alpha.ts");
+  });
+
+  it("serves an exact generic description proposal only over the paired run channel", () => {
+    const session = pairedAppSession();
+    const path = `/api/coding-workbench/runtime/runs/run-1/description-draft?proposalId=proposal-1&snapshotDigest=${"b".repeat(64)}`;
+    const reviewed = handleCodingRuntimeDescriptionDraft(
+      context("", { runId: "run-1" }, path, session.cookie),
+      runtime({ codingAppSessionChannel: session.channel }),
+    );
+    expect(reviewed).toMatchObject({
+      status: 200,
+      body: {
+        outcome: "draft",
+        draft: { proposalId: "proposal-1", artifact: { markdown: "## Exact generic draft" } },
+      },
+    });
+    const denied = handleCodingRuntimeDescriptionDraft(
+      context("", { runId: "run-1" }, path),
+      runtime(),
+    );
+    expect(denied.status).toBe(404);
   });
 
   it("#2802: the content-free status and run projections never carry a reviewable path", () => {
@@ -1220,17 +1408,136 @@ describe("coding runtime mutation authority boundary (ADR-0141 D1/D2)", () => {
 
   it("answers an unpaired run start with the honest authority-resolution failure, never a silent success", async () => {
     const { channel } = pairedAppSession();
-    const spy = spyingRuntime(channel);
+    const records: unknown[] = [];
+    const deps = runtime({
+      codingAppSessionChannel: channel,
+      activityLog: { write: (event: unknown) => void records.push(event) },
+    });
     const denied = await handleCreateCodingRuntimeRun(
-      context('{"requestId":"r","taskIntent":"secret","requestedMode":"governed-assist"}'),
-      spy.deps,
+      context(
+        '{"requestId":"r","taskIntent":"secret","requestedMode":"governed-assist"}',
+        {},
+        "/api/coding-workbench/runtime/runs",
+        undefined,
+        "unpaired-start-correlation",
+      ),
+      deps,
     );
     expect(denied).toMatchObject({
       status: 403,
       body: { error: { code: "CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED" } },
     });
-    expect(spy.invoked).toEqual([]);
+    expect((deps as unknown as { __calls: unknown[] }).__calls).toEqual([]);
     expect(JSON.stringify(denied.body)).not.toContain("secret");
+    expect(records).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        category: "process",
+        op: "coding-runtime.operation.refused",
+        correlationId: "unpaired-start-correlation",
+        extra: { operation: "start", reason: "authority-resolution-failed" },
+      }),
+    ]);
+    expect(JSON.stringify(records)).not.toContain("secret");
+  });
+
+  // Epic #3384 defect B follow-up / PR #3394 review: handleCodingRuntimeQuestionAnswer/Reject used
+  // to resolve the app-session precheck with their own pasted "check authority, log, return
+  // not-found" block instead of the shared mutation() funnel, so the funnel's own denial log added
+  // for defect B never ran for them -- an unpaired caller could attempt either state-changing
+  // question mutation and leave zero `coding-runtime.operation.refused` evidence. They now call
+  // mutation() directly with `{ conceal: "not-found" }` (codingRuntimeRoutes.ts) and inherit this
+  // log from the shared funnel by construction; this regression stays green across that change
+  // because the observable contract is unchanged -- still the existence-concealing 404 (#2478
+  // boundary) plus exactly the body-free activity line recorded below, matching the sibling
+  // unpaired-`start` case above.
+  it.each([
+    ["answer", handleCodingRuntimeQuestionAnswer],
+    ["reject", handleCodingRuntimeQuestionReject],
+  ] as const)(
+    "logs the unpaired question %s precheck denial before returning the concealing not-found",
+    async (operation, handler) => {
+      const { channel } = pairedAppSession();
+      const records: unknown[] = [];
+      const deps = runtime({
+        codingAppSessionChannel: channel,
+        activityLog: { write: (event: unknown) => void records.push(event) },
+      });
+      const denied = await handler(
+        context(
+          "{}",
+          { runId: "run-1" },
+          "/api/coding-workbench/runtime/runs",
+          undefined,
+          `unpaired-${operation}-correlation`,
+        ),
+        deps,
+      );
+      // Byte-identical to the pre-existing #2478 boundary: still a concealing 404, never a distinct
+      // auth error and never a 200.
+      expect(denied).toMatchObject({
+        status: 404,
+        body: { error: { code: "CODING_RUNTIME_RUN_NOT_FOUND" } },
+      });
+      expect(records).toEqual([
+        expect.objectContaining({
+          level: "warn",
+          category: "process",
+          op: "coding-runtime.operation.refused",
+          correlationId: `unpaired-${operation}-correlation`,
+          // No runId: the precheck fails before a per-run identifier is resolved, matching the
+          // unpaired-start log shape above.
+          extra: { operation, reason: "authority-resolution-failed" },
+        }),
+      ]);
+    },
+  );
+
+  // PR #3394 review: answer/reject must not merely look like they share the funnel -- their
+  // refusal has to BE the funnel's own logRuntimeOperationRefusal call, not a second block that
+  // happens to log something similar. `stop` has only ever gone through mutation() directly, so
+  // its refusal is the funnel's canonical shape; cross-checking against it pins that answer/reject
+  // now produce the identical shape (level, category, op, reason, and the absent runId) --
+  // differing only in the closed `operation` value each route names itself -- which is what
+  // "inherits the log by construction" has to mean from outside the module.
+  it("emits the identical funnel-shaped refusal for answer/reject as an ordinary mutation route", async () => {
+    interface RefusalRecord {
+      readonly level: string;
+      readonly category: string;
+      readonly op: string;
+      readonly extra: { readonly reason: string; readonly runId?: string };
+    }
+    const session = pairedAppSession();
+    const runPath = "/api/coding-workbench/runtime/runs";
+    const refusalOf = async (
+      handler: (ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>,
+    ): Promise<RefusalRecord> => {
+      const records: RefusalRecord[] = [];
+      const deps = runtime({
+        codingAppSessionChannel: session.channel,
+        activityLog: { write: (event: unknown) => void records.push(event as RefusalRecord) },
+      });
+      const denied = await handler(context("{}", { runId: "run-1" }, runPath), deps);
+      expect(denied.status).toBe(404);
+      expect(records).toHaveLength(1);
+      const [record] = records;
+      if (!record) throw new Error("expected exactly one refusal record");
+      return record;
+    };
+
+    const stopRefusal = await refusalOf(handleCodingRuntimeStop);
+    const answerRefusal = await refusalOf(handleCodingRuntimeQuestionAnswer);
+    const rejectRefusal = await refusalOf(handleCodingRuntimeQuestionReject);
+
+    for (const refusal of [answerRefusal, rejectRefusal]) {
+      expect(refusal).toMatchObject({
+        level: stopRefusal.level,
+        category: stopRefusal.category,
+        op: stopRefusal.op,
+        extra: { reason: "authority-resolution-failed" },
+      });
+      expect(refusal.extra.runId).toBeUndefined();
+    }
   });
 
   // The recorded attack, end to end: the unauthenticated status route publishes the pending

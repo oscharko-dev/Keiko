@@ -3,19 +3,27 @@ import type {
   CodingWorkbenchRuntimeQuestionsResponse,
 } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_TASK_INTENT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import type { CodingWorkbenchRuntimeQuestionAnswerRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 import { parseCodingWorkbenchRuntimeQuestionAnswerRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 
 import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
+import { CodingRuntimeQuestionAnswerRejectedError } from "./codingRuntimeQuestionPort.js";
 import type { CodingRuntimeManager } from "./codingRuntimeManager.js";
 import type { CodingRuntimeSnapshot } from "./codingRuntimeSnapshotStore.js";
 import type {
   CodingRuntimeTaskDispatcher,
+  CodingRuntimeTaskDispatchRequest,
+  CodingRuntimeTaskDispatchResult,
   CodingRuntimeTaskOutcome,
 } from "./productionCodingRuntimeHost.js";
 import type {
   CodingRuntimeOrchestratorResult,
   CodingRuntimeQuestionOperationResult,
 } from "./codingRuntimeOrchestratorTypes.js";
+import { correlationIdOrUnknown } from "../correlation.js";
+import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
+import { processServerLogSink } from "../process-log-sink.js";
 
 interface RuntimeOperationCoordinatorDeps {
   readonly current: () => CodingRuntimeSnapshot | undefined;
@@ -31,6 +39,7 @@ interface RuntimeOperationCoordinatorDeps {
   readonly settleTask: (runId: string, outcome: CodingRuntimeTaskOutcome) => void;
   readonly questionPort: CodingRuntimeQuestionPort;
   readonly manager: CodingRuntimeManager;
+  readonly activityLog?: ServerLogSink | undefined;
 }
 
 interface RuntimeOperationReservation {
@@ -53,9 +62,61 @@ type PreparedRuntimeOperation =
   // rejection so callers can emit a dedicated failureCode instead of the generic "invalid-intent".
   | { readonly ok: false; readonly reason?: "replay-cap-exhausted" | undefined };
 
+// The answer path admits the WHOLE body through parseCodingWorkbenchRuntimeQuestionAnswerRequest
+// (KEIKO-0411 / epic #3384 defect A) instead of a second, hand-maintained key list: `value` is
+// therefore the fully contract-validated request, not the generic unknown-field record every other
+// operation kind carries.
+type PreparedAnswerOperation =
+  | {
+      readonly ok: true;
+      readonly current: CodingRuntimeSnapshot;
+      readonly reservation: RuntimeOperationReservation;
+      readonly value: CodingWorkbenchRuntimeQuestionAnswerRequest;
+    }
+  | { readonly ok: false; readonly reason?: "replay-cap-exhausted" | undefined };
+
 type QuestionMutationOutcome =
   | { readonly ok: true }
-  | { readonly ok: false; readonly reason: "invalid-intent" | "authority-resolution-failed" };
+  | {
+      readonly ok: false;
+      readonly reason:
+        "invalid-intent" | "authority-resolution-failed" | "question-answer-rejected";
+    };
+
+type RuntimeOperationRevisionPolicy = "exact" | "stale-read";
+
+interface FollowUpDispatchOutcome {
+  readonly result: CodingRuntimeTaskDispatchResult;
+  readonly generation?: RuntimeTaskGenerationReservation | undefined;
+}
+
+interface RuntimeTaskGenerationReservation {
+  readonly generation: number;
+  readonly commit: () => void;
+  readonly release: () => void;
+}
+
+interface PendingTaskGeneration {
+  readonly previousGeneration: number;
+  readonly generation: number;
+  active: boolean;
+  predecessorOutcome?: CodingRuntimeTaskOutcome | undefined;
+}
+
+function settleGenerationReservation(
+  reservation: RuntimeTaskGenerationReservation | undefined,
+  accepted: boolean,
+): void {
+  if (reservation === undefined) return;
+  if (accepted) reservation.commit();
+  else reservation.release();
+}
+
+function reservedGeneration(
+  reservation: RuntimeTaskGenerationReservation | undefined,
+): number | undefined {
+  return reservation === undefined ? undefined : reservation.generation;
+}
 
 const FOLLOW_UP_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
   "running",
@@ -64,10 +125,16 @@ const FOLLOW_UP_STATES: ReadonlySet<CodingRuntimeSnapshot["state"]> = new Set([
 
 export class CodingRuntimeOperationCoordinator {
   private readonly replay = new RuntimeOperationReplayCoordinator();
+  private readonly taskGenerations = new Map<string, number>();
+  private readonly pendingTaskGenerations = new Map<string, PendingTaskGeneration>();
 
   public constructor(private readonly deps: RuntimeOperationCoordinatorDeps) {}
 
-  public submitFollowUp(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
+  public submitFollowUp(
+    runId: string,
+    input: unknown,
+    correlationId?: string,
+  ): Promise<CodingRuntimeOrchestratorResult> {
     return this.deps.serial(async () => {
       const operation = this.prepare(runId, input, ["requestId", "expectedRevision", "taskIntent"]);
       if (
@@ -83,42 +150,94 @@ export class CodingRuntimeOperationCoordinator {
             : "invalid-intent",
         );
       }
-      let dispatched: Awaited<ReturnType<CodingRuntimeTaskDispatcher["dispatch"]>>;
-      try {
-        dispatched = await this.deps.taskDispatcher.dispatch({
-          runId,
-          requestId: operation.value.requestId,
-          expectedRevision: operation.current.revision,
-          taskIntent: operation.value.taskIntent,
-        });
-      } catch {
-        dispatched = { ok: false };
-      }
-      if (!dispatched.ok) {
+      const dispatched = await this.dispatchFollowUp(
+        runId,
+        operation,
+        operation.value.taskIntent,
+        correlationId,
+      );
+      if (!dispatched.result.ok) {
+        settleGenerationReservation(dispatched.generation, false);
         operation.reservation.release();
         return failure("authority-resolution-failed");
       }
+      settleGenerationReservation(dispatched.generation, true);
       operation.reservation.commit();
-      this.observeTaskCompletion(runId, dispatched.completion);
+      this.observeTaskCompletion(
+        runId,
+        dispatched.result.completion,
+        reservedGeneration(dispatched.generation),
+      );
       return this.deps.advanceRevision(operation.current, "task-submitted");
     });
+  }
+
+  private async dispatchFollowUp(
+    runId: string,
+    operation: Extract<PreparedRuntimeOperation, { readonly ok: true }>,
+    taskIntent: string,
+    correlationId?: string,
+  ): Promise<FollowUpDispatchOutcome> {
+    const replacing = operation.current.state === "paused";
+    const generation = replacing ? this.reserveTaskGeneration(runId) : undefined;
+    const dispatch = replacing
+      ? this.deps.taskDispatcher.replace
+      : this.deps.taskDispatcher.dispatch;
+    if (dispatch === undefined) return { result: { ok: false }, generation };
+    try {
+      const result = await dispatch({
+        runId,
+        requestId: operation.value.requestId,
+        expectedRevision: operation.current.revision,
+        taskIntent,
+        ...(correlationId === undefined ? {} : { correlationId }),
+      });
+      return { result, generation };
+    } catch (error) {
+      recordRuntimeOperationTransportFailure(this.deps.activityLog, {
+        op: "coding-runtime.follow-up.dispatch-failed",
+        runId,
+        correlationId,
+        operation: "follow-up",
+        error,
+      });
+      return { result: { ok: false }, generation };
+    }
   }
 
   public listQuestions(
     runId: string,
     input: unknown,
+    correlationId?: string,
   ): Promise<CodingRuntimeQuestionOperationResult> {
     return this.deps.serial<CodingRuntimeQuestionOperationResult>(async () => {
-      const operation = this.prepare(runId, input, ["requestId", "expectedRevision"]);
+      // A paired question list is a read. Runtime activity may advance after the UI renders its
+      // snapshot, so admit an older revision and bind the downstream guard to the current one.
+      const operation = this.prepare(runId, input, ["requestId", "expectedRevision"], "stale-read");
       if (!operation.ok) {
         return failure(
           operation.reason === "replay-cap-exhausted" ? "replay-cap-exhausted" : "invalid-intent",
         );
       }
+      if (operation.value.expectedRevision < operation.current.revision) {
+        recordQuestionListRevisionRebound(this.deps.activityLog, {
+          runId,
+          correlationId,
+          expectedRevision: operation.value.expectedRevision,
+          currentRevision: operation.current.revision,
+        });
+      }
       let questions: CodingWorkbenchRuntimeQuestionsResponse | undefined;
       try {
         questions = await this.deps.questionPort.list(operationRequest(runId, operation));
-      } catch {
+      } catch (error) {
+        recordRuntimeOperationTransportFailure(this.deps.activityLog, {
+          op: "coding-runtime.question.list-failed",
+          runId,
+          correlationId,
+          operation: "list",
+          error,
+        });
         questions = undefined;
       }
       if (questions === undefined) {
@@ -136,20 +255,61 @@ export class CodingRuntimeOperationCoordinator {
     });
   }
 
-  public answerQuestion(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
-    return this.mutateQuestion(runId, input, "answer");
+  public answerQuestion(
+    runId: string,
+    input: unknown,
+    correlationId?: string,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    return this.deps.serial(async () => {
+      const operation = this.prepareAnswer(runId, input);
+      if (!operation.ok) {
+        return failure(
+          operation.reason === "replay-cap-exhausted" ? "replay-cap-exhausted" : "invalid-intent",
+        );
+      }
+      const outcome = await this.applyAnswer(runId, operation, correlationId);
+      if (!outcome.ok) {
+        operation.reservation.release();
+        return failure(outcome.reason);
+      }
+      operation.reservation.commit();
+      return this.deps.advanceRevision(operation.current);
+    });
   }
 
-  public rejectQuestion(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
-    return this.mutateQuestion(runId, input, "reject");
+  public rejectQuestion(
+    runId: string,
+    input: unknown,
+    correlationId?: string,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    return this.deps.serial(async () => {
+      const operation = this.prepare(runId, input, ["requestId", "expectedRevision", "questionId"]);
+      if (!operation.ok || !validQuestionId(operation.value.questionId)) {
+        if (operation.ok) operation.reservation.release();
+        return failure(
+          !operation.ok && operation.reason === "replay-cap-exhausted"
+            ? "replay-cap-exhausted"
+            : "invalid-intent",
+        );
+      }
+      const outcome = await this.applyReject(
+        runId,
+        operation,
+        operation.value.questionId,
+        correlationId,
+      );
+      if (!outcome.ok) {
+        operation.reservation.release();
+        return failure(outcome.reason);
+      }
+      operation.reservation.commit();
+      return this.deps.advanceRevision(operation.current);
+    });
   }
 
-  public async startInitialTurn(input: {
-    readonly runId: string;
-    readonly requestId: string;
-    readonly expectedRevision: number;
-    readonly taskIntent: string;
-  }): Promise<"accepted" | "failed" | "recovery-required"> {
+  public async startInitialTurn(
+    input: CodingRuntimeTaskDispatchRequest,
+  ): Promise<"accepted" | "failed" | "recovery-required"> {
     const reserveOutcome = this.replay.reserve(
       input.runId,
       input.requestId,
@@ -160,7 +320,13 @@ export class CodingRuntimeOperationCoordinator {
     let dispatched: Awaited<ReturnType<CodingRuntimeTaskDispatcher["dispatch"]>>;
     try {
       dispatched = await this.deps.taskDispatcher.dispatch(input);
-    } catch {
+    } catch (error) {
+      recordRuntimeOperationTransportFailure(this.deps.activityLog, {
+        op: "coding-runtime.initial-turn.dispatch-failed",
+        runId: input.runId,
+        operation: "initial-turn-dispatch",
+        error,
+      });
       dispatched = { ok: false };
     }
     if (dispatched.ok) {
@@ -172,114 +338,194 @@ export class CodingRuntimeOperationCoordinator {
     try {
       const stopped = await this.deps.manager.stop(input.runId);
       return stopped.ok ? "failed" : "recovery-required";
-    } catch {
+    } catch (error) {
+      recordRuntimeOperationTransportFailure(this.deps.activityLog, {
+        op: "coding-runtime.initial-turn.stop-failed",
+        runId: input.runId,
+        operation: "initial-turn-stop",
+        error,
+      });
       return "recovery-required";
     }
   }
 
   public clear(runId: string): void {
     this.replay.clear(runId);
+    this.taskGenerations.delete(runId);
+    this.pendingTaskGenerations.delete(runId);
   }
 
   private observeTaskCompletion(
     runId: string,
     completion: Promise<CodingRuntimeTaskOutcome>,
+    generation = this.nextTaskGeneration(runId),
   ): void {
     void completion.then(
       (outcome): void => {
-        this.deps.settleTask(runId, outcome);
+        this.settleTaskCompletion(runId, generation, outcome);
       },
       (): void => {
-        this.deps.settleTask(runId, "failed");
+        this.settleTaskCompletion(runId, generation, "failed");
       },
     );
   }
 
-  private mutateQuestion(
+  private settleTaskCompletion(
     runId: string,
-    input: unknown,
-    action: "answer" | "reject",
-  ): Promise<CodingRuntimeOrchestratorResult> {
-    return this.deps.serial(async () => {
-      const keys =
-        action === "answer"
-          ? ["requestId", "expectedRevision", "questionId", "answers"]
-          : ["requestId", "expectedRevision", "questionId"];
-      const operation = this.prepare(runId, input, keys);
-      if (!operation.ok || !validQuestionId(operation.value.questionId)) {
-        if (operation.ok) operation.reservation.release();
-        return failure(
-          !operation.ok && operation.reason === "replay-cap-exhausted"
-            ? "replay-cap-exhausted"
-            : "invalid-intent",
-        );
-      }
-      const outcome = await this.applyQuestionMutation(
-        runId,
-        action,
-        operation,
-        operation.value.questionId,
-      );
-      if (!outcome.ok) {
-        operation.reservation.release();
-        return failure(outcome.reason);
-      }
-      operation.reservation.commit();
-      return this.deps.advanceRevision(operation.current);
-    });
+    generation: number,
+    outcome: CodingRuntimeTaskOutcome,
+  ): void {
+    if (this.taskGenerations.get(runId) === generation) {
+      this.deps.settleTask(runId, outcome);
+      return;
+    }
+    const pending = this.pendingTaskGenerations.get(runId);
+    if (pending?.active === true && pending.previousGeneration === generation) {
+      pending.predecessorOutcome = outcome;
+    }
   }
 
-  // Issues the answer/reject port call for an already-admitted question operation. Split out of
-  // mutateQuestion() so that method stays under the line/complexity ceiling; behaviour (including
-  // which failureCode each path maps to) is unchanged from the inline version it replaced.
-  private async applyQuestionMutation(
+  private reserveTaskGeneration(runId: string): RuntimeTaskGenerationReservation {
+    const previousGeneration = this.taskGenerations.get(runId) ?? 0;
+    const pending: PendingTaskGeneration = {
+      previousGeneration,
+      generation: previousGeneration + 1,
+      active: true,
+    };
+    this.pendingTaskGenerations.set(runId, pending);
+    this.taskGenerations.set(runId, pending.generation);
+    return {
+      generation: pending.generation,
+      commit: (): void => {
+        this.commitTaskGeneration(runId, pending);
+      },
+      release: (): void => {
+        this.releaseTaskGeneration(runId, pending);
+      },
+    };
+  }
+
+  private commitTaskGeneration(runId: string, pending: PendingTaskGeneration): void {
+    if (!pending.active || this.pendingTaskGenerations.get(runId) !== pending) return;
+    pending.active = false;
+    this.pendingTaskGenerations.delete(runId);
+  }
+
+  private releaseTaskGeneration(runId: string, pending: PendingTaskGeneration): void {
+    if (!pending.active || this.pendingTaskGenerations.get(runId) !== pending) return;
+    pending.active = false;
+    this.pendingTaskGenerations.delete(runId);
+    this.taskGenerations.set(runId, pending.previousGeneration);
+    if (pending.predecessorOutcome !== undefined) {
+      this.deps.settleTask(runId, pending.predecessorOutcome);
+    }
+  }
+
+  private nextTaskGeneration(runId: string): number {
+    const generation = (this.taskGenerations.get(runId) ?? 0) + 1;
+    this.taskGenerations.set(runId, generation);
+    return generation;
+  }
+
+  // Issues the answer port call for an already-admitted, contract-validated answer operation.
+  private async applyAnswer(
     runId: string,
-    action: "answer" | "reject",
-    operation: Extract<PreparedRuntimeOperation, { readonly ok: true }>,
-    // Already validated by validQuestionId(operation.value.questionId) at the mutateQuestion()
-    // call site: `operation.value` types every field but requestId/expectedRevision as unknown
-    // (it is shared across every operation kind, not just answer/reject), so that narrowing
-    // cannot survive the call into this method and questionId is threaded through explicitly.
-    questionId: string,
+    operation: Extract<PreparedAnswerOperation, { readonly ok: true }>,
+    correlationId?: string,
   ): Promise<QuestionMutationOutcome> {
     try {
-      if (action !== "answer") {
-        const accepted = await this.deps.questionPort.reject({
-          ...operationRequest(runId, operation),
-          questionId,
-        });
-        return accepted ? { ok: true } : { ok: false, reason: "authority-resolution-failed" };
-      }
-      // requestId/expectedRevision are already bound and verified by prepare() above
-      // (isExactRecord + expectedRevision-vs-current.revision + the one-use requestId replay
-      // reservation) — this is a consolidation of that existing binding into the shared contract
-      // type (KEIKO-0411), not a new check at this call site. The values are already known-valid;
-      // the aggregate answers byte budget below is the one genuinely new protection this parse
-      // call adds here.
-      const answers = parseCodingWorkbenchRuntimeQuestionAnswerRequest({
+      const accepted = await this.deps.questionPort.answer({
+        runId,
         requestId: operation.value.requestId,
-        expectedRevision: operation.value.expectedRevision,
-        questionRequestId: questionId,
+        expectedRevision: operation.current.revision,
+        questionId: operation.value.questionId,
         answers: operation.value.answers,
       });
-      if (!answers.ok) return { ok: false, reason: "invalid-intent" };
-      const accepted = await this.deps.questionPort.answer({
-        ...operationRequest(runId, operation),
-        questionId,
-        answers: answers.value.answers,
-      });
       return accepted ? { ok: true } : { ok: false, reason: "authority-resolution-failed" };
-    } catch {
+    } catch (error) {
+      // T50 (review, PR #3394): the typed rejection is a validated, already-meaningful outcome --
+      // only a validated pending question can throw it (see CodingRuntimeQuestionAnswerRejectedError)
+      // -- and carries no diagnostic value of its own. Every OTHER exception here is a genuine
+      // transport/runtime failure that used to be discarded into the generic authority-resolution
+      // outcome with nothing in the activity log; AGENTS.md §8 requires that non-validation error
+      // path to leave structured, body-free evidence behind instead.
+      if (error instanceof CodingRuntimeQuestionAnswerRejectedError) {
+        return { ok: false, reason: "question-answer-rejected" };
+      }
+      recordRuntimeOperationTransportFailure(this.deps.activityLog, {
+        op: "coding-runtime.question.authority-resolution-failed",
+        runId,
+        correlationId,
+        operation: "answer",
+        error,
+      });
       return { ok: false, reason: "authority-resolution-failed" };
     }
+  }
+
+  // Issues the reject port call for an already-admitted question operation. `questionId` is
+  // already validated by validQuestionId(operation.value.questionId) at the rejectQuestion() call
+  // site: `operation.value` types every field but requestId/expectedRevision as unknown (it is
+  // shared across every generic keyed operation, not just reject), so that narrowing cannot
+  // survive the call into this method and questionId is threaded through explicitly.
+  private async applyReject(
+    runId: string,
+    operation: Extract<PreparedRuntimeOperation, { readonly ok: true }>,
+    questionId: string,
+    correlationId?: string,
+  ): Promise<QuestionMutationOutcome> {
+    try {
+      const accepted = await this.deps.questionPort.reject({
+        ...operationRequest(runId, operation),
+        questionId,
+      });
+      return accepted ? { ok: true } : { ok: false, reason: "authority-resolution-failed" };
+    } catch (error) {
+      // Same non-validation error path as applyAnswer's catch (T50): reject has no typed
+      // incompatible-answer case of its own, so every exception here is a genuine authority
+      // failure and is logged the same way.
+      recordRuntimeOperationTransportFailure(this.deps.activityLog, {
+        op: "coding-runtime.question.authority-resolution-failed",
+        runId,
+        correlationId,
+        operation: "reject",
+        error,
+      });
+      return { ok: false, reason: "authority-resolution-failed" };
+    }
+  }
+
+  // The answer body has exactly one shape definition: parseCodingWorkbenchRuntimeQuestionAnswerRequest
+  // owns the field list (requestId, expectedRevision, questionId, answers) and their bounds — this
+  // no longer re-states that shape as a local key array (epic #3384 defect A). Only the run-state,
+  // revision-match and replay-reservation checks below are this coordinator's own concern.
+  private prepareAnswer(runId: string, input: unknown): PreparedAnswerOperation {
+    const parsed = parseCodingWorkbenchRuntimeQuestionAnswerRequest(input);
+    if (!parsed.ok) return { ok: false };
+    const current = this.deps.current();
+    if (
+      current?.runId !== runId ||
+      !(current.state === "running" || current.state === "paused") ||
+      parsed.value.expectedRevision !== current.revision
+    ) {
+      return { ok: false };
+    }
+    const reserveOutcome = this.replay.reserve(runId, parsed.value.requestId, current.revision);
+    if ("rejection" in reserveOutcome) {
+      return reserveOutcome.rejection === "cap-exhausted"
+        ? { ok: false, reason: "replay-cap-exhausted" }
+        : { ok: false };
+    }
+    return { ok: true, current, reservation: reserveOutcome.reservation, value: parsed.value };
   }
 
   private prepare(
     runId: string,
     input: unknown,
     keys: readonly string[],
+    revisionPolicy: RuntimeOperationRevisionPolicy = "exact",
   ): PreparedRuntimeOperation {
-    const admitted = admitRuntimeOperation(input, keys, this.deps.current(), runId);
+    const admitted = admitRuntimeOperation(input, keys, this.deps.current(), runId, revisionPolicy);
     if (admitted === undefined) return { ok: false };
     const reserveOutcome = this.replay.reserve(
       runId,
@@ -312,6 +558,7 @@ function admitRuntimeOperation(
   keys: readonly string[],
   current: CodingRuntimeSnapshot | undefined,
   runId: string,
+  revisionPolicy: RuntimeOperationRevisionPolicy,
 ):
   | {
       readonly current: CodingRuntimeSnapshot;
@@ -332,8 +579,7 @@ function admitRuntimeOperation(
   // revision, so a second concurrent follow-up fails closed instead of queueing.
   if (
     !validRequestId(input.requestId) ||
-    !Number.isSafeInteger(input.expectedRevision) ||
-    input.expectedRevision !== current.revision
+    !revisionAdmitted(input.expectedRevision, current.revision, revisionPolicy)
   ) {
     return undefined;
   }
@@ -344,6 +590,19 @@ function admitRuntimeOperation(
       readonly expectedRevision: number;
     },
   };
+}
+
+function revisionAdmitted(
+  candidate: unknown,
+  current: number,
+  policy: RuntimeOperationRevisionPolicy,
+): boolean {
+  return (
+    typeof candidate === "number" &&
+    Number.isSafeInteger(candidate) &&
+    candidate >= 0 &&
+    (candidate === current || (policy === "stale-read" && candidate < current))
+  );
 }
 
 // Per-run replay/duplicate-detection budget. Sized well above any plausible single-run operation
@@ -412,6 +671,67 @@ class RuntimeOperationReplayCoordinator {
     this.committed.delete(runId);
     this.pending.delete(runId);
   }
+}
+
+// Every non-validation exception this coordinator used to discard silently (a question
+// answer/reject transport failure, a follow-up or initial-turn dispatch failure, a question-list
+// failure, a stop-after-dispatch-failure exception) is the SAME defect class (AGENTS.md §7 "fix
+// the whole class"): it must leave body-free, structured evidence behind instead of collapsing
+// into the generic outcome with nothing in the activity log. One writer serves every one of those
+// call sites so no future catch here can forget it (AGENTS.md §8 rule 1).
+//
+// `correlationId` is the per-request id threaded from the HTTP route (codingRuntimeRoutes.ts's
+// ctx.correlationId, via CodingRuntimeOrchestrator's four question/follow-up methods) for the
+// operations reachable from a route; `startInitialTurn` has no per-request HTTP caller and passes
+// none. Either way the run id is kept in `extra` (body-free) so a reader can join on EITHER the
+// request's correlation id or the run id, and `correlationIdOrUnknown` falls back to the run id
+// -- then to the sanctioned unknown marker -- only when no valid per-request id was supplied.
+function recordRuntimeOperationTransportFailure(
+  activityLog: ServerLogSink | undefined,
+  input: {
+    readonly op: string;
+    readonly runId: string;
+    readonly correlationId?: string | undefined;
+    readonly operation:
+      "follow-up" | "list" | "answer" | "reject" | "initial-turn-dispatch" | "initial-turn-stop";
+    readonly error: unknown;
+  },
+): void {
+  (activityLog ?? processServerLogSink()).write({
+    category: "process",
+    level: "warn",
+    op: input.op,
+    correlationId: correlationIdOrUnknown(input.correlationId ?? input.runId),
+    errorKind: errorKindOf(input.error),
+    extra: {
+      runId: input.runId,
+      operation: input.operation,
+      frames: keikoStackFrames(input.error),
+      causeChain: causeChain(input.error),
+    },
+  });
+}
+
+function recordQuestionListRevisionRebound(
+  activityLog: ServerLogSink | undefined,
+  input: {
+    readonly runId: string;
+    readonly correlationId?: string | undefined;
+    readonly expectedRevision: number;
+    readonly currentRevision: number;
+  },
+): void {
+  (activityLog ?? processServerLogSink()).write({
+    category: "process",
+    level: "info",
+    op: "coding-runtime.question.list-revision-rebound",
+    correlationId: correlationIdOrUnknown(input.correlationId ?? input.runId),
+    extra: {
+      runId: input.runId,
+      expectedRevision: input.expectedRevision,
+      currentRevision: input.currentRevision,
+    },
+  });
 }
 
 function operationRequest(

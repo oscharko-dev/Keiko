@@ -10,12 +10,11 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { request as httpRequest, type ClientRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
@@ -35,6 +34,10 @@ import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 const dirs: string[] = [];
 const MODEL_CAPABILITY = "m".repeat(43);
 const TOOL_CAPABILITY = "t".repeat(43);
+// ADR-0043 D11-D14 (#3390): the fixed test double of the ONE attested loopback origin the tool
+// facade rides -- the same origin `productionOpenCodeActivation.ts` derives `gatewayUrl` and
+// `toolFacadeUrl` from in production, fixed here since this suite never binds a real BFF port.
+const TOOL_FACADE_ORIGIN = "http://127.0.0.1:4391/api/coding-sidecar/tool";
 const FIXTURE_RUN_ID = "run-2254";
 const OPENCODE_VERSION = "1.17.17";
 const FIXED_SESSION_TITLE = "Keiko governed runtime";
@@ -207,14 +210,16 @@ interface OpenCodeRuntimeComposition {
   };
   readonly toolBridge: {
     readonly url: string;
+    readonly requestDeadlineMs: number;
     handle(input: {
       readonly method: "POST";
       readonly headers: Headers;
       readonly body: string;
+      readonly signal?: AbortSignal;
     }): Promise<{ readonly status: number; readonly body: string }>;
   };
   readonly runPort: {
-    readonly submitTask: (runId: string, text: string) => Promise<boolean>;
+    readonly submitTask: (runId: string, text: string, initialContext?: string) => Promise<boolean>;
     readonly abortTask: (runId: string) => Promise<boolean>;
     readonly waitForTerminal: (runId: string, signal: AbortSignal) => Promise<boolean>;
     readonly listQuestions: (runId: string) => Promise<readonly TestQuestionRequest[]>;
@@ -254,6 +259,11 @@ interface OpenCodeRuntimeCompositionModule {
       readonly target: "macos-arm64";
     };
     readonly stateBaseRoot: string;
+    readonly contextGeometry: {
+      readonly contextWindowTokens: number;
+      readonly maxInputTokens: number;
+      readonly maxOutputTokens: number;
+    };
     readonly capabilities: {
       readonly modelGatewayCapability: string;
       readonly toolFacadeCapability: string;
@@ -263,6 +273,9 @@ interface OpenCodeRuntimeCompositionModule {
       readonly requestDeadlineMs: number;
       readonly maxInFlight: number;
     };
+    // ADR-0043 D11-D14 (#3390): mirrors `OpenCodeRuntimeCompositionInput.toolFacadeOrigin` --
+    // the SAME single attested loopback origin the model gateway rides, never a second listener.
+    readonly toolFacadeOrigin: string;
     readonly toolFacade: CodingToolFacade;
     readonly governedEventSink: {
       readonly execute: (
@@ -301,9 +314,27 @@ interface OpenCodeRuntimeCompositionModule {
   }): OpenCodeRuntimeComposition;
 }
 
-async function compositionModule(): Promise<OpenCodeRuntimeCompositionModule> {
+let loadedCompositionModule: OpenCodeRuntimeCompositionModule | undefined;
+
+async function loadCompositionModule(): Promise<OpenCodeRuntimeCompositionModule> {
   const moduleName = "./opencodeRuntimeComposition.js";
   return (await import(moduleName)) as OpenCodeRuntimeCompositionModule;
+}
+
+function compositionModule(): Promise<OpenCodeRuntimeCompositionModule> {
+  if (loadedCompositionModule === undefined) throw new Error("Composition module was not loaded");
+  return Promise.resolve(loadedCompositionModule);
+}
+
+async function withDeterministicReadinessTimers<T>(operation: () => Promise<T>): Promise<T> {
+  vi.useFakeTimers();
+  try {
+    const pending = operation();
+    await vi.advanceTimersByTimeAsync(50);
+    return await pending;
+  } finally {
+    vi.useRealTimers();
+  }
 }
 
 function tempDir(prefix: string): string {
@@ -390,51 +421,13 @@ function portableFixture(resourceRoot: string): {
   };
 }
 
-interface HttpResult {
-  readonly status: number;
-  readonly body: Buffer;
-}
-
-function openHttpRequest(
-  url: string,
-  options: { readonly method?: string; readonly headers?: Readonly<Record<string, string>> } = {},
-): { readonly client: ClientRequest; readonly response: Promise<HttpResult> } {
-  let settle = (_result: HttpResult): void => undefined;
-  const response = new Promise<HttpResult>((resolve) => {
-    settle = resolve;
-  });
-  const client = httpRequest(
-    url,
-    { method: options.method ?? "POST", headers: options.headers, agent: false },
-    (result) => {
-      const chunks: Buffer[] = [];
-      result.on("data", (chunk: Buffer) => chunks.push(chunk));
-      result.on("end", () => {
-        settle({ status: result.statusCode ?? 0, body: Buffer.concat(chunks) });
-      });
-    },
-  );
-  // Disconnects are expected in cancellation tests; the assertion is on the facade signal.
-  client.on("error", () => {
-    settle({ status: 0, body: Buffer.alloc(0) });
-  });
-  return { client, response };
-}
-
-async function responseBeforeEof(response: Promise<HttpResult>): Promise<HttpResult | undefined> {
-  return await Promise.race([
-    response,
-    new Promise<undefined>((resolve) => {
-      setTimeout(resolve, 250);
-    }),
-  ]);
-}
-
 type FixtureSafeActivity = NonNullable<
   Parameters<
     OpenCodeRuntimeCompositionModule["createOpenCodeRuntimeComposition"]
   >[0]["safeActivity"]
 >;
+
+type ReadinessChallengePhase = "before-prompt" | "prompt-pending" | "aborted";
 
 interface StartBridgeControl {
   readonly startTimeoutMs?: number;
@@ -455,7 +448,9 @@ interface StartBridgeControl {
     readonly promptBodies: string[];
     readonly abortSessions: string[];
     readonly statusResponses: unknown[];
+    readonly statusResponseForReadinessPhase?: (phase: ReadinessChallengePhase) => unknown;
     readonly questionResponses?: unknown[];
+    readonly onQuestionListFetch?: () => Promise<void> | void;
     readonly permissionResponses?: unknown[];
     readonly questionRequests?: {
       readonly method: string;
@@ -564,7 +559,7 @@ async function startBridgeFixture(
     control?.sseFrame ??
       'data: {"payload":{"id":"evt_server","type":"server.connected","properties":{}}}\n\n',
   );
-  let readinessAbortPending = false;
+  let readinessChallengePhase: ReadinessChallengePhase = "before-prompt";
   // eslint-disable-next-line complexity -- finite mock endpoint table is intentionally explicit.
   const fetch = vi.fn((url: URL | RequestInfo, init?: RequestInit) => {
     const path = requestPath(url);
@@ -622,14 +617,14 @@ async function startBridgeFixture(
     }
     if (path.endsWith("/prompt_async")) {
       if (typeof init?.body === "string" && init.body.includes("runtime readiness handshake")) {
-        readinessAbortPending = true;
+        readinessChallengePhase = "prompt-pending";
       } else if (typeof init?.body === "string") {
         control?.runControl?.promptBodies.push(init.body);
       }
       return Promise.resolve(new Response(null, { status: 204 }));
     }
     if (path.endsWith("/abort")) {
-      if (readinessAbortPending) readinessAbortPending = false;
+      if (readinessChallengePhase === "prompt-pending") readinessChallengePhase = "aborted";
       else control?.runControl?.abortSessions.push(path.split("/")[2] ?? "");
       return Promise.resolve(
         new Response("true", { headers: { "content-type": "application/json" } }),
@@ -637,7 +632,9 @@ async function startBridgeFixture(
     }
     if (path === "/session/status") {
       const statuses = control?.runControl?.statusResponses;
-      const value = statuses?.length === 1 ? statuses[0] : statuses?.shift();
+      const value =
+        control?.runControl?.statusResponseForReadinessPhase?.(readinessChallengePhase) ??
+        (statuses?.length === 1 ? statuses[0] : statuses?.shift());
       return Promise.resolve(
         new Response(JSON.stringify(value ?? {}), {
           headers: { "content-type": "application/json" },
@@ -647,11 +644,14 @@ async function startBridgeFixture(
     if (path === "/question") {
       const responses = control?.runControl?.questionResponses;
       const value = responses?.length === 1 ? responses[0] : responses?.shift();
-      return Promise.resolve(
+      const respond = (): Response =>
         new Response(JSON.stringify(value ?? []), {
           headers: { "content-type": "application/json" },
-        }),
-      );
+        });
+      // Lets a test race a concurrent dispose to completion WHILE this listQuestions() round
+      // trip is still in flight, then observe the caller's post-await readiness re-check.
+      const raced = control?.runControl?.onQuestionListFetch?.();
+      return raced instanceof Promise ? raced.then(respond) : Promise.resolve(respond());
     }
     if (path.startsWith("/question/")) {
       control?.runControl?.questionRequests?.push({
@@ -701,11 +701,17 @@ async function startBridgeFixture(
   const runtime = (await compositionModule()).createOpenCodeRuntimeComposition({
     portable: { verification: portable.verification, resourceRoot, target: "macos-arm64" },
     stateBaseRoot: join(root, "state"),
+    contextGeometry: {
+      contextWindowTokens: 65_536,
+      maxInputTokens: 61_440,
+      maxOutputTokens: 4_096,
+    },
     capabilities: {
       modelGatewayCapability: MODEL_CAPABILITY,
       toolFacadeCapability: TOOL_CAPABILITY,
     },
     toolBridge,
+    toolFacadeOrigin: TOOL_FACADE_ORIGIN,
     toolFacade: readinessAwareFacade,
     governedEventSink: {
       execute: (_identityKey, event): Promise<"applied"> => {
@@ -848,6 +854,14 @@ function turnHistory(
 
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+beforeAll(async () => {
+  loadedCompositionModule = await loadCompositionModule();
+});
+
+afterAll(() => {
+  loadedCompositionModule = undefined;
 });
 
 describe("unmounted OpenCode runtime composition", () => {
@@ -1039,10 +1053,16 @@ describe("unmounted OpenCode runtime composition", () => {
     const runtime = (await compositionModule()).createOpenCodeRuntimeComposition({
       portable: { verification: portable.verification, resourceRoot, target: "macos-arm64" },
       stateBaseRoot,
+      contextGeometry: {
+        contextWindowTokens: 65_536,
+        maxInputTokens: 61_440,
+        maxOutputTokens: 4_096,
+      },
       capabilities: {
         modelGatewayCapability: MODEL_CAPABILITY,
         toolFacadeCapability: TOOL_CAPABILITY,
       },
+      toolFacadeOrigin: TOOL_FACADE_ORIGIN,
       toolFacade: facade,
       governedEventSink: {
         execute: (_identityKey, event): Promise<"applied"> => {
@@ -1060,7 +1080,7 @@ describe("unmounted OpenCode runtime composition", () => {
       authorityLifecycle,
     });
 
-    await expect(
+    const startResult = await withDeterministicReadinessTimers(() =>
       Promise.resolve(
         runtime.manager.start({
           runId: "run-1",
@@ -1074,7 +1094,9 @@ describe("unmounted OpenCode runtime composition", () => {
           effectiveMode: "supervised-coding",
           executablePath: executable,
           managedRoot: join(resourceRoot, "runtime/sidecars/opencode-compatible"),
-          gatewayUrl: "http://127.0.0.1:1983/api/coding-sidecar/gateway",
+          // Same loopback origin as `TOOL_FACADE_ORIGIN` (below) -- ADR-0043 D11-D14 (#3390):
+          // production derives both from ONE loopback origin (productionOpenCodeActivation.ts).
+          gatewayUrl: "http://127.0.0.1:4391/api/coding-sidecar/gateway",
           modelProfileId: "coding-safe-openai-compatible",
           args: ["--caller"],
           inheritedEnvAllowlist: [],
@@ -1088,7 +1110,8 @@ describe("unmounted OpenCode runtime composition", () => {
           },
         }),
       ),
-    ).resolves.toMatchObject({ ok: true });
+    );
+    expect(startResult).toMatchObject({ ok: true });
     expect(readinessStatusReads).toBe(5);
     const sessionCreate = fetchMock.mock.calls.find(
       ([url, init]) => requestPath(url) === "/session" && init?.method === "POST",
@@ -1124,6 +1147,16 @@ describe("unmounted OpenCode runtime composition", () => {
         launch?.env.OPENCODE_SERVER_PASSWORD,
       ]),
     ).toHaveLength(3);
+    // ADR-0043 D11-D14 (#3390): "the single loopback destination" invariant, proven on the actual
+    // env the spawned sidecar receives -- `KEIKO_TOOL_FACADE_URL` (this bridge's own
+    // `toolFacadeOrigin`, never a self-issued listener port) and `KEIKO_MODEL_GATEWAY_URL` (this
+    // run's `gatewayUrl`, merged into `launch.env` by codingRuntimeManager.ts) must share ONE
+    // origin -- both env values, and not just their construction-site source, agree.
+    expect(launch?.env.KEIKO_TOOL_FACADE_URL).toBeDefined();
+    expect(launch?.env.KEIKO_MODEL_GATEWAY_URL).toBeDefined();
+    expect(new URL(launch?.env.KEIKO_TOOL_FACADE_URL ?? "").origin).toBe(
+      new URL(launch?.env.KEIKO_MODEL_GATEWAY_URL ?? "").origin,
+    );
     for (const path of [
       runRoot,
       join(runRoot, "config"),
@@ -1151,10 +1184,30 @@ describe("unmounted OpenCode runtime composition", () => {
     expect(files).not.toContain(FIXED_SESSION_TITLE);
     expect(JSON.stringify(governedEvents)).not.toContain(FIXED_SESSION_TITLE);
     expect(files).toContain("Bearer {env:KEIKO_MODEL_GATEWAY_CAPABILITY}");
+    const materializedConfig = JSON.parse(
+      readFileSync(join(runRoot, "config", "opencode", "opencode.json"), "utf8"),
+    ) as {
+      readonly provider: Readonly<Record<string, unknown>>;
+      readonly compaction: Readonly<Record<string, unknown>>;
+    };
+    const materializedProvider = materializedConfig.provider["keiko-runtime"] as {
+      readonly models: Readonly<
+        Record<string, { readonly limit: Readonly<Record<string, number>> }>
+      >;
+    };
+    expect(materializedProvider.models.coding?.limit).toEqual({
+      context: 65_536,
+      input: 61_440,
+      output: 4_096,
+    });
+    expect(materializedConfig.compaction).toMatchObject({ auto: true, prune: true, tail_turns: 2 });
     const paths = fetchMock.mock.calls.map(([url]) => requestPath(url));
     expect(paths.indexOf("/session")).toBeLessThan(paths.lastIndexOf("/session"));
     expect(paths.indexOf("/sync/history")).toBeGreaterThan(paths.indexOf("/session"));
-    expect(new URL(runtime.toolBridge.url).hostname).toBe("127.0.0.1");
+    // ADR-0043 D11-D14 (#3390): the bridge's public `url` is the SAME attested loopback origin
+    // supplied at composition -- relocated from asserting a self-issued ephemeral listener port
+    // (retired) to asserting the bridge never fabricates a second one of its own.
+    expect(runtime.toolBridge.url).toBe(TOOL_FACADE_ORIGIN);
     await expect(
       runtime.toolBridge.handle({
         method: "POST",
@@ -1240,15 +1293,20 @@ describe("private OpenCode run control", () => {
   });
 
   it("isolates the live startup challenge from user task submissions", async () => {
+    const statusPhases: ReadinessChallengePhase[] = [];
     const runControl = {
       promptBodies: [],
       abortSessions: [],
-      statusResponses: [{ ses_tool: { type: "busy" } }, {}],
+      statusResponses: [],
+      statusResponseForReadinessPhase: (phase: ReadinessChallengePhase): unknown => {
+        statusPhases.push(phase);
+        return phase === "aborted" ? {} : { ses_tool: { type: "busy" } };
+      },
     };
     const fixture = await startBridgeFixture(facade, undefined, { runControl });
     expect(runControl.promptBodies).toEqual([]);
     expect(runControl.abortSessions).toEqual([]);
-    expect(runControl.statusResponses).toEqual([{}]);
+    expect(statusPhases.at(-1)).toBe("aborted");
     expect(fixture.runtime.manager.health()).toMatchObject({
       status: "ready",
       activeRunId: FIXTURE_RUN_ID,
@@ -1387,6 +1445,7 @@ describe("private OpenCode run control", () => {
 
   it("accepts status omission only when causal terminal history exists", async () => {
     const prompt = "SENTINEL_PRIVATE_RUN_PROMPT";
+    const initialContext = "SENTINEL_UNTRUSTED_ISSUE_CONTEXT";
     const governedEvents: Readonly<Record<string, unknown>>[] = [];
     let history: readonly Readonly<Record<string, unknown>>[] = completedTurnHistory().slice(0, 1);
     const runControl = {
@@ -1410,7 +1469,9 @@ describe("private OpenCode run control", () => {
     });
 
     await expect(fixture.runtime.runPort.submitTask("unknown-run", prompt)).resolves.toBe(false);
-    await expect(fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, prompt)).resolves.toBe(true);
+    await expect(
+      fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, prompt, initialContext),
+    ).resolves.toBe(true);
     history = completedTurnHistory();
     const terminalWait = new AbortController();
     const terminalDeadline = setTimeout(() => {
@@ -1424,7 +1485,12 @@ describe("private OpenCode run control", () => {
     await expect(fixture.runtime.runPort.abortTask(FIXTURE_RUN_ID)).resolves.toBe(true);
     expect(runControl.abortSessions).toEqual(["ses_tool"]);
     expect(runControl.promptBodies).toEqual([
-      JSON.stringify({ parts: [{ type: "text", text: prompt }] }),
+      JSON.stringify({
+        parts: [
+          { type: "text", text: prompt },
+          { type: "text", text: initialContext, synthetic: true },
+        ],
+      }),
     ]);
 
     const aborted = new AbortController();
@@ -1439,6 +1505,7 @@ describe("private OpenCode run control", () => {
       readFileSync(join(runRoot, "config", "opencode", "tools", "keiko_changeset_edit.ts"), "utf8"),
     ].join("\n");
     expect(retained).not.toContain(prompt);
+    expect(retained).not.toContain(initialContext);
 
     await fixture.stop();
     await expect(fixture.runtime.runPort.submitTask(FIXTURE_RUN_ID, "after stop")).resolves.toBe(
@@ -1598,6 +1665,10 @@ describe("private OpenCode run control", () => {
         fixture.runtime.runPort.answerQuestion(FIXTURE_RUN_ID, "que_other", [["Approve"]]),
       ).resolves.toBe(false);
       await expect(
+        fixture.runtime.runPort.answerQuestion(FIXTURE_RUN_ID, "que_fixed", []),
+      ).rejects.toThrow("question-answer-rejected");
+      expect(questionRequests).toEqual([]);
+      await expect(
         fixture.runtime.runPort.rejectQuestion("unknown-run", "que_fixed"),
       ).resolves.toBe(false);
       await expect(
@@ -1611,6 +1682,61 @@ describe("private OpenCode run control", () => {
         { method: "POST", path: "/question/que_fixed/reject" },
       ]);
       expect(JSON.stringify(questionRequests)).not.toContain("Approve the bounded edit?");
+    } finally {
+      await fixture.stop();
+    }
+  });
+
+  // Pins the post-await readiness re-check in answerQuestion (opencodeRuntimeComposition.ts):
+  // `readyRun` hands back a live reference into the SAME mutable run record kept in the
+  // composition's internal map, so a concurrent dispose that completes while the run's own
+  // listQuestions() round trip is still in flight is visible on that reference the instant it
+  // resolves, even though nothing re-fetches the run from the map. Before #3384 batch-6 fixed
+  // `ReadyRun.ready`'s type from the literal `true` to `boolean`, TypeScript treated that
+  // re-check as provably always false, which made `@typescript-eslint/no-unnecessary-condition`
+  // flag it as dead code -- a lint-driven "cleanup" that deleted it would have let an
+  // already-disposed run answer a question it no longer owns.
+  it("fails closed when the run is disposed while its question list is still in flight", async () => {
+    const questionRequests: {
+      readonly method: string;
+      readonly path: string;
+      readonly body?: string;
+    }[] = [];
+    const pending = [
+      {
+        id: "que_fixed",
+        sessionID: "ses_tool",
+        questions: [
+          {
+            question: "Approve the bounded edit?",
+            header: "Approval",
+            options: [{ label: "Approve", description: "Continue" }],
+          },
+        ],
+      },
+    ];
+    const runtimeRef: { current?: OpenCodeRuntimeComposition } = {};
+    let disposedOnce = false;
+    const fixture = await startBridgeFixture(facade, undefined, {
+      runControl: {
+        promptBodies: [],
+        abortSessions: [],
+        statusResponses: [{}],
+        questionResponses: [pending],
+        questionRequests,
+        onQuestionListFetch: async (): Promise<void> => {
+          if (disposedOnce) return;
+          disposedOnce = true;
+          await runtimeRef.current?.manager.stop(FIXTURE_RUN_ID);
+        },
+      },
+    });
+    runtimeRef.current = fixture.runtime;
+    try {
+      await expect(
+        fixture.runtime.runPort.answerQuestion(FIXTURE_RUN_ID, "que_fixed", [["Approve"]]),
+      ).resolves.toBe(false);
+      expect(questionRequests).toEqual([]);
     } finally {
       await fixture.stop();
     }
@@ -1649,6 +1775,31 @@ describe("private OpenCode tool bridge", () => {
       },
     };
   };
+
+  // #3390 (ADR-0043 D11-D14): a negative proof that no production path re-opens a second loopback
+  // listener for this bridge. The public port's OWN shape is the guard: it exposes exactly `url`
+  // (a fixed string, never a self-issued port), `requestDeadlineMs` (a plain number the route
+  // reads to bound body-ingestion by the SAME deadline the admission gate uses for execution) and
+  // `handle` -- no `listen`/`close`/socket accessor a caller could use to stand up an HTTP server,
+  // which is exactly what made the retired listener reachable from a Seatbelt-denied second port
+  // in the first place.
+  it("exposes exactly {url, requestDeadlineMs, handle} on the public bridge port -- no listener surface to reopen", async () => {
+    const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
+    const fixture = await startBridgeFixture(facade);
+    try {
+      expect(Object.keys(fixture.runtime.toolBridge).sort()).toEqual([
+        "handle",
+        "requestDeadlineMs",
+        "url",
+      ]);
+      // Pins to the SAME configured value `startBridgeFixture`'s default `toolBridge` input uses
+      // (`requestDeadlineMs: 50`) -- not just "some positive number" -- so a future change that
+      // decouples the exposed value from the admission gate's own limit is caught here.
+      expect(fixture.runtime.toolBridge.requestDeadlineMs).toBe(50);
+    } finally {
+      await fixture.stop();
+    }
+  });
 
   it("closes an adapter whose handshake succeeds after manager timeout disposal", async () => {
     let releaseHistory: (() => void) | undefined;
@@ -1805,102 +1956,82 @@ describe("private OpenCode tool bridge", () => {
     await fixture.stop();
   });
 
-  it("rejects an unauthorized chunked request before EOF or any facade call", async () => {
+  // #3390 (ADR-0043 D11-D14): the raw-listener framing pins below (chunked-before-EOF, declared
+  // Content-Length, non-POST/wrong-path routing, and the fatal UTF-8 decode) tested the RETIRED
+  // `createServer` listener's own request parsing. That framing is gone -- `handle()` is now the
+  // ONE dispatch surface, reached by the BFF's real route dispatcher (coding-sidecar-tool-facade.ts)
+  // which reads the body itself before calling `handle()`. Each invariant that still applies to
+  // `handle()` is relocated below, called directly instead of over a socket; the two that moved to
+  // a different owning layer are relocated there instead (never silently dropped):
+  //  - non-POST / wrong-path routing is now the router's job, not this bridge's -- covered by
+  //    routes.test.ts's generic `matchRoute` method-not-allowed coverage, strengthened with an
+  //    explicit pin for this route's pattern.
+  //  - "reject bytes that fail to decode as UTF-8" is now the BFF body reader's job
+  //    (coding-sidecar-tool-facade.ts's `readJsonObject`, over the real `IncomingMessage`) -- see
+  //    coding-sidecar-tool-facade.test.ts's own malformed-encoding pin.
+  it("rejects an unauthorized request before any facade call", async () => {
     const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
     const fixture = await startBridgeFixture(facade);
-    const request = openHttpRequest(fixture.runtime.toolBridge.url, {
-      headers: { "transfer-encoding": "chunked" },
-    });
     try {
-      request.client.write('{"action":"read"');
-      await expect(responseBeforeEof(request.response)).resolves.toMatchObject({ status: 401 });
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(),
+          body: '{"action":"read"}',
+        }),
+      ).resolves.toMatchObject({ status: 401 });
       expect(facade.execute).not.toHaveBeenCalled();
     } finally {
-      request.client.end();
       await fixture.stop();
     }
   });
 
-  it("rejects Origin, non-POST paths, and oversized declared bodies before reading them", async () => {
+  it("rejects an Origin header before invoking the facade", async () => {
     const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
     const fixture = await startBridgeFixture(facade);
-    const origin = openHttpRequest(fixture.runtime.toolBridge.url, {
-      headers: {
-        ...authorized,
-        origin: "http://untrusted.invalid",
-        "transfer-encoding": "chunked",
-      },
-    });
-    const wrongMethod = openHttpRequest(fixture.runtime.toolBridge.url, {
-      method: "GET",
-      headers: { ...authorized, "transfer-encoding": "chunked" },
-    });
-    const wrongPath = openHttpRequest(
-      fixture.runtime.toolBridge.url.replace(/\/tool$/u, "/other"),
-      {
-        headers: { ...authorized, "transfer-encoding": "chunked" },
-      },
-    );
-    const oversized = openHttpRequest(fixture.runtime.toolBridge.url, {
-      headers: {
-        ...authorized,
-        "content-length": String(CODING_TOOL_MAX_BODY_BYTES + 1),
-      },
-    });
     try {
-      origin.client.write("{");
-      wrongMethod.client.write("{");
-      wrongPath.client.write("{");
-      oversized.client.flushHeaders();
-      await expect(responseBeforeEof(origin.response)).resolves.toMatchObject({ status: 403 });
-      await expect(responseBeforeEof(wrongMethod.response)).resolves.toMatchObject({ status: 404 });
-      await expect(responseBeforeEof(wrongPath.response)).resolves.toMatchObject({ status: 404 });
-      await expect(responseBeforeEof(oversized.response)).resolves.toMatchObject({ status: 413 });
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers({ ...authorized, origin: "http://untrusted.invalid" }),
+          body: '{"action":"read"}',
+        }),
+      ).resolves.toMatchObject({ status: 403 });
       expect(facade.execute).not.toHaveBeenCalled();
     } finally {
-      origin.client.end();
-      wrongMethod.client.end();
-      wrongPath.client.end();
-      oversized.client.end(Buffer.alloc(CODING_TOOL_MAX_BODY_BYTES + 1));
       await fixture.stop();
     }
   });
 
-  it("uses a fatal UTF-8 decoder and preserves the exact ingress byte boundary", async () => {
+  it("admits a body at exactly the byte budget and rejects one over it, before invoking the facade for the oversized one", async () => {
     const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
     const fixture = await startBridgeFixture(facade);
-    const exact = openHttpRequest(fixture.runtime.toolBridge.url, { headers: authorized });
-    const invalidUtf8 = openHttpRequest(fixture.runtime.toolBridge.url, { headers: authorized });
+    // Padding with ASCII spaces keeps `Buffer.byteLength(body, "utf8")` equal to `body.length`,
+    // so the body constructed for N bytes is EXACTLY N bytes -- the same off-by-one-sensitive
+    // boundary `preflightToolRequest`'s `Buffer.byteLength(body, "utf8") > CODING_TOOL_MAX_BODY_BYTES`
+    // check guards.
+    const paddedObjectOfSize = (bytes: number): string => `{${" ".repeat(bytes - 2)}}`;
     try {
-      exact.client.end(
-        Buffer.concat([
-          Buffer.from("{}", "utf8"),
-          Buffer.alloc(CODING_TOOL_MAX_BODY_BYTES - 2, 0x20),
-        ]),
-      );
-      await expect(exact.response).resolves.toMatchObject({ status: 200 });
-      invalidUtf8.client.end(Buffer.from([0x7b, 0xc3, 0x28, 0x7d]));
-      await expect(invalidUtf8.response).resolves.toMatchObject({ status: 400 });
+      const exact = paddedObjectOfSize(CODING_TOOL_MAX_BODY_BYTES);
+      expect(Buffer.byteLength(exact, "utf8")).toBe(CODING_TOOL_MAX_BODY_BYTES);
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: exact,
+        }),
+      ).resolves.toMatchObject({ status: 200 });
+      expect(facade.execute).toHaveBeenCalledOnce();
+      const oversized = paddedObjectOfSize(CODING_TOOL_MAX_BODY_BYTES + 1);
+      await expect(
+        fixture.runtime.toolBridge.handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: oversized,
+        }),
+      ).resolves.toMatchObject({ status: 413 });
       expect(facade.execute).toHaveBeenCalledOnce();
     } finally {
-      exact.client.destroy();
-      invalidUtf8.client.destroy();
-      await fixture.stop();
-    }
-  });
-
-  it("applies one absolute deadline while reading an authorized body", async () => {
-    const facade: CodingToolFacade = { execute: vi.fn(() => Promise.resolve(completed)) };
-    const fixture = await startBridgeFixture(facade, { requestDeadlineMs: 30, maxInFlight: 1 });
-    const request = openHttpRequest(fixture.runtime.toolBridge.url, {
-      headers: { ...authorized, "transfer-encoding": "chunked" },
-    });
-    try {
-      request.client.write('{"action":"read"');
-      await expect(responseBeforeEof(request.response)).resolves.toMatchObject({ status: 408 });
-      expect(facade.execute).not.toHaveBeenCalled();
-    } finally {
-      request.client.end();
       await fixture.stop();
     }
   });
@@ -1918,20 +2049,23 @@ describe("private OpenCode tool bridge", () => {
       ),
     };
     const fixture = await startBridgeFixture(facade, { requestDeadlineMs: 1_000, maxInFlight: 1 });
-    const first = openHttpRequest(fixture.runtime.toolBridge.url, { headers: authorized });
-    const second = openHttpRequest(fixture.runtime.toolBridge.url, { headers: authorized });
+    const request = (): Promise<{ readonly status: number; readonly body: string }> =>
+      fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: '{"action":"read"}',
+      });
     try {
-      first.client.end('{"action":"read"}');
+      const first = request();
       await vi.waitFor(() => {
         expect(facade.execute).toHaveBeenCalledOnce();
       });
-      second.client.end('{"action":"read"}');
-      await expect(responseBeforeEof(second.response)).resolves.toMatchObject({ status: 429 });
+      await expect(request()).resolves.toMatchObject({ status: 429 });
       expect(facade.execute).toHaveBeenCalledOnce();
+      for (const release of releases) release();
+      await expect(first).resolves.toMatchObject({ status: 200 });
     } finally {
       for (const release of releases) release();
-      first.client.destroy();
-      second.client.destroy();
       await fixture.stop();
     }
   });
@@ -2112,12 +2246,22 @@ describe("private OpenCode tool bridge", () => {
       { requestDeadlineMs: 1_000, maxInFlight: 1 },
       { safeActivity: activity.safeActivity },
     );
-    const request = openHttpRequest(fixture.runtime.toolBridge.url, { headers: authorized });
+    // #3390 (ADR-0043 D11-D14): a raw TCP disconnect no longer reaches this bridge directly --
+    // the ROUTE (coding-sidecar-tool-facade.ts's `bindRouteDisconnect`) observes its own
+    // request/response and turns that into exactly this `signal`, merged with the admission
+    // gate's own deadline abort by `bindExternalAbort`. Driving that same `signal` here proves
+    // the merge point directly instead of simulating a socket close this bridge never sees again.
+    const disconnect = new AbortController();
+    const handled = fixture.runtime.toolBridge.handle({
+      method: "POST",
+      headers: new Headers(authorized),
+      body: toolBody("call_disconnect"),
+      signal: disconnect.signal,
+    });
     try {
-      request.client.end(toolBody("call_disconnect"));
       await invoked;
       expect(observedSignal).toBeInstanceOf(AbortSignal);
-      request.client.destroy();
+      disconnect.abort();
       await vi.waitFor(() => {
         expect(observedSignal?.aborted).toBe(true);
       });
@@ -2126,8 +2270,9 @@ describe("private OpenCode tool bridge", () => {
           expect.objectContaining({ actionId: "tool:call_disconnect", state: "cancelled" }),
         ]);
       });
+      await expect(handled).resolves.toMatchObject({ status: 502 });
     } finally {
-      request.client.destroy();
+      disconnect.abort();
       await fixture.stop();
     }
   });
@@ -2160,20 +2305,22 @@ describe("private OpenCode tool bridge", () => {
       { requestDeadlineMs: 30, maxInFlight: 1 },
       { safeActivity: activity.safeActivity },
     );
-    const request = openHttpRequest(fixture.runtime.toolBridge.url, { headers: authorized });
+    const handled = fixture.runtime.toolBridge.handle({
+      method: "POST",
+      headers: new Headers(authorized),
+      body: toolBody("call_timeout"),
+    });
     try {
-      request.client.end(toolBody("call_timeout"));
       await invoked;
       expect(observedSignal).toBeInstanceOf(AbortSignal);
       await vi.waitFor(() => {
         expect(observedSignal?.aborted).toBe(true);
       });
-      await expect(request.response).resolves.toMatchObject({ status: 408 });
+      await expect(handled).resolves.toMatchObject({ status: 408 });
       expect(activity.settlements).toEqual([
         expect.objectContaining({ actionId: "tool:call_timeout", state: "cancelled" }),
       ]);
     } finally {
-      request.client.destroy();
       await fixture.stop();
     }
   });

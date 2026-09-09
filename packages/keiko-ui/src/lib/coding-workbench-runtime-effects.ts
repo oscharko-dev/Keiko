@@ -3,7 +3,10 @@ import {
   GATEWAY_CONFIG_UPDATED_EVENT,
   GATEWAY_MODEL_READINESS_UPDATED_EVENT,
 } from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
-import type { CodingWorkbenchRuntimeStateName } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchRuntimeSnapshot,
+  CodingWorkbenchRuntimeStateName,
+} from "@oscharko-dev/keiko-contracts";
 import type { ActiveWorkspaceApi } from "@/app/components/desktop/context/ActiveWorkspaceContext";
 import { logRuntimeActivityEvents } from "@/app/components/desktop/widgets/shared/activityBus";
 import { codingWorkbenchRuntimeApiError } from "./coding-workbench-runtime-api";
@@ -72,6 +75,56 @@ export function useCodingWorkbenchRuntimeRefreshEffects({
   useEffect(() => {
     void refreshRun();
   }, [refreshRun]);
+  usePostRunDescriptionRefresh(state.run.value, refreshRun);
+}
+
+/** How often, and for how long at most, the settled run's snapshot is re-read while its
+ * automatically generated description is still on its way. */
+export const POST_RUN_DESCRIPTION_POLL_MS = 3_000;
+export const POST_RUN_DESCRIPTION_POLL_MAX_MS = 5 * 60_000;
+
+/**
+ * #3390: whether the run has settled with a draft pull request whose automatically generated
+ * description has not arrived yet.
+ *
+ * The description job is dispatched AT the terminal transition and generates a few seconds later --
+ * after the run's event stream, which is kept only for live states, has delivered its last
+ * re-snapshot. Nothing re-read the run after that, so the card an operator was watching kept
+ * showing the pre-generation state for good, while a freshly opened window showed "Review exact
+ * draft" at once (rehearsal run-04). The snapshot carries no "generation pending" phase of its own;
+ * this condition is exactly the window in which one is pending.
+ */
+export function awaitingPostRunDescription(
+  snapshot: CodingWorkbenchRuntimeSnapshot | null | undefined,
+): boolean {
+  return (
+    snapshot?.state === "succeeded" &&
+    snapshot.draftDelivery?.phase === "draft-created" &&
+    snapshot.descriptionStatus === undefined
+  );
+}
+
+// A bounded, purpose-specific re-read -- not a general polling loop: it runs only while the
+// condition above holds, and gives up after `POST_RUN_DESCRIPTION_POLL_MAX_MS` so a job that never
+// settles cannot keep a window polling forever.
+function usePostRunDescriptionRefresh(
+  snapshot: CodingWorkbenchRuntimeSnapshot | null | undefined,
+  refreshRun: () => Promise<void>,
+): void {
+  const awaiting = awaitingPostRunDescription(snapshot);
+  useEffect(() => {
+    if (!awaiting) return;
+    const timer = window.setInterval(() => {
+      void refreshRun();
+    }, POST_RUN_DESCRIPTION_POLL_MS);
+    const stop = window.setTimeout(() => {
+      window.clearInterval(timer);
+    }, POST_RUN_DESCRIPTION_POLL_MAX_MS);
+    return (): void => {
+      window.clearInterval(timer);
+      window.clearTimeout(stop);
+    };
+  }, [awaiting, refreshRun]);
 }
 
 /**

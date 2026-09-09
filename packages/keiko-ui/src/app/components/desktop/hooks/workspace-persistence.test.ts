@@ -66,6 +66,73 @@ describe("workspace-persistence", () => {
     expect(rejected[0]?.cfg).toEqual({ projectPath: "/other" });
   });
 
+  // Epic #3384 live-flow defect (#3401 "Review description"): the governed pull request window is
+  // opened with the exact server-held retained description proposal in its cfg, but the persistence
+  // whitelist only knew `projectPath`/`headBranchName`, so one desktop reload silently dropped the
+  // binding and the card fell back to an empty description form that never issued the retained
+  // review. The four binding keys must survive persistence with closed, fail-closed value shapes.
+  it("retains the exact retained-description binding of a governed pull request window", () => {
+    const digest = "a".repeat(64);
+    const retained = sanitizePersistedWindows([
+      win({
+        id: "pr-1",
+        type: "governedPullRequest",
+        cfg: {
+          projectPath: "/repo",
+          headBranchName: "feature",
+          descriptionOwnerAndRepo: "owner/repo",
+          descriptionPrNumber: 42,
+          descriptionProposalId: "proposal-1",
+          descriptionSnapshotDigest: digest,
+        },
+      }),
+    ]);
+    expect(retained[0]?.cfg).toEqual({
+      projectPath: "/repo",
+      headBranchName: "feature",
+      descriptionOwnerAndRepo: "owner/repo",
+      descriptionPrNumber: 42,
+      descriptionProposalId: "proposal-1",
+      descriptionSnapshotDigest: digest,
+    });
+
+    const hostile = sanitizePersistedWindows([
+      win({
+        id: "pr-2",
+        type: "governedPullRequest",
+        cfg: {
+          projectPath: "/repo",
+          descriptionOwnerAndRepo: "owner/../repo",
+          descriptionPrNumber: "42",
+          descriptionProposalId: "../escape",
+          descriptionSnapshotDigest: "not-a-digest",
+        },
+      }),
+      win({
+        id: "pr-3",
+        type: "governedPullRequest",
+        cfg: {
+          projectPath: "/repo",
+          descriptionPrNumber: -1,
+          descriptionSnapshotDigest: digest.toUpperCase(),
+        },
+      }),
+      win({
+        id: "pr-4",
+        type: "governedPullRequest",
+        cfg: {
+          projectPath: "/repo",
+          // Above the contracts-owned GITHUB_ISSUE_NUMBER_MAX ceiling and a repo with a path escape.
+          descriptionPrNumber: 1_000_000_001,
+          descriptionOwnerAndRepo: "owner/../repo",
+        },
+      }),
+    ]);
+    expect(hostile[0]?.cfg).toEqual({ projectPath: "/repo" });
+    expect(hostile[1]?.cfg).toEqual({ projectPath: "/repo" });
+    expect(hostile[2]?.cfg).toEqual({ projectPath: "/repo" });
+  });
+
   it("drops transient windows and preserves PDF preview as a safe shell only", () => {
     const persisted = sanitizePersistedWindows([
       win({ id: "browser-1", type: "browser", cfg: { url: "https://example.test" } }),

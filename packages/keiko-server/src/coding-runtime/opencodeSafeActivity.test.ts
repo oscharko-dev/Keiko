@@ -201,6 +201,126 @@ describe("OpenCode safe-activity normalization", () => {
     expect(JSON.stringify(normalized)).not.toContain("hidden");
   });
 
+  it("maps an errored tool part onto the closed failed state without the upstream error text (#3390)", () => {
+    // The real part shape observed from the #3390 run's opencode.db: a keiko_* tool the facade
+    // never got to settle because the HTTP call to the tool bridge itself failed.
+    const errorMessage = "Was there a typo in the url or port?";
+    const normalized = normalizeOpenCodeSafeActivityHistory([
+      row(1, "message.part.updated.1", {
+        sessionID: "ses_safe",
+        part: {
+          id: "prt_failed",
+          sessionID: "ses_safe",
+          messageID: "msg_assistant",
+          type: "tool",
+          callID: "call_AMHeAURMZJmbOntWyCy5udmS",
+          tool: "keiko_workspace_discover",
+          state: {
+            status: "error",
+            input: { maxResults: 20, query: "issue" },
+            error: errorMessage,
+            time: { start: 1_788_611_600_362, end: 1_788_611_600_364 },
+          },
+        },
+        time: 1_788_611_600_364,
+      }),
+    ]);
+
+    expect(normalized.dropped).toBe(0);
+    expect(normalized.signals).toMatchObject([
+      {
+        signal: {
+          kind: "tool",
+          state: "failed",
+          tool: "keiko_workspace_discover",
+          callId: "call_AMHeAURMZJmbOntWyCy5udmS",
+          messageId: "msg_assistant",
+        },
+      },
+    ]);
+    const serialized = JSON.stringify(normalized);
+    expect(serialized).not.toContain(errorMessage);
+    expect(serialized).not.toContain("typo");
+    expect(serialized).not.toContain("error");
+  });
+
+  it("projects a native tool's completed part as succeeded -- it has no other terminal source (#3390)", () => {
+    // "question" is the one model-visible tool that reaches toolPartSignal and is neither the
+    // plan carrier ("todowrite" is projected as a plan by partSignal before reaching here) nor
+    // dispatched through the productive tool facade (opencodeRuntimeComposition.ts's settleTool
+    // only ever settles facade-executed keiko_* calls). Leaving its completed part a no-op would
+    // reproduce the #3390 symptom via the success path instead of the error path: the calledTool
+    // "running" row would never receive a terminal state and the Workbench timeline would read
+    // "Running" forever for a question the user already answered.
+    const normalized = normalizeOpenCodeSafeActivityHistory([
+      row(1, "message.part.updated.1", {
+        sessionID: "ses_safe",
+        part: {
+          id: "prt_question",
+          sessionID: "ses_safe",
+          messageID: "msg_assistant",
+          type: "tool",
+          callID: "call_question",
+          tool: "question",
+          state: {
+            status: "completed",
+            input: {},
+            output: "answered",
+            title: "question",
+            metadata: {},
+            time: { start: 1_788_611_600_000, end: 1_788_611_600_001 },
+          },
+        },
+        time: 1_788_611_600_001,
+      }),
+    ]);
+
+    expect(normalized.dropped).toBe(0);
+    expect(normalized.signals).toMatchObject([
+      {
+        signal: {
+          kind: "tool",
+          state: "succeeded",
+          tool: "question",
+          callId: "call_question",
+          messageId: "msg_assistant",
+        },
+      },
+    ]);
+    const serialized = JSON.stringify(normalized);
+    expect(serialized).not.toContain("answered");
+  });
+
+  it("keeps a facade-dispatched (keiko_*) tool's completed part a silent no-op (#3390)", () => {
+    // The Keiko tool facade supplies "succeeded" once its own closed result is known
+    // (opencodeRuntimeComposition.ts settleTool). Projecting a second "succeeded" signal here
+    // from the upstream part would race that value instead of deferring to it.
+    const normalized = normalizeOpenCodeSafeActivityHistory([
+      row(1, "message.part.updated.1", {
+        sessionID: "ses_safe",
+        part: {
+          id: "prt_facade_completed",
+          sessionID: "ses_safe",
+          messageID: "msg_assistant",
+          type: "tool",
+          callID: "call_facade",
+          tool: "keiko_workspace_discover",
+          state: {
+            status: "completed",
+            input: { maxResults: 20, query: "issue" },
+            output: "found",
+            title: "keiko_workspace_discover",
+            metadata: {},
+            time: { start: 1_788_611_600_000, end: 1_788_611_600_001 },
+          },
+        },
+        time: 1_788_611_600_001,
+      }),
+    ]);
+
+    expect(normalized).toEqual({ signals: [], dropped: 0 });
+  });
+
   it("projects the completed plan-tool part as a plan signal, never as tool activity", () => {
     const droppedCanary = "PLAN_METADATA_CANARY_2480";
     const todos = [

@@ -54,6 +54,7 @@ const VALUE_OPTION_HANDLERS = new Map([
 const BOOLEAN_OPTIONS = new Map([
   ["strict", "strict"],
   ["enforce-file-floors", "enforceFileFloors"],
+  ["refresh-source-inventory", "refreshSourceInventory"],
   // ADR-0158 D2: evaluate lines, statements, branches and functions in one parse of the summaries.
   ["all-metrics", "allMetrics"],
 ]);
@@ -77,6 +78,7 @@ function defaultOptions() {
     strict: false,
     allMetrics: false,
     enforceFileFloors: false,
+    refreshSourceInventory: false,
     fileFloorThreshold: undefined,
   };
 }
@@ -139,6 +141,14 @@ function validateOptions(parsed) {
   }
   if (parsed.fileFloorThreshold !== undefined && !isPercent(parsed.fileFloorThreshold)) {
     throw new Error(`Invalid --file-floor-threshold value: ${String(parsed.fileFloorThreshold)}`);
+  }
+  if (
+    parsed.refreshSourceInventory &&
+    (parsed.baseline === undefined || parsed.writeBaseline === undefined)
+  ) {
+    throw new Error(
+      "--refresh-source-inventory requires --baseline and --write-baseline destinations",
+    );
   }
 }
 
@@ -297,6 +307,30 @@ export function listPackageSourceFiles(root, packageName) {
 
 export function countPackageSourceFiles(root, packageName) {
   return listPackageSourceFiles(root, packageName).length;
+}
+
+function assertInventoryPackageSet(root, baseline) {
+  const live = listPackages(root);
+  const recorded = Object.keys(baseline.packages);
+  const missing = live.filter((name) => !recorded.includes(name));
+  const stale = recorded.filter((name) => !live.includes(name));
+  if (missing.length === 0 && stale.length === 0) return;
+  throw new Error(
+    `Coverage baseline package inventory differs from the workspace: missing=${String(missing.length)}, stale=${String(stale.length)}`,
+  );
+}
+
+function refreshSourceInventoryBaseline(root, baseline) {
+  assertInventoryPackageSet(root, baseline);
+  return {
+    ...baseline,
+    packages: Object.fromEntries(
+      Object.entries(baseline.packages).map(([name, entry]) => [
+        name,
+        { ...entry, files: countPackageSourceFiles(root, name) },
+      ]),
+    ),
+  };
 }
 
 function normalizeCoverageFile(root, file) {
@@ -845,6 +879,24 @@ export async function runCli(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
   const scriptRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
   const root = resolve(options.root ?? scriptRoot);
+  if (options.refreshSourceInventory) {
+    const baseline = readJsonFile(resolve(root, options.baseline));
+    const failures = baselineSchemaFailures(baseline);
+    if (failures.length > 0) {
+      throw new Error(
+        `coverage baseline is not the governed schema:\n  - ${failures.join("\n  - ")}`,
+      );
+    }
+    const refreshed = refreshSourceInventoryBaseline(root, baseline);
+    const changed = Object.entries(baseline.packages).filter(
+      ([name, entry]) => entry.files !== refreshed.packages[name].files,
+    ).length;
+    writeJson(resolve(root, options.writeBaseline), refreshed);
+    console.log(
+      `coverage-source-inventory: refreshed ${String(Object.keys(refreshed.packages).length)} package count(s); ${String(changed)} changed.`,
+    );
+    return refreshed;
+  }
   const context = loadEvaluationContext(root, options);
   const evaluation = evaluateAll(options, context);
   writeReportOutputs(root, options, context, evaluation);

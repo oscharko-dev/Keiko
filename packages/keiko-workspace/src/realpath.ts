@@ -65,15 +65,30 @@ function deniedSegmentIndexes(segments: readonly string[]): readonly number[] {
   return indexes;
 }
 
-function isAllowedCodexWorktreeRoot(
+// The agent tools that create real, deliberately-worked-in git worktrees under their own state
+// directory. The deny list keeps those state directories out of content discovery, which is right —
+// they hold prompts, transcripts and caches — but a worktree below one is an ordinary checkout the
+// operator chose to work in, and refusing it makes every workspace feature unusable there.
+//
+// #3390: this named `.codex` alone. Claude Code lays its worktrees out identically under
+// `.claude/worktrees/<task>/`, and this repository's own agent contract names `claude/…` branches,
+// so an agent or a person working in one was refused before anything was read.
+const AGENT_WORKTREE_TOOL_DIRECTORIES: ReadonlySet<string> = new Set([".codex", ".claude"]);
+
+// Deliberately as narrow as it has always been: EXACTLY one denied segment, which must itself be an
+// agent tool directory, immediately followed by `worktrees/<name>` with content below it. Anything
+// else — a second denied segment, a different tool directory, a different layout — stays refused.
+function isAllowedAgentWorktreeRoot(
   segments: readonly string[],
   deniedIndexes: readonly number[],
 ): boolean {
   if (deniedIndexes.length !== 1) return false;
   const deniedIndex = deniedIndexes[0];
   if (deniedIndex === undefined) return false;
+  const toolDirectory = segments[deniedIndex]?.toLowerCase();
   return (
-    segments[deniedIndex]?.toLowerCase() === ".codex" &&
+    toolDirectory !== undefined &&
+    AGENT_WORKTREE_TOOL_DIRECTORIES.has(toolDirectory) &&
     segments[deniedIndex + 1]?.toLowerCase() === "worktrees" &&
     segments.length > deniedIndex + 2
   );
@@ -82,7 +97,7 @@ function isAllowedCodexWorktreeRoot(
 function deniedWorkspaceRootPath(path: string): boolean {
   const segments = absolutePathSegments(path);
   const deniedIndexes = deniedSegmentIndexes(segments);
-  return deniedIndexes.length > 0 && !isAllowedCodexWorktreeRoot(segments, deniedIndexes);
+  return deniedIndexes.length > 0 && !isAllowedAgentWorktreeRoot(segments, deniedIndexes);
 }
 
 function windowsPathShape(path: string): boolean {

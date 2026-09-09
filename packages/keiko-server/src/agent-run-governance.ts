@@ -315,7 +315,8 @@ function promptTokenEstimate(request: GatewayRequest): number {
       toolCalls: message.toolCalls,
     }),
   );
-  const tools = request.tools === undefined ? [] : [JSON.stringify(request.tools)];
+  const tools =
+    request.toolCatalog === undefined ? [] : [JSON.stringify(request.toolCatalog.projection.tools)];
   const responseFormat =
     request.responseFormat === undefined ? [] : [JSON.stringify(request.responseFormat)];
   return Math.max(1, estimateTokensForSegments([...messages, ...tools, ...responseFormat]));

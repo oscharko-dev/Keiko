@@ -24,6 +24,10 @@ import type {
 // serialize into preview/evidence and cannot leak file contents.
 
 export interface GitWorktreeSnapshot {
+  /** Absent only for unborn HEAD or a legacy injected snapshot. */
+  readonly headSha?: string | undefined;
+  /** Canonical identity of every staged mode, blob and path; no raw index data leaves the reader. */
+  readonly stagedTreeDigest?: string | undefined;
   readonly headDetached: boolean;
   // Present iff !headDetached. The branch HEAD currently points at.
   readonly currentBranchName?: string | undefined;
@@ -47,53 +51,21 @@ export interface GitWorktreeSnapshot {
 
 // ─── Finding taxonomy ─────────────────────────────────────────────────────────────────────
 
-export type GitPreflightFindingCode =
-  | "detached-head"
-  | "branch-already-exists"
-  | "base-branch-missing"
-  | "switch-target-missing"
-  | "no-changes-to-stage"
-  | "nothing-staged-to-unstage"
-  | "nothing-staged-to-commit"
-  | "untracked-files-impacted"
-  | "no-upstream-configured"
-  | "nothing-to-push"
-  | "non-fast-forward"
-  | "remote-alias-missing"
-  | "remote-unreachable"
-  | "operation-in-progress"
-  | "no-operation-to-abort"
-  | "recovery-target-unset"
-  | "dirty-worktree-impacts-recovery";
-
-export const GIT_PREFLIGHT_FINDING_CODES: readonly GitPreflightFindingCode[] = [
-  "detached-head",
-  "branch-already-exists",
-  "base-branch-missing",
-  "switch-target-missing",
-  "no-changes-to-stage",
-  "nothing-staged-to-unstage",
-  "nothing-staged-to-commit",
-  "untracked-files-impacted",
-  "no-upstream-configured",
-  "nothing-to-push",
-  "non-fast-forward",
-  "remote-alias-missing",
-  "remote-unreachable",
-  "operation-in-progress",
-  "no-operation-to-abort",
-  "recovery-target-unset",
-  "dirty-worktree-impacts-recovery",
-] as const;
-
-// A blocking finding halts the lifecycle before execution; an advisory finding is surfaced for the
-// caller (and preview/UX) but does not halt.
-export type GitPreflightSeverity = "blocking" | "advisory";
-
-// Intrinsic to each code: a user-actionable finding describes a repository condition the operator
-// can fix; an internal finding describes a kernel/caller construction fault. AC2 distinguishes these
-// so approval UX routes "you need to stage a file" differently from "the kernel was misconfigured".
-export type GitPreflightRemediation = "user-actionable" | "internal";
+export {
+  GIT_PREFLIGHT_FINDING_CODES,
+  isGitPreflightFindingCode,
+} from "@oscharko-dev/keiko-contracts/runtime/git-preflight";
+export type {
+  GitPreflightFindingCode,
+  GitPreflightSeverity,
+  GitPreflightRemediation,
+  GitPreflightFinding,
+} from "@oscharko-dev/keiko-contracts/runtime/git-preflight";
+import type {
+  GitPreflightFindingCode,
+  GitPreflightRemediation,
+  GitPreflightFinding,
+} from "@oscharko-dev/keiko-contracts/runtime/git-preflight";
 
 // Frozen, exhaustive code → remediation table. Keyed on every code so a new code forces an explicit
 // classification here (the Record is not Partial).
@@ -115,17 +87,14 @@ const FINDING_REMEDIATION: Readonly<Record<GitPreflightFindingCode, GitPreflight
   "no-operation-to-abort": "user-actionable",
   "recovery-target-unset": "internal",
   "dirty-worktree-impacts-recovery": "user-actionable",
+  // The user just needs to re-preview/re-approve against the branch's current head.
+  "verified-commit-drifted": "user-actionable",
+  // The user re-targets the push to the checked-out branch (or checks the named branch out).
+  "source-branch-not-checked-out": "user-actionable",
 } as const;
 
 export function gitPreflightRemediationFor(code: GitPreflightFindingCode): GitPreflightRemediation {
   return FINDING_REMEDIATION[code];
-}
-
-export interface GitPreflightFinding {
-  readonly code: GitPreflightFindingCode;
-  readonly severity: GitPreflightSeverity;
-  readonly remediation: GitPreflightRemediation;
-  readonly phase: "preflight";
 }
 
 export interface GitPreflightReport {
@@ -265,8 +234,25 @@ function preflightPush(
   if (!snapshot.remoteAliases.includes(inputs.remoteAlias)) {
     findings.push(blocking("remote-alias-missing"));
   }
-  if (!snapshot.hasUpstream && !inputs.setUpstreamTracking) {
-    findings.push(blocking("no-upstream-configured"));
+  // #3394 review, finding 1: `verifiedCommitSha` is now mandatory and validated at the request
+  // boundary (a valid Git object id, by construction) — so the "no local tracking relation and no
+  // pinned commit" gap `pushNeedsUpstream` used to close can no longer occur; a caller that omitted
+  // both used to fall through to an un-pinned, un-tracked push, which is now unreachable by
+  // construction (AGENTS.md §7: delete dead code rather than leave an always-false guard in place).
+  // This is the actual anti-drift gate the finding is about: it runs on the FRESHLY re-read snapshot
+  // (never the one a stale preview cached), so it catches "the branch moved since I approved this"
+  // before any adapter call happens at all.
+  // ...and it only speaks for `sourceBranchName` when that branch IS the checkout: `snapshot.headSha`
+  // is the checked-out branch's head, so a push naming any other branch (or issued from a detached
+  // head, where `currentBranchName` is absent) is refused outright rather than judged by a head the
+  // snapshot never read for it.
+  // One root cause, one finding: once the named branch is not the checkout, the drift comparison
+  // has no valid signal (it would compare against another branch's head) and its "retry" hint would
+  // contradict the "re-target" hint of the finding that actually explains the refusal.
+  if (snapshot.currentBranchName !== inputs.sourceBranchName) {
+    findings.push(blocking("source-branch-not-checked-out"));
+  } else if (inputs.verifiedCommitSha !== snapshot.headSha) {
+    findings.push(blocking("verified-commit-drifted"));
   }
   if (snapshot.remoteReachable === false) {
     findings.push(blocking("remote-unreachable"));
@@ -346,6 +332,15 @@ const PREFLIGHT_DISPATCH: PreflightDispatch = {
   recovery: preflightRecovery,
   "pr-create": preflightNoLocalPrecondition,
   "pr-update": preflightNoLocalPrecondition,
+  // #3399: pre-existing gap closed in passing — "pr-description-apply" joined
+  // GitDeliveryActionKind without a PREFLIGHT_DISPATCH entry, which is a compile error against
+  // this mapped type's exhaustiveness guarantee, not a runtime one (evaluateGitPreflight is never
+  // called with it; the description-apply execute path has its own approval/preparation checks).
+  "pr-description-apply": preflightNoLocalPrecondition,
+  // #3389: same shape — the mark-ready transition has no snapshot-derivable local precondition of
+  // its own; its readiness (draft state, base/head SHA drift) is re-verified live by the governed
+  // execute path (prMarkReadyExecution.ts) immediately before and after the mutation.
+  "pr-mark-ready": preflightNoLocalPrecondition,
   merge: preflightNoLocalPrecondition,
 };
 
@@ -360,9 +355,3 @@ export function evaluateGitPreflight(
 }
 
 // ─── Guards ─────────────────────────────────────────────────────────────────────────────────
-
-export function isGitPreflightFindingCode(value: unknown): value is GitPreflightFindingCode {
-  return (
-    typeof value === "string" && (GIT_PREFLIGHT_FINDING_CODES as readonly string[]).includes(value)
-  );
-}

@@ -6,7 +6,9 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readFileSync,
   realpathSync,
+  statSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
 
@@ -37,18 +39,37 @@ function requiredExecutable(path: string): string {
   return resolved;
 }
 
-function copyExecutable(source: string, target: string): string {
+/**
+ * Provisions `target` from `source` once per state dir. Playwright evaluates this config in the
+ * runner and again in every worker, after the BFF has already pinned each operator artifact by
+ * dev/ino/size/mode/uid and content (`createOperatorProvisioningQualification`, keiko-server
+ * deps.ts) and while an earlier test's sandboxed session may still be executing it. A rewrite must
+ * therefore keep the same inode -- a replacement file reads as NOT_PROVISIONED -- and must not open
+ * a running executable for writing (ETXTBSY). An identical artifact is left untouched; only a
+ * missing or different one is written, in place.
+ */
+function provisionFile(source: string, target: string, mode?: number): string {
   mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-  copyFileSync(source, target);
-  chmodSync(target, 0o755);
+  if (!sameContent(source, target)) {
+    copyFileSync(source, target);
+    if (mode !== undefined) chmodSync(target, mode);
+  } else if (mode !== undefined && (statSync(target).mode & 0o777) !== mode) {
+    chmodSync(target, mode);
+  }
   return target;
 }
 
+function sameContent(source: string, target: string): boolean {
+  if (!existsSync(target) || !statSync(target).isFile()) return false;
+  return readFileSync(source).equals(readFileSync(target));
+}
+
+function copyExecutable(source: string, target: string): string {
+  return provisionFile(source, target, 0o755);
+}
+
 function copyEmpty(target: string): string {
-  mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
-  copyFileSync("/dev/null", target);
-  chmodSync(target, 0o600);
-  return target;
+  return provisionFile("/dev/null", target, 0o600);
 }
 
 function artifact(
@@ -75,8 +96,7 @@ function nodeRuntimeClosure(node: string, closureRoot: string): readonly Record<
   const artifacts: Record<string, string>[] = [];
   for (const [index, library] of values.entries()) {
     const target = join(closureRoot, `runtime-library-${String(index)}`);
-    mkdirSync(closureRoot, { recursive: true, mode: 0o700 });
-    copyFileSync(library.source, target);
+    provisionFile(library.source, target);
     artifacts.push(artifact(target, closureRoot, library.capsulePath));
   }
   if (artifacts.length === 0) {

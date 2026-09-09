@@ -10,10 +10,14 @@ import {
 } from "node:fs";
 import { join, relative, resolve, sep } from "node:path";
 
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchSidecarGatewayRunMetadata,
+  WorkspaceInfo,
+} from "@oscharko-dev/keiko-contracts";
 import { CODING_SAFE_ACTIVITY_MAX_TEXT_SEGMENT_CHARS } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import { EDITOR_AGENT_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import {
+  resolveCodingSafeSidecarGatewayProfile,
   toolCallingConfigurationFingerprint,
   type GatewayConfig,
   type GatewayRequest,
@@ -37,8 +41,13 @@ import {
   type ServerDiagnosticSink,
 } from "../../diagnostics-log.js";
 import type { VerificationRunnerManager } from "../../editor/verificationRunner.js";
+import { editorAgentWorkspaceRootDigest } from "../../editor/agentAuthorityRegistry.js";
 import type { WorkspaceLifecycleService } from "../../task-workspace/types.js";
 import type { CodingRuntimeEvidenceAggregator } from "../codingRuntimeEvidenceAggregator.js";
+import type {
+  CodingRuntimeEditorMutationLeaseBroker,
+  CodingRuntimeEditorMutationLeaseRequest,
+} from "../codingRuntimeEditorMutationLeaseCoordinator.js";
 import { createAuthenticatedSessionStartConfirmationPlane } from "../codingRuntimeStartConfirmationPlane.js";
 import type { ProductionCodingRuntimeResolver } from "../productionCodingRuntimeHost.js";
 import { createProductionCodingRuntimeResolver } from "../productionCodingRuntimeResolver.js";
@@ -47,8 +56,16 @@ import {
   type ProductionOpenCodeBackendInput,
   type ResolvedPortableOpenCodeRuntime,
 } from "../productionOpenCodeBackend.js";
-import type { ProductionCodingRuntimeResolverInput } from "../productionCodingRuntimeResolver.js";
+import type {
+  ProductionCodingRuntimeResolverInput,
+  ProductionRuntimeBackendInput,
+} from "../productionCodingRuntimeResolver.js";
 import type { SecureWorkspaceTextReadPort } from "../secureWorkspaceTextRead.js";
+import {
+  H1_PROOF_SEARCH_CALL_ID,
+  repositorySearchReadHandoff,
+  type RepositorySearchConsumptionProof,
+} from "./repositorySearchProof.js";
 
 const MAX_READ_BYTES = 65_536;
 export const FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX = "VISIBLE_ASSISTANT_TEXT_2479:";
@@ -60,7 +77,7 @@ export const FUNCTIONAL_PLAN_STEP_VERIFY = "PLAN_STEP_VERIFY_2480";
 export const FUNCTIONAL_PLAN_DROPPED_CANARY = "PLAN_DROPPED_CANARY_2480";
 
 export interface ScriptState {
-  mode: "productive" | "out-of-scope" | "discovery" | "research";
+  mode: "productive" | "productive-search" | "out-of-scope" | "discovery" | "research";
   calls: number;
   readonly old: string;
   readonly next: string;
@@ -72,6 +89,10 @@ export interface ScriptState {
   readonly injectionDirective?: string;
   /** Invoked with every scripted tool name so a journey can assert what the model REQUESTED. */
   readonly observeToolCall?: (name: string) => void;
+  readonly observeRepositorySearch?: (proof: RepositorySearchConsumptionProof) => void;
+  /** Keeps a completed verification turn cancellable for browser journeys that prove Stop. */
+  readonly holdAfterVerification?: boolean;
+  verificationIssued?: boolean;
 }
 
 type FunctionalEditorAgentClient = ProductionCodingRuntimeResolverInput["editorAgentClient"];
@@ -79,6 +100,11 @@ type FunctionalEditorAction = Parameters<FunctionalEditorAgentClient["action"]>[
 type FunctionalEditorActionResult = Awaited<ReturnType<FunctionalEditorAgentClient["action"]>>;
 
 interface FunctionalRuntimeResolverBaseInput {
+  /** Uses the same real Git/approval/snapshot bundle as production composition. */
+  readonly verifiedCommit?: ProductionCodingRuntimeResolverInput["verifiedCommit"];
+  readonly draftDelivery?: ProductionCodingRuntimeResolverInput["draftDelivery"];
+  /** A composed fixture can invoke the admitted facade without inventing a model tool catalog. */
+  readonly observeBackendRun?: (input: ProductionRuntimeBackendInput) => void;
   readonly portable: ResolvedPortableOpenCodeRuntime;
   readonly runtimeStateRoot: string;
   readonly gatewayUrl: string;
@@ -87,8 +113,12 @@ interface FunctionalRuntimeResolverBaseInput {
   readonly readWorkspaceHead: (workspaceRoot: string, repositoryRoot: string) => string | undefined;
   readonly verificationRunner: Pick<VerificationRunnerManager, "runToReport">;
   readonly runtimeEvidence: Pick<CodingRuntimeEvidenceAggregator, "observe">;
+  /** Shares the resolver's per-run coordinators with the BFF editor commit boundary. */
+  readonly runtimeMutationLeaseBroker?: CodingRuntimeEditorMutationLeaseBroker;
   readonly createSupervisor: NonNullable<ProductionOpenCodeBackendInput["createSupervisor"]>;
   readonly diagnostics?: ServerDiagnosticSink;
+  /** Uses the same configured-profile qualification as the mounted gateway when supplied. */
+  readonly resolveManagedModelProfile?: ProductionCodingRuntimeResolverInput["workspaceAuthority"]["resolveManagedModelProfile"];
   /** #2387: opens the network-egress class so the research approval loop is reachable. */
   readonly researchEgressEnabled?: boolean | undefined;
   /** #2387 hermetic research transport; tests never touch the real network. */
@@ -163,23 +193,18 @@ export function createFunctionalRuntimeResolver(
       managedTaskWorkspaceRoot: input.managedTaskWorkspaceRoot,
       deploymentCeiling: "autonomous-delivery",
       readWorkspaceHead: input.readWorkspaceHead,
-      ...(input.researchEgressEnabled === undefined
-        ? {}
-        : { researchEgressEnabled: input.researchEgressEnabled }),
+      verifiedCommitResult: (runId) =>
+        input.verifiedCommit?.snapshots.getLastSuccessfulVerifiedCommit?.(runId),
+      resolveManagedModelProfile: input.resolveManagedModelProfile ?? functionalManagedModelProfile,
+      researchEgressEnabled: input.researchEgressEnabled,
     },
     ...(input.researchFetchImpl ? { researchFetchImpl: input.researchFetchImpl } : {}),
     ...resolveFunctionalChildModelInput(input),
-    backend: createProductionOpenCodeBackend({
-      portable: input.portable,
-      runtimeStateRoot: input.runtimeStateRoot,
-      gatewayUrl: input.gatewayUrl,
-      runtimeEvidence: input.runtimeEvidence,
-      gatewayReadiness: readiness,
-      createSupervisor: input.createSupervisor,
-      ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
-    }),
+    ...(input.verifiedCommit === undefined ? {} : { verifiedCommit: input.verifiedCommit }),
+    ...(input.draftDelivery === undefined ? {} : { draftDelivery: input.draftDelivery }),
+    backend: functionalBackend(input, readiness),
     secureWorkspaceTextRead: functionalWorkspaceRead(activeRoot, input.diagnostics),
-    editorAgentClient: functionalEditorAgentClient(activeRoot),
+    editorAgentClient: functionalEditorAgentClient(activeRoot, input.runtimeMutationLeaseBroker),
     verificationRunner: input.verificationRunner,
     resolveWorkspaceRootAccess: (requestedRoot) =>
       requestedRoot === activeRoot()
@@ -191,6 +216,9 @@ export function createFunctionalRuntimeResolver(
           }
         : undefined,
     confirmationConsumer: createAuthenticatedSessionStartConfirmationPlane(),
+    ...(input.runtimeMutationLeaseBroker === undefined
+      ? {}
+      : { runtimeMutationLeaseBroker: input.runtimeMutationLeaseBroker }),
   });
   return {
     resolve: (): ReturnType<ProductionCodingRuntimeResolver["resolve"]> => {
@@ -198,6 +226,47 @@ export function createFunctionalRuntimeResolver(
       return qualified === undefined
         ? undefined
         : { ...qualified, openCodeGatewayReadinessRegistry: readiness };
+    },
+  };
+}
+
+function functionalManagedModelProfile(modelId: string | undefined): {
+  readonly profileId: string;
+} {
+  const resolved = resolveCodingSafeSidecarGatewayProfile(functionalGatewayConfig(), {
+    ...(modelId === undefined ? {} : { modelId }),
+  });
+  if (resolved.status !== "available") throw new Error("functional model is unavailable");
+  return { profileId: resolved.modelAlias };
+}
+
+function functionalBackend(
+  input: FunctionalRuntimeResolverInput,
+  readiness: ReturnType<typeof createOpenCodeGatewayReadinessRegistry>,
+): ReturnType<typeof createProductionOpenCodeBackend> {
+  const backend = createProductionOpenCodeBackend({
+    portable: input.portable,
+    runtimeStateRoot: input.runtimeStateRoot,
+    gatewayUrl: input.gatewayUrl,
+    resolveGatewayRunMetadata: (modelId): CodingWorkbenchSidecarGatewayRunMetadata | undefined => {
+      const result = resolveCodingSafeSidecarGatewayProfile(functionalGatewayConfig(), { modelId });
+      return result.status === "available" ? result.runMetadata : undefined;
+    },
+    // ADR-0043 D11-D14 (#3390): the SAME single attested loopback origin as `gatewayUrl` above,
+    // never a second listener's own port -- derived from it exactly the way
+    // productionOpenCodeActivation.ts derives both from ONE `loopback` origin.
+    toolFacadeUrl: `${new URL(input.gatewayUrl).origin}/api/coding-sidecar/tool`,
+    runtimeEvidence: input.runtimeEvidence,
+    gatewayReadiness: readiness,
+    createSupervisor: input.createSupervisor,
+    ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
+  });
+  return {
+    ...backend,
+    createRun: (run): ReturnType<typeof backend.createRun> => {
+      const created = backend.createRun(run);
+      input.observeBackendRun?.(run);
+      return created;
     },
   };
 }
@@ -417,36 +486,83 @@ function isEnoent(error: unknown): boolean {
  */
 function functionalEditorAgentClient(
   resolveRoot: () => string | undefined,
+  runtimeMutationLeaseBroker: CodingRuntimeEditorMutationLeaseBroker | undefined,
 ): FunctionalEditorAgentClient {
   return {
     action: (action, signal): Promise<FunctionalEditorActionResult> => {
       const root = resolveRoot();
-      if (root === undefined || action.type !== "applyChangeset") {
-        return Promise.resolve(editorDenied("RUNTIME_EDIT_UNSUPPORTED"));
-      }
-      if (!changesetMatchesPatch(root, action)) {
-        return Promise.resolve(editorDenied("RUNTIME_EDIT_CHANGESET_INVALID"));
-      }
-      try {
-        applyPatch(workspace(root), action.changeset?.patch ?? "", {
-          applyEnabled: true,
-          signal,
-        });
-      } catch {
-        return Promise.resolve(editorDenied("RUNTIME_EDIT_APPLY_FAILED"));
-      }
-      return Promise.resolve({
-        ok: true as const,
-        value: {
-          result: {
-            schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
-            actionId: action.actionId,
-            sessionId: action.sessionId,
-            status: "succeeded" as const,
-          },
-        },
-      });
+      return Promise.resolve(
+        functionalEditorAction(action, signal, root, runtimeMutationLeaseBroker),
+      );
     },
+  };
+}
+
+function functionalEditorAction(
+  action: FunctionalEditorAction,
+  signal: AbortSignal,
+  root: string | undefined,
+  broker: CodingRuntimeEditorMutationLeaseBroker | undefined,
+): FunctionalEditorActionResult {
+  if (root === undefined || action.type !== "applyChangeset") {
+    return editorDenied("RUNTIME_EDIT_UNSUPPORTED");
+  }
+  if (!changesetMatchesPatch(root, action)) {
+    return editorDenied("RUNTIME_EDIT_CHANGESET_INVALID");
+  }
+  const request = functionalMutationLeaseRequest(action, root);
+  if (broker !== undefined && (request === undefined || !broker.claim(request))) {
+    return editorDenied("RUNTIME_EDIT_AUTHORITY_INVALID");
+  }
+  return applyFunctionalChangeset(action, signal, root, request, broker);
+}
+
+function applyFunctionalChangeset(
+  action: FunctionalEditorAction,
+  signal: AbortSignal,
+  root: string,
+  request: CodingRuntimeEditorMutationLeaseRequest | undefined,
+  broker: CodingRuntimeEditorMutationLeaseBroker | undefined,
+): FunctionalEditorActionResult {
+  let succeeded = false;
+  try {
+    applyPatch(workspace(root), action.changeset?.patch ?? "", { applyEnabled: true, signal });
+    succeeded = true;
+    return editorSucceeded(action);
+  } catch {
+    return editorDenied("RUNTIME_EDIT_APPLY_FAILED");
+  } finally {
+    if (request !== undefined) broker?.complete(request, succeeded);
+  }
+}
+
+function editorSucceeded(action: FunctionalEditorAction): FunctionalEditorActionResult {
+  return {
+    ok: true,
+    value: {
+      result: {
+        schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
+        actionId: action.actionId,
+        sessionId: action.sessionId,
+        status: "succeeded",
+      },
+    },
+  };
+}
+
+function functionalMutationLeaseRequest(
+  action: FunctionalEditorAction,
+  workspaceRoot: string,
+): CodingRuntimeEditorMutationLeaseRequest | undefined {
+  const authorityRef = action.authorityRef;
+  if (authorityRef === undefined) return undefined;
+  return {
+    authorityRef,
+    runId: authorityRef.runId,
+    envelopeDigest: authorityRef.envelopeDigest,
+    workspaceRootDigest: editorAgentWorkspaceRootDigest(workspaceRoot),
+    actionId: action.actionId,
+    idempotencyKey: action.idempotencyKey,
   };
 }
 
@@ -603,6 +719,8 @@ export function scriptedResponse(script: ScriptState, transcript = ""): Normaliz
 
 function scriptedResponseFor(script: ScriptState, transcript: string): NormalizedResponse {
   const step = script.calls++;
+  if (script.mode === "productive-search")
+    return productiveSearchResponse(step, script, transcript);
   if (script.mode === "research") return researchScriptedResponse(step, transcript, script);
   if (script.mode === "out-of-scope") {
     return step === 0
@@ -633,7 +751,42 @@ function productiveResponse(step: number, script: ScriptState): NormalizedRespon
   if (step === 2) return tool("question", question());
   if (step === 3) return tool("keiko_changeset_edit", edit(script));
   if (step === 4) return tool("todowrite", planUpdate(2));
-  return step === 5 ? tool("keiko_verification", { verifierId: "typecheck" }) : normal();
+  if (step === 5) {
+    script.verificationIssued = true;
+    return tool("keiko_verification", { verifierId: "typecheck" });
+  }
+  if (script.holdAfterVerification === true && script.verificationIssued === true) {
+    return tool("question", question());
+  }
+  return normal();
+}
+
+function productiveSearchResponse(
+  step: number,
+  script: ScriptState,
+  transcript: string,
+): NormalizedResponse {
+  if (step === 1) {
+    return tool(
+      "keiko_repository_search",
+      {
+        mode: "literal",
+        query: script.old.trim(),
+        caseSensitive: true,
+        includeGlobs: ["src/**/*.ts"],
+        excludeGlobs: [],
+        maxResults: 5,
+      },
+      H1_PROOF_SEARCH_CALL_ID,
+    );
+  }
+  if (step === 2) {
+    return tool(
+      "keiko_workspace_read",
+      repositorySearchReadHandoff(transcript, script.old.trim(), script.observeRepositorySearch),
+    );
+  }
+  return productiveResponse(step > 2 ? step - 1 : step, script);
 }
 
 /** Revision 1 opens two steps; revision 2 flips their states and appends the verify step. */
@@ -716,6 +869,7 @@ let scriptedToolCallSequence = 0;
 function tool(
   name:
     | "keiko_workspace_read"
+    | "keiko_repository_search"
     | "keiko_changeset_edit"
     | "keiko_verification"
     | "keiko_research_fetch"

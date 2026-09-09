@@ -3,26 +3,45 @@
 //   * POST /api/git-delivery/push/preview  — READ-ONLY. Builds the pre-publish risk context: the remote
 //       target, the risk class, would-create-remote-branch / force-blocked flags, the preflight findings
 //       (incl. non-fast-forward and missing-upstream), and the policy decision. Never mutates, never
-//       records evidence.
+//       records evidence. Reports the freshly-read local head as `headCommitSha` (#3394 review) so the
+//       caller can capture it and resubmit it as `verifiedCommitSha` at approve/execute time — preview
+//       itself never requires the field, since there is nothing to pin or drift against on a single,
+//       self-contained read.
+//   * POST /api/git-delivery/push/approve  — Mints the server-issued approval claim an issue-bound push
+//       requires before execute may proceed (#3387, ADR-0138 D2/D4, epic #3384 correction 5: a delivery
+//       effect is approval-required in every mode, including Full access — never mode-denied merely
+//       because the mode is lower). Mirrors createHandleCommitApprove/createHandleMergeApprove exactly:
+//       rebuilds the EXACT typed GitPushCommand the execute route would build from the identical request
+//       body (the shared `validate()` below) and binds the mint to it plus the admitted run's
+//       runId/envelopeDigest, so the claim this returns is redeemable by execute for that exact push
+//       only — a claim minted for a different command, run, or operation never matches.
 //   * POST /api/git-delivery/push/execute  — Governed. Drives the #476 publish gateway end-to-end through
 //       executeGovernedPublish (preflight + policy + approval + the dedicated push-only adapter) and
 //       appends content-free evidence for the allowed AND blocked outcome alike. Returns the typed
 //       publish-rejection reason + reused recovery hint so a rejected push can be recovered without
-//       guessing.
+//       guessing. An accepted run's push now requires an actually consumed, server-issued claim — a
+//       request that supplies no claim (or an unredeemed `{ required: false }`) is refused with
+//       `approval-required`, mirroring the commit route's unapproved-mutation closure (#3386).
 //
 // Content-free throughout: counts, flags, typed codes, branch/remote NAMES only — never command output,
 // diff content, secrets, or credentials. CSRF + JSON content type are enforced centrally by server.ts.
 
-import type { GitPushCommand } from "@oscharko-dev/keiko-tools";
+import type { GitDeliveryApprovalClaim } from "@oscharko-dev/keiko-contracts";
+import type { GitPushCommand, GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSink } from "../process-log-sink.js";
 import {
+  DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
+  GIT_DELIVERY_LOCAL_OPERATOR_ID,
   parseGitDeliveryApprovalRequest,
   resolveGitDeliveryApprovalRequirement,
+  type GitDeliveryApprovalBinding,
   type ParsedGitDeliveryApprovalRequest,
 } from "./approvalStore.js";
+import { logGitDeliveryApprovalEvent, parseVerifiedCommitSha } from "./approvalEvents.js";
 import { gitDeliveryTerminationHandler, readWorktreeSnapshotFor } from "./execution.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import {
@@ -98,6 +117,7 @@ const ALLOWED_KEYS: ReadonlySet<string> = new Set([
   "sourceBranchName",
   "forcePush",
   "setUpstreamTracking",
+  "verifiedCommitSha",
   "approval",
 ]);
 
@@ -128,9 +148,37 @@ function scanError(parsed: Record<string, unknown>): RouteResult | undefined {
   return undefined;
 }
 
-// Builds the typed push command from validated ref + boolean operands, or undefined when any operand is
-// malformed.
-function buildPushCommand(parsed: Record<string, unknown>): GitPushCommand | undefined {
+// #3394 review, finding 1: `pushApprovalBinding` (below) hashes the WHOLE typed command, so a
+// client that states which commit it previewed/approved binds the approval to that content, not
+// merely to branch names + flags -- an approval minted for one `verifiedCommitSha` no longer
+// matches a request that later names a different one, however the local branch has moved in
+// between. Mandatory for approve/execute (a caller that omits it, or sends a malformed value, is
+// refused as `GIT_DELIVERY_PUSH_BAD_REQUEST` — fail closed, never a silent unpinned push): every
+// governed push now dispatches through the SHA-pinned path (`git-publish-gateway.ts`'s
+// `verifiedPushArgv`), which publishes exactly that commit regardless of what the branch currently
+// points to -- the same mechanism `draftDeliveryService.ts` already trusts for the autonomous
+// delivery path. Parsing itself is shared with `prRoutes.ts` via `approvalEvents.ts`'s
+// `parseVerifiedCommitSha` (#3394 review: was duplicated byte-for-byte between the two routes).
+//
+// PREVIEW is the one exception: `buildPartialPushCommand`/`validatePreview` below build every OTHER
+// operand identically but never require this field — a read-only preview mints nothing and executes
+// nothing, so there is no approval binding for an omitted/stale value to corrupt. The preview
+// handler resolves the field itself from the freshly-read local snapshot before evaluating preflight
+// (see `resolvePreviewPushCommand`), and reports that same value back as `headCommitSha` for the
+// caller to capture and resubmit.
+
+// The operands every push command needs regardless of route strictness.
+interface PartialPushCommand {
+  readonly sourceBranchName: string;
+  readonly remoteAlias: string;
+  readonly remoteBranchName: string;
+  readonly forcePush: boolean;
+  readonly setUpstreamTracking: boolean;
+}
+
+// Builds the shared operands from validated ref + boolean fields, or undefined when any is malformed.
+// `verifiedCommitSha` is deliberately NOT part of this shape — see the file-header comment above.
+function buildPartialPushCommand(parsed: Record<string, unknown>): PartialPushCommand | undefined {
   if (
     !isSafeGitRef(parsed.remoteAlias) ||
     !isSafeGitRef(parsed.remoteBranchName) ||
@@ -140,15 +188,26 @@ function buildPushCommand(parsed: Record<string, unknown>): GitPushCommand | und
   }
   const forcePush = optionalBool(parsed.forcePush);
   const setUpstreamTracking = optionalBool(parsed.setUpstreamTracking);
-  if (forcePush === undefined || setUpstreamTracking === undefined) return undefined;
+  if (forcePush === undefined || setUpstreamTracking === undefined) {
+    return undefined;
+  }
   return {
-    kind: "push",
     sourceBranchName: parsed.sourceBranchName,
     remoteAlias: parsed.remoteAlias,
     remoteBranchName: parsed.remoteBranchName,
     forcePush,
     setUpstreamTracking,
   };
+}
+
+// Builds the typed push command APPROVE/EXECUTE require: the shared operands plus a mandatory,
+// well-formed `verifiedCommitSha` (fail-closed: undefined on absence or a malformed value).
+function buildPushCommand(parsed: Record<string, unknown>): GitPushCommand | undefined {
+  const partial = buildPartialPushCommand(parsed);
+  if (partial === undefined) return undefined;
+  const verifiedCommitSha = parseVerifiedCommitSha(parsed.verifiedCommitSha);
+  if (!verifiedCommitSha.ok || verifiedCommitSha.value === undefined) return undefined;
+  return { kind: "push", ...partial, verifiedCommitSha: verifiedCommitSha.value };
 }
 
 function validate(parsed: unknown): Validation {
@@ -161,6 +220,53 @@ function validate(parsed: unknown): Validation {
   const approval = parseGitDeliveryApprovalRequest(parsed.approval);
   if (command === undefined || approval === undefined) return bad;
   return { kind: "ok", value: { projectId: parsed.projectId, command, approval } };
+}
+
+interface PreviewValidatedRequest {
+  readonly projectId: string;
+  readonly command: PartialPushCommand;
+}
+
+type PreviewValidation =
+  | { readonly kind: "ok"; readonly value: PreviewValidatedRequest }
+  | { readonly kind: "err"; readonly result: RouteResult };
+
+// The preview route's own, lenient validator: identical field-shape checks, but never requires
+// `verifiedCommitSha` (see the file-header comment above).
+function validatePreview(parsed: unknown): PreviewValidation {
+  const bad: PreviewValidation = {
+    kind: "err",
+    result: errResult(400, "GIT_DELIVERY_PUSH_BAD_REQUEST"),
+  };
+  if (!isPlainObject(parsed) || !hasOnlyAllowedKeys(parsed, ALLOWED_KEYS)) return bad;
+  if (parsed.schemaVersion !== "1" || !isNonEmptyString(parsed.projectId)) return bad;
+  const scanErr = scanError(parsed);
+  if (scanErr !== undefined) return { kind: "err", result: scanErr };
+  const command = buildPartialPushCommand(parsed);
+  if (command === undefined) return bad;
+  return { kind: "ok", value: { projectId: parsed.projectId, command } };
+}
+
+// A push cannot legitimately target an unborn HEAD (there is nothing to push), so this all-zero
+// object id is never a real commit — used only so a preview against an unborn HEAD still produces a
+// well-formed command; the resulting `verified-commit-drifted` finding is the correct, fail-closed
+// outcome (there is no live head to pin to).
+const UNBORN_HEAD_PLACEHOLDER_SHA = "0".repeat(40);
+
+// Resolves the preview-only push command from the freshly-read snapshot: `verifiedCommitSha` is
+// ALWAYS the server's own live local head, never a client-supplied value (preview has no approval to
+// bind, so there is nothing for a stale client value to corrupt) — this makes preview's own
+// `verified-commit-drifted` preflight comparison a tautology (by construction, it can never fire for
+// a single, self-contained read) and is exactly the value reported back as `headCommitSha`.
+function resolvePreviewPushCommand(
+  partial: PartialPushCommand,
+  snapshot: GitWorktreeSnapshot,
+): GitPushCommand {
+  return {
+    kind: "push",
+    ...partial,
+    verifiedCommitSha: snapshot.headSha ?? UNBORN_HEAD_PLACEHOLDER_SHA,
+  };
 }
 
 async function pushSignatureRequirement(
@@ -192,13 +298,19 @@ export const createHandlePushPreview = (
   const now = (): number => (seams.now ?? Date.now)();
   return async (ctx, deps): Promise<RouteResult> => {
     const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
-    const prepared = await prepareGitDeliveryRequest(ctx, deps, PUSH_REQUEST_ERRORS, validate);
+    const prepared = await prepareGitDeliveryRequest(
+      ctx,
+      deps,
+      PUSH_REQUEST_ERRORS,
+      validatePreview,
+    );
     if (!prepared.ok) return prepared.result;
     const { workspace } = prepared;
-    const { command } = prepared.value;
+    const { command: partial } = prepared.value;
     const packs = seams.policyPacks ?? defaultMintableRepoPack(KEIKO_DEFAULT_PUBLISH_POLICY_PACK);
     try {
       const snapshot = await readWorktreeSnapshotFor(workspace, seams, now, correlationId);
+      const command = resolvePreviewPushCommand(partial, snapshot);
       const signatureRequirement = await pushSignatureRequirement(
         workspace,
         command,
@@ -219,6 +331,25 @@ export const createHandlePushPreview = (
 
 // ─── Execute handler (governed) ───────────────────────────────────────────────────────────────
 
+// #3394 review: `command` is embedded and hashed WHOLE (gitDeliveryApprovalBindingHash ->
+// canonicalise), so once `buildPushCommand` carries a caller-supplied `verifiedCommitSha`, this
+// binding is automatically content-sensitive to it -- an approval minted for one commit no longer
+// `matches()`/`consume()`s against an execute request naming a different one, closing the gap where
+// a binding built only from branch names/flags stayed valid however far the branch had since moved.
+function pushApprovalBinding(
+  projectId: string,
+  command: GitPushCommand,
+  authority: GitDeliveryAuthorityIdentity,
+): GitDeliveryApprovalBinding {
+  return {
+    projectId,
+    operation: "push",
+    command,
+    runId: authority.runId,
+    envelopeDigest: authority.envelopeDigest,
+  };
+}
+
 interface PushMutationInput {
   readonly ctx: RouteContext;
   readonly deps: UiHandlerDeps;
@@ -232,6 +363,24 @@ interface PushMutationInput {
   readonly correlationId: string;
 }
 
+// #3387 (ADR-0138 D2): mirrors commitApprovalRequiredBlock (commitRoutes.ts) exactly — an accepted
+// run's push requires an actually consumed, server-issued claim regardless of what the repo/org
+// policy pack decides; a pack that never names "approval-gated" for push must not silently
+// substitute for the human approval this closes. Reuses the kernel's own shared outcome vocabulary
+// (GitPublishOutcome["status"] already carries "approval-required" for the pack-driven
+// approval-gated path — see gitDeliveryPublishExecuteResponse in pushExecution.ts) rather than
+// inventing a second, parallel status for the identical governance outcome.
+function pushApprovalRequiredBlock(deps: Pick<UiHandlerDeps, "redactor">): RouteResult {
+  return {
+    status: 200,
+    body: deps.redactor({
+      schemaVersion: "1",
+      status: "approval-required",
+      actionKind: "push",
+    }),
+  };
+}
+
 // Resolves the approval requirement, arms the continuity guard, drives the publish gateway, and
 // projects the content-free response. Extracted from createHandlePushExecute's returned handler
 // purely to stay under the function-length budget (AGENTS.md §6) — no behavioral seam of its own.
@@ -239,16 +388,20 @@ async function runPushMutation(input: PushMutationInput): Promise<RouteResult> {
   const { ctx, deps, seams, projectId, workspace, command, approval, authority, target } = input;
   const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
     store: seams.approvalStore,
-    binding: {
-      projectId,
-      operation: "push",
-      command,
-      runId: authority.runId,
-      envelopeDigest: authority.envelopeDigest,
-    },
+    binding: pushApprovalBinding(projectId, command, authority),
     nowMs: (seams.now ?? Date.now)(),
   });
   if (verifiedApproval === undefined) return errResult(400, "GIT_DELIVERY_PUSH_BAD_REQUEST");
+  if (!verifiedApproval.required) {
+    logGitDeliveryApprovalEvent(
+      seams.activityLog ?? processServerLogSink(),
+      "git.delivery.push.approval.required",
+      "push",
+      input.correlationId,
+      authority.runId,
+    );
+    return pushApprovalRequiredBlock(deps);
+  }
   const denialCapture: GitDeliveryAuthorityContinuityDenialCapture = {};
   const beforeRemoteDispatch = gitDeliveryAuthorityContinuityGuard({
     ctx,
@@ -260,7 +413,9 @@ async function runPushMutation(input: PushMutationInput): Promise<RouteResult> {
     admitted: authority,
     next: seams.beforeRemoteDispatch,
     denialCapture,
-    audit: { logSink: seams.activityLog },
+    // Same deferral as the up-front admission gate above: the approval was already verified as
+    // consumed before this dispatch was reached, so the continuity re-check must not re-demand it.
+    audit: { logSink: seams.activityLog, deliveryApprovalDeferred: true },
   });
   try {
     const result = await executeGovernedPublish(
@@ -298,6 +453,10 @@ export const createHandlePushExecute = (
     };
     const authority = gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, "push", target, {
       logSink: seams.activityLog,
+      // Final-audit F2/#3390 (ADR-0138 D2, #3387): push's own execute path already enforces a
+      // mandatory, mode-independent consumed approval below (`pushApprovalRequiredBlock`), so this
+      // coarse admission layer defers to it instead of demanding a second claim.
+      deliveryApprovalDeferred: true,
     });
     if (!authority.allowed) return authority.result;
     return runPushMutation({
@@ -315,6 +474,61 @@ export const createHandlePushExecute = (
   };
 };
 
+// ─── Approve handler (mints the server-issued approval claim execute consumes) ────────────────────
+
+export interface GitDeliveryPushApproveResponseBody {
+  readonly schemaVersion: "1";
+  readonly approval: GitDeliveryApprovalClaim;
+  readonly expiresAt: string;
+}
+
+export const createHandlePushApprove = (
+  options: GitDeliveryPushRouteOptions = {},
+): ((ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult>) => {
+  const seams = options.execution ?? {};
+  return async (ctx, deps): Promise<RouteResult> => {
+    const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+    // Reuses the IDENTICAL `validate()` the preview/execute handlers use, so the GitPushCommand this
+    // mints against is byte-for-byte the same typed value execute will rebuild from the same request
+    // body — the binding-hash consume() already enforces then matches by construction.
+    const prepared = await prepareGitDeliveryRequest(ctx, deps, PUSH_REQUEST_ERRORS, validate);
+    if (!prepared.ok) return prepared.result;
+    const { workspace } = prepared;
+    const { projectId, command } = prepared.value;
+    const target = {
+      headBranchName: command.sourceBranchName,
+      remoteBranchName: command.remoteBranchName,
+    };
+    const authority = gitDeliveryAuthorityGate(ctx, deps, projectId, workspace, "push", target, {
+      logSink: seams.activityLog,
+      // Final-audit F2/#3390 (ADR-0138 D2, #3387): push's own execute path already enforces a
+      // mandatory, mode-independent consumed approval below (`pushApprovalRequiredBlock`), so this
+      // coarse admission layer defers to it instead of demanding a second claim.
+      deliveryApprovalDeferred: true,
+    });
+    if (!authority.allowed) return authority.result;
+    const store = seams.approvalStore ?? DEFAULT_GIT_DELIVERY_APPROVAL_STORE;
+    const issued = store.issue({
+      binding: pushApprovalBinding(projectId, command, authority),
+      approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
+      nowMs: (seams.now ?? Date.now)(),
+    });
+    logGitDeliveryApprovalEvent(
+      seams.activityLog ?? processServerLogSink(),
+      "git.delivery.push.approval.minted",
+      "push",
+      correlationId,
+      authority.runId,
+    );
+    const body: GitDeliveryPushApproveResponseBody = {
+      schemaVersion: "1",
+      approval: issued.approval,
+      expiresAt: new Date(issued.expiresAtMs).toISOString(),
+    };
+    return { status: 200, body: deps.redactor(body) };
+  };
+};
+
 // ─── Route group ───────────────────────────────────────────────────────────────────────────────
 
 export const createGitDeliveryPushRouteGroup = (
@@ -324,6 +538,11 @@ export const createGitDeliveryPushRouteGroup = (
     method: "POST",
     pattern: "/api/git-delivery/push/preview",
     handler: createHandlePushPreview(options),
+  },
+  {
+    method: "POST",
+    pattern: "/api/git-delivery/push/approve",
+    handler: createHandlePushApprove(options),
   },
   {
     method: "POST",

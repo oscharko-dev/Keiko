@@ -7,6 +7,7 @@ import type { ServerResponse } from "node:http";
 import { mockResponse } from "./_support.js";
 import {
   sseBackpressureReporter,
+  markSseStreamServerErrored,
   writeOrDestroy,
   type SseBackpressureSignal,
 } from "./sse-write.js";
@@ -206,6 +207,21 @@ describe("sse.stream.closed terminal line", () => {
         },
       },
     ]);
+  });
+
+  it("preserves a caught server error when destroy does not emit a response error", () => {
+    const sink = captureServerLog();
+    const { res, fireClose } = listenableFakeRes(true);
+    writeOrDestroy(res, "bounded-frame", new AbortController(), undefined, "corr-sse-error");
+    markSseStreamServerErrored(res);
+    res.destroy(new TypeError("private body"));
+    fireClose();
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]).toMatchObject({
+      correlationId: "corr-sse-error",
+      extra: { reason: "server-error", frameCount: 1 },
+    });
+    expect(JSON.stringify(sink.events)).not.toContain("private body");
   });
 
   it("emits the terminal line exactly once even when close fires more than once", () => {

@@ -12,17 +12,37 @@
 // AA). Styling uses inline styles backed by existing CSS custom properties so globals.css is untouched
 // (ADR-0051 gate).
 
-import { useCallback, useId, useRef, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
+import type { CSSProperties, Dispatch, ReactNode, SetStateAction } from "react";
 import {
   ApiError,
+  fetchGitDeliveryPrApprove,
   fetchGitDeliveryPrExecute,
   fetchGitDeliveryPrPreview,
+  fetchGitDeliveryPrDescriptionApply,
+  fetchGitDeliveryPrDescriptionApprove,
+  fetchGitDeliveryPrDescriptionPreview,
+  fetchGitDeliveryPrDescriptionReview,
+  fetchGitDeliveryPrDescriptionStatus,
+  type GitDeliveryPrDescriptionProposalInput,
+  type GitDeliveryPrDescriptionPreviewInput,
+  type GitDeliveryPrDescriptionTarget,
   type GitDeliveryPrExecuteResponse,
   type GitDeliveryPrInput,
   type GitDeliveryPrKind,
   type GitDeliveryPrPreviewResponse,
+  type PrDescriptionApplicationResultWire,
+  type PrDescriptionApplicationStatus,
+  type PrDescriptionLanguage,
 } from "@/lib/api";
+// `PR_DESCRIPTION_LANGUAGES` is a real value, not a type, so it stays a genuine runtime import.
+// Sourced from the contract's own runtime subpath directly (never re-exported through `./api`,
+// which is first-load-reachable from the desktop shell) so this small enum-of-languages value never
+// drags `pr-description`'s validator module into the eager chunk (epic #3384 final-audit F18) —
+// this card is already behind the `next/dynamic({ ssr: false })` boundary in widgets/index.tsx.
+import { PR_DESCRIPTION_LANGUAGES } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import type { MessageKey } from "@/lib/i18n-messages.en";
 import { Icons } from "../../Icons";
 
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
@@ -34,12 +54,34 @@ const CheckIcon = Icons.check;
 
 export interface GovernedPullRequestClient {
   readonly prPreview: typeof fetchGitDeliveryPrPreview;
+  // #3387: the create/update mutation now requires an actually consumed, server-issued approval
+  // claim unconditionally (epic #3384 correction 5) — never mode-denied merely because the mode is
+  // lower. `runExecute` mints it from the identical command and attaches it before calling execute.
+  // Optional only for compatibility with narrow injected clients. Execution fails closed when it
+  // is absent; no caller may downgrade to an unapproved request.
+  readonly prApprove: typeof fetchGitDeliveryPrApprove | undefined;
   readonly prExecute: typeof fetchGitDeliveryPrExecute;
+  // #3399: the governed PR-description preview -> approve -> apply lifecycle. Optional for the same
+  // reason as `prApprove` above — the panel renders nothing when a caller's client omits any of them.
+  readonly prDescriptionPreview?: typeof fetchGitDeliveryPrDescriptionPreview;
+  readonly prDescriptionReview?: typeof fetchGitDeliveryPrDescriptionReview;
+  readonly prDescriptionApprove?: typeof fetchGitDeliveryPrDescriptionApprove;
+  readonly prDescriptionApply?: typeof fetchGitDeliveryPrDescriptionApply;
+  // #3390: the read-only status observation. Optional like `prDescriptionReview` — the panel simply
+  // renders no status control for a client that omits it, and the preview -> approve -> apply
+  // lifecycle above is unaffected either way.
+  readonly prDescriptionStatus?: typeof fetchGitDeliveryPrDescriptionStatus;
 }
 
 const DEFAULT_CLIENT: GovernedPullRequestClient = {
   prPreview: fetchGitDeliveryPrPreview,
+  prApprove: fetchGitDeliveryPrApprove,
   prExecute: fetchGitDeliveryPrExecute,
+  prDescriptionPreview: fetchGitDeliveryPrDescriptionPreview,
+  prDescriptionReview: fetchGitDeliveryPrDescriptionReview,
+  prDescriptionApprove: fetchGitDeliveryPrDescriptionApprove,
+  prDescriptionApply: fetchGitDeliveryPrDescriptionApply,
+  prDescriptionStatus: fetchGitDeliveryPrDescriptionStatus,
 };
 
 function formatError(err: unknown): string {
@@ -105,6 +147,11 @@ const KV_LABEL: CSSProperties = {
 
 // ─── Form state ───────────────────────────────────────────────────────────────────────────────────
 
+// #3389 (epic #3384 correction 1): "to-ready" (mark ready) is deliberately NOT a member of this
+// union. The draft->ready transition now requires the dedicated pr-mark-ready one-use approval,
+// bound to base/head SHAs and a readiness digest this generic command-center card never resolves —
+// it is offered only from the Coding Workbench's journey outcome, where those facts are already on
+// hand from the journey read. "to-draft" (ready->draft) is unaffected; it stays a plain pr-update.
 interface PrForm {
   readonly kind: GitDeliveryPrKind;
   readonly ownerAndRepo: string;
@@ -114,17 +161,18 @@ interface PrForm {
   readonly body: string;
   readonly isDraft: boolean;
   readonly prExternalId: string;
-  readonly draftTransition: "none" | "to-ready" | "to-draft";
+  readonly draftTransition: "none" | "to-draft";
 }
+type PrFormChange = <K extends keyof PrForm>(key: K, value: PrForm[K]) => void;
 
 function initialForm({
   headBranchName,
   ownerAndRepo,
   baseBranchName,
 }: {
-  readonly headBranchName?: string | undefined;
-  readonly ownerAndRepo?: string | undefined;
-  readonly baseBranchName?: string | undefined;
+  readonly headBranchName: string | undefined;
+  readonly ownerAndRepo: string | undefined;
+  readonly baseBranchName: string | undefined;
 }): PrForm {
   return {
     kind: "pr-create",
@@ -156,7 +204,7 @@ function formToInput(form: PrForm, projectId: string): GitDeliveryPrInput {
     kind: "pr-update",
     prExternalId: form.prExternalId,
     convertToDraft: form.draftTransition === "to-draft",
-    convertFromDraft: form.draftTransition === "to-ready",
+    convertFromDraft: false,
   };
 }
 
@@ -192,6 +240,23 @@ interface PrAsyncState {
 interface PrAsync extends PrAsyncState {
   readonly runPreview: (input: GitDeliveryPrInput) => Promise<GitDeliveryPrPreviewResponse | null>;
   readonly runExecute: (input: GitDeliveryPrInput) => void;
+}
+
+// #3387: mints the approval the create/update mutation now requires unconditionally FIRST, from the
+// EXACT SAME input, then attaches the returned claim to the identical input before execute — the
+// mint route binds to that exact typed command, so the claim it returns is redeemable only for this
+// same target/title/body combination (mirrors GovernedMergeCard's runExecute). `prApprove` is
+// optional on the client (see GovernedPullRequestClient), but absence fails closed before execute.
+function withMintedPrApproval(
+  client: GovernedPullRequestClient,
+  input: GitDeliveryPrInput,
+): Promise<GitDeliveryPrInput> {
+  const prApprove = client.prApprove;
+  if (prApprove === undefined) return Promise.reject(new Error("pr-approval-client-unavailable"));
+  return prApprove(input).then((approved): GitDeliveryPrInput => ({
+    ...input,
+    approval: approved.approval,
+  }));
 }
 
 function useGovernedPrActions(client: GovernedPullRequestClient): PrAsync {
@@ -233,8 +298,8 @@ function useGovernedPrActions(client: GovernedPullRequestClient): PrAsync {
     (input: GitDeliveryPrInput): void => {
       const token = (seq.current += 1);
       setState((s) => ({ ...s, busy: true, error: null, outcome: null }));
-      void client
-        .prExecute(input)
+      void withMintedPrApproval(client, input)
+        .then((executeInput) => client.prExecute(executeInput))
         .then((outcome) => {
           if (token !== seq.current) return;
           setState((s) => ({ ...s, busy: false, outcome }));
@@ -283,99 +348,138 @@ function PrTargetFields({ form, busy, onChange }: FieldsProps): ReactNode {
   );
 }
 
-function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
-  const prNumberHintId = useId();
-  const prIdInvalid =
-    form.kind === "pr-update" && form.prExternalId !== "" && !isValidPrNumber(form.prExternalId);
+// Action (Create/Update) fieldset — extracted from PrMetadataFields (AGENTS.md §6 max-lines-per-function).
+function PrActionFieldset({ form, busy, onChange }: FieldsProps): ReactNode {
   return (
-    <section style={SECTION_STYLE} aria-label="Pull Request metadata">
-      <h3 style={HEADING_STYLE}>
-        <GitIcon size={12} /> Metadata
-      </h3>
-      <fieldset
-        style={{
-          border: "1px solid var(--border-default)",
-          borderRadius: "var(--radius-control)",
-          padding: "var(--space-2)",
-        }}
-      >
-        <legend style={KV_LABEL}>Action</legend>
-        <div style={ROW_STYLE}>
-          <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
-            <input
-              type="radio"
-              name="pull-request-action"
-              checked={form.kind === "pr-create"}
-              disabled={busy}
-              onChange={() => onChange("kind", "pr-create")}
-            />{" "}
-            Create
-          </label>
-          <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
-            <input
-              type="radio"
-              name="pull-request-action"
-              checked={form.kind === "pr-update"}
-              disabled={busy}
-              onChange={() => onChange("kind", "pr-update")}
-            />{" "}
-            Update
-          </label>
-        </div>
-      </fieldset>
-      {form.kind === "pr-update" ? (
-        <div style={ROW_STYLE}>
-          <label style={{ ...LABEL_STYLE, flex: 1 }}>
-            Pull Request number{" "}
-            <input
-              style={FIELD_STYLE}
-              inputMode="numeric"
-              value={form.prExternalId}
-              disabled={busy}
-              onChange={(e) => onChange("prExternalId", e.target.value)}
-              aria-label="Pull Request number"
-              aria-invalid={prIdInvalid}
-              aria-describedby={prIdInvalid ? prNumberHintId : undefined}
-            />
-            {prIdInvalid ? (
-              <p
-                id={prNumberHintId}
-                data-testid="gpr-pr-number-hint"
-                style={{ font: "var(--text-caption)", color: "var(--feedback-danger)", margin: 0 }}
-              >
-                Enter the numeric Pull Request number, for example 1499.
-              </p>
-            ) : null}
-          </label>
-          <label style={{ ...LABEL_STYLE, flex: 1 }}>
-            Draft state{" "}
-            <select
-              style={FIELD_STYLE}
-              value={form.draftTransition}
-              disabled={busy}
-              onChange={(e) =>
-                onChange("draftTransition", e.target.value as PrForm["draftTransition"])
-              }
-              aria-label="Draft state"
-            >
-              <option value="none">No change</option>
-              <option value="to-ready">Mark ready</option>
-              <option value="to-draft">Convert to draft</option>
-            </select>
-          </label>
-        </div>
+    <fieldset
+      style={{
+        border: "1px solid var(--border-default)",
+        borderRadius: "var(--radius-control)",
+        padding: "var(--space-2)",
+      }}
+    >
+      <legend style={KV_LABEL}>Action</legend>
+      <div style={ROW_STYLE}>
+        <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
+          <input
+            type="radio"
+            name="pull-request-action"
+            checked={form.kind === "pr-create"}
+            disabled={busy}
+            onChange={() => onChange("kind", "pr-create")}
+          />{" "}
+          Create
+        </label>
+        <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
+          <input
+            type="radio"
+            name="pull-request-action"
+            checked={form.kind === "pr-update"}
+            disabled={busy}
+            onChange={() => onChange("kind", "pr-update")}
+          />{" "}
+          Update
+        </label>
+      </div>
+    </fieldset>
+  );
+}
+
+// PR number field, shown only for the "pr-update" action. `prNumberHintId` is generated by the
+// always-mounted PrMetadataFields (not here) so the id stays stable across kind switches instead
+// of being re-minted whenever this conditionally-rendered block mounts.
+interface UpdateOnlyFieldsProps extends FieldsProps {
+  readonly prNumberHintId: string;
+  readonly prIdInvalid: boolean;
+}
+
+function PrUpdatePrNumberField({
+  form,
+  busy,
+  onChange,
+  prNumberHintId,
+  prIdInvalid,
+}: UpdateOnlyFieldsProps): ReactNode {
+  return (
+    <label style={{ ...LABEL_STYLE, flex: 1 }}>
+      Pull Request number{" "}
+      <input
+        style={FIELD_STYLE}
+        inputMode="numeric"
+        value={form.prExternalId}
+        disabled={busy}
+        onChange={(e) => onChange("prExternalId", e.target.value)}
+        aria-label="Pull Request number"
+        aria-invalid={prIdInvalid}
+        aria-describedby={prIdInvalid ? prNumberHintId : undefined}
+      />
+      {prIdInvalid ? (
+        <p
+          id={prNumberHintId}
+          data-testid="gpr-pr-number-hint"
+          style={{ font: "var(--text-caption)", color: "var(--feedback-danger)", margin: 0 }}
+        >
+          Enter the numeric Pull Request number, for example 1499.
+        </p>
       ) : null}
-      <label style={LABEL_STYLE}>
-        Head branch{" "}
-        <input
-          style={FIELD_STYLE}
-          value={form.headBranchName}
-          disabled={busy}
-          onChange={(e) => onChange("headBranchName", e.target.value)}
-          aria-label="Head branch"
-        />
-      </label>
-      <PrTargetFields form={form} busy={busy} onChange={onChange} />
+    </label>
+  );
+}
+
+function PrUpdateDraftStateField({ form, busy, onChange }: FieldsProps): ReactNode {
+  const t = useTranslate();
+  return (
+    <label style={{ ...LABEL_STYLE, flex: 1 }}>
+      Draft state{" "}
+      <select
+        style={FIELD_STYLE}
+        value={form.draftTransition}
+        disabled={busy}
+        onChange={(e) => onChange("draftTransition", e.target.value as PrForm["draftTransition"])}
+        aria-label="Draft state"
+      >
+        <option value="none">No change</option>
+        <option value="to-draft">Convert to draft</option>
+      </select>
+      <span
+        style={{ font: "var(--text-caption)", color: "var(--fg-muted)" }}
+        data-testid="gpr-mark-ready-hint"
+      >
+        {t("governedPullRequestCard.markReadyHint")}
+      </span>
+    </label>
+  );
+}
+
+// Wraps the two update-only fields in their shared row — thin composition, kept for the same reason
+// PrMetadataFields itself is: DOM order and grouping must stay exactly as before the decomposition.
+function PrUpdateOnlyFields(props: UpdateOnlyFieldsProps): ReactNode {
+  return (
+    <div style={ROW_STYLE}>
+      <PrUpdatePrNumberField {...props} />
+      <PrUpdateDraftStateField {...props} />
+    </div>
+  );
+}
+
+function PrHeadBranchField({ form, busy, onChange }: FieldsProps): ReactNode {
+  return (
+    <label style={LABEL_STYLE}>
+      Head branch{" "}
+      <input
+        style={FIELD_STYLE}
+        value={form.headBranchName}
+        disabled={busy}
+        onChange={(e) => onChange("headBranchName", e.target.value)}
+        aria-label="Head branch"
+      />
+    </label>
+  );
+}
+
+function PrTitleBodyFields({ form, busy, onChange }: FieldsProps): ReactNode {
+  return (
+    <>
       <label style={LABEL_STYLE}>
         Title{" "}
         <input
@@ -396,16 +500,48 @@ function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
           aria-label="Pull Request body"
         />
       </label>
-      <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
-        <input
-          type="checkbox"
-          checked={form.kind === "pr-create" ? form.isDraft : false}
-          disabled={busy || form.kind !== "pr-create"}
-          onChange={(e) => onChange("isDraft", e.target.checked)}
-          aria-label="Open as draft"
-        />{" "}
-        Open as draft
-      </label>
+    </>
+  );
+}
+
+function PrDraftCheckbox({ form, busy, onChange }: FieldsProps): ReactNode {
+  return (
+    <label style={{ ...LABEL_STYLE, flexDirection: "row", alignItems: "center" }}>
+      <input
+        type="checkbox"
+        checked={form.kind === "pr-create" ? form.isDraft : false}
+        disabled={busy || form.kind !== "pr-create"}
+        onChange={(e) => onChange("isDraft", e.target.checked)}
+        aria-label="Open as draft"
+      />{" "}
+      Open as draft
+    </label>
+  );
+}
+
+function PrMetadataFields({ form, busy, onChange }: FieldsProps): ReactNode {
+  const prNumberHintId = useId();
+  const prIdInvalid =
+    form.kind === "pr-update" && form.prExternalId !== "" && !isValidPrNumber(form.prExternalId);
+  return (
+    <section style={SECTION_STYLE} aria-label="Pull Request metadata">
+      <h3 style={HEADING_STYLE}>
+        <GitIcon size={12} /> Metadata
+      </h3>
+      <PrActionFieldset form={form} busy={busy} onChange={onChange} />
+      {form.kind === "pr-update" ? (
+        <PrUpdateOnlyFields
+          form={form}
+          busy={busy}
+          onChange={onChange}
+          prNumberHintId={prNumberHintId}
+          prIdInvalid={prIdInvalid}
+        />
+      ) : null}
+      <PrHeadBranchField form={form} busy={busy} onChange={onChange} />
+      <PrTargetFields form={form} busy={busy} onChange={onChange} />
+      <PrTitleBodyFields form={form} busy={busy} onChange={onChange} />
+      <PrDraftCheckbox form={form} busy={busy} onChange={onChange} />
     </section>
   );
 }
@@ -515,6 +651,787 @@ function PrOutcome({
   );
 }
 
+// ─── PR-description application (#3399, epic #3384 correction 4/7/10/11) ────────────────────────────
+//
+// Preview -> approve -> apply for the reviewed Keiko-generated description. The server renders
+// `finalBody`/`managedRegion` — repository template and human text preserved outside one versioned
+// managed region, the "by Keiko" attribution added by trusted code after model validation — so this
+// panel shows that text byte-for-byte and never composes or edits it. The approval is one-use: a
+// successful (or failed) apply always clears the local proposal so a second Apply click can never
+// replay a spent approval; the fields must be re-previewed to mint a new one.
+
+interface DescriptionForm {
+  readonly ownerAndRepo: string;
+  readonly prNumber: string;
+  readonly language: PrDescriptionLanguage;
+}
+type DescriptionFormChange = <K extends keyof DescriptionForm>(
+  key: K,
+  value: DescriptionForm[K],
+) => void;
+
+// #3390 — a retained proposal and a bare pull request are two different degrees of knowledge, and
+// the panel must open on whichever it was given. The Workbench hands over the full proposal while
+// its holder still has it, and the pull request alone once that holder has let it lapse; in both
+// cases the operator arrives on the right target rather than on an empty form.
+function initialDescriptionForm(
+  target: DescriptionSeed,
+  retained: GitDeliveryPrDescriptionProposalInput | undefined,
+): DescriptionForm {
+  const prNumber = retained?.prNumber ?? target.prNumber;
+  return {
+    ownerAndRepo: retained?.ownerAndRepo ?? target.ownerAndRepo ?? "",
+    prNumber: prNumber === undefined ? "" : String(prNumber),
+    language: "en",
+  };
+}
+
+/** What the caller knows about the description's pull request when no proposal is retained. */
+interface DescriptionSeed {
+  readonly ownerAndRepo: string | undefined;
+  readonly prNumber: number | undefined;
+}
+
+function isValidDescriptionPrNumber(value: string): boolean {
+  return /^\d+$/u.test(value);
+}
+
+// Owner audit b1-15 — `prNumber` arrives here as either the raw form string (which may carry
+// leading zeros the user typed, e.g. "007") or `String(async.target.prNumber)`, a reconstruction of
+// the server-issued number that never has any. Normalising through `Number` here means both sides
+// of every previewedKey/targetKey comparison agree on the same PR regardless of which shape the
+// caller had, instead of "007" silently failing to match its own already-completed preview "7".
+function descriptionTargetKeyOf(ownerAndRepo: string, prNumber: string): string {
+  return `${ownerAndRepo} ${String(Number(prNumber))}`;
+}
+
+interface DescriptionAsyncState {
+  readonly result: PrDescriptionApplicationResultWire | null;
+  // The exact target the current result/proposal was produced for — never the live form fields,
+  // so an approve/apply can never be sent for a PR the user has since retargeted (mirrors
+  // GovernedPullRequestBody's previewedKey/targetKey gate for the create/update form above).
+  readonly target: GitDeliveryPrDescriptionTarget | null;
+  readonly proposalId: string | null;
+  readonly approved: boolean;
+  readonly error: string | null;
+  readonly busy: boolean;
+}
+
+interface DescriptionAsync extends DescriptionAsyncState {
+  readonly runPreview: (input: GitDeliveryPrDescriptionPreviewInput) => void;
+  readonly runReview: (input: GitDeliveryPrDescriptionProposalInput) => void;
+  readonly runApprove: () => void;
+  readonly runApply: () => void;
+  readonly runStatus: (target: GitDeliveryPrDescriptionTarget) => void;
+}
+
+// The three description methods, narrowed to non-optional: `PrDescriptionPanel` builds this only
+// once all three are present on the injected client, so the hook below never has to branch on a
+// partially-populated client mid-lifecycle (preview present but approve missing, etc.).
+interface RequiredPrDescriptionClient {
+  readonly prDescriptionPreview: typeof fetchGitDeliveryPrDescriptionPreview;
+  readonly prDescriptionApprove: typeof fetchGitDeliveryPrDescriptionApprove;
+  readonly prDescriptionApply: typeof fetchGitDeliveryPrDescriptionApply;
+  readonly prDescriptionReview?: typeof fetchGitDeliveryPrDescriptionReview;
+  readonly prDescriptionStatus?: typeof fetchGitDeliveryPrDescriptionStatus;
+}
+
+// Shared sequencing for the three description actions below: increments the guard token, marks
+// busy, dispatches `run()`, and on the still-current response applies `onSettled`'s state patch — a
+// stale (superseded) response is silently dropped, mirroring useGovernedPrActions' own seq guard.
+function dispatchDescriptionAction<T>(
+  seq: { current: number },
+  setState: (updater: (s: DescriptionAsyncState) => DescriptionAsyncState) => void,
+  handleError: (err: unknown, token: number) => void,
+  run: () => Promise<T>,
+  onSettled: (value: T) => Partial<DescriptionAsyncState>,
+): void {
+  const token = (seq.current += 1);
+  setState((s) => ({ ...s, busy: true, error: null }));
+  void run()
+    .then((value) => {
+      if (token !== seq.current) return;
+      setState((s) => ({ ...s, busy: false, ...onSettled(value) }));
+    })
+    .catch((err: unknown) => handleError(err, token));
+}
+
+function descriptionPreviewAction(
+  client: RequiredPrDescriptionClient,
+  seq: { current: number },
+  setState: (updater: (s: DescriptionAsyncState) => DescriptionAsyncState) => void,
+  handleError: (err: unknown, token: number) => void,
+  input: GitDeliveryPrDescriptionPreviewInput,
+): void {
+  const target: GitDeliveryPrDescriptionTarget = {
+    projectId: input.projectId,
+    ownerAndRepo: input.ownerAndRepo,
+    prNumber: input.prNumber,
+    ...(input.snapshotDigest === undefined ? {} : { snapshotDigest: input.snapshotDigest }),
+  };
+  dispatchDescriptionAction(
+    seq,
+    setState,
+    handleError,
+    () => client.prDescriptionPreview(input),
+    (result) => ({
+      result,
+      target,
+      proposalId: result.outcome === "preview" ? result.preview.proposalId : null,
+      approved: false,
+    }),
+  );
+}
+
+function descriptionApproveAction(
+  client: RequiredPrDescriptionClient,
+  seq: { current: number },
+  setState: (updater: (s: DescriptionAsyncState) => DescriptionAsyncState) => void,
+  handleError: (err: unknown, token: number) => void,
+  target: GitDeliveryPrDescriptionTarget,
+  proposalId: string,
+): void {
+  dispatchDescriptionAction(
+    seq,
+    setState,
+    handleError,
+    () => client.prDescriptionApprove({ ...target, proposalId }),
+    () => ({ approved: true }),
+  );
+}
+
+function descriptionReviewAction(
+  client: RequiredPrDescriptionClient,
+  seq: { current: number },
+  setState: (updater: (s: DescriptionAsyncState) => DescriptionAsyncState) => void,
+  handleError: (err: unknown, token: number) => void,
+  input: GitDeliveryPrDescriptionProposalInput,
+): void {
+  const review = client.prDescriptionReview;
+  if (review === undefined) return;
+  const { proposalId, ...target } = input;
+  dispatchDescriptionAction(
+    seq,
+    setState,
+    handleError,
+    () => review(input),
+    (result) => ({
+      result,
+      target,
+      proposalId: result.outcome === "preview" ? proposalId : null,
+      approved: false,
+    }),
+  );
+}
+
+// #3390: observe the applied description's CURRENT status for a PR identity, without generating
+// anything. The governed draft-to-ready transition changes the PR's own `isDraft` identity, which
+// leaves a previously confirmed status bound to an identity that no longer exists; this is the read
+// that reconciles it. It mints no proposal and consumes no approval, so the pending lifecycle is
+// reset to "nothing in flight" rather than carried forward against a status the user never
+// previewed — and `canRefresh` keeps the control disabled while a proposal IS in flight, so this
+// reset can never discard one.
+function descriptionStatusAction(
+  read: typeof fetchGitDeliveryPrDescriptionStatus,
+  seq: { current: number },
+  setState: (updater: (s: DescriptionAsyncState) => DescriptionAsyncState) => void,
+  handleError: (err: unknown, token: number) => void,
+  target: GitDeliveryPrDescriptionTarget,
+): void {
+  dispatchDescriptionAction(
+    seq,
+    setState,
+    handleError,
+    () => read(target),
+    (result) => ({ result, target, proposalId: null, approved: false }),
+  );
+}
+
+function descriptionApplyAction(
+  client: RequiredPrDescriptionClient,
+  seq: { current: number },
+  setState: (updater: (s: DescriptionAsyncState) => DescriptionAsyncState) => void,
+  handleError: (err: unknown, token: number) => void,
+  target: GitDeliveryPrDescriptionTarget,
+  proposalId: string,
+): void {
+  dispatchDescriptionAction(
+    seq,
+    setState,
+    handleError,
+    () => client.prDescriptionApply({ ...target, proposalId }),
+    // One-use: the spent proposal/approval never carries forward to a second Apply click — but
+    // `target` is kept so the just-applied result stays visible (still "the exact target the
+    // current result was produced for"); only a fresh Preview mints a new proposal to approve.
+    (result) => ({ result, proposalId: null, approved: false }),
+  );
+}
+
+// The returned object is rebuilt every render regardless (it spreads `state`), so wrapping these in
+// `useCallback` would buy no referential stability — plain closures keep the hook itself short.
+function useGovernedPrDescriptionActions(
+  client: RequiredPrDescriptionClient | undefined,
+): DescriptionAsync {
+  const [state, setState] = useState<DescriptionAsyncState>({
+    result: null,
+    target: null,
+    proposalId: null,
+    approved: false,
+    error: null,
+    busy: false,
+  });
+  const seq = useRef(0);
+
+  const handleError = (err: unknown, token: number): void => {
+    if (token !== seq.current) return;
+    setState((s) => ({ ...s, busy: false, error: formatError(err) }));
+  };
+
+  const runPreview = (input: GitDeliveryPrDescriptionPreviewInput): void => {
+    if (client === undefined) return;
+    descriptionPreviewAction(client, seq, setState, handleError, input);
+  };
+
+  const runReview = (input: GitDeliveryPrDescriptionProposalInput): void => {
+    if (client === undefined) return;
+    descriptionReviewAction(client, seq, setState, handleError, input);
+  };
+
+  const runApprove = (): void => {
+    if (client === undefined || state.proposalId === null || state.target === null) return;
+    descriptionApproveAction(client, seq, setState, handleError, state.target, state.proposalId);
+  };
+
+  const runApply = (): void => {
+    if (
+      client === undefined ||
+      state.proposalId === null ||
+      state.target === null ||
+      !state.approved
+    ) {
+      return;
+    }
+    descriptionApplyAction(client, seq, setState, handleError, state.target, state.proposalId);
+  };
+
+  const runStatus = (target: GitDeliveryPrDescriptionTarget): void => {
+    const read = client?.prDescriptionStatus;
+    if (read === undefined) return;
+    descriptionStatusAction(read, seq, setState, handleError, target);
+  };
+
+  return { ...state, runPreview, runReview, runApprove, runApply, runStatus };
+}
+
+function descriptionStateOf(
+  result: PrDescriptionApplicationResultWire | null,
+): PrDescriptionApplicationStatus["state"] | undefined {
+  if (result === null) return undefined;
+  if (result.outcome === "preview") return result.preview.status.state;
+  if (result.outcome === "observed") return result.status.state;
+  return "blocked";
+}
+
+function descriptionReasonOf(
+  result: PrDescriptionApplicationResultWire | null,
+): string | undefined {
+  if (result === null) return undefined;
+  if (result.outcome === "preview") return result.preview.status.reason;
+  if (result.outcome === "observed") return result.status.reason;
+  return result.reason;
+}
+
+// Text + icon only — never colour alone (WCAG 2.2 AA), matching PrOutcome above.
+const DESCRIPTION_STATE_LABEL_KEY: Readonly<
+  Record<PrDescriptionApplicationStatus["state"], MessageKey>
+> = {
+  current: "governedPullRequestCard.description.state.current",
+  stale: "governedPullRequestCard.description.state.stale",
+  partial: "governedPullRequestCard.description.state.partial",
+  fallback: "governedPullRequestCard.description.state.fallback",
+  blocked: "governedPullRequestCard.description.state.blocked",
+  failed: "governedPullRequestCard.description.state.failed",
+};
+
+function PrDescriptionStatusBadge({
+  result,
+  t,
+}: {
+  readonly result: PrDescriptionApplicationResultWire | null;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  const state = descriptionStateOf(result);
+  if (state === undefined) return null;
+  const reason = descriptionReasonOf(result);
+  return (
+    <p style={KV_LABEL} data-testid="gpr-description-state" data-state={state}>
+      <InfoIcon size={12} /> {t(DESCRIPTION_STATE_LABEL_KEY[state])}
+      {reason !== undefined ? ` (${reason})` : ""}
+    </p>
+  );
+}
+
+// Renders the server-rendered final body byte-for-byte: the repository template, human-authored
+// text outside the managed region, and the trusted "by Keiko" attribution are composed server-side
+// (epic #3384 Frozen Decisions 10/11) and must never be recomposed or re-derived in the browser.
+function PrDescriptionPreviewBody({
+  result,
+  t,
+}: {
+  readonly result: PrDescriptionApplicationResultWire | null;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  if (result?.outcome !== "preview") return null;
+  return (
+    <div style={LABEL_STYLE}>
+      <span>{t("governedPullRequestCard.description.previewCaption")}</span>
+      <textarea
+        data-testid="gpr-description-preview"
+        readOnly
+        rows={8}
+        value={result.preview.finalBody}
+        aria-label={t("governedPullRequestCard.description.previewCaption")}
+        style={{
+          ...FIELD_STYLE,
+          whiteSpace: "pre-wrap",
+          maxHeight: 220,
+          overflow: "auto",
+          resize: "vertical",
+          margin: 0,
+        }}
+      />
+      <span style={{ font: "var(--text-caption)", color: "var(--fg-muted)" }}>
+        {result.preview.concurrencyLimitation}
+      </span>
+    </div>
+  );
+}
+
+interface DescriptionFieldsProps {
+  readonly form: DescriptionForm;
+  readonly busy: boolean;
+  readonly onChange: <K extends keyof DescriptionForm>(key: K, value: DescriptionForm[K]) => void;
+  readonly t: I18nTranslate;
+}
+
+function PrDescriptionPrNumberField({
+  form,
+  busy,
+  onChange,
+  t,
+}: DescriptionFieldsProps): ReactNode {
+  const prNumberHintId = useId();
+  const prNumberInvalid = form.prNumber !== "" && !isValidDescriptionPrNumber(form.prNumber);
+  // The visible label text intentionally matches the aria-label below (both say "Description pull
+  // request number", not the bare "Pull Request number" the create/update form above uses) — two
+  // fields with identical accessible names in the same DOM tree are ambiguous for assistive tech
+  // and for any `getByLabelText` query, even though they serve distinct forms.
+  return (
+    <label style={{ ...LABEL_STYLE, flex: 1 }}>
+      {t("governedPullRequestCard.description.field.prNumberAria")}{" "}
+      <input
+        style={FIELD_STYLE}
+        inputMode="numeric"
+        value={form.prNumber}
+        disabled={busy}
+        onChange={(e) => onChange("prNumber", e.target.value)}
+        aria-label={t("governedPullRequestCard.description.field.prNumberAria")}
+        aria-invalid={prNumberInvalid}
+        aria-describedby={prNumberInvalid ? prNumberHintId : undefined}
+      />
+      {prNumberInvalid ? (
+        <p
+          id={prNumberHintId}
+          style={{ font: "var(--text-caption)", color: "var(--feedback-danger)", margin: 0 }}
+        >
+          {t("governedPullRequestCard.description.field.prNumberHint")}
+        </p>
+      ) : null}
+    </label>
+  );
+}
+
+function PrDescriptionLanguageField({
+  form,
+  busy,
+  onChange,
+  t,
+}: DescriptionFieldsProps): ReactNode {
+  return (
+    <label style={{ ...LABEL_STYLE, flex: 1 }}>
+      {t("governedPullRequestCard.description.field.language")}{" "}
+      <select
+        style={FIELD_STYLE}
+        value={form.language}
+        disabled={busy}
+        onChange={(e) => onChange("language", e.target.value as PrDescriptionLanguage)}
+        aria-label={t("governedPullRequestCard.description.field.languageAria")}
+      >
+        {PR_DESCRIPTION_LANGUAGES.map((language) => (
+          <option key={language} value={language}>
+            {language.toUpperCase()}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function PrDescriptionFields(props: DescriptionFieldsProps): ReactNode {
+  const { form, busy, onChange, t } = props;
+  // Same rationale as PrDescriptionPrNumberField above: the visible label matches the aria-label
+  // ("Description repository (owner/repo)"), never the create/update form's bare "Repository
+  // (owner/repo)", so the two fields never share an ambiguous accessible name.
+  return (
+    <div style={ROW_STYLE}>
+      <label style={{ ...LABEL_STYLE, flex: 1 }}>
+        {t("governedPullRequestCard.description.field.repositoryAria")}{" "}
+        <input
+          style={FIELD_STYLE}
+          value={form.ownerAndRepo}
+          disabled={busy}
+          onChange={(e) => onChange("ownerAndRepo", e.target.value)}
+          aria-label={t("governedPullRequestCard.description.field.repositoryAria")}
+        />
+      </label>
+      <PrDescriptionPrNumberField {...props} />
+      <PrDescriptionLanguageField {...props} />
+    </div>
+  );
+}
+
+interface DescriptionButtonsProps {
+  readonly busy: boolean;
+  readonly canRefresh: boolean;
+  readonly canPreview: boolean;
+  readonly canApprove: boolean;
+  readonly canApply: boolean;
+  // `undefined` when the injected client carries no status reader — the control is then absent
+  // rather than present-and-permanently-disabled, matching how the whole panel disappears for a
+  // client without the preview/approve/apply trio.
+  readonly onRefresh: (() => void) | undefined;
+  readonly onPreview: () => void;
+  readonly onApprove: () => void;
+  readonly onApply: () => void;
+  readonly t: I18nTranslate;
+}
+
+function DescriptionActionButton({
+  testId,
+  label,
+  primary = false,
+  disabled,
+  onClick,
+}: {
+  readonly testId: string;
+  readonly label: string;
+  readonly primary?: boolean;
+  readonly disabled: boolean;
+  readonly onClick: () => void;
+}): ReactNode {
+  return (
+    <button
+      type="button"
+      style={primary ? PRIMARY_BTN : GHOST_BTN}
+      disabled={disabled}
+      onClick={onClick}
+      data-testid={testId}
+    >
+      {label}
+    </button>
+  );
+}
+
+// Reading first, then the generate -> approve -> apply lifecycle, with the one primary action last.
+function PrDescriptionButtons({
+  busy,
+  canRefresh,
+  canPreview,
+  canApprove,
+  canApply,
+  onRefresh,
+  onPreview,
+  onApprove,
+  onApply,
+  t,
+}: DescriptionButtonsProps): ReactNode {
+  return (
+    <div style={ROW_STYLE}>
+      {onRefresh === undefined ? null : (
+        <DescriptionActionButton
+          testId="gpr-description-status-button"
+          label={t("governedPullRequestCard.description.action.status")}
+          disabled={busy || !canRefresh}
+          onClick={onRefresh}
+        />
+      )}
+      <DescriptionActionButton
+        testId="gpr-description-preview-button"
+        label={t("governedPullRequestCard.description.action.preview")}
+        disabled={busy || !canPreview}
+        onClick={onPreview}
+      />
+      <DescriptionActionButton
+        testId="gpr-description-approve-button"
+        label={t("governedPullRequestCard.description.action.approve")}
+        disabled={busy || !canApprove}
+        onClick={onApprove}
+      />
+      <DescriptionActionButton
+        testId="gpr-description-apply-button"
+        label={t("governedPullRequestCard.description.action.apply")}
+        primary
+        disabled={busy || !canApply}
+        onClick={onApply}
+      />
+    </div>
+  );
+}
+
+function descriptionRefreshHint(
+  hasPreviewed: boolean,
+  stillValid: boolean,
+  state: string | undefined,
+  t: I18nTranslate,
+): ReactNode {
+  if (!hasPreviewed || (stillValid && state !== "stale")) return null;
+  const message = stillValid
+    ? t("governedPullRequestCard.description.refreshHint.stale")
+    : t("governedPullRequestCard.description.refreshHint.targetChanged");
+  return (
+    <p
+      role="alert"
+      style={{ font: "var(--text-body-sm)", color: "var(--feedback-danger)" }}
+      data-testid="gpr-description-refresh-hint"
+    >
+      <InfoIcon size={12} /> {message}
+    </p>
+  );
+}
+
+// Present only once ALL three description methods are on the injected client (Frozen Decision 7:
+// the whole preview -> approve -> apply lifecycle or none of it) — never a partially wired panel.
+function requiredPrDescriptionClient(
+  client: GovernedPullRequestClient,
+): RequiredPrDescriptionClient | undefined {
+  const { prDescriptionPreview, prDescriptionApprove, prDescriptionApply } = client;
+  if (
+    prDescriptionPreview === undefined ||
+    prDescriptionApprove === undefined ||
+    prDescriptionApply === undefined
+  ) {
+    return undefined;
+  }
+  return {
+    prDescriptionPreview,
+    prDescriptionApprove,
+    prDescriptionApply,
+    ...(client.prDescriptionReview === undefined
+      ? {}
+      : { prDescriptionReview: client.prDescriptionReview }),
+    ...(client.prDescriptionStatus === undefined
+      ? {}
+      : { prDescriptionStatus: client.prDescriptionStatus }),
+  };
+}
+
+interface DescriptionPanelFlags {
+  readonly stillValid: boolean;
+  readonly hasPreviewed: boolean;
+  readonly visibleResult: PrDescriptionApplicationResultWire | null;
+  readonly state: PrDescriptionApplicationStatus["state"] | undefined;
+  readonly canPreview: boolean;
+  readonly canRefresh: boolean;
+  readonly canApprove: boolean;
+  readonly canApply: boolean;
+}
+
+type DescriptionVisibility = Pick<
+  DescriptionPanelFlags,
+  "stillValid" | "hasPreviewed" | "visibleResult" | "state"
+>;
+
+// A preview/approval is shown only while the form still names the exact target it was produced for
+// — mirrors GovernedPullRequestBody's previewedKey/targetKey gate for the create/update form above,
+// applied to the description lifecycle's own (ownerAndRepo, prNumber) target.
+function derivePrDescriptionVisibility(
+  form: DescriptionForm,
+  async: DescriptionAsync,
+): DescriptionVisibility {
+  const targetKey = descriptionTargetKeyOf(form.ownerAndRepo, form.prNumber);
+  const previewedKey =
+    async.target === null
+      ? ""
+      : descriptionTargetKeyOf(async.target.ownerAndRepo, String(async.target.prNumber));
+  const stillValid = previewedKey !== "" && previewedKey === targetKey;
+  const visibleResult = stillValid ? async.result : null;
+  return {
+    stillValid,
+    hasPreviewed: async.target !== null,
+    visibleResult,
+    state: stillValid ? descriptionStateOf(visibleResult) : undefined,
+  };
+}
+
+function derivePrDescriptionPanelFlags(
+  form: DescriptionForm,
+  async: DescriptionAsync,
+): DescriptionPanelFlags {
+  const visibility = derivePrDescriptionVisibility(form, async);
+  const { stillValid, state } = visibility;
+  return {
+    ...visibility,
+    canPreview: form.ownerAndRepo !== "" && isValidDescriptionPrNumber(form.prNumber),
+    // Observing needs only a named PR — and stays unavailable while a proposal is pending so the
+    // status result can never replace a preview the user is still approving or applying.
+    canRefresh:
+      form.ownerAndRepo !== "" &&
+      isValidDescriptionPrNumber(form.prNumber) &&
+      async.proposalId === null,
+    canApprove: stillValid && async.proposalId !== null && !async.approved && state !== "stale",
+    canApply: stillValid && async.proposalId !== null && async.approved && state !== "stale",
+  };
+}
+
+function PrDescriptionPanelStatus({
+  flags,
+  error,
+  t,
+}: {
+  readonly flags: DescriptionPanelFlags;
+  readonly error: string | null;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  return (
+    <>
+      {descriptionRefreshHint(flags.hasPreviewed, flags.stillValid, flags.state, t)}
+      <PrDescriptionStatusBadge result={flags.visibleResult} t={t} />
+      <PrDescriptionPreviewBody result={flags.visibleResult} t={t} />
+      {error !== null ? (
+        <p role="alert" style={{ font: "var(--text-body-sm)", color: "var(--feedback-danger)" }}>
+          <InfoIcon size={12} /> {error}
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+function usePrDescriptionPreviewHandler(
+  form: DescriptionForm,
+  flags: DescriptionPanelFlags,
+  async: DescriptionAsync,
+  projectId: string,
+): () => void {
+  return useCallback((): void => {
+    if (!flags.canPreview) return;
+    async.runPreview({
+      projectId,
+      ownerAndRepo: form.ownerAndRepo,
+      prNumber: Number(form.prNumber),
+      language: form.language,
+    });
+  }, [async, flags.canPreview, form.language, form.ownerAndRepo, form.prNumber, projectId]);
+}
+
+function usePrDescriptionStatusHandler(
+  form: DescriptionForm,
+  flags: DescriptionPanelFlags,
+  async: DescriptionAsync,
+  projectId: string,
+): () => void {
+  return useCallback((): void => {
+    if (!flags.canRefresh) return;
+    async.runStatus({
+      projectId,
+      ownerAndRepo: form.ownerAndRepo,
+      prNumber: Number(form.prNumber),
+    });
+  }, [async, flags.canRefresh, form.ownerAndRepo, form.prNumber, projectId]);
+}
+
+function useRetainedDescriptionProposal(
+  async: DescriptionAsync,
+  projectId: string,
+  retainedProposal: GitDeliveryPrDescriptionProposalInput | undefined,
+): void {
+  const loadedProposal = useRef<string | null>(null);
+  useEffect(() => {
+    if (
+      retainedProposal?.projectId !== projectId ||
+      loadedProposal.current === retainedProposal.proposalId
+    ) {
+      return;
+    }
+    loadedProposal.current = retainedProposal.proposalId;
+    async.runReview(retainedProposal);
+  }, [async, projectId, retainedProposal]);
+}
+
+function useDescriptionForm(
+  target: DescriptionSeed,
+  retainedProposal: GitDeliveryPrDescriptionProposalInput | undefined,
+): { readonly form: DescriptionForm; readonly onChange: DescriptionFormChange } {
+  const [form, setForm] = useState<DescriptionForm>(() =>
+    initialDescriptionForm(target, retainedProposal),
+  );
+  const onChange = useCallback(
+    <K extends keyof DescriptionForm>(key: K, value: DescriptionForm[K]): void => {
+      setForm((current) => ({ ...current, [key]: value }));
+    },
+    [],
+  );
+  return { form, onChange };
+}
+
+function PrDescriptionPanel({
+  client,
+  projectId,
+  target,
+  retainedProposal,
+}: {
+  readonly client: GovernedPullRequestClient;
+  readonly projectId: string;
+  readonly target: DescriptionSeed;
+  readonly retainedProposal: GitDeliveryPrDescriptionProposalInput | undefined;
+}): ReactNode {
+  const { form, onChange } = useDescriptionForm(target, retainedProposal);
+  const t = useTranslate();
+  const descriptionClient = requiredPrDescriptionClient(client);
+  const async = useGovernedPrDescriptionActions(descriptionClient);
+  useRetainedDescriptionProposal(async, projectId, retainedProposal);
+  const flags = derivePrDescriptionPanelFlags(form, async);
+  const onPreview = usePrDescriptionPreviewHandler(form, flags, async, projectId);
+  const onRefresh = usePrDescriptionStatusHandler(form, flags, async, projectId);
+
+  if (descriptionClient === undefined) return null;
+
+  return (
+    <section
+      style={SECTION_STYLE}
+      aria-label={t("governedPullRequestCard.description.regionAria")}
+      data-testid="gpr-description"
+    >
+      <h3 style={HEADING_STYLE}>
+        <GitIcon size={12} /> {t("governedPullRequestCard.description.heading")}
+      </h3>
+      <PrDescriptionFields form={form} busy={async.busy} onChange={onChange} t={t} />
+      <PrDescriptionButtons
+        busy={async.busy}
+        canRefresh={flags.canRefresh}
+        canPreview={flags.canPreview}
+        canApprove={flags.canApprove}
+        canApply={flags.canApply}
+        onRefresh={descriptionClient.prDescriptionStatus === undefined ? undefined : onRefresh}
+        onPreview={onPreview}
+        onApprove={async.runApprove}
+        onApply={async.runApply}
+        t={t}
+      />
+      <PrDescriptionPanelStatus flags={flags} error={async.error} t={t} />
+    </section>
+  );
+}
+
 // ─── Card body ─────────────────────────────────────────────────────────────────────────────────────
 
 function liveTextFor(async: Pick<PrAsyncState, "busy" | "error" | "outcome" | "preview">): string {
@@ -526,35 +1443,170 @@ function liveTextFor(async: Pick<PrAsyncState, "busy" | "error" | "outcome" | "p
   return "";
 }
 
-function GovernedPullRequestBody({
-  client,
-  projectId,
-  headBranchName,
-  ownerAndRepo,
-  baseBranchName,
-  titleId,
-  liveId,
-}: {
+interface GovernedPullRequestBodyProps {
   readonly client: GovernedPullRequestClient;
   readonly projectId: string;
   readonly headBranchName: string | undefined;
-  readonly ownerAndRepo?: string | undefined;
-  readonly baseBranchName?: string | undefined;
+  readonly ownerAndRepo: string | undefined;
+  readonly baseBranchName: string | undefined;
+  readonly descriptionPrNumber: number | undefined;
+  readonly descriptionProposal: GitDeliveryPrDescriptionProposalInput | undefined;
   readonly titleId: string;
   readonly liveId: string;
-}): ReactNode {
-  const [form, setForm] = useState<PrForm>(() =>
-    initialForm({ headBranchName, ownerAndRepo, baseBranchName }),
-  );
-  // Target keys the loaded preview / last started action are valid for. A preview, outcome, or
-  // error is rendered only while the form still names the exact target it was produced for.
-  const [previewedKey, setPreviewedKey] = useState("");
-  const [actionKey, setActionKey] = useState("");
-  const async = useGovernedPrActions(client);
-  const onChange = useCallback(<K extends keyof PrForm>(key: K, value: PrForm[K]): void => {
-    setForm((f) => ({ ...f, [key]: value }));
-  }, []);
+}
 
+const CARD_BODY_STYLE: CSSProperties = {
+  display: "flex",
+  flexDirection: "column",
+  gap: "var(--space-3)",
+  padding: "var(--space-3)",
+  overflow: "auto",
+  height: "100%",
+};
+const LIVE_REGION_STYLE: CSSProperties = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+};
+
+// The visible title + visually-hidden aria-live status line — extracted from GovernedPullRequestBody
+// (AGENTS.md §6 max-lines-per-function). A Fragment, so this adds no DOM node of its own.
+function PrBodyHeader({
+  titleId,
+  liveId,
+  liveText,
+}: {
+  readonly titleId: string;
+  readonly liveId: string;
+  readonly liveText: string;
+}): ReactNode {
+  return (
+    <>
+      <h2 id={titleId} style={{ ...HEADING_STYLE, font: "var(--text-title)" }}>
+        <GitIcon size={14} /> Pull Request
+      </h2>
+      <p
+        id={liveId}
+        data-testid="gpr-live"
+        role="status"
+        aria-live="polite"
+        style={LIVE_REGION_STYLE}
+      >
+        {liveText}
+      </p>
+    </>
+  );
+}
+
+function prSubmitLabel(kind: GitDeliveryPrKind): string {
+  return kind === "pr-create" ? "Create Pull Request" : "Update Pull Request";
+}
+
+function PrFormActionButtons({
+  busy,
+  canPreview,
+  canExecute,
+  kind,
+  onPreview,
+  onExecute,
+}: {
+  readonly busy: boolean;
+  readonly canPreview: boolean;
+  readonly canExecute: boolean;
+  readonly kind: GitDeliveryPrKind;
+  readonly onPreview: () => void;
+  readonly onExecute: () => void;
+}): ReactNode {
+  return (
+    <div style={ROW_STYLE}>
+      <button type="button" style={GHOST_BTN} disabled={busy || !canPreview} onClick={onPreview}>
+        Preview
+      </button>
+      <button
+        type="button"
+        style={PRIMARY_BTN}
+        disabled={busy || !canExecute}
+        onClick={onExecute}
+        data-testid="gpr-submit"
+      >
+        {prSubmitLabel(kind)}
+      </button>
+    </div>
+  );
+}
+
+// Preview only needs the targets (it SYNTHESIZES a title/body suggestion); execute also needs a title.
+function derivePrFormFlags(form: PrForm): { canPreview: boolean; canExecute: boolean } {
+  const canPreview =
+    form.ownerAndRepo !== "" &&
+    form.headBranchName !== "" &&
+    form.baseBranchName !== "" &&
+    (form.kind === "pr-create" || isValidPrNumber(form.prExternalId));
+  return { canPreview, canExecute: canPreview && form.title !== "" };
+}
+
+interface PrVisibleState {
+  readonly visiblePreview: GitDeliveryPrPreviewResponse | null;
+  readonly visibleOutcome: GitDeliveryPrExecuteResponse | null;
+  readonly visibleError: string | null;
+}
+
+// A preview, outcome, or error is surfaced only while the form still names the exact target it was
+// produced for (targetKey), never a stale one left over from a previous target.
+function derivePrVisibleState(
+  async: Pick<PrAsyncState, "preview" | "outcome" | "error">,
+  previewedKey: string,
+  actionKey: string,
+  targetKey: string,
+): PrVisibleState {
+  return {
+    visiblePreview: previewedKey === targetKey ? async.preview : null,
+    visibleOutcome: actionKey === targetKey ? async.outcome : null,
+    visibleError: actionKey === targetKey ? async.error : null,
+  };
+}
+
+interface PrRenderState extends PrVisibleState {
+  readonly canPreview: boolean;
+  readonly canExecute: boolean;
+  readonly liveText: string;
+}
+
+// Bundles the pure per-render derivations (form validity, target-scoped visibility, the live-region
+// text) so GovernedPullRequestBody itself stays a thin composition.
+function derivePrRenderState(
+  form: PrForm,
+  async: PrAsyncState,
+  previewedKey: string,
+  actionKey: string,
+): PrRenderState {
+  const { canPreview, canExecute } = derivePrFormFlags(form);
+  const visible = derivePrVisibleState(async, previewedKey, actionKey, prTargetKeyOf(form));
+  const liveText = liveTextFor({
+    busy: async.busy,
+    error: visible.visibleError,
+    outcome: visible.visibleOutcome,
+    preview: visible.visiblePreview,
+  });
+  return { canPreview, canExecute, ...visible, liveText };
+}
+
+// The preview/execute submit handlers — extracted from GovernedPullRequestBody (AGENTS.md §6
+// max-lines-per-function). `setForm`/`setPreviewedKey`/`setActionKey` are the stable setters
+// returned by the parent's own `useState` calls, so omitting them from the dependency arrays below
+// (as the original inline callbacks did) keeps `onPreview`/`onExecute` referentially identical
+// across renders that only change unrelated state.
+function usePrFormActionHandlers(
+  form: PrForm,
+  setForm: Dispatch<SetStateAction<PrForm>>,
+  projectId: string,
+  async: PrAsync,
+  previewedKey: string,
+  setPreviewedKey: Dispatch<SetStateAction<string>>,
+  setActionKey: Dispatch<SetStateAction<string>>,
+): { onPreview: () => void; onExecute: () => void } {
   const onPreview = useCallback((): void => {
     const previewedTarget = prTargetKeyOf(form);
     setActionKey(previewedTarget);
@@ -568,81 +1620,111 @@ function GovernedPullRequestBody({
         body: f.body === "" ? preview.composedBody : f.body,
       }));
     });
-  }, [async, form, projectId]);
+    // `setActionKey`/`setForm`/`setPreviewedKey` are the stable setters returned by the caller's own
+    // `useState` calls (guaranteed referentially stable by React) — listed here only to satisfy
+    // exhaustive-deps now that they arrive as parameters instead of same-scope closures; including
+    // them does not change when this callback is recreated.
+  }, [async, form, projectId, setActionKey, setForm, setPreviewedKey]);
 
   const onExecute = useCallback((): void => {
-    setActionKey(prTargetKeyOf(form));
-    async.runExecute(formToInput(form, projectId));
-  }, [async, form, projectId]);
+    const target = prTargetKeyOf(form);
+    setActionKey(target);
+    const input = formToInput(form, projectId);
+    // #3394 review: the reviewed head commit is captured HERE, from the immediately-preceding
+    // preview response — never re-read at execute time. Trusted only when that preview is still for
+    // THIS exact target (mirrors derivePrVisibleState's own staleness gate): a preview left over
+    // from a previous target must never be attached to a different one's execute call. Execute with
+    // no verifiedCommitSha (no preview yet, or a stale one) still reaches the server, which fails
+    // closed on the missing field rather than silently redeeming an unpinned command.
+    const verifiedCommitSha = previewedKey === target ? async.preview?.headCommitSha : undefined;
+    async.runExecute(verifiedCommitSha === undefined ? input : { ...input, verifiedCommitSha });
+  }, [async, form, previewedKey, projectId, setActionKey]);
 
-  // Preview only needs the targets (it SYNTHESIZES a title/body suggestion); execute also needs a title.
-  const canPreview =
-    form.ownerAndRepo !== "" &&
-    form.headBranchName !== "" &&
-    form.baseBranchName !== "" &&
-    (form.kind === "pr-create" || isValidPrNumber(form.prExternalId));
-  const canExecute = canPreview && form.title !== "";
-  const targetKey = prTargetKeyOf(form);
-  const visiblePreview = previewedKey === targetKey ? async.preview : null;
-  const visibleOutcome = actionKey === targetKey ? async.outcome : null;
-  const visibleError = actionKey === targetKey ? async.error : null;
+  return { onPreview, onExecute };
+}
+
+function usePullRequestForm(
+  headBranchName: string | undefined,
+  ownerAndRepo: string | undefined,
+  baseBranchName: string | undefined,
+): {
+  readonly form: PrForm;
+  readonly setForm: Dispatch<SetStateAction<PrForm>>;
+  readonly onChange: PrFormChange;
+} {
+  const [form, setForm] = useState<PrForm>(() =>
+    initialForm({ headBranchName, ownerAndRepo, baseBranchName }),
+  );
+  const onChange = useCallback(<K extends keyof PrForm>(key: K, value: PrForm[K]): void => {
+    setForm((current) => ({ ...current, [key]: value }));
+  }, []);
+  return { form, setForm, onChange };
+}
+
+function renderPrDescriptionPanel(
+  client: GovernedPullRequestClient,
+  projectId: string,
+  target: DescriptionSeed,
+  retainedProposal: GitDeliveryPrDescriptionProposalInput | undefined,
+): ReactNode {
   return (
-    <div
-      style={{
-        display: "flex",
-        flexDirection: "column",
-        gap: "var(--space-3)",
-        padding: "var(--space-3)",
-        overflow: "auto",
-        height: "100%",
-      }}
-      aria-labelledby={titleId}
-    >
-      <h2 id={titleId} style={{ ...HEADING_STYLE, font: "var(--text-title)" }}>
-        <GitIcon size={14} /> Pull Request
-      </h2>
-      <p
-        id={liveId}
-        data-testid="gpr-live"
-        role="status"
-        aria-live="polite"
-        style={{
-          position: "absolute",
-          width: 1,
-          height: 1,
-          overflow: "hidden",
-          clip: "rect(0 0 0 0)",
-        }}
-      >
-        {liveTextFor({
-          busy: async.busy,
-          error: visibleError,
-          outcome: visibleOutcome,
-          preview: visiblePreview,
-        })}
-      </p>
+    <PrDescriptionPanel
+      client={client}
+      projectId={projectId}
+      target={target}
+      retainedProposal={retainedProposal}
+    />
+  );
+}
+
+function GovernedPullRequestBody({
+  client,
+  projectId,
+  headBranchName,
+  ownerAndRepo,
+  baseBranchName,
+  descriptionPrNumber,
+  descriptionProposal,
+  titleId,
+  liveId,
+}: GovernedPullRequestBodyProps): ReactNode {
+  const { form, setForm, onChange } = usePullRequestForm(
+    headBranchName,
+    ownerAndRepo,
+    baseBranchName,
+  );
+  // Target keys the loaded preview / last started action are valid for. A preview, outcome, or
+  // error is rendered only while the form still names the exact target it was produced for.
+  const [previewedKey, setPreviewedKey] = useState("");
+  const [actionKey, setActionKey] = useState("");
+  const async = useGovernedPrActions(client);
+  const { onPreview, onExecute } = usePrFormActionHandlers(
+    form,
+    setForm,
+    projectId,
+    async,
+    previewedKey,
+    setPreviewedKey,
+    setActionKey,
+  );
+  const { canPreview, canExecute, visiblePreview, visibleOutcome, visibleError, liveText } =
+    derivePrRenderState(form, async, previewedKey, actionKey);
+  const description = { ownerAndRepo, prNumber: descriptionPrNumber };
+  return (
+    <div style={CARD_BODY_STYLE} aria-labelledby={titleId}>
+      <PrBodyHeader titleId={titleId} liveId={liveId} liveText={liveText} />
       <PrMetadataFields form={form} busy={async.busy} onChange={onChange} />
       {visiblePreview !== null ? <PrReadinessPanel preview={visiblePreview} /> : null}
-      <div style={ROW_STYLE}>
-        <button
-          type="button"
-          style={GHOST_BTN}
-          disabled={async.busy || !canPreview}
-          onClick={onPreview}
-        >
-          Preview
-        </button>
-        <button
-          type="button"
-          style={PRIMARY_BTN}
-          disabled={async.busy || !canExecute}
-          onClick={onExecute}
-          data-testid="gpr-submit"
-        >
-          {form.kind === "pr-create" ? "Create Pull Request" : "Update Pull Request"}
-        </button>
-      </div>
+      <PrFormActionButtons
+        busy={async.busy}
+        canPreview={canPreview}
+        canExecute={canExecute}
+        kind={form.kind}
+        onPreview={onPreview}
+        onExecute={onExecute}
+      />
       <PrOutcome outcome={visibleOutcome} error={visibleError} />
+      {renderPrDescriptionPanel(client, projectId, description, descriptionProposal)}
     </div>
   );
 }
@@ -656,6 +1738,14 @@ export interface GovernedPullRequestCardProps {
   readonly ownerAndRepo?: string | undefined;
   /** Optional base branch inferred from upstream/current branch metadata. */
   readonly baseBranchName?: string | undefined;
+  /**
+   * The pull request the description belongs to, when it is known without a retained proposal —
+   * the Workbench hands this over once its held proposal has lapsed, so the panel still opens on
+   * the right pull request instead of an empty form (#3390).
+   */
+  readonly descriptionPrNumber?: number | undefined;
+  /** Exact server-held Workbench proposal to review without a second model generation. */
+  readonly descriptionProposal?: GitDeliveryPrDescriptionProposalInput | undefined;
   /** DI seam; defaults to the real BFF client. */
   readonly client?: GovernedPullRequestClient;
 }
@@ -665,6 +1755,8 @@ export function GovernedPullRequestCard({
   headBranchName,
   ownerAndRepo,
   baseBranchName,
+  descriptionPrNumber,
+  descriptionProposal,
   client = DEFAULT_CLIENT,
 }: GovernedPullRequestCardProps): ReactNode {
   const titleId = useId();
@@ -688,6 +1780,8 @@ export function GovernedPullRequestCard({
       headBranchName={headBranchName}
       ownerAndRepo={ownerAndRepo}
       baseBranchName={baseBranchName}
+      descriptionPrNumber={descriptionPrNumber}
+      descriptionProposal={descriptionProposal}
       titleId={titleId}
       liveId={liveId}
     />

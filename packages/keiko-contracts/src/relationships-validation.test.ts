@@ -379,6 +379,35 @@ describe("validateRelationship — forward-looking object kinds", () => {
   });
 });
 
+// ─── git-change object kind (Issue #3400, epic #3384) ─────────────────────────
+// Unlike the forward-looking kinds above, "git-change" is admitted immediately: a Chat
+// reads-context a server-resolved Git comparison. Before this kind existed the same request
+// failed with `denied/object-kind-not-yet-supported` (or, before it entered
+// RELATIONSHIP_OBJECT_KINDS at all, `denied/invalid-structure`); this pins the corrected,
+// admitting outcome.
+describe("validateRelationship — git-change object kind (Issue #3400)", () => {
+  it("admits chat → git-change under reads-context", () => {
+    const r = validateRelationship(
+      happy("reads-context", endpoint("chat", "chat-1"), endpoint("git-change", "gc-1")),
+    );
+    expect(r.ok).toBe(true);
+  });
+
+  it("rejects git-change as a source kind (reads-context is chat/workflow-run sourced only)", () => {
+    const r = validateRelationship(
+      happy("reads-context", endpoint("git-change", "gc-1"), endpoint("memory", "m1")),
+    );
+    expect(codesFrom(r)).toContain("denied/source-kind-not-allowed");
+  });
+
+  it("rejects git-change as a proposes-patch target (git-change is reads-context-only)", () => {
+    const r = validateRelationship(
+      happy("proposes-patch", endpoint("workflow-run", "r1"), endpoint("git-change", "gc-1")),
+    );
+    expect(codesFrom(r)).toContain("denied/target-kind-not-allowed");
+  });
+});
+
 // ─── Self-edge ────────────────────────────────────────────────────────────────
 describe("validateRelationship — self-edge", () => {
   it("rejects source === target with denied/cycle-forbidden", () => {

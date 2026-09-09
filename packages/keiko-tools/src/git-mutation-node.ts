@@ -12,6 +12,7 @@
 // re-exported from the package's main barrel.
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+export { canonicalGitHubPushUrl } from "./git-push-destination.js";
 import type { GitDeliveryExecutionResult } from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import {
@@ -24,6 +25,7 @@ import {
   buildUnstageArgv,
   GIT_MUTATION_COMMAND_RULES,
   type GitCommitExecRequest,
+  type GitStageExecRequest,
   type GitLocalMutationAdapter,
   type GitMutationArgvPlan,
 } from "./git-mutation-adapter.js";
@@ -43,8 +45,22 @@ import {
   type CommandResult,
   type SandboxPolicy,
 } from "./types.js";
+import {
+  ensureGitLazyFetchGuardSupported,
+  readGitFullRef,
+  readGitIndexTreeDigest,
+  readGitCommitIdentity,
+  readGitRevision,
+  readGitTreeDigest,
+} from "./git-worktree-snapshot-node.js";
+import { isSafeGitRefName } from "./git-worktree-adapter.js";
+import { stageExactFiles, gitStageAttributesSupported } from "./git-stage-node.js";
+import { gitCommitMessageDigest } from "./git-index-identity.js";
 
 export interface NodeGitMutationAdapterDeps {
+  /** Re-proves live server authority immediately before the sole ref-changing effect. */
+  readonly beforeCommitRefUpdate?: (() => boolean) | undefined;
+  readonly beforeIndexUpdate?: (() => boolean) | undefined;
   // The repository root the mutations run in. Reused as the spawn-boundary workspace root.
   readonly workspace: WorkspaceInfo;
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
@@ -127,6 +143,8 @@ interface RunContext {
   readonly runDeps: RunCommandDeps;
   readonly signal: AbortSignal;
   readonly timeoutMs: number | undefined;
+  readonly beforeCommitRefUpdate: (() => boolean) | undefined;
+  readonly beforeIndexUpdate: (() => boolean) | undefined;
 }
 
 const GOVERNED_GIT_MUTATION_CONFIG_ARGS: readonly string[] = [
@@ -160,19 +178,23 @@ const GLOBAL_SIGNING_POLICY_COMMAND_RULES: readonly CommandRule[] = Object.freez
     executable: "git",
     allowedSubcommands: Object.freeze(["config"]),
     valueFlags: Object.freeze([]),
-    denyFlags: Object.freeze([
-      "-c",
-      "-C",
-      "--config-env",
-      "--file",
-      "--blob",
-      "--local",
-      "--system",
-    ]),
+    denyFlags: Object.freeze(["-c", "-C", "--config-env", "--file", "--blob", "--system"]),
   },
 ]);
 
-function runOne(ctx: RunContext, argv: readonly string[]): Promise<CommandResult> {
+// Every mutating spawn goes through here, so the version-gated lazy-fetch/replace-objects guard
+// (git-worktree-snapshot-node.ts, reviewer 3941836280) protects the write lane exactly the way it
+// protects the read lane — cached after the first call, so this costs nothing beyond it. This
+// REPLACES the CLI-flag prepends this lane used to build at each call site: `buildRunContext`
+// below pins GIT_NO_LAZY_FETCH / GIT_NO_REPLACE_OBJECTS into every mutation's env, the equivalent
+// per git's own docs, and `ensureGitLazyFetchGuardSupported` refuses the write outright (never
+// silently unprotected) for an at-risk repository whose installed git cannot enforce them.
+async function runOne(
+  ctx: RunContext,
+  argv: readonly string[],
+  stdin?: string | Uint8Array,
+): Promise<CommandResult> {
+  await ensureGitLazyFetchGuardSupported(commitReadDeps(ctx));
   return runCommand(
     {
       command: "git",
@@ -180,6 +202,7 @@ function runOne(ctx: RunContext, argv: readonly string[]): Promise<CommandResult
       cwd: undefined,
       timeoutMs: ctx.timeoutMs,
       signal: ctx.signal,
+      stdin,
     },
     ctx.runDeps,
   );
@@ -205,16 +228,27 @@ async function runPlan(
   return executionResult("succeeded", totalDuration);
 }
 
-async function globalSigningRequired(ctx: RunContext): Promise<boolean | undefined> {
+async function configuredSigningRequired(
+  ctx: RunContext,
+  scope: "--global" | "--local",
+): Promise<boolean | undefined> {
+  const runDeps = {
+    ...ctx.runDeps,
+    commandRules: GLOBAL_SIGNING_POLICY_COMMAND_RULES,
+    onTerminated: ctx.runDeps.onTerminated,
+  };
   const result = await runCommand(
     {
       command: "git",
-      args: GLOBAL_SIGNING_POLICY_ARGS,
+      args:
+        scope === "--global"
+          ? GLOBAL_SIGNING_POLICY_ARGS
+          : ["config", "--local", "--type=bool", "--get", "commit.gpgSign"],
       cwd: undefined,
       timeoutMs: ctx.timeoutMs,
       signal: ctx.signal,
     },
-    { ...ctx.runDeps, commandRules: GLOBAL_SIGNING_POLICY_COMMAND_RULES },
+    runDeps,
   );
   if (result.exitCode === 1 && result.stdout.trim().length === 0) return false;
   if (result.exitCode !== 0) return undefined;
@@ -224,20 +258,213 @@ async function globalSigningRequired(ctx: RunContext): Promise<boolean | undefin
   return undefined;
 }
 
+async function configuredStageNormalizationSupported(ctx: RunContext): Promise<boolean> {
+  const runDeps = {
+    ...ctx.runDeps,
+    commandRules: GLOBAL_SIGNING_POLICY_COMMAND_RULES,
+    onTerminated: ctx.runDeps.onTerminated,
+  };
+  const result = await runCommand(
+    {
+      command: "git",
+      args: ["config", "--get-regexp", String.raw`^core\.(autocrlf|safecrlf)$`],
+      cwd: undefined,
+      timeoutMs: ctx.timeoutMs,
+      signal: ctx.signal,
+    },
+    runDeps,
+  );
+  if (result.truncated) return false;
+  if (result.exitCode === 1 && result.stdout.length === 0) return true;
+  return (
+    result.exitCode === 0 &&
+    result.stdout
+      .trim()
+      .split("\n")
+      .every((line) => /^core\.(?:autocrlf|safecrlf) false$/iu.test(line))
+  );
+}
+
+async function execStage(
+  ctx: RunContext,
+  request: GitStageExecRequest,
+): Promise<GitDeliveryExecutionResult> {
+  if (request.verified === undefined) return execPlan(ctx, () => buildStageArgv(request));
+  try {
+    if (
+      !(await configuredStageNormalizationSupported(ctx)) ||
+      !(await verifiedFactsMatch(ctx, request))
+    )
+      return failureFromExit(0, 0);
+    if (ctx.signal.aborted || ctx.beforeIndexUpdate?.() === false) return failureFromExit(0, 0);
+    const succeeded = await stageExactFiles(
+      {
+        workspaceRoot: ctx.runDeps.workspace.root,
+        check: () => verifiedFactsMatch(ctx, request),
+        authorized: () => !ctx.signal.aborted && ctx.beforeIndexUpdate?.() !== false,
+        run: (argv, stdin, indexPath) =>
+          runOne(indexPath === undefined ? ctx : withIndexPath(ctx, indexPath), argv, stdin),
+      },
+      request,
+    );
+    return succeeded ? executionResult("succeeded", 0) : failureFromExit(0, 0);
+  } catch (error) {
+    return failureFromThrow(error, 0, 0);
+  }
+}
+
+function withIndexPath(ctx: RunContext, indexPath: string): RunContext {
+  return {
+    ...ctx,
+    runDeps: {
+      ...ctx.runDeps,
+      policy: {
+        ...ctx.runDeps.policy,
+        pinnedEnv: { ...ctx.runDeps.policy.pinnedEnv, GIT_INDEX_FILE: indexPath },
+      },
+    },
+  };
+}
+
 async function execCommit(
   ctx: RunContext,
   request: GitCommitExecRequest,
 ): Promise<GitDeliveryExecutionResult> {
   let signingRequired: boolean | undefined;
   try {
-    signingRequired = await globalSigningRequired(ctx);
+    signingRequired = await configuredSigningRequired(ctx, "--global");
+    if (signingRequired === false && request.verified !== undefined)
+      signingRequired = await configuredSigningRequired(ctx, "--local");
   } catch (error) {
     return failureFromThrow(error, 0, 0);
   }
   if (signingRequired !== false) {
     return executionResult("failed", 0, { errorCode: "precondition-failed" });
   }
-  return execPlan(ctx, () => buildCommitArgv(request));
+  if (request.verified !== undefined) return execVerifiedCommit(ctx, request);
+  const result = await execPlan(ctx, () => buildCommitArgv(request));
+  if (result.outcome !== "succeeded") return result;
+  try {
+    return { ...result, externalId: await readGitRevision(commitReadDeps(ctx), "HEAD") };
+  } catch (error) {
+    return failureFromThrow(error, result.durationMs, 1);
+  }
+}
+
+function commitReadDeps(
+  ctx: RunContext,
+): import("./git-worktree-snapshot-node.js").NodeGitWorktreeReaderDeps {
+  return { ...ctx.runDeps, signal: ctx.signal, timeoutMs: ctx.timeoutMs };
+}
+
+function validVerifiedOperands(request: GitCommitExecRequest): boolean {
+  const v = request.verified;
+  if (v === undefined) return false;
+  return [
+    /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(v.headSha),
+    /^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(v.baseSha),
+    /^[a-f0-9]{64}$/u.test(v.stagedTreeDigest),
+    isSafeGitRefName(v.branchName),
+    isSafeGitRefName(v.baseRef),
+    request.message.length > 0,
+    !request.message.includes("\0"),
+  ].every(Boolean);
+}
+
+async function verifiedFactsMatch(
+  ctx: RunContext,
+  request: Pick<GitCommitExecRequest, "verified">,
+): Promise<boolean> {
+  const expected = request.verified;
+  if (expected === undefined || ctx.signal.aborted || ctx.beforeCommitRefUpdate?.() === false)
+    return false;
+  const deps = commitReadDeps(ctx);
+  const headSha = await readGitRevision(deps, "HEAD");
+  const branch = await readGitFullRef(deps, "HEAD");
+  const indexDigest = await readGitIndexTreeDigest(deps);
+  const baseSha = await readGitRevision(deps, expected.baseRef);
+  return (
+    headSha === expected.headSha &&
+    branch === `refs/heads/${expected.branchName}` &&
+    indexDigest === expected.stagedTreeDigest &&
+    baseSha === expected.baseSha
+  );
+}
+
+async function checkedObjectCommand(ctx: RunContext, argv: readonly string[]): Promise<string> {
+  const result = await runOne(ctx, argv);
+  const objectId = result.stdout.trim();
+  if (
+    result.exitCode !== 0 ||
+    result.truncated ||
+    !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(objectId)
+  ) {
+    throw new TypeError("verified-commit-object-unavailable");
+  }
+  return objectId;
+}
+
+async function execVerifiedCommit(
+  ctx: RunContext,
+  request: GitCommitExecRequest,
+): Promise<GitDeliveryExecutionResult> {
+  if (!validVerifiedOperands(request) || request.verified === undefined)
+    return failureFromExit(0, 0);
+  let refAttempted = false;
+  try {
+    if (!(await verifiedFactsMatch(ctx, request))) return failureFromExit(0, 0);
+    const tree = await checkedObjectCommand(ctx, ["write-tree"]);
+    const baseRef = await readGitFullRef(commitReadDeps(ctx), request.verified.baseRef);
+    if ((await readGitTreeDigest(commitReadDeps(ctx), tree)) !== request.verified.stagedTreeDigest)
+      return failureFromExit(0, 0);
+    const head = await checkedObjectCommand(ctx, [
+      "commit-tree",
+      tree,
+      "-p",
+      request.verified.headSha,
+      "-m",
+      request.message,
+    ]);
+    if (!(await createdCommitMatches(ctx, request, head))) return failureFromExit(0, 0);
+    if (!(await verifiedEffectReady(ctx, request))) return failureFromExit(0, 0);
+    refAttempted = true;
+    const result = await runOne(
+      ctx,
+      ["update-ref", "--stdin"],
+      `start\nverify ${baseRef} ${request.verified.baseSha}\nupdate refs/heads/${request.verified.branchName} ${head} ${request.verified.headSha}\nprepare\ncommit\n`,
+    );
+    if (result.exitCode !== 0) return failureFromExit(result.durationMs, 0);
+    return executionResult("succeeded", result.durationMs, { externalId: head });
+  } catch (error) {
+    return failureFromThrow(error, 0, refAttempted ? 1 : 0);
+  }
+}
+
+async function verifiedEffectReady(
+  ctx: RunContext,
+  request: GitCommitExecRequest,
+): Promise<boolean> {
+  return (await verifiedFactsMatch(ctx, request)) && commitEffectAuthorized(ctx);
+}
+
+function commitEffectAuthorized(ctx: RunContext): boolean {
+  return !ctx.signal.aborted && ctx.beforeCommitRefUpdate?.() !== false;
+}
+
+async function createdCommitMatches(
+  ctx: RunContext,
+  request: GitCommitExecRequest,
+  head: string,
+): Promise<boolean> {
+  const expected = request.verified;
+  if (expected === undefined) return false;
+  const actual = await readGitCommitIdentity(commitReadDeps(ctx), head);
+  return (
+    actual.parentShas.length === 1 &&
+    actual.parentShas[0] === expected.headSha &&
+    actual.treeDigest === expected.stagedTreeDigest &&
+    actual.messageDigest === gitCommitMessageDigest(request.message)
+  );
 }
 
 // Builds the argv plan, then runs it. A builder throw (invalid operand) is an internal error that
@@ -255,11 +482,27 @@ async function execPlan(
   return runPlan(ctx, plan);
 }
 
+// The equivalent of the `--no-lazy-fetch --no-replace-objects` CLI flags this lane used to prepend
+// to every argv (git's own docs: each flag "is equivalent to setting the GIT_NO_(LAZY_FETCH|
+// REPLACE_OBJECTS) environment variable"). Pinned once here rather than per call site so `runOne`
+// need only decide WHETHER the guard can be trusted (`ensureGitLazyFetchGuardSupported`), not build
+// it into every argv.
+function immutableMutationPolicy(policy: SandboxPolicy): SandboxPolicy {
+  return {
+    ...policy,
+    pinnedEnv: {
+      ...policy.pinnedEnv,
+      GIT_NO_REPLACE_OBJECTS: "1",
+      GIT_NO_LAZY_FETCH: "1",
+    },
+  };
+}
+
 function buildRunContext(deps: NodeGitMutationAdapterDeps): RunContext {
   return {
     runDeps: {
       workspace: deps.workspace,
-      policy: deps.policy ?? GOVERNED_GIT_IDENTITY_SANDBOX_POLICY,
+      policy: immutableMutationPolicy(deps.policy ?? GOVERNED_GIT_IDENTITY_SANDBOX_POLICY),
       commandRules: GIT_MUTATION_COMMAND_RULES,
       spawn: deps.spawn ?? nodeSpawnFn,
       processEnv: deps.processEnv ?? process.env,
@@ -272,7 +515,26 @@ function buildRunContext(deps: NodeGitMutationAdapterDeps): RunContext {
     },
     signal: deps.signal ?? new AbortController().signal,
     timeoutMs: deps.timeoutMs,
+    beforeCommitRefUpdate: deps.beforeCommitRefUpdate,
+    beforeIndexUpdate: deps.beforeIndexUpdate,
   };
+}
+
+export async function readGitStageSupport(
+  deps: NodeGitMutationAdapterDeps,
+  paths: readonly string[],
+): Promise<boolean> {
+  const ctx = buildRunContext(deps);
+  if (!(await configuredStageNormalizationSupported(ctx))) return false;
+  return gitStageAttributesSupported(
+    {
+      workspaceRoot: deps.workspace.root,
+      authorized: () => !ctx.signal.aborted,
+      check: () => Promise.resolve(!ctx.signal.aborted),
+      run: (argv, stdin) => runOne(ctx, argv, stdin),
+    },
+    paths,
+  );
 }
 
 export function createNodeGitMutationAdapter(
@@ -282,7 +544,7 @@ export function createNodeGitMutationAdapter(
   return {
     createBranch: (req) => execPlan(ctx, () => buildBranchCreateArgv(req)),
     switchBranch: (req) => execPlan(ctx, () => buildBranchSwitchArgv(req)),
-    stage: (req) => execPlan(ctx, () => buildStageArgv(req)),
+    stage: (req) => execStage(ctx, req),
     unstage: (req) => execPlan(ctx, () => buildUnstageArgv(req)),
     commit: (req) => execCommit(ctx, req),
     abort: (req) => execPlan(ctx, () => buildAbortArgv(req)),
@@ -297,11 +559,24 @@ export {
   GIT_WORKTREE_READ_COMMAND_RULES,
   GitWorktreeReadError,
   readGitRemoteUrl,
+  readGitPushRemoteUrls,
+  readGitRemoteAliases,
+  readGitIndexTreeDigest,
+  readGitIndexEntries,
+  readGitTreeEntries,
+  readGitUntrackedPaths,
+  readGitBlobText,
+  readGitCommitIdentity,
+  readGitRevision,
+  readGitTreeDigest,
   readGitWorktreeSnapshot,
+  readGitStagedDiff,
   readStagedConflictMarkerFileCount,
   readStagedPaths,
   type NodeGitWorktreeReaderDeps,
 } from "./git-worktree-snapshot-node.js";
+export { readGitStageCandidate } from "./git-stage-node.js";
+export { gitCommitMessageDigest } from "./git-index-identity.js";
 
 // The narrow managed-worktree lifecycle adapter (Issue #445, Epic #443) carries the same Node spawn
 // effect through the same governed `runCommand` boundary with its OWN dedicated allowlist
@@ -356,7 +631,25 @@ export {
 // gh itself, never by Keiko.
 export {
   createNodeGitMergeAdapter,
+  createNodeGitCiReader,
+  createNodeGitJourneyReader,
+  type NodeGitCiReaderDeps,
   readNodeGitBranchProtection,
   type GitBranchProtectionReadResult,
   type NodeGitMergeAdapterDeps,
 } from "./git-merge-node.js";
+
+export { readGitRawWorktreeSnapshot, readGitRawChanges } from "./git-raw-worktree-node.js";
+
+export { gitBlobObjectId } from "./git-index-identity.js";
+
+export type { GitCiProviderReader, GitCiFactsResult, GitCiProviderFacts } from "./git-ci-facts.js";
+
+export { assessGitCiFacts, gitCiCheckCounts, type GitCiAssessment } from "./git-ci-assessment.js";
+
+export type {
+  GitJourneyReader,
+  GitJourneyFacts,
+  GitJourneyFactsResult,
+  GitJourneyReadTarget,
+} from "./git-journey-facts.js";

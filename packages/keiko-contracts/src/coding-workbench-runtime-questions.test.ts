@@ -29,7 +29,7 @@ const response = {
 const VALID_ANSWER_BASE = {
   requestId: "req-1",
   expectedRevision: 0,
-  questionRequestId: "que_1",
+  questionId: "que_1",
 };
 
 const RUNTIME_QUESTION_TEXT_SURFACES = [
@@ -238,11 +238,11 @@ describe("coding workbench runtime questions failure branches", () => {
     ).toMatchObject({ ok: false, errors: ["answers must be a bounded non-empty array"] });
   });
 
-  it("rejects a body lacking expectedRevision, a malformed requestId, or an invalid questionRequestId (KEIKO-0411)", () => {
+  it("rejects a body lacking expectedRevision, a malformed requestId, or an invalid questionId (KEIKO-0411)", () => {
     expect(
       parseCodingWorkbenchRuntimeQuestionAnswerRequest({
         requestId: VALID_ANSWER_BASE.requestId,
-        questionRequestId: VALID_ANSWER_BASE.questionRequestId,
+        questionId: VALID_ANSWER_BASE.questionId,
         answers: [["Continue"]],
       }),
     ).toMatchObject({ ok: false });
@@ -266,10 +266,10 @@ describe("coding workbench runtime questions failure branches", () => {
     expect(
       parseCodingWorkbenchRuntimeQuestionAnswerRequest({
         ...VALID_ANSWER_BASE,
-        questionRequestId: "not-a-question-id",
+        questionId: "not-a-question-id",
         answers: [["Continue"]],
       }),
-    ).toMatchObject({ ok: false, errors: ["questionRequestId is invalid"] });
+    ).toMatchObject({ ok: false, errors: ["questionId is invalid"] });
   });
 
   it("rejects answers whose serialized size exceeds the aggregate UTF-8 byte budget even though every individual array is within its own per-item caps (KEIKO-0411)", () => {

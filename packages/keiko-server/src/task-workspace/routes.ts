@@ -26,6 +26,8 @@ import {
 } from "./activity-log.js";
 import { TaskWorkspaceError } from "./errors.js";
 import { assertSafeFieldValue } from "./field-safety.js";
+import { IssueProvisioningError, issueProvisioningBase } from "./issueProvisioning.js";
+import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
 import type {
   WorkspaceCleanupService,
   WorkspaceHealthService,
@@ -188,7 +190,13 @@ function mapError(error: unknown): RouteResult | undefined {
     const base = errorBody(error.code, detail);
     return {
       status: error.status,
-      body: { ...base, error: { ...base.error, failureClass: error.failureClass } },
+      body: {
+        ...base,
+        error: { ...base.error, failureClass: error.failureClass },
+        ...(error instanceof IssueProvisioningError
+          ? { issueBindingFailure: error.issueBindingFailure }
+          : {}),
+      },
     };
   }
   if (error instanceof FilesError) {
@@ -256,6 +264,32 @@ function parseProvisionBody(body: Record<string, unknown>): {
   return { root, taskId, baseBranch, requestedBy };
 }
 
+async function resolveProvisionBody(
+  deps: UiHandlerDeps,
+  body: Record<string, unknown>,
+  correlationId: string | undefined,
+): Promise<ReturnType<typeof parseProvisionBody>> {
+  if (body.source === undefined) return parseProvisionBody(body);
+  if (
+    body.baseBranch !== undefined ||
+    Object.keys(body).some((key) => !["root", "taskId", "requestedBy", "source"].includes(key))
+  ) {
+    throw new TaskWorkspaceError(
+      "INVALID_REQUEST",
+      "Issue provisioning cannot select a base branch.",
+    );
+  }
+  const root = requireSafeField(body.root, "root");
+  const resolved = await resolveRoot(deps.store, root, deps.redactor);
+  const baseBranch = await issueProvisioningBase(
+    deps,
+    resolved.realRoot,
+    body.source,
+    correlationId,
+  );
+  return parseProvisionBody({ ...body, root, baseBranch });
+}
+
 // POST /api/task-workspaces — provision (create or resume) a managed task workspace.
 export async function handleProvisionTaskWorkspace(
   ctx: RouteContext,
@@ -272,7 +306,20 @@ export async function handleProvisionTaskWorkspace(
     },
     async () => {
       const body = await readJsonObject(ctx.req);
-      const parsed = parseProvisionBody(body);
+      if (
+        body.source !== undefined &&
+        resolveAppSessionReadAuthority(deps, ctx.req) === undefined
+      ) {
+        return {
+          status: 403,
+          body: errorBody(
+            "AUTHORITY_DENIED",
+            "Pair the app before issue provisioning.",
+            ctx.correlationId,
+          ),
+        };
+      }
+      const parsed = await resolveProvisionBody(deps, body, ctx.correlationId);
       const resolvedRoot = await resolveRoot(deps.store, parsed.root, deps.redactor);
       const request: WorkspaceProvisionRequest = {
         repositoryRequestPath: resolvedRoot.realRoot,

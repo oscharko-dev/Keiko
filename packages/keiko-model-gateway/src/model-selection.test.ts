@@ -540,6 +540,12 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
       localEndpointPath: "/api/coding-sidecar/gateway",
       supportsStreaming: false,
       supportsToolCalling: true,
+      runMetadata: {
+        maxPromptTokens: 128_000,
+        maxOutputTokens: 4_096,
+        maxInputMessages: 512,
+        maxRequestBytes: 1_048_576,
+      },
     });
     expect(JSON.stringify(result)).not.toContain("baseUrl");
     expect(JSON.stringify(result)).not.toContain("apiKey");

@@ -34,15 +34,32 @@ const WORKSPACE_A: CodingWorkbenchRunWorkspace = {
   root: "/worktrees/a",
   taskBranch: "issue/a",
   workspace: projection("workspace-a", "issue/a"),
+  trust: {
+    repositoryRoot: "/repos/a",
+    repositoryId: "repository-a",
+    workspaceId: "workspace-a",
+    correlationId: "correlation-workspace-a",
+  },
 };
 
 const WORKSPACE_B: CodingWorkbenchRunWorkspace = {
   root: "/worktrees/b",
   taskBranch: "issue/b",
   workspace: projection("workspace-b", "issue/b"),
+  trust: {
+    repositoryRoot: "/repos/b",
+    repositoryId: "repository-b",
+    workspaceId: "workspace-b",
+    correlationId: "correlation-workspace-b",
+  },
 };
 
-const UNBOUND: CodingWorkbenchRunWorkspace = { root: null, taskBranch: null, workspace: null };
+const UNBOUND: CodingWorkbenchRunWorkspace = {
+  root: null,
+  taskBranch: null,
+  workspace: null,
+  trust: null,
+};
 
 interface Props {
   readonly runId: string | undefined;

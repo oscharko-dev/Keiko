@@ -369,7 +369,8 @@ async function defaultProviderState(
   const workspace = resolveProjectWorkspace(deps, request.projectId);
   if (workspace === undefined) return { facts: {}, ready: false };
   const result = await reader(workspace, target.remoteAlias, target.branchName);
-  if (result.outcome === "unavailable") return { facts: {}, ready: false };
+  if (result.outcome === "unavailable" || result.outcome === "unknown")
+    return { facts: {}, ready: false };
   return result.outcome === "protected"
     ? { facts: { branchProtection: result.protection }, ready: true }
     : { facts: {}, ready: true };

@@ -18,6 +18,10 @@
     "./internal/resilience": {
       "types": "./dist/resilience.d.ts",
       "import": "./dist/resilience.js"
+    },
+    "./internal/prompt-token-accounting": {
+      "types": "./dist/prompt-token-accounting.d.ts",
+      "import": "./dist/prompt-token-accounting.js"
     }
   },
   "scripts": {
@@ -34,7 +38,8 @@
   },
   "dependencies": {
     "@oscharko-dev/keiko-contracts": "0.3.17",
-    "@oscharko-dev/keiko-security": "0.3.17"
+    "@oscharko-dev/keiko-security": "0.3.17",
+    "@oscharko-dev/keiko-tool-catalog": "0.3.17"
   },
   "private": true
 }

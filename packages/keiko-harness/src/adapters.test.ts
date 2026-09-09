@@ -6,9 +6,10 @@ import {
   type GatewayStreamChunk,
   type ModelGatewayLogContext,
   type NormalizedResponse,
-  type ToolDefinition,
 } from "@oscharko-dev/keiko-model-gateway";
+import { TOOL_DEFINITIONS, UNAVAILABLE_TOOL_CATALOG_BINDING } from "@oscharko-dev/keiko-tools";
 import { DryRunToolPort, GatewayModelPort } from "./adapters.js";
+import { HARNESS_CODES } from "./errors.js";
 
 function response(): NormalizedResponse {
   return {
@@ -158,33 +159,52 @@ describe("GatewayModelPort", () => {
 });
 
 describe("DryRunToolPort", () => {
-  const tools: readonly ToolDefinition[] = [
-    { name: "read_file", description: "read", parameters: {} },
-  ];
-
-  it("records the call without executing and returns an empty dry-run output", async () => {
-    const port = new DryRunToolPort(tools);
-    const result = await port.execute({
-      toolCallId: "tc-1",
-      toolName: "read_file",
-      arguments: { path: "src/foo.ts" },
-      signal: new AbortController().signal,
-    });
-    expect(result.toolCallId).toBe("tc-1");
-    expect(result.durationMs).toBe(0);
-    expect(port.calls()).toHaveLength(1);
-    expect(port.calls()[0]?.toolName).toBe("read_file");
-    expect(port.calls()[0]?.arguments).toEqual({ path: "src/foo.ts" });
+  it("does not fabricate completed output for an unavailable dry-run handler", async () => {
+    const port = new DryRunToolPort();
+    await expect(
+      port.execute({
+        toolCallId: "tc-1",
+        toolName: "read_file",
+        arguments: { path: "src/foo.ts" },
+        signal: new AbortController().signal,
+      }),
+    ).rejects.toThrow("unavailable");
+    expect(port.calls()).toHaveLength(0);
   });
 
-  it("listTools returns the registered list", () => {
-    expect(new DryRunToolPort(tools).listTools()).toEqual(tools);
+  // Relocates the prior pin "does not advertise productive tools even when legacy definitions are
+  // supplied" (adapters.ts previously took a caller-supplied `legacyDefinitions` constructor
+  // argument that could never make the port productive). That injection vector is now removed
+  // entirely -- the constructor takes no arguments -- so the fabrication-prevention invariant it
+  // guarded is now proven directly by execute() always refusing (the two tests in this file), and
+  // this test instead pins the ADR-0175 D1/D4 disposition: honest advertisement of the fixed
+  // compiled `legacy-native@1` projection, asserted against the canonical producer
+  // (@oscharko-dev/keiko-tools's TOOL_DEFINITIONS, packages/keiko-tools/src/schemas.ts) rather
+  // than a locally recomputed copy, paired with the same unconditional refusal for every one of
+  // the tools it lists.
+  it("advertises the compiled legacy-native catalog projection and refuses execution with a closed reason", async () => {
+    const port = new DryRunToolPort();
+    const advertised = port.listTools();
+    expect(advertised).toEqual(TOOL_DEFINITIONS);
+    expect(port.catalogBinding()).toBe(UNAVAILABLE_TOOL_CATALOG_BINDING);
+    expect(port.catalogBinding().handlerSetDigest).not.toBe(port.catalogBinding().projectionDigest);
+    expect(advertised.length).toBeGreaterThan(0);
+    for (const tool of advertised) {
+      const outcome = port.execute({
+        toolCallId: `tc-${tool.name}`,
+        toolName: tool.name,
+        arguments: {},
+        signal: new AbortController().signal,
+      });
+      await expect(outcome).rejects.toMatchObject({ category: HARNESS_CODES.TOOL_ERROR });
+    }
+    expect(port.calls()).toHaveLength(0);
   });
 
   it("rejects with CancelledError when the signal is already aborted", async () => {
     const controller = new AbortController();
     controller.abort("stop");
-    const port = new DryRunToolPort(tools);
+    const port = new DryRunToolPort();
     await expect(
       port.execute({
         toolCallId: "tc-2",

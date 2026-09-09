@@ -5,7 +5,7 @@ import { resolveHostExecutable } from "./host-executable.mjs";
 export function listChangedGitPaths(baseRef, root) {
   const output = execFileSync(
     resolveHostExecutable("git"),
-    ["diff", "--name-only", "-z", `${baseRef}...HEAD`, "--"],
+    ["diff", "--no-renames", "--name-only", "-z", `${baseRef}...HEAD`, "--"],
     { cwd: root, encoding: "utf8" },
   );
   return output.split("\0").filter((path) => path.length > 0);

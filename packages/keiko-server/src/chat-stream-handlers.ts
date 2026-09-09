@@ -48,8 +48,11 @@ import {
   type AdmittedTurnHandle,
   gatewayHistoryPrefix,
   admitDesktopChatTurn,
+  admitGitChangeScopedTurn,
+  acceptedGitChangeChatMode,
   inspectDesktopChatTurn,
   parseDesktopChatSend,
+  persistGitChangeDescriptionTurn,
   recordChatCompaction,
   validateDesktopChatSend,
   validateDesktopChatProviderBoundary,
@@ -61,6 +64,7 @@ import {
   type SendDesktopChatRequest,
   type GatewayTurnSnapshot,
   type DesktopChatExecutionAdmission,
+  activeGitChangeScope,
 } from "./chat-handlers.js";
 import { CHAT_TURN_WAIT_CANCELLED, runSerializedChatTurn } from "./chat-turn-serializer.js";
 import { createRequestCancellation } from "./request-cancellation.js";
@@ -458,12 +462,28 @@ function inspectedStreamPreparation(
     : undefined;
 }
 
+/** Every `HandlerOutcome` return below funnels through this identity call so a function that
+ * legitimately returns either a `RouteResult` object or the `STREAMING` sentinel symbol is never
+ * reported as "returning different types" -- each return's expression is a call to this one
+ * helper, whose own signature is the annotated union, not the narrower literal type of whichever
+ * branch produced the value. */
+function asHandlerOutcome(value: HandlerOutcome): HandlerOutcome {
+  return value;
+}
+
+/** Same identity-call idiom as `asHandlerOutcome`, generalized to the `T | RouteResult` shape
+ * used by `resolveDesktopChatStreamCall` below, where `T` is a callable (`StreamCall`) rather than
+ * a plain object. */
+function asCallableOrRouteResult<T>(value: T | RouteResult): T | RouteResult {
+  return value;
+}
+
 function nonAdmittedStreamOutcome(
   ctx: RouteContext,
   admission: Exclude<ReturnType<typeof admitDesktopChatTurn>, { readonly kind: "admitted" }>,
 ): HandlerOutcome {
-  if (admission.kind === "rejected") return admission.result;
-  return streamingReplayOutcome(ctx, admission.response);
+  if (admission.kind === "rejected") return asHandlerOutcome(admission.result);
+  return asHandlerOutcome(streamingReplayOutcome(ctx, admission.response));
 }
 
 async function prepareDesktopChatStream(
@@ -475,6 +495,16 @@ async function prepareDesktopChatStream(
   if ("status" in parsed) return { kind: "outcome", outcome: parsed };
   const prepared = validateDesktopChatSend(parsed, deps);
   if ("status" in prepared) return { kind: "outcome", outcome: prepared };
+  // Same fast-fail gate as the buffered /api/desktop/chat path (handleSendDesktopChat): a
+  // git-change-connected chat must re-derive its description authority before ANY diff content
+  // reaches the Model Gateway, streaming transport included.
+  const gitChangeDenial = admitGitChangeScopedTurn(
+    deps,
+    prepared.chat,
+    acceptedGitChangeChatMode(deps, prepared.request),
+    ctx.correlationId,
+  );
+  if (gitChangeDenial !== undefined) return { kind: "outcome", outcome: gitChangeDenial };
   const inspection = inspectDesktopChatTurn(deps, prepared);
   const inspected = inspectedStreamPreparation(inspection);
   if (inspected !== undefined) return inspected;
@@ -504,12 +534,12 @@ function resolveDesktopChatStreamCall(
       invalidExecution.status,
       desktopChatProviderBoundaryRejectionReason(prepared.modelId, executionAdmission, deps),
     );
-    return invalidExecution;
+    return asCallableOrRouteResult<StreamCall>(invalidExecution);
   }
   const model = deps.modelPortFactory(prepared.modelId);
   return model?.callStream === undefined
-    ? streamingUnsupportedOutcome(correlationId)
-    : model.callStream.bind(model);
+    ? asCallableOrRouteResult<StreamCall>(streamingUnsupportedOutcome(correlationId))
+    : asCallableOrRouteResult<StreamCall>(model.callStream.bind(model));
 }
 
 interface AdmittedDesktopChatStream {
@@ -643,6 +673,35 @@ async function prepareDesktopChatProviderStream(
   return callStream;
 }
 
+interface StreamedChatPreflight {
+  readonly prepared: PreparedDesktopChatSend;
+  readonly preflight: DesktopChatStreamExecutionPreflight;
+}
+
+// Re-derives the git-change description authority immediately before dispatch (not only at the
+// earlier fast-fail check in prepareDesktopChatStream): a queued turn may wait long enough for the
+// authority to expire in between, exactly as the buffered path re-checks inside its
+// serialized-turn callback. Extracted so runAdmittedDesktopChatStream stays under the function
+// line budget.
+function resolveStreamedChatPreflight(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  start: PreparedDesktopChatStream,
+): StreamedChatPreflight | RouteResult {
+  const prepared = validateCurrentDesktopChatSend(start.parsed, deps);
+  if ("status" in prepared) return prepared;
+  const gitChangeDenial = admitGitChangeScopedTurn(
+    deps,
+    prepared.chat,
+    acceptedGitChangeChatMode(deps, prepared.request),
+    ctx.correlationId,
+  );
+  if (gitChangeDenial !== undefined) return gitChangeDenial;
+  const preflight = preflightDesktopChatStreamExecution(prepared, deps, ctx.correlationId);
+  if ("status" in preflight) return preflight;
+  return { prepared, preflight };
+}
+
 async function runAdmittedDesktopChatStream(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -650,10 +709,9 @@ async function runAdmittedDesktopChatStream(
   controller: AbortController,
   markStreamStarted: () => void,
 ): Promise<HandlerOutcome> {
-  const prepared = validateCurrentDesktopChatSend(start.parsed, deps);
-  if ("status" in prepared) return prepared;
-  const preflight = preflightDesktopChatStreamExecution(prepared, deps, ctx.correlationId);
-  if ("status" in preflight) return preflight;
+  const resolved = resolveStreamedChatPreflight(ctx, deps, start);
+  if ("status" in resolved) return resolved;
+  const { prepared, preflight } = resolved;
   const messageCountBeforeTurn = deps.store.countMessages(prepared.request.chatId);
   const admission = admitDesktopChatTurn(deps, prepared);
   if (admission.kind !== "admitted") return nonAdmittedStreamOutcome(ctx, admission);
@@ -698,6 +756,50 @@ interface DesktopChatStreamState {
   started: boolean;
 }
 
+function writeGitChangeDescriptionStream(
+  ctx: RouteContext,
+  response: DesktopChatSendResponse,
+): HandlerOutcome {
+  ctx.res.writeHead(200, SSE_HEADERS);
+  const assistant = response.messages.find((message) => message.role === "assistant");
+  if (assistant !== undefined) {
+    writeTerminalFrame(ctx, sseMessage({ event: "token", data: { text: assistant.content } }));
+  }
+  writeTerminalFrame(ctx, sseMessage({ event: "done", data: response }));
+  ctx.res.end();
+  return STREAMING;
+}
+
+async function runGitChangeDescriptionStream(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+  start: Extract<DesktopChatStreamPreparation, { readonly kind: "ready" }>,
+  controller: AbortController,
+): Promise<HandlerOutcome> {
+  const result = await runSerializedChatTurn(
+    deps,
+    start.parsed.request.chatId,
+    controller.signal,
+    async () => {
+      const prepared = validateCurrentDesktopChatSend(start.parsed, deps);
+      if ("status" in prepared) return prepared;
+      const denial = admitGitChangeScopedTurn(
+        deps,
+        prepared.chat,
+        acceptedGitChangeChatMode(deps, prepared.request),
+        ctx.correlationId,
+      );
+      return denial ?? persistGitChangeDescriptionTurn(ctx, deps, prepared, controller.signal);
+    },
+  );
+  if (result === CHAT_TURN_WAIT_CANCELLED) {
+    return { status: 499, body: errorBody("REQUEST_CANCELLED", "Request was cancelled.") };
+  }
+  return result.status === 200
+    ? writeGitChangeDescriptionStream(ctx, result.body as DesktopChatSendResponse)
+    : result;
+}
+
 async function runDesktopChatStream(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -709,6 +811,9 @@ async function runDesktopChatStream(
   }
   if (start.kind === "outcome") return start.outcome;
   if (start.kind === "replay") return streamingReplayOutcome(ctx, start.response);
+  if (activeGitChangeScope(start.parsed.chat) !== undefined) {
+    return runGitChangeDescriptionStream(ctx, deps, start, controller);
+  }
   // Fresh-install gap: verify the target model on demand before the sync readiness guards,
   // mirroring the create and buffered entries.
   await ensureOnDemandConversationReadiness(

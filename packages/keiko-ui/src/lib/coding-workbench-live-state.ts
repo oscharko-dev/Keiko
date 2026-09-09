@@ -26,9 +26,8 @@ export type CodingWorkbenchResourceStatus =
 /**
  * Release-audit F-08/RG-12: whether this browser window holds a launcher-paired app session, as
  * reported by the honest workspaces read (`session: "paired" | "unpaired"`). Never guessed
- * client-side. Runtime start may proceed once the workspace is resolved, but content-bearing
- * channels still use this dimension; `unknown` (boot, or the read failed) blocks start fail-closed
- * without claiming the window is unpaired.
+ * client-side. Every runtime mutation needs this session authority, so both `unknown` (boot, or
+ * the read failed) and `unpaired` block start fail-closed.
  */
 export type CodingWorkbenchPairingState = "unknown" | "paired" | "unpaired";
 
@@ -59,7 +58,7 @@ export interface CodingWorkbenchSourceProjection {
   readonly modelSource: CodingWorkbenchModelSource;
   readonly runtimeSource: CodingWorkbenchRuntimeSource;
   readonly available: boolean;
-  readonly unavailableReason?: string | undefined;
+  readonly unavailableReason?: string;
   /**
    * F-01: what a live probe last said about this source. `available` answers "is a source
    * configured"; this answers "did anyone confirm it answers". A never-probed source is
@@ -286,6 +285,20 @@ function acceptStreamProjection(
   return { ...state, stream: ready(stream) };
 }
 
+/**
+ * #3390 recovery-ack-restart: once the operator has explicitly acknowledged a `recovery-required`
+ * predecessor, the server treats that acknowledgement as the reconciliation ADR-0137 D5 requires
+ * before a replacement run may start (`CodingRuntimeOrchestrator.start` auto-detects it). The
+ * client-side start guard must agree, or the composer's single "Start coding run" action stays
+ * disabled forever after a restart and the operator has no way to launch a replacement run short
+ * of wiping local state.
+ */
+function isAcknowledgedRecoveryRequired(state: CodingWorkbenchRuntimeState): boolean {
+  return (
+    state.run.value?.state === "recovery-required" && state.run.value.recoveryAcknowledged === true
+  );
+}
+
 function projectReadiness(state: CodingWorkbenchRuntimeState): CodingWorkbenchRuntimeState {
   const runtime = state.runtime.value;
   // F-01: `available` is stored-config truth. A probe that ran and could not reach the gateway
@@ -308,13 +321,14 @@ function projectReadiness(state: CodingWorkbenchRuntimeState): CodingWorkbenchRu
     runtime.requestedMode === state.requestedMode;
   const runState = state.run.value?.state;
   const runReady =
-    state.run.status === "ready" && runState !== undefined && STARTABLE_RUN_STATES.has(runState);
+    state.run.status === "ready" &&
+    runState !== undefined &&
+    (STARTABLE_RUN_STATES.has(runState) || isAcknowledgedRecoveryRequired(state));
   const mutationIdle = state.mutation.status !== "pending";
-  // Pairing is a channel diagnostic, not a local-composer kill switch. `unknown` still blocks while
-  // the boot read is unresolved, but a confirmed unpaired browser must be allowed to send the start
-  // request so the server can either bind the registered workspace or return the authoritative
-  // failure. Blocking it here left a filled composer with a dead send button.
-  const pairingReady = state.pairing !== "unknown";
+  // A confirmed unpaired browser cannot mutate the runtime: the server correctly refuses every
+  // such request. Keep the draft editable, but do not present a Start or Retry action that is
+  // guaranteed to fail authority resolution.
+  const pairingReady = state.pairing === "paired";
   return {
     ...state,
     canStart:
@@ -324,8 +338,7 @@ function projectReadiness(state: CodingWorkbenchRuntimeState): CodingWorkbenchRu
       workspaceReady &&
       authorityReady &&
       pairingReady &&
-      runState === "recovery-required" &&
-      state.run.value?.recoveryAcknowledged === true &&
+      isAcknowledgedRecoveryRequired(state) &&
       mutationIdle,
   };
 }

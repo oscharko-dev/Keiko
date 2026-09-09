@@ -170,6 +170,46 @@ describe("OpenCode HTTP client", () => {
     ]);
   });
 
+  // #3390: this is the producer contract the coding-sidecar gateway's multipart content-array
+  // parsing (coding-sidecar-gateway.ts `parseMessageContent`) is fixtured against. A prompt with
+  // `initialContext` sends TWO text parts, not one — OpenCode's AI-SDK provider then forwards the
+  // outgoing user message to the model as an OpenAI content-part ARRAY instead of a bare string.
+  // If this pin ever moves, the gateway-side fixture must move with it (AGENTS.md §7).
+  it("pins the two-part prompt shape sent for a prompt with initial context", async () => {
+    const requests: { readonly method: string; readonly path: string; readonly body?: string }[] =
+      [];
+    const client = createOpenCodeHttpClient({
+      endpoint: "http://127.0.0.1:43123",
+      password: "p".repeat(43),
+      fetch: (url, init) => {
+        const path = new URL(requestUrl(url)).pathname;
+        requests.push({
+          method: init?.method ?? "GET",
+          path,
+          ...(typeof init?.body === "string" ? { body: init.body } : {}),
+        });
+        return Promise.resolve(new Response(null, { status: 204 }));
+      },
+    });
+
+    await expect(
+      client.promptAsync("ses_1", "bounded task", { initialContext: "issue context" }),
+    ).resolves.toBeUndefined();
+
+    expect(requests).toEqual([
+      {
+        method: "POST",
+        path: "/session/ses_1/prompt_async",
+        body: JSON.stringify({
+          parts: [
+            { type: "text", text: "bounded task" },
+            { type: "text", text: "issue context", synthetic: true },
+          ],
+        }),
+      },
+    ]);
+  });
+
   it("lists exact bounded questions and uses answer/reject transports without local content retention", async () => {
     const requests: { readonly method: string; readonly path: string; readonly body?: string }[] =
       [];

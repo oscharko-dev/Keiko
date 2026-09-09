@@ -47,6 +47,7 @@ import { GovernedPullRequestCard } from "../GovernedPullRequestCard";
 import { Icons } from "../../../Icons";
 import { RepositoryToolbar } from "./RepositoryToolbar";
 import { ConnectPanel } from "./ConnectPanel";
+import { ConnectToChatDialog } from "./ConnectToChatDialog";
 import { AddRepositoryDialog } from "./AddRepositoryDialog";
 import { ChangesPane } from "./ChangesPane";
 import type { ChangesTab } from "./ChangesPane";
@@ -150,17 +151,23 @@ function useRepositoryCommitDraft(repositoryPath: string | null): RepositoryComm
 export interface GitClientWindowProps {
   /** Repository path to preselect when opened from Files, Editor, or Runtime (resolveBoundRoot). */
   readonly projectId?: string | undefined;
+  /** The desktop locked this window to the active task workspace: `projectId` is that managed
+   * worktree, registered server-side and deliberately absent from the user-facing repository list,
+   * so it is bound as-is instead of being judged against that list (#3390). */
+  readonly lockedToActiveRoot?: boolean | undefined;
   readonly initialPath?: string | undefined;
   readonly initialCommit?: string | undefined;
-  readonly onOpenFiles?: ((root: string) => void) | undefined;
-  readonly onOpenEditor?: ((root: string) => void) | undefined;
-  readonly onOpenEditorFile?: ((request: OpenEditorFileRequest) => void) | undefined;
+  readonly initialRepositoryDialog?: "clone" | "open" | undefined;
+  readonly onRepositoryConnected?: (root: string) => void;
+  readonly onOpenFiles?: (root: string) => void;
+  readonly onOpenEditor?: (root: string) => void;
+  readonly onOpenEditorFile?: (request: OpenEditorFileRequest) => void;
   /** Persists the selected repository into cfg.projectPath so resolveBoundRoot re-targets. */
-  readonly updateCfg?: ((patch: Record<string, WindowCfgValue>) => void) | undefined;
+  readonly updateCfg?: (patch: Record<string, WindowCfgValue>) => void;
   /** DI seam; defaults to the real BFF client. */
   readonly client?: GitClientSeam;
   /** Reconciles open editor buffers after a successful working-tree mutation. */
-  readonly reconcileEditorBuffers?: ((root: string) => Promise<void>) | undefined;
+  readonly reconcileEditorBuffers?: (root: string) => Promise<void>;
 }
 
 type RightPaneMode = "diff" | "pull-request" | "merge";
@@ -508,6 +515,47 @@ function pushInput(projectId: string, syncView: SyncView): PushInput | null {
   };
 }
 
+type PushPreviewResult = Awaited<ReturnType<GitClientSeam["pushPreview"]>>;
+
+// Resolves a completed preview into either the execute input (with the reviewed head SHA captured
+// from THIS preview — never re-read at click time) or `undefined` once the block has already been
+// reported through `completeSync`. Extracted from `runPushSync` purely to stay under the repo's
+// max-lines-per-function budget (AGENTS.md §6) — no behavioral seam of its own.
+function pushProposeInput(
+  preview: PushPreviewResult,
+  input: PushInput,
+  context: SyncExecutionContext,
+  t: I18nTranslate,
+): PushInput | undefined {
+  if (preview.policyOutcome !== "allowed" || preview.preflightBlockingCodes.length > 0) {
+    completeSync(
+      context,
+      blockedOutcome(
+        t("gitClientWindow.sync.blocked", {
+          reason: preview.policyBlockReason ?? preview.preflightBlockingCodes.join(", "),
+        }),
+      ),
+      false,
+    );
+    return undefined;
+  }
+  // #3394 review: the reviewed head SHA is captured HERE, once, from the preview response that was
+  // just evaluated — never re-read at click time. `verifiedCommitSha` is mandatory for execute
+  // (pushExecution.ts fails closed on absence), so an unborn-HEAD preview (no `headCommitSha`) must
+  // not silently execute an unpinned push.
+  if (preview.headCommitSha === undefined) {
+    completeSync(
+      context,
+      blockedOutcome(
+        t("gitClientWindow.sync.blocked", { reason: preview.preflightBlockingCodes.join(", ") }),
+      ),
+      false,
+    );
+    return undefined;
+  }
+  return { ...input, verifiedCommitSha: preview.headCommitSha };
+}
+
 function runPushSync(
   client: GitClientSeam,
   projectId: string,
@@ -520,19 +568,8 @@ function runPushSync(
   void client
     .pushPreview(input)
     .then((preview) => {
-      if (preview.policyOutcome !== "allowed" || preview.preflightBlockingCodes.length > 0) {
-        completeSync(
-          context,
-          blockedOutcome(
-            t("gitClientWindow.sync.blocked", {
-              reason: preview.policyBlockReason ?? preview.preflightBlockingCodes.join(", "),
-            }),
-          ),
-          false,
-        );
-        return undefined;
-      }
-      return client.pushExecute(input);
+      const proceedInput = pushProposeInput(preview, input, context, t);
+      return proceedInput === undefined ? undefined : client.pushPropose(proceedInput);
     })
     .then(
       (result) => {
@@ -760,10 +797,22 @@ function shouldShowBranchOutcome(
   return !dialogOpen && (error !== null || (outcome !== null && outcome.status !== "succeeded"));
 }
 
+function repositoryRootForMutation(
+  status: GitRepositoryStatusResponse | null,
+  statusProjectKey: string | null,
+  selectedPath: string | null,
+): string | undefined {
+  if (statusProjectKey !== selectedPath || status?.available !== true) return undefined;
+  return status.repositoryRoot ?? status.root;
+}
+
 export function GitClientWindow({
   projectId,
+  lockedToActiveRoot = false,
   initialPath,
   initialCommit,
+  initialRepositoryDialog,
+  onRepositoryConnected,
   onOpenFiles,
   onOpenEditor,
   onOpenEditorFile,
@@ -808,7 +857,19 @@ export function GitClientWindow({
   const [commitNonce, setCommitNonce] = useState(0);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [dialogMode, setDialogMode] = useState<"clone" | "open">("clone");
+  const openRepositoryDialog = useCallback((mode: "clone" | "open"): void => {
+    setDialogMode(mode);
+    setDialogOpen(true);
+  }, []);
+  useEffect(() => {
+    if (initialRepositoryDialog === undefined) return;
+    openRepositoryDialog(initialRepositoryDialog);
+    updateCfg?.({ repositoryDialog: "" });
+    reportClientDiagnostic(`[keiko] git repository dialog handoff: ${initialRepositoryDialog}`);
+  }, [initialRepositoryDialog, openRepositoryDialog, updateCfg]);
   const [newBranchOpen, setNewBranchOpen] = useState(false);
+  // Issue #3400 — "Connect to Chat" dialog for the active repository comparison.
+  const [connectToChatOpen, setConnectToChatOpen] = useState(false);
   const [worktreeConfirmation, setWorktreeConfirmation] =
     useState<WorktreeMutationConfirmation | null>(null);
   const [syncBusy, setSyncBusy] = useState(false);
@@ -839,10 +900,7 @@ export function GitClientWindow({
   // Two independent governed-mutation flows: one for staging, one for the commit composer. Each
   // carries its own stale-guard so concurrent stage clicks and a later commit do not cross results.
   const projectKey = selectedPath ?? "";
-  const mutationRepositoryRoot =
-    statusProjectKey === selectedPath && status?.available === true
-      ? (status.repositoryRoot ?? status.root)
-      : undefined;
+  const mutationRepositoryRoot = repositoryRootForMutation(status, statusProjectKey, selectedPath);
   const branchActions = useGitActions(client, projectKey, mutationRepositoryRoot);
   const staging = useGitActions(client, projectKey, mutationRepositoryRoot);
   const commit = useGitActions(client, projectKey, mutationRepositoryRoot);
@@ -1203,9 +1261,10 @@ export function GitClientWindow({
       }
       setReposError(null);
       applyRepositorySelection(project.path);
+      onRepositoryConnected?.(project.path);
       return true;
     },
-    [applyRepositorySelection, optionalT],
+    [applyRepositorySelection, onRepositoryConnected, optionalT],
   );
 
   const reconnectRepository = useCallback(
@@ -1245,6 +1304,14 @@ export function GitClientWindow({
     const configuredPath = projectId !== undefined && projectId !== "" ? projectId : null;
     const requestedPath = selectedPath ?? configuredPath;
     if (requestedPath === null) return;
+    // A root the desktop locked to the active task workspace is a managed worktree: the server
+    // registers it for trust, manifests and verification and keeps it out of the user-facing
+    // repository list on purpose, so the recents-membership check below could only ever declare it
+    // unavailable and strand the operator (#3390, rehearsal run-21). It is bound as-is.
+    if (lockedToActiveRoot && requestedPath === configuredPath) {
+      if (selectedPath !== requestedPath) setSelectedPath(requestedPath);
+      return;
+    }
     const selected = repositories.find((repository) => repository.path === requestedPath);
     if (selected?.available === true && selected.workspaceAvailable === true) {
       if (selectedPath !== requestedPath) setSelectedPath(requestedPath);
@@ -1259,7 +1326,16 @@ export function GitClientWindow({
           : "gitClientWindow.repository.workspaceUnavailable",
       ),
     );
-  }, [optionalT, projectId, repositories, reposError, reposLoading, selectedPath, updateCfg]);
+  }, [
+    lockedToActiveRoot,
+    optionalT,
+    projectId,
+    repositories,
+    reposError,
+    reposLoading,
+    selectedPath,
+    updateCfg,
+  ]);
 
   const active = activeGitClientState({
     selectedPath,
@@ -1368,7 +1444,7 @@ export function GitClientWindow({
   const commitChanges = useCallback(
     (message: string): void => {
       if (selectedPath === null) return;
-      commit.runMutation(() => client.commitExecute({ projectId: selectedPath, message }));
+      commit.runMutation(() => client.commitPropose({ projectId: selectedPath, message }));
     },
     [client, commit, selectedPath],
   );
@@ -1609,6 +1685,8 @@ export function GitClientWindow({
         onRunSync={requestSync}
         onOpenEditor={onOpenEditor}
         onOpenFiles={onOpenFiles}
+        onConnectToChat={() => setConnectToChatOpen(true)}
+        onAddRepository={() => openRepositoryDialog("open")}
       />
       {/* A rejected branch switch must never render as silent success: the New Branch dialog
           shows its own copy of this outcome while it is open (the create-then-switch chain runs
@@ -1630,14 +1708,8 @@ export function GitClientWindow({
             loading={reposLoading}
             error={reposError}
             onSelect={reconnectRepository}
-            onConnect={() => {
-              setDialogMode("open");
-              setDialogOpen(true);
-            }}
-            onClone={() => {
-              setDialogMode("clone");
-              setDialogOpen(true);
-            }}
+            onConnect={() => openRepositoryDialog("open")}
+            onClone={() => openRepositoryDialog("clone")}
           />
         ) : (
           <>
@@ -1755,6 +1827,15 @@ export function GitClientWindow({
           onConfirm={confirmWorktreeMutation}
         />
       )}
+      {connectToChatOpen && selectedPath !== null ? (
+        <ConnectToChatDialog
+          projectId={selectedPath}
+          currentBranch={currentBranch}
+          baseBranchName={inferredBaseBranch}
+          baseBranchChoices={activeBranches.map((branch) => branch.name)}
+          onClose={() => setConnectToChatOpen(false)}
+        />
+      ) : null}
     </div>
   );
 }

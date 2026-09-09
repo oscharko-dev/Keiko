@@ -21,7 +21,12 @@ vi.mock("node:fs", async (importOriginal) => {
 
 import type { ProductionCodingRuntimeResolverInput } from "../productionCodingRuntimeResolver.js";
 import type { ServerDiagnosticRecord } from "../../diagnostics-log.js";
-import { functionalWorkspaceRead, resolveFunctionalChildModelInput } from "./_support.js";
+import {
+  functionalWorkspaceRead,
+  resolveFunctionalChildModelInput,
+  scriptedResponse,
+  type ScriptState,
+} from "./_support.js";
 
 const childModelPortFactory: NonNullable<
   ProductionCodingRuntimeResolverInput["childModelPortFactory"]
@@ -72,6 +77,30 @@ describe("functional child-model composition", () => {
         "functional-child-model-configuration-incomplete",
       );
     }
+  });
+});
+
+describe("functional browser cancellation hold", () => {
+  it("holds the turn only after the verification tool was emitted", () => {
+    const script: ScriptState = {
+      mode: "productive",
+      calls: 0,
+      old: "before",
+      next: "after",
+      holdAfterVerification: true,
+    };
+    const tools = Array.from({ length: 7 }, () => scriptedResponse(script).toolCalls[0]?.name);
+
+    expect(tools).toEqual([
+      "todowrite",
+      "keiko_workspace_read",
+      "question",
+      "keiko_changeset_edit",
+      "todowrite",
+      "keiko_verification",
+      "question",
+    ]);
+    expect(script.verificationIssued).toBe(true);
   });
 });
 

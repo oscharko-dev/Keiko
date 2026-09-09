@@ -1,0 +1,111 @@
+// #3390 — one owner for the closed, body-free assertions emitted by both the independently
+// selectable journey rows and the corresponding stages of each five-flow qualification drive.
+
+import type { CodingWorkbenchMode, JourneyOutcome } from "@oscharko-dev/keiko-contracts";
+// The outer package root is a type-only entrypoint (pinned by
+// packageSurface.test.ts's "keeps runtime values out of the outer type-only entrypoint") --
+// `sameGitHubOwnerAndRepo` is a value, reachable only through this runtime subpath re-export.
+import { sameGitHubOwnerAndRepo } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import type { ObservedDescriptionStatus } from "./coding-issue-journey-live-observed.js";
+import type { DeliveredPullRequest } from "./coding-issue-journey-live.js";
+import {
+  evaluateCiRepairLoopOutcome,
+  type CiRepairOutcome,
+} from "./coding-issue-journey-live-ci.js";
+import type { RetainedDescriptionBinding } from "./coding-issue-journey-live-description.js";
+import type { CodingIssueJourneyScenarioId } from "./coding-issue-journey-scenarios.js";
+
+export function modeScenarioId(mode: CodingWorkbenchMode): CodingIssueJourneyScenarioId {
+  const ids: Record<CodingWorkbenchMode, CodingIssueJourneyScenarioId> = {
+    "governed-assist": "issue-to-pr-governed-assist",
+    "supervised-coding": "issue-to-pr-supervised-coding",
+    "autonomous-delivery": "issue-to-pr-autonomous-delivery",
+  };
+  return ids[mode];
+}
+
+export function issueToPrAssertions(
+  delivered: DeliveredPullRequest,
+  mode: CodingWorkbenchMode,
+): readonly string[] {
+  return [
+    `real-model-run-recorded:${delivered.runId}`,
+    `draft-pull-request-created:${delivered.repository}#${String(delivered.number)}`,
+    `mode-selected:${mode}`,
+  ];
+}
+
+export function ciRepairAssertions(outcome: CiRepairOutcome): readonly string[] {
+  const evidence = evaluateCiRepairLoopOutcome(outcome);
+  const repairHeadChanged = outcome.failureHeadSha !== outcome.finalHeadSha;
+  if (evidence.result !== "passed") {
+    throw new Error(
+      `ci-repair-loop did not qualify (${evidence.result}: ${evidence.reason}) -- ` +
+        `finalState=${outcome.finalState} observedFailureBeforeReady=${String(outcome.observedFailureBeforeReady)} ` +
+        `repairHeadChanged=${String(repairHeadChanged)}`,
+    );
+  }
+  return [
+    `ci-terminal-state:${outcome.finalState}`,
+    `observed-failure-before-ready:${String(outcome.observedFailureBeforeReady)}`,
+    `required-checks-total:${String(outcome.requiredChecks.total)}`,
+    `repair-head-changed:${String(repairHeadChanged)}`,
+    `ci-repair-evidence:${evidence.reason}`,
+  ];
+}
+
+export function descriptionAssertions(
+  status: ObservedDescriptionStatus,
+  retained: RetainedDescriptionBinding,
+): readonly string[] {
+  return [
+    `auto-draft-reason:${status.reason}`,
+    `retained-proposal:${retained.proposalId}`,
+    "governed-apply-completed:true",
+  ];
+}
+
+export function markReadyAssertions(): readonly string[] {
+  return ["ready-for-review-proposed:true"];
+}
+
+export interface GovernedMergeAndClosureEvidence {
+  readonly assertions: readonly string[];
+  readonly mergeCommitSha: string;
+}
+
+export function governedMergeAndClosureEvidence(
+  outcome: JourneyOutcome,
+): GovernedMergeAndClosureEvidence {
+  const remote = outcome.remote;
+  if (remote === null) throw new Error("governed merge and closure evidence is incomplete");
+  const { mergeCommitSha } = remote;
+  if (typeof mergeCommitSha !== "string") {
+    throw new Error("governed merge and closure evidence is incomplete");
+  }
+  const complete = [
+    outcome.state === "completed",
+    outcome.reason === "merge-and-closure-observed",
+    remote.issue.state === "closed",
+    typeof remote.mergedAt === "string",
+    typeof remote.issue.closedAt === "string",
+    // The provider-cased identity (remote.identity.repository) and the lowercased journey
+    // binding slug (outcome.binding.repository) name the same repository whenever they match
+    // case-insensitively -- rehearsal run-13's root cause was polling this exact equality against
+    // `oscharko/Wegwerf-Repo`, which never holds under strict `===`.
+    sameGitHubOwnerAndRepo(remote.identity.repository, outcome.binding.repository),
+    remote.identity.number === outcome.binding.prNumber,
+    remote.issue.number === outcome.binding.issueNumber,
+  ].every(Boolean);
+  if (!complete) {
+    throw new Error("governed merge and closure evidence is incomplete");
+  }
+  return {
+    assertions: [
+      "governed-merge-confirmed:true",
+      "provider-merge-observed:true",
+      "bound-issue-closure-observed:true",
+    ],
+    mergeCommitSha,
+  };
+}

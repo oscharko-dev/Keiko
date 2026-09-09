@@ -1,4 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createDefaultChatCapability } from "@oscharko-dev/keiko-model-gateway";
 
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import type {
@@ -24,6 +28,10 @@ import {
   type ServerLogThreshold,
 } from "./observability/index.js";
 import { createInMemoryUiStore } from "./store/index.js";
+import {
+  QUALIFICATION_SPEND_BUDGET_USD_ENV,
+  QUALIFICATION_SPEND_LEDGER_PATH_ENV,
+} from "./gateway-spend-budget.js";
 
 type EgressConfig = NonNullable<GatewayConfig["egress"]>;
 
@@ -78,7 +86,61 @@ function successfulOutcome(results: readonly { readonly index: number }[]): Rera
   return { ok: true, value: { modelId: "qwen3-reranker", results } };
 }
 
+function expectUnboundedRerankEvidence(sink: BufferedServerLogSink): void {
+  expect(sink.events.find((event) => event.op === "gateway.spend.rejected")).toMatchObject({
+    correlationId: "rerank-batch-budget",
+    errorKind: "GATEWAY_CONFIG_INVALID",
+    extra: { reason: "spend-bound-unavailable", frames: expect.any(Array) as unknown },
+  });
+  const evidence = JSON.stringify(sink.events);
+  for (const body of ["private query", "private document", "reranker.example", "reranker-test-key"])
+    expect(evidence).not.toContain(body);
+}
+
 describe("rerankSelection", () => {
+  it("refuses a paid batch without a verified aggregate bound before any provider dispatch", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "keiko-rerank-batch-spend-"));
+    const request = vi.fn(() => Promise.resolve(successfulOutcome([{ index: 0 }])));
+    const config: GatewayConfig = {
+      ...gatewayConfig(),
+      capabilities: [
+        {
+          ...createDefaultChatCapability("qwen3-reranker"),
+          contextWindow: 100,
+          maxOutputTokens: 20,
+          pricing: { inputUsdPerMillionTokens: 1, outputUsdPerMillionTokens: 1 },
+        },
+      ],
+    };
+    const deps = depsWith(config, request);
+    Object.assign(deps, {
+      env: {
+        [QUALIFICATION_SPEND_BUDGET_USD_ENV]: "0.00015",
+        [QUALIFICATION_SPEND_LEDGER_PATH_ENV]: join(directory, "spend.db"),
+      },
+    });
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    try {
+      const result = await rerankSelection({
+        deps,
+        query: "private query",
+        candidates: ["first private document", "second private document"],
+        documentFor: (document) => document,
+        topN: 2,
+        fallbackMode: "slice-topN",
+        correlationId: "rerank-batch-budget",
+      });
+      expect(request).not.toHaveBeenCalled();
+      expect(result.selected).toEqual(["first private document", "second private document"]);
+      expect(result.diagnostics.status).toBe("unavailable");
+      expectUnboundedRerankEvidence(sink);
+    } finally {
+      resetServerLogger();
+      deps.store.close();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
   it("passes the readiness fetch seam through the sole facade transport", async () => {
     const fetchImpl = vi.fn() as unknown as typeof fetch;
     let captured: LiteLLMRerankRequest | undefined;

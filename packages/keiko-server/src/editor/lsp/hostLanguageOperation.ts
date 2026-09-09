@@ -1571,7 +1571,11 @@ async function runPooledOperation(
   request: LanguageServiceRequest,
   options: HostLanguageOperationOptions,
 ): Promise<LanguageServiceOutcome> {
-  if (entry.quarantined) return providerUnhealthyOutcome();
+  // A manager whose child/tree lease remains retained is a permanent fail-closed tombstone. Its
+  // CRASHED status is normally non-terminal because safely settled crashes may restart, but this
+  // instance cannot restart. Waiting the full initialize deadline here delayed every retry and
+  // durable-restart refusal even though the manager already had a definitive unavailable answer.
+  if (hasRetainedOwnership(entry)) return providerUnhealthyOutcome();
   const config = makeConfig(
     spec,
     options.protocolConfiguration?.resourceBudget,

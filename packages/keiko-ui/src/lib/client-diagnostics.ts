@@ -20,14 +20,20 @@
 // not control, and a diagnostic surface is what users screenshot into bug reports. Callers that hold
 // an error pass `clientErrorSummary(error)`, which yields its class and nothing else.
 //
-// The optional second argument is metadata ABOUT the report, not content: currently just the
-// correlation id of the server request the diagnostic describes (see `correlationIdOf` in
-// client-error-summary.ts), when the caller has one. It rides alongside `message` rather than being
-// folded into it so a transport can use it structurally (e.g. as a real wire field) instead of every
-// caller re-deriving a string convention a transport then has to parse back out.
+// The optional second argument is metadata ABOUT the report, not content: the correlation id of the
+// server request and closed body-free identities needed to reconstruct a response disposition. It
+// rides alongside `message` rather than being folded into it so transports can preserve typed wire
+// fields instead of parsing a caller-specific string convention.
+
+import type {
+  ClientDiagnosticGitChangeDescription,
+  ClientDiagnosticWorkspaceTrustBinding,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 export interface ClientDiagnosticMeta {
   readonly correlationId?: string | undefined;
+  readonly gitChangeDescription?: ClientDiagnosticGitChangeDescription | undefined;
+  readonly workspaceTrustBinding?: ClientDiagnosticWorkspaceTrustBinding | undefined;
 }
 
 export type ClientDiagnosticWriter = (message: string, meta?: ClientDiagnosticMeta) => void;

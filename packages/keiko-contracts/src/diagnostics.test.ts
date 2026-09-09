@@ -108,6 +108,49 @@ describe("isClientDiagnosticIngestRequest", () => {
     ).toBe(false);
   });
 
+  it("accepts only a complete body-free git-change description response identity", () => {
+    const gitChangeDescription = {
+      action: "apply",
+      disposition: "discarded",
+      relationshipId: "rel-1",
+      snapshotDigest: "a".repeat(64),
+      proposalId: "prop-1",
+      outcome: "observed",
+    };
+    expect(isClientDiagnosticIngestRequest({ ...validRequest(), gitChangeDescription })).toBe(true);
+    for (const invalid of [
+      { ...gitChangeDescription, action: "write" },
+      { ...gitChangeDescription, disposition: "ignored" },
+      { ...gitChangeDescription, relationshipId: "/customer/repository" },
+      { ...gitChangeDescription, snapshotDigest: "a".repeat(63) },
+      { ...gitChangeDescription, proposalId: "contains spaces" },
+      { ...gitChangeDescription, outcome: "body" },
+    ]) {
+      expect(
+        isClientDiagnosticIngestRequest({ ...validRequest(), gitChangeDescription: invalid }),
+      ).toBe(false);
+    }
+  });
+
+  it("accepts only a complete body-free workspace trust binding", () => {
+    const workspaceTrustBinding = {
+      repositoryId: "repository-a",
+      workspaceId: "workspace-a",
+    };
+    expect(isClientDiagnosticIngestRequest({ ...validRequest(), workspaceTrustBinding })).toBe(
+      true,
+    );
+    for (const invalid of [
+      { ...workspaceTrustBinding, repositoryId: "/customer/repository" },
+      { ...workspaceTrustBinding, workspaceId: "contains spaces" },
+      { repositoryId: workspaceTrustBinding.repositoryId },
+    ]) {
+      expect(
+        isClientDiagnosticIngestRequest({ ...validRequest(), workspaceTrustBinding: invalid }),
+      ).toBe(false);
+    }
+  });
+
   // This guard only asserts wire SHAPE (AGENTS.md: "reuse first" — the leaf must not duplicate
   // `correlation.ts`'s alphabet policy). A shape-conforming but semantically invalid id is the
   // server route's job to reject via `isValidCorrelationId`, never this guard's.

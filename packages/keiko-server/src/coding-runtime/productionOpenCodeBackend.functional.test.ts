@@ -38,6 +38,7 @@ import { createWorkspaceProvisioningService } from "../task-workspace/provisioni
 import { reconcileSingleInstance } from "../task-workspace/reconciliation.js";
 import { buildWorkspaceInstanceStoreOverDatabase } from "../task-workspace/store.js";
 import { createCodingRuntimeEvidenceAggregator } from "./codingRuntimeEvidenceAggregator.js";
+import { createCodingRuntimeEditorMutationLeaseBroker } from "./codingRuntimeEditorMutationLeaseCoordinator.js";
 import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
 import { resolveProductionRuntimeContext } from "./productionRuntimeWorkspaceAuthority.js";
 import { readProductionWorkspaceHead } from "./productionWorkspaceHeadReader.js";
@@ -407,6 +408,7 @@ async function bootPipeline(
     },
   };
   const port = await reserveLoopbackPort();
+  const runtimeMutationLeaseBroker = createCodingRuntimeEditorMutationLeaseBroker();
   const resolver = createFunctionalRuntimeResolver({
     portable,
     runtimeStateRoot: join(fixture.root, "runtime-state"),
@@ -421,6 +423,7 @@ async function bootPipeline(
     runtimeEvidence,
     createSupervisor,
     diagnostics,
+    runtimeMutationLeaseBroker,
   });
   const deps = functionalBffDeps({
     stateRoot: join(fixture.root, "bff-state"),
@@ -431,6 +434,7 @@ async function bootPipeline(
   disposers.push(async () => {
     await deps.codingRuntimeOrchestrator?.shutdown();
     await deps.dispose?.();
+    runtimeMutationLeaseBroker.dispose();
   });
   const server = createUiServer({
     staticRoot: fixture.root,
@@ -953,7 +957,10 @@ async function waitForQuestion(
         requestId: `${tag}-${String(questionPollSequence)}`,
         expectedRevision: snapshot?.revision ?? -1,
       });
-      expect(listed.ok, `question listing failed for ${tag}`).toBe(true);
+      expect(
+        listed.ok,
+        `question listing failed for ${tag}: ${listed.ok ? "ok" : listed.failureCode}`,
+      ).toBe(true);
       if (listed.ok) found = listed.questions.questions;
       expect(found).toHaveLength(1);
     },

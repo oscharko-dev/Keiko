@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  buildGatewaySeatbeltCommand,
   buildWrappedCommand,
   DEFAULT_CONTAINER_IMAGE,
   EXECUTION_ROOT_MOUNT,
@@ -7,7 +8,7 @@ import {
   SEATBELT_DENY_EGRESS_PROFILE,
   type WrappedCommand,
 } from "./backends.js";
-import type { IsolatedRunPlan } from "./types.js";
+import type { IsolatedRunPlan, NetworkGatewayPolicy } from "./types.js";
 
 const plan: IsolatedRunPlan = {
   command: "node",
@@ -251,5 +252,39 @@ describe("buildWrappedCommand", () => {
       buildWrappedCommand("seatbelt", { ...plan, args: [], command: "true" }),
     );
     expect(wrapped.args).toEqual(["-p", SEATBELT_DENY_EGRESS_PROFILE, "true"]);
+  });
+});
+
+describe("buildGatewaySeatbeltCommand child process policy (#3390 live run)", () => {
+  const gateway: NetworkGatewayPolicy = { mode: "gateway", host: "127.0.0.1", port: 1983 };
+
+  // Regression pin: `(deny process-fork)` broke the OpenCode git handshake. Fork itself therefore
+  // remains available, but the executable transition is deny-by-default and admits only the
+  // verified runtime plus the one caller-attested Git executable (#3394 T47) — no conventional
+  // Xcode/CommandLineTools path is trusted unconditionally, since a local user can replace it.
+  it("denies arbitrary child executables while admitting only the runtime and the attested git", () => {
+    const wrapped = buildGatewaySeatbeltCommand(
+      gateway,
+      "/trusted/opencode",
+      ["serve"],
+      "/qualified/apple/git",
+    );
+    const profile = wrapped.args[1];
+    expect(profile).not.toContain("process-fork");
+    expect(profile).toContain("(deny process-exec)");
+    expect(profile).toContain('(literal "/trusted/opencode")');
+    expect(profile).toContain('(literal "/qualified/apple/git")');
+    expect(profile).not.toContain('(literal "/usr/bin/git")');
+    expect(profile).not.toContain("CommandLineTools");
+    expect(profile).not.toContain("Xcode.app");
+    expect(profile).not.toContain("(allow process-exec)");
+    for (const denied of ["network*", "mach-lookup", "appleevent-send", "lsopen"])
+      expect(profile).toContain(`(deny ${denied})`);
+  });
+
+  it("rejects a relative runtime executable before compiling the profile", () => {
+    expect(() =>
+      buildGatewaySeatbeltCommand(gateway, "opencode", ["serve"], "/qualified/apple/git"),
+    ).toThrow("gateway-seatbelt-command-not-absolute");
   });
 });
