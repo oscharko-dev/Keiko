@@ -552,12 +552,28 @@ describe("main", () => {
       for (const file of ["pdf.mjs", "pdf.worker.mjs"]) {
         const path = resolve("node_modules", "pdfjs-dist", "legacy", "build", file);
         const provided = providedRuntimeApis(path);
-        for (const api of ["Promise.try", "Promise.withResolvers", "URL.parse"]) {
+        for (const api of ["Promise.try", "URL.parse"]) {
           expect(provided, `${file} does not execute the core-js provider for ${api}`).toContain(
             api,
           );
         }
       }
+    });
+
+    // 6.3.289 dropped the bundled provider for `Promise.withResolvers` and kept the call sites, which
+    // is why the declared chrome/edge floor is 119 rather than 116. Pin both halves of that fact: if a
+    // later release brings the provider back, this fails and the floor can drop again; if the call
+    // sites disappear, the second half fails and the floor is no longer owed to this dependency.
+    it("leaves Promise.withResolvers to the host, which is what the chrome/edge 119 floor pays for", () => {
+      for (const file of ["pdf.mjs", "pdf.worker.mjs"]) {
+        const path = resolve("node_modules", "pdfjs-dist", "legacy", "build", file);
+        expect(providedRuntimeApis(path)).not.toContain("Promise.withResolvers");
+      }
+      const main = readFileSync(
+        resolve("node_modules", "pdfjs-dist", "legacy", "build", "pdf.mjs"),
+        "utf8",
+      );
+      expect(main).toContain("Promise.withResolvers(");
     });
 
     it("does not accept a comment, string, or similarly-shaped arbitrary call as a provider", () => {

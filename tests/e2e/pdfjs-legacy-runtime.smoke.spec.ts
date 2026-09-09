@@ -1,3 +1,8 @@
+// PDF.js 6.3.289 removed its bundled core-js provider for `Promise.withResolvers` while keeping
+// the call sites, so that API is now required of the host rather than restored by the dependency.
+// `check:browser-baseline` raised the chrome/edge floor to 119 for exactly that reason, and this
+// smoke no longer deletes it: demanding that PDF.js restore a polyfill it does not ship would pin a
+// fiction. `Promise.try` and `URL.parse` are still bundled and are still proven here.
 import { expect, test, type Page, type Route } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -19,7 +24,7 @@ const REMOVE_NEW_RUNTIME_APIS = String.raw`
     }
   };
   const targets = [
-    [globalThis.Promise, "try"], [globalThis.Promise, "withResolvers"],
+    [globalThis.Promise, "try"],
     [globalThis.URL, "parse"],
     [globalThis.Map?.prototype, "getOrInsert"],
     [globalThis.Map?.prototype, "getOrInsertComputed"],
@@ -43,7 +48,7 @@ const REMOVE_NEW_RUNTIME_APIS = String.raw`
 const ASSERT_LEGACY_APIS = String.raw`
 {
   const restored = [
-    [globalThis.Promise, "try"], [globalThis.Promise, "withResolvers"],
+    [globalThis.Promise, "try"],
     [globalThis.URL, "parse"],
     [globalThis.Map?.prototype, "getOrInsertComputed"],
     [globalThis.WeakMap?.prototype, "getOrInsertComputed"],
