@@ -124,17 +124,108 @@ export function looksLikeSignatureStart(line: string): boolean {
   if (trimmed.length === 0 || looksLikeControlFlowHeader(trimmed)) {
     return false;
   }
-  // Same S8786 shape as `looksLikeBlockHeader` (this pattern is reached from the same
-  // `collectBestLines` line-scan on arbitrary source lines): the repeated group's inner class
-  // `[\w$<>,.[\]?]*` includes `,`/`.`, so on a dead-end line (never followed by `(`) it overlaps
-  // comma/dot-separated content and re-walks an O(remaining length) search from every one of the
-  // many word-boundary start positions that creates — quadratic in line length. Bounded to 2000
-  // characters per the same "far beyond any realistic single-line type prefix" reasoning as
-  // `looksLikeBlockHeader`.
-  return (
-    looksLikeBlockHeader(trimmed) ||
-    /\b(?:[A-Za-z_$][\w$<>,.[\]?]{0,2000}\s+)+[A-Za-z_$][\w$]*\s*\(/u.test(trimmed)
-  );
+  // The typed-call fallback (reached from the same `collectBestLines` line-scan on arbitrary
+  // source lines) is one linear pass; `looksLikeTypedCallStart` records the S8786 history of the
+  // regex it replaces.
+  return looksLikeBlockHeader(trimmed) || looksLikeTypedCallStart(trimmed);
+}
+
+// The retired typed-call fallback was
+//   /\b(?:[A-Za-z_$][\w$<>,.[\]?]{0,2000}\s+)+[A-Za-z_$][\w$]*\s*\(/u
+// Bounding the type-token class capped ONE repetition of the `(?:…)+` group, but a plain `.test()`
+// still retried the whole group from every word-boundary start position, and each retry greedily
+// re-consumed every remaining token before backtracking across repetitions: on a line of near-cap
+// tokens with no `(` that is quadratic (S8786), and past a few million characters it is a
+// `RangeError: Maximum call stack size exceeded` inside `RegExp.test`. `looksLikeTypedCallStart` is
+// the same predicate evaluated in one left-to-right pass over the line's runs of type-token
+// characters (`[\w$<>,.[\]?]`), which whitespace and every other character separate:
+//   * a run opens a token chain when some identifier-start character within its last 2,001
+//     characters sits on a real `\b` (the retired pattern could start there), and continues an
+//     open chain when it is reached across whitespace, starts with an identifier character and
+//     fits one bounded token;
+//   * a run reached across whitespace while a chain is open is the call name when it is a plain
+//     `[A-Za-z_$][\w$]*` followed by optional whitespace and `(`.
+// Every character is visited once and each run's boundary scan is capped at 2,001 characters, so
+// the pass is linear in the line length; the test file pins the equivalence with the retired
+// pattern on hand-picked and deterministic pseudo-random lines.
+const TYPE_TOKEN_MAX_LENGTH = 2_001;
+const TYPE_TOKEN_PUNCTUATION: ReadonlySet<string> = new Set([
+  "$",
+  "<",
+  ">",
+  ",",
+  ".",
+  "[",
+  "]",
+  "?",
+]);
+const CALL_NAME = /[A-Za-z_$][\w$]*\s*\(/uy;
+const WHITESPACE = /\s/u;
+
+function isTypeTokenChar(char: string): boolean {
+  return isWordChar(char) || TYPE_TOKEN_PUNCTUATION.has(char);
+}
+
+function typeTokenRunEnd(text: string, runStart: number): number {
+  let index = runStart;
+  while (index < text.length && isTypeTokenChar(text.charAt(index))) index += 1;
+  return index;
+}
+
+function isWhitespaceSpan(text: string, from: number, to: number): boolean {
+  if (from >= to) return false;
+  for (let index = from; index < to; index += 1) {
+    if (!WHITESPACE.test(text.charAt(index))) return false;
+  }
+  return true;
+}
+
+// `\b` at `index`: the character before it and the character at it disagree on being `\w`; the
+// string's start counts as a non-word "before".
+function isWordBoundaryAt(text: string, index: number): boolean {
+  const beforeIsWord = index > 0 && isWordChar(text.charAt(index - 1));
+  return beforeIsWord !== isWordChar(text.charAt(index));
+}
+
+function hasBoundedTokenStart(text: string, runStart: number, runEnd: number): boolean {
+  const earliest = Math.max(runStart, runEnd - TYPE_TOKEN_MAX_LENGTH);
+  for (let index = earliest; index < runEnd; index += 1) {
+    if (isIdentStartChar(text.charAt(index)) && isWordBoundaryAt(text, index)) return true;
+  }
+  return false;
+}
+
+function isBoundedChainToken(text: string, runStart: number, runEnd: number): boolean {
+  return runEnd - runStart <= TYPE_TOKEN_MAX_LENGTH && isIdentStartChar(text.charAt(runStart));
+}
+
+function startsCallAt(text: string, index: number): boolean {
+  CALL_NAME.lastIndex = index;
+  return CALL_NAME.test(text);
+}
+
+// Exported (module-local only — not re-exported from the package barrel) so the test file can pin
+// its equivalence with the retired pattern directly.
+export function looksLikeTypedCallStart(trimmed: string): boolean {
+  let chainOpen = false;
+  let previousRunEnd = 0;
+  let index = 0;
+  while (index < trimmed.length) {
+    if (!isTypeTokenChar(trimmed.charAt(index))) {
+      index += 1;
+      continue;
+    }
+    const runEnd = typeTokenRunEnd(trimmed, index);
+    const reachedAcrossWhitespace: boolean =
+      chainOpen && isWhitespaceSpan(trimmed, previousRunEnd, index);
+    if (reachedAcrossWhitespace && startsCallAt(trimmed, index)) return true;
+    chainOpen =
+      (reachedAcrossWhitespace && isBoundedChainToken(trimmed, index, runEnd)) ||
+      hasBoundedTokenStart(trimmed, index, runEnd);
+    previousRunEnd = runEnd;
+    index = runEnd;
+  }
+  return false;
 }
 
 function braceStartLine(lines: readonly string[], braceLineIndex: number): number | undefined {
