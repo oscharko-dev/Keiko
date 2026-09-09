@@ -893,6 +893,25 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
     expect(isAncestorOfDev(devTip, ROOT, execFileSync)).toBe(true);
     expect(isAncestorOfDev("f".repeat(40), ROOT, execFileSync)).toBe(false);
   });
+  it("does not let a stale local dev ref override a fetched origin/dev rejection", () => {
+    const visited = [];
+    const execute = (_git, args) => {
+      visited.push(args.at(-1));
+      if (args[0] === "merge-base") throw new Error("not an origin/dev ancestor");
+      return "";
+    };
+    expect(isAncestorOfDev("a".repeat(40), ROOT, execute)).toBe(false);
+    expect(visited).toEqual(["refs/remotes/origin/dev", "refs/remotes/origin/dev"]);
+  });
+  it("uses local dev only when the remote-tracking ref is absent", () => {
+    const execute = (_git, args) => {
+      const ref = args.at(-1);
+      if (args[0] === "show-ref" && ref === "refs/remotes/origin/dev")
+        throw new Error("missing remote ref");
+      return "";
+    };
+    expect(isAncestorOfDev("a".repeat(40), ROOT, execute)).toBe(true);
+  });
   // The tests above stub `identityFailures` to isolate the recheck's own control flow. This proves
   // the REAL, unstubbed identity cross-check actually agrees with the real producer, and actually
   // detects a mismatch -- not just that a stub was called. Calls it directly against ROOT (never

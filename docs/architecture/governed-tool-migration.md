@@ -141,8 +141,9 @@ was needed for this producer/consumer handoff.
 
 #3415 independently revalidates the pre-merge producer through `checkH1ProducerCheckpoint`
 inside `checkToolCatalogMigrationCloseout`. A durable `H1Provenance` record at
-`docs/architecture/h1-producer-checkpoint.v1.json` is required even while the future dev-landing
-fields are null. Its verification and independent-review references pin the SHA-256 of retained
+`docs/architecture/h1-producer-checkpoint.v1.json` was required while the dev-landing fields were
+null and remains the historical producer record. Its verification and independent-review
+references pin the SHA-256 of retained
 body-free receipts. Each receipt must accept the same source head and owned-source digest.
 The checker resolves real producer and consumer Git objects, verifies the reviewed producer-to-consumer ancestry and shared integration history, compares
 owned content at all three commits, rejects uncommitted owned changes,

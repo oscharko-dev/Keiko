@@ -194,10 +194,10 @@ export async function checkToolCatalogMigrationCloseout(
 }
 
 // #3414 AC7 / #3415 AC5-AC6: the durable, independently-verifiable H1 dev-landing record. #3414
-// alone may write it (once H1 actually reaches `dev` — see governed-tool-migration.md); this repo
-// has no such landing on this head, so nothing here fabricates one (AGENTS.md §7). What this DOES
-// provide now is the fail-closed RECHECK: if `pendingH1.landedDevCommit`/`landedTreeDigest` are
-// ever populated, this record must exist, pass shape validation, agree with them, be reachable
+// alone writes it after H1 reaches `dev` (see governed-tool-migration.md). PR #3394's verified
+// squash landing is now recorded; nothing is inferred from a branch label or issue status
+// (AGENTS.md §7). The fail-closed recheck requires populated
+// `pendingH1.landedDevCommit`/`landedTreeDigest` to have a durable record that agrees, is reachable
 // from `dev`, resolve `sourceHead` against real Git and rebind its declared `treeDigest` to the
 // real owned-source content at both `sourceHead` and the consuming `currentHead` commit, and agree
 // with the real current producer's own identity — anything missing, stale, unresolvable, or
@@ -622,19 +622,28 @@ export async function checkH1ProducerCheckpoint(
 
 export function isAncestorOfDev(commit, root, execute) {
   const git = resolveHostExecutable("git");
-  for (const devRef of ["refs/remotes/origin/dev", "refs/heads/dev"]) {
+  const remoteDev = "refs/remotes/origin/dev";
+  const localDev = "refs/heads/dev";
+  let devRef = remoteDev;
+  try {
+    execute(git, ["show-ref", "--verify", "--quiet", remoteDev], { cwd: root, encoding: "utf8" });
+  } catch {
+    devRef = localDev;
     try {
-      execute(git, ["show-ref", "--verify", "--quiet", devRef], { cwd: root, encoding: "utf8" });
-      execute(git, ["merge-base", "--is-ancestor", commit, devRef], {
-        cwd: root,
-        encoding: "utf8",
-      });
-      return true;
+      execute(git, ["show-ref", "--verify", "--quiet", localDev], { cwd: root, encoding: "utf8" });
     } catch {
-      // A stale or absent local ref cannot override a current remote-tracking dev ref.
+      return false;
     }
   }
-  return false;
+  try {
+    execute(git, ["merge-base", "--is-ancestor", commit, devRef], {
+      cwd: root,
+      encoding: "utf8",
+    });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export async function realProducerIdentityFailures(root, record) {
@@ -686,7 +695,7 @@ function resolveCommitTreeId(commit, root, execute) {
 }
 
 // The one digest formula for "owned source content at a commit", reused by both the producer side
-// (once #3414 lands real H1Provenance) and this recheck — never restated. Reads each owned path's
+// (the producer checkpoint and durable H1Provenance) and this recheck — never restated. Reads each owned path's
 // exact byte content at `commit` via Git's byte-framed batch reader (fails closed if any path is
 // absent from that commit's tree) and hashes sorted {path, contentBase64} pairs with this file's own
 // canonical digest primitive (`canonicalise`/`sha256Hex`, keiko-security — this file's own
