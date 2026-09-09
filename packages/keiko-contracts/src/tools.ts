@@ -351,7 +351,16 @@ export const DEFAULT_COMMAND_RULES: readonly CommandRule[] = deepFreeze([
     // --config-env/--ext-diff/--textconv) make git spawn an arbitrary command via its OWN shell,
     // defeating the Node spawn's shell:false; --exec-path redirects git to attacker-supplied sub-binaries.
     // hasDeniedFlag runs BEFORE subcommand resolution and matches both `--flag value` and
-    // `--flag=value`. `-C`/--git-dir/--work-tree stay value-flags (location only, not execution).
+    // `--flag=value`.
+    // `-C`/--git-dir/--work-tree/--namespace are denied here too. They are not inert location data
+    // the way npm's `--prefix` is: they make git operate AS IF launched from that directory,
+    // overriding the resolved-in-workspace cwd that exec.ts's spawn boundary relies on, so
+    // `git -C /etc log` reads a repository outside the workspace. Workspace escape is a hard,
+    // mode-independent denial (AGENTS.md §1). They stay listed as value flags as well, so that
+    // subcommand resolution keeps its S-H2 behaviour if this rule is ever copied without the
+    // denial. The sibling git rule sets — GIT_WORKTREE_COMMAND_RULES, GIT_MUTATION_COMMAND_RULES,
+    // GIT_PUBLISH_COMMAND_RULES and terminal-policy.ts's TERMINAL_COMMAND_RULES/Layer 2 — already
+    // denied the same flags; sandbox.test.ts pins that every git rule set keeps denying them.
     // Cross-reference (audit finding #3348): packages/keiko-git/src/runner.ts — the lower-level
     // spawn boundary this tool ultimately shares with gitRoutes.ts and
     // grounded-git-history-evidence.ts — cannot deny `-c`/`--config-env` outright the way this
@@ -363,8 +372,12 @@ export const DEFAULT_COMMAND_RULES: readonly CommandRule[] = deepFreeze([
     // update both lists together.
     denyFlags: Object.freeze([
       "-c",
+      "-C",
       "--config-env",
       "--exec-path",
+      "--git-dir",
+      "--work-tree",
+      "--namespace",
       "--ext-diff",
       "--textconv",
       "--no-index",
