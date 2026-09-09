@@ -1368,6 +1368,19 @@ jobs:
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         timeout-minutes: 20
         run: npm run test:e2e:smoke:webkit
+      # The Playwright config records a trace for every failed test (`trace: "retain-on-failure"`),
+      # and until now the runner threw it away: a browser smoke failure left only the truncated call
+      # log in the check annotation, so the same failure had to be re-run to be understood. AGENTS.md
+      # section 8 makes that gap the first defect to fix — evidence must let the defect be rebuilt
+      # without the machine it happened on. Uploaded only on failure, so a green run carries no cost.
+      - name: Upload browser smoke traces on failure
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: playwright-smoke-traces
+          path: test-results/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Editor run, verify, problems E2E (#2215)
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:editor-run-verification-2215
