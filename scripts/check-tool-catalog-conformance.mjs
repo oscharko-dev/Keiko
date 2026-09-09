@@ -556,7 +556,7 @@ function staleRecordFailures(record, landedDevCommit, landedTreeDigest) {
 async function landedEvidenceFailures(root, landedDevCommit, landedTreeDigest, deps) {
   const { record, shapeFailures } = readH1Provenance(root, deps.provenancePath);
   if (record === null || shapeFailures.length > 0) return shapeFailures;
-  return [
+  const identityFailures = [
     ...staleRecordFailures(record, landedDevCommit, landedTreeDigest),
     ...(isAncestorOfDev(landedDevCommit, root, deps.execute)
       ? []
@@ -565,6 +565,11 @@ async function landedEvidenceFailures(root, landedDevCommit, landedTreeDigest, d
         ]),
     ...(await deps.sourceHeadFailures(root, record, deps.execute)),
     ...(await deps.identityFailures(root, record)),
+  ];
+  if (identityFailures.length > 0) return identityFailures;
+  return [
+    ...checkpointReceiptFailures(root, record, "verification"),
+    ...checkpointReceiptFailures(root, record, "review"),
   ];
 }
 

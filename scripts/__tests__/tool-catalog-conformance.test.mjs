@@ -769,6 +769,24 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
     );
     expect(errors).toEqual([]);
   });
+  it("rejects an otherwise valid landing whose required-CI and review refs are not pinned receipts", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-unpinned-"));
+    workDir = root;
+    mkdirSync(join(root, "docs", "architecture"), { recursive: true });
+    writeFileSync(join(root, H1_PROVENANCE_PATH), JSON.stringify(VALID_RECORD));
+    const errors = await checkH1HandoffEvidence(
+      root,
+      {
+        landedDevCommit: VALID_RECORD.currentHead,
+        landedTreeDigest: VALID_RECORD.treeDigest,
+      },
+      { execute: () => "", identityFailures: async () => [], sourceHeadFailures: async () => [] },
+    );
+    expect(errors).toEqual([
+      "H1 producer checkpoint invalid verification reference: expected a pinned local receipt",
+      "H1 producer checkpoint invalid review reference: expected a pinned local receipt",
+    ]);
+  });
   it("fails closed on an identity mismatch against the current producer", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-"));
     workDir = root;
