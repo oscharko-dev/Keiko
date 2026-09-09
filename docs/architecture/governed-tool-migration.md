@@ -235,10 +235,12 @@ consumer history, current owned contents, recomputed producer identity, and pinn
 and independent review receipts. The manifest explicitly retains `h1-producer-checkpoint.v1` as its
 evidence reference. This permits #3415 to qualify before #3390 and the final consolidated merge.
 
-After integration, supply `h1-provenance.v1.json`. That reference additionally invokes the existing
-postmerge validator and requires a real dev-reachable integration commit. This record may be
-external, so recording the actual merge identity never requires inventing a future source commit.
-A checkpoint reference cannot be presented as landed provenance.
+After integration, supply `h1-provenance.v1.json`; it is now the programmatic default. That
+reference invokes the postmerge validator and requires a real dev-reachable integration commit,
+while `checkToolCatalogMigrationCloseout` continues to validate the historical producer checkpoint
+separately. The postmerge record is not sent through the checkpoint's linear ancestry rule because
+a truthful squash/rebase source and merge are distinct histories; its exact receipt instead proves
+their complete Git-tree equality. A checkpoint reference cannot be presented as landed provenance.
 
 Each named check uses the existing `.receipt.json`/`.artifact` reader. Structured reports are
 parsed from the same bytes whose digest the reader retains. They carry only exact source/package

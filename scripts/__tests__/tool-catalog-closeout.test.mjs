@@ -15,6 +15,7 @@ import {
   CATALOG_CLOSEOUT_CONSUMER_PROOF_COUNTS,
   CATALOG_CLOSEOUT_CONSUMERS,
   catalogCloseoutHead,
+  qualifiedH1,
   readCatalogCloseoutReceipts,
   requireExternalManifest,
 } from "../check-tool-catalog-closeout.mjs";
@@ -323,6 +324,34 @@ describe("exact-head catalog closeout artifact", () => {
     expect(validateToolCatalogCloseout(manifest, f.context, f.receipts, f.reports)).toEqual(
       manifest,
     );
+  });
+  it("routes a landed provenance artifact through postmerge validation, not checkpoint ancestry", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-closeout-phase-"));
+    roots.push(root);
+    const h1Path = join(root, "h1-provenance.v1.json");
+    const h1 = { currentHead: "a".repeat(40), treeDigest: "b".repeat(64) };
+    writeFileSync(h1Path, JSON.stringify(h1));
+    const visited = [];
+    const result = await qualifiedH1(root, h1Path, {
+      migrationFailures: async () => {
+        visited.push("migration");
+        return [];
+      },
+      handoffFailures: async (_root, pending, options) => {
+        visited.push("postmerge");
+        expect(pending).toEqual({
+          landedDevCommit: h1.currentHead,
+          landedTreeDigest: h1.treeDigest,
+        });
+        expect(options.provenancePath).toBe("h1-provenance.v1.json");
+        return [];
+      },
+      checkpointFailures: async () => {
+        throw new Error("postmerge provenance must not use checkpoint ancestry");
+      },
+    });
+    expect(result).toEqual({ h1, evidenceRef: "h1-provenance.v1" });
+    expect(visited).toEqual(["migration", "postmerge"]);
   });
   it("rejects unknown H1 evidence stages", async () => {
     const f = await fixture();
