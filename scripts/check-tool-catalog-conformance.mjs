@@ -325,11 +325,9 @@ function isPositiveInteger(value) {
 }
 
 function isIsoInstant(value) {
-  return (
-    typeof value === "string" &&
-    Number.isFinite(Date.parse(value)) &&
-    new Date(value).toISOString() === value
-  );
+  if (typeof value !== "string" || !Number.isFinite(Date.parse(value))) return false;
+  const milliseconds = new Date(value).toISOString();
+  return value === milliseconds || value === milliseconds.replace(".000Z", "Z");
 }
 
 const VERIFICATION_RECEIPT_FIELDS = Object.freeze([
