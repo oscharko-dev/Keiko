@@ -5,7 +5,7 @@
   "appPath": "packaged-cli-ui",
   "route": "/",
   "evidencePath": "docs/git-delivery/evidence/476",
-  "generatedAt": "2026-08-28T19:29:57.543Z",
+  "generatedAt": "2026-09-09T00:41:40.077Z",
   "governedRoutes": ["/api/git-delivery/push/preview", "/api/git-delivery/push/execute"],
   "windowRegistration": {
     "kind": "governedGit",
@@ -18,7 +18,7 @@
     "governedWindowMountedFromRegistry": true,
     "protectedTargetPreviewSurfacesPolicyBlock": true,
     "publishPathSurfacesGovernedBlock": true,
-    "blockReasonIsPolicyPackBlocked": true,
+    "blockReasonIsProtectedBranch": true,
     "blockedTargetNeverReachesExecute": true,
     "browserReachedGovernedPushExecuteRoute": true,
     "safeNamespaceTargetReachesSucceeded": true
