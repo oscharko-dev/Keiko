@@ -337,7 +337,7 @@ describe("runLoop — limit breaches each map to their category", () => {
         }),
       listTools: () => [{ name: "read_file", description: "read", parameters: {} }],
     };
-    const { ctx, _sink } = buildContext({
+    const { ctx, sink: _sink } = buildContext({
       task: INVESTIGATE,
       model: port,
       tools: readTool,

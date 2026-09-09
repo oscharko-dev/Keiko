@@ -108,9 +108,8 @@ function incompleteUsageToolCallStream(): Response {
 }
 
 async function consumeStream(stream: AsyncIterable<unknown>): Promise<void> {
-  for await (const chunk of stream) {
+  for await (const _chunk of stream) {
     // Consumption drives the provider stream through its terminal semantic validation.
-    void chunk;
   }
 }
 const config: GatewayConfig = {

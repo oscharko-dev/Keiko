@@ -271,7 +271,7 @@ function prepareChildRun(
 async function runChild(
   deps: ReadOnlyChildOrchestratorDeps,
   context: ReadOnlyChildInvocationContext,
-  _childRequest: ChildAgentRequestV1,
+  childRequest: ChildAgentRequestV1,
   envelope: ReadOnlyChildEnvelope,
   maxToolCalls: number,
 ): Promise<AuxiliaryCapabilityOutcomeV1> {

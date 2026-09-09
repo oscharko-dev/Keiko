@@ -484,7 +484,6 @@ function persistConnectedScope(
   ctx: RouteContext,
   deps: UiHandlerDeps,
   chatId: string,
-  existingScopes: readonly ChatGitChangeScope[],
   captured: CapturedComparison & { readonly prNumber: number | undefined },
   correlationId: string,
 ): RouteResult {
@@ -625,14 +624,7 @@ export async function handleGitChangeConnect(
     if (!(error instanceof GitChangeBlocked)) throw error;
     return blockedConnectResult(deps, correlationId, error.reason);
   }
-  return persistConnectedScope(
-    ctx,
-    deps,
-    chat.id,
-    chat.gitChangeScopes ?? [],
-    captured,
-    correlationId,
-  );
+  return persistConnectedScope(ctx, deps, chat.id, captured, correlationId);
 }
 
 function connectChat(
