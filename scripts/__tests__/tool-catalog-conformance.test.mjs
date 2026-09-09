@@ -10,6 +10,7 @@ import {
   checkToolCatalogMigrationCloseout,
   checkToolCatalogSemanticNegatives,
   checkH1HandoffEvidence,
+  h1LandingReceiptSemanticFailures,
   h1ProvenanceShapeFailures,
   realProducerIdentityFailures,
   realSourceHeadFailures,
@@ -27,6 +28,7 @@ import {
   TOOL_CATALOG_MIGRATION_PATH,
   toolCatalogMigrationBytes,
 } from "../check-tool-catalog-conformance.mjs";
+import { GOVERNED_TOOL_CONTRACT_PINS } from "../lib/governed-tool-contract-pins.mjs";
 import { scanToolRegistrySource } from "../lib/tool-catalog-inventory.mjs";
 import { resolveHostExecutable } from "../lib/host-executable.mjs";
 import {
@@ -86,38 +88,13 @@ describe("initial compiler and finite migration conformance gate", () => {
     );
   }, 30_000);
 
-  // #3406/#3414 (F6): the non-authorizing pending-H1 handoff record for #3386's H1 local
-  // repository-search handler. Fails-before: prior to this record's addition, the generated
-  // migration document carried no `pendingH1` field at all, so #3406's acceptance criterion
-  // (owner, canonical tool reference, prerequisite #3411 merge identity, removal issue #3414,
-  // initially-empty landedDevCommit/landedTreeDigest) existed only as prose in
-  // governed-tool-migration.md, never as an actual record.
-  it("carries the non-authorizing pending-H1 handoff record with exactly its six fields", async () => {
+  // #3414/#3415: after the durable landing record exists, the temporary migration handoff must
+  // disappear while stable source-owned pins retain the independently revalidated merge identity.
+  it("removes the temporary pending-H1 migration record after durable provenance lands", async () => {
     const migration = JSON.parse(await toolCatalogMigrationBytes(ROOT));
-    expect(Object.keys(migration.pendingH1).sort()).toEqual(
-      [
-        "owner",
-        "canonicalTool",
-        "prerequisiteMerge",
-        "removalIssue",
-        "landedDevCommit",
-        "landedTreeDigest",
-      ].sort(),
-    );
-    expect(migration.pendingH1.owner).toBe(3386);
-    expect(migration.pendingH1.canonicalTool).toEqual({
-      canonicalId: "keiko.repo.search",
-      contractVersion: 1,
-    });
-    expect(migration.pendingH1.prerequisiteMerge.issue).toBe(3411);
-    expect(migration.pendingH1.prerequisiteMerge.contractDigest).toBe(
-      migration.sourceContractDigest,
-    );
-    expect(migration.pendingH1.removalIssue).toBe(3414);
-    // Initially empty: no code path may treat this record as an authorization while these are
-    // null -- only #3414 may populate them once H1 actually reaches dev.
-    expect(migration.pendingH1.landedDevCommit).toBeNull();
-    expect(migration.pendingH1.landedTreeDigest).toBeNull();
+    expect(migration).not.toHaveProperty("pendingH1");
+    expect(GOVERNED_TOOL_CONTRACT_PINS.h1Provenance.landedDevCommit).toMatch(/^[a-f0-9]{40}$/u);
+    expect(GOVERNED_TOOL_CONTRACT_PINS.h1Provenance.landedTreeDigest).toMatch(/^[a-f0-9]{64}$/u);
   });
   it("pins the one non-dispatch readiness probe without granting a path exception", () => {
     const source = readFileSync(join(ROOT, PROBE), "utf8");
@@ -158,6 +135,36 @@ describe("initial compiler and finite migration conformance gate", () => {
     ).toEqual([]);
   });
 });
+// PR #3394 landed on `dev` by SQUASH, so its reviewed source head is not reachable from any
+// branch or tag and a clone that never fetched `refs/pull/3394/head` simply does not carry that
+// object -- every CI checkout included, `fetch-depth: 0` notwithstanding, because depth 0 clones
+// every ref, not every orphaned commit. `checkToolCatalogMigrationCloseout` resolves that head
+// against real Git and fails closed when it cannot, which is correct: the closeout is a deliberate
+// LOCAL qualification run and `arch:check` deliberately invokes the conformance gate without
+// `--closeout`. These two assertions are the only place the closeout runs where the object may be
+// absent, so they measure that precondition instead of silently inheriting it, and pin the exact
+// outcome for both clones. Everything else the closeout checks must still pass in either
+// environment, so any other defect still fails these tests.
+function closeoutFailuresThisCloneCanReach(root = ROOT) {
+  const { currentHead, sourceHead } = JSON.parse(
+    readFileSync(join(root, H1_PROVENANCE_PATH), "utf8"),
+  );
+  const failures = [];
+  if (!isAncestorOfDev(currentHead, root, execFileSync)) {
+    failures.push(
+      `H1 handoff evidence unreachable: landedDevCommit ${currentHead} is not an ancestor of dev`,
+    );
+  }
+  try {
+    git(root, ["cat-file", "-e", `${sourceHead}^{commit}`]);
+  } catch {
+    failures.push(
+      `H1 handoff evidence unverifiable: sourceHead ${sourceHead} is not a resolvable Git commit`,
+    );
+  }
+  return failures;
+}
+
 describe("closeout enforcement", () => {
   it("requires the producer checkpoint even before the final dev merge exists", async () => {
     const errors = await checkToolCatalogMigrationCloseout(ROOT, {
@@ -180,7 +187,7 @@ describe("closeout enforcement", () => {
         {},
         { producerCheckpointFailures: async () => [] },
       ),
-    ).toEqual([]);
+    ).toEqual(closeoutFailuresThisCloneCanReach());
   });
   it.each([
     [
@@ -635,7 +642,7 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
       await checkH1HandoffEvidence(ROOT, { landedDevCommit: null, landedTreeDigest: null }),
     ).toEqual([]);
   });
-  it("fails closed on a partially populated pending record", async () => {
+  it("fails closed on partially populated landing pins", async () => {
     expect(
       await checkH1HandoffEvidence(ROOT, {
         landedDevCommit: "a".repeat(40),
@@ -652,14 +659,16 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
         landedTreeDigest: "b".repeat(64),
       }),
     ).toEqual([
-      "H1 handoff evidence malformed: pendingH1.landedDevCommit is not a 40-hex commit SHA",
+      "H1 handoff evidence malformed: landing pin landedDevCommit is not a 40-hex commit SHA",
     ]);
     expect(
       await checkH1HandoffEvidence(ROOT, {
         landedDevCommit: "a".repeat(40),
         landedTreeDigest: "not-a-digest",
       }),
-    ).toEqual(["H1 handoff evidence malformed: pendingH1.landedTreeDigest is not a 64-hex digest"]);
+    ).toEqual([
+      "H1 handoff evidence malformed: landing pin landedTreeDigest is not a 64-hex digest",
+    ]);
   });
   it("fails closed when no durable H1Provenance record exists", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-"));
@@ -683,6 +692,7 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
     const deps = {
       provenancePath: "../handoff.json",
       execute: () => "",
+      receiptFailures: () => [],
       sourceHeadFailures: async (_root, record) => {
         visited.push(record.sourceHead);
         return [];
@@ -716,7 +726,7 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
       }),
     ).toEqual(["H1 handoff evidence malformed: not valid JSON"]);
   });
-  it("fails closed on a stale record (treeDigest/currentHead do not match pendingH1)", async () => {
+  it("fails closed on a stale record (treeDigest/currentHead do not match landing pins)", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-"));
     workDir = root;
     mkdirSync(join(root, "docs", "architecture"), { recursive: true });
@@ -727,7 +737,7 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
       { execute: () => "", identityFailures: async () => [] },
     );
     expect(errors).toContain(
-      "H1 handoff evidence stale: durable record's currentHead does not match pendingH1.landedDevCommit",
+      "H1 handoff evidence stale: durable record's currentHead does not match landing pin landedDevCommit",
     );
   });
   it("fails closed when landedDevCommit is not reachable from dev", async () => {
@@ -760,9 +770,123 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
     const errors = await checkH1HandoffEvidence(
       root,
       { landedDevCommit: record.currentHead, landedTreeDigest: record.treeDigest },
-      { execute: () => "", identityFailures: async () => [], sourceHeadFailures: async () => [] },
+      {
+        execute: () => "",
+        identityFailures: async () => [],
+        receiptFailures: () => [],
+        sourceHeadFailures: async () => [],
+      },
     );
     expect(errors).toEqual([]);
+  });
+  it("rejects an otherwise valid landing whose required-CI and review refs are not pinned receipts", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-unpinned-"));
+    workDir = root;
+    mkdirSync(join(root, "docs", "architecture"), { recursive: true });
+    writeFileSync(join(root, H1_PROVENANCE_PATH), JSON.stringify(VALID_RECORD));
+    const errors = await checkH1HandoffEvidence(
+      root,
+      {
+        landedDevCommit: VALID_RECORD.currentHead,
+        landedTreeDigest: VALID_RECORD.treeDigest,
+      },
+      { execute: () => "", identityFailures: async () => [], sourceHeadFailures: async () => [] },
+    );
+    expect(errors).toEqual([
+      "H1 producer checkpoint invalid verification reference: expected a pinned local receipt",
+      "H1 producer checkpoint invalid review reference: expected a pinned local receipt",
+    ]);
+  });
+  it("accepts only the exact body-free H1 landing receipt schemas", () => {
+    const record = JSON.parse(readFileSync(join(ROOT, H1_PROVENANCE_PATH), "utf8"));
+    const verification = JSON.parse(
+      readFileSync(join(ROOT, "docs/qa/evidence/h1-verification.v1.json"), "utf8"),
+    );
+    const review = JSON.parse(
+      readFileSync(join(ROOT, "docs/qa/evidence/h1-review.v1.json"), "utf8"),
+    );
+    expect(h1LandingReceiptSemanticFailures(verification, record, "verification")).toEqual([]);
+    expect(h1LandingReceiptSemanticFailures(review, record, "review")).toEqual([]);
+    expect(
+      h1LandingReceiptSemanticFailures(
+        { ...verification, rawOutput: "forbidden" },
+        record,
+        "verification",
+      ),
+    ).toEqual(["H1 landing verification receipt malformed: unexpected top-level fields"]);
+    expect(
+      h1LandingReceiptSemanticFailures({ ...review, rawComment: "forbidden" }, record, "review"),
+    ).toEqual(["H1 landing review receipt malformed: unexpected top-level fields"]);
+    expect(h1LandingReceiptSemanticFailures(null, record, "verification")).toEqual([
+      "H1 landing verification receipt malformed: unexpected top-level fields",
+    ]);
+    expect(h1LandingReceiptSemanticFailures([], record, "review")).toEqual([
+      "H1 landing review receipt malformed: unexpected top-level fields",
+    ]);
+  });
+  it("rejects every mismatched verification and review settlement dimension", () => {
+    const record = JSON.parse(readFileSync(join(ROOT, H1_PROVENANCE_PATH), "utf8"));
+    const verification = JSON.parse(
+      readFileSync(join(ROOT, "docs/qa/evidence/h1-verification.v1.json"), "utf8"),
+    );
+    const review = JSON.parse(
+      readFileSync(join(ROOT, "docs/qa/evidence/h1-review.v1.json"), "utf8"),
+    );
+    const incompleteChecks = {
+      ...verification,
+      requiredChecks: { ...verification.requiredChecks, pending: 1 },
+    };
+    const divergentTree = { ...verification, currentTree: "0".repeat(40) };
+    const unresolvedReview = {
+      ...review,
+      reviewThreads: { ...review.reviewThreads, currentUnresolved: 1 },
+    };
+    const driftedBinding = {
+      ...review,
+      binding: { ...review.binding, handlerSetDigest: "0".repeat(64) },
+    };
+    const mismatchedVerificationIdentity = {
+      ...verification,
+      repository: "other/repository",
+    };
+    const invalidVerificationMetadata = { ...verification, mergedAt: 0 };
+    const failedManagedVerification = {
+      ...verification,
+      managedVerification: { ...verification.managedVerification, result: "failed" },
+    };
+    const mismatchedReviewIdentity = { ...review, currentHead: "0".repeat(40) };
+    const wrongReviewKind = { ...review, reviewKind: "premerge-review" };
+    const wrongReviewOwner = { ...review, ownerIssue: 0 };
+    expect(h1LandingReceiptSemanticFailures(incompleteChecks, record, "verification")).toContain(
+      "H1 landing verification receipt required-check settlement mismatch",
+    );
+    expect(h1LandingReceiptSemanticFailures(divergentTree, record, "verification")).toContain(
+      "H1 landing verification receipt Git tree identity mismatch",
+    );
+    expect(h1LandingReceiptSemanticFailures(unresolvedReview, record, "review")).toContain(
+      "H1 landing review receipt thread settlement mismatch",
+    );
+    expect(h1LandingReceiptSemanticFailures(driftedBinding, record, "review")).toContain(
+      "H1 landing review receipt catalog binding mismatch",
+    );
+    expect(
+      h1LandingReceiptSemanticFailures(mismatchedVerificationIdentity, record, "verification"),
+    ).toContain("H1 landing verification receipt identity mismatch");
+    expect(
+      h1LandingReceiptSemanticFailures(invalidVerificationMetadata, record, "verification"),
+    ).toContain("H1 landing verification receipt integration metadata mismatch");
+    expect(
+      h1LandingReceiptSemanticFailures(failedManagedVerification, record, "verification"),
+    ).toContain("H1 landing verification receipt has no passing managed verification");
+    expect(h1LandingReceiptSemanticFailures(mismatchedReviewIdentity, record, "review")).toContain(
+      "H1 landing review receipt identity mismatch",
+    );
+    expect(h1LandingReceiptSemanticFailures(wrongReviewKind, record, "review")).toContain(
+      "H1 landing review receipt kind mismatch",
+    );
+    expect(h1LandingReceiptSemanticFailures(wrongReviewOwner, record, "review")).toContain(
+      "H1 landing review receipt owner mismatch",
+    );
   });
   it("fails closed on an identity mismatch against the current producer", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-"));
@@ -792,7 +916,7 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
         {},
         { producerCheckpointFailures: async () => [] },
       ),
-    ).toEqual([]);
+    ).toEqual(closeoutFailuresThisCloneCanReach());
   });
   // The stubbed `execute` above proves the recheck's own control flow. This proves the REAL,
   // unstubbed git-reachability check against this actual repository: `dev`'s own current tip is
@@ -811,6 +935,34 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
     }
     expect(isAncestorOfDev(devTip, ROOT, execFileSync)).toBe(true);
     expect(isAncestorOfDev("f".repeat(40), ROOT, execFileSync)).toBe(false);
+  });
+  it("does not let a stale local dev ref override a fetched origin/dev rejection", () => {
+    const visited = [];
+    const execute = (_git, args) => {
+      visited.push(args.at(-1));
+      if (args[0] === "merge-base") throw new Error("not an origin/dev ancestor");
+      return "";
+    };
+    expect(isAncestorOfDev("a".repeat(40), ROOT, execute)).toBe(false);
+    expect(visited).toEqual(["refs/remotes/origin/dev", "refs/remotes/origin/dev"]);
+  });
+  it("uses local dev only when the remote-tracking ref is absent", () => {
+    const execute = (_git, args) => {
+      const ref = args.at(-1);
+      if (args[0] === "show-ref" && ref === "refs/remotes/origin/dev")
+        throw new Error("missing remote ref");
+      return "";
+    };
+    expect(isAncestorOfDev("a".repeat(40), ROOT, execute)).toBe(true);
+  });
+  it("fails closed when neither remote-tracking nor local dev exists", () => {
+    const visited = [];
+    const execute = (_git, args) => {
+      visited.push(args.at(-1));
+      throw new Error("missing dev ref");
+    };
+    expect(isAncestorOfDev("a".repeat(40), ROOT, execute)).toBe(false);
+    expect(visited).toEqual(["refs/remotes/origin/dev", "refs/heads/dev"]);
   });
   // The tests above stub `identityFailures` to isolate the recheck's own control flow. This proves
   // the REAL, unstubbed identity cross-check actually agrees with the real producer, and actually
@@ -964,6 +1116,7 @@ describe("review 3941891302: sourceHead must resolve against real Git and bind t
       { landedDevCommit: currentHead, landedTreeDigest: treeDigest },
       {
         identityFailures: async () => [],
+        receiptFailures: () => [],
         sourceHeadFailures: (r, rec, exec) => realSourceHeadFailures(r, rec, exec, ownedPaths),
       },
     );

@@ -10,7 +10,7 @@ import {
   checkH1HandoffEvidence,
   checkH1ProducerCheckpoint,
   checkToolCatalogMigrationCloseout,
-  H1_PRODUCER_CHECKPOINT_PATH,
+  H1_PROVENANCE_PATH,
 } from "./check-tool-catalog-conformance.mjs";
 import { compareStrings } from "./lib/compare-strings.mjs";
 import { sha256File } from "./lib/digest.mjs";
@@ -379,28 +379,31 @@ export function catalogCloseoutHead(root) {
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
-async function qualifiedH1(root, h1Path) {
+export async function qualifiedH1(
+  root,
+  h1Path,
+  {
+    checkpointFailures = checkH1ProducerCheckpoint,
+    handoffFailures = checkH1HandoffEvidence,
+    migrationFailures = checkToolCatalogMigrationCloseout,
+  } = {},
+) {
   const evidenceRef = basename(h1Path, ".json");
   requireEvidence(H1_EVIDENCE_REFS.has(evidenceRef), "invalid H1 evidence reference");
   const h1 = readJson(h1Path);
-  // Consolidated delivery qualifies #3415 before #3390 and before the final #3394 merge.
-  // Both phases retain the independently reviewed producer and real source-content checks.
-  const failures = [
-    ...(await checkH1ProducerCheckpoint(root)),
-    ...(await checkH1ProducerCheckpoint(root, { checkpointPath: relative(root, h1Path) })),
-    ...(await checkToolCatalogMigrationCloseout(root)),
-  ];
-  // A provenance claim additionally requires actual dev-reachable integration. Choosing the
-  // checkpoint phase never labels its evidence as landed provenance or authorizes a merge.
-  if (evidenceRef === "h1-provenance.v1") {
-    failures.push(
-      ...(await checkH1HandoffEvidence(
-        root,
-        { landedDevCommit: h1.currentHead, landedTreeDigest: h1.treeDigest },
-        { provenancePath: relative(root, h1Path) },
-      )),
-    );
-  }
+  // Migration closeout always rechecks the historical producer checkpoint and the durable landing.
+  // The selected artifact is then validated according to its own phase: a squash/rebase provenance
+  // record cannot honestly satisfy the checkpoint's linear producer/consumer ancestry rule.
+  const failures = [...(await migrationFailures(root))];
+  const selectedFailures =
+    evidenceRef === "h1-provenance.v1"
+      ? await handoffFailures(
+          root,
+          { landedDevCommit: h1.currentHead, landedTreeDigest: h1.treeDigest },
+          { provenancePath: relative(root, h1Path) },
+        )
+      : await checkpointFailures(root, { checkpointPath: relative(root, h1Path) });
+  failures.push(...selectedFailures);
   requireEvidence(failures.length === 0, "H1 handoff or migration qualification failed");
   return { h1, evidenceRef };
 }
@@ -437,7 +440,7 @@ export async function checkToolCatalogCloseoutFiles({
   headRepository,
   headRef,
   baseSha,
-  h1Path = join(root, H1_PRODUCER_CHECKPOINT_PATH),
+  h1Path = join(root, H1_PROVENANCE_PATH),
   write = false,
 }) {
   const head = catalogCloseoutHead(root);
