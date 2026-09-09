@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { GIT_MUTATION_COMMAND_RULES } from "./git-mutation-adapter.js";
+import { GIT_PUBLISH_COMMAND_RULES } from "./git-publish-gateway.js";
+import { GIT_WORKTREE_COMMAND_RULES } from "./git-worktree-adapter.js";
 import {
   buildChildEnv,
   buildSandboxEnv,
@@ -320,13 +323,15 @@ describe("isCommandAllowed — S-H2 value-flag bypass + transitive shell", () =>
     );
   });
 
+  // `-C sub status` was pinned as allowed while `-C` counted as inert "location only" data. It is
+  // not: `-C` makes git operate as if launched in that directory, overriding the resolved-in-
+  // workspace cwd the spawn boundary relies on, so the pin moves to the escape below and the
+  // masking invariant it guarded (a value flag must never admit a denied subcommand) is kept above.
+
   it("positive controls still pass: npm audit, npm view, git status", () => {
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["audit"]).allowed).toBe(true);
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npm", ["view", "keiko"]).allowed).toBe(true);
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["status"]).allowed).toBe(true);
-    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["-C", "sub", "status"]).allowed).toBe(
-      true,
-    );
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "npx", ["eslint", "."]).allowed).toBe(false);
   });
 });
@@ -359,12 +364,13 @@ describe("isCommandAllowed — git external-command injection (diff.external RCE
     });
   }
 
-  it("still allows read-only git (status, diff HEAD~1, and -C dir status)", () => {
+  it("still allows read-only git (status, diff HEAD~1, log -n 1)", () => {
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["status"]).allowed).toBe(true);
     expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["diff", "HEAD~1"]).allowed).toBe(true);
-    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["-C", "sub", "status"]).allowed).toBe(
-      true,
-    );
+    expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["log", "-n", "1"]).allowed).toBe(true);
+    expect(
+      isCommandAllowed(DEFAULT_COMMAND_RULES, "git", ["--no-pager", "show", "HEAD"]).allowed,
+    ).toBe(true);
   });
 });
 
@@ -456,5 +462,51 @@ describe("collectCredentialEnvValues — the fail-closed scrub set", () => {
 
   it("returns nothing for a lane that declares no credentials", () => {
     expect(collectCredentialEnvValues(GOVERNED_PARENT_ENV, [])).toEqual([]);
+  });
+});
+
+// `-C DIR` / `--git-dir DIR` / `--work-tree DIR` / `--namespace NS` make git operate as if it had
+// been launched elsewhere, so they override the resolved-in-workspace cwd that exec.ts's spawn
+// boundary relies on: `git -C /etc log` reads a repository outside the workspace even though the
+// child's cwd is the workspace. AGENTS.md §1 lists workspace escape as a hard, mode-independent
+// denial, and the sibling git rule sets (worktree, mutation, publish) plus terminal-policy.ts's
+// Layer 2 already denied the same flags outright — only the agent-facing default rule set skipped
+// them as value flags.
+describe("isCommandAllowed — git workspace escape via location flags", () => {
+  const escapes: readonly { readonly label: string; readonly args: readonly string[] }[] = [
+    { label: "-C /etc log", args: ["-C", "/etc", "log"] },
+    { label: "--git-dir /etc/.git log", args: ["--git-dir", "/etc/.git", "log"] },
+    { label: "--git-dir=/etc/.git log", args: ["--git-dir=/etc/.git", "log"] },
+    { label: "--work-tree /etc status", args: ["--work-tree", "/etc", "status"] },
+    { label: "--work-tree=/etc status", args: ["--work-tree=/etc", "status"] },
+    { label: "--namespace ns log", args: ["--namespace", "ns", "log"] },
+    { label: "-C /etc show HEAD:/etc/shadow", args: ["-C", "/etc", "show", "HEAD:secrets"] },
+    { label: "-C /etc cat-file -p HEAD", args: ["-C", "/etc", "cat-file", "-p", "HEAD"] },
+    { label: "log -C /etc (flag after the subcommand)", args: ["log", "-C", "/etc"] },
+  ];
+
+  for (const { label, args } of escapes) {
+    it(`denies git ${label}`, () => {
+      expect(isCommandAllowed(DEFAULT_COMMAND_RULES, "git", args).allowed).toBe(false);
+    });
+  }
+
+  // One flag closed on one surface and left open on another is how this gap survived: the same
+  // location flags must be denied by every git rule set that reaches a spawn.
+  it("denies the same location flags on every git rule set", () => {
+    const ruleSets = {
+      default: DEFAULT_COMMAND_RULES,
+      worktree: GIT_WORKTREE_COMMAND_RULES,
+      mutation: GIT_MUTATION_COMMAND_RULES,
+      publish: GIT_PUBLISH_COMMAND_RULES,
+    };
+    for (const flag of ["-C", "--git-dir", "--work-tree", "--namespace", "--exec-path"]) {
+      for (const [name, rules] of Object.entries(ruleSets)) {
+        expect(
+          isCommandAllowed(rules, "git", [flag, "/etc", "status"]).allowed,
+          `${name}: ${flag}`,
+        ).toBe(false);
+      }
+    }
   });
 });
