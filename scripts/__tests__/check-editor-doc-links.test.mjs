@@ -7,16 +7,27 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { isWithinPath, runEditorDocLinkCheck } from "../check-editor-doc-links.mjs";
 
-let parent;
+// Every sandbox any test in this file creates, swept after each test by the one module-scope hook
+// below -- so a describe block that never registers its own cleanup, or a test that builds several
+// sandboxes (the growth guards build four), cannot leave pathological fixtures behind in the
+// temp directory (Keiko for Quality on #3394: the S8786 block leaked one sandbox per test).
+const sandboxes = [];
 
 function makeSandbox() {
-  parent = mkdtempSync(join(tmpdir(), "editor-doc-links-"));
-  const repoRoot = join(parent, "repo");
-  const outsideRoot = join(parent, "outside");
+  const root = mkdtempSync(join(tmpdir(), "editor-doc-links-"));
+  sandboxes.push(root);
+  const repoRoot = join(root, "repo");
+  const outsideRoot = join(root, "outside");
   mkdirSync(repoRoot, { recursive: true });
   mkdirSync(outsideRoot, { recursive: true });
   return { repoRoot, outsideRoot };
 }
+
+afterEach(() => {
+  for (const root of sandboxes.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 function write(root, relativePath, content) {
   const absolute = join(root, relativePath);
@@ -34,13 +45,6 @@ function check(options) {
 }
 
 describe("check-editor-doc-links", () => {
-  afterEach(() => {
-    if (parent) {
-      rmSync(parent, { recursive: true, force: true });
-      parent = undefined;
-    }
-  });
-
   it("accepts in-repository relative links and anchors", () => {
     const { repoRoot } = makeSandbox();
     write(
