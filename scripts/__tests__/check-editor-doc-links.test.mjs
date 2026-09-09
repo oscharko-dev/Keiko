@@ -1,6 +1,7 @@
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { performance } from "node:perf_hooks";
 
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -116,37 +117,58 @@ describe("check-editor-doc-links — bounded regex safety (S8786)", () => {
     });
   });
 
+  // Both guards below assert "no catastrophic backtracking" as a GROWTH RATIO -- the check is timed
+  // on a pathological input of size n and again at 2n, back-to-back and under the same load, and
+  // the larger run must stay under three times the smaller (a linear scan doubles; the superlinear
+  // patterns these guard against grew far faster). The previous absolute 300 ms budget inflated with
+  // the hosted runner's parallel test load (309 ms in the scripts coverage suite of #3394) and so
+  // raced the wall clock instead of measuring the pattern.
+  function checkDurationMs(makeCase, size) {
+    let best = Number.POSITIVE_INFINITY;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const { repoRoot, files } = makeCase(size);
+      const start = performance.now();
+      const result = check({ repoRoot, files });
+      best = Math.min(best, performance.now() - start);
+      expect(result).toMatchObject({ ok: true, failures: [] });
+    }
+    return best;
+  }
+
+  function expectLinearGrowth(makeCase, size) {
+    const small = checkDurationMs(makeCase, size);
+    const large = checkDurationMs(makeCase, size * 2);
+    // Below ~50 ms a measurement is dominated by timer, I/O and scheduling noise, not by the scan.
+    expect(large).toBeLessThan(3 * Math.max(small, 50));
+  }
+
   it("resolves an anchor slugged from a pathologically long heading line without catastrophic backtracking", () => {
-    const { repoRoot } = makeSandbox();
-    write(
-      repoRoot,
-      "packages/keiko-editor/README.md",
-      "# Package\n\n[Runbook](../../docs/keiko-editor/big.md#a-b)\n",
-    );
     // Shape that made the previous `(.*?)\s*#*\s*$` superlinear: a long whitespace run followed by
     // more non-whitespace content, so `\s*#*\s*$` cannot succeed until `.*?` has grown past it all.
-    write(repoRoot, "docs/keiko-editor/big.md", `## a${" ".repeat(20000)}b\n`);
-
-    const start = Date.now();
-    const result = check({ repoRoot, files: ["packages/keiko-editor/README.md"] });
-    expect(Date.now() - start).toBeLessThan(300);
-    expect(result).toMatchObject({ ok: true, failures: [] });
+    expectLinearGrowth((size) => {
+      const { repoRoot } = makeSandbox();
+      write(
+        repoRoot,
+        "packages/keiko-editor/README.md",
+        "# Package\n\n[Runbook](../../docs/keiko-editor/big.md#a-b)\n",
+      );
+      write(repoRoot, "docs/keiko-editor/big.md", `## a${" ".repeat(size)}b\n`);
+      return { repoRoot, files: ["packages/keiko-editor/README.md"] };
+    }, 20000);
   });
 
   it("scans a doc file with a pathologically link-shaped body without catastrophic backtracking", () => {
-    const { repoRoot } = makeSandbox();
     // Shape that made the previous `[^\]]*`/`[^)\s]+` superlinear: many repeated `[` characters,
     // none of which ever closes, forcing a full O(n) consume-then-backtrack at every position.
-    write(
-      repoRoot,
-      "packages/keiko-editor/README.md",
-      `${"[".repeat(20000)}\n\n[real](../../docs/keiko-editor/runbook.md)\n`,
-    );
-    write(repoRoot, "docs/keiko-editor/runbook.md", "# Runbook\n");
-
-    const start = Date.now();
-    const result = check({ repoRoot, files: ["packages/keiko-editor/README.md"] });
-    expect(Date.now() - start).toBeLessThan(300);
-    expect(result).toMatchObject({ ok: true, failures: [] });
+    expectLinearGrowth((size) => {
+      const { repoRoot } = makeSandbox();
+      write(
+        repoRoot,
+        "packages/keiko-editor/README.md",
+        `${"[".repeat(size)}\n\n[real](../../docs/keiko-editor/runbook.md)\n`,
+      );
+      write(repoRoot, "docs/keiko-editor/runbook.md", "# Runbook\n");
+      return { repoRoot, files: ["packages/keiko-editor/README.md"] };
+    }, 20000);
   });
 });
