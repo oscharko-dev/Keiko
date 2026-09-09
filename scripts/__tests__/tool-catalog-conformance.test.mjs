@@ -10,6 +10,7 @@ import {
   checkToolCatalogMigrationCloseout,
   checkToolCatalogSemanticNegatives,
   checkH1HandoffEvidence,
+  h1LandingReceiptSemanticFailures,
   h1ProvenanceShapeFailures,
   realProducerIdentityFailures,
   realSourceHeadFailures,
@@ -688,6 +689,7 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
     const deps = {
       provenancePath: "../handoff.json",
       execute: () => "",
+      receiptFailures: () => [],
       sourceHeadFailures: async (_root, record) => {
         visited.push(record.sourceHead);
         return [];
@@ -765,7 +767,12 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
     const errors = await checkH1HandoffEvidence(
       root,
       { landedDevCommit: record.currentHead, landedTreeDigest: record.treeDigest },
-      { execute: () => "", identityFailures: async () => [], sourceHeadFailures: async () => [] },
+      {
+        execute: () => "",
+        identityFailures: async () => [],
+        receiptFailures: () => [],
+        sourceHeadFailures: async () => [],
+      },
     );
     expect(errors).toEqual([]);
   });
@@ -786,6 +793,57 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
       "H1 producer checkpoint invalid verification reference: expected a pinned local receipt",
       "H1 producer checkpoint invalid review reference: expected a pinned local receipt",
     ]);
+  });
+  it("accepts only the exact body-free H1 landing receipt schemas", () => {
+    const record = JSON.parse(readFileSync(join(ROOT, H1_PROVENANCE_PATH), "utf8"));
+    const verification = JSON.parse(
+      readFileSync(join(ROOT, "docs/qa/evidence/h1-verification.v1.json"), "utf8"),
+    );
+    const review = JSON.parse(
+      readFileSync(join(ROOT, "docs/qa/evidence/h1-review.v1.json"), "utf8"),
+    );
+    expect(h1LandingReceiptSemanticFailures(verification, record, "verification")).toEqual([]);
+    expect(h1LandingReceiptSemanticFailures(review, record, "review")).toEqual([]);
+    expect(
+      h1LandingReceiptSemanticFailures({ ...verification, rawOutput: "forbidden" }, record, "verification"),
+    ).toEqual(["H1 landing verification receipt malformed: unexpected top-level fields"]);
+    expect(
+      h1LandingReceiptSemanticFailures({ ...review, rawComment: "forbidden" }, record, "review"),
+    ).toEqual(["H1 landing review receipt malformed: unexpected top-level fields"]);
+  });
+  it("rejects incomplete checks, divergent trees, unresolved reviews, and catalog drift", () => {
+    const record = JSON.parse(readFileSync(join(ROOT, H1_PROVENANCE_PATH), "utf8"));
+    const verification = JSON.parse(
+      readFileSync(join(ROOT, "docs/qa/evidence/h1-verification.v1.json"), "utf8"),
+    );
+    const review = JSON.parse(
+      readFileSync(join(ROOT, "docs/qa/evidence/h1-review.v1.json"), "utf8"),
+    );
+    const incompleteChecks = {
+      ...verification,
+      requiredChecks: { ...verification.requiredChecks, pending: 1 },
+    };
+    const divergentTree = { ...verification, currentTree: "0".repeat(40) };
+    const unresolvedReview = {
+      ...review,
+      reviewThreads: { ...review.reviewThreads, currentUnresolved: 1 },
+    };
+    const driftedBinding = {
+      ...review,
+      binding: { ...review.binding, handlerSetDigest: "0".repeat(64) },
+    };
+    expect(h1LandingReceiptSemanticFailures(incompleteChecks, record, "verification")).toContain(
+      "H1 landing verification receipt required-check settlement mismatch",
+    );
+    expect(h1LandingReceiptSemanticFailures(divergentTree, record, "verification")).toContain(
+      "H1 landing verification receipt Git tree identity mismatch",
+    );
+    expect(h1LandingReceiptSemanticFailures(unresolvedReview, record, "review")).toContain(
+      "H1 landing review receipt thread settlement mismatch",
+    );
+    expect(h1LandingReceiptSemanticFailures(driftedBinding, record, "review")).toContain(
+      "H1 landing review receipt catalog binding mismatch",
+    );
   });
   it("fails closed on an identity mismatch against the current producer", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-h1-evidence-"));
@@ -987,6 +1045,7 @@ describe("review 3941891302: sourceHead must resolve against real Git and bind t
       { landedDevCommit: currentHead, landedTreeDigest: treeDigest },
       {
         identityFailures: async () => [],
+        receiptFailures: () => [],
         sourceHeadFailures: (r, rec, exec) => realSourceHeadFailures(r, rec, exec, ownedPaths),
       },
     );

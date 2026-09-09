@@ -407,22 +407,28 @@ readiness and tests under #3386; only #3414 owns its later model-visible project
 order does not require a separate dev merge, another PR or closure of #3386.
 
 The durable H1 handoff uses `H1Provenance`: `schemaVersion`, `integrationPr` (#3394), `sourceHead`
-(the actual signed H1 checkpoint commit), `treeDigest` (its Git tree identity), `verificationRef`,
+(the final signed PR source commit), `treeDigest` (the SHA-256 identity of the dependency-derived
+H1-owned source closure), `verificationRef`,
 `reviewRef`, `catalogRevision`, `profile`, `projectionDigest`, `handlerSetDigest` and `currentHead`
-(the consuming integration head). Verification and reviewer acceptance reference the actual
-producer checkpoint and its prerequisite #3411 contract. An independent agent review over those
-exact source contents, retained as a durable artifact with its hash, satisfies checkpoint review;
-there is no per-checkpoint external GitHub review or required-check wait. These are development
-evidence, not final release qualification. The consumer verifies that checkpoint's ancestry and the owned source contents against its current tree with existing Git identity and
-evidence helpers. Later producer changes invalidate earlier verification or review acceptance and
-require a fresh checkpoint. A branch name, uncommitted tree, issue status, unrelated green check or
-assumed cherry-pick is insufficient. No placeholder reference qualifies a consumer.
+(GitHub's dev-reachable merge commit). Verification and reviewer acceptance reference the actual
+producer source and its prerequisite #3411 contract. Before integration, the consumer verifies
+producer-to-consumer ancestry and the owned source contents with existing Git identity and evidence
+helpers. Later producer changes invalidate earlier verification or review acceptance and require a
+fresh checkpoint. A branch name, uncommitted tree, issue status, unrelated green check or assumed
+cherry-pick is insufficient. No placeholder reference qualifies a consumer.
 
-Final exact-head required-check evidence and GitHub's actual merge commit/tree are recorded only
-when they exist, under the owner-controlled final PR #3394 delivery. They are not fabricated as
-prerequisites to an in-PR checkpoint. H1 provenance survives removal of the temporary pending-H1
-migration entry, is independently revalidated by #3415, and never enters a semantic projection
-digest. #3390 consumes the retained closeout reference before live qualification.
+PR #3394 was squash-merged to `dev` as `96188897e245d8fa5f02949e8655854ad08a7e86` from final
+signed source `41aeca96072d30de30d6bf84e1102c1efece65b3`. Squash integration deliberately does not claim
+commit ancestry between those identities. The postmerge receipt instead binds both commits to the
+same complete Git tree `69523c6020188993fa26368a7a58570b80825847`, re-derives the owned-source
+digest at the dev-reachable merge, and pins the source-head required checks and settled GitHub
+review threads. The final source refresh was required because the dependency-derived H1 closure
+grew after the earlier intermediate checkpoint. The verification and review receipts are body-free,
+exact-schema JSON whose bytes are SHA-256-pinned by `H1Provenance`; extra fields, incomplete checks,
+unresolved current review threads, identity drift, or a mismatched merge tree fail closed. H1
+provenance survives removal of the temporary pending-H1 migration entry, is independently
+revalidated by #3415, and never enters a semantic projection digest. #3390 consumes the retained
+closeout reference before live qualification.
 
 
 ## Migration, verification and consequences
@@ -463,4 +469,5 @@ schema drift, false readiness and competing authority systems.
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.1 | 2026-09-09 | Record the completed #3394 squash-delivery semantics: final signed source and dev-reachable merge are distinct identities with equal complete Git trees; pin exact-schema required-check and review-settlement receipts and the refreshed owned-source closure (#3414, #3415). |
 | 1.0 | 2026-09-04 | Accept the governed-tool ownership, pure package boundary, version/digest/result/state/evidence contract and workspace-only coding raw-coordinate lane (#3411); implementation belongs to the named delivery owners. Consolidate delivery into owner-selected PR #3394 with reviewed producer checkpoints instead of dedicated dev merges. |

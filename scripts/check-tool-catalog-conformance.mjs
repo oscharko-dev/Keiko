@@ -432,7 +432,9 @@ function validRequiredChecks(value, sourceHead) {
     hasExactFields(value, REQUIRED_CHECK_FIELDS) &&
     value.sourceHead === sourceHead &&
     isPositiveInteger(value.configured) &&
+    Number.isSafeInteger(value.satisfied) &&
     value.satisfied === value.configured &&
+    Number.isSafeInteger(value.successfulEvidenceRuns) &&
     value.successfulEvidenceRuns >= value.satisfied &&
     value.failed === 0 &&
     value.pending === 0 &&
@@ -443,9 +445,9 @@ function validRequiredChecks(value, sourceHead) {
 }
 
 function verificationReceiptFailures(receipt, record) {
-  const failures = [];
   if (!hasExactFields(receipt, VERIFICATION_RECEIPT_FIELDS))
-    failures.push("H1 landing verification receipt malformed: unexpected top-level fields");
+    return ["H1 landing verification receipt malformed: unexpected top-level fields"];
+  const failures = [];
   if (!validLandingReceiptIdentity(receipt, record, "verification"))
     failures.push("H1 landing verification receipt identity mismatch");
   if (
@@ -455,6 +457,8 @@ function verificationReceiptFailures(receipt, record) {
     !isIsoInstant(receipt.mergedAt)
   )
     failures.push("H1 landing verification receipt integration metadata mismatch");
+  if (!HEX_40.test(receipt.sourceTree) || receipt.sourceTree !== receipt.currentTree)
+    failures.push("H1 landing verification receipt Git tree identity mismatch");
   if (!validManagedVerification(receipt.managedVerification))
     failures.push("H1 landing verification receipt has no passing managed verification");
   if (!validRequiredChecks(receipt.requiredChecks, record.sourceHead))
@@ -493,9 +497,9 @@ function validReviewThreads(value, sourceHead) {
 }
 
 function reviewReceiptFailures(receipt, record) {
-  const failures = [];
   if (!hasExactFields(receipt, REVIEW_RECEIPT_FIELDS))
-    failures.push("H1 landing review receipt malformed: unexpected top-level fields");
+    return ["H1 landing review receipt malformed: unexpected top-level fields"];
+  const failures = [];
   if (!validLandingReceiptIdentity(receipt, record, "review"))
     failures.push("H1 landing review receipt identity mismatch");
   if (receipt.reviewKind !== "postmerge-github-review-settlement")
@@ -522,16 +526,20 @@ function landingTreeFailures(root, receipt, record, execute) {
   return [];
 }
 
+export function h1LandingReceiptSemanticFailures(receipt, record, kind) {
+  return kind === "verification"
+    ? verificationReceiptFailures(receipt, record)
+    : reviewReceiptFailures(receipt, record);
+}
+
 function landingReceiptFailures(root, record, kind, execute) {
   const result = readCheckpointReceipt(root, record, kind);
   if (result.receipt === null || result.failures.length > 0) return result.failures;
-  const failures =
-    kind === "verification"
-      ? verificationReceiptFailures(result.receipt, record)
-      : reviewReceiptFailures(result.receipt, record);
+  const failures = h1LandingReceiptSemanticFailures(result.receipt, record, kind);
+  if (failures.length > 0) return failures;
   return kind === "verification"
-    ? [...failures, ...landingTreeFailures(root, result.receipt, record, execute)]
-    : failures;
+    ? landingTreeFailures(root, result.receipt, record, execute)
+    : [];
 }
 
 function readCheckpointReceipt(root, record, kind) {
@@ -796,8 +804,8 @@ async function landedEvidenceFailures(root, landedDevCommit, landedTreeDigest, d
   ];
   if (identityFailures.length > 0) return identityFailures;
   return [
-    ...landingReceiptFailures(root, record, "verification", deps.execute),
-    ...landingReceiptFailures(root, record, "review", deps.execute),
+    ...deps.receiptFailures(root, record, "verification", deps.execute),
+    ...deps.receiptFailures(root, record, "review", deps.execute),
   ];
 }
 
@@ -807,6 +815,7 @@ export async function checkH1HandoffEvidence(
   {
     execute = execFileSync,
     identityFailures = realProducerIdentityFailures,
+    receiptFailures = landingReceiptFailures,
     sourceHeadFailures = realSourceHeadFailures,
     provenancePath = H1_PROVENANCE_PATH,
   } = {},
@@ -820,6 +829,7 @@ export async function checkH1HandoffEvidence(
   return landedEvidenceFailures(repositoryRoot, landedDevCommit, landedTreeDigest, {
     execute,
     identityFailures,
+    receiptFailures,
     sourceHeadFailures,
     provenancePath,
   });

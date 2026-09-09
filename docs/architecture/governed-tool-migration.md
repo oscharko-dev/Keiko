@@ -117,24 +117,27 @@ hand-edited) and carries exactly six fields: `owner` (#3386), `canonicalTool`
 (`{canonicalId: "keiko.repo.search", contractVersion: 1}`), `prerequisiteMerge` (the #3411
 architecture checkpoint this entry depends on, identified by the same `sourceContractDigest` this
 migration document already computes for `governed-tool-contract.v1.json`), `removalIssue` (#3414)
-and, initially empty, `landedDevCommit`/`landedTreeDigest`. This entry alone grants no allowlist
+and `landedDevCommit`/`landedTreeDigest`. Those landing fields were initially empty; after PR #3394
+merged they were source-pinned to the dev-reachable squash commit
+`96188897e245d8fa5f02949e8655854ad08a7e86` and the producer-derived H1-owned-source digest
+`4a13a6f50e50acc58fa13262e8689032d1acd83deaf862577e3e88173f55d519`. This entry alone grants no allowlist
 exception, is read by no dispatch or authority path, and does not itself make
 `keiko_repository_search` model-visible: that projection is #3414's own catalog registration
 (`opencodeRegistrationSet()` in `packages/keiko-tool-catalog/src/opencode.ts`), which consumes
 #3386's already-implemented and server-mounted H1 handler directly, under this epic's single
-integration-branch delivery model rather than a separate per-issue merge to `dev`. The two
-identity fields this entry still leaves empty — `landedDevCommit`/`landedTreeDigest` — remain for
-the durable, separately-owned dev-landing provenance described below; populating them is not a
-precondition for #3414's own projection work. #3414 records
-`H1Provenance` for the signed producer commit and Git tree in PR #3394, with applicable verification
-and producing-reviewer acceptance references. Checkpoint review may be an independent agent's
-review of the exact producer contents with a retained artifact/hash; it requires no intermediate
-external GitHub review or required-check cycle and makes no final release claim. It verifies
-ancestry and owned source contents in the consuming head using existing Git identity/evidence helpers before removing the temporary entry.
+integration-branch delivery model rather than a separate per-issue merge to `dev`. #3414 records
+`H1Provenance` for final signed source `41aeca96072d30de30d6bf84e1102c1efece65b3`
+and GitHub's dev-reachable merge `96188897e245d8fa5f02949e8655854ad08a7e86`, with applicable
+verification and producing-reviewer acceptance references. The final source replaces the earlier
+intermediate checkpoint because the dependency-derived H1 closure gained another owned path before
+the PR froze. The source and squash merge resolve to the same complete Git tree even though squash
+integration does not preserve commit ancestry. Checkpoint review may be an independent agent's
+review of the exact producer contents with a retained artifact/hash; final delivery additionally
+pins GitHub's source-head required checks and review-thread settlement.
 Producer changes require fresh verification and review evidence. Durable provenance survives,
 is independently revalidated by #3415, and is not a projection-digest input. Final required-check
-and actual GitHub merge evidence are recorded only after they exist; no separate dev PR or merge
-is needed for this producer/consumer handoff.
+and actual GitHub merge evidence are now recorded because they exist; no separate dev PR or merge
+was needed for this producer/consumer handoff.
 
 #3415 independently revalidates the pre-merge producer through `checkH1ProducerCheckpoint`
 inside `checkToolCatalogMigrationCloseout`. A durable `H1Provenance` record at
@@ -157,7 +160,11 @@ UTF-8 bytes and byte-order marks instead of collapsing them during text decoding
 The separately retained post-merge validator, `checkH1HandoffEvidence`, requires both
 `landedDevCommit` and `landedTreeDigest` together when either is populated. It checks the actual
 `docs/architecture/h1-provenance.v1.json` record against those fields, a real dev-reachable merge
-commit, source and consuming owned contents, and the current producer identity. Its
+commit, source and consuming owned contents, and the current producer identity. It also requires
+SHA-256-pinned local receipts with exact body-free schemas. The verification receipt binds the
+historical PR source, equal source/merge Git trees, passing managed verification and a complete
+required-check settlement; the review receipt binds the catalog/profile/projection/handler
+identities and requires every current review thread to be resolved. Its
 `handlerSetDigest` is shape-checked here; the actual bound handler set is a server-composition
 fact and must be established by the referenced runtime evidence. For a fresh clone after squash/rebase, fetch the retained PR source history with
 `git fetch origin refs/pull/3394/head` before explicitly rerunning the historical checkpoint gate.
