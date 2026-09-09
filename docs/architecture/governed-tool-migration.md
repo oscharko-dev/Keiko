@@ -236,6 +236,18 @@ separately. The postmerge record is not sent through the checkpoint's linear anc
 a truthful squash/rebase source and merge are distinct histories; its exact receipt instead proves
 their complete Git-tree equality. A checkpoint reference cannot be presented as landed provenance.
 
+Run the closeout where its source head is reachable. `sourceHead` names PR #3394's reviewed
+head, and that squash landing leaves the commit orphaned: no branch or tag reaches it, so a
+clone that has never fetched `refs/pull/3394/head` does not carry the object at all — a hosted
+`fetch-depth: 0` checkout included, because depth zero clones every ref, not every orphaned
+commit. The recheck resolves that head against real Git and fails closed when it cannot, which
+is why `arch:check` deliberately runs the conformance gate without `--closeout`: the closeout is
+a local qualification run. What every clone can still verify is the binding that matters — the
+owned-source digest recomputed at the dev-reachable `currentHead` must equal the declared
+`treeDigest`, so a fabricated digest fails everywhere. To complete the source-head half from a
+fresh clone, fetch the durable pull-request ref named in the receipt's `evidenceRef` first:
+`git fetch origin refs/pull/3394/head`.
+
 Each named check uses the existing `.receipt.json`/`.artifact` reader. Structured reports are
 parsed from the same bytes whose digest the reader retains. They carry only exact source/package
 digests, actual platform/runtime, closed execution/status values, counts and binding identities.
