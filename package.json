@@ -264,7 +264,7 @@
     "@types/ws": "^8.18.1",
     "@types/yauzl": "^3.4.0",
     "@typescript/native": "npm:typescript@~7.0.2",
-    "@vitejs/plugin-react": "6.0.5",
+    "@vitejs/plugin-react": "6.1.1",
     "@vitest/coverage-v8": "^4.1.11",
     "acorn": "^8.16.0",
     "corepack": "0.35.0",
