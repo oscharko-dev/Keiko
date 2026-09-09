@@ -10,7 +10,7 @@ const repoRoot = resolve(here, "..", "..");
 const workflow = readFileSync(resolve(repoRoot, ".github/workflows/workflow-hygiene.yml"), "utf8");
 const config = readFileSync(resolve(repoRoot, ".github/zizmor.yml"), "utf8");
 
-const ZIZMOR_ACTION_SHA = "3dc1ecc9bcb9e94e9b2c709687979e1298497054";
+const ZIZMOR_ACTION_SHA = "70fb788f84895a7701f5643d103d587e460b5c99";
 
 // The job these assertions moved from contained zizmor and nothing else; the one they moved to runs
 // four tools. Scoping to the step keeps the pin as tight as it was: another step carrying
