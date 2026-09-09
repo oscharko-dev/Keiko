@@ -294,13 +294,20 @@ function completeArchitectureSensorReceipt(lines, specification) {
   return isComplete && receipt !== undefined ? { ...evidence, receipt } : undefined;
 }
 
+// The architecture pipeline must be closed and ordered WITHIN itself: the source analysis
+// reported a completion at all, the JS sensor finished before the TS sensor began, the upload
+// followed both, and the scanner then succeeded. Where the analyzed-source line lands relative to
+// the first sensor is NOT part of that proof: the scanner's producers interleave, and PR #3434's
+// second run printed "4856/4856 source files have been analyzed" after JsArchitectureSensor had
+// already started, with a complete and correctly ordered architecture pipeline. Requiring that
+// position rejected a full-project graph on log interleaving alone, so it is not required; the
+// line's existence still is.
 function architectureSequenceIsClosed(sourceIndex, sensors, uploadIndex, completionIndex) {
   const jsSensor = sensors[0];
   const tsSensor = sensors[1];
   if (jsSensor === undefined || tsSensor === undefined) return false;
   return [
     sourceIndex >= 0,
-    sourceIndex < jsSensor.startIndex,
     jsSensor.completionIndex < tsSensor.startIndex,
     tsSensor.completionIndex < uploadIndex,
     uploadIndex < completionIndex,

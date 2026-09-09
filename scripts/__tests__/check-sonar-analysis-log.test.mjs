@@ -16,6 +16,15 @@ const scanner81PrFullLog = readFileSync(
   resolve(import.meta.dirname, "fixtures", "sonar-analysis", "scanner-8.1-pr-full.txt"),
   "utf8",
 );
+const scanner81PrInterleavedSourceProgressLog = readFileSync(
+  resolve(
+    import.meta.dirname,
+    "fixtures",
+    "sonar-analysis",
+    "scanner-8.1-pr-interleaved-source-progress.txt",
+  ),
+  "utf8",
+);
 const scanner81PrUnchangedSourcesLog = readFileSync(
   resolve(
     import.meta.dirname,
@@ -185,6 +194,44 @@ describe("Sonar scanner warning gate", () => {
   // rejected every such log.
   it("accepts the sensor-scoped receipts of a PR whose taint analysis skipped unchanged sources", () => {
     expect(fullAnalysisEvidenceFailures(scanner81PrUnchangedSourcesLog)).toEqual([]);
+  });
+
+  // Same PR (#3434), a later run: the scanner printed "4856/4856 source files have been analyzed"
+  // AFTER the JsArchitectureSensor had already started, because those producers interleave. The
+  // architecture pipeline itself was complete and correctly ordered. Where a line lands relative to
+  // a concurrent producer is not evidence, so the sequence check no longer requires the analyzed-
+  // source line to precede the first sensor; it still requires that line to exist, both sensors to
+  // close in order, and the upload to follow them and precede EXECUTION SUCCESS.
+  it("accepts receipts whose analyzed-source progress interleaves into the first sensor", () => {
+    expect(fullAnalysisEvidenceFailures(scanner81PrInterleavedSourceProgressLog)).toEqual([]);
+  });
+
+  it.each([
+    [
+      "a missing analyzed-source progress line",
+      scanner81PrInterleavedSourceProgressLog.replace(
+        "4856/4856 source files have been analyzed",
+        "",
+      ),
+    ],
+    [
+      "an architecture upload that precedes the last sensor",
+      scanner81PrInterleavedSourceProgressLog
+        .replace("Successfully sent architecture data\n", "")
+        .replace(
+          "Sensor TsArchitectureSensor [architecture]\n",
+          "Successfully sent architecture data\nSensor TsArchitectureSensor [architecture]\n",
+        ),
+    ],
+    [
+      "sensors that ran out of order",
+      scanner81PrInterleavedSourceProgressLog
+        .replaceAll("JsArchitectureSensor", "TMP")
+        .replaceAll("TsArchitectureSensor", "JsArchitectureSensor")
+        .replaceAll("TMP", "TsArchitectureSensor"),
+    ],
+  ])("still rejects the interleaved log with %s", (_name, contents) => {
+    expect(fullAnalysisEvidenceFailures(contents)).not.toEqual([]);
   });
 
   it.each([
