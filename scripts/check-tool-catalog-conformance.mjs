@@ -205,6 +205,9 @@ export async function checkToolCatalogMigrationCloseout(
 // otherwise declare a nonexistent `sourceHead` and a fabricated `treeDigest` and pass unchecked).
 export const H1_PROVENANCE_PATH = "docs/architecture/h1-provenance.v1.json";
 export const H1_PRODUCER_CHECKPOINT_PATH = "docs/architecture/h1-producer-checkpoint.v1.json";
+const H1_INTEGRATION_REPOSITORY = "oscharko-dev/Keiko";
+const H1_INTEGRATION_PR = 3394;
+const H1_OWNER_ISSUE = 3386;
 const HEX_64 = /^[a-f0-9]{64}$/u;
 const HEX_40 = /^[a-f0-9]{40}$/u;
 
@@ -315,6 +318,8 @@ function checkpointAncestorFailures(root, record, execute) {
 
 function acceptedCheckpointReceipt(receipt, record, kind) {
   return (
+    typeof receipt === "object" &&
+    receipt !== null &&
     receipt.schemaVersion === 1 &&
     receipt.status === (kind === "verification" ? "verified" : "accepted") &&
     receipt.sourceHead === record.sourceHead &&
@@ -322,23 +327,246 @@ function acceptedCheckpointReceipt(receipt, record, kind) {
   );
 }
 
-function checkpointReceiptFailures(root, record, kind) {
+function hasExactFields(value, expected) {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const actual = Object.keys(value).sort(compareStrings);
+  const sortedExpected = [...expected].sort(compareStrings);
+  return (
+    actual.length === sortedExpected.length &&
+    sortedExpected.every((field, index) => field === actual[index])
+  );
+}
+
+function isPositiveInteger(value) {
+  return Number.isSafeInteger(value) && value > 0;
+}
+
+function isIsoInstant(value) {
+  return (
+    typeof value === "string" &&
+    Number.isFinite(Date.parse(value)) &&
+    new Date(value).toISOString() === value
+  );
+}
+
+const VERIFICATION_RECEIPT_FIELDS = Object.freeze([
+  "schemaVersion",
+  "status",
+  "verificationKind",
+  "repository",
+  "integrationPr",
+  "sourceHead",
+  "currentHead",
+  "sourceTree",
+  "currentTree",
+  "ownedSourceDigest",
+  "baseRef",
+  "baseHead",
+  "mergedAt",
+  "managedVerification",
+  "requiredChecks",
+]);
+const MANAGED_VERIFICATION_FIELDS = Object.freeze(["testFiles", "testCount", "result"]);
+const REQUIRED_CHECK_FIELDS = Object.freeze([
+  "sourceHead",
+  "configured",
+  "satisfied",
+  "successfulEvidenceRuns",
+  "failed",
+  "pending",
+  "requirementsDigest",
+  "evidenceDigest",
+  "evidenceRef",
+]);
+const REVIEW_RECEIPT_FIELDS = Object.freeze([
+  "schemaVersion",
+  "status",
+  "reviewKind",
+  "repository",
+  "integrationPr",
+  "ownerIssue",
+  "sourceHead",
+  "currentHead",
+  "ownedSourceDigest",
+  "binding",
+  "reviewThreads",
+]);
+const BINDING_FIELDS = Object.freeze([
+  "catalogRevision",
+  "profile",
+  "projectionDigest",
+  "handlerSetDigest",
+]);
+const REVIEW_THREAD_FIELDS = Object.freeze([
+  "total",
+  "resolved",
+  "unresolved",
+  "current",
+  "currentResolved",
+  "currentUnresolved",
+  "evidenceRef",
+]);
+
+function validLandingReceiptIdentity(receipt, record, kind) {
+  return (
+    acceptedCheckpointReceipt(receipt, record, kind) &&
+    receipt.repository === H1_INTEGRATION_REPOSITORY &&
+    receipt.integrationPr === H1_INTEGRATION_PR &&
+    receipt.currentHead === record.currentHead
+  );
+}
+
+function validManagedVerification(value) {
+  return (
+    hasExactFields(value, MANAGED_VERIFICATION_FIELDS) &&
+    isPositiveInteger(value.testFiles) &&
+    isPositiveInteger(value.testCount) &&
+    value.result === "passed"
+  );
+}
+
+function validRequiredChecks(value, sourceHead) {
+  const evidenceRef =
+    `github:${H1_INTEGRATION_REPOSITORY}#pull/${String(H1_INTEGRATION_PR)}/checks@${sourceHead}`;
+  return (
+    hasExactFields(value, REQUIRED_CHECK_FIELDS) &&
+    value.sourceHead === sourceHead &&
+    isPositiveInteger(value.configured) &&
+    value.satisfied === value.configured &&
+    value.successfulEvidenceRuns >= value.satisfied &&
+    value.failed === 0 &&
+    value.pending === 0 &&
+    HEX_64.test(value.requirementsDigest) &&
+    HEX_64.test(value.evidenceDigest) &&
+    value.evidenceRef === evidenceRef
+  );
+}
+
+function verificationReceiptFailures(receipt, record) {
+  const failures = [];
+  if (!hasExactFields(receipt, VERIFICATION_RECEIPT_FIELDS))
+    failures.push("H1 landing verification receipt malformed: unexpected top-level fields");
+  if (!validLandingReceiptIdentity(receipt, record, "verification"))
+    failures.push("H1 landing verification receipt identity mismatch");
+  if (
+    receipt.verificationKind !== "postmerge-source-head-and-required-ci" ||
+    receipt.baseRef !== "dev" ||
+    !HEX_40.test(receipt.baseHead) ||
+    !isIsoInstant(receipt.mergedAt)
+  )
+    failures.push("H1 landing verification receipt integration metadata mismatch");
+  if (!validManagedVerification(receipt.managedVerification))
+    failures.push("H1 landing verification receipt has no passing managed verification");
+  if (!validRequiredChecks(receipt.requiredChecks, record.sourceHead))
+    failures.push("H1 landing verification receipt required-check settlement mismatch");
+  return failures;
+}
+
+function validReviewBinding(value, record) {
+  return (
+    hasExactFields(value, BINDING_FIELDS) &&
+    value.catalogRevision === record.catalogRevision &&
+    hasExactFields(value.profile, ["id", "version"]) &&
+    value.profile.id === record.profile.id &&
+    value.profile.version === record.profile.version &&
+    value.projectionDigest === record.projectionDigest &&
+    value.handlerSetDigest === record.handlerSetDigest
+  );
+}
+
+function validReviewThreads(value, sourceHead) {
+  const evidenceRef =
+    `github:${H1_INTEGRATION_REPOSITORY}#pull/${String(H1_INTEGRATION_PR)}/review-threads@${sourceHead}`;
+  return (
+    hasExactFields(value, REVIEW_THREAD_FIELDS) &&
+    Number.isSafeInteger(value.total) &&
+    value.total > 0 &&
+    value.resolved === value.total &&
+    value.unresolved === 0 &&
+    Number.isSafeInteger(value.current) &&
+    value.current > 0 &&
+    value.current <= value.total &&
+    value.currentResolved === value.current &&
+    value.currentUnresolved === 0 &&
+    value.evidenceRef === evidenceRef
+  );
+}
+
+function reviewReceiptFailures(receipt, record) {
+  const failures = [];
+  if (!hasExactFields(receipt, REVIEW_RECEIPT_FIELDS))
+    failures.push("H1 landing review receipt malformed: unexpected top-level fields");
+  if (!validLandingReceiptIdentity(receipt, record, "review"))
+    failures.push("H1 landing review receipt identity mismatch");
+  if (receipt.reviewKind !== "postmerge-github-review-settlement")
+    failures.push("H1 landing review receipt kind mismatch");
+  if (receipt.ownerIssue !== H1_OWNER_ISSUE)
+    failures.push("H1 landing review receipt owner mismatch");
+  if (!validReviewBinding(receipt.binding, record))
+    failures.push("H1 landing review receipt catalog binding mismatch");
+  if (!validReviewThreads(receipt.reviewThreads, record.sourceHead))
+    failures.push("H1 landing review receipt thread settlement mismatch");
+  return failures;
+}
+
+function landingTreeFailures(root, receipt, record, execute) {
+  const currentTree = resolveCommitTreeId(record.currentHead, root, execute);
+  if (currentTree === null)
+    return ["H1 landing verification receipt current Git tree is not resolvable"];
+  if (
+    !HEX_40.test(receipt.sourceTree) ||
+    receipt.sourceTree !== receipt.currentTree ||
+    receipt.currentTree !== currentTree
+  )
+    return ["H1 landing verification receipt Git tree identity mismatch"];
+  return [];
+}
+
+function landingReceiptFailures(root, record, kind, execute) {
+  const result = readCheckpointReceipt(root, record, kind);
+  if (result.receipt === null || result.failures.length > 0) return result.failures;
+  const failures =
+    kind === "verification"
+      ? verificationReceiptFailures(result.receipt, record)
+      : reviewReceiptFailures(result.receipt, record);
+  return kind === "verification"
+    ? [...failures, ...landingTreeFailures(root, result.receipt, record, execute)]
+    : failures;
+}
+
+function readCheckpointReceipt(root, record, kind) {
   const receiptPath = `docs/qa/evidence/h1-${kind}.v1.json`;
   const ref = kind === "verification" ? record.verificationRef : record.reviewRef;
   const prefix = `${receiptPath}#sha256=`;
   if (!ref.startsWith(prefix) || !HEX_64.test(ref.slice(prefix.length)))
-    return [`H1 producer checkpoint invalid ${kind} reference: expected a pinned local receipt`];
+    return {
+      receipt: null,
+      failures: [
+        `H1 producer checkpoint invalid ${kind} reference: expected a pinned local receipt`,
+      ],
+    };
   try {
     const bytes = readFileSync(join(root, receiptPath), "utf8");
     if (sha256Hex(bytes) !== ref.slice(prefix.length))
-      return [`H1 producer checkpoint stale ${kind} receipt: content digest mismatch`];
-    const receipt = JSON.parse(bytes);
-    if (!acceptedCheckpointReceipt(receipt, record, kind))
-      return [`H1 producer checkpoint invalid ${kind} receipt: source or acceptance mismatch`];
-    return [];
+      return {
+        receipt: null,
+        failures: [`H1 producer checkpoint stale ${kind} receipt: content digest mismatch`],
+      };
+    return { receipt: JSON.parse(bytes), failures: [] };
   } catch {
-    return [`H1 producer checkpoint missing or malformed ${kind} receipt`];
+    return {
+      receipt: null,
+      failures: [`H1 producer checkpoint missing or malformed ${kind} receipt`],
+    };
   }
+}
+
+function checkpointReceiptFailures(root, record, kind) {
+  const result = readCheckpointReceipt(root, record, kind);
+  if (result.receipt === null || result.failures.length > 0) return result.failures;
+  return acceptedCheckpointReceipt(result.receipt, record, kind)
+    ? []
+    : [`H1 producer checkpoint invalid ${kind} receipt: source or acceptance mismatch`];
 }
 
 function checkpointWorktreeFailures(root, execute, ownedPaths) {
@@ -568,8 +796,8 @@ async function landedEvidenceFailures(root, landedDevCommit, landedTreeDigest, d
   ];
   if (identityFailures.length > 0) return identityFailures;
   return [
-    ...checkpointReceiptFailures(root, record, "verification"),
-    ...checkpointReceiptFailures(root, record, "review"),
+    ...landingReceiptFailures(root, record, "verification", deps.execute),
+    ...landingReceiptFailures(root, record, "review", deps.execute),
   ];
 }
 
