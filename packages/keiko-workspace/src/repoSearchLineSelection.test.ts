@@ -5,6 +5,7 @@ import {
   collectBestLines,
   looksLikeBlockHeader,
   looksLikeSignatureStart,
+  looksLikeTypedCallStart,
 } from "./repoSearchLineSelection.js";
 
 describe("collectBestLines", () => {
@@ -475,7 +476,7 @@ describe("looksLikeSignatureStart", () => {
   });
 
   // Same S8786 shape as `looksLikeBlockHeader`'s type-prefix regression, reached via this
-  // function's own `(?:[A-Za-z_$][\w$<>,.[\]?]*\s+)+` fallback regex (used when the keyword and
+  // function's own typed-call fallback (used when the keyword and
   // `looksLikeBlockHeader` branches don't match). Never contains `(`, so the whole pattern must
   // fail. Against the pre-fix pattern (unbounded type-prefix class inside the repeated group)
   // this showed the same clean ~4x-per-doubling quadratic growth as the `looksLikeBlockHeader`
@@ -484,5 +485,97 @@ describe("looksLikeSignatureStart", () => {
   // lengths measured under the same load, never as an absolute wall-clock budget.
   it("resolves an adversarial comma-separated no-paren line in linear time", () => {
     assertLinearGrowth(looksLikeSignatureStart, (units) => "a,".repeat(units) + ";z", 20_000);
+  });
+
+  // Fourth S8786 regression. Bounding the type-token class to `{0,2000}` capped ONE repetition of
+  // the `(?:…\s+)+` group; a plain `.test()` still retried the whole group from every
+  // word-boundary start, and each retry greedily re-consumed every remaining token before
+  // backtracking across repetitions. Chunks of 1,999 identifier characters plus one space (just
+  // under the cap, exactly one word-boundary start each) with no `(` anywhere showed ~4x per
+  // doubling against the regex (742ms/2,939ms/11,811ms at 500/1,000/2,000 chunks) and a
+  // `RangeError: Maximum call stack size exceeded` inside `RegExp.test` at 4,000 chunks. The
+  // comma-list line above never reached this: it has no whitespace, so only one repetition ever
+  // matched. `looksLikeTypedCallStart` now evaluates the same predicate in one pass.
+  // 1,600 chunks, not the 200 that first reproduced the finding: below ~20 ms `assertLinearGrowth`
+  // falls back to its noise floor and the comparison degrades into an absolute 60 ms budget, which
+  // would accept a re-introduced quadratic that happens to measure 4 ms and 16 ms. The fixed scan
+  // takes ~27 ms at 1,600 chunks (3.2M characters) and ~54 ms at 3,200 here, so the assertion stays
+  // the growth ratio the helper documents. The retired pattern needed ~19 s for the small sample.
+  it("resolves an adversarial sparse-whitespace chunked no-paren line in linear time", () => {
+    assertLinearGrowth(
+      looksLikeSignatureStart,
+      (units) => ("a".repeat(1_999) + " ").repeat(units),
+      1_600,
+    );
+  });
+
+  // The growth ratio above cannot see the second failure the retired pattern had on this shape:
+  // at 4,000 chunks `RegExp.test` threw `RangeError: Maximum call stack size exceeded` rather than
+  // running slowly. The single-pass scan has no recursion to exhaust, so the same input must simply
+  // return.
+  it("does not overflow the stack on the line that crashed the retired pattern", () => {
+    expect(looksLikeSignatureStart(("a".repeat(1_999) + " ").repeat(4_000))).toBe(false);
+  });
+});
+
+// `looksLikeTypedCallStart` replaces the retired regex with a hand-written linear pass; these two
+// tests pin that the pass accepts exactly what the regex accepted, on the shapes that distinguish
+// its token, word-boundary and call-name rules and on deterministic pseudo-random lines.
+describe("looksLikeTypedCallStart", () => {
+  const retiredPattern = /\b(?:[A-Za-z_$][\w$<>,.[\]?]{0,2000}\s+)+[A-Za-z_$][\w$]*\s*\(/u;
+
+  it("matches the retired pattern on hand-picked token, boundary and name shapes", () => {
+    const lines = [
+      "public void foo(int a, int b)",
+      "Map<String,Object> foo(",
+      "static $foo bar(",
+      "x$foo bar(",
+      "$foo bar(",
+      "foo(bar baz(",
+      "a ,b c(",
+      "1abc foo(",
+      "a $bar(",
+      "a b (",
+      "a\u00a0b(",
+      "Foo.bar(",
+      "x Foo.bar(",
+      "a ( b",
+      "a b",
+      "a b( c(",
+      `${"a".repeat(2_001)} foo(`,
+      `${"a".repeat(2_002)} foo(`,
+      `${"a".repeat(2_002)}$b foo(`,
+      "",
+    ];
+    for (const line of lines) {
+      expect(looksLikeTypedCallStart(line), JSON.stringify(line.slice(0, 40))).toBe(
+        retiredPattern.test(line),
+      );
+    }
+  });
+
+  it("matches the retired pattern on deterministic pseudo-random lines", () => {
+    // Letters, spaces and "(" are over-represented so that the corpus reaches accepting lines.
+    const alphabet = ["a", "a", "b", "B", "_", "$", "1", "<", ">", ",", ".", "[", "]", "?"];
+    alphabet.push(" ", " ", " ", "\t", "(", "(", ")", ";");
+    // Park–Miller minimal standard generator with a fixed seed: hermetic and replayable.
+    let seed = 48_271;
+    const next = (): number => {
+      seed = (seed * 16_807) % 2_147_483_647;
+      return seed;
+    };
+    let accepted = 0;
+    for (let sample = 0; sample < 8_000; sample += 1) {
+      const length = next() % 24;
+      let line = "";
+      for (let position = 0; position < length; position += 1) {
+        line += alphabet[next() % alphabet.length] ?? "";
+      }
+      const expected = retiredPattern.test(line);
+      if (expected) accepted += 1;
+      expect(looksLikeTypedCallStart(line), JSON.stringify(line)).toBe(expected);
+    }
+    // The corpus must exercise both outcomes, or the equivalence claim is vacuous.
+    expect(accepted).toBeGreaterThan(150);
   });
 });
