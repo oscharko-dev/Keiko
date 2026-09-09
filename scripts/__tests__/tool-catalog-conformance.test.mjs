@@ -606,7 +606,13 @@ const VALID_RECORD = Object.freeze({
 describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
   let workDir;
   afterEach(() => {
-    if (workDir !== undefined) rmSync(workDir, { recursive: true, force: true });
+    // `git` writes into this directory from a child process, so a recursive remove can race its
+    // last writes and throw ENOTEMPTY -- `force` only ignores a missing path, it does not retry.
+    // Observed on CI run 34399751761, where the removal, not an assertion, failed the suite. Same
+    // retry the repository already applies wherever a child process wrote the directory being
+    // removed (e.g. gitRepositoryReads.test.ts).
+    if (workDir !== undefined)
+      rmSync(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     workDir = undefined;
   });
   it.each([
@@ -1000,7 +1006,13 @@ describe("#3414 AC7 / #3415 AC5-AC6: H1 dev-handoff evidence recheck", () => {
 describe("review 3941891302: sourceHead must resolve against real Git and bind to the consuming commit", () => {
   let workDir;
   afterEach(() => {
-    if (workDir !== undefined) rmSync(workDir, { recursive: true, force: true });
+    // `git` writes into this directory from a child process, so a recursive remove can race its
+    // last writes and throw ENOTEMPTY -- `force` only ignores a missing path, it does not retry.
+    // Observed on CI run 34399751761, where the removal, not an assertion, failed the suite. Same
+    // retry the repository already applies wherever a child process wrote the directory being
+    // removed (e.g. gitRepositoryReads.test.ts).
+    if (workDir !== undefined)
+      rmSync(workDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     workDir = undefined;
   });
 
