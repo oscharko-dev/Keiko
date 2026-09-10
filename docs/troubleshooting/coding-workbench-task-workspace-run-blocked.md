@@ -608,3 +608,75 @@ grant is recorded; it will not need the decision a second time unless the manife
 Never widen the boundary to avoid the prompt. Granting trust for a manifest you have not looked at
 defeats the only control standing between a rewritten `package.json` and arbitrary code running on
 the machine.
+
+---
+
+## A stage proposal is blocked with `selection-unreviewed`, or a Git tool call fails with `git-execution-failed`
+
+| Field             | Value                                                                                        |
+| ----------------- | -------------------------------------------------------------------------------------------- |
+| Severity          | High                                                                                         |
+| Surface           | Local server / Coding Workbench                                                              |
+| Stable identifier | `selection-unreviewed`, `git-proposal-unknown`, `git-execution-failed`, `git.runtime-action` |
+
+**Symptom**
+
+A run that has just passed verification asks to stage its changes and does not deliver. The activity
+log carries `op: "git.runtime-action"` with `phase: "stage-propose"` on the run's correlation id and
+one of three shapes: `state: "blocked"` with `reason: "selection-unreviewed"` (or `buffers-dirty`,
+`proposal-limit`) and the request's `pathCount`; `state: "refused"` with a `reason` naming the
+condition (`guard-rejected`, `signal-aborted`, `run-not-live`, `mode-unavailable`,
+`proposal-unknown`); or `state: "failed"` at warn level with `errorKind: "internal"`, the thrown
+class and, when the helper threw a closed literal, its `code` (for example
+`git-raw-snapshot-incomplete`). The model sees the same fact: a completed stage result with the
+blocked reason and a fixed recovery instruction, or a failed tool call with `git-proposal-unknown`
+or `git-execution-failed`.
+
+Before 2026-09-10 every one of these surfaced as `state: "unavailable"` and reached the model as
+`git-authority-revoked`. A model told that stops delivering, and the run ends `delivery-not-evidenced`
+(see the entry above) with no line saying why staging was refused.
+
+**Root Cause**
+
+The runtime Git service admits a stage selection against Git's own change list: every requested path
+must be an exact file path the list names as a pending change (or as fully staged already). A path
+that is unchanged, absent, a directory, in conflict, or hidden behind a truncated change list refuses
+the whole selection as `selection-unreviewed`. Until run 13 the admission check reused the
+model-facing diff reader instead and refused whenever that reader had truncated its response — a
+byte budget for a response, not a property of the selection — so eight ordinary files could not be
+staged at all.
+
+`buffers-dirty` means an editor session holds unsaved content for the workspace; `proposal-limit`
+means 64 stage proposals are already open. `git-proposal-unknown` is a redemption of an id the
+service does not hold (never proposed, already redeemed, or expired after five minutes).
+`git-execution-failed` is a Git read or stage helper that threw — the failure line names it.
+
+**Diagnostic Steps**
+
+1. Reconstruct the run's timeline and find the `stage-propose` line(s):
+
+   ```bash
+   keiko support analyze bundle.jsonl --correlation-id <runId> --json
+   ```
+
+2. `state: "blocked"`: read the `reason`. For `selection-unreviewed`, compare the request's
+   `pathCount` with the preceding `git.runtime-action` `status` line's `fileCount` and check whether
+   the model requested directories or paths outside the change list; the model's own next call
+   should be a `keiko_git_status` read, as its guidance says.
+3. `state: "refused"`: the `reason` is the condition that closed the request. `guard-rejected` and
+   `signal-aborted` point at the run's authority or a cancelled tool call, `run-not-live` at a call
+   that arrived after the run settled (the line then carries the unknown correlation id),
+   `proposal-unknown` at a stale id.
+4. `state: "failed"`: read `errorClass`, `code` and the dist-anchored `frames`. A
+   `git-raw-snapshot-incomplete` code means the worktree scan exceeded its content budget and no
+   Git operation can complete until the change set shrinks.
+
+**Resolution**
+
+None of these outcomes needs repair in the run that reported them; each names the next step. A
+selection the model can correct (`selection-unreviewed`, `proposal-unknown`) continues on the
+model's next call. `buffers-dirty` is settled by saving or discarding the editor session's changes.
+A `failed` line with a closed code is a defect in the named helper or a repository the bounds do not
+fit; file it with the timeline. Do not widen the admission rule to admit a path the change list does
+not name: the candidate digest binds exactly the bytes reviewed, and a directory or an unlisted path
+would stage content nobody reviewed.

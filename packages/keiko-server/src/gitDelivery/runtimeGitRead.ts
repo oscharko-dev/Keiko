@@ -284,6 +284,71 @@ async function readSelectedDiffFiles(
   return { files, totalBytes, truncated };
 }
 
+/** One requested stage path as Git's own change list sees it: pending, or fully staged already. */
+export interface StageSelectionChange {
+  readonly path: string;
+  readonly pending: boolean;
+}
+
+/** The operator-facing counts a stage proposal's review carries for an admitted selection. */
+export interface StageSelectionReview {
+  readonly fileCount: number;
+  readonly addedLines: number;
+  readonly deletedLines: number;
+}
+
+/**
+ * Admits a stage selection against Git's own change list, or refuses it whole.
+ *
+ * `propose()` used to reuse the model-facing `runtimeGitDiff` for this and refuse the selection
+ * whenever that reader had truncated — but the reader's byte budget bounds a RESPONSE, not a
+ * selection: eight ordinary files whose rendered hunks exceeded it were refused as unreviewable, and
+ * the run stopped one step after a green verification (Coding Workbench run 13, 2026-09-10). A path
+ * is admitted only when the change list names it exactly — as a pending change, or as a fully staged
+ * one whose no-op the binding keeps by exact path — so directories, unchanged and absent paths,
+ * conflicts, and paths a truncated scan never reached are never admitted, and nothing the scan
+ * observed is refused for its size.
+ */
+export async function admitStageSelection(
+  context: VerifiedCommitRunContext,
+  execution: GitDeliveryExecutionSeams,
+  paths: readonly string[],
+): Promise<readonly StageSelectionChange[] | undefined> {
+  const raw = await readGitRawChanges(runtimeGitReadDeps(context, execution));
+  logDeniedPathExclusion(execution, context.correlationId, raw.deniedPathCount);
+  const changes = new Map(raw.changes.map((change) => [change.path, change]));
+  const admitted: StageSelectionChange[] = [];
+  for (const path of paths) {
+    const change = changes.get(path);
+    if (change === undefined || change.conflicted) return undefined;
+    admitted.push({ path, pending: change.unstaged || change.untracked });
+  }
+  return admitted;
+}
+
+/**
+ * Line counts for an admitted selection, read from each pending path's two sides — the same sides
+ * the diff reader renders, counted whole instead of rendered under a response budget. A fully staged
+ * path contributes nothing: there is no index-to-worktree change left to count.
+ */
+export async function reviewStageSelection(
+  context: VerifiedCommitRunContext,
+  execution: GitDeliveryExecutionSeams,
+  selection: readonly StageSelectionChange[],
+): Promise<StageSelectionReview> {
+  let addedLines = 0;
+  let deletedLines = 0;
+  for (const change of selection.filter((entry) => entry.pending)) {
+    if (!context.stillAuthorized() || context.signal?.aborted === true)
+      throw new Error("git-runtime-authority-denied");
+    const sides = await readSides(context, execution, change.path, "unstaged");
+    if (sides.binary || sides.same) continue;
+    addedLines += textLines(sides.after).length;
+    deletedLines += textLines(sides.before).length;
+  }
+  return { fileCount: selection.length, addedLines, deletedLines };
+}
+
 export async function runtimeGitDiff(
   context: VerifiedCommitRunContext,
   execution: GitDeliveryExecutionSeams,

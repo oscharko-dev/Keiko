@@ -219,6 +219,42 @@ describe("production managed worktree tools", () => {
     }
   });
 
+  // Coding Workbench run 13 (2026-09-10): the runtime Git service answered `undefined` for every
+  // refusal it could not express as a Git result, and this port turned each one into
+  // `git-authority-revoked`. A stage proposal refused for its size therefore told the model its Git
+  // authority was gone, and the model stopped delivering. The service now names its refusal; only
+  // `authority-revoked` may keep that code, and the two the model can act on carry guidance.
+  it.each([
+    ["authority-revoked", "git-authority-revoked", false],
+    ["proposal-unknown", "git-proposal-unknown", true],
+    ["execution-failed", "git-execution-failed", true],
+  ] as const)(
+    "reports a %s refusal of the runtime Git service as %s",
+    async (reason, reasonCode, coached) => {
+      const service = {
+        execute: vi.fn(() => Promise.resolve({ kind: "refused", reason })),
+      } as unknown as RuntimeGitService;
+      const facade = verificationFacade({
+        runToReport: vi.fn(),
+        records: [],
+        runtimeGitService: service,
+      });
+      const result = await facade.execute({
+        capability: "runtime-capability",
+        body: JSON.stringify({
+          action: "git",
+          operation: "stage",
+          phase: "execute",
+          proposalId: "stage-3384",
+          actionId: "stage-redeem",
+          idempotencyKey: "stage-redeem",
+        }),
+      });
+      expect(result).toMatchObject({ status: "failed", reasonCode });
+      expect("guidance" in result).toBe(coached);
+    },
+  );
+
   it("routes a CI tool call to the confirmed-PR observer through the existing facade", async () => {
     const observe = vi.fn<CiObservationService["observe"]>(() =>
       Promise.resolve({ status: "observed", snapshot: readySnapshot(), retryAfterMs: 0 }),

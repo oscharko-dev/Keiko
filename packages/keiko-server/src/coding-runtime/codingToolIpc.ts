@@ -198,6 +198,8 @@ export type CodingToolResult =
       readonly status: "completed";
       readonly evidence: readonly CodingToolEvidence[];
       readonly git: CodingRuntimeGitResult;
+      /** The fixed recovery instruction for a stage proposal blocked at admission; absent otherwise. */
+      readonly guidance?: string | undefined;
     }
   | {
       readonly status: "completed";

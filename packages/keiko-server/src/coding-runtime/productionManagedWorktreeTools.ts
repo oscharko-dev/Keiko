@@ -5,7 +5,10 @@ import { runDraftDeliveryRequest } from "./productionDraftDeliveryRuntime.js";
 import type { DraftDeliveryService } from "../gitDelivery/draftDeliveryTypes.js";
 import type { CiObservationService } from "../gitDelivery/ciObservationService.js";
 import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
-import type { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
+import type {
+  RuntimeGitRefusalReason,
+  RuntimeGitService,
+} from "../gitDelivery/runtimeGitService.js";
 import type { VerifiedCommitService } from "../gitDelivery/verifiedCommitTypes.js";
 import type {
   CodingWorkbenchAuxiliaryStatus,
@@ -463,6 +466,16 @@ function governedPorts(
   };
 }
 
+// The facade's closed failure code for each reason the runtime Git service answers without a
+// result (runtimeGitService.ts). Only `authority-revoked` may reach the model as a revoked
+// authority: an unknown or expired proposal and a thrown Git failure used to collapse into that same
+// code, and the model stopped delivering on the strength of it (Coding Workbench run 13, 2026-09-10).
+const GIT_REFUSAL_REASON_CODES: Readonly<Record<RuntimeGitRefusalReason, string>> = {
+  "authority-revoked": "git-authority-revoked",
+  "proposal-unknown": "git-proposal-unknown",
+  "execution-failed": "git-execution-failed",
+};
+
 function buildRuntimeGitPort(
   input: ProductionManagedWorktreeToolInput,
 ): GovernedCodingToolPort<"git"> {
@@ -483,7 +496,8 @@ function buildRuntimeGitPort(
       )
         return { status: "failed", reasonCode: "capability-backend-unavailable" };
       const result = await input.runtimeGitService.execute(request, guard, signal);
-      if (result === undefined) return { status: "failed", reasonCode: "git-authority-revoked" };
+      if (result.kind === "refused")
+        return { status: "failed", reasonCode: GIT_REFUSAL_REASON_CODES[result.reason] };
       const released = await releaseStageProposal(input, result, signal);
       return released === undefined
         ? { status: "failed", reasonCode: "git-authority-revoked" }

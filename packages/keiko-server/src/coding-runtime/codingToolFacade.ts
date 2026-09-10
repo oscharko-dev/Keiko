@@ -1,7 +1,10 @@
 import { isCodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import { isCodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
 import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
-import { isCodingRuntimeGitResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
+import {
+  isCodingRuntimeGitResult,
+  type CodingRuntimeGitResult,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { isVerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import { isCodingRepositoryResult } from "./codingRepositorySearchHandler.js";
 import { isUtf8 } from "node:buffer";
@@ -120,6 +123,8 @@ const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
   "command-authority-revoked",
   "command-execution-failed",
   "git-authority-revoked",
+  "git-proposal-unknown",
+  "git-execution-failed",
   "delivery-authority-revoked",
   "connector-authority-revoked",
   "search-authority-revoked",
@@ -428,6 +433,7 @@ function projectRuntimeGit(
           status: "completed",
           evidence: [{ kind: "governed-delegate", code: "completed" }],
           git: value.git,
+          ...stageGuidance(value.git),
         }
       : projected("failed");
   return undefined;
@@ -507,7 +513,7 @@ function projectGovernedFailure(
   }
   const result = {
     ...projected("failed", reasonCode, true),
-    ...verificationFailureCoaching(request, reasonCode),
+    ...governedFailureCoaching(request, reasonCode),
   };
   const verificationFailure =
     request.action === "verification" && reasonCode === "VERIFICATION_FAILED"
@@ -523,20 +529,51 @@ function projectGovernedFailure(
       };
 }
 
-// What the model is told when the verification runner refuses for want of package-script trust
-// (ADR-0147 D3). Only the operator can change that state, in the Coding Workbench header; the bare
-// code left the model to retry the verifier or route around it (Coding Workbench run 8, 2026-09-10).
-const VERIFICATION_FAILURE_GUIDANCE: Readonly<Record<string, string>> = {
-  WORKSPACE_TRUST_REQUIRED:
-    "Package scripts in this workspace may not run yet: either the repository's scripts were never allowed, or this run changed package.json and the operator has to allow the rewritten scripts. Only the operator can allow them, in the Coding Workbench header. Report this blocker, do not retry verification until it has been allowed, and never run the scripts another way.",
+// What the model is told about a governed refusal it can act on, by action and closed reasonCode.
+// Verification: the runner refused for want of package-script trust (ADR-0147 D3) — only the
+// operator can change that state, in the Coding Workbench header; the bare code left the model to
+// retry the verifier or route around it (Coding Workbench run 8, 2026-09-10). Git: the two runtime
+// Git service refusals that are the model's to repair (runtimeGitService.ts) — a stale proposal id
+// and a thrown Git failure — which used to reach it as a revoked authority (run 13, 2026-09-10).
+const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  verification: {
+    WORKSPACE_TRUST_REQUIRED:
+      "Package scripts in this workspace may not run yet: either the repository's scripts were never allowed, or this run changed package.json and the operator has to allow the rewritten scripts. Only the operator can allow them, in the Coding Workbench header. Report this blocker, do not retry verification until it has been allowed, and never run the scripts another way.",
+  },
+  git: {
+    "git-proposal-unknown":
+      "This proposal id cannot be redeemed: it was never proposed in this run, was already redeemed, or has expired. Propose the change again with the proposing tool and redeem the new id promptly.",
+    "git-execution-failed":
+      "Git could not complete this operation. Read keiko_git_status, then retry once against the current state; if it fails again, report the blocker instead of working around it.",
+  },
 };
 
-function verificationFailureCoaching(
+function governedFailureCoaching(
   request: CodingToolActionRequest,
   reasonCode: string,
 ): { readonly guidance?: string } {
+  const guidance = GOVERNED_FAILURE_GUIDANCE[request.action]?.[reasonCode];
+  return guidance === undefined ? {} : { guidance };
+}
+
+// A stage proposal the runtime Git service blocks at admission is a complete Git result, not a
+// failure, and its closed reason alone left the model guessing (run 13, 2026-09-10). Each admission
+// reason carries the one recovery the model can perform itself; the policy and preflight blocks
+// keep their own findings and need none.
+const STAGE_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
+  "selection-unreviewed":
+    "At least one requested path is not a pending change Git lists for this worktree: it is unchanged, absent, a directory, in conflict, or hidden behind a truncated change list. Read keiko_git_status and request exactly the file paths it lists as changed and not conflicted.",
+  "buffers-dirty":
+    "An editor session holds unsaved changes in this workspace, so the bytes to stage are not settled. Report the blocker; only the operator can save or discard them.",
+  "proposal-limit":
+    "Too many stage proposals are open. Redeem the ones you need with keiko_git_execute or let them expire before proposing again.",
+};
+
+function stageGuidance(result: CodingRuntimeGitResult): { readonly guidance?: string } {
   const guidance =
-    request.action === "verification" ? VERIFICATION_FAILURE_GUIDANCE[reasonCode] : undefined;
+    result.kind === "stage" && result.status === "blocked"
+      ? STAGE_BLOCKED_GUIDANCE[result.reason]
+      : undefined;
   return guidance === undefined ? {} : { guidance };
 }
 

@@ -1,6 +1,7 @@
 import { runtimeGitDiff, runtimeGitStatus } from "./runtimeGitRead.js";
 import { readVerifiedCommitFacts } from "./verifiedCommitFacts.js";
 import { redactLogFields } from "../observability/log-redaction.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { RuntimeGitService } from "./runtimeGitService.js";
 import { commitFacadeFixture } from "./verifiedCommitFacadeTestSupport.js";
 import { execFileSync } from "node:child_process";
@@ -664,7 +665,7 @@ describe("productive runtime status/diff/stage lane", () => {
       { check: () => true },
     );
     expect(proposed).toMatchObject({ kind: "stage", status: "ready", pathCount: 2 });
-    if (proposed?.kind !== "stage") throw new Error("stage proposal unavailable");
+    if (proposed.kind !== "stage") throw new Error("stage proposal unavailable");
     expect(gitService.review(proposed.proposalId)?.review.paths).toEqual(["code.js", "other.js"]);
     expect(
       await gitService.execute(
@@ -715,14 +716,38 @@ describe("productive runtime status/diff/stage lane", () => {
         },
         { check: () => true },
       ),
-    ).toBeUndefined();
+    ).toMatchObject({
+      kind: "stage",
+      status: "blocked",
+      reason: "selection-unreviewed",
+      pathCount: 2,
+    });
     expect(git(["write-tree"])).toBe(index);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "git.runtime-action",
+        correlationId: "verified-commit-test",
+        extra: expect.objectContaining({
+          phase: "stage-propose",
+          state: "blocked",
+          reason: "selection-unreviewed",
+          pathCount: 2,
+        }) as unknown,
+      }),
+    );
   });
 
-  it("does not admit an already-staged path through a truncated mixed-stage status", async () => {
+  // Relocated pin (was "does not admit an already-staged path through a truncated mixed-stage
+  // status"). Admission used to read the 50-entry status projection, so 51 untracked files hid the
+  // staged no-op. It now reads Git's own change list, which only the raw scan's content budget can
+  // cut — and a scan that could not complete proposes nothing: the facts read fails closed with its
+  // own code, no path is admitted, and the failure line says why.
+  it("does not admit anything through a change list the raw scan could not complete", async () => {
     writeFileSync(join(root, "other.js"), "export const other = 3;\n");
-    for (let index = 0; index < 51; index += 1) {
-      writeFileSync(join(root, `untracked-${String(index).padStart(2, "0")}.js`), "untracked\n");
+    // Eight untracked mebibyte files sort ahead of both requested paths and exhaust the raw scan's
+    // 8 MiB content budget exactly, so the scan stops before it reaches them.
+    for (let index = 0; index < 8; index += 1) {
+      writeFileSync(join(root, `aaa-${String(index)}.bin`), Buffer.alloc(1_048_576, 0x61));
     }
     const index = git(["write-tree"]);
     const gitService = new RuntimeGitService({
@@ -732,26 +757,45 @@ describe("productive runtime status/diff/stage lane", () => {
         service.invalidate();
       },
     });
+    expect((await runtimeGitStatus(context(), options.execution ?? {})).truncated).toBe(true);
 
     expect(
       await gitService.execute(
         {
           action: "git",
-          actionId: "truncated-status",
-          idempotencyKey: "truncated-status",
+          actionId: "truncated-scan",
+          idempotencyKey: "truncated-scan",
           operation: "stage",
           phase: "propose",
           paths: ["code.js", "other.js"],
         },
         { check: () => true },
       ),
-    ).toBeUndefined();
+    ).toEqual({ kind: "refused", reason: "execution-failed" });
     expect(git(["write-tree"])).toBe(index);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "git.runtime-action",
+        level: "warn",
+        errorKind: "internal",
+        correlationId: "verified-commit-test",
+        extra: expect.objectContaining({
+          phase: "stage-propose",
+          state: "failed",
+          code: "git-raw-snapshot-incomplete",
+        }) as unknown,
+      }),
+    );
   });
 
-  it("does not admit a mixed-stage selection whose reviewed diff is truncated", async () => {
+  // Relocated pin (was "does not admit a mixed-stage selection whose reviewed diff is truncated").
+  // Admission used to reuse the model-facing diff reader and refused whenever that reader had
+  // truncated — here a 62 KB line it cannot render. A truncated RENDERING was never a fact about the
+  // selection: the file is a real pending change with exact bytes and line counts, and refusing it
+  // reached the model as a revoked authority. A change list the scan could not complete is pinned
+  // above; a path absent from a complete list is pinned by the missing-path case.
+  it("admits a pending change the diff reader could only render truncated", async () => {
     writeFileSync(join(root, "other.js"), "x".repeat(62_000));
-    const index = git(["write-tree"]);
     const gitService = new RuntimeGitService({
       ...options,
       mode: (): "supervised-coding" => "supervised-coding",
@@ -759,24 +803,30 @@ describe("productive runtime status/diff/stage lane", () => {
         service.invalidate();
       },
     });
+    const diff = await runtimeGitDiff(context(), options.execution ?? {}, "unstaged", ["other.js"]);
+    expect(diff.truncated).toBe(true);
 
-    expect(
-      await gitService.execute(
-        {
-          action: "git",
-          actionId: "truncated-diff",
-          idempotencyKey: "truncated-diff",
-          operation: "stage",
-          phase: "propose",
-          paths: ["code.js", "other.js"],
-        },
-        { check: () => true },
-      ),
-    ).toBeUndefined();
-    expect(git(["write-tree"])).toBe(index);
+    const proposed = await gitService.execute(
+      {
+        action: "git",
+        actionId: "rendered-truncated",
+        idempotencyKey: "rendered-truncated",
+        operation: "stage",
+        phase: "propose",
+        paths: ["code.js", "other.js"],
+      },
+      { check: () => true },
+    );
+    expect(proposed).toMatchObject({ kind: "stage", status: "ready", pathCount: 2 });
+    if (proposed.kind !== "stage") throw new Error("stage proposal unavailable");
+    expect(gitService.review(proposed.proposalId)?.review).toMatchObject({
+      fileCount: 2,
+      addedLines: 1,
+      deletedLines: 0,
+    });
   });
 
-  it("blocks a conflicted path without changing the mixed-stage index", async () => {
+  it("fails closed on a conflicted index without changing it, naming the reader's code", async () => {
     git(["commit", "-qm", "codex change"]);
     git(["checkout", "-q", "dev"]);
     writeFileSync(join(root, "code.js"), "export const value = 3;\n");
@@ -804,8 +854,247 @@ describe("productive runtime status/diff/stage lane", () => {
         },
         { check: () => true },
       ),
-    ).toBeUndefined();
+    ).toEqual({ kind: "refused", reason: "execution-failed" });
     expect(git(["ls-files", "--stage"])).toBe(index);
+    // An unmerged index has no single identity the raw reader can snapshot, so the facts read
+    // throws before any admission: the refusal is a failure, and its line names the reader's own
+    // closed literal — the message of a thrown `TypeError`, which `describeError` alone would drop.
+    const failed = events.find(
+      (event) => event.op === "git.runtime-action" && event.extra?.state === "failed",
+    );
+    expect(failed).toMatchObject({ level: "warn", errorKind: "internal" });
+    expect(redactLogFields(failed?.extra)).toMatchObject({
+      phase: "stage-propose",
+      runId: "run-1",
+      state: "failed",
+      errorClass: "TypeError",
+      code: "git-index-identity-invalid",
+    });
+  });
+
+  // Coding Workbench run 13 (2026-09-10): after a green verification the model asked to stage eight
+  // ordinary files — four edited, four new — whose rendered hunks weighed 68 KB of review JSON.
+  // `propose()` reused the model-facing diff reader for its admission check; that reader had cut its
+  // response at the 60 KB budget, the selection was refused as unreviewable, the tool reported a
+  // revoked Git authority, and the run stopped one step short of delivering. Admission now reads
+  // Git's own change list and each pending path's two sides: a response budget never refuses a path.
+  it("admits a selection whose rendered review exceeds the diff reader's response budget", async () => {
+    const body = Array.from(
+      { length: 120 },
+      (_value, index) => `export const value${String(index)} = "${"v".repeat(24)}";\n`,
+    ).join("");
+    const tracked = ["one.js", "two.js", "three.js"];
+    for (const name of tracked) writeFileSync(join(root, name), "export const seed = 1;\n");
+    git(["add", ...tracked]);
+    git(["commit", "-qm", "seed"]);
+    const paths = ["code.js", ...tracked, "four.js", "five.js", "six.js", "seven.js"];
+    for (const name of paths) writeFileSync(join(root, name), body);
+    const execution = options.execution ?? {};
+    expect((await runtimeGitDiff(context(), execution, "unstaged", paths)).truncated).toBe(true);
+    const gitService = new RuntimeGitService({
+      ...options,
+      mode: (): "supervised-coding" => "supervised-coding",
+      invalidateVerification: (): void => {
+        service.invalidate();
+      },
+    });
+
+    const proposed = await gitService.execute(
+      {
+        action: "git",
+        actionId: "wide",
+        idempotencyKey: "wide",
+        operation: "stage",
+        phase: "propose",
+        paths,
+      },
+      { check: () => true },
+    );
+    expect(proposed).toMatchObject({ kind: "stage", status: "ready", pathCount: 8 });
+    if (proposed.kind !== "stage") throw new Error("stage proposal unavailable");
+    expect(gitService.review(proposed.proposalId)?.review).toMatchObject({
+      fileCount: 8,
+      addedLines: 8 * 120,
+      deletedLines: 4,
+    });
+    expect(
+      await gitService.execute(
+        {
+          action: "git",
+          actionId: "wide-execute",
+          idempotencyKey: "wide-execute",
+          operation: "stage",
+          phase: "execute",
+          proposalId: proposed.proposalId,
+        },
+        { check: () => true },
+      ),
+    ).toMatchObject({ status: "succeeded", pathCount: 8 });
+    expect(git(["diff", "--name-only"])).toBe("");
+    expect(git(["ls-files", "--others", "--exclude-standard"])).toBe("");
+  });
+
+  it("refuses a directory as a stage path with a reasoned block instead of a Git failure", async () => {
+    mkdirSync(join(root, "src"));
+    writeFileSync(join(root, "src", "value.js"), "export const nested = true;\n");
+    const gitService = new RuntimeGitService({
+      ...options,
+      mode: (): "supervised-coding" => "supervised-coding",
+      invalidateVerification: (): void => {
+        service.invalidate();
+      },
+    });
+
+    expect(
+      await gitService.execute(
+        {
+          action: "git",
+          actionId: "directory",
+          idempotencyKey: "directory",
+          operation: "stage",
+          phase: "propose",
+          paths: ["src"],
+        },
+        { check: () => true },
+      ),
+    ).toMatchObject({
+      kind: "stage",
+      status: "blocked",
+      reason: "selection-unreviewed",
+      pathCount: 1,
+    });
+  });
+
+  // Run 13 (2026-09-10): the service answered `undefined` without a line whenever its guard, its
+  // signal or its live context said no, so the log could not say why a Git call went unanswered.
+  // Every refusal now names its condition on the run's own correlation id — or on the unknown id
+  // when there is no live run to borrow one from.
+  it("logs why a Git request is refused before it is dispatched", async () => {
+    const gitService = new RuntimeGitService({
+      ...options,
+      mode: (): "supervised-coding" => "supervised-coding",
+      invalidateVerification: (): void => {
+        service.invalidate();
+      },
+    });
+    expect(
+      await gitService.execute(
+        {
+          action: "git",
+          actionId: "guarded",
+          idempotencyKey: "guarded",
+          operation: "stage",
+          phase: "propose",
+          paths: ["code.js"],
+        },
+        { check: () => false },
+      ),
+    ).toEqual({ kind: "refused", reason: "authority-revoked" });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "git.runtime-action",
+        correlationId: "verified-commit-test",
+        extra: {
+          phase: "stage-propose",
+          runId: "run-1",
+          state: "refused",
+          reason: "guard-rejected",
+        },
+      }),
+    );
+
+    const detached = new RuntimeGitService({
+      ...options,
+      context: (): undefined => undefined,
+      mode: (): "supervised-coding" => "supervised-coding",
+      invalidateVerification: (): void => {
+        service.invalidate();
+      },
+    });
+    expect(
+      await detached.execute(
+        { action: "git", actionId: "detached", idempotencyKey: "detached", operation: "status" },
+        { check: () => true },
+      ),
+    ).toEqual({ kind: "refused", reason: "authority-revoked" });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "git.runtime-action",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        extra: { phase: "status", state: "refused", reason: "run-not-live" },
+      }),
+    );
+  });
+
+  it("names an unknown or expired proposal at redemption instead of a revoked authority", async () => {
+    const gitService = new RuntimeGitService({
+      ...options,
+      mode: (): "supervised-coding" => "supervised-coding",
+      invalidateVerification: (): void => {
+        service.invalidate();
+      },
+    });
+
+    expect(
+      await gitService.execute(
+        {
+          action: "git",
+          actionId: "unknown",
+          idempotencyKey: "unknown",
+          operation: "stage",
+          phase: "execute",
+          proposalId: "stage-404",
+        },
+        { check: () => true },
+      ),
+    ).toEqual({ kind: "refused", reason: "proposal-unknown" });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "git.runtime-action",
+        correlationId: "verified-commit-test",
+        extra: {
+          phase: "stage-execute",
+          runId: "run-1",
+          state: "refused",
+          reason: "proposal-unknown",
+        },
+      }),
+    );
+  });
+
+  it("reports a thrown Git failure as execution-failed on a body-free failure line", async () => {
+    writeFileSync(join(root, "large.js"), `export const value = "${"x".repeat(70_000)}";\n`);
+    const gitService = new RuntimeGitService({
+      ...options,
+      mode: (): "supervised-coding" => "supervised-coding",
+      invalidateVerification: (): void => {
+        service.invalidate();
+      },
+    });
+
+    expect(
+      await gitService.execute(
+        {
+          action: "git",
+          actionId: "too-large",
+          idempotencyKey: "too-large",
+          operation: "stage",
+          phase: "propose",
+          paths: ["large.js"],
+        },
+        { check: () => true },
+      ),
+    ).toEqual({ kind: "refused", reason: "execution-failed" });
+    const failed = events.find(
+      (event) => event.op === "git.runtime-action" && event.extra?.state === "failed",
+    );
+    expect(failed).toMatchObject({
+      level: "warn",
+      errorKind: "internal",
+      correlationId: "verified-commit-test",
+      extra: expect.objectContaining({ phase: "stage-propose", runId: "run-1" }) as unknown,
+    });
+    expect(JSON.stringify(events)).not.toContain("xxxx");
   });
 
   it("captures stage operands before the first asynchronous admission read", async () => {
@@ -832,7 +1121,7 @@ describe("productive runtime status/diff/stage lane", () => {
     );
     paths[0] = "other.js";
     const proposal = await pending;
-    if (proposal?.kind !== "stage") throw new Error("proposal unavailable");
+    if (proposal.kind !== "stage") throw new Error("proposal unavailable");
     expect(gitService.review(proposal.proposalId)?.review.paths).toEqual(["code.js"]);
   });
   it("preserves final-newline metadata in a newline-only diff", async () => {
@@ -947,7 +1236,7 @@ describe("productive runtime status/diff/stage lane", () => {
       { check: () => true },
     );
     expect(proposed).toMatchObject({ kind: "stage", status: "ready" });
-    if (proposed?.kind !== "stage") throw new Error("proposal unavailable");
+    if (proposed.kind !== "stage") throw new Error("proposal unavailable");
     expect(
       await gitService.execute(
         {
@@ -1034,7 +1323,7 @@ describe("productive runtime status/diff/stage lane", () => {
       },
       guard,
     );
-    if (proposal?.kind !== "stage") throw new Error("missing stage proposal");
+    if (proposal.kind !== "stage") throw new Error("missing stage proposal");
     const index = git(["write-tree"]);
     writeFileSync(join(root, "code.js"), "export const value = 3;\n");
     expect(
@@ -1066,8 +1355,20 @@ describe("productive runtime status/diff/stage lane", () => {
         guard,
         AbortSignal.abort(),
       ),
-    ).toBeUndefined();
+    ).toEqual({ kind: "refused", reason: "authority-revoked" });
     expect(git(["write-tree"])).toBe(index);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "git.runtime-action",
+        correlationId: "verified-commit-test",
+        extra: {
+          phase: "stage-execute",
+          runId: "run-1",
+          state: "refused",
+          reason: "signal-aborted",
+        },
+      }),
+    );
   });
 
   it.each(["governed-assist", "supervised-coding", "autonomous-delivery"] as const)(

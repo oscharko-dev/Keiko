@@ -642,6 +642,102 @@ describe("CodingToolFacade", () => {
     });
   });
 
+  // Coding Workbench run 13 (2026-09-10): a stage proposal the runtime Git service blocks is a
+  // completed Git result, not a failure — but its closed reason alone left the model guessing. The
+  // admission reasons carry the one recovery the model can perform itself.
+  it("tells the model how to recover from a blocked stage proposal", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "completed",
+        evidence: [],
+        git: {
+          kind: "stage",
+          proposalId: "stage-13",
+          status: "blocked",
+          reason: "selection-unreviewed",
+          pathCount: 1,
+        },
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "git", operation: "stage", phase: "propose", paths: ["src"] }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "completed" }],
+      git: {
+        kind: "stage",
+        proposalId: "stage-13",
+        status: "blocked",
+        reason: "selection-unreviewed",
+        pathCount: 1,
+      },
+      guidance: expect.stringContaining("keiko_git_status") as unknown as string,
+    });
+  });
+
+  it("keeps a ready stage proposal free of guidance", async () => {
+    const ports = facade();
+    const git = {
+      kind: "stage",
+      proposalId: "stage-14",
+      status: "ready",
+      reason: "none",
+      pathCount: 2,
+    };
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "completed", evidence: [], git }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({
+          action: "git",
+          operation: "stage",
+          phase: "propose",
+          paths: ["a.js", "b.js"],
+        }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "completed" }],
+      git,
+    });
+  });
+
+  it.each([
+    ["git-proposal-unknown", "Propose the change again"],
+    ["git-execution-failed", "keiko_git_status"],
+  ])("forwards a %s Git refusal with its recovery guidance", async (reasonCode, coaching) => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "failed", reasonCode }));
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({
+          action: "git",
+          operation: "stage",
+          phase: "execute",
+          proposalId: "stage-15",
+        }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: reasonCode }],
+      reasonCode,
+      guidance: expect.stringContaining(coaching) as unknown as string,
+    });
+  });
+
   // #3390: a structural refusal carries the route's sentence and a fixed recovery instruction, so
   // the model repairs the patch instead of resending it. The sentence is admitted only as one
   // bounded printable-ASCII line, and only for the structural codes.
