@@ -271,17 +271,27 @@ export class DraftDeliveryController implements DraftDeliveryService {
     assertKnownDraftIdentity(current, remote);
     if (remote.headSha !== current.binding.headSha) throw new DraftDeliveryFailure("remote-drift");
     if (remote.pullRequest !== undefined) return this.reconcileCurrent(context);
-    const template = resolveDraftDeliveryTemplate({
+    const template = await this.composeTemplate(context, title);
+    if (template.status !== "ready") throw new DraftDeliveryFailure("payload-changed");
+    return this.pullRequestProposal(context, current, template.title, template.body);
+  }
+  // The server-owned body: the authored template, the closing line for the bound issue and the
+  // epic's resolved children as a non-closing related-issue line (run 19, 2026-09-10).
+  private async composeTemplate(
+    context: DraftDeliveryRunContext,
+    title: string,
+  ): Promise<ReturnType<typeof resolveDraftDeliveryTemplate>> {
+    const relatedIssueNumbers = (await this.options.resolveRelatedIssues?.(context)) ?? [];
+    return resolveDraftDeliveryTemplate({
       workspace: context.workspace,
       issueBinding: context.issueBinding,
+      relatedIssueNumbers,
       title,
       correlationId: context.correlationId,
       ...(this.options.execution?.activityLog === undefined
         ? {}
         : { activityLog: this.options.execution.activityLog }),
     });
-    if (template.status !== "ready") throw new DraftDeliveryFailure("payload-changed");
-    return this.pullRequestProposal(context, current, template.title, template.body);
   }
   private samePrProposal(record: DraftDeliveryRecord, title: string): boolean {
     if (record.phase !== "pr-proposed") return false;

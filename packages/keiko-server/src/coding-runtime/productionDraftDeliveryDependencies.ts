@@ -1,4 +1,5 @@
 import { realpathSync } from "node:fs";
+import { resolvedLinkedIssueNumbers } from "../coding-context/codingRuntimeIssueIntake.js";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import { canonicalise } from "@oscharko-dev/keiko-security";
 import {
@@ -68,6 +69,7 @@ export function createProductionDraftDeliveryDependencies(
     mutationDeps: verified.mutationDeps,
     ...(verified.execution === undefined ? {} : { execution: verified.execution }),
     resolveTarget: (context) => factory.resolveTarget(context),
+    resolveRelatedIssues: (context) => factory.resolveRelatedIssues(context),
     ciReader: (context) => factory.ciReader(context),
     journeyReader: (context) => factory.journeyReader(context),
     inspectionAdapter: (context) =>
@@ -409,6 +411,57 @@ class DraftDeliveryFactory {
       context.baseRef === context.issueBinding.defaultBaseRef &&
       canonicalise(snapshot.issueBinding ?? null) === canonicalise(context.issueBinding)
     );
+  }
+
+  // The epic's children for the pull request's related-issue line, read through the same authorized
+  // root and reader as the accepted issue itself. The bound issue is re-read and must still be the
+  // accepted binding; anything unavailable or drifted answers "no related issues", logged body-free.
+  public async resolveRelatedIssues(context: DraftDeliveryRunContext): Promise<readonly number[]> {
+    const root = this.originalRoot(context);
+    if (root === undefined) return this.relatedIssues(context, "unavailable", []);
+    try {
+      const bound = await resolveGitHubIssue(this.deps, {
+        repositoryRoot: root,
+        issueRef: `#${String(context.issueBinding.issueNumber)}`,
+        correlationId: context.correlationId,
+        signal: context.signal,
+      });
+      if (!bound.ok || canonicalise(bound.binding) !== canonicalise(context.issueBinding))
+        return this.relatedIssues(context, "unavailable", []);
+      const related = await resolvedLinkedIssueNumbers(this.deps, {
+        repositoryRoot: root,
+        body: bound.contextObject.body,
+        boundIssue: context.issueBinding.issueNumber,
+        correlationId: context.correlationId,
+        runId: context.runId,
+        signal: context.signal,
+      });
+      return this.relatedIssues(context, "resolved", related);
+    } catch (error) {
+      this.log.write({
+        category: "process",
+        op: "git.draft-related-issues",
+        correlationId: context.correlationId,
+        level: "warn",
+        errorKind: "internal",
+        extra: { runId: context.runId, state: "unavailable", count: 0, ...describeError(error) },
+      });
+      return [];
+    }
+  }
+
+  private relatedIssues(
+    context: DraftDeliveryRunContext,
+    state: "resolved" | "unavailable",
+    related: readonly number[],
+  ): readonly number[] {
+    this.log.write({
+      category: "process",
+      op: "git.draft-related-issues",
+      correlationId: context.correlationId,
+      extra: { runId: context.runId, state, count: related.length },
+    });
+    return related;
   }
 
   public adapterDeps(context: DraftDeliveryRunContext): {

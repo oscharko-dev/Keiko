@@ -62,6 +62,11 @@ export interface DraftDeliveryTemplateInput {
   readonly workspace: WorkspaceInfo;
   /** Accepted server-owned binding, never an issue number supplied by authored metadata. */
   readonly issueBinding: CodingWorkbenchIssueBinding;
+  /**
+   * Same-repository issues the bound issue references and the authorized reader resolved (an epic's
+   * children). Rendered as a non-closing "Related issues" line: the bound issue alone is closed.
+   */
+  readonly relatedIssueNumbers?: readonly number[];
   readonly title: string;
   readonly correlationId: string;
   readonly fs?: WorkspaceFs;
@@ -80,9 +85,33 @@ function validateAuthoredMetadata(text: string): void {
   if (hasIssueClosingDirective(text)) throw new TemplateResolutionError("issue-directive");
 }
 
+export const DRAFT_DELIVERY_RELATED_ISSUES_MAX = 8;
+
+function validRelatedIssues(input: DraftDeliveryTemplateInput): boolean {
+  const related = input.relatedIssueNumbers ?? [];
+  return (
+    related.length <= DRAFT_DELIVERY_RELATED_ISSUES_MAX &&
+    new Set(related).size === related.length &&
+    related.every(
+      (issueNumber) =>
+        Number.isSafeInteger(issueNumber) &&
+        issueNumber > 0 &&
+        issueNumber !== input.issueBinding.issueNumber,
+    )
+  );
+}
+
+function relatedIssuesLine(input: DraftDeliveryTemplateInput): string {
+  const related = input.relatedIssueNumbers ?? [];
+  return related.length === 0
+    ? ""
+    : `Related issues: ${related.map((issueNumber) => `#${String(issueNumber)}`).join(", ")}\n\n`;
+}
+
 function validateInput(input: DraftDeliveryTemplateInput): void {
   if (!validateCodingWorkbenchIssueBinding(input.issueBinding).ok)
     throw new TemplateResolutionError("invalid-issue-binding");
+  if (!validRelatedIssues(input)) throw new TemplateResolutionError("invalid-issue-binding");
   const title = input.title;
   if (
     title.trim().length === 0 ||
@@ -180,7 +209,7 @@ function compose(
   if (resolveDefaultPath(fs, input.workspace.root) !== path)
     throw new TemplateResolutionError("template-unreadable");
   const prefix = template.length === 0 ? "" : `${template}\n\n`;
-  const body = `${prefix}Closes #${String(input.issueBinding.issueNumber)}\n\n${framePrDescriptionRegion("")}`;
+  const body = `${prefix}Closes #${String(input.issueBinding.issueNumber)}\n\n${relatedIssuesLine(input)}${framePrDescriptionRegion("")}`;
   return {
     status: "ready",
     title: input.title,
@@ -219,6 +248,7 @@ export function resolveDraftDeliveryTemplate(
         bodyDigest: result.bodyDigest,
         templateBytes: result.templateBytes,
         templateDigest: result.templateDigest,
+        relatedIssueCount: input.relatedIssueNumbers?.length ?? 0,
       },
     });
     return result;

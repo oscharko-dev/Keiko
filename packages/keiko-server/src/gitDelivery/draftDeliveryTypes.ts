@@ -53,6 +53,12 @@ export interface DraftDeliveryDependencies {
   readonly mutationDeps: GitDeliveryMutationDeps;
   readonly execution?: GitDeliveryExecutionSeams;
   /** Revalidates the frozen issue, canonical origin and the current default base before dispatch. */
+  /**
+   * The bound issue's same-repository references that resolve through the authorized reader, for
+   * the pull request's related-issue line. Best effort: an unavailable answer is no line, never a
+   * refused delivery. Absent in compositions without an issue reader.
+   */
+  readonly resolveRelatedIssues?: (context: DraftDeliveryRunContext) => Promise<readonly number[]>;
   readonly resolveTarget: (
     context: DraftDeliveryRunContext,
   ) => Promise<DraftDeliveryTargetResolution>;

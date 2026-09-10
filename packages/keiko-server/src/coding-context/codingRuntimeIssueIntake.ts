@@ -38,7 +38,13 @@ async function buildContext(
   if (canonicalise(resolution.binding) !== canonicalise(input.binding)) {
     return { ok: false, failure: "issue-unavailable" };
   }
-  const linked = await resolveLinkedIssues(deps, input, resolution);
+  const linked = await resolveLinkedIssues(deps, {
+    repositoryRoot: input.repositoryRoot,
+    body: resolution.contextObject.body,
+    boundIssue: input.binding.issueNumber,
+    correlationId: input.correlationId,
+    runId: input.runId,
+  });
   const pack = await buildPack(deps, input, [resolution, ...linked]);
   if (pack.status === "blocked") {
     logPackBlocked(deps, input, pack);
@@ -80,33 +86,57 @@ export function linkedIssueNumbers(body: string, boundIssue: number): readonly n
   return [...numbers];
 }
 
+/** What the linked-issue resolution needs: the authorized repository root and the bound issue. */
+export interface LinkedIssueRequest {
+  readonly repositoryRoot: string;
+  readonly body: string;
+  readonly boundIssue: number;
+  readonly correlationId: string;
+  readonly runId: string;
+  readonly signal?: AbortSignal | undefined;
+}
+
 async function resolveLinkedIssues(
   deps: GitHubIssueResolutionDeps,
-  input: ContextInput,
-  resolution: ResolvedIssue,
+  request: LinkedIssueRequest,
 ): Promise<readonly ResolvedIssue[]> {
-  const numbers = linkedIssueNumbers(resolution.contextObject.body, input.binding.issueNumber);
+  const numbers = linkedIssueNumbers(request.body, request.boundIssue);
   const resolutions = await Promise.all(
     numbers.map((issueNumber) =>
       resolveGitHubIssue(deps, {
-        repositoryRoot: input.repositoryRoot,
+        repositoryRoot: request.repositoryRoot,
         issueRef: `#${String(issueNumber)}`,
-        correlationId: input.correlationId,
+        correlationId: request.correlationId,
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
       }),
     ),
   );
   const linked: ResolvedIssue[] = [];
   resolutions.forEach((linkedResolution, index) => {
     if (linkedResolution.ok) linked.push(linkedResolution);
-    else logLinkedIssueSkipped(deps, input, numbers[index], linkedResolution.failure);
+    else logLinkedIssueSkipped(deps, request, numbers[index], linkedResolution.failure);
   });
   return linked;
+}
+
+/**
+ * The numbers of the bound issue's same-repository references that resolve through the authorized
+ * reader — the related-issue line of a delivery's pull request (run 19, 2026-09-10: the PR named only
+ * the epic although the run implemented its four children). Same bounds, same skip evidence as the
+ * run's issue context.
+ */
+export async function resolvedLinkedIssueNumbers(
+  deps: GitHubIssueResolutionDeps,
+  request: LinkedIssueRequest,
+): Promise<readonly number[]> {
+  const linked = await resolveLinkedIssues(deps, request);
+  return linked.map((resolution) => resolution.preview.provenance.issueNumber);
 }
 
 // Body-free: the referenced number and the reader's closed failure, never the issue's text.
 function logLinkedIssueSkipped(
   deps: GitHubIssueResolutionDeps,
-  input: ContextInput,
+  request: LinkedIssueRequest,
   issueNumber: number | undefined,
   failure: string,
 ): void {
@@ -114,8 +144,12 @@ function logLinkedIssueSkipped(
     level: "info",
     category: "process",
     op: "coding-context.linked-issue-skipped",
-    correlationId: input.correlationId,
-    extra: { runId: input.runId, ...(issueNumber === undefined ? {} : { issueNumber }), failure },
+    correlationId: request.correlationId,
+    extra: {
+      runId: request.runId,
+      ...(issueNumber === undefined ? {} : { issueNumber }),
+      failure,
+    },
   });
 }
 
