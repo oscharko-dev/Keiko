@@ -592,9 +592,6 @@ describe("handleQiReview — candidate-scope approve", () => {
       entryHashSha256Hex: _entryHash,
       ...unchainedSecond
     } = second;
-    void _sequence;
-    void _priorHash;
-    void _entryHash;
 
     expect(
       verifyQiReviewAuditIntegrity({
@@ -655,7 +652,6 @@ describe("handleQiReview — candidate-scope approve", () => {
       throw new Error("expected two audit entries");
     }
     const { entryHashSha256Hex: _firstEntryHash, ...firstWithoutEntryHash } = first;
-    void _firstEntryHash;
     const secondWithFallbackPrior = {
       ...second,
       priorHashSha256Hex: hashQiReviewAuditEntry(firstWithoutEntryHash),

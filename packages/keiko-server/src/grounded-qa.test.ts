@@ -497,8 +497,7 @@ function requirePackExcerpt(
 }
 
 function runner(pack: ConnectedContextPack, content = "answered"): GroundedRunner {
-  return (input: OrchestratorInput): Promise<OrchestratorOutput> => {
-    void input;
+  return (_input: OrchestratorInput): Promise<OrchestratorOutput> => {
     return Promise.resolve({
       pack,
       assistantContent: content,
@@ -508,8 +507,7 @@ function runner(pack: ConnectedContextPack, content = "answered"): GroundedRunne
 }
 
 function runnerWithPlan(pack: ConnectedContextPack, content = "answered"): GroundedRunner {
-  return (input: OrchestratorInput): Promise<OrchestratorOutput> => {
-    void input;
+  return (_input: OrchestratorInput): Promise<OrchestratorOutput> => {
     return Promise.resolve({
       pack,
       assistantContent: content,
@@ -1697,8 +1695,7 @@ describe("handleGroundedAsk", () => {
     });
 
     let runnerCalled = false;
-    const spyRunner: GroundedRunner = (input): Promise<OrchestratorOutput> => {
-      void input;
+    const spyRunner: GroundedRunner = (_input): Promise<OrchestratorOutput> => {
       runnerCalled = true;
       return Promise.resolve({ pack: emptyPack(), assistantContent: "ok", elapsedMs: 1 });
     };
@@ -1886,8 +1883,7 @@ describe("handleGroundedAsk", () => {
     symlinkSync(deniedRoot, linkedRoot, "dir");
 
     let runnerCalled = false;
-    const spyRunner: GroundedRunner = (input): Promise<OrchestratorOutput> => {
-      void input;
+    const spyRunner: GroundedRunner = (_input): Promise<OrchestratorOutput> => {
       runnerCalled = true;
       return Promise.resolve({ pack: emptyPack(), assistantContent: "ok", elapsedMs: 1 });
     };
@@ -3502,8 +3498,7 @@ describe("handleGroundedAsk", () => {
         },
       ],
     };
-    const abstainRunner: GroundedRunner = (input): Promise<OrchestratorOutput> => {
-      void input;
+    const abstainRunner: GroundedRunner = (_input): Promise<OrchestratorOutput> => {
       return Promise.resolve({
         pack: noEvidencePack,
         assistantContent: GROUNDED_NO_EVIDENCE_ANSWER,

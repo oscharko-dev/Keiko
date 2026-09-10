@@ -287,12 +287,10 @@ describe("M7 keybinding, snippet, and AI activation contracts", () => {
     // @ts-expect-error -- "explorer" is not a legal EditorM7CommandScope; no registered command
     // uses it, and the KeyboardShortcutsPanel branch that read it was deleted alongside the
     // "settings.keyboard.scopeExplorer" i18n key.
-    const explorerScope: EditorM7CommandScope = "explorer";
+    const _explorerScope: EditorM7CommandScope = "explorer";
     // @ts-expect-error -- same for "git"; the "settings.keyboard.scopeGit" i18n key was deleted
     // alongside its branch too.
-    const gitScope: EditorM7CommandScope = "git";
-    void explorerScope;
-    void gitScope;
+    const _gitScope: EditorM7CommandScope = "git";
 
     // Real runtime assertion (not a restatement of the type check above): the type-level guard
     // only stops a literal "explorer"/"git" from being written in source. It cannot stop a value

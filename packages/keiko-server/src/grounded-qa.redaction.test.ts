@@ -192,8 +192,7 @@ function attackerPack(): ConnectedContextPack {
 }
 
 function runner(pack: ConnectedContextPack, content: string): GroundedRunner {
-  return (input: OrchestratorInput): Promise<OrchestratorOutput> => {
-    void input;
+  return (_input: OrchestratorInput): Promise<OrchestratorOutput> => {
     return Promise.resolve({ pack, assistantContent: content, elapsedMs: 42 });
   };
 }

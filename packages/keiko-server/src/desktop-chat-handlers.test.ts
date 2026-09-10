@@ -1261,8 +1261,8 @@ describe("desktop chat routes", () => {
         seenRequests.push(request);
         const system = request.messages[0]?.content ?? "";
         if (system.includes("You extract durable memories from a chat turn")) {
-          return new Promise<NormalizedResponse>((resolve) => {
-            void resolve;
+          return new Promise<NormalizedResponse>((_resolve) => {
+            // never settles: this case asserts the caller's own timeout, not a response
           });
         }
         return Promise.resolve({

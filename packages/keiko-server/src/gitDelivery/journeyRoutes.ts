@@ -650,7 +650,7 @@ function logJourneyRefreshUnavailable(
 }
 
 async function observeJourney(
-  ctx: RouteContext,
+  _ctx: RouteContext,
   deps: UiHandlerDeps,
   options: GitDeliveryJourneyRouteOptions,
   runId: string,

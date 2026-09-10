@@ -547,7 +547,7 @@ describe("testSourcePairingAdapter (real fs symlink containment)", () => {
     rmSync(outside, { recursive: true, force: true });
   });
 
-  function file(rel: string, body = "x"): void {
+  function _file(rel: string, body = "x"): void {
     const abs = join(root, rel);
     mkdirSync(dirname(abs), { recursive: true });
     writeFileSync(abs, body, "utf8");
@@ -576,7 +576,6 @@ describe("testSourcePairingAdapter (real fs symlink containment)", () => {
         nodeWorkspaceFs,
       ),
     ).rejects.toBeInstanceOf(PathEscapeError);
-    void file;
   });
 
   it("rejects a candidate retargeted to a denied in-workspace symlink after discovery", async () => {

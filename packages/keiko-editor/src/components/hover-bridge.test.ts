@@ -298,4 +298,3 @@ describe("registerKeikoHoverProvider", () => {
 
 // Type-only guard: the structural Monaco hover shape stays assignable.
 const _hover: MonacoHover = { contents: [{ value: "x" }] };
-void _hover;

@@ -5065,7 +5065,7 @@ interface RecordedDirectoryRead {
 // throwing port so an accidental widening of the wrapper surfaces as a failure. The port answers
 // exactly the way the Node port does: a bounded read returns the first `maxEntries` entries.
 function fanOutWorkspaceFs(
-  directory: string,
+  _directory: string,
   entryCount: number,
   reads: RecordedDirectoryRead[],
 ): WorkspaceFs {

@@ -79,8 +79,6 @@ describe("validateRuntimeGovernanceRequestV1", () => {
 
   it("accepts a lifecycle request without an action", () => {
     const { actionKind: _actionKind, requestedGrantScope: _grantScope, ...rest } = decideRequest();
-    void _actionKind;
-    void _grantScope;
     expect(validateRuntimeGovernanceRequestV1({ ...rest, operation: "pause" })).toMatchObject({
       ok: true,
     });
@@ -395,9 +393,6 @@ describe("ownField makes an inherited field unreadable regardless of descriptor 
       requestedGrantScope: _grantScope,
       ...target
     } = decideRequest();
-    void _operation;
-    void _actionKind;
-    void _grantScope;
     const result = withPollutedPrototype("operation", { value: "pause", enumerable: false }, () =>
       validateRuntimeGovernanceRequestV1(target),
     );
@@ -412,7 +407,6 @@ describe("ownField makes an inherited field unreadable regardless of descriptor 
       reasonCode: "no-pause-capability",
     };
     const { status: _status, ...withoutStatus } = legitimate;
-    void _status;
     const result = withPollutedPrototype(
       "status",
       { value: "unsupported", enumerable: false },

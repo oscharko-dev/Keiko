@@ -425,7 +425,7 @@ export async function handleNativeFileDialogOpen(
 }
 
 export function handleNativeFileDialogCapability(
-  ctx: RouteContext,
+  _ctx: RouteContext,
   deps: UiHandlerDeps,
 ): RouteResult {
   const options = deps.nativeFileDialog;

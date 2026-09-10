@@ -206,7 +206,7 @@ function isValidityExpired(record: MemoryRecord, nowMs: number): boolean {
 
 function shouldForget(
   c: RecordContext,
-  p: MemoryMaintenancePolicy,
+  _p: MemoryMaintenancePolicy,
   nowMs: number,
 ): MemoryForgetReason | null {
   if (
