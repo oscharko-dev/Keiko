@@ -464,6 +464,53 @@ describe("coding runtime routes", () => {
     ]);
   });
 
+  // A retry mints a NEW run against the predecessor named in the URL; when the runtime refuses it
+  // after minting, every cause line is keyed to the new run. Keyed on the URL's predecessor, the
+  // refusal line and the cause again shared no key (review of PR #3452).
+  it("names the newly minted run, not the URL predecessor, on a refused retry", async () => {
+    const session = pairedAppSession();
+    const records: unknown[] = [];
+    const deps = runtime({
+      codingAppSessionChannel: session.channel,
+      activityLog: { write: (event: unknown) => void records.push(event) },
+    });
+    (
+      deps.codingRuntimeOrchestrator as unknown as {
+        retry: (
+          runId: string,
+          body: unknown,
+        ) => Promise<{ readonly ok: false; readonly failureCode: string; readonly runId: string }>;
+      }
+    ).retry = (predecessorRunId) =>
+      Promise.resolve({
+        ok: false as const,
+        failureCode: "authority-resolution-failed",
+        runId: `${predecessorRunId}-successor`,
+      });
+    const refused = await handleCodingRuntimeRetry(
+      context(
+        "{}",
+        { runId: "run-1" },
+        "/api/coding-workbench/runtime/runs/run-1/retry",
+        session.cookie,
+        "retry-corr-1",
+      ),
+      deps,
+    );
+    expect(refused).toMatchObject({ status: 403 });
+    expect(records).toEqual([
+      expect.objectContaining({
+        op: "coding-runtime.operation.refused",
+        correlationId: "retry-corr-1",
+        extra: {
+          operation: "retry",
+          runId: "run-1-successor",
+          reason: "authority-resolution-failed",
+        },
+      }),
+    ]);
+  });
+
   it("returns and logs the closed question-answer-rejected reason from the runtime", async () => {
     const session = pairedAppSession();
     const records: unknown[] = [];

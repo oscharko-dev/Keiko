@@ -277,13 +277,16 @@ async function mutation(
     }
     const result = await invoke(required.orchestrator, body, ctx.correlationId);
     if (result.ok) return { status: 200, body: result.snapshot };
-    // A refused start names the run it had already minted, so this request-scoped line joins the
-    // run-scoped lines that carry the cause (see CodingRuntimeOrchestratorResult.runId).
+    // The refusal line names the run the refusal happened under, so this request-scoped line joins
+    // the run-scoped lines that carry the cause (see CodingRuntimeOrchestratorResult.runId). The
+    // result's run id comes first: a refused start or retry minted a NEW run before it was refused,
+    // and a retry's URL names only the predecessor -- keyed on that, the refusal and its cause
+    // shared no key (review of PR #3452). The URL run is the fallback for a result without one.
     logRuntimeOperationRefusal(
       deps,
       ctx.correlationId,
       operationName,
-      runId ?? result.runId,
+      result.runId ?? runId,
       result.failureCode,
     );
     return failureResult(result.failureCode, ctx.correlationId, result.issueBindingFailure);
