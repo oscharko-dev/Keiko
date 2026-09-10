@@ -86,6 +86,7 @@ function session(
 
 class FakeUpdateSessionManager implements UpdateSessionManager {
   public readonly starts: UpdateSessionStartRequest[] = [];
+  public startError: UpdateSessionError | undefined;
   public retryError: UpdateSessionError | undefined;
   public cancelError: UpdateSessionError | undefined;
   public verifyError: UpdateSessionError | undefined;
@@ -98,6 +99,7 @@ class FakeUpdateSessionManager implements UpdateSessionManager {
 
   public readonly start = (input: UpdateSessionStartRequest): UpdateSessionStartOutcome => {
     this.starts.push(input);
+    if (this.startError !== undefined) throw this.startError;
     return { session: session(), reused: false };
   };
 
@@ -324,22 +326,22 @@ describe("update session routes", () => {
     expectServerBoundStart(res);
   });
 
-  it("delegates candidate-bound remediation gating to the session manager", async () => {
-    await rebuild({
-      updateRemediation: new FakeUpdateRemediationManager(
-        remediationReport(false, "manual-review-required"),
-      ),
-    });
+  it("maps candidate-bound remediation rejection from the session manager", async () => {
+    updateSession.startError = new UpdateSessionError(
+      "UPDATE_REMEDIATION_REQUIRED",
+      "Required update remediation is incomplete.",
+      409,
+    );
 
     const res = await fetch(`${baseUrl()}/api/update/session`, {
       method: "POST",
       headers: csrfHeaders(),
       body: JSON.stringify(CLAIM),
     });
-    const body = (await res.json()) as UpdateSession;
+    const body = (await res.json()) as { error: { code: string } };
 
-    expect(res.status).toBe(202);
-    expect(body).toMatchObject({ targetVersion: "0.2.12" });
+    expect(res.status).toBe(409);
+    expect(body.error.code).toBe("UPDATE_REMEDIATION_REQUIRED");
     expectServerBoundStart(res);
   });
 
