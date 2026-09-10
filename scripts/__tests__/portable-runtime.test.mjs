@@ -822,8 +822,9 @@ function writeAssemblerAttestationFixture(candidate, target, resourceRoot) {
   candidate.runtimeAttestation.sizeBytes = statSync(attestationPath).size;
 }
 
-function writeAssemblerSidecarFixture(candidate, target, resourceRoot, fixtureKind) {
-  addSidecarRuntime(candidate, target.platformTarget);
+function writeAssemblerSidecarFixture(candidate, target, resourceRoot, fixtureKind, evaluation) {
+  const overrides = evaluation ? { signing: evaluationSidecarSigning(target) } : {};
+  addSidecarRuntime(candidate, target.platformTarget, overrides);
   const sidecar = candidate.sidecarRuntimes[0];
   const sidecarRoot = join(resourceRoot, sidecar.payloadRootPath);
   const executablePath = join(resourceRoot, sidecar.executablePath);
@@ -887,23 +888,46 @@ function writeAssemblerQualificationFixture(candidate, target, resourceRoot) {
   candidate.runtimeQualification.sha256 = digestFor(qualificationBytes);
 }
 
-function writeAssemblerFixture(bundleRoot, largeArchive = false, unsafeSidecarKind) {
+function assemblerCandidate(target, evaluation) {
+  if (evaluation) {
+    const candidate = evaluationManifest(target.platformTarget);
+    candidate.updateEligibility.requiredPredicates.platformSignatureLocallyVerified = false;
+    candidate.updateEligibility.requiredPredicates.releaseTrustRequired = true;
+    candidate.updateEligibility.manualOnlyWhen = candidate.updateEligibility.manualOnlyWhen.map(
+      (reason) =>
+        reason === "signature-or-notarization-cannot-be-verified"
+          ? "release-trust-cannot-be-verified"
+          : reason,
+    );
+    return candidate;
+  }
+  const candidate = manifest();
+  setManifestTarget(candidate, target.platformTarget);
+  setVerificationState(candidate);
+  return candidate;
+}
+
+function assemblerArchiveSize(index, largeArchive) {
+  return largeArchive && index === 0 ? 17 * 1024 * 1024 : 1;
+}
+
+function writeAssemblerFixture(
+  bundleRoot,
+  largeArchive = false,
+  unsafeSidecarKind,
+  evaluation = false,
+) {
   const artifactsRoot = join(bundleRoot, "artifacts");
   for (const [index, target] of PORTABLE_TARGETS.entries()) {
     const stageRoot = join(artifactsRoot, `portable-stage-${target.platformTarget}`);
     mkdirSync(join(stageRoot, "manifest"), { recursive: true });
     mkdirSync(join(stageRoot, "evidence"), { recursive: true });
     const archivePath = join(stageRoot, target.assetName);
-    writeFileSync(
-      archivePath,
-      storedZipFixture(largeArchive && index === 0 ? 17 * 1024 * 1024 : 1),
-    );
+    writeFileSync(archivePath, storedZipFixture(assemblerArchiveSize(index, largeArchive)));
     if (target.platformTarget === "windows-x64") {
       writeFileSync(join(stageRoot, WINDOWS_PORTABLE_SETUP_ASSET_NAME), portableExecutable(42));
     }
-    const candidate = manifest();
-    setManifestTarget(candidate, target.platformTarget);
-    setVerificationState(candidate);
+    const candidate = assemblerCandidate(target, evaluation);
     candidate.release.releaseId = 0;
     candidate.artifact.assetId = 0;
     candidate.artifact.sizeBytes = statSync(archivePath).size;
@@ -921,7 +945,7 @@ function writeAssemblerFixture(bundleRoot, largeArchive = false, unsafeSidecarKi
     }
     writeAssemblerAttestationFixture(candidate, target, resourceRoot);
     const fixtureKind = index === 0 ? unsafeSidecarKind : undefined;
-    writeAssemblerSidecarFixture(candidate, target, resourceRoot, fixtureKind);
+    writeAssemblerSidecarFixture(candidate, target, resourceRoot, fixtureKind, evaluation);
     const activationPath = join(resourceRoot, ...candidate.runtimeActivation.path.split("/"));
     mkdirSync(dirname(activationPath), { recursive: true });
     const activationBytes = `${JSON.stringify(runtimeActivationManifest(candidate), null, 2)}\n`;
@@ -1330,6 +1354,7 @@ function evaluationSidecarSigning(target) {
 
 function evaluationManifest(platformTarget = "windows-x64") {
   const candidate = manifest();
+  setManifestTarget(candidate, platformTarget);
   setVerificationState(candidate, {
     verificationChecks:
       platformTarget === "windows-x64"
@@ -2387,6 +2412,15 @@ describe("assemblePortableReleaseAssets bounds", () => {
       setupPath: `artifacts/windows-x64/${WINDOWS_PORTABLE_SETUP_ASSET_NAME}`,
       setupSha256: createHash("sha256").update(copiedSetup).digest("hex"),
       setupSizeBytes: copiedSetup.length,
+    });
+  });
+
+  it("assembles evaluation helpers under the manifest-level trust policy", async () => {
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot, false, undefined, true);
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).resolves.toMatchObject({
+      schemaVersion: 1,
     });
   });
 

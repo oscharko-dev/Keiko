@@ -47,19 +47,19 @@ Portable GitHub Release Assets are published by the same `scripts/release-publis
 a second release process. A stable `latest` publish must end with all four downloads
 (`keiko-windows-x64.zip`, `keiko-macos-arm64.zip`, `keiko-macos-x64.zip`, and
 `keiko-windows-x64-setup.exe`) present on the GitHub Release; the publisher verifies that against
-the release itself and fails closed **before** npm learns the dist-tag. Two ways satisfy it: supply
-`--portable-assets-manifest` / `KEIKO_PORTABLE_ASSETS_MANIFEST` and this run uploads them, or the
-governed evaluation lane already published them onto the tag and this run only promotes it. Beta,
-next, plan-only, and dry-run executions do not require real portable files unless a manifest is
-supplied. When supplied, the manifest is validated before npm publish starts: for stable `latest`
+the release itself and fails closed **before** npm learns the dist-tag. A stable `latest` publish
+must supply `--portable-assets-manifest` / `KEIKO_PORTABLE_ASSETS_MANIFEST`; prepublished evaluation
+assets are not a release-trust input. Beta, next, plan-only, and dry-run executions do not require
+real portable files unless a manifest is supplied. The manifest is validated before npm publish
+starts: for stable `latest`
 the publisher creates or updates the GitHub Release, uploads and verifies the three zero-id portable
 candidates, binds the uploaded manifest copies to the actual GitHub release id and archive asset
 ids, signs that final binding with the protected Keiko release key, uploads the evidence assets,
 and verifies unauthenticated full-download bytes by size and SHA-256.
 
-The older prepublished-evaluation path remains a compatibility input for an already created release;
-it does not bypass final manifest signing. Run it from a clean
-checkout AT the built commit, and dispatch the evaluation build from the ACTIVE release source
+The evaluation prerelease command remains available for testing and release rehearsal, but its
+output cannot be promoted to stable `latest` without a fresh portable release-trust bundle. Run it
+from a clean checkout AT the built commit, and dispatch the evaluation build from the ACTIVE release source
 branch — `RELEASE_BASE_BRANCH` from `release.yml` when that branch exists, otherwise the
 repository default branch (`dev` today, which is why the example says `dev`):
 
@@ -75,16 +75,9 @@ on that exact commit, and the release owner's approval verifies live. It then pu
 `keiko-portable-evaluation-manifest.json` at `v<version>` as the Latest release, with both the
 first-launch instructions and the governed catalog notes in its body.
 
-When the downloads were already published by the governed evaluation lane, the publisher verifies
-them instead of uploading them: the release must carry
-`keiko-portable-evaluation-manifest.json`, whose declared tag, source commit, workflow path and
-per-asset digests are validated, whose named workflow run must be a successful run of the canonical
-portable-assets workflow at that commit. The declared digests are then checked against the
-artifacts that run actually produced — workflow artifacts cannot be rewritten after the run, so the
-evidence sitting next to the assets is never its own provenance — and only then are the four
-downloads re-fetched over the same unauthenticated URL a customer uses and matched byte for byte. Either way npm publication happens
-only afterwards, so a broken or unevidenced portable asset set cannot produce a stable package
-release.
+Stable npm publication happens only after the supplied bundle has been validated, uploaded, signed,
+and re-downloaded over the same unauthenticated URL a customer uses. A broken or unevidenced
+portable asset set therefore cannot produce a stable package release.
 
 The portable assets manifest is a content-free operator input:
 
@@ -208,8 +201,7 @@ still requires an operator dispatch with `portable_assets_run_id` pointing at th
 - Manual `workflow_dispatch` with `publish: true` enables the publish job only when the selected ref is a tag that starts with `v` and the same tag/SHA already has a successful tag-push release verification run.
 - Manual publishes require an explicit npm dist-tag. The default is `beta`.
 - Stable `latest` publishes require the four downloads to be present on the GitHub Release when the
-  run finishes; a reviewed portable asset bundle is how this run uploads them, and is not required
-  when the governed evaluation lane already published them onto the tag. In GitHub Actions, provide
+  run finishes; a reviewed portable asset bundle is how this run uploads them. In GitHub Actions, provide
   `portable_assets_run_id`, `portable_assets_run_attempt`, and the canonical
   `portable_assets_artifact_name` value `portable-release-assets`; the workflow first verifies that
   the run is a successful stable-tag push of `.github/workflows/portable-assets.yml` for the exact
@@ -278,9 +270,7 @@ Publish is intentionally off by default. To publish, a maintainer must:
 - set `publish` to `true`,
 - keep `npm_dist_tag` at `beta` for prereleases such as `0.3.0-beta.0`,
 - provide `portable_assets_run_id` and `portable_assets_artifact_name` for the reviewed portable
-  asset bundle when this run is the one uploading the stable `latest` downloads; omit them when the
-  governed evaluation lane already published the four downloads onto the tag (the publisher
-  verifies their evidence and re-downloads every byte either way),
+  asset bundle used to upload the stable `latest` downloads,
 - provide the exact `portable_assets_run_attempt` recorded by that successful tag-push run when you
   supply a bundle,
 - optionally set `portable_assets_manifest` to the manifest path inside that bundle; otherwise it

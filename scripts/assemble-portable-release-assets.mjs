@@ -382,12 +382,18 @@ function assertNativeHelperEvidence(stageRoot, manifest, target, sbom) {
     fail(`${target.platformTarget} must contain the complete native helper set`);
   }
   for (const helper of manifest.nativeHelpers) {
-    assertOneNativeHelperEvidence(stageRoot, helper, target, sbom);
+    assertOneNativeHelperEvidence(
+      stageRoot,
+      helper,
+      target,
+      sbom,
+      manifest.security.verificationPolicy,
+    );
   }
 }
 
-function assertOneNativeHelperEvidence(stageRoot, helper, target, sbom) {
-  assertNativeHelperTrustState(helper, target);
+function assertOneNativeHelperEvidence(stageRoot, helper, target, sbom, verificationPolicy) {
+  assertNativeHelperTrustState(helper, target, verificationPolicy);
   const resourceRoot = sidecarPayloadRoot(stageRoot, target);
   const executable = regularContainedFile(resourceRoot, helper.executablePath, "native helper");
   const bytes = readFileSync(executable);
@@ -410,9 +416,9 @@ function assertOneNativeHelperEvidence(stageRoot, helper, target, sbom) {
   }
 }
 
-function assertNativeHelperTrustState(helper, target) {
+function assertNativeHelperTrustState(helper, target, verificationPolicy) {
   const signing = helper.signing;
-  const evaluation = signing?.verificationPolicy === "evaluation";
+  const evaluation = verificationPolicy === "evaluation";
   const expected = evaluation
     ? [
         signing.verificationStatus === "evaluation-unqualified",
@@ -492,7 +498,7 @@ function nativeHelperProvenance(helper) {
     sourceTreeSha256: helper.source?.treeSha256,
     shippedSha256: helper.shippedSha256,
     signatureKind: helper.signing?.signatureKind,
-    signatureVerified: true,
+    signatureVerified: helper.signing?.signatureVerified,
     notarizationVerified: helper.signing?.notarizationVerified,
   };
 }
