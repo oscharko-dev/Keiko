@@ -36,8 +36,13 @@ export interface RuntimeQualificationSidecarDigest {
   readonly sha256: string;
 }
 
+export interface RuntimeQualificationComponentDigest {
+  readonly name: "node-runtime" | "primary-launcher" | "usearch";
+  readonly sha256: string;
+}
+
 export interface RuntimeQualificationReceipt {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 1 | 2;
   readonly suiteVersion: "runtime-tree-qualification-v1";
   readonly platformTarget: RuntimeQualificationTarget;
   readonly sourceCommitSha: string;
@@ -45,14 +50,20 @@ export interface RuntimeQualificationReceipt {
   readonly supervisorSha256: string;
   readonly secureReadSha256: string;
   readonly sidecars: readonly RuntimeQualificationSidecarDigest[];
+  readonly runtimeComponents?: readonly RuntimeQualificationComponentDigest[];
   readonly backend: LongLivedRuntimeBackend;
   readonly result: "passed" | "failed";
 }
 
-export type RuntimeQualificationReceiptBinding = Omit<
-  RuntimeQualificationReceipt,
-  "schemaVersion" | "suiteVersion" | "backend" | "result"
->;
+export interface RuntimeQualificationReceiptBinding {
+  readonly platformTarget: RuntimeQualificationTarget;
+  readonly sourceCommitSha: string;
+  readonly activationManifestSha256: string;
+  readonly supervisorSha256: string;
+  readonly secureReadSha256: string;
+  readonly sidecars: readonly RuntimeQualificationSidecarDigest[];
+  readonly runtimeComponents?: readonly RuntimeQualificationComponentDigest[];
+}
 
 export type RuntimeQualificationReceiptResult =
   | { readonly ok: true; readonly qualification: LongLivedRuntimeQualification }
@@ -150,33 +161,26 @@ const RECEIPT_KEYS = [
   "backend",
   "result",
 ] as const;
+const LINUX_RECEIPT_KEYS = [...RECEIPT_KEYS, "runtimeComponents"] as const;
+const RUNTIME_COMPONENT_NAMES = new Set(["node-runtime", "primary-launcher", "usearch"]);
 
 function receiptIsClosed(value: unknown): value is RuntimeQualificationReceipt {
-  if (!isExactRecord(value, RECEIPT_KEYS)) return false;
+  if (!isRecord(value)) return false;
+  const keys = value.platformTarget === "linux-x64" ? LINUX_RECEIPT_KEYS : RECEIPT_KEYS;
+  if (!isExactRecord(value, keys)) return false;
   return receiptIdentityIsClosed(value) && receiptResultIsClosed(value);
 }
 
-function receiptIdentityIsClosed(
-  value: Record<(typeof RECEIPT_KEYS)[number], unknown>,
-): value is Record<(typeof RECEIPT_KEYS)[number], unknown> &
-  Pick<
-    RuntimeQualificationReceipt,
-    | "schemaVersion"
-    | "suiteVersion"
-    | "platformTarget"
-    | "sourceCommitSha"
-    | "activationManifestSha256"
-    | "supervisorSha256"
-    | "secureReadSha256"
-    | "sidecars"
-  > {
+function receiptIdentityIsClosed(value: Record<string, unknown>): boolean {
+  const target = value.platformTarget;
   return (
-    value.schemaVersion === 1 &&
+    (target === "linux-x64" ? value.schemaVersion === 2 : value.schemaVersion === 1) &&
     value.suiteVersion === "runtime-tree-qualification-v1" &&
-    isQualificationTarget(value.platformTarget) &&
+    isQualificationTarget(target) &&
     receiptCommitIsClosed(value.sourceCommitSha) &&
     receiptDigestsAreClosed(value) &&
-    sidecarsAreClosed(value.sidecars)
+    sidecarsAreClosed(value.sidecars) &&
+    (target !== "linux-x64" || runtimeComponentsAreClosed(value.runtimeComponents))
   );
 }
 
@@ -202,9 +206,7 @@ function digestIsClosed(value: unknown): value is string {
   return typeof value === "string" && DIGEST_PATTERN.test(value);
 }
 
-function receiptResultIsClosed(
-  value: ReturnTypeNarrowedReceipt,
-): value is RuntimeQualificationReceipt {
+function receiptResultIsClosed(value: Record<string, unknown>): boolean {
   const backend = value.backend;
   if (
     backend !== "linux-namespace-gateway" &&
@@ -214,13 +216,20 @@ function receiptResultIsClosed(
     return false;
   }
   if (value.result !== "passed" && value.result !== "failed") return false;
-  return backendMatchesTarget({ backend, platformTarget: value.platformTarget });
+  return isQualificationTarget(value.platformTarget)
+    ? backendMatchesTarget({ backend, platformTarget: value.platformTarget })
+    : false;
 }
 
-type ReturnTypeNarrowedReceipt = Record<(typeof RECEIPT_KEYS)[number], unknown> &
-  Pick<RuntimeQualificationReceipt, "platformTarget">;
-
 function bindingIsCurrent(
+  receipt: RuntimeQualificationReceipt,
+  binding: RuntimeQualificationReceiptBinding,
+): boolean {
+  if (!commonBindingMatches(receipt, binding)) return false;
+  return runtimeComponentsMatch(receipt, binding);
+}
+
+function commonBindingMatches(
   receipt: RuntimeQualificationReceipt,
   binding: RuntimeQualificationReceiptBinding,
 ): boolean {
@@ -232,6 +241,18 @@ function bindingIsCurrent(
     receipt.supervisorSha256 === binding.supervisorSha256 &&
     receipt.secureReadSha256 === binding.secureReadSha256 &&
     canonicalSidecars(receipt.sidecars) === canonicalSidecars(binding.sidecars)
+  );
+}
+
+function runtimeComponentsMatch(
+  receipt: RuntimeQualificationReceipt,
+  binding: RuntimeQualificationReceiptBinding,
+): boolean {
+  if (receipt.platformTarget !== "linux-x64") return binding.runtimeComponents === undefined;
+  return (
+    binding.runtimeComponents !== undefined &&
+    canonicalRuntimeComponents(receipt.runtimeComponents ?? []) ===
+      canonicalRuntimeComponents(binding.runtimeComponents)
   );
 }
 
@@ -247,8 +268,22 @@ function sidecarsAreClosed(value: unknown): value is readonly RuntimeQualificati
   return true;
 }
 
+function runtimeComponentsAreClosed(
+  value: unknown,
+): value is readonly RuntimeQualificationComponentDigest[] {
+  if (!Array.isArray(value) || value.length !== RUNTIME_COMPONENT_NAMES.size) return false;
+  const names = new Set<string>();
+  for (const entry of value) {
+    if (!isExactRecord(entry, ["name", "sha256"])) return false;
+    if (!RUNTIME_COMPONENT_NAMES.has(entry.name) || !DIGEST_PATTERN.test(entry.sha256))
+      return false;
+    names.add(entry.name);
+  }
+  return names.size === RUNTIME_COMPONENT_NAMES.size;
+}
+
 function canonicalReceipt(receipt: RuntimeQualificationReceipt): string {
-  return JSON.stringify({
+  const common = {
     schemaVersion: receipt.schemaVersion,
     suiteVersion: receipt.suiteVersion,
     platformTarget: receipt.platformTarget,
@@ -259,7 +294,15 @@ function canonicalReceipt(receipt: RuntimeQualificationReceipt): string {
     sidecars: canonicalSidecarRecords(receipt.sidecars),
     backend: receipt.backend,
     result: receipt.result,
-  });
+  };
+  return JSON.stringify(
+    receipt.platformTarget === "linux-x64"
+      ? {
+          ...common,
+          runtimeComponents: canonicalRuntimeComponentRecords(receipt.runtimeComponents ?? []),
+        }
+      : common,
+  );
 }
 
 function canonicalSidecars(sidecars: readonly RuntimeQualificationSidecarDigest[]): string {
@@ -270,6 +313,18 @@ function canonicalSidecarRecords(
   sidecars: readonly RuntimeQualificationSidecarDigest[],
 ): readonly RuntimeQualificationSidecarDigest[] {
   return [...sidecars].sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function canonicalRuntimeComponents(
+  components: readonly RuntimeQualificationComponentDigest[],
+): string {
+  return JSON.stringify(canonicalRuntimeComponentRecords(components));
+}
+
+function canonicalRuntimeComponentRecords(
+  components: readonly RuntimeQualificationComponentDigest[],
+): readonly RuntimeQualificationComponentDigest[] {
+  return [...components].sort((left, right) => left.name.localeCompare(right.name));
 }
 
 function backendMatchesTarget(

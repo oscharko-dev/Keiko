@@ -7,6 +7,7 @@ import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
 import {
   qualificationFromReceipt,
   type LongLivedRuntimeQualification,
+  type RuntimeQualificationComponentDigest,
   type RuntimeQualificationReceiptBinding,
 } from "@oscharko-dev/keiko-sandbox";
 
@@ -113,6 +114,7 @@ interface PortableRuntimeCandidate {
   readonly sourceCommitSha: string;
   readonly supervisorSha256: string;
   readonly secureReadSha256: string;
+  readonly runtimeComponents?: readonly RuntimeQualificationComponentDigest[];
   readonly sidecar: PortableSidecarRuntimeVerification;
   readonly platformAssurance: PortableRuntimeLane;
 }
@@ -121,6 +123,13 @@ interface BoundActivation {
   readonly activation: Record<string, unknown>;
   readonly activationPath: string;
   readonly sourceCommitSha: string;
+}
+
+interface CandidateRuntimeBindings {
+  readonly supervisorSha256: string;
+  readonly secureReadSha256: string;
+  readonly runtimeComponents?: readonly RuntimeQualificationComponentDigest[];
+  readonly sidecar: PortableSidecarRuntimeVerification;
 }
 
 /**
@@ -162,18 +171,35 @@ function portableRuntimeCandidate(
   if (bound === undefined) return undefined;
   const platformAssurance = honouredLane(bound.activation, root, target, input);
   if (platformAssurance === undefined) return undefined;
-  const helpers = boundHelperDigests(root, bound.activation, target);
-  const sidecar = qualifiedSidecar(root, bound.activation, target, platformAssurance);
-  if (helpers === undefined || sidecar === undefined) return undefined;
+  const bindings = candidateRuntimeBindings(root, bound.activation, target, platformAssurance);
+  if (bindings === undefined) return undefined;
   return {
     root,
     target,
     activation: bound.activation,
     activationSha256: sha256File(bound.activationPath),
     sourceCommitSha: bound.sourceCommitSha,
-    ...helpers,
-    sidecar,
+    ...bindings,
     platformAssurance,
+  };
+}
+
+function candidateRuntimeBindings(
+  root: string,
+  activation: Record<string, unknown>,
+  target: UpdatePortableTarget,
+  lane: PortableRuntimeLane,
+): CandidateRuntimeBindings | undefined {
+  const helpers = boundHelperDigests(root, activation, target);
+  if (helpers === undefined) return undefined;
+  const sidecar = qualifiedSidecar(root, activation, target, lane);
+  if (sidecar === undefined) return undefined;
+  const runtimeComponents = boundRuntimeComponents(root, activation, target);
+  if (target === "linux-x64" && runtimeComponents === undefined) return undefined;
+  return {
+    ...helpers,
+    ...(runtimeComponents === undefined ? {} : { runtimeComponents }),
+    sidecar,
   };
 }
 
@@ -360,6 +386,9 @@ function receiptBinding(candidate: PortableRuntimeCandidate): RuntimeQualificati
     sidecars: [
       { name: candidate.sidecar.summary.name, sha256: candidate.sidecar.summary.payloadSha256 },
     ],
+    ...(candidate.runtimeComponents === undefined
+      ? {}
+      : { runtimeComponents: candidate.runtimeComponents }),
   };
 }
 
@@ -669,6 +698,58 @@ function boundHelperDigests(
   return supervisor === undefined || secureRead === undefined
     ? undefined
     : { supervisorSha256: supervisor, secureReadSha256: secureRead };
+}
+
+function boundRuntimeComponents(
+  root: string,
+  activation: Record<string, unknown>,
+  target: UpdatePortableTarget,
+): readonly RuntimeQualificationComponentDigest[] | undefined {
+  if (target !== "linux-x64") return undefined;
+  const launcher = installedFileDigest(root, "Keiko");
+  const node = installedFileDigest(root, "runtime/node/bin/node");
+  const usearch = boundUsearchDigest(root, activation);
+  if (launcher === undefined || node === undefined || usearch === undefined) return undefined;
+  return [
+    { name: "primary-launcher", sha256: launcher },
+    { name: "node-runtime", sha256: node },
+    { name: "usearch", sha256: usearch },
+  ];
+}
+
+function installedFileDigest(root: string, relativePath: string): string | undefined {
+  const path = safeRealFile(join(root, ...relativePath.split("/")));
+  return statSync(path).size > 0 ? sha256File(path) : undefined;
+}
+
+function boundUsearchDigest(root: string, activation: Record<string, unknown>): string | undefined {
+  const addons = Array.isArray(activation.nativeAddons) ? activation.nativeAddons : [];
+  const matches = addons.map(record).filter((addon) => addon?.name === "usearch");
+  if (matches.length !== 1) return undefined;
+  const addon = matches[0];
+  const expectedSize = addon?.sizeBytes;
+  const expectedDigest = stringField(addon, "shippedSha256", DIGEST);
+  if (!usearchBindingIsValid(addon, expectedSize, expectedDigest)) return undefined;
+  const path = safeRealFile(join(root, "runtime", "native", "usearch.node"));
+  const entry = statSync(path);
+  return entry.size === expectedSize && sha256File(path) === expectedDigest
+    ? expectedDigest
+    : undefined;
+}
+
+function usearchBindingIsValid(
+  addon: Record<string, unknown> | undefined,
+  expectedSize: unknown,
+  expectedDigest: string | undefined,
+): expectedSize is number {
+  return (
+    addon?.platformTarget === "linux-x64" &&
+    addon.executablePath === "runtime/native/usearch.node" &&
+    typeof expectedSize === "number" &&
+    Number.isSafeInteger(expectedSize) &&
+    expectedSize > 0 &&
+    expectedDigest !== undefined
+  );
 }
 
 function boundHelperDigest(

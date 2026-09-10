@@ -28,6 +28,7 @@ function fixture() {
   const resourceRoot = join(stageRoot, "payload", "Keiko");
   const supervisor = Buffer.from("compiled sandbox runtime\n");
   const secureRead = Buffer.from("secure workspace read\n");
+  const usearch = Buffer.from("native usearch addon\n");
   const nativeHelpers = [
     {
       name: "keiko-runtime-supervisor",
@@ -52,6 +53,15 @@ function fixture() {
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, bytes);
   }
+  for (const [path, bytes] of [
+    ["Keiko", Buffer.from("native launcher\n")],
+    ["runtime/node/bin/node", Buffer.from("node runtime\n")],
+    ["runtime/native/usearch.node", usearch],
+  ]) {
+    const destination = join(resourceRoot, ...path.split("/"));
+    mkdirSync(dirname(destination), { recursive: true });
+    writeFileSync(destination, bytes);
+  }
   const activation = {
     schemaVersion: 1,
     suiteVersion: RUNTIME_QUALIFICATION_SUITE,
@@ -61,6 +71,15 @@ function fixture() {
     runtime: { nodePlatform: "linux", nodeArchitecture: "x64" },
     security: { verificationStatus: "verified-production" },
     nativeHelpers,
+    nativeAddons: [
+      {
+        name: "usearch",
+        platformTarget: TARGET,
+        executablePath: "runtime/native/usearch.node",
+        sizeBytes: usearch.length,
+        shippedSha256: sha256(usearch),
+      },
+    ],
     sidecarRuntimes: [
       { name: "opencode-compatible", platformTarget: TARGET, payloadSha256: "a".repeat(64) },
     ],
@@ -85,9 +104,15 @@ describe("Linux runtime qualification", () => {
         sourceCommitSha: COMMIT,
       }),
     ).toMatchObject({
+      schemaVersion: 2,
       platformTarget: TARGET,
       supervisorSha256: value.activation.nativeHelpers[0].shippedSha256,
       secureReadSha256: value.activation.nativeHelpers[1].shippedSha256,
+      runtimeComponents: [
+        { name: "primary-launcher", sha256: sha256("native launcher\n") },
+        { name: "node-runtime", sha256: sha256("node runtime\n") },
+        { name: "usearch", sha256: sha256("native usearch addon\n") },
+      ],
       sidecars: [{ name: "opencode-compatible", sha256: "a".repeat(64) }],
       backend: "linux-namespace-gateway",
       result: "passed",
@@ -145,6 +170,45 @@ describe("Linux runtime qualification", () => {
       join(value.resourceRoot, "runtime", "native", "keiko-secure-workspace-read"),
       "changed\n",
     );
+    expect(() =>
+      qualificationReceiptFor({
+        activationPath: value.activationPath,
+        resourceRoot: value.resourceRoot,
+        sourceCommitSha: COMMIT,
+      }),
+    ).toThrow(LinuxRuntimeQualificationError);
+  });
+
+  it.each(["Keiko", "runtime/node/bin/node"])(
+    "changes the signed qualification binding when %s changes",
+    (relativePath) => {
+      const value = fixture();
+      const before = qualificationReceiptFor({
+        activationPath: value.activationPath,
+        resourceRoot: value.resourceRoot,
+        sourceCommitSha: COMMIT,
+      });
+      writeFileSync(
+        join(value.resourceRoot, ...relativePath.split("/")),
+        "changed runtime bytes\n",
+      );
+      const after = qualificationReceiptFor({
+        activationPath: value.activationPath,
+        resourceRoot: value.resourceRoot,
+        sourceCommitSha: COMMIT,
+      });
+
+      expect(after.runtimeComponents).not.toEqual(before.runtimeComponents);
+    },
+  );
+
+  it("rejects qualification when USearch differs from its activation binding", () => {
+    const value = fixture();
+    writeFileSync(
+      join(value.resourceRoot, "runtime", "native", "usearch.node"),
+      "changed runtime bytes\n",
+    );
+
     expect(() =>
       qualificationReceiptFor({
         activationPath: value.activationPath,

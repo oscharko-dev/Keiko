@@ -137,7 +137,8 @@ activation uses a smaller, closed runtime attestation whose identity contains on
 - schema and qualification-suite versions;
 - target and source commit;
 - supervisor backend and protocol identity;
-- exact shipped supervisor, secure-read, and OpenCode payload digests;
+- exact shipped supervisor, secure-read, OpenCode payload, native-addon, Node.js executable, and
+  primary-launcher digests;
 - the qualification result; and
 - content-free platform evidence flags.
 
@@ -156,11 +157,15 @@ signature. Point-of-use verification requires the outer code-resource seal, nest
 signatures, notarization/stapling assessment, exact team identity, required entitlements, and exact
 component digests. A copied JSON file outside those trust anchors is never sufficient.
 
-On Linux, the closed receipt is bound to the exact staged activation manifest, supervisor,
-secure-read helper, and OpenCode payload. A Sigstore bundle created through GitHub OIDC anchors the
-receipt to the protected `portable-assets` workflow identity and source commit. Runtime discovery
-performs offline verification with the bundled public trust root; no network result, mutable key
-file, caller Boolean, or unsigned receipt can authorize activation.
+On Linux, the closed v2 receipt is bound to the exact staged activation manifest, supervisor,
+secure-read helper, OpenCode payload, `Keiko` launcher, Node.js executable, and USearch native
+addon. The activation projection carries the reviewed native-addon identity and shipped digest;
+the receipt additionally binds the actual launcher's and Node.js executable's staged bytes. A
+Sigstore bundle created through GitHub OIDC anchors the receipt to the protected `portable-assets`
+workflow identity and source commit. Immediately before admitting the runtime, production
+discovery reopens each fixed, contained, regular single-link file and compares its SHA-256 digest
+with that offline-verified receipt. No network result, mutable key file, caller Boolean, unsigned
+receipt, legacy Linux receipt, or post-qualification byte replacement can authorize activation.
 
 Stale, malformed, failed, differently targeted, differently signed, differently hashed, or
 unsealed evidence returns `runtime-unqualified`.
@@ -476,3 +481,4 @@ green. This is the class audit finding F-01 closed, and it must not be reintrodu
 | 1.0     | 2026-07-27 | Accepted the self-contained release-qualified Coding Workbench runtime. |
 | 1.1     | 2026-09-03 | Recorded the D1 Windows native-helper packaging amendment: `/MT` statically links the CRT while `/DEPENDENTLOADFLAG:0x800` and fail-closed DLL-directory initialization retain the DLL-planting defense. |
 | 1.2     | 2026-09-10 | Added the production-only `linux-x64` release target, offline GitHub-OIDC Sigstore qualification, exact component/source binding, fresh-runner re-verification, and namespace-gateway activation. |
+| 1.3     | 2026-09-10 | Closed the Linux launch-path binding for Issue #3451: receipt schema v2 and production discovery now bind and rehash the launcher, Node.js executable, and USearch addon in addition to the existing activation, helper, and sidecar evidence. |

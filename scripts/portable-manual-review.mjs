@@ -518,6 +518,9 @@ function writeLinuxLayout(root, target, version, sidecar) {
   });
   writeJson(join(root, ".portable", "setup-manifest.json"), setupManifest(target, version));
   writeNativeHelperPayload(root, target);
+  writeFileSync(join(root, "runtime", "native", "usearch.node"), "fixture usearch\n", {
+    mode: 0o644,
+  });
   writeSidecarPayload(root, target, sidecar);
 }
 
@@ -553,9 +556,9 @@ function runtimeResourceRoot(payloadRoot, target) {
     : join(payloadRoot, "Keiko.app", "Contents", "Resources");
 }
 
-function runtimeQualificationReceipt(manifest) {
+function runtimeQualificationReceipt(manifest, resourceRoot) {
   const helpers = new Map(manifest.nativeHelpers.map((helper) => [helper.name, helper]));
-  return {
+  const common = {
     schemaVersion: 1,
     suiteVersion: RUNTIME_QUALIFICATION_SUITE,
     platformTarget: manifest.artifact.platformTarget,
@@ -570,6 +573,22 @@ function runtimeQualificationReceipt(manifest) {
     backend: runtimeQualificationBackend(manifest.artifact.platformTarget),
     result: "passed",
   };
+  if (manifest.artifact.platformTarget !== "linux-x64") return common;
+  return {
+    ...common,
+    schemaVersion: 2,
+    runtimeComponents: [
+      { name: "primary-launcher", sha256: sha256File(join(resourceRoot, "Keiko")) },
+      {
+        name: "node-runtime",
+        sha256: sha256File(join(resourceRoot, "runtime", "node", "bin", "node")),
+      },
+      {
+        name: "usearch",
+        sha256: sha256File(join(resourceRoot, "runtime", "native", "usearch.node")),
+      },
+    ],
+  };
 }
 
 function writeRuntimeEvidencePayload(payloadRoot, target, manifest) {
@@ -577,7 +596,7 @@ function writeRuntimeEvidencePayload(payloadRoot, target, manifest) {
   const activationPath = join(resourceRoot, ...RUNTIME_ACTIVATION_RELATIVE_PATH.split("/"));
   writeJson(activationPath, runtimeActivationManifest(manifest));
   manifest.runtimeActivation.sha256 = sha256File(activationPath);
-  const receipt = runtimeQualificationReceipt(manifest);
+  const receipt = runtimeQualificationReceipt(manifest, resourceRoot);
   if (target === "windows-x64") {
     writeManualWindowsAttestation(resourceRoot, manifest, receipt);
   } else {

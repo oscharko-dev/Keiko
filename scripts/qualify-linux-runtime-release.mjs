@@ -15,6 +15,10 @@ const COMMIT = /^[a-f0-9]{40}$/u;
 const SHA256 = /^[a-f0-9]{64}$/u;
 const TARGET = "linux-x64";
 const RECEIPT_PATH = ".portable/runtime-qualification.json";
+const RUNTIME_COMPONENTS = Object.freeze([
+  { name: "primary-launcher", path: "Keiko" },
+  { name: "node-runtime", path: "runtime/node/bin/node" },
+]);
 const REQUIRED_TEST_TITLES = new Set([
   "permits only the configured gateway and isolates concurrent gateway ports",
   "composes a release-qualified Linux run through the namespace gateway backend",
@@ -107,6 +111,47 @@ function componentDigest(resourceRoot, helper) {
   return helper.shippedSha256;
 }
 
+function fileDigest(resourceRoot, relativePath) {
+  try {
+    const path = join(resourceRoot, ...relativePath.split("/"));
+    const entry = lstatSync(path);
+    if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1 || entry.size <= 0) {
+      fail("runtime component bytes are invalid");
+    }
+    return sha256File(path);
+  } catch (error) {
+    if (error instanceof LinuxRuntimeQualificationError) throw error;
+    return fail("runtime component bytes are invalid");
+  }
+}
+
+function usearchComponent(activation, resourceRoot) {
+  const addons = Array.isArray(activation.nativeAddons) ? activation.nativeAddons : [];
+  if (addons.length !== 1) fail("activation native addon set is invalid");
+  const addon = addons[0];
+  if (
+    addon?.name !== "usearch" ||
+    addon.platformTarget !== TARGET ||
+    addon.executablePath !== "runtime/native/usearch.node" ||
+    !Number.isSafeInteger(addon.sizeBytes) ||
+    addon.sizeBytes <= 0 ||
+    !SHA256.test(addon.shippedSha256)
+  ) {
+    fail("activation native addon set is invalid");
+  }
+  return { name: "usearch", sha256: componentDigest(resourceRoot, addon) };
+}
+
+function runtimeComponents(activation, resourceRoot) {
+  return [
+    ...RUNTIME_COMPONENTS.map((component) => ({
+      name: component.name,
+      sha256: fileDigest(resourceRoot, component.path),
+    })),
+    usearchComponent(activation, resourceRoot),
+  ];
+}
+
 function assertValid(condition, message = "activation manifest is invalid") {
   if (!condition) fail(message);
 }
@@ -182,13 +227,14 @@ export function qualificationReceiptFor(input) {
   const supervisor = helperByName(activation, "keiko-runtime-supervisor");
   const secureRead = helperByName(activation, "keiko-secure-workspace-read");
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     suiteVersion: RUNTIME_QUALIFICATION_SUITE,
     platformTarget: TARGET,
     sourceCommitSha: input.sourceCommitSha,
     activationManifestSha256: sha256File(input.activationPath),
     supervisorSha256: componentDigest(input.resourceRoot, supervisor),
     secureReadSha256: componentDigest(input.resourceRoot, secureRead),
+    runtimeComponents: runtimeComponents(activation, input.resourceRoot),
     sidecars: activation.sidecarRuntimes.map((sidecar) => ({
       name: sidecar.name,
       sha256: sidecar.payloadSha256,
