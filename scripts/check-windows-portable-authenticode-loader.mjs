@@ -5,11 +5,16 @@ import { pathToFileURL } from "node:url";
 
 const CHILD_TIMEOUT_MS = 40_000;
 const CHILD_OUTPUT_BYTES = 16_384;
-const CLOSED_HELPER_DIAGNOSTIC =
-  /^standard-token-loader:[a-z-]+(?::(?:win32-[0-9]+|[A-Za-z]+:hresult-[0-9A-F]{8}|child-[0-9A-F]{8}))?\r?\n?$/u;
+const CLOSED_HELPER_DIAGNOSTICS = [
+  /^standard-token-loader:[a-z-]+\r?\n?$/u,
+  /^standard-token-loader:[a-z-]+:win32-\d+\r?\n?$/u,
+  /^standard-token-loader:[a-z-]+:[A-Za-z]+:hresult-[0-9A-F]{8}\r?\n?$/u,
+  /^standard-token-loader:[a-z-]+:child-[0-9A-F]{8}\r?\n?$/u,
+];
 
 function closedHelperDiagnostic(stderr) {
-  return typeof stderr === "string" && CLOSED_HELPER_DIAGNOSTIC.test(stderr)
+  return typeof stderr === "string" &&
+    CLOSED_HELPER_DIAGNOSTICS.some((pattern) => pattern.test(stderr))
     ? stderr.trim()
     : "unavailable";
 }

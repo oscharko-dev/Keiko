@@ -461,43 +461,71 @@ function stringTokenEnd(text: string, offset: number): number | undefined {
 
 function primitiveEnd(text: string, offset: number): number | undefined {
   if (text[offset] === '"') return stringTokenEnd(text, offset);
-  const match = /^(?:-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?|true|false|null)/u.exec(
-    text.slice(offset),
+  const delimiters = [text.indexOf(",", offset), text.indexOf("}", offset)].filter(
+    (index) => index >= 0,
   );
-  return match === null ? undefined : offset + match[0].length;
+  const delimiter = Math.min(...delimiters);
+  if (!Number.isFinite(delimiter)) return undefined;
+  const token = text.slice(offset, delimiter).trimEnd();
+  if (token.length === 0) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(token);
+    return parsed === null || typeof parsed === "boolean" || typeof parsed === "number"
+      ? offset + token.length
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
-// A deliberately tiny lexer for the retired flat schema. Its branches are the JSON token states,
-// not business decisions; keeping them together makes escaped-key duplicate rejection auditable.
-// eslint-disable-next-line complexity -- finite flat-JSON lexical state machine
+interface FlatObjectKey {
+  readonly key: string;
+  readonly end: number;
+}
+
+function flatObjectKey(
+  text: string,
+  offset: number,
+  seen: ReadonlySet<string>,
+): FlatObjectKey | undefined {
+  const end = stringTokenEnd(text, offset);
+  if (end === undefined) return undefined;
+  try {
+    const key: unknown = JSON.parse(text.slice(offset, end));
+    return typeof key === "string" && !seen.has(key) ? { key, end } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function completedFlatKeys(
+  text: string,
+  offset: number,
+  keys: readonly string[],
+): readonly string[] | undefined {
+  return skipWhitespace(text, offset + 1) === text.length ? keys : undefined;
+}
+
 function flatObjectKeys(text: string): readonly string[] | undefined {
   let offset = skipWhitespace(text, 0);
   if (text[offset] !== "{") return undefined;
   offset = skipWhitespace(text, offset + 1);
   const keys: string[] = [];
   const seen = new Set<string>();
-  if (text[offset] === "}")
-    return skipWhitespace(text, offset + 1) === text.length ? keys : undefined;
+  if (text[offset] === "}") return completedFlatKeys(text, offset, keys);
   while (offset < text.length) {
-    const end = stringTokenEnd(text, offset);
-    if (end === undefined) return undefined;
-    let key: unknown;
-    try {
-      key = JSON.parse(text.slice(offset, end));
-    } catch {
-      return undefined;
-    }
-    if (typeof key !== "string" || seen.has(key)) return undefined;
-    seen.add(key);
-    keys.push(key);
-    offset = skipWhitespace(text, end);
+    const decoded = flatObjectKey(text, offset, seen);
+    if (decoded === undefined) return undefined;
+    seen.add(decoded.key);
+    keys.push(decoded.key);
+    offset = skipWhitespace(text, decoded.end);
     if (text[offset] !== ":") return undefined;
     offset = skipWhitespace(text, offset + 1);
     const valueEnd = primitiveEnd(text, offset);
     if (valueEnd === undefined) return undefined;
     offset = skipWhitespace(text, valueEnd);
     if (text[offset] === "}") {
-      return skipWhitespace(text, offset + 1) === text.length ? keys : undefined;
+      return completedFlatKeys(text, offset, keys);
     }
     if (text[offset] !== ",") return undefined;
     offset = skipWhitespace(text, offset + 1);

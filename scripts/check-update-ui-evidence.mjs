@@ -54,8 +54,10 @@ function assertDigestMap(recordName, fieldName, actual, expected) {
   if (actual === null || typeof actual !== "object" || Array.isArray(actual)) {
     throw new Error(`Updater UI evidence ${recordName} has an invalid ${fieldName} map.`);
   }
-  const actualPaths = Object.keys(actual).sort();
-  const expectedPaths = Object.keys(expected).sort();
+  const actualPaths = Object.keys(actual).sort((left, right) => left.localeCompare(right, "en-US"));
+  const expectedPaths = Object.keys(expected).sort((left, right) =>
+    left.localeCompare(right, "en-US"),
+  );
   if (JSON.stringify(actualPaths) !== JSON.stringify(expectedPaths)) {
     throw new Error(`Updater UI evidence ${recordName} has an unexpected ${fieldName} path set.`);
   }

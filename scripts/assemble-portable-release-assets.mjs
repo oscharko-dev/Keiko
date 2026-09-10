@@ -305,14 +305,11 @@ function assertRuntimeActivationEvidence(stageRoot, manifest, target, sbom) {
   ) {
     fail(`${target.platformTarget} runtime activation binding is invalid`);
   }
+  if (manifest.security.verificationPolicy === "evaluation") return;
   if (target.nodePlatform === "win32") {
-    if (manifest.security.verificationPolicy !== "evaluation") {
-      assertRuntimeAttestationEvidence(resourceRoot, manifest, sbom);
-    }
+    assertRuntimeAttestationEvidence(resourceRoot, manifest, sbom);
   } else {
-    if (manifest.security.verificationPolicy !== "evaluation") {
-      assertMacosRuntimeQualificationEvidence(resourceRoot, manifest);
-    }
+    assertMacosRuntimeQualificationEvidence(resourceRoot, manifest);
   }
 }
 

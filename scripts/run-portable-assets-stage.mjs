@@ -150,6 +150,12 @@ function workflowIdentity(env) {
   return { runAttempt, runId };
 }
 
+function stageLane(options) {
+  if (options.release) return "release-trust-pending";
+  if (options.evaluation) return "evaluation-unqualified";
+  return "unverified-staging";
+}
+
 export function runPortableAssetsStage(argv, env = process.env) {
   const options = parseArgs(argv);
   const approvals = loadPortableRuntimeApprovals(repoRoot);
@@ -163,11 +169,7 @@ export function runPortableAssetsStage(argv, env = process.env) {
     env.APPLE_TEAM_ID,
   );
   const specCount = args.filter((arg) => arg === "--sidecar-runtime-spec").length;
-  const lane = options.release
-    ? "release-trust-pending"
-    : options.evaluation
-      ? "evaluation-unqualified"
-      : "unverified-staging";
+  const lane = stageLane(options);
   console.log(
     `portable-assets-stage: staging ${options.target} (${lane}) with node ${approvals.node.version} and ${String(specCount)} sidecar spec(s)`,
   );

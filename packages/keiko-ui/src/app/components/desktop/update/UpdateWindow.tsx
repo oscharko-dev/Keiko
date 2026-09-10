@@ -213,20 +213,6 @@ async function writeTextWithFallback(
       // Restricted clipboard contexts can still allow the selection-backed fallback.
     }
   }
-  if (typeof document !== "undefined" && typeof document.execCommand === "function") {
-    const target = document.createElement("textarea");
-    target.value = text;
-    target.setAttribute("readonly", "");
-    target.style.position = "fixed";
-    target.style.left = "-9999px";
-    document.body.appendChild(target);
-    target.select();
-    try {
-      if (document.execCommand("copy")) return "copied";
-    } finally {
-      target.remove();
-    }
-  }
   if (selectCopyTarget(visibleTarget)) return "selected";
   throw new Error("clipboard-unavailable");
 }
@@ -896,7 +882,7 @@ function SessionOutcomePanel({
   return (
     <section
       className="upd-panel"
-      role={session.phase === "failed" ? "alert" : "status"}
+      role={session.phase === "failed" ? "alert" : undefined}
       aria-live={session.phase === "failed" ? "assertive" : "polite"}
     >
       <div className="upd-panel-head">
@@ -1195,7 +1181,7 @@ function RemediationPanel({
       )}
       aria-labelledby="updates-remediation-title"
       aria-live={hasFailedAction ? "assertive" : "polite"}
-      role={hasFailedAction ? "alert" : "status"}
+      role={hasFailedAction ? "alert" : undefined}
     >
       <div className="upd-panel-head">
         <strong id="updates-remediation-title">
@@ -1658,6 +1644,31 @@ function checkFeedbackMessage(
   return t("updates.check.available");
 }
 
+async function loadRefreshProjection(
+  api: UpdateWindowApi,
+  source: "initial" | "manual" | "poll",
+  report: UpdatePreflightReport,
+  cached: RemediationProjection | undefined,
+  refreshRequired: boolean,
+): Promise<{
+  readonly session: UpdateSessionStatus;
+  readonly remediation: UpdateRemediationStatusReport;
+}> {
+  if (source !== "poll") {
+    const [session, remediation] = await Promise.all([
+      api.fetchSessionStatus(),
+      loadRemediation(api, report),
+    ]);
+    return { session, remediation };
+  }
+  const session = await api.fetchSessionStatus();
+  const pollKey = remediationProjectionKey(report, session);
+  if (!refreshRequired && cached?.key === pollKey) {
+    return { session, remediation: cached.report };
+  }
+  return { session, remediation: await loadRemediation(api, report) };
+}
+
 export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNode {
   const t = useTranslate();
   const [state, setState] = useState<LoadState>({ status: "loading" });
@@ -1682,22 +1693,13 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
       try {
         const previousManualTarget = computePreviousManualTarget(manual, readyStateRef.current);
         const report = manual ? await api.checkPreflight() : await api.fetchPreflight();
-        let session: UpdateSessionStatus;
-        let remediation: UpdateRemediationStatusReport;
-        if (source === "poll") {
-          session = await api.fetchSessionStatus();
-          const cachedRemediation = remediationProjectionRef.current;
-          const pollKey = remediationProjectionKey(report, session);
-          remediation =
-            !remediationRefreshRequiredRef.current && cachedRemediation?.key === pollKey
-              ? cachedRemediation.report
-              : await loadRemediation(api, report);
-        } else {
-          [session, remediation] = await Promise.all([
-            api.fetchSessionStatus(),
-            loadRemediation(api, report),
-          ]);
-        }
+        const { session, remediation } = await loadRefreshProjection(
+          api,
+          source,
+          report,
+          remediationProjectionRef.current,
+          remediationRefreshRequiredRef.current,
+        );
         const remediationKey = remediationProjectionKey(report, session);
         remediationProjectionRef.current = { key: remediationKey, report: remediation };
         remediationRefreshRequiredRef.current = false;

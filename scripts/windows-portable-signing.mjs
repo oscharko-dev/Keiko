@@ -611,7 +611,9 @@ function assertRegularSingleLink(path, label) {
 
 function assertWindowsGenerationLayout(stageRoot, generationId) {
   const payloadRoot = join(resolve(stageRoot), "payload", "Keiko");
-  const payloadEntries = readdirSync(payloadRoot).sort();
+  const payloadEntries = readdirSync(payloadRoot).sort((left, right) =>
+    left.localeCompare(right, "en-US"),
+  );
   const allowedPayloadEntries = new Set([".portable", "Keiko.exe", "support"]);
   if (
     !payloadEntries.includes(".portable") ||
@@ -623,7 +625,9 @@ function assertWindowsGenerationLayout(stageRoot, generationId) {
   assertRegularSingleLink(join(payloadRoot, "Keiko.exe"), "primary Keiko.exe");
   const portableRoot = join(payloadRoot, ".portable");
   assertDirectoryEntry(portableRoot, "Windows portable metadata root");
-  const portableEntries = readdirSync(portableRoot).sort();
+  const portableEntries = readdirSync(portableRoot).sort((left, right) =>
+    left.localeCompare(right, "en-US"),
+  );
   const allowedPortableEntries = new Set(["generations", "setup-manifest.json"]);
   if (
     !portableEntries.includes("generations") ||

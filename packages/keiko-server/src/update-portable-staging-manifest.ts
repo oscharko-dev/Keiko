@@ -592,16 +592,20 @@ interface CandidateTextEvidence {
   readonly checksum: TextAsset;
 }
 
-function candidateManifestVerified(
-  options: PortableUpdateStagerOptions,
-  manifestRecord: Record<string, unknown>,
-  release: PortableRelease,
-  archive: GitHubAsset,
-  evidence: CandidateTextEvidence,
-  target: UpdatePortableTarget,
-  portable: NonNullable<PortableUpdateStageInput["candidate"]["portable"]>,
-  archiveSha256: string,
-): boolean {
+interface CandidateManifestVerificationInput {
+  readonly options: PortableUpdateStagerOptions;
+  readonly manifestRecord: Record<string, unknown>;
+  readonly release: PortableRelease;
+  readonly archive: GitHubAsset;
+  readonly evidence: CandidateTextEvidence;
+  readonly target: UpdatePortableTarget;
+  readonly portable: NonNullable<PortableUpdateStageInput["candidate"]["portable"]>;
+  readonly archiveSha256: string;
+}
+
+function candidateManifestVerified(input: CandidateManifestVerificationInput): boolean {
+  const { options, manifestRecord, release, archive, evidence, target, portable, archiveSha256 } =
+    input;
   return [
     manifestVerified(options, manifestRecord, release, archive, target),
     recordAt(manifestRecord, "artifact")?.uncompressedSizeBytes === portable.uncompressedSizeBytes,
@@ -660,7 +664,7 @@ function verifiedCandidateSidecars(
   if (
     manifestRecord === undefined ||
     archiveSha256 === undefined ||
-    !candidateManifestVerified(
+    !candidateManifestVerified({
       options,
       manifestRecord,
       release,
@@ -669,7 +673,7 @@ function verifiedCandidateSidecars(
       target,
       portable,
       archiveSha256,
-    )
+    })
   ) {
     throw new PortableUpdateStagingError(
       "portable-verification-failed",

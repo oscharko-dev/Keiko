@@ -13,6 +13,7 @@ import {
   rmSync,
   statfsSync,
   statSync,
+  type Dirent,
 } from "node:fs";
 import { dirname, join, posix, relative, resolve, sep } from "node:path";
 import { Transform } from "node:stream";
@@ -196,6 +197,20 @@ export function requiredPortableDiskBytes(
   );
 }
 
+function managedEntrySize(cursor: string, entry: Dirent, pending: string[]): number {
+  const path = join(cursor, entry.name);
+  const stat = lstatSync(path);
+  if (stat.isSymbolicLink()) {
+    throw new PortableUpdateStagingError("portable-staging-failed", "managed tree is unsafe");
+  }
+  if (stat.isDirectory()) {
+    pending.push(path);
+    return 0;
+  }
+  if (stat.isFile()) return stat.size;
+  throw new PortableUpdateStagingError("portable-staging-failed", "managed tree is unsafe");
+}
+
 function boundedCurrentTreeSize(root: string, signal: AbortSignal | undefined): number {
   let entries = 0;
   let bytes = 0;
@@ -212,15 +227,7 @@ function boundedCurrentTreeSize(root: string, signal: AbortSignal | undefined): 
           "managed tree exceeds limits",
         );
       }
-      const path = join(cursor, entry.name);
-      const stat = lstatSync(path);
-      if (stat.isSymbolicLink()) {
-        throw new PortableUpdateStagingError("portable-staging-failed", "managed tree is unsafe");
-      }
-      if (stat.isDirectory()) pending.push(path);
-      else if (stat.isFile()) bytes += stat.size;
-      else
-        throw new PortableUpdateStagingError("portable-staging-failed", "managed tree is unsafe");
+      bytes += managedEntrySize(cursor, entry, pending);
       if (!Number.isSafeInteger(bytes)) {
         throw new PortableUpdateStagingError(
           "portable-staging-failed",
@@ -385,16 +392,18 @@ async function writeZipEntry(
   return hash.digest("hex");
 }
 
-async function handleEntry(
-  zip: yauzl.ZipFile,
-  entry: yauzl.Entry,
-  root: string,
-  state: PortableArchiveLimitState,
-  files: ExtractedTreeFile[],
-  seen: Set<string>,
-  session: PortableUpdateStageInput,
-  progress: ExtractionProgressState,
-): Promise<void> {
+interface ArchiveExtractionContext {
+  readonly zip: yauzl.ZipFile;
+  readonly root: string;
+  readonly state: PortableArchiveLimitState;
+  readonly files: ExtractedTreeFile[];
+  readonly seen: Set<string>;
+  readonly session: PortableUpdateStageInput;
+  readonly progress: ExtractionProgressState;
+}
+
+async function handleEntry(context: ArchiveExtractionContext, entry: yauzl.Entry): Promise<void> {
+  const { zip, root, state, files, seen, session, progress } = context;
   assertAbort(session.signal);
   assertPortableArchiveEntryLimits(entry, state);
   const declaredInflated = session.candidate.portable?.uncompressedSizeBytes;
@@ -451,6 +460,7 @@ async function extractArchive(
   const progress = { completedBytes: 0, lastReportedBytes: 0, lastReportedAt: Date.now() };
   const files: ExtractedTreeFile[] = [];
   const seen = new Set<string>();
+  const context = { zip, root: destination, state, files, seen, session, progress };
   let rejectAbort: (() => void) | undefined;
   try {
     await new Promise<void>((resolveDone, reject) => {
@@ -458,12 +468,9 @@ async function extractArchive(
         reject(new PortableUpdateStagingError("cancelled", "cancelled"));
       };
       zip.on("entry", (entry: yauzl.Entry) => {
-        void handleEntry(zip, entry, destination, state, files, seen, session, progress).then(
-          () => {
-            zip.readEntry();
-          },
-          reject,
-        );
+        void handleEntry(context, entry).then(() => {
+          zip.readEntry();
+        }, reject);
       });
       zip.once("end", resolveDone);
       zip.once("error", reject);

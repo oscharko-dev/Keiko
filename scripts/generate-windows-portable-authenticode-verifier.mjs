@@ -43,7 +43,7 @@ export function sha256(value) {
 
 function canonicalSource(path) {
   const source = readFileSync(path, "utf8");
-  if (source.charCodeAt(0) === 0xfeff || source.includes("\r") || !source.endsWith("\n")) {
+  if (source.codePointAt(0) === 0xfeff || source.includes("\r") || !source.endsWith("\n")) {
     throw new Error("verifier source must be UTF-8 without BOM, LF-only, and newline-terminated");
   }
   return source;
