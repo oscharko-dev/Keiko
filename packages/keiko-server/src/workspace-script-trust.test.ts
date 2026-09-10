@@ -1016,3 +1016,111 @@ describe("WorkspaceScriptTrust invalidation reasons", () => {
     expect(reason).toBe("human-grant");
   });
 });
+
+// Production keeps managed task worktrees under `<stateDir>/ui/task-workspaces` — below `.keiko`, a
+// segment the user-workspace deny list refuses as a workspace root. Deriving a worktree's trust from
+// its repository re-admitted the worktree through `detectWorkspaceAt`'s user-workspace root rules,
+// so on every installation with the default state directory a trusted repository could not be bound
+// at all: provisioning failed PROVISIONING_FAILED after `git worktree add` had succeeded, and the
+// worktree was rolled back again (oscharko/Wegwerf-Repo-Final#1, run 1, 2026-09-10). A registered
+// project below the CONFIGURED managed root is a managed task worktree whose workspace root is the
+// worktree root by construction; the service admits it by managed containment, never by path shape.
+describe("managed task worktrees below the state directory", () => {
+  interface ManagedFixture {
+    readonly managedRoot: string;
+    readonly repositoryRoot: string;
+    readonly worktreeRoot: string;
+    readonly deniedOutsider: string;
+  }
+
+  function managedFixture(): ManagedFixture {
+    const stateDir = realpathSync(mkdtempSync(join(tmpdir(), "keiko-trust-state-")));
+    const managedRoot = join(stateDir, ".keiko", "ui", "task-workspaces");
+    const repositoryRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-trust-repo-")));
+    const worktreeRoot = join(managedRoot, "repo_1", "ws_1");
+    const deniedOutsider = join(stateDir, ".keiko", "elsewhere", "project");
+    const manifest = JSON.stringify({ name: "shared", scripts: { test: "vitest run" } });
+    for (const directory of [managedRoot, worktreeRoot, deniedOutsider]) {
+      mkdirSync(directory, { recursive: true });
+    }
+    for (const directory of [repositoryRoot, worktreeRoot, deniedOutsider]) {
+      writeFileSync(join(directory, "package.json"), manifest);
+    }
+    fixtureDirs.push(stateDir, repositoryRoot);
+    return { managedRoot, repositoryRoot, worktreeRoot, deniedOutsider };
+  }
+
+  const fixtureDirs: string[] = [];
+
+  afterEach(() => {
+    for (const directory of fixtureDirs.splice(0))
+      rmSync(directory, { recursive: true, force: true });
+  });
+
+  it("derives and reports trust for a registered worktree below the configured managed root", () => {
+    const fixture = managedFixture();
+    const managedStore = createInMemoryUiStore();
+    try {
+      managedStore.createProject(fixture.repositoryRoot, "repository");
+      managedStore.createProject(fixture.worktreeRoot, "worktree");
+      const trust = createWorkspaceScriptTrustService({
+        store: managedStore,
+        managedRoot: fixture.managedRoot,
+      });
+
+      expect(trust.grant(fixture.repositoryRoot)).toEqual({ trusted: true });
+      expect(trust.deriveFromTrustedRoot(fixture.worktreeRoot, fixture.repositoryRoot)).toEqual({
+        trusted: true,
+      });
+      expect(trust.status(fixture.worktreeRoot)).toMatchObject({
+        projectId: fixture.worktreeRoot,
+        trust: "trusted",
+        reason: "derived-from-trusted-root",
+      });
+      expect(trust.trustLevelForRoot(fixture.worktreeRoot)).toBe("trusted");
+      expect(trust.revoke(fixture.worktreeRoot)).toEqual({ trusted: false });
+    } finally {
+      managedStore.close();
+    }
+  });
+
+  it("still refuses a denied root that lies outside the configured managed root", () => {
+    const fixture = managedFixture();
+    const managedStore = createInMemoryUiStore();
+    try {
+      managedStore.createProject(fixture.repositoryRoot, "repository");
+      managedStore.createProject(fixture.deniedOutsider, "outsider");
+      const trust = createWorkspaceScriptTrustService({
+        store: managedStore,
+        managedRoot: fixture.managedRoot,
+      });
+
+      expect(trust.grant(fixture.repositoryRoot)).toEqual({ trusted: true });
+      expect(() => trust.grant(fixture.deniedOutsider)).toThrow();
+      expect(() =>
+        trust.deriveFromTrustedRoot(fixture.deniedOutsider, fixture.repositoryRoot),
+      ).toThrow();
+      expect(trust.trustLevelForRoot(fixture.deniedOutsider)).toBe("restricted");
+    } finally {
+      managedStore.close();
+    }
+  });
+
+  it("admits nothing by path shape when no managed root is configured", () => {
+    const fixture = managedFixture();
+    const managedStore = createInMemoryUiStore();
+    try {
+      managedStore.createProject(fixture.repositoryRoot, "repository");
+      managedStore.createProject(fixture.worktreeRoot, "worktree");
+      const trust = createWorkspaceScriptTrustService({ store: managedStore });
+
+      expect(trust.grant(fixture.repositoryRoot)).toEqual({ trusted: true });
+      expect(() =>
+        trust.deriveFromTrustedRoot(fixture.worktreeRoot, fixture.repositoryRoot),
+      ).toThrow();
+      expect(trust.trustLevelForRoot(fixture.worktreeRoot)).toBe("restricted");
+    } finally {
+      managedStore.close();
+    }
+  });
+});

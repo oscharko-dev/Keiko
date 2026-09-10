@@ -289,6 +289,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The repository path is outside the folders this installation may bind. Choose a folder inside an allowed workspace root.",
   "codingWorkbench.setup.lockContention":
     "Another action currently holds this task workspace. Wait a moment, then try again.",
+  "codingWorkbench.setup.provisioningFailed":
+    "Keiko could not create the managed task workspace for this repository. The repository path and target branch were accepted; the activity log records the cause.",
   "codingWorkbench.setup.provisioningUnavailable":
     "Managed task workspaces are not configured on this installation, so no workspace can be bound.",
   "codingWorkbench.setup.repairRequired":

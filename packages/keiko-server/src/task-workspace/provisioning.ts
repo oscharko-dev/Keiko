@@ -171,6 +171,10 @@ interface EmitInput {
   // activity-log line's `errorKind` (see activity-log.ts's `WorkspaceLifecycleLogInput.errorCode`).
   // Ignored on a success outcome.
   readonly errorCode?: string | undefined;
+  // The caught error itself, so the settled failure line carries its content-free cause chain and
+  // Keiko frames (activity-log.ts's `WorkspaceLifecycleLogInput.error`); the rethrow path's tracker
+  // suppresses the second diagnostic that used to be the only carrier of that trace.
+  readonly error?: TaskWorkspaceError | undefined;
   // The classified drift marker on a drift verdict, carried into the activity-log line's `extra`.
   readonly driftMarker?: TaskWorkspaceDriftMarker | undefined;
   // The managed worktrees this outcome handled: one for a materialised, resumed or activated
@@ -372,6 +376,7 @@ function emit(ctx: ProvisioningCtx, input: EmitInput): void {
     },
     redactString: ctx.deps.redactString,
     errorCode: input.errorCode,
+    error: input.error,
     driftMarker: input.driftMarker,
   });
   if (input.errorCode !== undefined) ctx.failureOutcomeRecorded = true;
@@ -635,6 +640,7 @@ async function failProvisioning(
     fromState: "provisioning",
     toState: target,
     errorCode: error.code,
+    error,
     driftMarker,
   });
   throw error;
@@ -872,6 +878,7 @@ async function provisionLocked(
         nowMs,
         correlationId: request.correlationId,
         errorCode: error.code,
+        error,
       });
     }
     throw error;
@@ -1142,6 +1149,7 @@ function activateOrRefuse(
         correlationId: request.correlationId,
         fromState: owned.instance.lifecycleState,
         errorCode: error.code,
+        error,
       });
     }
     throw error;

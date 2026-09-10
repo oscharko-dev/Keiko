@@ -752,6 +752,11 @@ describe("CodingWorkbenchSetup", () => {
       failureClass: undefined,
       text: "Managed task workspaces are not configured on this installation",
     },
+    {
+      code: "PROVISIONING_FAILED",
+      failureClass: "terminal",
+      text: "Keiko could not create the managed task workspace for this repository.",
+    },
   ])(
     "names a $code refusal instead of the generic sentence",
     async ({ code, failureClass, text }) => {

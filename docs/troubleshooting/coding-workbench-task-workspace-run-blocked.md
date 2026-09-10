@@ -77,3 +77,55 @@ decision the human made about different bytes. Re-granting trust does not clear 
 runner reads is always the repository's. Bring the two manifests back into agreement — land the
 worktree's `package.json` change in the repository, or revert it in the worktree — and the runner
 admits the scripts again. An unreadable manifest on either side fails closed the same way.
+
+---
+
+## Binding a trusted repository fails with "The workspace could not be bound", every time
+
+| Field             | Value                                                                |
+| ----------------- | -------------------------------------------------------------------- |
+| Severity          | High                                                                 |
+| Surface           | Local UI / Coding Workbench setup                                    |
+| Stable identifier | `PROVISIONING_FAILED`, `task-workspace.lifecycle`, `PathDeniedError` |
+
+**Symptom**
+
+"Bind workspace" fails within a second for a repository whose workspace trust was granted. Before
+2026-09-10 the setup card said "The workspace could not be bound. Review the repository path and
+target branch." although both were accepted; it now says that Keiko could not create the managed
+task workspace. The repository shows a `keiko/task/…` branch that was created and no worktree for
+it: `git worktree add` succeeded and the worktree was rolled back again. A repository without a
+trust grant binds fine, which is what made the failure look like a repository problem.
+
+**Root Cause**
+
+Managed task worktrees live below the state directory's always-denied segment
+(`~/.keiko/ui/task-workspaces/…`; `.keiko/dev/ui/task-workspaces/…` in the dev lane). When the
+repository is trusted, provisioning derives the worktree's own package-script trust from the
+repository's grant (ADR-0147). That derivation resolved the worktree's canonical root through the
+user-workspace root rules (`detectWorkspaceAt`), which refuse any root below `.keiko`; the refusal
+(`PathDeniedError`) surfaced as `PROVISIONING_FAILED` after the worktree had been created, and the
+settled `task-workspace.lifecycle` line carried only that code — the cause chain the rethrow path
+would have logged was suppressed as a duplicate, so the log named no cause. The 2026-09-03 repair
+had corrected the same re-admission for the editor-agent boundary and the verification runner;
+script trust was the remaining consumer.
+
+**Diagnostic Steps**
+
+1. Activity log: `op: "task-workspace.lifecycle"` with `extra.operation: "provision"`,
+   `extra.outcome: "failed"`, `errorKind: "PROVISIONING_FAILED"`, and — since 2026-09-10 —
+   `extra.causeChain` naming the failing class (`PathDeniedError` for this defect) plus the Keiko
+   frames of the failing call, all under the bind request's `correlationId`.
+2. `git -C <repository> branch --list 'keiko/task/*'` lists the task branch while
+   `git worktree list` shows no worktree for it.
+3. Settings → Security → Workspace Trust lists the repository as "Trusted workspace"; an untrusted
+   copy of the same repository binds successfully.
+
+**Resolution**
+
+Update to a build that contains the 2026-09-10 repair: the script-trust service is composed with
+the managed root and resolves a registered project below it as its own workspace root, exactly as
+the other managed-root consumers do. Nothing has to be migrated; delete the leftover
+`keiko/task/…` branch (or let the next bind reuse it — the branch name is deterministic per issue)
+and bind again. If the failure persists, the new `causeChain` on the lifecycle line names the actual
+cause.

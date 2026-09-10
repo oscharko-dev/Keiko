@@ -308,6 +308,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Der Repository-Pfad liegt außerhalb der Ordner, die diese Installation binden darf. Wähle einen Ordner innerhalb eines erlaubten Workspace-Roots.",
   "codingWorkbench.setup.lockContention":
     "Eine andere Aktion hält diesen Task Workspace gerade. Warte einen Moment und versuche es dann erneut.",
+  "codingWorkbench.setup.provisioningFailed":
+    "Keiko konnte den verwalteten Task Workspace für dieses Repository nicht anlegen. Repository-Pfad und Zielbranch wurden akzeptiert; das Aktivitätsprotokoll enthält die Ursache.",
   "codingWorkbench.setup.provisioningUnavailable":
     "Verwaltete Task Workspaces sind auf dieser Installation nicht konfiguriert, daher kann kein Workspace gebunden werden.",
   "codingWorkbench.setup.repairRequired":

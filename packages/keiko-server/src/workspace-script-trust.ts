@@ -44,6 +44,7 @@ import type {
   WorkspaceTrustRecordRow,
   WorkspaceTrustRecordRowInput,
 } from "./store/index.js";
+import { isManagedTargetContained } from "./task-workspace/managed-root.js";
 import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
 import {
   deriveWorkspaceRootRef,
@@ -112,6 +113,17 @@ export interface WorkspaceScriptTrustServiceOptions {
   readonly store: UiStore;
   readonly fs?: WorkspaceFs | undefined;
   readonly onRestricted?: ((canonicalRoot: string) => void) | undefined;
+  /**
+   * The Keiko-owned managed task-worktree root (`<stateDir>/ui/task-workspaces`). A registered
+   * project below it is a managed task worktree: `git worktree add` made its root the checkout root
+   * by construction, so its workspace root is resolved by managed containment and never through the
+   * user-workspace root rules — which deny every path below the state directory's `.keiko` segment
+   * and therefore refused every managed worktree on a default installation (grant, revoke, status
+   * and the repository-derived trust a provision records all failed closed, and binding a trusted
+   * repository ended in PROVISIONING_FAILED). Absent, no root is admitted by containment: an
+   * unconfigured service keeps refusing a denied root whatever its shape.
+   */
+  readonly managedRoot?: string | undefined;
 }
 
 function realPathOrThrow(fs: WorkspaceFs, path: string, message: string): string {
@@ -268,6 +280,22 @@ function requireCurrentObjectIdentity(context: CurrentTrustContext): WorkspaceTr
   );
 }
 
+// The workspace a registered project root resolves to. A managed task worktree (a registered project
+// below the configured managed root) IS its own workspace root — the same fact the verification
+// runner and the editor-agent boundary already take from the managed-root prover — so it is not
+// re-admitted through `detectWorkspaceAt`'s user-workspace root rules, which refuse the state
+// directory's `.keiko` segment. Every other root keeps the marker detection and admission it had.
+function projectWorkspaceAt(
+  canonicalProjectRoot: string,
+  fs: WorkspaceFs,
+  managedRoot: string | undefined,
+): WorkspaceInfo {
+  if (managedRoot !== undefined && isManagedTargetContained(managedRoot, canonicalProjectRoot)) {
+    return workspaceInfoForRoot(canonicalProjectRoot);
+  }
+  return detectWorkspaceAt(canonicalProjectRoot, fs);
+}
+
 // Preserves the pre-#2521 canonicalization and single-root assertion exactly: the project must be
 // registered, both the project root and the resolved workspace root are realpath-canonicalized, and
 // the workspace root must equal the project root. Richer multi-root resolution lands additively with
@@ -277,6 +305,7 @@ function resolveCanonicalRoot(
   fs: WorkspaceFs,
   projectId: string,
   suppliedWorkspace?: WorkspaceInfo,
+  managedRoot?: string,
 ): string {
   // A registered project path is normalized but never realpath'd, while a manifest's canonicalRoot
   // is `realpath.native`. Matching on the string alone therefore answered PROJECT_NOT_FOUND for the
@@ -299,7 +328,7 @@ function resolveCanonicalRoot(
     project.path,
     "Project root path could not be resolved.",
   );
-  const detected = suppliedWorkspace ?? detectWorkspaceAt(canonicalProjectRoot, fs);
+  const detected = suppliedWorkspace ?? projectWorkspaceAt(canonicalProjectRoot, fs, managedRoot);
   const canonicalWorkspaceRoot = realPathOrThrow(
     fs,
     detected.root,
@@ -500,6 +529,7 @@ function invalidatedTrustedRecord(
 class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
   private readonly store: UiStore;
   private readonly fs: WorkspaceFs;
+  private readonly managedRoot: string | undefined;
   // #2628 — restriction listeners are held as a set so both the options.onRestricted seat
   // (kept for callers that construct the service directly) and subscribeOnRestricted callers
   // deliver the same notification without either path silently dropping the other.
@@ -508,6 +538,7 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
   public constructor(options: WorkspaceScriptTrustServiceOptions) {
     this.store = options.store;
     this.fs = options.fs ?? nodeWorkspaceFs;
+    this.managedRoot = options.managedRoot;
     if (options.onRestricted !== undefined) {
       this.restrictionListeners.add(options.onRestricted);
     }
@@ -515,6 +546,12 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
 
   private notifyRestricted(canonicalRoot: string): void {
     for (const listener of this.restrictionListeners) listener(canonicalRoot);
+  }
+
+  // The one canonical-root resolution every decision path uses, so the managed-root admission
+  // above cannot be applied on one path and forgotten on another.
+  private canonicalRootOf(projectId: string, workspace?: WorkspaceInfo): string {
+    return resolveCanonicalRoot(this.store, this.fs, projectId, workspace, this.managedRoot);
   }
 
   private isTrustedForBasis(
@@ -553,7 +590,7 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
   }
 
   public readonly grant = (projectId: string): WorkspaceScriptTrustSnapshot => {
-    const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId);
+    const canonicalRoot = this.canonicalRootOf(projectId);
     const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
     // `absent` is a complete, knowable basis: the root has no package scripts, so there is nothing
     // for the package-script consumer to execute and nothing about it left uncertain. `unavailable`
@@ -581,10 +618,10 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     projectId: string,
     trustedProjectId: string,
   ): WorkspaceScriptTrustSnapshot => {
-    const trustedRoot = resolveCanonicalRoot(this.store, this.fs, trustedProjectId);
+    const trustedRoot = this.canonicalRootOf(trustedProjectId);
     const trustedBasis = resolveTrustBasisFact(this.fs, trustedRoot);
     if (!this.isTrustedForBasis(trustedRoot, trustedBasis)) return { trusted: false };
-    const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId);
+    const canonicalRoot = this.canonicalRootOf(projectId);
     const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
     if (!trustBasisFactsMatch(trustedBasis, basis)) return { trusted: false };
     const binding = requireCurrentObjectIdentity(
@@ -605,7 +642,7 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
   };
 
   public readonly revoke = (projectId: string): WorkspaceScriptTrustSnapshot => {
-    const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId);
+    const canonicalRoot = this.canonicalRootOf(projectId);
     const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
     const binding = requireCurrentObjectIdentity(
       currentTrustContext(this.store, canonicalRoot, basis),
@@ -622,7 +659,7 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
   };
 
   public readonly status = (projectId: string): WorkspaceTrustStatus => {
-    const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId);
+    const canonicalRoot = this.canonicalRootOf(projectId);
     const workspace = workspaceInfoForRoot(canonicalRoot);
     const trusted = this.isTrusted(projectId, workspace);
     let binding: WorkspaceTrustBinding;
@@ -650,7 +687,7 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
 
   public readonly isTrusted = (projectId: string, workspace: WorkspaceInfo): boolean => {
     try {
-      const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId, workspace);
+      const canonicalRoot = this.canonicalRootOf(projectId, workspace);
       const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
       return this.isTrustedForBasis(canonicalRoot, basis);
     } catch {
@@ -687,7 +724,7 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
    */
   private notificationRootFor(root: string): string | undefined {
     try {
-      return resolveCanonicalRoot(this.store, this.fs, root);
+      return this.canonicalRootOf(root);
     } catch {
       return undefined;
     }

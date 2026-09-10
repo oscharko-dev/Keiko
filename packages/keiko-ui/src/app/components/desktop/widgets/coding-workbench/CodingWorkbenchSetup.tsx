@@ -82,6 +82,7 @@ type SetupErrorReason =
   | "missing-repository"
   | "unsafe-path"
   | "lock-contention"
+  | "provisioning-failed"
   | "unavailable"
   | "repair-required"
   | "operator-required"
@@ -158,6 +159,11 @@ const REASON_BY_CODE: Readonly<Partial<Record<string, SetupErrorReason>>> = {
   MISSING_REPOSITORY: "missing-repository",
   UNSAFE_PATH: "unsafe-path",
   LOCK_CONTENTION: "lock-contention",
+  // The server accepted the repository path and target branch and then could not create the managed
+  // worktree (or its identity) itself — the generic "review the repository path and target branch"
+  // sentence sent the operator after two inputs that were fine (2026-09-10, a trusted repository's
+  // bind that failed inside script-trust derivation). The cause lives in the activity log.
+  PROVISIONING_FAILED: "provisioning-failed",
   WORKSPACE_PROVISIONING_UNAVAILABLE: "unavailable",
 };
 
@@ -566,6 +572,7 @@ const PLAIN_ALERT_KEYS: Readonly<Partial<Record<SetupErrorReason, CodingWorkbenc
   "missing-repository": "codingWorkbench.setup.missingRepository",
   "unsafe-path": "codingWorkbench.setup.unsafePath",
   "lock-contention": "codingWorkbench.setup.lockContention",
+  "provisioning-failed": "codingWorkbench.setup.provisioningFailed",
   unavailable: "codingWorkbench.setup.provisioningUnavailable",
   "repair-failed": "codingWorkbench.setup.repairFailed",
 };

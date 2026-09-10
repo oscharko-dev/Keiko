@@ -204,8 +204,15 @@ not resurrect the prior grant; a new explicit grant is required. A managed task 
 registered project row but never a package-script trust basis of its own: its script decision is
 resolved from the repository it was bound from, and holds only while the worktree's `package.json`
 is byte-identical to that repository's — the same trust-basis digest this decision already binds
-(PR #3381). The existing command, verification, and debug decider seams remain the only consumer
-path until #2521 migrates their implementation.
+(PR #3381). Its canonical root is resolved by containment in the Keiko-owned managed root
+(`<stateDir>/ui/task-workspaces`), never through the user-workspace root rules: those deny every
+path below the state directory's `.keiko` segment, and applying them to the worktree refused every
+grant, status read and repository-derived trust for it — binding a trusted repository failed
+`PROVISIONING_FAILED` on a default installation until the script-trust service was composed with the
+managed root (2026-09-10). Containment admits only a REGISTERED project below the configured managed
+root; an unconfigured service and a denied root outside that root keep failing closed. The existing
+command, verification, and debug decider seams remain the only consumer path until #2521 migrates
+their implementation.
 
 Every durable trust or effect resolution also compares the manifest row's server-private
 filesystem-object digest with a fresh inspection. The public V1 identity remains necessary for

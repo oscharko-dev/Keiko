@@ -593,7 +593,12 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
   });
 
   it("gives a managed worktree its own exact trust identity from the selected root grant", async () => {
-    const stateDir = tmp("managed-root-identity-");
+    // Production-shaped: `~/.keiko/ui/keiko-ui.db` puts the managed root below `.keiko`, a segment
+    // the user-workspace deny list refuses as a workspace root. The derivation used to re-admit the
+    // worktree through those rules and every trusted-repository bind on a default installation
+    // failed PROVISIONING_FAILED (2026-09-10); a tmp root without the segment could not see it.
+    const stateDir = join(tmp("managed-root-identity-"), ".keiko", "ui");
+    mkdirSync(stateDir, { recursive: true });
     const repositoryRoot = tmp("managed-root-source-");
     const managedRoot = join(stateDir, "task-workspaces", "repo-1", "workspace-1");
     // This test reaches deps.verificationRunner.discover(managedRoot) below, which resolves

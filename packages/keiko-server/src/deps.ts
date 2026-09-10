@@ -3423,8 +3423,17 @@ function composePersistenceTaskWorkspaceServices(
   readonly workspaceScriptTrust: WorkspaceScriptTrustService;
   readonly services: TaskWorkspaceServices;
 } {
+  // The managed root is handed to script trust so a managed task worktree — a registered project
+  // below `<stateDir>/ui/task-workspaces`, i.e. below the `.keiko` segment the user-workspace root
+  // rules deny — resolves as its own workspace root. Without it every grant, status read and
+  // repository-derived trust for a worktree failed closed, and binding a trusted repository ended
+  // in PROVISIONING_FAILED on a default installation.
   const workspaceScriptTrust =
-    options.workspaceScriptTrust ?? createWorkspaceScriptTrustService({ store: persistence.store });
+    options.workspaceScriptTrust ??
+    createWorkspaceScriptTrustService({
+      store: persistence.store,
+      managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
+    });
   const services = composeTaskWorkspaceServices({
     options,
     workspaceInstanceStore: persistence.workspaceInstanceStore,
