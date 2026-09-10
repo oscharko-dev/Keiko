@@ -455,6 +455,77 @@ describe("runUiCli", () => {
     }
   });
 
+  it("refuses to listen when pre-listen recovery resolves as recovery-required", async () => {
+    const { io } = captureIo();
+    const createServer = vi.fn(() => fakeServer({}));
+
+    await expect(
+      runUiCli(
+        ["--port", "4399"],
+        io,
+        { KEIKO_UI_LAUNCH_ID: "a".repeat(32) },
+        {
+          staticRoot,
+          hashesFile: join(staticRoot, "csp-hashes.json"),
+          cwd: staticRoot,
+          updateStartupRecovery: {
+            reconcile: () => Promise.resolve({ status: "recovery-required" as const }),
+          },
+          createServer,
+        },
+      ),
+    ).rejects.toThrow("Portable update startup recovery is required before listening.");
+    expect(createServer).not.toHaveBeenCalled();
+  });
+
+  it("closes the listener when post-listen recovery resolves as recovery-required", async () => {
+    const { io } = captureIo();
+    const phases: string[] = [];
+    const close = vi.fn((done: () => void) => {
+      done();
+    });
+
+    await expect(
+      runUiCli(
+        ["--port", "4399"],
+        io,
+        { KEIKO_UI_LAUNCH_ID: "a".repeat(32) },
+        {
+          staticRoot,
+          hashesFile: join(staticRoot, "csp-hashes.json"),
+          cwd: staticRoot,
+          updateStartupRecovery: {
+            reconcile: ({ phase }) => {
+              phases.push(phase);
+              return Promise.resolve(
+                phase === "pre-listen"
+                  ? { status: "ready" as const }
+                  : { status: "recovery-required" as const },
+              );
+            },
+          },
+          createServer: () =>
+            ({
+              once(): Server {
+                return this as unknown as Server;
+              },
+              removeListener(): Server {
+                return this as unknown as Server;
+              },
+              listen(_port: number, _host: string, callback: () => void): Server {
+                callback();
+                return this as unknown as Server;
+              },
+              address: () => ({ address: UI_HOST, family: "IPv4", port: 4399 }),
+              close,
+            }) as unknown as Server,
+        },
+      ),
+    ).rejects.toThrow("Portable update startup recovery failed after listening.");
+    expect(phases).toStrictEqual(["pre-listen", "post-listen"]);
+    expect(close).toHaveBeenCalledOnce();
+  });
+
   it("imports legacy audit evidence after post-listen recovery and before startup reporting", async () => {
     const { io } = captureIo();
     const order: string[] = [];

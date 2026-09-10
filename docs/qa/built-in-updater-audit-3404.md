@@ -378,8 +378,11 @@ registers below are required parts of the audit; the 194/194 comparison alone do
 rg --files packages native scripts tests .github docs | rg '(^|/)([^/]*(update|portable|launcher|release-impact)[^/]*)' | sort
 ```
 
-The following recorded check must print `194` twice and no `comm` output; it compares only the
-marker, not the additional composition records below it.
+The following historical reproduction must run from a checkout of audited commit
+`9348fb9c36bbae730c6856d79d91ee6a6cadcbc3` and then print `194` twice with no `comm` output. It
+compares only the marker, not the additional composition records below it. Running it from a later
+tree is expected to drift as unrelated paths containing words such as `launcher` are added; such a
+result does not invalidate this frozen audit and must not be reported as an audit failure.
 
 ```sh
 rg --files packages native scripts tests .github docs | rg '(^|/)([^/]*(update|portable|launcher|release-impact)[^/]*)' | sort > /tmp/discovered-3404
@@ -690,8 +693,10 @@ NODE
 
 ### Shared dependency and native build/proof register
 
-The following non-keyword paths are outside the filename marker, but not outside the audit. The
-relative-import scan below finds 41 direct shared dependencies at the audited baseline. Every one is
+The following non-keyword paths are outside the filename marker, but not outside the audit. When run
+from audited commit `9348fb9c36bbae730c6856d79d91ee6a6cadcbc3`, the relative-import scan below
+finds 41 direct shared dependencies. Later trees are expected to produce a different count as the
+keyword seed set and dependency graph evolve; the count is historical evidence, not a HEAD gate. Every one is
 assigned here or in the composition register above. Workspace package exports, UI aliases, and native
 build/test inputs are recorded separately because a relative-import scan cannot discover them.
 These are shared authorities to reuse, not permission to fork their policies or rewrite unrelated
