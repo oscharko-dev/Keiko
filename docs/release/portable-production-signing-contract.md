@@ -1,8 +1,8 @@
 # Portable Production Signing Contract
 
-This document is the authoritative, redacted operator contract for production signing of Keiko's
-three portable release assets. It implements ADR-0121 D7 and is consumed by issues #2200, #2201, and
-#2202. It does not replace the archive, manifest, or release-impact schema in the
+This document is the authoritative, redacted operator contract for production signing and
+attestation of Keiko's four portable release assets. It implements ADR-0121 D7 and is consumed by
+issues #2200, #2201, #2202, and #3451. It does not replace the archive, manifest, or release-impact schema in the
 [Portable Runtime Artifact Contract](portable-runtime-artifact-contract.md).
 
 ## Trust boundary
@@ -34,9 +34,10 @@ or wildcard subject. If Azure/GitHub support for an immutable repository-id clai
 claim as a reviewed strengthening of this tuple before rollout; do not replace or relax the
 environment-bound subject implicitly during a repository rename or transfer.
 
-Keep workflow permissions empty by default. The protected Windows signing job receives only
-`contents: read` and `id-token: write`; the protected macOS jobs receive only `contents: read` and do
-not receive OIDC authority. Add another permission only when a child issue proves it is required at the
+Keep workflow permissions empty by default. The protected Windows signing and Linux qualification
+jobs receive only `contents: read` and `id-token: write`; the protected macOS jobs receive only
+`contents: read` and do not receive OIDC authority. Their fresh qualification jobs receive only
+`contents: read`. Add another permission only when a child issue proves it is required at the
 smallest job scope. Signing jobs never receive `contents: write`.
 
 ## Provider decisions
@@ -82,6 +83,22 @@ import the certificate into a newly created temporary keychain. Generate the key
 time, mask it immediately, and pass sensitive values through protected input channels rather than
 command-line arguments or logs. Mask any derived sensitive value before use. An always-run cleanup step
 must delete the temporary keychain and decoded files; cleanup failure fails the job and blocks upload.
+
+### Linux
+
+- Identity: GitHub's keyless OIDC identity for the protected `portable-assets` workflow in
+  `oscharko-dev/Keiko`; no repository-managed signing key or secret is accepted.
+- Signed subject: the canonical bytes of the exact `linux-x64` runtime-qualification receipt after
+  the staged runtime has passed the real namespace-gateway suite.
+- Binding: the receipt fixes the source commit, target, `linux-namespace-gateway` backend,
+  activation manifest, packaged supervisor, secure-read helper, and approved OpenCode digest.
+- Verification: the producer verifies the generated Sigstore bundle before sealing the archive; a
+  fresh runner with no OIDC permission verifies it offline against the dependency-pinned embedded
+  public trust root and exact repository/workflow identity, then reruns the real qualification
+  against the sealed receipt. Runtime discovery repeats the offline verification.
+- Availability: missing bubblewrap/unshare support, missing or malformed bundle, identity drift,
+  stale receipt, component drift, or a non-Linux backend refuses activation. Linux has no unsigned
+  evaluation or unconfined production fallback.
 
 ## Configuration references
 
@@ -131,7 +148,8 @@ Signing success is not a caller declaration. For each target, one protected nati
 4. verify the complete signed payload using native platform tools;
 5. on Windows, require the Public Trust/code-signing chain and exact configured subscriber
    identity-validation EKU on every PE; on macOS, compare the verified signer with the stable reviewed
-   identity alias;
+   identity alias; on Linux, bind the exact qualification receipt and component set before requesting
+   its GitHub OIDC Sigstore bundle;
 6. finalize the archive, calculate its SHA-256 digest, and bind the verified payload result to that
    archive without modifying it afterward;
 7. create the bounded verifier input and run `scripts/verify-portable-runtime-signing.mjs` with
@@ -322,7 +340,7 @@ stdout/stderr are forbidden from durable evidence.
 
 A provider outage, rejection, revoked identity, partial target result, failed Boolean, or failure in
 any sidecar produces no promotable target. The workflow maps the observable failed checks to the bounded
-platform codes; it does not invent an outage/rejection code or retain the provider body. All three
+platform codes; it does not invent an outage/rejection code or retain the provider body. All four
 targets must independently reach `verified-production` before the reviewed bundle is portable-complete.
 
 Secret-free tag and manual staging remains `unverified-staging`. It must not select the protected
@@ -331,7 +349,7 @@ environment, request OIDC, read Apple secrets, or become production evidence. In
 It may upload the three individually named staging artifacts for inspection, but it must never emit
 the canonical reviewed `portable-release-assets` artifact.
 
-After native producer upload, fresh read-only Windows and macOS qualification jobs download the final
+After native producer upload, fresh read-only Windows, Linux, and macOS qualification jobs download the final
 archives on new GitHub-hosted runners and repeat the native checks over extracted final bytes. These
 jobs receive no signing secret, OIDC, write permission, or provider mutation authority; only the
 reviewed identity values are read from protected configuration. Assembly gates on their actual job
@@ -407,10 +425,14 @@ signed object from another Apple developer fails closed.
 - **#2201 (macOS):** implements both protected native macOS targets, leaf-to-root hardened-runtime
   signing, dedicated Developer-role team notary key, per-run credential/keychain hygiene,
   notarization/stapling/assessment, identity binding, macOS verifier input, and fail-closed upload.
-- **#2202 (qualification):** proves all three target artifacts and their sidecars arrive from the native
+- **#2202 (qualification):** proves the original three target artifacts and their sidecars arrive from the native
   jobs with matching digests, identities, manifests, summaries, and release-impact bindings; proves
   staging/manual paths remain secret-free; reruns native verification on fresh runners; resolves one
   exact successful stable-tag run/artifact; and proves the assembler/publisher cannot create success.
+- **#3451 (Linux extension):** adds the fourth production target, exact-component qualification,
+  GitHub-OIDC Sigstore receipt, offline fresh-runner/runtime verification, real namespace-gateway
+  proof, and exact-four assembler/publisher boundary without widening the three-target evaluation
+  lane.
 
 Changes to these interfaces require a reviewed update to this contract and ADR-0121 when they alter
 trust authority. Implementation details that preserve the boundary remain owned by the child issue.

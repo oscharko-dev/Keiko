@@ -44,15 +44,17 @@ manifest/evidence fields and fails closed for `--policy production`; `--policy d
 portable-complete release assets.
 
 Portable GitHub Release Assets are published by the same `scripts/release-publish.mjs` path, not by
-a second release process. A stable `latest` publish must end with all four downloads
-(`keiko-windows-x64.zip`, `keiko-macos-arm64.zip`, `keiko-macos-x64.zip`, and
-`keiko-windows-x64-setup.exe`) present on the GitHub Release; the publisher verifies that against
-the release itself and fails closed **before** npm learns the dist-tag. Two ways satisfy it: supply
-`--portable-assets-manifest` / `KEIKO_PORTABLE_ASSETS_MANIFEST` and this run uploads them, or the
-governed evaluation lane already published them onto the tag and this run only promotes it. Beta,
-next, plan-only, and dry-run executions do not require real portable files unless a manifest is
-supplied. When supplied, the manifest is validated before npm publish starts: for stable `latest`
-the publisher creates or updates the GitHub Release, uploads and verifies the three zero-id portable
+a second release process. A production stable `latest` publish must end with all five downloads
+(`keiko-linux-x64.zip`, `keiko-windows-x64.zip`, `keiko-macos-arm64.zip`,
+`keiko-macos-x64.zip`, and `keiko-windows-x64-setup.exe`) present on the GitHub Release; the publisher
+verifies that against the release itself and fails closed **before** npm learns the dist-tag. A
+production run supplies `--portable-assets-manifest` / `KEIKO_PORTABLE_ASSETS_MANIFEST` and uploads
+that exact-four archive set plus the Windows companion. The separately governed evaluation path may
+promote only its historically reviewed exact-three Windows/macOS archive set plus the Windows
+companion, after validating its dedicated evaluation manifest and remote bytes. Beta, next,
+plan-only, and dry-run executions do not require real portable files unless a manifest is supplied.
+When supplied, the manifest is validated before npm publish starts: for stable `latest`
+the publisher creates or updates the GitHub Release, uploads and verifies the four zero-id portable
 candidates, binds the uploaded manifest copies to the actual GitHub release id and archive asset
 ids, uploads the evidence assets, and verifies unauthenticated full-download bytes by size and
 SHA-256.
@@ -92,6 +94,11 @@ The portable assets manifest is a content-free operator input:
   "schemaVersion": 1,
   "artifacts": [
     {
+      "platformTarget": "linux-x64",
+      "archivePath": "artifacts/linux-x64/keiko-linux-x64.zip",
+      "manifestPath": "artifacts/linux-x64/manifest/portable-manifest.json"
+    },
+    {
       "platformTarget": "windows-x64",
       "archivePath": "artifacts/windows-x64/keiko-windows-x64.zip",
       "manifestPath": "artifacts/windows-x64/manifest/portable-manifest.json",
@@ -113,12 +120,12 @@ The portable assets manifest is a content-free operator input:
 }
 ```
 
-The publisher requires exactly those three platform targets. For each target it validates the
+The publisher requires exactly those four platform targets. For each target it validates the
 production portable manifest, archive name, archive size, SHA-256 digest, manifest/evidence file
 containment, checksums binding, signing/notarization verification state, and optional
 `sidecarRuntimes[]` through the portable manifest contract. Archive, manifest, and evidence paths
 must resolve to regular non-symlink files under the target's portable stage root. After the GitHub
-Release exists, it uploads the three archives plus target-prefixed manifest/checksum/SBOM/license/
+Release exists, it uploads the four archives plus target-prefixed manifest/checksum/SBOM/license/
 provenance/signing evidence assets with `gh release upload --clobber`, verifies GitHub reports
 non-zero asset ids and HTTPS `browser_download_url` values, and performs unauthenticated full-byte
 digest checks for every uploaded portable asset. Generated archives and evidence remain
@@ -162,10 +169,13 @@ it:
 1. Validates the committed approved runtime inputs with `npm run check:portable-approvals`.
 2. Downloads and digest-verifies the approved coding sidecar payloads with
    `npm run portable:prepare-sidecars` on each native target runner.
-3. Stages all three portable targets from those approvals with
-   `scripts/run-portable-assets-stage.mjs` (Windows x64 on a Windows runner, both macOS targets on
-   a macOS runner, native launcher compiled in place).
-4. Re-downloads the final archives on fresh native runners. Windows re-verifies the Public Trust
+3. Stages all four production portable targets from those approvals with
+   `scripts/run-portable-assets-stage.mjs` (Linux x64 on Linux, Windows x64 on Windows, and both
+   macOS targets on native runners, with each native launcher compiled in place). Manual evaluation
+   dispatch remains the explicitly reviewed three-target Windows/macOS lane and cannot select Linux.
+4. Re-downloads the final archives on fresh native runners. Linux verifies its qualification
+   receipt offline against the GitHub-OIDC Sigstore identity and reruns the real namespace-gateway
+   proof. Windows re-verifies the Public Trust
    Authenticode chain, reviewed subscriber EKU, and RFC 3161 timestamp. Both macOS runners re-verify
    architecture, Developer ID identity/team, hardened runtime, timestamp, stapling, and Gatekeeper
    over extracted final bytes, then run the terminal payload smoke without credential or Actions
@@ -174,7 +184,7 @@ it:
    ZIP, signs that companion through the same protected identity, verifies its Authenticode chain,
    re-extracts it to prove the embedded script and ZIP digests, and carries it beside the Windows
    archive into the reviewed release bundle.
-5. Assembles the exact-three, digest-cross-checked `portable-release-assets` bundle (with
+5. Assembles the exact-four, digest-cross-checked `portable-release-assets` bundle (with
    `portable-assets.json`) via `scripts/assemble-portable-release-assets.mjs` in exactly the layout
    the Release workflow consumes through `portable_assets_run_id`.
 
@@ -211,9 +221,10 @@ still requires an operator dispatch with `portable_assets_run_id` pointing at th
 - Manual `workflow_dispatch` with `publish: false` runs the same verification job.
 - Manual `workflow_dispatch` with `publish: true` enables the publish job only when the selected ref is a tag that starts with `v` and the same tag/SHA already has a successful tag-push release verification run.
 - Manual publishes require an explicit npm dist-tag. The default is `beta`.
-- Stable `latest` publishes require the four downloads to be present on the GitHub Release when the
-  run finishes; a reviewed portable asset bundle is how this run uploads them, and is not required
-  when the governed evaluation lane already published them onto the tag. In GitHub Actions, provide
+- Production stable `latest` publishes require the four archives plus the Windows setup companion
+  to be present on the GitHub Release when the run finishes; a reviewed portable asset bundle is how
+  this run uploads them. The separately governed historical evaluation lane retains its exact four
+  Windows/macOS downloads and dedicated evidence path. In GitHub Actions, provide
   `portable_assets_run_id`, `portable_assets_run_attempt`, and the canonical
   `portable_assets_artifact_name` value `portable-release-assets`; the workflow first verifies that
   the run is a successful stable-tag push of `.github/workflows/portable-assets.yml` for the exact
@@ -282,8 +293,8 @@ Publish is intentionally off by default. To publish, a maintainer must:
 - set `publish` to `true`,
 - keep `npm_dist_tag` at `beta` for prereleases such as `0.3.0-beta.0`,
 - provide `portable_assets_run_id` and `portable_assets_artifact_name` for the reviewed portable
-  asset bundle when this run is the one uploading the stable `latest` downloads; omit them when the
-  governed evaluation lane already published the four downloads onto the tag (the publisher
+  asset bundle when this run is the one uploading the production stable `latest` downloads; omit
+  them only when the separately governed evaluation lane already published its four downloads onto the tag (the publisher
   verifies their evidence and re-downloads every byte either way),
 - provide the exact `portable_assets_run_attempt` recorded by that successful tag-push run when you
   supply a bundle,
@@ -295,7 +306,7 @@ below. The npm Trusted Publisher is configured for this package on npmjs.com and
 v0.3.8 dispatch publish on 2026-08-16.
 
 For the first stable handoff, the release owner records only the reviewed tag/SHA, portable-assets
-run id/attempt, canonical artifact name, three target statuses, and manifest/archive digests. Do not
+run id/attempt, canonical artifact name, four target statuses, and manifest/archive digests. Do not
 copy provider logs, certificate bodies, credentials, private paths, or raw tool output. If run
 resolution, fresh native qualification, assembly, upload, remote binding, or full-byte verification
 fails, leave npm and its dist-tags unchanged. Recover by fixing the producer input or protected
@@ -312,8 +323,9 @@ The script:
 - checks release-impact metadata for the current package version,
 - requires portable production artifacts to carry verified signing/notarization sidecar status
   before they may be treated as portable-complete release assets,
-- requires stable `latest` publishes to attach exactly three first-class portable GitHub Release
-  Assets: `keiko-windows-x64.zip`, `keiko-macos-arm64.zip`, and `keiko-macos-x64.zip`,
+- requires production stable `latest` publishes to attach exactly four first-class portable GitHub
+  Release Assets: `keiko-linux-x64.zip`, `keiko-windows-x64.zip`, `keiko-macos-arm64.zip`, and
+  `keiko-macos-x64.zip`,
 - rejects portable artifacts with sidecar payload metadata that is unverified, wrong-platform,
   checksum-mismatched, missing executable/license/SBOM evidence, or not contained under
   `runtime/sidecars/<runtime-name>`,

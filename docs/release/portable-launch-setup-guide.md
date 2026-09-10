@@ -55,7 +55,9 @@ user and network namespaces; it never falls back to unconfined execution.
 ### Verifying a downloaded artifact
 
 Every stable release archive and its SBOM (`<platform-target>-sbom.cdx.json`, also published as a
-release asset) carry a GitHub Artifact Attestation in addition to the platform code signature. An
+release asset) carry a GitHub Artifact Attestation. Windows and macOS additionally carry their
+platform code signatures; Linux's runtime qualification receipt carries its separate protected
+workflow OIDC signature. An
 operator can verify a downloaded file independently of Keiko's own release tooling with the
 [GitHub CLI](https://cli.github.com/):
 
@@ -68,8 +70,9 @@ gh attestation verify windows-x64-sbom.cdx.json --repo oscharko-dev/Keiko
 
 A successful verification proves the file was built by the recorded `portable-assets` workflow run
 at the recorded commit, without needing to trust anything other than GitHub's Sigstore-backed
-attestation service. This is independent of, and in addition to, the Authenticode/notarization
-signature already required for the file to launch (see [ADR-0121](../adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md#d8--release-archives-and-sboms-carry-independently-verifiable-github-artifact-attestations)).
+attestation service. This is independent of the target's activation trust: Authenticode on Windows,
+Developer ID/notarization on macOS, and the offline-verified qualification receipt on Linux (see
+[ADR-0121](../adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md#d8--release-archives-and-sboms-carry-independently-verifiable-github-artifact-attestations)).
 Attestation verification is optional; it is not part of the managed setup journey below.
 
 ## Managed Setup
