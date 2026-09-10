@@ -26,6 +26,7 @@ const RELEASE_OWNER = "oscharko-dev";
 const RELEASE_REPO = "keiko";
 const MAX_RELEASE_METADATA_BYTES = 256_000;
 const UPDATE_PREFLIGHT_TIMEOUT_MS = 8_000;
+const PORTABLE_RELEASE_DEADLINE_MS = 30_000;
 
 interface PortableReleaseMetadata extends PortableRelease {
   readonly release: UpdatePreflightReleaseSummary;
@@ -166,15 +167,18 @@ function malformedOutcome(): PortableGitHubReleaseOutcome {
 }
 
 async function fetchLatestRelease(deps: UiHandlerDeps): Promise<LatestReleaseFetch> {
-  const response = await fetchWithPortableRetry(() =>
-    gatewayFetch(githubLatestReleaseUrl(), {
-      method: "GET",
-      headers: { Accept: "application/vnd.github+json", "User-Agent": "Keiko" },
-      fetchImpl: deps.gatewayReadinessFetch,
-      timeoutMs: UPDATE_PREFLIGHT_TIMEOUT_MS,
-      maxResponseBytes: MAX_RELEASE_METADATA_BYTES,
-      egress: currentGatewayEgressConfig(deps),
-    }),
+  const deadlineAt = Date.now() + PORTABLE_RELEASE_DEADLINE_MS;
+  const response = await fetchWithPortableRetry(
+    () =>
+      gatewayFetch(githubLatestReleaseUrl(), {
+        method: "GET",
+        headers: { Accept: "application/vnd.github+json", "User-Agent": "Keiko" },
+        fetchImpl: deps.gatewayReadinessFetch,
+        timeoutMs: Math.max(1, Math.min(UPDATE_PREFLIGHT_TIMEOUT_MS, deadlineAt - Date.now())),
+        maxResponseBytes: MAX_RELEASE_METADATA_BYTES,
+        egress: currentGatewayEgressConfig(deps),
+      }),
+    { deadlineAt },
   );
   if (!response.ok) {
     await response.body?.cancel();

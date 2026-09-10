@@ -23,6 +23,7 @@ import {
   runUpdatePreflight,
 } from "./update-preflight.js";
 import type { RouteContext } from "./routes.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 
 const APPROVED_RELEASE_REFERENCE = "github-pr-review:oscharko-dev/Keiko#1717#484740";
 const ARCHIVE_SHA = "a".repeat(64);
@@ -761,6 +762,49 @@ describe("update preflight service", () => {
           status: "succeeded",
           target,
         },
+      }),
+    );
+    deps.store.close();
+  });
+
+  it("logs a body-free security event when a portable asset redirect is refused", async () => {
+    const target: UpdatePortableTarget = "macos-arm64";
+    const events: {
+      readonly op: string;
+      readonly extra?: Readonly<Record<string, unknown>>;
+    }[] = [];
+    const fetchImpl = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/releases/latest")) {
+        return Promise.resolve(jsonResponse(portableRelease(target)));
+      }
+      return Promise.resolve(
+        new Response(null, {
+          status: 302,
+          headers: { location: "https://updates.example.invalid/portable-manifest.json" },
+        }),
+      );
+    });
+    const deps = depsWith(fetchImpl, {
+      activityLog: { write: (event): void => events.push(event) },
+    });
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: baseCatalog(),
+      installMode: () => portableMode(target),
+    });
+
+    expect(report.blockers).toContainEqual(
+      expect.objectContaining({ code: "portable-manifest-malformed" }),
+    );
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        category: "security",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        level: "warn",
+        op: "update.portable-asset.redirect-refused",
+        extra: { assetKind: "manifest", reason: "unsafe-target", target },
       }),
     );
     deps.store.close();

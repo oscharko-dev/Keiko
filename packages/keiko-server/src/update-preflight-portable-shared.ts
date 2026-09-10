@@ -26,9 +26,21 @@ export interface PortableFetchRetryOptions {
   readonly sleep?: ((ms: number, signal?: AbortSignal) => Promise<void>) | undefined;
 }
 
+export type PortableAssetRedirectFailureReason =
+  "missing-location" | "malformed-location" | "unsafe-target" | "loop" | "limit" | "unsafe-origin";
+
+const REDIRECT_FAILURE_MESSAGES: Readonly<Record<PortableAssetRedirectFailureReason, string>> = {
+  "missing-location": "asset redirect location is missing",
+  "malformed-location": "asset redirect location is malformed",
+  "unsafe-target": "asset redirect target is unsafe",
+  loop: "asset redirect loop detected",
+  limit: "asset redirect limit exceeded",
+  "unsafe-origin": "asset origin is unsafe",
+};
+
 export class PortableAssetRedirectError extends Error {
-  public constructor(message: string) {
-    super(message);
+  public constructor(public readonly reason: PortableAssetRedirectFailureReason) {
+    super(REDIRECT_FAILURE_MESSAGES[reason]);
     this.name = "PortableAssetRedirectError";
   }
 }
@@ -119,6 +131,15 @@ async function waitForPortableRetry(
   return true;
 }
 
+function assertPortableFetchWithinDeadline(
+  deadlineAt: number | undefined,
+  now: () => number,
+): void {
+  if (deadlineAt !== undefined && now() >= deadlineAt) {
+    throw new DOMException("portable request deadline exceeded", "TimeoutError");
+  }
+}
+
 export async function fetchWithPortableRetry(
   fetchAttempt: () => Promise<Response>,
   options: PortableFetchRetryOptions = {},
@@ -126,6 +147,7 @@ export async function fetchWithPortableRetry(
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? abortableSleep;
   for (let attempt = 0; ; attempt += 1) {
+    assertPortableFetchWithinDeadline(options.deadlineAt, now);
     let response: Response | undefined;
     try {
       response = await fetchAttempt();
@@ -162,16 +184,16 @@ function redirectTarget(currentUrl: string, response: Response): string | undefi
   if (response.status < 300 || response.status >= 400) return undefined;
   const location = response.headers.get("location");
   if (location === null || location.trim().length === 0) {
-    throw new PortableAssetRedirectError("asset redirect location is missing");
+    throw new PortableAssetRedirectError("missing-location");
   }
   let target: URL;
   try {
     target = new URL(location, currentUrl);
   } catch {
-    throw new PortableAssetRedirectError("asset redirect location is malformed");
+    throw new PortableAssetRedirectError("malformed-location");
   }
   if (!isApprovedAssetUrl(target, false)) {
-    throw new PortableAssetRedirectError("asset redirect target is unsafe");
+    throw new PortableAssetRedirectError("unsafe-target");
   }
   return target.toString();
 }
@@ -201,10 +223,10 @@ async function continueAssetRedirect(
 ): Promise<void> {
   await response.body?.cancel();
   if (visited.has(nextUrl)) {
-    throw new PortableAssetRedirectError("asset redirect loop detected");
+    throw new PortableAssetRedirectError("loop");
   }
   if (redirects === MAX_PORTABLE_ASSET_REDIRECTS) {
-    throw new PortableAssetRedirectError("asset redirect limit exceeded");
+    throw new PortableAssetRedirectError("limit");
   }
 }
 
@@ -214,7 +236,7 @@ export async function fetchGitHubReleaseAsset(
 ): Promise<Response> {
   const initial = new URL(initialUrl);
   if (!isApprovedAssetUrl(initial, true)) {
-    throw new PortableAssetRedirectError("asset origin is unsafe");
+    throw new PortableAssetRedirectError("unsafe-origin");
   }
   const visited = new Set<string>();
   let currentUrl = initial.toString();
@@ -226,7 +248,7 @@ export async function fetchGitHubReleaseAsset(
     await continueAssetRedirect(response, nextUrl, redirects, visited);
     currentUrl = nextUrl;
   }
-  throw new PortableAssetRedirectError("asset redirect limit exceeded");
+  throw new PortableAssetRedirectError("limit");
 }
 
 const REQUIRED_TARGETS: readonly UpdatePortableTarget[] = [

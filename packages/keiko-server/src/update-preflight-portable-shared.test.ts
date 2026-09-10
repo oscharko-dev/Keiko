@@ -119,6 +119,15 @@ describe("portable GitHub release asset redirect policy", () => {
 });
 
 describe("portable fetch retry policy", () => {
+  it("refuses an attempt once the operation-wide deadline has elapsed", async () => {
+    const attempt = vi.fn(() => Promise.resolve(new Response("late")));
+
+    await expect(
+      fetchWithPortableRetry(attempt, { deadlineAt: 2_000, now: () => 2_000 }),
+    ).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(attempt).not.toHaveBeenCalled();
+  });
+
   it("retries 429 and 5xx twice with capped Retry-After and fixed backoff", async () => {
     const responses = [
       new Response(null, { status: 429, headers: { "retry-after": "99" } }),

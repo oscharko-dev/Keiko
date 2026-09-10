@@ -3134,7 +3134,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3900",
+      "site": "packages/keiko-server/src/deps.ts:3901",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -3388,6 +3388,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "update.portable-asset.redirect-refused",
+      "category": "security",
+      "site": "packages/keiko-server/src/update-preflight-portable-evidence.ts:362",
+      "package": "keiko-server"
+    },
+    {
       "op": "update.preflight.bundled-catalog.read",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/update-preflight-catalog.ts:215",
@@ -3397,13 +3403,13 @@
     {
       "op": "update.release-trust.verify",
       "category": "security",
-      "site": "packages/keiko-server/src/update-preflight-portable-evidence.ts:454",
+      "site": "packages/keiko-server/src/update-preflight-portable-evidence.ts:490",
       "package": "keiko-server"
     },
     {
       "op": "update.release-trust.verify",
       "category": "security",
-      "site": "packages/keiko-server/src/update-preflight-portable-evidence.ts:468",
+      "site": "packages/keiko-server/src/update-preflight-portable-evidence.ts:504",
       "package": "keiko-server"
     },
     {
@@ -3416,7 +3422,7 @@
     {
       "op": "update.runtime.activity-log",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/update-local-state.ts:1677",
+      "site": "packages/keiko-server/src/update-local-state.ts:1678",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -3429,7 +3435,7 @@
     {
       "op": "update.runtime.event",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/update-local-state.ts:1656",
+      "site": "packages/keiko-server/src/update-local-state.ts:1657",
       "package": "keiko-server"
     },
     {
@@ -3989,6 +3995,7 @@
     "update.candidate.consumed",
     "update.candidate.issued",
     "update.candidate.rejected",
+    "update.portable-asset.redirect-refused",
     "update.preflight.bundled-catalog.read",
     "update.release-trust.verify",
     "update.remediation.execute",

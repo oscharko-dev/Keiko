@@ -17,6 +17,7 @@ import { currentGatewayEgressConfig } from "./deps.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
   type GitHubAsset,
+  PortableAssetRedirectError,
   type PortableRelease,
   fetchGitHubReleaseAsset,
   fetchWithPortableRetry,
@@ -34,6 +35,7 @@ import { portableManifestGenerationSchemaVerified } from "./update-portable-wind
 const MAX_PORTABLE_MANIFEST_BYTES = 256_000;
 const MAX_CHECKSUM_BYTES = 32_000;
 const UPDATE_PREFLIGHT_TIMEOUT_MS = 8_000;
+const PORTABLE_EVIDENCE_DEADLINE_MS = 30_000;
 const HEX_SHA256 = /^[a-f0-9]{64}$/u;
 const COMMIT_SHA = /^[a-f0-9]{40}$/u;
 interface TextAsset {
@@ -80,17 +82,20 @@ async function fetchTextAsset(
   deps: UiHandlerDeps,
   asset: GitHubAsset,
   maxBytes: number,
+  deadlineAt: number,
 ): Promise<TextAsset | undefined> {
   const response = await fetchGitHubReleaseAsset(asset.downloadUrl, (url) =>
-    fetchWithPortableRetry(() =>
-      gatewayFetch(url, {
-        method: "GET",
-        headers: { Accept: "application/octet-stream", "User-Agent": "Keiko" },
-        fetchImpl: deps.gatewayReadinessFetch,
-        timeoutMs: UPDATE_PREFLIGHT_TIMEOUT_MS,
-        maxResponseBytes: maxBytes,
-        egress: currentGatewayEgressConfig(deps),
-      }),
+    fetchWithPortableRetry(
+      () =>
+        gatewayFetch(url, {
+          method: "GET",
+          headers: { Accept: "application/octet-stream", "User-Agent": "Keiko" },
+          fetchImpl: deps.gatewayReadinessFetch,
+          timeoutMs: Math.max(1, Math.min(UPDATE_PREFLIGHT_TIMEOUT_MS, deadlineAt - Date.now())),
+          maxResponseBytes: maxBytes,
+          egress: currentGatewayEgressConfig(deps),
+        }),
+      { deadlineAt },
     ),
   );
   if (!response.ok) {
@@ -342,12 +347,42 @@ async function readAssetSafely(
   deps: UiHandlerDeps,
   asset: GitHubAsset,
   maxBytes: number,
+  deadlineAt: number,
+  target: UpdatePortableTarget,
+  assetKind: "manifest" | "checksum",
 ): Promise<TextAsset | undefined> {
   try {
-    return await fetchTextAsset(deps, asset, maxBytes);
-  } catch {
+    return await fetchTextAsset(deps, asset, maxBytes, deadlineAt);
+  } catch (error) {
+    if (error instanceof PortableAssetRedirectError) {
+      deps.activityLog?.write({
+        category: "security",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        level: "warn",
+        op: "update.portable-asset.redirect-refused",
+        extra: { assetKind, reason: error.reason, target },
+      });
+    }
     return undefined;
   }
+}
+
+function readManifestAsset(
+  deps: UiHandlerDeps,
+  asset: GitHubAsset,
+  deadlineAt: number,
+  target: UpdatePortableTarget,
+): Promise<TextAsset | undefined> {
+  return readAssetSafely(deps, asset, MAX_PORTABLE_MANIFEST_BYTES, deadlineAt, target, "manifest");
+}
+
+function readChecksumAsset(
+  deps: UiHandlerDeps,
+  asset: GitHubAsset,
+  deadlineAt: number,
+  target: UpdatePortableTarget,
+): Promise<TextAsset | undefined> {
+  return readAssetSafely(deps, asset, MAX_CHECKSUM_BYTES, deadlineAt, target, "checksum");
 }
 
 export async function resolvePortableAsset(
@@ -405,7 +440,8 @@ async function resolvePortableEvidence(
   manifestAsset: GitHubAsset,
   checksumAsset: GitHubAsset,
 ): Promise<PortableAssetResolution> {
-  const manifestText = await readAssetSafely(deps, manifestAsset, MAX_PORTABLE_MANIFEST_BYTES);
+  const deadlineAt = Date.now() + PORTABLE_EVIDENCE_DEADLINE_MS;
+  const manifestText = await readManifestAsset(deps, manifestAsset, deadlineAt, target);
   const manifest = manifestText === undefined ? undefined : manifestRecord(manifestText.text);
   const validated = validateManifestSafely(deps, manifest, release, archive, target);
   if (validated instanceof PortableSigningVerificationError) {
@@ -419,7 +455,7 @@ async function resolvePortableEvidence(
     return malformedResolution(target, "The matching portable manifest is malformed.");
   }
   recordReleaseTrustSuccess(deps, target, validated.releaseTrust);
-  const checksum = await readAssetSafely(deps, checksumAsset, MAX_CHECKSUM_BYTES);
+  const checksum = await readChecksumAsset(deps, checksumAsset, deadlineAt, target);
   if (
     checksum === undefined ||
     !checksumIncludesArchive(checksum.text, validated.archiveSha256, archive.name)
