@@ -47,7 +47,6 @@ import {
   normalizePortableSetupCompanion,
   portableSetupCompanionRecord,
 } from "./lib/portable-setup-companion.mjs";
-import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { PORTABLE_EVALUATION_MANIFEST_ASSET_NAME } from "./lib/portable-evaluation-manifest.mjs";
 import { provenancePublishArgs, releaseImpactChildEnv } from "./lib/npm-publish-preflight.mjs";
 import {

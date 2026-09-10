@@ -197,16 +197,21 @@ describe("Windows generation registration", () => {
   it.each([
     [
       "an extra binding field",
-      (binding: Record<string, unknown>): void => void (binding.extra = true),
+      (binding: Record<string, unknown>): void => {
+        binding.extra = true;
+      },
     ],
     [
       "a non-canonical resource root",
-      (binding: Record<string, unknown>): void =>
-        void (binding.resourceRoot = ".portable/generations/other"),
+      (binding: Record<string, unknown>): void => {
+        binding.resourceRoot = ".portable/generations/other";
+      },
     ],
     [
       "a launcher digest that does not bind the selected launcher",
-      (binding: Record<string, unknown>): void => void (binding.launcherSha256 = "b".repeat(64)),
+      (binding: Record<string, unknown>): void => {
+        binding.launcherSha256 = "b".repeat(64);
+      },
     ],
   ])("rejects schema 2 with %s", (_label, mutate) => {
     const fixture = createWindowsFixture();
@@ -221,46 +226,63 @@ describe("Windows generation registration", () => {
   it.each([
     [
       "missing managed root locator",
-      (value: Record<string, unknown>): void => void delete value.managedRootLocator,
+      (value: Record<string, unknown>): void => {
+        delete value.managedRootLocator;
+      },
     ],
     [
       "malformed managed root locator",
-      (value: Record<string, unknown>): void =>
-        void (value.managedRootLocator = { kind: "default", path: "extra" }),
+      (value: Record<string, unknown>): void => {
+        value.managedRootLocator = { kind: "default", path: "extra" };
+      },
     ],
     [
       "missing setup digest",
-      (value: Record<string, unknown>): void => void delete value.setupManifestSha256,
+      (value: Record<string, unknown>): void => {
+        delete value.setupManifestSha256;
+      },
     ],
     [
       "malformed setup digest",
-      (value: Record<string, unknown>): void => void (value.setupManifestSha256 = "A".repeat(64)),
+      (value: Record<string, unknown>): void => {
+        value.setupManifestSha256 = "A".repeat(64);
+      },
     ],
     [
       "missing root identity",
-      (value: Record<string, unknown>): void => void delete value.installRootIdentitySha256,
+      (value: Record<string, unknown>): void => {
+        delete value.installRootIdentitySha256;
+      },
     ],
     [
       "malformed root identity",
-      (value: Record<string, unknown>): void =>
-        void (value.installRootIdentitySha256 = "not-a-digest"),
+      (value: Record<string, unknown>): void => {
+        value.installRootIdentitySha256 = "not-a-digest";
+      },
     ],
     [
       "missing launcher identity",
-      (value: Record<string, unknown>): void => void delete value.launcherIdentitySha256,
+      (value: Record<string, unknown>): void => {
+        delete value.launcherIdentitySha256;
+      },
     ],
     [
       "malformed launcher identity",
-      (value: Record<string, unknown>): void =>
-        void (value.launcherIdentitySha256 = "f".repeat(63)),
+      (value: Record<string, unknown>): void => {
+        value.launcherIdentitySha256 = "f".repeat(63);
+      },
     ],
     [
       "invalid package version",
-      (value: Record<string, unknown>): void => void (value.packageVersion = ""),
+      (value: Record<string, unknown>): void => {
+        value.packageVersion = "";
+      },
     ],
     [
       "invalid timestamp",
-      (value: Record<string, unknown>): void => void (value.updatedAt = "yesterday"),
+      (value: Record<string, unknown>): void => {
+        value.updatedAt = "yesterday";
+      },
     ],
   ])("rejects schema 2 with %s", (_label, mutate) => {
     const fixture = createWindowsFixture();

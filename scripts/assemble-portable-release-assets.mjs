@@ -386,8 +386,6 @@ function assertNativeHelperEvidence(stageRoot, manifest, target, sbom) {
   }
 }
 
-// This release gate deliberately evaluates the complete helper proof in one atomic assertion.
-// eslint-disable-next-line complexity
 function assertOneNativeHelperEvidence(stageRoot, helper, target, sbom) {
   assertNativeHelperTrustState(helper, target);
   const resourceRoot = sidecarPayloadRoot(stageRoot, target);
@@ -413,22 +411,21 @@ function assertOneNativeHelperEvidence(stageRoot, helper, target, sbom) {
 }
 
 function assertNativeHelperTrustState(helper, target) {
-  if (helper.signing?.verificationPolicy === "evaluation") {
-    if (
-      helper.signing.verificationStatus !== "evaluation-unqualified" ||
-      helper.signing.signatureVerified !== false ||
-      helper.signing.notarizationVerified !== false
-    ) {
-      fail(`${target.platformTarget} native helper has inconsistent release-trust evidence`);
-    }
-    return;
-  }
-  if (
-    helper.signing?.verificationStatus !== "verified-production" ||
-    helper.signing?.signatureVerified !== true ||
-    (target.nodePlatform === "darwin" && helper.signing?.notarizationVerified !== true)
-  ) {
-    fail(`${target.platformTarget} native helper is not production verified`);
+  const signing = helper.signing;
+  const evaluation = signing?.verificationPolicy === "evaluation";
+  const expected = evaluation
+    ? [
+        signing.verificationStatus === "evaluation-unqualified",
+        signing.signatureVerified === false,
+        signing.notarizationVerified === false,
+      ]
+    : [
+        signing?.verificationStatus === "verified-production",
+        signing?.signatureVerified === true,
+        target.nodePlatform !== "darwin" || signing?.notarizationVerified === true,
+      ];
+  if (!expected.every(Boolean)) {
+    fail(`${target.platformTarget} native helper has inconsistent trust evidence`);
   }
 }
 
