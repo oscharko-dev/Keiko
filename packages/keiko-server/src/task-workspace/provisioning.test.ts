@@ -1848,6 +1848,12 @@ describe("activate", () => {
       errorKind: "POINTER_DRIFT",
       extra: { operation: "activate", outcome: "retry-required" },
     });
+    // The one line this path leaves carries the classified error's Keiko frames, like every other
+    // settled failure line (review of PR #3452): the rethrow path's second, trace-carrying line is
+    // suppressed once `errorCode` is recorded, so without this the drift left no frames at all.
+    const frames = lastActivityLogEvent(activityLog).extra?.frames;
+    expect(Array.isArray(frames) && frames.length > 0).toBe(true);
+    expect(String(frames)).toContain("task-workspace/provisioning");
   });
 
   it("rejects activation of an unknown workspace", async () => {

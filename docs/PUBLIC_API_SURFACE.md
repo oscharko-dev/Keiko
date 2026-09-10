@@ -74,6 +74,12 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 ## Stability notes
 
 - Removing a root-barrel export or renaming a CLI flag is a breaking change.
+- 0.3.17 (2026-09-10, PR #3452): the root barrel gains `boundWorkspaceFs` from
+  `@oscharko-dev/keiko-workspace` — the filesystem port a consumer should resolve paths through for a
+  `WorkspaceInfo` (the owned-root port the managed-worktree prover bound to it, else the caller's
+  fallback). Additive: it lets every spawn boundary that only holds a `WorkspaceInfo` act under a
+  Keiko-managed root's own authority instead of re-admitting it under the user-workspace rules;
+  minting that authority stays on the pinned internal subpath and is not part of the root surface.
 - The published 0.2.15 realtime voice/default/tool symbols remain compatibility-only exports. The
   productive Twin pipeline requires explicit deployment aliases and never consumes those defaults,
   provider-native tools, voices, or assistant-response configuration.

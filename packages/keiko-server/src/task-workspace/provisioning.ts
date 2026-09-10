@@ -711,6 +711,7 @@ function flagDrift(
   marker: TaskWorkspaceDriftMarker = "worktree-missing",
   message = "managed worktree is missing",
 ): never {
+  const error = new TaskWorkspaceError("POINTER_DRIFT", message);
   const drifted = ctx.deps.store.upsert({
     ...existing,
     lifecycleState: "recovery-required",
@@ -731,9 +732,13 @@ function flagDrift(
     fromState: existing.lifecycleState,
     toState: "recovery-required",
     errorCode: "POINTER_DRIFT",
+    // Constructed before the line is written so the settled drift line carries the same frames
+    // the other failure paths carry (review of PR #3452): the rethrow path's tracker suppresses
+    // the second, trace-carrying diagnostic once `errorCode` is recorded.
+    error,
     driftMarker: marker,
   });
-  throw new TaskWorkspaceError("POINTER_DRIFT", message);
+  throw error;
 }
 
 function reuseExistingOrUndefined(

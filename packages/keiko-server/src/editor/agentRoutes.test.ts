@@ -1,6 +1,7 @@
 import {
   editorAgentPathBoundaryReason,
   type EditorAgentResolvedRoot,
+  serverResolvedDocumentText,
 } from "./agentRootBoundary.js";
 import {
   mkdirSync,
@@ -61,6 +62,7 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import type { GitProcessOptions, GitProcessResult } from "@oscharko-dev/keiko-git";
 import { forwardWorkspaceFs, nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { PathDeniedError } from "@oscharko-dev/keiko-workspace";
 import { STREAMING, type RouteContext } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
@@ -4193,6 +4195,31 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
       );
       // The plain node port still applies the user-workspace admission to the same root.
       expect(editorAgentPathBoundaryReason(root, ["src/a.txt"])).toBe("workspace-boundary-escape");
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  // navigateSymbol without client-supplied text reads the document server-side. That read detected
+  // the workspace through the plain node port, so for a managed task worktree it threw before
+  // reading anything and every such navigation failed with the generic server-resolved error
+  // (review of PR #3452) — the same defect class as the boundary check above.
+  it("reads a navigateSymbol document inside a managed task worktree through the access port", () => {
+    const fixture = createManagedAgentWorkspaceFixture();
+    try {
+      writeWorkspaceFile(fixture.root, "src/a.ts", "export const a = 1;\n");
+      const deps = {
+        workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome =>
+          fixture.resolveAccess(requestedRoot),
+      };
+      expect(serverResolvedDocumentText(deps, fixture.root, "src/a.ts", undefined)).toBe(
+        "export const a = 1;\n",
+      );
+      expect(serverResolvedDocumentText(deps, fixture.root, "src/a.ts", "buffer")).toBe("buffer");
+      // Without the resolver the plain node port still applies the user-workspace admission.
+      expect(() =>
+        serverResolvedDocumentText(undefined, fixture.root, "src/a.ts", undefined),
+      ).toThrow(PathDeniedError);
     } finally {
       fixture.dispose();
     }

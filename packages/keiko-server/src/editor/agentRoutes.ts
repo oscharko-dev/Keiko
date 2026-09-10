@@ -57,7 +57,6 @@ import {
   EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
   EDITOR_AGENT_SESSION_ID_MAX_BYTES,
   EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES,
-  EDITOR_AGENT_NAVIGATION_DOCUMENT_MAX_BYTES,
   editorAgentWritePreconditionError,
   isContainedAgentPath,
   isEditorAgentAction,
@@ -101,9 +100,7 @@ import {
   type WorkspaceWriter,
 } from "@oscharko-dev/keiko-tools";
 import {
-  detectWorkspaceAt,
   isDenied,
-  readWorkspaceFile,
   type WorkspaceFs,
   type WorkspaceInfo,
   containedRealPathInfo,
@@ -149,6 +146,7 @@ import {
   resolveEditorAgentContainmentPort,
   resolveEditorAgentSessionRoot,
   type EditorAgentRootBoundaryReason,
+  serverResolvedDocumentText,
 } from "./agentRootBoundary.js";
 
 type EditorAgentRouteDeps = Pick<
@@ -1467,21 +1465,6 @@ function actionAbortSignal(ctx: RouteContext): AbortSignal {
   return controller.signal;
 }
 
-function serverResolvedDocumentText(
-  snapshot: EditorAgentSessionSnapshot,
-  path: string,
-  text: string | undefined,
-): string {
-  if (text !== undefined) return text;
-  const workspace = detectWorkspaceAt(snapshot.workspaceRoot, nodeWorkspaceFs);
-  return readWorkspaceFile(
-    workspace,
-    path,
-    { maxBytes: EDITOR_AGENT_NAVIGATION_DOCUMENT_MAX_BYTES },
-    nodeWorkspaceFs,
-  ).text;
-}
-
 function optionalTargetPath(path: string | null | undefined): readonly string[] {
   return path === null || path === undefined ? [] : [path];
 }
@@ -2484,7 +2467,13 @@ async function runNavigateSymbolAction(
         document: {
           path: request.document.path,
           languageId: request.document.languageId,
-          text: serverResolvedDocumentText(snapshot, request.document.path, request.document.text),
+          text: serverResolvedDocumentText(
+            deps,
+            snapshot.workspaceRoot,
+            request.document.path,
+            request.document.text,
+            actionCorrelationId(action),
+          ),
         },
         position: request.position,
         ...(request.range === undefined ? {} : { range: request.range }),

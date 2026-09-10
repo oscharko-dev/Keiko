@@ -13,7 +13,7 @@
 
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { CodedHttpError, httpStatusFor } from "@oscharko-dev/keiko-contracts/runtime/http-error";
 import {
   projectCommandTaskTrustState,
@@ -281,16 +281,26 @@ function requireCurrentObjectIdentity(context: CurrentTrustContext): WorkspaceTr
 }
 
 // The workspace a registered project root resolves to. A managed task worktree (a registered project
-// below the configured managed root) IS its own workspace root — the same fact the verification
-// runner and the editor-agent boundary already take from the managed-root prover — so it is not
-// re-admitted through `detectWorkspaceAt`'s user-workspace root rules, which refuse the state
-// directory's `.keiko` segment. Every other root keeps the marker detection and admission it had.
+// below the configured managed root) IS its own workspace root: `git worktree add` made that
+// directory the checkout root, and the managed-root prover (workspace-root-access.ts) re-proves its
+// identity before any consumer acts on it — so it is not re-admitted through `detectWorkspaceAt`'s
+// user-workspace root rules, which refuse the state directory's `.keiko` segment. Every other root
+// keeps the marker detection and admission it had. (The editor-agent boundary and the verification
+// runner reach the same worktree through that prover's owned-root port; PR #3452's review found
+// one editor-agent read that still detected through the plain port, repaired in the same change.)
 function projectWorkspaceAt(
   canonicalProjectRoot: string,
   fs: WorkspaceFs,
   managedRoot: string | undefined,
 ): WorkspaceInfo {
-  if (managedRoot !== undefined && isManagedTargetContained(managedRoot, canonicalProjectRoot)) {
+  // Strictly below the managed root: the root itself is the parent of every worktree and never a
+  // checkout of its own, so it keeps the user-workspace admission (and is refused like any other
+  // `.keiko` path) even when someone registers it as a project.
+  if (
+    managedRoot !== undefined &&
+    resolve(canonicalProjectRoot) !== resolve(managedRoot) &&
+    isManagedTargetContained(managedRoot, canonicalProjectRoot)
+  ) {
     return workspaceInfoForRoot(canonicalProjectRoot);
   }
   return detectWorkspaceAt(canonicalProjectRoot, fs);

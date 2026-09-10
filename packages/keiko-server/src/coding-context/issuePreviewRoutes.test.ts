@@ -195,5 +195,15 @@ describe("issue preview request lifecycle", () => {
     expect(result.body).toMatchObject({ failure: "authority-denied" });
     expect(resolver).not.toHaveBeenCalled();
     expect(f.ctx.req.readableDidRead).toBe(false);
+    // The refusal leaves its own line: a 403 the operator saw as a support id used to resolve to
+    // nothing in the activity log (2026-09-10, a dev-lane BFF restart dropped the app session).
+    expect(f.activity.events).toContainEqual(
+      expect.objectContaining({
+        op: "coding-workbench.issue.previewed",
+        correlationId: f.ctx.correlationId,
+        status: 403,
+        extra: { outcome: "authority-denied" },
+      }),
+    );
   });
 });

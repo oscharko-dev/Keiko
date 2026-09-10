@@ -254,6 +254,10 @@ export function createCodingWorkbenchIssuePreviewHandler(
 ): (ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult> {
   return async (ctx, deps): Promise<RouteResult> => {
     if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+      // A 403 that left no server-side line was invisible to `keiko support analyze`: the support
+      // id the operator saw resolved to nothing (2026-09-10, a dev-lane BFF restart that dropped the
+      // in-memory app session). The refusal is recorded like every other preview outcome.
+      recordPreview(deps, ctx.correlationId, "authority-denied", 403, {});
       return failureResult("authority-denied", undefined, ctx.correlationId);
     }
     const read = await readRequest(ctx);

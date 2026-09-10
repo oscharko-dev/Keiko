@@ -1106,6 +1106,40 @@ describe("managed task worktrees below the state directory", () => {
     }
   });
 
+  // Boundary and malformed inputs fail closed: an empty or relative project id resolves to no
+  // registered project, and the managed root ITSELF — the parent of every worktree, never a
+  // worktree — is not admitted by containment (nothing "stays inside" it), so it falls back to the
+  // user-workspace rules and is refused like any other `.keiko` path.
+  it("fails closed for an empty or malformed project id and for the managed root itself", () => {
+    const fixture = managedFixture();
+    const managedStore = createInMemoryUiStore();
+    try {
+      managedStore.createProject(fixture.repositoryRoot, "repository");
+      managedStore.createProject(fixture.managedRoot, "managed-root-itself");
+      writeFileSync(join(fixture.managedRoot, "package.json"), JSON.stringify({ name: "root" }));
+      const trust = createWorkspaceScriptTrustService({
+        store: managedStore,
+        managedRoot: fixture.managedRoot,
+      });
+      expect(trust.grant(fixture.repositoryRoot)).toEqual({ trusted: true });
+
+      for (const projectId of ["", "relative/worktree", "   "]) {
+        expect(() => trust.grant(projectId)).toThrow(/Project not found/u);
+        expect(() => trust.deriveFromTrustedRoot(projectId, fixture.repositoryRoot)).toThrow(
+          /Project not found/u,
+        );
+        expect(trust.trustLevelForRoot(projectId)).toBe("restricted");
+      }
+      expect(() => trust.grant(fixture.managedRoot)).toThrow();
+      expect(() =>
+        trust.deriveFromTrustedRoot(fixture.managedRoot, fixture.repositoryRoot),
+      ).toThrow();
+      expect(trust.trustLevelForRoot(fixture.managedRoot)).toBe("restricted");
+    } finally {
+      managedStore.close();
+    }
+  });
+
   it("admits nothing by path shape when no managed root is configured", () => {
     const fixture = managedFixture();
     const managedStore = createInMemoryUiStore();
