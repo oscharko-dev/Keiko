@@ -17,6 +17,7 @@ import type {
 import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { ExecuteVerificationResult } from "./verificationExecution.js";
+import type { VerificationStepOutput } from "@oscharko-dev/keiko-verification";
 import {
   createVerificationRunnerManager,
   decideScriptTrust,
@@ -945,6 +946,117 @@ describe("VerificationRunnerManager — runToReport shares the human run's lifec
         controller.signal,
       ),
     ).rejects.toThrow(VerificationRunnerError);
+  });
+});
+
+// #3452: the agent path's own plumbing around the injected execute port -- runToReport must ask
+// for a dependency bootstrap and forward every orchestrator output through onStepOutput, bounded,
+// and must leave exactly one body-free activity line behind for a report that bootstrapped
+// dependencies (and none for one that did not).
+describe("VerificationRunnerManager — runToReport's dependency-bootstrap and step-output plumbing (#3452)", () => {
+  it('passes dependencyBootstrap "auto" and an onStepOutput sink to the execute port, and returns everything pushed through it as failureOutput', async () => {
+    const outputs: VerificationStepOutput[] = [
+      { step: "dependencies", scriptName: undefined, excerpt: "npm install failed" },
+      { step: "targeted-test", scriptName: "vitest", excerpt: "1 failing" },
+    ];
+    let observedBootstrap: "off" | "auto" | undefined;
+    let observedOnStepOutput: ((output: VerificationStepOutput) => void) | undefined;
+    const port: VerificationExecutePort = (args) => {
+      observedBootstrap = args.dependencyBootstrap;
+      observedOnStepOutput = args.onStepOutput;
+      for (const output of outputs) args.onStepOutput?.(output);
+      return Promise.resolve({
+        report: report(["targeted-test"]),
+        probe: { available: true, backend: "test-backend" },
+      });
+    };
+    const manager = makeManager({ execute: port });
+
+    const { failureOutput } = await manager.runToReport(
+      input({ kinds: ["targeted-test"], targetPath: "src/a.test.ts" }),
+      new AbortController().signal,
+    );
+
+    expect(observedBootstrap).toBe("auto");
+    expect(typeof observedOnStepOutput).toBe("function");
+    expect(failureOutput).toEqual(outputs);
+  });
+
+  it("caps failureOutput at 8 entries even when the port pushes more through onStepOutput", async () => {
+    // MAX_FAILURE_OUTPUTS (verificationRunner.ts) is 8 and module-private; pinned by its observable
+    // effect rather than by importing it.
+    const many: VerificationStepOutput[] = Array.from({ length: 12 }, (_, index) => ({
+      step: "targeted-test",
+      scriptName: "vitest",
+      excerpt: `failure ${String(index)}`,
+    }));
+    const port: VerificationExecutePort = (args) => {
+      for (const output of many) args.onStepOutput?.(output);
+      return Promise.resolve({
+        report: report(["targeted-test"]),
+        probe: { available: true, backend: "test-backend" },
+      });
+    };
+    const manager = makeManager({ execute: port });
+
+    const { failureOutput } = await manager.runToReport(
+      input({ kinds: ["targeted-test"], targetPath: "src/a.test.ts" }),
+      new AbortController().signal,
+    );
+
+    expect(failureOutput).toHaveLength(8);
+    expect(failureOutput).toEqual(many.slice(0, 8));
+  });
+
+  it("writes exactly one body-free editor.verification.dependencies activity line when the report carries a dependencies summary", async () => {
+    const events: ServerLogEvent[] = [];
+    const withDependencies: VerificationReport = {
+      ...report(["targeted-test"]),
+      dependencies: { state: "installed", lockfile: "created", exitCode: 0, durationMs: 4_200 },
+    };
+    const manager = makeManager({
+      activityLog: { write: (event): void => void events.push(event) },
+      execute: fakePort(withDependencies).port,
+    });
+
+    await manager.runToReport(
+      input({
+        kinds: ["targeted-test"],
+        targetPath: "src/a.test.ts",
+        correlationId: "deps-present",
+      }),
+      new AbortController().signal,
+    );
+
+    const dependencyLines = events.filter(
+      (event) => event.op === "editor.verification.dependencies",
+    );
+    expect(dependencyLines).toHaveLength(1);
+    expect(dependencyLines[0]).toMatchObject({
+      op: "editor.verification.dependencies",
+      correlationId: "deps-present",
+      extra: { state: "installed", lockfile: "created", exitCode: 0, durationMs: 4_200 },
+    });
+    expect(JSON.stringify(dependencyLines)).not.toContain(workspaceRoot);
+  });
+
+  it("writes no editor.verification.dependencies line when the report carries no dependencies summary", async () => {
+    const events: ServerLogEvent[] = [];
+    const manager = makeManager({
+      activityLog: { write: (event): void => void events.push(event) },
+      execute: fakePort(report(["targeted-test"])).port,
+    });
+
+    await manager.runToReport(
+      input({
+        kinds: ["targeted-test"],
+        targetPath: "src/a.test.ts",
+        correlationId: "deps-absent",
+      }),
+      new AbortController().signal,
+    );
+
+    expect(events.some((event) => event.op === "editor.verification.dependencies")).toBe(false);
   });
 });
 

@@ -3037,6 +3037,40 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     });
   });
 
+  // #3452: the follow-up's own resume path (above) must not reopen the ONE exit a decision-paused
+  // run keeps for the operator's decision (see "refuses an operator resume while a run waits on a
+  // decision" earlier in this file). resumePausedForFollowUp refuses whenever `pauseReason` is set,
+  // so the follow-up gets the SAME invalid-intent failure the coordinator returns for any other
+  // resume refusal, dispatches nothing, and never touches the manager.
+  it("refuses a follow-up into a run paused for an operator decision, dispatching nothing and resuming nothing", async () => {
+    const f = await runningFixture();
+    const paused = await f.orchestrator.ingest(operatorDecisionEvent());
+    expect(successfulSnapshot(paused)).toMatchObject({
+      state: "paused",
+      pauseReason: "workspace-script-trust",
+    });
+    // The initial turn `runningFixture()` dispatched to reach "running" already called these; clear
+    // them so the assertions below are about the follow-up attempt alone.
+    f.manager.resume.mockClear();
+    f.taskDispatcher.dispatch.mockClear();
+    f.taskDispatcher.replace.mockClear();
+
+    const followUp = await f.orchestrator.submitFollowUp("run-1", {
+      requestId: "follow-up-decision-paused",
+      expectedRevision: successfulSnapshot(paused).revision,
+      taskIntent: "continue with this instruction",
+    });
+
+    expect(followUp).toMatchObject({ ok: false, failureCode: "invalid-intent" });
+    expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+    expect(f.taskDispatcher.replace).not.toHaveBeenCalled();
+    expect(f.manager.resume).not.toHaveBeenCalled();
+    expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+      state: "paused",
+      pauseReason: "workspace-script-trust",
+    });
+  });
+
   it.each([60_000, 60_001])(
     "fails closed and stops the manager when a stashed permission expires at +%i ms",
     async (elapsedMs) => {

@@ -37,6 +37,7 @@ import {
   verificationLivenessRefusal,
   SCRIPT_TRUST_WAIT_CEILING_MS,
 } from "./productionManagedWorktreeTools.js";
+import { dependencyBootstrapFailureSummary } from "./codingToolIpc.js";
 import { CODING_TOOL_INVOCATION_MAX_TTL_MS } from "./codingToolInvocationRegistry.js";
 import type { SkillCatalog } from "./skillCatalog.js";
 import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
@@ -58,6 +59,7 @@ import {
   type VerificationRunnerManager,
   type VerificationRunInput,
 } from "../editor/verificationRunner.js";
+import type { VerificationStepOutput } from "@oscharko-dev/keiko-verification";
 import { createInMemoryUiStore } from "../store/index.js";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createGeneratedOpenCodeBundle } from "./opencodeRuntimeAdapter.js";
@@ -531,6 +533,98 @@ describe("production managed worktree tools", () => {
         verificationTargetDigest: codingVerificationTargetDigest("test"),
       }),
     );
+  });
+
+  // #3452: modelVerificationFailure/stepFailure/dependencyBootstrapFailure match a failureOutput
+  // entry to the step it names (kind + scriptName), or to "dependencies" when the bootstrap itself
+  // failed, and attach only that excerpt to the model-facing failure.
+  it("attaches the failed step's matching failureOutput excerpt to verificationFailure.excerpt", async () => {
+    const facade = verificationFacade({
+      runToReport: () => Promise.resolve(failedVerificationReport()),
+      failureOutput: [
+        { step: "test", scriptName: "test", excerpt: "1 test failed: expected true, got false" },
+      ],
+      records: [],
+    });
+
+    const result = await facade.execute({
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "verification",
+        actionId: "verification-excerpt",
+        idempotencyKey: "verification-excerpt-key",
+        verifierId: "test",
+      }),
+    });
+
+    if (result.status !== "failed") throw new Error("expected a failed verification result");
+    expect(result.verificationFailure?.excerpt).toBe("1 test failed: expected true, got false");
+  });
+
+  // The producer half of the bootstrap-failure pin; the facade half is
+  // codingToolFacade.dependencyFailure.test.ts. A failed dependency install reaches the model with its
+  // closed summary, the install's own output excerpt and the dependency record. Before bb585534a the
+  // summary carried free text, the facade's closed admission refused it, and the whole failure
+  // (reason, excerpt and record) was dropped before the model saw it (found by this test pass).
+  it("forwards a failed dependency bootstrap to the model with its summary, excerpt and record", async () => {
+    const dependencies = {
+      state: "failed",
+      lockfile: "absent",
+      exitCode: 1,
+      durationMs: 900,
+      detail: "npm install failed (exit 1)",
+    } as const;
+    const facade = verificationFacade({
+      runToReport: () =>
+        Promise.resolve({ ...verificationReport("failed"), results: [], dependencies }),
+      failureOutput: [
+        { step: "dependencies", scriptName: undefined, excerpt: "npm ERR! code E404" },
+      ],
+      records: [],
+    });
+
+    const result = await facade.execute({
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "verification",
+        actionId: "verification-bootstrap",
+        idempotencyKey: "verification-bootstrap-key",
+        verifierId: "test",
+      }),
+    });
+
+    if (result.status !== "failed") throw new Error("expected a failed verification result");
+    expect(result.verificationFailure).toEqual({
+      summary: dependencyBootstrapFailureSummary("failed"),
+      locations: [],
+      truncated: false,
+      excerpt: "npm ERR! code E404",
+      dependencies,
+    });
+  });
+
+  it("does not attach an excerpt captured for a different step", async () => {
+    const facade = verificationFacade({
+      runToReport: () => Promise.resolve(failedVerificationReport()),
+      failureOutput: [
+        { step: "lint", scriptName: "lint", excerpt: "unrelated lint failure output" },
+      ],
+      records: [],
+    });
+
+    const result = await facade.execute({
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "verification",
+        actionId: "verification-mismatched-excerpt",
+        idempotencyKey: "verification-mismatched-excerpt-key",
+        verifierId: "test",
+      }),
+    });
+
+    if (result.status !== "failed") throw new Error("expected a failed verification result");
+    expect(result.verificationFailure?.excerpt).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain("unrelated lint failure output");
   });
 
   it("threads live proxy and CA settings into the governed research transport", async () => {
@@ -2439,8 +2533,14 @@ type ReportRunner = (
   signal: AbortSignal,
 ) => Promise<VerificationReport>;
 
-function outcomeRunner(runToReport: ReportRunner): VerificationRunnerManager["runToReport"] {
-  return async (input, signal) => ({ report: await runToReport(input, signal), failureOutput: [] });
+function outcomeRunner(
+  runToReport: ReportRunner,
+  failureOutput: readonly VerificationStepOutput[] = [],
+): VerificationRunnerManager["runToReport"] {
+  return async (input, signal) => ({
+    report: await runToReport(input, signal),
+    failureOutput,
+  });
 }
 
 function verificationRunnerOptions(options: {
@@ -2450,13 +2550,16 @@ function verificationRunnerOptions(options: {
     decision: CodingWorkbenchOperatorDecision,
     outcome?: CodingWorkbenchAuxiliaryStatus,
   ) => void;
+  // #3452: the orchestrator's redacted output tail(s) the port hands back beside the report
+  // (ADR-0126 D3). Defaulted to none, exactly as before, so only a test that cares provides one.
+  readonly failureOutput?: readonly VerificationStepOutput[];
 }): Pick<
   Parameters<typeof createProductionManagedWorktreeToolFacade>[0],
   "verificationRunner" | "requestOperatorDecision"
 > {
   return {
     verificationRunner: {
-      runToReport: outcomeRunner(options.runToReport),
+      runToReport: outcomeRunner(options.runToReport, options.failureOutput),
       scriptTrustFor:
         options.scriptTrustFor ??
         ((): ScriptTrustDecision => ({ trusted: true, basis: "repository" })),
@@ -2481,6 +2584,7 @@ function verificationFacade(options: {
     decision: CodingWorkbenchOperatorDecision,
     outcome?: CodingWorkbenchAuxiliaryStatus,
   ) => void;
+  readonly failureOutput?: readonly VerificationStepOutput[];
   readonly workspaceRoot?: string;
   readonly records: ServerDiagnosticRecord[];
 }): ReturnType<typeof createProductionManagedWorktreeToolFacade> {

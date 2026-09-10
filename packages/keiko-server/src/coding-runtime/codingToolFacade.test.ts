@@ -20,6 +20,7 @@ import type {
 } from "./codingToolFacadePorts.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import type { CodingToolActionRequest } from "./codingToolIpc.js";
+import { VERIFIED_COMMIT_BLOCKING_PATHS_MAX } from "../gitDelivery/verifiedCommitTypes.js";
 
 const capability = "capability-1-opaque-runtime-secret";
 const deliveryFixtures: DraftDeliveryFixture[] = [];
@@ -1084,6 +1085,83 @@ describe("CodingToolFacade", () => {
       evidence: [{ kind: "governed-delegate", code: "completed" }],
     });
   });
+
+  // isVerifiedCommitBlockingPaths/isBlockingPathList: bounded, workspace-relative, exact-keyed.
+  const validBlocking = {
+    unstagedCount: 1,
+    untrackedCount: 1,
+    unstaged: ["src/a.ts"],
+    untracked: ["src/b.ts"],
+  };
+  function candidateNotStagedVerification(
+    blocking: Readonly<Record<string, unknown>>,
+  ): Readonly<Record<string, unknown>> {
+    return {
+      commitProof: "unavailable",
+      reasonCode: "candidate-not-staged",
+      nextAction: "stage-then-verify",
+      blocking,
+    };
+  }
+
+  it("accepts a candidate-not-staged verification proof with a well-formed blocking payload", async () => {
+    const ports = facade();
+    const verification = candidateNotStagedVerification(validBlocking);
+    ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "completed", verification }));
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "verification", verifierId: "unit" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "completed" }],
+      verification,
+    });
+  });
+
+  it.each([
+    ["an absolute unstaged path", { ...validBlocking, unstaged: ["/etc/passwd"] }],
+    [
+      "an untracked path escaping the workspace with ..",
+      { ...validBlocking, untracked: ["../secrets.env"] },
+    ],
+    [
+      `more than ${String(VERIFIED_COMMIT_BLOCKING_PATHS_MAX)} unstaged paths`,
+      {
+        ...validBlocking,
+        unstagedCount: VERIFIED_COMMIT_BLOCKING_PATHS_MAX + 1,
+        unstaged: Array.from(
+          { length: VERIFIED_COMMIT_BLOCKING_PATHS_MAX + 1 },
+          (_, index) => `src/file-${String(index)}.ts`,
+        ),
+      },
+    ],
+  ])(
+    "strips a candidate-not-staged verification proof whose blocking payload has %s",
+    async (_label, blocking) => {
+      const ports = facade();
+      ports.delegate.execute = vi.fn(() =>
+        Promise.resolve({
+          outcome: "completed",
+          verification: candidateNotStagedVerification(blocking),
+        }),
+      );
+      const subject = createCodingToolFacade(ports);
+
+      await expect(
+        subject.execute({
+          body: requestBody({ action: "verification", verifierId: "unit" }),
+          capability,
+        }),
+      ).resolves.toEqual({
+        status: "completed",
+        evidence: [{ kind: "governed-delegate", code: "completed" }],
+      });
+    },
+  );
 
   // The other half of sourcing the runner vocabulary: the exclusion is a decision, not an accident.
   // A route-only code has no meaning for a tool call, so it collapses to the bare status instead of

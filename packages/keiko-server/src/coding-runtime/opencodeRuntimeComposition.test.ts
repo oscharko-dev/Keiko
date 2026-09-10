@@ -18,6 +18,11 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 
 import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  DEFAULT_VERIFICATION_LIMITS,
+  VERIFICATION_SETTLEMENT_GRACE_MS,
+  VERIFICATION_TOOL_MAX_DURATION_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/verification";
 
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
@@ -34,6 +39,7 @@ import {
 } from "./opencodeProtocolSurface.js";
 import { OPENCODE_HISTORY_RESPONSE_MAX_BYTES } from "./opencodeProtocol.js";
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
+import { OPEN_CODE_VERIFICATION_TOOL_CLIENT_TIMEOUT_MS } from "./opencodeRuntimeAdapter.js";
 
 const dirs: string[] = [];
 const MODEL_CAPABILITY = "m".repeat(43);
@@ -2514,5 +2520,110 @@ describe("private OpenCode tool bridge", () => {
     } finally {
       await fixture.stop();
     }
+  });
+
+  // #3452: requestDeadlineFor/VERIFICATION_TOOL_BRIDGE_DEADLINE_MS/createToolBridgeAdmissionGate
+  // are module-private -- pinned here through the public handle() surface instead. The verification
+  // budget (contracts' catalog budget + its settlement grace) is on the order of 14.5 minutes, so a
+  // real-timer wait is impractical; fake timers step through it without ever really waiting.
+  it("keeps a verification-tagged request admitted past the configured default deadline, aborting it only at the verification budget", async () => {
+    const facade: CodingToolFacade = {
+      execute: vi.fn((input: Parameters<CodingToolFacade["execute"]>[0]) => {
+        const { signal } = input;
+        return new Promise((resolve) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              resolve(completed);
+            },
+            { once: true },
+          );
+        });
+      }) as CodingToolFacade["execute"],
+    };
+    // A small configured default: if the verification action were bound to it (a regression), the
+    // request below would already be settled long before the first `advanceTimersByTimeAsync` ends.
+    const fixture = await startBridgeFixture(facade, { requestDeadlineMs: 30, maxInFlight: 1 });
+    try {
+      vi.useFakeTimers();
+      let settled = false;
+      const handled = fixture.runtime.toolBridge
+        .handle({
+          method: "POST",
+          headers: new Headers(authorized),
+          body: '{"action":"verification"}',
+        })
+        .then((response) => {
+          settled = true;
+          return response;
+        });
+
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(settled).toBe(false);
+
+      // The rest of the way to the bridge's own verification deadline -- the module-private
+      // VERIFICATION_TOOL_BRIDGE_DEADLINE_MS constant's own formula (not exported, so restated here
+      // from the two contract constants it is built from, purely to pin the ordering -- see the
+      // dedicated ordering pin below for the values themselves).
+      await vi.advanceTimersByTimeAsync(
+        VERIFICATION_TOOL_MAX_DURATION_MS + VERIFICATION_SETTLEMENT_GRACE_MS - 10_000,
+      );
+      await expect(handled).resolves.toMatchObject({ status: 408 });
+      expect(settled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      await fixture.stop();
+    }
+  });
+
+  it("aborts a body without a recognized verification action at the configured default deadline", async () => {
+    const facade: CodingToolFacade = {
+      execute: vi.fn((input: Parameters<CodingToolFacade["execute"]>[0]) => {
+        const { signal } = input;
+        return new Promise((resolve) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              resolve(completed);
+            },
+            { once: true },
+          );
+        });
+      }) as CodingToolFacade["execute"],
+    };
+    const fixture = await startBridgeFixture(facade, { requestDeadlineMs: 30, maxInFlight: 1 });
+    try {
+      vi.useFakeTimers();
+      // Valid JSON so it is admitted past preflight and reaches the facade, but declaredAction()
+      // finds no "action" key at all -- requestDeadlineFor() must fall through to the configured
+      // default rather than the verification budget.
+      const handled = fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: '{"unrelated":true}',
+      });
+      await vi.advanceTimersByTimeAsync(30);
+      await expect(handled).resolves.toMatchObject({ status: 408 });
+    } finally {
+      vi.useRealTimers();
+      await fixture.stop();
+    }
+  });
+
+  // The four independently-defined budgets the verification tool bridge chain relies on staying
+  // strictly ordered, so the sidecar always receives the server's own answer (a report or the
+  // catalog's timeout) instead of racing a client- or bridge-side abort of its own. Each constant is
+  // imported from the layer that owns it, never restated: the bridge's own
+  // VERIFICATION_TOOL_BRIDGE_DEADLINE_MS is module-private, so it is expressed here exactly as
+  // opencodeRuntimeComposition.ts itself defines it -- the contracts' catalog budget plus its
+  // settlement grace -- rather than duplicated as a separate literal.
+  it("orders the plugin client timeout above the bridge deadline above the catalog budget above the default wall time", () => {
+    const bridgeDeadlineMs = VERIFICATION_TOOL_MAX_DURATION_MS + VERIFICATION_SETTLEMENT_GRACE_MS;
+
+    expect(OPEN_CODE_VERIFICATION_TOOL_CLIENT_TIMEOUT_MS).toBeGreaterThan(bridgeDeadlineMs);
+    expect(bridgeDeadlineMs).toBeGreaterThan(VERIFICATION_TOOL_MAX_DURATION_MS);
+    expect(VERIFICATION_TOOL_MAX_DURATION_MS).toBeGreaterThan(
+      DEFAULT_VERIFICATION_LIMITS.wallTimeMs,
+    );
   });
 });

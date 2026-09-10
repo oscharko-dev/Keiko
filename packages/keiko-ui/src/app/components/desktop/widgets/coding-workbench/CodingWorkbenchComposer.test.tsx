@@ -164,6 +164,24 @@ describe("Coding Workbench composer", () => {
     expect(screen.getByRole("button", { name: "Resume run" })).toBeDisabled();
   });
 
+  // #3452: the follow-up resumes the run before replacing its task, through the same one exit a
+  // decision-paused run keeps for the operator's decision. When the operator may not resume it
+  // themselves, sending a follow-up must not submit either -- it stays a plain, non-submitting
+  // button, exactly like the resume control above.
+  it("keeps the follow-up Send button a non-submitting button when the run may not be resumed", () => {
+    renderComposerWithOverrides({ runState: "paused", canResume: false });
+    const send = screen.getByRole("button", { name: "Send follow-up" });
+    expect(send).toHaveAttribute("aria-disabled", "true");
+    expect(send).toHaveAttribute("type", "button");
+  });
+
+  it("submits the follow-up Send button once the run may be resumed and nothing else blocks it", () => {
+    renderComposerWithOverrides({ runState: "paused", canResume: true });
+    const send = screen.getByRole("button", { name: "Send follow-up" });
+    expect(send).toHaveAttribute("aria-disabled", "false");
+    expect(send).toHaveAttribute("type", "submit");
+  });
+
   it("disables the follow-up Send button when the draft is empty", () => {
     renderComposer("paused", composerActions(), "   ");
     expect(screen.getByRole("button", { name: "Send follow-up" })).toHaveAttribute(
