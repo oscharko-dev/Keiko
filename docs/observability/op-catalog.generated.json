@@ -3032,13 +3032,13 @@
     {
       "op": "runtime.confinement.failed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:253",
+      "site": "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:255",
       "package": "keiko-server"
     },
     {
       "op": "runtime.confinement.failed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:298",
+      "site": "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:300",
       "package": "keiko-server"
     },
     {
@@ -3050,7 +3050,7 @@
     {
       "op": "runtime.confinement.spawned",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:269",
+      "site": "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:271",
       "package": "keiko-server"
     },
     {
