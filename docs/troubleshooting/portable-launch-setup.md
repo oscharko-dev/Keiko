@@ -21,11 +21,11 @@ quarantine, signing, notarization, or "damaged app" prompt.
 
 **Root Cause**
 
-Portable artifacts are downloaded executable software. Windows SmartScreen, Defender, AppLocker,
-WDAC, macOS Gatekeeper, quarantine attributes, missing signing evidence, missing notarization, or
-organization-managed allowlists can block downloaded applications before Keiko code runs. This does
-not mean Keiko requires system Node/npm; it means the operating system or organization policy
-blocked execution of the bundled launcher.
+Portable artifacts are downloaded executable software. Linux execution and mount policy, Windows
+SmartScreen, Defender, AppLocker, WDAC, macOS Gatekeeper, quarantine attributes, missing signing
+evidence, missing notarization, or organization-managed allowlists can block downloaded
+applications before Keiko code runs. This does not mean Keiko requires system Node/npm; it means
+the operating system or organization policy blocked execution of the bundled launcher.
 
 **Diagnostic Steps**
 
@@ -45,11 +45,54 @@ Gatekeeper, quarantine, or organization-managed notarization policy is blocking 
 **Resolution**
 
 - Use signed Windows artifacts and signed/notarized macOS artifacts for production releases.
+- Use only the Sigstore-qualified `linux-x64` artifact on Linux and preserve its executable modes
+  while extracting it.
 - Keep the ZIP artifact, manifest, checksums, signing evidence, and release notes together.
 - If an organization blocks public GitHub downloads, distribute the same reviewed release assets
   through an organization-approved mirror or software portal.
 - Do not tell users to disable SmartScreen, Gatekeeper, notarization, TLS verification, or
   organization policy as the normal fix.
+
+---
+
+## Linux managed coding runtime reports confinement unavailable
+
+| Field             | Value                                                   |
+| ----------------- | ------------------------------------------------------- |
+| Severity          | Blocker                                                 |
+| Surface           | Linux managed coding runtime                            |
+| Stable identifier | `runtime confinement unavailable on supported platform` |
+
+**Symptom**
+
+The Linux application and local UI start, but a governed long-lived coding runtime is refused before
+its sidecar starts. The activity log records `runtime.confinement.unavailable` or
+`runtime.confinement.failed` with redacted policy, artifact, and authority digests.
+
+**Root Cause**
+
+The production Linux runtime requires the `unshare` utility and a functioning unprivileged user and
+network namespace implementation. A distribution may omit `util-linux`, disable unprivileged user
+namespaces, or apply an organization security profile that denies the namespace operation. Keiko
+tests the actual kernel boundary and fails closed; loopback-only filtering or direct sidecar egress
+is not an accepted fallback.
+
+**Diagnostic Steps**
+
+- Confirm that the installed release is the `linux-x64` artifact and that its GitHub artifact
+  attestation is valid.
+- Inspect `<stateDir>/logs/server.log` for the correlation-linked, body-free
+  `runtime.confinement.*` event and its stable reason code.
+- Ask the Linux or organization administrator whether unprivileged user/network namespaces and the
+  distribution's `unshare` package are available to ordinary user processes.
+
+**Resolution**
+
+- Install the distribution-provided `util-linux` package if `unshare` is absent.
+- Restore the distribution-supported unprivileged user-namespace policy or use an approved managed
+  host where it is enabled.
+- Do not run Keiko as root, grant `CAP_NET_ADMIN`, disable host security controls, or bypass the
+  requested confinement.
 
 ---
 

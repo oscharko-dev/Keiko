@@ -8,16 +8,16 @@ portable install and first-run setup journey delivered by #1942. Portable update
 
 The normal user path is intentionally simple:
 
-1. On Windows, download and open `keiko-windows-x64-setup.exe`. On macOS, download the Keiko ZIP
-   for the user's architecture from the public GitHub Release.
-2. On macOS, extract the ZIP and open the extracted `Keiko` folder.
-3. Double-click `Keiko.app` on macOS. The Windows setup companion installs and launches the same
-   reviewed portable ZIP automatically.
+1. On Windows, download and open `keiko-windows-x64-setup.exe`. On Linux or macOS, download the
+   matching ZIP for the user's platform and architecture from the public GitHub Release.
+2. On Linux or macOS, extract the ZIP and open the extracted `Keiko` folder.
+3. Open `Keiko` on Linux or `Keiko.app` on macOS. The Windows setup companion installs and launches
+   the same reviewed portable ZIP automatically.
 4. On macOS, approve the one-time Administrator, System Extension, and Full Disk Access dialogs when
    macOS presents them; organization-managed Macs may have these permissions preapproved by MDM.
 5. Keiko continues automatically after the required approval and opens its local UI.
-6. Start Keiko afterward from the same app surface, Windows search, the Start Menu entry, Finder, or
-   Spotlight.
+6. Start Keiko afterward from the same app surface, the Linux application menu, Windows search, the
+   Start Menu entry, Finder, or Spotlight.
 
 The primary path does not ask users to install Node.js, install npm, run a package manager, type
 terminal commands, restart by hand, manually verify the running version, or use the browser's
@@ -27,11 +27,12 @@ path for portable delivery; see
 
 ## Platform Artifacts
 
-Every stable portable release that advertises portable delivery must provide exactly three
+Every stable portable release that advertises portable delivery must provide exactly four
 first-class artifacts:
 
 | Platform target | Download asset          | Primary launcher |
 | --------------- | ----------------------- | ---------------- |
+| `linux-x64`     | `keiko-linux-x64.zip`   | `Keiko`          |
 | `windows-x64`   | `keiko-windows-x64.zip` | `Keiko.exe`      |
 | `macos-arm64`   | `keiko-macos-arm64.zip` | `Keiko.app`      |
 | `macos-x64`     | `keiko-macos-x64.zip`   | `Keiko.app`      |
@@ -46,6 +47,11 @@ macOS arm64 and macOS x64 have the same release-blocking importance. A release i
 portable-complete when either macOS architecture is missing, unsigned, unnotarized where required,
 or not covered by the same launch/setup verification.
 
+The Linux artifact is production-qualified only when its exact runtime receipt carries a valid
+GitHub OIDC Sigstore bundle and the Linux reference runner proves the namespace-gateway backend.
+Keiko refuses a managed coding-runtime launch when the host cannot create the required unprivileged
+user and network namespaces; it never falls back to unconfined execution.
+
 ### Verifying a downloaded artifact
 
 Every stable release archive and its SBOM (`<platform-target>-sbom.cdx.json`, also published as a
@@ -55,6 +61,7 @@ operator can verify a downloaded file independently of Keiko's own release tooli
 
 ```console
 gh attestation verify keiko-windows-x64.zip --repo oscharko-dev/Keiko
+gh attestation verify keiko-linux-x64.zip --repo oscharko-dev/Keiko
 gh attestation verify keiko-windows-x64-setup.exe --repo oscharko-dev/Keiko
 gh attestation verify windows-x64-sbom.cdx.json --repo oscharko-dev/Keiko
 ```
@@ -122,10 +129,11 @@ Operators can run the deterministic launch/setup smoke after package build:
 npm run smoke:portable-launch-setup
 ```
 
-The smoke creates disposable fixtures for `windows-x64`, `macos-arm64`, and `macos-x64`, launches
+The smoke creates disposable fixtures for `linux-x64`, `windows-x64`, `macos-arm64`, and
+`macos-x64`, launches
 through the portable setup seam with `PATH` stripped, verifies managed setup registration, verifies
 that relaunch uses the managed app root, verifies the manually re-downloaded newer package fallback
-stops the old server and swaps to the new managed package for all three targets, validates the
+stops the old server and swaps to the new managed package for all four targets, validates the
 native launcher source uses bundled Node, and checks this documentation remains shell-free on the
 primary user path.
 
