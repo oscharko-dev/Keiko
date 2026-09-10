@@ -70,6 +70,8 @@ const KNOWN_ENVELOPE_KEYS: ReadonlySet<string> = new Set([
   "causeChain",
 ]);
 
+type ServerLogStatus = number | string;
+
 export interface ServerLogLineView {
   readonly toolCatalog?: ToolCatalogLogEvidence;
   readonly ts: string;
@@ -82,7 +84,7 @@ export interface ServerLogLineView {
   readonly parentCorrelationId?: string | undefined;
   readonly errorKind?: string | undefined;
   readonly durationMs?: number | undefined;
-  readonly status?: number | string | undefined;
+  readonly status?: ServerLogStatus | undefined;
   readonly frames?: readonly string[] | undefined;
   // Sibling of `frames`: `redactLogObject` special-cases both by name the same way (ADR-0173
   // §4.4), and `formatServerLogLine` flattens both onto the top level of the written JSON.

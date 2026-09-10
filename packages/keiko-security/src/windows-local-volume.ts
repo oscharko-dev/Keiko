@@ -108,7 +108,8 @@ function trustedEnvironment(executable: string): NodeJS.ProcessEnv {
 }
 
 function text(value: string | Buffer | null): string {
-  return value === null ? "" : Buffer.isBuffer(value) ? value.toString("utf8") : value;
+  if (value === null) return "";
+  return Buffer.isBuffer(value) ? value.toString("utf8") : value;
 }
 
 function assertUsablePath(path: string): void {

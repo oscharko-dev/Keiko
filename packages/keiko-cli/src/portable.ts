@@ -260,19 +260,42 @@ function finalizePortableOptions(
   };
 }
 
-async function launchManaged(
-  target: PortableTarget,
+interface LaunchManagedOptions {
+  readonly target: PortableTarget;
+  readonly layout: PortableLayout;
+  readonly io: CliIo;
+  readonly env: EnvSource;
+  readonly stateDir: string;
+  readonly securityLogSink?: SecurityLogSink | undefined;
+  readonly recovered?: {
+    readonly descriptor: PortableRecoveredLaunchDescriptor;
+    readonly encoded: string;
+  };
+}
+
+function managedLaunchOptions(
+  options: PortableCliOptions,
   layout: PortableLayout,
   io: CliIo,
   env: EnvSource,
-  stateDir: string,
+  recovered?: LaunchManagedOptions["recovered"],
+): LaunchManagedOptions {
+  return {
+    target: options.target,
+    layout,
+    io,
+    env,
+    stateDir: options.stateDir,
+    securityLogSink: options.securityLogSink,
+    ...(recovered === undefined ? {} : { recovered }),
+  };
+}
+
+async function launchManaged(
+  options: LaunchManagedOptions,
   deps: Pick<PortableRuntimeDeps, "activateMacosRuntimeFn" | "lifecycleFn">,
-  securityLogSink?: SecurityLogSink,
-  recovered?: {
-    readonly descriptor: PortableRecoveredLaunchDescriptor;
-    readonly encoded: string;
-  },
 ): Promise<number> {
+  const { target, layout, io, env, stateDir, securityLogSink, recovered } = options;
   if (target !== "windows-x64") {
     const activation = await deps.activateMacosRuntimeFn(layout, target);
     if (activation === "unavailable") {
@@ -318,7 +341,7 @@ async function relaunchPreviousManaged(
   deps: Pick<PortableRuntimeDeps, "activateMacosRuntimeFn" | "lifecycleFn">,
   securityLogSink?: SecurityLogSink,
 ): Promise<number> {
-  await launchManaged(target, layout, io, env, stateDir, deps, securityLogSink);
+  await launchManaged({ target, layout, io, env, stateDir, securityLogSink }, deps);
   return 1;
 }
 
@@ -331,15 +354,7 @@ async function upgradeManagedFromClickedPackage(
   deps: PortableUpgradeDeps,
 ): Promise<number> {
   if (!portableSourceCanReplaceManaged(source, current)) {
-    return launchManaged(
-      options.target,
-      current.layout,
-      io,
-      env,
-      options.stateDir,
-      deps,
-      options.securityLogSink,
-    );
+    return launchManaged(managedLaunchOptions(options, current.layout, io, env), deps);
   }
   try {
     return await withPortableManagedMutation(options, (upgrade) =>
@@ -378,15 +393,7 @@ async function upgradeManagedWhileLocked(
       securityLogSink: options.securityLogSink,
     });
     io.out("Keiko portable upgrade installed from downloaded package.\n");
-    return await launchManaged(
-      options.target,
-      upgraded,
-      io,
-      env,
-      options.stateDir,
-      deps,
-      options.securityLogSink,
-    );
+    return await launchManaged(managedLaunchOptions(options, upgraded, io, env), deps);
   } catch (error) {
     io.err(
       `keiko portable launch: ${error instanceof Error ? error.message : "portable upgrade failed"}\n`,
@@ -432,15 +439,7 @@ async function setupAndLaunchManaged(
 ): Promise<number> {
   const setup = setupPortable({ ...options, env, home: options.home }, io, deps.now());
   if (setup.code !== 0 || setup.layout === undefined) return setup.code;
-  return await launchManaged(
-    options.target,
-    setup.layout,
-    io,
-    env,
-    options.stateDir,
-    deps,
-    options.securityLogSink,
-  );
+  return await launchManaged(managedLaunchOptions(options, setup.layout, io, env), deps);
 }
 
 function setupDownloadedPortable(
@@ -523,30 +522,19 @@ async function recoverBeforePortableLaunch(
   if (recovery.status === "normal") {
     if (attestedRecovery.managed === undefined) return undefined;
     return launchManaged(
-      options.target,
-      attestedRecovery.managed.layout,
-      io,
-      env,
-      options.stateDir,
+      managedLaunchOptions(options, attestedRecovery.managed.layout, io, env),
       deps,
-      options.securityLogSink,
     );
   }
   if (attestedRecovery.managed === undefined) {
     throw new Error("recovered portable install could not be attested");
   }
   return launchManaged(
-    options.target,
-    attestedRecovery.managed.layout,
-    io,
-    env,
-    options.stateDir,
-    deps,
-    options.securityLogSink,
-    {
+    managedLaunchOptions(options, attestedRecovery.managed.layout, io, env, {
       descriptor: recovery.descriptor,
       encoded: deps.encodeRecoveredLaunchFn(recovery.descriptor),
-    },
+    }),
+    deps,
   );
 }
 

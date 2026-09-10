@@ -130,11 +130,11 @@ const MANAGED_INSTALL_RULES: Readonly<
   },
 };
 const WINDOWS_LAUNCHER_MAX_BYTES = 64 * 1024;
-const WINDOWS_GENERATION_ROOT_FILES: readonly string[] = [
+const WINDOWS_GENERATION_ROOT_FILES: ReadonlySet<string> = new Set([
   "Keiko.exe",
   ".portable/setup-manifest.json",
   "support/keiko-support.cmd",
-];
+]);
 const WINDOWS_GENERATION_PAYLOAD_EXACT_FILES: readonly string[] = [
   "app/package.json",
   "app/release-impact.catalog.json",
@@ -681,7 +681,7 @@ function allowlistedSelectedWindowsGenerationFile(
   relPath: string,
   generationRoot: string,
 ): boolean {
-  if (WINDOWS_GENERATION_ROOT_FILES.includes(relPath)) return true;
+  if (WINDOWS_GENERATION_ROOT_FILES.has(relPath)) return true;
   if (!relPath.startsWith(`${generationRoot}/`)) return false;
   const selected = relPath.slice(generationRoot.length + 1);
   return (

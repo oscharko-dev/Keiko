@@ -77,9 +77,12 @@ export function parseWindowsGenerationBinding(value: unknown): WindowsGeneration
 }
 
 function hasExactKeys(record: Record<string, unknown>, expected: readonly string[]): boolean {
-  const actual = Object.keys(record).sort();
+  const actual = Object.keys(record).sort((left, right) => left.localeCompare(right, "en-US"));
   return (
-    actual.length === expected.length && [...expected].sort().every((key, i) => actual[i] === key)
+    actual.length === expected.length &&
+    [...expected]
+      .sort((left, right) => left.localeCompare(right, "en-US"))
+      .every((key, i) => actual[i] === key)
   );
 }
 

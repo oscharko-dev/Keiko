@@ -108,6 +108,51 @@ function portablePath(root: string, name: string): string {
   return name === "" ? root : join(root, ...name.split("/"));
 }
 
+interface SnapshotTraversal {
+  readonly root: string;
+  readonly handles: { next: number };
+  readonly files: TreeEntrySnapshot[];
+  readonly directorySnapshots: TreeEntrySnapshot[];
+  readonly directories: TreeEntrySnapshot[];
+  readonly budget: TreeBudget;
+}
+
+function* readSnapshotDirectory(
+  traversal: SnapshotTraversal,
+  directory: TreeEntrySnapshot,
+): Generator<IoRequest, void, unknown> {
+  const relativeDirectory = directory.name;
+  const id = traversal.handles.next;
+  traversal.handles.next += 1;
+  yield {
+    kind: "open-directory",
+    id,
+    path: portablePath(traversal.root, relativeDirectory),
+    expected: directory.stat,
+  };
+  try {
+    for (;;) {
+      const entry = (yield { kind: "read-directory", id }) as Dirent | null;
+      if (entry === null) return;
+      const name = relativeDirectory === "" ? entry.name : `${relativeDirectory}/${entry.name}`;
+      recordTreeEntry(traversal.budget, name);
+      const stat = (yield {
+        kind: "lstat",
+        path: portablePath(traversal.root, name),
+      }) as BigIntStats;
+      if (treeEntryKind(entry, stat) === "directory") {
+        const snapshot = { name, stat };
+        traversal.directories.push(snapshot);
+        traversal.directorySnapshots.push(snapshot);
+      } else {
+        traversal.files.push({ name, stat });
+      }
+    }
+  } finally {
+    yield { kind: "close-directory", id };
+  }
+}
+
 function* snapshotTree(
   root: string,
   handles: { next: number },
@@ -121,36 +166,11 @@ function* snapshotTree(
   const directorySnapshots: TreeEntrySnapshot[] = [{ name: "", stat: rootStat }];
   const directories: TreeEntrySnapshot[] = [{ name: "", stat: rootStat }];
   const budget: TreeBudget = { entries: 0, pathBytes: 0 };
+  const traversal = { root, handles, files, directorySnapshots, directories, budget };
   while (directories.length > 0) {
     const directory = directories.pop();
     if (directory === undefined) break;
-    const relativeDirectory = directory.name;
-    const id = handles.next;
-    handles.next += 1;
-    yield {
-      kind: "open-directory",
-      id,
-      path: portablePath(root, relativeDirectory),
-      expected: directory.stat,
-    };
-    try {
-      for (;;) {
-        const entry = (yield { kind: "read-directory", id }) as Dirent | null;
-        if (entry === null) break;
-        const name = relativeDirectory === "" ? entry.name : `${relativeDirectory}/${entry.name}`;
-        recordTreeEntry(budget, name);
-        const stat = (yield { kind: "lstat", path: portablePath(root, name) }) as BigIntStats;
-        if (treeEntryKind(entry, stat) === "directory") {
-          const snapshot = { name, stat };
-          directories.push(snapshot);
-          directorySnapshots.push(snapshot);
-        } else {
-          files.push({ name, stat });
-        }
-      }
-    } finally {
-      yield { kind: "close-directory", id };
-    }
+    yield* readSnapshotDirectory(traversal, directory);
   }
   return { directories: directorySnapshots, files };
 }
@@ -437,9 +457,9 @@ class AsyncIo {
         await this.#openDirectory(request);
         return undefined;
       case "read-directory":
-        return await this.#directory(request.id).handle.read();
+        return await this.#resource(request.id, "directory").handle.read();
       case "close-directory":
-        await this.#directory(request.id).handle.close();
+        await this.#resource(request.id, "directory").handle.close();
         this.#resources.delete(request.id);
         return undefined;
       case "open-file":
@@ -450,14 +470,14 @@ class AsyncIo {
         });
         return undefined;
       case "fstat-file":
-        return await this.#file(request.id).handle.stat({ bigint: true });
+        return await this.#resource(request.id, "file").handle.stat({ bigint: true });
       case "read-file": {
-        const file = this.#file(request.id);
+        const file = this.#resource(request.id, "file");
         const result = await file.handle.read(file.buffer, 0, file.buffer.length, null);
         return file.buffer.subarray(0, result.bytesRead);
       }
       case "close-file":
-        await this.#file(request.id).handle.close();
+        await this.#resource(request.id, "file").handle.close();
         this.#resources.delete(request.id);
         return undefined;
     }
@@ -468,22 +488,17 @@ class AsyncIo {
     this.#resources.clear();
     await Promise.allSettled(
       resources.map(async (resource) => {
-        if (resource.kind === "file") await resource.handle.close();
-        else await resource.handle.close();
+        await resource.handle.close();
       }),
     );
   }
 
-  #file(id: number): AsyncFileResource {
+  #resource(id: number, kind: "file"): AsyncFileResource;
+  #resource(id: number, kind: "directory"): AsyncDirectoryResource;
+  #resource(id: number, kind: AsyncResource["kind"]): AsyncResource {
     const resource = this.#resources.get(id);
-    if (resource?.kind !== "file") throw new Error("portable tree file handle is unavailable");
-    return resource;
-  }
-
-  #directory(id: number): AsyncDirectoryResource {
-    const resource = this.#resources.get(id);
-    if (resource?.kind !== "directory") {
-      throw new Error("portable tree directory handle is unavailable");
+    if (resource?.kind !== kind) {
+      throw new Error(`portable tree ${kind} handle is unavailable`);
     }
     return resource;
   }

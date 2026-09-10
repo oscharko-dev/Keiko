@@ -1416,7 +1416,7 @@ function portableInspectionResourceRoots(
   }
   const resourceRoots = (value as readonly unknown[]).map((resourceRoot) => {
     if (typeof resourceRoot !== "string") {
-      throw new Error("portable inspection allowance resource roots are invalid");
+      throw new TypeError("portable inspection allowance resource roots are invalid");
     }
     return resourceRoot;
   });
@@ -1443,7 +1443,7 @@ function assertPortableInspectionLockScope(
     throw new Error("portable inspection allowance requires a Windows managed install");
   }
   if (typeof managedRootValue !== "string") {
-    throw new Error("portable inspection allowance managed root is invalid");
+    throw new TypeError("portable inspection allowance managed root is invalid");
   }
   const managedRoot = resolve(options.managedRoot);
   const allowanceLocks = portableSetupLockPaths({

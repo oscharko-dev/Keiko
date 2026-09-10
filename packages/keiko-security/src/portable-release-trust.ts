@@ -82,8 +82,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function exactTrustKeys(value: Record<string, unknown>): boolean {
-  const actual = Object.keys(value).sort();
-  const expected = [...TRUST_KEYS].sort();
+  const actual = Object.keys(value).sort((left, right) => left.localeCompare(right, "en-US"));
+  const expected = [...TRUST_KEYS].sort((left, right) => left.localeCompare(right, "en-US"));
   return actual.length === expected.length && actual.every((key, index) => key === expected[index]);
 }
 
