@@ -195,7 +195,9 @@ function candidateRuntimeBindings(
   const sidecar = qualifiedSidecar(root, activation, target, lane);
   if (sidecar === undefined) return undefined;
   const runtimeComponents = boundRuntimeComponents(root, activation, target);
-  if (target === "linux-x64" && runtimeComponents === undefined) return undefined;
+  if (target === "linux-x64" && runtimeComponents === undefined) {
+    throw new Error("runtime-component-binding-invalid");
+  }
   return {
     ...helpers,
     ...(runtimeComponents === undefined ? {} : { runtimeComponents }),
@@ -402,7 +404,8 @@ function platformQualification(
     target: candidate.target,
   });
   const result = qualificationFromReceipt(receipt, binding);
-  return result.ok ? result.qualification : undefined;
+  if (!result.ok) throw new Error("runtime-qualification-binding-invalid");
+  return result.qualification;
 }
 
 /**

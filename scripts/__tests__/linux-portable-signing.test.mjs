@@ -33,7 +33,7 @@ function sha256(bytes) {
 
 function qualificationReceipt() {
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     suiteVersion: "runtime-tree-qualification-v1",
     platformTarget: TARGET,
     sourceCommitSha: COMMIT,
@@ -41,6 +41,11 @@ function qualificationReceipt() {
     supervisorSha256: "b".repeat(64),
     secureReadSha256: "c".repeat(64),
     sidecars: [{ name: "opencode-compatible", sha256: "d".repeat(64) }],
+    runtimeComponents: [
+      { name: "primary-launcher", sha256: "e".repeat(64) },
+      { name: "node-runtime", sha256: "f".repeat(64) },
+      { name: "usearch", sha256: "0".repeat(64) },
+    ],
     backend: "linux-namespace-gateway",
     result: "passed",
   };

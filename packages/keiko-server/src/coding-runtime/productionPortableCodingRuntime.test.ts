@@ -90,6 +90,29 @@ describe("production portable OpenCode discovery", () => {
     },
   );
 
+  it("emits body-free diagnostics for a rejected Linux component binding", () => {
+    const fixture = linuxPortableInstall();
+    const records: unknown[] = [];
+    writeFileSync(join(fixture.root, "runtime", "node", "bin", "node"), "customer bytes");
+
+    expect(
+      discoverQualifiedPortableOpenCode({
+        env: {},
+        installRoot: fixture.root,
+        platform: "linux",
+        arch: "x64",
+        attestation: { readReceipt: () => fixture.receipt },
+        diagnostics: { record: (record): void => void records.push(record) },
+      }),
+    ).toBeUndefined();
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      operation: "coding.runtime.discover",
+      source: "coding.runtime.discovery",
+    });
+    expect(JSON.stringify(records)).not.toContain("customer bytes");
+  });
+
   it("does not treat ambient PATH or an arbitrary executable as an installed runtime", () => {
     expect(
       discoverQualifiedPortableOpenCode({
