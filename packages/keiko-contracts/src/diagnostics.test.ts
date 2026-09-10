@@ -22,6 +22,7 @@ describe("Linux gateway diagnostic contract", () => {
     for (const kind of LINUX_GATEWAY_DIAGNOSTIC_KINDS) {
       expect(isLinuxGatewayDiagnosticKind(kind)).toBe(true);
     }
+    expect(isLinuxGatewayDiagnosticKind("")).toBe(false);
     expect(isLinuxGatewayDiagnosticKind("host-relay-failed:private-detail")).toBe(false);
     expect(isLinuxGatewayDiagnosticKind({ kind: "host-relay-failed" })).toBe(false);
   });

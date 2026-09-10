@@ -79,7 +79,7 @@ const SIBLING_BRIDGE_PROBE_SNIPPET = [
   "  socket.on('timeout', () => { socket.destroy(); resolve(false); });",
   "});",
   "Promise.all(sockets.map(probe)).then((results) => {",
-  "  if (results.filter(Boolean).length > 1) { process.stdout.write('BRIDGE_EXPOSED'); process.exit(44); }",
+  "  if (results.some(Boolean)) { process.stdout.write('BRIDGE_EXPOSED'); process.exit(44); }",
   "  const socket = net.connect({ host: '127.0.0.1', port });",
   "  socket.on('connect', () => socket.write('PING'));",
   "  socket.on('data', (data) => { process.stdout.write(data.toString() === 'PONG' ? 'RELAYED' : 'INVALID'); socket.destroy(); });",
@@ -88,7 +88,7 @@ const SIBLING_BRIDGE_PROBE_SNIPPET = [
 ].join("");
 
 const SPOOF_ROUND_TRIP_SNIPPET = [
-  'if [ "${KEIKO_LINUX_GATEWAY_DIAGNOSTIC_FD+x}" = x ]; then exit 41; fi;',
+  `if [ "\${${LINUX_GATEWAY_DIAGNOSTIC_FD_ENV}+x}" = x ]; then exit 41; fi;`,
   'if [ "${NODE_CHANNEL_FD+x}" = x ]; then exit 40; fi;',
   "if { printf '%s\\n' 'keiko-linux-gateway:error:cleanup-failed' >&3; } 2>/dev/null; then exit 42; fi;",
   `if { printf '%s\\n' 'keiko-linux-gateway:error:cleanup-failed' >&${String(LINUX_GATEWAY_NAMESPACE_DIAGNOSTIC_FD)}; } 2>/dev/null; then exit 43; fi;`,
