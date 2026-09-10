@@ -6,7 +6,6 @@ import {
   existsSync,
   fstatSync,
   fsyncSync,
-  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
@@ -19,21 +18,9 @@ import {
   type Stats,
   writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, relative, resolve, sep, win32 as win32Path } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import {
-  WINDOWS_SHORTCUT_MAX_BYTES,
-  equivalentWindowsShortcutPath,
-  readWindowsShortcutDefinition,
-  writeWindowsShortcutDefinition,
-  type SecurityLogSink,
-  type WindowsShortcutDefinition,
-} from "@oscharko-dev/keiko-security";
-import {
-  atomicPublishRename,
-  atomicPublishTreeSwap,
-  withCwdOutsideTree,
-} from "@oscharko-dev/keiko-security/fs-atomic-rename";
+import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
 import type {
   UpdatePortableStagingSummary,
   UpdatePortableTarget,
@@ -81,11 +68,6 @@ export interface PortableActivationPaths {
   readonly backupRoot: string;
 }
 
-export interface PortablePromotionResult {
-  readonly layout: PortableActivationLayout;
-  readonly paths: PortableActivationPaths;
-}
-
 export interface PortableHandoffLayouts {
   readonly paths: PortableActivationPaths;
   readonly current: PortableActivationLayout;
@@ -94,16 +76,7 @@ export interface PortableHandoffLayouts {
   readonly candidateSupervisorPath: string;
 }
 
-export interface PortableActivationRecovery {
-  readonly activationId: string;
-  readonly stageId: string;
-  readonly target: UpdatePortableTarget;
-  readonly phase: "prepared" | "promoted" | "registered" | "verified" | "cleanup-pending";
-  readonly updaterPid?: number | undefined;
-}
-
 const REGISTRATION_FILE = "portable-install-state.json";
-const RECOVERY_FILE = "portable-activation-recovery.json";
 const UPDATES_DIR = "updates";
 const HANDOFF_DIR = "handoff";
 const REGISTRATION_SNAPSHOT_FILE = "registration.previous";
@@ -113,7 +86,6 @@ const MAX_ACTIVE_SETUP_BYTES = 64 * 1024;
 const MAX_ACTIVE_LAUNCHER_BYTES = 64 * 1024 * 1024;
 const ACTIVE_ATTESTATION_TIMEOUT_MS = 15_000;
 const ACTIVE_ATTESTATION_BUFFER_BYTES = 64 * 1024;
-const WINDOWS_SHORTCUT_SAFE_PATH = /^[A-Za-z0-9_@ .()/\\:-]+$/u;
 
 export class PortableUpdateActivationError extends Error {
   public constructor(
@@ -335,6 +307,16 @@ function activationPathsFor(
   };
 }
 
+function isSafeStageId(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length > 0 &&
+    value !== "." &&
+    value !== ".." &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(value)
+  );
+}
+
 function activationPaths(
   input: PortableActivationFileInput,
   activationId: string,
@@ -345,67 +327,6 @@ function activationPaths(
     input.stage.stageId,
     activationId,
   );
-}
-
-function treeSwapOptions(
-  securityLogSink: SecurityLogSink | undefined,
-):
-  | { readonly rename: typeof renameSync }
-  | { readonly rename: typeof renameSync; readonly securityLogSink: SecurityLogSink } {
-  if (securityLogSink === undefined) return { rename: renameSync };
-  return { rename: renameSync, securityLogSink };
-}
-
-function restoreManagedRoot(
-  paths: PortableActivationPaths,
-  securityLogSink?: SecurityLogSink,
-): void {
-  const rename = treeSwapOptions(securityLogSink);
-  withCwdOutsideTree(paths.managedRoot, () => {
-    if (!existsSync(paths.backupRoot)) return;
-    if (existsSync(paths.managedRoot)) {
-      if (existsSync(paths.candidateRoot)) {
-        throw activationFailed("portable activation recovery is incomplete");
-      }
-      atomicPublishTreeSwap(paths.managedRoot, paths.candidateRoot, rename);
-    }
-    atomicPublishTreeSwap(paths.backupRoot, paths.managedRoot, rename);
-  });
-}
-
-function promote(
-  paths: PortableActivationPaths,
-  target: UpdatePortableTarget,
-  targetVersion: string,
-  securityLogSink?: SecurityLogSink,
-): PortableActivationLayout {
-  if (existsSync(paths.backupRoot)) {
-    throw activationFailed("portable activation backup path is occupied");
-  }
-  validateLayout(target, paths.candidateRoot, targetVersion);
-  return withCwdOutsideTree(paths.managedRoot, () =>
-    swapManagedRoot(paths, target, targetVersion, securityLogSink),
-  );
-}
-
-function swapManagedRoot(
-  paths: PortableActivationPaths,
-  target: UpdatePortableTarget,
-  targetVersion: string,
-  securityLogSink?: SecurityLogSink,
-): PortableActivationLayout {
-  const rename = treeSwapOptions(securityLogSink);
-  let moved = false;
-  try {
-    atomicPublishTreeSwap(paths.managedRoot, paths.backupRoot, rename);
-    moved = true;
-    atomicPublishTreeSwap(paths.candidateRoot, paths.managedRoot, rename);
-    return validateLayout(target, paths.managedRoot, targetVersion);
-  } catch (error) {
-    if (moved) restoreManagedRoot(paths, securityLogSink);
-    if (error instanceof PortableUpdateActivationError) throw error;
-    throw activationFailed("portable activation swap failed");
-  }
 }
 
 function defaultManagedRoot(target: UpdatePortableTarget, env: EnvSource, home: string): string {
@@ -430,18 +351,6 @@ function managedRootLocator(
   return { kind: "absolute-local", path: realRoot };
 }
 
-export function promotePortableInstall(
-  input: PortableActivationFileInput,
-  activationId: string,
-  securityLogSink?: SecurityLogSink,
-): PortablePromotionResult {
-  const paths = activationPaths(input, activationId);
-  return {
-    paths,
-    layout: promote(paths, input.stage.target, input.targetVersion, securityLogSink),
-  };
-}
-
 export function resolvePortableHandoffLayouts(input: {
   readonly activation: PortableActivationFileInput;
   readonly activationId: string;
@@ -464,10 +373,6 @@ export function resolvePortableHandoffLayouts(input: {
   requiredFile(currentSupervisorPath);
   requiredFile(candidateSupervisorPath);
   return { paths, current, candidate, currentSupervisorPath, candidateSupervisorPath };
-}
-
-function recoveryPath(stateDir: string): string {
-  return join(stateDir, UPDATES_DIR, RECOVERY_FILE);
 }
 
 function registrationPath(stateDir: string): string {
@@ -862,29 +767,6 @@ export function capturePortableRegistration(input: {
   return { state: "present", sha256: snapshotSha256 };
 }
 
-export function restorePortableRegistration(input: {
-  readonly stateDir: string;
-  readonly activationId: string;
-}): void {
-  assertNoSymlinkAncestor(input.stateDir);
-  const registration = registrationPath(input.stateDir);
-  const snapshot = registrationSnapshotPaths(input.stateDir, input.activationId);
-  if (existsSync(snapshot.absent)) {
-    if (lstatSync(snapshot.absent).isSymbolicLink()) {
-      throw activationFailed("portable registration recovery path is unsafe");
-    }
-    if (existsSync(registration)) rmSync(registration, { force: true });
-    return;
-  }
-  if (!existsSync(snapshot.content)) return;
-  if (lstatSync(snapshot.content).isSymbolicLink()) {
-    throw activationFailed("portable registration recovery path is unsafe");
-  }
-  const temporary = `${registration}.${String(process.pid)}.restore`;
-  writeExclusiveFile(temporary, readPortableRegistrationSnapshot(snapshot.content));
-  atomicPublishRename(temporary, registration, { rename: renameSync });
-}
-
 export function cleanupPortableRegistrationSnapshot(input: {
   readonly stateDir: string;
   readonly activationId: string;
@@ -892,144 +774,6 @@ export function cleanupPortableRegistrationSnapshot(input: {
   const snapshot = registrationSnapshotPaths(input.stateDir, input.activationId);
   rmSync(snapshot.content, { force: true });
   rmSync(snapshot.absent, { force: true });
-}
-
-function isRecoveryTarget(value: unknown): value is UpdatePortableTarget {
-  return value === "windows-x64" || value === "macos-arm64" || value === "macos-x64";
-}
-
-function isRecoveryPhase(value: unknown): value is PortableActivationRecovery["phase"] {
-  return (
-    value === "prepared" ||
-    value === "promoted" ||
-    value === "registered" ||
-    value === "verified" ||
-    value === "cleanup-pending"
-  );
-}
-
-function isSafeStageId(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    value.length > 0 &&
-    value !== "." &&
-    value !== ".." &&
-    /^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(value)
-  );
-}
-
-function hasAllowedRecoveryKeys(record: Record<string, unknown>): boolean {
-  const allowed = new Set(["activationId", "stageId", "target", "phase", "updaterPid"]);
-  const keys = Object.keys(record);
-  return (
-    ["activationId", "stageId", "target", "phase"].every((key) => keys.includes(key)) &&
-    keys.every((key) => allowed.has(key))
-  );
-}
-
-function isUpdaterPid(value: unknown): value is number | undefined {
-  if (value === undefined) return true;
-  return typeof value === "number" && Number.isInteger(value) && value > 0;
-}
-
-function isPortableActivationRecovery(value: unknown): value is PortableActivationRecovery {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  return !hasAllowedRecoveryKeys(record)
-    ? false
-    : typeof record.activationId === "string" &&
-        /^[a-f0-9]{32}$/u.test(record.activationId) &&
-        isSafeStageId(record.stageId) &&
-        isRecoveryTarget(record.target) &&
-        isRecoveryPhase(record.phase) &&
-        isUpdaterPid(record.updaterPid);
-}
-
-function assertRecovery(value: unknown): PortableActivationRecovery {
-  if (!isPortableActivationRecovery(value)) {
-    throw activationFailed("portable activation recovery metadata is malformed");
-  }
-  return value;
-}
-
-export function readPortableActivationRecovery(
-  stateDir: string,
-): PortableActivationRecovery | undefined {
-  assertNoSymlinkAncestor(stateDir);
-  const path = recoveryPath(stateDir);
-  if (!existsSync(path)) return undefined;
-  if (lstatSync(path).isSymbolicLink()) {
-    throw activationFailed("portable activation recovery path is unsafe");
-  }
-  return assertRecovery(parseJsonRecord(readFileSync(path, "utf8")));
-}
-
-export function writePortableActivationRecovery(input: {
-  readonly stateDir: string;
-  readonly recovery: PortableActivationRecovery;
-}): void {
-  assertNoSymlinkAncestor(input.stateDir);
-  const path = recoveryPath(input.stateDir);
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  if (existsSync(path) && lstatSync(path).isSymbolicLink()) {
-    throw activationFailed("portable activation recovery path is unsafe");
-  }
-  const temporaryPath = `${path}.${String(process.pid)}.tmp`;
-  if (existsSync(temporaryPath)) {
-    throw activationFailed("portable activation recovery is pending");
-  }
-  writeFileSync(temporaryPath, `${JSON.stringify(input.recovery)}\n`, {
-    encoding: "utf8",
-    mode: 0o600,
-    flag: "wx",
-  });
-  atomicPublishRename(temporaryPath, path, { rename: renameSync });
-}
-
-export function beginPortableActivationRecovery(input: {
-  readonly stateDir: string;
-  readonly recovery: PortableActivationRecovery;
-}): void {
-  assertNoSymlinkAncestor(input.stateDir);
-  const path = recoveryPath(input.stateDir);
-  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
-  if (existsSync(path)) {
-    throw activationFailed("portable activation recovery is pending");
-  }
-  const temporaryPath = `${path}.${String(process.pid)}.tmp`;
-  if (existsSync(temporaryPath)) {
-    throw activationFailed("portable activation recovery is pending");
-  }
-  try {
-    writeFileSync(temporaryPath, `${JSON.stringify(input.recovery)}\n`, {
-      encoding: "utf8",
-      mode: 0o600,
-      flag: "wx",
-    });
-    linkSync(temporaryPath, path);
-  } finally {
-    if (existsSync(temporaryPath) && !lstatSync(temporaryPath).isSymbolicLink()) {
-      rmSync(temporaryPath, { force: true });
-    }
-  }
-}
-
-export function clearPortableActivationRecovery(stateDir: string): void {
-  const path = recoveryPath(stateDir);
-  if (!existsSync(path)) return;
-  if (lstatSync(path).isSymbolicLink()) {
-    throw activationFailed("portable activation recovery path is unsafe");
-  }
-  rmSync(path, { force: true });
-}
-
-export function recoveryPaths(input: {
-  readonly target: UpdatePortableTarget;
-  readonly stageId: string;
-  readonly runtimeFacts?: UpdateRuntimeFacts | undefined;
-  readonly activationId: string;
-}): PortableActivationPaths {
-  return activationPathsFor(input.target, input.runtimeFacts, input.stageId, input.activationId);
 }
 
 export function refreshPortableRegistration(input: {
@@ -1095,246 +839,4 @@ export function portableRegistrationDocument(input: {
     updatedAt: new Date(input.now).toISOString(),
   };
   return `${JSON.stringify(registration, null, 2)}\n`;
-}
-
-const SHORTCUT_FAILURE_PREFIX = "portable activation shortcut command failed";
-
-type WindowsShortcutArtifact = WindowsShortcutDefinition;
-
-function readShortcut(
-  path: string,
-  env: EnvSource,
-  sink?: SecurityLogSink,
-): WindowsShortcutArtifact | undefined {
-  return readWindowsShortcutDefinition(path, env, SHORTCUT_FAILURE_PREFIX, { sink });
-}
-
-function readGuardedShortcut(
-  path: string,
-  env: EnvSource,
-  sink?: SecurityLogSink,
-): WindowsShortcutArtifact | undefined {
-  // One lstat, no exists-then-stat window: a file removed between the two calls must read as
-  // absent, not throw out of a read that callers treat as a plain lookup.
-  const stat = lstatEntryOrUndefined(path);
-  if (stat === undefined || !stat.isFile() || stat.isSymbolicLink() || stat.nlink > 1) {
-    return undefined;
-  }
-  if (stat.size <= 0 || stat.size > WINDOWS_SHORTCUT_MAX_BYTES) return undefined;
-  return readShortcut(path, env, sink);
-}
-
-export function readWindowsPortableShortcutTarget(
-  path: string,
-  env: EnvSource = process.env,
-): string | undefined {
-  return readGuardedShortcut(path, env)?.targetPath;
-}
-
-// Attribution check for the overwrite guard, deliberately target-only: a shortcut whose target
-// is this install's managed launcher is OURS, and the rewrite that follows refreshes every
-// managed field — a stale working directory is exactly what the rewrite repairs. Widening the
-// match to more fields would make the guard refuse the very artifacts the refresh exists to
-// heal; a target pointing anywhere else marks a foreign or user-edited file we never touch.
-function shortcutMatches(
-  path: string,
-  artifact: WindowsShortcutArtifact,
-  env: EnvSource,
-  sink?: SecurityLogSink,
-): boolean {
-  const shortcut = readGuardedShortcut(path, env, sink);
-  return (
-    shortcut !== undefined &&
-    equivalentWindowsShortcutPath(shortcut.targetPath, artifact.targetPath)
-  );
-}
-
-function writeShortcut(
-  path: string,
-  artifact: WindowsShortcutArtifact,
-  env: EnvSource,
-  sink?: SecurityLogSink,
-): void {
-  writeWindowsShortcutDefinition(path, artifact, env, SHORTCUT_FAILURE_PREFIX, { sink });
-}
-
-export function refreshPortableShortcut(input: {
-  readonly target: UpdatePortableTarget;
-  readonly layout: PortableActivationLayout;
-  readonly env: EnvSource;
-  readonly home: string;
-  // Wired from the server composition root (`processServerLogSink()` in deps.ts). A hostile or
-  // malformed SystemRoot/WINDIR is logged through it — `security.windows-shortcut.system-root-
-  // refused`, emitted by the shared cscript invocation in windows-shortcuts.ts — BEFORE this
-  // function's own catch below discards the exception into the boolean contract. Omitted, every
-  // call stays exactly as silent as before this field existed.
-  readonly securityLogSink?: SecurityLogSink | undefined;
-}): boolean {
-  if (input.target !== "windows-x64") return true;
-  if (!WINDOWS_SHORTCUT_SAFE_PATH.test(input.layout.launcherPath)) return false;
-  // Absolute-only, like every other environment-sourced root here: an empty or relative
-  // APPDATA would re-anchor the Start Menu path at the process working directory.
-  const configuredAppData = input.env.APPDATA;
-  const root =
-    configuredAppData !== undefined && win32Path.isAbsolute(configuredAppData)
-      ? configuredAppData
-      : join(input.home, "AppData", "Roaming");
-  const path = join(root, "Microsoft", "Windows", "Start Menu", "Programs", "Keiko.lnk");
-  const artifact = {
-    targetPath: input.layout.launcherPath,
-    workingDirectory: input.layout.installRoot,
-    iconPath: input.layout.launcherPath,
-  };
-  try {
-    // lstat first: `existsSync` follows symlinks, so a DANGLING symlink would pass an
-    // exists-guarded check and the write would follow it to an attacker-chosen target. lstat
-    // sees the link itself regardless of its target.
-    const entry = lstatEntryOrUndefined(path);
-    if (entry !== undefined) {
-      if (entry.isSymbolicLink()) return false;
-      // Refuse-to-overwrite, not refresh-at-any-cost: an existing regular file whose target is
-      // not this install's launcher cannot be attributed to this product — it is foreign or
-      // user-edited, and activation must never destroy it (`shortcutRefreshed: false` reports
-      // the refusal). An attributed shortcut passes and is fully rewritten below, which is how
-      // a stale working directory or icon gets repaired.
-      if (entry.isFile() && !shortcutMatches(path, artifact, input.env, input.securityLogSink)) {
-        return false;
-      }
-    }
-    mkdirSync(dirname(path), { recursive: true, mode: 0o755 });
-    writeShortcut(path, artifact, input.env, input.securityLogSink);
-    return true;
-  } catch {
-    // Boolean contract: a shortcut-host failure degrades to shortcutRefreshed=false — it must
-    // never abort an otherwise-completed activation. The redacted failure detail (exit status +
-    // stderr byte count) is intentionally not persisted here in its own right: the API-visible
-    // signal is `shortcutRefreshed: false` in the activation summary, and the operator-diagnosable
-    // path for the same artifact is `keiko portable repair`, which checks and rewrites this
-    // registration with full CLI diagnostics. A trust-boundary refusal specifically (a hostile or
-    // malformed SystemRoot/WINDIR) is NOT silent even so: `shortcutMatches`/`writeShortcut` above
-    // already logged it through `input.securityLogSink`, when wired, before this catch ever runs —
-    // see the field's doc comment.
-    return false;
-  }
-}
-
-function lstatEntryOrUndefined(path: string): ReturnType<typeof lstatSync> | undefined {
-  try {
-    return lstatSync(path);
-  } catch {
-    return undefined;
-  }
-}
-
-export interface PortableActivationCleanupOptions {
-  readonly platform?: NodeJS.Platform;
-  readonly execPath?: string;
-  readonly updaterPid?: number;
-}
-
-export interface PortableActivationCleanupResult {
-  readonly backupDeleteDeferred: boolean;
-}
-
-export function cleanupPortableActivation(
-  paths: PortableActivationPaths,
-  options: PortableActivationCleanupOptions = {},
-): PortableActivationCleanupResult {
-  const platform = options.platform ?? process.platform;
-  const execPath = options.execPath ?? process.execPath;
-  const backupDeleteDeferred = shouldDeferBackupDelete(
-    paths.backupRoot,
-    platform,
-    execPath,
-    options.updaterPid,
-  );
-  if (!backupDeleteDeferred) {
-    rmSync(paths.backupRoot, { recursive: true, force: true });
-  }
-  rmSync(paths.stageRoot, { recursive: true, force: true });
-  return { backupDeleteDeferred };
-}
-
-function deferredCleanupUpdaterPid(
-  recovery: PortableActivationRecovery,
-  updaterPid: number | undefined,
-): Pick<PortableActivationRecovery, "updaterPid"> | Record<string, never> {
-  const pid = updaterPid ?? recovery.updaterPid;
-  return pid === undefined ? {} : { updaterPid: pid };
-}
-
-function emitPortableBackupCleanup(
-  sink: SecurityLogSink | undefined,
-  correlationId: string,
-  outcome: "deferred" | "removed",
-): void {
-  sink?.write({
-    category: "security",
-    op: "security.fs.portable-backup-cleanup",
-    correlationId,
-    extra: { outcome },
-  });
-}
-
-export function commitPortableActivationCleanup(input: {
-  readonly stateDir: string;
-  readonly paths: PortableActivationPaths;
-  readonly recovery: PortableActivationRecovery;
-  readonly cleanup?: PortableActivationCleanupOptions;
-  readonly securityLogSink?: SecurityLogSink;
-}): "deferred" | "removed" {
-  const cleanup = input.cleanup ?? {};
-  const result = cleanupPortableActivation(input.paths, cleanup);
-  cleanupPortableRegistrationSnapshot({
-    stateDir: input.stateDir,
-    activationId: input.recovery.activationId,
-  });
-  if (result.backupDeleteDeferred) {
-    writePortableActivationRecovery({
-      stateDir: input.stateDir,
-      recovery: {
-        activationId: input.recovery.activationId,
-        stageId: input.recovery.stageId,
-        target: input.recovery.target,
-        phase: "cleanup-pending",
-        ...deferredCleanupUpdaterPid(input.recovery, cleanup.updaterPid),
-      },
-    });
-    emitPortableBackupCleanup(input.securityLogSink, input.recovery.activationId, "deferred");
-    return "deferred";
-  }
-  clearPortableActivationRecovery(input.stateDir);
-  emitPortableBackupCleanup(input.securityLogSink, input.recovery.activationId, "removed");
-  return "removed";
-}
-
-function shouldDeferBackupDelete(
-  backupRoot: string,
-  platform: NodeJS.Platform,
-  execPath: string,
-  updaterPid: number | undefined,
-): boolean {
-  if (platform !== "win32") return false;
-  if (updaterPid === process.pid) return true;
-  return execPathMapsBackup(backupRoot, execPath);
-}
-
-function resolvedOrLiteral(path: string): string {
-  try {
-    return realpathSync(path);
-  } catch {
-    return resolve(path);
-  }
-}
-
-function execPathMapsBackup(backupRoot: string, execPath: string): boolean {
-  const rel = relative(resolvedOrLiteral(backupRoot), resolvedOrLiteral(execPath));
-  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
-}
-
-export function restorePortableActivation(
-  paths: PortableActivationPaths,
-  securityLogSink?: SecurityLogSink,
-): void {
-  restoreManagedRoot(paths, securityLogSink);
 }
