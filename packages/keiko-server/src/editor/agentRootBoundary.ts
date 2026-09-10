@@ -8,7 +8,10 @@ import type {
   WorkspaceRootDescriptor,
 } from "@oscharko-dev/keiko-contracts";
 import { editorAgentRootBindingDenyReason } from "@oscharko-dev/keiko-contracts/runtime/editor-agent-governance";
-import { isContainedAgentPath } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import {
+  EDITOR_AGENT_NAVIGATION_DOCUMENT_MAX_BYTES,
+  isContainedAgentPath,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 import {
   containedRealPathInfo,
@@ -23,7 +26,6 @@ import { inspectWorkspaceRootIdentity } from "../workspace-root-identity.js";
 import { contentFreeErrorClass, emitServerDiagnostic } from "../diagnostics-log.js";
 import { correlationIdOrUnknown } from "../correlation.js";
 import type { WorkspaceRootAccessOutcome } from "../task-workspace/workspace-root-access.js";
-import { EDITOR_AGENT_NAVIGATION_DOCUMENT_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 
 export type EditorAgentRootBoundaryReason = Extract<
   EditorAgentActionDenyReason,
