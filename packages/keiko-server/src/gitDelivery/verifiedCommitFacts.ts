@@ -5,6 +5,7 @@ import {
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { readVerifiedRepositoryIdentity } from "./verifiedRepositoryIdentity.js";
 import { gitDeliveryTerminationHandler, type GitDeliveryExecutionSeams } from "./execution.js";
+import { logDeniedPathExclusion } from "./runtimeGitRead.js";
 import type { VerifiedCommitFacts, VerifiedCommitRunContext } from "./verifiedCommitTypes.js";
 import type { GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 
@@ -33,6 +34,7 @@ export async function readVerifiedCommitFacts(
     onTerminated: gitDeliveryTerminationHandler(seams, context.correlationId),
   };
   const snapshot = await readGitRawWorktreeSnapshot(deps);
+  logDeniedPathExclusion(seams, context.correlationId, snapshot.deniedPathCount);
   const baseSha = await readGitRevision(deps, context.baseRef);
   if (
     snapshot.headSha === undefined ||

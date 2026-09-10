@@ -19,6 +19,7 @@ import type { GitChangedFile, GitStatusCode } from "@oscharko-dev/keiko-contract
 import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import { gitBlobObjectId, gitIndexEntriesDigest, type IndexEntry } from "./git-index-identity.js";
 import {
+  GitWorktreeReadError,
   readGitIndexStat,
   readGitIndexEntries,
   readGitTreeEntries,
@@ -34,15 +35,42 @@ import { workspaceFsOf } from "./exec.js";
 
 const MAX_INSPECTED_PATHS = 10_000;
 const MAX_CONTENT_BYTES = 8_388_608;
+export type GitRawWorktreeReadCode =
+  "git-raw-snapshot-incomplete" | "git-raw-snapshot-drift" | "git-raw-read-cancelled";
+/**
+ * A raw read that cannot be trusted names its closed reason as `code`, so the diagnostic a consumer
+ * records carries it (the server's `describeError` reads `code`; an `Error`'s message never reaches
+ * the activity log). Run 6, 2026-09-10: every verification failed with `errorKind: "Error"` and only
+ * the dist frames said which of this reader's three exits had thrown.
+ */
+export class GitRawWorktreeReadError extends GitWorktreeReadError {
+  public readonly code: GitRawWorktreeReadCode;
+  public constructor(code: GitRawWorktreeReadCode) {
+    super(code);
+    this.name = "GitRawWorktreeReadError";
+    this.code = code;
+  }
+}
 export interface GitRawChanges {
   readonly headSha: string;
   readonly branch: string;
   readonly stagedTreeDigest: string;
   readonly changes: readonly GitChangedFile[];
   readonly truncated: boolean;
+  /**
+   * Paths the workspace deny list keeps outside Keiko's governed content surface (`.idea/**`,
+   * `.env`, `.keiko/**`, ...): never read, never listed in `changes`, counted here. Keiko's edit and
+   * staging lanes refuse the same paths, so nothing Keiko commits can hide behind this count, and
+   * the staged tree digest still binds the exact index they may sit in. Before 2026-09-10 one such
+   * path marked the whole snapshot truncated: a repository that tracked its IDE metadata
+   * (`.idea/.gitignore`, run 6 of the Workbench engagement) could never be verified or committed.
+   */
+  readonly deniedPathCount: number;
 }
-function allowedPath(path: string): boolean {
-  return isRootRelativeFileIdentifier(path) && !isDenied(path) && !path.includes("\uFFFD");
+// A path git reports that this snapshot cannot represent -- not a root-relative file identifier, or
+// carrying a replacement character from an undecodable name -- leaves the snapshot incomplete.
+function representablePath(path: string): boolean {
+  return isRootRelativeFileIdentifier(path) && !path.includes("\uFFFD");
 }
 function indexStatus(head: IndexEntry | undefined, index: IndexEntry | undefined): GitStatusCode {
   if (head === undefined) return index === undefined ? " " : "A";
@@ -107,7 +135,7 @@ export async function readGitRawChanges(deps: NodeGitWorktreeReaderDeps): Promis
     (await readGitRevision(deps, "HEAD")) !== headSha ||
     (await readGitFullRef(deps, "HEAD")) !== `refs/heads/${branch}`
   )
-    throw new Error("git-raw-snapshot-drift");
+    throw new GitRawWorktreeReadError("git-raw-snapshot-drift");
   return { headSha, branch, stagedTreeDigest, ...scanned };
 }
 async function scanPaths(
@@ -117,14 +145,19 @@ async function scanPaths(
   index: ReadonlyMap<string, IndexEntry>,
   stats: ReadonlyMap<string, GitIndexStat>,
   indexWriteTimeNs: string | undefined,
-): Promise<Pick<GitRawChanges, "changes" | "truncated">> {
+): Promise<Pick<GitRawChanges, "changes" | "truncated" | "deniedPathCount">> {
   const changes: GitChangedFile[] = [];
   let total = 0;
+  let deniedPathCount = 0;
   let truncated = paths.length > MAX_INSPECTED_PATHS;
   for (const path of paths.slice(0, MAX_INSPECTED_PATHS)) {
-    if (deps.signal?.aborted === true) throw new Error("git-raw-read-cancelled");
-    if (!allowedPath(path)) {
+    if (deps.signal?.aborted === true) throw new GitRawWorktreeReadError("git-raw-read-cancelled");
+    if (!representablePath(path)) {
       truncated = true;
+      continue;
+    }
+    if (isDenied(path)) {
+      deniedPathCount += 1;
       continue;
     }
     if (total >= MAX_CONTENT_BYTES) {
@@ -145,7 +178,7 @@ async function scanPaths(
     if (staged !== " " || working.status !== " " || working.untracked)
       changes.push(changed(path, staged, working.status, working.untracked));
   }
-  return { changes, truncated };
+  return { changes, truncated, deniedPathCount };
 }
 async function workingStatus(
   deps: NodeGitWorktreeReaderDeps,
@@ -182,7 +215,7 @@ export async function readGitRawWorktreeSnapshot(
   deps: NodeGitWorktreeReaderDeps,
 ): Promise<GitWorktreeSnapshot> {
   const raw = await readGitRawChanges(deps);
-  if (raw.truncated) throw new Error("git-raw-snapshot-incomplete");
+  if (raw.truncated) throw new GitRawWorktreeReadError("git-raw-snapshot-incomplete");
   return {
     headSha: raw.headSha,
     stagedTreeDigest: raw.stagedTreeDigest,
@@ -191,6 +224,7 @@ export async function readGitRawWorktreeSnapshot(
     stagedFileCount: raw.changes.filter((file) => file.staged).length,
     unstagedFileCount: raw.changes.filter((file) => file.unstaged).length,
     untrackedFileCount: raw.changes.filter((file) => file.untracked).length,
+    deniedPathCount: raw.deniedPathCount,
     // Not probed by this reader — see the header comment and the doc comment above.
     hasUpstream: false,
     aheadCount: 0,

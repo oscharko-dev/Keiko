@@ -9,7 +9,11 @@ import {
   workspaceFsWithOwnedRootAuthority,
   workspaceInfoWithOwnedRootAuthority,
 } from "@oscharko-dev/keiko-workspace/internal/owned-root-mint";
-import { readGitRawChanges, readGitRawWorktreeSnapshot } from "./git-raw-worktree-node.js";
+import {
+  GitRawWorktreeReadError,
+  readGitRawChanges,
+  readGitRawWorktreeSnapshot,
+} from "./git-raw-worktree-node.js";
 import {
   GitWorktreeReadError,
   readGitBlobText,
@@ -277,5 +281,55 @@ describe("a managed worktree below an always-denied segment", () => {
     });
     expect(snapshot.unstagedFileCount).toBe(1);
     expect(snapshot.untrackedFileCount).toBe(1);
+  });
+});
+
+// Run 6 (2026-09-10): the target repository tracked `.idea/.gitignore`; `.idea` is on the workspace
+// deny list, and one such path marked the whole snapshot truncated, so every verification and
+// commit-facts read failed with a bare `Error` -- for any repository that tracks IDE metadata.
+// Deny-listed paths are outside Keiko's governed content surface: never read, never listed, counted.
+describe("paths the workspace deny list protects", () => {
+  it("excludes them from the listing, counts them, and keeps the snapshot complete", async () => {
+    mkdirSync(join(root, ".idea"));
+    writeFileSync(join(root, ".idea", ".gitignore"), "shelf/\n");
+    git(["add", ".idea/.gitignore"]);
+    git(["-c", "commit.gpgsign=false", "commit", "-qm", "ide metadata"]);
+    // One tracked and one untracked deny-listed path; neither is git-ignored, so git reports both.
+    writeFileSync(join(root, ".idea", "misc.xml"), "<project/>\n");
+    writeFileSync(join(root, "code.txt"), "updated\n");
+    const deps = { workspace, processEnv: { PATH: process.env.PATH } };
+
+    const raw = await readGitRawChanges(deps);
+    expect(raw.truncated).toBe(false);
+    expect(raw.deniedPathCount).toBe(2);
+    expect(raw.changes.map((change) => change.path)).toEqual(["code.txt"]);
+    expect(JSON.stringify(raw)).not.toContain(".idea");
+
+    const snapshot = await readGitRawWorktreeSnapshot(deps);
+    expect(snapshot.deniedPathCount).toBe(2);
+    expect(snapshot.unstagedFileCount).toBe(1);
+    expect(snapshot.untrackedFileCount).toBe(0);
+  });
+
+  it("still fails closed, with its closed code, when the content budget leaves the snapshot incomplete", async () => {
+    // Nine untracked files of exactly 1 MiB: the eighth exhausts the 8 MiB content budget and the
+    // ninth marks the inspection incomplete.
+    for (let index = 0; index < 9; index += 1) {
+      writeFileSync(join(root, `blob-${String(index)}.bin`), Buffer.alloc(1_048_576, index));
+    }
+    const deps = { workspace, processEnv: { PATH: process.env.PATH } };
+    const raw = await readGitRawChanges(deps);
+    expect(raw.truncated).toBe(true);
+    expect(raw.deniedPathCount).toBe(0);
+    const failure = await readGitRawWorktreeSnapshot(deps).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(GitRawWorktreeReadError);
+    expect(failure).toMatchObject({
+      name: "GitRawWorktreeReadError",
+      code: "git-raw-snapshot-incomplete",
+      message: "git-raw-snapshot-incomplete",
+    });
   });
 });

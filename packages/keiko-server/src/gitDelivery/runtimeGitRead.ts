@@ -24,7 +24,13 @@ import {
   readGitBlobText,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { parseGitEditorUnifiedDiff } from "../gitDiffParser.js";
-import { gitDeliveryTerminationHandler, type GitDeliveryExecutionSeams } from "./execution.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import {
+  gitDeliveryTerminationHandler,
+  type GitDeliveryExecutionSeams,
+  type GitDeliveryTerminationLogSeam,
+} from "./execution.js";
 import type { VerifiedCommitRunContext } from "./verifiedCommitTypes.js";
 import { runtimeGitPaths } from "../coding-runtime/codingRuntimeGitIpc.js";
 /**
@@ -36,6 +42,24 @@ export function runtimeWorkspaceFs(
   context: Pick<VerifiedCommitRunContext, "workspace">,
 ): WorkspaceFs {
   return boundWorkspaceFs(context.workspace, nodeWorkspaceFs);
+}
+/**
+ * A raw status read that skipped deny-listed paths (`.idea/**`, `.env`, ...) leaves the count in the
+ * activity log, so a status or commit-facts read whose listing omits them is reconstructable from
+ * the log alone (AGENTS.md §8). Before 2026-09-10 such a path failed the whole read instead.
+ */
+export function logDeniedPathExclusion(
+  seams: GitDeliveryTerminationLogSeam,
+  correlationId: string | undefined,
+  deniedPathCount: number | undefined,
+): void {
+  if (deniedPathCount === undefined || deniedPathCount === 0) return;
+  (seams.activityLog ?? processServerLogSink()).write({
+    category: "security",
+    op: "git.raw-status.denied-paths-excluded",
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    extra: { deniedPathCount },
+  });
 }
 export function runtimeGitReadDeps(
   context: VerifiedCommitRunContext,
@@ -52,6 +76,7 @@ export async function runtimeGitStatus(
   execution: GitDeliveryExecutionSeams,
 ): Promise<CodingRuntimeGitStatus> {
   const raw = await readGitRawChanges(runtimeGitReadDeps(context, execution));
+  logDeniedPathExclusion(execution, context.correlationId, raw.deniedPathCount);
   return {
     kind: "status",
     headSha: raw.headSha,
@@ -268,6 +293,7 @@ export async function runtimeGitDiff(
   if (!runtimeGitPaths(paths)) throw new Error("git-runtime-paths-invalid");
   const deps = runtimeGitReadDeps(context, execution);
   const raw = await readGitRawChanges(deps);
+  logDeniedPathExclusion(execution, context.correlationId, raw.deniedPathCount);
   const expanded = expandDiffPaths(paths, raw.changes, scope);
   const selection = await readSelectedDiffFiles(
     context,

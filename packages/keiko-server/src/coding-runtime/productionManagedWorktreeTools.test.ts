@@ -15,6 +15,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import type { GatewayFetchOptions } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { GitWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-worktree-snapshot-node";
+import { GitRawWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
@@ -1103,6 +1104,37 @@ describe("production managed worktree tools", () => {
     expect(record.frames).toHaveLength(1);
     expect(record.frames?.[0]).toMatch(/^packages\/keiko-server\/src\//u);
     expect(JSON.stringify(records)).not.toContain(secret);
+  });
+
+  // Run 6 (2026-09-10): every verification failed with `errorKind: "Error"`; which of the raw status
+  // reader's three exits had thrown could be reconstructed only from the dist frames. A coded throw
+  // now names its closed reason on the line; the code is a fixed token, never text.
+  it("carries the raw status reader's closed code on a verification read failure", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const facade = verificationFacade({
+      runToReport: () => Promise.reject(new GitRawWorktreeReadError("git-raw-snapshot-incomplete")),
+      records,
+    });
+
+    await facade.execute({
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "verification",
+        actionId: "verification-coded-failure",
+        idempotencyKey: "verification-coded-failure-key",
+        verifierId: "test",
+      }),
+    });
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        operation: "coding-runtime.verification",
+        message: "verification-failed",
+        errorClass: "GitRawWorktreeReadError",
+        code: "git-raw-snapshot-incomplete",
+        correlationId: "run-verification-3",
+      }),
+    ]);
   });
 
   it("revokes liveness the instant resolveWorkspaceRootAccess stops proving managed authority, even before expiry (#3347)", async () => {

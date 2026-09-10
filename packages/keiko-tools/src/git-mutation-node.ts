@@ -641,7 +641,11 @@ export {
   type NodeGitMergeAdapterDeps,
 } from "./git-merge-node.js";
 
-export { readGitRawWorktreeSnapshot, readGitRawChanges } from "./git-raw-worktree-node.js";
+export {
+  GitRawWorktreeReadError,
+  readGitRawWorktreeSnapshot,
+  readGitRawChanges,
+} from "./git-raw-worktree-node.js";
 
 export { gitBlobObjectId } from "./git-index-identity.js";
 

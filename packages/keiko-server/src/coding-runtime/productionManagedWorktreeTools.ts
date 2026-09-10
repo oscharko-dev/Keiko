@@ -1054,6 +1054,9 @@ function emitVerificationDiagnostic(
     source: "production-managed-worktree-tools.verification",
     errorClass,
     message,
+    // A coded throw (the raw status reader's `git-raw-snapshot-incomplete`, for one) names its closed
+    // reason here; before 2026-09-10 the line carried `errorKind: "Error"` and nothing else.
+    ...(detail?.code === undefined ? {} : { code: detail.code }),
     ...(detail?.frames === undefined ? {} : { frames: detail.frames }),
     ...(detail?.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
     operation: "coding-runtime.verification",

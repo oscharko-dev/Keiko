@@ -1,4 +1,5 @@
-import { runtimeGitDiff } from "./runtimeGitRead.js";
+import { runtimeGitDiff, runtimeGitStatus } from "./runtimeGitRead.js";
+import { readVerifiedCommitFacts } from "./verifiedCommitFacts.js";
 import { redactLogFields } from "../observability/log-redaction.js";
 import { RuntimeGitService } from "./runtimeGitService.js";
 import { commitFacadeFixture } from "./verifiedCommitFacadeTestSupport.js";
@@ -1382,5 +1383,40 @@ describe("productive runtime status/diff/stage lane", () => {
       correlationId: "verified-commit-test",
     });
     expect(JSON.stringify(events)).not.toContain("snapshot store unavailable");
+  });
+});
+
+// Run 6 (2026-09-10): the target repository tracked `.idea/.gitignore`; the raw status reader marked
+// the deny-listed path as truncation, the commit facts refused the snapshot as incomplete, and every
+// verification of the run failed. Deny-listed paths are excluded, counted and recorded body-free.
+describe("deny-listed paths in the run's repository", () => {
+  it("keeps status and commit facts readable and records the exclusion count", async () => {
+    // The fixture's staged code.js lands in this commit together with the tracked IDE metadata;
+    // a fresh unstaged edit and an untracked (not git-ignored) `.idea/misc.xml` follow.
+    mkdirSync(join(root, ".idea"));
+    writeFileSync(join(root, ".idea", ".gitignore"), "shelf/\n");
+    git(["add", ".idea/.gitignore"]);
+    git(["commit", "-qm", "ide metadata"]);
+    writeFileSync(join(root, ".idea", "misc.xml"), "<project/>\n");
+    writeFileSync(join(root, "code.js"), "export const value = 3;\n");
+    const execution = options.execution ?? {};
+
+    const status = await runtimeGitStatus(context(), execution);
+    expect(status.truncated).toBe(false);
+    expect(status.changes.map((change) => change.path)).toEqual(["code.js"]);
+    expect(JSON.stringify(status)).not.toContain(".idea");
+
+    const facts = await readVerifiedCommitFacts(context(), execution);
+    expect(facts.headSha).toMatch(/^[a-f0-9]{40}$/u);
+
+    const exclusions = events.filter(
+      (event) => event.op === "git.raw-status.denied-paths-excluded",
+    );
+    expect(exclusions).toHaveLength(2);
+    expect(exclusions[0]).toMatchObject({
+      category: "security",
+      correlationId: "verified-commit-test",
+      extra: { deniedPathCount: 2 },
+    });
   });
 });

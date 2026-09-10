@@ -162,7 +162,12 @@ comparator and index write-time reader, the stage-file reader, the index transac
 exact-file staging effect take the bound port (`workspaceFsOf` in `keiko-tools`,
 `runtimeWorkspaceFs` in the server's git delivery) instead of asking the plain node port with a bare
 root string — the first verification inside a managed worktree was refused exactly that way on
-2026-09-10, after the spawn boundary had already been corrected.
+2026-09-10, after the spawn boundary had already been corrected. The deny list itself governs
+content, not completeness: the raw status reader that feeds verification, commit facts and the
+run's git status excludes a deny-listed path (`.idea/**`, `.env`, `.keiko/**`) from its listing
+and reports it as a count, because Keiko never reads, edits or stages such a path and the staged
+tree digest still binds the exact index it may sit in; treating it as an incomplete snapshot made
+every repository that tracks its IDE metadata undeliverable (2026-09-10).
 Connected-context detection uses marker-only language metadata because its request-local candidate
 inventory already performs the bounded repository walk; structural diagnostics derive additional
 observed languages from that shared inventory instead of scanning the repository twice.

@@ -324,3 +324,48 @@ reader, the stage-file reader, the index transaction and the exact-file staging 
 containment through the port bound to the workspace (`workspaceFsOf` in keiko-tools,
 `runtimeWorkspaceFs` in the server's git delivery), while the plain port keeps refusing the same
 root. No operator action is needed; the model's next verification succeeds.
+
+## Every `keiko_verification` fails with `errorKind: "Error"` in a repository that tracks IDE metadata
+
+| Field             | Value                                                                                                                                       |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| Severity          | High                                                                                                                                        |
+| Surface           | Coding runtime / Git delivery                                                                                                               |
+| Stable identifier | `coding-runtime.verification` with `code: "git-raw-snapshot-incomplete"`, `GitRawWorktreeReadError`, `git.raw-status.denied-paths-excluded` |
+
+**Symptom**
+
+Edits apply, then every `keiko_verification` fails within about a hundred milliseconds and the
+FILES panel of the run keeps saying the run has no workspace changes. The activity log shows
+`coding-runtime.verification` diagnostics whose frames end in `git-raw-worktree-node.js` and
+`verifiedCommitFacts.js`; before 2026-09-10 the line carried `errorKind: "Error"` and no reason,
+since then it carries `errorKind: "GitRawWorktreeReadError"` with `code: "git-raw-snapshot-incomplete"`.
+The repository tracks a path under a deny-listed segment — typically `.idea/` — or the run's
+worktree contains one.
+
+**Root Cause**
+
+The raw status reader behind verification, commit facts, the run's git status and the editor diff
+treated a deny-listed path (`.idea/**`, `.env`, `.keiko/**`, ...) like a path it could not represent
+and marked the whole snapshot truncated; the commit-facts consumer then refused the snapshot as
+incomplete. A deny-listed path is outside Keiko's governed content surface — never read, never
+edited or staged by Keiko — so its presence says nothing about the snapshot's completeness.
+
+**Diagnostic Steps**
+
+1. `keiko support analyze bundle.jsonl --correlation-id <run id>`; the first
+   `coding-runtime.verification` failure names `code: "git-raw-snapshot-incomplete"` (a real content
+   or path-count budget overrun) or another closed code of the reader.
+2. On a build with the repair, a `git.raw-status.denied-paths-excluded` line with
+   `extra.deniedPathCount` records how many deny-listed paths each status or facts read skipped.
+3. On a log written before the repair (`errorKind: "Error"`, no `code`), the frame
+   `git-raw-worktree-node.js` followed by `verifiedCommitFacts.js` is this defect whenever the
+   repository tracks a deny-listed path.
+
+**Resolution**
+
+Update to a build that contains the 2026-09-10 repair: deny-listed paths are excluded from the
+listing and counted (`deniedPathCount` on the raw changes and the snapshot), never read and never
+treated as incompleteness; `truncated` keeps its meaning for the path and content budgets and for
+names the snapshot cannot represent. No repository change is needed; a repository is not required to
+untrack its IDE metadata to be delivered by the Workbench.

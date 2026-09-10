@@ -1810,7 +1810,7 @@
     {
       "op": "coding-runtime.verification",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1059",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1062",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -2563,6 +2563,12 @@
       "op": "git.process.refused",
       "category": "security",
       "site": "packages/keiko-server/src/gitProcessActivity.ts:239",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.raw-status.denied-paths-excluded",
+      "category": "security",
+      "site": "packages/keiko-server/src/gitDelivery/runtimeGitRead.ts:59",
       "package": "keiko-server"
     },
     {
@@ -3717,6 +3723,7 @@
     "git.pr-description.receipt",
     "git.process.failed",
     "git.process.refused",
+    "git.raw-status.denied-paths-excluded",
     "git.runtime-action",
     "git.runtime-identity",
     "git.snapshot.capacity-denied",
