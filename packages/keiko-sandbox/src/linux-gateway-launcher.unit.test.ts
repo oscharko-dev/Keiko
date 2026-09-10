@@ -196,17 +196,17 @@ describe("Linux gateway launcher in-process orchestration", () => {
   });
 
   it("fails closed for malformed, premature, duplicated, or handle-bearing IPC messages", async () => {
-    const cases: readonly (readonly [unknown, unknown?])[] = [
+    const cases: readonly (readonly [unknown, unknown?, boolean?])[] = [
       [{ kind: "open", connectionId: 1 }],
       [{ kind: "ready", extra: true }],
       [{ kind: "ready" }, new Socket()],
-      [{ kind: "ready" }],
+      [{ kind: "ready" }, undefined, true],
     ];
-    for (const [message, handle] of cases) {
+    for (const [message, handle, repeated] of cases) {
       const control = fakeChild();
       spawnMock.mockReturnValueOnce(control.child);
       const run = runLinuxGatewayLauncher(hostArgs(19_983));
-      if (message.kind === "ready" && handle === undefined) {
+      if (repeated === true) {
         control.child.emit("message", message);
         control.child.emit("message", message);
       } else {
