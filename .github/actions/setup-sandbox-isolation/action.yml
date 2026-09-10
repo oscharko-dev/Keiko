@@ -1,6 +1,6 @@
 name: Setup Linux sandbox isolation
 description: >
-  Installs the Bubblewrap sandbox backend and relaxes the Ubuntu 24.04 AppArmor restriction on
+  Installs the Bubblewrap sandbox backend and loopback tooling, then relaxes the Ubuntu 24.04 AppArmor restriction on
   unprivileged user namespaces so the verification runner's mandatory network:none boundary
   (enforce-or-fail-closed) can be reached on hosted Linux runners. Every CI job that runs a
   Playwright suite, a verification-runner-driven test, or a code-task lane must call this action
@@ -31,7 +31,7 @@ runs:
             sudo rm -f "${source}"
           fi
         done
-    - name: Install bubblewrap
+    - name: Install Linux namespace tools
       shell: bash
       run: |
         # `apt-get update` exits non-zero when ANY configured repository fails to refresh, so one
@@ -45,7 +45,7 @@ runs:
           echo "apt-get update attempt ${attempt} did not refresh every repository; retrying"
           sleep "$((attempt * 5))"
         done
-        sudo apt-get install -y bubblewrap
+        sudo apt-get install -y bubblewrap iproute2
         # Ubuntu 24.04 restricts unprivileged user namespaces via AppArmor, blocking Bubblewrap's
         # own uid-map setup. `|| true` keeps the step green on runner images that already carry a
         # permissive sysctl (older images and non-Ubuntu Linux runners): the test surface is
