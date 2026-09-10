@@ -411,6 +411,9 @@ function runtimeSupervisor(
   if (isDevLaneRuntime(input.portable)) {
     return devLaneSupervisor(input.portable, input, run);
   }
+  if (input.portable.target === "linux-x64") {
+    return linuxNamespaceGatewaySupervisor(input.portable, input, run);
+  }
   if (isEvaluationLaneRuntime(input.portable) && input.portable.target !== "windows-x64") {
     return appSandboxSupervisor(input.portable, input, run);
   }
@@ -423,6 +426,25 @@ function runtimeSupervisor(
       gatewayConfinement: runtimeGatewayConfinement(input.portable, input, run),
     }),
     qualifications: [input.portable.qualification],
+  });
+}
+
+function linuxNamespaceGatewaySupervisor(
+  portable: ResolvedPortableOpenCodeRuntime,
+  input: ProductionOpenCodeBackendInput,
+  run: ProductionRuntimeBackendInput,
+): RuntimeProcessSupervisor {
+  return createRuntimeProcessSupervisor({
+    backend: createDevLaneRuntimeProcessBackend({
+      identity: {
+        platform: "linux",
+        arch: "x64",
+        backend: "linux-namespace-gateway",
+      },
+      runtimeRoot: join(portable.installRoot, portable.sidecar.payloadRootPath),
+      gatewayConfinement: runtimeGatewayConfinement(portable, input, run),
+    }),
+    qualifications: [portable.qualification],
   });
 }
 
