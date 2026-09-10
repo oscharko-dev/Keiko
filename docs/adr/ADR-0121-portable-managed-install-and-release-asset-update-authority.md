@@ -468,6 +468,13 @@ Security review for implementation under this ADR must cover:
 - [Local runtime state contract](../local-runtime-state-contract.md)
 - Issue #1946
 
+## Version
+
+| Version | Date       | Change |
+| ------- | ---------- | ------ |
+| 1.0     | 2026-07-05 | Accepted the portable managed-install and release-asset authority. |
+| 1.1     | 2026-09-10 | Added `linux-x64` as the fourth release-blocking archive for Issue #3451 so the production packaging model matches the qualified runtime target set. |
+
 ## Amendment history
 
 - **2026-07-10 — Issue #2199:** Added D7 and its security, alternatives, and operating-contract

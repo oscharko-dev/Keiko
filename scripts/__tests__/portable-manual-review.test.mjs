@@ -14,6 +14,8 @@ import { join, sep } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import yauzl from "yauzl";
 
+import { extractZipArchiveEntries } from "../lib/zip-archive.mjs";
+
 import {
   approvedNodeVersion,
   browserOpenCommand,
@@ -239,6 +241,25 @@ describe("portable manual review harness", () => {
       source: { path: "packages/keiko-sandbox/src" },
       protocol: { requestMagic: "none", responseMagic: "none" },
     });
+  });
+
+  it("retains executable modes when the Linux fixture archive is extracted", () => {
+    const root = tmpReviewRoot();
+    prepareScenarioFixture(root, "linux-x64", "happy-update");
+    const extracted = join(root, "extracted");
+
+    extractZipArchiveEntries(join(root, "release-assets", "keiko-linux-x64.zip"), extracted, {
+      requireRegularEntries: true,
+    });
+
+    for (const relativePath of [
+      "runtime/node/bin/node",
+      "Keiko",
+      "support/keiko-support.sh",
+      "runtime/native/keiko-secure-workspace-read",
+    ]) {
+      expect(statSync(join(extracted, "Keiko", relativePath)).mode & 0o111).toBe(0o100);
+    }
   });
 
   it("generates a valid schema-v2 OpenCode whole-product sidecar manifest", () => {

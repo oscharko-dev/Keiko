@@ -509,9 +509,13 @@ function writeLinuxLayout(root, target, version, sidecar) {
   ensureDir(join(root, ".portable"));
   ensureDir(join(root, "support"));
   writeAppPackage(join(root, "app"), version);
-  writeFileSync(join(root, "runtime", "node", "bin", "node"), "fixture node\n");
-  writeFileSync(join(root, "Keiko"), "#!/usr/bin/env sh\n");
-  writeFileSync(join(root, "support", "keiko-support.sh"), "#!/usr/bin/env sh\n");
+  writeFileSync(join(root, "runtime", "node", "bin", "node"), "fixture node\n", {
+    mode: 0o755,
+  });
+  writeFileSync(join(root, "Keiko"), "#!/usr/bin/env sh\n", { mode: 0o755 });
+  writeFileSync(join(root, "support", "keiko-support.sh"), "#!/usr/bin/env sh\n", {
+    mode: 0o755,
+  });
   writeJson(join(root, ".portable", "setup-manifest.json"), setupManifest(target, version));
   writeNativeHelperPayload(root, target);
   writeSidecarPayload(root, target, sidecar);
@@ -721,7 +725,9 @@ function writeNativeHelperPayload(resourceRoot, target) {
   for (const name of NATIVE_HELPER_NAMES) {
     const path = join(resourceRoot, nativeHelperExecutablePath(target, name));
     ensureDir(dirname(path));
-    writeFileSync(path, nativeHelperBytes(target, name));
+    writeFileSync(path, nativeHelperBytes(target, name), {
+      mode: target === "windows-x64" ? 0o644 : 0o755,
+    });
   }
 }
 
