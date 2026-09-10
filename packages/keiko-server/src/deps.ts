@@ -113,6 +113,7 @@ import {
 } from "./diagnostics-log.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
+import { currentOpenSseStreamCount, markServerShuttingDown } from "./sse-write.js";
 import type { ServerLogSink } from "./observability/index.js";
 import { recordWorkspaceRootDenial } from "./workspace-root-denial-log.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
@@ -1005,6 +1006,10 @@ export interface BuildHandlerDepsOptions {
   readonly localGitMutationEnv?: EnvSource | undefined;
   readonly conversationAttachmentStore?: ConversationAttachmentStore | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  // Activity-log port for the composition's own lifecycle evidence (the shutdown bracket in
+  // `createUiHandlerDispose`). Production omits it and the process sink is used; a test injects a
+  // recorder to assert the emitted lines (AGENTS.md §8).
+  readonly activityLog?: ServerLogSink | undefined;
   // Optional deployment replacement for the default memory category denylist. Production leaves
   // this unset unless an operator supplies a reviewed, ReDoS-safe policy at composition time.
   readonly memoryDeniedCategoryMatchers?:
@@ -4613,6 +4618,62 @@ function buildCodingContextPortsDependency(
     : { codingContextGitHubPort: args.options.codingContextGitHubPort };
 }
 
+/**
+ * The shutdown's own evidence (AGENTS.md §8). A customer only ever has the activity log: when this
+ * process goes away — an app quit, a service restart, an updater, the dev runner's own reload — the
+ * log used to show only the SHAPES that leaves behind (SSE streams closing, an aborted gateway
+ * fetch, a run settling as `cancelled`) and nothing saying a shutdown had begun. Reconstructing run
+ * 9's cancellation needed the dev runner's console, which no customer has (2026-09-10). These two
+ * lines bracket the teardown under one minted correlation id, name what was still live when it
+ * began, and are the join key for the terminal lines that follow.
+ */
+function recordRuntimeShutdown(
+  activityLog: ServerLogSink,
+  correlationId: string,
+  state: "started" | "completed",
+  extra: Readonly<Record<string, number | boolean>>,
+): void {
+  activityLog.write({
+    level: state === "started" ? "warn" : "info",
+    category: "process",
+    op: "server.runtime.shutdown",
+    correlationId,
+    extra: { state, ...extra },
+  });
+}
+
+// Everything the teardown itself tears down, in the order the graph requires. Extracted so the
+// dispose closure stays the shutdown's EVIDENCE bracket and nothing more.
+async function disposeRuntimeServices(
+  args: UiHandlerDepsAssemblyArgs,
+  services: UiHandlerRuntimeServices,
+  atlassianRegistries: ReturnType<typeof atlassianConnectorRegistryFields>,
+  codingAppSessionDenialWindows: CodingAppSessionDenialWindows,
+): Promise<void> {
+  services.gitChangeSnapshotService.close();
+  services.runtimeComposition.dispose?.();
+  services.codingRuntimeControlPlane?.safeActivityProjection?.purgeAll("shutdown");
+  await shutdownHostLspPool();
+  await services.dapProduction?.dispose();
+  services.peripherals.disposeTrustLspBridge();
+  services.peripherals.debugActivationControl.dispose();
+  services.peripherals.workspaceWatchService.disposeAll();
+  // #2906 round 2: these graph-owned registries (atlassianConnectorRegistryFields, one
+  // instance per composed deps graph) were never disposed with the graph. A sync job started
+  // via startAtlassianSyncJob continues in a detached setImmediate closure that captures THIS
+  // graph's deps/registry and keeps mutating it after disposal, while a newly composed graph's
+  // OWN fresh registry has no record of that still-running job and could admit a duplicate for
+  // the same capsule (hasActiveRunForCapsule sees an empty registry). reset() aborts every
+  // active job's controller and drops pending approvals/activity before the bundle itself goes
+  // away, so nothing on this graph outlives it as observable state on the NEXT graph.
+  atlassianRegistries.atlassianActionApprovalRegistry?.reset();
+  atlassianRegistries.atlassianSyncJobRegistry?.reset();
+  // #2906 round 3: same rationale as the Atlassian registries above -- drop this graph's
+  // denial-window counters so nothing outlives it as observable state on the next graph.
+  codingAppSessionDenialWindows.reset();
+  args.bundle.dispose?.();
+}
+
 function createUiHandlerDispose(
   args: UiHandlerDepsAssemblyArgs,
   services: UiHandlerRuntimeServices,
@@ -4620,31 +4681,34 @@ function createUiHandlerDispose(
   codingAppSessionDenialWindows: CodingAppSessionDenialWindows,
 ): UiHandlerDeps["dispose"] {
   return async (): Promise<void> => {
+    const activityLog = args.options.activityLog ?? processServerLogSink();
+    const correlationId = randomUUID();
+    const startedAtMs = Date.now();
+    const openSseStreamCount = currentOpenSseStreamCount();
+    const activeRunCount =
+      services.codingRuntimeControlPlane?.orchestrator.hasLiveRun() === true ? 1 : 0;
+    markServerShuttingDown();
+    recordRuntimeShutdown(activityLog, correlationId, "started", {
+      openSseStreamCount,
+      activeRunCount,
+    });
+    let runtimeStopped = false;
     try {
       await services.codingRuntimeControlPlane?.orchestrator.shutdown();
+      runtimeStopped = true;
     } finally {
-      services.gitChangeSnapshotService.close();
-      services.runtimeComposition.dispose?.();
-      services.codingRuntimeControlPlane?.safeActivityProjection?.purgeAll("shutdown");
-      await shutdownHostLspPool();
-      await services.dapProduction?.dispose();
-      services.peripherals.disposeTrustLspBridge();
-      services.peripherals.debugActivationControl.dispose();
-      services.peripherals.workspaceWatchService.disposeAll();
-      // #2906 round 2: these graph-owned registries (atlassianConnectorRegistryFields, one
-      // instance per composed deps graph) were never disposed with the graph. A sync job started
-      // via startAtlassianSyncJob continues in a detached setImmediate closure that captures THIS
-      // graph's deps/registry and keeps mutating it after disposal, while a newly composed graph's
-      // OWN fresh registry has no record of that still-running job and could admit a duplicate for
-      // the same capsule (hasActiveRunForCapsule sees an empty registry). reset() aborts every
-      // active job's controller and drops pending approvals/activity before the bundle itself goes
-      // away, so nothing on this graph outlives it as observable state on the NEXT graph.
-      atlassianRegistries.atlassianActionApprovalRegistry?.reset();
-      atlassianRegistries.atlassianSyncJobRegistry?.reset();
-      // #2906 round 3: same rationale as the Atlassian registries above -- drop this graph's
-      // denial-window counters so nothing outlives it as observable state on the next graph.
-      codingAppSessionDenialWindows.reset();
-      args.bundle.dispose?.();
+      await disposeRuntimeServices(
+        args,
+        services,
+        atlassianRegistries,
+        codingAppSessionDenialWindows,
+      );
+      recordRuntimeShutdown(activityLog, correlationId, "completed", {
+        durationMs: Date.now() - startedAtMs,
+        openSseStreamCount,
+        activeRunCount,
+        runtimeStopped,
+      });
     }
   };
 }

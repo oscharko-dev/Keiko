@@ -700,6 +700,48 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(serialized).not.toContain("/bin/runtime");
   });
 
+  // Run 9 (2026-09-10): a server shutdown ends the live run through the same stop path an operator
+  // uses, so the settled evidence was identical and a customer log could not tell the two apart —
+  // the only record of the shutdown lived in the dev runner's console, which no customer has. The
+  // cause is now named on the RUN's own correlation id, immediately before its terminal line.
+  it("names the server shutdown as the cause when it ends a live run", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start(start);
+
+    await f.orchestrator.shutdown();
+
+    const shutdown = captured.records.find(
+      (candidate) => candidate.op === "coding-runtime.run.shutdown",
+    );
+    expect(shutdown).toMatchObject({
+      level: "warn",
+      category: "process",
+      extra: { runId: "run-1", reason: "server-shutdown" },
+    });
+    // Same correlation id as the run, and BEFORE the terminal line, so one timeline reads in order.
+    const settledIndex = captured.records.findIndex(
+      (candidate) => candidate.op === "coding-runtime.run.settled",
+    );
+    expect(shutdown?.correlationId).toBe(
+      captured.records[settledIndex]?.correlationId ?? "missing-settled-line",
+    );
+    expect(captured.records.indexOf(shutdown as never)).toBeLessThan(settledIndex);
+    expect(JSON.stringify(captured.records)).not.toContain(start.taskIntent);
+  });
+
+  // An idle server shutting down has no run to name, and must not invent one.
+  it("emits no run shutdown line when nothing is running", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+
+    await f.orchestrator.shutdown();
+
+    expect(
+      captured.records.some((candidate) => candidate.op === "coding-runtime.run.shutdown"),
+    ).toBe(false);
+  });
+
   it("reaps the managed runtime and settles a completed task exactly once", async () => {
     const f = fixture();
     let resolveCompletion: ((outcome: "succeeded") => void) | undefined;

@@ -5,6 +5,55 @@ its managed task workspace. The entry follows the [troubleshooting entry templat
 
 ---
 
+## A run ends as `cancelled` and nobody stopped it
+
+| Field             | Value                                                    |
+| ----------------- | -------------------------------------------------------- |
+| Severity          | Medium                                                   |
+| Surface           | Local server / Coding Workbench                          |
+| Stable identifier | `server.runtime.shutdown`, `coding-runtime.run.shutdown` |
+
+**Symptom**
+
+An autonomous run stops mid-work. The Workbench shows it as cancelled, the timeline ends without a
+failure, and the operator did not press Stop. The activity log shows a burst that looks like client
+trouble — SSE streams closing as `backpressure-killed` or `client-disconnected`, a gateway call
+aborted with `ABORT_ERR` and `GATEWAY_CANCELLED`, then `coding-runtime.run.settled` with
+`state: "cancelled"` — and, seconds later, a fresh `store.opened` under a new `pid`.
+
+**Root Cause**
+
+The server process was shut down while the run was live: the application quit, a service or updater
+restarted it, the machine slept or powered down, or (in the development lane) the file watcher
+restarted the backend after a rebuild. A shutdown ends the live run through the same path an
+operator's Stop uses and closes every connection at once, so before 2026-09-10 the log recorded only
+the shapes that left behind. The cause itself was not in the activity log at all — reconstructing it
+needed the process supervisor's own console, which a customer does not have.
+
+**Diagnostic Steps**
+
+1. Look for `op: "server.runtime.shutdown"` with `state: "started"`. It carries the number of runs
+   and SSE streams that were still live, and its correlation id joins the `state: "completed"` line
+   with the teardown's duration and whether the runtime stopped cleanly.
+2. On the run's own timeline (`keiko support analyze --correlation-id <runId>`), look for
+   `op: "coding-runtime.run.shutdown"` with `reason: "server-shutdown"` immediately before the
+   terminal `coding-runtime.run.settled`. Its presence means the shutdown ended the run; its absence
+   on a cancelled run means an operator or a takeover did.
+3. Streams closed by that shutdown report `reason: "server-shutdown"` rather than
+   `backpressure-killed` or `client-disconnected`, so a burst of stream closes is no longer
+   mistakable for client trouble.
+4. The next process's lines carry a new `pid` and `instanceId` — the ADR-0173 join keys — so the
+   timeline before and after the restart stays separable.
+
+**Resolution**
+
+Start the run again. A shutdown is not a governance refusal and leaves no residue in the task
+workspace: the worktree, its branch and any committed work are intact, and the run's authority ended
+with it. If the shutdowns are unexpected, the `started` lines and their timestamps are the record of
+how often and when the process is going away.
+
+---
+
 ## Every edit is refused as out of scope, or every verification fails without a reason
 
 | Field             | Value                                                                                           |

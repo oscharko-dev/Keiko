@@ -681,6 +681,14 @@ export class CodingRuntimeOrchestrator {
     this.deps.safeActivityProjection?.purge(predecessorRunId, "stop");
     this.pruneSettled();
   }
+  /**
+   * Whether a run is live right now — the orchestrator's own notion of `current()`, exposed because
+   * the shutdown evidence has to state what it is about to end and must not re-derive "terminal"
+   * from a copy of `TERMINAL_STATES` somewhere else.
+   */
+  hasLiveRun(): boolean {
+    return this.current() !== undefined;
+  }
   snapshot(): PublicSnapshot {
     const visibleRunId = this.activeRunId ?? this.settledRunId;
     return visibleRunId === undefined
@@ -1406,9 +1414,30 @@ export class CodingRuntimeOrchestrator {
     this.settledRunId =
       this.activeRunId === undefined ? latestSettledRunId(this.deps.snapshots) : undefined;
   }
+  /**
+   * Ends the live run because the SERVER is going away, not because an operator asked. Both take the
+   * same stop path, so the settled evidence is identical — `state: "cancelled"`, `reason: "stop"` —
+   * and a customer log could not tell "the user pressed Stop" from "the machine shut the app down"
+   * (run 9, 2026-09-10). This line names the cause under the RUN's own correlation id, so
+   * `keiko support analyze --correlation-id <run>` shows it immediately before the terminal line.
+   */
   shutdown(): Promise<CodingRuntimeOrchestratorResult> {
     const current = this.current();
-    if (current) return this.end("stop", current.runId, { requestId: current.runId });
+    if (current) {
+      this.deps.activityLog?.write({
+        level: "warn",
+        category: "process",
+        op: "coding-runtime.run.shutdown",
+        correlationId: runtimeDiagnosticCorrelationId(current.runId),
+        extra: {
+          runId: current.runId,
+          state: current.state,
+          revision: current.revision,
+          reason: "server-shutdown",
+        },
+      });
+      return this.end("stop", current.runId, { requestId: current.runId });
+    }
     this.deps.safeActivityProjection?.purgeAll("shutdown");
     return Promise.resolve({ ok: true, snapshot: this.projection.idle() });
   }

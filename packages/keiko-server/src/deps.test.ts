@@ -576,6 +576,50 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     expect(deps.voiceRecapContentAttestations).toBeDefined();
   }, 15000);
 
+  // AGENTS.md §8 Rule 2, learned the hard way (run 9, 2026-09-10): when this process goes away, the
+  // activity log used to show only what a shutdown LEAVES BEHIND — streams closing, an aborted
+  // gateway call, a run settling as "cancelled" — and nothing saying a shutdown had begun. The cause
+  // lived in the dev runner's console, which a customer does not have. These two lines bracket the
+  // teardown under one correlation id and say what was live when it started.
+  it("brackets its own teardown with body-free shutdown evidence", async (): Promise<void> => {
+    const records: ServerLogEvent[] = [];
+    const stateDir = tmp("shutdown-evidence-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("shutdown-evidence-ev-"),
+      env: {},
+      uiDbPath: join(stateDir, "keiko-ui.db"),
+      activityLog: { write: (event: ServerLogEvent): void => void records.push(event) },
+    });
+
+    await deps.dispose?.();
+
+    const shutdown = records.filter((event) => event.op === "server.runtime.shutdown");
+    expect(shutdown).toHaveLength(2);
+    expect(shutdown[0]).toMatchObject({
+      level: "warn",
+      category: "process",
+      extra: {
+        state: "started",
+        activeRunCount: 0,
+        openSseStreamCount: expect.any(Number) as unknown,
+      },
+    });
+    expect(shutdown[1]).toMatchObject({
+      level: "info",
+      category: "process",
+      extra: {
+        state: "completed",
+        runtimeStopped: true,
+        durationMs: expect.any(Number) as unknown,
+      },
+    });
+    // One id joins the pair, so `keiko support analyze --correlation-id <id>` reads the teardown.
+    expect(shutdown[0]?.correlationId).toBe(shutdown[1]?.correlationId);
+    expect(shutdown[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(JSON.stringify(shutdown)).not.toContain(stateDir);
+  }, 15000);
+
   it("materializes the managed root before content-bearing routes classify ordinary roots", async (): Promise<void> => {
     const stateDir = tmp("managed-root-composition-");
     const deps = buildUiHandlerDeps({

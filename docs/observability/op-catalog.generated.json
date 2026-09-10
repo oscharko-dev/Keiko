@@ -1099,7 +1099,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/sse-write.ts:208",
+      "site": "packages/keiko-server/src/sse-write.ts:243",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -1464,7 +1464,7 @@
     {
       "op": "coding-runtime.description",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:2232",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:2261",
       "package": "keiko-server"
     },
     {
@@ -1656,19 +1656,25 @@
     {
       "op": "coding-runtime.run.issue-context-attached",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1595",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1624",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.run.recovery-acknowledged",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1128",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1136",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.run.settled",
       "category": "process",
       "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:448",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.run.shutdown",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1430",
       "package": "keiko-server"
     },
     {
@@ -2814,7 +2820,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1862",
+      "site": "packages/keiko-server/src/deps.ts:1867",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -2835,7 +2841,7 @@
     {
       "op": "memory.audit.state-cache.seeded",
       "category": "memory",
-      "site": "packages/keiko-server/src/deps.ts:2030",
+      "site": "packages/keiko-server/src/deps.ts:2035",
       "package": "keiko-server"
     },
     {
@@ -3135,7 +3141,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3807",
+      "site": "packages/keiko-server/src/deps.ts:3812",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -3147,6 +3153,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "server.runtime.shutdown",
+      "category": "process",
+      "site": "packages/keiko-server/src/deps.ts:4639",
+      "package": "keiko-server"
+    },
+    {
       "op": "sse.run-events.resume",
       "category": "http",
       "site": "packages/keiko-server/src/run-handlers.ts:575",
@@ -3155,7 +3167,7 @@
     {
       "op": "sse.stream.closed",
       "category": "http",
-      "site": "packages/keiko-server/src/sse-write.ts:69",
+      "site": "packages/keiko-server/src/sse-write.ts:103",
       "package": "keiko-server"
     },
     {
@@ -3192,14 +3204,14 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2590",
+      "site": "packages/keiko-server/src/deps.ts:2595",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "task-workspace.repository.registered",
       "category": "security",
-      "site": "packages/keiko-server/src/deps.ts:2295",
+      "site": "packages/keiko-server/src/deps.ts:2300",
       "package": "keiko-server"
     },
     {
@@ -3567,6 +3579,7 @@
     "coding-runtime.run.issue-context-attached",
     "coding-runtime.run.recovery-acknowledged",
     "coding-runtime.run.settled",
+    "coding-runtime.run.shutdown",
     "coding-runtime.run.started",
     "coding-runtime.safe-activity",
     "coding-runtime.sse-fanout",
@@ -3879,6 +3892,7 @@
     "server-log.write-failed",
     "server.composition",
     "server.request",
+    "server.runtime.shutdown",
     "speech.stt.language.normalized",
     "speech.tts.mime.corrected",
     "speech.tts.stream.peek.failed",

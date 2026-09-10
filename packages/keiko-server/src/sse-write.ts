@@ -28,7 +28,36 @@ export interface SseBackpressureSignal {
 }
 
 type SseStreamCloseReason =
-  "completed" | "client-disconnected" | "backpressure-killed" | "server-error";
+  "completed" | "client-disconnected" | "backpressure-killed" | "server-error" | "server-shutdown";
+
+// A server that is shutting down closes every live connection at once. Without this, the streams it
+// tears down are reported as the shapes they LOOK like from the socket — `backpressure-killed` for a
+// stream whose last write was still buffered, `client-disconnected` for the rest — and a customer
+// log shows a run cancelled next to a burst of client problems that never happened (run 9, dev lane,
+// 2026-09-10). The flag is process-wide because the shutdown is.
+let serverShuttingDown = false;
+
+/**
+ * Marks this process as shutting down, so every stream torn down from here on names the shutdown as
+ * its close reason. Called once from the runtime dispose path before connections are closed; there
+ * is deliberately no way back — a process that has begun shutting down does not resume serving.
+ */
+export function markServerShuttingDown(): void {
+  serverShuttingDown = true;
+}
+
+/** Test seam: restores the not-shutting-down state a fresh process starts in. */
+export function resetServerShuttingDownForTests(): void {
+  serverShuttingDown = false;
+}
+
+// Live SSE streams, so the shutdown line can say how many were still open when it began. Counted,
+// never enumerated: a count is body-free, a list of streams is not.
+let openSseStreamCount = 0;
+
+export function currentOpenSseStreamCount(): number {
+  return openSseStreamCount;
+}
 
 interface SseStreamCounterState {
   frameCount: number;
@@ -49,6 +78,10 @@ interface SseStreamCounterState {
 const sseStreamCounters = new WeakMap<ServerResponse, SseStreamCounterState>();
 
 function sseStreamReason(res: ServerResponse, state: SseStreamCounterState): SseStreamCloseReason {
+  // The shutdown is the CAUSE of every close that follows it, including the ones that look like
+  // backpressure because the socket went away mid-write. It therefore wins over the socket-shaped
+  // diagnoses below; a stream the producer had already ended still reports "completed".
+  if (serverShuttingDown && !res.writableEnded) return "server-shutdown";
   if (state.backpressureKilled) return "backpressure-killed";
   if (state.serverErrored) return "server-error";
   // A stream whose producer called `res.end()` and had it fully flush is "completed"; one whose
@@ -64,6 +97,7 @@ function sseStreamReason(res: ServerResponse, state: SseStreamCounterState): Sse
 function emitSseStreamClosed(res: ServerResponse, state: SseStreamCounterState): void {
   if (state.emitted) return;
   state.emitted = true;
+  openSseStreamCount = Math.max(0, openSseStreamCount - 1);
   getServerLogger().info({
     category: "http",
     op: "sse.stream.closed",
@@ -96,6 +130,7 @@ function sseStreamState(res: ServerResponse): SseStreamCounterState | undefined 
     correlationId: undefined,
   };
   sseStreamCounters.set(res, state);
+  openSseStreamCount += 1;
   res.on("close", () => {
     emitSseStreamClosed(res, state);
   });
