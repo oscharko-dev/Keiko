@@ -73,6 +73,13 @@ was bound from. Two surfaces do it:
   not the one currently open.
 - The editor's verification panel, for the root the editor is already on.
 
+Since 2026-09-10 the repository a task workspace was bound from is registered as a project when the
+workspace is provisioned, so it appears in the Workspace Trust panel and in the Coding Workbench
+header as soon as it needs a decision. Before that it was never registered, and on a fresh
+installation the trust surfaces had no row for it at all: verification was refused and no surface
+could offer the grant. Registration is not a grant — the repository stays restricted until the
+operator allows it.
+
 The grant is recorded for the REPOSITORY root, and a task worktree runs its scripts under that grant
 only while the worktree's `package.json` is byte-identical to the repository's. That is what the
 grant is bound to (ADR-0147 D3), and a governed run may edit `package.json` inside its own worktree:

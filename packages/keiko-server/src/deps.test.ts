@@ -77,6 +77,7 @@ import {
   parseGatewayConfig,
   toolCallingConfigurationFingerprint,
 } from "@oscharko-dev/keiko-model-gateway";
+import type { ServerLogEvent } from "./observability/index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { DatabaseSync } from "node:sqlite";
 import { buildCspHeader } from "./csp.js";
@@ -688,6 +689,69 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       });
     } finally {
       await deps.dispose?.();
+      store.close();
+    }
+  });
+
+  // Fresh-installation run (2026-09-10): a repository bound through the Coding Workbench was never a
+  // registered project, so script trust could not be resolved for it at all, the Workspace Trust
+  // panel had no row for it, and every verification inside its task workspace was refused with no
+  // surface able to offer the grant. Registration is what makes it a trust SUBJECT; it is not a
+  // grant, and the repository stays restricted until the operator decides.
+  it("registers the bound repository as a restricted trust subject and logs it once", () => {
+    const repositoryRoot = tmp("managed-root-register-source-");
+    const managedRoot = tmp("managed-root-register-target-");
+    const manifest = JSON.stringify({ name: "shared" });
+    writeFileSync(join(repositoryRoot, "package.json"), manifest);
+    writeFileSync(join(managedRoot, "package.json"), manifest);
+    const instance = managedWorkspaceInstance(repositoryRoot, managedRoot);
+    const store = createInMemoryUiStore();
+    const workspaceScriptTrust = createWorkspaceScriptTrustService({ store });
+    const events: ServerLogEvent[] = [];
+    const activityLog = { write: (event: ServerLogEvent): void => void events.push(event) };
+
+    try {
+      expect(store.listProjects().some((project) => project.path === repositoryRoot)).toBe(false);
+
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore: store,
+        workspaceScriptTrust,
+        instance,
+        correlationId: "provision-correlation-1",
+        activityLog,
+      });
+
+      expect(store.listProjects().some((project) => project.path === repositoryRoot)).toBe(true);
+      // Registered, never granted: the operator's decision is still outstanding, and the worktree
+      // inherits nothing from a repository that carries no grant.
+      expect(workspaceScriptTrust.trustLevelForRoot(repositoryRoot)).toBe("restricted");
+      expect(workspaceScriptTrust.status(repositoryRoot)).toMatchObject({ trust: "restricted" });
+      expect(
+        store.readWorkspaceTrustRecord(requiredManifestRootRef(store, managedRoot)),
+      ).toBeUndefined();
+      expect(events).toEqual([
+        expect.objectContaining({
+          op: "task-workspace.repository.registered",
+          correlationId: "provision-correlation-1",
+          extra: { repositoryId: instance.repositoryId, granted: false },
+        }),
+      ]);
+      // The operator grants the repository through the existing surface; the next exposure derives.
+      workspaceScriptTrust.grant(repositoryRoot);
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore: store,
+        workspaceScriptTrust,
+        instance,
+        activityLog,
+      });
+      expect(workspaceScriptTrust.status(managedRoot)).toMatchObject({
+        trust: "trusted",
+        reason: "derived-from-trusted-root",
+      });
+      // Idempotent: the second exposure re-registers nothing and emits no second line.
+      expect(events).toHaveLength(1);
+      expect(JSON.stringify(events)).not.toContain(repositoryRoot);
+    } finally {
       store.close();
     }
   });

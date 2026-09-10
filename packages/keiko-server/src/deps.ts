@@ -86,7 +86,15 @@ import {
   resolveExistingAllowedWorkspaceRealRoot,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
+import {
+  basename,
+  delimiter,
+  dirname,
+  isAbsolute,
+  join,
+  relative as relative_,
+  resolve,
+} from "node:path";
 import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import type { RunRegistry } from "./runs.js";
@@ -2205,9 +2213,19 @@ function managedWorkspaceRootRef(uiStore: UiStore, managedRoot: string): string 
 }
 
 /**
- * Registers the server-owned Project/Manifest identity for one managed worktree and, when the
- * repository's standing grant currently covers it, derives the worktree's own script-trust record
- * from it.
+ * Registers the server-owned Project/Manifest identity for one managed worktree AND for the
+ * repository it was bound from, and — when the repository's standing grant currently covers the
+ * worktree — derives the worktree's own script-trust record from it.
+ *
+ * The repository registration is what makes it a trust SUBJECT: script trust is only ever resolved
+ * for a REGISTERED root (`registeredProjectPathForRoot`), and the Workspace Trust panel lists
+ * registered roots. A repository the operator bound through the Coding Workbench but never opened
+ * as a project was therefore permanently `restricted` with no surface able to offer the grant, so
+ * every verification inside its task workspace was refused and the only exit was to open the same
+ * folder again through the workspace picker (fresh-installation run, 2026-09-10). Registration is
+ * NOT a grant: no trust record is written here, the repository stays restricted until the operator
+ * grants it, and `POST /api/projects` (choosing a folder) remains the only path that grants on
+ * selection.
  *
  * The derivation used to run for an explicit provision ONLY (an `initializeTrust` flag). That flag
  * was a proxy for the two guards below, and it stranded every worktree whose repository was not yet
@@ -2227,7 +2245,11 @@ export function ensureManagedTaskWorkspaceIdentity(input: {
   readonly uiStore: UiStore;
   readonly workspaceScriptTrust: WorkspaceScriptTrustService;
   readonly instance: WorkspaceInstance;
+  /** The provisioning request's own correlation id, so the registration joins that timeline. */
+  readonly correlationId?: string | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
 }): void {
+  ensureBoundRepositoryProject(input);
   const projectRegistered = input.uiStore
     .listProjects()
     .some((project) => project.path === input.instance.managedWorktreePath);
@@ -2251,6 +2273,36 @@ export function ensureManagedTaskWorkspaceIdentity(input: {
   );
 }
 
+function isPathInside(candidate: string, parent: string): boolean {
+  const relative = relative_(parent, candidate);
+  return relative.length > 0 && !relative.startsWith("..") && !isAbsolute(relative);
+}
+
+// Registration only, never a grant — see `ensureManagedTaskWorkspaceIdentity`. Body-free evidence:
+// the repository's own id, and whether this call created the row; never a path.
+function ensureBoundRepositoryProject(input: {
+  readonly uiStore: UiStore;
+  readonly instance: WorkspaceInstance;
+  readonly correlationId?: string | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
+}): void {
+  const { repositoryRoot } = input.instance;
+  if (input.uiStore.listProjects().some((project) => project.path === repositoryRoot)) return;
+  // A repository that CONTAINS the managed worktree also contains Keiko's own state directory, and
+  // therefore the UI database (`assertUiDbOutsideProject`'s invariant). Registering it would put the
+  // database inside a project's read surface, so this root is left unregistered — it keeps exactly
+  // the behaviour that stood before this repair, and Keiko's own checkout is registered as the
+  // workspace context anyway.
+  if (isPathInside(input.instance.managedWorktreePath, repositoryRoot)) return;
+  input.uiStore.createProject(repositoryRoot, basename(repositoryRoot));
+  (input.activityLog ?? processServerLogSink()).write({
+    category: "security",
+    op: "task-workspace.repository.registered",
+    correlationId: input.correlationId ?? UNKNOWN_CORRELATION_ID,
+    extra: { repositoryId: input.instance.repositoryId, granted: false },
+  });
+}
+
 function withManagedWorkspaceIdentity(
   provisioning: WorkspaceProvisioningService,
   uiStore: UiStore,
@@ -2263,6 +2315,7 @@ function withManagedWorkspaceIdentity(
         uiStore,
         workspaceScriptTrust,
         instance: result.instance,
+        ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
       });
       return result;
     },
@@ -2272,6 +2325,7 @@ function withManagedWorkspaceIdentity(
         uiStore,
         workspaceScriptTrust,
         instance: result.instance,
+        ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
       });
       return result;
     },

@@ -2814,7 +2814,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1862",
+      "site": "packages/keiko-server/src/deps.ts:1870",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -2835,7 +2835,7 @@
     {
       "op": "memory.audit.state-cache.seeded",
       "category": "memory",
-      "site": "packages/keiko-server/src/deps.ts:2030",
+      "site": "packages/keiko-server/src/deps.ts:2038",
       "package": "keiko-server"
     },
     {
@@ -3129,7 +3129,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3743",
+      "site": "packages/keiko-server/src/deps.ts:3797",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -3186,8 +3186,14 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2526",
+      "site": "packages/keiko-server/src/deps.ts:2580",
       "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "task-workspace.repository.registered",
+      "category": "security",
+      "site": "packages/keiko-server/src/deps.ts:2300",
       "package": "keiko-server"
     },
     {
@@ -3880,6 +3886,7 @@
     "task-workspace.identity.creation-time-probe",
     "task-workspace.lifecycle",
     "task-workspace.reconcile.startup",
+    "task-workspace.repository.registered",
     "tool-catalog.bind-ready",
     "tool-catalog.bind-unavailable",
     "tool-catalog.binding-failed",

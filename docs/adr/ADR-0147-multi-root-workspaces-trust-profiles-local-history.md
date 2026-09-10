@@ -208,7 +208,13 @@ A package-script consumer projects `trusted` only when canonical trust is truste
 binding dimension and current trust-basis digest matches. Every other cell projects to today's
 `CommandTaskTrustState = "approval-required"`. A digest/root mismatch immediately persists a
 restricted invalidation at a newer revision. Restoring the old `package.json` bytes therefore does
-not resurrect the prior grant; a new explicit grant is required. A managed task worktree is a
+not resurrect the prior grant; a new explicit grant is required. Binding a repository into a managed
+task workspace registers BOTH roots as projects — the worktree and the repository it was bound from —
+because a root that is not registered cannot be a trust subject at all: script trust is resolved only
+for a registered root, and the trust surfaces list registered roots. That registration is never a
+grant; the repository stays restricted until the operator decides, and choosing a folder remains the
+only path that grants on selection. A repository that CONTAINS the managed worktree is left
+unregistered, because that root also contains the UI database. A managed task worktree is a
 registered project row whose script decision is resolved from the repository it was bound from, and
 that inherited decision holds only while the worktree's `package.json` is byte-identical to that
 repository's — the same trust-basis digest this decision already binds (PR #3381). Once a governed
