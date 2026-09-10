@@ -363,7 +363,7 @@ export type LinuxGatewayDiagnosticKind =
 
 export const LINUX_GATEWAY_DIAGNOSTIC_FD_ENV = "KEIKO_LINUX_GATEWAY_DIAGNOSTIC_FD";
 export const LINUX_GATEWAY_DIAGNOSTIC_FD = 3;
-const LINUX_GATEWAY_NAMESPACE_DIAGNOSTIC_FD = 9;
+export const LINUX_GATEWAY_NAMESPACE_DIAGNOSTIC_FD = 9;
 const LINUX_GATEWAY_DIAGNOSTIC_PREFIX = "keiko-linux-gateway:error:";
 const LINUX_GATEWAY_DIAGNOSTIC_KINDS: ReadonlySet<string> = new Set([
   "cleanup-failed",

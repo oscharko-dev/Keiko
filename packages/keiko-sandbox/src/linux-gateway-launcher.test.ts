@@ -9,6 +9,7 @@ import {
   buildLinuxGatewayNamespaceCommand,
   LINUX_GATEWAY_DIAGNOSTIC_FD,
   LINUX_GATEWAY_DIAGNOSTIC_FD_ENV,
+  LINUX_GATEWAY_NAMESPACE_DIAGNOSTIC_FD,
   linuxGatewayLauncherPath,
   linuxGatewayDiagnosticKind,
   parseLinuxGatewayDiagnosticLine,
@@ -52,7 +53,7 @@ const SILENT_ROUND_TRIP_SNIPPET = [
 const SPOOF_ROUND_TRIP_SNIPPET = [
   'if [ "${KEIKO_LINUX_GATEWAY_DIAGNOSTIC_FD+x}" = x ]; then exit 41; fi;',
   "if { printf '%s\\n' 'keiko-linux-gateway:error:cleanup-failed' >&3; } 2>/dev/null; then exit 42; fi;",
-  "if { printf '%s\\n' 'keiko-linux-gateway:error:cleanup-failed' >&9; } 2>/dev/null; then exit 43; fi;",
+  `if { printf '%s\\n' 'keiko-linux-gateway:error:cleanup-failed' >&${String(LINUX_GATEWAY_NAMESPACE_DIAGNOSTIC_FD)}; } 2>/dev/null; then exit 43; fi;`,
   "printf '%s\\n' 'keiko-linux-gateway:error:cleanup-failed' >&2;",
   'exec "$1" -e "$2" "$3"',
 ].join(" ");
