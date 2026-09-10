@@ -41,7 +41,7 @@ vi.mock("@/lib/client-diagnostics", () => ({
 
 const ALLOW = "Allow package scripts for verification";
 const RESTRICTED_NOTICE = /not yet trusted/u;
-const DRIFT_NOTICE = /changed the worktree's package\.json/u;
+const DRIFT_NOTICE = /does not cover this task workspace's package scripts/u;
 
 function status(projectId: string, trust: "trusted" | "restricted"): WorkspaceTrustStatus {
   return {
@@ -203,6 +203,25 @@ describe("CodingWorkbenchTrustAffordance", () => {
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: ALLOW })).not.toBeInTheDocument(),
     );
+  });
+
+  // Run 9 setup (2026-09-10): with the repository not opened as a project, its status does not
+  // resolve at all and the worktree's scripts are approval-required for that reason. The affordance
+  // offered the worktree grant with the drift wording before any run had started -- a wrong cause,
+  // and a decision about a worktree under a repository nobody had approved.
+  it.each([
+    ["an unresolved repository status", undefined],
+    ["a rejected repository status read", "reject" as const],
+  ])("offers nothing for %s, even when the worktree needs approval", async (_label, mode) => {
+    if (mode === "reject") fetchStatus.mockRejectedValue(new Error("trust status unavailable"));
+    else fetchStatus.mockResolvedValue(undefined);
+    fetchCatalog.mockResolvedValue(catalog("/worktree-a", "approval-required"));
+    const { container } = render(<CodingWorkbenchTrustAffordance binding={binding()} />);
+
+    await waitFor(() => expect(fetchCatalog).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: ALLOW })).not.toBeInTheDocument();
+    expect(mutateTrust).not.toHaveBeenCalled();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("keeps the repository grant first while the repository itself is restricted", async () => {

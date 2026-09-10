@@ -1000,7 +1000,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.trust.restrictedNotice":
     "Die Verifizierung muss die Paket-Skripte dieses Repositorys ausführen, sie sind aber noch nicht freigegeben.",
   "codingWorkbench.trust.driftNotice":
-    "Dieser Run hat die package.json des Worktrees geändert. Die Verifizierung muss die umgeschriebenen Paket-Skripte ausführen; sie zuzulassen ist deine Entscheidung für genau dieses Manifest.",
+    "Die Freigabe des Repositorys deckt die Paket-Skripte dieses Task-Workspace nicht ab, meist weil dieser Run die package.json geändert hat. Sie zuzulassen ist deine Entscheidung für genau dieses Manifest.",
   "codingWorkbench.trust.allow": "Paket-Skripte für die Verifizierung zulassen",
   "codingWorkbench.trust.allowing": "Wird zugelassen…",
 } satisfies CodingWorkbenchMessageCatalog;

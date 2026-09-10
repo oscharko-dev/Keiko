@@ -960,7 +960,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.trust.restrictedNotice":
     "Verification needs to run this repository's package scripts, and they are not yet trusted.",
   "codingWorkbench.trust.driftNotice":
-    "This run changed the worktree's package.json. Verification needs to run the rewritten package scripts, and allowing them is your decision for exactly this manifest.",
+    "The repository's approval does not cover this task workspace's package scripts, usually because this run changed package.json. Allowing them is your decision for exactly this manifest.",
   "codingWorkbench.trust.allow": "Allow package scripts for verification",
   "codingWorkbench.trust.allowing": "Allowing…",
 } as const;

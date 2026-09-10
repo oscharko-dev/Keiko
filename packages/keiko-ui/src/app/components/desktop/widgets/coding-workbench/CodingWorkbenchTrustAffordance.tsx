@@ -96,8 +96,14 @@ export function CodingWorkbenchTrustAffordance({
 }
 
 // The repository's own restriction comes first: while the repository is restricted, its grant is the
-// decision that covers this worktree and every later one. Only a TRUSTED repository whose grant no
-// longer reaches the worktree (a rewritten manifest) is answered with the worktree's own grant.
+// decision that covers this worktree and every later one. The worktree's own grant is offered ONLY
+// once the repository is read as TRUSTED and its grant still does not reach the worktree — a
+// rewritten manifest, or a revocation recorded for the worktree itself.
+//
+// A repository whose status does not resolve at all (unregistered, unreadable) renders nothing: the
+// worktree's scripts are approval-required then too, but the operator's next step is to open and
+// trust the REPOSITORY, and offering the worktree grant would both name a wrong cause and record a
+// decision about a worktree under a repository nobody has approved (2026-09-10, run 9 setup).
 function pendingTrustDecision(
   repository: WorkspaceTrustView,
   worktreeScripts: WorktreeScriptTrust | undefined,
@@ -112,7 +118,7 @@ function pendingTrustDecision(
       },
     };
   }
-  if (worktreeScripts === "approval-required") {
+  if (repository.status?.trust === "trusted" && worktreeScripts === "approval-required") {
     return {
       notice: "codingWorkbench.trust.driftNotice",
       granting: worktreeGrant.granting,
