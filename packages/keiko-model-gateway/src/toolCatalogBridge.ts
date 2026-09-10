@@ -351,6 +351,10 @@ function prepare(
       projectionDigest: normalizer.binding.projection.projectionDigest,
       toolCount: tools.length,
       compatibility: advertisement.kind,
+      // How long the advertised offer stays bindable from this point. Read next to the fetch's own
+      // `durationMs` it reconstructs an `expired-compatibility` rejection from the log alone: a
+      // response that took longer than this window was bound against an offer that had run out.
+      offerRemainingMs: Date.parse(advertisement.offered.expiresAt) - now(),
     },
   });
   return bridge(normalizer, tools, now, log);

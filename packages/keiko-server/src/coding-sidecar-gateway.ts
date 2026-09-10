@@ -41,6 +41,7 @@ import {
 } from "./coding-runtime/opencodeLaunchProfile.js";
 import {
   createOpenCodeGatewayToolCatalogAdvertisement,
+  opencodeGatewayOfferLifetimeMs,
   hasExactOpenCodeVisibleToolContract,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
   type OpenCodeGatewayHandlerCoverage,
@@ -646,20 +647,30 @@ function isMatchingModelAlias(
  * `runtimeGatewayAdmissionResponse` already applies to the incoming sidecar request below, so the
  * advertisement and the admission gate are provably the same source (ADR-0175 D1/D4).
  */
+/** The per-request facts the tool-catalog advertisement is minted from. */
+interface GatewayToolCatalogOffer {
+  readonly coverage: OpenCodeGatewayHandlerCoverage | undefined;
+  readonly offerLifetimeMs: number;
+}
+
 function toolCatalogFor(
   tools: readonly ToolDefinition[] | undefined,
-  coverage: OpenCodeGatewayHandlerCoverage | undefined,
+  offer: GatewayToolCatalogOffer,
 ): GatewayCallRequest["toolCatalog"] {
   return isExactManagedToolSet(tools)
-    ? createOpenCodeGatewayToolCatalogAdvertisement(Date.now(), coverage)
+    ? createOpenCodeGatewayToolCatalogAdvertisement(
+        Date.now(),
+        offer.coverage,
+        offer.offerLifetimeMs,
+      )
     : undefined;
 }
 
 function toolRequestFields(
   parsed: CodingSidecarGatewayChatCompletionRequest,
-  coverage: OpenCodeGatewayHandlerCoverage | undefined,
+  offer: GatewayToolCatalogOffer,
 ): Pick<GatewayCallRequest, "toolCatalog"> {
-  const toolCatalog = toolCatalogFor(parsed.tools, coverage);
+  const toolCatalog = toolCatalogFor(parsed.tools, offer);
   if (toolCatalog !== undefined) return { toolCatalog };
   return {};
 }
@@ -721,12 +732,12 @@ function buildChatRequest(
   maxOutputTokens: number,
   correlationId: string | undefined,
   reasoningEffort: ModelReasoningEffort | undefined,
-  toolCatalogCoverage: OpenCodeGatewayHandlerCoverage | undefined,
+  toolCatalogOffer: GatewayToolCatalogOffer,
 ): GatewayCallRequest {
   return {
     modelId: modelAlias,
     messages: parsed.messages,
-    ...toolRequestFields(parsed, toolCatalogCoverage),
+    ...toolRequestFields(parsed, toolCatalogOffer),
     ...(parsed.temperature === undefined ? {} : { temperature: parsed.temperature }),
     ...(parsed.top_p === undefined ? {} : { topP: parsed.top_p }),
     cancellationSignal,
@@ -1459,6 +1470,10 @@ interface GatewayChatDelivery {
   readonly reasoningEffort?: ModelReasoningEffort | undefined;
   readonly promptTokenReservation: PromptTokenReservation;
   readonly toolCatalogCoverage: OpenCodeGatewayHandlerCoverage | undefined;
+  // How long the per-request tool-catalog offer stays bindable: the request deadline the gateway
+  // enforces for this model plus the bridge's settlement grace (`opencodeGatewayOfferLifetimeMs`),
+  // so a legitimately long generation never comes back to an expired offer.
+  readonly offerLifetimeMs: number;
 }
 
 interface PinnedGatewayBinding {
@@ -1489,7 +1504,7 @@ function requestForGatewayDelivery(
     delivery.maxOutputTokens,
     ctx.correlationId,
     delivery.reasoningEffort,
-    delivery.toolCatalogCoverage,
+    { coverage: delivery.toolCatalogCoverage, offerLifetimeMs: delivery.offerLifetimeMs },
   );
 }
 
@@ -2289,6 +2304,9 @@ function executeBudgetedGatewayChat(
       deps,
       authentication.runId,
       ctx.correlationId,
+    ),
+    offerLifetimeMs: opencodeGatewayOfferLifetimeMs(
+      requestDeadlineMs(binding.config, profile.modelAlias),
     ),
   });
 }

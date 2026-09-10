@@ -5,7 +5,7 @@ import type {
   CatalogDigest,
   CompiledCatalogTool,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { createToolRef } from "@oscharko-dev/keiko-tool-catalog";
+import { createToolInvocationNormalizer, createToolRef } from "@oscharko-dev/keiko-tool-catalog";
 import {
   createOpenCodeGatewayToolCatalogAdvertisement,
   deriveGatewayCatalogReadiness,
@@ -14,6 +14,8 @@ import {
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
   projectedGatewaySchema,
   type OpenCodeGatewayHandlerCoverage,
+  OPENCODE_GATEWAY_OFFER_SETTLEMENT_GRACE_MS,
+  opencodeGatewayOfferLifetimeMs,
 } from "./opencodeToolSchemas.js";
 import { mintProposalId, proposalIdPattern } from "../gitDelivery/proposalId.js";
 
@@ -67,6 +69,10 @@ function realAdvertisementFixture(): readonly RealAdvertisedTool[] {
   }[];
   return parsed.map(({ name, parameters }) => ({ name, parameters }));
 }
+
+// A representative deadline-derived lifetime for the structural assertions below (30 s provider
+// deadline + settlement grace); the lifetime tests further down pin the derivation itself.
+const OFFER_LIFETIME_MS = opencodeGatewayOfferLifetimeMs(30_000);
 
 describe("OpenCode visible tool contract", () => {
   it("keeps the runtime and portable verifier on the canonical pinned version", () => {
@@ -210,7 +216,11 @@ describe("OpenCode visible tool contract", () => {
 
 describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
   it("binds the sixteen catalog-representable governed tools plus its two native extensions (#3414 follow-up)", () => {
-    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0);
+    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(
+      0,
+      undefined,
+      OFFER_LIFETIME_MS,
+    );
     expect(advertisement.kind).toBe("bound");
     expect(advertisement.projection.nativeExtensions).toEqual([
       { alias: "question", contractVersion: 1 },
@@ -251,7 +261,11 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
   // so this stays one exact-equality invariant rather than a two-source partition: every
   // model-visible tool is either a catalog-projected tool or one of its two native extensions.
   it("names all eighteen OpenCode 1.17.17 model-visible tools once native extensions are included", () => {
-    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0);
+    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(
+      0,
+      undefined,
+      OFFER_LIFETIME_MS,
+    );
     const modelVisibleNames = new Set([
       ...advertisement.projection.tools.map((tool) => tool.alias),
       ...advertisement.projection.nativeExtensions.map((extension) => extension.alias),
@@ -260,11 +274,60 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
   });
 
   it("issues a distinct offer identity and expiry per call", () => {
-    const first = createOpenCodeGatewayToolCatalogAdvertisement(1_000);
-    const second = createOpenCodeGatewayToolCatalogAdvertisement(1_000);
+    const lifetime = opencodeGatewayOfferLifetimeMs(120_000);
+    const first = createOpenCodeGatewayToolCatalogAdvertisement(1_000, undefined, lifetime);
+    const second = createOpenCodeGatewayToolCatalogAdvertisement(1_000, undefined, lifetime);
     expect(first.offered.offerId).not.toBe(second.offered.offerId);
     expect(first.projection.projectionDigest).toBe(second.projection.projectionDigest);
-    expect(first.offered.expiresAt).toBe(new Date(31_000).toISOString());
+    expect(first.offered.expiresAt).toBe(new Date(1_000 + 120_000 + 5_000).toISOString());
+  });
+
+  // The offer used to expire after a fixed 30 s. A ~6k-token `keiko_changeset_edit` call took 49 s
+  // to generate (2026-09-10), so the response bound against a dead offer: `expired-compatibility`,
+  // reported as GATEWAY_MALFORMED_TOOL_CALL, chat failed, turn failed, run failed with no change.
+  // The lifetime is the request deadline the gateway enforces plus the bridge's settlement grace.
+  describe("offer lifetime follows the request deadline", () => {
+    it("derives the lifetime from the deadline plus the settlement grace, and refuses a non-positive deadline", () => {
+      expect(opencodeGatewayOfferLifetimeMs(120_000)).toBe(
+        120_000 + OPENCODE_GATEWAY_OFFER_SETTLEMENT_GRACE_MS,
+      );
+      expect(opencodeGatewayOfferLifetimeMs(30_000)).toBe(35_000);
+      expect(() => opencodeGatewayOfferLifetimeMs(0)).toThrow(RangeError);
+      expect(() => opencodeGatewayOfferLifetimeMs(Number.NaN)).toThrow(RangeError);
+      expect(() => createOpenCodeGatewayToolCatalogAdvertisement(0, undefined, 0)).toThrow(
+        RangeError,
+      );
+    });
+
+    it("binds a call that arrives 49 s into a 120 s request, and still refuses one past the deadline", () => {
+      const now = Date.parse("2026-09-10T05:26:07.000Z");
+      const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(
+        now,
+        undefined,
+        opencodeGatewayOfferLifetimeMs(120_000),
+      );
+      const normalizer = createToolInvocationNormalizer({
+        catalog: advertisement.catalog,
+        projection: advertisement.projection,
+        offered: advertisement.offered,
+      });
+      const args = {};
+      expect(normalizer.bindAlias("keiko_git_status", args, now + 49_000).arguments).toEqual(args);
+      expect(() => normalizer.bindAlias("keiko_git_status", args, now + 120_000 + 5_000)).toThrow(
+        /expired-compatibility/u,
+      );
+      // The historical fixed lifetime, kept only as the red half of this pin: the same 49 s
+      // response is refused against a 30 s offer.
+      const fixed = createOpenCodeGatewayToolCatalogAdvertisement(now, undefined, 30_000);
+      const fixedNormalizer = createToolInvocationNormalizer({
+        catalog: fixed.catalog,
+        projection: fixed.projection,
+        offered: fixed.offered,
+      });
+      expect(() => fixedNormalizer.bindAlias("keiko_git_status", args, now + 49_000)).toThrow(
+        /expired-compatibility/u,
+      );
+    });
   });
 
   // AC5 (#3413-AC5): the advertisement crosses a BFF-owned trust boundary (today BFF -> model
@@ -273,7 +336,11 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
   // convention. Mirrors catalogToolBinder.test.ts:28's real-binder proof against THIS module's
   // actually-wired advertisement, which had no equivalent exact-shape assertion before.
   it("is JSON-safe and carries no handler/authority/secret-bearing material (#3413-AC5)", () => {
-    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0);
+    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(
+      0,
+      undefined,
+      OFFER_LIFETIME_MS,
+    );
     const serialized = JSON.stringify(advertisement.offered);
     // "execute" is deliberately excluded: `keiko.git.execute` is a legitimate canonical tool id,
     // not a leaked handler-execution field.
@@ -308,7 +375,7 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement with real handlerCoverag
   function coverageFrom(
     readiness: (canonicalId: string) => "ready" | "unavailable",
   ): OpenCodeGatewayHandlerCoverage {
-    const base = createOpenCodeGatewayToolCatalogAdvertisement(0);
+    const base = createOpenCodeGatewayToolCatalogAdvertisement(0, undefined, OFFER_LIFETIME_MS);
     const readinessByToolId = new Map(
       base.projection.tools.map((tool) => [
         tool.toolRef.canonicalId,
@@ -319,7 +386,11 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement with real handlerCoverag
   }
 
   it("preserves the prior structural-only behaviour byte-for-byte when coverage is omitted", () => {
-    const withoutCoverage = createOpenCodeGatewayToolCatalogAdvertisement(0);
+    const withoutCoverage = createOpenCodeGatewayToolCatalogAdvertisement(
+      0,
+      undefined,
+      OFFER_LIFETIME_MS,
+    );
     expect(withoutCoverage.offered.toolRefs).toHaveLength(16);
     expect(withoutCoverage.offered.binding.readiness).toBe("ready");
     expect(withoutCoverage.offered.binding.handlerSetDigest).toBe(
@@ -329,7 +400,11 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement with real handlerCoverag
 
   it("drops a tool from the offered set when its real binding is not ready, without killing the rest", () => {
     const coverage = coverageFrom((id) => (id === "keiko.repo.search" ? "unavailable" : "ready"));
-    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0, coverage);
+    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(
+      0,
+      coverage,
+      OFFER_LIFETIME_MS,
+    );
     expect(advertisement.offered.toolRefs.map((ref) => ref.canonicalId)).not.toContain(
       "keiko.repo.search",
     );
@@ -341,16 +416,20 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement with real handlerCoverag
   });
 
   it("treats a tool absent from the coverage map as unavailable (fail closed)", () => {
-    const base = createOpenCodeGatewayToolCatalogAdvertisement(0);
+    const base = createOpenCodeGatewayToolCatalogAdvertisement(0, undefined, OFFER_LIFETIME_MS);
     const partial = new Map(
       base.projection.tools
         .filter((tool) => tool.toolRef.canonicalId !== "keiko.repo.search")
         .map((tool) => [tool.toolRef.canonicalId, "ready" as const]),
     );
-    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0, {
-      readinessByToolId: partial,
-      handlerSetDigest: "real-handler-set-digest" as never,
-    });
+    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(
+      0,
+      {
+        readinessByToolId: partial,
+        handlerSetDigest: "real-handler-set-digest" as never,
+      },
+      OFFER_LIFETIME_MS,
+    );
     expect(advertisement.offered.toolRefs.map((ref) => ref.canonicalId)).not.toContain(
       "keiko.repo.search",
     );
@@ -358,14 +437,22 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement with real handlerCoverag
 
   it("is ready, and offers every tool, only when every real binding is ready", () => {
     const coverage = coverageFrom(() => "ready");
-    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0, coverage);
+    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(
+      0,
+      coverage,
+      OFFER_LIFETIME_MS,
+    );
     expect(advertisement.offered.binding.readiness).toBe("ready");
     expect(advertisement.offered.toolRefs).toHaveLength(16);
   });
 
   it("uses the caller-supplied real handlerSetDigest verbatim, never the projection digest alias (#3414-AC4)", () => {
     const coverage = coverageFrom(() => "ready");
-    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0, coverage);
+    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(
+      0,
+      coverage,
+      OFFER_LIFETIME_MS,
+    );
     expect(advertisement.offered.binding.handlerSetDigest).toBe("real-handler-set-digest");
     expect(advertisement.offered.binding.handlerSetDigest).not.toBe(
       advertisement.projection.projectionDigest,
@@ -406,7 +493,11 @@ describe("deriveGatewayCatalogReadiness", () => {
   });
 
   it("advertises the real sixteen-tool production catalog as ready", () => {
-    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(0);
+    const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(
+      0,
+      undefined,
+      OFFER_LIFETIME_MS,
+    );
     expect(deriveGatewayCatalogReadiness(advertisement.projection.tools)).toBe("ready");
   });
 });

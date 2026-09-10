@@ -467,6 +467,9 @@ describe("gateway bridge trust and compatibility boundaries", () => {
     expect(events.every((event) => event.correlationId === "correlation-1")).toBe(true);
     expect(JSON.stringify(events)).not.toContain("raw-body");
     expect(JSON.stringify(events)).not.toContain("src/example.ts");
+    // The projection line names how long the offer stays bindable (the fixture mints NOW + 30 s), so
+    // an `expired-compatibility` rejection is reconstructable next to the fetch duration.
+    expect(events[0]).toMatchObject({ extra: { offerRemainingMs: 30_000 } });
     expect(events.at(-1)).toMatchObject({
       errorKind: "validation",
       extra: {

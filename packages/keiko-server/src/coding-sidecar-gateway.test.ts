@@ -27,6 +27,7 @@ import { mockRequest, mockResponse, probeVerifiedGatewayConfig } from "./_suppor
 import {
   createOpenCodeGatewayToolCatalogAdvertisement,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
+  opencodeGatewayOfferLifetimeMs,
 } from "./coding-runtime/opencodeToolSchemas.js";
 import { proposalIdPattern } from "./gitDelivery/proposalId.js";
 import {
@@ -831,7 +832,11 @@ describe("coding-sidecar gateway", () => {
       expect(result.status).toBe(200);
       expect(requestBody?.tools).toBeDefined();
       const sentTools = requestBody?.tools ?? [];
-      const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(Date.now());
+      const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(
+        Date.now(),
+        undefined,
+        opencodeGatewayOfferLifetimeMs(30_000),
+      );
       // The forwarded set is the seven catalog-representable tools plus the two native
       // extensions (question/todowrite), merged by the model-gateway bridge (#3414 follow-up) --
       // canonically the full pinned OpenCode 1.17.17 model-visible set.
@@ -852,6 +857,50 @@ describe("coding-sidecar gateway", () => {
       for (const tool of sentTools) {
         expect(tool.function.parameters).toEqual(expectedParametersByName.get(tool.function.name));
       }
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
+  // The per-request offer used to expire after a fixed 30 s, shorter than the provider deadline the
+  // gateway itself enforces: a 49 s generation bound against a dead offer and the run failed as if
+  // the model had emitted a malformed call (2026-09-10). The offer now lives for the model's request
+  // deadline plus the settlement grace, and the bridge logs how long it had left when projected.
+  it("advertises an offer that outlives the provider request deadline and logs its remaining lifetime", async () => {
+    resetGatewayInstanceCacheForTests();
+    const sink = captureServerLog("info");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((): Promise<Response> =>
+        Promise.resolve(
+          new Response(
+            JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "ok" } }] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        ),
+      ),
+    );
+    const deps = runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-real" } }));
+    try {
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "continue" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+      assertRouteResult(result);
+      expect(result.status).toBe(200);
+      const projected = sink.events.find((event) => event.op === "gateway.tool-catalog.projected");
+      expect(projected).toBeDefined();
+      const remaining = projected?.extra?.offerRemainingMs;
+      // The fixture provider's timeoutMs is 30 s; the offer must still be bindable past that
+      // deadline by the settlement grace, minus the milliseconds between mint and projection.
+      expect(typeof remaining).toBe("number");
+      expect(remaining as number).toBeGreaterThan(30_000);
+      expect(remaining as number).toBeLessThanOrEqual(opencodeGatewayOfferLifetimeMs(30_000));
     } finally {
       vi.unstubAllGlobals();
       resetGatewayInstanceCacheForTests();

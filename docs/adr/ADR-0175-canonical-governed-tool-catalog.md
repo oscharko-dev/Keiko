@@ -141,6 +141,15 @@ not reactivate expired aliases or replay uncertain effects.
 ### D4 — Offer, dispatch and bounded data
 
 `offer = profile intent ∩ representable ∩ bound-and-ready ∩ live-authority-eligible ∩ budgeted`.
+
+An offer minted for one model request lives exactly as long as that request can: its expiry is the
+request deadline the gateway enforces for the model (the provider's `timeoutMs`) plus the bridge's
+settlement grace, never a fixed constant. A fixed 30 s offer expired under a legitimately long
+generation (a ~6k-token changeset call took 49 s), the response's calls bound against a dead offer as
+`expired-compatibility`, and the run failed as if the model had emitted a malformed call
+(2026-09-10). A response later than the deadline has already been aborted, so the deadline-derived
+lifetime refuses nothing legitimate and admits nothing stale; the bridge logs the offer's remaining
+lifetime at projection time so an expiry is reconstructable from the activity log alone.
 An approval-required action is eligible only when the current mode/envelope permits that action
 and a valid approval channel can complete the existing approval protocol; listing is not approval.
 All three ADR-0138 modes preserve monotonic authority and mode-independent hard denials.

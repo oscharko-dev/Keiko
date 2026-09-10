@@ -619,7 +619,26 @@ export function hasExactOpenCodeVisibleToolContract(
 }
 
 const OPENCODE_GATEWAY_PROFILE = { id: "opencode", version: 1 } as const;
-const OPENCODE_GATEWAY_OFFER_LIFETIME_MS = 30_000;
+
+/**
+ * The gateway offer must outlive the whole chat request it is minted for. It used to be a fixed
+ * 30 s: a turn whose generation ran longer — a ~6k-token `keiko_changeset_edit` call took 49 s —
+ * came back to an EXPIRED offer, the bridge classified the bind failure as a malformed tool call
+ * (`expired-compatibility` → `invalid-arguments`), the chat failed non-retryably, the OpenCode turn
+ * failed and the run ended `runtime-failed` with no workspace change (2026-09-10). The honest bound
+ * is the request deadline the gateway itself enforces (coding-sidecar-gateway.ts
+ * `requestDeadlineMs`, the provider's `timeoutMs`) plus the settlement time the bridge needs to
+ * bind the response after the fetch completes — a response later than the deadline has already
+ * been aborted, so nothing legitimate is refused and nothing stale is admitted.
+ */
+export const OPENCODE_GATEWAY_OFFER_SETTLEMENT_GRACE_MS = 5_000;
+
+export function opencodeGatewayOfferLifetimeMs(requestDeadlineMs: number): number {
+  if (!Number.isFinite(requestDeadlineMs) || requestDeadlineMs <= 0) {
+    throw new RangeError("the gateway request deadline must be a positive number of milliseconds");
+  }
+  return Math.trunc(requestDeadlineMs) + OPENCODE_GATEWAY_OFFER_SETTLEMENT_GRACE_MS;
+}
 
 /**
  * The catalog used to build the sidecar gateway's OUTGOING `toolCatalog` advertisement (the
@@ -741,11 +760,32 @@ function realCoverageOffer(
   };
 }
 
+/**
+ * The catalog and its compiled OpenCode projection, without an offer. A consumer that only needs
+ * the descriptors (the canonical facade bridge's descriptor lookup) reads this instead of minting
+ * a request offer it will never bind.
+ */
+export function openCodeGatewayCatalogProjection(): Pick<
+  GatewayToolCatalogAdvertisement,
+  "catalog" | "projection"
+> {
+  return {
+    catalog: OPENCODE_GATEWAY_CATALOG,
+    projection: compileToolProjection(OPENCODE_GATEWAY_CATALOG, OPENCODE_GATEWAY_PROFILE),
+  };
+}
+
 export function createOpenCodeGatewayToolCatalogAdvertisement(
   now: number,
-  handlerCoverage?: OpenCodeGatewayHandlerCoverage,
+  handlerCoverage: OpenCodeGatewayHandlerCoverage | undefined,
+  // Always derived from the request deadline by `opencodeGatewayOfferLifetimeMs`; explicit so no
+  // caller can fall back to a fixed lifetime shorter than the request it advertises for.
+  offerLifetimeMs: number,
 ): GatewayToolCatalogAdvertisement {
-  const projection = compileToolProjection(OPENCODE_GATEWAY_CATALOG, OPENCODE_GATEWAY_PROFILE);
+  if (!Number.isFinite(offerLifetimeMs) || offerLifetimeMs <= 0) {
+    throw new RangeError("the gateway offer lifetime must be a positive number of milliseconds");
+  }
+  const { projection } = openCodeGatewayCatalogProjection();
   const offer =
     handlerCoverage === undefined
       ? structuralOnlyOffer(projection)
@@ -764,7 +804,7 @@ export function createOpenCodeGatewayToolCatalogAdvertisement(
       },
       offerId: `opencode-gateway-${randomUUID()}`,
       toolRefs: offer.toolRefs,
-      expiresAt: new Date(now + OPENCODE_GATEWAY_OFFER_LIFETIME_MS).toISOString(),
+      expiresAt: new Date(now + offerLifetimeMs).toISOString(),
     },
   };
 }

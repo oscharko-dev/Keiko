@@ -177,3 +177,47 @@ port for the worktree, but only the `WorkspaceInfo` projection reached the lanes
 Update to a build that contains the 2026-09-10 repair: the prover binds the owned-root port to the
 worktree's `WorkspaceInfo` and the spawn boundary resolves through it, so every Git lane runs under
 the root's own authority. Nothing has to be migrated; start the run again.
+
+---
+
+## A run fails `runtime-failed` right after a long model turn, with `GATEWAY_MALFORMED_TOOL_CALL`
+
+| Field             | Value                                                                                                          |
+| ----------------- | -------------------------------------------------------------------------------------------------------------- |
+| Severity          | High                                                                                                           |
+| Surface           | Model gateway / Coding Workbench                                                                               |
+| Stable identifier | `GATEWAY_MALFORMED_TOOL_CALL`, `gateway.tool-catalog.rejected`, `expired-compatibility`, `OpenCodeTurnFailure` |
+
+**Symptom**
+
+The run inspects the repository normally, then the first substantial edit step ends the run:
+`Failed. Failure: runtime-failed`, no workspace change. The activity log shows a gateway fetch of
+several tens of seconds (`http.gateway.fetch.completed` with a large `durationMs`) followed by
+`gateway.tool-catalog.rejected` with `reason: "invalid-arguments"` and
+`catalogReason: "expired-compatibility"`, `gateway.chat.failed` with `GATEWAY_MALFORMED_TOOL_CALL`,
+and the OpenCode turn failing terminally.
+
+**Root Cause**
+
+The per-request tool-catalog offer the sidecar gateway advertises to the model expired after a fixed
+30 s (before 2026-09-10). A tool call whose generation took longer — a ~6k-token
+`keiko_changeset_edit` call took 49 s — was bound against the expired offer when the response
+arrived; the bridge classified that as a malformed tool call, which is not retryable, so the whole
+chat completion failed and the runtime treated the turn as terminal.
+
+**Diagnostic Steps**
+
+1. Activity log, the chat's correlation id: `gateway.tool-catalog.projected` now carries
+   `extra.offerRemainingMs`; compare it with the fetch's `durationMs`. A rejection whose
+   `catalogReason` is `expired-compatibility` with a fetch longer than the remaining lifetime is this
+   defect.
+2. The run's correlation id: `coding-runtime.opencode-composition` (`OpenCodeTurnFailure`) and
+   `coding-runtime.task-dispatch` (`reason=terminal-failed`) follow within milliseconds.
+
+**Resolution**
+
+Update to a build that contains the 2026-09-10 repair: the offer's lifetime is derived from the
+request deadline the gateway enforces for the model (the provider's `timeoutMs`) plus a settlement
+grace, so a legitimately long generation binds against a live offer. If an operator sets a very
+short provider `timeoutMs`, that timeout — not the offer — bounds the turn, and the fetch is aborted
+before any call could be bound.

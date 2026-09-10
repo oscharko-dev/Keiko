@@ -14,7 +14,7 @@ import type {
 import type { CodingToolAuthorityPreview } from "../coding-runtime/codingToolAuthorityPort.js";
 import type { CodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
 import {
-  createOpenCodeGatewayToolCatalogAdvertisement,
+  openCodeGatewayCatalogProjection,
   isOpenCodeVerificationId,
   type OpenCodeGatewayHandlerCoverage,
 } from "../coding-runtime/opencodeToolSchemas.js";
@@ -42,7 +42,9 @@ import type {
 } from "./catalogToolPorts.js";
 import { CatalogDispatchFault } from "./catalogToolRuntimeAuthority.js";
 
-const OPENCODE_CATALOG_ADVERTISEMENT = createOpenCodeGatewayToolCatalogAdvertisement(0);
+// Descriptor lookup only: the facade never binds a gateway offer, so it reads the catalog and its
+// compiled projection directly instead of minting a request offer.
+const OPENCODE_CATALOG_ADVERTISEMENT = openCodeGatewayCatalogProjection();
 const OPENCODE_CATALOG_DESCRIPTORS = OPENCODE_CATALOG_ADVERTISEMENT.projection.tools.flatMap(
   (tool) => {
     const descriptor = lookupCatalogTool(OPENCODE_CATALOG_ADVERTISEMENT.catalog, tool.toolRef);
@@ -461,7 +463,7 @@ function expiredResult(request: CodingToolActionRequest): CodingToolResult {
 }
 
 function emitExpiredBinding(
-  advertisement: ReturnType<typeof createOpenCodeGatewayToolCatalogAdvertisement>,
+  advertisement: ReturnType<typeof openCodeGatewayCatalogProjection>,
   context: CanonicalCatalogContext,
   logPort: CatalogLifecycleLogPort,
 ): void {

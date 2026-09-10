@@ -46,7 +46,10 @@ import {
   readBoundedBody,
   type OpenCodeToolBridge,
 } from "./opencodeRuntimeComposition.js";
-import { createOpenCodeGatewayToolCatalogAdvertisement } from "./opencodeToolSchemas.js";
+import {
+  createOpenCodeGatewayToolCatalogAdvertisement,
+  opencodeGatewayOfferLifetimeMs,
+} from "./opencodeToolSchemas.js";
 import {
   createRuntimeProcessSupervisor,
   type RuntimeProcessBackend,
@@ -1378,6 +1381,8 @@ describe("[functional-only] real staged OpenCode runtime", () => {
         expect(gateway.requests).toHaveLength(4);
         const expectedProjection = createOpenCodeGatewayToolCatalogAdvertisement(
           Date.parse("2026-09-05T00:00:00.000Z"),
+          undefined,
+          opencodeGatewayOfferLifetimeMs(30_000),
         ).projection;
         expect(
           gateway.requests.every(
