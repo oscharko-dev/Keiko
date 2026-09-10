@@ -4631,7 +4631,7 @@ function recordRuntimeShutdown(
   activityLog: ServerLogSink,
   correlationId: string,
   state: "started" | "completed",
-  extra: Readonly<Record<string, number | boolean>>,
+  extra: Readonly<Record<string, number | boolean | string>>,
 ): void {
   activityLog.write({
     level: state === "started" ? "warn" : "info",
@@ -4692,10 +4692,20 @@ function createUiHandlerDispose(
       openSseStreamCount,
       activeRunCount,
     });
-    let runtimeStopped = false;
+    // What the teardown achieved for the live run, not merely "the call did not throw". A refused
+    // shutdown resolves normally with `{ok: false}` (a run in `recovery-required`, for one), and
+    // recording that as a clean stop told the one artifact a customer site has the opposite of what
+    // happened (owner review, PR #3452). "not-applicable" is its own answer: no control plane means
+    // there was nothing to stop, which is not the same as stopping cleanly.
+    let runtimeShutdown: "not-applicable" | "ended" | "refused" | "faulted" = "not-applicable";
     try {
-      await services.codingRuntimeControlPlane?.orchestrator.shutdown();
-      runtimeStopped = true;
+      const orchestrator = services.codingRuntimeControlPlane?.orchestrator;
+      if (orchestrator !== undefined) {
+        runtimeShutdown = (await orchestrator.shutdown()).ok ? "ended" : "refused";
+      }
+    } catch (error) {
+      runtimeShutdown = "faulted";
+      throw error;
     } finally {
       await disposeRuntimeServices(
         args,
@@ -4707,7 +4717,7 @@ function createUiHandlerDispose(
         durationMs: Date.now() - startedAtMs,
         openSseStreamCount,
         activeRunCount,
-        runtimeStopped,
+        runtimeShutdown,
       });
     }
   };

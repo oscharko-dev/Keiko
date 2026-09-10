@@ -1343,12 +1343,60 @@ export class CodingRuntimeOrchestrator {
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
-    const target = taskOutcomeState(outcome);
+    const target = this.deliveryTruthfulOutcome(live, taskOutcomeState(outcome));
     if (!isLegalCodingWorkbenchRuntimeTransition(live.state, target.state)) {
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
     this.transition(live, target.state, target.failureCode);
+  }
+
+  /**
+   * A run started from an accepted GitHub issue is the product's delivery flow: the issue binds the
+   * task branch, the base ref and the pull request the work is delivered through. Such a run may not
+   * be reported as `succeeded` on the strength of the model having stopped emitting tool calls —
+   * which is all `taskOutcomeState` knows. Run 10 of the Coding Workbench engagement (2026-09-10)
+   * ended exactly that way: its verification was refused, it wrote files into the task workspace and
+   * stopped, and the Workbench showed a green success for a run that had verified, committed, pushed
+   * and delivered nothing.
+   *
+   * Delivery evidence is the durable server-owned kind: a verified-commit receipt, or a draft
+   * delivery record. Either is enough — a run that committed but could not push has delivered
+   * something and says so through its own facts. Neither means the terminal state is
+   * `delivery-not-evidenced`, and the operator sees a truthful failure instead of a false success.
+   *
+   * Deliberately scoped to issue-bound runs: an ad-hoc task ("explain this module") legitimately
+   * ends with no commit, and inferring delivery intent from free text would turn honest successes
+   * into false failures.
+   */
+  private deliveryTruthfulOutcome(
+    live: CodingRuntimeSnapshot,
+    target: {
+      readonly state: "failed" | "succeeded";
+      readonly failureCode?: "runtime-failed" | undefined;
+    },
+  ): {
+    readonly state: "failed" | "succeeded";
+    readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+  } {
+    if (target.state !== "succeeded" || live.issueBinding === undefined) return target;
+    const hasVerifiedCommit = live.verifiedCommitResult !== undefined;
+    const hasDraftDelivery = live.draftDelivery !== undefined;
+    if (hasVerifiedCommit || hasDraftDelivery) return target;
+    this.deps.activityLog?.write({
+      level: "warn",
+      category: "process",
+      op: "coding-runtime.run.delivery-unevidenced",
+      correlationId: runtimeDiagnosticCorrelationId(live.runId),
+      extra: {
+        runId: live.runId,
+        issueNumber: live.issueBinding.issueNumber,
+        hasVerifiedCommit,
+        hasDraftDelivery,
+        reportedOutcome: "succeeded",
+      },
+    });
+    return { state: "failed", failureCode: "delivery-not-evidenced" };
   }
 
   private async stopForSettlement(
@@ -1418,28 +1466,39 @@ export class CodingRuntimeOrchestrator {
    * Ends the live run because the SERVER is going away, not because an operator asked. Both take the
    * same stop path, so the settled evidence is identical — `state: "cancelled"`, `reason: "stop"` —
    * and a customer log could not tell "the user pressed Stop" from "the machine shut the app down"
-   * (run 9, 2026-09-10). This line names the cause under the RUN's own correlation id, so
-   * `keiko support analyze --correlation-id <run>` shows it immediately before the terminal line.
+   * (run 9, 2026-09-10). This names the cause under the RUN's own correlation id, so
+   * `keiko support analyze --correlation-id <run>` reads it alongside that run's terminal line.
+   *
+   * The line is written AFTER the attempt and reports what the attempt achieved. Writing it before
+   * asserted an outcome the code had not reached: `end()` refuses outright for a run in
+   * `recovery-required` (no transition, no terminal line), so a shutdown then left behind a cause
+   * for an ending that never happened, and the troubleshooting entry told the operator to read it as
+   * confirmation (owner review, PR #3452).
    */
-  shutdown(): Promise<CodingRuntimeOrchestratorResult> {
+  async shutdown(): Promise<CodingRuntimeOrchestratorResult> {
     const current = this.current();
-    if (current) {
-      this.deps.activityLog?.write({
-        level: "warn",
-        category: "process",
-        op: "coding-runtime.run.shutdown",
-        correlationId: runtimeDiagnosticCorrelationId(current.runId),
-        extra: {
-          runId: current.runId,
-          state: current.state,
-          revision: current.revision,
-          reason: "server-shutdown",
-        },
-      });
-      return this.end("stop", current.runId, { requestId: current.runId });
+    if (current === undefined) {
+      this.deps.safeActivityProjection?.purgeAll("shutdown");
+      return { ok: true, snapshot: this.projection.idle() };
     }
-    this.deps.safeActivityProjection?.purgeAll("shutdown");
-    return Promise.resolve({ ok: true, snapshot: this.projection.idle() });
+    const result = await this.end("stop", current.runId, { requestId: current.runId });
+    this.deps.activityLog?.write({
+      level: "warn",
+      category: "process",
+      op: "coding-runtime.run.shutdown",
+      correlationId: runtimeDiagnosticCorrelationId(current.runId),
+      extra: {
+        runId: current.runId,
+        stateBefore: current.state,
+        revision: current.revision,
+        reason: "server-shutdown",
+        // What the shutdown actually achieved for this run: it ended, or the orchestrator refused
+        // to end it and the run keeps whatever state it had.
+        outcome: result.ok ? "ended" : "refused",
+        ...(result.ok ? {} : { failureCode: result.failureCode }),
+      },
+    });
+    return result;
   }
 
   // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) is an authority the

@@ -901,27 +901,48 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
     }
   });
 
-  // The properties the budgets must satisfy, not the arithmetic that produces them. Restating the
-  // formula here (as this test first did) passes for any edit that changes both sides together, so
-  // it pins nothing (AGENTS.md §7; CodeRabbit, PR #3452).
+  // Both halves of AGENTS.md §7 at once. The formula belongs to the producer and is not restated
+  // here (CodeRabbit, PR #3452) — but a floor alone is satisfied by absurd values, so replacing the
+  // original equalities with floors RELAXED the pin (owner review, PR #3452): a dropped zero in the
+  // module-private metadata allowance would have raised one history pull's buffer past 24 MiB with
+  // every assertion still green. Each budget is therefore fenced on BOTH sides: the floor states
+  // what the product must be able to hold, the ceiling states what it may never allocate. Both
+  // fences are policy this test owns, not arithmetic the producer owns.
+  //
+  // THE CEILINGS ARE THE POINT. `opencodeHttpClient.history()` passes
+  // OPENCODE_HISTORY_RESPONSE_MAX_BYTES to the transport verbatim as `maxResponseBytes`, so this
+  // number is the largest response one sidecar pull may ever buffer in the server's memory.
+  const METADATA_ALLOWANCE_CEILING_BYTES = 128 * 1024;
+  const HISTORY_PULL_BUFFER_CEILING_BYTES = 12 * 1024 * 1024;
+
   it("derives the history budgets from the catalog ceilings, never from a restated constant", () => {
-    // One governed call can leave BOTH an input and an output body at the catalog's own ceiling; a
-    // part budget under that would refuse a legal call's own record.
+    // Floor: one governed call can leave BOTH an input and an output body at the catalog's own
+    // ceiling, and a part budget under that would refuse a legal call's own record.
     expect(OPENCODE_HISTORY_TOOL_PART_MAX_BYTES).toBeGreaterThan(
       2 * TOOL_CATALOG_LIMITS.maxArgumentBytes,
     );
-    // A catch-up pull must hold the ordinary metadata rows AND every call it is allowed to catch up
-    // on, each with at least one argument body.
+    // Ceiling: what a part budget adds ON TOP of those two bodies is a bounded metadata allowance,
+    // never a second payload's worth of room.
+    expect(OPENCODE_HISTORY_TOOL_PART_MAX_BYTES).toBeLessThanOrEqual(
+      2 * TOOL_CATALOG_LIMITS.maxArgumentBytes + METADATA_ALLOWANCE_CEILING_BYTES,
+    );
+    // Floor: a catch-up pull must hold the ordinary metadata rows AND every call it is allowed to
+    // catch up on, each with at least one argument body.
     expect(OPENCODE_HISTORY_RESPONSE_MAX_BYTES).toBeGreaterThan(
       1024 * 1024 + OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS * TOOL_CATALOG_LIMITS.maxArgumentBytes,
     );
-    // And it must still hold several whole parts, so one large call cannot exhaust a pull.
+    // Floor: it must still hold several whole parts, so one large call cannot exhaust a pull.
     expect(OPENCODE_HISTORY_RESPONSE_MAX_BYTES).toBeGreaterThan(
       3 * OPENCODE_HISTORY_TOOL_PART_MAX_BYTES,
     );
-    // Every budget is derived from the catalog ceiling: a ceiling of zero would leave the metadata
-    // allowance alone, which is what makes these strict inequalities meaningful rather than trivia.
+    // Ceiling: no edit to any input of the formula may push one pull's buffer past this.
+    expect(OPENCODE_HISTORY_RESPONSE_MAX_BYTES).toBeLessThanOrEqual(
+      HISTORY_PULL_BUFFER_CEILING_BYTES,
+    );
+    // And the catch-up allowance stays a small, bounded number of calls: it multiplies the per-call
+    // room inside the pull budget above.
     expect(OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS).toBeGreaterThan(0);
+    expect(OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS).toBeLessThanOrEqual(16);
   });
 
   it("re-bounds tool arguments by the catalog ceilings and names the refusing gate body-free", () => {

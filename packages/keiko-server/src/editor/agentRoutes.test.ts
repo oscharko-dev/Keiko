@@ -4246,10 +4246,17 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
       expect(serverResolvedDocumentText(deps, fixture.root, "src/a.ts", "")).toBe("");
       expect(serverResolvedDocumentText(deps, fixture.root, "does-not-exist.ts", "")).toBe("");
 
-      // Hostile paths: an escape, an absolute path, and a traversal that lands back inside.
-      for (const hostile of ["../escape.ts", "/etc/passwd", "src/../../escape.ts"]) {
+      // Hostile paths: a traversal escape, an absolute path, and a deeper traversal that still lands
+      // outside. `src/../../escape.ts` is NOT a third case — it resolves byte-for-byte to
+      // `../escape.ts` (owner review, PR #3452) — so the third one leaves from a nested directory.
+      for (const hostile of ["../escape.ts", "/etc/passwd", "src/nested/../../../escape.ts"]) {
         expect(() => serverResolvedDocumentText(deps, fixture.root, hostile, undefined)).toThrow();
       }
+      // The accept half of the same rule: a traversal that NORMALIZES BACK INSIDE the worktree is
+      // read through the managed port like any contained path, never refused as an escape.
+      expect(serverResolvedDocumentText(deps, fixture.root, "src/../src/a.ts", undefined)).toBe(
+        "export const a = 1;\n",
+      );
 
       // Boundary: exactly at the ceiling reads; one byte over is refused.
       expect(

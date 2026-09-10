@@ -717,17 +717,58 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(shutdown).toMatchObject({
       level: "warn",
       category: "process",
-      extra: { runId: "run-1", reason: "server-shutdown" },
+      extra: { runId: "run-1", reason: "server-shutdown", outcome: "ended" },
     });
-    // Same correlation id as the run, and BEFORE the terminal line, so one timeline reads in order.
+    // Same correlation id as the run's terminal line, so one `--correlation-id <run>` timeline holds
+    // the ending and its cause. The cause is written AFTER the attempt on purpose: written before,
+    // it asserted an ending the orchestrator had not performed (owner review, PR #3452).
     const settledIndex = captured.records.findIndex(
       (candidate) => candidate.op === "coding-runtime.run.settled",
     );
-    expect(shutdown?.correlationId).toBe(
-      captured.records[settledIndex]?.correlationId ?? "missing-settled-line",
-    );
-    expect(captured.records.indexOf(shutdown as never)).toBeLessThan(settledIndex);
+    expect(settledIndex).toBeGreaterThanOrEqual(0);
+    expect(shutdown?.correlationId).toBe(captured.records[settledIndex]?.correlationId);
     expect(JSON.stringify(captured.records)).not.toContain(start.taskIntent);
+  });
+
+  // Owner review, PR #3452: the cause line used to be written BEFORE the attempt, so a shutdown that
+  // could not end the run left behind a cause for an ending that never happened — and the
+  // troubleshooting entry tells the operator to read that line as confirmation of the outcome. A run
+  // in `recovery-required` is exactly that case: `end()` refuses outright, with no transition and no
+  // terminal line.
+  it("reports a refused shutdown as refused instead of asserting an ending", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start(start);
+    // Drive the live run into recovery-required, the state `end()` declines to end.
+    f.eventHub.publish.mockImplementation(() => ({ ok: false }));
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "run-1-task-submitted",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "task-submitted",
+    });
+    expect(f.orchestrator.snapshot().state).toBe("recovery-required");
+    // Entering recovery-required already wrote its own settled line; the shutdown must not add one.
+    const settledBefore = captured.records.filter(
+      (candidate) => candidate.op === "coding-runtime.run.settled",
+    ).length;
+
+    const result = await f.orchestrator.shutdown();
+
+    expect(result.ok).toBe(false);
+    const shutdown = captured.records.find(
+      (candidate) => candidate.op === "coding-runtime.run.shutdown",
+    );
+    expect(shutdown).toMatchObject({
+      extra: { runId: "run-1", reason: "server-shutdown", outcome: "refused" },
+    });
+    // The shutdown ended nothing, so it wrote no new terminal line — and the cause line says so
+    // instead of asserting an ending that never happened.
+    expect(
+      captured.records.filter((candidate) => candidate.op === "coding-runtime.run.settled").length,
+    ).toBe(settledBefore);
+    expect(f.orchestrator.snapshot().state).toBe("recovery-required");
   });
 
   // An idle server shutting down has no run to name, and must not invent one.
@@ -740,6 +781,77 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(
       captured.records.some((candidate) => candidate.op === "coding-runtime.run.shutdown"),
     ).toBe(false);
+  });
+
+  // Run 10 of the Workbench engagement (2026-09-10): an issue-bound run whose verification was
+  // refused wrote files, stopped, and settled `succeeded` — with nothing verified, committed, pushed
+  // or delivered. "The model stopped emitting tool calls" is not delivery, and the operator saw
+  // green. An issue-bound run now needs durable delivery evidence to claim success.
+  it.each([
+    ["no delivery evidence at all", "none", "failed", "delivery-not-evidenced"],
+    ["a verified commit receipt", "verified-commit", "succeeded", undefined],
+    ["a draft delivery record", "draft-delivery", "succeeded", undefined],
+  ] as const)(
+    "settles an issue-bound run that reported success with %s",
+    async (_label, evidenceKind, expectedState, expectedFailureCode) => {
+      const captured = captureActivityLog();
+      const f = fixture(undefined, undefined, [], undefined, captured.activityLog, issueIntake());
+      let resolveCompletion: ((outcome: "succeeded") => void) | undefined;
+      const completion = new Promise<"succeeded">((resolve) => {
+        resolveCompletion = resolve;
+      });
+      f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: true, completion });
+      await f.orchestrator.start({ ...start, issueRef: ISSUE_REF });
+      const row = f.rows.get("run-1");
+      if (row === undefined) throw new Error("expected the started run row");
+      if (evidenceKind === "verified-commit") {
+        f.rows.set("run-1", { ...row, verifiedCommitResult: historicalVerifiedCommit(row) });
+      } else if (evidenceKind === "draft-delivery") {
+        f.rows.set("run-1", { ...row, draftDelivery: historicalDraft(row) });
+      }
+
+      resolveCompletion?.("succeeded");
+
+      await vi.waitFor(() => {
+        expect(f.orchestrator.getSnapshot("run-1")?.state).toBe(expectedState);
+      });
+      expect(f.orchestrator.getSnapshot("run-1")?.failureCode).toBe(expectedFailureCode);
+      const unevidenced = captured.records.find(
+        (candidate) => candidate.op === "coding-runtime.run.delivery-unevidenced",
+      );
+      if (expectedState === "failed") {
+        expect(unevidenced).toMatchObject({
+          level: "warn",
+          extra: {
+            runId: "run-1",
+            hasVerifiedCommit: false,
+            hasDraftDelivery: false,
+            reportedOutcome: "succeeded",
+          },
+        });
+      } else {
+        expect(unevidenced).toBeUndefined();
+      }
+    },
+  );
+
+  // An ad-hoc task legitimately ends with no commit: inferring delivery intent from free text would
+  // turn honest successes into false failures, so the rule binds the issue-bound flow only.
+  it("leaves a run with no issue binding to its reported success", async () => {
+    const f = fixture();
+    let resolveCompletion: ((outcome: "succeeded") => void) | undefined;
+    const completion = new Promise<"succeeded">((resolve) => {
+      resolveCompletion = resolve;
+    });
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: true, completion });
+    await f.orchestrator.start(start);
+
+    resolveCompletion?.("succeeded");
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    expect(f.orchestrator.getSnapshot("run-1")?.failureCode).toBeUndefined();
   });
 
   it("reaps the managed runtime and settles a completed task exactly once", async () => {

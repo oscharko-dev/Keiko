@@ -213,17 +213,21 @@ describe("sse.stream.closed terminal line", () => {
     expect(currentOpenSseStreamCount()).toBe(before);
   });
 
-  // A stream the producer had already ended before the shutdown began finished on its own terms.
-  it("keeps reason=completed for a stream that ended before the shutdown", async () => {
+  // A stream the producer had already ended finished on its own terms, even though its `close` event
+  // arrives after the shutdown began — which is the PRODUCTION order: dispose marks the shutdown
+  // first, then connections are torn down. Marking the shutdown after the close event (as this test
+  // first did) never entered the branch at all, so `!res.writableEnded` could have been deleted with
+  // the test still green (owner review, PR #3452).
+  it("keeps reason=completed for a stream that ended before the shutdown tore it down", async () => {
     const sink = captureServerLog();
     const { res } = mockResponse();
     const controller = new AbortController();
 
     writeOrDestroy(res, "event: a\ndata: {}\n\n", controller);
+    markServerShuttingDown();
     const closed = new Promise<void>((resolve) => res.once("close", resolve));
     res.end();
     await closed;
-    markServerShuttingDown();
 
     expect(sink.events[0]?.extra).toMatchObject({ reason: "completed" });
   });

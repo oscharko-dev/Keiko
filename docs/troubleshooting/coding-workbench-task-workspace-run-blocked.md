@@ -34,11 +34,17 @@ needed the process supervisor's own console, which a customer does not have.
 
 1. Look for `op: "server.runtime.shutdown"` with `state: "started"`. It carries the number of runs
    and SSE streams that were still live, and its correlation id joins the `state: "completed"` line
-   with the teardown's duration and whether the runtime stopped cleanly.
+   with the teardown's duration and `runtimeShutdown`: `ended` (the live run was ended), `refused`
+   (the orchestrator declined), `faulted` (the shutdown call itself failed) or `not-applicable` (there
+   was no coding runtime to stop). It reports the resolved outcome, never merely that the call
+   returned.
 2. On the run's own timeline (`keiko support analyze --correlation-id <runId>`), look for
-   `op: "coding-runtime.run.shutdown"` with `reason: "server-shutdown"` immediately before the
-   terminal `coding-runtime.run.settled`. Its presence means the shutdown ended the run; its absence
-   on a cancelled run means an operator or a takeover did.
+   `op: "coding-runtime.run.shutdown"` with `reason: "server-shutdown"`. It is written after the
+   attempt and reports what the attempt achieved: `outcome: "ended"` means the shutdown ended this
+   run and a `coding-runtime.run.settled` line accompanies it; `outcome: "refused"` with a
+   `failureCode` means the orchestrator declined to end it (a run already in `recovery-required`, for
+   one) and the run keeps the state it had. The line's absence on a cancelled run means an operator
+   or a takeover ended it, not a shutdown.
 3. Streams closed by that shutdown report `reason: "server-shutdown"` rather than
    `backpressure-killed` or `client-disconnected`, so a burst of stream closes is no longer
    mistakable for client trouble.

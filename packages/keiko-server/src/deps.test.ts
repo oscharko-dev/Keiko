@@ -610,7 +610,9 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       category: "process",
       extra: {
         state: "completed",
-        runtimeStopped: true,
+        // What the teardown achieved, not "the call did not throw": this composition has a control
+        // plane with no live run, so its shutdown ends cleanly (owner review, PR #3452).
+        runtimeShutdown: "ended",
         durationMs: expect.any(Number) as unknown,
       },
     });
