@@ -21,6 +21,7 @@ import {
   sha256Hex,
   sha256Base64,
   createPortableReleaseTrust,
+  KEIKO_PORTABLE_RELEASE_TRUSTED_KEYS,
   portableReleaseTrustKeyId,
   verifyPortableReleaseTrust,
   ERROR_CODES,
@@ -94,6 +95,10 @@ describe("keiko-security package surface", () => {
     expect(typeof createPortableReleaseTrust).toBe("function");
     expect(typeof portableReleaseTrustKeyId).toBe("function");
     expect(typeof verifyPortableReleaseTrust).toBe("function");
+    expect(KEIKO_PORTABLE_RELEASE_TRUSTED_KEYS).toHaveLength(1);
+    expect(
+      portableReleaseTrustKeyId(KEIKO_PORTABLE_RELEASE_TRUSTED_KEYS[0]?.publicKeyPem ?? ""),
+    ).toBe(KEIKO_PORTABLE_RELEASE_TRUSTED_KEYS[0]?.keyId);
   });
 
   it("ERROR_CODES.AUTHENTICATION is the canonical gateway code string", () => {

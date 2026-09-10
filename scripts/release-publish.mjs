@@ -23,6 +23,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { URL } from "node:url";
 
+import { createPortableReleaseTrust } from "@oscharko-dev/keiko-security/portable-release-trust";
+
 import {
   findPortableMetadataRedactionFailures,
   PORTABLE_TARGET_NAMES,
@@ -81,6 +83,7 @@ const valueArgFields = new Map([
 ]);
 const verifyAttempts = positiveIntegerEnv("KEIKO_RELEASE_VERIFY_ATTEMPTS", 13);
 const verifyDelayMs = nonNegativeIntegerEnv("KEIKO_RELEASE_VERIFY_DELAY_MS", 5000);
+const portableReleaseTrustLifetimeMs = 366 * 24 * 60 * 60 * 1000;
 
 function positiveIntegerEnv(name, fallback) {
   const raw = process.env[name];
@@ -1422,8 +1425,13 @@ function githubReleaseSnapshot(releaseInfo) {
   const result = runGh(["api", `repos/${releaseInfo.repo}/releases/tags/${releaseInfo.tag}`]);
   try {
     const release = JSON.parse(result.stdout);
-    if (isRecord(release) && Number.isSafeInteger(release.id) && Array.isArray(release.assets)) {
-      return { assets: release.assets, id: release.id };
+    if (
+      isRecord(release) &&
+      Number.isSafeInteger(release.id) &&
+      Array.isArray(release.assets) &&
+      canonicalReleaseInstant(release.created_at) !== undefined
+    ) {
+      return { assets: release.assets, createdAt: release.created_at, id: release.id };
     }
   } catch {
     // Fall through to the fail-closed message below.
@@ -1434,17 +1442,26 @@ function githubReleaseSnapshot(releaseInfo) {
 function bindPortableAssetsToRemoteRelease(assets, releaseSnapshot) {
   const remoteByName = new Map(releaseSnapshot.assets.map((asset) => [asset.name, asset]));
   return assets.map((asset) =>
-    bindPortableAssetToRemoteRelease(asset, releaseSnapshot.id, remoteByName),
+    bindPortableAssetToRemoteRelease(
+      asset,
+      releaseSnapshot.id,
+      releaseSnapshot.createdAt,
+      remoteByName,
+    ),
   );
 }
 
-function bindPortableAssetToRemoteRelease(asset, releaseId, remoteByName) {
+function bindPortableAssetToRemoteRelease(asset, releaseId, releaseCreatedAt, remoteByName) {
   const remote = remoteByName.get(asset.archiveAssetName);
   if (!isRecord(remote) || !Number.isSafeInteger(remote.id) || remote.id <= 0) {
     fail(`${asset.archiveAssetName} must have a remote GitHub asset id before evidence upload.`);
   }
   const setupBinding = remoteSetupBinding(asset, remoteByName);
-  const manifest = boundPortableManifest(asset.manifest, releaseId, remote.id, setupBinding);
+  const manifest = signedPortableManifest(
+    boundPortableManifest(asset.manifest, releaseId, remote.id, setupBinding),
+    releaseId,
+    releaseCreatedAt,
+  );
   const failures = validatePortablePublishedManifest(manifest, {
     assetId: remote.id,
     releaseId,
@@ -1454,6 +1471,32 @@ function bindPortableAssetToRemoteRelease(asset, releaseId, remoteByName) {
     fail(`portable manifest binding failed:\n  - ${failures.join("\n  - ")}`);
   }
   return { ...asset, manifest };
+}
+
+function canonicalReleaseInstant(value) {
+  if (typeof value !== "string") return undefined;
+  const instant = new Date(value);
+  return Number.isFinite(instant.valueOf()) ? instant.toISOString() : undefined;
+}
+
+function portableReleaseSigningKey() {
+  const value = process.env.KEIKO_PORTABLE_RELEASE_SIGNING_KEY;
+  if (typeof value !== "string" || value.length === 0) {
+    fail("KEIKO_PORTABLE_RELEASE_SIGNING_KEY is required for portable release publication.");
+  }
+  return value;
+}
+
+function signedPortableManifest(manifest, releaseId, releaseCreatedAt) {
+  const signedAt = canonicalReleaseInstant(releaseCreatedAt);
+  if (signedAt === undefined) fail("GitHub release creation time must be a canonical instant.");
+  const expiresAt = new Date(new Date(signedAt).valueOf() + portableReleaseTrustLifetimeMs);
+  return createPortableReleaseTrust(manifest, {
+    expiresAt: expiresAt.toISOString(),
+    metadataVersion: releaseId,
+    privateKeyPem: portableReleaseSigningKey(),
+    signedAt,
+  });
 }
 
 function remoteSetupBinding(asset, remoteByName) {

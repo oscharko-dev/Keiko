@@ -1,4 +1,8 @@
 import { createHash } from "node:crypto";
+import {
+  KEIKO_PORTABLE_RELEASE_TRUSTED_KEYS,
+  verifyPortableReleaseTrust,
+} from "@oscharko-dev/keiko-security/portable-release-trust";
 import { createWriteStream } from "node:fs";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -427,7 +431,7 @@ function targetChecksVerified(
   return keys.every((key) => checks?.[key] === true);
 }
 
-function securityVerified(
+function nativeSecurityVerified(
   manifest: Record<string, unknown>,
   target: UpdatePortableTarget,
 ): boolean {
@@ -445,7 +449,21 @@ function securityVerified(
   );
 }
 
-function updatePredicatesVerified(manifest: Record<string, unknown>): boolean {
+function releaseTrustVerified(
+  options: PortableUpdateStagerOptions,
+  manifest: Record<string, unknown>,
+): boolean {
+  return verifyPortableReleaseTrust(manifest, {
+    now: new Date(options.now?.() ?? Date.now()),
+    trustedKeys: options.releaseTrustedKeys ?? KEIKO_PORTABLE_RELEASE_TRUSTED_KEYS,
+  }).ok;
+}
+
+function updatePredicatesVerified(
+  manifest: Record<string, unknown>,
+  nativeVerified: boolean,
+  releaseVerified: boolean,
+): boolean {
   const update = recordAt(manifest, "updateEligibility");
   const predicates = recordAt(update, "requiredPredicates");
   return (
@@ -454,7 +472,8 @@ function updatePredicatesVerified(manifest: Record<string, unknown>): boolean {
     fieldEquals(update, "eligibleAfterSetupOnly", true) &&
     fieldEquals(predicates, "artifactShaVerified", true) &&
     fieldEquals(predicates, "manifestReleaseImpactBound", true) &&
-    fieldEquals(predicates, "platformSignatureLocallyVerified", true)
+    fieldEquals(predicates, "platformSignatureLocallyVerified", nativeVerified) &&
+    (nativeVerified || fieldEquals(predicates, "releaseTrustRequired", releaseVerified))
   );
 }
 
@@ -473,6 +492,7 @@ function reviewedBindingVerified(
   release: PortableRelease,
   archive: GitHubAsset,
   target: UpdatePortableTarget,
+  nativeVerified: boolean,
 ): boolean {
   const impact = recordAt(manifest, "releaseImpact");
   const binding = recordAt(impact, "reviewedBinding");
@@ -488,7 +508,7 @@ function reviewedBindingVerified(
     fieldEquals(binding, "platformTarget", target),
     fieldEquals(binding, "packageVersion", release.targetVersion),
     fieldEquals(binding, "archiveSha256", sha256),
-    fieldEquals(binding, "platformSignatureLocallyVerified", true),
+    fieldEquals(binding, "platformSignatureLocallyVerified", nativeVerified),
   ].every(Boolean);
 }
 
@@ -525,6 +545,7 @@ function artifactManifestVerified(
 }
 
 function manifestVerified(
+  options: PortableUpdateStagerOptions,
   manifest: Record<string, unknown>,
   release: PortableRelease,
   archive: GitHubAsset,
@@ -533,6 +554,8 @@ function manifestVerified(
   const product = recordAt(manifest, "product");
   const releaseRecord = recordAt(manifest, "release");
   const artifact = recordAt(manifest, "artifact");
+  const nativeVerified = nativeSecurityVerified(manifest, target);
+  const releaseVerified = releaseTrustVerified(options, manifest);
   return [
     portableManifestGenerationSchemaVerified(manifest, target),
     fieldEquals(product, "packageName", PACKAGE_NAME),
@@ -541,9 +564,9 @@ function manifestVerified(
     artifactManifestVerified(artifact, archive, target),
     manifestArchiveSha(manifest) !== undefined &&
       runtimeVerified(manifest, target) &&
-      securityVerified(manifest, target) &&
-      updatePredicatesVerified(manifest) &&
-      reviewedBindingVerified(manifest, release, archive, target),
+      (nativeVerified || releaseVerified) &&
+      updatePredicatesVerified(manifest, nativeVerified, releaseVerified) &&
+      reviewedBindingVerified(manifest, release, archive, target, nativeVerified),
   ].every(Boolean);
 }
 
@@ -570,6 +593,7 @@ interface CandidateTextEvidence {
 }
 
 function candidateManifestVerified(
+  options: PortableUpdateStagerOptions,
   manifestRecord: Record<string, unknown>,
   release: PortableRelease,
   archive: GitHubAsset,
@@ -579,7 +603,7 @@ function candidateManifestVerified(
   archiveSha256: string,
 ): boolean {
   return [
-    manifestVerified(manifestRecord, release, archive, target),
+    manifestVerified(options, manifestRecord, release, archive, target),
     recordAt(manifestRecord, "artifact")?.uncompressedSizeBytes === portable.uncompressedSizeBytes,
     archiveSha256 === portable.sha256,
     checksumBindsArchive(evidence.checksum.text, archiveSha256, archive.name),
@@ -622,6 +646,7 @@ async function fetchCandidateTextEvidence(
 }
 
 function verifiedCandidateSidecars(
+  options: PortableUpdateStagerOptions,
   input: PortableUpdateStageInput,
   release: PortableRelease,
   archive: GitHubAsset,
@@ -636,6 +661,7 @@ function verifiedCandidateSidecars(
     manifestRecord === undefined ||
     archiveSha256 === undefined ||
     !candidateManifestVerified(
+      options,
       manifestRecord,
       release,
       archive,
@@ -676,7 +702,7 @@ export async function resolvePortableStageAssets(
     size: portable.sizeBytes,
   });
   const evidence = await fetchCandidateTextEvidence(options, input, release, target);
-  const sidecars = verifiedCandidateSidecars(input, release, archive, evidence, target);
+  const sidecars = verifiedCandidateSidecars(options, input, release, archive, evidence, target);
   const manifestRecord = parseJsonRecord(evidence.manifest.text);
   if (manifestRecord === undefined) {
     throw new PortableUpdateStagingError(

@@ -1,4 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import { generateKeyPairSync } from "node:crypto";
+import {
+  createPortableReleaseTrust,
+  portableReleaseTrustKeyId,
+  type PortableReleaseTrustedKey,
+} from "@oscharko-dev/keiko-security/portable-release-trust";
 import type { IncomingMessage } from "node:http";
 import type {
   ReleaseImpactCatalog,
@@ -175,7 +181,7 @@ function baseCatalog(): ReleaseImpactCatalog {
   };
 }
 
-function depsWith(fetchImpl: typeof fetch): UiHandlerDeps {
+function depsWith(fetchImpl: typeof fetch, overrides: Partial<UiHandlerDeps> = {}): UiHandlerDeps {
   return {
     config: undefined,
     configPresent: false,
@@ -186,6 +192,7 @@ function depsWith(fetchImpl: typeof fetch): UiHandlerDeps {
     modelPortFactory: () => undefined,
     store: createInMemoryUiStore(),
     gatewayReadinessFetch: fetchImpl,
+    ...overrides,
   };
 }
 
@@ -436,6 +443,46 @@ function portableManifest(
   };
 }
 
+function releaseTrustedManifest(target: UpdatePortableTarget): {
+  readonly manifest: Record<string, unknown>;
+  readonly trustedKey: PortableReleaseTrustedKey;
+} {
+  const unsigned = portableManifest(target);
+  const security = unsigned.security as Record<string, unknown>;
+  security.verificationPolicy = "release";
+  security.verificationStatus = "platform-signature-optional";
+  security.verificationReasonCodes = ["platform-signature-optional"];
+  security.signatureVerified = false;
+  security.notarizationVerified = false;
+  security.verificationChecks =
+    target === "windows-x64"
+      ? { publisherChainVerified: false, timestampVerified: false }
+      : {
+          developerIdVerified: false,
+          notarizationVerified: false,
+          stapleVerified: false,
+          assessmentVerified: false,
+        };
+  const binding = (unsigned.releaseImpact as Record<string, Record<string, unknown>>)
+    .reviewedBinding;
+  binding.platformSignatureLocallyVerified = false;
+  const predicates = (unsigned.updateEligibility as Record<string, Record<string, unknown>>)
+    .requiredPredicates;
+  predicates.platformSignatureLocallyVerified = false;
+  predicates.releaseTrustRequired = true;
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
+  const publicKeyPem = publicKey.export({ format: "pem", type: "spki" });
+  return {
+    manifest: createPortableReleaseTrust(unsigned, {
+      expiresAt: "2027-03-09T08:00:00.000Z",
+      metadataVersion: 987_654_321,
+      privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }),
+      signedAt: "2026-09-10T08:00:00.000Z",
+    }),
+    trustedKey: { keyId: portableReleaseTrustKeyId(publicKeyPem), publicKeyPem },
+  };
+}
+
 const ctx: RouteContext = {
   correlationId: undefined,
   req: {} as IncomingMessage,
@@ -669,6 +716,56 @@ describe("update preflight service", () => {
     deps.store.close();
   });
 
+  it("allows one-click updates with Keiko release trust and no platform signature", async () => {
+    const target: UpdatePortableTarget = "macos-arm64";
+    const trusted = releaseTrustedManifest(target);
+    const events: {
+      readonly op: string;
+      readonly extra?: Readonly<Record<string, unknown>>;
+    }[] = [];
+    const fetchImpl = vi.fn<typeof fetch>((input) => {
+      const url = requestUrl(input);
+      if (url.endsWith("/releases/latest")) {
+        return Promise.resolve(jsonResponse(portableRelease(target)));
+      }
+      if (url.endsWith(`${target}-portable-manifest.json`)) {
+        return Promise.resolve(textResponse(JSON.stringify(trusted.manifest)));
+      }
+      if (url.endsWith(`${target}-SHA256SUMS.txt`)) {
+        return Promise.resolve(
+          textResponse(`${ARCHIVE_SHA}  ${UPDATE_PORTABLE_TARGET_ASSET_NAMES[target]}\n`),
+        );
+      }
+      return Promise.resolve(new Response("not found", { status: 404 }));
+    });
+    const deps = depsWith(fetchImpl, {
+      activityLog: { write: (event): void => events.push(event) },
+      updatePortableReleaseNow: () => Date.parse("2026-09-11T08:00:00.000Z"),
+      updatePortableReleaseTrustedKeys: [trusted.trustedKey],
+    });
+
+    const report = await runUpdatePreflight(deps, {
+      currentVersion: "0.2.10",
+      bundledCatalog: baseCatalog(),
+      installMode: () => portableMode(target),
+    });
+
+    expect(report.oneClickEligible).toBe(true);
+    expect(report.portableAsset?.status).toBe("eligible");
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "update.release-trust.verify",
+        extra: {
+          keyId: trusted.trustedKey.keyId,
+          metadataVersion: 987_654_321,
+          status: "succeeded",
+          target,
+        },
+      }),
+    );
+    deps.store.close();
+  });
+
   it("reports redacted sidecar summaries for sidecar-bearing portable assets", async () => {
     const target: UpdatePortableTarget = "macos-arm64";
     const sidecar = sidecarRuntime(target);
@@ -874,7 +971,8 @@ describe("update preflight service", () => {
     expect(report.blockers).toContainEqual(
       expect.objectContaining({
         code: "portable-signing-unverified",
-        message: "The portable update is missing verified signing or notarization evidence.",
+        message:
+          "The portable update has neither valid Keiko release trust nor optional native signing evidence.",
       }),
     );
     deps.store.close();

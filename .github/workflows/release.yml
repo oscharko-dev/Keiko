@@ -220,6 +220,10 @@ jobs:
           KEIKO_PORTABLE_ASSETS_SOURCE_SHA: ${{ github.sha }}
           KEIKO_PORTABLE_ASSETS_TAG: ${{ github.ref_name }}
           KEIKO_PORTABLE_ASSETS_WORKFLOW_PATH: .github/workflows/portable-assets.yml
+          # Keiko-owned, platform-neutral Ed25519 release trust. This replaces Apple/Microsoft
+          # platform signing as the updater's mandatory authenticity boundary; the protected
+          # npm-publish environment keeps the private key outside source and build artifacts.
+          KEIKO_PORTABLE_RELEASE_SIGNING_KEY: ${{ secrets.KEIKO_PORTABLE_RELEASE_SIGNING_KEY }}
           NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           KEIKO_RELEASE_OWNER_GITHUB_LOGINS: ${{ vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS }}
         run: npm run release:publish -- --tag "$NPM_DIST_TAG"

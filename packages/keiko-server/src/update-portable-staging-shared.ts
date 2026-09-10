@@ -9,6 +9,7 @@ import {
   type UpdateSessionFailureReason,
 } from "@oscharko-dev/keiko-contracts";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import type { PortableReleaseTrustedKey } from "@oscharko-dev/keiko-security/portable-release-trust";
 import { isRecord } from "./update-preflight-registry.js";
 import type { UpdateRuntimeFacts } from "./update-install-mode.js";
 import type { UpdateLocalStateManager } from "./update-local-state.js";
@@ -90,6 +91,8 @@ export interface PortableUpdateStagerOptions {
   readonly platformVerifier?: PortablePlatformVerifier | undefined;
   readonly securityLogSink?: SecurityLogSink | undefined;
   readonly availableDiskBytes?: ((path: string) => number) | undefined;
+  readonly releaseTrustedKeys?: readonly PortableReleaseTrustedKey[] | undefined;
+  readonly now?: (() => number) | undefined;
 }
 
 export class PortableUpdateStagingError extends Error {

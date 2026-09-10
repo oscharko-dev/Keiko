@@ -12,6 +12,11 @@ const KEY_ID = /^[a-f0-9]{64}$/u;
 const BASE64 = /^[A-Za-z0-9+/]{86}==$/u;
 const ROLE = "keiko-portable-release";
 const ALGORITHM = "ed25519";
+const PRODUCTION_KEY_ID = "63b20c885c396471b6e0141a7b971c78b37b907066485d8107c3b572e22ef814";
+const PRODUCTION_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+MCowBQYDK2VwAyEAIS2FY9YmfR7N/X6xxbt1HnPOGwPdHfF9arOxcVeD0os=
+-----END PUBLIC KEY-----
+`;
 const TRUST_KEYS = [
   "algorithm",
   "expiresAt",
@@ -27,6 +32,14 @@ export interface PortableReleaseTrustedKey {
   readonly keyId: string;
   readonly publicKeyPem: string;
 }
+
+/**
+ * Trust roots shipped with Keiko. Add a successor key in a normal reviewed release before using
+ * it to publish updates; retain an old key until every supported source version trusts its
+ * successor. Private signing material never belongs in this repository or in a portable bundle.
+ */
+export const KEIKO_PORTABLE_RELEASE_TRUSTED_KEYS: readonly PortableReleaseTrustedKey[] =
+  Object.freeze([Object.freeze({ keyId: PRODUCTION_KEY_ID, publicKeyPem: PRODUCTION_PUBLIC_KEY })]);
 
 export interface CreatePortableReleaseTrustOptions {
   readonly expiresAt: string;

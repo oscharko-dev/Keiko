@@ -38,7 +38,7 @@
 //      npm 401, because npm Trusted Publishing does not authorize `npm dist-tag add`.
 
 import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -108,6 +108,7 @@ const HEAD_SHA = "0123456789abcdef0123456789abcdef01234567";
 const DIGEST_B = "b".repeat(64);
 const DIGEST_C = "c".repeat(64);
 const NODE_VERSION = "24.0.0";
+const RELEASE_CREATED_AT = "2026-09-10T08:00:00.000Z";
 
 function digestFor(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -644,7 +645,7 @@ function ghStubBody() {
     '  if (argv[1] && argv[1].includes("/releases/tags/")) {',
     // The release-by-tag endpoint always reports both flags; the prepublished gate requires the
     // published stable shape, so the double states it the way the real API does.
-    "    writeFileSync(1, JSON.stringify({ id: 987654321, draft: state().releaseDraft === true, prerelease: state().releasePrerelease === true, assets: state().uploadedAssets || [] }));",
+    `    writeFileSync(1, JSON.stringify({ id: 987654321, created_at: ${JSON.stringify(RELEASE_CREATED_AT)}, draft: state().releaseDraft === true, prerelease: state().releasePrerelease === true, assets: state().uploadedAssets || [] }));`,
     "    process.exit(0);",
     "  }",
     '  process.stdout.write(JSON.stringify({ state: "APPROVED", user: { login: "release-owner" } }));',
@@ -1036,6 +1037,7 @@ function runPublish({
   qualificationEnv = {},
   extraArgs = [],
 }) {
+  const { privateKey } = generateKeyPairSync("ed25519");
   const binDir = mkdtempSync(join(tmpdir(), "keiko-release-publish-stub-"));
   const portableDir = mkdtempSync(join(tmpdir(), "keiko-portable-assets-fixture-"));
   const logFile = join(binDir, "calls.log");
@@ -1080,6 +1082,7 @@ function runPublish({
     NODE_AUTH_TOKEN: "stub-token-never-sent",
     KEIKO_RELEASE_VERIFY_ATTEMPTS: "3",
     KEIKO_RELEASE_VERIFY_DELAY_MS: "0",
+    KEIKO_PORTABLE_RELEASE_SIGNING_KEY: privateKey.export({ format: "pem", type: "pkcs8" }),
     ...qualificationEnv,
   };
   for (const [key, value] of Object.entries(qualificationEnv)) {

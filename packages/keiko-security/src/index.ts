@@ -32,6 +32,7 @@ export type {
 } from "./portable-release-trust.js";
 export {
   createPortableReleaseTrust,
+  KEIKO_PORTABLE_RELEASE_TRUSTED_KEYS,
   portableReleaseTrustKeyId,
   verifyPortableReleaseTrust,
 } from "./portable-release-trust.js";

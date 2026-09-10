@@ -56,6 +56,7 @@ import {
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
 import { keikoApiKeySecretValues, redact } from "@oscharko-dev/keiko-security";
+import type { PortableReleaseTrustedKey } from "@oscharko-dev/keiko-security/portable-release-trust";
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchModelSource,
@@ -880,6 +881,9 @@ export interface UiHandlerDeps {
   // Test seam for the non-mutating gateway readiness probes. Production uses globalThis.fetch via
   // the existing gateway HTTP transport; route tests inject a deterministic fetch implementation.
   readonly gatewayReadinessFetch?: typeof fetch | undefined;
+  /** Test seams for the platform-neutral portable-release trust root and expiry clock. */
+  readonly updatePortableReleaseTrustedKeys?: readonly PortableReleaseTrustedKey[] | undefined;
+  readonly updatePortableReleaseNow?: (() => number) | undefined;
   // Test seam for Figma PAT setup. Production performs a bounded Figma /v1/me request.
   readonly figmaCredentialTester?:
     ((accessToken: string, egress?: GatewayEgressConfig) => Promise<void>) | undefined;
