@@ -4,7 +4,7 @@
 
 Accepted (Issue #1946, 2026-07-05); amended for the Windows setup companion (Issue #2966,
 2026-08-04); construction surface replaced by a Keiko-owned native bootstrap (Issue #2992,
-2026-08-29).
+2026-08-29); amended with the production-qualified Linux x64 archive (Issue #3451, 2026-09-10).
 
 ## Context
 
@@ -41,7 +41,7 @@ Out of scope:
 - MSI, MSIX, PKG, DMG, MDM, Jamf, Intune, SCCM, Munki, or organization-managed rollout,
 - machine-wide self-update outside the canonical macOS app, or mutation of IT-managed installs,
 - rollback, downgrade, beta, canary, prerelease, private-channel, or silent background updates,
-- Linux or Windows arm64 portable assets.
+- Linux arm64 or Windows arm64 portable assets.
 
 ## Decision
 
@@ -49,8 +49,9 @@ Out of scope:
 
 Keiko will ship the portable-managed product as governed GitHub Release Assets.
 
-Each stable release will expose exactly three platform-target archive assets:
+Each production stable release will expose exactly four platform-target archive assets:
 
+- `linux-x64`
 - `windows-x64`
 - `macos-arm64`
 - `macos-x64`
@@ -64,13 +65,14 @@ Windows ZIP remains the manual and troubleshooting fallback. The setup companion
 reviewed `windows-x64` archive and delegates installation and launch to the same portable lifecycle.
 It does not create another platform target, payload authority, or update channel.
 
-The three platform targets are release-blocking as a set, and the Windows setup companion is
+The four platform targets are release-blocking as a set, and the Windows setup companion is
 release-blocking for `windows-x64`. A stable release is not portable-complete when a required
 archive or companion is missing, unnotarized where required, or unverified.
 
 **Where completeness is decided (amended 2026-08-09, issue #2802).** Release-blocking is answered
 against the published release, not against a publish input. Before npm learns the `latest`
-dist-tag, `scripts/release-publish.mjs` verifies that the GitHub Release actually carries all four
+dist-tag, `scripts/release-publish.mjs` verifies that the production GitHub Release actually carries
+all five
 downloads and fails closed otherwise. The earlier formulation demanded a qualified asset *manifest*
 as an input to the publish job, which is strictly weaker — a well-formed manifest proves nothing
 about whether the upload landed — and it was unsatisfiable for the release the owner had scoped,
@@ -280,17 +282,17 @@ Microsoft-controlled signal and is not an installability acceptance criterion.
 
 ### D8 — Release archives and SBOMs carry independently verifiable GitHub Artifact Attestations
 
-Each of the three portable release archives and its per-target SBOM additionally carries a GitHub
+Each of the four portable release archives and its per-target SBOM additionally carries a GitHub
 Artifact Attestation: a build-provenance attestation over the archive, an SBOM attestation binding
 the archive to its `evidence/sbom.cdx.json` as that attestation's predicate, and a separate
 build-provenance attestation over the SBOM document itself so the SBOM file has its own attestation
 subject and is independently verifiable (`gh attestation verify <sbom-file>`) without requiring the
-archive. All three are generated with GitHub's keyless, Sigstore-backed `actions/attest` action
+archive. All four are generated with GitHub's keyless, Sigstore-backed `actions/attest` action
 using the same environment-scoped `id-token: write` OIDC mechanism already established for Windows
 production signing in D7 — no new secret material or credential class is introduced.
 
 Attestation generation runs once, in the `assemble` job of `.github/workflows/portable-assets.yml`,
-strictly after `validatePortableReleaseSet` has proven the reviewed bundle contains exactly three
+strictly after `validatePortableReleaseSet` has proven the reviewed bundle contains exactly four
 mutually consistent, qualification-bound targets. A missing, mismatched, or non-production target
 fails that gate before any attestation step runs; there is no path that attests an incomplete or
 unverified release set. The `ci` workflow's root, per-workspace, and UI CycloneDX SBOMs receive the
@@ -300,7 +302,7 @@ not accumulate attestations for commits that never ship. A `workflow_dispatch` r
 `unverified-staging` by default and, when the run explicitly requests the ADR-0163 D9 evaluation
 build, `evaluation-unqualified` instead. Neither is a production lane, neither is attested, and
 neither can reach the `assemble` job — which runs only from a stable-tag push and still demands
-three mutually consistent `verified-production` targets.
+four mutually consistent `verified-production` targets.
 
 This is additive evidence, not a replacement for the existing portable manifest, the content-free
 `evidence/signing-verification.json` projection, or the `provenance.intoto.jsonl` statement. Those
@@ -466,12 +468,19 @@ Security review for implementation under this ADR must cover:
 - [Local runtime state contract](../local-runtime-state-contract.md)
 - Issue #1946
 
+## Version
+
+| Version | Date       | Change |
+| ------- | ---------- | ------ |
+| 1.0     | 2026-07-05 | Accepted the portable managed-install and release-asset authority. |
+| 1.1     | 2026-09-10 | Added `linux-x64` as the fourth release-blocking archive for Issue #3451 so the production packaging model matches the qualified runtime target set. |
+
 ## Amendment history
 
 - **2026-07-10 — Issue #2199:** Added D7 and its security, alternatives, and operating-contract
   consequences to settle the production Windows and macOS signing trust boundary for Epic #2198.
 - **2026-07-11 — Issue #2308:** Added D8 to record GitHub Artifact Attestations (build provenance
-  and SBOM) for the three portable release archives and the `ci` workflow's SBOMs.
+  and SBOM) for the then-current three portable release archives and the `ci` workflow's SBOMs.
 - **2026-07-27 — ADR-0163:** Accepted `/Applications/Keiko.app` as the sole system-managed root
   exception for release-qualified macOS bundles. Administrator, System Extension, and Full Disk
   Access approval dialogs are part of the one-time first start; MDM may preinstall or preapprove
@@ -496,3 +505,8 @@ Security review for implementation under this ADR must cover:
   unchanged: the companion still embeds the exact reviewed `windows-x64` archive and delegates
   installation and launch to the same portable lifecycle; only its construction and launch surface
   changed.
+- **2026-09-10 — Issue #3451:** Added `linux-x64` as the fourth release-blocking production archive
+  and fifth production download after the Windows setup companion. Linux promotion requires the
+  protected-workflow OIDC receipt, offline Sigstore verification, exact component/source binding,
+  and real namespace-gateway qualification. Historical reviewed three-target releases remain
+  readable by the updater but do not satisfy a new production release set.

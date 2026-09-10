@@ -527,15 +527,19 @@ describe("buildRedactor", () => {
 describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
   it("keeps snapshot content scoped to one live server composition and discards it on disposal", async () => {
     const workspace = snapshotWorkspace();
+    const stateA = tmp("snapshot-state-a-");
+    const stateB = tmp("snapshot-state-b-");
     const depsA = buildUiHandlerDeps({
       configPath: undefined,
-      evidenceDir: tmp("snapshot-evidence-a-"),
+      evidenceDir: join(stateA, "evidence"),
       env: {},
+      uiDbPath: join(stateA, "keiko-ui.db"),
     });
     const depsB = buildUiHandlerDeps({
       configPath: undefined,
-      evidenceDir: tmp("snapshot-evidence-b-"),
+      evidenceDir: join(stateB, "evidence"),
       env: {},
+      uiDbPath: join(stateB, "keiko-ui.db"),
     });
     const a = depsA.gitChangeSnapshotService;
     const b = depsB.gitChangeSnapshotService;

@@ -233,7 +233,7 @@ async function launchManaged(
   deps: Pick<PortableRuntimeDeps, "activateMacosRuntimeFn" | "lifecycleFn">,
   securityLogSink?: SecurityLogSink,
 ): Promise<number> {
-  if (target !== "windows-x64") {
+  if (target === "macos-arm64" || target === "macos-x64") {
     const activation = await deps.activateMacosRuntimeFn(layout, target);
     if (activation === "unavailable") {
       io.err("keiko portable launch: macOS runtime activation is incomplete\n");

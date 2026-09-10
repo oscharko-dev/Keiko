@@ -59,11 +59,12 @@ const supported = new Map([
       ],
     ],
   ],
+  ["linux-x64", ["cc", ["-std=c11", "-Wall", "-Wextra", "-Werror", "-O2", "-D_GNU_SOURCE"]]],
   ["windows-x64", ["cl", windowsCompilerFlags()]],
 ]);
 
 const COMPILER_ENV_KEYS = {
-  macos: ["PATH"],
+  posix: ["PATH"],
   windows: ["PATH", "INCLUDE", "LIB", "LIBPATH"],
 };
 
@@ -84,7 +85,8 @@ export function buildCompilerEnvironment(
   if (target === "windows-x64") {
     keys = COMPILER_ENV_KEYS.windows;
     source = windowsEnvironmentSource(environment, resolveMsvcEnvImpl);
-  } else if (target === "macos-arm64" || target === "macos-x64") keys = COMPILER_ENV_KEYS.macos;
+  } else if (target === "macos-arm64" || target === "macos-x64" || target === "linux-x64")
+    keys = COMPILER_ENV_KEYS.posix;
   else throw new Error(`unsupported compiler environment target: ${target}`);
   const filtered = {};
   for (const key of keys) {

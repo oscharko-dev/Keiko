@@ -37,11 +37,13 @@ export interface PortableSecureWorkspaceReadBindingInput {
 }
 
 interface TargetContract {
-  readonly artifactTarget: "win32-x64" | "darwin-arm64" | "darwin-x64";
-  readonly manifestTarget: "windows-x64" | "macos-arm64" | "macos-x64";
+  readonly artifactTarget: "linux-x64" | "win32-x64" | "darwin-arm64" | "darwin-x64";
+  readonly manifestTarget: "linux-x64" | "windows-x64" | "macos-arm64" | "macos-x64";
   readonly architecture: "x64" | "arm64";
   readonly executablePath: string;
+  readonly nodePlatform: "linux" | "win32" | "darwin";
   readonly notarized: boolean;
+  readonly signatureKind: "github-oidc-attested" | "authenticode" | "developer-id-notarized";
 }
 
 export interface PortableSecureWorkspaceReadMetadata {
@@ -135,13 +137,25 @@ function parsePortableBinding(
 
 function contractFor(platform: SecureWorkspaceReadPlatform): TargetContract | undefined {
   const artifactTarget = secureWorkspaceReadTargetFor(platform);
+  if (artifactTarget === "linux-x64")
+    return {
+      artifactTarget,
+      manifestTarget: "linux-x64",
+      architecture: "x64",
+      executablePath: "runtime/native/keiko-secure-workspace-read",
+      nodePlatform: "linux",
+      notarized: false,
+      signatureKind: "github-oidc-attested",
+    };
   if (artifactTarget === "win32-x64")
     return {
       artifactTarget,
       manifestTarget: "windows-x64",
       architecture: "x64",
       executablePath: "runtime/native/keiko-secure-workspace-read.exe",
+      nodePlatform: "win32",
       notarized: false,
+      signatureKind: "authenticode",
     };
   if (artifactTarget === "darwin-arm64" || artifactTarget === "darwin-x64")
     return {
@@ -149,7 +163,9 @@ function contractFor(platform: SecureWorkspaceReadPlatform): TargetContract | un
       manifestTarget: artifactTarget === "darwin-arm64" ? "macos-arm64" : "macos-x64",
       architecture: artifactTarget === "darwin-arm64" ? "arm64" : "x64",
       executablePath: "runtime/native/keiko-secure-workspace-read",
+      nodePlatform: "darwin",
       notarized: true,
+      signatureKind: "developer-id-notarized",
     };
   return undefined;
 }
@@ -193,7 +209,7 @@ function validSupervisorIdentity(
   const source = record(helper.source);
   return (
     supervisorIdentityMatches(helper, target) &&
-    supervisorProtocolMatches(protocol) &&
+    supervisorProtocolMatches(protocol, target) &&
     supervisorSourceMatches(source, target)
   );
 }
@@ -202,16 +218,34 @@ function supervisorIdentityMatches(
   helper: Record<string, unknown>,
   target: TargetContract,
 ): boolean {
-  const suffix = target.artifactTarget === "win32-x64" ? ".exe" : "";
+  const executablePath = supervisorExecutablePath(target);
   return (
     helper.kind === "runtime-process-supervisor" &&
     helper.platformTarget === target.manifestTarget &&
     helper.architecture === target.architecture &&
-    helper.executablePath === `runtime/native/keiko-runtime-supervisor${suffix}`
+    helper.executablePath === executablePath
   );
 }
 
-function supervisorProtocolMatches(protocol: Record<string, unknown> | undefined): boolean {
+function supervisorExecutablePath(target: TargetContract): string {
+  if (target.artifactTarget === "linux-x64") {
+    return "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
+  }
+  const suffix = target.artifactTarget === "win32-x64" ? ".exe" : "";
+  return `runtime/native/keiko-runtime-supervisor${suffix}`;
+}
+
+function supervisorProtocolMatches(
+  protocol: Record<string, unknown> | undefined,
+  target: TargetContract,
+): boolean {
+  if (target.artifactTarget === "linux-x64") {
+    return (
+      protocol?.schemaVersion === 1 &&
+      protocol.requestMagic === "none" &&
+      protocol.responseMagic === "none"
+    );
+  }
   return (
     protocol?.schemaVersion === 1 &&
     protocol.requestMagic === "KRP1" &&
@@ -223,6 +257,9 @@ function supervisorSourceMatches(
   source: Record<string, unknown> | undefined,
   target: TargetContract,
 ): boolean {
+  if (target.artifactTarget === "linux-x64") {
+    return source?.path === "packages/keiko-sandbox/src";
+  }
   const platform = target.artifactTarget === "win32-x64" ? "windows" : "macos";
   return source?.path === `native/runtime-supervisor/${platform}`;
 }
@@ -297,7 +334,7 @@ function validSigning(
       "notarizationRequired",
       "notarizationVerified",
     ]) ||
-    value.signatureKind !== (target.notarized ? "developer-id-notarized" : "authenticode") ||
+    value.signatureKind !== target.signatureKind ||
     value.notarizationRequired !== target.notarized
   ) {
     return false;
@@ -340,7 +377,7 @@ function matchingManifestTarget(
 ): boolean {
   return [
     artifact?.platformTarget === target.manifestTarget,
-    runtime?.nodePlatform === (target.notarized ? "darwin" : "win32"),
+    runtime?.nodePlatform === target.nodePlatform,
     runtime?.nodeArchitecture === target.architecture,
   ].every(Boolean);
 }
@@ -367,7 +404,7 @@ function validSecurity(
 ): boolean {
   if (value === undefined) return false;
   if (
-    value.signatureKind !== (target.notarized ? "developer-id-notarized" : "authenticode") ||
+    value.signatureKind !== target.signatureKind ||
     value.notarizationRequired !== target.notarized ||
     !validVerificationChecksShape(record(value.verificationChecks), target)
   ) {
@@ -435,6 +472,7 @@ function platformChecksAll(
 }
 
 function verificationCheckKeys(target: TargetContract): readonly string[] {
+  if (target.artifactTarget === "linux-x64") return ["provenanceVerified"];
   return target.notarized
     ? ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"]
     : ["publisherChainVerified", "timestampVerified"];

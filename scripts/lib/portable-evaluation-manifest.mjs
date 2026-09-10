@@ -19,6 +19,11 @@
  */
 
 export const PORTABLE_EVALUATION_MANIFEST_ASSET_NAME = "keiko-portable-evaluation-manifest.json";
+export const PORTABLE_EVALUATION_TARGET_NAMES = Object.freeze([
+  "windows-x64",
+  "macos-arm64",
+  "macos-x64",
+]);
 
 /**
  * The only verification policy this artifact may declare; the signed lane never uses it. Module

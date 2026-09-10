@@ -4,6 +4,10 @@
   "node": {
     "version": "24.18.0",
     "archives": {
+      "linux-x64": {
+        "url": "https://nodejs.org/dist/v24.18.0/node-v24.18.0-linux-x64.tar.gz",
+        "sha256": "783130984963db7ba9cbd01089eaf2c2efb055c7c1693c943174b967b3050cb8"
+      },
       "windows-x64": {
         "url": "https://nodejs.org/dist/v24.18.0/node-v24.18.0-win-x64.zip",
         "sha256": "0ae68406b42d7725661da979b1403ec9926da205c6770827f33aac9d8f26e821"
@@ -61,6 +65,14 @@
       },
       "executableTreeAlgorithm": "keiko-directory-tree-sha256-v1",
       "archives": {
+        "linux-x64": {
+          "url": "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode-linux-x64.tar.gz",
+          "sha256": "3957e8b9b80867633daf82cba43f17980c8daf71d4d265a40313fb21d5d58fac",
+          "sizeBytes": 69420615,
+          "executableName": "opencode",
+          "executableTreeSha256": "d098e61e7376f77208d4d4f52a502a70b68ab47be73ca406d81789b17385c31e",
+          "sbomSha256": "f358378c5e1b60b0691826e31de25a06c39328d03b6e3ace1eec2ec5b9c8e897"
+        },
         "windows-x64": {
           "url": "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode-windows-x64.zip",
           "sha256": "0a7fd7730a8efb00c69bce86fabcc0c24668371d821e99078a90dc78b71b4b85",

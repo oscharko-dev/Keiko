@@ -8,7 +8,8 @@ name: Portable assets
 #
 # Publishing remains a human decision: this workflow never uploads release
 # assets or publishes to npm. Manual runs remain unsigned staging; stable-tag
-# Windows and macOS artifacts are signed and verified in protected native jobs.
+# Windows and macOS artifacts are platform-signed, while Linux qualification is GitHub OIDC
+# attested; all production targets are verified in protected native jobs.
 
 on:
   push:
@@ -458,6 +459,106 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  stage-linux-production:
+    name: Stage, qualify, and attest portable asset (linux-x64)
+    needs: production-signing-preflight
+    if: ${{ needs.production-signing-preflight.result == 'success' }}
+    runs-on: ubuntu-latest
+    environment: portable-release-signing
+    permissions:
+      contents: read
+      id-token: write
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Run executable secure-read adversarial harness
+        run: node native/secure-workspace-read/test-protocol.mjs
+      - name: Run Linux portable launcher native quality
+        run: ./scripts/check-linux-portable-launcher.sh
+      - name: Validate approved runtime inputs
+        run: npm run check:portable-approvals
+      - name: Provision the pinned USearch native addon
+        run: npm run provision:usearch
+      - name: Prepare approved sidecar payloads
+        run: node scripts/prepare-approved-sidecar-payloads.mjs --target linux-x64
+      - name: Stage portable runtime from approved inputs
+        run: node scripts/run-portable-assets-stage.mjs --target linux-x64
+      - name: Functionally smoke the unsigned USearch addon
+        run: node scripts/smoke-portable-usearch.mjs .portable-runtime/staging/linux-x64 linux-x64
+      - name: Smoke test the unsigned staged artifact
+        run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target linux-x64
+      - name: Functionally smoke the unsigned secure-read helper
+        run: npm run smoke:portable-secure-read -- .portable-runtime/staging/linux-x64 linux-x64 --load
+      - name: Bind the reviewed Linux production payload
+        run: node scripts/linux-portable-signing.mjs prepare --stage-root .portable-runtime/staging/linux-x64
+      - name: Qualify the exact Linux runtime and namespace gateway
+        run: node scripts/qualify-linux-runtime-release.mjs --stage-root .portable-runtime/staging/linux-x64 --source-commit-sha "$GITHUB_SHA" --test-report "$RUNNER_TEMP/linux-runtime-tests.json"
+      - name: Attest the exact qualification receipt with GitHub OIDC
+        run: node scripts/sign-linux-runtime-qualification.mjs "$GITHUB_WORKSPACE/.portable-runtime/staging/linux-x64/payload/Keiko/.portable/runtime-qualification.json" "$GITHUB_WORKSPACE/.portable-runtime/staging/linux-x64/payload/Keiko/.portable/runtime-qualification.sigstore.json"
+      - name: Seal and verify the production Linux archive
+        run: node scripts/linux-portable-signing.mjs finalize --stage-root .portable-runtime/staging/linux-x64 --source-commit-sha "$GITHUB_SHA"
+      - name: Smoke test the verified production artifact
+        run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target linux-x64
+      - name: Functionally requalify the secure-read helper
+        run: npm run smoke:portable-secure-read -- .portable-runtime/staging/linux-x64 linux-x64 --load
+      - name: Run secure-read executable consistency harness
+        run: node native/secure-workspace-read/test-protocol.mjs --binary .portable-runtime/staging/linux-x64/payload/Keiko/runtime/native/keiko-secure-workspace-read
+      - name: Upload verified Linux target artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: portable-stage-linux-x64
+          path: .portable-runtime/staging/linux-x64
+          if-no-files-found: error
+          retention-days: 30
+
+  qualify-linux-production:
+    name: Fresh native qualification (linux-x64)
+    needs: stage-linux-production
+    if: ${{ needs.stage-linux-production.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Download immutable verified Linux artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: portable-stage-linux-x64
+          path: .portable-runtime/staging/linux-x64
+      - name: Re-verify the offline Sigstore bundle, archive, and production discovery
+        run: node scripts/linux-portable-signing.mjs verify --stage-root .portable-runtime/staging/linux-x64 --source-commit-sha "$GITHUB_SHA"
+      - name: Re-run real namespace-gateway qualification against the sealed receipt
+        run: node scripts/qualify-linux-runtime-release.mjs --stage-root .portable-runtime/staging/linux-x64 --source-commit-sha "$GITHUB_SHA" --test-report "$RUNNER_TEMP/linux-runtime-tests.json" --verify-only true
+      - name: Functionally requalify the signed secure-read helper
+        run: npm run smoke:portable-secure-read -- .portable-runtime/staging/linux-x64 linux-x64 --load
+      - name: Run signed secure-read executable consistency harness
+        run: node native/secure-workspace-read/test-protocol.mjs --binary .portable-runtime/staging/linux-x64/payload/Keiko/runtime/native/keiko-secure-workspace-read
+
   stage-macos-production:
     name: Stage provisional signed macOS asset (${{ matrix.platform_target }})
     needs: production-signing-preflight
@@ -817,8 +918,8 @@ jobs:
 
   assemble:
     name: Assemble reviewed portable asset bundle
-    needs: [production-signing-preflight, stage-windows-production, stage-macos-production, qualify-macos-runtime, seal-macos-production, qualify-windows-production, qualify-macos-production]
-    if: ${{ always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') && needs.production-signing-preflight.result == 'success' && needs.stage-windows-production.result == 'success' && needs.stage-macos-production.result == 'success' && needs.qualify-macos-runtime.result == 'success' && needs.seal-macos-production.result == 'success' && needs.qualify-windows-production.result == 'success' && needs.qualify-macos-production.result == 'success' }}
+    needs: [production-signing-preflight, stage-windows-production, stage-linux-production, qualify-linux-production, stage-macos-production, qualify-macos-runtime, seal-macos-production, qualify-windows-production, qualify-macos-production]
+    if: ${{ always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') && needs.production-signing-preflight.result == 'success' && needs.stage-windows-production.result == 'success' && needs.stage-linux-production.result == 'success' && needs.qualify-linux-production.result == 'success' && needs.stage-macos-production.result == 'success' && needs.qualify-macos-runtime.result == 'success' && needs.seal-macos-production.result == 'success' && needs.qualify-windows-production.result == 'success' && needs.qualify-macos-production.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       attestations: write
@@ -851,7 +952,7 @@ jobs:
       # Additive to, not a replacement for, the existing evidence/signing-verification.json and
       # provenance.intoto.jsonl projections (ADR-0121 D8): these are independently verifiable via
       # `gh attestation verify` / Sigstore, anchored to this exact workflow run and commit, and only
-      # ever run once the `if:` gate above has proven all three targets signed, notarized where
+      # ever run once the `if:` gate above has proven all four targets signed, notarized where
       # required, and qualification-bound. actions/attest-build-provenance and actions/attest-sbom
       # are both thin, deprecated-warning-free wrappers around actions/attest; using actions/attest
       # directly avoids depending on the actions/attest-sbom wrapper, which is deprecated upstream.
@@ -875,6 +976,11 @@ jobs:
         with:
           subject-path: portable-release-assets/artifacts/windows-x64/keiko-windows-x64.zip
           sbom-path: portable-release-assets/artifacts/windows-x64/evidence/sbom.cdx.json
+      - name: Attest SBOM for linux-x64 portable artifact
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-path: portable-release-assets/artifacts/linux-x64/keiko-linux-x64.zip
+          sbom-path: portable-release-assets/artifacts/linux-x64/evidence/sbom.cdx.json
       - name: Attest SBOM for macos-arm64 portable artifact
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:

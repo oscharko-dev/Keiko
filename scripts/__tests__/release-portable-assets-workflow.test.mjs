@@ -55,14 +55,15 @@ const secureReadNative = readFileSync(
 );
 
 describe("portable secure-read qualification", () => {
-  it("functionally smokes unsigned and fresh signed helpers on all three native runners", () => {
+  it("functionally smokes unsigned and fresh qualified helpers on all four native targets", () => {
     expect(
       portableWorkflow.match(/Functionally smoke the unsigned secure-read helper/gmu),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
     expect(
       portableWorkflow.match(/Functionally requalify the signed secure-read helper/gmu),
-    ).toHaveLength(2);
-    expect(portableWorkflow.match(/smoke:portable-secure-read -- .* --load/gmu)).toHaveLength(5);
+    ).toHaveLength(3);
+    expect(portableWorkflow.match(/smoke:portable-secure-read -- .* --load/gmu)).toHaveLength(8);
+    expect(portableWorkflow).toContain(".portable-runtime/staging/linux-x64 linux-x64");
     expect(portableWorkflow).toContain(".qualified-windows-stage/windows-x64 windows-x64");
     expect(portableWorkflow).toContain(
       ".isolated-macos-artifact/${{ matrix.platform_target }} ${{ matrix.platform_target }}",
@@ -107,17 +108,17 @@ describe("portable secure-read qualification", () => {
   it("runs the executable adversarial harness on unsigned builds and signed native bytes", () => {
     expect(
       portableWorkflow.match(/Run executable secure-read adversarial harness/gmu),
-    ).toHaveLength(3);
+    ).toHaveLength(4);
     expect(
       portableWorkflow.match(/Run signed secure-read executable consistency harness/gmu),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     expect(portableWorkflow).toContain(
       "test-protocol.mjs --binary .qualified-windows-stage/windows-x64/payload/Keiko/runtime/native/keiko-secure-workspace-read.exe",
     );
     expect(portableWorkflow).toContain(
       "test-protocol.mjs --binary .isolated-macos-artifact/${{ matrix.platform_target }}/payload/Keiko/Keiko.app/Contents/Resources/runtime/native/keiko-secure-workspace-read",
     );
-    const windowsStage = workflowJob("  stage-windows-production:", "\n  stage-macos-production:");
+    const windowsStage = workflowJob("  stage-windows-production:", "\n  stage-linux-production:");
     // The MSVC step is gone by design (#3084): the harness resolves its own toolchain via the
     // shared lib and spawns the compiler by absolute path — never a bare name.
     expect(windowsStage).not.toContain("Configure MSVC environment");
@@ -264,10 +265,12 @@ function productionStepPolicies() {
 }
 
 function workflowJob(start, end) {
-  return portableWorkflow.slice(
-    portableWorkflow.indexOf(start),
-    end === undefined ? undefined : portableWorkflow.indexOf(end),
-  );
+  const startIndex = portableWorkflow.indexOf(start);
+  const endIndex = end === undefined ? portableWorkflow.length : portableWorkflow.indexOf(end);
+  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
+    throw new Error("portable workflow job boundary is missing or out of order");
+  }
+  return portableWorkflow.slice(startIndex, endIndex);
 }
 
 function stagePortableRuntimeStep(job) {
@@ -527,10 +530,71 @@ describe("unsigned evaluation staging opt-in", () => {
   });
 });
 
+describe("Linux portable production qualification workflow", () => {
+  it("attests only after exact-head gateway qualification and re-verifies without OIDC", () => {
+    const stage = portableWorkflowDocument.jobs["stage-linux-production"];
+    const fresh = portableWorkflowDocument.jobs["qualify-linux-production"];
+    const stepIndex = (steps, name) => {
+      const indexes = steps.flatMap((step, index) => (step.name === name ? [index] : []));
+      expect(indexes, `${name} step name must be unique`).toHaveLength(1);
+      return indexes[0] ?? -1;
+    };
+    const prepare = stepIndex(stage.steps, "Bind the reviewed Linux production payload");
+    const launcherQuality = stepIndex(stage.steps, "Run Linux portable launcher native quality");
+    const qualify = stepIndex(stage.steps, "Qualify the exact Linux runtime and namespace gateway");
+    const attest = stepIndex(
+      stage.steps,
+      "Attest the exact qualification receipt with GitHub OIDC",
+    );
+    const finalize = stepIndex(stage.steps, "Seal and verify the production Linux archive");
+    const upload = stepIndex(stage.steps, "Upload verified Linux target artifact");
+
+    expect(stage.environment).toBe("portable-release-signing");
+    expect(stage.permissions).toEqual({ contents: "read", "id-token": "write" });
+    expect(launcherQuality).toBeLessThan(prepare);
+    expect(stage.steps[launcherQuality].run).toBe("./scripts/check-linux-portable-launcher.sh");
+    expect(prepare).toBeLessThan(qualify);
+    expect(qualify).toBeLessThan(attest);
+    expect(attest).toBeLessThan(finalize);
+    expect(finalize).toBeLessThan(upload);
+    expect(stage.steps[qualify].run).toContain('source-commit-sha "$GITHUB_SHA"');
+    expect(stage.steps[attest].run).toContain("sign-linux-runtime-qualification.mjs");
+    expect(stage.steps[finalize].run).toContain("linux-portable-signing.mjs finalize");
+
+    expect(fresh.needs).toBe("stage-linux-production");
+    expect(fresh.permissions).toEqual({ contents: "read" });
+    expect(fresh.environment).toBeUndefined();
+    expect(fresh.permissions?.["id-token"]).not.toBe("write");
+    for (const step of fresh.steps) expect(step.permissions?.["id-token"]).not.toBe("write");
+    expect(fresh.steps.map((step) => step.name)).toEqual(
+      expect.arrayContaining([
+        "Re-verify the offline Sigstore bundle, archive, and production discovery",
+        "Re-run real namespace-gateway qualification against the sealed receipt",
+      ]),
+    );
+    expect(JSON.stringify(fresh)).toContain("--verify-only true");
+  });
+
+  it("makes both Linux native jobs mandatory before assembly and attests its SBOM", () => {
+    const assemble = portableWorkflowDocument.jobs.assemble;
+    expect(assemble.needs).toEqual(
+      expect.arrayContaining(["stage-linux-production", "qualify-linux-production"]),
+    );
+    expect(assemble.if).toContain("needs.stage-linux-production.result == 'success'");
+    expect(assemble.if).toContain("needs.qualify-linux-production.result == 'success'");
+    expect(JSON.stringify(assemble.steps)).toContain(
+      "portable-release-assets/artifacts/linux-x64/keiko-linux-x64.zip",
+    );
+    expect(JSON.stringify(assemble.steps)).toContain(
+      "portable-release-assets/artifacts/linux-x64/evidence/sbom.cdx.json",
+    );
+  });
+});
+
 describe("Windows portable production signing workflow", () => {
   it("stages Windows archives through the repository ZIP adapter without 7z", () => {
     const stagingJob = workflowJob("  stage:", "\n  stage-windows-production:");
-    const productionJob = workflowJob("  stage-windows-production:", "\n  stage-macos-production:");
+    const productionJob = workflowJob("  stage-windows-production:", "\n  stage-linux-production:");
     const stagingWindows = stagePortableRuntimeStep(stagingJob);
     const productionWindows = stagePortableRuntimeStep(productionJob);
 
@@ -560,15 +624,12 @@ describe("Windows portable production signing workflow", () => {
   });
 
   it("confines OIDC to the protected job and pins the official Azure actions", () => {
-    const windowsJob = portableWorkflow.slice(
-      portableWorkflow.indexOf("  stage-windows-production:"),
-      portableWorkflow.indexOf("\n  stage-macos-production:"),
-    );
+    const windowsJob = workflowJob("  stage-windows-production:", "\n  stage-linux-production:");
     expect(portableWorkflow).toContain("permissions: {}");
-    // Exactly two jobs request an OIDC token, each for a distinct, minimal, reviewed reason: the
-    // Windows job for Azure Artifact Signing federation, and `assemble` for Sigstore-backed GitHub
-    // Artifact Attestations (ADR-0121 D8) - never for a job that does not need one.
-    expect(portableWorkflow.match(/id-token: write/gu)).toHaveLength(2);
+    // Exactly three jobs request an OIDC token, each for a distinct, minimal, reviewed reason: the
+    // Windows Azure signing job, the Linux qualification receipt signer, and `assemble` for
+    // Sigstore-backed GitHub Artifact Attestations (ADR-0121 D8).
+    expect(portableWorkflow.match(/id-token: write/gu)).toHaveLength(3);
     expect(windowsJob).toContain("id-token: write");
     expect(portableWorkflow).toContain("Azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43");
     expect(portableWorkflow).toContain(
@@ -581,10 +642,9 @@ describe("Windows portable production signing workflow", () => {
 
   it("confines the attestation OIDC grant to the assemble job alone", () => {
     const assembleJob = portableWorkflow.slice(portableWorkflow.indexOf("  assemble:"));
-    const betweenWindowsAndAssemble = portableWorkflow.slice(
-      portableWorkflow.indexOf("\n  stage-macos-production:"),
-      portableWorkflow.indexOf("  assemble:"),
-    );
+    const oidcJobs = Object.entries(portableWorkflowDocument.jobs)
+      .filter(([, job]) => job.permissions?.["id-token"] === "write")
+      .map(([name]) => name);
     expect(assembleJob).toContain("attestations: write");
     expect(assembleJob).toContain("id-token: write");
     expect(assembleJob).toContain("actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6");
@@ -593,11 +653,12 @@ describe("Windows portable production signing workflow", () => {
     expect(assembleJob).toContain(
       "portable-release-assets/artifacts/windows-x64/keiko-windows-x64-setup.exe",
     );
-    // Together with the total-count and windowsJob assertions above, this proves the two
-    // `id-token: write` occurrences are exactly stage-windows-production and assemble - no job
-    // in between (macOS staging/signing, Windows/macOS qualification) carries either grant.
-    expect(betweenWindowsAndAssemble).not.toContain("id-token: write");
-    expect(betweenWindowsAndAssemble).not.toContain("attestations: write");
+    expect(oidcJobs).toEqual(["stage-windows-production", "stage-linux-production", "assemble"]);
+    expect(
+      Object.entries(portableWorkflowDocument.jobs)
+        .filter(([, job]) => job.permissions?.attestations === "write")
+        .map(([name]) => name),
+    ).toEqual(["assemble"]);
   });
 
   it("signs the exact catalog and verifies before rebuilding and uploading", () => {

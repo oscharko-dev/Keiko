@@ -8,9 +8,10 @@ export type UpdateInstallPackageManager = "npm" | "yarn";
 export const UPDATE_INSTALL_PACKAGE_MANAGERS: readonly UpdateInstallPackageManager[] =
   Object.freeze(["npm", "yarn"] as const satisfies readonly UpdateInstallPackageManager[]);
 
-export type UpdatePortableTarget = "windows-x64" | "macos-arm64" | "macos-x64";
+export type UpdatePortableTarget = "linux-x64" | "windows-x64" | "macos-arm64" | "macos-x64";
 
 export const UPDATE_PORTABLE_TARGETS: readonly UpdatePortableTarget[] = Object.freeze([
+  "linux-x64",
   "windows-x64",
   "macos-arm64",
   "macos-x64",
@@ -18,6 +19,7 @@ export const UPDATE_PORTABLE_TARGETS: readonly UpdatePortableTarget[] = Object.f
 
 export const UPDATE_PORTABLE_TARGET_ASSET_NAMES: Readonly<Record<UpdatePortableTarget, string>> =
   Object.freeze({
+    "linux-x64": "keiko-linux-x64.zip",
     "windows-x64": "keiko-windows-x64.zip",
     "macos-arm64": "keiko-macos-arm64.zip",
     "macos-x64": "keiko-macos-x64.zip",

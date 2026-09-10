@@ -1959,7 +1959,7 @@
     {
       "op": "coding.runtime.discover",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:137",
+      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:153",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -3130,13 +3130,13 @@
     {
       "op": "runtime.confinement.failed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:255",
+      "site": "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:311",
       "package": "keiko-server"
     },
     {
       "op": "runtime.confinement.failed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:300",
+      "site": "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:377",
       "package": "keiko-server"
     },
     {
@@ -3148,7 +3148,13 @@
     {
       "op": "runtime.confinement.spawned",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:271",
+      "site": "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:345",
+      "package": "keiko-server"
+    },
+    {
+      "op": "runtime.confinement.unavailable",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:330",
       "package": "keiko-server"
     },
     {
@@ -3202,7 +3208,7 @@
     {
       "op": "security.fs.portable-backup-cleanup",
       "category": "security",
-      "site": "packages/keiko-server/src/update-portable-activation-files.ts:811",
+      "site": "packages/keiko-server/src/update-portable-activation-files.ts:817",
       "package": "keiko-server"
     },
     {

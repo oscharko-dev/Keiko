@@ -77,10 +77,12 @@ function sidecarTarget(sidecar) {
   return target;
 }
 
-function verificationSucceeded(target, checks) {
+/** @internal Exported only for deterministic platform-policy tests. */
+export function verificationSucceeded(target, checks) {
   if (target.nodePlatform === "win32") {
     return checks.publisherChainVerified === true && checks.timestampVerified === true;
   }
+  if (target.nodePlatform === "linux") return checks.provenanceVerified === true;
   return (
     checks.developerIdVerified === true &&
     checks.notarizationVerified === true &&
@@ -89,12 +91,16 @@ function verificationSucceeded(target, checks) {
   );
 }
 
-function failureReasonCodes(target, checks) {
+/** @internal Exported only for deterministic platform-policy tests. */
+export function failureReasonCodes(target, checks) {
   if (target.nodePlatform === "win32") {
     return [
       ...(checks.publisherChainVerified === true ? [] : ["windows-publisher-chain-unverified"]),
       ...(checks.timestampVerified === true ? [] : ["windows-timestamp-unverified"]),
     ];
+  }
+  if (target.nodePlatform === "linux") {
+    return checks.provenanceVerified === true ? [] : ["github-provenance-unverified"];
   }
   return [
     ...(checks.developerIdVerified === true ? [] : ["macos-developer-id-unverified"]),
@@ -113,16 +119,20 @@ function verificationStateFor(target, policy, input) {
     verificationReasonCodes: reasons,
     verificationStatus: verificationStatusFor(policy, verified),
     signatureKind: target.signatureKind,
-    signatureVerified:
-      target.nodePlatform === "win32"
-        ? verified
-        : input.verificationChecks.developerIdVerified === true,
+    signatureVerified: signatureVerifiedFor(target, verified, input.verificationChecks),
     notarizationRequired: target.nodePlatform === "darwin",
     notarizationVerified:
       target.nodePlatform === "darwin"
         ? input.verificationChecks.notarizationVerified === true
         : false,
   };
+}
+
+/** @internal Exported only for deterministic platform-policy tests. */
+export function signatureVerifiedFor(target, verified, checks) {
+  if (target.nodePlatform === "win32") return verified;
+  if (target.nodePlatform === "linux") return checks.provenanceVerified === true;
+  return checks.developerIdVerified === true;
 }
 
 function verificationStatusFor(policy, verified) {

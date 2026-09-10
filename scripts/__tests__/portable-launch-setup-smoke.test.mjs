@@ -35,8 +35,9 @@ describe("portable launch/setup smoke", () => {
       tempRoot: dir,
     });
 
-    expect(evidence.fixtureTargets).toHaveLength(3);
+    expect(evidence.fixtureTargets).toHaveLength(4);
     expect(evidence.fixtureTargets.map((target) => target.platformTarget)).toEqual([
+      "linux-x64",
       "windows-x64",
       "macos-arm64",
       "macos-x64",

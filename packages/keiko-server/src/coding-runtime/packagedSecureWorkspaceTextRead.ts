@@ -92,16 +92,17 @@ function evaluationInspection(
 
 function artifactTargetFor(
   target: UpdatePortableTarget,
-): "win32-x64" | "darwin-arm64" | "darwin-x64" {
+): "linux-x64" | "win32-x64" | "darwin-arm64" | "darwin-x64" {
+  if (target === "linux-x64") return "linux-x64";
   if (target === "windows-x64") return "win32-x64";
   return target === "macos-arm64" ? "darwin-arm64" : "darwin-x64";
 }
 
 function platformForTarget(target: UpdatePortableTarget): {
-  readonly os: "darwin" | "win32";
+  readonly os: "darwin" | "linux" | "win32";
   readonly arch: "arm64" | "x64";
 } {
-  return target === "windows-x64"
-    ? { os: "win32", arch: "x64" }
-    : { os: "darwin", arch: target === "macos-arm64" ? "arm64" : "x64" };
+  if (target === "linux-x64") return { os: "linux", arch: "x64" };
+  if (target === "windows-x64") return { os: "win32", arch: "x64" };
+  return { os: "darwin", arch: target === "macos-arm64" ? "arm64" : "x64" };
 }

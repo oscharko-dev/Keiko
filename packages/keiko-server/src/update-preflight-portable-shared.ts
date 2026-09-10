@@ -15,22 +15,24 @@ export interface PortableRelease {
   readonly assets: readonly GitHubAsset[];
 }
 
-const REQUIRED_TARGETS: readonly UpdatePortableTarget[] = [
-  "windows-x64",
-  "macos-arm64",
-  "macos-x64",
-];
+const LEGACY_TARGETS: readonly UpdatePortableTarget[] = ["windows-x64", "macos-arm64", "macos-x64"];
+
+const CURRENT_TARGETS: readonly UpdatePortableTarget[] = ["linux-x64", ...LEGACY_TARGETS];
 
 export function requiredAssetName(target: UpdatePortableTarget): string {
   return UPDATE_PORTABLE_TARGET_ASSET_NAMES[target];
 }
 
 export function firstClassArchiveSetComplete(assets: readonly GitHubAsset[]): boolean {
-  const expected = new Set(REQUIRED_TARGETS.map(requiredAssetName));
   const archiveNames = assets
     .map((asset) => asset.name)
     .filter((name) => /^keiko-[a-z0-9-]+\.zip$/u.test(name));
-  return archiveNames.length === expected.size && archiveNames.every((name) => expected.has(name));
+  const actual = new Set(archiveNames);
+  if (actual.size !== archiveNames.length) return false;
+  return [LEGACY_TARGETS, CURRENT_TARGETS].some((targets) => {
+    const expected = new Set(targets.map(requiredAssetName));
+    return actual.size === expected.size && archiveNames.every((name) => expected.has(name));
+  });
 }
 
 export function portableBlocker(

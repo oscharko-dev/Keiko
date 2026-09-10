@@ -9,51 +9,20 @@ import {
   isLinuxGatewayDiagnosticKind,
   type LinuxGatewayDiagnosticKind,
 } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import type {
+  LongLivedRuntimePlatform,
+  LongLivedRuntimeQualification,
+  RuntimeQualificationComponentDigest,
+  RuntimeQualificationReceipt,
+  RuntimeQualificationReceiptBinding,
+  RuntimeQualificationReceiptResult,
+  RuntimeQualificationSidecarDigest,
+  RuntimeQualificationTarget,
+} from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
 
 export function linuxGatewayLauncherPath(): string {
   return fileURLToPath(new URL("../dist/runtime.js", import.meta.url));
 }
-
-export type LongLivedRuntimePlatform = "darwin" | "win32";
-export type LongLivedRuntimeArchitecture = "arm64" | "x64";
-export type LongLivedRuntimeBackend =
-  "macos-app-sandbox" | "macos-endpoint-security" | "windows-job-object";
-
-export interface LongLivedRuntimeQualification {
-  readonly platform: LongLivedRuntimePlatform;
-  readonly arch: LongLivedRuntimeArchitecture;
-  readonly backend: LongLivedRuntimeBackend;
-  readonly releaseReceipt: string;
-}
-
-export type RuntimeQualificationTarget = "windows-x64" | "macos-arm64" | "macos-x64";
-
-export interface RuntimeQualificationSidecarDigest {
-  readonly name: string;
-  readonly sha256: string;
-}
-
-export interface RuntimeQualificationReceipt {
-  readonly schemaVersion: 1;
-  readonly suiteVersion: "runtime-tree-qualification-v1";
-  readonly platformTarget: RuntimeQualificationTarget;
-  readonly sourceCommitSha: string;
-  readonly activationManifestSha256: string;
-  readonly supervisorSha256: string;
-  readonly secureReadSha256: string;
-  readonly sidecars: readonly RuntimeQualificationSidecarDigest[];
-  readonly backend: LongLivedRuntimeBackend;
-  readonly result: "passed" | "failed";
-}
-
-export type RuntimeQualificationReceiptBinding = Omit<
-  RuntimeQualificationReceipt,
-  "schemaVersion" | "suiteVersion" | "backend" | "result"
->;
-
-export type RuntimeQualificationReceiptResult =
-  | { readonly ok: true; readonly qualification: LongLivedRuntimeQualification }
-  | { readonly ok: false; readonly reason: "runtime-unqualified" };
 
 export interface ClosedRuntimeLaunchProfile {
   readonly upstreamEditAuthority: false;
@@ -109,7 +78,7 @@ export function qualificationFromReceipt(
   return {
     ok: true,
     qualification: {
-      platform: candidate.platformTarget === "windows-x64" ? "win32" : "darwin",
+      platform: qualificationPlatform(candidate.platformTarget),
       arch: candidate.platformTarget === "macos-arm64" ? "arm64" : "x64",
       backend: candidate.backend,
       releaseReceipt,
@@ -147,33 +116,26 @@ const RECEIPT_KEYS = [
   "backend",
   "result",
 ] as const;
+const LINUX_RECEIPT_KEYS = [...RECEIPT_KEYS, "runtimeComponents"] as const;
+const RUNTIME_COMPONENT_NAMES = new Set(["node-runtime", "primary-launcher", "usearch"]);
 
 function receiptIsClosed(value: unknown): value is RuntimeQualificationReceipt {
-  if (!isExactRecord(value, RECEIPT_KEYS)) return false;
+  if (!isRecord(value)) return false;
+  const keys = value.platformTarget === "linux-x64" ? LINUX_RECEIPT_KEYS : RECEIPT_KEYS;
+  if (!isExactRecord(value, keys)) return false;
   return receiptIdentityIsClosed(value) && receiptResultIsClosed(value);
 }
 
-function receiptIdentityIsClosed(
-  value: Record<(typeof RECEIPT_KEYS)[number], unknown>,
-): value is Record<(typeof RECEIPT_KEYS)[number], unknown> &
-  Pick<
-    RuntimeQualificationReceipt,
-    | "schemaVersion"
-    | "suiteVersion"
-    | "platformTarget"
-    | "sourceCommitSha"
-    | "activationManifestSha256"
-    | "supervisorSha256"
-    | "secureReadSha256"
-    | "sidecars"
-  > {
+function receiptIdentityIsClosed(value: Record<string, unknown>): boolean {
+  const target = value.platformTarget;
   return (
-    value.schemaVersion === 1 &&
+    (target === "linux-x64" ? value.schemaVersion === 2 : value.schemaVersion === 1) &&
     value.suiteVersion === "runtime-tree-qualification-v1" &&
-    isQualificationTarget(value.platformTarget) &&
+    isQualificationTarget(target) &&
     receiptCommitIsClosed(value.sourceCommitSha) &&
     receiptDigestsAreClosed(value) &&
-    sidecarsAreClosed(value.sidecars)
+    sidecarsAreClosed(value.sidecars) &&
+    (target !== "linux-x64" || runtimeComponentsAreClosed(value.runtimeComponents))
   );
 }
 
@@ -199,19 +161,30 @@ function digestIsClosed(value: unknown): value is string {
   return typeof value === "string" && DIGEST_PATTERN.test(value);
 }
 
-function receiptResultIsClosed(
-  value: ReturnTypeNarrowedReceipt,
-): value is RuntimeQualificationReceipt {
+function receiptResultIsClosed(value: Record<string, unknown>): boolean {
   const backend = value.backend;
-  if (backend !== "windows-job-object" && backend !== "macos-endpoint-security") return false;
+  if (
+    backend !== "linux-namespace-gateway" &&
+    backend !== "windows-job-object" &&
+    backend !== "macos-endpoint-security"
+  ) {
+    return false;
+  }
   if (value.result !== "passed" && value.result !== "failed") return false;
-  return backendMatchesTarget({ backend, platformTarget: value.platformTarget });
+  return isQualificationTarget(value.platformTarget)
+    ? backendMatchesTarget({ backend, platformTarget: value.platformTarget })
+    : false;
 }
 
-type ReturnTypeNarrowedReceipt = Record<(typeof RECEIPT_KEYS)[number], unknown> &
-  Pick<RuntimeQualificationReceipt, "platformTarget">;
-
 function bindingIsCurrent(
+  receipt: RuntimeQualificationReceipt,
+  binding: RuntimeQualificationReceiptBinding,
+): boolean {
+  if (!commonBindingMatches(receipt, binding)) return false;
+  return runtimeComponentsMatch(receipt, binding);
+}
+
+function commonBindingMatches(
   receipt: RuntimeQualificationReceipt,
   binding: RuntimeQualificationReceiptBinding,
 ): boolean {
@@ -223,6 +196,18 @@ function bindingIsCurrent(
     receipt.supervisorSha256 === binding.supervisorSha256 &&
     receipt.secureReadSha256 === binding.secureReadSha256 &&
     canonicalSidecars(receipt.sidecars) === canonicalSidecars(binding.sidecars)
+  );
+}
+
+function runtimeComponentsMatch(
+  receipt: RuntimeQualificationReceipt,
+  binding: RuntimeQualificationReceiptBinding,
+): boolean {
+  if (receipt.platformTarget !== "linux-x64") return binding.runtimeComponents === undefined;
+  return (
+    binding.runtimeComponents !== undefined &&
+    canonicalRuntimeComponents(receipt.runtimeComponents ?? []) ===
+      canonicalRuntimeComponents(binding.runtimeComponents)
   );
 }
 
@@ -238,8 +223,22 @@ function sidecarsAreClosed(value: unknown): value is readonly RuntimeQualificati
   return true;
 }
 
+function runtimeComponentsAreClosed(
+  value: unknown,
+): value is readonly RuntimeQualificationComponentDigest[] {
+  if (!Array.isArray(value) || value.length !== RUNTIME_COMPONENT_NAMES.size) return false;
+  const names = new Set<string>();
+  for (const entry of value) {
+    if (!isExactRecord(entry, ["name", "sha256"])) return false;
+    if (!RUNTIME_COMPONENT_NAMES.has(entry.name) || !DIGEST_PATTERN.test(entry.sha256))
+      return false;
+    names.add(entry.name);
+  }
+  return names.size === RUNTIME_COMPONENT_NAMES.size;
+}
+
 function canonicalReceipt(receipt: RuntimeQualificationReceipt): string {
-  return JSON.stringify({
+  const common = {
     schemaVersion: receipt.schemaVersion,
     suiteVersion: receipt.suiteVersion,
     platformTarget: receipt.platformTarget,
@@ -250,7 +249,15 @@ function canonicalReceipt(receipt: RuntimeQualificationReceipt): string {
     sidecars: canonicalSidecarRecords(receipt.sidecars),
     backend: receipt.backend,
     result: receipt.result,
-  });
+  };
+  return JSON.stringify(
+    receipt.platformTarget === "linux-x64"
+      ? {
+          ...common,
+          runtimeComponents: canonicalRuntimeComponentRecords(receipt.runtimeComponents ?? []),
+        }
+      : common,
+  );
 }
 
 function canonicalSidecars(sidecars: readonly RuntimeQualificationSidecarDigest[]): string {
@@ -263,16 +270,43 @@ function canonicalSidecarRecords(
   return [...sidecars].sort((left, right) => left.name.localeCompare(right.name));
 }
 
+function canonicalRuntimeComponents(
+  components: readonly RuntimeQualificationComponentDigest[],
+): string {
+  return JSON.stringify(canonicalRuntimeComponentRecords(components));
+}
+
+function canonicalRuntimeComponentRecords(
+  components: readonly RuntimeQualificationComponentDigest[],
+): readonly RuntimeQualificationComponentDigest[] {
+  return [...components].sort((left, right) => left.name.localeCompare(right.name));
+}
+
 function backendMatchesTarget(
   receipt: Pick<RuntimeQualificationReceipt, "platformTarget" | "backend">,
 ): boolean {
-  return receipt.platformTarget === "windows-x64"
-    ? receipt.backend === "windows-job-object"
-    : receipt.backend === "macos-endpoint-security";
+  if (receipt.platformTarget === "windows-x64") {
+    return receipt.backend === "windows-job-object";
+  }
+  if (receipt.platformTarget === "linux-x64") {
+    return receipt.backend === "linux-namespace-gateway";
+  }
+  return receipt.backend === "macos-endpoint-security";
 }
 
 function isQualificationTarget(value: unknown): value is RuntimeQualificationTarget {
-  return value === "windows-x64" || value === "macos-arm64" || value === "macos-x64";
+  return (
+    value === "linux-x64" ||
+    value === "windows-x64" ||
+    value === "macos-arm64" ||
+    value === "macos-x64"
+  );
+}
+
+function qualificationPlatform(target: RuntimeQualificationTarget): LongLivedRuntimePlatform {
+  if (target === "windows-x64") return "win32";
+  if (target === "linux-x64") return "linux";
+  return "darwin";
 }
 
 function isExactRecord<const K extends string>(
@@ -289,17 +323,44 @@ function qualificationIsSupported(
 ): qualification is LongLivedRuntimeQualification {
   if (!isQualificationRecord(qualification)) return false;
   if (!RELEASE_RECEIPT_PATTERN.test(qualification.releaseReceipt)) return false;
-  if (qualification.platform === "win32") {
-    return qualification.arch === "x64" && qualification.backend === "windows-job-object";
-  }
-  if (qualification.platform === "darwin") {
-    return (
-      (qualification.arch === "arm64" || qualification.arch === "x64") &&
-      (qualification.backend === "macos-app-sandbox" ||
-        qualification.backend === "macos-endpoint-security")
-    );
-  }
-  return false;
+  return (
+    windowsQualificationIsSupported(qualification) ||
+    linuxQualificationIsSupported(qualification) ||
+    macosQualificationIsSupported(qualification)
+  );
+}
+
+type QualificationRecord = Record<"platform" | "arch" | "backend" | "releaseReceipt", string>;
+
+function windowsQualificationIsSupported(
+  qualification: QualificationRecord,
+): qualification is LongLivedRuntimeQualification & QualificationRecord {
+  return (
+    qualification.platform === "win32" &&
+    qualification.arch === "x64" &&
+    qualification.backend === "windows-job-object"
+  );
+}
+
+function linuxQualificationIsSupported(
+  qualification: QualificationRecord,
+): qualification is LongLivedRuntimeQualification & QualificationRecord {
+  return (
+    qualification.platform === "linux" &&
+    qualification.arch === "x64" &&
+    qualification.backend === "linux-namespace-gateway"
+  );
+}
+
+function macosQualificationIsSupported(
+  qualification: QualificationRecord,
+): qualification is LongLivedRuntimeQualification & QualificationRecord {
+  return (
+    qualification.platform === "darwin" &&
+    (qualification.arch === "arm64" || qualification.arch === "x64") &&
+    (qualification.backend === "macos-app-sandbox" ||
+      qualification.backend === "macos-endpoint-security")
+  );
 }
 
 function isQualificationRecord(

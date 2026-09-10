@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import {
+  chmodSync,
   closeSync,
   fstatSync,
   lstatSync,
@@ -587,8 +588,10 @@ export function extractZipArchiveEntries(archivePath, targetRoot, options = {}) 
       } else {
         assertRegularZipEntry(entry, options.requireRegularEntries);
         const path = join(targetRoot, normalizedEntryName(entry.rawName));
+        const mode = (entry.unixMode & 0o111) === 0 ? 0o600 : 0o700;
         mkdirSync(dirname(path), { recursive: true });
-        writeFileSync(path, extractEntryData(fd, entry, size));
+        writeFileSync(path, extractEntryData(fd, entry, size), { mode });
+        chmodSync(path, mode);
       }
       offset = entry.next;
     }

@@ -5,8 +5,8 @@ import { dirname, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import type { RuntimeQualificationReceipt } from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
-import type { RuntimeQualificationReceipt } from "@oscharko-dev/keiko-sandbox";
 
 import { verifyPortableAttestedSidecars } from "../update-portable-sidecar-verification.js";
 import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-verification.js";
@@ -20,6 +20,10 @@ const COMMIT = "c".repeat(40);
 const SIDECAR_ROOT = "runtime/sidecars/opencode-compatible";
 const SUPERVISOR = "qualified native supervisor";
 const SECURE_READ = "qualified secure read";
+const LINUX_TARGET = "linux-x64";
+const LINUX_LAUNCHER = "qualified Linux launcher";
+const LINUX_NODE = "qualified Linux Node.js";
+const LINUX_USEARCH = "qualified Linux USearch";
 
 describe("production portable OpenCode discovery", () => {
   it("discovers only a disk-verified sidecar with a signed exact-byte attestation", () => {
@@ -70,6 +74,44 @@ describe("production portable OpenCode discovery", () => {
       expect(result).toBeUndefined();
     },
   );
+
+  it.each(["Keiko", "runtime/node/bin/node", "runtime/native/usearch.node"])(
+    "refuses Linux production activation after %s changes",
+    (relativePath) => {
+      const fixture = linuxPortableInstall();
+      expect(discoverLinux(fixture)).toMatchObject({
+        target: LINUX_TARGET,
+        qualification: { backend: "linux-namespace-gateway" },
+      });
+
+      writeFileSync(join(fixture.root, ...relativePath.split("/")), "drifted runtime bytes");
+
+      expect(discoverLinux(fixture)).toBeUndefined();
+    },
+  );
+
+  it("emits body-free diagnostics for a rejected Linux component binding", () => {
+    const fixture = linuxPortableInstall();
+    const records: unknown[] = [];
+    writeFileSync(join(fixture.root, "runtime", "node", "bin", "node"), "customer bytes");
+
+    expect(
+      discoverQualifiedPortableOpenCode({
+        env: {},
+        installRoot: fixture.root,
+        platform: "linux",
+        arch: "x64",
+        attestation: { readReceipt: () => fixture.receipt },
+        diagnostics: { record: (record): void => void records.push(record) },
+      }),
+    ).toBeUndefined();
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      operation: "coding.runtime.discover",
+      source: "coding.runtime.discovery",
+    });
+    expect(JSON.stringify(records)).not.toContain("customer bytes");
+  });
 
   it("does not treat ambient PATH or an arbitrary executable as an installed runtime", () => {
     expect(
@@ -608,6 +650,88 @@ function attestation(
   };
 }
 
+interface LinuxFixture {
+  readonly root: string;
+  readonly receipt: RuntimeQualificationReceipt;
+}
+
+function discoverLinux(
+  fixture: LinuxFixture,
+): ReturnType<typeof discoverQualifiedPortableOpenCode> {
+  return discoverQualifiedPortableOpenCode({
+    env: {},
+    installRoot: fixture.root,
+    platform: "linux",
+    arch: "x64",
+    attestation: { readReceipt: () => fixture.receipt },
+  });
+}
+
+function linuxPortableInstall(): LinuxFixture {
+  const root = mkdtempSync(join(tmpdir(), "keiko-linux-portable-runtime-"));
+  const sidecar = linuxSidecarFixture();
+  writeLinuxRuntimeFiles(root, sidecar.files);
+  const activation = linuxActivation(sidecar.runtime);
+  const activationPath = join(root, ".portable", "runtime-activation.json");
+  writeFileSync(activationPath, JSON.stringify(activation));
+  return { root, receipt: linuxReceipt(root, activationPath, sidecar.payloadSha256) };
+}
+
+function writeLinuxRuntimeFiles(
+  root: string,
+  sidecarFiles: Readonly<Record<string, string>>,
+): void {
+  const files = {
+    ".portable/setup-manifest.json": JSON.stringify({
+      platformTarget: LINUX_TARGET,
+      stable: true,
+    }),
+    Keiko: LINUX_LAUNCHER,
+    "runtime/node/bin/node": LINUX_NODE,
+    "runtime/native/keiko-secure-workspace-read": SECURE_READ,
+    "runtime/native/usearch.node": LINUX_USEARCH,
+    "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js": SUPERVISOR,
+    ...Object.fromEntries(
+      Object.entries(sidecarFiles).map(([path, bytes]) => [`${SIDECAR_ROOT}/${path}`, bytes]),
+    ),
+  };
+  for (const [path, bytes] of Object.entries(files)) {
+    const destination = join(root, ...path.split("/"));
+    mkdirSync(dirname(destination), { recursive: true });
+    writeFileSync(destination, bytes);
+  }
+}
+
+function linuxReceipt(
+  root: string,
+  activationPath: string,
+  payloadSha256: string,
+): RuntimeQualificationReceipt {
+  return {
+    schemaVersion: 2,
+    suiteVersion: "runtime-tree-qualification-v1",
+    platformTarget: LINUX_TARGET,
+    sourceCommitSha: COMMIT,
+    activationManifestSha256: sha256(readFileSync(activationPath)),
+    supervisorSha256: sha256(SUPERVISOR),
+    secureReadSha256: sha256(SECURE_READ),
+    sidecars: [{ name: "opencode-compatible", sha256: payloadSha256 }],
+    runtimeComponents: [
+      { name: "primary-launcher", sha256: sha256(readFileSync(join(root, "Keiko"))) },
+      {
+        name: "node-runtime",
+        sha256: sha256(readFileSync(join(root, "runtime", "node", "bin", "node"))),
+      },
+      {
+        name: "usearch",
+        sha256: sha256(readFileSync(join(root, "runtime", "native", "usearch.node"))),
+      },
+    ],
+    backend: "linux-namespace-gateway",
+    result: "passed",
+  };
+}
+
 function portableInstall(lane: FixtureLane = "production"): string {
   const root = mkdtempSync(join(tmpdir(), "keiko-portable-runtime-"));
   const sidecar = sidecarFixture(lane);
@@ -700,6 +824,101 @@ function sidecarFixture(lane: FixtureLane = "production"): {
         shippedExecutableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
         shippedExecutableTreeSha256: sha256(`opencode.cmd\0${executableSha256}\0`),
       },
+    },
+  };
+}
+
+function linuxSidecarFixture(): {
+  readonly runtime: Record<string, unknown>;
+  readonly files: Readonly<Record<string, string>>;
+  readonly payloadSha256: string;
+} {
+  const base = sidecarFixture().runtime;
+  const baseSigning = base.signing as Record<string, unknown>;
+  const files = {
+    "LICENSE.txt": "sidecar license",
+    "evidence/sbom.cdx.json": '{"bomFormat":"CycloneDX"}',
+    "bin/opencode": "qualified Linux OpenCode",
+  } as const;
+  const payloadSha256 = treeSha256(files);
+  const executableSha256 = sha256(files["bin/opencode"]);
+  return {
+    files,
+    payloadSha256,
+    runtime: {
+      ...base,
+      archive: { platformTarget: LINUX_TARGET, sha256: "d".repeat(64) },
+      platformTarget: LINUX_TARGET,
+      executablePath: `${SIDECAR_ROOT}/bin/opencode`,
+      payloadSha256,
+      sizeBytes: Object.values(files).reduce((sum, bytes) => sum + Buffer.byteLength(bytes), 0),
+      signing: {
+        ...baseSigning,
+        signatureKind: "github-oidc-attested",
+        verificationChecks: { provenanceVerified: true },
+        shippedExecutableSha256: executableSha256,
+        shippedExecutableTreeSha256: sha256(`bin/opencode\0${executableSha256}\0`),
+      },
+    },
+  };
+}
+
+function treeSha256(files: Readonly<Record<string, string>>): string {
+  const hash = createHash("sha256");
+  for (const [path, bytes] of Object.entries(files).sort(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    hash.update(`${path}\0${sha256(bytes)}\0`);
+  }
+  return hash.digest("hex");
+}
+
+function linuxActivation(sidecar: Record<string, unknown>): Record<string, unknown> {
+  const security = {
+    ...laneSecurity("production"),
+    signatureKind: "github-oidc-attested",
+    verificationChecks: { provenanceVerified: true },
+  };
+  return {
+    schemaVersion: 1,
+    suiteVersion: "runtime-tree-qualification-v1",
+    sourceCommitSha: COMMIT,
+    platformTarget: LINUX_TARGET,
+    runtime: { nodePlatform: "linux", nodeArchitecture: "x64" },
+    security,
+    nativeHelpers: [
+      linuxNativeHelper("keiko-secure-workspace-read", SECURE_READ),
+      linuxNativeHelper("keiko-runtime-supervisor", SUPERVISOR),
+    ],
+    nativeAddons: [
+      {
+        name: "usearch",
+        platformTarget: LINUX_TARGET,
+        executablePath: "runtime/native/usearch.node",
+        shippedSha256: sha256(LINUX_USEARCH),
+        sizeBytes: Buffer.byteLength(LINUX_USEARCH),
+      },
+    ],
+    sidecarRuntimes: [sidecar],
+  };
+}
+
+function linuxNativeHelper(name: string, bytes: string): Record<string, unknown> {
+  return {
+    name,
+    platformTarget: LINUX_TARGET,
+    executablePath:
+      name === "keiko-runtime-supervisor"
+        ? "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js"
+        : `runtime/native/${name}`,
+    shippedSha256: sha256(bytes),
+    sizeBytes: Buffer.byteLength(bytes),
+    signing: {
+      signatureKind: "github-oidc-attested",
+      verificationStatus: "verified-production",
+      signatureVerified: true,
+      notarizationRequired: false,
+      notarizationVerified: false,
     },
   };
 }

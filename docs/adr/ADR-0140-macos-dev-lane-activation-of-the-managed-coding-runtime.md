@@ -163,9 +163,11 @@ running unconfined. This matches ADR-0043 D14's own description of the same wiri
 converge instead of describing the fact differently.
 
 Issue #3422 additionally teaches the shared planner to compile the same contract into a Linux
-bubblewrap/unshare namespace plus a fixed Unix-domain gateway bridge (ADR-0043 D12/D14). ADR-0140
-does not activate that path: the development lane still supports only its declared macOS and
-Windows targets, and Linux has no long-lived runtime target until #3451 supplies and qualifies one.
+bubblewrap/unshare namespace plus an anonymous descriptor-transfer gateway bridge (ADR-0043
+D12/D14). ADR-0140 does not activate that path: the development lane still supports only its
+declared macOS and Windows targets. Issue #3451 supplies `linux-x64` exclusively through the
+packaged production-discovery path, where exact-component, offline Sigstore, fresh-runner, and real
+namespace qualification are mandatory; it does not widen this weaker development lane.
 
 ## Consequences
 

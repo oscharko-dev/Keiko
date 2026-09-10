@@ -131,15 +131,23 @@ static void clear_request(struct request *request) {
   if (request->root != NULL) { size_t n = strlen(request->root) + strlen(request->path) + 2; memset(request->root, 0, n); free(request->root); }
 }
 
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__linux__)
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <errno.h>
 
+#if defined(__APPLE__)
+#define KSR_MTIME(value) ((value)->st_mtimespec)
+#define KSR_CTIME(value) ((value)->st_ctimespec)
+#else
+#define KSR_MTIME(value) ((value)->st_mtim)
+#define KSR_CTIME(value) ((value)->st_ctim)
+#endif
+
 static int same_identity(const struct stat *a, const struct stat *b) {
-  return a->st_dev == b->st_dev && a->st_ino == b->st_ino && a->st_mode == b->st_mode && a->st_nlink == b->st_nlink && a->st_size == b->st_size && a->st_mtimespec.tv_sec == b->st_mtimespec.tv_sec && a->st_mtimespec.tv_nsec == b->st_mtimespec.tv_nsec && a->st_ctimespec.tv_sec == b->st_ctimespec.tv_sec && a->st_ctimespec.tv_nsec == b->st_ctimespec.tv_nsec;
+  return a->st_dev == b->st_dev && a->st_ino == b->st_ino && a->st_mode == b->st_mode && a->st_nlink == b->st_nlink && a->st_size == b->st_size && KSR_MTIME(a).tv_sec == KSR_MTIME(b).tv_sec && KSR_MTIME(a).tv_nsec == KSR_MTIME(b).tv_nsec && KSR_CTIME(a).tv_sec == KSR_CTIME(b).tv_sec && KSR_CTIME(a).tv_nsec == KSR_CTIME(b).tv_nsec;
 }
 
 #if defined(KSR_TEST_PAUSE_AFTER_FINAL_OPEN)

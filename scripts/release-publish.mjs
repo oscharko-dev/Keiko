@@ -711,7 +711,7 @@ function portableQualificationFailures(qualification, rootManifest, head) {
 }
 
 // Deliberate defense-in-depth: assemble-portable-release-assets.mjs (validatePortableReleaseSet)
-// enforces this same exact-three/qualification-binding invariant at assembly; keep in sync.
+// enforces this same exact-four/qualification-binding invariant at assembly; keep in sync.
 function portableAssetsFromManifest(inputPath, rootManifest, qualification) {
   const manifest = readJsonFile(inputPath);
   const baseDir = dirname(inputPath);
@@ -722,7 +722,7 @@ function portableAssetsFromManifest(inputPath, rootManifest, qualification) {
   }
   const artifacts = Array.isArray(manifest.artifacts) ? manifest.artifacts : [];
   if (artifacts.length !== PORTABLE_TARGETS.length) {
-    failures.push("portable assets manifest must list exactly three artifacts.");
+    failures.push("portable assets manifest must list exactly four artifacts.");
   }
   const normalized = normalizePortableAssets(
     artifacts,
@@ -1506,8 +1506,13 @@ function verifyFirstClassArchiveSet(remoteAssets, failures) {
   const actual = remoteAssets
     .map((asset) => asset.name)
     .filter((name) => /^keiko-[a-z0-9-]+\.zip$/u.test(name));
-  if (actual.length !== expected.size || actual.some((name) => !expected.has(name))) {
-    failures.push("stable portable releases must expose exactly the three first-class ZIP assets.");
+  const actualSet = new Set(actual);
+  if (
+    actual.length !== expected.size ||
+    actualSet.size !== actual.length ||
+    actual.some((name) => !expected.has(name))
+  ) {
+    failures.push("stable portable releases must expose exactly the four first-class ZIP assets.");
   }
 }
 

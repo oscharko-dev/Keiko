@@ -16,7 +16,8 @@ Governing decisions:
 ## Product Contract
 
 Portable v1 is an archive-backed delivery path for stable public releases with platform-specific
-promoted journeys. On Windows, ordinary users download and run the signed
+promoted journeys. On Linux, users download the `linux-x64` ZIP, extract it, and open `Keiko`. On
+Windows, ordinary users download and run the signed
 `keiko-windows-x64-setup.exe`; setup verifies its embedded canonical ZIP, completes first-run setup
 into Keiko's per-user managed install location, and launches Keiko. On macOS, users download the
 target ZIP, extract `Keiko.app`, and double-click it to complete first-run setup into the managed app
@@ -29,11 +30,12 @@ the primary install/start path. Shell launchers may exist only for support and a
 
 ## Platform Target Matrix
 
-Every stable release that claims portable product delivery must publish exactly these first-class
+Every production stable release that claims portable product delivery must publish exactly these first-class
 portable assets as a release-blocking set:
 
 | Platform target | Required asset name     | Archive format | Primary launcher | Runtime target | Signing evidence                              | Stable release requirement                           |
 | --------------- | ----------------------- | -------------- | ---------------- | -------------- | --------------------------------------------- | ---------------------------------------------------- |
+| `linux-x64`     | `keiko-linux-x64.zip`   | ZIP            | `Keiko`          | `linux-x64`    | GitHub-OIDC Sigstore qualification receipt    | Required; exact namespace-gateway proof, no fallback |
 | `windows-x64`   | `keiko-windows-x64.zip` | ZIP            | `Keiko.exe`      | `win32-x64`    | Authenticode publisher-chain verification     | Required whenever portable delivery is advertised    |
 | `macos-arm64`   | `keiko-macos-arm64.zip` | ZIP            | `Keiko.app`      | `darwin-arm64` | Developer ID signature and notarization proof | Equal priority with `macos-x64`; never best-effort   |
 | `macos-x64`     | `keiko-macos-x64.zip`   | ZIP            | `Keiko.app`      | `darwin-x64`   | Developer ID signature and notarization proof | Equal priority with `macos-arm64`; never best-effort |
@@ -46,7 +48,7 @@ the canonical Windows ZIP. The setup embeds that exact ZIP, installs it under th
 install root, and verifies that the launched Keiko process remains healthy. If a managed Keiko
 installation already exists, setup validates and launches that installation without replacing it;
 governed in-app update remains the upgrade authority. The setup is a convenience install surface
-for `windows-x64`, not a fourth platform target; release qualification and digest binding still
+for `windows-x64`, not a fifth platform target; release qualification and digest binding still
 derive from the ZIP and its reviewed evidence.
 
 ## Current Staging Status
@@ -54,8 +56,8 @@ derive from the ZIP and its reviewed evidence.
 The portable release pipeline stages the packed Keiko package, acquires and verifies the target
 Node.js runtime and the approved OpenCode runtime, builds the native launcher and governed runtime
 helpers, and validates redacted artifact manifests. Stable-tag production jobs additionally perform
-Windows signing, macOS signing and notarization, native runtime qualification, release upload, and
-published-asset verification. First-run setup promotes the verified bundle into the managed install
+Linux OIDC attestation and namespace qualification, Windows signing, macOS signing and notarization,
+native runtime qualification, release upload, and published-asset verification. First-run setup promotes the verified bundle into the managed install
 root before the Coding Workbench may activate the bundled runtime.
 
 Manifest schema v1 has four explicit pre-publication validation contexts — staging, evaluation,
@@ -109,6 +111,50 @@ release asset without a self-referential manifest checksum.
 Every ZIP asset extracts into one top-level `Keiko/` directory. That directory is a bootstrap
 payload, not the long-lived self-update target until first-run setup attests and promotes a managed
 install.
+
+Linux archive:
+
+```text
+linux-x64/
+  keiko-linux-x64.zip
+  manifest/
+    portable-manifest.json
+  evidence/
+    SHA256SUMS.txt
+    sbom.cdx.json
+    third-party-notices.txt
+    signing-verification.json
+  payload/
+    Keiko/
+      Keiko
+      .portable/
+        setup-manifest.json
+        runtime-activation.json
+        runtime-qualification.json
+        runtime-qualification.sigstore.json
+      app/
+        package.json
+        dist/
+        node_modules/
+        release-impact.catalog.json
+      runtime/
+        native/
+          keiko-secure-workspace-read
+        node/
+          bin/node
+          LICENSE
+          NOTICE
+          NODE_RUNTIME_SOURCE.json
+        sidecars/
+          opencode-compatible/
+            bin/
+              opencode
+            evidence/
+              LICENSE
+              sbom.cdx.json
+      support/
+        keiko-support.sh
+```
 
 Windows archive:
 
@@ -211,7 +257,7 @@ macos-arm64/
 
 Layout rules:
 
-- `Keiko.exe` and `Keiko.app` are the only primary launchers named in user-facing install/start
+- `Keiko`, `Keiko.exe`, and `Keiko.app` are the only primary launchers named in user-facing install/start
   instructions.
 - `support/` is optional and support-only. It must not be the primary user path and must not be
   referenced from default install/start copy.
@@ -243,6 +289,7 @@ Default managed roots:
 
 | Platform target | Managed root                      | Native registration owned by #1950                             |
 | --------------- | --------------------------------- | -------------------------------------------------------------- |
+| `linux-x64`     | `~/.local/opt/Keiko`              | User-local XDG desktop entry pointing to managed `Keiko`       |
 | `windows-x64`   | `%LOCALAPPDATA%\\Programs\\Keiko` | User-local Start Menu shortcut pointing to managed `Keiko.exe` |
 | `macos-arm64`   | `/Applications/Keiko.app`         | Canonical app bundle registration for Spotlight/Finder launch  |
 | `macos-x64`     | `/Applications/Keiko.app`         | Canonical app bundle registration for Spotlight/Finder launch  |
@@ -799,7 +846,13 @@ Validation rules:
   exactly one `keiko-secure-workspace-read` entry at the fixed target path. The entry binds target,
   architecture, `KSR1`/`KSS1`, source commit and tree, unsigned and final signed-byte digests,
   signature/notarization state, and one CycloneDX `bom-ref`; it is not a sidecar runtime.
-- `artifact.platformTarget` is one of `windows-x64`, `macos-arm64`, or `macos-x64`.
+- `runtimeQualification` is required for production Linux and macOS artifacts and has exactly
+  `schemaVersion`, `path`, `sha256`, and `backend`. Linux requires
+  `.portable/runtime-qualification.json` with backend `linux-namespace-gateway`, plus the fixed
+  `.portable/runtime-qualification.sigstore.json` bundle whose offline-verified OIDC identity and
+  subject bytes bind that receipt. The complete object is duplicated in `reviewedBinding`; drift,
+  absence, or a target/backend mismatch fails closed.
+- `artifact.platformTarget` is one of `linux-x64`, `windows-x64`, `macos-arm64`, or `macos-x64`.
 - `artifact.assetName` must match the platform matrix exactly.
 - `artifact.assetId` and `release.releaseId` are exactly `0` for staging and verified unpublished
   candidates. API-bound published manifests require positive values matching the remote snapshot.
@@ -824,8 +877,8 @@ Validation rules:
   first-run-download fallback.
 - Sidecar `license` is normalized from the schema-v2 approval and must retain its SPDX id,
   commit-addressed source URL, and SHA-256. Its digest must match `licenseEvidence.sha256`.
-- Sidecar `platformTarget` must match the parent artifact target. A Windows sidecar cannot be
-  carried by a macOS artifact, and macOS arm64 and macOS x64 sidecars are independently verified.
+- Sidecar `platformTarget` must match the parent artifact target. A sidecar cannot cross Linux,
+  Windows, or macOS artifacts, and macOS arm64 and macOS x64 sidecars are independently verified.
 - Sidecar `executablePath`, `licenseEvidence.path`, and `sbomEvidence.path` must be contained
   relative paths under that sidecar payload root. Traversal, absolute paths, `.keiko`, customer
   repository paths, temp roots, private paths, raw logs, package-manager output, prompts, diffs,
@@ -853,13 +906,17 @@ Validation rules:
   `macos-staple-unverified`, but it must never store certificate subjects, team ids, account ids,
   keychain names, private endpoints, or raw signing/notarization output.
 - `security.verificationChecks` stores target-specific redacted booleans only:
-  `publisherChainVerified` and `timestampVerified` for Windows; `developerIdVerified`,
+  `provenanceVerified` for Linux; `publisherChainVerified` and `timestampVerified` for Windows; `developerIdVerified`,
   `notarizationVerified`, `stapleVerified`, and `assessmentVerified` for both macOS architectures.
 - `updateEligibility.requiredPredicates` must all be true before the one-click portable updater may
   execute. Any missing platform signature/notarization proof or missing crash-safe same-volume
   promotion capability forces a manual-only path.
-- `entrypoints.primaryLauncher` must be `Keiko.exe` for `windows-x64` and `Keiko.app` for both macOS
-  targets.
+- `entrypoints.primaryLauncher` must be `Keiko` for `linux-x64`, `Keiko.exe` for `windows-x64`, and
+  `Keiko.app` for both macOS targets.
+- Linux production admission requires `github-oidc-attested`, `provenanceVerified: true`, the exact
+  receipt and bundle described above, and a live qualified namespace backend. Runtime discovery and
+  every admitted secure read verify the receipt offline and bind the exact helper, supervisor,
+  activation manifest, OpenCode payload, source commit, repository, and workflow identity.
 - macOS targets require Developer ID signature and notarization verification. Windows requires
   Authenticode publisher-chain verification. Windows point-of-use admission additionally invokes
   the fixed system verifier with a closed environment and requires every runtime attestation carrier

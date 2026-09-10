@@ -3,7 +3,7 @@ import { basename, dirname, join } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
 export type PortableCommand = "setup" | "launch" | "status" | "resolve-root";
-export type PortableTarget = "windows-x64" | "macos-arm64" | "macos-x64";
+export type PortableTarget = "linux-x64" | "windows-x64" | "macos-arm64" | "macos-x64";
 export type SetupStatus = "managed" | "setup-failed" | "unmanaged";
 export type SpawnFn = (
   command: string,
@@ -12,7 +12,7 @@ export type SpawnFn = (
 ) => ChildProcess;
 
 export interface SetupRuntimeManifest {
-  readonly nodePlatform: "win32" | "darwin";
+  readonly nodePlatform: "linux" | "win32" | "darwin";
   readonly nodeArchitecture: "x64" | "arm64";
 }
 
@@ -28,7 +28,7 @@ export interface SetupManifest {
 }
 
 export interface PortableLayout {
-  readonly rootKind: "windows-root" | "macos-app";
+  readonly rootKind: "linux-root" | "windows-root" | "macos-app";
   readonly installRoot: string;
   readonly resourceRoot: string;
   readonly appRoot: string;
@@ -47,7 +47,12 @@ export function isPortableCommand(value: string | undefined): value is PortableC
 }
 
 export function isPortableTarget(value: string | undefined): value is PortableTarget {
-  return value === "windows-x64" || value === "macos-arm64" || value === "macos-x64";
+  return (
+    value === "linux-x64" ||
+    value === "windows-x64" ||
+    value === "macos-arm64" ||
+    value === "macos-x64"
+  );
 }
 
 export function targetForHost(
@@ -55,6 +60,7 @@ export function targetForHost(
   architecture: string,
 ): PortableTarget | undefined {
   if (platform === "win32" && architecture === "x64") return "windows-x64";
+  if (platform === "linux" && architecture === "x64") return "linux-x64";
   if (platform === "darwin" && architecture === "arm64") return "macos-arm64";
   if (platform === "darwin" && architecture === "x64") return "macos-x64";
   return undefined;
@@ -62,12 +68,14 @@ export function targetForHost(
 
 export function targetRuntime(target: PortableTarget): SetupManifest["runtime"] {
   if (target === "windows-x64") return { nodePlatform: "win32", nodeArchitecture: "x64" };
+  if (target === "linux-x64") return { nodePlatform: "linux", nodeArchitecture: "x64" };
   if (target === "macos-arm64") return { nodePlatform: "darwin", nodeArchitecture: "arm64" };
   return { nodePlatform: "darwin", nodeArchitecture: "x64" };
 }
 
 export function primaryLauncherName(target: PortableTarget): string {
-  return target === "windows-x64" ? "Keiko.exe" : "Keiko.app";
+  if (target === "windows-x64") return "Keiko.exe";
+  return target === "linux-x64" ? "Keiko" : "Keiko.app";
 }
 
 export function defaultManagedRoot(target: PortableTarget, env: EnvSource, home: string): string {
@@ -75,6 +83,7 @@ export function defaultManagedRoot(target: PortableTarget, env: EnvSource, home:
     const localAppData = env.LOCALAPPDATA ?? join(home, "AppData", "Local");
     return join(localAppData, "Programs", "Keiko");
   }
+  if (target === "linux-x64") return join(home, ".local", "opt", "Keiko");
   return "/Applications/Keiko.app";
 }
 
@@ -96,6 +105,18 @@ export function layoutFor(target: PortableTarget, root: string): PortableLayout 
       packageJsonPath: join(root, "app", "package.json"),
       runtimeNodePath: join(root, "runtime", "node", "node.exe"),
       primaryLauncherPath: join(root, "Keiko.exe"),
+      setupManifestPath: join(root, ".portable", SETUP_MANIFEST),
+    };
+  }
+  if (target === "linux-x64") {
+    return {
+      rootKind: "linux-root",
+      installRoot: root,
+      resourceRoot: root,
+      appRoot: join(root, "app"),
+      packageJsonPath: join(root, "app", "package.json"),
+      runtimeNodePath: join(root, "runtime", "node", "bin", "node"),
+      primaryLauncherPath: join(root, "Keiko"),
       setupManifestPath: join(root, ".portable", SETUP_MANIFEST),
     };
   }

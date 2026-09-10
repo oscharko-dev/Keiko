@@ -297,7 +297,9 @@ int wmain(void) {
 
 #else
 #include <limits.h>
+#if defined(__APPLE__)
 #include <mach-o/dyld.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -321,32 +323,59 @@ static int join_path(char *out, size_t cap, const char *base, const char *suffix
   return written > 0 && (size_t)written < cap;
 }
 
-int main(void) {
+static int current_executable_path(char *out, size_t cap) {
+#if defined(__APPLE__)
+  (void)cap;
   char raw[PATH_MAX];
   uint32_t raw_size = sizeof(raw);
   if (_NSGetExecutablePath(raw, &raw_size) != 0) {
-    return 1;
+    return 0;
   }
-  char executable[PATH_MAX];
-  if (realpath(raw, executable) == NULL) {
-    return 1;
+  return realpath(raw, out) != NULL;
+#elif defined(__linux__)
+  if (cap < 2) {
+    return 0;
   }
+  ssize_t length = readlink("/proc/self/exe", out, cap - 1);
+  if (length <= 0 || (size_t)length >= cap - 1) {
+    return 0;
+  }
+  out[length] = '\0';
+  return 1;
+#else
+  (void)out;
+  (void)cap;
+  return 0;
+#endif
+}
 
+static int portable_root(char *out, size_t cap, const char *executable) {
+#if defined(__APPLE__)
   char macos_dir[PATH_MAX];
   char contents_dir[PATH_MAX];
-  char app_root[PATH_MAX];
   if (!dirname_copy(macos_dir, sizeof(macos_dir), executable)) {
-    return 1;
+    return 0;
   }
   if (!dirname_copy(contents_dir, sizeof(contents_dir), macos_dir)) {
-    return 1;
+    return 0;
   }
-  if (!dirname_copy(app_root, sizeof(app_root), contents_dir)) {
+  return dirname_copy(out, cap, contents_dir);
+#else
+  return dirname_copy(out, cap, executable);
+#endif
+}
+
+int main(void) {
+  char executable[PATH_MAX];
+  char app_root[PATH_MAX];
+  if (!current_executable_path(executable, sizeof(executable)) ||
+      !portable_root(app_root, sizeof(app_root), executable)) {
     return 1;
   }
 
   char node[PATH_MAX];
   char cli[PATH_MAX];
+#if defined(__APPLE__)
   if (!join_path(node, sizeof(node), app_root, "/Contents/Resources/runtime/node/bin/node")) {
     return 1;
   }
@@ -363,6 +392,14 @@ int main(void) {
   if (!isatty(STDERR_FILENO)) {
     setenv("KEIKO_PORTABLE_UI_LAUNCH", "1", 1);
   }
+#else
+  if (!join_path(node, sizeof(node), app_root, "/runtime/node/bin/node")) {
+    return 1;
+  }
+  if (!join_path(cli, sizeof(cli), app_root, "/app/dist/cli/index.js")) {
+    return 1;
+  }
+#endif
   execl(
     node,
     node,

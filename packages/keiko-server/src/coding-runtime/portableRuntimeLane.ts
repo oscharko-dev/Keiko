@@ -24,6 +24,7 @@ const PRODUCTION_STATUS = "verified-production";
 const EVALUATION_REASON_CODES = ["evaluation-artifact", "evaluation-unsigned-allowed"] as const;
 
 const WINDOWS_CHECK_KEYS = ["publisherChainVerified", "timestampVerified"] as const;
+const LINUX_CHECK_KEYS = ["provenanceVerified"] as const;
 const MACOS_CHECK_KEYS = [
   "developerIdVerified",
   "notarizationVerified",
@@ -33,7 +34,8 @@ const MACOS_CHECK_KEYS = [
 
 /** The one copy of the per-target platform-check key list. */
 export function platformCheckKeys(target: UpdatePortableTarget): readonly string[] {
-  return target === "windows-x64" ? WINDOWS_CHECK_KEYS : MACOS_CHECK_KEYS;
+  if (target === "windows-x64") return WINDOWS_CHECK_KEYS;
+  return target === "linux-x64" ? LINUX_CHECK_KEYS : MACOS_CHECK_KEYS;
 }
 
 /**

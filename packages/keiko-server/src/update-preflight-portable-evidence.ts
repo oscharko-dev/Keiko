@@ -131,18 +131,22 @@ function stringFieldMatches(
 }
 
 function signatureKind(target: UpdatePortableTarget): string {
-  return target === "windows-x64" ? "authenticode" : "developer-id-notarized";
+  if (target === "windows-x64") return "authenticode";
+  return target === "linux-x64" ? "github-oidc-attested" : "developer-id-notarized";
 }
 
 function targetChecksVerified(
   target: UpdatePortableTarget,
   checks: Record<string, unknown> | undefined,
 ): boolean {
-  const keys =
-    target === "windows-x64"
-      ? ["publisherChainVerified", "timestampVerified"]
-      : ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"];
+  const keys = targetVerificationCheckKeys(target);
   return keys.every((key) => checks?.[key] === true);
+}
+
+function targetVerificationCheckKeys(target: UpdatePortableTarget): readonly string[] {
+  if (target === "windows-x64") return ["publisherChainVerified", "timestampVerified"];
+  if (target === "linux-x64") return ["provenanceVerified"];
+  return ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"];
 }
 
 function securityVerified(
@@ -151,7 +155,7 @@ function securityVerified(
 ): boolean {
   const security = recordAt(manifest, "security");
   const checks = security === undefined ? undefined : recordAt(security, "verificationChecks");
-  const macos = target !== "windows-x64";
+  const macos = target.startsWith("macos-");
   return all([
     fieldEquals(security, "verificationPolicy", "production"),
     fieldEquals(security, "verificationStatus", "verified-production"),
@@ -298,7 +302,7 @@ export async function resolvePortableAsset(
   if (!firstClassArchiveSetComplete(release.assets)) {
     return missingResolution(
       target,
-      "The GitHub Release does not expose exactly the three reviewed portable ZIP assets.",
+      "The GitHub Release does not expose a complete reviewed portable ZIP asset set.",
       "portable-asset-missing",
     );
   }

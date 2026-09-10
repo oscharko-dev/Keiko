@@ -305,12 +305,13 @@ describe("CI test/gate wiring guard", () => {
     // 17 -> 20 with the three coverage suite jobs Issue #2704 split out of `coverage-sonar`,
     // then 20 -> 22 with the credential-free macOS qualification and protected sealing lanes,
     // then 22 -> 23 with the diff-scoped semantic-duplication lane, 23 -> 24 when the secret scan
-    // adopted the governed runtime. The retired hosted performance policy no longer adds a lane.
+    // adopted the governed runtime, then 24 -> 26 with the Linux assembly and clean-runner
+    // qualification lanes. The retired hosted performance policy no longer adds a lane.
     // The load-bearing assertion is the pairing below: every Node lane, old or new, verifies the
     // governed toolchain.
-    expect(node24SetupCount).toBe(24);
+    expect(node24SetupCount).toBe(26);
     expect(node26SetupCount).toBe(1);
-    expect(nodeSetupCount).toBe(25);
+    expect(nodeSetupCount).toBe(27);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
     expect(ci).toContain("NODE_26_COMPATIBILITY_RESULT");
