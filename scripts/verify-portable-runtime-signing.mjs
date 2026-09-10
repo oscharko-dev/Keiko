@@ -81,6 +81,7 @@ function verificationSucceeded(target, checks) {
   if (target.nodePlatform === "win32") {
     return checks.publisherChainVerified === true && checks.timestampVerified === true;
   }
+  if (target.nodePlatform === "linux") return checks.provenanceVerified === true;
   return (
     checks.developerIdVerified === true &&
     checks.notarizationVerified === true &&
@@ -95,6 +96,9 @@ function failureReasonCodes(target, checks) {
       ...(checks.publisherChainVerified === true ? [] : ["windows-publisher-chain-unverified"]),
       ...(checks.timestampVerified === true ? [] : ["windows-timestamp-unverified"]),
     ];
+  }
+  if (target.nodePlatform === "linux") {
+    return checks.provenanceVerified === true ? [] : ["github-provenance-unverified"];
   }
   return [
     ...(checks.developerIdVerified === true ? [] : ["macos-developer-id-unverified"]),
@@ -116,7 +120,9 @@ function verificationStateFor(target, policy, input) {
     signatureVerified:
       target.nodePlatform === "win32"
         ? verified
-        : input.verificationChecks.developerIdVerified === true,
+        : target.nodePlatform === "linux"
+          ? input.verificationChecks.provenanceVerified === true
+          : input.verificationChecks.developerIdVerified === true,
     notarizationRequired: target.nodePlatform === "darwin",
     notarizationVerified:
       target.nodePlatform === "darwin"

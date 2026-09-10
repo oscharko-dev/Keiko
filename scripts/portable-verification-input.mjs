@@ -39,7 +39,9 @@ function readVerificationChecks(value, target) {
   const allowedKeys =
     target.nodePlatform === "win32"
       ? ["publisherChainVerified", "timestampVerified"]
-      : ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"];
+      : target.nodePlatform === "linux"
+        ? ["provenanceVerified"]
+        : ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"];
   for (const key of exactInputKeys(value)) {
     if (!allowedKeys.includes(key)) fail("verification checks contain unsupported keys");
   }
