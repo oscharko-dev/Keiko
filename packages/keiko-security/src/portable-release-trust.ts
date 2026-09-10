@@ -12,6 +12,7 @@ const KEY_ID = /^[a-f0-9]{64}$/u;
 const BASE64 = /^[A-Za-z0-9+/]{86}==$/u;
 const ROLE = "keiko-portable-release";
 const ALGORITHM = "ed25519";
+export const PORTABLE_RELEASE_TRUST_MAX_LIFETIME_MS = 366 * 24 * 60 * 60 * 1000;
 const PRODUCTION_KEY_ID = "63b20c885c396471b6e0141a7b971c78b37b907066485d8107c3b572e22ef814";
 const PRODUCTION_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MCowBQYDK2VwAyEAIS2FY9YmfR7N/X6xxbt1HnPOGwPdHfF9arOxcVeD0os=
@@ -123,11 +124,13 @@ function validTrustVersion(value: Record<string, unknown>): boolean {
 }
 
 function validTrustWindow(value: Record<string, unknown>): boolean {
-  return (
-    validIsoInstant(value.signedAt) &&
-    validIsoInstant(value.expiresAt) &&
-    new Date(value.expiresAt) > new Date(value.signedAt)
-  );
+  const signedAt = validIsoInstant(value.signedAt) ? new Date(value.signedAt) : undefined;
+  const expiresAt = validIsoInstant(value.expiresAt) ? new Date(value.expiresAt) : undefined;
+  const lifetime =
+    expiresAt !== undefined && signedAt !== undefined
+      ? expiresAt.valueOf() - signedAt.valueOf()
+      : 0;
+  return lifetime > 0 && lifetime <= PORTABLE_RELEASE_TRUST_MAX_LIFETIME_MS;
 }
 
 function trustMetadata(
@@ -186,8 +189,12 @@ export function createPortableReleaseTrust(
   if (!validIsoInstant(options.signedAt) || !validIsoInstant(options.expiresAt)) {
     throw new TypeError("portable release trust timestamps must be canonical ISO instants");
   }
-  if (new Date(options.expiresAt) <= new Date(options.signedAt)) {
+  const lifetime = new Date(options.expiresAt).valueOf() - new Date(options.signedAt).valueOf();
+  if (lifetime <= 0) {
     throw new TypeError("portable release trust expiry must follow its signing time");
+  }
+  if (lifetime > PORTABLE_RELEASE_TRUST_MAX_LIFETIME_MS) {
+    throw new TypeError("portable release trust lifetime exceeds the maximum");
   }
   const privateKey = createPrivateKey(options.privateKeyPem);
   const publicKey = publicKeyFromPrivate(privateKey);

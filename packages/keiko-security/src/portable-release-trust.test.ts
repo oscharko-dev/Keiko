@@ -2,6 +2,7 @@ import { generateKeyPairSync } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   createPortableReleaseTrust,
+  PORTABLE_RELEASE_TRUST_MAX_LIFETIME_MS,
   portableReleaseTrustKeyId,
   verifyPortableReleaseTrust,
   type PortableReleaseTrustedKey,
@@ -121,6 +122,35 @@ describe("portable release trust", () => {
     expect(
       verifyPortableReleaseTrust(malformed, {
         now: new Date("2026-09-11T08:00:00.000Z"),
+        trustedKeys: [key.trustedKey],
+      }),
+    ).toEqual({ ok: false, reason: "metadata-malformed" });
+  });
+
+  it("enforces the maximum trust lifetime when signing and verifying", () => {
+    const key = keyPair();
+    const overlongExpiry = new Date(
+      new Date(SIGNED_AT).valueOf() + PORTABLE_RELEASE_TRUST_MAX_LIFETIME_MS + 1,
+    ).toISOString();
+    expect(() =>
+      createPortableReleaseTrust(manifest(), {
+        expiresAt: overlongExpiry,
+        metadataVersion: 1234,
+        privateKeyPem: key.privateKeyPem,
+        signedAt: SIGNED_AT,
+      }),
+    ).toThrow("portable release trust lifetime exceeds the maximum");
+
+    const signed = createPortableReleaseTrust(manifest(), {
+      expiresAt: EXPIRES_AT,
+      metadataVersion: 1234,
+      privateKeyPem: key.privateKeyPem,
+      signedAt: SIGNED_AT,
+    });
+    (signed.releaseTrust as Record<string, unknown>).expiresAt = overlongExpiry;
+    expect(
+      verifyPortableReleaseTrust(signed, {
+        now: new Date(SIGNED_AT),
         trustedKeys: [key.trustedKey],
       }),
     ).toEqual({ ok: false, reason: "metadata-malformed" });

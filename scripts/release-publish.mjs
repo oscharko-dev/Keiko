@@ -25,6 +25,7 @@ import { URL } from "node:url";
 import {
   createPortableReleaseTrust,
   KEIKO_PORTABLE_RELEASE_TRUSTED_KEYS,
+  PORTABLE_RELEASE_TRUST_MAX_LIFETIME_MS,
   portableReleaseTrustKeyId,
   verifyPortableReleaseTrust,
 } from "@oscharko-dev/keiko-security/portable-release-trust";
@@ -84,7 +85,6 @@ const valueArgFields = new Map([
 ]);
 const verifyAttempts = positiveIntegerEnv("KEIKO_RELEASE_VERIFY_ATTEMPTS", 13);
 const verifyDelayMs = nonNegativeIntegerEnv("KEIKO_RELEASE_VERIFY_DELAY_MS", 5000);
-const portableReleaseTrustLifetimeMs = 366 * 24 * 60 * 60 * 1000;
 
 function positiveIntegerEnv(name, fallback) {
   const raw = process.env[name];
@@ -1431,7 +1431,7 @@ function portableReleaseTrustedKeys() {
 function signedPortableManifest(manifest, releaseId, releaseCreatedAt) {
   const signedAt = canonicalReleaseInstant(releaseCreatedAt);
   if (signedAt === undefined) fail("GitHub release creation time must be a canonical instant.");
-  const expiresAt = new Date(new Date(signedAt).valueOf() + portableReleaseTrustLifetimeMs);
+  const expiresAt = new Date(new Date(signedAt).valueOf() + PORTABLE_RELEASE_TRUST_MAX_LIFETIME_MS);
   const signed = createPortableReleaseTrust(manifest, {
     expiresAt: expiresAt.toISOString(),
     metadataVersion: releaseId,
