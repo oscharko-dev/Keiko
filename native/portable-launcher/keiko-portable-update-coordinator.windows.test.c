@@ -61,6 +61,11 @@ static int test_atomic_replace_checkpoint(const char *name) {
 
 enum { TEST_PATH_CAP = 32768 };
 
+static void test_canonical_local_directory(
+    const wchar_t *path,
+    wchar_t output[TEST_PATH_CAP]
+);
+
 static int test_join(
     wchar_t output[TEST_PATH_CAP],
     const wchar_t *base,
@@ -145,6 +150,7 @@ static void test_create_root(wchar_t root[TEST_PATH_CAP]) {
   assert(GetTempFileNameW(temporary, L"kwc", 0, root) != 0);
   assert(DeleteFileW(root));
   assert(CreateDirectoryW(root, NULL));
+  test_canonical_local_directory(root, root);
   free(temporary);
 }
 
