@@ -13,6 +13,7 @@ import type {
   AuxiliaryCapabilityOutcomeV1,
   CodingWorkbenchRuntimeAuthorityEnvelope,
   EditorAgentChangeset,
+  VerificationDependencySummary,
   VerificationFailureLocation,
   VerifiedCommitResult,
   CodingRuntimeGitResult,
@@ -73,6 +74,14 @@ export interface CodingToolVerificationFailure {
   readonly summary: string;
   readonly locations: readonly VerificationFailureLocation[];
   readonly truncated: boolean;
+  /**
+   * The redacted, bounded tail of the failed step's output (ADR-0126 D3): what the model needs to
+   * repair a failure the location parser cannot read — a missing binary, a bundler error, npm's own
+   * diagnostics. Model-facing only; the persisted report and the activity log never carry it.
+   */
+  readonly excerpt?: string | undefined;
+  /** The dependency bootstrap's body-free summary when it, not a step, failed the run. */
+  readonly dependencies?: VerificationDependencySummary | undefined;
 }
 
 export type CodingToolActionRequest =

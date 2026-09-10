@@ -16,6 +16,7 @@ import {
   runVerification,
   type VerificationPlan,
   type VerificationReport,
+  type VerificationStepOutput,
 } from "@oscharko-dev/keiko-verification";
 import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-contracts";
 import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
@@ -61,6 +62,12 @@ export interface ExecuteVerificationArgs {
   // without this seam the evidence line was unobservable to any test in this file.
   readonly activityLog?: ServerLogSink | undefined;
   readonly fs?: WorkspaceFs | undefined;
+  // ADR-0043 D17: install the manifest's declared dependencies before the first script step when
+  // the installed tree is not current. Off unless the caller asks, exactly like the orchestrator.
+  readonly dependencyBootstrap?: "off" | "auto" | undefined;
+  // The orchestrator's redacted output tail of a step that did not pass (ADR-0126 D3), forwarded
+  // as it happens; never part of the persisted report.
+  readonly onStepOutput?: ((output: VerificationStepOutput) => void) | undefined;
 }
 
 export interface ExecuteVerificationResult {
@@ -99,6 +106,10 @@ export async function executeVerificationEnforced(
     // Deps-level termination-evidence port (PR #3354 review, 3887021650): a verification step's
     // timeout/abort leaves its verified Windows tree-kill disposition in the log.
     onTerminated: verificationTerminationHandler(activityLog, args.correlationId),
+    ...(args.dependencyBootstrap === undefined
+      ? {}
+      : { dependencyBootstrap: args.dependencyBootstrap }),
+    ...(args.onStepOutput === undefined ? {} : { onStepOutput: args.onStepOutput }),
   });
   return { report, probe };
 }

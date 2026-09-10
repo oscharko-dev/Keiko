@@ -369,7 +369,9 @@ async function runAndRespond(
       projectId: snapshot.workspaceRoot,
       correlationId,
     };
-    const report = await runner.runToReport(input, lifecycle.signal);
+    // The agent route answers with the redacted report only; the orchestrator's output tails travel
+    // exclusively to the governed coding tool (ADR-0126 D3) and are dropped here.
+    const { report } = await runner.runToReport(input, lifecycle.signal);
     return {
       status: 200,
       body: { result: { outcome: "completed", report: toRedactedVerificationReport(report) } },

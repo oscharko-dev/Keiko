@@ -7,6 +7,7 @@ import {
   buildCodeContextPack,
   type CodeContextConnector,
   type CodeContextPackResult,
+  type CodeContextRawObject,
 } from "./codeContextConnector.js";
 import { resolveGitHubIssue, type GitHubIssueResolutionDeps } from "./githubIssueResolution.js";
 
@@ -37,21 +38,94 @@ async function buildContext(
   if (canonicalise(resolution.binding) !== canonicalise(input.binding)) {
     return { ok: false, failure: "issue-unavailable" };
   }
-  const pack = await buildPack(deps, input, resolution);
+  const linked = await resolveLinkedIssues(deps, input, resolution);
+  const pack = await buildPack(deps, input, [resolution, ...linked]);
   if (pack.status === "blocked") {
     logPackBlocked(deps, input, pack);
     return { ok: false, failure: "authority-denied" };
   }
-  const text = renderPack(pack, resolution.preview.commentCount);
+  const text = renderPack(pack, commentCountsOf([resolution, ...linked]));
   return {
     ok: true,
     attachment: {
       issueNumber: input.binding.issueNumber,
       itemCount: pack.items.length,
+      linkedIssueCount: linked.length,
       byteCount: Buffer.byteLength(text),
       text,
     },
   };
+}
+
+// ─── Linked issues ──────────────────────────────────────────────────────────────────
+// An epic names its children as `#n` in its own body, and a run that can read only the epic has to
+// ask the operator for their text (Coding Workbench run 15, 2026-09-10: "Missing child issues …
+// please provide their text"). The bound issue's same-repository references are therefore resolved
+// through the SAME authorized reader the bound issue went through — the per-checkout GitHub-reader
+// grant and the remote check apply to each of them — and attached beside it, one level deep and
+// bounded. A reference that does not resolve (closed, a pull request, renumbered, unreadable) is
+// skipped with its closed failure on a body-free line; the run still starts with what could be read.
+export const MAX_LINKED_ISSUES = 8;
+// `#n` not preceded by a word character, a slash or another hash: `owner/repo#12` is another
+// repository's issue and `##` a heading. Bounded digits, no nested quantifier.
+const ISSUE_REFERENCE = /(?<![\w/#])#(\d{1,7})\b/gu;
+
+export function linkedIssueNumbers(body: string, boundIssue: number): readonly number[] {
+  const numbers = new Set<number>();
+  for (const match of body.matchAll(ISSUE_REFERENCE)) {
+    const issueNumber = Number(match[1]);
+    if (issueNumber > 0 && issueNumber !== boundIssue) numbers.add(issueNumber);
+    if (numbers.size >= MAX_LINKED_ISSUES) break;
+  }
+  return [...numbers];
+}
+
+async function resolveLinkedIssues(
+  deps: GitHubIssueResolutionDeps,
+  input: ContextInput,
+  resolution: ResolvedIssue,
+): Promise<readonly ResolvedIssue[]> {
+  const numbers = linkedIssueNumbers(resolution.contextObject.body, input.binding.issueNumber);
+  const resolutions = await Promise.all(
+    numbers.map((issueNumber) =>
+      resolveGitHubIssue(deps, {
+        repositoryRoot: input.repositoryRoot,
+        issueRef: `#${String(issueNumber)}`,
+        correlationId: input.correlationId,
+      }),
+    ),
+  );
+  const linked: ResolvedIssue[] = [];
+  resolutions.forEach((linkedResolution, index) => {
+    if (linkedResolution.ok) linked.push(linkedResolution);
+    else logLinkedIssueSkipped(deps, input, numbers[index], linkedResolution.failure);
+  });
+  return linked;
+}
+
+// Body-free: the referenced number and the reader's closed failure, never the issue's text.
+function logLinkedIssueSkipped(
+  deps: GitHubIssueResolutionDeps,
+  input: ContextInput,
+  issueNumber: number | undefined,
+  failure: string,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write({
+    level: "info",
+    category: "process",
+    op: "coding-context.linked-issue-skipped",
+    correlationId: input.correlationId,
+    extra: { runId: input.runId, ...(issueNumber === undefined ? {} : { issueNumber }), failure },
+  });
+}
+
+function commentCountsOf(resolutions: readonly ResolvedIssue[]): ReadonlyMap<string, number> {
+  return new Map(
+    resolutions.map((resolution) => [
+      resolution.contextObject.objectId,
+      resolution.preview.commentCount,
+    ]),
+  );
 }
 
 /**
@@ -106,26 +180,37 @@ function logPackBlocked(
 async function buildPack(
   deps: GitHubIssueResolutionDeps,
   input: ContextInput,
-  resolution: ResolvedIssue,
+  resolutions: readonly ResolvedIssue[],
 ): Promise<CodeContextPackResult> {
+  // Every object was read by the authorized resolver above; the connector only hands each ref its
+  // own already-read object and refuses a ref it never resolved.
+  const objects = new Map<string, CodeContextRawObject>(
+    resolutions.map((resolution) => [
+      String(resolution.preview.provenance.issueNumber),
+      resolution.contextObject,
+    ]),
+  );
   const connector: CodeContextConnector = {
-    read: () => Promise.resolve(resolution.contextObject),
+    read: (ref) => {
+      const object = objects.get(ref.objectId);
+      return object === undefined
+        ? Promise.reject(new Error("code-context-object-unresolved"))
+        : Promise.resolve(object);
+    },
   };
-  const ownerAndRepo = resolution.preview.provenance.ownerAndRepo;
+  const ownerAndRepo = resolutions[0]?.preview.provenance.ownerAndRepo ?? "";
   return buildCodeContextPack(
     {
       runId: input.runId,
       effectiveMode: input.effectiveMode,
       connectorScopes: connectorScopesFor(input.effectiveMode),
       maxBodyBytes: 16_384,
-      refs: [
-        {
-          source: "github",
-          objectKind: "issue",
-          ownerAndRepo,
-          objectId: String(input.binding.issueNumber),
-        },
-      ],
+      refs: resolutions.map((resolution) => ({
+        source: "github" as const,
+        objectKind: "issue" as const,
+        ownerAndRepo,
+        objectId: String(resolution.preview.provenance.issueNumber),
+      })),
     },
     {
       connectors: { github: connector, jira: connector },
@@ -144,7 +229,10 @@ async function buildPack(
   );
 }
 
-function renderPack(pack: CodeContextPackResult, commentCount: number): string {
+function renderPack(
+  pack: CodeContextPackResult,
+  commentCounts: ReadonlyMap<string, number>,
+): string {
   return JSON.stringify(
     pack.items.map((item) => ({
       ...item,
@@ -154,7 +242,10 @@ function renderPack(pack: CodeContextPackResult, commentCount: number): string {
         body: comment.body.slice(0, 1_024),
         bodyTruncated: comment.bodyTruncated || comment.body.length > 1_024,
       })),
-      omittedCommentCount: Math.max(0, commentCount - 8),
+      omittedCommentCount: Math.max(
+        0,
+        (commentCounts.get(item.objectId) ?? item.comments.length) - 8,
+      ),
     })),
   );
 }

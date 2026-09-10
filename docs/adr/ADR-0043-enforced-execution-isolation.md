@@ -429,3 +429,57 @@ of any D1–D10 denial, only a tightening of what D11 already restricted. The re
 never contains the literal Apple paths or `Xcode.app`/`CommandLineTools` substrings, alongside
 `darwin-git.test.ts`'s coverage of the user-writable-directory rejection and (on a real Darwin
 host) `resolveDarwinGitExecutable`'s successful resolution through `xcrun`.
+
+## Addendum — dependency installation is host-executed network I/O with lifecycle scripts disabled (2026-09-10)
+
+### D17 — The verification orchestrator installs a workspace's declared dependencies before its script steps
+
+D1–D10 confine every verification step to `network: "none"`, and D13 keeps that. A managed task
+worktree, however, is a clean checkout: it has the manifest a governed run wrote and none of the
+dependencies the manifest declares. Every `build` or `typecheck` step therefore failed within
+200 ms on a missing binary, and the run had no governed way to install anything — the tool catalog
+offers no command tool, and the one egress tool (`keiko.research.fetch`) is unavailable to a
+coding run (Coding Workbench run 15, 2026-09-10, PR #3452). Verification of a project created from
+nothing was impossible by construction.
+
+The dependency bootstrap (`packages/keiko-verification/src/dependencies.ts`) closes that gap at the
+layer that owns the plan. Before the first script step of a plan that has one, the orchestrator
+reads the workspace's `package.json`; when it declares dependencies and npm's own hidden lockfile
+(`node_modules/.package-lock.json`) is absent or older than the manifest or a lockfile, it runs
+exactly `npm install --ignore-scripts --no-audit --no-fund --no-progress --loglevel=error` through
+the same keiko-tools command boundary as every step (`DEPENDENCY_INSTALL_COMMAND_RULES`: `npm
+install` and nothing else, no leading flags, `-c`/`--call` denied), under
+`DEPENDENCY_INSTALL_LIMITS` (240 s wall time, 1 MiB output) and with **host network**. This is the
+one verification command that keeps egress, and the reason it may is the same reason D1–D10 deny
+it elsewhere: those steps EXECUTE untrusted, model-written code; `npm install --ignore-scripts`
+executes none — no project lifecycle script, no dependency's `postinstall`, only npm's own
+resolution and unpacking of what the manifest declares — and the code it fetches runs solely inside
+the sandboxed, egress-denied steps that follow. The child receives the ephemeral empty HOME every
+governed command receives (C5), so only npm's default registry configuration applies, and a
+project-level `.npmrc` refuses the bootstrap outright (`refused`, `project npm config present`):
+a manifest cannot redirect the install to a registry nobody configured. An unreadable manifest
+refuses too; a manifest without declarations, or a workspace without one, is `none` and nothing
+runs.
+
+The outcome is part of the report (`VerificationReport.dependencies`: state, lockfile
+`present`/`created`/`absent`, npm's exit code, duration, a short redacted detail) and of the
+activity log (`editor.verification.dependencies`, the same fields), never the install's output.
+When the bootstrap does not leave the workspace fit for its steps (`refused`, `failed`,
+`timed-out`), the steps are recorded as skipped with that reason and the report is `failed` —
+`matchesOverallStatus` applies the same rule on the wire — so a report whose steps all read
+"skipped" can be read back to the install that left them without their dependencies. The
+bootstrap's redacted output tail reaches the coding model through the orchestrator's
+`onStepOutput` seam exactly like a failed step's does (ADR-0126 D3); it is never persisted.
+
+Two bounds follow from this decision rather than being chosen next to it. The governed
+verification tool is settled by the tool catalog at
+`VERIFICATION_TOOL_MAX_DURATION_MS` (keiko-contracts), derived as the install ceiling plus every
+planned step at its own wall-time ceiling plus one settlement grace — the sandbox default of 30 s
+never fit a real install-then-build sequence — and the sidecar tool bridge and the generated plugin
+client each outlive that settlement by the contract's grace, so the facade's answer (the report, or
+the catalog's own timeout) always reaches the sidecar. The governed-invocation registry's 30 s TTL is
+untouched: it bounds staged edits, not verification.
+
+D13 still holds: no D1–D10 denial is relaxed for any step that executes code. The bootstrap is a new,
+narrower kind of command — network I/O by a trusted host tool over declarations, with execution of
+the fetched code deferred to the confined steps — and it is admitted only under that shape.

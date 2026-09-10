@@ -1822,6 +1822,7 @@ export class CodingRuntimeOrchestrator {
           runId,
           issueNumber: attachment.issueNumber,
           itemCount: attachment.itemCount,
+          linkedIssueCount: attachment.linkedIssueCount,
           byteCount: attachment.byteCount,
         },
       });

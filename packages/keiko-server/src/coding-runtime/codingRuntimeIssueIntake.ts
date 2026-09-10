@@ -16,6 +16,8 @@ import { githubIssueReaderRepositoryId } from "../coding-context/githubIssueRead
 export interface CodingRuntimeIssueAttachment {
   readonly issueNumber: number;
   readonly itemCount: number;
+  /** Same-repository issues the bound issue references and that were attached beside it. */
+  readonly linkedIssueCount: number;
   readonly byteCount: number;
   readonly text: string;
 }

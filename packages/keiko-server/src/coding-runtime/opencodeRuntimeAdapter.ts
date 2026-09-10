@@ -1,4 +1,8 @@
 import { opencodeRegistrationSet } from "@oscharko-dev/keiko-tool-catalog";
+import {
+  VERIFICATION_SETTLEMENT_GRACE_MS,
+  VERIFICATION_TOOL_MAX_DURATION_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { isAbsolute } from "node:path";
 import { correlationIdOrUnknown } from "../correlation.js";
 import { describeError } from "../diagnostics-log.js";
@@ -39,6 +43,11 @@ const MAX_HISTORY_CATCH_UP_ATTEMPTS = 4;
 const MAX_STREAM_RECONNECTS = 3;
 // The generated client must outlive the server-owned 30 s governed tool-bridge deadline.
 const OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS = 35_000;
+// The verification tool is settled at the contract's derived budget and the bridge outlives it by
+// one grace; the plugin's own client outlives both, so the sidecar always receives the server's
+// answer (report or catalog timeout) rather than producing a client-side one of its own.
+const OPEN_CODE_VERIFICATION_TOOL_CLIENT_TIMEOUT_MS =
+  VERIFICATION_TOOL_MAX_DURATION_MS + 2 * VERIFICATION_SETTLEMENT_GRACE_MS + 5_000;
 const OPEN_CODE_APPROVAL_TOOL_CLIENT_TIMEOUT_MS = MAX_APPROVAL_CHALLENGE_TTL_MS + 5_000;
 export const OPEN_CODE_MAX_TURN_WAIT_MS = 30 * 60_000;
 
@@ -1041,6 +1050,7 @@ function toolDescription(action: GeneratedToolAction): string {
 }
 
 function toolClientTimeoutMs(action: GeneratedToolAction): number {
+  if (action === "verification") return OPEN_CODE_VERIFICATION_TOOL_CLIENT_TIMEOUT_MS;
   return action === "git-stage" ||
     action === "git-commit" ||
     action === "git-push" ||

@@ -19,7 +19,11 @@ import {
   EDITOR_AGENT_FAILURE_CODES,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { validateAuxiliaryCapabilityOutcomeV1 } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
-import { isVerificationFailureLocation } from "@oscharko-dev/keiko-contracts/runtime/verification";
+import {
+  isVerificationDependencySummary,
+  isVerificationFailureLocation,
+} from "@oscharko-dev/keiko-contracts/runtime/verification";
+import { VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS } from "@oscharko-dev/keiko-verification";
 
 import {
   CODING_TOOL_MAX_BODY_BYTES,
@@ -577,11 +581,23 @@ function stageGuidance(result: CodingRuntimeGitResult): { readonly guidance?: st
   return guidance === undefined ? {} : { guidance };
 }
 
+const VERIFICATION_FAILURE_KEYS: ReadonlySet<string> = new Set([
+  "summary",
+  "locations",
+  "truncated",
+  "excerpt",
+  "dependencies",
+]);
+
 function codingToolVerificationFailure(value: unknown): CodingToolVerificationFailure | undefined {
-  if (!isRecord(value) || Object.keys(value).length !== 3) return undefined;
+  if (!isRecord(value) || !Object.keys(value).every((key) => VERIFICATION_FAILURE_KEYS.has(key))) {
+    return undefined;
+  }
   if (
     !validVerificationFailureHeader(value) ||
-    !validVerificationFailureLocations(value.locations)
+    !validVerificationFailureLocations(value.locations) ||
+    !validVerificationFailureExcerpt(value.excerpt) ||
+    (value.dependencies !== undefined && !isVerificationDependencySummary(value.dependencies))
   ) {
     return undefined;
   }
@@ -589,7 +605,19 @@ function codingToolVerificationFailure(value: unknown): CodingToolVerificationFa
     summary: value.summary,
     locations: value.locations,
     truncated: value.truncated,
+    ...(value.excerpt === undefined ? {} : { excerpt: value.excerpt }),
+    ...(value.dependencies === undefined ? {} : { dependencies: value.dependencies }),
   };
+}
+
+// The orchestrator's redacted output tail (ADR-0126 D3): bounded by the same cap it was cut to.
+function validVerificationFailureExcerpt(value: unknown): value is string | undefined {
+  return (
+    value === undefined ||
+    (typeof value === "string" &&
+      value.length > 0 &&
+      value.length <= VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS + 1)
+  );
 }
 
 function validVerificationFailureHeader(

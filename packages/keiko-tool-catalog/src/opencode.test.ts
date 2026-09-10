@@ -1,4 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import {
+  DEFAULT_VERIFICATION_LIMITS,
+  VERIFICATION_TOOL_MAX_DURATION_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { opencodeRegistrationSet, OPENCODE_NATIVE_EXTENSION_DEFINITIONS } from "./opencode.js";
 import { createKeikoToolCatalog } from "./composer.js";
 import { compileToolProjection, gatewayToolDefinitions } from "./projection.js";
@@ -70,6 +75,27 @@ describe("opencode registration set", () => {
       "keiko_workspace_read",
     ]) {
       expect(aliases).toContain(alias);
+    }
+  });
+
+  // The catalog settles every governed tool call at its descriptor's `bounds.maxDurationMs`, and
+  // every managed tool inherited the sandbox default of 30 s — which no real test or build run
+  // fits, so the first verification a Coding Workbench run actually executed would have been cut
+  // off as an opaque timeout before it could report (2026-09-10). The verification tool declares
+  // the budget its own enforced limits need; the others keep the default, so a reader who widened
+  // it for everything would fail here too.
+  it("gives the verification tool the budget its own limits need and no other tool more", () => {
+    const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
+    const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
+    const byId = new Map(projection.tools.map((tool) => [tool.toolRef.canonicalId, tool]));
+    const verification = byId.get("keiko.verification.run");
+    expect(verification?.bounds.maxDurationMs).toBe(VERIFICATION_TOOL_MAX_DURATION_MS);
+    expect(VERIFICATION_TOOL_MAX_DURATION_MS).toBeGreaterThan(
+      DEFAULT_VERIFICATION_LIMITS.wallTimeMs,
+    );
+    for (const [id, tool] of byId) {
+      if (id === "keiko.verification.run") continue;
+      expect(tool.bounds.maxDurationMs).toBe(DEFAULT_SANDBOX_POLICY.defaultTimeoutMs);
     }
   });
 

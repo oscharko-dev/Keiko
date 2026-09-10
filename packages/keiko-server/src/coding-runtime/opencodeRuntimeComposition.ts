@@ -1,5 +1,9 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import {
+  VERIFICATION_SETTLEMENT_GRACE_MS,
+  VERIFICATION_TOOL_MAX_DURATION_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/verification";
+import {
   chmodSync,
   existsSync,
   mkdirSync,
@@ -1381,12 +1385,39 @@ interface AdmittedToolRequest {
 }
 
 interface ToolBridgeAdmissionGate {
-  readonly admit: () => AdmittedToolRequest | undefined;
+  readonly limits: ToolBridgeLimits;
+  readonly admit: (requestDeadlineMs: number) => AdmittedToolRequest | undefined;
   readonly abortAll: () => void;
 }
 
 const DEFAULT_TOOL_BRIDGE_DEADLINE_MS = 30_000;
 const MAX_TOOL_BRIDGE_DEADLINE_MS = 60_000;
+// The one action whose settlement budget is derived from the verification orchestrator's own
+// enforced limits rather than the sandbox default (keiko-contracts VERIFICATION_TOOL_MAX_DURATION_MS,
+// the catalog settles `keiko.verification.run` at it): the bridge outlives that settlement by the
+// contract's grace, so the facade's answer — the report, or the catalog's own timeout — always
+// reaches the sidecar instead of a bridge-side abort racing it.
+const VERIFICATION_TOOL_BRIDGE_DEADLINE_MS =
+  VERIFICATION_TOOL_MAX_DURATION_MS + VERIFICATION_SETTLEMENT_GRACE_MS;
+
+// The deadline a request is admitted under, read from its own declared action; an unreadable body
+// gets the configured default and is refused by the facade's parser afterwards as before.
+function requestDeadlineFor(limits: ToolBridgeLimits, body: string | undefined): number {
+  return body !== undefined && declaredAction(body) === "verification"
+    ? VERIFICATION_TOOL_BRIDGE_DEADLINE_MS
+    : limits.requestDeadlineMs;
+}
+
+function declaredAction(body: string): unknown {
+  try {
+    const parsed: unknown = JSON.parse(body);
+    return typeof parsed === "object" && parsed !== null && "action" in parsed
+      ? parsed.action
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
 const MAX_TOOL_BRIDGE_IN_FLIGHT = 64;
 const DEADLINE_ABORT = "tool-bridge-deadline";
 const DISCONNECT_ABORT = "tool-bridge-disconnect";
@@ -1456,7 +1487,7 @@ function handleDirectToolRequest(
   if (preflight.outcome === "rejected") {
     return Promise.resolve({ status: preflight.status, body: preflight.body });
   }
-  const admission = gate.admit();
+  const admission = gate.admit(requestDeadlineFor(gate.limits, input.body));
   if (admission === undefined) return Promise.resolve({ status: 429, body: "" });
   const detachExternalAbort = bindExternalAbort(input.signal, admission);
   return executeToolRequest(deps, input.headers, input.body, admission).finally(
@@ -1490,14 +1521,15 @@ function createToolBridgeAdmissionGate(limits: ToolBridgeLimits): ToolBridgeAdmi
   let admitted = 0;
   const controllers = new Set<AbortController>();
   return {
-    admit: (): AdmittedToolRequest | undefined => {
+    limits,
+    admit: (requestDeadlineMs: number): AdmittedToolRequest | undefined => {
       if (admitted >= limits.maxInFlight) return undefined;
       admitted += 1;
       const controller = new AbortController();
       controllers.add(controller);
       const timer = setTimeout(() => {
         controller.abort(new Error(DEADLINE_ABORT));
-      }, limits.requestDeadlineMs);
+      }, requestDeadlineMs);
       timer.unref();
       let released = false;
       return {

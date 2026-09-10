@@ -49,17 +49,64 @@ export const DEFAULT_VERIFICATION_LIMITS: VerificationResourceLimits = {
   network: "none",
 } as const;
 
+// ─── Dependency bootstrap (ADR-0043 D17) ───────────────────────────────────────────
+// A plan's package scripts run against the workspace's installed dependencies, and a managed task
+// worktree is a clean checkout without them (Coding Workbench run 15, 2026-09-10: every build step
+// failed within 200 ms on a missing binary, and the model had no governed way to install anything).
+// The orchestrator installs the manifest's declared dependencies before the first script step when
+// the installed tree is not current. The install runs the trusted host `npm` with lifecycle scripts
+// disabled — it executes no package or project code — so it is the one verification command that
+// keeps host network; the code it fetches runs only inside the sandboxed steps that follow.
+export const DEPENDENCY_INSTALL_LIMITS: VerificationResourceLimits = {
+  wallTimeMs: 240_000,
+  maxOutputBytes: 1_048_576,
+  maxMemoryBytes: undefined,
+  network: "inherit",
+} as const;
+
+export type VerificationDependencyState =
+  "none" | "current" | "installed" | "refused" | "failed" | "timed-out" | "cancelled";
+
+export type VerificationLockfileState = "present" | "created" | "absent";
+
+// The bootstrap outcomes after which no script step can be trusted to run; the report is "failed".
+export const VERIFICATION_DEPENDENCY_FAILURE_STATES: ReadonlySet<VerificationDependencyState> =
+  new Set<VerificationDependencyState>(["refused", "failed", "timed-out"]);
+
+/** Body-free record of the dependency bootstrap on a report: never output, never a path. */
+export interface VerificationDependencySummary {
+  readonly state: VerificationDependencyState;
+  readonly lockfile: VerificationLockfileState;
+  readonly exitCode: number | null;
+  readonly durationMs: number;
+  // A short, redacted reason for a refused or failed bootstrap (e.g. "project npm config present").
+  readonly detail?: string | undefined;
+}
+
+// ─── The governed verification tool's settlement budget ────────────────────────────
+// Derived from the orchestrator's own enforced limits, never chosen: one governed call may install
+// dependencies and then run every planned step in sequence, each up to its wall-time ceiling. The
+// tool catalog settles the verification tool at this budget (`keiko.verification.run`), the sidecar
+// tool bridge and the generated plugin client both outlive it by their own grace, so a real build or
+// test run reports its result instead of an opaque timeout (Coding Workbench runs 13–15).
+export const VERIFICATION_MAX_PLAN_STEPS = 5;
+export const VERIFICATION_SETTLEMENT_GRACE_MS = 15_000;
+export const VERIFICATION_TOOL_MAX_DURATION_MS =
+  DEPENDENCY_INSTALL_LIMITS.wallTimeMs +
+  VERIFICATION_MAX_PLAN_STEPS * DEFAULT_VERIFICATION_LIMITS.wallTimeMs +
+  VERIFICATION_SETTLEMENT_GRACE_MS;
+
 // ─── The governed verification tool's wait for a human decision ────────────────────
 // How long the governed verification tool may wait in place for a decision only a local human can
 // make (an ADR-0147 package-script trust grant) before it hands the model the truthful refusal
 // instead. It lives in the contract because two layers must agree on it: the server-side tool that
 // waits, and the tool-catalog budget the verification tool is eventually settled at.
 //
-// It must stay strictly below every ceiling a governed verification call is settled at today, or
-// the caller receives an opaque `timeout`/`cancelled` instead of the tool's own closed refusal —
-// the one string that tells the model what a person has to do. Both current ceilings are 30 s:
-// the sandbox default the catalog descriptor inherits (`DEFAULT_SANDBOX_POLICY.defaultTimeoutMs`)
-// and the governed-invocation registry's TTL; the server pins this constant against the latter.
+// It must stay strictly below every ceiling a governed verification call is settled at, or the
+// caller receives an opaque `timeout`/`cancelled` instead of the tool's own closed refusal — the
+// one string that tells the model what a person has to do. The binding ceiling is the
+// governed-invocation registry's 30 s TTL (the catalog budget above is far larger); the server pins
+// this constant against it.
 export const VERIFICATION_TOOL_OPERATOR_DECISION_GRACE_MS = 25_000;
 
 // ─── Structured failure locations (Issue #2210, ADR-0126 D3) ─────────────────────
@@ -132,6 +179,9 @@ export interface VerificationReport {
   readonly startedAtMs: number;
   readonly durationMs: number;
   readonly counts: Readonly<Record<VerificationStatus, number>>;
+  // Present when the orchestrator decided about the workspace's dependencies before the steps
+  // (ADR-0043 D17); absent for plans that ran no script step or for callers that left it off.
+  readonly dependencies?: VerificationDependencySummary | undefined;
 }
 
 // ─── Deep wire guards ─────────────────────────────────────────────────────────────
@@ -408,13 +458,56 @@ function isStatusCounts(
 export function matchesOverallStatus(
   overallStatus: VerificationStatus,
   items: readonly { readonly status: VerificationStatus }[],
+  dependencies?: VerificationDependencySummary,
 ): boolean {
   if (overallStatus === "cancelled") return true;
   if (items.some((item) => item.status === "cancelled")) {
     return false;
   }
+  // A bootstrap that left the steps without their dependencies fails the report whatever the steps
+  // (all skipped) would otherwise say (ADR-0043 D17).
+  if (
+    dependencies !== undefined &&
+    VERIFICATION_DEPENDENCY_FAILURE_STATES.has(dependencies.state)
+  ) {
+    return overallStatus === "failed";
+  }
   const allOk = items.every((item) => item.status === "passed" || item.status === "skipped");
   return overallStatus === (allOk ? "passed" : "failed");
+}
+
+const VERIFICATION_DEPENDENCY_STATES: readonly VerificationDependencyState[] = [
+  "none",
+  "current",
+  "installed",
+  "refused",
+  "failed",
+  "timed-out",
+  "cancelled",
+];
+const VERIFICATION_DEPENDENCY_STATE_SET: ReadonlySet<string> = new Set(
+  VERIFICATION_DEPENDENCY_STATES,
+);
+const VERIFICATION_LOCKFILE_STATE_SET: ReadonlySet<string> = new Set<VerificationLockfileState>([
+  "present",
+  "created",
+  "absent",
+]);
+
+export function isVerificationDependencySummary(
+  value: unknown,
+): value is VerificationDependencySummary {
+  if (!isRecord(value)) return false;
+  if (!hasOnlyKeys(value, ["state", "lockfile", "exitCode", "durationMs", "detail"])) return false;
+  if (typeof value.state !== "string" || !VERIFICATION_DEPENDENCY_STATE_SET.has(value.state)) {
+    return false;
+  }
+  if (typeof value.lockfile !== "string" || !VERIFICATION_LOCKFILE_STATE_SET.has(value.lockfile)) {
+    return false;
+  }
+  if (value.exitCode !== null && !isIntegerWithin(value.exitCode, 0, 255)) return false;
+  if (!isFiniteNonNegative(value.durationMs)) return false;
+  return value.detail === undefined || isBoundedText(value.detail, VERIFICATION_DETAIL_MAX_CHARS);
 }
 
 export function isVerificationReport(value: unknown): value is VerificationReport {
@@ -430,10 +523,16 @@ export function isVerificationReport(value: unknown): value is VerificationRepor
       "startedAtMs",
       "durationMs",
       "counts",
+      "dependencies",
     ]) &&
+    (value.dependencies === undefined || isVerificationDependencySummary(value.dependencies)) &&
     isBoundedWorkspacePath(value.workspaceRoot) &&
     isVerificationStatusValue(value.overallStatus) &&
-    matchesOverallStatus(value.overallStatus, value.results) &&
+    matchesOverallStatus(
+      value.overallStatus,
+      value.results,
+      isVerificationDependencySummary(value.dependencies) ? value.dependencies : undefined,
+    ) &&
     isFiniteNonNegative(value.startedAtMs) &&
     isFiniteNonNegative(value.durationMs) &&
     isStatusCounts(value.counts, value.results)

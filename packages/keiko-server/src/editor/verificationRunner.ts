@@ -28,6 +28,7 @@ import {
   buildVerificationPlan,
   detectScripts,
   planDirectTargetedTests,
+  type VerificationStepOutput,
 } from "@oscharko-dev/keiko-verification";
 import {
   detectWorkspaceAt,
@@ -92,6 +93,21 @@ export interface VerificationRunStart {
   readonly run: EditorVerificationRun;
 }
 
+/**
+ * What the agent path hands back: the persisted, body-free report plus the orchestrator's redacted
+ * output tails of the steps that did not pass (ADR-0126 D3). The tails travel only in memory to the
+ * governed verification tool, which forwards them to the coding model; they are never persisted
+ * and never logged (Coding Workbench run 15, 2026-09-10: without them the model saw "build failed;
+ * 0 structured failure locations" seven times and could not repair anything).
+ */
+export interface VerificationRunOutcome {
+  readonly report: VerificationReport;
+  readonly failureOutput: readonly VerificationStepOutput[];
+}
+
+// At most this many step outputs are retained per run — one per planned step plus the bootstrap.
+const MAX_FAILURE_OUTPUTS = 8;
+
 export type EditorVerificationCatalogDiscovery = Omit<EditorVerificationCatalog, "workspaceTrust">;
 
 export type VerificationRunnerEventEmitter = (event: EditorVerificationEvent) => void;
@@ -113,7 +129,7 @@ export interface VerificationRunnerManager {
   readonly runToReport: (
     input: VerificationRunInput,
     signal: AbortSignal,
-  ) => Promise<VerificationReport>;
+  ) => Promise<VerificationRunOutcome>;
   readonly abort: (runId: string) => boolean;
   /**
    * The runner's OWN package-script trust decision for a project, as a pure query: it resolves the
@@ -308,7 +324,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   public readonly runToReport = async (
     input: VerificationRunInput,
     signal: AbortSignal,
-  ): Promise<VerificationReport> => {
+  ): Promise<VerificationRunOutcome> => {
     const { resolved, plan } = this.prepare(input);
     const { workspace } = resolved;
     const runId = randomUUID();
@@ -328,6 +344,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     const startedAtMs = this.now();
     this.emitRunStarted(runId, input, startedAtMs);
     this.emitStepsStarted(runId, plan);
+    const failureOutput: VerificationStepOutput[] = [];
     try {
       const { report } = await this.executePort({
         plan,
@@ -335,14 +352,19 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         signal: controller.signal,
         correlationId: entry.correlationId,
         fs: resolved.access.fs,
+        dependencyBootstrap: "auto",
+        onStepOutput: (output): void => {
+          if (failureOutput.length < MAX_FAILURE_OUTPUTS) failureOutput.push(output);
+        },
       });
+      this.recordDependencyBootstrap(entry.correlationId, report);
       this.emitStepCompletions(runId, report);
       // Awaited path (the agent's HTTP request awaits this promise): an evidence-write failure is
       // surfaced both as the terminal SSE event AND a thrown error, so the caller receives a real
       // failure instead of a redacted report the ledger has no record of.
       this.persistAndEmitTerminalOrThrow(runId, workspace.root, report, startedAtMs, entry);
       this.recordRunnerCompletion(workspace, entry.correlationId, report);
-      return report;
+      return { report, failureOutput };
     } catch (error) {
       this.recordRunnerFailure(workspace, entry.correlationId, error);
       if (!(error instanceof VerificationRunnerError && error.code === "EVIDENCE_WRITE_FAILED")) {
@@ -511,7 +533,9 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         signal: entry.controller.signal,
         correlationId: entry.correlationId,
         fs: resolved.access.fs,
+        dependencyBootstrap: "auto",
       });
+      this.recordDependencyBootstrap(entry.correlationId, report);
       this.emitStepCompletions(runId, report);
       // Fire-and-forget path (nothing awaits runPlan): an evidence-write failure must not become an
       // unhandled rejection, so it is caught and surfaced as the terminal event itself rather than
@@ -547,6 +571,25 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         runnerId: workspace.testFramework,
         stepCount,
         ...(trustBasis === undefined ? {} : { trustBasis }),
+      },
+    });
+  }
+
+  // ADR-0043 D17: the dependency bootstrap's own body-free line — its state, whether a lockfile
+  // was present or created, npm's exit code and the duration — so a report whose steps were all
+  // skipped can be read back to the install that left them without their dependencies.
+  private recordDependencyBootstrap(correlationId: string, report: VerificationReport): void {
+    const dependencies = report.dependencies;
+    if (dependencies === undefined) return;
+    this.activityLog.write({
+      category: "process",
+      op: "editor.verification.dependencies",
+      correlationId,
+      extra: {
+        state: dependencies.state,
+        lockfile: dependencies.lockfile,
+        exitCode: dependencies.exitCode,
+        durationMs: dependencies.durationMs,
       },
     });
   }

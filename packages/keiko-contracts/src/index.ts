@@ -2259,13 +2259,18 @@ export type {
   VerificationResult,
   VerificationFailureLocation,
   VerificationReport,
+  VerificationDependencyState,
+  VerificationDependencySummary,
+  VerificationLockfileState,
   ScriptCatalog,
   ScriptMapping,
 } from "./verification.js";
 export type {
   DEFAULT_VERIFICATION_LIMITS,
+  DEPENDENCY_INSTALL_LIMITS,
   VERIFICATION_FAILURE_MESSAGE_MAX_CHARS,
   VERIFICATION_MAX_FAILURE_LOCATIONS,
+  VERIFICATION_TOOL_MAX_DURATION_MS,
 } from "./verification.js";
 
 // ─── Editor verification run/event envelope (Issue #2210, Epic #2092, ADR-0126) ──

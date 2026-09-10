@@ -24,9 +24,11 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import {
   isVerificationFailureLocation,
+  VERIFICATION_DEPENDENCY_FAILURE_STATES,
   VERIFICATION_TOOL_OPERATOR_DECISION_GRACE_MS,
 } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import type { VerificationStepOutput } from "@oscharko-dev/keiko-verification";
 import { codingWorkbenchPolicyEffectFor } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 
@@ -1025,7 +1027,7 @@ function buildVerificationRunner(
       }
       verificationSequence += 1;
       publishVerification(input, verificationSequence, attempt.report, request);
-      return verificationOutcome(input, attempt.report, guard, signal, attempt.commitProof);
+      return verificationOutcome(input, attempt, guard, signal);
     },
   };
 }
@@ -1035,6 +1037,7 @@ type VerificationAttempt =
   | {
       readonly outcome: "completed";
       readonly report: VerificationReport;
+      readonly failureOutput: readonly VerificationStepOutput[];
       readonly commitProof: CodingToolVerificationResult | undefined;
     }
   | { readonly outcome: "threw"; readonly error: unknown };
@@ -1067,14 +1070,14 @@ async function runVerificationAttempt(
     const ticket = await input.verifiedCommitService?.beginVerification();
     const beforeRun = verificationLivenessRefusal(input, guard, signal);
     if (beforeRun !== undefined) return revoked(beforeRun);
-    const report = await input.verificationRunner.runToReport(
+    const { report, failureOutput } = await input.verificationRunner.runToReport(
       verificationRunInput(input, request, kind),
       signal ?? new AbortController().signal,
     );
     const afterRun = verificationLivenessRefusal(input, guard, signal);
     if (afterRun !== undefined) return revoked(afterRun);
     const commitProof = await completeCandidateVerification(input, ticket, report, guard, signal);
-    return { outcome: "completed", report, commitProof };
+    return { outcome: "completed", report, failureOutput, commitProof };
   } catch (error) {
     return { outcome: "threw", error };
   }
@@ -1196,13 +1199,13 @@ function recordScriptTrustWait(
 
 function verificationOutcome(
   input: ProductionManagedWorktreeToolInput,
-  report: VerificationReport,
+  attempt: Extract<VerificationAttempt, { readonly outcome: "completed" }>,
   guard: CodingToolMutationGuard,
   signal: AbortSignal | undefined,
-  commitProof: CodingToolVerificationResult | undefined,
 ): VerificationPortResult {
+  const { report, commitProof } = attempt;
   if (report.overallStatus !== "passed") {
-    const verificationFailure = modelVerificationFailure(report);
+    const verificationFailure = modelVerificationFailure(report, attempt.failureOutput);
     return {
       status: "failed",
       reasonCode: VERIFICATION_OUTCOME_REASON_CODES[report.overallStatus],
@@ -1216,20 +1219,44 @@ function verificationOutcome(
     : verificationPortRefusal(input, "verification-authority-revoked", refusal);
 }
 
+// What the model is told about a run that did not pass: the failed step's structured locations
+// when the parser could read them, and always the orchestrator's redacted output tail for that
+// step (ADR-0126 D3) — a missing binary, a bundler error or npm's own diagnostics carry no
+// location, and without the tail the model repaired nothing (Coding Workbench run 15, 2026-09-10).
+// A failed dependency bootstrap is named as such, with its own tail.
 function modelVerificationFailure(
   report: VerificationReport,
+  failureOutput: readonly VerificationStepOutput[] = [],
 ): CodingToolVerificationFailure | undefined {
   if (report.overallStatus !== "failed") return undefined;
+  const dependencies = report.dependencies;
+  if (
+    dependencies !== undefined &&
+    VERIFICATION_DEPENDENCY_FAILURE_STATES.has(dependencies.state)
+  ) {
+    const excerpt = failureOutput.find((output) => output.step === "dependencies")?.excerpt;
+    return {
+      summary: `dependency installation ${dependencies.state}${dependencies.detail === undefined ? "" : `: ${dependencies.detail}`}; no verification step ran`,
+      locations: [],
+      truncated: false,
+      ...(excerpt === undefined ? {} : { excerpt }),
+      dependencies,
+    };
+  }
   const failed = report.results.find((result) => result.status === "failed");
   if (failed === undefined) return undefined;
   const candidates = failed.locations ?? [];
   const locations = candidates
     .filter(isVerificationFailureLocation)
     .slice(0, CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS);
+  const excerpt = failureOutput.find(
+    (output) => output.step === failed.kind && output.scriptName === failed.scriptName,
+  )?.excerpt;
   return {
     summary: `${failed.kind} failed; ${String(locations.length)} structured failure location${locations.length === 1 ? "" : "s"}`,
     locations,
     truncated: failed.truncated || candidates.length > locations.length,
+    ...(excerpt === undefined ? {} : { excerpt }),
   };
 }
 

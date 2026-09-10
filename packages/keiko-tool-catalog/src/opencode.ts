@@ -40,6 +40,7 @@
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import { VERIFICATION_TOOL_MAX_DURATION_MS } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { CODING_REPOSITORY_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
@@ -185,6 +186,12 @@ interface OpenCodeToolSpec {
   readonly effects: readonly CatalogEffect[];
   readonly idempotency: CatalogIdempotency;
   readonly handlerId: string;
+  /**
+   * The tool's own settlement budget when the sandbox default does not fit the work it performs.
+   * Absent means the sandbox default; a tool that runs the workspace's own scripts declares the
+   * budget those scripts are actually allowed (verification: `VERIFICATION_TOOL_MAX_DURATION_MS`).
+   */
+  readonly maxDurationMs?: number;
 }
 
 const OPENCODE_RESULT_SCHEMA: CatalogJsonObject = {
@@ -237,7 +244,7 @@ function entryFor(spec: OpenCodeToolSpec): CatalogSetEntry {
         maxArgumentBytes: TOOL_CATALOG_LIMITS.maxArgumentBytes,
         maxResultBytes: TOOL_CATALOG_LIMITS.maxResultBytes,
         maxResultCount: 1,
-        maxDurationMs: DEFAULT_SANDBOX_POLICY.defaultTimeoutMs,
+        maxDurationMs: spec.maxDurationMs ?? DEFAULT_SANDBOX_POLICY.defaultTimeoutMs,
       },
       idempotency: spec.idempotency,
       cancellation: "before-effect",
@@ -439,6 +446,7 @@ function verificationSpec(): OpenCodeToolSpec {
     effects: ["verification"],
     idempotency: "server-key-required",
     handlerId: "opencode-verification-port",
+    maxDurationMs: VERIFICATION_TOOL_MAX_DURATION_MS,
   };
 }
 
