@@ -14,10 +14,13 @@ export function linuxGatewayLauncherPath(): string {
   return fileURLToPath(new URL("../dist/runtime.js", import.meta.url));
 }
 
-export type LongLivedRuntimePlatform = "darwin" | "win32";
+export type LongLivedRuntimePlatform = "darwin" | "linux" | "win32";
 export type LongLivedRuntimeArchitecture = "arm64" | "x64";
 export type LongLivedRuntimeBackend =
-  "macos-app-sandbox" | "macos-endpoint-security" | "windows-job-object";
+  | "linux-namespace-gateway"
+  | "macos-app-sandbox"
+  | "macos-endpoint-security"
+  | "windows-job-object";
 
 export interface LongLivedRuntimeQualification {
   readonly platform: LongLivedRuntimePlatform;
@@ -26,7 +29,7 @@ export interface LongLivedRuntimeQualification {
   readonly releaseReceipt: string;
 }
 
-export type RuntimeQualificationTarget = "windows-x64" | "macos-arm64" | "macos-x64";
+export type RuntimeQualificationTarget = "linux-x64" | "windows-x64" | "macos-arm64" | "macos-x64";
 
 export interface RuntimeQualificationSidecarDigest {
   readonly name: string;
@@ -109,7 +112,7 @@ export function qualificationFromReceipt(
   return {
     ok: true,
     qualification: {
-      platform: candidate.platformTarget === "windows-x64" ? "win32" : "darwin",
+      platform: qualificationPlatform(candidate.platformTarget),
       arch: candidate.platformTarget === "macos-arm64" ? "arm64" : "x64",
       backend: candidate.backend,
       releaseReceipt,
@@ -203,7 +206,13 @@ function receiptResultIsClosed(
   value: ReturnTypeNarrowedReceipt,
 ): value is RuntimeQualificationReceipt {
   const backend = value.backend;
-  if (backend !== "windows-job-object" && backend !== "macos-endpoint-security") return false;
+  if (
+    backend !== "linux-namespace-gateway" &&
+    backend !== "windows-job-object" &&
+    backend !== "macos-endpoint-security"
+  ) {
+    return false;
+  }
   if (value.result !== "passed" && value.result !== "failed") return false;
   return backendMatchesTarget({ backend, platformTarget: value.platformTarget });
 }
@@ -266,13 +275,28 @@ function canonicalSidecarRecords(
 function backendMatchesTarget(
   receipt: Pick<RuntimeQualificationReceipt, "platformTarget" | "backend">,
 ): boolean {
-  return receipt.platformTarget === "windows-x64"
-    ? receipt.backend === "windows-job-object"
-    : receipt.backend === "macos-endpoint-security";
+  if (receipt.platformTarget === "windows-x64") {
+    return receipt.backend === "windows-job-object";
+  }
+  if (receipt.platformTarget === "linux-x64") {
+    return receipt.backend === "linux-namespace-gateway";
+  }
+  return receipt.backend === "macos-endpoint-security";
 }
 
 function isQualificationTarget(value: unknown): value is RuntimeQualificationTarget {
-  return value === "windows-x64" || value === "macos-arm64" || value === "macos-x64";
+  return (
+    value === "linux-x64" ||
+    value === "windows-x64" ||
+    value === "macos-arm64" ||
+    value === "macos-x64"
+  );
+}
+
+function qualificationPlatform(target: RuntimeQualificationTarget): LongLivedRuntimePlatform {
+  if (target === "windows-x64") return "win32";
+  if (target === "linux-x64") return "linux";
+  return "darwin";
 }
 
 function isExactRecord<const K extends string>(
@@ -289,17 +313,44 @@ function qualificationIsSupported(
 ): qualification is LongLivedRuntimeQualification {
   if (!isQualificationRecord(qualification)) return false;
   if (!RELEASE_RECEIPT_PATTERN.test(qualification.releaseReceipt)) return false;
-  if (qualification.platform === "win32") {
-    return qualification.arch === "x64" && qualification.backend === "windows-job-object";
-  }
-  if (qualification.platform === "darwin") {
-    return (
-      (qualification.arch === "arm64" || qualification.arch === "x64") &&
-      (qualification.backend === "macos-app-sandbox" ||
-        qualification.backend === "macos-endpoint-security")
-    );
-  }
-  return false;
+  return (
+    windowsQualificationIsSupported(qualification) ||
+    linuxQualificationIsSupported(qualification) ||
+    macosQualificationIsSupported(qualification)
+  );
+}
+
+type QualificationRecord = Record<"platform" | "arch" | "backend" | "releaseReceipt", string>;
+
+function windowsQualificationIsSupported(
+  qualification: QualificationRecord,
+): qualification is LongLivedRuntimeQualification & QualificationRecord {
+  return (
+    qualification.platform === "win32" &&
+    qualification.arch === "x64" &&
+    qualification.backend === "windows-job-object"
+  );
+}
+
+function linuxQualificationIsSupported(
+  qualification: QualificationRecord,
+): qualification is LongLivedRuntimeQualification & QualificationRecord {
+  return (
+    qualification.platform === "linux" &&
+    qualification.arch === "x64" &&
+    qualification.backend === "linux-namespace-gateway"
+  );
+}
+
+function macosQualificationIsSupported(
+  qualification: QualificationRecord,
+): qualification is LongLivedRuntimeQualification & QualificationRecord {
+  return (
+    qualification.platform === "darwin" &&
+    (qualification.arch === "arm64" || qualification.arch === "x64") &&
+    (qualification.backend === "macos-app-sandbox" ||
+      qualification.backend === "macos-endpoint-security")
+  );
 }
 
 function isQualificationRecord(

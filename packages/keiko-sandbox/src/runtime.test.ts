@@ -178,4 +178,29 @@ describe("long-lived runtime qualification", () => {
       });
     },
   );
+
+  it("accepts linux-x64 only with the namespace gateway backend", () => {
+    const candidate = {
+      ...receipt,
+      platformTarget: "linux-x64",
+      backend: "linux-namespace-gateway",
+    };
+    const result = qualificationFromReceipt(candidate, {
+      platformTarget: "linux-x64",
+      sourceCommitSha: receipt.sourceCommitSha,
+      activationManifestSha256: receipt.activationManifestSha256,
+      supervisorSha256: receipt.supervisorSha256,
+      secureReadSha256: receipt.secureReadSha256,
+      sidecars: receipt.sidecars,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      qualification: {
+        platform: "linux",
+        arch: "x64",
+        backend: "linux-namespace-gateway",
+      },
+    });
+  });
 });
