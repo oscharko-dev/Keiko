@@ -489,8 +489,15 @@ class DraftDeliveryFactory {
     context: DraftDeliveryRunContext,
     root: string,
   ): Promise<{ ok: true; url: string } | TargetFailure> {
+    // The REPOSITORY root the issue was read from, never the managed worktree: the worktree lives
+    // under the state directory, which the workspace deny list (`.keiko/**`) keeps outside the
+    // governed content surface, so evaluating its remote answered `remote-unreadable` and refused
+    // every push and pull request of a run that had just committed as `remote-drift` (Coding
+    // Workbench run 17, 2026-09-10). A worktree shares its repository's remotes; `originalRoot`
+    // already resolved and authorized exactly that root, and `resolveAcceptedIssue` reads the issue
+    // through it. The push URL below is still read from the worktree's own Git configuration.
     const fetchRemote = await githubRemoteOwnerAndRepoFor(
-      context.workspace.root,
+      root,
       this.deps.env,
       this.deps.codingContextGitHubRemoteResolver,
       { activityLog: this.log, correlationId: context.correlationId, signal: context.signal },

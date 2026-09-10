@@ -1814,7 +1814,7 @@ function buildCommandRunner(options: {
     isWorktreeTrustedByHumanGrant: (canonicalRoot): boolean =>
       options.workspaceScriptTrust.holdsHumanGrantForRoot(canonicalRoot),
     isWorktreeManifestRunAdmitted: (canonicalRoot): boolean =>
-      options.workspaceScriptTrust.holdsRunAdmissionForRoot?.(canonicalRoot) ?? false,
+      options.workspaceScriptTrust.holdsRunAdmissionForRoot(canonicalRoot),
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);
       return typeof redacted === "string" ? redacted : value;
@@ -1849,7 +1849,7 @@ function buildVerificationRunner(options: {
     isWorktreeTrustedByHumanGrant: (canonicalRoot): boolean =>
       options.workspaceScriptTrust.holdsHumanGrantForRoot(canonicalRoot),
     isWorktreeManifestRunAdmitted: (canonicalRoot): boolean =>
-      options.workspaceScriptTrust.holdsRunAdmissionForRoot?.(canonicalRoot) ?? false,
+      options.workspaceScriptTrust.holdsRunAdmissionForRoot(canonicalRoot),
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);
       return typeof redacted === "string" ? redacted : value;

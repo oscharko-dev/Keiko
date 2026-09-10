@@ -127,7 +127,7 @@ export interface WorkspaceScriptTrustService {
    * nothing is admitted then. The admission is held in memory only: it lives and dies with the run
    * (`revokeRunAdmissions`) and expires with the run's authority.
    */
-  readonly admitRunManifest?: (
+  readonly admitRunManifest: (
     root: string,
     runId: string,
     expiresAt: string,
@@ -138,9 +138,9 @@ export interface WorkspaceScriptTrustService {
    * another process, the operator's editor — no longer matches and the caller falls back to the
    * refusal it always gave.
    */
-  readonly holdsRunAdmissionForRoot?: (root: string) => boolean;
+  readonly holdsRunAdmissionForRoot: (root: string) => boolean;
   /** Drops every admission the run holds and returns how many there were. */
-  readonly revokeRunAdmissions?: (runId: string) => number;
+  readonly revokeRunAdmissions: (runId: string) => number;
   readonly recomputeForRoots?: (roots: readonly string[]) => readonly WorkspaceTrustLevel[];
   // #2628 — additive listener registration so composition-time consumers (buildPeripherals
   // wires managed-LSP restriction propagation this way) receive every persisted restriction

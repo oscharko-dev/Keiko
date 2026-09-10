@@ -386,6 +386,8 @@ describe("production coding runtime resolver", () => {
     expect(backendInput?.resolveWorkspaceRootAccess()).toBeUndefined();
     expect(JSON.stringify(createRun.mock.calls[0]?.[0].minted)).not.toContain("private task");
     expect(createRun.mock.calls[0]?.[0].authorityLifecycle.revokeRuntime("run-1")).toBe(true);
+    // Revoking the run drops its manifest admissions with it (ADR-0147 D3, autonomous-delivery).
+    expect(revokeRunAdmissions).toHaveBeenCalledExactlyOnceWith("run-1");
     await expect(
       host.taskDispatcher.dispatch({
         runId: "run-1",

@@ -609,6 +609,86 @@ describe("production managed worktree tools", () => {
     });
   });
 
+  // ADR-0147 D3, autonomous-delivery amendment (owner decision, 2026-09-10): a completed governed
+  // effect in `autonomous-delivery` admits the worktree's current manifest for the run; a failed
+  // effect admits nothing, and the two modes that ask before risky work never admit.
+  it.each([
+    ["autonomous-delivery", "none", 1],
+    ["autonomous-delivery", "timeout", 0],
+    ["supervised-coding", "none", 0],
+    ["governed-assist", "none", 0],
+  ] as const)(
+    "admits the run's manifest after a completed command in %s (failure %s → %d admission)",
+    async (mode, failureReason, admissions) => {
+      const admitRunManifest = vi.fn();
+      const execute = vi.fn((): Promise<CommandTaskRunResult> =>
+        Promise.resolve({
+          schemaVersion: "1",
+          runId: "command-run-1",
+          taskId: "npm-script:test",
+          kind: "test",
+          exitCode: failureReason === "none" ? 0 : 1,
+          durationMs: 1,
+          truncated: false,
+          timedOut: failureReason === "timeout",
+          failureReason,
+          stdout: "",
+          stderr: "",
+        }),
+      );
+      const liveFacts: CodingWorkbenchRuntimeAuthorityFacts = {
+        ...FACTS,
+        actionClasses: ["workspace-read", "workspace-write", "verification", "command-execution"],
+      };
+      const facade = createProductionManagedWorktreeToolFacade({
+        authority: {
+          revalidateCapabilityForMutation: () => ({
+            ok: true as const,
+            envelope: authorizedEnvelope(true),
+          }),
+          resolveCapabilityForDelegation: () => ({
+            ok: true as const,
+            envelope: authorizedEnvelope(true),
+          }),
+        },
+        authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
+        workspaceRoot: "/managed/worktree",
+        resolveWorkspaceRootAccess,
+        authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+        effectiveMode: mode,
+        deploymentCeiling: "autonomous-delivery",
+        liveFacts: () => liveFacts,
+        secureWorkspaceTextRead: {
+          readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+        },
+        editorAgentClient: {
+          action: () =>
+            Promise.resolve({
+              ok: false as const,
+              error: { kind: "route" as const, code: "denied", message: "denied" },
+            }),
+        },
+        invocationRegistry: createCodingToolInvocationRegistry(),
+        commandRunner: { execute },
+        verificationRunner: { runToReport: vi.fn() },
+        admitRunManifest,
+        onRuntimeEvent: vi.fn(),
+      });
+
+      await facade.execute({
+        capability: "runtime-capability",
+        body: JSON.stringify({
+          action: "command",
+          commandId: "npm-script:test",
+          actionId: "command-1",
+          idempotencyKey: "command-1",
+        }),
+      });
+      expect(execute).toHaveBeenCalledOnce();
+      expect(admitRunManifest).toHaveBeenCalledTimes(admissions);
+    },
+  );
+
   it("completes a governed command through production wiring", async () => {
     const execute = vi.fn((): Promise<CommandTaskRunResult> =>
       Promise.resolve({

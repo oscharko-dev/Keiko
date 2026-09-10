@@ -1151,7 +1151,87 @@ describe("decideScriptTrust", () => {
           throw new Error("trust store unavailable");
         },
         worktreeHumanGrant: (): boolean => true,
+        runAdmittedManifest: (): boolean => true,
       }),
     ).toEqual({ trusted: false, refusal: "decision-failed" });
+  });
+
+  // ADR-0147 D3, autonomous-delivery amendment (owner decision, 2026-09-10): the run's own manifest
+  // is a basis only UNDER the repository's standing grant and only after the explicit worktree
+  // grant was asked; a repository nobody trusted admits no run manifest, and an ordinary root never
+  // consults it.
+  describe("run-manifest basis", () => {
+    const worktreeDir = mkdtempSync(join(tmpdir(), "keiko-run-manifest-"));
+    const repositoryDir = mkdtempSync(join(tmpdir(), "keiko-run-manifest-repo-"));
+    writeFileSync(join(repositoryDir, "package.json"), PACKAGE_JSON, "utf8");
+    writeFileSync(
+      join(worktreeDir, "package.json"),
+      PACKAGE_JSON.replace('"vitest run"', '"vitest run --coverage"'),
+      "utf8",
+    );
+    const drifted: WorkspaceRootAccess = {
+      kind: "managed-task",
+      canonicalRoot: worktreeDir,
+      fs: nodeWorkspaceFs,
+      repositoryRoot: repositoryDir,
+    };
+    afterAll(() => {
+      rmSync(worktreeDir, { recursive: true, force: true });
+      rmSync(repositoryDir, { recursive: true, force: true });
+    });
+
+    it("admits a drifted worktree under the repository's grant when the run left the manifest", () => {
+      const runAdmittedManifest = vi.fn((): boolean => true);
+      expect(
+        decideScriptTrust({
+          access: drifted,
+          repositoryFs: nodeWorkspaceFs,
+          standingTrust: (): boolean => true,
+          worktreeHumanGrant: (): boolean => false,
+          runAdmittedManifest,
+        }),
+      ).toEqual({ trusted: true, basis: "run-manifest" });
+      expect(runAdmittedManifest).toHaveBeenCalledOnce();
+    });
+
+    it("prefers the explicit worktree grant and never asks the run when it holds", () => {
+      const runAdmittedManifest = vi.fn((): boolean => true);
+      expect(
+        decideScriptTrust({
+          access: drifted,
+          repositoryFs: nodeWorkspaceFs,
+          standingTrust: (): boolean => true,
+          worktreeHumanGrant: (): boolean => true,
+          runAdmittedManifest,
+        }),
+      ).toEqual({ trusted: true, basis: "worktree-human-grant" });
+      expect(runAdmittedManifest).not.toHaveBeenCalled();
+    });
+
+    it("admits no run manifest for a repository nobody trusted", () => {
+      const runAdmittedManifest = vi.fn((): boolean => true);
+      expect(
+        decideScriptTrust({
+          access: drifted,
+          repositoryFs: nodeWorkspaceFs,
+          standingTrust: (): boolean => false,
+          worktreeHumanGrant: (): boolean => false,
+          runAdmittedManifest,
+        }),
+      ).toEqual({ trusted: false, refusal: "repository-not-trusted" });
+      expect(runAdmittedManifest).not.toHaveBeenCalled();
+    });
+
+    it("still refuses the drift when the run left a different manifest than the one now present", () => {
+      expect(
+        decideScriptTrust({
+          access: drifted,
+          repositoryFs: nodeWorkspaceFs,
+          standingTrust: (): boolean => true,
+          worktreeHumanGrant: (): boolean => false,
+          runAdmittedManifest: (): boolean => false,
+        }),
+      ).toEqual({ trusted: false, refusal: "worktree-manifest-drift" });
+    });
   });
 });

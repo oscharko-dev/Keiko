@@ -1373,7 +1373,7 @@ function authorityLifecycle(
       invocations.revokeRun(runId);
       leases.revokeRun(runId);
       // ADR-0147 D3, autonomous-delivery amendment: the run's own manifest admissions end with it.
-      scriptTrust?.revokeRunAdmissions?.(runId);
+      scriptTrust?.revokeRunAdmissions(runId);
       // Drop every read-only research grant AND any unanswered research ask for the run so a
       // terminate/revoke leaves no orphaned internet reach for the parent or any child (#2387).
       research.grants.invalidateRun(runId);
