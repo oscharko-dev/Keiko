@@ -4,6 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } fro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
+import { createRuntimeGatewayConfinement } from "@oscharko-dev/keiko-sandbox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
@@ -130,6 +131,42 @@ describe("native runtime process backend", () => {
     expect(decodeLaunchStrings(encodeLaunchPacket(launch, validated)).slice(1, 3)).toEqual([
       "/validated/runtime/runtime.exe",
       "/validated/workspace",
+    ]);
+  });
+
+  it("encodes gateway confinement only in the version-two capability frame", () => {
+    const launch = request("/validated/runtime/runtime.exe", "/validated/workspace");
+    const confinement = createRuntimeGatewayConfinement({
+      gatewayUrl: "http://127.0.0.1:1983",
+      runId: launch.runId,
+      treeBindingId: launch.treeBindingId,
+      envelopeDigest: "b".repeat(64),
+      runtimeArtifactDigest: "c".repeat(64),
+      modelProfileDigest: "d".repeat(64),
+    });
+    const packet = encodeLaunchPacket(
+      launch,
+      { executable: launch.executable, cwd: launch.cwd },
+      confinement,
+    );
+
+    expect(packet.readUInt16LE(4)).toBe(2);
+    expect(packet.readUInt16LE(16)).toBe(1);
+    expect(packet.readUInt16LE(18)).toBe(4);
+    expect(packet.readUInt16LE(20)).toBe(1983);
+    expect(decodeLaunchStrings(packet, 12, 6)).toEqual([
+      launch.recoveryHandle,
+      launch.executable,
+      launch.cwd,
+      confinement.runId,
+      confinement.treeBindingId,
+      confinement.envelopeDigest,
+      confinement.runtimeArtifactDigest,
+      confinement.modelProfileDigest,
+      confinement.policyDigest,
+      "--stdio",
+      "KEIKO_RUNTIME_MODE",
+      "managed",
     ]);
   });
 
@@ -311,13 +348,17 @@ describe("native runtime process backend", () => {
   });
 });
 
-function decodeLaunchStrings(packet: Buffer): readonly string[] {
+function decodeLaunchStrings(
+  packet: Buffer,
+  prefixBytes = 4,
+  additionalStringCount = 0,
+): readonly string[] {
   const payloadLength = packet.readUInt32LE(8);
   const argumentCount = packet.readUInt16LE(12);
   const environmentCount = packet.readUInt16LE(14);
   const values: string[] = [];
-  let offset = 16;
-  const count = 3 + argumentCount + environmentCount * 2;
+  let offset = 12 + prefixBytes;
+  const count = 3 + additionalStringCount + argumentCount + environmentCount * 2;
   for (let index = 0; index < count; index += 1) {
     const length = packet.readUInt32LE(offset);
     offset += 4;

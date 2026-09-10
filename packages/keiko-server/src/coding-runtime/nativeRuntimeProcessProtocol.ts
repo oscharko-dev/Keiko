@@ -1,4 +1,8 @@
 import type { RuntimeSupervisorLaunchRequest } from "./runtimeProcessSupervisor.js";
+import {
+  copyRuntimeGatewayConfinement,
+  type RuntimeGatewayConfinement,
+} from "@oscharko-dev/keiko-sandbox";
 
 export const MAX_PACKET_BYTES = 128 * 1024;
 export const RESPONSE_HEADER_BYTES = 12;
@@ -8,6 +12,9 @@ const MAX_ENVIRONMENT_ENTRIES = 64;
 const MAX_ARGUMENT_BYTES = 4 * 1024;
 const MAX_ENVIRONMENT_VALUE_BYTES = 16 * 1024;
 const ENVIRONMENT_NAME_PATTERN = /^[A-Za-z_]\w{0,127}$/u;
+const BASE_PROTOCOL_VERSION = 1;
+const GATEWAY_CONFINEMENT_PROTOCOL_VERSION = 2;
+const GATEWAY_CONFINEMENT_CAPABILITY = 1;
 
 interface LaunchValidationDependencies {
   readonly runtimeRoots: readonly string[];
@@ -50,7 +57,9 @@ export function validateLaunchPacketRequest(
 export function encodeLaunchPacket(
   request: RuntimeSupervisorLaunchRequest,
   paths: ValidatedLaunchPacketPaths,
+  gatewayConfinement?: RuntimeGatewayConfinement,
 ): Buffer {
+  const closedConfinement = closeGatewayConfinement(gatewayConfinement);
   const environment = Object.entries(request.env).sort(([left], [right]) =>
     left.localeCompare(right),
   );
@@ -58,16 +67,20 @@ export function encodeLaunchPacket(
     request.recoveryHandle,
     paths.executable,
     paths.cwd,
+    ...(closedConfinement === undefined ? [] : confinementStrings(closedConfinement)),
     ...request.args,
     ...environment.flatMap(([name, value]) => [name, value]),
   ];
-  const payload = encodeStrings(values, request.args.length, environment.length);
+  const prefix = launchPrefix(request.args.length, environment.length, closedConfinement);
+  const payload = encodeStrings(prefix, values);
   if (payload.length + RESPONSE_HEADER_BYTES > MAX_PACKET_BYTES) invalidRequest();
-  return Buffer.concat([protocolHeader("KRP1", 1, payload.length), payload]);
+  const version =
+    closedConfinement === undefined ? BASE_PROTOCOL_VERSION : GATEWAY_CONFINEMENT_PROTOCOL_VERSION;
+  return Buffer.concat([protocolHeader("KRP1", 1, payload.length, version), payload]);
 }
 
 export function encodeControlPacket(kind: 2 | 3): Buffer {
-  return protocolHeader("KRC1", kind, 0);
+  return protocolHeader("KRC1", kind, 0, BASE_PROTOCOL_VERSION);
 }
 
 export function validResponsePayloadLength(bytes: Buffer): number | undefined {
@@ -77,10 +90,23 @@ export function validResponsePayloadLength(bytes: Buffer): number | undefined {
   return payloadLength <= 64 ? payloadLength : undefined;
 }
 
-function encodeStrings(values: readonly string[], argumentCount: number, envCount: number): Buffer {
-  const prefix = Buffer.alloc(4);
+function launchPrefix(
+  argumentCount: number,
+  envCount: number,
+  confinement: RuntimeGatewayConfinement | undefined,
+): Buffer {
+  const prefix = Buffer.alloc(confinement === undefined ? 4 : 12);
   prefix.writeUInt16LE(argumentCount, 0);
   prefix.writeUInt16LE(envCount, 2);
+  if (confinement !== undefined) {
+    prefix.writeUInt16LE(GATEWAY_CONFINEMENT_CAPABILITY, 4);
+    prefix.writeUInt16LE(confinement.addressFamily === "ipv4" ? 4 : 6, 6);
+    prefix.writeUInt16LE(confinement.port, 8);
+  }
+  return prefix;
+}
+
+function encodeStrings(prefix: Buffer, values: readonly string[]): Buffer {
   const parts: Buffer[] = [prefix];
   for (const value of values) {
     const encoded = Buffer.from(value, "utf8");
@@ -91,13 +117,38 @@ function encodeStrings(values: readonly string[], argumentCount: number, envCoun
   return Buffer.concat(parts);
 }
 
-function protocolHeader(magic: string, kind: number, payloadLength: number): Buffer {
+function protocolHeader(
+  magic: string,
+  kind: number,
+  payloadLength: number,
+  version: number,
+): Buffer {
   const header = Buffer.alloc(RESPONSE_HEADER_BYTES);
   header.write(magic, 0, "ascii");
-  header.writeUInt16LE(1, 4);
+  header.writeUInt16LE(version, 4);
   header.writeUInt16LE(kind, 6);
   header.writeUInt32LE(payloadLength, 8);
   return header;
+}
+
+function closeGatewayConfinement(
+  value: RuntimeGatewayConfinement | undefined,
+): RuntimeGatewayConfinement | undefined {
+  if (value === undefined) return undefined;
+  const closed = copyRuntimeGatewayConfinement(value);
+  if (closed === undefined) invalidRequest();
+  return closed;
+}
+
+function confinementStrings(value: RuntimeGatewayConfinement): readonly string[] {
+  return [
+    value.runId,
+    value.treeBindingId,
+    value.envelopeDigest,
+    value.runtimeArtifactDigest,
+    value.modelProfileDigest,
+    value.policyDigest,
+  ];
 }
 
 function validateText(value: string, maxBytes: number, fail: () => never): void {
