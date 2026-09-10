@@ -7,7 +7,6 @@ import {
   FRAMEWORK_REFERENCE_NAMES,
   assertPinnedToolchain,
   boundedDirectoryDigest,
-  executeGeneratorCli,
   generateVerifierAsset,
   inspectVerifierToolchain,
   renderGeneratedVerifierAsset,
@@ -90,75 +89,6 @@ describe("Windows portable Authenticode verifier generator", () => {
       ]),
     );
     expect(args.filter((value) => value.startsWith("/reference:"))).toHaveLength(4);
-  });
-
-  it("inspects a complete reviewed toolchain through the CLI without compiling", () => {
-    const { compilerPath, expectedToolchain, referenceDirectory } = fixture();
-    const output = [];
-    const write = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
-      output.push(String(chunk));
-      return true;
-    });
-
-    try {
-      executeGeneratorCli([
-        "node",
-        "generate-windows-portable-authenticode-verifier.mjs",
-        "--compiler",
-        compilerPath,
-        "--references",
-        referenceDirectory,
-        "--inspect",
-      ]);
-    } finally {
-      write.mockRestore();
-    }
-
-    expect(output).toHaveLength(1);
-    expect(JSON.parse(output[0] ?? "")).toEqual(expectedToolchain);
-  });
-
-  it.each([
-    [
-      "omits the references path",
-      ["--compiler", "csc.exe"],
-      /compiler and --references are required/u,
-    ],
-    [
-      "uses an unknown option",
-      ["--compiler", "csc.exe", "--references", "refs", "--unexpected", "value"],
-      /unknown or incomplete argument/u,
-    ],
-    [
-      "uses an unframed framework-reference pin",
-      ["--compiler", "csc.exe", "--references", "refs", "--expected-reference-sha256", "digest"],
-      /expected reference pin must use name=sha256/u,
-    ],
-    [
-      "uses malformed compiler-distribution JSON",
-      [
-        "--compiler",
-        "csc.exe",
-        "--references",
-        "refs",
-        "--expected-compiler-distribution",
-        "not-json",
-      ],
-      SyntaxError,
-    ],
-    [
-      "requests compilation without reviewed pins",
-      ["--compiler", "csc.exe", "--references", "refs"],
-      /output and reviewed expected toolchain digests are required/u,
-    ],
-  ])("rejects CLI input that %s", (_label, arguments_, expectedError) => {
-    expect(() =>
-      executeGeneratorCli([
-        "node",
-        "generate-windows-portable-authenticode-verifier.mjs",
-        ...arguments_,
-      ]),
-    ).toThrow(expectedError);
   });
 
   it("rejects compiler-distribution and framework-reference drift", () => {

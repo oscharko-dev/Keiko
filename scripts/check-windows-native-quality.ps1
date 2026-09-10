@@ -18,6 +18,35 @@ function Get-ActiveNativeProducerSource {
   )
 }
 
+function Update-NativeArgumentScanState {
+  param(
+    [Parameter(Mandatory = $true)][hashtable] $State,
+    [Parameter(Mandatory = $true)][int] $CodePoint
+  )
+
+  if ($State.Quote -ne 0) {
+    if ($State.Escaped) {
+      $State.Escaped = $false
+      return
+    }
+    if ($CodePoint -eq 92) {
+      $State.Escaped = $true
+      return
+    }
+    if ($CodePoint -eq $State.Quote) { $State.Quote = 0 }
+    return
+  }
+  if ($CodePoint -eq 34 -or $CodePoint -eq 39 -or $CodePoint -eq 96) {
+    $State.Quote = $CodePoint
+    return
+  }
+  if ($CodePoint -eq 91) {
+    $State.Depth += 1
+    return
+  }
+  if ($CodePoint -eq 93) { $State.Depth -= 1 }
+}
+
 function Get-NativeProducerArgumentList {
   param(
     [Parameter(Mandatory = $true)][string] $ActiveSource,
@@ -35,34 +64,16 @@ function Get-NativeProducerArgumentList {
     throw "could not locate the target compiler argument list in $ProducerPath $FunctionName()"
   }
   $argumentListEnd = -1
-  $depth = 0
-  $quote = 0
-  $escaped = $false
+  $state = @{ Depth = 0; Quote = 0; Escaped = $false }
   for ($index = $argumentListStart; $index -lt $ActiveSource.Length; $index += 1) {
     $codePoint = [int]$ActiveSource[$index]
-    if ($quote -ne 0) {
-      if ($escaped) {
-        $escaped = $false
-      } elseif ($codePoint -eq 92) {
-        $escaped = $true
-      } elseif ($codePoint -eq $quote) {
-        $quote = 0
-      }
-      continue
-    }
-    if ($codePoint -eq 34 -or $codePoint -eq 39 -or $codePoint -eq 96) {
-      $quote = $codePoint
-    } elseif ($codePoint -eq 91) {
-      $depth += 1
-    } elseif ($codePoint -eq 93) {
-      $depth -= 1
-      if ($depth -eq 0) {
-        $argumentListEnd = $index
-        break
-      }
+    Update-NativeArgumentScanState -State $state -CodePoint $codePoint
+    if ($codePoint -eq 93 -and $state.Depth -eq 0 -and $state.Quote -eq 0) {
+      $argumentListEnd = $index
+      break
     }
   }
-  if ($argumentListEnd -lt $argumentListStart -or $depth -ne 0 -or $quote -ne 0) {
+  if ($argumentListEnd -lt $argumentListStart -or $state.Depth -ne 0 -or $state.Quote -ne 0) {
     throw "could not locate the balanced target compiler argument list in $ProducerPath $FunctionName()"
   }
   return $ActiveSource.Substring($argumentListStart, $argumentListEnd - $argumentListStart + 1)
@@ -444,8 +455,7 @@ static const size_t KEIKO_RUNTIME_ATTESTATION_LENGTH = 20u;
     throw "Trusted Windows PowerShell or built Authenticode runtime was not found"
   }
   node (Join-Path $root "scripts/check-windows-portable-authenticode-loader.mjs") `
-    --helper $standardTokenHelper --powershell $windowsPowerShell `
-    --runtime $serverRuntime --system-root $env:SystemRoot
+    --helper $standardTokenHelper
   if ($LASTEXITCODE -ne 0) { throw "Restricted-token Authenticode loader verification failed" }
 
   $project = Join-Path $PSScriptRoot "native-quality/windows-rfc3161-quality.csproj"

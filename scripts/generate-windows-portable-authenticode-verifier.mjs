@@ -12,7 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 
 export const FRAMEWORK_REFERENCE_NAMES = Object.freeze([
   "mscorlib.dll",
@@ -269,62 +269,4 @@ export function generateVerifierAsset({
   } finally {
     rmSync(scratchRoot, { force: true, recursive: true });
   }
-}
-
-function consumeArgument(options, key, value) {
-  if (key === "--compiler") options.compilerPath = value;
-  else if (key === "--references") options.referenceDirectory = value;
-  else if (key === "--output") options.outputPath = value;
-  else if (key === "--expected-compiler-sha256") options.compilerSha256 = value;
-  else if (key === "--expected-compiler-distribution")
-    options.compilerDistribution = JSON.parse(value);
-  else if (key === "--expected-reference-sha256") {
-    const separator = value?.indexOf("=") ?? -1;
-    if (separator <= 0) throw new Error("expected reference pin must use name=sha256");
-    options.referenceSha256[value.slice(0, separator)] = value.slice(separator + 1);
-  } else throw new Error(`unknown or incomplete argument ${String(key)}`);
-}
-
-function parseArguments(argv) {
-  const options = { referenceSha256: {} };
-  for (let index = 2; index < argv.length; index += 1) {
-    const key = argv[index];
-    if (key === "--inspect") options.inspect = true;
-    else {
-      consumeArgument(options, key, argv[index + 1]);
-      index += 1;
-    }
-  }
-  if (options.compilerPath === undefined || options.referenceDirectory === undefined) {
-    throw new Error("--compiler and --references are required");
-  }
-  return options;
-}
-
-export function executeGeneratorCli(argv = process.argv) {
-  const options = parseArguments(argv);
-  if (options.inspect === true) {
-    const receipt = inspectVerifierToolchain(options);
-    process.stdout.write(`${JSON.stringify(receipt, null, 2)}\n`);
-    return;
-  }
-  if (options.outputPath === undefined || options.compilerSha256 === undefined) {
-    throw new Error("--output and reviewed expected toolchain digests are required");
-  }
-  const generated = generateVerifierAsset({
-    ...options,
-    expectedToolchain: {
-      compilerSha256: options.compilerSha256,
-      compilerDistribution: options.compilerDistribution,
-      referenceSha256: options.referenceSha256,
-    },
-  });
-  writeFileSync(resolve(options.outputPath), generated.asset, { encoding: "utf8" });
-}
-
-if (
-  process.argv[1] !== undefined &&
-  import.meta.url === pathToFileURL(resolve(process.argv[1])).href
-) {
-  executeGeneratorCli();
 }

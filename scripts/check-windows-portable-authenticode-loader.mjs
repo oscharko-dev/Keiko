@@ -1,10 +1,18 @@
 import { spawnSync } from "node:child_process";
 import { Buffer } from "node:buffer";
-import { resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { lstatSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const CHILD_TIMEOUT_MS = 40_000;
 const CHILD_OUTPUT_BYTES = 16_384;
+const SCRIPT_ROOT = dirname(fileURLToPath(import.meta.url));
+const REPOSITORY_ROOT = resolve(SCRIPT_ROOT, "..");
+const SERVER_RUNTIME_PATH = resolve(
+  REPOSITORY_ROOT,
+  "packages/keiko-server/dist/coding-runtime/windowsPortableAuthenticode.js",
+);
+const HELPER_FILE_NAME = "windows-portable-authenticode-standard-token-loader.exe";
 const CLOSED_HELPER_DIAGNOSTICS = [
   /^standard-token-loader:[a-z-]+\r?\n?$/u,
   /^standard-token-loader:[a-z-]+:win32-\d+\r?\n?$/u,
@@ -21,6 +29,62 @@ function closedHelperDiagnostic(stderr) {
 
 function encodedPowerShell(script) {
   return Buffer.from(script, "utf16le").toString("base64");
+}
+
+function assertContainedRegularFile(candidate, root, expectedName, label) {
+  if (!isAbsolute(candidate) || !isAbsolute(root) || basename(candidate) !== expectedName) {
+    throw new Error(`${label} path is not an approved absolute executable path`);
+  }
+  const rootReal = realpathSync(root);
+  const stat = lstatSync(candidate);
+  const candidateReal = realpathSync(candidate);
+  const contained = relative(rootReal, candidateReal);
+  if (
+    stat.isSymbolicLink() ||
+    !stat.isFile() ||
+    contained === ".." ||
+    contained.startsWith(`..${sep}`) ||
+    isAbsolute(contained)
+  ) {
+    throw new Error(`${label} path escapes its approved root`);
+  }
+  return candidateReal;
+}
+
+function trustedLoaderContext(helperPath, env) {
+  const systemRoot = env.SystemRoot;
+  const runnerTemp = env.RUNNER_TEMP;
+  if (systemRoot === undefined || runnerTemp === undefined) {
+    throw new Error("SystemRoot and RUNNER_TEMP are required for the Windows loader check");
+  }
+  const powershellPath = join(
+    systemRoot,
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+  return {
+    helperPath: assertContainedRegularFile(
+      helperPath,
+      runnerTemp,
+      HELPER_FILE_NAME,
+      "restricted-token helper",
+    ),
+    powershellPath: assertContainedRegularFile(
+      powershellPath,
+      systemRoot,
+      "powershell.exe",
+      "Windows PowerShell",
+    ),
+    serverRuntimePath: assertContainedRegularFile(
+      SERVER_RUNTIME_PATH,
+      REPOSITORY_ROOT,
+      "windowsPortableAuthenticode.js",
+      "built Authenticode runtime",
+    ),
+    systemRoot: realpathSync(systemRoot),
+  };
 }
 
 function runRestricted(run, helper, powershell, systemRoot, script, input) {
@@ -98,27 +162,18 @@ export async function checkWindowsPortableAuthenticodeLoader({
   assertCorruptInputsDenied({ helperPath, input, powershellPath, probe, run, systemRoot });
 }
 
-function parseArguments(argv) {
-  const values = {};
-  for (let index = 2; index < argv.length; index += 2) {
-    const key = argv[index];
-    const value = argv[index + 1];
-    if (value === undefined) throw new Error(`missing value for ${String(key)}`);
-    if (key === "--helper") values.helperPath = value;
-    else if (key === "--powershell") values.powershellPath = value;
-    else if (key === "--runtime") values.serverRuntimePath = value;
-    else if (key === "--system-root") values.systemRoot = value;
-    else throw new Error(`unknown argument ${String(key)}`);
+function parseHelperArgument(argv) {
+  if (argv.length !== 4 || argv[2] !== "--helper" || argv[3] === undefined) {
+    throw new Error("exactly one --helper argument is required");
   }
-  if (Object.values(values).length !== 4)
-    throw new Error("all loader check arguments are required");
-  return values;
+  return argv[3];
 }
 
 if (
   process.argv[1] !== undefined &&
   import.meta.url === pathToFileURL(resolve(process.argv[1])).href
 ) {
-  await checkWindowsPortableAuthenticodeLoader(parseArguments(process.argv));
+  const context = trustedLoaderContext(parseHelperArgument(process.argv), process.env);
+  await checkWindowsPortableAuthenticodeLoader(context);
   process.stdout.write("windows-portable-authenticode-loader: PASS\n");
 }

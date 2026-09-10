@@ -189,7 +189,7 @@ describe("CI test/gate wiring guard", () => {
     const fixtureGate = ci.slice(fixtureStep, nextStep);
     expect(fixtureGate).toContain("if: runner.os == 'Windows'");
     expect(fixtureGate).toContain(
-      "npx vitest run packages/keiko-server/src/update-portable-handoff-plan.test.ts",
+      "node node_modules/vitest/vitest.mjs run packages/keiko-server/src/update-portable-handoff-plan.test.ts",
     );
     expect(fixtureGate).toContain(
       "packages/keiko-server/src/update-portable-handoff-receipts.test.ts",
