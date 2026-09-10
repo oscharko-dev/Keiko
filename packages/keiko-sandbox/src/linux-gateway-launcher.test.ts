@@ -496,6 +496,21 @@ describe("real OS-level gateway confinement (Linux namespace bridge, #3422)", ()
         );
         expect((await runChild(crossRun.command, crossRun.args, env)).stdout).toBe("BLOCKED");
 
+        const unavailablePort = await reservePort();
+        const unavailableGateway = requireWrapped(
+          planIsolatedRun(plan(unavailablePort, unavailablePort), availability, "linux"),
+        );
+        const unavailableResult = await runChild(
+          unavailableGateway.command,
+          unavailableGateway.args,
+          env,
+          true,
+        );
+        expect(unavailableResult.status).toBe(1);
+        expect(unavailableResult.launcherDiagnostics).toBe(
+          "keiko-linux-gateway:error:host-relay-failed",
+        );
+
         const readyPath = join(launcherTemp, "first-ready");
         const releasePath = join(launcherTemp, "first-release");
         const firstAllowed = requireWrapped(
