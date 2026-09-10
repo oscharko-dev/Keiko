@@ -23,20 +23,6 @@ export { isKeikoApiKeyEnvName, keikoApiKeySecretValues } from "./secrets.js";
 
 export { canonicalise, sha256Hex, sha256Base64 } from "./hashing.js";
 
-export type {
-  CreatePortableReleaseTrustOptions,
-  PortableReleaseTrustedKey,
-  PortableReleaseTrustFailureReason,
-  PortableReleaseTrustVerification,
-  VerifyPortableReleaseTrustOptions,
-} from "./portable-release-trust.js";
-export {
-  createPortableReleaseTrust,
-  KEIKO_PORTABLE_RELEASE_TRUSTED_KEYS,
-  portableReleaseTrustKeyId,
-  verifyPortableReleaseTrust,
-} from "./portable-release-trust.js";
-
 export { sealString, openString, sealBytes, openBytes, isSealed } from "./secretbox.js";
 
 // Shared filesystem-hardening primitives (0o700 dirs / 0o600 files) — one owner for the store/vault
