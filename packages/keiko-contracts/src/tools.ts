@@ -40,21 +40,57 @@ export interface NetworkGatewayPolicy {
 
 export type NetworkPolicy = "inherit" | "none";
 
+const NETWORK_GATEWAY_POLICY_KEYS = new Set(["mode", "host", "port"]);
+
+function ownNetworkGatewayPolicyData(value: unknown): Record<string, unknown> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const prototype: unknown = Object.getPrototypeOf(value);
+  if (prototype !== Object.prototype && prototype !== null) return undefined;
+  const descriptors = Object.getOwnPropertyDescriptors(value);
+  if (Reflect.ownKeys(descriptors).length !== NETWORK_GATEWAY_POLICY_KEYS.size) return undefined;
+  const entries = Object.entries(descriptors);
+  if (
+    !entries.every(
+      ([key, descriptor]) =>
+        NETWORK_GATEWAY_POLICY_KEYS.has(key) && Object.hasOwn(descriptor, "value"),
+    )
+  ) {
+    return undefined;
+  }
+  return Object.fromEntries(entries.map(([key, descriptor]) => [key, descriptor.value as unknown]));
+}
+
+function networkGatewayPolicyData(value: unknown): Record<string, unknown> | undefined {
+  try {
+    return ownNetworkGatewayPolicyData(value);
+  } catch {
+    return undefined;
+  }
+}
+
+export function copyNetworkGatewayPolicy(value: unknown): NetworkGatewayPolicy | undefined {
+  const record = networkGatewayPolicyData(value);
+  if (record?.mode !== "gateway") return undefined;
+  const host = record.host;
+  const port = record.port;
+  if (
+    (host !== "127.0.0.1" && host !== "::1") ||
+    typeof port !== "number" ||
+    !Number.isSafeInteger(port) ||
+    port <= 0 ||
+    port > 65_535
+  ) {
+    return undefined;
+  }
+  return Object.freeze({ mode: "gateway", host, port });
+}
+
 // Structural guard, not a coercion: true only for a value shaped exactly like a
 // `NetworkGatewayPolicy` — a loopback host, an in-range TCP port, and no other fields. A
 // non-loopback host, a missing/fractional/out-of-range port, or an extra field is rejected, never
 // widened or truncated into something that would look valid.
 export function isValidNetworkGatewayPolicy(value: unknown): value is NetworkGatewayPolicy {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
-  const record = value as Record<string, unknown>;
-  return (
-    Object.keys(record).length === 3 &&
-    record.mode === "gateway" &&
-    (record.host === "127.0.0.1" || record.host === "::1") &&
-    Number.isSafeInteger(record.port) &&
-    (record.port as number) > 0 &&
-    (record.port as number) <= 65_535
-  );
+  return copyNetworkGatewayPolicy(value) !== undefined;
 }
 
 export type FilesystemPolicy = "inherit" | "execution-root";

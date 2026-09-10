@@ -3,7 +3,8 @@
 // are deterministic string functions so the security-critical argv is pinned by unit tests.
 
 import { basename, dirname, isAbsolute } from "node:path";
-import { isValidNetworkGatewayPolicy } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import { copyNetworkGatewayPolicy } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import { linuxGatewayLauncherPath } from "./runtime.js";
 import type { IsolatedRunPlan, NetworkGatewayPolicy, SandboxBackend } from "./types.js";
 
 export interface WrappedCommand {
@@ -112,6 +113,49 @@ function unshareArgs(plan: IsolatedRunPlan): readonly string[] {
   return ["--map-root-user", "--net", plan.command, ...plan.args];
 }
 
+function buildLinuxGatewayCommand(
+  backend: "bubblewrap" | "unshare",
+  plan: IsolatedRunPlan,
+  gateway: NetworkGatewayPolicy,
+): WrappedCommand {
+  if (
+    !isAbsolute(plan.command) ||
+    plan.command.includes("\0") ||
+    !isAbsolute(plan.cwd) ||
+    plan.cwd.includes("\0") ||
+    plan.args.some((argument) => argument.includes("\0"))
+  ) {
+    throw new TypeError("linux-gateway-launch-input-invalid");
+  }
+  return {
+    command: process.execPath,
+    args: [
+      linuxGatewayLauncherPath(),
+      "host",
+      backend,
+      gateway.host,
+      String(gateway.port),
+      plan.cwd,
+      plan.command,
+      ...plan.args,
+    ],
+  };
+}
+
+function buildBubblewrapCommand(plan: IsolatedRunPlan): WrappedCommand {
+  const gateway = copyNetworkGatewayPolicy(plan.network);
+  if (gateway !== undefined) return buildLinuxGatewayCommand("bubblewrap", plan, gateway);
+  if (plan.network !== "none") throw new TypeError("sandbox-network-policy-invalid");
+  return { command: "bwrap", args: bubblewrapArgs(plan) };
+}
+
+function buildUnshareCommand(plan: IsolatedRunPlan): WrappedCommand {
+  const gateway = copyNetworkGatewayPolicy(plan.network);
+  if (gateway !== undefined) return buildLinuxGatewayCommand("unshare", plan, gateway);
+  if (plan.network !== "none") throw new TypeError("sandbox-network-policy-invalid");
+  return { command: "unshare", args: unshareArgs(plan) };
+}
+
 function seatbeltArgs(plan: IsolatedRunPlan): readonly string[] {
   return ["-p", SEATBELT_DENY_EGRESS_PROFILE, plan.command, ...plan.args];
 }
@@ -146,12 +190,14 @@ export function buildGatewaySeatbeltCommand(
   args: readonly string[],
   childExecutable: string,
 ): WrappedCommand {
-  const family = gateway.host === "127.0.0.1" ? "tcp4" : "tcp6";
+  const closedGateway = copyNetworkGatewayPolicy(gateway);
+  if (closedGateway === undefined) throw new TypeError("gateway-network-policy-invalid");
+  const family = closedGateway.host === "127.0.0.1" ? "tcp4" : "tcp6";
   const profile =
     "(version 1)(allow default)(deny network*)" +
     gatewayProcessExecPolicy(command, childExecutable) +
     "(deny mach-lookup)(deny appleevent-send)(deny lsopen)" +
-    `(allow network-outbound (remote ${family} "localhost:${String(gateway.port)}"))` +
+    `(allow network-outbound (remote ${family} "localhost:${String(closedGateway.port)}"))` +
     `(allow network-inbound (local ${family} "localhost:*"))`;
   return { command: "/usr/bin/sandbox-exec", args: ["-p", profile, command, ...args] };
 }
@@ -189,18 +235,22 @@ export function buildWrappedCommand(
 ): WrappedCommand | undefined {
   switch (backend) {
     case "bubblewrap":
-      return { command: "bwrap", args: bubblewrapArgs(plan) };
+      return buildBubblewrapCommand(plan);
     case "unshare":
-      return { command: "unshare", args: unshareArgs(plan) };
-    case "seatbelt":
-      return isValidNetworkGatewayPolicy(plan.network)
-        ? buildGatewaySeatbeltCommand(
-            plan.network,
-            plan.command,
-            plan.args,
-            plan.gatewayChildExecutable ?? "",
-          )
-        : { command: "sandbox-exec", args: seatbeltArgs(plan) };
+      return buildUnshareCommand(plan);
+    case "seatbelt": {
+      const gateway = copyNetworkGatewayPolicy(plan.network);
+      if (gateway !== undefined) {
+        return buildGatewaySeatbeltCommand(
+          gateway,
+          plan.command,
+          plan.args,
+          plan.gatewayChildExecutable ?? "",
+        );
+      }
+      if (plan.network !== "none") throw new TypeError("sandbox-network-policy-invalid");
+      return { command: "sandbox-exec", args: seatbeltArgs(plan) };
+    }
     case "container-docker":
       return { command: "docker", args: containerArgs(plan, DEFAULT_CONTAINER_IMAGE) };
     case "container-podman":

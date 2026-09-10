@@ -1,9 +1,10 @@
 // @oscharko-dev/keiko-sandbox — the reusable OS/container egress-isolation strategy (ADR-0043).
 //
-// keiko-sandbox decides HOW a `network: "none"` command is wrapped so that an outbound connection from
-// the child fails; the single spawn boundary stays in keiko-tools' exec.ts, which applies the decision
-// and records the returned attestation. The same path is the shared isolated-execution boundary for
-// the #1202 assured pre-filter and the #1204 post-apply verification.
+// keiko-sandbox decides HOW isolated commands are wrapped. Disposable `network: "none"` runs keep
+// their single spawn boundary in keiko-tools' exec.ts. Gateway-confined Linux runs use this package's
+// internal launcher to own the namespace/relay lifecycle; callers still receive one wrapped command.
+// The disposable path remains the shared isolated-execution boundary for the #1202 assured pre-filter
+// and the #1204 post-apply verification.
 
 export {
   buildWrappedCommand,
@@ -38,7 +39,10 @@ export {
 } from "./runtime-gateway.js";
 export {
   CLOSED_RUNTIME_LAUNCH_PROFILE,
+  LINUX_GATEWAY_DIAGNOSTIC_FD,
+  LINUX_GATEWAY_DIAGNOSTIC_FD_ENV,
   PRODUCTION_RUNTIME_QUALIFICATIONS,
+  parseLinuxGatewayDiagnosticLine,
   qualificationFromReceipt,
   qualifyLongLivedRuntime,
 } from "./runtime.js";

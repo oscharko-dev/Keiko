@@ -17,7 +17,10 @@ code comments anticipated (no such files existed); those comments are updated to
 
 ## Version
 
-1.0
+1.2 — Issue #3422 moves the internal Linux gateway launcher into the `keiko-sandbox` enforcement
+boundary while `keiko-tools` remains the disposable-command spawn boundary, replaces its
+same-uid-discoverable filesystem relay with an anonymous descriptor-transfer channel, and records
+the kernel-proven private diagnostics-descriptor lifecycle (2026-09-10).
 
 ## Context
 
@@ -50,18 +53,25 @@ Introduce `@oscharko-dev/keiko-sandbox`, a near-leaf package (depends only on `k
 the `SandboxPolicy`/`NetworkPolicy`/attestation types). It owns the **isolation strategy only**:
 backend availability probing, deterministic per-platform backend selection, pure construction of the
 wrapper argv/profile that denies egress, a content-free `SandboxAttestation` (`{ backend,
-networkEnforced, platform }`), and the fail-closed verdict. It performs **no process spawning** — the
-wrapper builders and selection are pure functions, the probe is a thin filesystem read. The package is
-the platform's reusable isolation brain, consumable anywhere an enforced run is needed.
+networkEnforced, platform }`), and the fail-closed verdict. The disposable `network: "none"` builders
+and selection remain pure functions and the probe remains a thin filesystem read. The gateway-only
+Linux extension in D12 additionally owns the internal namespace and relay subprocesses because their
+lifecycle is the enforcement boundary itself; consumers still receive one wrapped command. The
+package is the platform's reusable isolation owner, consumable anywhere an enforced run is needed.
 
 ### D2 — One spawn boundary applies the wrapper
 
-The single subprocess boundary remains `keiko-tools/src/exec.ts` `runCommand`. When a caller passes
+The single disposable-command subprocess boundary remains `keiko-tools/src/exec.ts` `runCommand`.
+When a caller passes
 `policy.network === "none"`, `runCommand` asks keiko-sandbox for an enforcing wrapper and spawns the
 wrapped command, recording the attestation on `CommandResult`. No second spawning path is introduced
 (preserving the ADR-0019 invariant that verification and tools share one command boundary). Callers
 that do not request `network: "none"` are unaffected — egress enforcement is opt-in per call, so the
 read-only command tools keep `network: "inherit"` and their existing behaviour.
+
+D12's gateway-only Linux wrapper does not create another product command boundary: the planned child
+is still one command to the consumer, while the package-private launcher owns only the inseparable
+namespace peer, anonymous descriptor relay, and target-child lifecycle needed to enforce that plan.
 
 ### D3 — Hybrid backends, fail-closed
 
@@ -194,43 +204,82 @@ any other executable is refused by Seatbelt. Descendants inherit that executable
 same `(deny network*)` with its one gateway-port carve-out. The real Darwin suite proves both the
 attested Git spawn and an unapproved executable denial, and separately proves network denial
 remains inherited by an allowed same-runtime descendant.
-`packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts` is the sole caller: it
-refuses to spawn the sidecar at all when no
+`packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts` is the sole Seatbelt
+caller: it refuses to spawn the sidecar at all when no
 confinement policy is attached, or when the policy's `runId`/`treeBindingId` drift from the launch
 request, before any process exists.
 
-### D12 — Current scope is macOS-only; Linux and Windows are an explicit, tracked gap
+### D12 — macOS is product-wired; Linux has a proven primitive; Windows remains fail-closed
 
-`buildRuntimeGatewaySeatbeltCommand` hardcodes `/usr/bin/sandbox-exec` and is invoked only from the
-macOS dev-lane backend (ADR-0140). **No equivalent OS-level network policy exists today for Linux
-or Windows.** `packages/keiko-server/src/coding-runtime/nativeRuntimeProcessBackend.ts` — the
-backend used for the Windows dev lane and every release-qualified platform — carries no network
-policy of any kind; a sidecar launched through it is not confined to the gateway port by the OS. This
-is a real gap in the acceptance criterion ("every long-lived coding sidecar runs behind an attested
-OS/process-level sandbox … on macOS, Linux, and Windows"), not a documentation omission: closing it
-requires extending `backends.ts`'s existing per-platform `IsolatedRunPlan`/`SandboxBackend`
-abstraction with a gateway-allowlist variant (bubblewrap/`unshare` network-namespace plumbing for
-Linux, a Windows-native equivalent), which is materially harder than the disposable-run case because
-`--unshare-net` isolates the child into a fresh network namespace that cannot reach the host's
-loopback gateway port without additional bridging. That generalisation is out of scope for this
-delivery and is tracked as remaining work; this record deliberately does not claim cross-platform
-coverage the code does not have. Until it lands, non-macOS long-lived sidecars rely on the process
-supervisor's identity/path checks (§ D11) but not on kernel-enforced network denial.
+`buildRuntimeGatewaySeatbeltCommand` remains the enforcing macOS product path (ADR-0140). Issue
+#3422 adds the corresponding Linux primitive to the generic isolated-run planner: when bubblewrap
+or unshare is available, `selectGatewayBackend` chooses that native namespace backend and
+`buildWrappedCommand` starts the packaged internal launcher in `runtime.ts`. The host and namespace
+launchers communicate over one anonymous Node IPC socketpair inherited on descriptor 10. The
+namespace peer exposes the validated port on its isolated loopback interface and requests a stream
+with a bounded, monotonically increasing connection id. The host alone connects to the validated
+gateway address and port and passes that already-connected TCP descriptor over the anonymous
+socketpair. There is no filesystem socket name, temporary relay directory, or reconnectable bridge
+capability for a same-uid sidecar to enumerate across concurrent runs. The sidecar starts only after
+the namespace listener is ready and its readiness message has crossed the IPC channel; descendants
+inherit the network namespace. No host network namespace, veth, NAT rule, root, or ambient
+`CAP_NET_ADMIN` is granted. Parent-death, signals, relay failure, and cleanup stay inside the
+wrapper's fail-closed lifecycle.
+
+Launcher failures cross a dedicated descriptor-3 diagnostics channel that the server provisions
+only for the Linux wrapper. The host launcher relocates that pipe to descriptor 9 when entering the
+network namespace and reserves descriptors 3 through 8, keeping Bubblewrap's low-numbered lifecycle
+eventfds away from it. The pipe is not claimed through `--sync-fd`, whose eventfd semantics make it
+unwritable for text diagnostics. The namespace launcher removes both descriptor 9 and its marker
+environment variable before spawning the sidecar. It also closes descriptor 10 and removes Node's
+IPC marker variables, so the sidecar can neither forge launcher evidence nor request or receive a
+gateway handle.
+The server accepts only the closed launcher error vocabulary and records the first failure as
+`runtime.confinement.failed`, with the run correlation id and body-free backend/source fields. A
+missing diagnostics pipe refuses the launch and terminates the just-spawned unowned process tree.
+This prepares the existing composition boundary for #3451 without claiming that a Linux runtime
+target is already qualified.
+
+The Linux reference-runner test proves the mechanism rather than an argv string: the unconfined
+child completes a PING/PONG exchange with a hostile ephemeral loopback listener, the same child
+under the planned gateway
+wrapper cannot reach that listener or a concurrent run's port, and two isolated runs can each
+complete the same data round trip only through their own real gateway listener. The hostile second
+sidecar also enumerates the shared temporary directory and tries every legacy `relay.sock` it finds:
+the regression proof fails against the former filesystem bridge because both concurrent gateway
+destinations are reachable, and passes only when no reconnectable bridge exists. Missing namespace
+tools on Linux fail that reference proof. Containers remain ineligible because no equivalent bridge
+is compiled for them.
+
+This does **not** yet establish Linux product coverage. Keiko still has no `linux-x64`
+`LongLivedRuntimePlatform`, `RuntimeQualificationTarget`, staged/portable artifact, discovery path,
+or release-qualified long-lived runtime. Issue #3451 owns those surfaces and must consume this
+primitive before Linux can be described as shipped. Windows production composition already
+attaches the exact gateway policy to its native backend, but the native protocol/helper cannot
+enforce it, so it refuses before spawn with `GATEWAY_UNSUPPORTED_ON_HOST_REASON`. Issue #3423 owns
+the exact-port WFP implementation. The cross-platform acceptance criterion remains open until
+#3451 and #3423 have their own platform-native proofs.
 
 ### D13 — Does not relax D1–D10
 
 This confinement mechanism is additive: it does not change `network: "none"`, the disposable-run
-backends, or the CI-proven egress denial in D5. It is a second, narrower policy shape for a shape of
+backends, their `keiko-tools` spawn boundary, or the CI-proven egress denial in D5. D12's
+package-private launcher is the enforcement implementation for the new gateway-only plan, not a
+second general-purpose command execution API. It is a second, narrower policy shape for a shape of
 execution (long-lived, one-endpoint-allowed) that D1–D10 did not address, scoped today to the one
-platform (macOS) that has a production long-lived sidecar activation path (ADR-0140).
+platform (macOS) that has a production long-lived sidecar activation path (ADR-0140). The Linux
+planner/bridge primitive in D12 extends this second shape without changing any disposable-run argv
+or claiming a Linux product activation path.
 
 ## Addendum — a contract-level `NetworkGatewayPolicy` and an honest cross-platform posture (2026-09-05)
 
 ### D14 — The gateway-allowlist shape moves into `keiko-contracts`, and macOS reuses one Seatbelt formula
 
 `packages/keiko-contracts/src/tools.ts` now carries `NetworkGatewayPolicy` (`{ mode: "gateway",
-host: "127.0.0.1" | "::1", port }`), guarded by `isValidNetworkGatewayPolicy` — deliberately not a
-general allowlist: one loopback host, one in-range port, nothing else. It is just as deliberately
+host: "127.0.0.1" | "::1", port }`), guarded through `copyNetworkGatewayPolicy` — deliberately not
+a general allowlist: one loopback host, one in-range port, nothing else. The copier accepts only a
+plain/null-prototype object with exactly three own data descriptors, never invokes accessors,
+rejects hidden/symbol/extra fields, and returns a frozen data-only record. It is just as deliberately
 **not** folded into `NetworkPolicy` (`"inherit" | "none"`, the general keiko-tools spawn-boundary
 type every disposable command run's `runCommand` reads): a first attempt at that fold-in was
 reverted during review, because widening `NetworkPolicy` to include the gateway object would make
@@ -248,11 +297,15 @@ thirteen-line wrapper over that same function (its exported name and observable 
 unchanged, so existing callers and D11's own description above still hold). There is no longer a
 second, independently-maintained copy of the "(deny network*) plus one port-specific allow" formula.
 
-Linux and Windows remain fail-closed for this policy, and D12's stated gap is now a *reasoned*
-refusal rather than silent non-enforcement: `selectGatewayBackend` never selects bubblewrap, unshare,
-or a container runtime for a gateway policy, because each of those isolates the child into its own
-network namespace with no route back to the *parent's* loopback socket — reachability a general
-`network:"none"` deny-all run never needed and a `network:"inherit"` run never isolated either.
+Linux now selects bubblewrap, then unshare, only because D12's packaged anonymous descriptor bridge
+supplies the missing fixed route back to the host gateway without exposing the host network
+namespace or a reusable filesystem capability.
+Absence of both primitives fails closed; a container runtime is never substituted because no
+container bridge implements the same contract. Invalid/accessor-backed gateway values fail as
+`invalid-network-policy` before a child is compiled, rather than being mistaken for the narrower
+`network:"none"` shape.
+
+Windows remains a reasoned refusal rather than silent non-enforcement:
 `nativeRuntimeProcessBackend.ts` (the backend used for the Windows dev lane and every
 release-qualified platform) now accepts an optional `gatewayConfinement` and, when one is attached,
 refuses the launch outright with the identical `GATEWAY_UNSUPPORTED_ON_HOST_REASON` string
@@ -265,8 +318,9 @@ and release-qualified native lanes. Process-tree qualification alone cannot auth
 network launch. Until a native backend can enforce the policy, starting that run refuses before
 spawning a helper and records `runtime.confinement.failed`; omitting the policy to keep a launch
 working is a fail-open defect. The macOS app-sandbox and dev lanes enforce the same policy through
-Seatbelt. #2951 remains open for the Linux network-namespace bridge and Windows-native enforcement,
-and these unavailable targets cannot be represented as qualified end-to-end journeys.
+Seatbelt. #2951 remains open for #3451's Linux product target and #3423's Windows-native WFP
+enforcement; neither target can be represented as a qualified end-to-end journey before its own
+reference-runner proof.
 
 
 ## Addendum — the governed tool facade rides the ONE attested loopback destination, never a second (2026-09-05)

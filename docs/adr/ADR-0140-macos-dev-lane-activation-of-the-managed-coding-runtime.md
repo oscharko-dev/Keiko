@@ -106,8 +106,8 @@ Every launch is wrapped in a `RuntimeGatewayConfinement` (ADR-0043 D11–D13,
 by default and carves out exactly one outbound allowance — the loopback gateway/BFF port the caller
 attests — plus denies mach-lookup, Apple Event, and `LSOpen` escapes. `process-fork` remains
 available for the pinned OpenCode sidecar's Git handshake (#3390), while `process-exec` is
-deny-by-default and admits only the verified runtime executable and Apple's fixed Git
-launcher/implementation paths. Arbitrary shells, curl, compilers, and other child executables are
+deny-by-default and admits only the verified runtime executable and the exact Git executable
+attested for that launch. Arbitrary shells, curl, compilers, and other child executables are
 refused. Every admitted descendant inherits the same Seatbelt profile, including the network
 denial above. The backend refuses to spawn at all when no confinement is attached, or when the
 policy's `runId`/`treeBindingId`
@@ -124,13 +124,12 @@ the sidecar's own HTTP server bind and answer `/health` and other local callers 
 narrower carve-out; it does not weaken the egress boundary this ADR closes, since an inbound-only
 allowance grants no ability to reach out to a network destination the outbound rule denies.
 
-This closes the network side of the dev lane's confinement for macOS only. It does **not** extend to
-the Windows dev lane or to `nativeRuntimeProcessBackend.ts` (the backend this ADR also names in its
-title and D3 for Windows process-group supervision): neither carries an OS-level network policy
-today. A Windows-activated sidecar is confined by D2's structural checkout confinement and D3's
-digest-pinned payload trust, but not by a kernel-enforced egress boundary. Closing that gap requires
-a Windows-native equivalent of the Seatbelt allowlist and is tracked as remaining work (Issue #2951),
-not claimed here as done.
+This closes the network side of the dev lane's confinement for macOS only. Windows production
+composition does attach the same `RuntimeGatewayConfinement` to `nativeRuntimeProcessBackend.ts`,
+but the native launch protocol/helper cannot enforce it yet. The Windows launch therefore refuses
+before spawn with `GATEWAY_UNSUPPORTED_ON_HOST_REASON`; omitting the policy or launching unconfined
+is not an allowed fallback. Exact-port WFP enforcement remains tracked by #3423/#2951 and is not
+claimed here as done.
 
 ### D7 — Development stop owns bounded runtime teardown
 
@@ -162,6 +161,11 @@ Windows branch) — so a Windows-activated sidecar today fails closed pre-spawn 
 `GATEWAY_UNSUPPORTED_ON_HOST_REASON` (`nativeRuntimeProcessBackend.ts`'s refusal path) rather than
 running unconfined. This matches ADR-0043 D14's own description of the same wiring; the two ADRs
 converge instead of describing the fact differently.
+
+Issue #3422 additionally teaches the shared planner to compile the same contract into a Linux
+bubblewrap/unshare namespace plus a fixed Unix-domain gateway bridge (ADR-0043 D12/D14). ADR-0140
+does not activate that path: the development lane still supports only its declared macOS and
+Windows targets, and Linux has no long-lived runtime target until #3451 supplies and qualifies one.
 
 ## Consequences
 
