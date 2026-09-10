@@ -27,7 +27,7 @@ describe("outputExcerpt — the cap boundary", () => {
     const tail = "x".repeat(5);
     const result = outputExcerpt({ stdout: `y${tail}`, stderr: "" }, 5);
     expect(result).toBe(`…${tail}`);
-    expect(result.length).toBe(6);
+    expect(result).toHaveLength(6);
   });
 
   it("returns the tail bounded to VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS by default, dropping the head", () => {
@@ -35,7 +35,7 @@ describe("outputExcerpt — the cap boundary", () => {
     const tail = "T".repeat(VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS);
     const result = outputExcerpt({ stdout: head + tail, stderr: "" });
     expect(result).toBe(`…${tail}`);
-    expect(result.length).toBe(VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS + 1);
+    expect(result).toHaveLength(VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS + 1);
     expect(result).not.toContain("H");
   });
 });

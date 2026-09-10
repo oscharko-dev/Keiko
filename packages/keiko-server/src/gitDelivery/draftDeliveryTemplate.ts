@@ -101,11 +101,14 @@ function validRelatedIssues(input: DraftDeliveryTemplateInput): boolean {
   );
 }
 
+function issueReference(issueNumber: number): string {
+  return `#${String(issueNumber)}`;
+}
+
 function relatedIssuesLine(input: DraftDeliveryTemplateInput): string {
   const related = input.relatedIssueNumbers ?? [];
-  return related.length === 0
-    ? ""
-    : `Related issues: ${related.map((issueNumber) => `#${String(issueNumber)}`).join(", ")}\n\n`;
+  if (related.length === 0) return "";
+  return `Related issues: ${related.map(issueReference).join(", ")}\n\n`;
 }
 
 function validateInput(input: DraftDeliveryTemplateInput): void {
