@@ -7,6 +7,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,6 +21,7 @@ import {
   prepareLinuxQualifiedPayload,
   verifyLinuxQualifiedPayload,
 } from "../linux-portable-signing.mjs";
+import { runSignLinuxRuntimeQualificationCli } from "../sign-linux-runtime-qualification.mjs";
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const TARGET = "linux-x64";
@@ -186,6 +188,40 @@ describe("Linux portable qualification sealing", () => {
     expect(() => verifyLinuxQualifiedPayload(optionsFor(value.stageRoot), deps)).toThrow(
       "production runtime discovery is unavailable",
     );
+  });
+
+  it("rejects a payload symlink that escapes the signed resource root", async () => {
+    const value = fixture();
+    const deps = dependencies(value.receipt);
+    prepareLinuxQualifiedPayload(optionsFor(value.stageRoot), deps);
+    const outside = join(value.stageRoot, "outside-resource-root");
+    writeFileSync(outside, "must not be archived\n");
+    symlinkSync(outside, join(value.resourceRoot, "escape"));
+
+    await expect(finalizeLinuxQualifiedPayload(optionsFor(value.stageRoot), deps)).rejects.toThrow(
+      "ZIP source symlink escapes the archive root",
+    );
+  });
+
+  it("redacts qualification-signing dependency failures at the CLI boundary", async () => {
+    const stderr = { write: vi.fn() };
+    const status = await runSignLinuxRuntimeQualificationCli(
+      ["node", "signer", "/sensitive/receipt.json", "/sensitive/bundle.json"],
+      {
+        readFile: vi.fn(() => Buffer.from("receipt")),
+        signReceipt: vi.fn(() => Promise.reject(new Error("provider dependency details"))),
+        writeFile: vi.fn(),
+      },
+      stderr,
+    );
+
+    expect(status).toBe(1);
+    expect(stderr.write).toHaveBeenCalledWith(
+      "linux-runtime-qualification-signing: redacted failure\n",
+    );
+    const output = stderr.write.mock.calls.flat().join("");
+    expect(output).not.toContain("/sensitive/");
+    expect(output).not.toContain("provider dependency details");
   });
 
   it("uses the dedicated error type for fail-closed signing failures", () => {

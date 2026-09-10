@@ -203,8 +203,10 @@ function sha256File(path) {
 
 function rebuildArchive(files) {
   const archivePath = join(files.stageRoot, files.manifest.artifact.assetName);
+  const resourceRoot = join(files.stageRoot, "payload", "Keiko");
   rmSync(archivePath, { force: true });
-  writeZipArchiveFromDirectory(join(files.stageRoot, "payload", "Keiko"), archivePath, {
+  writeZipArchiveFromDirectory(resourceRoot, archivePath, {
+    containmentRoot: resourceRoot,
     followSymlinks: true,
     rootName: "Keiko",
   });

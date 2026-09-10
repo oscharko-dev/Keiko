@@ -13,6 +13,7 @@ import {
 } from "../portable-runtime-approvals.mjs";
 import { checkPortableRuntimeApprovals } from "../check-portable-runtime-approvals.mjs";
 import {
+  createPortableTarAdapter,
   extractApprovedExecutable,
   sidecarSbomDocument,
   sidecarSpecDocument,
@@ -416,6 +417,44 @@ describe("prepare approved sidecar payloads", () => {
     expect(list).toHaveBeenCalledWith("approved.zip");
     expect(extract).toHaveBeenCalledWith("approved.zip", expect.any(String));
     expect(readFileSync(destination, "utf8")).toBe("approved executable\n");
+  });
+
+  it("fails closed across malformed TAR listings and extraction failures", () => {
+    const adapterFor = (names, details, extractionError) =>
+      createPortableTarAdapter((_command, args) => {
+        if (args[0] === "-tzf") return { stdout: names };
+        if (args[0] === "-tvzf") return { stdout: details };
+        if (extractionError !== undefined) throw new Error(extractionError);
+        return { stdout: "" };
+      });
+    const destination = join(tempRoot(), "bin", "opencode");
+    const regular = "-rwxr-xr-x owner/group 1 2026-01-01 00:00 opencode\n";
+
+    expect(() =>
+      extractApprovedExecutable("empty.tar.gz", "opencode", destination, adapterFor("", "")),
+    ).toThrow(/exactly one entry/u);
+    expect(() =>
+      extractApprovedExecutable(
+        "extra.tar.gz",
+        "opencode",
+        destination,
+        adapterFor("opencode\nextra\n", `${regular}${regular.replace("opencode", "extra")}`),
+      ),
+    ).toThrow(/exactly one entry/u);
+    expect(() => adapterFor("opencode\n", regular.replace("-", "l")).list("link.tar.gz")).toThrow(
+      /only regular files/u,
+    );
+    expect(() => adapterFor("opencode\n", regular.replace("-", "h")).list("hard.tar.gz")).toThrow(
+      /only regular files/u,
+    );
+    expect(() => adapterFor("opencode\nextra\n", regular).list("mismatch.tar.gz")).toThrow(
+      /only regular files/u,
+    );
+
+    const failed = adapterFor("opencode\n", regular, "dependency details /sensitive/input");
+    expect(() => failed.extract("/sensitive/input", "/sensitive/output")).toThrow(
+      "prepare-sidecar-payloads: approved tar archive command failed",
+    );
   });
 
   it("rejects an extracted executable tree that differs from the independent approval", async () => {

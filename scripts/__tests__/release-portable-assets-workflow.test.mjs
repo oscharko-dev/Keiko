@@ -265,10 +265,12 @@ function productionStepPolicies() {
 }
 
 function workflowJob(start, end) {
-  return portableWorkflow.slice(
-    portableWorkflow.indexOf(start),
-    end === undefined ? undefined : portableWorkflow.indexOf(end),
-  );
+  const startIndex = portableWorkflow.indexOf(start);
+  const endIndex = end === undefined ? portableWorkflow.length : portableWorkflow.indexOf(end);
+  if (startIndex === -1 || endIndex === -1 || endIndex <= startIndex) {
+    throw new Error("portable workflow job boundary is missing or out of order");
+  }
+  return portableWorkflow.slice(startIndex, endIndex);
 }
 
 function stagePortableRuntimeStep(job) {
@@ -562,7 +564,8 @@ describe("Linux portable production qualification workflow", () => {
     expect(fresh.needs).toBe("stage-linux-production");
     expect(fresh.permissions).toEqual({ contents: "read" });
     expect(fresh.environment).toBeUndefined();
-    expect(JSON.stringify(fresh)).not.toContain("id-token: write");
+    expect(fresh.permissions?.["id-token"]).not.toBe("write");
+    for (const step of fresh.steps) expect(step.permissions?.["id-token"]).not.toBe("write");
     expect(fresh.steps.map((step) => step.name)).toEqual(
       expect.arrayContaining([
         "Re-verify the offline Sigstore bundle, archive, and production discovery",

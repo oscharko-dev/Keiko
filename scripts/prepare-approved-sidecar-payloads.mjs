@@ -239,17 +239,27 @@ function approvedArchiveAdapter(archivePath) {
 export function createPortableTarAdapter(commandRunner = runResolvedHostExecutable) {
   return {
     list(archivePath) {
-      const names = tarLines(commandRunner("tar", ["-tzf", archivePath]).stdout);
-      const details = tarLines(commandRunner("tar", ["-tvzf", archivePath]).stdout);
+      const names = tarLines(runTarCommand(commandRunner, ["-tzf", archivePath]));
+      const details = tarLines(runTarCommand(commandRunner, ["-tvzf", archivePath]));
       if (names.length !== details.length || details.some((line) => line[0] !== "-")) {
         fail("approved tar archive must contain only regular files");
       }
       return names;
     },
     extract(archivePath, extractRoot) {
-      commandRunner("tar", ["-xzf", archivePath, "-C", extractRoot, "--no-same-owner"]);
+      runTarCommand(commandRunner, ["-xzf", archivePath, "-C", extractRoot, "--no-same-owner"]);
     },
   };
+}
+
+function runTarCommand(commandRunner, args) {
+  try {
+    const result = commandRunner("tar", args);
+    if (typeof result?.stdout !== "string") fail("approved tar command returned invalid output");
+    return result.stdout;
+  } catch {
+    fail("approved tar archive command failed");
+  }
 }
 
 function tarLines(output) {

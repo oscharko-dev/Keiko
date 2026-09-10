@@ -33,6 +33,7 @@ describe("portable release archive-set compatibility", () => {
     const duplicated = [...LEGACY_ARCHIVES, LEGACY_ARCHIVES[0]].map(asset);
     const unknown = [...LEGACY_ARCHIVES, "keiko-freebsd-x64.zip"].map(asset);
 
+    expect(firstClassArchiveSetComplete([])).toBe(false);
     expect(firstClassArchiveSetComplete(partial)).toBe(false);
     expect(firstClassArchiveSetComplete(duplicated)).toBe(false);
     expect(firstClassArchiveSetComplete(unknown)).toBe(false);
