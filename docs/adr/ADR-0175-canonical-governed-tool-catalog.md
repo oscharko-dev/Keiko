@@ -162,7 +162,11 @@ An incomplete shared effect floor cannot substitute for that conservative advert
 
 Before every dispatch, validate the exact offer/tool/version/projection and untrusted arguments,
 then recheck current authority, root/revision, readiness, cancellation/deadline, budget and
-idempotency. No model/browser/adapter field may override composition-owned fields. A revoked or
+idempotency. An argument rejection carries the schema's own account of the mismatch — the missing
+required properties and the invalid properties as schema paths, undeclared properties as a count,
+never the arguments — on the rejection line and in the one bounded correction the model receives;
+a correction that only asked the model to "match the schema" let the same omission exhaust the
+retry budget (2026-09-10). No model/browser/adapter field may override composition-owned fields. A revoked or
 unoffered call cannot reserve an effect. The binder invokes existing handlers in process through
 ports, not loopback HTTP. Missing/wrong handlers fail closed before advertising; loss after offer
 returns `failed / handler-unavailable` or `handler-mismatch` without effect.

@@ -199,10 +199,37 @@ interface RepairPromptBudget {
 const TOOL_SCHEMA_REPAIR_PREFIX =
   "The previous tool call was rejected before execution because its arguments did not match the advertised schema.";
 
+// What the model is told to fix, in the schema's vocabulary only (declared property paths and
+// counts; the rejected arguments are never quoted back). A generic "match the schema" sentence left
+// gpt-5.4 repeating the same omission until the retry budget was gone (run 7, 2026-09-10: three
+// `keiko_repository_search` calls without the properties the dialect declares required).
+function schemaMismatchGuidance(repair: GatewayToolCatalogError["repair"]): string {
+  const shape = repair?.shape;
+  if (shape === undefined) return "";
+  const parts: string[] = [];
+  if (shape.missingRequired.length > 0) {
+    parts.push(
+      ` Missing required properties: ${shape.missingRequired.join(", ")}. Every property the schema declares is required; pass an explicit value such as false or [] when a property does not apply.`,
+    );
+  }
+  if (shape.invalidPaths.length > 0) {
+    parts.push(
+      ` Properties whose value does not match the schema: ${shape.invalidPaths.join(", ")}.`,
+    );
+  }
+  if (shape.unexpectedPropertyCount > 0) {
+    const plural = shape.unexpectedPropertyCount === 1 ? "property is" : "properties are";
+    parts.push(
+      ` ${String(shape.unexpectedPropertyCount)} ${plural} not declared by the schema and must be removed.`,
+    );
+  }
+  return parts.join("");
+}
+
 function toolSchemaRepairMessage(error: GatewayToolCatalogError): string | undefined {
   const repair = error.repair;
   if (repair === undefined) return undefined;
-  return `${TOOL_SCHEMA_REPAIR_PREFIX} Retry tool call ${repair.toolCallId} for offered tool ${repair.offeredAlias} with arguments that match its advertised schema exactly.`;
+  return `${TOOL_SCHEMA_REPAIR_PREFIX} Retry tool call ${repair.toolCallId} for offered tool ${repair.offeredAlias} with arguments that match its advertised schema exactly.${schemaMismatchGuidance(repair)}`;
 }
 
 function repairedRequest(
@@ -440,6 +467,13 @@ export class Gateway {
         reason: state === "denied" ? "context-window-exceeded" : "invalid-shape",
         toolCallId: repair.toolCallId,
         offeredAlias: repair.offeredAlias,
+        ...(repair.shape === undefined
+          ? {}
+          : {
+              missingRequiredCount: repair.shape.missingRequired.length,
+              invalidPathCount: repair.shape.invalidPaths.length,
+              unexpectedPropertyCount: repair.shape.unexpectedPropertyCount,
+            }),
         ...budget,
         correctionMessageCount: 1,
         effectStarted: false,

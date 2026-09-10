@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { copyCatalogJson, catalogBytes } from "./json.js";
-import { compileCatalogSchema, matchesCatalogSchema } from "./schema.js";
+import {
+  compileCatalogSchema,
+  describeCatalogSchemaMismatch,
+  matchesCatalogSchema,
+} from "./schema.js";
 import { createToolDescriptor, createToolCatalog, compileToolProjection } from "./index.js";
 import { declaration, profile } from "./__fixtures__/catalog.js";
 
@@ -275,5 +279,80 @@ describe("closed lossless schema core", () => {
         { referenceTimeMs: 0 },
       ),
     ).toThrow("duplicate-identity");
+  });
+});
+
+// One walk serves the boolean match and the body-free mismatch account, so the two cannot drift:
+// a value matches exactly when the account is empty.
+describe("schema mismatch account", () => {
+  const schema = compileCatalogSchema({
+    type: "object",
+    properties: {
+      changeset: {
+        type: "object",
+        properties: {
+          patch: { type: "string", minLength: 1 },
+          mode: { type: "string", enum: ["literal", "regex"] },
+          files: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { file: { type: "string" } },
+              required: ["file"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["patch", "files", "mode"],
+        additionalProperties: false,
+      },
+    },
+    required: ["changeset"],
+    additionalProperties: false,
+  });
+
+  it("names declared paths only, counts undeclared properties, and is empty for a match", () => {
+    const secret = "SENTINEL_PRIVATE_ARGUMENT";
+    const value = copyCatalogJson({
+      changeset: {
+        patch: "",
+        mode: "fuzzy",
+        files: [{ file: 1 }, { [secret]: true }],
+      },
+      [secret]: secret,
+    });
+    const mismatch = describeCatalogSchemaMismatch(schema, value);
+    expect(mismatch).toEqual({
+      missingRequired: ["changeset.files[].file"],
+      invalidPaths: ["changeset.files[].file", "changeset.mode", "changeset.patch"],
+      unexpectedPropertyCount: 2,
+    });
+    expect(JSON.stringify(mismatch)).not.toContain(secret);
+    expect(matchesCatalogSchema(schema, value)).toBe(false);
+
+    const matching = copyCatalogJson({
+      changeset: { patch: "--- a\n", mode: "literal", files: [{ file: "a.ts" }] },
+    });
+    expect(describeCatalogSchemaMismatch(schema, matching)).toBeUndefined();
+    expect(matchesCatalogSchema(schema, matching)).toBe(true);
+  });
+
+  it("reports a wrong root type and caps every list", () => {
+    expect(describeCatalogSchemaMismatch(schema, copyCatalogJson("text"))).toEqual({
+      missingRequired: [],
+      invalidPaths: ["$"],
+      unexpectedPropertyCount: 0,
+    });
+    const wide = compileCatalogSchema({
+      type: "object",
+      properties: Object.fromEntries(
+        Array.from({ length: 40 }, (_, index) => [`p${String(index)}`, { type: "string" }]),
+      ),
+      required: Array.from({ length: 40 }, (_, index) => `p${String(index)}`),
+      additionalProperties: false,
+    });
+    const account = describeCatalogSchemaMismatch(wide, copyCatalogJson({}));
+    expect(account?.missingRequired).toHaveLength(16);
+    expect(matchesCatalogSchema(wide, copyCatalogJson({}))).toBe(false);
   });
 });

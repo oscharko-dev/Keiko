@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { validateToolArguments } from "./arguments.js";
 import { createToolDescriptor } from "./descriptor.js";
+import { ToolCatalogError } from "./errors.js";
 import { declaration, fixture } from "./__fixtures__/catalog.js";
 
 describe("catalog invocation argument qualification", () => {
@@ -18,6 +19,35 @@ describe("catalog invocation argument qualification", () => {
     "rejects values outside the descriptor schema",
     (input) => {
       expect(() => validateToolArguments(input, fixture().descriptor)).toThrow("invalid-shape");
+    },
+  );
+  // Run 7 of the Workbench engagement (2026-09-10): three identical `invalid-shape` rejections of
+  // one call exhausted the gateway's retry budget, and neither the log nor the model's correction
+  // could say which declared property was missing. The rejection now carries the schema's own account
+  // -- declared property paths and a count -- and never the arguments.
+  it.each([
+    [{}, { missingRequired: ["path"], invalidPaths: [], unexpectedPropertyCount: 0 }],
+    [{ path: 1 }, { missingRequired: [], invalidPaths: ["path"], unexpectedPropertyCount: 0 }],
+    [{ path: "" }, { missingRequired: [], invalidPaths: ["path"], unexpectedPropertyCount: 0 }],
+    [
+      { path: "file.ts", root: "/private" },
+      { missingRequired: [], invalidPaths: [], unexpectedPropertyCount: 1 },
+    ],
+  ] as const)(
+    "names the schema mismatch on the rejection without quoting the value",
+    (input, shape) => {
+      const failure = ((): unknown => {
+        try {
+          validateToolArguments(input, fixture().descriptor);
+          return undefined;
+        } catch (error) {
+          return error;
+        }
+      })();
+      expect(failure).toBeInstanceOf(ToolCatalogError);
+      expect(failure).toMatchObject({ reason: "invalid-shape", shape });
+      expect(JSON.stringify((failure as ToolCatalogError).shape)).not.toContain("/private");
+      expect(JSON.stringify((failure as ToolCatalogError).shape)).not.toContain("root");
     },
   );
   it("rejects untrusted descriptor identity and byte-bound violations", () => {

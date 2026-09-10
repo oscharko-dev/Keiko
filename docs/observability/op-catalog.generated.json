@@ -630,19 +630,19 @@
     {
       "op": "gateway.chat.completed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:664",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:698",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.chat.failed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:561",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:595",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.chat.started",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:541",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:575",
       "package": "keiko-model-gateway"
     },
     {
@@ -672,7 +672,7 @@
     {
       "op": "gateway.config.resolved",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:306",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:333",
       "package": "keiko-model-gateway"
     },
     {
@@ -702,67 +702,67 @@
     {
       "op": "gateway.route.rejected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:788",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:822",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.abandoned",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:609",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:643",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.buffered-fallback",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:697",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:731",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.completed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:581",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:615",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.failed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:634",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:668",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.stream.started",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:541",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:575",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.call-bound",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:246",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:277",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.native-passthrough",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:234",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:265",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.projected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:349",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:380",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.rejected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:185",
+      "site": "packages/keiko-model-gateway/src/toolCatalogBridge.ts:210",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.tool-catalog.repair",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/gateway.ts:438",
+      "site": "packages/keiko-model-gateway/src/gateway.ts:465",
       "package": "keiko-model-gateway"
     },
     {

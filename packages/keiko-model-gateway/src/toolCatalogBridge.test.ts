@@ -479,6 +479,13 @@ describe("gateway bridge trust and compatibility boundaries", () => {
         catalogReason: "invalid-shape",
         canonicalToolId: "keiko.file.read",
         contractVersion: 1,
+        // The schema's account of the mismatch (run 7, 2026-09-10): the undeclared property is
+        // counted, never named -- its name is model text.
+        missingRequired: [],
+        missingRequiredCount: 0,
+        invalidPaths: [],
+        invalidPathCount: 0,
+        unexpectedPropertyCount: 1,
       },
     });
   });

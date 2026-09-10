@@ -369,3 +369,52 @@ listing and counted (`deniedPathCount` on the raw changes and the snapshot), nev
 treated as incompleteness; `truncated` keeps its meaning for the path and content budgets and for
 names the snapshot cannot represent. No repository change is needed; a repository is not required to
 untrack its IDE metadata to be delivered by the Workbench.
+
+## A run fails `runtime-failed` on its first turn after three `invalid-shape` rejections of one tool call
+
+| Field             | Value                                                                                                                                                              |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Severity          | High                                                                                                                                                               |
+| Surface           | Model gateway / Coding Workbench                                                                                                                                   |
+| Stable identifier | `gateway.tool-catalog.rejected` with `catalogReason: "invalid-shape"`, `gateway.tool-catalog.repair`, `gateway.retry.exhausted` with `GATEWAY_MALFORMED_TOOL_CALL` |
+
+**Symptom**
+
+The run starts, attaches the issue and ends within a minute: `Failed. Failure: runtime-failed`. The
+activity log shows, under one chat correlation id, `gateway.tool-catalog.rejected` with
+`catalogReason: "invalid-shape"` three times, each followed by `gateway.tool-catalog.repair`
+(`state: "scheduled"`, `correctionMessageCount: 1`) and `gateway.retry.scheduled`, then
+`gateway.retry.exhausted` and `gateway.chat.failed` with `GATEWAY_MALFORMED_TOOL_CALL`,
+`OpenCodeTurnFailure` and `RuntimeTaskDispatchFailure`. Typically the first call of the turn is
+`keiko_repository_search`.
+
+**Root Cause**
+
+The managed-runtime dialect declares every property of a tool's schema required (the pinned
+OpenCode runtime projects custom-tool arguments that way), so a `keiko_repository_search` call
+without `caseSensitive`, `includeGlobs` or `excludeGlobs` is refused. The gateway's bounded repair
+sent the model one correction that only said "match the advertised schema exactly"; a model that
+had left the same properties out repeated the omission until the retry budget was spent. The
+rejection line carried `invalid-shape` and nothing else, so the operator could not tell which
+property had failed either.
+
+**Diagnostic Steps**
+
+1. `keiko support analyze bundle.jsonl --correlation-id <chat correlation id>`. Since 2026-09-10 the
+   `gateway.tool-catalog.rejected` line carries the schema's own account: `missingRequired` (schema
+   property paths), `invalidPaths`, `missingRequiredCount`, `invalidPathCount` and
+   `unexpectedPropertyCount` — declared names and counts only, never the arguments. The
+   `gateway.tool-catalog.repair` line carries the three counts.
+2. `missingRequired` naming `caseSensitive`, `excludeGlobs`, `includeGlobs` is this defect on a
+   build without the repair; an `unexpectedPropertyCount` above zero means the model invented a
+   property; `invalidPaths` names declared properties whose value broke a bound or pattern.
+3. On a log written before the repair (no account on the line), three `invalid-shape` rejections of
+   the same `canonicalToolId` inside one correlation id are the signature.
+
+**Resolution**
+
+Update to a build that contains the 2026-09-10 repair: the correction the model receives names the
+missing required properties (and states that every declared property is required), the properties
+whose value failed, and the number of undeclared properties to remove, so the first retry can
+succeed. The schema itself is unchanged: its required list is the dialect's rule and is bound into
+the H1 provenance record.
