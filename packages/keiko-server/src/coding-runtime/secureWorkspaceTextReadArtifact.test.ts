@@ -27,10 +27,11 @@ function artifact(
 
 describe("secure workspace text-read artifact proof", () => {
   it.each([
+    [{ os: "linux", arch: "x64" }, "linux-x64"],
     [{ os: "win32", arch: "x64" }, "win32-x64"],
     [{ os: "darwin", arch: "arm64" }, "darwin-arm64"],
     [{ os: "darwin", arch: "x64" }, "darwin-x64"],
-    [{ os: "linux", arch: "x64" }, undefined],
+    [{ os: "linux", arch: "arm64" }, undefined],
     [{ os: "freebsd", arch: "x64" }, undefined],
     [{ os: "win32", arch: "arm64" }, undefined],
   ] as const)("resolves only signed portable target %o", (platform, target) => {
@@ -55,16 +56,17 @@ describe("secure workspace text-read artifact proof", () => {
     });
   });
 
-  it("rejects unsupported Linux and unknown targets before any artifact lookup or verifier call", async () => {
+  it("accepts the fixed Linux identity and rejects unknown targets before verification", async () => {
     const verify = vi.fn(() => true);
+    const linux = artifact({ target: "linux-x64" });
 
     await expect(
-      resolveSecureWorkspaceReadArtifact(artifact(), { os: "linux", arch: "x64" }, { verify }),
-    ).resolves.toBeUndefined();
+      resolveSecureWorkspaceReadArtifact(linux, { os: "linux", arch: "x64" }, { verify }),
+    ).resolves.toBe(linux);
     await expect(
       resolveSecureWorkspaceReadArtifact(artifact(), { os: "haiku", arch: "riscv64" }, { verify }),
     ).resolves.toBeUndefined();
-    expect(verify).not.toHaveBeenCalled();
+    expect(verify).toHaveBeenCalledOnce();
   });
 
   it.each([
