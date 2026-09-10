@@ -5,6 +5,7 @@ import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { GIT_STAGE_FILE_MAX_BYTES } from "@oscharko-dev/keiko-workspace/internal/git-index";
 import { RuntimeGitService } from "./runtimeGitService.js";
 import { commitFacadeFixture } from "./verifiedCommitFacadeTestSupport.js";
+import type { VerificationTicketOutcome } from "./verifiedCommitTypes.js";
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
@@ -217,8 +218,12 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
+function ticketOf(outcome: VerificationTicketOutcome): object | undefined {
+  return outcome.kind === "ticket" ? outcome.ticket : undefined;
+}
+
 async function verifiedProposal(): Promise<string> {
-  const ticket = await service.beginVerification();
+  const ticket = ticketOf(await service.beginVerification());
   if (ticket === undefined) throw new Error("verification ticket unavailable");
   expect(await service.completeVerification(ticket, report())).toBe(true);
   const proposal = await service.propose("feat: approved exact candidate");
@@ -278,7 +283,7 @@ describe("verified Code-task commit service", () => {
           },
         }),
       });
-      const ticket = await service.beginVerification();
+      const ticket = ticketOf(await service.beginVerification());
       if (ticket === undefined) throw new Error("verification unavailable");
       completing = true;
       expect(
@@ -305,7 +310,7 @@ describe("verified Code-task commit service", () => {
     const id = await verifiedProposal();
     const approval = await service.approve(id);
     if (approval === undefined) throw new Error("approval unavailable");
-    const ticket = await service.beginVerification();
+    const ticket = ticketOf(await service.beginVerification());
     if (ticket === undefined) throw new Error("verification unavailable");
     expect(await service.completeVerification(ticket, report(false))).toBe(false);
     expect(service.review(id)).toBeUndefined();
@@ -317,7 +322,7 @@ describe("verified Code-task commit service", () => {
   it.each(["failed", "denied", "cancelled", "timed-out", "resource-exceeded", "skipped"] as const)(
     "rejects a contradictory passed report with a %s result",
     async (status) => {
-      const ticket = await service.beginVerification();
+      const ticket = ticketOf(await service.beginVerification());
       if (ticket === undefined) throw new Error("verification unavailable");
       const passed = report();
       const contradictory = {
@@ -415,16 +420,35 @@ describe("verified Code-task commit service", () => {
     );
     expect(git(["rev-parse", "HEAD"])).toBe(before);
   });
-  it("logs a body-free reason when an unstaged candidate cannot receive commit proof", async () => {
+  // Coding Workbench run 16 (2026-09-10): the refusal named no path, and the model — which had
+  // staged every file it wrote — could not find the lockfile the dependency install had created. The
+  // outcome names the blocking paths for the model; the activity line keeps counts only.
+  it("names the paths that keep an unclean candidate from commit proof and logs only their counts", async () => {
     writeFileSync(join(root, "code.js"), "export const value = 3;\n");
-    expect(await service.beginVerification()).toBeUndefined();
+    writeFileSync(join(root, "package-lock.json"), "{}\n");
+    expect(await service.beginVerification()).toEqual({
+      kind: "refused",
+      reason: "candidate-not-staged",
+      blocking: {
+        unstagedCount: 1,
+        untrackedCount: 1,
+        unstaged: ["code.js"],
+        untracked: ["package-lock.json"],
+      },
+    });
     const event = events.find((candidate) => candidate.extra?.phase === "verification-unavailable");
     expect(event).toMatchObject({
       op: "git.verified-commit",
       correlationId: "verified-commit-test",
-      extra: { phase: "verification-unavailable", reason: "candidate-not-staged" },
+      extra: {
+        phase: "verification-unavailable",
+        reason: "candidate-not-staged",
+        unstagedCount: 1,
+        untrackedCount: 1,
+      },
     });
     expect(JSON.stringify(events)).not.toContain("code.js");
+    expect(JSON.stringify(events)).not.toContain("package-lock.json");
   });
   it("invalidates verification when staged content changes after a green command", async () => {
     const id = await verifiedProposal();

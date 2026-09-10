@@ -169,7 +169,10 @@ describe("human and agent verification share the governed sandbox boundary (Issu
     const humanReportPromise = waitForHumanReport(manager);
     manager.execute(input());
     const humanReport = await humanReportPromise;
-    const agentReport = await manager.runToReport(input(), new AbortController().signal);
+    const { report: agentReport } = await manager.runToReport(
+      input(),
+      new AbortController().signal,
+    );
 
     expect(port.plans).toHaveLength(2);
     expect(port.plans[0]).toEqual(port.plans[1]);
@@ -190,7 +193,10 @@ describe("human and agent verification share the governed sandbox boundary (Issu
     const humanReportPromise = waitForHumanReport(manager);
     manager.execute(input());
     const humanReport = await humanReportPromise;
-    const agentReport = await manager.runToReport(input(), new AbortController().signal);
+    const { report: agentReport } = await manager.runToReport(
+      input(),
+      new AbortController().signal,
+    );
 
     expect(port.spawnCalls).toHaveLength(0);
     expect(humanReport.results[0]?.status).toBe("denied");

@@ -702,7 +702,9 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
           }),
       },
       invocationRegistry: createCodingToolInvocationRegistry(),
-      verificationRunner: { runToReport: () => Promise.resolve(failingReport(root)) },
+      verificationRunner: {
+        runToReport: () => Promise.resolve({ report: failingReport(root), failureOutput: [] }),
+      },
       onRuntimeEvent: (event): void => {
         events.push(event);
       },

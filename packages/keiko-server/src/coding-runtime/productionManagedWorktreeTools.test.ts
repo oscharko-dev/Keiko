@@ -56,6 +56,7 @@ import {
   type VerificationExecutePort,
   type ScriptTrustDecision,
   type VerificationRunnerManager,
+  type VerificationRunInput,
 } from "../editor/verificationRunner.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -614,7 +615,7 @@ describe("production managed worktree tools", () => {
   // effect admits nothing, and the two modes that ask before risky work never admit.
   it.each([
     ["autonomous-delivery", "none", 1],
-    ["autonomous-delivery", "timeout", 0],
+    ["autonomous-delivery", "timed-out", 0],
     ["supervised-coding", "none", 0],
     ["governed-assist", "none", 0],
   ] as const)(
@@ -630,7 +631,7 @@ describe("production managed worktree tools", () => {
           exitCode: failureReason === "none" ? 0 : 1,
           durationMs: 1,
           truncated: false,
-          timedOut: failureReason === "timeout",
+          timedOut: failureReason === "timed-out",
           failureReason,
           stdout: "",
           stderr: "",
@@ -1008,7 +1009,8 @@ describe("production managed worktree tools", () => {
     });
     const log: ServerLogEvent[] = [];
     const facade = verificationFacade({
-      runToReport: manager.runToReport,
+      runToReport: (input, signal) =>
+        manager.runToReport(input, signal).then((outcome) => outcome.report),
       records: [],
       log,
       workspaceRoot,
@@ -1113,8 +1115,8 @@ describe("production managed worktree tools", () => {
 
   it.each([
     [
-      "unstaged candidate",
-      undefined,
+      "vanished run context",
+      { kind: "unavailable" } as const,
       true,
       {
         commitProof: "unavailable",
@@ -1122,13 +1124,41 @@ describe("production managed worktree tools", () => {
         nextAction: "stage-then-verify",
       },
     ],
+    // Coding Workbench run 16 (2026-09-10): the untracked lockfile the dependency install had
+    // created blocked every proof, and the model read "candidate-not-staged" seven times without a
+    // path to act on. The refusal now names what has to be staged.
+    [
+      "unstaged candidate",
+      {
+        kind: "refused",
+        reason: "candidate-not-staged",
+        blocking: {
+          unstagedCount: 1,
+          untrackedCount: 1,
+          unstaged: ["src/App.tsx"],
+          untracked: ["package-lock.json"],
+        },
+      } as const,
+      true,
+      {
+        commitProof: "unavailable",
+        reasonCode: "candidate-not-staged",
+        nextAction: "stage-then-verify",
+        blocking: {
+          unstagedCount: 1,
+          untrackedCount: 1,
+          unstaged: ["src/App.tsx"],
+          untracked: ["package-lock.json"],
+        },
+      },
+    ],
     [
       "candidate drift",
-      {},
+      { kind: "ticket", ticket: {} } as const,
       false,
       { commitProof: "unavailable", reasonCode: "candidate-drift", nextAction: "verify-again" },
     ],
-    ["recorded proof", {}, true, { commitProof: "recorded" }],
+    ["recorded proof", { kind: "ticket", ticket: {} } as const, true, { commitProof: "recorded" }],
   ] as const)(
     "reports a passed run with %s commit-proof status",
     async (_label, ticket, recorded, expected) => {
@@ -1160,7 +1190,7 @@ describe("production managed worktree tools", () => {
         }),
       ).resolves.toMatchObject({ status: "completed", verification: expected });
       expect(beginVerification).toHaveBeenCalledOnce();
-      expect(completeVerification).toHaveBeenCalledTimes(ticket === undefined ? 0 : 1);
+      expect(completeVerification).toHaveBeenCalledTimes(ticket.kind === "ticket" ? 1 : 0);
     },
   );
 
@@ -2380,8 +2410,20 @@ describe("verification waiting on the operator's package-script trust decision",
 
 // Trusted unless a test says otherwise, so every case that is not about script trust keeps its
 // single-attempt behaviour and never announces a decision.
+// The runner returns its report beside the orchestrator's failure output (ADR-0126 D3); these
+// doubles produce the report and the helper wraps it in the outcome the port actually consumes, so
+// a fixture that only cares about the report keeps saying exactly that.
+type ReportRunner = (
+  input: VerificationRunInput,
+  signal: AbortSignal,
+) => Promise<VerificationReport>;
+
+function outcomeRunner(runToReport: ReportRunner): VerificationRunnerManager["runToReport"] {
+  return async (input, signal) => ({ report: await runToReport(input, signal), failureOutput: [] });
+}
+
 function verificationRunnerOptions(options: {
-  readonly runToReport: VerificationRunnerManager["runToReport"];
+  readonly runToReport: ReportRunner;
   readonly scriptTrustFor?: VerificationRunnerManager["scriptTrustFor"];
   readonly requestOperatorDecision?: (
     decision: CodingWorkbenchOperatorDecision,
@@ -2393,7 +2435,7 @@ function verificationRunnerOptions(options: {
 > {
   return {
     verificationRunner: {
-      runToReport: options.runToReport,
+      runToReport: outcomeRunner(options.runToReport),
       scriptTrustFor:
         options.scriptTrustFor ??
         ((): ScriptTrustDecision => ({ trusted: true, basis: "repository" })),
@@ -2412,7 +2454,7 @@ function verificationFacade(options: {
   readonly log?: ServerLogEvent[];
   readonly events?: CodingWorkbenchRuntimeEvent[];
   readonly ciObservationService?: CiObservationService;
-  readonly runToReport: VerificationRunnerManager["runToReport"];
+  readonly runToReport: ReportRunner;
   readonly scriptTrustFor?: VerificationRunnerManager["scriptTrustFor"];
   readonly requestOperatorDecision?: (
     decision: CodingWorkbenchOperatorDecision,
@@ -2538,7 +2580,7 @@ function loadGeneratedVerificationTool(fetchImpl: typeof fetch): GeneratedVerifi
 
 function verificationService(): VerifiedCommitService {
   return {
-    beginVerification: vi.fn(() => Promise.resolve({})),
+    beginVerification: vi.fn(() => Promise.resolve({ kind: "ticket" as const, ticket: {} })),
     completeVerification: vi.fn(() => Promise.resolve(true)),
     propose: vi.fn(),
     approve: vi.fn(),

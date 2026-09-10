@@ -344,19 +344,8 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     const startedAtMs = this.now();
     this.emitRunStarted(runId, input, startedAtMs);
     this.emitStepsStarted(runId, plan);
-    const failureOutput: VerificationStepOutput[] = [];
     try {
-      const { report } = await this.executePort({
-        plan,
-        workspace,
-        signal: controller.signal,
-        correlationId: entry.correlationId,
-        fs: resolved.access.fs,
-        dependencyBootstrap: "auto",
-        onStepOutput: (output): void => {
-          if (failureOutput.length < MAX_FAILURE_OUTPUTS) failureOutput.push(output);
-        },
-      });
+      const { report, failureOutput } = await this.executeAgentPlan(plan, resolved, entry);
       this.recordDependencyBootstrap(entry.correlationId, report);
       this.emitStepCompletions(runId, report);
       // Awaited path (the agent's HTTP request awaits this promise): an evidence-write failure is
@@ -376,6 +365,28 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       this.runs.delete(runId);
     }
   };
+
+  // The agent path's execution: dependencies bootstrapped, and the orchestrator's redacted output
+  // tails of non-passing steps collected (bounded) for the governed tool — never persisted.
+  private async executeAgentPlan(
+    plan: VerificationPlan,
+    resolved: ResolvedVerificationWorkspace,
+    entry: InFlightRun,
+  ): Promise<VerificationRunOutcome> {
+    const failureOutput: VerificationStepOutput[] = [];
+    const { report } = await this.executePort({
+      plan,
+      workspace: resolved.workspace,
+      signal: entry.controller.signal,
+      correlationId: entry.correlationId,
+      fs: resolved.access.fs,
+      dependencyBootstrap: "auto",
+      onStepOutput: (output): void => {
+        if (failureOutput.length < MAX_FAILURE_OUTPUTS) failureOutput.push(output);
+      },
+    });
+    return { report, failureOutput };
+  }
 
   private prepare(input: VerificationRunInput): PreparedVerificationRun {
     let workspace: WorkspaceInfo | undefined;

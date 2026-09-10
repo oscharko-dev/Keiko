@@ -547,6 +547,7 @@ const ISSUE_PREVIEW = {
 const ISSUE_ATTACHMENT = {
   issueNumber: 3385,
   itemCount: 1,
+  linkedIssueCount: 0,
   byteCount: 96,
   text: `[untrusted issue context] ${ISSUE_TITLE}\n${ISSUE_BODY}`,
 };
@@ -3005,24 +3006,35 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     expect(f.manager.resume).toHaveBeenLastCalledWith("run-1", "governed-assist");
   });
 
-  it("dispatches the UI follow-up while the run remains paused", async () => {
+  // Coding Workbench run 16 (2026-09-10) relocated this pin. It used to assert that a follow-up is
+  // dispatched as a task replacement INTO the pause while the run stays paused. The runtime admits
+  // tool calls only while running, so the replacement's first call was refused
+  // `state-not-admissible`, the turn failed and the run ended `failed` — the pinned shape was the
+  // defect. The invariant it protected stands: an operator admission reaches a paused run. The
+  // operator's follow-up is their decision to continue with that instruction, so the run resumes
+  // through the one resume path (manager resumed in the active mode) and the replacement is
+  // dispatched against the resumed revision.
+  it("resumes a paused run before dispatching the operator's follow-up as its next task", async () => {
     const f = await runningFixture();
     const paused = await f.orchestrator.pause("run-1", { requestId: "run-1" });
 
     const followUp = await f.orchestrator.submitFollowUp("run-1", {
       requestId: "follow-up-paused",
       expectedRevision: successfulSnapshot(paused).revision,
-      taskIntent: "continue while operator control stays paused",
+      taskIntent: "continue with this instruction",
     });
 
-    expect(successfulSnapshot(followUp)).toMatchObject({ state: "paused", revision: 6 });
+    expect(f.manager.resume).toHaveBeenCalledOnce();
+    expect(successfulSnapshot(followUp)).toMatchObject({
+      state: "running",
+      revision: successfulSnapshot(paused).revision + 2,
+    });
     expect(f.taskDispatcher.replace).toHaveBeenLastCalledWith({
       runId: "run-1",
       requestId: "follow-up-paused",
-      expectedRevision: successfulSnapshot(paused).revision,
-      taskIntent: "continue while operator control stays paused",
+      expectedRevision: successfulSnapshot(paused).revision + 1,
+      taskIntent: "continue with this instruction",
     });
-    expect(f.manager.resume).not.toHaveBeenCalled();
   });
 
   it.each([60_000, 60_001])(
@@ -3541,7 +3553,13 @@ describe("issue-bound runs (#3385)", () => {
       category: "process",
       op: "coding-runtime.run.issue-context-attached",
       correlationId: "run-1",
-      extra: { runId: "run-1", issueNumber: 3385, itemCount: 1, byteCount: 96 },
+      extra: {
+        runId: "run-1",
+        issueNumber: 3385,
+        itemCount: 1,
+        linkedIssueCount: 0,
+        byteCount: 96,
+      },
     });
     // Transient: the issue's text reaches the model turn and nothing else.
     const persisted = JSON.stringify([...f.rows.values()]);

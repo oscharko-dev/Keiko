@@ -18,6 +18,7 @@ import { createVerificationRunnerManager } from "./editor/verificationRunner.js"
 import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
 import { deriveWorkspaceRootRef } from "./workspaceTrust/canonicalTrustIdentity.js";
 import { createInMemoryUiStore, createNodeUiStore, type UiStore } from "./store/index.js";
+import type { ServerLogEvent } from "./observability/index.js";
 import { restoreV13SchemaFixture } from "./store/legacySchemaTestFixture.js";
 import {
   createWorkspaceScriptTrustService,

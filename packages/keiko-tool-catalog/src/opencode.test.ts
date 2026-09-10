@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { CanonicalToolId } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   DEFAULT_VERIFICATION_LIMITS,
@@ -88,7 +89,7 @@ describe("opencode registration set", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
     const byId = new Map(projection.tools.map((tool) => [tool.toolRef.canonicalId, tool]));
-    const verification = byId.get("keiko.verification.run");
+    const verification = byId.get("keiko.verification.run" as CanonicalToolId);
     expect(verification?.bounds.maxDurationMs).toBe(VERIFICATION_TOOL_MAX_DURATION_MS);
     expect(VERIFICATION_TOOL_MAX_DURATION_MS).toBeGreaterThan(
       DEFAULT_VERIFICATION_LIMITS.wallTimeMs,

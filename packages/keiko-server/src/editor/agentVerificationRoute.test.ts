@@ -56,6 +56,7 @@ import {
 import type {
   ScriptTrustDecision,
   VerificationRunInput,
+  VerificationRunOutcome,
   VerificationRunnerManager,
 } from "./verificationRunner.js";
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
@@ -220,16 +221,16 @@ class FakeManager implements VerificationRunnerManager {
     basis: "repository",
   });
 
-  public readonly runToReport = (
+  public readonly runToReport = async (
     input: VerificationRunInput,
     signal: AbortSignal,
-  ): Promise<VerificationReport> => {
+  ): Promise<VerificationRunOutcome> => {
     this.calls += 1;
     this.lastInput = input;
     this.lastSignal = signal;
-    if (this.failWith !== undefined) return Promise.reject(this.failWith);
-    if (this.onRun !== undefined) return this.onRun(input, signal);
-    return Promise.resolve(this.report);
+    if (this.failWith !== undefined) throw this.failWith;
+    const report = this.onRun === undefined ? this.report : await this.onRun(input, signal);
+    return { report, failureOutput: [] };
   };
 }
 

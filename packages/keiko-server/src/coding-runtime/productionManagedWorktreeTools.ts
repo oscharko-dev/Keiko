@@ -1237,15 +1237,30 @@ function modelVerificationFailure(
     dependencies !== undefined &&
     VERIFICATION_DEPENDENCY_FAILURE_STATES.has(dependencies.state)
   ) {
-    const excerpt = failureOutput.find((output) => output.step === "dependencies")?.excerpt;
-    return {
-      summary: `dependency installation ${dependencies.state}${dependencies.detail === undefined ? "" : `: ${dependencies.detail}`}; no verification step ran`,
-      locations: [],
-      truncated: false,
-      ...(excerpt === undefined ? {} : { excerpt }),
-      dependencies,
-    };
+    return dependencyBootstrapFailure(dependencies, failureOutput);
   }
+  return stepFailure(report, failureOutput);
+}
+
+function dependencyBootstrapFailure(
+  dependencies: NonNullable<VerificationReport["dependencies"]>,
+  failureOutput: readonly VerificationStepOutput[],
+): CodingToolVerificationFailure {
+  const excerpt = failureOutput.find((output) => output.step === "dependencies")?.excerpt;
+  const detail = dependencies.detail === undefined ? "" : `: ${dependencies.detail}`;
+  return {
+    summary: `dependency installation ${dependencies.state}${detail}; no verification step ran`,
+    locations: [],
+    truncated: false,
+    ...(excerpt === undefined ? {} : { excerpt }),
+    dependencies,
+  };
+}
+
+function stepFailure(
+  report: VerificationReport,
+  failureOutput: readonly VerificationStepOutput[],
+): CodingToolVerificationFailure | undefined {
   const failed = report.results.find((result) => result.status === "failed");
   if (failed === undefined) return undefined;
   const candidates = failed.locations ?? [];

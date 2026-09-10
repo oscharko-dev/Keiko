@@ -240,6 +240,7 @@ describe("production coding runtime turn ports", () => {
       text: "PRIVATE_ISSUE_CONTEXT",
       issueNumber: 3385,
       itemCount: 1,
+      linkedIssueCount: 0,
       byteCount: 21,
     });
     expect(initialContext).toContain("untrusted repository data");

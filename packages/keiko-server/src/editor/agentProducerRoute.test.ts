@@ -60,6 +60,7 @@ import { createUiServer, UI_HOST } from "../server.js";
 import type {
   ScriptTrustDecision,
   VerificationRunInput,
+  VerificationRunOutcome,
   VerificationRunnerManager,
 } from "./verificationRunner.js";
 import {
@@ -254,9 +255,9 @@ class FakeVerificationRunnerManager implements VerificationRunnerManager {
     basis: "repository",
   });
 
-  public readonly runToReport = (_input: VerificationRunInput): Promise<VerificationReport> => {
+  public readonly runToReport = (_input: VerificationRunInput): Promise<VerificationRunOutcome> => {
     this.calls += 1;
-    return Promise.resolve(passingVerificationReport());
+    return Promise.resolve({ report: passingVerificationReport(), failureOutput: [] });
   };
 }
 

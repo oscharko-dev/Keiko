@@ -494,20 +494,38 @@ const VERIFICATION_LOCKFILE_STATE_SET: ReadonlySet<string> = new Set<Verificatio
   "absent",
 ]);
 
-export function isVerificationDependencySummary(
-  value: unknown,
-): value is VerificationDependencySummary {
-  if (!isRecord(value)) return false;
-  if (!hasOnlyKeys(value, ["state", "lockfile", "exitCode", "durationMs", "detail"])) return false;
-  if (typeof value.state !== "string" || !VERIFICATION_DEPENDENCY_STATE_SET.has(value.state)) {
-    return false;
-  }
-  if (typeof value.lockfile !== "string" || !VERIFICATION_LOCKFILE_STATE_SET.has(value.lockfile)) {
-    return false;
-  }
+function hasDependencySummaryStates(value: Readonly<Record<string, unknown>>): boolean {
+  return (
+    typeof value.state === "string" &&
+    VERIFICATION_DEPENDENCY_STATE_SET.has(value.state) &&
+    typeof value.lockfile === "string" &&
+    VERIFICATION_LOCKFILE_STATE_SET.has(value.lockfile)
+  );
+}
+
+function hasDependencySummaryExecution(value: Readonly<Record<string, unknown>>): boolean {
   if (value.exitCode !== null && !isIntegerWithin(value.exitCode, 0, 255)) return false;
   if (!isFiniteNonNegative(value.durationMs)) return false;
   return value.detail === undefined || isBoundedText(value.detail, VERIFICATION_DETAIL_MAX_CHARS);
+}
+
+export function isVerificationDependencySummary(
+  value: unknown,
+): value is VerificationDependencySummary {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["state", "lockfile", "exitCode", "durationMs", "detail"]) &&
+    hasDependencySummaryStates(value) &&
+    hasDependencySummaryExecution(value)
+  );
+}
+
+// An absent summary is valid (a report without a bootstrap); a present one must be well formed.
+function reportDependenciesOf(
+  value: Readonly<Record<string, unknown>>,
+): VerificationDependencySummary | undefined | false {
+  if (value.dependencies === undefined) return undefined;
+  return isVerificationDependencySummary(value.dependencies) ? value.dependencies : false;
 }
 
 export function isVerificationReport(value: unknown): value is VerificationReport {
@@ -515,6 +533,7 @@ export function isVerificationReport(value: unknown): value is VerificationRepor
   if (!isDenseArray(value.results, VERIFICATION_MAX_REPORT_RESULTS, isVerificationResult)) {
     return false;
   }
+  const dependencies = reportDependenciesOf(value);
   return (
     hasOnlyKeys(value, [
       "workspaceRoot",
@@ -525,14 +544,10 @@ export function isVerificationReport(value: unknown): value is VerificationRepor
       "counts",
       "dependencies",
     ]) &&
-    (value.dependencies === undefined || isVerificationDependencySummary(value.dependencies)) &&
+    dependencies !== false &&
     isBoundedWorkspacePath(value.workspaceRoot) &&
     isVerificationStatusValue(value.overallStatus) &&
-    matchesOverallStatus(
-      value.overallStatus,
-      value.results,
-      isVerificationDependencySummary(value.dependencies) ? value.dependencies : undefined,
-    ) &&
+    matchesOverallStatus(value.overallStatus, value.results, dependencies) &&
     isFiniteNonNegative(value.startedAtMs) &&
     isFiniteNonNegative(value.durationMs) &&
     isStatusCounts(value.counts, value.results)

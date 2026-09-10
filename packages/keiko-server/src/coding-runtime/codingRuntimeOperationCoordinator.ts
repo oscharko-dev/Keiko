@@ -159,15 +159,8 @@ export class CodingRuntimeOperationCoordinator {
             : "invalid-intent",
         );
       }
-      // A follow-up into a pause is the operator's own "continue with this": the run resumes first,
-      // and the replacement is dispatched against the resumed revision.
-      if (operation.current.state === "paused") {
-        const resumed = await this.deps.resumePaused(operation.current);
-        if (!resumed.ok) {
-          operation.reservation.release();
-          return resumed;
-        }
-      }
+      const refusedResume = await this.resumeForFollowUp(operation);
+      if (refusedResume !== undefined) return refusedResume;
       const live = this.deps.current() ?? operation.current;
       const dispatched = await this.dispatchFollowUp(
         runId,
@@ -190,6 +183,19 @@ export class CodingRuntimeOperationCoordinator {
       );
       return this.deps.advanceRevision(live, "task-submitted");
     });
+  }
+
+  // A follow-up into a pause is the operator's own "continue with this": the run resumes first, and
+  // the replacement is dispatched against the resumed revision. A refused resume releases the
+  // reservation and is the follow-up's answer.
+  private async resumeForFollowUp(
+    operation: Extract<PreparedRuntimeOperation, { readonly ok: true }>,
+  ): Promise<CodingRuntimeOrchestratorResult | undefined> {
+    if (operation.current.state !== "paused") return undefined;
+    const resumed = await this.deps.resumePaused(operation.current);
+    if (resumed.ok) return undefined;
+    operation.reservation.release();
+    return resumed;
   }
 
   private async dispatchFollowUp(

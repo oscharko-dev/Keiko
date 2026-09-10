@@ -5,7 +5,10 @@ import { describe, expect, it, vi } from "vitest";
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import { OPENCODE_PINNED_BUILT_IN_TOOLS } from "./opencodeToolSchemas.js";
 import { parseOpenCodeHistory } from "./opencodeProtocol.js";
-import { createGeneratedOpenCodeBundle } from "./opencodeRuntimeAdapter.js";
+import {
+  OPEN_CODE_VERIFICATION_TOOL_CLIENT_TIMEOUT_MS,
+  createGeneratedOpenCodeBundle,
+} from "./opencodeRuntimeAdapter.js";
 import { CODING_TOOL_MAX_BODY_BYTES, parseCodingToolRequest } from "./codingToolIpc.js";
 import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
 
@@ -633,7 +636,7 @@ describe("OpenCode runtime adapter readiness", () => {
     ]);
     for (const [name, source] of Object.entries(bundle.toolSources)) {
       expect(source).toContain(
-        approvalWaitTools.has(name) ? "const TIMEOUT_MS = 305000;" : "const TIMEOUT_MS = 35000;",
+        `const TIMEOUT_MS = ${String(expectedClientTimeoutMs(name, approvalWaitTools))};`,
       );
       expect(source).toContain('redirect: "manual"');
       expect(source).toContain("signal:");
@@ -1773,3 +1776,11 @@ describe("keiko_repository_search generated tool dispatch", () => {
     expect(parseCodingToolRequest(flatBody, CODING_TOOL_MAX_BODY_BYTES)).toBeUndefined();
   });
 });
+
+// The generated plugin client outlives the server-side bound of each tool: the verification tool is
+// settled at the contract-derived verification budget, the proposal tools wait for an operator
+// decision, every other tool uses the default governed ceiling.
+function expectedClientTimeoutMs(name: string, approvalWaitTools: ReadonlySet<string>): number {
+  if (name === "keiko_verification") return OPEN_CODE_VERIFICATION_TOOL_CLIENT_TIMEOUT_MS;
+  return approvalWaitTools.has(name) ? 305_000 : 35_000;
+}

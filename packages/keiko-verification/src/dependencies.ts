@@ -103,27 +103,36 @@ function statOrUndefined(fs: WorkspaceFs, path: string): WorkspaceStat | undefin
 
 type ManifestDeclarations = { readonly declared: number } | "absent" | "unreadable";
 
+function isPlainObject(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function parsedManifest(
+  path: string,
+  fs: WorkspaceFs,
+): Readonly<Record<string, unknown>> | undefined {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileUtf8(path));
+    return isPlainObject(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function declaredDependencyCount(manifest: Readonly<Record<string, unknown>>): number {
+  return DECLARATION_SECTIONS.reduce((count, section) => {
+    const entries = manifest[section];
+    return isPlainObject(entries) ? count + Object.keys(entries).length : count;
+  }, 0);
+}
+
 function manifestDeclarations(root: string, fs: WorkspaceFs): ManifestDeclarations {
   const path = join(root, MANIFEST);
   const stat = statOrUndefined(fs, path);
   if (stat === undefined) return "absent";
   if (!stat.isFile || stat.size > MANIFEST_MAX_BYTES) return "unreadable";
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(fs.readFileUtf8(path));
-  } catch {
-    return "unreadable";
-  }
-  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return "unreadable";
-  const manifest = parsed as Readonly<Record<string, unknown>>;
-  let declared = 0;
-  for (const section of DECLARATION_SECTIONS) {
-    const entries = manifest[section];
-    if (typeof entries === "object" && entries !== null && !Array.isArray(entries)) {
-      declared += Object.keys(entries).length;
-    }
-  }
-  return { declared };
+  const manifest = parsedManifest(path, fs);
+  return manifest === undefined ? "unreadable" : { declared: declaredDependencyCount(manifest) };
 }
 
 function lockfileState(root: string, fs: WorkspaceFs): VerificationLockfileState {

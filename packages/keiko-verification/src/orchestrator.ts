@@ -28,6 +28,7 @@ import { classifyOutcome, type AbortReason } from "./classify.js";
 import {
   planDependencyBootstrap,
   runDependencyBootstrap,
+  type DependencyBootstrapDeps,
   type DependencyBootstrapOutcome,
 } from "./dependencies.js";
 import { classifyScripts } from "./detect.js";
@@ -592,7 +593,19 @@ async function bootstrapDependencies(
   const fs = deps.fs ?? nodeWorkspaceFs;
   const bootstrapPlan = planDependencyBootstrap(deps.workspace, fs);
   if (bootstrapPlan.kind === "none") return undefined;
-  const outcome = await runDependencyBootstrap(bootstrapPlan, {
+  const outcome = await runDependencyBootstrap(bootstrapPlan, bootstrapDeps(deps, fs, baseSpawn));
+  if (outcome.excerpt !== undefined) {
+    deps.onStepOutput?.({ step: "dependencies", scriptName: undefined, excerpt: outcome.excerpt });
+  }
+  return outcome;
+}
+
+function bootstrapDeps(
+  deps: VerificationDeps,
+  fs: WorkspaceFs,
+  baseSpawn: SpawnFn,
+): DependencyBootstrapDeps {
+  return {
     workspace: deps.workspace,
     fs,
     spawn: baseSpawn,
@@ -605,11 +618,7 @@ async function bootstrapDependencies(
       ? {}
       : { sandboxAvailability: deps.sandboxAvailability }),
     ...(deps.platform === undefined ? {} : { platform: deps.platform }),
-  });
-  if (outcome.excerpt !== undefined) {
-    deps.onStepOutput?.({ step: "dependencies", scriptName: undefined, excerpt: outcome.excerpt });
-  }
-  return outcome;
+  };
 }
 
 // Every planned step, unexecuted, when the bootstrap left the workspace without its dependencies.

@@ -46,7 +46,7 @@ const OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS = 35_000;
 // The verification tool is settled at the contract's derived budget and the bridge outlives it by
 // one grace; the plugin's own client outlives both, so the sidecar always receives the server's
 // answer (report or catalog timeout) rather than producing a client-side one of its own.
-const OPEN_CODE_VERIFICATION_TOOL_CLIENT_TIMEOUT_MS =
+export const OPEN_CODE_VERIFICATION_TOOL_CLIENT_TIMEOUT_MS =
   VERIFICATION_TOOL_MAX_DURATION_MS + 2 * VERIFICATION_SETTLEMENT_GRACE_MS + 5_000;
 const OPEN_CODE_APPROVAL_TOOL_CLIENT_TIMEOUT_MS = MAX_APPROVAL_CHALLENGE_TTL_MS + 5_000;
 export const OPEN_CODE_MAX_TURN_WAIT_MS = 30 * 60_000;

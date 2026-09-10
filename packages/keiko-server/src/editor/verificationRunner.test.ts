@@ -6,7 +6,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   EditorVerificationEvent,
   VerificationKind,
@@ -882,7 +882,7 @@ describe("VerificationRunnerManager — runToReport shares the human run's lifec
     const events: EditorVerificationEvent[] = [];
     manager.subscribe((event) => events.push(event));
     const controller = new AbortController();
-    const resultReport = await manager.runToReport(
+    const { report: resultReport } = await manager.runToReport(
       input({ kinds: ["targeted-test"], targetPath: "src/a.test.ts" }),
       controller.signal,
     );
@@ -1129,6 +1129,7 @@ describe("decideScriptTrust", () => {
         repositoryFs: nodeWorkspaceFs,
         standingTrust: (): boolean => true,
         worktreeHumanGrant,
+        runAdmittedManifest: (): boolean => false,
       }),
     ).toEqual({ trusted: true, basis: "own-root" });
     expect(
@@ -1137,6 +1138,7 @@ describe("decideScriptTrust", () => {
         repositoryFs: nodeWorkspaceFs,
         standingTrust: (): boolean => false,
         worktreeHumanGrant,
+        runAdmittedManifest: (): boolean => false,
       }),
     ).toEqual({ trusted: false, refusal: "root-not-trusted" });
     expect(worktreeHumanGrant).not.toHaveBeenCalled();

@@ -102,6 +102,9 @@ function coordinator(input: {
     current: input.current ?? ((): CodingRuntimeSnapshot => runningSnapshot()),
     serial: (work) => work(),
     advanceRevision: () => ({ ok: true, snapshot: publicSnapshot() }),
+    // A follow-up into a pause resumes the run first (#3452, run 16); these fixtures dispatch
+    // against a running snapshot, so the resume is never reached.
+    resumePaused: () => Promise.resolve({ ok: true, snapshot: publicSnapshot() }),
     publicSnapshot: (current) => ({
       schemaVersion: "1",
       state: current.state,
@@ -746,6 +749,8 @@ describe("CodingRuntimeOperationCoordinator", () => {
     const subject = new CodingRuntimeOperationCoordinator({
       current: (): CodingRuntimeSnapshot => ({ ...runningSnapshot(), revision }),
       serial: <T>(work: () => Promise<T>): Promise<T> => work(),
+      resumePaused: (): Promise<CodingRuntimeOrchestratorResult> =>
+        Promise.resolve({ ok: true, snapshot: { ...publicSnapshot(), revision } }),
       advanceRevision: (current): CodingRuntimeOrchestratorResult => {
         revision = current.revision + 1;
         return { ok: true, snapshot: { ...publicSnapshot(), revision } };

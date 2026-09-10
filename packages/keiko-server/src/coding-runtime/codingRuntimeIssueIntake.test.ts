@@ -44,6 +44,7 @@ const ISSUE_TITLE = "Issue attachment must survive a server restart";
 const ISSUE_ATTACHMENT: CodingRuntimeIssueAttachment = {
   issueNumber: 3390,
   itemCount: 1,
+  linkedIssueCount: 0,
   byteCount: 64,
   text: `[untrusted issue context] ${ISSUE_TITLE}`,
 };

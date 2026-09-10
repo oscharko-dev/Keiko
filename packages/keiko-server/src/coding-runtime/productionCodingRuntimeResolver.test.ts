@@ -7,7 +7,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
-import { operatorDecisionRequester } from "./productionCodingRuntimeResolver.js";
+import {
+  operatorDecisionRequester,
+  runManifestAdmission,
+} from "./productionCodingRuntimeResolver.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
@@ -311,6 +314,8 @@ describe("production coding runtime resolver", () => {
     const fixture = workspaceFixture();
     const confirmations = confirmationFixture();
     const turns: string[] = [];
+    // ADR-0147 D3, autonomous-delivery amendment: the run's manifest admissions end with the run.
+    const revokeRunAdmissions = vi.fn((): number => 1);
     const createRun = vi.fn((input: ProductionRuntimeBackendInput) => ({
       manager: runtimeManager(input.request.runId),
       launch: {
@@ -335,7 +340,9 @@ describe("production coding runtime resolver", () => {
         waitForTerminal: () => Promise.resolve("succeeded" as const),
       },
     }));
-    const resolver = resolverFor(fixture, createRun, confirmations.consumer);
+    const resolver = resolverFor(fixture, createRun, confirmations.consumer, undefined, {
+      workspaceScriptTrust: { admitRunManifest: vi.fn(), revokeRunAdmissions },
+    });
     const host = createProductionCodingRuntimeHost(resolver);
     if (host === undefined) throw new Error("expected qualified host");
     const manager = host.createManager(vi.fn());
@@ -740,6 +747,31 @@ function workspaceFixture() {
 describe("operatorDecisionRequester", () => {
   const now = (): Date => new Date("2026-09-10T17:17:05.000Z");
   const runId = "run-162123733010859537403366256760456230003";
+
+  // ADR-0147 D3, autonomous-delivery amendment: the admission the tool facade calls after a completed
+  // effect is bound to THIS run's worktree, run id and authority expiry, and is absent when the
+  // composition has no trust service — every mode then keeps asking exactly as before.
+  it("binds the run-manifest admission to the run's worktree, id and authority expiry", () => {
+    const admitRunManifest = vi.fn();
+    const composed = runManifestAdmission(
+      { workspaceScriptTrust: { admitRunManifest, revokeRunAdmissions: vi.fn() } },
+      { workspaceRoot: "/managed/worktree", expiresAt: "2026-09-10T20:00:00.000Z" },
+      { authorityRef: { runId: "run-7", envelopeDigest: "d".repeat(64) } },
+    );
+    composed.admitRunManifest?.();
+    expect(admitRunManifest).toHaveBeenCalledExactlyOnceWith(
+      "/managed/worktree",
+      "run-7",
+      "2026-09-10T20:00:00.000Z",
+    );
+    expect(
+      runManifestAdmission(
+        {},
+        { workspaceRoot: "/managed/worktree", expiresAt: "2026-09-10T20:00:00.000Z" },
+        { authorityRef: { runId: "run-7", envelopeDigest: "d".repeat(64) } },
+      ),
+    ).toEqual({});
+  });
 
   it("emits contract-valid open and settled events for the run", () => {
     const emitted: CodingWorkbenchRuntimeEvent[] = [];
