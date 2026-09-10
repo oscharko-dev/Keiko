@@ -8,7 +8,9 @@
 #include <string.h>
 #include <wchar.h>
 
-#define KRP_VERSION 1u
+#define KRP_BASE_VERSION 1u
+#define KRP_GATEWAY_VERSION 2u
+#define KRP_GATEWAY_CAPABILITY 1u
 #define KRP_HEADER_BYTES 12u
 #define KRP_MAX_PACKET (128u * 1024u)
 #define KRP_MAX_ARGUMENTS 64u
@@ -21,7 +23,8 @@ enum error_code {
   ERROR_JOB_CREATE = 2,
   ERROR_PROCESS_CREATE = 3,
   ERROR_JOB_ASSIGN = 4,
-  ERROR_JOB_OBSERVE = 5
+  ERROR_JOB_OBSERVE = 5,
+  ERROR_CONFINEMENT_UNAVAILABLE = 6
 };
 
 struct launch_request {
@@ -30,6 +33,15 @@ struct launch_request {
   char *recovery_handle;
   char *executable;
   char *cwd;
+  char *run_id;
+  char *tree_binding_id;
+  char *envelope_digest;
+  char *runtime_artifact_digest;
+  char *model_profile_digest;
+  char *policy_digest;
+  uint16_t protocol_version;
+  uint16_t address_family;
+  uint16_t gateway_port;
   uint16_t argument_count;
   uint16_t environment_count;
   char **arguments;
@@ -82,7 +94,7 @@ static int write_exact(int descriptor, const void *buffer, size_t length) {
 
 static int send_response(uint16_t kind, const unsigned char *payload, uint32_t length) {
   unsigned char header[KRP_HEADER_BYTES] = {'K', 'R', 'S', '1', 0, 0, 0, 0, 0, 0, 0, 0};
-  write_u16(header + 4, KRP_VERSION);
+  write_u16(header + 4, KRP_BASE_VERSION);
   write_u16(header + 6, kind);
   write_u32(header + 8, length);
   return write_exact(4, header, sizeof(header)) &&
@@ -110,6 +122,28 @@ static int valid_recovery_handle(const char *value) {
   return 1;
 }
 
+static int valid_lower_hex(const char *value, size_t expected_length) {
+  size_t index;
+  if (strlen(value) != expected_length) return 0;
+  for (index = 0; index < expected_length; ++index) {
+    char byte = value[index];
+    if (!((byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'f'))) return 0;
+  }
+  return 1;
+}
+
+static int valid_run_id(const char *value) {
+  size_t length = strlen(value), index;
+  if (length == 0 || length > 128) return 0;
+  for (index = 0; index < length; ++index) {
+    char byte = value[index];
+    if (!((byte >= 'A' && byte <= 'Z') || (byte >= 'a' && byte <= 'z') ||
+          (byte >= '0' && byte <= '9') || byte == '.' || byte == '_' || byte == ':' ||
+          byte == '-')) return 0;
+  }
+  return 1;
+}
+
 static char *take_string(unsigned char **cursor, size_t *remaining) {
   uint32_t length;
   char *value;
@@ -129,22 +163,35 @@ static char *take_string(unsigned char **cursor, size_t *remaining) {
 static int read_launch_request(struct launch_request *request) {
   unsigned char header[KRP_HEADER_BYTES], *cursor;
   uint32_t payload_length;
+  uint16_t protocol_version;
   size_t remaining, allocation_length, index;
   memset(request, 0, sizeof(*request));
   if (!read_exact(3, header, sizeof(header)) || memcmp(header, "KRP1", 4) != 0 ||
-      read_u16(header + 4) != KRP_VERSION || read_u16(header + 6) != 1) return 0;
+      read_u16(header + 6) != 1) return 0;
+  protocol_version = read_u16(header + 4);
+  if (protocol_version != KRP_BASE_VERSION && protocol_version != KRP_GATEWAY_VERSION) return 0;
   payload_length = read_u32(header + 8);
   if (payload_length < 16 || payload_length > KRP_MAX_PACKET - KRP_HEADER_BYTES) return 0;
   allocation_length = (size_t)payload_length + 1;
   request->storage = calloc(allocation_length, 1);
   if (request->storage == NULL || !read_exact(3, request->storage, payload_length)) return 0;
   request->storage_length = allocation_length;
+  request->protocol_version = protocol_version;
   cursor = (unsigned char *)request->storage;
   remaining = payload_length;
   request->argument_count = read_u16(cursor);
   request->environment_count = read_u16(cursor + 2);
   cursor += 4;
   remaining -= 4;
+  if (protocol_version == KRP_GATEWAY_VERSION) {
+    if (remaining < 8 || read_u16(cursor) != KRP_GATEWAY_CAPABILITY ||
+        (read_u16(cursor + 2) != 4 && read_u16(cursor + 2) != 6) ||
+        read_u16(cursor + 4) == 0 || read_u16(cursor + 6) != 0) return 0;
+    request->address_family = read_u16(cursor + 2);
+    request->gateway_port = read_u16(cursor + 4);
+    cursor += 8;
+    remaining -= 8;
+  }
   if (request->argument_count > KRP_MAX_ARGUMENTS ||
       request->environment_count > KRP_MAX_ENVIRONMENT) return 0;
   request->arguments = calloc(request->argument_count, sizeof(char *));
@@ -156,6 +203,14 @@ static int read_launch_request(struct launch_request *request) {
   request->recovery_handle = take_string(&cursor, &remaining);
   request->executable = take_string(&cursor, &remaining);
   request->cwd = take_string(&cursor, &remaining);
+  if (protocol_version == KRP_GATEWAY_VERSION) {
+    request->run_id = take_string(&cursor, &remaining);
+    request->tree_binding_id = take_string(&cursor, &remaining);
+    request->envelope_digest = take_string(&cursor, &remaining);
+    request->runtime_artifact_digest = take_string(&cursor, &remaining);
+    request->model_profile_digest = take_string(&cursor, &remaining);
+    request->policy_digest = take_string(&cursor, &remaining);
+  }
   for (index = 0; index < request->argument_count; ++index)
     request->arguments[index] = take_string(&cursor, &remaining);
   for (index = 0; index < request->environment_count; ++index) {
@@ -164,6 +219,15 @@ static int read_launch_request(struct launch_request *request) {
   }
   if (remaining != 0 || request->recovery_handle == NULL || request->executable == NULL ||
       request->cwd == NULL || !valid_recovery_handle(request->recovery_handle)) return 0;
+  if (protocol_version == KRP_GATEWAY_VERSION &&
+      (request->run_id == NULL || !valid_run_id(request->run_id) ||
+       request->tree_binding_id == NULL || !valid_lower_hex(request->tree_binding_id, 64) ||
+       request->envelope_digest == NULL || !valid_lower_hex(request->envelope_digest, 64) ||
+       request->runtime_artifact_digest == NULL ||
+       !valid_lower_hex(request->runtime_artifact_digest, 64) ||
+       request->model_profile_digest == NULL ||
+       !valid_lower_hex(request->model_profile_digest, 64) || request->policy_digest == NULL ||
+       !valid_lower_hex(request->policy_digest, 64))) return 0;
   for (index = 0; index < request->argument_count; ++index)
     if (request->arguments[index] == NULL) return 0;
   for (index = 0; index < request->environment_count; ++index)
@@ -392,7 +456,7 @@ static int process_control(HANDLE job) {
   }
   if (available < sizeof(header)) return 1;
   if (!read_exact(3, header, sizeof(header)) || memcmp(header, "KRC1", 4) != 0 ||
-      read_u16(header + 4) != KRP_VERSION || read_u32(header + 8) != 0 ||
+      read_u16(header + 4) != KRP_BASE_VERSION || read_u32(header + 8) != 0 ||
       (read_u16(header + 6) != 2 && read_u16(header + 6) != 3)) {
     TerminateJobObject(job, 137);
     return 0;
@@ -500,6 +564,10 @@ int wmain(int argc, wchar_t **argv) {
     return 1;
   }
   job = configured_job(request.recovery_handle, &completion_port);
+  if (request.protocol_version == KRP_GATEWAY_VERSION) {
+    send_error(ERROR_CONFINEMENT_UNAVAILABLE);
+    goto cleanup;
+  }
   if (job == NULL) {
     send_error(ERROR_JOB_CREATE);
     goto cleanup;

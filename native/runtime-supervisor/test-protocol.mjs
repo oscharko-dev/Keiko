@@ -267,6 +267,15 @@ function runSourceContractOn(rawSource) {
   assert.match(codeText, /JOB_OBJECT_MSG_ACTIVE_PROCESS_ZERO/u);
   assert.match(codeText, /accounting\.ActiveProcesses == 0/u);
   assert.match(codeText, /PROC_THREAD_ATTRIBUTE_HANDLE_LIST/u);
+  assert.match(codeText, /KRP_GATEWAY_VERSION\s+2u/u);
+  assert.match(codeText, /KRP_GATEWAY_CAPABILITY\s+1u/u);
+  assert.match(codeText, /request->address_family\s*=\s*read_u16\(cursor \+ 2\)/u);
+  assert.match(codeText, /request->gateway_port\s*=\s*read_u16\(cursor \+ 4\)/u);
+  assert.match(codeText, /valid_lower_hex\(request->policy_digest, 64\)/u);
+  assert.match(
+    codeText,
+    /request\.protocol_version == KRP_GATEWAY_VERSION[\s\S]*?send_error\(ERROR_CONFINEMENT_UNAVAILABLE\)[\s\S]*?goto cleanup/u,
+  );
   assert.match(
     literalPreservingText,
     /int wmain\([^)]*\)\s*\{[\s\S]*?if\s*\(\s*!SetDefaultDllDirectories\(LOAD_LIBRARY_SEARCH_SYSTEM32\)\s*\|\|\s*!SetDllDirectoryW\(L""\)\s*\)\s*return\s+1\s*;/u,
@@ -327,6 +336,20 @@ function assertMutationRejected(rawSource) {
     () => runSourceContractOn(unsafeDllDirectory),
     /SetDllDirectoryW/u,
     "assertSourceContract must reject a non-empty DLL directory in the fail-closed startup guard",
+  );
+  assertGatewayRefusalMutationRejected(rawSource);
+}
+
+function assertGatewayRefusalMutationRejected(rawSource) {
+  const withoutGatewayRefusal = rawSource.replace(
+    "send_error(ERROR_CONFINEMENT_UNAVAILABLE);",
+    "send_error(ERROR_PROTOCOL);",
+  );
+  assert.notEqual(withoutGatewayRefusal, rawSource, "gateway-refusal mutation must change source");
+  assert.throws(
+    () => runSourceContractOn(withoutGatewayRefusal),
+    /ERROR_CONFINEMENT_UNAVAILABLE/u,
+    "source contract must reject a gateway frame that could continue without enforcement",
   );
 }
 
