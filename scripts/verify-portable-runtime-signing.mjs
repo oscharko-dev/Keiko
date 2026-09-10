@@ -117,18 +117,19 @@ function verificationStateFor(target, policy, input) {
     verificationReasonCodes: reasons,
     verificationStatus: verificationStatusFor(policy, verified),
     signatureKind: target.signatureKind,
-    signatureVerified:
-      target.nodePlatform === "win32"
-        ? verified
-        : target.nodePlatform === "linux"
-          ? input.verificationChecks.provenanceVerified === true
-          : input.verificationChecks.developerIdVerified === true,
+    signatureVerified: signatureVerifiedFor(target, verified, input.verificationChecks),
     notarizationRequired: target.nodePlatform === "darwin",
     notarizationVerified:
       target.nodePlatform === "darwin"
         ? input.verificationChecks.notarizationVerified === true
         : false,
   };
+}
+
+function signatureVerifiedFor(target, verified, checks) {
+  if (target.nodePlatform === "win32") return verified;
+  if (target.nodePlatform === "linux") return checks.provenanceVerified === true;
+  return checks.developerIdVerified === true;
 }
 
 function verificationStatusFor(policy, verified) {

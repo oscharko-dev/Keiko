@@ -218,16 +218,21 @@ function supervisorIdentityMatches(
   helper: Record<string, unknown>,
   target: TargetContract,
 ): boolean {
-  const executablePath =
-    target.artifactTarget === "linux-x64"
-      ? "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js"
-      : `runtime/native/keiko-runtime-supervisor${target.artifactTarget === "win32-x64" ? ".exe" : ""}`;
+  const executablePath = supervisorExecutablePath(target);
   return (
     helper.kind === "runtime-process-supervisor" &&
     helper.platformTarget === target.manifestTarget &&
     helper.architecture === target.architecture &&
     helper.executablePath === executablePath
   );
+}
+
+function supervisorExecutablePath(target: TargetContract): string {
+  if (target.artifactTarget === "linux-x64") {
+    return "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
+  }
+  const suffix = target.artifactTarget === "win32-x64" ? ".exe" : "";
+  return `runtime/native/keiko-runtime-supervisor${suffix}`;
 }
 
 function supervisorProtocolMatches(

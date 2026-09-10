@@ -67,8 +67,12 @@ function readJson(path, label) {
 }
 
 function exactCleanHead(sourceCommitSha) {
-  const head = execFileSync("git", ["rev-parse", "HEAD"], { encoding: "utf8" }).trim();
-  const status = execFileSync("git", ["status", "--porcelain=v1"], { encoding: "utf8" });
+  const head = execFileSync("/usr/bin/git", ["rev-parse", "HEAD"], {
+    encoding: "utf8",
+  }).trim();
+  const status = execFileSync("/usr/bin/git", ["status", "--porcelain=v1"], {
+    encoding: "utf8",
+  });
   if (head !== sourceCommitSha || status.length > 0) {
     fail("qualification checkout is not the clean exact source head");
   }

@@ -753,13 +753,8 @@ function writeNativeHelperPayload(resourceRoot, target) {
 function nativeHelper(target, version, signingVerified, name) {
   const runtimeTarget = targetByName(target);
   const secureRead = name === "keiko-secure-workspace-read";
-  let sourcePath = "native/secure-workspace-read";
-  if (!secureRead) {
-    sourcePath =
-      target === "linux-x64"
-        ? "packages/keiko-sandbox/src"
-        : `native/runtime-supervisor/${target === "windows-x64" ? "windows" : "macos"}`;
-  }
+  const sourcePath = nativeHelperSourcePath(target, secureRead);
+  const protocol = nativeHelperProtocol(target, secureRead);
   const bytes = nativeHelperBytes(target, name);
   const digest = sha256(bytes);
   const signing = componentSigningEvidence(target, signingVerified);
@@ -769,11 +764,7 @@ function nativeHelper(target, version, signingVerified, name) {
     platformTarget: target,
     architecture: runtimeTarget.nodeArchitecture,
     executablePath: nativeHelperExecutablePath(target, name),
-    protocol: {
-      schemaVersion: 1,
-      requestMagic: secureRead ? "KSR1" : target === "linux-x64" ? "none" : "KRP1",
-      responseMagic: secureRead ? "KSS1" : target === "linux-x64" ? "none" : "KRS1",
-    },
+    protocol,
     source: {
       commitSha: "a".repeat(40),
       path: sourcePath,
@@ -789,6 +780,21 @@ function nativeHelper(target, version, signingVerified, name) {
     sbomBomRef: `pkg:generic/${name}@${version}?platform=${target}`,
     signing,
   };
+}
+
+function nativeHelperSourcePath(target, secureRead) {
+  if (secureRead) return "native/secure-workspace-read";
+  if (target === "linux-x64") return "packages/keiko-sandbox/src";
+  const platform = target === "windows-x64" ? "windows" : "macos";
+  return `native/runtime-supervisor/${platform}`;
+}
+
+function nativeHelperProtocol(target, secureRead) {
+  if (secureRead) return { schemaVersion: 1, requestMagic: "KSR1", responseMagic: "KSS1" };
+  if (target === "linux-x64") {
+    return { schemaVersion: 1, requestMagic: "none", responseMagic: "none" };
+  }
+  return { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" };
 }
 
 function componentSigningEvidence(target, verified) {
@@ -878,17 +884,20 @@ function signingEvidence(target, verified) {
     signatureVerified: verified,
     notarizationRequired: macos,
     notarizationVerified: macos && verified,
-    verificationChecks:
-      runtimeTarget.nodePlatform === "win32"
-        ? { publisherChainVerified: verified, timestampVerified: verified }
-        : runtimeTarget.nodePlatform === "linux"
-          ? { provenanceVerified: verified }
-          : {
-              developerIdVerified: verified,
-              notarizationVerified: verified,
-              stapleVerified: verified,
-              assessmentVerified: verified,
-            },
+    verificationChecks: manualVerificationChecks(runtimeTarget.nodePlatform, verified),
+  };
+}
+
+function manualVerificationChecks(platform, verified) {
+  if (platform === "win32") {
+    return { publisherChainVerified: verified, timestampVerified: verified };
+  }
+  if (platform === "linux") return { provenanceVerified: verified };
+  return {
+    developerIdVerified: verified,
+    notarizationVerified: verified,
+    stapleVerified: verified,
+    assessmentVerified: verified,
   };
 }
 

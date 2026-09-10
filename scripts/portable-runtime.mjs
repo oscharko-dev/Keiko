@@ -874,6 +874,7 @@ function nativeHelperContract(name, target) {
   }
   if (name === "keiko-runtime-supervisor") {
     const linux = target.nodePlatform === "linux";
+    const sourcePlatform = target.nodePlatform === "win32" ? "windows" : "macos";
     return {
       bomName: name,
       executablePath: linux
@@ -885,7 +886,7 @@ function nativeHelperContract(name, target) {
         : { requestMagic: "KRP1", responseMagic: "KRS1" },
       sourcePath: linux
         ? "packages/keiko-sandbox/src"
-        : `native/runtime-supervisor/${target.nodePlatform === "win32" ? "windows" : "macos"}`,
+        : `native/runtime-supervisor/${sourcePlatform}`,
     };
   }
   return undefined;
