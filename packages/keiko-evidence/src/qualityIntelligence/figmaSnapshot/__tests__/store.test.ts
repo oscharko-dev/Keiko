@@ -809,7 +809,6 @@ describe("createNodeFigmaSnapshotStore", () => {
     // Strip only the body; keep artifactHashes.links intact so verifyArtifactHash walks the
     // value===undefined branch with an actualHash still present.
     const { links: _links, ...withoutLinksBody } = raw;
-    void _links;
     writeSnapshotFile(withoutLinksBody);
 
     expect(() => store.load(RUN_ID)).toThrow(EvidenceReadError);

@@ -512,7 +512,6 @@ describe("CommandRunnerManager — execution", () => {
     await expect(
       manager.execute({ projectId: workspaceRoot, taskId: "npm-script:test" }),
     ).rejects.toMatchObject({ code: "RUN_LIMIT_EXCEEDED" });
-    void pending;
   });
 });
 

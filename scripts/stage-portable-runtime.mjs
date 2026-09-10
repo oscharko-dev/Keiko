@@ -2014,7 +2014,7 @@ function manifestRelease(options) {
   };
 }
 
-function manifestArtifact(options, target, digests) {
+function manifestArtifact(_options, target, digests) {
   return {
     platformTarget: target.platformTarget,
     assetId: STAGING_ASSET_ID_UNAVAILABLE,

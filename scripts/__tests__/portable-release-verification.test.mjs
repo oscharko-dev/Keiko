@@ -523,7 +523,7 @@ describe("portableReleaseGate", () => {
       setupAssetName: "keiko-windows-x64-setup.exe",
       snapshot: () => ({ assets: overrides.snapshotAssets ?? assets }),
       targets: TARGETS,
-      verifyBytes: (remote, expected) => events.verified.push(expected.map((e) => e.assetName)),
+      verifyBytes: (_remote, expected) => events.verified.push(expected.map((e) => e.assetName)),
     });
     return { events, gate };
   }

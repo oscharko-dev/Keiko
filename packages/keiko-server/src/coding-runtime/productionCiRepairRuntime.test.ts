@@ -106,7 +106,6 @@ function recover(snapshots: CodingRuntimeSnapshotStore): CodingRuntimeSnapshot {
     ...shared
   } = source;
   expect(_receipt?.status).toBe("succeeded");
-  void _readiness;
   snapshots.create({
     ...shared,
     runId: "run-2",
@@ -386,7 +385,6 @@ describe("production CI repair accounting availability", () => {
     const current = test.snapshots.get("run-2");
     if (current === undefined) throw new Error("Missing recovered run");
     const { draftDelivery: _draft, ...awaitingAdoption } = current;
-    void _draft;
     const snapshots = {
       ...test.snapshots,
       ciRepairBudget: test.ciRepairBudget,
@@ -467,7 +465,6 @@ describe("production CI repair accounting availability", () => {
     const current = test.snapshots.get("run-2");
     if (current === undefined) throw new Error("Missing recovered run");
     const { draftDelivery: _draft, ...awaitingAdoption } = current;
-    void _draft;
     const snapshots = {
       ...test.snapshots,
       ciRepairBudget: test.ciRepairBudget,
@@ -495,7 +492,6 @@ describe("production CI repair accounting availability", () => {
     const current = test.snapshots.get("run-2");
     if (current === undefined) throw new Error("Missing recovered run");
     const { draftDelivery: _draft, ...awaitingAdoption } = current;
-    void _draft;
     const snapshots = {
       ...test.snapshots,
       ciRepairBudget: test.ciRepairBudget,

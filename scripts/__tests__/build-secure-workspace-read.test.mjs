@@ -163,7 +163,7 @@ describe("secure workspace read compiler environment", () => {
         invocation = { args, command, options };
         return { status: 0 };
       },
-      resolveCompilerImpl: (envPath, tool) => `C:\\MSVC\\bin\\${tool}`,
+      resolveCompilerImpl: (_envPath, tool) => `C:\\MSVC\\bin\\${tool}`,
     });
 
     expect(status).toBe(0);

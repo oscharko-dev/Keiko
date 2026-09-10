@@ -637,7 +637,6 @@ describe("handleQiReCheck — no stored sourceFingerprints", () => {
     // Seed without sourceFingerprints: rest-destructure drops the optional (readonly) key, since
     // exactOptionalPropertyTypes forbids setting it to `undefined` and the field cannot be deleted.
     const { sourceFingerprints: _droppedFingerprints, ...noFpInput } = runRecordInput(runIdNoFp);
-    void _droppedFingerprints;
     recordQualityIntelligenceRun(noFpInput, { evidenceDir });
     recordQualityIntelligenceCandidates({
       runId: runIdNoFp,

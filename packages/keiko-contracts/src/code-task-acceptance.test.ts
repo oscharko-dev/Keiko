@@ -496,7 +496,6 @@ describe("ownField makes an inherited field unreadable regardless of descriptor 
   it("rejects an inherited non-enumerable top-level header field", () => {
     const legitimate = validContribution();
     const { kind: _kind, ...withoutKind } = legitimate as unknown as Record<string, unknown>;
-    void _kind;
     const result = withPollutedPrototype(
       "kind",
       { value: CODE_TASK_ACCEPTANCE_CONTRIBUTION_KIND, enumerable: false },

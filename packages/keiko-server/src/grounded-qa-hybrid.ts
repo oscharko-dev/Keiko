@@ -1034,7 +1034,7 @@ function emptyFolderSummary(): GroundedAnswerContextPackSummary {
 function folderSummary(
   folders: readonly RetrievedFolder[],
   cited: readonly SelectedCandidate<HybridPayload>[],
-  redactor: Redactor,
+  _redactor: Redactor,
   deps: Pick<UiHandlerDeps, "contextProfile">,
 ): GroundedAnswerContextPackSummary {
   if (folders.length === 0) return emptyFolderSummary();

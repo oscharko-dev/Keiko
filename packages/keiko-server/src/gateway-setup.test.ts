@@ -4850,7 +4850,7 @@ describe("handleGatewaySetup", () => {
     const uiDir = await tempDir("keiko-gw-ui-modelinfo-401-");
     const evidenceDir = await tempDir("keiko-gw-ev-modelinfo-401-");
     const originalFetch = globalThis.fetch;
-    const fakeFetch: typeof fetch = (url, init) => {
+    const fakeFetch: typeof fetch = (url, _init) => {
       const href = fetchInputUrl(url);
       const embeddingProbeResponse = fakeEmbeddingProbeResponse(url);
       if (embeddingProbeResponse !== undefined) return embeddingProbeResponse;
@@ -4865,7 +4865,6 @@ describe("handleGatewaySetup", () => {
           }),
         );
       }
-      void init;
       return Promise.resolve(
         new Response(
           JSON.stringify({
@@ -4949,7 +4948,7 @@ describe("handleGatewaySetup", () => {
     const evidenceDir = await tempDir("keiko-gw-ev-modelinfo-empty-");
     const originalFetch = globalThis.fetch;
     const seenPaths: string[] = [];
-    const fakeFetch: typeof fetch = (url, init) => {
+    const fakeFetch: typeof fetch = (url, _init) => {
       const href = fetchInputUrl(url);
       seenPaths.push(href);
       const embeddingProbeResponse = fakeEmbeddingProbeResponse(url);
@@ -4970,7 +4969,6 @@ describe("handleGatewaySetup", () => {
           }),
         );
       }
-      void init;
       return Promise.resolve(
         new Response(
           JSON.stringify({

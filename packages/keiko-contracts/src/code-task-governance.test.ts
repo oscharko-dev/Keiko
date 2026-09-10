@@ -856,7 +856,6 @@ describe("ownField makes an inherited field unreadable regardless of descriptor 
     // correct, proving nothing about ownField specifically (caught empirically before this test
     // shipped -- both a correct and a sabotaged ownField rejected it via that path, uninformative).
     const { decision: _decision, ...withoutDecision } = allowedAction();
-    void _decision;
     const result = withPollutedPrototype("decision", { value: "allowed", enumerable: false }, () =>
       validateGovernedActionV1(withoutDecision),
     );
@@ -930,7 +929,6 @@ describe("allowedGrantExclusionErrors rejects an unverifiable outcome instead of
 describe("governedActionRefErrors's decision read is unreachable-with-undefined (KfQ 3789983164, refuted)", () => {
   it("rejects via the top-level gate, never reaching governedActionRefErrors's fallback", () => {
     const { decision: _decision, ...withoutDecision } = allowedAction();
-    void _decision;
     const result = withPollutedPrototype("decision", { value: "allowed", enumerable: false }, () =>
       validateGovernedActionV1(withoutDecision),
     );

@@ -266,7 +266,6 @@ describe("scoreDiscussionQuality - correction-handling", () => {
       expectedContradictionPolicies: _expectedContradictionPolicies,
       ...oracleWithoutPolicies
     } = f.oracle;
-    void _expectedContradictionPolicies;
     const fWithoutPolicies: DiscussionEvalFixture = { ...f, oracle: oracleWithoutPolicies };
     expect(
       outcomeOf(fWithoutPolicies, observationFor("evidence-check"), "correction-handling"),
