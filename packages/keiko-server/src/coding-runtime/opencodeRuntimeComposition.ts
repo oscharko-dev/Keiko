@@ -58,7 +58,9 @@ import {
   type OpenCodeSyncHint,
 } from "./opencodeRuntimeAdapter.js";
 import {
+  OPENCODE_HISTORY_RESPONSE_MAX_BYTES,
   classifyOpenCodeLiveControl,
+  describeRejectedOpenCodeHistoryPart,
   parseOpenCodeHistory,
   projectOpenCodePermissionEvent,
   projectOpenCodePermissionRequestId,
@@ -837,7 +839,13 @@ function readinessPorts(
     history: async (checkpoints, signal): Promise<readonly OpenCodeReconciliationEvent[]> => {
       const combinedSignal =
         request.signal === undefined ? signal : AbortSignal.any([signal, request.signal]);
-      const rows = await client.history(checkpoints, { signal: combinedSignal });
+      const rows = await pullHistory(
+        client,
+        checkpoints,
+        combinedSignal,
+        input.diagnostics,
+        run.runId,
+      );
       const normalized = normalizeOpenCodeSafeActivityHistory(rows);
       stageSafeActivity(normalized, safeActivity, input.safeActivity);
       const parsed = parseOpenCodeHistory(rows);
@@ -861,6 +869,56 @@ function readinessPorts(
   };
 }
 
+async function pullHistory(
+  client: OpenCodeHttpClient,
+  checkpoints: Readonly<Record<string, number>>,
+  signal: AbortSignal,
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+): Promise<readonly Record<string, unknown>[]> {
+  try {
+    return await client.history(checkpoints, { signal });
+  } catch (error) {
+    if (!signal.aborted) recordHistoryTransportFailure(diagnostics, runId, error);
+    throw error;
+  }
+}
+
+// The client's closed error vocabulary for a pull that fails before any row is parsed.
+const HISTORY_TRANSPORT_REASONS: ReadonlyMap<string, string> = new Map([
+  ["opencode-history-failed", "transport-failed"],
+  ["opencode-history-oversized", "transport-oversized"],
+  ["opencode-json-invalid", "transport-json-invalid"],
+  ["opencode-history-invalid", "checkpoints-invalid"],
+]);
+
+// A pull can fail before any row is parsed -- a refused or oversized response, a body that is not a
+// JSON array -- and until 2026-09-10 those paths reached the lifecycle failure with no line of their
+// own. The reason is the client's closed vocabulary, never the response; an oversized pull names the
+// budget it exceeded so the operator can tell a burst from a defect. A cancelled pull is not a failure.
+function recordHistoryTransportFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  error: unknown,
+): void {
+  const reason =
+    (error instanceof Error ? HISTORY_TRANSPORT_REASONS.get(error.message) : undefined) ??
+    "transport-unclassified";
+  const budgetCode =
+    reason === "transport-oversized"
+      ? `:responseBudgetBytes=${String(OPENCODE_HISTORY_RESPONSE_MAX_BYTES)}`
+      : "";
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.handshake",
+    source: "opencode.history",
+    errorClass: "OpenCodeHistoryFailure",
+    message: "runtime-handshake-failed",
+    code: `stage=sse-history-reconciliation:reason=${reason}${budgetCode}`,
+  });
+}
+
 function recordHistoryParseFailure(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
@@ -869,8 +927,10 @@ function recordHistoryParseFailure(
 ): void {
   const eventTypeDigest = firstUnknownHistoryEventTypeDigest(rows);
   const eventShape = firstUnknownMessageShape(rows);
+  const partShape = firstRejectedPartShape(rows);
   const eventDigestCode = eventTypeDigest === undefined ? "" : `:eventSha256=${eventTypeDigest}`;
   const eventShapeCode = eventShape === undefined ? "" : `:${eventShape}`;
+  const partShapeCode = partShape === undefined ? "" : `:${partShape}`;
   emitServerDiagnostic(diagnostics, {
     correlationId: runId,
     timestamp: new Date().toISOString(),
@@ -878,8 +938,21 @@ function recordHistoryParseFailure(
     source: "opencode.history",
     errorClass: "OpenCodeHistoryFailure",
     message: "runtime-handshake-failed",
-    code: `stage=sse-history-reconciliation:reason=${reason}${eventDigestCode}${eventShapeCode}`,
+    code: `stage=sse-history-reconciliation:reason=${reason}${eventDigestCode}${eventShapeCode}${partShapeCode}`,
   });
+}
+
+// Run 2026-09-10: the only evidence of a refused `message.part.updated.1` row was the digest of its
+// type; which gate refused it -- and that the row was a pending `keiko_changeset_edit` whose
+// arguments merely exceeded the metadata bound -- had to be reconstructed from source. The part's
+// closed labels and its serialized size now travel in `code`; no field of the row itself does.
+function firstRejectedPartShape(rows: readonly unknown[]): string | undefined {
+  for (const row of rows) {
+    const rejection = describeRejectedOpenCodeHistoryPart(row);
+    if (rejection === undefined) continue;
+    return `part=${rejection.partType}:tool=${rejection.tool}:status=${rejection.status}:partBytes=${String(rejection.partBytes)}:gate=${rejection.gate}`;
+  }
+  return undefined;
 }
 
 function structuralNameDigest(value: string): string {

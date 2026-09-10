@@ -16,6 +16,9 @@ import { PassThrough } from "node:stream";
 
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
+import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
@@ -29,6 +32,7 @@ import {
   OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
   projectOpenCodeProtocolSurface,
 } from "./opencodeProtocolSurface.js";
+import { OPENCODE_HISTORY_RESPONSE_MAX_BYTES } from "./opencodeProtocol.js";
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
 
 const dirs: string[] = [];
@@ -779,6 +783,40 @@ async function startBridgeFixture(
 
 function completedTurnHistory(): readonly Readonly<Record<string, unknown>>[] {
   return turnHistory("stop");
+}
+
+function changesetArguments(patch: string): Readonly<Record<string, unknown>> {
+  return {
+    changeset: {
+      patch,
+      files: [{ file: "src/App.tsx", expectedContentHash: "a".repeat(64) }],
+    },
+  };
+}
+
+function editPartRow(
+  sequence: number,
+  state: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  return {
+    id: `evt_edit_${String(sequence)}`,
+    aggregate_id: "ses_tool",
+    seq: sequence,
+    type: "message.part.updated.1",
+    data: {
+      sessionID: "ses_tool",
+      part: {
+        id: `prt_edit_${String(sequence)}`,
+        sessionID: "ses_tool",
+        messageID: "msg_assistant",
+        type: "tool",
+        callID: "call_edit",
+        tool: "keiko_changeset_edit",
+        state,
+      },
+      time: sequence,
+    },
+  };
 }
 
 function failedTurnHistory(): readonly Readonly<Record<string, unknown>>[] {
@@ -1953,6 +1991,159 @@ describe("private OpenCode tool bridge", () => {
     );
     expect(JSON.stringify(records)).not.toContain(sentinel);
     expect(JSON.stringify(records)).not.toContain(sentinelKey);
+    await fixture.stop();
+  });
+
+  // Run 2026-09-10: the model's first `keiko_changeset_edit` call (a 19 KiB unified diff, inside the
+  // 64 KiB patch contract) left durable rows whose arguments exceeded the 4096-character metadata
+  // bound; the pull threw and the run ended `runtime-failed` on its first edit. The rows a governed
+  // edit legitimately leaves -- pending with the raw argument text, running, settled -- now
+  // reconcile, and nothing of the patch reaches the diagnostics. The start phase pulls history more
+  // than once, so the fixture answers every pull with a fresh response.
+  it("reconciles a governed edit whose argument rows fill the patch contract", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const patch = "x".repeat(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES);
+    const input = changesetArguments(patch);
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+        historyResponseFactory: (): Promise<Response> =>
+          Promise.resolve(
+            new Response(
+              JSON.stringify([
+                ...completedTurnHistory(),
+                editPartRow(3, { status: "pending", input, raw: JSON.stringify(input) }),
+                editPartRow(4, {
+                  status: "running",
+                  input,
+                  title: "Edit",
+                  metadata: {},
+                  time: { start: 1 },
+                }),
+                editPartRow(5, {
+                  status: "error",
+                  input,
+                  error: "INVALID_EDITS",
+                  time: { start: 1, end: 2 },
+                }),
+              ]),
+              { headers: { "content-type": "application/json" } },
+            ),
+          ),
+      },
+    );
+
+    expect(records.filter((record) => record.errorClass === "OpenCodeHistoryFailure")).toEqual([]);
+    expect(JSON.stringify(records)).not.toContain("xxxxx");
+    await fixture.stop();
+  });
+
+  it("records a body-free structural diagnostic for a refused history part shape", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const sentinel = "SENTINEL_PRIVATE_ARGUMENT_BODY";
+    const input = changesetArguments(sentinel);
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+        historyResponse: Promise.resolve(
+          new Response(
+            JSON.stringify([
+              ...completedTurnHistory(),
+              editPartRow(3, {
+                status: "pending",
+                input,
+                raw: `${sentinel}${"x".repeat(TOOL_CATALOG_LIMITS.maxArgumentBytes)}`,
+              }),
+            ]),
+            { headers: { "content-type": "application/json" } },
+          ),
+        ),
+        expectedStart: {
+          ok: false,
+          failureCode: "protocol-schema-mismatch",
+          retryable: false,
+        },
+      },
+    );
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      correlationId: FIXTURE_RUN_ID,
+      operation: "coding-runtime.handshake",
+      source: "opencode.history",
+      errorClass: "OpenCodeHistoryFailure",
+      message: "runtime-handshake-failed",
+    });
+    expect(records[0]?.code).toMatch(
+      /^stage=sse-history-reconciliation:reason=event-unknown:eventSha256=[a-f0-9]{16}:part=tool:tool=keiko_changeset_edit:status=pending:partBytes=[1-9][0-9]*:gate=argument-bound$/u,
+    );
+    expect(JSON.stringify(records)).not.toContain(sentinel);
+    await fixture.stop();
+  });
+
+  // Before 2026-09-10 a pull that failed before any row was parsed -- refused, oversized, not a JSON
+  // array -- reached the lifecycle failure with no line of its own. The closed reason and, for an
+  // oversized pull, the budget it exceeded now travel in `code`; the response never does.
+  it("records the closed transport reason when the history pull itself fails", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    let cancellations = 0;
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+        historyResponse: Promise.resolve(
+          new Response(
+            new ReadableStream<Uint8Array>(
+              {
+                cancel(): void {
+                  cancellations += 1;
+                },
+              },
+              { highWaterMark: 0 },
+            ),
+            {
+              headers: {
+                "content-length": String(OPENCODE_HISTORY_RESPONSE_MAX_BYTES + 1),
+                "content-type": "application/json",
+              },
+            },
+          ),
+        ),
+        expectedStart: {
+          ok: false,
+          failureCode: "protocol-schema-mismatch",
+          retryable: false,
+        },
+      },
+    );
+
+    expect(cancellations).toBe(1);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      correlationId: FIXTURE_RUN_ID,
+      operation: "coding-runtime.handshake",
+      source: "opencode.history",
+      errorClass: "OpenCodeHistoryFailure",
+      message: "runtime-handshake-failed",
+      code: `stage=sse-history-reconciliation:reason=transport-oversized:responseBudgetBytes=${String(OPENCODE_HISTORY_RESPONSE_MAX_BYTES)}`,
+    });
     await fixture.stop();
   });
 

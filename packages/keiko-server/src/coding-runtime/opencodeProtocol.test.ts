@@ -1,11 +1,16 @@
 import { describe, expect, it } from "vitest";
 
 import { validateCodingWorkbenchPermissionRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
+import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 
 import {
   OPENCODE_APPROVED_ENDPOINTS,
+  OPENCODE_HISTORY_RESPONSE_MAX_BYTES,
+  OPENCODE_HISTORY_TOOL_PART_MAX_BYTES,
   createOpenCodeSseDecoder,
   classifyOpenCodeLiveControl,
+  describeRejectedOpenCodeHistoryPart,
   isOpenCodeFacadeDispatchedTool,
   parseOpenCodeHistory,
   parseOpenCodeSse,
@@ -837,7 +842,19 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
       { ...part, tool: "bash" },
       { ...part, unexpected: true },
       { ...part, state: { ...part.state, unexpected: true } },
-      { ...part, state: { ...part.state, raw: "x".repeat(64 * 1024 + 1) } },
+      // The raw-argument bound is the catalog argument ceiling that admitted the call at the
+      // gateway (relocated from the 64 KiB part budget on 2026-09-10; see the governed-edit tests).
+      {
+        ...part,
+        state: { ...part.state, raw: "x".repeat(TOOL_CATALOG_LIMITS.maxArgumentBytes + 1) },
+      },
+      {
+        ...part,
+        state: {
+          ...part.state,
+          input: { ...input, note: "x".repeat(TOOL_CATALOG_LIMITS.maxStringBytes + 1) },
+        },
+      },
     ]) {
       expect(
         parseOpenCodeHistory([
@@ -849,6 +866,182 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
         ]),
       ).toEqual({ ok: false, reason: "event-unknown" });
     }
+  });
+
+  // Run 2026-09-10: the model's first `keiko_changeset_edit` call carried a 19 KiB unified diff --
+  // inside the 64 KiB patch contract -- and every durable row OpenCode wrote for it (pending,
+  // running, settled) failed the uniform 4096-character bound meant for metadata. The whole history
+  // pull threw `opencode-history-invalid` and the run ended `runtime-failed` on its first edit.
+  // Arguments now re-enter under the catalog ceilings that admitted them at the gateway, and the
+  // admitted bodies still never reach the reconciliation projection.
+  it("admits a governed edit whose arguments fill the patch contract, in every tool status", () => {
+    const input = changesetInput("x".repeat(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES));
+    const raw = JSON.stringify(input);
+    expect(raw.length).toBeGreaterThan(64 * 1024);
+    const states = [
+      { status: "pending", input, raw },
+      { status: "running", input, title: "Edit", metadata: {}, time: { start: 1 } },
+      {
+        status: "completed",
+        input,
+        output: "applied",
+        title: "Edit",
+        metadata: {},
+        time: { start: 1, end: 2 },
+      },
+      { status: "error", input, error: "INVALID_EDITS", time: { start: 1, end: 2 } },
+    ];
+    for (const [index, state] of states.entries()) {
+      const row = editRow(40 + index, state);
+      const parsed = parseOpenCodeHistory([row]);
+      expect(parsed).toMatchObject({ ok: true, value: [{ kind: "observation" }] });
+      expect(JSON.stringify(parsed)).not.toContain("xxxxx");
+      expect(describeRejectedOpenCodeHistoryPart(row)).toBeUndefined();
+    }
+  });
+
+  it("derives the history budgets from the catalog ceilings, never from a restated constant", () => {
+    // Metadata budget plus two argument bodies: the largest part one call can leave.
+    expect(OPENCODE_HISTORY_TOOL_PART_MAX_BYTES).toBe(
+      64 * 1024 + 2 * TOOL_CATALOG_LIMITS.maxArgumentBytes,
+    );
+    // Eight catch-up calls of three argument-bearing rows each, above the ordinary 1 MiB of rows.
+    expect(OPENCODE_HISTORY_RESPONSE_MAX_BYTES).toBe(
+      1024 * 1024 + 8 * (3 * 64 * 1024 + 4 * TOOL_CATALOG_LIMITS.maxArgumentBytes),
+    );
+    expect(OPENCODE_HISTORY_RESPONSE_MAX_BYTES).toBeGreaterThan(
+      3 * OPENCODE_HISTORY_TOOL_PART_MAX_BYTES,
+    );
+  });
+
+  it("re-bounds tool arguments by the catalog ceilings and names the refusing gate body-free", () => {
+    const sentinel = "SENTINEL_PRIVATE_ARGUMENT_BODY";
+    const input = changesetInput(sentinel);
+    const running = {
+      status: "running",
+      input,
+      title: "Edit",
+      metadata: {},
+      time: { start: 1 },
+    };
+    const cases: readonly {
+      readonly row: Record<string, unknown>;
+      readonly expected: Record<string, unknown>;
+    }[] = [
+      {
+        row: editRow(51, {
+          status: "pending",
+          input,
+          raw: `${sentinel}${"x".repeat(TOOL_CATALOG_LIMITS.maxArgumentBytes)}`,
+        }),
+        expected: { status: "pending", gate: "argument-bound" },
+      },
+      {
+        row: editRow(52, {
+          ...running,
+          input: changesetInput(`${sentinel}${"x".repeat(TOOL_CATALOG_LIMITS.maxStringBytes)}`),
+        }),
+        expected: { status: "running", gate: "argument-bound" },
+      },
+      {
+        row: editRow(53, {
+          status: "error",
+          input: nestedArguments(TOOL_CATALOG_LIMITS.maxSchemaDepth + 1, sentinel),
+          error: "INVALID_EDITS",
+          time: { start: 1, end: 2 },
+        }),
+        expected: { status: "error", gate: "argument-bound" },
+      },
+      {
+        row: editRow(54, { ...running, title: `${sentinel}${"x".repeat(4097)}` }),
+        expected: { status: "running", gate: "metadata-bound" },
+      },
+      {
+        row: editRow(55, {
+          status: "completed",
+          input,
+          output: `${sentinel}${"x".repeat(66_000)}`,
+          title: "Edit",
+          metadata: {},
+          time: { start: 1, end: 2 },
+        }),
+        expected: { status: "completed", gate: "output-bound" },
+      },
+      {
+        row: editRow(56, { status: "sideways", input }),
+        expected: { status: "other", gate: "tool-state" },
+      },
+      {
+        row: editRow(57, { ...running, unexpected: sentinel }),
+        expected: { status: "running", gate: "tool-state" },
+      },
+    ];
+    for (const { row, expected } of cases) {
+      expect(parseOpenCodeHistory([row])).toEqual({ ok: false, reason: "event-unknown" });
+      const rejection = describeRejectedOpenCodeHistoryPart(row);
+      expect(rejection).toMatchObject({
+        partType: "tool",
+        tool: "keiko_changeset_edit",
+        ...expected,
+      });
+      expect(rejection?.partBytes).toBeGreaterThan(0);
+      expect(JSON.stringify(rejection)).not.toContain(sentinel);
+    }
+  });
+
+  it("labels unreviewed tools, statuses and part types without echoing them", () => {
+    const sentinel = "SENTINEL_UNREVIEWED_NAME";
+    const running = {
+      status: "running",
+      input: {},
+      title: "Edit",
+      metadata: {},
+      time: { start: 1 },
+    };
+    const unapproved = editRow(60, running, { tool: sentinel });
+    expect(parseOpenCodeHistory([unapproved])).toEqual({ ok: false, reason: "event-unknown" });
+    expect(describeRejectedOpenCodeHistoryPart(unapproved)).toEqual({
+      partType: "tool",
+      tool: "unapproved",
+      status: "running",
+      partBytes: expect.any(Number) as number,
+      gate: "tool-unapproved",
+    });
+    const unknownType = syncRow(61, "message.part.updated.1", {
+      sessionID: "ses_1",
+      part: {
+        id: "prt_reasoning",
+        sessionID: "ses_1",
+        messageID: "msg_assistant",
+        type: sentinel,
+        text: sentinel,
+      },
+      time: 61,
+    });
+    expect(parseOpenCodeHistory([unknownType])).toEqual({ ok: false, reason: "event-unknown" });
+    expect(describeRejectedOpenCodeHistoryPart(unknownType)).toMatchObject({
+      partType: "other",
+      tool: "none",
+      status: "none",
+      gate: "part-type",
+    });
+    const foreignSession = { ...editRow(62, running), aggregate_id: "ses_other" };
+    expect(describeRejectedOpenCodeHistoryPart(foreignSession)).toMatchObject({ gate: "envelope" });
+    // Only part rows are described: a refused message row keeps its own message-shape diagnostic.
+    expect(
+      describeRejectedOpenCodeHistoryPart(
+        syncRow(63, "message.updated.1", {
+          sessionID: "ses_1",
+          info: { ...assistantMessage(), role: "user" },
+        }),
+      ),
+    ).toBeUndefined();
+    expect(
+      JSON.stringify([
+        describeRejectedOpenCodeHistoryPart(unapproved),
+        describeRejectedOpenCodeHistoryPart(unknownType),
+      ]),
+    ).not.toContain(sentinel);
   });
 
   it("fails closed on malformed, content-oversized, cross-session, and unsafe completion shapes", () => {
@@ -1367,4 +1560,40 @@ function toolPart(
 
 function tokens(): Record<string, unknown> {
   return { total: 0, input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } };
+}
+
+function changesetInput(patch: string): Record<string, unknown> {
+  return {
+    changeset: {
+      patch,
+      files: [{ file: "src/App.tsx", expectedContentHash: "a".repeat(64) }],
+    },
+  };
+}
+
+function nestedArguments(depth: number, leaf: string): Record<string, unknown> {
+  let value: unknown = leaf;
+  for (let level = 0; level < depth; level += 1) value = { nested: value };
+  return value as Record<string, unknown>;
+}
+
+function editRow(
+  sequence: number,
+  state: Record<string, unknown>,
+  overrides: Record<string, unknown> = {},
+): ReturnType<typeof syncRow> {
+  return syncRow(sequence, "message.part.updated.1", {
+    sessionID: "ses_1",
+    part: {
+      id: "prt_edit",
+      sessionID: "ses_1",
+      messageID: "msg_assistant",
+      type: "tool",
+      callID: "call_edit",
+      tool: "keiko_changeset_edit",
+      state,
+      ...overrides,
+    },
+    time: sequence,
+  });
 }

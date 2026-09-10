@@ -173,6 +173,17 @@ performance and #3415 calibrates narrower catalog-specific thresholds. JSON obje
 width is keys per object, byte bounds count UTF-8 serialization, and integer metrics are finite,
 nonnegative safe integers. Input and output limits apply before parsing/allocation where possible.
 
+The ceilings also bound the sidecar's durable record of a call. OpenCode persists each governed
+call's arguments in its `message.part.updated.1` rows (`state.input` on every status, the raw
+argument text `state.raw` while pending), and the fail-closed history gate that admits those rows
+re-applies `TOOL_CATALOG_LIMITS` to them rather than its 4096-character metadata bound: a body the
+catalog admitted cannot be refused by the record of its own dispatch. The per-pull history response
+budget is derived from the same ceilings (the ordinary metadata rows plus eight catch-up calls of
+three argument-bearing rows each). A 19 KiB `keiko_changeset_edit` patch — inside the 64 KiB patch
+contract — was refused by the metadata bound on 2026-09-10 and the run ended `runtime-failed` on its
+first edit, with a diagnostic naming only the digest of the event type; the refused part's closed
+labels (type, tool, status, byte size, refusing gate) now travel in that diagnostic's `code`.
+
 Repository search v1 is local lexical/literal/safe-regex/symbol search through the workspace owner.
 It caps query characters at 200, hits at 50, scanned files at 2,000, file bytes at 512 KiB, time at
 5 seconds, snippets at 512 bytes, result at 64 KiB and discovery inventory at 50,000. Each include
@@ -481,5 +492,6 @@ schema drift, false readiness and competing authority systems.
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.2 | 2026-09-10 | D4: the catalog ceilings also bound the arguments recorded in the sidecar's durable tool-part rows and derive the history response budget; a refused part row is named body-free in the reconciliation diagnostic (PR #3452). |
 | 1.1 | 2026-09-09 | Record the completed #3394 squash-delivery semantics: final signed source and dev-reachable merge are distinct identities with equal complete Git trees; pin exact-schema required-check and review-settlement receipts and the refreshed owned-source closure (#3414, #3415). |
 | 1.0 | 2026-09-04 | Accept the governed-tool ownership, pure package boundary, version/digest/result/state/evidence contract and workspace-only coding raw-coordinate lane (#3411); implementation belongs to the named delivery owners. Consolidate delivery into owner-selected PR #3394 with reviewed producer checkpoints instead of dedicated dev merges. |

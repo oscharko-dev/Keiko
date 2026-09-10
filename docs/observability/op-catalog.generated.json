@@ -1542,14 +1542,21 @@
     {
       "op": "coding-runtime.handshake",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1123",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1196",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.handshake",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:877",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:914",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.handshake",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:937",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -1575,14 +1582,14 @@
     {
       "op": "coding-runtime.opencode-composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:358",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:360",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.opencode-composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:605",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:607",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -1759,7 +1766,7 @@
     {
       "op": "coding-runtime.tool-bridge",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1601",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeComposition.ts:1674",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -1987,7 +1994,7 @@
     {
       "op": "editor.agent.root-containment",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/agentRootBoundary.ts:355",
+      "site": "packages/keiko-server/src/editor/agentRootBoundary.ts:357",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

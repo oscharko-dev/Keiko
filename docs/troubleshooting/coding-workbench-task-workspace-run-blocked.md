@@ -221,3 +221,60 @@ request deadline the gateway enforces for the model (the provider's `timeoutMs`)
 grace, so a legitimately long generation binds against a live offer. If an operator sets a very
 short provider `timeoutMs`, that timeout — not the offer — bounds the turn, and the fetch is aborted
 before any call could be bound.
+
+## A run fails `runtime-failed` on its first large edit, with `OpenCodeHistoryFailure` and `event-unknown`
+
+| Field             | Value                                                                                                                                                           |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Severity          | High                                                                                                                                                            |
+| Surface           | Coding runtime / OpenCode sidecar                                                                                                                               |
+| Stable identifier | `OpenCodeHistoryFailure`, `stage=sse-history-reconciliation:reason=event-unknown`, `safe-activity-dropped-validation-rejected`, `CodingRuntimeLifecycleFailure` |
+
+**Symptom**
+
+The run reads the workspace normally. Its first `keiko_changeset_edit` call — or any tool call whose
+arguments run to tens of kilobytes — is followed within milliseconds by `Failed. Failure:
+runtime-failed` and no workspace change. The activity log shows, under the run's correlation id,
+several `coding-runtime.handshake` diagnostics with `errorKind: "OpenCodeHistoryFailure"` and a
+`code` beginning `stage=sse-history-reconciliation:reason=event-unknown:eventSha256=…`, interleaved
+with `coding-runtime.safe-activity` drops (`safe-activity-dropped-validation-rejected`), then
+`coding-runtime.lifecycle` with `CodingRuntimeLifecycleFailure` and `coding-runtime.run.settled`
+with `failureCode: "runtime-failed"`. An `edit-refused` line for the same call may precede them; it
+is a consequence of the call, not the cause of the failure.
+
+**Root Cause**
+
+Keiko reconciles the sidecar's durable history (`POST /sync/history`) through a fail-closed gate:
+an unreviewed row fails the whole pull, by design. Before 2026-09-10 that gate bounded every string
+of a tool part at 4096 characters — the bound meant for metadata — including the call's arguments
+(`state.input` on every status, and the raw argument text `state.raw` on the pending row). A
+changeset patch may be 64 KiB by contract, so the sidecar's own record of a legitimate edit was
+refused as an unknown event, the pull threw `opencode-history-invalid`, and the run ended. The
+diagnostic named only the digest of the event type, so the refused row could not be identified from
+the log.
+
+**Diagnostic Steps**
+
+1. `keiko support analyze bundle.jsonl --correlation-id <run id> --json`; locate the first
+   `OpenCodeHistoryFailure`. Since 2026-09-10 its `code` names the refused row body-free:
+   `:part=<type>:tool=<alias>:status=<pending|running|completed|error>:partBytes=<n>:gate=<gate>`.
+   `gate=argument-bound` means the arguments exceeded the catalog ceilings (`TOOL_CATALOG_LIMITS`:
+   256 KiB per call, 64 KiB per string, depth 16); `metadata-bound` a non-body field over 4096
+   characters; `output-bound` a completed tool output over 64 KiB; `tool-unapproved` an upstream
+   built-in tool; `part-type` a part type Keiko has not reviewed (typically a new OpenCode version).
+2. A `code` ending `reason=transport-oversized:responseBudgetBytes=<n>` means one history pull
+   exceeded the response budget derived from those ceilings (a burst of argument-bearing rows
+   between two pulls); `transport-failed` and `transport-json-invalid` mean the sidecar's history
+   endpoint did not answer with a JSON array.
+3. On a log written before the repair (no `:part=` suffix), identify the event type by hashing
+   candidates: the first 16 hex characters of SHA-256 over the type name equal `eventSha256`
+   (`message.part.updated.1` hashes to `1505a599b1d917b2`).
+
+**Resolution**
+
+Update to a build that contains the 2026-09-10 repair: the arguments recorded in a tool part are
+bounded by the catalog ceilings that admitted them at the gateway instead of the metadata bound, the
+history response budget is derived from the same ceilings, and every history failure — refused row,
+oversized pull, non-JSON answer — leaves a diagnostic naming its closed reason. A `part-type` or
+`tool-unapproved` refusal after an OpenCode version change is a protocol review, never a bound to
+raise.
