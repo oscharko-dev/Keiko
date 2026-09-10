@@ -427,6 +427,43 @@ describe("coding runtime routes", () => {
     ]);
   });
 
+  // A start the orchestrator refused AFTER minting its run id (issue admission, launch resolution)
+  // used to leave a request-scoped refusal line and run-scoped cause lines that shared no key: the
+  // support id the operator saw led to `authority-resolution-failed` and nothing else (2026-09-10).
+  // The refusal line now names the run, so the two halves of one failed start join.
+  it("names the minted run on the refusal line of a start the runtime refused", async () => {
+    const session = pairedAppSession();
+    const records: unknown[] = [];
+    const deps = runtime({
+      codingAppSessionChannel: session.channel,
+      activityLog: { write: (event: unknown) => void records.push(event) },
+    });
+    (
+      deps.codingRuntimeOrchestrator as unknown as {
+        start: (
+          body: unknown,
+        ) => Promise<{ readonly ok: false; readonly failureCode: string; readonly runId: string }>;
+      }
+    ).start = () =>
+      Promise.resolve({
+        ok: false as const,
+        failureCode: "authority-resolution-failed",
+        runId: "run-9",
+      });
+    const refused = await handleCreateCodingRuntimeRun(
+      context("{}", {}, "/api/coding-workbench/runtime/runs", session.cookie, "start-corr-1"),
+      deps,
+    );
+    expect(refused).toMatchObject({ status: 403 });
+    expect(records).toEqual([
+      expect.objectContaining({
+        op: "coding-runtime.operation.refused",
+        correlationId: "start-corr-1",
+        extra: { operation: "start", runId: "run-9", reason: "authority-resolution-failed" },
+      }),
+    ]);
+  });
+
   it("returns and logs the closed question-answer-rejected reason from the runtime", async () => {
     const session = pairedAppSession();
     const records: unknown[] = [];

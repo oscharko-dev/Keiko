@@ -6,7 +6,11 @@ import { describe, expect, it } from "vitest";
 import { PathDeniedError, PathEscapeError } from "./errors.js";
 import { nodeWorkspaceFs } from "./fs.js";
 import type { WorkspaceDirEntry, WorkspaceFs, WorkspaceStat } from "./fs.js";
-import { workspaceFsWithOwnedRootAuthority } from "./ownedRootMint.js";
+import {
+  workspaceFsWithOwnedRootAuthority,
+  workspaceInfoWithOwnedRootAuthority,
+} from "./ownedRootMint.js";
+import type { WorkspaceInfo } from "./types.js";
 import { preserveOwnedRootAuthority } from "./ownedRootPreserve.js";
 import { memFs } from "./_memfs.js";
 import {
@@ -16,6 +20,7 @@ import {
   isCanonicalAllowedContainedPath,
   realRootIsDeniedViaSymlink,
   resolveExistingAllowedWorkspaceRealRoot,
+  boundWorkspaceFs,
 } from "./realpath.js";
 
 class PrototypeWorkspaceFs implements WorkspaceFs {
@@ -569,5 +574,73 @@ describe("isAllowedContainedPathParent", () => {
         "src/missing/file.ts",
       ),
     ).toBe(false);
+  });
+});
+
+// A Keiko-owned root's WorkspaceInfo travels alone into consumers whose spawn boundary resolves the
+// cwd through the user-workspace rules; the prover binds the owned-root port to that object so the
+// boundary resolves through the root's own authority. The binding is exact: only a port minted for
+// the same root can be bound, and an ordinary root resolves through the caller's fallback unchanged.
+describe("boundWorkspaceFs", () => {
+  function workspaceInfo(root: string): WorkspaceInfo {
+    return {
+      root,
+      selectedRoot: root,
+      name: undefined,
+      version: undefined,
+      testFramework: "unknown",
+      sourceDirs: [],
+      testDirs: [],
+      languages: [],
+      ignoreLines: [],
+    };
+  }
+
+  it("returns the fallback for a WorkspaceInfo no prover bound", () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-bound-plain-")));
+    try {
+      expect(boundWorkspaceFs(workspaceInfo(root), nodeWorkspaceFs)).toBe(nodeWorkspaceFs);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("returns the exact owned-root port the prover bound, and admits the denied root through it", () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-bound-owned-")));
+    const root = join(base, ".keiko", "ui", "task-workspaces", "repo_1", "ws_1");
+    mkdirSync(root, { recursive: true });
+    try {
+      const owned = workspaceFsWithOwnedRootAuthority(nodeWorkspaceFs, root);
+      const info = workspaceInfoWithOwnedRootAuthority(workspaceInfo(root), owned);
+      expect(boundWorkspaceFs(info, nodeWorkspaceFs)).toBe(owned);
+      expect(() => resolveExistingAllowedWorkspaceRealRoot(nodeWorkspaceFs, root)).toThrow(
+        PathDeniedError,
+      );
+      expect(
+        resolveExistingAllowedWorkspaceRealRoot(boundWorkspaceFs(info, nodeWorkspaceFs), root),
+      ).toBe(root);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses to bind a port whose authority names another root, or none", () => {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-bound-foreign-")));
+    const root = join(base, "a");
+    const other = join(base, "b");
+    mkdirSync(root);
+    mkdirSync(other);
+    try {
+      const foreign = workspaceFsWithOwnedRootAuthority(nodeWorkspaceFs, other);
+      expect(() => workspaceInfoWithOwnedRootAuthority(workspaceInfo(root), foreign)).toThrow(
+        "owned-root authority does not name this workspace root",
+      );
+      expect(() =>
+        workspaceInfoWithOwnedRootAuthority(workspaceInfo(root), nodeWorkspaceFs),
+      ).toThrow("owned-root authority does not name this workspace root");
+      expect(boundWorkspaceFs(workspaceInfo(root), nodeWorkspaceFs)).toBe(nodeWorkspaceFs);
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });

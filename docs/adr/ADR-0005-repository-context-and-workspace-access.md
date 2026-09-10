@@ -148,7 +148,15 @@ siblings, aliases, and copied wrapper
 objects. Capability minting and propagation are package-internal subpaths pinned to reviewed callers
 by the import-policy gate; wrapping an authorised filesystem may preserve its exact authority but
 cannot widen or manufacture it. Long-lived consumers must refresh the capability at each governed
-effect so removal of the persisted instance or ownership proof revokes subsequent access.
+effect so removal of the persisted instance or ownership proof revokes subsequent access. The
+prover also binds that capability to the `WorkspaceInfo` projection it hands out for the worktree
+(mint-side binder, same pinned subpath), and the shared spawn boundary in `keiko-tools` resolves a
+command's cwd through the port bound to its `WorkspaceInfo` before falling back to the plain node
+port. Consumers that only ever receive the projection — every Git lane's deps — therefore act under
+the root's own authority instead of re-admitting the root under generic workspace admission, which
+denies the state directory's `.keiko` segment; before this binding every Git command inside a managed
+worktree was refused before spawn on a default installation (2026-09-10). Binding accepts only a port
+minted for exactly that root and adds no capability of its own.
 Connected-context detection uses marker-only language metadata because its request-local candidate
 inventory already performs the bounded repository walk; structural diagnostics derive additional
 observed languages from that shared inventory instead of scanning the repository twice.

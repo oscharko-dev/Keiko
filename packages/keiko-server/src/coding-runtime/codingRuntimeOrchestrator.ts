@@ -1438,7 +1438,7 @@ export class CodingRuntimeOrchestrator {
     if (!active || !principal) return this.fail("authority-resolution-failed");
     const runId = this.newRunId();
     const issue = await this.admitIssue(parsed.value, active, runId, predecessorRunId);
-    if (!issue.ok) return issue;
+    if (!issue.ok) return { ...issue, runId };
     const resolved = await this.resolveLaunch(
       parsed.value,
       active,
@@ -1446,7 +1446,7 @@ export class CodingRuntimeOrchestrator {
       runId,
       issue.binding,
     );
-    if (!resolved.ok) return this.fail(resolved.failureCode);
+    if (!resolved.ok) return { ok: false, failureCode: resolved.failureCode, runId };
     const launch = resolved.launch;
     const initialSnapshot = this.buildStartSnapshot(
       parsed.value,

@@ -20,6 +20,7 @@ import {
   PathDeniedError,
   resolveExistingAllowedWorkspaceRealRoot,
   type WorkspaceFs,
+  boundWorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -221,6 +222,26 @@ describe("resolveManagedWorkspaceRootAccess", () => {
     expect(
       resolveExistingAllowedWorkspaceRealRoot(access?.fs ?? nodeWorkspaceFs, workspaceRoot),
     ).toBe(workspaceRoot);
+  });
+
+  // The WorkspaceInfo projection travels alone into every git lane's deps, whose spawn boundary
+  // resolves its cwd through the user-workspace root rules. Below `.keiko` those rules refuse the
+  // managed worktree, so every git command inside it was denied before spawn (2026-09-10) — the
+  // projection now carries the owned-root port the prover minted, and only that port.
+  it("binds the owned-root port to the WorkspaceInfo projection for the spawn boundary", () => {
+    const info = resolveManagedTaskWorkspaceRoot(
+      { managedTaskWorkspaceRoot: managedRoot, workspaceProvisioning: provisioning() },
+      workspaceRoot,
+    );
+
+    expect(info?.root).toBe(workspaceRoot);
+    if (info === undefined) throw new Error("managed worktree did not resolve");
+    expect(() => resolveExistingAllowedWorkspaceRealRoot(nodeWorkspaceFs, workspaceRoot)).toThrow(
+      PathDeniedError,
+    );
+    const bound = boundWorkspaceFs(info, nodeWorkspaceFs);
+    expect(bound).not.toBe(nodeWorkspaceFs);
+    expect(resolveExistingAllowedWorkspaceRealRoot(bound, workspaceRoot)).toBe(workspaceRoot);
   });
 
   it("rejects an unregistered valid-shaped sibling and cannot reuse another root's capability", () => {

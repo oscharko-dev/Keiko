@@ -27,7 +27,16 @@ import {
 } from "./exec.js";
 import { WindowsSystemBinaryMissingError, WindowsSystemDirectoryError } from "./windows-shell.js";
 import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "./errors.js";
-import { PathEscapeError, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import {
+  PathDeniedError,
+  PathEscapeError,
+  type WorkspaceInfo,
+} from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import {
+  workspaceFsWithOwnedRootAuthority,
+  workspaceInfoWithOwnedRootAuthority,
+} from "@oscharko-dev/keiko-workspace/internal/owned-root-mint";
 import {
   DEFAULT_COMMAND_RULES,
   DEFAULT_ENV_ALLOWLIST,
@@ -2763,5 +2772,83 @@ describe("Windows pre-spawn termination capacity", () => {
     expect(seenRoots).toEqual([String.raw`D:\Windows`]);
     expect(seenCommands).toEqual([String.raw`D:\Windows\System32\taskkill.exe`]);
     reservation?.release();
+  });
+});
+
+// Managed task worktrees live below `<stateDir>/ui/task-workspaces`, i.e. below `.keiko`, a segment
+// the user-workspace root rules deny. resolveCwd re-admitted every such root through those rules
+// with the plain node port, so every git lane command inside a managed worktree was refused before
+// spawn on a default installation (2026-09-10). The prover binds the owned-root port to the
+// WorkspaceInfo it hands out; the spawn boundary resolves through that port and nothing else changes.
+describe("workspace roots below an always-denied segment", () => {
+  function deniedRoot(): {
+    readonly base: string;
+    readonly root: string;
+    readonly info: WorkspaceInfo;
+  } {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-exec-denied-")));
+    const root = join(base, ".keiko", "ui", "task-workspaces", "repo_1", "ws_1");
+    mkdirSync(root, { recursive: true });
+    return {
+      base,
+      root,
+      info: {
+        root,
+        selectedRoot: root,
+        name: "managed",
+        version: undefined,
+        testFramework: "unknown",
+        sourceDirs: [],
+        testDirs: [],
+        languages: [],
+        ignoreLines: [],
+      },
+    };
+  }
+
+  it("refuses the cwd of a WorkspaceInfo no prover bound, before spawn", async () => {
+    const fixture = deniedRoot();
+    const spawnFn = vi.fn();
+    try {
+      await expect(
+        runCommand(
+          {
+            command: "node",
+            args: ["--version"],
+            cwd: undefined,
+            timeoutMs: 5_000,
+            signal: controller().signal,
+          },
+          { ...fakeDeps(spawnFn as unknown as RunCommandDeps["spawn"]), workspace: fixture.info },
+        ),
+      ).rejects.toBeInstanceOf(PathDeniedError);
+      expect(spawnFn).not.toHaveBeenCalled();
+    } finally {
+      rmSync(fixture.base, { recursive: true, force: true });
+    }
+  });
+
+  it("runs inside the same root once its WorkspaceInfo carries the owned-root authority", async () => {
+    const fixture = deniedRoot();
+    try {
+      const workspace = workspaceInfoWithOwnedRootAuthority(
+        fixture.info,
+        workspaceFsWithOwnedRootAuthority(nodeWorkspaceFs, fixture.root),
+      );
+      const result = await runCommand(
+        {
+          command: "node",
+          args: ["-e", "process.stdout.write(process.cwd())"],
+          cwd: undefined,
+          timeoutMs: 10_000,
+          signal: controller().signal,
+        },
+        { ...realDeps({ PATH: process.env.PATH ?? "" }), workspace },
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe(fixture.root);
+    } finally {
+      rmSync(fixture.base, { recursive: true, force: true });
+    }
   });
 });

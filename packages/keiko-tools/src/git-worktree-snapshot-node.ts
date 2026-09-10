@@ -16,7 +16,7 @@
 
 import { gitEnv } from "@oscharko-dev/keiko-git";
 import { createHash } from "node:crypto";
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { PathDeniedError, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { CommandRule, CommandResult, SandboxPolicy } from "./types.js";
 import {
   DEFAULT_SANDBOX_POLICY,
@@ -33,7 +33,7 @@ import {
   type CommandTerminationEvidence,
 } from "./exec.js";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
-import { CommandCancelledError, CommandTimeoutError } from "./errors.js";
+import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "./errors.js";
 import { isSafeGitRefName } from "./git-worktree-adapter.js";
 import { gitIndexTreeDigest, parseGitIndexEntries, type IndexEntry } from "./git-index-identity.js";
 
@@ -310,8 +310,12 @@ async function repositoryHasPromisorRemote(ctx: ReadContext): Promise<boolean> {
   } catch (error) {
     // A cancelled/timed-out probe is not "ambiguous risk" — it is the caller's OWN signal firing,
     // and must reach the real command's cancellation handling unchanged, not be relabelled as a
-    // guard failure.
-    if (error instanceof CommandCancelledError || error instanceof CommandTimeoutError) throw error;
+    // guard failure. The same holds for the spawn boundary refusing the probe before it runs (a
+    // denied command, a denied or escaping workspace root): that refusal is the finding, and
+    // relabelling it as "cannot rule out a promisor remote" sent the caller through the version
+    // probe — refused the same way — into a `GitLazyFetchGuardUnsupportedError` that named a
+    // guard which was never the problem (2026-09-10, a managed task worktree below `.keiko`).
+    if (isCallerBoundaryFailure(error)) throw error;
     return true;
   }
   if (result.exitCode === 1 && result.stdout.trim().length === 0) return false;
@@ -376,11 +380,23 @@ async function runVersionProbe(ctx: ReadContext): Promise<CommandResult> {
   );
 }
 
+// The refusals that belong to the caller, not to the guard: its own cancellation or timeout, and
+// the spawn boundary denying the probe before it runs. Each is rethrown as itself.
+function isCallerBoundaryFailure(error: unknown): boolean {
+  return (
+    error instanceof CommandCancelledError ||
+    error instanceof CommandTimeoutError ||
+    error instanceof CommandDeniedError ||
+    error instanceof PathDeniedError
+  );
+}
+
 async function probeGitVersionGuardSupport(ctx: ReadContext): Promise<GitLazyFetchGuardSupport> {
   let result: CommandResult;
   try {
     result = await runVersionProbe(ctx);
-  } catch {
+  } catch (error) {
+    if (isCallerBoundaryFailure(error)) throw error;
     return { supported: false, gitVersion: undefined };
   }
   if (result.exitCode !== 0) return { supported: false, gitVersion: undefined };
@@ -410,9 +426,16 @@ function cachedVersionGuardSupport(ctx: ReadContext): Promise<GitLazyFetchGuardS
   if (cached !== undefined) return cached;
   const probe = probeGitVersionGuardSupport(ctx);
   gitVersionGuardSupportCache.set(spawn, probe);
-  void probe.then((support) => {
-    if (support.gitVersion === undefined) gitVersionGuardSupportCache.delete(spawn);
-  });
+  // A rethrown boundary refusal is as indeterminate as a failed probe: evict it too, or one refused
+  // caller's rejection would replay for every later, unrelated workspace on the same spawn function.
+  void probe.then(
+    (support) => {
+      if (support.gitVersion === undefined) gitVersionGuardSupportCache.delete(spawn);
+    },
+    () => {
+      gitVersionGuardSupportCache.delete(spawn);
+    },
+  );
   return probe;
 }
 

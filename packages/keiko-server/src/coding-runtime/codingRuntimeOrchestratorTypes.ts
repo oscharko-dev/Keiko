@@ -94,6 +94,12 @@ export type CodingRuntimeOrchestratorResult =
       readonly ok: false;
       readonly failureCode: CodingWorkbenchRuntimeFailureCode;
       readonly issueBindingFailure?: CodingWorkbenchIssueBindingFailure;
+      // The run id a refused start had already minted (issue admission, launch resolution). The
+      // route's refusal line carries it, so the request correlation the operator sees as the support
+      // id leads to the run-scoped lines that hold the actual cause; without it the two halves of one
+      // failed start shared nothing (2026-09-10: `authority-resolution-failed` under the request id,
+      // the git preparation failure under the run id, and no join between them).
+      readonly runId?: string | undefined;
     };
 
 export type CodingRuntimeQuestionOperationResult =

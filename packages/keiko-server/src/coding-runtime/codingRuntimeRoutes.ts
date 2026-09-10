@@ -277,7 +277,15 @@ async function mutation(
     }
     const result = await invoke(required.orchestrator, body, ctx.correlationId);
     if (result.ok) return { status: 200, body: result.snapshot };
-    logRuntimeOperationRefusal(deps, ctx.correlationId, operationName, runId, result.failureCode);
+    // A refused start names the run it had already minted, so this request-scoped line joins the
+    // run-scoped lines that carry the cause (see CodingRuntimeOrchestratorResult.runId).
+    logRuntimeOperationRefusal(
+      deps,
+      ctx.correlationId,
+      operationName,
+      runId ?? result.runId,
+      result.failureCode,
+    );
     return failureResult(result.failureCode, ctx.correlationId, result.issueBindingFailure);
   }, ctx.correlationId);
 }

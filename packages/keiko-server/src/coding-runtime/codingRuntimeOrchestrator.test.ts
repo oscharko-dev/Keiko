@@ -1025,7 +1025,11 @@ describe("CodingRuntimeOrchestrator", () => {
       throw new CodingRuntimeLaunchRejectedError("adapter-profile-mismatch");
     });
 
-    expect(await f.orchestrator.start(start)).toEqual({ ok: false, failureCode: "source-drift" });
+    expect(await f.orchestrator.start(start)).toEqual({
+      ok: false,
+      failureCode: "source-drift",
+      runId: "run-1",
+    });
     expect(captured.records).toContainEqual(
       expect.objectContaining({
         operation: "coding-runtime.start",
@@ -1045,6 +1049,7 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(await f.orchestrator.start(start)).toEqual({
       ok: false,
       failureCode: "authority-resolution-failed",
+      runId: "run-1",
     });
     expect(captured.records).toContainEqual(
       expect.objectContaining({
@@ -1063,6 +1068,7 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(await f.orchestrator.start(start)).toEqual({
       ok: false,
       failureCode: "authority-resolution-failed",
+      runId: "run-1",
     });
   });
 
@@ -1850,6 +1856,7 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(await f.orchestrator.retry("run-1", { ...start, requestId: "request-2" })).toEqual({
       ok: false,
       failureCode: "authority-resolution-failed",
+      runId: "run-2",
     });
 
     expect(f.orchestrator.snapshot()).toMatchObject({
@@ -3065,7 +3072,7 @@ describe("issue-bound runs (#3385)", () => {
 
     const result = await f.orchestrator.start({ ...start, issueRef: ISSUE_REF });
 
-    expect(result).toEqual({ ok: false, failureCode: "invalid-intent" });
+    expect(result).toEqual({ ok: false, failureCode: "invalid-intent", runId: "run-1" });
     expect(f.rows.size).toBe(0);
     expect(f.launchResolver.resolve).not.toHaveBeenCalled();
     expect(f.manager.start).not.toHaveBeenCalled();
@@ -3172,6 +3179,7 @@ describe("issue-bound runs (#3385)", () => {
       expect(result).toEqual({
         ok: false,
         failureCode: expectedRefusalCode(failure),
+        runId: "run-1",
         issueBindingFailure: failure,
       });
       expect(f.rows.size).toBe(0);
@@ -3202,6 +3210,7 @@ describe("issue-bound runs (#3385)", () => {
     expect(result).toEqual({
       ok: false,
       failureCode: "invalid-intent",
+      runId: "run-1",
       issueBindingFailure: "issue-unavailable",
     });
     expect(f.rows.size).toBe(0);
@@ -3229,6 +3238,7 @@ describe("issue-bound runs (#3385)", () => {
     expect(result).toEqual({
       ok: false,
       failureCode: "invalid-intent",
+      runId: "run-1",
       issueBindingFailure: "repository-mismatch",
     });
     expect(f.rows.size).toBe(0);
@@ -3254,6 +3264,7 @@ describe("issue-bound runs (#3385)", () => {
     expect(await f.orchestrator.start({ ...start, issueRef: ISSUE_REF })).toEqual({
       ok: false,
       failureCode: "invalid-intent",
+      runId: "run-1",
       issueBindingFailure: "repository-mismatch",
     });
     expect(f.rows.size).toBe(0);
@@ -3273,6 +3284,7 @@ describe("issue-bound runs (#3385)", () => {
     expect(await f.orchestrator.start({ ...start, issueRef: ISSUE_REF })).toEqual({
       ok: false,
       failureCode: "invalid-intent",
+      runId: "run-1",
       issueBindingFailure: "invalid-reference",
     });
     expect(f.rows.size).toBe(0);
@@ -3292,6 +3304,7 @@ describe("issue-bound runs (#3385)", () => {
       expect(result).toEqual({
         ok: false,
         failureCode: expectedRefusalCode(failure),
+        runId: "run-1",
         issueBindingFailure: failure,
       });
       expect(f.rows.size).toBe(0);
@@ -3389,6 +3402,7 @@ describe("issue-bound runs (#3385)", () => {
     expect(result).toEqual({
       ok: false,
       failureCode: "invalid-intent",
+      runId: "run-2",
       issueBindingFailure: "issue-unavailable",
     });
     expect(f.rows.has("run-2")).toBe(false);
@@ -3487,6 +3501,7 @@ describe("issue-bound runs (#3385)", () => {
     expect(result).toEqual({
       ok: false,
       failureCode: "issue-context-unavailable",
+      runId: "run-2",
       issueBindingFailure: "issue-unavailable",
     });
     expect(f.rows.has("run-2")).toBe(false);

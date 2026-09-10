@@ -129,3 +129,51 @@ the other managed-root consumers do. Nothing has to be migrated; delete the left
 `keiko/task/…` branch (or let the next bind reuse it — the branch name is deterministic per issue)
 and bind again. If the failure persists, the new `causeChain` on the lifecycle line names the actual
 cause.
+
+---
+
+## "Start coding run" fails immediately with `CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED`
+
+| Field             | Value                                                                                                         |
+| ----------------- | ------------------------------------------------------------------------------------------------------------- |
+| Severity          | High                                                                                                          |
+| Surface           | Local UI / Coding Workbench                                                                                   |
+| Stable identifier | `authority-resolution-failed`, `git.runtime-identity`, `GitLazyFetchGuardUnsupportedError`, `PathDeniedError` |
+
+**Symptom**
+
+The workspace binds, the composer is ready, and "Start coding run" answers within a second with
+"The requested runtime action failed (CODING_RUNTIME_AUTHORITY_RESOLUTION_FAILED)" and a support id.
+Nothing was launched. Before 2026-09-10 the support id led to a single `coding-runtime.operation.refused`
+line and the run-scoped lines that held the cause carried a different correlation id.
+
+**Root Cause**
+
+Run start reads the repository identity of the managed task worktree through the keiko-tools Git
+read lane. Every lane's spawn boundary resolves the command's working directory through the
+user-workspace root rules with the plain filesystem port, which deny the state directory's `.keiko`
+segment the worktree lives below (`~/.keiko/ui/task-workspaces/…`, `.keiko/dev/ui/task-workspaces/…`
+in the dev lane) — so the read, and with it every other Git command inside the worktree, was refused
+before spawn. The lazy-fetch guard's probes swallowed that refusal as "cannot rule out a promisor
+remote" and then as an indeterminate version probe, reporting `GitLazyFetchGuardUnsupportedError`
+for a guard that was never involved; the orchestrator mapped the unrecognised throw to
+`authority-resolution-failed`. The server's managed-root prover (ADR-0005 D2) minted an owned-root
+port for the worktree, but only the `WorkspaceInfo` projection reached the lanes.
+
+**Diagnostic Steps**
+
+1. Activity log, request correlation (the support id): `op: "coding-runtime.operation.refused"`,
+   `extra.operation: "start"`, `extra.reason: "authority-resolution-failed"` and — since 2026-09-10 —
+   `extra.runId` naming the run that was minted.
+2. Activity log, that run id: `op: "git.runtime-identity"` with `state: "failed"`, the failing class
+   in `errorClass` and its Keiko frames; then `op: "coding-runtime.start"` with
+   `code: "stage=start:reason=launch-resolution"`. Since the repair the class is the boundary's own
+   (`PathDeniedError`, `CommandDeniedError`), never a relabelled guard verdict.
+3. `keiko support analyze --correlation-id <run id> --json` reconstructs the sequence; the request
+   correlation alone reconstructs only the refusal.
+
+**Resolution**
+
+Update to a build that contains the 2026-09-10 repair: the prover binds the owned-root port to the
+worktree's `WorkspaceInfo` and the spawn boundary resolves through it, so every Git lane runs under
+the root's own authority. Nothing has to be migrated; start the run again.

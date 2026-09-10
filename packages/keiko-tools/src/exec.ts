@@ -37,6 +37,7 @@ import {
   resolveWithinWorkspace,
   type WorkspaceFs,
   type WorkspaceInfo,
+  boundWorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "./errors.js";
@@ -753,10 +754,20 @@ function assertExecutableOutsideWorkspace(
   }
 }
 
+// The port every root-relative check in this module resolves through: an explicit `deps.fs`, else
+// the owned-root port the prover bound to a Keiko-owned root's WorkspaceInfo, else the plain node
+// port. A managed task worktree lives below the state directory's always-denied `.keiko` segment;
+// resolving its cwd through the plain port re-admitted it under the user-workspace rules and refused
+// every git lane command inside it before spawn, on every installation with the default state
+// directory (2026-09-10). The binding is minted only by the server's managed-root prover.
+function workspaceFsOf(deps: Pick<RunCommandDeps, "workspace" | "fs">): WorkspaceFs {
+  return deps.fs ?? boundWorkspaceFs(deps.workspace, nodeWorkspaceFs);
+}
+
 /** Shared internal trust check for the launched command and its fixed, first-party helpers. */
 export function defaultResolveExecutable(command: string, deps: ExecutableResolverDeps): string {
   assertBareExecutable(command);
-  const fs = deps.fs ?? nodeWorkspaceFs;
+  const fs = workspaceFsOf(deps);
   const lexicalWorkspaceRoot = deps.workspace.root;
   const realWorkspaceRoot = realRoot(fs, lexicalWorkspaceRoot);
   for (const rawEntry of pathEntries(deps.processEnv)) {
@@ -817,7 +828,11 @@ function resolveInheritedSpawnTarget(
 // workspace before it is ever spawned.
 function resolveWrapperExecutable(name: string, deps: RunCommandDeps): string {
   const resolver = deps.resolveExecutable ?? defaultResolveExecutable;
-  return resolver(name, { workspace: deps.workspace, processEnv: deps.processEnv, fs: deps.fs });
+  return resolver(name, {
+    workspace: deps.workspace,
+    processEnv: deps.processEnv,
+    fs: workspaceFsOf(deps),
+  });
 }
 
 // Decides what to spawn. Inherited network → run the executable directly. network:"none" → ask
@@ -942,7 +957,7 @@ interface RunState {
 // errors, which the host maps to a tool error — the command never spawns.
 function resolveCwd(deps: RunCommandDeps, cwd: string | undefined): string {
   const lexical = resolveWithinWorkspace(deps.workspace.root, cwd ?? ".");
-  const fs = deps.fs ?? nodeWorkspaceFs;
+  const fs = workspaceFsOf(deps);
   const rel = lexical.slice(deps.workspace.root.length).replace(/^[/\\]/, "");
   if (isDenied(rel === "" ? (cwd ?? ".") : rel)) {
     throw new PathDeniedError("path matches an always-on deny pattern", cwd ?? ".");
@@ -1320,7 +1335,7 @@ function resolveExecutable(input: RunCommandInput, deps: RunCommandDeps): string
   return resolver(input.command, {
     workspace: deps.workspace,
     processEnv: deps.processEnv,
-    fs: deps.fs,
+    fs: workspaceFsOf(deps),
   });
 }
 
