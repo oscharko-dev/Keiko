@@ -401,11 +401,7 @@ function windowsZipAdapter() {
   });
 }
 
-export async function rebindPortableSignedArchive(
-  stageRoot,
-  manifest,
-  archiveAdapter = windowsZipAdapter(),
-) {
+export async function rebindArchive(stageRoot, manifest, archiveAdapter = windowsZipAdapter()) {
   const payloadContainer = join(stageRoot, "payload");
   const archivePath = join(stageRoot, manifest.artifact.assetName);
   rebindSignedPayload(stageRoot, manifest, WINDOWS_TARGET);
@@ -871,8 +867,6 @@ async function finalizeCommand(options) {
   assertFinalWindowsManifest(finalManifest);
   console.log("windows-portable-signing: verified production archive finalized");
 }
-
-export const rebindArchive = rebindPortableSignedArchive;
 
 export async function main(argv = process.argv.slice(2)) {
   const { command, options } = parseArgs(argv);
