@@ -152,7 +152,7 @@ npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --
 Generated smoke evidence is a local release artifact. It must not be committed to Git.
 
 The fixture smoke above proves its named setup/launch seams only. It does not prove installed
-production-signed N−1→N mutation, native process-tree containment, a real BFF outage/reconnect, or
+Keiko-signed N−1→N mutation, native process-tree containment, a real BFF outage/reconnect, or
 recovery after every activation crash boundary. Record those results separately on #3405 with exact
 artifact digests and target-native run evidence; do not promote fixture output to a production
 qualification claim.

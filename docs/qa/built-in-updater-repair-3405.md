@@ -16,7 +16,23 @@ its absence no longer blocks stable publication or one-click update. The unchang
 provenance, target, release-impact, containment, atomic activation, recovery, and exact-version
 checks remain mandatory.
 
-## Current checkpoint (2026-09-08)
+## Current delivery checkpoint (2026-09-10)
+
+Delivery continues in PR #3456. The published-manifest verifier now requires the protected Keiko
+Ed25519 trust root, while unsigned Apple/Microsoft platform status remains explicit and acceptable.
+KHA1 dispatches the native coordinator on macOS and Windows; the shared engine, macOS mechanics,
+Windows generation mechanics, and Windows crash-checkpoint recovery are wired into required native
+quality lanes. Production staging runs on Windows x64, macOS arm64, and macOS x64 without signing
+provider credentials. The browser evidence, source/harness freshness gate, durable startup refusal,
+canonical activity logging, bounded downloads, tree identity, recovery outcomes, and deletion of the
+obsolete JavaScript activation path are integrated as signed review checkpoints.
+
+Final exact-head gates and GitHub CI are still in progress. A two-release native canary remains
+release evidence to collect once two Keiko-signed eligible releases exist; it is not blocked by
+#2198 and does not require Apple Developer ID, notarization, Authenticode, or an external signing
+provider. No final one-click qualification or merge is claimed by this checkpoint.
+
+## Historical checkpoint (2026-09-08; superseded by the owner decision above)
 
 Later dated entries supersede historical failures below. The repaired restricted-token
 Windows helper now passes the actual four-probe loader job and the C# analyzer job
@@ -485,7 +501,7 @@ the pinned image pull with a registry authentication error, including an isolate
 retry. No Sonar finding count or clean result is available from that attempt. Registry sign-in
 repair is requested while independent implementation and verification continue.
 
-### Native proof decision remains pending
+### Historical native proof proposal (superseded 2026-09-10)
 
 The unchanged macOS production verifier requires Developer ID continuity, strict code verification,
 stapled notarization and Gatekeeper assessment on the exact compiled bytes. Copied native artifacts
@@ -501,7 +517,7 @@ awaits operator approval. No criterion, production verifier, KHA1 enablement or 
 harness has been changed on its authority. Production qualification still requires two genuine
 eligible signed releases and all three native target journeys regardless of that decision.
 
-## Acceptance evidence map
+## Historical acceptance evidence map (superseded 2026-09-10)
 
 Every row remains open until current integrated-head evidence and independent review settle its
 full scope. Existing source and focused test results locate the work; they do not imply completion.
@@ -737,7 +753,7 @@ not a claim that the entire old commit supports the newer backend contracts.
   1.6 minutes, exit 0), including reconnect, durable recovery and exact-owned cleanup. No historical
   UI code survives this experiment. This proof does not establish native updater qualification.
 
-## Native qualification record
+## Historical native qualification record (as of 2026-09-05)
 
 | Target      | Immutable N−1 / N inputs | Production-path result | Failure/crash result | Second restart | Protected canary |
 | ----------- | ------------------------ | ---------------------- | -------------------- | -------------- | ---------------- |
@@ -766,13 +782,12 @@ those patterns for isolated state and same-port replacement; their sequential re
 do not prove native updater ownership transfer. The updater's current Playwright config already
 starts the real CLI, but mocked `/api/update/*` responses must not establish the production journey.
 
-The required CI workflow now invokes the tagged real-BFF updater journey in its existing browser
-lane, and `docs/qa/unwired-e2e-suites.json` records this suite as `runs-per-pr`. The lead independently
-ran `node scripts/check-e2e-suite-wiring.mjs`: PASS, with this suite included among 39 of 52 wired
-suites. That gate proves reachability, not behavior or a completed GitHub run at the final head.
-Supported target-native workflows must additionally exercise real N−1/N product bytes through the
-production coordinator; the current disabled executor prevents claiming those results. No new
-native handoff smoke command is recorded as available until its implementation exists.
+The required CI workflow invokes the tagged real-BFF updater journey in its existing browser lane,
+and `docs/qa/unwired-e2e-suites.json` records this suite as `runs-per-pr`. The wiring gate proves
+reachability, not behavior or a completed GitHub run at the final head. KHA1 now invokes the native
+executor and the native quality lanes exercise its transaction order and platform mechanics.
+Supported target-native release workflows must still record real N−1/N product-byte results through
+that coordinator; declarations, fixtures, or skipped jobs cannot be reported as those results.
 
 Native crash-resume also needs an explicit discovery/entrypoint decision. After a coordinator crash
 with the old BFF gone, the current normal launcher does not rediscover its activation capsule; the

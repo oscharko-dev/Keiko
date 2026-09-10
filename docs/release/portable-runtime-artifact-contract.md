@@ -1,9 +1,9 @@
 # Portable Runtime Artifact Contract
 
-Status: Contract baseline for Issue #1947 and staging baseline for Issue #1948. The frozen Windows
-production generation producer is implemented for the Phase A work in #3405/#3403. This document
-defines the artifact shape that producer emits and later portable delivery children must consume and
-verify. It does not claim completed Windows consumer integration or a qualified production release.
+Status: Production artifact contract amended by Epic #3403. The Windows generation producer and
+native coordinator consumer are implemented and exercised by required native quality lanes. This
+document defines the artifact shape that release production, runtime verification, and the updater
+consume. It does not by itself claim a completed two-release native update canary.
 
 Governing decisions:
 
@@ -136,9 +136,11 @@ manifest are outside the generation tree hash; the generation tree itself remain
 
 The explicit `--windows-generation-production` staging flag is production-only and cannot be used by
 evaluation output. Windows generation-v1 discovery, consumers, startup attestation and recovery
-integration are implemented. Native execution verification and the three-target production-signed
-N−1→N canaries remain incomplete; KHA1 coordinator acceptance stays disabled. Implementation and
-host-side tests do not establish platform qualification. These are release gates, not evidence
+integration are implemented. The three-target, two-release N−1→N canary remains incomplete; KHA1
+coordinator acceptance now dispatches the production
+coordinator, and required native lanes exercise its mechanics and crash checkpoints. The canary
+uses Keiko-signed releases; Apple/Microsoft signing is not a prerequisite. Implementation and
+host-side tests do not by themselves establish that canary. These are release gates, not evidence
 supplied by this document.
 
 ## Archive And Evidence Layout
@@ -330,8 +332,8 @@ activity evidence, or browser projections. The capsule grants no arbitrary path 
 ADR-0121's acknowledged ownership transfer, same-volume promotion, process-tree containment, exact
 target startup proof, and idempotent recovery are required in addition to the artifact checks. A
 manifest that passes schema and digest validation does not prove those runtime steps. Production
-qualification additionally requires two actual production-signed eligible releases on all three
-targets. Evaluation artifacts remain manual-only, including the first transition to production.
+qualification additionally requires two actual Keiko-signed eligible releases on all three targets.
+Evaluation artifacts remain manual-only, including the first transition to a release-trusted build.
 
 ## State And Payload Exclusions
 
@@ -903,14 +905,14 @@ Validation rules:
   protocol-schema SHA-256 values bind independently reviewed inputs to the staged bytes. Any
   mismatch fails closed before spawn or promotion.
 - Sidecar signing metadata uses the same bounded verification vocabulary as the parent artifact.
-  Production validation requires a verified signature plus the shipped executable fields
+  Stable validation requires Keiko release trust plus the shipped executable fields
   `shippedExecutableSha256`, `shippedExecutableTreeAlgorithm`, and
   `shippedExecutableTreeSha256`. These fields are signed evidence for the executable bytes and
   executable tree that Keiko stages and checks before production staging or sidecar pre-spawn.
   The upstream `executableSha256`, `executableTreeAlgorithm`, and `executableTreeSha256` fields
   remain immutable provenance for the approved upstream release; shipped evidence does not replace
-  or rewrite that upstream record. macOS sidecars also require Developer ID, notarization,
-  stapling, and assessment proof where applicable.
+  or rewrite that upstream record. Optional macOS Developer ID, notarization, stapling, and
+  assessment evidence must verify when present and must otherwise remain explicitly false.
 - `release.stable` and `updateEligibility.stableOnly` must both be `true` for one-click portable
   update eligibility. Prerelease, beta, canary, downgrade, and rollback paths are out of scope.
 - `security.verificationPolicy` is one of `staging`, `development`, `pull-request`, `evaluation`, or
@@ -925,20 +927,18 @@ Validation rules:
   `publisherChainVerified` and `timestampVerified` for Windows; `developerIdVerified`,
   `notarizationVerified`, `stapleVerified`, and `assessmentVerified` for both macOS architectures.
 - `updateEligibility.requiredPredicates` must all be true before the one-click portable updater may
-  execute. Any missing platform signature/notarization proof or missing crash-safe same-volume
-  promotion capability forces a manual-only path.
+  execute. A missing or invalid Keiko release signature, or a missing crash-safe same-volume
+  promotion capability, forces a manual-only path. Platform-signature predicates are not required.
 - `entrypoints.primaryLauncher` must be `Keiko.exe` for `windows-x64` and `Keiko.app` for both macOS
   targets.
-- macOS targets require Developer ID signature and notarization verification. Windows requires
-  Authenticode publisher-chain verification. Windows point-of-use admission additionally invokes
-  the fixed system verifier with a closed environment and requires every runtime attestation carrier
-  and privileged helper to have the same verified leaf signer identity as `Keiko.exe` within that
-  release. The updater's cross-release comparison instead binds independently verified Public Trust
-  chains and the exact reviewed subscriber identity-validation EKU, permitting legitimate Azure leaf
-  rotation without relaxing same-release consistency or timestamp verification.
-- macOS point-of-use admission derives the qualified outer app's closed Developer ID TeamIdentifier
-  and requires the app seal, system-extension manager, Endpoint Security extension, and secure-read
-  helper to verify under that same team identity. Raw team ids remain forbidden in persisted evidence.
+- macOS Developer ID/notarization and Windows Authenticode are optional defense in depth. When a
+  manifest claims that evidence, point-of-use admission invokes the existing closed native verifier
+  and requires the complete same-release identity chain; false or inconsistent positive claims fail
+  closed. Cross-release Windows comparison permits legitimate Azure leaf rotation only after both
+  independently verified Public Trust chains bind the reviewed subscriber identity-validation EKU.
+  macOS native verification, when claimed, derives the outer app's closed Developer ID
+  TeamIdentifier and binds the app seal, system-extension manager, Endpoint Security extension, and
+  secure-read helper to that identity. Raw identities remain forbidden in persisted evidence.
 - The release-impact entry must bind the full reviewed ADR-0121 tuple for the same artifact:
   release id/tag, asset id/name/size, package version, runtime identity, archive digest, build
   provenance, SBOM/license/checksum evidence, platform target, signing/notarization status, and any

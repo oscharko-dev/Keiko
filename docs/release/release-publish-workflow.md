@@ -304,7 +304,7 @@ promote a partial target set.
 Artifact signing, fresh archive verification, and the launch/setup smoke do not by themselves prove
 an installed application can replace itself. Before advertising production one-click updates, the
 release owner must attach native N−1→N canary evidence for Windows x64, macOS arm64, and macOS x64
-using two immutable production-signed eligible releases. Each run must exercise the assembled
+using two immutable Keiko-signed eligible releases. Each run must exercise the assembled
 application's real BFF/CLI/native path, prove orderly same-port process transfer, exact target
 startup and durable outcome, reconstruct the canonical activity timeline, and restart again while
 retaining N. Record target, source/target versions, exact artifact digests and run identities, and
@@ -316,13 +316,13 @@ version verifiers, and payload `--version` smoke are not substitutes for real na
 Required-lane reachability and all three actual target results must be recorded, not inferred from
 workflow YAML or a skipped job.
 
-If #2198's provider prerequisites or two production-signed releases are unavailable, keep that
-external production-qualification limitation explicit on the issue/epic and in release guidance.
+If two Keiko-signed release versions or their three target-native canary results are unavailable,
+keep that production-qualification limitation explicit on the issue/epic and in release guidance.
 Code review may proceed with the stated limit; a production one-click claim may not. Evaluation
 releases, including 0.3.17, remain manual-only and require a deliberate manual transition to the
-first production build. Do not retroactively change their signing scope, broaden publisher trust,
-or treat fixture evidence as a canary. No signing credentials or publish approval are granted by
-this updater repair.
+first release-trusted build. Do not retroactively change their trust scope or treat fixture evidence
+as a canary. Apple/Microsoft provider access is not a prerequisite and this updater repair grants no
+publish approval.
 
 The publish job runs `npm run release:publish -- --tag "$NPM_DIST_TAG"` after confirming
 that the tag-push release verification already completed successfully for the same commit.
@@ -331,8 +331,8 @@ The script:
 - checks version and publish-manifest consistency,
 - checks workspace SBOM/license policy through the `check:workspace-supply-chain` gate in `prepack`,
 - checks release-impact metadata for the current package version,
-- requires portable production artifacts to carry verified signing/notarization sidecar status
-  before they may be treated as portable-complete release assets,
+- requires portable production artifacts to carry valid Keiko release trust and truthful native
+  platform-evidence status before they may be treated as portable-complete release assets,
 - requires stable `latest` publishes to attach exactly three first-class portable GitHub Release
   Assets: `keiko-windows-x64.zip`, `keiko-macos-arm64.zip`, and `keiko-macos-x64.zip`,
 - rejects portable artifacts with sidecar payload metadata that is unverified, wrong-platform,

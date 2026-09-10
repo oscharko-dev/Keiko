@@ -237,10 +237,12 @@ native acknowledgement must never authorize restoration of an already verified N
 These are implementation and acceptance requirements, not evidence that native qualification has
 completed. Each supported target needs a real same-port N−1→N run through the assembled application,
 failure/crash-boundary tests, and a second restart retaining N. Hermetic PR proof is distinct from
-the protected canary between two actual production-signed eligible releases. Until #2198's external
-signing prerequisites and that canary are satisfied, code may merge with explicit limits but no
-production one-click claim is permitted. Evaluation releases, including 0.3.17, remain manual-only;
-changing release metadata or a test verifier cannot make their installed bytes production trusted.
+the release canary between two actual Keiko-signed eligible releases. That canary requires immutable
+release/asset identities and the D7 signature on both versions; it does not require Apple or
+Microsoft signing. Until those native journeys and the canary are satisfied, code may merge with
+explicit limits but no production one-click claim is permitted. Evaluation releases, including
+0.3.17, remain manual-only; changing release metadata or a test verifier cannot make their installed
+bytes trusted retroactively.
 
 #### Windows generation consumer and cutover contract (#3405)
 
