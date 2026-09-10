@@ -696,7 +696,6 @@
   },
   "runtimeExports": [
     "AuthenticationError",
-    "boundWorkspaceFs",
     "BUG_INVESTIGATION_WORKFLOW_DESCRIPTOR",
     "CANONICAL_MANIFEST_BASENAMES",
     "CAPABILITY_DATA",
@@ -814,6 +813,7 @@
     "assertContainedRealPath",
     "assertValidGatewaySamplingParameters",
     "assertValidRunId",
+    "boundWorkspaceFs",
     "buildAppliedLimits",
     "buildCodeIntelligenceIndex",
     "buildContextPack",
