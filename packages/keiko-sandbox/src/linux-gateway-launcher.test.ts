@@ -6,10 +6,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildLinuxGatewayNamespaceCommand,
+  LINUX_GATEWAY_LAUNCHER_PATH,
   linuxGatewayDiagnosticKind,
   runLinuxGatewayLauncher,
-} from "./linux-gateway-launcher.js";
-import { LINUX_GATEWAY_LAUNCHER_PATH } from "./linux-gateway-path.js";
+} from "./runtime.js";
 import { planIsolatedRun } from "./plan.js";
 import { probeBackends } from "./probe.js";
 import type { IsolatedRunDecision, IsolatedRunPlan } from "./types.js";

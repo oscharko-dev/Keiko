@@ -211,7 +211,7 @@ request, before any process exists.
 `buildRuntimeGatewaySeatbeltCommand` remains the enforcing macOS product path (ADR-0140). Issue
 #3422 adds the corresponding Linux primitive to the generic isolated-run planner: when bubblewrap
 or unshare is available, `selectGatewayBackend` chooses that native namespace backend and
-`buildWrappedCommand` starts the packaged `linux-gateway-launcher`. The host launcher creates an
+`buildWrappedCommand` starts the packaged internal launcher in `runtime.ts`. The host launcher creates an
 owner-only, unpredictable Unix-domain socket and fixes its relay destination to the validated
 gateway address and port before spawn. Its namespace peer exposes that same port on the isolated
 loopback interface and forwards streams only through the private socket. The sidecar starts only

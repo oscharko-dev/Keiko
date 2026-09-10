@@ -100,7 +100,7 @@ describe("planIsolatedRun with a gateway-allowlist network policy", () => {
     expect(decision.kind).toBe("wrapped");
     if (decision.kind !== "wrapped") throw new Error("expected wrapped");
     expect(decision.command).toBe(process.execPath);
-    expect(decision.args[0]).toMatch(/keiko-sandbox\/dist\/linux-gateway-launcher\.js$/);
+    expect(decision.args[0]).toMatch(/keiko-sandbox\/dist\/runtime\.js$/);
     expect(decision.args.slice(1)).toEqual([
       "host",
       "bubblewrap",
