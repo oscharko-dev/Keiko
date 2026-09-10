@@ -27,6 +27,7 @@ import {
 } from "./approvalStore.js";
 import { executeGovernedMutation, readStagedConflictMarkerFileCountFor } from "./execution.js";
 import {
+  readVerifiedCommitBlockingPaths,
   readVerifiedCommitFacts,
   sameVerifiedCommitFacts,
   verifiedCommitMessageDigest,
@@ -34,6 +35,7 @@ import {
 import { reconcileVerifiedCommit } from "./verifiedCommitRecovery.js";
 import { commitVerificationReportPassed } from "./verifiedCommitVerification.js";
 import type {
+  VerificationTicketOutcome,
   VerifiedCommitFacts,
   VerifiedCommitProposal,
   VerifiedCommitRunContext,
@@ -204,18 +206,25 @@ class VerifiedCommitController implements VerifiedCommitService {
     return readVerifiedCommitFacts(context, this.options.execution ?? {});
   }
 
-  public async beginVerification(): Promise<object | undefined> {
+  public async beginVerification(): Promise<VerificationTicketOutcome> {
     this.invalidate();
     const context = this.context();
-    if (context === undefined) return undefined;
+    if (context === undefined) return { kind: "unavailable" };
     const facts = await this.facts(context);
     if (!facts.clean) {
-      this.log(context, "verification-unavailable", { reason: "candidate-not-staged" });
-      return undefined;
+      // Named, not merely counted, for the model: the blocking paths travel on the tool result,
+      // only their counts on this line (run 16, 2026-09-10).
+      const blocking = await readVerifiedCommitBlockingPaths(context, this.options.execution ?? {});
+      this.log(context, "verification-unavailable", {
+        reason: "candidate-not-staged",
+        unstagedCount: blocking.unstagedCount,
+        untrackedCount: blocking.untrackedCount,
+      });
+      return { kind: "refused", reason: "candidate-not-staged", blocking };
     }
     const ticket = {};
     this.tickets.set(ticket, { context, facts, startedAtMs: this.now() });
-    return ticket;
+    return { kind: "ticket", ticket };
   }
 
   private verificationGuardLive(

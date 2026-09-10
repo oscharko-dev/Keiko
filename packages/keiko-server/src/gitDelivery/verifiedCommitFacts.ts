@@ -1,4 +1,5 @@
 import {
+  readGitRawChanges,
   readGitRawWorktreeSnapshot,
   readGitRevision,
   gitCommitMessageDigest,
@@ -6,7 +7,12 @@ import {
 import { readVerifiedRepositoryIdentity } from "./verifiedRepositoryIdentity.js";
 import { gitDeliveryTerminationHandler, type GitDeliveryExecutionSeams } from "./execution.js";
 import { logDeniedPathExclusion } from "./runtimeGitRead.js";
-import type { VerifiedCommitFacts, VerifiedCommitRunContext } from "./verifiedCommitTypes.js";
+import {
+  VERIFIED_COMMIT_BLOCKING_PATHS_MAX,
+  type VerifiedCommitBlockingPaths,
+  type VerifiedCommitFacts,
+  type VerifiedCommitRunContext,
+} from "./verifiedCommitTypes.js";
 import type { GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
 
 function cleanCandidate(context: VerifiedCommitRunContext, snapshot: GitWorktreeSnapshot): boolean {
@@ -55,6 +61,28 @@ export async function readVerifiedCommitFacts(
     stagedTreeDigest: snapshot.stagedTreeDigest,
     repositoryDigest,
     clean: cleanCandidate(context, snapshot),
+  };
+}
+
+// The paths that keep the candidate from being clean, read from the same raw change list the
+// snapshot's counts come from — only on the refusal path, so the proof path pays nothing. The two
+// lists are cut at VERIFIED_COMMIT_BLOCKING_PATHS_MAX; the counts stay exact.
+export async function readVerifiedCommitBlockingPaths(
+  context: VerifiedCommitRunContext,
+  seams: GitDeliveryExecutionSeams,
+): Promise<VerifiedCommitBlockingPaths> {
+  const raw = await readGitRawChanges({
+    workspace: context.workspace,
+    signal: context.signal,
+    onTerminated: gitDeliveryTerminationHandler(seams, context.correlationId),
+  });
+  const unstaged = raw.changes.filter((file) => file.unstaged && !file.untracked);
+  const untracked = raw.changes.filter((file) => file.untracked);
+  return {
+    unstagedCount: unstaged.length,
+    untrackedCount: untracked.length,
+    unstaged: unstaged.slice(0, VERIFIED_COMMIT_BLOCKING_PATHS_MAX).map((file) => file.path),
+    untracked: untracked.slice(0, VERIFIED_COMMIT_BLOCKING_PATHS_MAX).map((file) => file.path),
   };
 }
 

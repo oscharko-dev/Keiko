@@ -9,7 +9,10 @@ import type {
   RuntimeGitRefusalReason,
   RuntimeGitService,
 } from "../gitDelivery/runtimeGitService.js";
-import type { VerifiedCommitService } from "../gitDelivery/verifiedCommitTypes.js";
+import type {
+  VerificationTicketOutcome,
+  VerifiedCommitService,
+} from "../gitDelivery/verifiedCommitTypes.js";
 import type {
   CodingWorkbenchAuxiliaryStatus,
   CodingWorkbenchMode,
@@ -1067,7 +1070,7 @@ async function runVerificationAttempt(
     result: verificationPortRefusal(input, "verification-authority-revoked", condition),
   });
   try {
-    const ticket = await input.verifiedCommitService?.beginVerification();
+    const begun = await input.verifiedCommitService?.beginVerification();
     const beforeRun = verificationLivenessRefusal(input, guard, signal);
     if (beforeRun !== undefined) return revoked(beforeRun);
     const { report, failureOutput } = await input.verificationRunner.runToReport(
@@ -1076,7 +1079,7 @@ async function runVerificationAttempt(
     );
     const afterRun = verificationLivenessRefusal(input, guard, signal);
     if (afterRun !== undefined) return revoked(afterRun);
-    const commitProof = await completeCandidateVerification(input, ticket, report, guard, signal);
+    const commitProof = await completeCandidateVerification(input, begun, report, guard, signal);
     return { outcome: "completed", report, failureOutput, commitProof };
   } catch (error) {
     return { outcome: "threw", error };
@@ -1262,19 +1265,22 @@ function modelVerificationFailure(
 
 async function completeCandidateVerification(
   input: ProductionManagedWorktreeToolInput,
-  ticket: object | undefined,
+  begun: VerificationTicketOutcome | undefined,
   report: VerificationReport,
   guard: CodingToolMutationGuard,
   signal: AbortSignal | undefined,
 ): Promise<CodingToolVerificationResult | undefined> {
-  if (input.verifiedCommitService === undefined) return undefined;
-  if (ticket === undefined)
+  if (input.verifiedCommitService === undefined || begun === undefined) return undefined;
+  if (begun.kind !== "ticket") {
     return {
       commitProof: "unavailable",
       reasonCode: "candidate-not-staged",
       nextAction: "stage-then-verify",
+      // The paths the model has to stage (run 16, 2026-09-10); a vanished run context has none.
+      ...(begun.kind === "refused" ? { blocking: begun.blocking } : {}),
     };
-  const recorded = await input.verifiedCommitService.completeVerification(ticket, report, {
+  }
+  const recorded = await input.verifiedCommitService.completeVerification(begun.ticket, report, {
     check: guard.check,
     signal,
   });

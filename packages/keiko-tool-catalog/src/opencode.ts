@@ -424,8 +424,10 @@ function verificationSpec(): OpenCodeToolSpec {
       "one workspace-relative test path. For a commit, execute a ready stage proposal, or an " +
       "approval-required stage proposal after approval, then rerun verification and proceed only " +
       'when the result reports verification: { commitProof: "recorded" }. A ' +
-      "candidate-not-staged result with nextAction stage-then-verify requires staging and another " +
-      "verification run.",
+      "candidate-not-staged result with nextAction stage-then-verify names, under blocking, the " +
+      "unstaged and untracked paths that keep the proof from forming (a lockfile the dependency " +
+      "install created, build output no .gitignore covers): stage exactly those paths, or ignore " +
+      "them deliberately, then run the verification again.",
     inputSchema: managedObjectSchema(
       {
         verifierId: {

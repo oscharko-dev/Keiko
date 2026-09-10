@@ -36,6 +36,15 @@ interface RuntimeOperationCoordinatorDeps {
     current: CodingRuntimeSnapshot,
   ) => Extract<CodingRuntimeOrchestratorResult, { readonly ok: true }>["snapshot"];
   readonly taskDispatcher: CodingRuntimeTaskDispatcher;
+  /**
+   * Returns a paused run to running before a follow-up replaces its task. The runtime admits tool
+   * calls only while running, so a replacement dispatched into a pause failed its first call and
+   * the turn's failure ended the run (Coding Workbench run 16, 2026-09-10). A pause held for an
+   * operator decision is refused here: the decision resumes that run, not a follow-up.
+   */
+  readonly resumePaused: (
+    current: CodingRuntimeSnapshot,
+  ) => Promise<CodingRuntimeOrchestratorResult>;
   readonly settleTask: (runId: string, outcome: CodingRuntimeTaskOutcome) => void;
   readonly questionPort: CodingRuntimeQuestionPort;
   readonly manager: CodingRuntimeManager;
@@ -150,9 +159,20 @@ export class CodingRuntimeOperationCoordinator {
             : "invalid-intent",
         );
       }
+      // A follow-up into a pause is the operator's own "continue with this": the run resumes first,
+      // and the replacement is dispatched against the resumed revision.
+      if (operation.current.state === "paused") {
+        const resumed = await this.deps.resumePaused(operation.current);
+        if (!resumed.ok) {
+          operation.reservation.release();
+          return resumed;
+        }
+      }
+      const live = this.deps.current() ?? operation.current;
       const dispatched = await this.dispatchFollowUp(
         runId,
         operation,
+        live,
         operation.value.taskIntent,
         correlationId,
       );
@@ -168,13 +188,14 @@ export class CodingRuntimeOperationCoordinator {
         dispatched.result.completion,
         reservedGeneration(dispatched.generation),
       );
-      return this.deps.advanceRevision(operation.current, "task-submitted");
+      return this.deps.advanceRevision(live, "task-submitted");
     });
   }
 
   private async dispatchFollowUp(
     runId: string,
     operation: Extract<PreparedRuntimeOperation, { readonly ok: true }>,
+    live: CodingRuntimeSnapshot,
     taskIntent: string,
     correlationId?: string,
   ): Promise<FollowUpDispatchOutcome> {
@@ -188,7 +209,7 @@ export class CodingRuntimeOperationCoordinator {
       const result = await dispatch({
         runId,
         requestId: operation.value.requestId,
-        expectedRevision: operation.current.revision,
+        expectedRevision: live.revision,
         taskIntent,
         ...(correlationId === undefined ? {} : { correlationId }),
       });

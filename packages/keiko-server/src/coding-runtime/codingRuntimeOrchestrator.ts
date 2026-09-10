@@ -654,6 +654,8 @@ export class CodingRuntimeOrchestrator {
         this.advanceRevision(current, eventKind),
       publicSnapshot: (current): PublicSnapshot => this.publicSnapshotWithDescription(current),
       taskDispatcher: deps.taskDispatcher,
+      resumePaused: (current): Promise<CodingRuntimeOrchestratorResult> =>
+        this.resumePausedForFollowUp(current),
       settleTask: (runId, outcome): void => {
         this.queueTaskSettlement(runId, outcome);
       },
@@ -825,6 +827,31 @@ export class CodingRuntimeOrchestrator {
   ): Promise<CodingRuntimeOrchestratorResult> {
     const admitted = resumeAdmission(this.current(), runId, input, this.activeEffectiveMode);
     if (admitted === undefined) return this.fail("invalid-intent");
+    return this.resumeAdmitted(admitted);
+  }
+
+  // A follow-up sent to a paused run resumes it before the replacement task is dispatched (called
+  // by the operation coordinator inside the same serial section, so it never re-enters
+  // `serial`). The runtime admits tool calls only while running; a replacement dispatched into
+  // the pause failed its first call `state-not-admissible` and that failure ended the run (Coding
+  // Workbench run 16, 2026-09-10). A pause held for an operator decision keeps its one exit — the
+  // decision — exactly as `resumeAdmission` refuses the operator's Resume for it.
+  private resumePausedForFollowUp(
+    current: CodingRuntimeSnapshot,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    if (current.state !== "paused" || current.pauseReason !== undefined) {
+      return Promise.resolve(this.fail("invalid-intent"));
+    }
+    return this.resumeAdmitted({
+      current,
+      requestedMode: this.activeEffectiveMode ?? current.requestedMode,
+    });
+  }
+
+  private async resumeAdmitted(
+    admitted: ResumeAdmission,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    const { runId } = admitted.current;
     const approval = this.approvals.get(runId);
     if (approval !== undefined && approval.expiresAt <= this.now().getTime()) {
       this.approvals.delete(runId);

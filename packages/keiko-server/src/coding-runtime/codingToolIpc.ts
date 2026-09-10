@@ -1,4 +1,5 @@
 import { parseDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
+import type { VerifiedCommitBlockingPaths } from "../gitDelivery/verifiedCommitTypes.js";
 import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import type { CodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
 import { parseRuntimeGitRequest, type RuntimeGitRequest } from "./codingRuntimeGitIpc.js";
@@ -67,6 +68,12 @@ export type CodingToolVerificationResult =
       readonly commitProof: "unavailable";
       readonly reasonCode: "candidate-not-staged" | "candidate-drift";
       readonly nextAction: "stage-then-verify" | "verify-again";
+      /**
+       * For `candidate-not-staged`: the unstaged and untracked workspace-relative paths that keep
+       * the proof from forming, bounded, with exact counts — what `stage-then-verify` has to stage
+       * (Coding Workbench run 16, 2026-09-10). Model-facing only.
+       */
+      readonly blocking?: VerifiedCommitBlockingPaths | undefined;
     };
 
 /** Bounded, model-only diagnostics for a verifier that executed and failed. */

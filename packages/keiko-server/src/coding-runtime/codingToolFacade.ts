@@ -1,4 +1,8 @@
 import { isCodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
+import {
+  VERIFIED_COMMIT_BLOCKING_PATHS_MAX,
+  type VerifiedCommitBlockingPaths,
+} from "../gitDelivery/verifiedCommitTypes.js";
 import { isCodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
 import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
 import {
@@ -383,11 +387,46 @@ function project(request: CodingToolActionRequest, input: unknown): CodingToolRe
 function isCodingToolVerificationResult(value: unknown): value is CodingToolVerificationResult {
   if (!isRecord(value)) return false;
   if (value.commitProof === "recorded") return Object.keys(value).length === 1;
+  if (value.commitProof !== "unavailable") return false;
+  if (value.reasonCode === "candidate-drift") {
+    return value.nextAction === "verify-again" && Object.keys(value).length === 3;
+  }
   return (
-    value.commitProof === "unavailable" &&
-    ((value.reasonCode === "candidate-not-staged" && value.nextAction === "stage-then-verify") ||
-      (value.reasonCode === "candidate-drift" && value.nextAction === "verify-again")) &&
-    Object.keys(value).length === 3
+    value.reasonCode === "candidate-not-staged" &&
+    value.nextAction === "stage-then-verify" &&
+    (value.blocking === undefined
+      ? Object.keys(value).length === 3
+      : Object.keys(value).length === 4 && isVerifiedCommitBlockingPaths(value.blocking))
+  );
+}
+
+// Bounded, workspace-relative and exact-keyed, like every other payload crossing this boundary.
+function isVerifiedCommitBlockingPaths(value: unknown): value is VerifiedCommitBlockingPaths {
+  if (!isRecord(value) || Object.keys(value).length !== 4) return false;
+  return (
+    isBlockingCount(value.unstagedCount) &&
+    isBlockingCount(value.untrackedCount) &&
+    isBlockingPathList(value.unstaged) &&
+    isBlockingPathList(value.untracked)
+  );
+}
+
+function isBlockingCount(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function isBlockingPathList(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= VERIFIED_COMMIT_BLOCKING_PATHS_MAX &&
+    value.every(
+      (path) =>
+        typeof path === "string" &&
+        path.length > 0 &&
+        path.length <= 512 &&
+        !path.startsWith("/") &&
+        !path.split("/").includes(".."),
+    )
   );
 }
 
