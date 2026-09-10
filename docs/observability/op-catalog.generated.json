@@ -3116,7 +3116,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3730",
+      "site": "packages/keiko-server/src/deps.ts:3739",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -3161,13 +3161,13 @@
     {
       "op": "task-workspace.identity.creation-time-probe",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/task-workspace/activity-log.ts:307",
+      "site": "packages/keiko-server/src/task-workspace/activity-log.ts:316",
       "package": "keiko-server"
     },
     {
       "op": "task-workspace.lifecycle",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/task-workspace/activity-log.ts:147",
+      "site": "packages/keiko-server/src/task-workspace/activity-log.ts:154",
       "package": "keiko-server"
     },
     {
