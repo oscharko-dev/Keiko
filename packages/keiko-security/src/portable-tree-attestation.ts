@@ -74,7 +74,12 @@ interface TreeSnapshot {
 
 type IoRequest =
   | { readonly kind: "lstat"; readonly path: string }
-  | { readonly kind: "open-directory"; readonly id: number; readonly path: string }
+  | {
+      readonly kind: "open-directory";
+      readonly id: number;
+      readonly path: string;
+      readonly expected: BigIntStats;
+    }
   | { readonly kind: "read-directory"; readonly id: number }
   | { readonly kind: "close-directory"; readonly id: number }
   | { readonly kind: "open-file"; readonly id: number; readonly path: string }
@@ -112,14 +117,20 @@ function* snapshotTree(
 
   const files: TreeEntrySnapshot[] = [];
   const directorySnapshots: TreeEntrySnapshot[] = [{ name: "", stat: rootStat }];
-  const directories = [""];
+  const directories: TreeEntrySnapshot[] = [{ name: "", stat: rootStat }];
   const budget: TreeBudget = { entries: 0, pathBytes: 0 };
   while (directories.length > 0) {
-    const relativeDirectory = directories.pop();
-    if (relativeDirectory === undefined) break;
+    const directory = directories.pop();
+    if (directory === undefined) break;
+    const relativeDirectory = directory.name;
     const id = handles.next;
     handles.next += 1;
-    yield { kind: "open-directory", id, path: portablePath(root, relativeDirectory) };
+    yield {
+      kind: "open-directory",
+      id,
+      path: portablePath(root, relativeDirectory),
+      expected: directory.stat,
+    };
     try {
       for (;;) {
         const entry = (yield { kind: "read-directory", id }) as Dirent | null;
@@ -128,8 +139,9 @@ function* snapshotTree(
         recordTreeEntry(budget, name);
         const stat = (yield { kind: "lstat", path: portablePath(root, name) }) as BigIntStats;
         if (treeEntryKind(entry, stat) === "directory") {
-          directories.push(name);
-          directorySnapshots.push({ name, stat });
+          const snapshot = { name, stat };
+          directories.push(snapshot);
+          directorySnapshots.push(snapshot);
         } else {
           files.push({ name, stat });
         }
@@ -214,6 +226,19 @@ function assertOpenedFile(before: BigIntStats, opened: BigIntStats): void {
     opened.size > BigInt(MAX_FILE_BYTES)
   ) {
     fail("portable handoff artifact is unsafe");
+  }
+}
+
+function assertOpenedDirectory(expected: BigIntStats, current: BigIntStats): void {
+  if (
+    !expected.isDirectory() ||
+    expected.isSymbolicLink() ||
+    !current.isDirectory() ||
+    current.isSymbolicLink() ||
+    expected.dev !== current.dev ||
+    expected.ino !== current.ino
+  ) {
+    fail("portable handoff directory changed before traversal");
   }
 }
 
@@ -315,10 +340,7 @@ class SyncIo {
       case "lstat":
         return lstatSync(request.path, { bigint: true });
       case "open-directory":
-        this.#resources.set(request.id, {
-          kind: "directory",
-          handle: opendirSync(request.path),
-        });
+        this.#openDirectory(request);
         return undefined;
       case "read-directory":
         return this.#directory(request.id).handle.readSync();
@@ -372,6 +394,21 @@ class SyncIo {
     }
     return resource;
   }
+
+  #openDirectory(request: Extract<IoRequest, { readonly kind: "open-directory" }>): void {
+    const handle = opendirSync(request.path);
+    try {
+      assertOpenedDirectory(request.expected, lstatSync(request.path, { bigint: true }));
+      this.#resources.set(request.id, { kind: "directory", handle });
+    } catch (error) {
+      try {
+        handle.closeSync();
+      } catch {
+        // Preserve the directory-identity failure.
+      }
+      throw error;
+    }
+  }
 }
 
 interface AsyncFileResource {
@@ -395,10 +432,7 @@ class AsyncIo {
       case "lstat":
         return await lstat(request.path, { bigint: true });
       case "open-directory":
-        this.#resources.set(request.id, {
-          kind: "directory",
-          handle: await opendir(request.path),
-        });
+        await this.#openDirectory(request);
         return undefined;
       case "read-directory":
         return await this.#directory(request.id).handle.read();
@@ -450,6 +484,23 @@ class AsyncIo {
       throw new Error("portable tree directory handle is unavailable");
     }
     return resource;
+  }
+
+  async #openDirectory(
+    request: Extract<IoRequest, { readonly kind: "open-directory" }>,
+  ): Promise<void> {
+    const handle = await opendir(request.path);
+    try {
+      assertOpenedDirectory(request.expected, await lstat(request.path, { bigint: true }));
+      this.#resources.set(request.id, { kind: "directory", handle });
+    } catch (error) {
+      try {
+        await handle.close();
+      } catch {
+        // Preserve the directory-identity failure.
+      }
+      throw error;
+    }
   }
 }
 
