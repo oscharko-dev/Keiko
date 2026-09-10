@@ -432,7 +432,16 @@ class DraftDeliveryFactory {
       correlationId: context.correlationId,
       level: "warn",
       errorKind: "internal",
-      extra: { runId: context.runId, state: "failed", ...describeError(error) },
+      extra: {
+        runId: context.runId,
+        state: "failed",
+        // The publish view throws closed slugs (`git-publish-metadata-unavailable`, …); the class
+        // alone ("Error") did not say which precondition failed (run 18, 2026-09-10).
+        ...(publishPreparationReason(error) === undefined
+          ? {}
+          : { reason: publishPreparationReason(error) }),
+        ...describeError(error),
+      },
     });
   }
 
@@ -558,4 +567,14 @@ class DraftDeliveryFactory {
       },
     });
   }
+}
+
+// A closed `git-publish-*` slug from the publish view, or undefined for anything else — never free
+// text, so the preparation line stays body-free whatever an unexpected error carries.
+const PUBLISH_PREPARATION_REASON = /^git-publish-[a-z]+(?:-[a-z]+){0,6}$/u;
+
+function publishPreparationReason(error: unknown): string | undefined {
+  return error instanceof Error && PUBLISH_PREPARATION_REASON.test(error.message)
+    ? error.message
+    : undefined;
 }

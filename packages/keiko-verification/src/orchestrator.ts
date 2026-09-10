@@ -588,7 +588,6 @@ async function bootstrapDependencies(
   deps: VerificationDeps,
   baseSpawn: SpawnFn,
 ): Promise<DependencyBootstrapOutcome | undefined> {
-  if ((deps.dependencyBootstrap ?? "off") !== "auto") return undefined;
   if (plan.steps.every((step) => step.skipReason !== undefined)) return undefined;
   const fs = deps.fs ?? nodeWorkspaceFs;
   const bootstrapPlan = planDependencyBootstrap(deps.workspace, fs);
@@ -734,7 +733,12 @@ export async function runVerification(
     return rootMismatchReport(plan, workspaceRoot, startedAtMs, now);
   }
   const baseSpawn = deps.spawn ?? nodeSpawnFn;
-  const bootstrap = await bootstrapDependencies(plan, deps, baseSpawn);
+  // Awaited only when enabled: the default path keeps the exact scheduling it always had, so a
+  // caller that aborts or advances timers right after starting a run sees no extra tick.
+  const bootstrap =
+    (deps.dependencyBootstrap ?? "off") === "auto"
+      ? await bootstrapDependencies(plan, deps, baseSpawn)
+      : undefined;
   if (bootstrap !== undefined && !dependenciesReady(bootstrap)) {
     const results = dependenciesUnavailableResults(plan, bootstrap);
     return finishReport(workspaceRoot, results, false, startedAtMs, now, bootstrap.summary);
