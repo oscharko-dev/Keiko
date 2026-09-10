@@ -26,12 +26,36 @@ describe("catalog invocation argument qualification", () => {
   // could say which declared property was missing. The rejection now carries the schema's own account
   // -- declared property paths and a count -- and never the arguments.
   it.each([
-    [{}, { missingRequired: ["path"], invalidPaths: [], unexpectedPropertyCount: 0 }],
-    [{ path: 1 }, { missingRequired: [], invalidPaths: ["path"], unexpectedPropertyCount: 0 }],
-    [{ path: "" }, { missingRequired: [], invalidPaths: ["path"], unexpectedPropertyCount: 0 }],
+    [
+      {},
+      {
+        missingRequired: ["path"],
+        invalidPaths: [],
+        unexpectedPropertyCount: 0,
+        droppedPathCount: 0,
+      },
+    ],
+    [
+      { path: 1 },
+      {
+        missingRequired: [],
+        invalidPaths: ["path"],
+        unexpectedPropertyCount: 0,
+        droppedPathCount: 0,
+      },
+    ],
+    [
+      { path: "" },
+      {
+        missingRequired: [],
+        invalidPaths: ["path"],
+        unexpectedPropertyCount: 0,
+        droppedPathCount: 0,
+      },
+    ],
     [
       { path: "file.ts", root: "/private" },
-      { missingRequired: [], invalidPaths: [], unexpectedPropertyCount: 1 },
+      { missingRequired: [], invalidPaths: [], unexpectedPropertyCount: 1, droppedPathCount: 0 },
     ],
   ] as const)(
     "names the schema mismatch on the rejection without quoting the value",

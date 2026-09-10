@@ -203,7 +203,11 @@ const TOOL_SCHEMA_REPAIR_PREFIX =
 // counts; the rejected arguments are never quoted back). A generic "match the schema" sentence left
 // gpt-5.4 repeating the same omission until the retry budget was gone (run 7, 2026-09-10: three
 // `keiko_repository_search` calls without the properties the dialect declares required).
-function schemaMismatchGuidance(repair: GatewayToolCatalogError["repair"]): string {
+// Module-level export (not part of the package surface) so the sentence for each branch of the
+// account can be pinned directly: the real catalog offers no tool with more than sixteen distinct
+// schema paths, so the "further properties not listed" branch is unreachable through a provider
+// round trip today and stays a guard for a wider future schema (PR #3452 review).
+export function schemaMismatchGuidance(repair: GatewayToolCatalogError["repair"]): string {
   const shape = repair?.shape;
   if (shape === undefined) return "";
   const parts: string[] = [];
@@ -221,6 +225,11 @@ function schemaMismatchGuidance(repair: GatewayToolCatalogError["repair"]): stri
     const plural = shape.unexpectedPropertyCount === 1 ? "property is" : "properties are";
     parts.push(
       ` ${String(shape.unexpectedPropertyCount)} ${plural} not declared by the schema and must be removed.`,
+    );
+  }
+  if (shape.droppedPathCount > 0) {
+    parts.push(
+      ` ${String(shape.droppedPathCount)} further mismatching ${shape.droppedPathCount === 1 ? "property is" : "properties are"} not listed; check every remaining property against the schema.`,
     );
   }
   return parts.join("");
@@ -473,6 +482,7 @@ export class Gateway {
               missingRequiredCount: repair.shape.missingRequired.length,
               invalidPathCount: repair.shape.invalidPaths.length,
               unexpectedPropertyCount: repair.shape.unexpectedPropertyCount,
+              droppedPathCount: repair.shape.droppedPathCount,
             }),
         ...budget,
         correctionMessageCount: 1,

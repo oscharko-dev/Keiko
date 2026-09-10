@@ -163,6 +163,7 @@ interface CatalogRejectionDetails {
   readonly invalidPaths?: readonly string[] | undefined;
   readonly invalidPathCount?: number | undefined;
   readonly unexpectedPropertyCount?: number | undefined;
+  readonly droppedPathCount?: number | undefined;
 }
 
 // The schema's account of an `invalid-shape` rejection, in the schema's vocabulary only: declared
@@ -176,6 +177,7 @@ function shapeDetails(shape: CatalogSchemaMismatch | undefined): CatalogRejectio
     invalidPaths: shape.invalidPaths,
     invalidPathCount: shape.invalidPaths.length,
     unexpectedPropertyCount: shape.unexpectedPropertyCount,
+    droppedPathCount: shape.droppedPathCount,
   };
 }
 

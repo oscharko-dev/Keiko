@@ -27,6 +27,11 @@ export interface CatalogSchemaMismatch {
   readonly invalidPaths: readonly string[];
   /** Properties the value carries that a closed object schema does not declare. */
   readonly unexpectedPropertyCount: number;
+  /**
+   * Distinct mismatching paths the two list caps left out; 0 when every distinct path is listed. The
+   * lists never repeat a path, so this counts genuinely different violations, not repeated items.
+   */
+  readonly droppedPathCount: number;
 }
 
 /**

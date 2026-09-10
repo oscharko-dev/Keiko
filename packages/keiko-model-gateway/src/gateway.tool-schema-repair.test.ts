@@ -2,7 +2,12 @@ import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gatewa
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { describe, expect, it, vi } from "vitest";
 import { openCodeGatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
-import { Gateway, type GatewayCallRequest, type GatewaySpendReservation } from "./gateway.js";
+import {
+  Gateway,
+  schemaMismatchGuidance,
+  type GatewayCallRequest,
+  type GatewaySpendReservation,
+} from "./gateway.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 import { createGatewayToolCatalogBridge } from "./toolCatalogBridge.js";
@@ -242,10 +247,16 @@ describe("Gateway bounded tool-schema repair", () => {
         missingRequiredCount: 3,
         invalidPathCount: 0,
         unexpectedPropertyCount: 0,
+        droppedPathCount: 0,
       },
     });
     expect(events.find((event) => event.op === "gateway.tool-catalog.repair")).toMatchObject({
-      extra: { missingRequiredCount: 3, invalidPathCount: 0, unexpectedPropertyCount: 0 },
+      extra: {
+        missingRequiredCount: 3,
+        invalidPathCount: 0,
+        unexpectedPropertyCount: 0,
+        droppedPathCount: 0,
+      },
     });
     expect(JSON.stringify(events)).not.toContain(INVALID_ARGUMENT_SECRET);
   });
@@ -380,5 +391,39 @@ describe("Gateway bounded tool-schema repair", () => {
         effectStarted: false,
       },
     });
+  });
+});
+
+// PR #3452 review: the account lists distinct paths, capped and sorted, and counts what the cap left
+// out. No offered tool declares more than sixteen distinct schema paths, so the "not listed" sentence
+// cannot be reached through a provider round trip and is pinned directly, for both branches.
+describe("schemaMismatchGuidance", () => {
+  const repair = (
+    droppedPathCount: number,
+  ): NonNullable<Parameters<typeof schemaMismatchGuidance>[0]> => ({
+    toolCallId: "call-1",
+    offeredAlias: "keiko_changeset_edit",
+    shape: {
+      missingRequired: [],
+      invalidPaths: ["changeset.patch"],
+      unexpectedPropertyCount: 0,
+      droppedPathCount,
+    },
+  });
+
+  it("names how many distinct mismatching properties the capped account left out", () => {
+    expect(schemaMismatchGuidance(repair(3))).toBe(
+      " Properties whose value does not match the schema: changeset.patch. 3 further mismatching properties are not listed; check every remaining property against the schema.",
+    );
+    expect(schemaMismatchGuidance(repair(1))).toContain(
+      "1 further mismatching property is not listed",
+    );
+  });
+
+  it("says nothing about unlisted properties while the account is complete", () => {
+    expect(schemaMismatchGuidance(repair(0))).toBe(
+      " Properties whose value does not match the schema: changeset.patch.",
+    );
+    expect(schemaMismatchGuidance(undefined)).toBe("");
   });
 });

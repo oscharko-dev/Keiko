@@ -486,6 +486,7 @@ describe("gateway bridge trust and compatibility boundaries", () => {
         invalidPaths: [],
         invalidPathCount: 0,
         unexpectedPropertyCount: 1,
+        droppedPathCount: 0,
       },
     });
   });

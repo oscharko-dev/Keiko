@@ -326,6 +326,7 @@ describe("schema mismatch account", () => {
       missingRequired: ["changeset.files[].file"],
       invalidPaths: ["changeset.files[].file", "changeset.mode", "changeset.patch"],
       unexpectedPropertyCount: 2,
+      droppedPathCount: 0,
     });
     expect(JSON.stringify(mismatch)).not.toContain(secret);
     expect(matchesCatalogSchema(schema, value)).toBe(false);
@@ -337,11 +338,35 @@ describe("schema mismatch account", () => {
     expect(matchesCatalogSchema(schema, matching)).toBe(true);
   });
 
+  // PR #3452 review: the account listed one entry per offending VALUE, capped at sixteen, so twenty
+  // malformed items of one array filled the list and a distinct violation reached later in the walk
+  // was dropped from the log line and from the correction the model received -- the model fixed what
+  // it was told and was rejected again for a defect it was never informed of. Paths are distinct
+  // now, and what the cap drops is counted.
+  it("collapses identical violations from many array items and still names a distinct later one", () => {
+    const value = copyCatalogJson({
+      changeset: {
+        // `files` is walked before `patch`: the distinct violation comes AFTER the repeated ones.
+        files: Array.from({ length: 20 }, () => ({})),
+        mode: "literal",
+        patch: 5,
+      },
+    });
+    expect(describeCatalogSchemaMismatch(schema, value)).toEqual({
+      missingRequired: ["changeset.files[].file"],
+      invalidPaths: ["changeset.patch"],
+      unexpectedPropertyCount: 0,
+      droppedPathCount: 0,
+    });
+    expect(matchesCatalogSchema(schema, value)).toBe(false);
+  });
+
   it("reports a wrong root type and caps every list", () => {
     expect(describeCatalogSchemaMismatch(schema, copyCatalogJson("text"))).toEqual({
       missingRequired: [],
       invalidPaths: ["$"],
       unexpectedPropertyCount: 0,
+      droppedPathCount: 0,
     });
     const wide = compileCatalogSchema({
       type: "object",
@@ -353,6 +378,14 @@ describe("schema mismatch account", () => {
     });
     const account = describeCatalogSchemaMismatch(wide, copyCatalogJson({}));
     expect(account?.missingRequired).toHaveLength(16);
+    // The sixteen listed are the first of the SORTED distinct set (deterministic), and the twenty-four
+    // the cap left out are counted, not lost.
+    expect(account?.missingRequired).toEqual(
+      Array.from({ length: 40 }, (_, index) => `p${String(index)}`)
+        .sort()
+        .slice(0, 16),
+    );
+    expect(account?.droppedPathCount).toBe(24);
     expect(matchesCatalogSchema(wide, copyCatalogJson({}))).toBe(false);
   });
 });

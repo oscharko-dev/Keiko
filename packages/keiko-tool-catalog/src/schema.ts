@@ -155,9 +155,14 @@ function withinNumericBounds(
 
 const MAX_MISMATCH_PATHS = 16;
 
+// Distinct schema paths, never one entry per offending value: an array walk names every item under
+// the same `…[]…` path, so twenty malformed items are one path here, and a distinct violation
+// reached later in the walk is never crowded out of the account (PR #3452 review). The sets are
+// bounded by the compiled schema's own shape — paths name declared properties and `[]`/`*` nodes —
+// not by the payload.
 interface MismatchCollector {
-  readonly missingRequired: string[];
-  readonly invalidPaths: string[];
+  readonly missingRequired: Set<string>;
+  readonly invalidPaths: Set<string>;
   unexpectedPropertyCount: number;
 }
 
@@ -166,12 +171,25 @@ function joinSchemaPath(path: string, key: string): string {
 }
 
 function noteInvalid(out: MismatchCollector, path: string): false {
-  if (out.invalidPaths.length < MAX_MISMATCH_PATHS) out.invalidPaths.push(path === "" ? "$" : path);
+  out.invalidPaths.add(path === "" ? "$" : path);
   return false;
 }
 
 function noteMissing(out: MismatchCollector, path: string): void {
-  if (out.missingRequired.length < MAX_MISMATCH_PATHS) out.missingRequired.push(path);
+  out.missingRequired.add(path);
+}
+
+// The cap applies to the SORTED distinct set, so which paths are listed is deterministic, and what
+// it drops is counted rather than lost.
+function cappedPaths(paths: ReadonlySet<string>): {
+  readonly listed: readonly string[];
+  readonly dropped: number;
+} {
+  const sorted = [...paths].sort(compareStrings);
+  return {
+    listed: Object.freeze(sorted.slice(0, MAX_MISMATCH_PATHS)),
+    dropped: Math.max(0, sorted.length - MAX_MISMATCH_PATHS),
+  };
 }
 
 function collectObjectMismatch(
@@ -282,22 +300,26 @@ function collectMismatch(
 /**
  * Why `value` fails `schema`, in the schema's own vocabulary, or `undefined` when it matches. Paths
  * name declared properties (`changeset.files[].file`), never the value; a property the schema does
- * not declare is counted, not named. Both lists are sorted and capped at MAX_MISMATCH_PATHS entries.
+ * not declare is counted, not named. Both lists hold distinct paths, sorted and capped at
+ * MAX_MISMATCH_PATHS entries; `droppedPathCount` says how many distinct paths the caps left out.
  */
 export function describeCatalogSchemaMismatch(
   schema: CatalogJsonObject,
   value: CatalogJsonValue,
 ): CatalogSchemaMismatch | undefined {
   const out: MismatchCollector = {
-    missingRequired: [],
-    invalidPaths: [],
+    missingRequired: new Set<string>(),
+    invalidPaths: new Set<string>(),
     unexpectedPropertyCount: 0,
   };
   if (collectMismatch(schema, value, "", out)) return undefined;
+  const missing = cappedPaths(out.missingRequired);
+  const invalid = cappedPaths(out.invalidPaths);
   return Object.freeze({
-    missingRequired: Object.freeze([...out.missingRequired].sort(compareStrings)),
-    invalidPaths: Object.freeze([...out.invalidPaths].sort(compareStrings)),
+    missingRequired: missing.listed,
+    invalidPaths: invalid.listed,
     unexpectedPropertyCount: out.unexpectedPropertyCount,
+    droppedPathCount: missing.dropped + invalid.dropped,
   });
 }
 
