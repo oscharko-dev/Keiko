@@ -69,6 +69,7 @@ import type {
 } from "./codingToolGovernedDelegate.js";
 import {
   CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS,
+  dependencyBootstrapFailureSummary,
   type CodingToolVerificationFailure,
   type CodingToolVerificationResult,
 } from "./codingToolIpc.js";
@@ -1247,9 +1248,8 @@ function dependencyBootstrapFailure(
   failureOutput: readonly VerificationStepOutput[],
 ): CodingToolVerificationFailure {
   const excerpt = failureOutput.find((output) => output.step === "dependencies")?.excerpt;
-  const detail = dependencies.detail === undefined ? "" : `: ${dependencies.detail}`;
   return {
-    summary: `dependency installation ${dependencies.state}${detail}; no verification step ran`,
+    summary: dependencyBootstrapFailureSummary(dependencies.state),
     locations: [],
     truncated: false,
     ...(excerpt === undefined ? {} : { excerpt }),

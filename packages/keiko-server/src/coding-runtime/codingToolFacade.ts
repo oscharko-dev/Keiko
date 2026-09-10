@@ -26,6 +26,7 @@ import { validateAuxiliaryCapabilityOutcomeV1 } from "@oscharko-dev/keiko-contra
 import {
   isVerificationDependencySummary,
   isVerificationFailureLocation,
+  VERIFICATION_DEPENDENCY_FAILURE_STATES,
 } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS } from "@oscharko-dev/keiko-verification";
 
@@ -35,6 +36,7 @@ import {
   CODING_TOOL_MAX_READ_BYTES,
   CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS,
   CODING_TOOL_VERIFICATION_SUMMARY_MAX_CHARS,
+  dependencyBootstrapFailureSummary,
   isPermissionObservation,
   parseCodingToolRequest,
   type CodingToolActionRequest,
@@ -666,8 +668,21 @@ function validVerificationFailureHeader(
   return (
     value.summary.length > 0 &&
     value.summary.length <= CODING_TOOL_VERIFICATION_SUMMARY_MAX_CHARS &&
-    VERIFICATION_FAILURE_SUMMARY.test(value.summary) &&
+    summaryNamesItsSubject(value.summary, value.dependencies) &&
     typeof value.truncated === "boolean"
+  );
+}
+
+// A step failure carries the step's closed summary and no dependency summary; a failed dependency
+// bootstrap carries its own closed summary for exactly the state its dependency summary reports.
+// Before this, every bootstrap failure failed the step pattern and the facade dropped the whole
+// failure (reason, excerpt and dependency summary) before it reached the model (#3452).
+function summaryNamesItsSubject(summary: string, dependencies: unknown): boolean {
+  if (dependencies === undefined) return VERIFICATION_FAILURE_SUMMARY.test(summary);
+  return (
+    isVerificationDependencySummary(dependencies) &&
+    VERIFICATION_DEPENDENCY_FAILURE_STATES.has(dependencies.state) &&
+    summary === dependencyBootstrapFailureSummary(dependencies.state)
   );
 }
 

@@ -14,6 +14,7 @@ import type {
   AuxiliaryCapabilityOutcomeV1,
   CodingWorkbenchRuntimeAuthorityEnvelope,
   EditorAgentChangeset,
+  VerificationDependencyState,
   VerificationDependencySummary,
   VerificationFailureLocation,
   VerifiedCommitResult,
@@ -89,6 +90,15 @@ export interface CodingToolVerificationFailure {
   readonly excerpt?: string | undefined;
   /** The dependency bootstrap's body-free summary when it, not a step, failed the run. */
   readonly dependencies?: VerificationDependencySummary | undefined;
+}
+
+/**
+ * The one summary a failed dependency bootstrap carries: its closed state, never its free-text
+ * detail, which rides in `dependencies.detail` under the contract's own bound. The producer and the
+ * facade's admission both read it from here, so the two cannot drift apart again (#3452).
+ */
+export function dependencyBootstrapFailureSummary(state: VerificationDependencyState): string {
+  return `dependency installation ${state}; no verification step ran`;
 }
 
 export type CodingToolActionRequest =
