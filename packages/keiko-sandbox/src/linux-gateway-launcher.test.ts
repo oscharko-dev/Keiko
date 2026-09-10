@@ -459,6 +459,42 @@ describe("real OS-level gateway confinement (Linux namespace bridge, #3422)", ()
   const platformIsLinux = process.platform === "linux";
 
   it.skipIf(!platformIsLinux)(
+    "passes the anonymous bridge through the unshare fallback",
+    async () => {
+      const availability = probeBackends();
+      if (!availability.unshare) throw new Error("linux-unshare-proof-backend-unavailable");
+      const gateway = await listenEphemeral();
+      try {
+        const result = await runChild(
+          process.execPath,
+          [
+            linuxGatewayLauncherPath(),
+            "host",
+            "unshare",
+            "127.0.0.1",
+            String(gateway.port),
+            process.cwd(),
+            process.execPath,
+            "-e",
+            ROUND_TRIP_SNIPPET,
+            String(gateway.port),
+          ],
+          process.env,
+          true,
+        );
+        expect(result).toEqual({
+          status: 0,
+          stdout: "RELAYED",
+          stderr: "",
+          launcherDiagnostics: "",
+        });
+      } finally {
+        await close(gateway.server);
+      }
+    },
+  );
+
+  it.skipIf(!platformIsLinux)(
     "permits only the configured gateway and isolates concurrent gateway ports",
     async () => {
       const availability = probeBackends();
