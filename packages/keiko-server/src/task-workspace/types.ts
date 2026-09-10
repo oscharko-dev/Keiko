@@ -156,7 +156,15 @@ export interface WorkspaceProvisioningServiceDeps extends WorkspaceActivityLogSe
   // repository was granted: nothing revisited the record afterwards, so the editor's restricted-mode
   // level for that worktree could never follow the repository (#3382). The guards are now the whole
   // rule; the flag is gone (pinned in deps.test.ts, which asserts the guards directly).
-  readonly ensureManagedWorkspaceIdentity?: ((instance: WorkspaceInstance) => void) | undefined;
+  //
+  // `correlationId` is the triggering operation's own id: this seam WRITES server-owned identity
+  // (project rows for the worktree and for the repository it was bound from), and that evidence has
+  // to join the provision/activate timeline that caused it. Production's inner call used to pass
+  // none, so the registration line landed under UNKNOWN_CORRELATION_ID while the lifecycle line 4 ms
+  // later carried the real id (run 9 setup, 2026-09-10). Optional so every existing test double
+  // keeps compiling.
+  readonly ensureManagedWorkspaceIdentity?:
+    ((instance: WorkspaceInstance, correlationId?: string) => void) | undefined;
   // Optional: how long a provisioning/activation lock stays valid before it is treated as stale.
   readonly lockTtlMs?: number | undefined;
   // In-process serializer shared across all mutating workspace services (#449, ADR-0093 D1): provision

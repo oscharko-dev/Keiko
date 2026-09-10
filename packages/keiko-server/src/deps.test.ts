@@ -756,6 +756,57 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     }
   });
 
+  // PR #3452 review: the exclusion branch had no coverage anywhere, and it approximated
+  // `assertUiDbOutsideProject` instead of asking it. Both cells of the canonical rule are pinned
+  // here, against the SAME helper every other project-registration site uses.
+  it.each([
+    [
+      "refuses a repository that would expose the UI database",
+      (repositoryRoot: string): string => join(repositoryRoot, "state", "keiko-ui.db"),
+      false,
+    ],
+    [
+      "registers a self-hosted repository whose database sits in its runtime state root",
+      (repositoryRoot: string): string =>
+        join(repositoryRoot, ".keiko", "dev", "ui", "keiko-ui.db"),
+      true,
+    ],
+    [
+      "registers a repository whose database lives outside it",
+      (): string => join(tmpdir(), "keiko-elsewhere", "keiko-ui.db"),
+      true,
+    ],
+  ])("%s", (_label, dbPathFor, registered) => {
+    const repositoryRoot = tmp("managed-root-uidb-source-");
+    const managedRoot = tmp("managed-root-uidb-target-");
+    const manifest = JSON.stringify({ name: "shared" });
+    writeFileSync(join(repositoryRoot, "package.json"), manifest);
+    writeFileSync(join(managedRoot, "package.json"), manifest);
+    const instance = managedWorkspaceInstance(repositoryRoot, managedRoot);
+    const store = createInMemoryUiStore();
+    const workspaceScriptTrust = createWorkspaceScriptTrustService({ store });
+    const events: ServerLogEvent[] = [];
+
+    try {
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore: store,
+        workspaceScriptTrust,
+        instance,
+        uiDbPath: dbPathFor(repositoryRoot),
+        activityLog: { write: (event: ServerLogEvent): void => void events.push(event) },
+      });
+
+      expect(store.listProjects().some((project) => project.path === repositoryRoot)).toBe(
+        registered,
+      );
+      expect(events).toHaveLength(registered ? 1 : 0);
+      // The worktree's own identity is registered either way: the repository decision never gates it.
+      expect(store.listProjects().some((project) => project.path === managedRoot)).toBe(true);
+    } finally {
+      store.close();
+    }
+  });
+
   it("does not infer managed trust from a registered root without a human selection grant", () => {
     const repositoryRoot = tmp("managed-root-untrusted-source-");
     const managedRoot = tmp("managed-root-untrusted-target-");

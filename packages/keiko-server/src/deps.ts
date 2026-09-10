@@ -86,15 +86,7 @@ import {
   resolveExistingAllowedWorkspaceRealRoot,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import {
-  basename,
-  delimiter,
-  dirname,
-  isAbsolute,
-  join,
-  relative as relative_,
-  resolve,
-} from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync } from "node:fs";
 import type { BigIntStats } from "node:fs";
 import type { RunRegistry } from "./runs.js";
@@ -2247,6 +2239,8 @@ export function ensureManagedTaskWorkspaceIdentity(input: {
   readonly instance: WorkspaceInstance;
   /** The provisioning request's own correlation id, so the registration joins that timeline. */
   readonly correlationId?: string | undefined;
+  /** The UI database path, so the repository registration asks the canonical containment rule. */
+  readonly uiDbPath?: string | undefined;
   readonly activityLog?: ServerLogSink | undefined;
 }): void {
   ensureBoundRepositoryProject(input);
@@ -2273,27 +2267,28 @@ export function ensureManagedTaskWorkspaceIdentity(input: {
   );
 }
 
-function isPathInside(candidate: string, parent: string): boolean {
-  const relative = relative_(parent, candidate);
-  return relative.length > 0 && !relative.startsWith("..") && !isAbsolute(relative);
-}
-
 // Registration only, never a grant — see `ensureManagedTaskWorkspaceIdentity`. Body-free evidence:
 // the repository's own id, and whether this call created the row; never a path.
 function ensureBoundRepositoryProject(input: {
   readonly uiStore: UiStore;
   readonly instance: WorkspaceInstance;
   readonly correlationId?: string | undefined;
+  readonly uiDbPath?: string | undefined;
   readonly activityLog?: ServerLogSink | undefined;
 }): void {
   const { repositoryRoot } = input.instance;
   if (input.uiStore.listProjects().some((project) => project.path === repositoryRoot)) return;
-  // A repository that CONTAINS the managed worktree also contains Keiko's own state directory, and
-  // therefore the UI database (`assertUiDbOutsideProject`'s invariant). Registering it would put the
-  // database inside a project's read surface, so this root is left unregistered — it keeps exactly
-  // the behaviour that stood before this repair, and Keiko's own checkout is registered as the
-  // workspace context anyway.
-  if (isPathInside(input.instance.managedWorktreePath, repositoryRoot)) return;
+  // The SAME containment rule every other project-registration site asks (`store/paths.ts`, used by
+  // `handleCreateProject`, `gitRepositoryRoutes` and `seedInitialProject`): a project must not expose
+  // the UI database, and a project inside the database's own directory is refused. Asked rather than
+  // approximated, so this path cannot drift from the invariant it protects (PR #3452 review); a
+  // refusal leaves the root unregistered, which is exactly the behaviour that stood before this
+  // repair.
+  try {
+    assertUiDbOutsideProject(input.uiDbPath, repositoryRoot);
+  } catch {
+    return;
+  }
   input.uiStore.createProject(repositoryRoot, basename(repositoryRoot));
   (input.activityLog ?? processServerLogSink()).write({
     category: "security",
@@ -2307,6 +2302,7 @@ function withManagedWorkspaceIdentity(
   provisioning: WorkspaceProvisioningService,
   uiStore: UiStore,
   workspaceScriptTrust: WorkspaceScriptTrustService,
+  uiDbPath: string | undefined,
 ): WorkspaceProvisioningService {
   return {
     provision: async (request): ReturnType<WorkspaceProvisioningService["provision"]> => {
@@ -2315,6 +2311,7 @@ function withManagedWorkspaceIdentity(
         uiStore,
         workspaceScriptTrust,
         instance: result.instance,
+        ...(uiDbPath === undefined ? {} : { uiDbPath }),
         ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
       });
       return result;
@@ -2325,6 +2322,7 @@ function withManagedWorkspaceIdentity(
         uiStore,
         workspaceScriptTrust,
         instance: result.instance,
+        ...(uiDbPath === undefined ? {} : { uiDbPath }),
         ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
       });
       return result;
@@ -2333,7 +2331,12 @@ function withManagedWorkspaceIdentity(
       provisioning.getInstance(workspaceId),
     ensureIdentity: (instance): void => {
       provisioning.ensureIdentity?.(instance);
-      ensureManagedTaskWorkspaceIdentity({ uiStore, workspaceScriptTrust, instance });
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore,
+        workspaceScriptTrust,
+        instance,
+        ...(uiDbPath === undefined ? {} : { uiDbPath }),
+      });
     },
     // Forwarded, not re-implemented: this wrapper adds Project/Manifest identity around an INJECTED
     // provisioning service, and it owns no store or mutex of its own. A wrapper that silently
@@ -2366,6 +2369,7 @@ function buildWorkspaceProvisioning(
       options.workspaceProvisioning,
       uiStore,
       workspaceScriptTrust,
+      args.resolvedUiDbPath,
     );
   }
   if (instanceStore === undefined) return undefined;
@@ -2377,8 +2381,14 @@ function buildWorkspaceProvisioning(
     redactString: args.redactString,
     now: () => Date.now(),
     newId: randomUUID,
-    ensureManagedWorkspaceIdentity: (instance): void => {
-      ensureManagedTaskWorkspaceIdentity({ uiStore, workspaceScriptTrust, instance });
+    ensureManagedWorkspaceIdentity: (instance, correlationId): void => {
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore,
+        workspaceScriptTrust,
+        instance,
+        uiDbPath: args.resolvedUiDbPath,
+        ...(correlationId === undefined ? {} : { correlationId }),
+      });
     },
     mutex: args.mutex,
   });

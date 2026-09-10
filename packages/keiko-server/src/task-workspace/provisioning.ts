@@ -314,7 +314,7 @@ function assertPersistedManagedPath(ctx: ProvisioningCtx, instance: WorkspaceIns
 
 function ensureManagedWorkspaceIdentity(ctx: ProvisioningCtx, instance: WorkspaceInstance): void {
   try {
-    ctx.deps.ensureManagedWorkspaceIdentity?.(instance);
+    ctx.deps.ensureManagedWorkspaceIdentity?.(instance, ctx.correlationId);
   } catch (error) {
     throw new TaskWorkspaceError(
       "PROVISIONING_FAILED",
