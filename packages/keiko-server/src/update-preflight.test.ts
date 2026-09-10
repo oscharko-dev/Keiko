@@ -822,6 +822,56 @@ describe("update preflight service", () => {
     deps.store.close();
   });
 
+  it("logs a body-free deadline reason when portable manifest fetches time out", async () => {
+    vi.useFakeTimers();
+    const target: UpdatePortableTarget = "macos-arm64";
+    const events: {
+      readonly op: string;
+      readonly extra?: Readonly<Record<string, unknown>> | undefined;
+    }[] = [];
+    const fetchImpl = vi.fn<typeof fetch>((input) => {
+      if (requestUrl(input).endsWith("/releases/latest")) {
+        return Promise.resolve(jsonResponse(portableRelease(target)));
+      }
+      return Promise.reject(new DOMException("sensitive timeout detail", "TimeoutError"));
+    });
+    const deps = depsWith(fetchImpl, {
+      activityLog: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
+    });
+
+    try {
+      const pending = runUpdatePreflight(deps, {
+        currentVersion: "0.2.10",
+        bundledCatalog: baseCatalog(),
+        installMode: () => portableMode(target),
+      });
+      await vi.runAllTimersAsync();
+      const report = await pending;
+
+      expect(report.blockers).toContainEqual(
+        expect.objectContaining({ code: "portable-manifest-malformed" }),
+      );
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          category: "diagnostic",
+          correlationId: UNKNOWN_CORRELATION_ID,
+          errorKind: "PORTABLE_FETCH_FAILURE",
+          level: "warn",
+          op: "update.portable-fetch.failed",
+          extra: { assetKind: "manifest", reason: "deadline-exceeded", target },
+        }),
+      );
+      expect(JSON.stringify(events)).not.toContain("sensitive timeout detail");
+    } finally {
+      vi.useRealTimers();
+      deps.store.close();
+    }
+  });
+
   it("reports redacted sidecar summaries for sidecar-bearing portable assets", async () => {
     const target: UpdatePortableTarget = "macos-arm64";
     const sidecar = sidecarRuntime(target);

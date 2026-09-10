@@ -23,6 +23,7 @@ import {
   fetchWithPortableRetry,
   firstClassArchiveSetComplete,
   portableBlocker,
+  portableFetchFailureReason,
   requiredAssetName,
 } from "./update-preflight-portable-shared.js";
 import { isRecord } from "./update-preflight-registry.js";
@@ -361,6 +362,15 @@ async function readAssetSafely(
         level: "warn",
         op: "update.portable-asset.redirect-refused",
         extra: { assetKind, reason: error.reason, target },
+      });
+    } else {
+      deps.activityLog?.write({
+        category: "diagnostic",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        errorKind: "PORTABLE_FETCH_FAILURE",
+        level: "warn",
+        op: "update.portable-fetch.failed",
+        extra: { assetKind, reason: portableFetchFailureReason(error), target },
       });
     }
     return undefined;

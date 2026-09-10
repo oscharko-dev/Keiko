@@ -29,6 +29,9 @@ export interface PortableFetchRetryOptions {
 export type PortableAssetRedirectFailureReason =
   "missing-location" | "malformed-location" | "unsafe-target" | "loop" | "limit" | "unsafe-origin";
 
+export type PortableFetchFailureReason =
+  "deadline-exceeded" | "request-aborted" | "network-unavailable" | "unexpected-failure";
+
 const REDIRECT_FAILURE_MESSAGES: Readonly<Record<PortableAssetRedirectFailureReason, string>> = {
   "missing-location": "asset redirect location is missing",
   "malformed-location": "asset redirect location is malformed",
@@ -43,6 +46,19 @@ export class PortableAssetRedirectError extends Error {
     super(REDIRECT_FAILURE_MESSAGES[reason]);
     this.name = "PortableAssetRedirectError";
   }
+}
+
+export function portableFetchFailureReason(error: unknown): PortableFetchFailureReason {
+  if (error instanceof DOMException) {
+    if (error.name === "TimeoutError") return "deadline-exceeded";
+    if (error.name === "AbortError") return "request-aborted";
+  }
+  if (error instanceof TypeError) return "network-unavailable";
+  if (typeof error !== "object" || error === null) return "unexpected-failure";
+  const code = (error as { readonly code?: unknown }).code;
+  return code === "EAI_AGAIN" || code === "ENOTFOUND" || code === "ETIMEDOUT"
+    ? "network-unavailable"
+    : "unexpected-failure";
 }
 
 function transientNetworkError(error: unknown): boolean {

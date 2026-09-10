@@ -7,12 +7,14 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayEgressConfig } from "./deps.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { resolvePortableAsset } from "./update-preflight-portable-evidence.js";
 import {
   type GitHubAsset,
   type PortableRelease,
   fetchWithPortableRetry,
   portableBlocker,
+  portableFetchFailureReason,
   requiredAssetName,
 } from "./update-preflight-portable-shared.js";
 import {
@@ -188,6 +190,22 @@ async function fetchLatestRelease(deps: UiHandlerDeps): Promise<LatestReleaseFet
   return release === undefined ? { status: "malformed" } : { status: "ok", release };
 }
 
+function recordPortableFetchFailure(
+  deps: UiHandlerDeps,
+  error: unknown,
+  target: UpdatePortableTarget,
+  assetKind: "release-evidence" | "release-metadata",
+): void {
+  deps.activityLog?.write({
+    category: "diagnostic",
+    correlationId: UNKNOWN_CORRELATION_ID,
+    errorKind: "PORTABLE_FETCH_FAILURE",
+    level: "warn",
+    op: "update.portable-fetch.failed",
+    extra: { assetKind, reason: portableFetchFailureReason(error), target },
+  });
+}
+
 function notNeededOutcome(
   release: PortableReleaseMetadata,
   target: UpdatePortableTarget,
@@ -212,13 +230,19 @@ export async function fetchPortableGitHubReleaseAssets(
   currentVersion: string,
   target: UpdatePortableTarget,
 ): Promise<PortableGitHubReleaseOutcome> {
+  let result: LatestReleaseFetch;
   try {
-    const result = await fetchLatestRelease(deps);
-    if (result.status === "unavailable") return unavailableOutcome();
-    if (result.status === "malformed") return malformedOutcome();
-    if (compareSemver(result.release.targetVersion, currentVersion) <= 0) {
-      return notNeededOutcome(result.release, target);
-    }
+    result = await fetchLatestRelease(deps);
+  } catch (error) {
+    recordPortableFetchFailure(deps, error, target, "release-metadata");
+    return unavailableOutcome();
+  }
+  if (result.status === "unavailable") return unavailableOutcome();
+  if (result.status === "malformed") return malformedOutcome();
+  if (compareSemver(result.release.targetVersion, currentVersion) <= 0) {
+    return notNeededOutcome(result.release, target);
+  }
+  try {
     const resolution = await resolvePortableAsset(deps, result.release, target);
     return {
       status: "live",
@@ -228,7 +252,8 @@ export async function fetchPortableGitHubReleaseAssets(
       blockers: resolution.blockers,
       warnings: resolution.warnings,
     };
-  } catch {
+  } catch (error) {
+    recordPortableFetchFailure(deps, error, target, "release-evidence");
     return unavailableOutcome();
   }
 }
