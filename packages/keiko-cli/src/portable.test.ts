@@ -234,7 +234,7 @@ const INVALID_SETUP_MANIFEST_CASES: readonly InvalidSetupManifestCase[] = [
   },
   {
     name: "unsupported target",
-    manifest: (base) => ({ ...base, platformTarget: "linux-x64" }),
+    manifest: (base) => ({ ...base, platformTarget: "linux-arm64" }),
     message: "portable setup manifest target is unsupported",
   },
   {
@@ -261,7 +261,7 @@ const INVALID_SETUP_MANIFEST_CASES: readonly InvalidSetupManifestCase[] = [
     name: "unsupported runtime platform",
     manifest: (base) => ({
       ...base,
-      runtime: { nodePlatform: "linux", nodeArchitecture: "x64" },
+      runtime: { nodePlatform: "freebsd", nodeArchitecture: "x64" },
     }),
     message: "portable setup manifest runtime platform is unsupported",
   },
@@ -344,7 +344,7 @@ describe("runPortableCli", () => {
     ["unknown command", ["bogus"]],
     ["unknown flag", ["setup", "--bogus"]],
     ["missing flag value", ["setup", "--target"]],
-    ["unsupported target flag", ["setup", "--target", "linux-x64"]],
+    ["unsupported target flag", ["setup", "--target", "linux-arm64"]],
   ] as const)("prints usage for invalid portable args: %s", async (_name, args) => {
     const c = capture();
 
@@ -362,7 +362,7 @@ describe("runPortableCli", () => {
       c.io,
       {},
       {
-        platform: () => "linux",
+        platform: () => "freebsd",
         arch: () => "x64",
       },
     );

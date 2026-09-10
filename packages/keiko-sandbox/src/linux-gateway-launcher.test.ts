@@ -40,6 +40,15 @@ const ROUND_TRIP_SNIPPET = [
   "socket.on('timeout', () => { process.stdout.write('TIMEOUT'); socket.destroy(); process.exitCode = 3; });",
 ].join("");
 
+const EXTERNAL_DESTINATION_SNIPPET = [
+  "const net = require('node:net');",
+  "const socket = net.connect({ host: '192.0.2.1', port: 443 });",
+  "socket.setTimeout(3000);",
+  "socket.on('connect', () => { process.stdout.write('REACHED'); socket.destroy(); process.exitCode = 44; });",
+  "socket.on('error', () => { process.stdout.write('BLOCKED'); });",
+  "socket.on('timeout', () => { process.stdout.write('BLOCKED'); socket.destroy(); });",
+].join("");
+
 const HELD_ROUND_TRIP_SNIPPET = [
   "const fs = require('node:fs');",
   "const net = require('node:net');",
@@ -528,6 +537,22 @@ describe("real OS-level gateway confinement (Linux namespace bridge, #3422)", ()
         const deniedResult = await runChild(denied.command, denied.args, env);
         expect(["BLOCKED", "TIMEOUT"]).toContain(deniedResult.stdout);
         expect(deniedResult.stdout).not.toBe("RELAYED");
+
+        const external = requireWrapped(
+          planIsolatedRun(
+            {
+              ...plan(firstGateway.port, firstGateway.port),
+              args: ["-e", EXTERNAL_DESTINATION_SNIPPET],
+            },
+            availability,
+            "linux",
+          ),
+        );
+        expect(await runChild(external.command, external.args, env)).toEqual({
+          status: 0,
+          stdout: "BLOCKED",
+          stderr: "",
+        });
 
         const crossRun = requireWrapped(
           planIsolatedRun(plan(firstGateway.port, secondGateway.port), availability, "linux"),
