@@ -271,18 +271,12 @@ describe("Linux namespace command compilation", () => {
   };
 
   it("uses a parent-bound bubblewrap network namespace", () => {
-    const [command, args] = buildLinuxGatewayNamespaceCommand(
-      config,
-      "/tmp/private/relay.sock",
-      true,
-    );
+    const [command, args] = buildLinuxGatewayNamespaceCommand(config, "/tmp/private/relay.sock");
     expect(command).toBe("bwrap");
     expect(args).toEqual([
       "--unshare-net",
       "--die-with-parent",
       "--new-session",
-      "--sync-fd",
-      "3",
       "--dev-bind",
       "/",
       "/",

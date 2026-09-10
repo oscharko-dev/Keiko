@@ -607,17 +607,17 @@ function namespaceArgs(config: CommonConfig, socketPath: string): readonly strin
 export function buildLinuxGatewayNamespaceCommand(
   config: CommonConfig,
   socketPath: string,
-  preserveDiagnosticFd = false,
 ): readonly [string, readonly string[]] {
   const launcher = [process.execPath, ...namespaceArgs(config, socketPath)];
   if (config.backend === "bubblewrap") {
+    // Bubblewrap passes unused inherited descriptors to its child. Do not name fd 3 with
+    // `--sync-fd`: that option owns an eventfd and makes the diagnostic pipe unwritable.
     return [
       "bwrap",
       [
         "--unshare-net",
         "--die-with-parent",
         "--new-session",
-        ...(preserveDiagnosticFd ? ["--sync-fd", String(LINUX_GATEWAY_DIAGNOSTIC_FD)] : []),
         "--dev-bind",
         "/",
         "/",
@@ -722,11 +722,7 @@ async function runHost(config: CommonConfig): Promise<number> {
       await chmod(directory, 0o700);
       await listen(relay.server, socketPath);
       await chmod(socketPath, 0o600);
-      const [command, args] = buildLinuxGatewayNamespaceCommand(
-        config,
-        socketPath,
-        preserveDiagnosticFd,
-      );
+      const [command, args] = buildLinuxGatewayNamespaceCommand(config, socketPath);
       const child = spawn(command, args, {
         cwd: config.cwd,
         stdio: nestedLauncherStdio(preserveDiagnosticFd),

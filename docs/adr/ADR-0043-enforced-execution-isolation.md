@@ -18,7 +18,8 @@ code comments anticipated (no such files existed); those comments are updated to
 ## Version
 
 1.1 — Issue #3422 moves the internal Linux gateway launcher into the `keiko-sandbox` enforcement
-boundary while `keiko-tools` remains the disposable-command spawn boundary (2026-09-10).
+boundary while `keiko-tools` remains the disposable-command spawn boundary, and records the
+kernel-proven private diagnostics-descriptor lifecycle (2026-09-10).
 
 ## Context
 
@@ -221,13 +222,15 @@ network namespace, veth, NAT rule, root, or ambient `CAP_NET_ADMIN` is granted. 
 signals, relay failure, and cleanup stay inside the wrapper's fail-closed lifecycle.
 
 Launcher failures cross a dedicated descriptor-3 diagnostics channel that the server provisions
-only for the Linux wrapper. Bubblewrap preserves that descriptor explicitly; the namespace launcher
-removes both the descriptor and its marker environment variable before spawning the sidecar, so
-sidecar stderr cannot forge launcher evidence. The server accepts only the closed launcher error
-vocabulary and records the first failure as `runtime.confinement.failed`, with the run correlation
-id and body-free backend/source fields. A missing diagnostics pipe refuses the launch and terminates
-the just-spawned unowned process tree. This prepares the existing composition boundary for #3451
-without claiming that a Linux runtime target is already qualified.
+only for the Linux wrapper. Bubblewrap passes that otherwise-unused inherited descriptor to the
+namespace child; it must not claim descriptor 3 through `--sync-fd`, whose eventfd semantics make a
+text diagnostics pipe unwritable. The namespace launcher removes both the descriptor and its marker
+environment variable before spawning the sidecar, so sidecar stderr cannot forge launcher evidence.
+The server accepts only the closed launcher error vocabulary and records the first failure as
+`runtime.confinement.failed`, with the run correlation id and body-free backend/source fields. A
+missing diagnostics pipe refuses the launch and terminates the just-spawned unowned process tree.
+This prepares the existing composition boundary for #3451 without claiming that a Linux runtime
+target is already qualified.
 
 The Linux reference-runner test proves the mechanism rather than an argv string: the unconfined
 child completes a PING/PONG exchange with a hostile ephemeral loopback listener, the same child
