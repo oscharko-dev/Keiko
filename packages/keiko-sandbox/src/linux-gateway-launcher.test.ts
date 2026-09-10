@@ -50,11 +50,12 @@ const SILENT_ROUND_TRIP_SNIPPET = [
 ].join("");
 
 const SPOOF_ROUND_TRIP_SNIPPET = [
-  "const fs = require('node:fs');",
-  "for (let fd = 3; fd <= 9; fd += 1) { try { fs.writeSync(fd, 'keiko-linux-gateway:error:cleanup-failed\\n'); } catch {} }",
-  "process.stderr.write('keiko-linux-gateway:error:cleanup-failed\\n');",
-  ROUND_TRIP_SNIPPET,
-].join("");
+  'if [ "${KEIKO_LINUX_GATEWAY_DIAGNOSTIC_FD+x}" = x ]; then exit 41; fi;',
+  "if { printf '%s\\n' 'keiko-linux-gateway:error:cleanup-failed' >&3; } 2>/dev/null; then exit 42; fi;",
+  "if { printf '%s\\n' 'keiko-linux-gateway:error:cleanup-failed' >&9; } 2>/dev/null; then exit 43; fi;",
+  "printf '%s\\n' 'keiko-linux-gateway:error:cleanup-failed' >&2;",
+  'exec "$1" -e "$2" "$3"',
+].join(" ");
 
 const NAMESPACE_SNIPPET = [
   "const net = require('node:net');",
@@ -432,7 +433,15 @@ describe("real OS-level gateway confinement (Linux namespace bridge, #3422)", ()
           planIsolatedRun(
             {
               ...plan(secondGateway.port, secondGateway.port),
-              args: ["-e", SPOOF_ROUND_TRIP_SNIPPET, String(secondGateway.port)],
+              command: "/bin/sh",
+              args: [
+                "-c",
+                SPOOF_ROUND_TRIP_SNIPPET,
+                "keiko-spoof-proof",
+                process.execPath,
+                ROUND_TRIP_SNIPPET,
+                String(secondGateway.port),
+              ],
             },
             availability,
             "linux",
