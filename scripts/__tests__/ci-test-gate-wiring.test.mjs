@@ -53,6 +53,18 @@ const portableAssetsWorkflow = readFileSync(
   resolve(repoRoot, ".github/workflows/portable-assets.yml"),
   "utf8",
 );
+const secretScanningQueueWorkflow = readFileSync(
+  resolve(repoRoot, ".github/workflows/secret-scanning-queue.yml"),
+  "utf8",
+);
+const nightlyPerfEvidenceWorkflow = readFileSync(
+  resolve(repoRoot, ".github/workflows/nightly-perf-evidence.yml"),
+  "utf8",
+);
+const codeTaskRealBinaryWorkflow = readFileSync(
+  resolve(repoRoot, ".github/workflows/code-task-real-binary.yml"),
+  "utf8",
+);
 const htmlManualReleaseEvidence = readFileSync(
   resolve(repoRoot, "docs/qa/html-manual-retrieval-evaluation-evidence.md"),
   "utf8",
@@ -320,21 +332,23 @@ describe("CI test/gate wiring guard", () => {
       releaseWorkflow,
       portableAssetsWorkflow,
       mutationSecurityWorkflow,
+      secretScanningQueueWorkflow,
+      nightlyPerfEvidenceWorkflow,
+      codeTaskRealBinaryWorkflow,
     ].join("\n");
     const node24SetupCount = runtimeWorkflows.match(/node-version: "24\.18\.0"/gu)?.length ?? 0;
     const node26SetupCount = runtimeWorkflows.match(/node-version: "26\.8\.1"/gu)?.length ?? 0;
     const nodeSetupCount = node24SetupCount + node26SetupCount;
     const verificationCount =
       runtimeWorkflows.match(/node scripts\/check-runtime-toolchain\.mjs --exact/gu)?.length ?? 0;
-    // 17 -> 20 with the three coverage suite jobs Issue #2704 split out of `coverage-sonar`,
-    // then 20 -> 22 with the credential-free macOS qualification and protected sealing lanes,
-    // then 22 -> 23 with the diff-scoped semantic-duplication lane, 23 -> 24 when the secret scan
-    // adopted the governed runtime. The retired hosted performance policy no longer adds a lane.
-    // The load-bearing assertion is the pairing below: every Node lane, old or new, verifies the
+    // This inventory now covers all eight workflows that select Node. Issue #3403 retired six
+    // credential-bound Apple/Microsoft signing lanes; the platform-neutral staging matrix remains
+    // native and the release workflow applies the mandatory Keiko signature. Exact counts make a
+    // removed or unreviewed new lane fail, while the pairing below proves every lane verifies the
     // governed toolchain.
-    expect(node24SetupCount).toBe(24);
+    expect(node24SetupCount).toBe(20);
     expect(node26SetupCount).toBe(1);
-    expect(nodeSetupCount).toBe(25);
+    expect(nodeSetupCount).toBe(21);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
     expect(ci).toContain("NODE_26_COMPATIBILITY_RESULT");

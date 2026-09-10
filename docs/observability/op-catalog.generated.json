@@ -2840,7 +2840,7 @@
     {
       "op": "memory.audit.state-cache.seeded",
       "category": "memory",
-      "site": "packages/keiko-server/src/deps.ts:2115",
+      "site": "packages/keiko-server/src/deps.ts:2127",
       "package": "keiko-server"
     },
     {
@@ -3146,7 +3146,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3913",
+      "site": "packages/keiko-server/src/deps.ts:3925",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -3203,7 +3203,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2611",
+      "site": "packages/keiko-server/src/deps.ts:2623",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
