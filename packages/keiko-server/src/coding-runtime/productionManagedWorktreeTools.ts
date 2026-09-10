@@ -933,8 +933,9 @@ function buildVerificationRunner(
   let verificationSequence = 0;
   return {
     execute: async (request, signal, guard): Promise<VerificationPortResult> => {
-      if (!guard.check() || !live(input)) {
-        return verificationPortRefusal(input, "verification-authority-revoked");
+      const entryRefusal = verificationLivenessRefusal(input, guard, signal);
+      if (entryRefusal !== undefined) {
+        return verificationPortRefusal(input, "verification-authority-revoked", entryRefusal);
       }
       const kind = verificationKind(request.verifierId);
       if (kind === undefined) {
@@ -952,8 +953,9 @@ function buildVerificationRunner(
       }
       if (attempt.outcome === "refused") return attempt.result;
       if (attempt.outcome === "threw") return verificationRefused(input, attempt.error);
-      if (!verificationCompletionLive(input, guard, signal)) {
-        return verificationPortRefusal(input, "verification-authority-revoked");
+      const completionRefusal = verificationLivenessRefusal(input, guard, signal);
+      if (completionRefusal !== undefined) {
+        return verificationPortRefusal(input, "verification-authority-revoked", completionRefusal);
       }
       verificationSequence += 1;
       publishVerification(input, verificationSequence, attempt.report, request);
@@ -991,18 +993,20 @@ async function runVerificationAttempt(
   // Built on demand, never in advance: `verificationPortRefusal` EMITS the refusal diagnostic as a
   // side effect, so materialising it up front would report a revoked authority on every attempt
   // that then succeeded.
-  const revoked = (): VerificationAttempt => ({
+  const revoked = (condition: VerificationLivenessRefusal): VerificationAttempt => ({
     outcome: "refused",
-    result: verificationPortRefusal(input, "verification-authority-revoked"),
+    result: verificationPortRefusal(input, "verification-authority-revoked", condition),
   });
   try {
     const ticket = await input.verifiedCommitService?.beginVerification();
-    if (!verificationCompletionLive(input, guard, signal)) return revoked();
+    const beforeRun = verificationLivenessRefusal(input, guard, signal);
+    if (beforeRun !== undefined) return revoked(beforeRun);
     const report = await input.verificationRunner.runToReport(
       verificationRunInput(input, request, kind),
       signal ?? new AbortController().signal,
     );
-    if (!verificationCompletionLive(input, guard, signal)) return revoked();
+    const afterRun = verificationLivenessRefusal(input, guard, signal);
+    if (afterRun !== undefined) return revoked(afterRun);
     const commitProof = await completeCandidateVerification(input, ticket, report, guard, signal);
     return { outcome: "completed", report, commitProof };
   } catch (error) {
@@ -1139,9 +1143,10 @@ function verificationOutcome(
     };
   }
   // A passing runner whose authority lapsed is a refusal, never a failed test run.
-  return verificationCompletionLive(input, guard, signal)
+  const refusal = verificationLivenessRefusal(input, guard, signal);
+  return refusal === undefined
     ? { status: "completed", ...(commitProof === undefined ? {} : { verification: commitProof }) }
-    : verificationPortRefusal(input, "verification-authority-revoked");
+    : verificationPortRefusal(input, "verification-authority-revoked", refusal);
 }
 
 function modelVerificationFailure(
@@ -1183,12 +1188,28 @@ async function completeCandidateVerification(
     ? { commitProof: "recorded" }
     : { commitProof: "unavailable", reasonCode: "candidate-drift", nextAction: "verify-again" };
 }
-function verificationCompletionLive(
-  input: ProductionManagedWorktreeToolInput,
-  guard: CodingToolMutationGuard,
+export type VerificationLivenessRefusal = "signal-aborted" | "guard-rejected" | "run-not-live";
+
+/**
+ * Which of the three liveness conditions a verification effect fails, or undefined while all hold.
+ * One closed code (`verification-authority-revoked`) answers the model for all three, and until run
+ * 12 (2026-09-10) the refusal diagnostic said no more than that: a concurrent verification refused
+ * while its sibling waited on the operator's trust decision left no way to tell an aborted signal
+ * from a rejecting guard from a workspace that had stopped resolving. The condition is now the
+ * diagnostic's `code`, so the log names the one that fired.
+ */
+export function verificationLivenessRefusal(
+  input: Pick<
+    ProductionManagedWorktreeToolInput,
+    "liveFacts" | "resolveWorkspaceRootAccess" | "authorityExpiresAt"
+  >,
+  guard: Pick<CodingToolMutationGuard, "check">,
   signal: AbortSignal | undefined,
-): boolean {
-  return !signalAborted(signal) && guard.check() && live(input);
+): VerificationLivenessRefusal | undefined {
+  if (signalAborted(signal)) return "signal-aborted";
+  if (!guard.check()) return "guard-rejected";
+  if (!live(input)) return "run-not-live";
+  return undefined;
 }
 
 // The runner keys its run-started/step/terminal evidence and its own "execution failed
@@ -1248,8 +1269,9 @@ function verificationCorrelationId(input: ProductionManagedWorktreeToolInput): s
 function verificationPortRefusal(
   input: ProductionManagedWorktreeToolInput,
   reasonCode: "verification-authority-revoked" | "verification-verifier-unsupported",
+  condition?: VerificationLivenessRefusal,
 ): VerificationPortResult {
-  emitVerificationDiagnostic(input, reasonCode, "verification-refused");
+  emitVerificationDiagnostic(input, reasonCode, "verification-refused", undefined, condition);
   return { status: "failed", reasonCode };
 }
 
@@ -1258,8 +1280,10 @@ function emitVerificationDiagnostic(
   errorClass: string,
   message: "verification-refused" | "verification-failed",
   error?: unknown,
+  code?: string,
 ): void {
   const detail = error === undefined ? undefined : describeError(error);
+  const closedCode = code ?? detail?.code;
   emitServerDiagnostic(input.diagnostics, {
     correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID,
     timestamp: new Date().toISOString(),
@@ -1268,7 +1292,7 @@ function emitVerificationDiagnostic(
     message,
     // A coded throw (the raw status reader's `git-raw-snapshot-incomplete`, for one) names its closed
     // reason here; before 2026-09-10 the line carried `errorKind: "Error"` and nothing else.
-    ...(detail?.code === undefined ? {} : { code: detail.code }),
+    ...(closedCode === undefined ? {} : { code: closedCode }),
     ...(detail?.frames === undefined ? {} : { frames: detail.frames }),
     ...(detail?.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
     operation: "coding-runtime.verification",
@@ -1322,7 +1346,12 @@ function buildEgressAuthority(
 // connector, egress) specifically so liveness can be re-proven against the SAME resolver those ports
 // use, not just an expiry timestamp. A lifecycle transition or gitdir-identity mismatch mid-run must
 // revoke every one of those ports immediately, not only wait for authorityExpiresAt to lapse (#3347).
-function live(input: ProductionManagedWorktreeToolInput): boolean {
+function live(
+  input: Pick<
+    ProductionManagedWorktreeToolInput,
+    "liveFacts" | "resolveWorkspaceRootAccess" | "authorityExpiresAt"
+  >,
+): boolean {
   try {
     input.liveFacts();
     return (

@@ -1615,7 +1615,7 @@
     {
       "op": "coding-runtime.operator-decision",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1114",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1118",
       "package": "keiko-server"
     },
     {
@@ -1841,13 +1841,13 @@
     {
       "op": "coding-runtime.verification",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1230",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1251",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.verification",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1274",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1298",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

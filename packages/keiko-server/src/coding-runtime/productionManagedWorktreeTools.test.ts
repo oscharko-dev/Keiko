@@ -34,6 +34,7 @@ import {
   resolveChildModelForRun,
   waitForRuntimeProposalApproval,
   waitForWorkspaceScriptTrust,
+  verificationLivenessRefusal,
   SCRIPT_TRUST_WAIT_CEILING_MS,
 } from "./productionManagedWorktreeTools.js";
 import { CODING_TOOL_INVOCATION_MAX_TTL_MS } from "./codingToolInvocationRegistry.js";
@@ -321,6 +322,8 @@ describe("production managed worktree tools", () => {
       expect.objectContaining({
         operation: "coding-runtime.verification",
         errorClass: "verification-authority-revoked",
+        // The lapsed repair lease is a GUARD rejection; the diagnostic says so (run 12, 2026-09-10).
+        code: "guard-rejected",
       }),
     );
     expect(settle).toHaveBeenCalledOnce();
@@ -2447,3 +2450,56 @@ function authorizedEnvelope(network = false): never {
     },
   } as never;
 }
+
+// Run 12 (2026-09-10): a verification refused while its sibling waited on the operator's trust
+// decision was logged as `verification-authority-revoked` and nothing else, although three different
+// conditions produce that one code. The condition is the diagnostic's `code`; these pins hold the
+// mapping so the next refusal in a customer log names what actually fired.
+describe("verificationLivenessRefusal", () => {
+  const liveInput = {
+    liveFacts: (): CodingWorkbenchRuntimeAuthorityFacts => FACTS,
+    resolveWorkspaceRootAccess,
+    authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+  };
+  const liveGuard = { check: (): boolean => true };
+
+  it("names an aborted signal before anything else", () => {
+    const controller = new AbortController();
+    controller.abort();
+    expect(verificationLivenessRefusal(liveInput, { check: () => false }, controller.signal)).toBe(
+      "signal-aborted",
+    );
+  });
+
+  it("names a rejecting guard", () => {
+    expect(verificationLivenessRefusal(liveInput, { check: () => false }, undefined)).toBe(
+      "guard-rejected",
+    );
+  });
+
+  it.each([
+    [
+      "a workspace that no longer resolves as a managed task",
+      { resolveWorkspaceRootAccess: (): WorkspaceRootAccess | undefined => undefined },
+    ],
+    ["an expired authority", { authorityExpiresAt: "2000-01-01T00:00:00.000Z" }],
+    [
+      "live facts that throw",
+      {
+        liveFacts: (): CodingWorkbenchRuntimeAuthorityFacts => {
+          throw new Error("facts unavailable");
+        },
+      },
+    ],
+  ] as const)("names a run that is not live: %s", (_label, override) => {
+    expect(verificationLivenessRefusal({ ...liveInput, ...override }, liveGuard, undefined)).toBe(
+      "run-not-live",
+    );
+  });
+
+  it("reports nothing while every condition holds", () => {
+    expect(verificationLivenessRefusal(liveInput, liveGuard, new AbortController().signal)).toBe(
+      undefined,
+    );
+  });
+});
