@@ -3,7 +3,9 @@ param(
   [Parameter(Mandatory = $true)][string]$StageRoot,
   [Parameter(Mandatory = $true)][string]$InventoryPath,
   [Parameter(Mandatory = $true)][string]$VerificationInput,
-  [Parameter(Mandatory = $true)][string]$ExpectedIdentityEku
+  [Parameter(Mandatory = $true)][string]$ExpectedIdentityEku,
+  [string]$ResourceRootRelativePath = ".portable\generation-staging",
+  [switch]$CompleteInventory
 )
 
 $ErrorActionPreference = "Stop"
@@ -105,6 +107,23 @@ if ($null -eq (Get-Command signtool.exe -ErrorAction SilentlyContinue)) {
 
 $stage = [System.IO.Path]::GetFullPath($StageRoot)
 $payload = [System.IO.Path]::GetFullPath((Join-Path $stage "payload\Keiko"))
+$resourceRoot = [System.IO.Path]::GetFullPath((Join-Path $payload $ResourceRootRelativePath))
+$payloadPrefix = $payload.TrimEnd('\') + '\'
+if (-not $resourceRoot.StartsWith($payloadPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+  Fail-Bounded "generation resource root escapes the payload"
+}
+try {
+  $resourceRootEntry = Get-Item -LiteralPath $resourceRoot -Force
+}
+catch {
+  Fail-Bounded "generation resource root is invalid"
+}
+if (
+  -not $resourceRootEntry.PSIsContainer -or
+  ($resourceRootEntry.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+) {
+  Fail-Bounded "generation resource root is invalid"
+}
 $inventory = Get-Content -LiteralPath $InventoryPath -Raw | ConvertFrom-Json
 if ($inventory.schemaVersion -ne 1 -or $inventory.target -ne "windows-x64" -or $inventory.files.Count -lt 1) {
   Fail-Bounded "PE inventory is invalid"
@@ -116,9 +135,9 @@ foreach ($entry in $inventory.files) {
   if ($entry.relativePath -notmatch '^[^\\/:*?"<>|]+(?:/[^\\/:*?"<>|]+)*$') {
     Fail-Bounded "PE inventory contains an unsafe path"
   }
-  $candidate = [System.IO.Path]::GetFullPath((Join-Path $payload ($entry.relativePath -replace '/', '\')))
-  $prefix = $payload.TrimEnd('\') + '\'
-  if (-not $candidate.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+  $inventoryRoot = if ($CompleteInventory) { $payload } else { $resourceRoot }
+  $candidate = [System.IO.Path]::GetFullPath((Join-Path $inventoryRoot ($entry.relativePath -replace '/', '\')))
+  if (-not $candidate.StartsWith($payloadPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
     Fail-Bounded "PE inventory escapes the payload root"
   }
   if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) {
@@ -152,13 +171,18 @@ if ($verifiedCount -ne $inventory.files.Count) {
 $manifest = Get-Content -LiteralPath (Join-Path $stage "manifest\portable-manifest.json") -Raw | ConvertFrom-Json
 $sidecars = @()
 foreach ($sidecar in @($manifest.sidecarRuntimes)) {
-  if (-not $inventoryPaths.Contains($sidecar.executablePath)) {
+  $sidecarInventoryPath = if ($CompleteInventory) {
+    ($ResourceRootRelativePath.TrimEnd('\') + '\' + ($sidecar.executablePath -replace '/', '\')).Replace('\', '/')
+  }
+  else {
+    $sidecar.executablePath
+  }
+  if (-not $inventoryPaths.Contains($sidecarInventoryPath)) {
     Fail-Bounded "sidecar PE verification coverage is incomplete"
   }
   $sidecarRoot = [System.IO.Path]::GetFullPath(
-    (Join-Path $payload ($sidecar.payloadRootPath -replace '/', '\'))
+    (Join-Path $resourceRoot ($sidecar.payloadRootPath -replace '/', '\'))
   )
-  $payloadPrefix = $payload.TrimEnd('\') + '\'
   if (-not $sidecarRoot.StartsWith($payloadPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
     Fail-Bounded "sidecar payload root escapes the payload"
   }

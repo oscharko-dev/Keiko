@@ -30,10 +30,15 @@
 import { randomUUID } from "node:crypto";
 import {
   closeSync,
+  constants,
   existsSync,
+  fstatSync,
+  fsyncSync,
   linkSync,
+  lstatSync,
   mkdirSync,
   openSync,
+  readSync,
   readdirSync,
   renameSync,
   unlinkSync,
@@ -659,6 +664,415 @@ export interface FileServerLogSinkOptions {
   readonly level?: ServerLogThreshold | undefined;
   readonly retentionDays?: number | undefined;
   readonly env?: ServerLogEnv | undefined;
+}
+
+export type DurableServerLogBatchInspection =
+  | { readonly status: "already-complete" }
+  | { readonly status: "deferred" }
+  | { readonly status: "append"; readonly events: readonly ServerLogEvent[] };
+
+export interface DurableServerLogBatchOptions {
+  readonly level: ServerLogThreshold;
+  readonly inspect: (directory: string) => DurableServerLogBatchInspection;
+}
+
+export type DurableServerLogBatchResult =
+  | { readonly status: "already-complete" }
+  | { readonly status: "inspection-deferred" }
+  | { readonly status: "appended"; readonly appendedCount: number }
+  | {
+      readonly status: "deferred";
+      readonly reason:
+        | "level-filtered"
+        | "destination-unsafe"
+        | "destination-mutated"
+        | "append-failed"
+        | "durability-uncertain";
+    };
+
+interface LogFileIdentity {
+  readonly dev: number;
+  readonly ino: number;
+  readonly size: number;
+  readonly mtimeMs: number;
+}
+
+interface LogDirectoryGuard {
+  readonly path: string;
+  readonly dev: number;
+  readonly ino: number;
+  readonly handle: number | undefined;
+}
+
+function sameLogIdentity(left: LogFileIdentity, right: LogFileIdentity): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeMs === right.mtimeMs
+  );
+}
+
+function sameLogNode(left: LogFileIdentity, right: LogFileIdentity): boolean {
+  return left.dev === right.dev && left.ino === right.ino && left.size === right.size;
+}
+
+function trustedLogIdentity(stat: ReturnType<typeof fstatSync>): LogFileIdentity | undefined {
+  if (!stat.isFile() || stat.nlink !== 1 || !Number.isSafeInteger(stat.size) || stat.size < 0) {
+    return undefined;
+  }
+  return {
+    dev: Number(stat.dev),
+    ino: Number(stat.ino),
+    size: Number(stat.size),
+    mtimeMs: Number(stat.mtimeMs),
+  };
+}
+
+function pathLogIdentity(path: string): LogFileIdentity | undefined {
+  const stat = lstatSync(path);
+  if (!stat.isFile() || stat.nlink !== 1 || !Number.isSafeInteger(stat.size) || stat.size < 0) {
+    return undefined;
+  }
+  return {
+    dev: stat.dev,
+    ino: stat.ino,
+    size: stat.size,
+    mtimeMs: stat.mtimeMs,
+  };
+}
+
+function currentHandleIdentity(active: ActiveLog): LogFileIdentity | undefined {
+  if (active.handle === null) return undefined;
+  const descriptor = trustedLogIdentity(fstatSync(active.handle));
+  if (descriptor === undefined) return undefined;
+  const pathname = pathLogIdentity(active.currentPath);
+  return pathname !== undefined && sameLogNode(descriptor, pathname) ? descriptor : undefined;
+}
+
+function openTrustedDurableHandle(active: ActiveLog): LogFileIdentity | undefined {
+  const existing = currentHandleIdentity(active);
+  if (existing !== undefined) return existing;
+  closeHandle(active);
+  const secureFlags =
+    constants.O_WRONLY | constants.O_APPEND | constants.O_NONBLOCK | constants.O_NOFOLLOW;
+  try {
+    active.handle = openSync(active.currentPath, secureFlags);
+  } catch (error) {
+    if (errorCode(error) !== "ENOENT") return undefined;
+    try {
+      active.handle = openSync(
+        active.currentPath,
+        secureFlags | constants.O_CREAT | constants.O_EXCL,
+        0o600,
+      );
+    } catch {
+      return undefined;
+    }
+  }
+  return currentHandleIdentity(active);
+}
+
+function durableLogDirectory(directory: string): boolean {
+  try {
+    const stat = lstatSync(directory);
+    return stat.isDirectory() && !stat.isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+function openLogDirectoryGuard(path: string): LogDirectoryGuard | undefined {
+  const before = lstatSync(path);
+  if (!before.isDirectory() || before.isSymbolicLink()) return undefined;
+  let handle: number | undefined;
+  try {
+    const directoryFlag = typeof constants.O_DIRECTORY === "number" ? constants.O_DIRECTORY : 0;
+    const noFollowFlag = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+    handle = openSync(path, constants.O_RDONLY | directoryFlag | noFollowFlag);
+    return validateOpenedLogDirectory(path, before.dev, before.ino, handle);
+  } catch {
+    if (handle !== undefined) closeSync(handle);
+    return windowsLogDirectoryGuard(path, before.dev, before.ino);
+  }
+}
+
+function validateOpenedLogDirectory(
+  path: string,
+  dev: number,
+  ino: number,
+  handle: number,
+): LogDirectoryGuard {
+  const opened = fstatSync(handle);
+  const pathname = lstatSync(path);
+  if (
+    !opened.isDirectory() ||
+    !pathname.isDirectory() ||
+    pathname.isSymbolicLink() ||
+    opened.dev !== pathname.dev ||
+    opened.ino !== pathname.ino ||
+    opened.dev !== dev ||
+    opened.ino !== ino
+  ) {
+    throw new Error("log directory changed");
+  }
+  return { path, dev: opened.dev, ino: opened.ino, handle };
+}
+
+function windowsLogDirectoryGuard(
+  path: string,
+  dev: number,
+  ino: number,
+): LogDirectoryGuard | undefined {
+  if (process.platform !== "win32") return undefined;
+  const after = lstatSync(path);
+  if (!after.isDirectory() || after.isSymbolicLink() || after.dev !== dev || after.ino !== ino) {
+    return undefined;
+  }
+  return { path, dev: after.dev, ino: after.ino, handle: undefined };
+}
+
+function logDirectoryStillSame(guard: LogDirectoryGuard): boolean {
+  try {
+    const pathname = lstatSync(guard.path);
+    if (
+      !pathname.isDirectory() ||
+      pathname.isSymbolicLink() ||
+      pathname.dev !== guard.dev ||
+      pathname.ino !== guard.ino
+    ) {
+      return false;
+    }
+    if (guard.handle === undefined) return process.platform === "win32";
+    const opened = fstatSync(guard.handle);
+    return opened.isDirectory() && opened.dev === guard.dev && opened.ino === guard.ino;
+  } catch {
+    return false;
+  }
+}
+
+function closeLogDirectoryGuards(guards: readonly LogDirectoryGuard[]): void {
+  for (const guard of guards) {
+    if (guard.handle !== undefined) closeSync(guard.handle);
+  }
+}
+
+function batchLines(events: readonly ServerLogEvent[]): readonly string[] | undefined {
+  const lines: string[] = [];
+  for (const event of events) {
+    const seq = allocateServerLogSeq();
+    const line = formatServerLogLine(event, undefined, {
+      schemaVersion: SERVER_LOG_SCHEMA_VERSION,
+      pid: process.pid,
+      instanceId: INSTANCE_ID,
+      seq,
+    });
+    if (Buffer.byteLength(line, "utf8") > MAX_LOG_LINE_BYTES) return undefined;
+    lines.push(line);
+  }
+  return lines;
+}
+
+interface PreparedDurableLog {
+  readonly active: ActiveLog;
+  readonly initial: LogFileIdentity;
+  readonly directory: string;
+}
+
+function repairPendingRecord(active: ActiveLog): boolean {
+  if (!active.pendingNewline) return true;
+  const before = currentHandleIdentity(active);
+  if (before === undefined || active.handle === null) return false;
+  if (!writeBatchRecords(active, [""])) return false;
+  if (!syncBatch(active)) return false;
+  return completedBatchMatches(active, before, before.size + 1);
+}
+
+function currentLogReadStillMatches(
+  active: ActiveLog,
+  handle: number,
+  expected: LogFileIdentity,
+  guards: readonly LogDirectoryGuard[],
+): boolean {
+  const after = trustedLogIdentity(fstatSync(handle));
+  const pathname = pathLogIdentity(active.currentPath);
+  const filesMatch = [after, pathname].every(
+    (identity) => identity !== undefined && sameLogIdentity(expected, identity),
+  );
+  return filesMatch && guards.every(logDirectoryStillSame);
+}
+
+function currentLogHasDelimiter(
+  active: ActiveLog,
+  expected: LogFileIdentity,
+  guards: readonly LogDirectoryGuard[],
+): boolean | undefined {
+  if (expected.size === 0) return true;
+  let handle: number | undefined;
+  try {
+    const noFollowFlag = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+    handle = openSync(active.currentPath, constants.O_RDONLY | constants.O_NONBLOCK | noFollowFlag);
+    const before = trustedLogIdentity(fstatSync(handle));
+    if (before === undefined || !sameLogIdentity(expected, before)) return undefined;
+    const last = Buffer.allocUnsafe(1);
+    if (readSync(handle, last, 0, 1, expected.size - 1) !== 1) return undefined;
+    if (!currentLogReadStillMatches(active, handle, expected, guards)) return undefined;
+    return last[0] === 0x0a;
+  } catch {
+    return undefined;
+  } finally {
+    if (handle !== undefined) closeSync(handle);
+  }
+}
+
+function repairCurrentLogTail(
+  active: ActiveLog,
+  initial: LogFileIdentity,
+  guards: readonly LogDirectoryGuard[],
+): LogFileIdentity | undefined {
+  const terminated = currentLogHasDelimiter(active, initial, guards);
+  if (terminated === undefined) return undefined;
+  if (!terminated) active.pendingNewline = true;
+  if (!repairPendingRecord(active)) return undefined;
+  const repaired = currentHandleIdentity(active);
+  return repaired !== undefined && guards.every(logDirectoryStillSame) ? repaired : undefined;
+}
+
+function prepareDurableLog(
+  stateDir: string,
+  guards: LogDirectoryGuard[],
+): PreparedDurableLog | undefined {
+  const stateGuard = openLogDirectoryGuard(stateDir);
+  if (stateGuard === undefined) return undefined;
+  guards.push(stateGuard);
+  const directory = join(stateDir, "logs");
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (!durableLogDirectory(directory)) return undefined;
+  const logGuard = openLogDirectoryGuard(directory);
+  if (logGuard === undefined) return undefined;
+  guards.push(logGuard);
+  const active = resolveActiveLog(directory, DEFAULT_LOG_RETENTION_DAYS);
+  rotateIfNeeded(active);
+  let initial = openTrustedDurableHandle(active);
+  if (initial === undefined || active.handle === null) {
+    closeHandle(active);
+    return undefined;
+  }
+  initial = repairCurrentLogTail(active, initial, guards);
+  if (initial === undefined) return undefined;
+  return { active, initial, directory };
+}
+
+function stableBeforeBatch(
+  prepared: PreparedDurableLog,
+  guards: readonly LogDirectoryGuard[],
+): LogFileIdentity | undefined {
+  if (!guards.every(logDirectoryStillSame)) return undefined;
+  const current = currentHandleIdentity(prepared.active);
+  return current !== undefined && sameLogIdentity(prepared.initial, current) ? current : undefined;
+}
+
+function writeBatchRecords(active: ActiveLog, lines: readonly string[]): boolean {
+  try {
+    if (active.handle === null) return false;
+    for (const line of lines) writeRecord(active, active.handle, line);
+    return true;
+  } catch {
+    closeHandle(active);
+    return false;
+  }
+}
+
+function syncBatch(active: ActiveLog): boolean {
+  try {
+    if (active.handle === null) return false;
+    fsyncSync(active.handle);
+    return true;
+  } catch {
+    closeHandle(active);
+    return false;
+  }
+}
+
+function completedBatchMatches(
+  active: ActiveLog,
+  before: LogFileIdentity,
+  expectedSize: number,
+): boolean {
+  const completed = currentHandleIdentity(active);
+  return (
+    completed?.dev === before.dev && completed.ino === before.ino && completed.size === expectedSize
+  );
+}
+
+function appendInspectedBatch(
+  prepared: PreparedDurableLog,
+  inspection: Extract<DurableServerLogBatchInspection, { status: "append" }>,
+  before: LogFileIdentity,
+  guards: readonly LogDirectoryGuard[],
+  threshold: ServerLogThreshold,
+): DurableServerLogBatchResult {
+  if (inspection.events.some((event) => !serverLogLevelEnabled(eventLevel(event), threshold))) {
+    return { status: "deferred", reason: "level-filtered" };
+  }
+  const lines = batchLines(inspection.events);
+  if (lines === undefined) return { status: "deferred", reason: "append-failed" };
+  const addedBytes = lines.reduce((total, line) => total + Buffer.byteLength(line, "utf8"), 0);
+  if (!writeBatchRecords(prepared.active, lines)) {
+    return { status: "deferred", reason: "append-failed" };
+  }
+  if (!syncBatch(prepared.active)) {
+    return { status: "deferred", reason: "durability-uncertain" };
+  }
+  if (
+    !completedBatchMatches(prepared.active, before, before.size + addedBytes) ||
+    !guards.every(logDirectoryStillSame)
+  ) {
+    closeHandle(prepared.active);
+    return { status: "deferred", reason: "destination-mutated" };
+  }
+  return { status: "appended", appendedCount: lines.length };
+}
+
+function inspectAndAppendDurableBatch(
+  prepared: PreparedDurableLog,
+  guards: readonly LogDirectoryGuard[],
+  options: DurableServerLogBatchOptions,
+): DurableServerLogBatchResult {
+  const inspection = options.inspect(prepared.directory);
+  const before = stableBeforeBatch(prepared, guards);
+  if (before === undefined) {
+    closeHandle(prepared.active);
+    return { status: "deferred", reason: "destination-mutated" };
+  }
+  if (inspection.status === "already-complete") return { status: "already-complete" };
+  if (inspection.status === "deferred") return { status: "inspection-deferred" };
+  return appendInspectedBatch(prepared, inspection, before, guards, options.level);
+}
+
+// Synchronous by design: `inspect` and the append share the process-wide ActiveLog critical
+// section (one JavaScript stack), while descriptor/path/size checks expose interference from a
+// second process as `deferred`. O_APPEND can still leave duplicate physical records when two
+// processes import concurrently; callers obtain semantic deduplication from their stable record
+// identities, never an exactly-once filesystem claim.
+export function appendDurableServerLogBatch(
+  stateDir: string,
+  options: DurableServerLogBatchOptions,
+): DurableServerLogBatchResult {
+  if (!serverLogLevelEnabled("info", options.level)) {
+    return { status: "deferred", reason: "level-filtered" };
+  }
+  const guards: LogDirectoryGuard[] = [];
+  try {
+    const prepared = prepareDurableLog(stateDir, guards);
+    return prepared === undefined
+      ? { status: "deferred", reason: "destination-unsafe" }
+      : inspectAndAppendDurableBatch(prepared, guards, options);
+  } catch {
+    return { status: "deferred", reason: "destination-unsafe" };
+  } finally {
+    closeLogDirectoryGuards(guards);
+  }
 }
 
 // The process-wide registry that makes the file sink a singleton per resolved log directory. Every

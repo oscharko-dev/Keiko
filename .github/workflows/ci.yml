@@ -1157,6 +1157,11 @@ jobs:
         if: runner.os == 'Windows'
         timeout-minutes: 20
         run: npm run build:packages
+      - name: Verify the Windows portable handoff protocol fixture
+        # KHP v3 uses Windows path semantics. Run the full plan suite on a genuine Windows host so
+        # its native-consumer golden bytes cannot remain covered only by a skipped cross-host case.
+        if: runner.os == 'Windows'
+        run: npx vitest run packages/keiko-server/src/update-portable-handoff-plan.test.ts packages/keiko-server/src/update-portable-handoff-receipts.test.ts
       - name: Verify Git executable Windows reparse containment
         # Direct execution is deliberate: Vitest exits zero when every selected test is skipped.
         # This smoke asserts the real host is Win32, creates a genuine directory junction, and calls
@@ -1362,6 +1367,10 @@ jobs:
       - name: Release smoke E2E
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:smoke
+      - name: Governed updater real-BFF outage E2E (#3405)
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        timeout-minutes: 10
+        run: npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage
       # Same @smoke journeys on Gecko. Kept a SEPARATE step so a Firefox-only failure is
       # attributable at a glance instead of hiding inside the Chromium run's report.
       - name: Release smoke E2E (Firefox)

@@ -426,6 +426,39 @@ describe("runLifecycleCli", () => {
     expect(c.out()).toContain("Keiko UI running");
   });
 
+  it("uses the plan-bound launch id for a recovered portable start", async () => {
+    const root = makeRoot();
+    const c = makeIo();
+    const spawned: { readonly args: readonly string[]; readonly opts: SpawnOptions }[] = [];
+    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
+    const launchId = "3".repeat(32);
+    const descriptor = Buffer.from(JSON.stringify({ launchId }), "utf8").toString("base64url");
+    const code = await runLifecycle(
+      "start",
+      ["--state-dir", ".keiko-test"],
+      c.io,
+      { KEIKO_PORTABLE_RECOVERED_LAUNCH: descriptor },
+      {
+        cwd: root,
+        homedir: () => root,
+        spawnFn: (_command, args, opts) => {
+          spawned.push({ args, opts });
+          return child;
+        },
+        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        isProcessAlive: () => true,
+        isPortAvailable: () => Promise.resolve(true),
+        killProcess: vi.fn(),
+        sleep: () => Promise.resolve(),
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(spawned[0]?.args).toEqual(expect.arrayContaining(["--launch-id", launchId]));
+    expect(spawned[0]?.opts.env).toMatchObject({ KEIKO_UI_LAUNCH_ID: launchId });
+    expect(readFileSync(join(root, ".keiko-test", "ui.pid"), "utf8")).toBe(`12345\n${launchId}\n`);
+  });
+
   it("prefers the active published CLI entry when KEIKO_CLI_BIN_PATH is set", async () => {
     const root = makeRoot();
     // #KEIKO-0285: the env override must be an ABSOLUTE, EXISTING file — the value is

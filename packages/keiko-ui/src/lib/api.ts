@@ -99,7 +99,6 @@ import type {
   UpdateRemediationStatusRequest,
   UpdateRestartVerificationRequest,
   UpdateSession,
-  UpdateSessionStartRequest,
   UpdateSessionStatus,
   WorkspaceSummary,
   WorkflowStatus,
@@ -433,19 +432,22 @@ export async function fetchUpdateSessionStatus(): Promise<UpdateSessionStatus> {
   return fetchJson("/api/update/session", { cache: "no-store" });
 }
 
-export async function startUpdateSession(input: UpdateSessionStartRequest): Promise<UpdateSession> {
+/**
+ * Opaque, one-use authority issued by the preflight producer.  The browser must
+ * never reconstruct a target version or carry a claim over to a later retry.
+ */
+export interface UpdateSessionClaimRequest {
+  readonly candidateId: string;
+  readonly confirmationDigest: string;
+  readonly executionToken: string;
+  readonly requestId?: string | undefined;
+}
+
+export async function startUpdateSession(input: UpdateSessionClaimRequest): Promise<UpdateSession> {
   return fetchJson("/api/update/session", {
     method: "POST",
     cache: "no-store",
     body: JSON.stringify(input),
-  });
-}
-
-export async function retryUpdateSession(): Promise<UpdateSession> {
-  return fetchJson("/api/update/session/retry", {
-    method: "POST",
-    cache: "no-store",
-    body: JSON.stringify({}),
   });
 }
 

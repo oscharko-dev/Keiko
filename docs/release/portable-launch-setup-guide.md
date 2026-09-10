@@ -1,8 +1,9 @@
 # Portable Launch And Setup Guide
 
-Status: production user/operator guide for Issue #1953. This guide covers the archive-first
-portable install and first-run setup journey delivered by #1942. Portable updater v2 is owned by
-#1945 and extends this managed install baseline later in the same program branch.
+This guide covers archive-first portable installation and managed setup. Production-signed and
+evaluation downloads have different trust guarantees. The updater reliability repair and its native
+qualification are tracked by #3403/#3405; a setup smoke or parser test is not proof of a production
+built-in update.
 
 ## Primary User Journey
 
@@ -36,8 +37,9 @@ first-class artifacts:
 | `macos-arm64`   | `keiko-macos-arm64.zip` | `Keiko.app`      |
 | `macos-x64`     | `keiko-macos-x64.zip`   | `Keiko.app`      |
 
-The release also provides `keiko-windows-x64-setup.exe` as the signed companion install surface for
-the Windows ZIP. Users who need the archive-first fallback may still download, extract, and open
+The release also provides `keiko-windows-x64-setup.exe` as the companion install surface for
+the Windows ZIP. It is signed for production releases and unsigned for the explicitly labeled
+evaluation program. Users who need the archive-first fallback may still download, extract, and open
 `keiko-windows-x64.zip`; both paths delegate managed installation to the same attested portable
 lifecycle. Reopening setup validates and launches an existing managed installation without
 replacing it. Governed in-app update remains the upgrade path.
@@ -48,8 +50,9 @@ or not covered by the same launch/setup verification.
 
 ### Verifying a downloaded artifact
 
-Every stable release archive and its SBOM (`<platform-target>-sbom.cdx.json`, also published as a
-release asset) carry a GitHub Artifact Attestation in addition to the platform code signature. An
+Production release archives and their SBOMs (`<platform-target>-sbom.cdx.json`, also published as
+release assets) require GitHub Artifact Attestations in addition to platform code signatures.
+Evaluation downloads do not inherit those production guarantees. An
 operator can verify a downloaded file independently of Keiko's own release tooling with the
 [GitHub CLI](https://cli.github.com/):
 
@@ -62,7 +65,7 @@ gh attestation verify windows-x64-sbom.cdx.json --repo oscharko-dev/Keiko
 A successful verification proves the file was built by the recorded `portable-assets` workflow run
 at the recorded commit, without needing to trust anything other than GitHub's Sigstore-backed
 attestation service. This is independent of, and in addition to, the Authenticode/notarization
-signature already required for the file to launch (see [ADR-0121](../adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md#d8--release-archives-and-sboms-carry-independently-verifiable-github-artifact-attestations)).
+signature required for production qualification (see [ADR-0121](../adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md#d8--release-archives-and-sboms-carry-independently-verifiable-github-artifact-attestations)).
 Attestation verification is optional; it is not part of the managed setup journey below.
 
 ## Managed Setup
@@ -89,12 +92,28 @@ boundary instead of relocating the app to a writable parent.
 
 ## Update Journey
 
-Portable updater v2 is integrated on the portable product delivery program branch and remains
-subject to final program QA before the `dev` PR. The portable-managed update path uses the existing
-in-app update notice and update window with one explicit user action. After that action, download,
-verification, staging, activation, relaunch, version verification, and required release-impact
-remediation handling are managed in-product without asking the user to perform technical update
-steps.
+Current evaluation releases require reviewed manual installation. The repaired native coordinator
+still refuses update acceptance while its qualification gates are incomplete. The automatic
+replacement and relaunch behavior below describes the qualified release contract; it is not a claim
+that current releases can execute a one-click update or automatic re-download fallback.
+
+The portable-managed update path uses the existing in-app notice and Update window. One-click
+execution is offered only for a fresh eligible candidate on an attested managed installation and
+requires explicit confirmation. Download, verification, staging, ownership transfer, activation,
+relaunch, target-version proof, and required remediation belong to the same governed attempt.
+An expected local-server disconnect is not success: the window must retain safe progress and
+reconnect, and success requires verified target startup. Follow the displayed recovery or manual
+action if the installation cannot establish that proof; do not clear update state or delete the
+managed tree to force another attempt.
+
+Evaluation builds, including 0.3.17, are intentionally manual-only. Their signatures cannot establish
+production publisher continuity. The first production transition therefore requires a manual install
+using the target release's reviewed instructions, not the Update button. Preserve `.keiko` runtime
+state. Do not alter signing metadata, disable platform trust checks, or treat a skipped signing job
+as qualification. A production one-click claim additionally requires genuine N−1→N canary results
+between two production-signed eligible releases on all three targets; #2198 tracks the external
+signing prerequisites. Until those results exist, availability of a newer download is not evidence
+that an evaluation installation can update itself.
 
 The npm/Yarn updater remains a developer and compatibility path, not the promoted product journey
 for ordinary portable users.
@@ -136,6 +155,12 @@ npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --
 ```
 
 Generated smoke evidence is a local release artifact. It must not be committed to Git.
+
+The fixture smoke above proves its named setup/launch seams only. It does not prove installed
+production-signed N−1→N mutation, native process-tree containment, a real BFF outage/reconnect, or
+recovery after every activation crash boundary. Record those results separately on #3405 with exact
+artifact digests and target-native run evidence; do not promote fixture output to a production
+qualification claim.
 
 ## Related Documents
 

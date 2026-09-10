@@ -124,8 +124,15 @@ export async function handleRunUpdateRemediationAction(
     if (!parsed.ok) {
       throw new UpdateRemediationError("BAD_REQUEST", parsed.errors.join("; "), 400);
     }
-    // Threads the request's own correlation id (ADR-0173 D5 / g12) so every diagnostic this one
-    // remediation action reports stays joined under it, per runAction's own contract.
-    return { status: 200, body: await guard.runAction(parsed.value, ctx.correlationId) };
+    const status = deps.updateSession?.getStatus();
+    const updateAttempt = [status?.activeSession, status?.lastSession].find(
+      (session) => session?.targetVersion === parsed.value.targetVersion,
+    );
+    // A remediation spawned by an update stays on the originating update attempt. Standalone
+    // remediation falls back to its own request correlation.
+    return {
+      status: 200,
+      body: await guard.runAction(parsed.value, updateAttempt?.correlationId ?? ctx.correlationId),
+    };
   });
 }

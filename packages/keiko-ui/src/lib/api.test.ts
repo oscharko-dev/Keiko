@@ -56,7 +56,6 @@ import {
   setupGateway,
   checkUpdatePreflight,
   cancelUpdateSession,
-  retryUpdateSession,
   runUpdateRemediationAction,
   startUpdateSession,
   requestEditorCodeActions,
@@ -633,9 +632,17 @@ describe("governed update session helpers", () => {
   const session = {
     schemaVersion: "1",
     sessionId: "update-1",
+    candidateId: "candidate-0.2.11",
+    candidateDigest: "c".repeat(64),
+    correlationId: "update-correlation-1",
     packageName: "@oscharko-dev/keiko",
     targetVersion: "0.2.11",
     phase: "running",
+    lifecycle: {
+      phase: "downloading",
+      progress: { completedBytes: 0 },
+      cancellationCutoff: "not-reached",
+    },
     failureReason: "none",
     startedAt: "2026-06-30T12:00:00.000Z",
     updatedAt: "2026-06-30T12:00:01.000Z",
@@ -661,11 +668,17 @@ describe("governed update session helpers", () => {
     );
   });
 
-  it("startUpdateSession posts a target version through the CSRF gate", async () => {
+  it("startUpdateSession posts only the opaque fresh candidate claim through the CSRF gate", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(session));
     vi.stubGlobal("fetch", fetchMock);
 
-    const result = await startUpdateSession({ targetVersion: "0.2.11" });
+    const claim = {
+      candidateId: "candidate-0.2.11",
+      confirmationDigest: "a".repeat(64),
+      executionToken: "b".repeat(64),
+      requestId: "update-request-1",
+    };
+    const result = await startUpdateSession(claim);
 
     expect(result.sessionId).toBe("update-1");
     expect(fetchMock).toHaveBeenCalledWith(
@@ -673,7 +686,7 @@ describe("governed update session helpers", () => {
       expect.objectContaining({
         method: "POST",
         cache: "no-store",
-        body: JSON.stringify({ targetVersion: "0.2.11" }),
+        body: JSON.stringify(claim),
         headers: expect.objectContaining({
           Accept: "application/json",
           "Content-Type": "application/json",
@@ -683,25 +696,15 @@ describe("governed update session helpers", () => {
     );
   });
 
-  it("exposes retry, cancel, and restart verification mutation helpers", async () => {
+  it("exposes cancel and restart verification mutation helpers", async () => {
     const fetchMock = vi.fn().mockImplementation(() => Promise.resolve(jsonResponse(session)));
     vi.stubGlobal("fetch", fetchMock);
 
-    await retryUpdateSession();
     await cancelUpdateSession();
     await verifyUpdateRestart({ targetVersion: "0.2.11" });
 
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      "/api/update/session/retry",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({}),
-        headers: expect.objectContaining({ "X-Keiko-CSRF": "1" }),
-      }),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
       "/api/update/session",
       expect.objectContaining({
         method: "DELETE",
@@ -709,7 +712,7 @@ describe("governed update session helpers", () => {
       }),
     );
     expect(fetchMock).toHaveBeenNthCalledWith(
-      3,
+      2,
       "/api/update/session/verify-restart",
       expect.objectContaining({
         method: "POST",

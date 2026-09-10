@@ -30,17 +30,20 @@ import {
   reportBase,
   updateAvailableReportFromOutcomes,
 } from "./update-preflight-report.js";
+import type { UpdateCandidateAuthority } from "./update-candidate-authority.js";
 
 interface UpdatePreflightRuntimeOptions {
   readonly currentVersion?: string | (() => string);
   readonly bundledCatalog?: ReleaseImpactCatalog | undefined;
   readonly clock?: (() => Date) | undefined;
   readonly installMode?: (() => UpdateInstallMode) | undefined;
+  readonly candidateAuthority?: UpdateCandidateAuthority | undefined;
 }
 
 export interface UpdatePreflightService {
   getStartupReport(deps: UiHandlerDeps): Promise<UpdatePreflightReport>;
   runManualCheck(deps: UiHandlerDeps): Promise<UpdatePreflightReport>;
+  runValidationCheck?(deps: UiHandlerDeps): Promise<UpdatePreflightReport>;
 }
 
 async function updateAvailableReport(
@@ -216,7 +219,10 @@ export async function runUpdatePreflight(
     mode,
     options,
   );
-  return portableReport ?? packageManagerPreflightReport(deps, base, currentVersion, options);
+  const report =
+    portableReport ?? (await packageManagerPreflightReport(deps, base, currentVersion, options));
+  const candidate = options.candidateAuthority?.issue(report, mode);
+  return candidate === undefined ? report : { ...report, candidate };
 }
 
 export function createUpdatePreflightService(
@@ -230,6 +236,9 @@ export function createUpdatePreflightService(
     },
     runManualCheck(deps): Promise<UpdatePreflightReport> {
       return runUpdatePreflight(deps, options);
+    },
+    runValidationCheck(deps): Promise<UpdatePreflightReport> {
+      return runUpdatePreflight(deps, { ...options, candidateAuthority: undefined });
     },
   };
 }
@@ -254,7 +263,7 @@ function createDefaultServiceRegistry(): {
 
 const defaultServiceRegistry = createDefaultServiceRegistry();
 
-function serviceFor(deps: UiHandlerDeps): UpdatePreflightService {
+export function resolveUpdatePreflightService(deps: UiHandlerDeps): UpdatePreflightService {
   if (deps.updatePreflight !== undefined) return deps.updatePreflight;
   return defaultServiceRegistry.resolve(deps);
 }
@@ -263,12 +272,12 @@ export async function handleGetUpdatePreflight(
   _ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  return { status: 200, body: await serviceFor(deps).getStartupReport(deps) };
+  return { status: 200, body: await resolveUpdatePreflightService(deps).getStartupReport(deps) };
 }
 
 export async function handlePostUpdatePreflightCheck(
   _ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  return { status: 200, body: await serviceFor(deps).runManualCheck(deps) };
+  return { status: 200, body: await resolveUpdatePreflightService(deps).runManualCheck(deps) };
 }

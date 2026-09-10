@@ -37,6 +37,13 @@ const installMode: UpdateInstallMode = {
   },
 };
 
+const CLAIM = {
+  candidateId: "candidate-1",
+  confirmationDigest: "a".repeat(64),
+  executionToken: "b".repeat(64),
+} as const;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
 function session(
   targetVersion = "0.2.12",
   phase: UpdateSession["phase"] = "preparing",
@@ -44,9 +51,22 @@ function session(
   return {
     schemaVersion: UPDATE_SESSION_SCHEMA_VERSION,
     sessionId: "session-1",
+    candidateId: "candidate-1",
+    candidateDigest: "c".repeat(64),
+    correlationId: "candidate-1",
     packageName: "@oscharko-dev/keiko",
     targetVersion,
     phase,
+    lifecycle: {
+      phase:
+        phase === "succeeded" || phase === "failed" || phase === "cancelled"
+          ? phase
+          : phase === "restart-required"
+            ? "handoff-pending"
+            : "preparing",
+      progress: { completedBytes: 0 },
+      cancellationCutoff: phase === "restart-required" ? "handoff-committed" : "not-reached",
+    },
     failureReason: "none",
     packageManager: "npm",
     installRoot: "/usr/local/lib/node_modules/@oscharko-dev/keiko",
@@ -78,7 +98,7 @@ class FakeUpdateSessionManager implements UpdateSessionManager {
 
   public readonly start = (input: UpdateSessionStartRequest): UpdateSessionStartOutcome => {
     this.starts.push(input);
-    return { session: session(input.targetVersion), reused: false };
+    return { session: session(), reused: false };
   };
 
   public readonly retry = (): UpdateSessionStartOutcome => {
@@ -176,6 +196,10 @@ function baseDeps(): UiHandlerDeps {
     modelPortFactory: (): undefined => undefined,
     store: createInMemoryUiStore(),
     updateSession,
+    updatePreflight: {
+      getStartupReport: () => Promise.reject(new Error("unused")),
+      runManualCheck: () => Promise.reject(new Error("unused")),
+    },
   };
 }
 
@@ -206,6 +230,14 @@ function baseUrl(): string {
 
 function csrfHeaders(): Record<string, string> {
   return { "Content-Type": "application/json", "X-Keiko-CSRF": "1" };
+}
+
+function expectServerBoundStart(response: Response): string {
+  const correlationId = response.headers.get("X-Keiko-Correlation-Id");
+  expect(correlationId).toMatch(UUID);
+  if (correlationId === null) throw new TypeError("expected server correlation ID");
+  expect(updateSession.starts).toEqual([{ ...CLAIM, requestId: correlationId }]);
+  return correlationId;
 }
 
 beforeEach(async () => {
@@ -245,7 +277,7 @@ describe("update session routes", () => {
     const res = await fetch(`${baseUrl()}/api/update/session`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ targetVersion: "0.2.12" }),
+      body: JSON.stringify(CLAIM),
     });
 
     expect(res.status).toBe(403);
@@ -255,12 +287,12 @@ describe("update session routes", () => {
     const invalid = await fetch(`${baseUrl()}/api/update/session`, {
       method: "POST",
       headers: csrfHeaders(),
-      body: JSON.stringify({ targetVersion: "0.2.12-beta.1" }),
+      body: JSON.stringify({ ...CLAIM, candidateId: "candidate id with spaces" }),
     });
     const injected = await fetch(`${baseUrl()}/api/update/session`, {
       method: "POST",
       headers: csrfHeaders(),
-      body: JSON.stringify({ targetVersion: "0.2.12;rm -rf /" }),
+      body: JSON.stringify({ ...CLAIM, executionToken: "not-a-token" }),
     });
     expect(invalid.status).toBe(400);
     expect(injected.status).toBe(400);
@@ -268,13 +300,13 @@ describe("update session routes", () => {
     const valid = await fetch(`${baseUrl()}/api/update/session`, {
       method: "POST",
       headers: csrfHeaders(),
-      body: JSON.stringify({ targetVersion: "0.2.12", requestId: "req-1" }),
+      body: JSON.stringify({ ...CLAIM, requestId: "req-1" }),
     });
     const body = (await valid.json()) as UpdateSession;
 
     expect(valid.status).toBe(202);
     expect(body.targetVersion).toBe("0.2.12");
-    expect(updateSession.starts[0]).toEqual({ targetVersion: "0.2.12", requestId: "req-1" });
+    expect(expectServerBoundStart(valid)).not.toBe("req-1");
   });
 
   it("allows pending follow-up remediation when starting a session", async () => {
@@ -285,14 +317,14 @@ describe("update session routes", () => {
     const res = await fetch(`${baseUrl()}/api/update/session`, {
       method: "POST",
       headers: csrfHeaders(),
-      body: JSON.stringify({ targetVersion: "0.2.12" }),
+      body: JSON.stringify(CLAIM),
     });
 
     expect(res.status).toBe(202);
-    expect(updateSession.starts).toEqual([{ targetVersion: "0.2.12" }]);
+    expectServerBoundStart(res);
   });
 
-  it("blocks session start while required remediation needs manual review", async () => {
+  it("delegates candidate-bound remediation gating to the session manager", async () => {
     await rebuild({
       updateRemediation: new FakeUpdateRemediationManager(
         remediationReport(false, "manual-review-required"),
@@ -302,13 +334,13 @@ describe("update session routes", () => {
     const res = await fetch(`${baseUrl()}/api/update/session`, {
       method: "POST",
       headers: csrfHeaders(),
-      body: JSON.stringify({ targetVersion: "0.2.12" }),
+      body: JSON.stringify(CLAIM),
     });
-    const body = (await res.json()) as { error: { code: string } };
+    const body = (await res.json()) as UpdateSession;
 
-    expect(res.status).toBe(409);
-    expect(body.error.code).toBe("UPDATE_REMEDIATION_REQUIRED");
-    expect(updateSession.starts).toEqual([]);
+    expect(res.status).toBe(202);
+    expect(body).toMatchObject({ targetVersion: "0.2.12" });
+    expectServerBoundStart(res);
   });
 
   it("rejects bad JSON and oversized update start bodies", async () => {
@@ -320,7 +352,7 @@ describe("update session routes", () => {
     const tooLarge = await fetch(`${baseUrl()}/api/update/session`, {
       method: "POST",
       headers: csrfHeaders(),
-      body: JSON.stringify({ targetVersion: "0.2.12", padding: "x".repeat(20_000) }),
+      body: JSON.stringify({ ...CLAIM, padding: "x".repeat(20_000) }),
     });
 
     expect(badJson.status).toBe(400);

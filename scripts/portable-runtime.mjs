@@ -8,6 +8,10 @@ import {
 import { sha256 } from "./lib/digest.mjs";
 
 export const PORTABLE_MANIFEST_SCHEMA_VERSION = 1;
+export const WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION = 2;
+export const WINDOWS_GENERATION_BINDING_SCHEMA_VERSION = 1;
+export const WINDOWS_GENERATION_TREE_HASH_SCHEMA = "KHT1";
+export const WINDOWS_GENERATION_STAGING_RELATIVE_PATH = ".portable/generation-staging";
 export const WINDOWS_PORTABLE_SETUP_ASSET_NAME = "keiko-windows-x64-setup.exe";
 
 // Shared bounds for the platform-specific bounded payload-tree walkers (Windows PE and macOS
@@ -167,6 +171,7 @@ function matchesAnyPattern(value, patterns) {
 const PRIVATE_PATH_PATTERN =
   /(?:^|[\s"'`])(?:\/Users\/|\/home\/|\/private\/|\/var\/folders\/|[A-Za-z]:\\Users\\|\\\\[^\\]+\\[^\\]+)/u;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
+const WINDOWS_GENERATION_RESOURCE_ROOT_PATTERN = /^\.portable\/generations\/([a-f0-9]{64})$/u;
 const PLACEHOLDER_DIGEST_PATTERN = /^64-hex-[a-z0-9-]+$/u;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$|^40-hex-[a-z0-9-]+$/u;
 const STRICT_COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
@@ -495,6 +500,90 @@ function validateProvenance(manifest, failures, options) {
   }
   relativePathAt(provenance, "provenanceStatementPath", "provenance", failures);
   digestAt(provenance, "provenanceStatementSha256", "provenance", failures, options);
+  validateWindowsGenerationCopies(manifest, provenance, "provenance", failures, options);
+}
+
+function validateWindowsGenerationCopies(manifest, container, path, failures, options) {
+  const isWindows = manifest.artifact?.platformTarget === "windows-x64";
+  const usesGenerationLayout = manifest.schemaVersion === WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION;
+  if (!isWindows || !usesGenerationLayout) {
+    if (container.windowsGeneration !== undefined) {
+      push(failures, `${path}.windowsGeneration`, "is supported only by Windows schema 2");
+    }
+    return;
+  }
+  const generation = validateWindowsGenerationBinding(
+    container.windowsGeneration,
+    `${path}.windowsGeneration`,
+    failures,
+    options,
+  );
+  if (!bindingValuesMatch(generation, manifest.windowsGeneration)) {
+    push(failures, `${path}.windowsGeneration`, "does not match manifest");
+  }
+}
+
+function validateWindowsGenerationBinding(value, path, failures, options) {
+  if (!isRecord(value)) {
+    push(failures, path, "must be an object");
+    return {};
+  }
+  exactKeysAt(
+    value,
+    [
+      "schemaVersion",
+      "resourceRoot",
+      "treeHashSchema",
+      "treeSha256",
+      "launcherPath",
+      "launcherSha256",
+    ],
+    path,
+    failures,
+  );
+  literalAt(value, "schemaVersion", WINDOWS_GENERATION_BINDING_SCHEMA_VERSION, path, failures);
+  const resourceRoot = stringAt(value, "resourceRoot", path, failures);
+  const resourceMatch = WINDOWS_GENERATION_RESOURCE_ROOT_PATTERN.exec(resourceRoot);
+  if (resourceMatch === null)
+    push(failures, `${path}.resourceRoot`, "must name one KHT1 generation");
+  literalAt(value, "treeHashSchema", WINDOWS_GENERATION_TREE_HASH_SCHEMA, path, failures);
+  const treeSha256 = digestAt(value, "treeSha256", path, failures, options);
+  if (resourceMatch?.[1] !== undefined && resourceMatch[1] !== treeSha256) {
+    push(failures, `${path}.resourceRoot`, "must end with treeSha256");
+  }
+  literalAt(value, "launcherPath", "Keiko.exe", path, failures);
+  digestAt(value, "launcherSha256", path, failures, options);
+  return value;
+}
+
+export function windowsGenerationBindingValidationFailures(
+  value,
+  { expected, path = "windowsGeneration" } = {},
+) {
+  const failures = [];
+  const binding = validateWindowsGenerationBinding(value, path, failures, {
+    allowPlaceholders: false,
+  });
+  if (expected !== undefined && !bindingValuesMatch(binding, expected)) {
+    push(failures, path, "does not match expected binding");
+  }
+  return failures;
+}
+
+function validateWindowsGeneration(manifest, failures, options) {
+  const isWindows = manifest.artifact?.platformTarget === "windows-x64";
+  if (manifest.schemaVersion === WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION && isWindows) {
+    validateWindowsGenerationBinding(
+      manifest.windowsGeneration,
+      "windowsGeneration",
+      failures,
+      options,
+    );
+    return;
+  }
+  if (manifest.windowsGeneration !== undefined) {
+    push(failures, "windowsGeneration", "is supported only by Windows schema 2");
+  }
 }
 
 function validateRuntime(manifest, failures, options) {
@@ -1651,6 +1740,13 @@ function validateReviewedBinding(manifest, binding, failures, options) {
     if (!bindingValuesMatch(binding[key], expected))
       push(failures, `releaseImpact.reviewedBinding.${key}`, "does not match manifest");
   }
+  validateWindowsGenerationCopies(
+    manifest,
+    binding,
+    "releaseImpact.reviewedBinding",
+    failures,
+    options,
+  );
   validatePublishedSetupAssetBinding(manifest, binding, failures, options);
 }
 
@@ -1993,8 +2089,13 @@ export function validatePortableManifest(manifest, options = {}) {
     return ["validation.context: is unsupported"];
   }
   validateApiIdentity(normalized, failures);
-  if (manifest.schemaVersion !== PORTABLE_MANIFEST_SCHEMA_VERSION)
-    push(failures, "schemaVersion", "must be 1");
+  const windowsSchema = manifest.artifact?.platformTarget === "windows-x64";
+  if (
+    manifest.schemaVersion !== PORTABLE_MANIFEST_SCHEMA_VERSION &&
+    !(windowsSchema && manifest.schemaVersion === WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION)
+  ) {
+    push(failures, "schemaVersion", windowsSchema ? "must be 1 or 2" : "must be 1");
+  }
   validateProduct(manifest, failures);
   validateRelease(manifest, failures, normalized);
   validateArtifact(manifest, failures, normalized);
@@ -2003,6 +2104,7 @@ export function validatePortableManifest(manifest, options = {}) {
   validateRuntimeActivation(manifest, failures, normalized);
   validateRuntimeAttestation(manifest, failures, normalized);
   validateRuntimeQualification(manifest, failures, normalized);
+  validateWindowsGeneration(manifest, failures, normalized);
   validateSidecarRuntimes(manifest, failures, normalized);
   validateNativeHelpers(manifest, failures, normalized);
   validateNativeAddons(manifest, failures, normalized);

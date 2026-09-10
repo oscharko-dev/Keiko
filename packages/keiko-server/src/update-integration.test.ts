@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { realpathSync } from "node:fs";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -24,9 +24,10 @@ import { buildUiHandlerDeps } from "./deps.js";
 import { buildRedactor, createInMemoryUiStore, type UiHandlerDeps } from "./index.js";
 import { createRunRegistry } from "./runs.js";
 import { createUiServer, UI_HOST } from "./server.js";
-import { detectUpdateInstallMode } from "./update-install-mode.js";
+import { detectUpdateInstallMode, type UpdateRuntimeFacts } from "./update-install-mode.js";
 import { createUpdateSessionManager, type UpdateSessionManagerOptions } from "./update-session.js";
 import { createUpdatePreflightService } from "./update-preflight.js";
+import { createUpdateCandidateAuthority } from "./update-candidate-authority.js";
 import {
   createUpdateLocalStateManager,
   type UpdateLocalStateManager,
@@ -141,10 +142,20 @@ function releaseImpactCatalog(
   };
 }
 
-function fixedUpdatePreflight(report: UpdatePreflightReport): UiHandlerDeps["updatePreflight"] {
+function fixedUpdatePreflight(
+  report: UpdatePreflightReport,
+  candidateAuthority?: ReturnType<typeof createUpdateCandidateAuthority>,
+  installMode?: UpdateInstallMode,
+): UiHandlerDeps["updatePreflight"] {
+  const offered = (): UpdatePreflightReport => {
+    if (candidateAuthority === undefined || installMode === undefined) return report;
+    const candidate = candidateAuthority.issue(report, installMode);
+    return candidate === undefined ? report : { ...report, candidate };
+  };
   return {
-    getStartupReport: () => Promise.resolve(report),
-    runManualCheck: () => Promise.resolve(report),
+    getStartupReport: () => Promise.resolve(offered()),
+    runManualCheck: () => Promise.resolve(offered()),
+    runValidationCheck: () => Promise.resolve(report),
   };
 }
 
@@ -263,6 +274,37 @@ function syntheticPreflightReport(
     blockers: [],
     manualUpdateRequired: false,
     oneClickEligible: true,
+    release: {
+      source: "github-release",
+      tag: `v${targetVersion}`,
+      title: `Keiko ${targetVersion}`,
+      summary: "Injected reviewed update fixture.",
+      notes: releaseNoteBullets,
+    },
+    portableAsset: {
+      source: "github-release-asset",
+      target: "windows-x64",
+      requiredAssetName: "keiko-windows-x64.zip",
+      status: "eligible",
+      asset: {
+        target: "windows-x64",
+        assetName: "keiko-windows-x64.zip",
+        assetId: 1001,
+        releaseId: 2002,
+        sizeBytes: 3003,
+        uncompressedSizeBytes: 4004,
+        sha256: "a".repeat(64),
+        manifestAssetName: "release-manifest.json",
+        manifestAssetId: 1002,
+        manifestSizeBytes: 3004,
+        manifestSha256: "b".repeat(64),
+        checksumAssetName: "SHA256SUMS",
+        checksumAssetId: 1003,
+        checksumSizeBytes: 3005,
+        checksumSha256: "c".repeat(64),
+        checksumVerified: true,
+      },
+    },
     impact: {
       entries: [
         {
@@ -508,6 +550,7 @@ describe("governed updater integration", () => {
       const targetVersion = nextPatchVersion(SDK_VERSION);
       const metadata = createMetadataFetch(targetVersion);
       let runningVersion = SDK_VERSION;
+      const candidateAuthority = createUpdateCandidateAuthority({ now: () => FIXED_NOW });
       const runCommandImpl = vi.fn<NonNullable<UpdateSessionManagerOptions["runCommandImpl"]>>();
       runCommandImpl.mockImplementation((input) => Promise.resolve(commandResult(input)));
       const updateSession = createUpdateSessionManager({
@@ -524,11 +567,14 @@ describe("governed updater integration", () => {
         now: () => FIXED_NOW,
         redactor: (value) => value.replaceAll("SECRET", "[REDACTED]"),
         runCommandImpl,
+        candidateAuthority,
       });
       const updatePreflight = createUpdatePreflightService({
         currentVersion: SDK_VERSION,
         bundledCatalog: releaseImpactCatalog(targetVersion, SDK_VERSION),
         clock: () => new Date(FIXED_NOW),
+        installMode: () => updateSession.getStatus().installMode,
+        candidateAuthority,
       });
       await buildServer({
         config: undefined,
@@ -571,7 +617,12 @@ describe("governed updater integration", () => {
       const startedResponse = await fetch(`${baseUrl()}/api/update/session`, {
         method: "POST",
         headers: csrfHeaders(),
-        body: JSON.stringify({ targetVersion, requestId: "integration-test" }),
+        body: JSON.stringify({
+          candidateId: preflight.candidate?.candidateId,
+          confirmationDigest: preflight.candidate?.confirmationDigest,
+          executionToken: preflight.candidate?.executionToken,
+          requestId: "integration-test",
+        }),
       });
       const started = await readJson<UpdateSession>(startedResponse);
 
@@ -617,11 +668,183 @@ describe("governed updater integration", () => {
   );
 
   it.skipIf(CURRENT_IS_PRERELEASE)(
+    "rejects a reviewed claim when the real preflight producer retargets before start",
+    async () => {
+      const firstTarget = nextPatchVersion(SDK_VERSION);
+      const [major, minor, patch] = firstTarget.split(".").map(Number);
+      const secondTarget = `${String(major)}.${String(minor)}.${String((patch ?? 0) + 1)}`;
+      let liveTarget = firstTarget;
+      const fetchImpl: typeof fetch = (input) => {
+        const url = requestUrl(input);
+        if (url.startsWith("https://registry.npmjs.org/")) {
+          return Promise.resolve(jsonResponse({ "dist-tags": { latest: liveTarget } }));
+        }
+        return Promise.resolve(
+          jsonResponse({
+            tag_name: `v${liveTarget}`,
+            name: `Keiko ${liveTarget}`,
+            body: "- Reviewed producer result",
+          }),
+        );
+      };
+      const catalog: ReleaseImpactCatalog = {
+        schemaVersion: 1,
+        entries: [
+          ...releaseImpactCatalog(firstTarget, SDK_VERSION).entries,
+          ...releaseImpactCatalog(secondTarget, firstTarget).entries,
+        ],
+      };
+      const candidateAuthority = createUpdateCandidateAuthority({ now: () => FIXED_NOW });
+      const runCommandImpl = vi.fn<NonNullable<UpdateSessionManagerOptions["runCommandImpl"]>>();
+      runCommandImpl.mockResolvedValue(commandResult({ command: "npm", args: [] }));
+      const detector = (): UpdateInstallMode =>
+        detectUpdateInstallMode({
+          packageRoot: INSTALL_ROOT,
+          packageName: PACKAGE_NAME,
+          packageManagerHint: "npm",
+          installScope: "global",
+        });
+      const updatePreflight = createUpdatePreflightService({
+        currentVersion: SDK_VERSION,
+        bundledCatalog: catalog,
+        clock: () => new Date(FIXED_NOW),
+        installMode: detector,
+        candidateAuthority,
+      });
+      await buildServer({
+        config: undefined,
+        configPresent: false,
+        evidenceStore: {
+          put: (): string => "",
+          list: (): readonly string[] => [],
+          get: (): string | undefined => undefined,
+          delete: (): void => undefined,
+        },
+        env: {},
+        redactor: buildRedactor({}),
+        registry: createRunRegistry(),
+        modelPortFactory: (): undefined => undefined,
+        store: createInMemoryUiStore(),
+        gatewayReadinessFetch: fetchImpl,
+        updatePreflight,
+        updateSession: createUpdateSessionManager({
+          detector,
+          currentVersion: () => SDK_VERSION,
+          candidateAuthority,
+          runCommandImpl,
+        }),
+      });
+      const offered = await readJson<UpdatePreflightReport>(
+        await fetch(`${baseUrl()}/api/update/preflight`),
+      );
+      liveTarget = secondTarget;
+
+      const response = await fetch(`${baseUrl()}/api/update/session`, {
+        method: "POST",
+        headers: csrfHeaders(),
+        body: JSON.stringify({
+          candidateId: offered.candidate?.candidateId,
+          confirmationDigest: offered.candidate?.confirmationDigest,
+          executionToken: offered.candidate?.executionToken,
+        }),
+      });
+
+      expect(response.status).toBe(409);
+      expect(runCommandImpl).not.toHaveBeenCalled();
+    },
+  );
+
+  it.skipIf(CURRENT_IS_PRERELEASE).each([
+    ["package manager", "package-manager"],
+    ["global install root", "install-root"],
+    ["portable installation facts", "portable"],
+  ] as const)(
+    "rejects a default-composition candidate after the %s changes",
+    async (_label, changedFact) => {
+      const targetVersion = nextPatchVersion(SDK_VERSION);
+      const metadata = createMetadataFetch(targetVersion);
+      const stateDir = join(staticRoot, "state");
+      let facts: UpdateRuntimeFacts = {
+        packageRoot: INSTALL_ROOT,
+        packageName: PACKAGE_NAME,
+        packageManagerHint: "npm",
+        installScope: "global",
+      };
+      const runCommandImpl = vi.fn<NonNullable<UpdateSessionManagerOptions["runCommandImpl"]>>();
+      const deps = buildUiHandlerDeps({
+        configPath: undefined,
+        evidenceDir: join(staticRoot, "evidence"),
+        env: { KEIKO_STATE_DIR: stateDir },
+        uiDbPath: join(staticRoot, "ui.db"),
+        modelPortFactory: (): undefined => undefined,
+        updateRuntimeFacts: () => facts,
+        updateRunCommandImpl: runCommandImpl,
+        updatePreflightCatalog: releaseImpactCatalog(targetVersion, SDK_VERSION),
+      });
+      await buildServer({ ...deps, gatewayReadinessFetch: metadata.fetchImpl });
+      const offeredResponse = await fetch(`${baseUrl()}/api/update/preflight`);
+      const offered = await readJson<UpdatePreflightReport>(offeredResponse);
+      expect(offeredResponse.status).toBe(200);
+      expect(offered.candidate).toBeDefined();
+
+      if (changedFact === "package-manager") {
+        facts = {
+          ...facts,
+          packageRoot: `/Users/test/.config/yarn/global/node_modules/${PACKAGE_NAME}`,
+          packageManagerHint: "yarn",
+        };
+      } else if (changedFact === "install-root") {
+        facts = {
+          ...facts,
+          packageRoot: `/opt/homebrew/lib/node_modules/${PACKAGE_NAME}`,
+        };
+      } else {
+        const portablePackageRoot = join(staticRoot, "Keiko.app", "Contents", "Resources", "app");
+        const manifestDir = join(portablePackageRoot, "..", ".portable");
+        await mkdir(manifestDir, { recursive: true });
+        await writeFile(
+          join(manifestDir, "setup-manifest.json"),
+          JSON.stringify({
+            schemaVersion: 1,
+            packageName: PACKAGE_NAME,
+            packageVersion: SDK_VERSION,
+            platformTarget: "macos-arm64",
+            stable: true,
+          }),
+          "utf8",
+        );
+        facts = {
+          packageRoot: portablePackageRoot,
+          packageName: PACKAGE_NAME,
+          portableStateDir: stateDir,
+          portableManagement: "organization-managed",
+        };
+      }
+
+      const response = await fetch(`${baseUrl()}/api/update/session`, {
+        method: "POST",
+        headers: csrfHeaders(),
+        body: JSON.stringify({
+          candidateId: offered.candidate?.candidateId,
+          confirmationDigest: offered.candidate?.confirmationDigest,
+          executionToken: offered.candidate?.executionToken,
+        }),
+      });
+      const body = await readJson<{ readonly error: { readonly code: string } }>(response);
+
+      expect(response.status).toBe(409);
+      expect(body.error.code).toBe("UPDATE_CANDIDATE_INVALID");
+      expect(runCommandImpl).not.toHaveBeenCalled();
+    },
+  );
+
+  it.skipIf(CURRENT_IS_PRERELEASE)(
     "keeps a synthetic update pending until Local Knowledge reindex remediation completes",
     async () => {
       const targetVersion = nextPatchVersion(SDK_VERSION);
       const metadata = createMetadataFetch(targetVersion);
       let runningVersion = SDK_VERSION;
+      const candidateAuthority = createUpdateCandidateAuthority({ now: () => FIXED_NOW });
       const runCommandImpl = vi.fn<NonNullable<UpdateSessionManagerOptions["runCommandImpl"]>>();
       runCommandImpl.mockImplementation((input) => Promise.resolve(commandResult(input)));
       const updateSession = createUpdateSessionManager({
@@ -638,6 +861,7 @@ describe("governed updater integration", () => {
         now: () => FIXED_NOW,
         redactor: (value) => value.replaceAll("SECRET", "[REDACTED]"),
         runCommandImpl,
+        candidateAuthority,
       });
       const updatePreflight = createUpdatePreflightService({
         currentVersion: SDK_VERSION,
@@ -645,6 +869,8 @@ describe("governed updater integration", () => {
           localKnowledgeReindexRequired: true,
         }),
         clock: () => new Date(FIXED_NOW),
+        installMode: () => updateSession.getStatus().installMode,
+        candidateAuthority,
       });
       const stateDir = join(staticRoot, ".keiko-state");
       await mkdir(stateDir, { recursive: true });
@@ -732,7 +958,12 @@ describe("governed updater integration", () => {
       const startedResponse = await fetch(`${baseUrl()}/api/update/session`, {
         method: "POST",
         headers: csrfHeaders(),
-        body: JSON.stringify({ targetVersion, requestId: "reindex-integration-test" }),
+        body: JSON.stringify({
+          candidateId: preflight.candidate?.candidateId,
+          confirmationDigest: preflight.candidate?.confirmationDigest,
+          executionToken: preflight.candidate?.executionToken,
+          requestId: "reindex-integration-test",
+        }),
       });
       const started = await readJson<UpdateSession>(startedResponse);
 
@@ -814,6 +1045,7 @@ describe("governed updater integration", () => {
     const preflight = syntheticPreflightReport(targetVersion, {
       localKnowledgeReindexRequired: true,
     });
+    const candidateAuthority = createUpdateCandidateAuthority({ now: () => FIXED_NOW });
     const stateDir = join(staticRoot, ".keiko-portable-state");
     await mkdir(stateDir, { recursive: true });
     const updateLocalState = createUpdateLocalStateManager({
@@ -840,7 +1072,7 @@ describe("governed updater integration", () => {
     const updateSession = createUpdateSessionManager({
       processEnv: {},
       detector: () => portableManagedMode(),
-      currentVersion: () => targetVersion,
+      currentVersion: () => SDK_VERSION,
       facts: () => ({
         packageRoot: "/Users/alice/Applications/Keiko/app",
         packageName: PACKAGE_NAME,
@@ -854,6 +1086,7 @@ describe("governed updater integration", () => {
         updateRemediation.completeRestart(session.targetVersion);
         return updateRemediation.updateCanComplete(session.targetVersion);
       },
+      candidateAuthority,
     });
     await buildServer({
       config: undefined,
@@ -869,7 +1102,7 @@ describe("governed updater integration", () => {
       registry: createRunRegistry(),
       modelPortFactory: (): undefined => undefined,
       store: createInMemoryUiStore(),
-      updatePreflight: fixedUpdatePreflight(preflight),
+      updatePreflight: fixedUpdatePreflight(preflight, candidateAuthority, portableManagedMode()),
       updateLocalState,
       updateRemediation,
       updateSession,
@@ -895,7 +1128,12 @@ describe("governed updater integration", () => {
     const startedResponse = await fetch(`${baseUrl()}/api/update/session`, {
       method: "POST",
       headers: csrfHeaders(),
-      body: JSON.stringify({ targetVersion, requestId: "portable-remediation-test" }),
+      body: JSON.stringify({
+        candidateId: loadedPreflight.candidate?.candidateId,
+        confirmationDigest: loadedPreflight.candidate?.confirmationDigest,
+        executionToken: loadedPreflight.candidate?.executionToken,
+        requestId: "portable-remediation-test",
+      }),
     });
     expect(startedResponse.status).toBe(202);
 
@@ -956,7 +1194,7 @@ describe("governed updater integration", () => {
     expect(localKnowledge.runs()).toBe(1);
   });
 
-  it("uses explicit injected updater seams when automatic update is unsupported", async () => {
+  it("rejects a legacy arbitrary target request when automatic update is unsupported", async () => {
     const targetVersion = nextPatchVersion(SDK_VERSION);
     const updateSession = createUpdateSessionManager({
       processEnv: {},
@@ -1015,8 +1253,8 @@ describe("governed updater integration", () => {
     });
     const started = await readJson<{ readonly error: { readonly code: string } }>(startedResponse);
 
-    expect(startedResponse.status).toBe(409);
-    expect(started.error.code).toBe("UPDATE_INSTALL_MODE_UNSUPPORTED");
+    expect(startedResponse.status).toBe(400);
+    expect(started.error.code).toBe("BAD_REQUEST");
     expect(sessionStatus.activeSession).toBeUndefined();
     expect(sessionStatus.lastSession).toBeUndefined();
   });

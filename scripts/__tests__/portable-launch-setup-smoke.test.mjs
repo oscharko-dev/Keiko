@@ -53,9 +53,18 @@ describe("portable launch/setup smoke", () => {
         relaunchedFromManagedAppRoot: true,
         setupStatus: "managed",
         spawnedManagedLauncher: true,
-        updateEligible: true,
       });
     }
+    expect(
+      evidence.fixtureTargets.map(({ platformTarget, updateEligible }) => ({
+        platformTarget,
+        updateEligible,
+      })),
+    ).toEqual([
+      { platformTarget: "windows-x64", updateEligible: false },
+      { platformTarget: "macos-arm64", updateEligible: true },
+      { platformTarget: "macos-x64", updateEligible: true },
+    ]);
     const rendered = readFileSync(evidencePath, "utf8");
     expect(rendered).toContain('"issue": 1953');
     expect(rendered).not.toContain(dir);

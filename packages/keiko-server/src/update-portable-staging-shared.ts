@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import type { EnvSource, GatewayConfig } from "@oscharko-dev/keiko-model-gateway";
 import {
+  type UpdateCandidateSnapshot,
   type UpdateInstallMode,
   type UpdatePortableSidecarSummary,
   type UpdatePortableStagingSummary,
@@ -25,6 +26,8 @@ export const MAX_ENTRY_BYTES = 256 * 1024 * 1024;
 export const MAX_UNCOMPRESSED_BYTES = 2 * 1024 * 1024 * 1024;
 export const MAX_ARCHIVE_ENTRIES = 60_000;
 export const MAX_INFLATE_RATIO = 100;
+export const PORTABLE_OPERATION_TIMEOUT_MS = 15 * 60_000;
+export const MIN_PORTABLE_DISK_MARGIN_BYTES = 512 * 1024 * 1024;
 export const UPDATE_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
 export const HEX_SHA256 = /^[a-f0-9]{64}$/u;
 export const COMMIT_SHA = /^[a-f0-9]{40}$/u;
@@ -48,11 +51,19 @@ export interface TextAsset {
 }
 
 export interface PortableUpdateStageInput {
+  readonly candidate: UpdateCandidateSnapshot;
   readonly sessionId: string;
   readonly targetVersion: string;
   readonly installMode: UpdateInstallMode;
   readonly runtimeFacts?: UpdateRuntimeFacts | undefined;
   readonly signal?: AbortSignal | undefined;
+  readonly onProgress?: ((progress: PortableUpdateStageProgress) => void) | undefined;
+}
+
+export interface PortableUpdateStageProgress {
+  readonly phase: "downloading" | "staging" | "verifying";
+  readonly completedBytes: number;
+  readonly totalBytes?: number | undefined;
 }
 
 export interface PortablePlatformVerificationInput {
@@ -78,6 +89,7 @@ export interface PortableUpdateStagerOptions {
   readonly egress?: (() => GatewayEgressConfig | undefined) | undefined;
   readonly platformVerifier?: PortablePlatformVerifier | undefined;
   readonly securityLogSink?: SecurityLogSink | undefined;
+  readonly availableDiskBytes?: ((path: string) => number) | undefined;
 }
 
 export class PortableUpdateStagingError extends Error {
@@ -157,6 +169,13 @@ export function manifestArchiveSha(manifest: Record<string, unknown>): string | 
 
 export function assertAbort(signal: AbortSignal | undefined): void {
   if (signal?.aborted === true) throw new PortableUpdateStagingError("cancelled", "cancelled");
+}
+
+export function reportPortableProgress(
+  input: PortableUpdateStageInput,
+  progress: PortableUpdateStageProgress,
+): void {
+  input.onProgress?.(progress);
 }
 
 export function portableStageSummary(input: {

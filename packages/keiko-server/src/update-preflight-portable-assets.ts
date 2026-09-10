@@ -11,6 +11,7 @@ import { resolvePortableAsset } from "./update-preflight-portable-evidence.js";
 import {
   type GitHubAsset,
   type PortableRelease,
+  fetchWithPortableRetry,
   portableBlocker,
   requiredAssetName,
 } from "./update-preflight-portable-shared.js";
@@ -165,15 +166,20 @@ function malformedOutcome(): PortableGitHubReleaseOutcome {
 }
 
 async function fetchLatestRelease(deps: UiHandlerDeps): Promise<LatestReleaseFetch> {
-  const response = await gatewayFetch(githubLatestReleaseUrl(), {
-    method: "GET",
-    headers: { Accept: "application/vnd.github+json", "User-Agent": "Keiko" },
-    fetchImpl: deps.gatewayReadinessFetch,
-    timeoutMs: UPDATE_PREFLIGHT_TIMEOUT_MS,
-    maxResponseBytes: MAX_RELEASE_METADATA_BYTES,
-    egress: currentGatewayEgressConfig(deps),
-  });
-  if (!response.ok) return { status: "unavailable" };
+  const response = await fetchWithPortableRetry(() =>
+    gatewayFetch(githubLatestReleaseUrl(), {
+      method: "GET",
+      headers: { Accept: "application/vnd.github+json", "User-Agent": "Keiko" },
+      fetchImpl: deps.gatewayReadinessFetch,
+      timeoutMs: UPDATE_PREFLIGHT_TIMEOUT_MS,
+      maxResponseBytes: MAX_RELEASE_METADATA_BYTES,
+      egress: currentGatewayEgressConfig(deps),
+    }),
+  );
+  if (!response.ok) {
+    await response.body?.cancel();
+    return { status: "unavailable" };
+  }
   const release = validateRelease(await readJsonCapped(response, MAX_RELEASE_METADATA_BYTES));
   return release === undefined ? { status: "malformed" } : { status: "ok", release };
 }

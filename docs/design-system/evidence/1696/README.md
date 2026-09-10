@@ -3,6 +3,9 @@
 Design-system, accessibility, and product-copy evidence for the Settings Updates entry point, startup
 update notification, and reusable governed update window added in issue #1696.
 
+These screenshots and JSON are historical fixture evidence. Current #3405 captures and the
+real-BFF outage/reconnect proof are documented in [the repair evidence](../3405/README.md).
+
 ## Surface Covered
 
 - Settings > General > Updates entry point.
@@ -28,13 +31,13 @@ update notification, and reusable governed update window added in issue #1696.
 
 ## Verification Evidence
 
-Rerunnable browser harness:
+Retained browser command (now captures #3405, not this historical directory):
 
 ```bash
 npm run test:e2e:update-ui-1696
 ```
 
-The Playwright harness writes these artifacts in this directory:
+The historical capture produced these artifacts in this directory:
 
 - `01-update-window-dark.png`
 - `02-update-window-light.png`

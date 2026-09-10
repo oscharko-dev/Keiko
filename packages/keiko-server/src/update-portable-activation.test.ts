@@ -1,49 +1,52 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import {
+  appendFileSync,
+  chmodSync,
   copyFileSync,
   existsSync,
+  linkSync,
   mkdirSync,
-  readdirSync,
   readFileSync,
-  realpathSync,
   renameSync,
   rmSync,
-  symlinkSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs";
+import { EventEmitter } from "node:events";
+import type { ChildProcess } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ChildProcess, SpawnOptions } from "node:child_process";
+import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { UpdatePortableStagingSummary } from "@oscharko-dev/keiko-contracts";
 import { createUpdateLocalStateManager } from "./update-local-state.js";
+import { digestUpdateCandidate } from "./update-candidate-authority.js";
 import { createPortableUpdateActivator } from "./update-portable-activation.js";
 import {
   activationIdFor,
-  capturePortableRegistration,
-  cleanupPortableActivation,
-  commitPortableActivationCleanup,
-  promotePortableInstall,
-  readPortableActivationRecovery,
-  readWindowsPortableShortcutTarget,
-  refreshPortableShortcut,
-  writePortableActivationRecovery,
-  type PortableActivationRecovery,
+  attestPortableManagedRegistration,
+  attestPortableManagedRegistrationFacts,
+  refreshPortableRegistration,
+  type PortableActivationLayout,
 } from "./update-portable-activation-files.js";
-import type { SecurityLogEvent, SecurityLogSink } from "@oscharko-dev/keiko-security";
 import {
-  parseWindowsShortcutFallback,
-  windowsShortcutFallbackContent,
-} from "@oscharko-dev/keiko-security";
+  createPortableHandoffCoordinator,
+  PortableHandoffCoordinatorError,
+} from "./update-portable-handoff.js";
+import { hashPortableHandoffTree } from "./update-portable-handoff-tree.js";
 
 const TARGET_VERSION = "0.2.12";
 const OLD_VERSION = "0.2.11";
 const TARGET = "windows-x64" as const;
 const tempRoots: string[] = [];
 
-function setupManifest(version: string): string {
+function setupManifest(
+  version: string,
+  windowsGeneration: NonNullable<PortableActivationLayout["windowsGeneration"]>,
+): string {
   return JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
     platformTarget: TARGET,
     packageName: "@oscharko-dev/keiko",
     packageVersion: version,
@@ -51,21 +54,58 @@ function setupManifest(version: string): string {
     primaryLauncher: "Keiko.exe",
     bootstrapUpdateEligible: false,
     runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
+    windowsGeneration,
   });
 }
 
-function writeInstall(root: string, version: string): void {
-  mkdirSync(join(root, "app"), { recursive: true });
+async function writeInstall(root: string, version: string): Promise<PortableActivationLayout> {
+  const pendingGeneration = join(root, ".portable", "generation-fixture");
+  mkdirSync(join(pendingGeneration, "app"), { recursive: true });
   mkdirSync(join(root, ".portable"), { recursive: true });
-  mkdirSync(join(root, "runtime", "node"), { recursive: true });
-  copyFileSync(process.execPath, join(root, "Keiko.exe"));
-  writeFileSync(join(root, "runtime", "node", "node.exe"), "node", "utf8");
+  mkdirSync(join(pendingGeneration, "runtime", "native"), { recursive: true });
+  writeFileSync(join(root, "Keiko.exe"), `fixture-launcher-${version}`, { mode: 0o700 });
   writeFileSync(
-    join(root, "app", "package.json"),
-    JSON.stringify({ name: "@oscharko-dev/keiko", version }),
-    "utf8",
+    join(pendingGeneration, "runtime", "native", "keiko-runtime-supervisor.exe"),
+    "supervisor",
   );
-  writeFileSync(join(root, ".portable", "setup-manifest.json"), setupManifest(version), "utf8");
+  writeFileSync(
+    join(pendingGeneration, "app", "package.json"),
+    JSON.stringify({ name: "@oscharko-dev/keiko", version }),
+  );
+  const treeSha256 = await hashPortableHandoffTree(pendingGeneration, {
+    deadline: Date.now() + 10_000,
+  });
+  const resourceRoot = `.portable/generations/${treeSha256}`;
+  const generationRoot = join(root, ...resourceRoot.split("/"));
+  mkdirSync(dirname(generationRoot), { recursive: true });
+  renameSync(pendingGeneration, generationRoot);
+  const windowsGeneration = {
+    schemaVersion: 1,
+    resourceRoot,
+    treeHashSchema: "KHT1",
+    treeSha256,
+    launcherPath: "Keiko.exe",
+    launcherSha256: createHash("sha256")
+      .update(readFileSync(join(root, "Keiko.exe")))
+      .digest("hex"),
+  } as const;
+  const setupManifestPath = join(root, ".portable", "setup-manifest.json");
+  writeFileSync(setupManifestPath, setupManifest(version, windowsGeneration));
+  return {
+    installRoot: root,
+    resourceRoot: generationRoot,
+    appRoot: join(generationRoot, "app"),
+    packageJsonPath: join(generationRoot, "app", "package.json"),
+    setupManifestPath,
+    launcherPath: join(root, "Keiko.exe"),
+    runtimeSupervisorPath: join(
+      generationRoot,
+      "runtime",
+      "native",
+      "keiko-runtime-supervisor.exe",
+    ),
+    windowsGeneration,
+  };
 }
 
 function stageSummary(): UpdatePortableStagingSummary {
@@ -88,1257 +128,431 @@ async function makeInstall(): Promise<{
   readonly stateDir: string;
   readonly managedRoot: string;
   readonly packageRoot: string;
-  readonly stageRoot: string;
+  readonly currentLayout: PortableActivationLayout;
 }> {
   const home = await mkdtemp(join(tmpdir(), "keiko-portable-activation-"));
   tempRoots.push(home);
   const managedRoot = join(home, "AppData", "Local", "Programs", "Keiko");
-  const packageRoot = join(managedRoot, "app");
-  const stageRoot = join(dirname(managedRoot), ".keiko-portable-updates", "stage-1", "Keiko");
-  writeInstall(managedRoot, OLD_VERSION);
-  writeInstall(stageRoot, TARGET_VERSION);
-  writeFileSync(join(managedRoot, "active.txt"), "active", "utf8");
-  return {
-    home,
-    stateDir: join(home, ".keiko"),
-    managedRoot,
-    packageRoot,
-    stageRoot,
+  const candidateRoot = join(dirname(managedRoot), ".keiko-portable-updates", "stage-1", "Keiko");
+  const stateDir = join(home, ".keiko");
+  const localState = createUpdateLocalStateManager({ stateDir });
+  localState.writeRuntimeState(localState.readRuntimeState());
+  const currentLayout = await writeInstall(managedRoot, OLD_VERSION);
+  await writeInstall(candidateRoot, TARGET_VERSION);
+  writeFileSync(join(managedRoot, "active.txt"), "active");
+  return { home, stateDir, managedRoot, packageRoot: currentLayout.appRoot, currentLayout };
+}
+
+function registerCurrentInstall(install: Awaited<ReturnType<typeof makeInstall>>): void {
+  refreshPortableRegistration({
+    stateDir: install.stateDir,
+    layout: install.currentLayout,
+    target: TARGET,
+    env: { LOCALAPPDATA: join(install.home, "AppData", "Local") },
+    home: install.home,
+    now: 1_699_999_000_000,
+  });
+}
+
+function attestCurrentRegistration(install: Awaited<ReturnType<typeof makeInstall>>): boolean {
+  const registration = readFileSync(join(install.stateDir, "portable-install-state.json"));
+  return attestPortableManagedRegistration({
+    stateDir: install.stateDir,
+    managedRoot: install.managedRoot,
+    target: TARGET,
+    version: OLD_VERSION,
+    expectedSha256: createHash("sha256").update(registration).digest("hex"),
+  });
+}
+
+function makeLauncherWritable(install: Awaited<ReturnType<typeof makeInstall>>): string {
+  const launcher = join(install.managedRoot, "Keiko.exe");
+  chmodSync(launcher, 0o700);
+  return launcher;
+}
+
+function seedCancellableSession(
+  localState: ReturnType<typeof createUpdateLocalStateManager>,
+): void {
+  const candidate = {
+    schemaVersion: "1" as const,
+    candidateId: "candidate-0.2.12",
+    currentVersion: OLD_VERSION,
+    targetVersion: TARGET_VERSION,
+    channel: "stable" as const,
+    install: {
+      packageName: "@oscharko-dev/keiko",
+      installKind: "package-manager" as const,
+      packageManager: "npm" as const,
+      installIdentitySha256: "e".repeat(64),
+    },
+    release: { source: "github-release" as const, tag: `v${TARGET_VERSION}` },
+    releaseImpactDigest: "f".repeat(64),
+    issuedAt: "2026-09-05T00:00:00.000Z",
+    expiresAt: "2026-09-05T01:00:00.000Z",
   };
+  const current = localState.readRuntimeState();
+  localState.writeRuntimeState({
+    ...current,
+    activeCandidate: candidate,
+    activeSession: {
+      schemaVersion: "1",
+      sessionId: "handoff-cancelled",
+      candidateId: candidate.candidateId,
+      candidateDigest: digestUpdateCandidate(candidate),
+      correlationId: "corr-handoff-cancelled",
+      packageName: "@oscharko-dev/keiko",
+      targetVersion: TARGET_VERSION,
+      phase: "running",
+      lifecycle: {
+        phase: "staging",
+        progress: { completedBytes: 1, totalBytes: 2 },
+        cancellationCutoff: "not-reached",
+      },
+      failureReason: "none",
+      packageManager: "npm",
+      startedAt: "2026-09-05T00:00:00.000Z",
+      updatedAt: "2026-09-05T00:00:00.000Z",
+      cancelable: true,
+      retryable: false,
+      restartRequired: false,
+      message: "Preparing handoff.",
+    },
+  });
 }
 
-function childProcess(): ChildProcess {
-  return { unref: vi.fn() } as unknown as ChildProcess;
-}
-
-function filesUnder(root: string): readonly string[] {
-  return readdirSync(root, { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => join(entry.parentPath, entry.name));
+function configuredActivator(
+  install: Awaited<ReturnType<typeof makeInstall>>,
+  begin: Parameters<typeof createPortableUpdateActivator>[0]["handoffCoordinator"],
+): ReturnType<typeof createPortableUpdateActivator> {
+  return createPortableUpdateActivator({
+    env: {
+      KEIKO_STATE_DIR: install.stateDir,
+      LOCALAPPDATA: join(install.home, "AppData", "Local"),
+    },
+    localState: createUpdateLocalStateManager({ stateDir: install.stateDir }),
+    homedir: () => install.home,
+    currentVersion: OLD_VERSION,
+    currentProcess: () => ({
+      pid: process.pid,
+      launchId: "1".repeat(32),
+      host: "127.0.0.1",
+      port: 1983,
+      version: OLD_VERSION,
+    }),
+    newLaunchId: () => "2".repeat(32),
+    now: () => 1_700_000_000_000,
+    ...(begin === undefined ? {} : { handoffCoordinator: begin }),
+  });
 }
 
 afterEach(async () => {
   await Promise.all(tempRoots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
-describe("portable update activation", () => {
-  it.each([
-    "",
-    ".",
-    "..",
-    "nested/stage",
-    "nested\\stage",
-    "/absolute",
-    "C:\\stage",
-    "bad\u0000id",
-  ])("rejects unsafe stage id %j before install or registration mutation", async (stageId) => {
+describe("portable update activation handoff", () => {
+  it("attests schema 2 registration against the active root setup generation binding", async () => {
     const install = await makeInstall();
+    registerCurrentInstall(install);
     const registrationPath = join(install.stateDir, "portable-install-state.json");
-    mkdirSync(install.stateDir, { recursive: true });
-    writeFileSync(registrationPath, "old-registration\n", "utf8");
-    const activator = createPortableUpdateActivator({
-      env: { KEIKO_STATE_DIR: install.stateDir },
-      homedir: () => install.home,
-      spawnFn: () => childProcess(),
-      versionVerifier: () => Promise.resolve(true),
-    });
-
-    await expect(
-      activator.activate({
-        sessionId: "unsafe-stage",
-        targetVersion: TARGET_VERSION,
-        stage: { ...stageSummary(), stageId },
-        runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
+    const registration = readFileSync(registrationPath);
+    expect(
+      attestPortableManagedRegistration({
+        stateDir: install.stateDir,
+        managedRoot: install.managedRoot,
+        target: TARGET,
+        version: OLD_VERSION,
+        expectedSha256: createHash("sha256").update(registration).digest("hex"),
       }),
-    ).rejects.toMatchObject({ reason: "portable-activation-failed" });
-    expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(OLD_VERSION);
-    expect(readFileSync(registrationPath, "utf8")).toBe("old-registration\n");
+    ).toBe(true);
+    expect(
+      attestPortableManagedRegistrationFacts({
+        stateDir: install.stateDir,
+        managedRoot: install.managedRoot,
+        target: TARGET,
+        version: OLD_VERSION,
+        expectedSha256: createHash("sha256").update(registration).digest("hex"),
+      }),
+    ).toEqual({ windowsGeneration: install.currentLayout.windowsGeneration });
+    const replaced = JSON.parse(registration.toString("utf8")) as Record<string, unknown>;
+    const windowsGeneration = replaced.windowsGeneration;
+    if (
+      typeof windowsGeneration !== "object" ||
+      windowsGeneration === null ||
+      Array.isArray(windowsGeneration)
+    ) {
+      throw new Error("Windows generation fixture is missing");
+    }
+    const differentTree = "f".repeat(64);
+    replaced.windowsGeneration = {
+      ...windowsGeneration,
+      resourceRoot: `.portable/generations/${differentTree}`,
+      treeSha256: differentTree,
+    };
+    const replacedBytes = Buffer.from(`${JSON.stringify(replaced, null, 2)}\n`, "utf8");
+    writeFileSync(registrationPath, replacedBytes);
+
+    expect(
+      attestPortableManagedRegistration({
+        stateDir: install.stateDir,
+        managedRoot: install.managedRoot,
+        target: TARGET,
+        version: OLD_VERSION,
+        expectedSha256: createHash("sha256").update(replacedBytes).digest("hex"),
+      }),
+    ).toBe(false);
   });
 
   it.each([
-    "",
-    ".",
-    "..",
-    "nested/stage",
-    "nested\\stage",
-    "/absolute",
-    "C:\\stage",
-    "bad\u0000id",
-  ])("rejects unsafe recovery stage id %j", async (stageId) => {
+    ["setup manifest", ".portable/setup-manifest.json", 64 * 1024 + 1],
+    ["root launcher", "Keiko.exe", 64 * 1024 * 1024 + 1],
+  ])("rejects a genuinely sparse oversized Windows %s", async (_name, relativePath, size) => {
     const install = await makeInstall();
-    mkdirSync(join(install.stateDir, "updates"), { recursive: true });
-    writeFileSync(
-      join(install.stateDir, "updates", "portable-activation-recovery.json"),
-      JSON.stringify({ activationId: "a".repeat(32), stageId, target: TARGET, phase: "prepared" }),
-      "utf8",
-    );
+    registerCurrentInstall(install);
+    if (relativePath === "Keiko.exe") makeLauncherWritable(install);
+    truncateSync(join(install.managedRoot, ...relativePath.split("/")), size);
 
-    expect(() => readPortableActivationRecovery(install.stateDir)).toThrow(
-      "portable activation recovery metadata is malformed",
-    );
-    expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(OLD_VERSION);
+    expect(attestCurrentRegistration(install)).toBe(false);
   });
 
-  it("accepts cleanup-pending recovery with updaterPid and rejects unknown extra keys", async () => {
+  it("rejects a hard-linked Windows root launcher", async () => {
     const install = await makeInstall();
-    mkdirSync(join(install.stateDir, "updates"), { recursive: true });
-    const recoveryPath = join(install.stateDir, "updates", "portable-activation-recovery.json");
-    writePortableActivationRecovery({
-      stateDir: install.stateDir,
-      recovery: {
-        activationId: "a".repeat(32),
-        stageId: "stage-1",
-        target: TARGET,
-        phase: "cleanup-pending",
-        updaterPid: 4242,
-      },
-    });
-    expect(readPortableActivationRecovery(install.stateDir)).toEqual({
-      activationId: "a".repeat(32),
-      stageId: "stage-1",
-      target: TARGET,
-      phase: "cleanup-pending",
-      updaterPid: 4242,
-    });
-    writeFileSync(
-      recoveryPath,
-      JSON.stringify({
-        activationId: "a".repeat(32),
-        stageId: "stage-1",
-        target: TARGET,
-        phase: "verified",
-        extra: true,
-      }),
-      "utf8",
-    );
-    expect(() => readPortableActivationRecovery(install.stateDir)).toThrow(
-      "portable activation recovery metadata is malformed",
-    );
+    registerCurrentInstall(install);
+    const launcher = join(install.managedRoot, "Keiko.exe");
+    const linkedSource = join(install.managedRoot, "linked-launcher.exe");
+    copyFileSync(launcher, linkedSource);
+    rmSync(launcher);
+    linkSync(linkedSource, launcher);
+
+    expect(attestCurrentRegistration(install)).toBe(false);
   });
 
-  it("promotes the staged install, refreshes registration, relaunches, and records redacted state", async () => {
+  it("rejects Windows root launcher growth after registration", async () => {
     const install = await makeInstall();
-    const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });
-    const spawnCalls: [string, readonly string[], SpawnOptions][] = [];
-    const spawnFn = vi.fn((command: string, args: readonly string[], options: SpawnOptions) => {
-      spawnCalls.push([command, args, options]);
-      return childProcess();
-    });
-    const activator = createPortableUpdateActivator({
-      env: {
-        KEIKO_STATE_DIR: install.stateDir,
-        APPDATA: join(install.home, "AppData", "Roaming"),
-        LOCALAPPDATA: join(install.home, "AppData", "Local"),
-      },
-      homedir: () => install.home,
-      localState,
-      now: () => Date.parse("2026-07-06T00:00:00.000Z"),
-      spawnFn,
-      versionVerifier: () => Promise.resolve(true),
-    });
+    registerCurrentInstall(install);
+    appendFileSync(makeLauncherWritable(install), "growth");
 
-    const activation = await activator.activate({
-      sessionId: "session-1",
+    expect(attestCurrentRegistration(install)).toBe(false);
+  });
+
+  it("rejects same-size Windows root launcher mutation after registration", async () => {
+    const install = await makeInstall();
+    registerCurrentInstall(install);
+    const launcher = makeLauncherWritable(install);
+    const bytes = readFileSync(launcher);
+    bytes[0] = (bytes[0] ?? 0) ^ 0xff;
+    writeFileSync(launcher, bytes);
+
+    expect(attestCurrentRegistration(install)).toBe(false);
+  });
+
+  it("hands an immutable plan to the coordinator without promoting or reporting success", async () => {
+    const install = await makeInstall();
+    registerCurrentInstall(install);
+    const begin = vi.fn(() =>
+      Promise.resolve({ coordinatorId: "9".repeat(64), acceptedAt: "2026-09-05T00:00:00.000Z" }),
+    );
+    const result = await configuredActivator(install, { begin }).activate({
+      sessionId: "handoff-session",
       targetVersion: TARGET_VERSION,
       stage: stageSummary(),
       runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
     });
 
-    expect(activation).toMatchObject({
-      status: "activated",
-      packageVersion: TARGET_VERSION,
-      registrationRefreshed: true,
-      relaunchRequested: true,
-      versionVerified: true,
-    });
-    expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(
-      TARGET_VERSION,
-    );
-    expect(existsSync(join(install.managedRoot, "active.txt"))).toBe(false);
-    expect(spawnCalls[0]?.[0]).toBe(join(install.managedRoot, "Keiko.exe"));
-    expect(readFileSync(join(install.stateDir, "portable-install-state.json"), "utf8")).toContain(
-      TARGET_VERSION,
-    );
-    const runtimeState = JSON.stringify(localState.readRuntimeState());
-    expect(runtimeState).toContain("portableActivation");
-    expect(runtimeState).not.toContain(install.managedRoot);
-    const audit = readFileSync(join(install.stateDir, "updates", "update-audit.jsonl"), "utf8");
-    expect(audit).toContain("portable-activation-result");
-    expect(audit).toContain("portable-relaunch-result");
-    expect(audit).not.toContain(install.managedRoot);
+    expect(result).toMatchObject({ status: "handoff-pending", coordinatorId: "9".repeat(64) });
+    expect(begin).toHaveBeenCalledOnce();
+    expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(OLD_VERSION);
+    expect(existsSync(join(install.managedRoot, "active.txt"))).toBe(true);
   });
 
-  it("restores the previously working install and retains staging when relaunch version is not verified", async () => {
+  it("discards an uncommitted capsule when coordinator acceptance fails", async () => {
     const install = await makeInstall();
-    const registrationPath = join(install.stateDir, "portable-install-state.json");
-    mkdirSync(install.stateDir, { recursive: true });
-    writeFileSync(registrationPath, '{"packageVersion":"0.2.14"}\n', "utf8");
-    const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });
-    const activator = createPortableUpdateActivator({
-      env: {
-        KEIKO_STATE_DIR: install.stateDir,
-        APPDATA: join(install.home, "AppData", "Roaming"),
-        LOCALAPPDATA: join(install.home, "AppData", "Local"),
-      },
-      homedir: () => install.home,
-      localState,
-      spawnFn: () => childProcess(),
-      versionVerifier: () => Promise.resolve(false),
+    registerCurrentInstall(install);
+    const input = {
+      sessionId: "handoff-refused",
+      targetVersion: TARGET_VERSION,
+      stage: stageSummary(),
+      runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
+    };
+    const activator = configuredActivator(install, {
+      begin: () => Promise.reject(new Error("coordinator refused")),
     });
 
-    await expect(
-      activator.activate({
-        sessionId: "session-version-miss",
-        targetVersion: TARGET_VERSION,
-        stage: stageSummary(),
-        runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
-      }),
-    ).rejects.toMatchObject({ reason: "portable-version-verification-failed" });
-    expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(OLD_VERSION);
-    expect(readFileSync(join(install.managedRoot, "active.txt"), "utf8")).toBe("active");
-    expect(readFileSync(registrationPath, "utf8")).toBe('{"packageVersion":"0.2.14"}\n');
-    expect(readFileSync(join(install.stageRoot, "app", "package.json"), "utf8")).toContain(
-      TARGET_VERSION,
-    );
-    expect(localState.readRuntimeState().portableActivation).toBeUndefined();
-    const audit = readFileSync(join(install.stateDir, "updates", "update-audit.jsonl"), "utf8");
-    expect(audit).toContain("portable-activation-result");
-    expect(audit).toContain('"status":"failed"');
-    expect(audit).not.toContain("portable-relaunch-result");
-    expect(audit).not.toContain(install.managedRoot);
-    expect(existsSync(join(install.stateDir, "updates", "portable-activation-recovery.json"))).toBe(
+    await expect(activator.activate(input)).rejects.toThrow("coordinator refused");
+    expect(existsSync(join(install.stateDir, "updates", "handoff", activationIdFor(input)))).toBe(
       false,
     );
   });
 
-  it("leaves the managed install tree before the atomic rename swap", async () => {
+  it("fails closed when the native handoff capability is not composed", async () => {
     const install = await makeInstall();
-    const previous = process.cwd();
-    const parent = dirname(install.managedRoot);
-    const destinations: string[] = [];
-    const realChdir = process.chdir.bind(process);
-    const spy = vi.spyOn(process, "chdir").mockImplementation((next: string): void => {
-      destinations.push(next);
-      realChdir(next);
-    });
-    realChdir(install.managedRoot);
-    try {
-      const input = {
-        sessionId: "cwd-swap",
+    registerCurrentInstall(install);
+    await expect(
+      configuredActivator(install, undefined).activate({
+        sessionId: "handoff-unavailable",
         targetVersion: TARGET_VERSION,
         stage: stageSummary(),
         runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
-      };
-      promotePortableInstall(input, activationIdFor(input));
-      const parentReal = realpathSync(parent);
-      expect(destinations.some((path) => realpathSync(path) === parentReal)).toBe(true);
-      expect(readFileSync(join(install.managedRoot, "app", "package.json"), "utf8")).toContain(
-        TARGET_VERSION,
-      );
-    } finally {
-      spy.mockRestore();
-      process.chdir(previous);
-    }
+      }),
+    ).rejects.toThrow("portable handoff capability is unavailable");
   });
 
-  // KEIKO-0493: a cancellation landing between requestRelaunch() and the relaunch's own
-  // version-verification poll used to roll back the promoted layout while a live process,
-  // spawned against exactly those files, was starting up. `kill` appeared nowhere in the
-  // module before this fix, so the spawned child simply outlived the rollback.
-  it("terminates an already-spawned relaunch before rolling the promotion back (KEIKO-0493)", async () => {
+  it("forwards cancellation authority through the coordinator ACK boundary", async () => {
     const install = await makeInstall();
-    mkdirSync(install.stateDir, { recursive: true });
+    registerCurrentInstall(install);
+    const controller = new AbortController();
+    const begin = vi.fn(
+      (_input: {
+        readonly sessionId: string;
+        readonly activationId: string;
+        readonly signal?: AbortSignal | undefined;
+      }) => Promise.reject(new Error("cancelled before ACK")),
+    );
+    await expect(
+      configuredActivator(install, { begin }).activate({
+        sessionId: "handoff-cancelled",
+        targetVersion: TARGET_VERSION,
+        stage: stageSummary(),
+        runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow("cancelled before ACK");
+    expect(begin.mock.calls[0]?.[0].signal).toBe(controller.signal);
+  });
+
+  it("atomically clears prepared authority when the real coordinator is cancelled before ACK", async () => {
+    const install = await makeInstall();
+    registerCurrentInstall(install);
     const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });
-    // Ordering matters, not just the call: a rollback that restored the old install BEFORE
-    // killing the child would still satisfy a bare toHaveBeenCalled. Assert inside the mock
-    // that the promoted layout is still in place when the signal is sent.
-    const kill = vi.fn(() => {
-      expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(
-        TARGET_VERSION,
-      );
+    seedCancellableSession(localState);
+    const controller = new AbortController();
+    const control = new PassThrough();
+    const response = new PassThrough();
+    const kill = vi.fn(() => true);
+    const child = Object.assign(new EventEmitter(), {
+      pid: 43_210,
+      stdin: control,
+      stdio: [control, null, null, response],
+      unref: vi.fn(),
+      kill,
+    }) as unknown as ChildProcess;
+    kill.mockImplementation(() => {
+      queueMicrotask(() => child.emit("exit", null, "SIGTERM"));
       return true;
     });
+    const coordinator = createPortableHandoffCoordinator({
+      stateDir: install.stateDir,
+      publishCoordinatorPid: () => true,
+      persistPrepared: ({ activationWal }) => {
+        const current = localState.readRuntimeState();
+        localState.writeRuntimeState({
+          ...current,
+          activationWal,
+          recovery: {
+            status: "reconciling",
+            sessionId: "handoff-cancelled",
+            updatedAt: "2026-09-05T00:00:00.000Z",
+          },
+        });
+        return Promise.resolve();
+      },
+      persistAccepted: () => Promise.reject(new Error("acceptance must not persist")),
+      verifyNativeCopy: () => Promise.resolve(),
+      spawnFn: () => {
+        queueMicrotask(() => {
+          controller.abort();
+        });
+        return child;
+      },
+    });
     const activator = createPortableUpdateActivator({
       env: {
         KEIKO_STATE_DIR: install.stateDir,
-        APPDATA: join(install.home, "AppData", "Roaming"),
         LOCALAPPDATA: join(install.home, "AppData", "Local"),
       },
-      homedir: () => install.home,
       localState,
-      spawnFn: () => ({ unref: vi.fn(), kill }) as unknown as ChildProcess,
-      // Fails verification AFTER the relaunch has been spawned — exactly the window the
-      // finding describes.
-      versionVerifier: () => Promise.resolve(false),
-    });
-
-    await expect(
-      activator.activate({
-        sessionId: "session-relaunch-rollback",
-        targetVersion: TARGET_VERSION,
-        stage: stageSummary(),
-        runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
-      }),
-    ).rejects.toMatchObject({ reason: "portable-version-verification-failed" });
-
-    expect(kill).toHaveBeenCalledTimes(1);
-    // The rollback itself still completed — terminating the child must not replace it.
-    expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(OLD_VERSION);
-  });
-
-  it("refreshes a quoted Windows shortcut when the managed launcher path contains spaces", async () => {
-    const base = await mkdtemp(join(tmpdir(), "keiko-portable-activation-"));
-    tempRoots.push(base);
-    const home = join(base, "User Profile");
-    const managedRoot = join(home, "AppData", "Local", "Programs", "Keiko App");
-    const packageRoot = join(managedRoot, "app");
-    const stageRoot = join(dirname(managedRoot), ".keiko-portable-updates", "stage-1", "Keiko");
-    const stateDir = join(home, ".keiko");
-    const activatorEnv = {
-      KEIKO_STATE_DIR: stateDir,
-      APPDATA: join(home, "AppData", "Roaming"),
-      LOCALAPPDATA: join(home, "AppData", "Local"),
-    };
-    writeInstall(managedRoot, OLD_VERSION);
-    writeInstall(stageRoot, TARGET_VERSION);
-    const activator = createPortableUpdateActivator({
-      env: activatorEnv,
-      homedir: () => home,
-      spawnFn: () => childProcess(),
-      versionVerifier: () => Promise.resolve(true),
-    });
-
-    const summary = await activator.activate({
-      sessionId: "session-spaced-shortcut",
-      targetVersion: TARGET_VERSION,
-      stage: stageSummary(),
-      runtimeFacts: { packageRoot, portableStateDir: stateDir },
-    });
-
-    expect(summary.target).toBe(TARGET);
-    expect(summary.shortcutRefreshed).toBe(true);
-    const shortcutPath = join(
-      home,
-      "AppData",
-      "Roaming",
-      "Microsoft",
-      "Windows",
-      "Start Menu",
-      "Programs",
-      "Keiko.lnk",
-    );
-    expect(filesUnder(home).filter((path) => path.endsWith(".lnk"))).toContain(shortcutPath);
-    expect(readWindowsPortableShortcutTarget(shortcutPath, activatorEnv)).toBe(
-      join(managedRoot, "Keiko.exe"),
-    );
-  });
-
-  it("rewrites an attributed shortcut with a stale working directory and refuses a foreign one", async () => {
-    const base = await mkdtemp(join(tmpdir(), "keiko-portable-shortcut-guard-"));
-    tempRoots.push(base);
-    const home = join(base, "home");
-    const installRoot = join(home, "AppData", "Local", "Programs", "Keiko");
-    const launcherPath = join(installRoot, "Keiko.exe");
-    const env = { APPDATA: join(home, "AppData", "Roaming") };
-    const shortcutPath = join(
-      env.APPDATA,
-      "Microsoft",
-      "Windows",
-      "Start Menu",
-      "Programs",
-      "Keiko.lnk",
-    );
-    const layout = {
-      installRoot,
-      appRoot: join(installRoot, "app"),
-      packageJsonPath: join(installRoot, "app", "package.json"),
-      setupManifestPath: join(installRoot, "app", "keiko-setup-manifest.json"),
-      launcherPath,
-    };
-    mkdirSync(dirname(shortcutPath), { recursive: true });
-
-    // Attributed (target = managed launcher) but stale working directory: the refresh must
-    // repair it, not refuse it — this is the exact artifact the rewrite exists to heal.
-    writeFileSync(
-      shortcutPath,
-      windowsShortcutFallbackContent({
-        targetPath: launcherPath,
-        workingDirectory: join(home, "old-install-root"),
-        iconPath: launcherPath,
-      }),
-      "utf8",
-    );
-    expect(refreshPortableShortcut({ target: "windows-x64", layout, env, home })).toBe(true);
-    expect(parseWindowsShortcutFallback(shortcutPath)?.workingDirectory).toBe(installRoot);
-
-    // Foreign target: cannot be attributed to this install, must be refused and left intact.
-    const foreign = windowsShortcutFallbackContent({
-      targetPath: join(home, "SomethingElse", "Other.exe"),
-      workingDirectory: join(home, "SomethingElse"),
-      iconPath: join(home, "SomethingElse", "Other.exe"),
-    });
-    writeFileSync(shortcutPath, foreign, "utf8");
-    expect(refreshPortableShortcut({ target: "windows-x64", layout, env, home })).toBe(false);
-    expect(readFileSync(shortcutPath, "utf8")).toBe(foreign);
-  });
-
-  it("falls back to the profile location when APPDATA is empty or relative", async () => {
-    const base = await mkdtemp(join(tmpdir(), "keiko-portable-appdata-guard-"));
-    tempRoots.push(base);
-    const home = join(base, "home");
-    const installRoot = join(home, "AppData", "Local", "Programs", "Keiko");
-    const launcherPath = join(installRoot, "Keiko.exe");
-    const layout = {
-      installRoot,
-      appRoot: join(installRoot, "app"),
-      packageJsonPath: join(installRoot, "app", "package.json"),
-      setupManifestPath: join(installRoot, "app", "keiko-setup-manifest.json"),
-      launcherPath,
-    };
-    const fallbackShortcut = join(
-      home,
-      "AppData",
-      "Roaming",
-      "Microsoft",
-      "Windows",
-      "Start Menu",
-      "Programs",
-      "Keiko.lnk",
-    );
-
-    // An empty or relative APPDATA must anchor at the profile fallback, never at the process
-    // working directory.
-    for (const appData of ["", "relative\\appdata"]) {
-      expect(
-        refreshPortableShortcut({
-          target: "windows-x64",
-          layout,
-          env: { APPDATA: appData },
-          home,
-        }),
-      ).toBe(true);
-      expect(parseWindowsShortcutFallback(fallbackShortcut)?.targetPath).toBe(launcherPath);
-      rmSync(fallbackShortcut);
-    }
-    expect(existsSync(join(process.cwd(), "Microsoft"))).toBe(false);
-    expect(existsSync(join(process.cwd(), "relative"))).toBe(false);
-  });
-
-  it("fails closed and preserves the active install when the staged candidate is incomplete", async () => {
-    const install = await makeInstall();
-    await rm(join(install.stageRoot, "Keiko.exe"), { force: true });
-    const activator = createPortableUpdateActivator({
-      env: { KEIKO_STATE_DIR: install.stateDir },
       homedir: () => install.home,
-      localState: createUpdateLocalStateManager({ stateDir: install.stateDir }),
-      spawnFn: () => childProcess(),
-      versionVerifier: () => Promise.resolve(true),
-    });
-
-    await expect(
-      activator.activate({
-        sessionId: "session-2",
-        targetVersion: TARGET_VERSION,
-        stage: stageSummary(),
-        runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
+      currentVersion: OLD_VERSION,
+      currentProcess: () => ({
+        pid: process.pid,
+        launchId: "1".repeat(32),
+        host: "127.0.0.1",
+        port: 1983,
+        version: OLD_VERSION,
       }),
-    ).rejects.toMatchObject({ reason: "portable-activation-failed" });
-    expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(OLD_VERSION);
-    expect(readFileSync(join(install.managedRoot, "active.txt"), "utf8")).toBe("active");
-    expect(existsSync(join(install.stateDir, "portable-install-state.json"))).toBe(false);
-  });
-
-  it("restores the active install when registration refresh fails before relaunch", async () => {
-    const install = await makeInstall();
-    const unsafeStateTarget = join(install.home, "unsafe-state-target");
-    mkdirSync(unsafeStateTarget);
-    mkdirSync(install.stateDir);
-    symlinkSync(unsafeStateTarget, join(install.stateDir, "portable-install-state.json"), "file");
-    const spawnFn = vi.fn(() => childProcess());
-    const activator = createPortableUpdateActivator({
-      env: { KEIKO_STATE_DIR: install.stateDir },
-      homedir: () => install.home,
-      spawnFn,
-      versionVerifier: () => Promise.resolve(true),
+      newLaunchId: () => "2".repeat(32),
+      now: () => 1_700_000_000_000,
+      handoffCoordinator: coordinator,
     });
-
-    await expect(
-      activator.activate({
-        sessionId: "session-3",
-        targetVersion: TARGET_VERSION,
-        stage: stageSummary(),
-        runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
-      }),
-    ).rejects.toMatchObject({ reason: "portable-activation-failed" });
-    expect(spawnFn).not.toHaveBeenCalled();
-    expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(OLD_VERSION);
-    expect(readFileSync(join(install.managedRoot, "active.txt"), "utf8")).toBe("active");
-    expect(readFileSync(join(install.stageRoot, "app", "package.json"), "utf8")).toContain(
-      TARGET_VERSION,
-    );
-  });
-
-  it("restores the active install when relaunch cannot be started", async () => {
-    const install = await makeInstall();
-    const registrationPath = join(install.stateDir, "portable-install-state.json");
-    mkdirSync(install.stateDir, { recursive: true });
-    writeFileSync(registrationPath, '{"packageVersion":"0.2.14"}\n', "utf8");
-    const activator = createPortableUpdateActivator({
-      env: { KEIKO_STATE_DIR: install.stateDir },
-      homedir: () => install.home,
-      spawnFn: () => {
-        throw new Error("launcher unavailable");
-      },
-      versionVerifier: () => Promise.resolve(true),
-    });
-
-    await expect(
-      activator.activate({
-        sessionId: "session-relaunch-failed",
-        targetVersion: TARGET_VERSION,
-        stage: stageSummary(),
-        runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
-      }),
-    ).rejects.toMatchObject({ reason: "portable-relaunch-failed" });
-    expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(OLD_VERSION);
-    expect(readFileSync(join(install.managedRoot, "active.txt"), "utf8")).toBe("active");
-    expect(readFileSync(registrationPath, "utf8")).toBe('{"packageVersion":"0.2.14"}\n');
-    expect(readFileSync(join(install.stageRoot, "app", "package.json"), "utf8")).toContain(
-      TARGET_VERSION,
-    );
-  });
-
-  it("blocks a concurrent promotion until the active activation has settled", async () => {
-    const install = await makeInstall();
-    let completeVerification: (() => void) | undefined;
-    const verification = new Promise<boolean>((resolve) => {
-      completeVerification = (): void => {
-        resolve(true);
-      };
-    });
-    const activator = createPortableUpdateActivator({
-      env: { KEIKO_STATE_DIR: install.stateDir },
-      homedir: () => install.home,
-      spawnFn: () => childProcess(),
-      versionVerifier: () => verification,
-    });
-    const request = {
-      sessionId: "session-concurrent",
+    const input = {
+      sessionId: "handoff-cancelled",
       targetVersion: TARGET_VERSION,
       stage: stageSummary(),
       runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
+      signal: controller.signal,
     };
 
-    const first = activator.activate(request);
-    const concurrentActivator = createPortableUpdateActivator({
-      env: { KEIKO_STATE_DIR: install.stateDir },
-      homedir: () => install.home,
-      spawnFn: () => childProcess(),
-      versionVerifier: () => Promise.resolve(true),
-    });
-    await expect(concurrentActivator.activate(request)).rejects.toMatchObject({
-      reason: "portable-activation-failed",
-    });
-    completeVerification?.();
-    await expect(first).resolves.toMatchObject({ status: "activated" });
-  });
-
-  it("settles an interrupted promotion from content-free recovery metadata before promoting", async () => {
-    const install = await makeInstall();
-    const request = {
-      sessionId: "session-interrupted",
-      targetVersion: TARGET_VERSION,
-      stage: stageSummary(),
-      runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
-    };
-    const activationId = activationIdFor(request);
-    const backupRoot = join(dirname(install.managedRoot), `.keiko-previous-${activationId}`);
-    renameSync(install.managedRoot, backupRoot);
-    renameSync(install.stageRoot, install.managedRoot);
-    mkdirSync(join(install.stateDir, "updates"), { recursive: true });
-    writeFileSync(
-      join(install.stateDir, "updates", "portable-activation-recovery.json"),
-      JSON.stringify({ activationId, stageId: "stage-1", target: TARGET, phase: "promoted" }),
-      "utf8",
-    );
-    const activator = createPortableUpdateActivator({
-      env: { KEIKO_STATE_DIR: install.stateDir },
-      homedir: () => install.home,
-      spawnFn: () => childProcess(),
-      versionVerifier: () => Promise.resolve(true),
-    });
-
-    await expect(activator.activate(request)).resolves.toMatchObject({ status: "activated" });
-    expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(
-      TARGET_VERSION,
-    );
-    const recoveryPath = join(install.stateDir, "updates", "portable-activation-recovery.json");
-    if (process.platform === "win32") {
-      expect(existsSync(backupRoot)).toBe(true);
-      expect(JSON.parse(readFileSync(recoveryPath, "utf8"))).toMatchObject({
-        phase: "cleanup-pending",
-        updaterPid: process.pid,
-      });
-    } else {
-      expect(existsSync(backupRoot)).toBe(false);
-      expect(existsSync(recoveryPath)).toBe(false);
-    }
-  });
-
-  it("restores prior registration for an interrupted registered candidate before failing safely", async () => {
-    const install = await makeInstall();
-    const request = {
-      sessionId: "session-registered-recovery",
-      targetVersion: TARGET_VERSION,
-      stage: stageSummary(),
-      runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
-    };
-    const registrationPath = join(install.stateDir, "portable-install-state.json");
-    const oldRegistration = '{"packageVersion":"0.2.14"}\n';
-    mkdirSync(install.stateDir, { recursive: true });
-    writeFileSync(registrationPath, oldRegistration, "utf8");
-    const activationId = activationIdFor(request);
-    capturePortableRegistration({ stateDir: install.stateDir, activationId });
-    const backupRoot = join(dirname(install.managedRoot), `.keiko-previous-${activationId}`);
-    renameSync(install.managedRoot, backupRoot);
-    renameSync(install.stageRoot, install.managedRoot);
-    writeFileSync(registrationPath, '{"packageVersion":"0.2.12"}\n', "utf8");
-    mkdirSync(join(install.stateDir, "updates"), { recursive: true });
-    writeFileSync(
-      join(install.stateDir, "updates", "portable-activation-recovery.json"),
-      JSON.stringify({ activationId, stageId: "stage-1", target: TARGET, phase: "registered" }),
-      "utf8",
-    );
-    await rm(join(install.managedRoot, "Keiko.exe"), { force: true });
-    const activator = createPortableUpdateActivator({
-      env: { KEIKO_STATE_DIR: install.stateDir },
-      homedir: () => install.home,
-      spawnFn: () => childProcess(),
-      versionVerifier: () => Promise.resolve(true),
-    });
-
-    await expect(activator.activate(request)).rejects.toMatchObject({
-      reason: "portable-activation-failed",
-    });
-    expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(OLD_VERSION);
-    expect(readFileSync(registrationPath, "utf8")).toBe(oldRegistration);
-  });
-
-  it("records a failed activation when recovery metadata is malformed", async () => {
-    const install = await makeInstall();
-    const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });
-    mkdirSync(join(install.stateDir, "updates"), { recursive: true });
-    writeFileSync(
-      join(install.stateDir, "updates", "portable-activation-recovery.json"),
-      "{not-json",
-      "utf8",
-    );
-    const activator = createPortableUpdateActivator({
-      env: { KEIKO_STATE_DIR: install.stateDir },
-      homedir: () => install.home,
-      localState,
-      spawnFn: () => childProcess(),
-      versionVerifier: () => Promise.resolve(true),
-    });
-    await expect(
-      activator.activate({
-        sessionId: "session-malformed-recovery",
-        targetVersion: TARGET_VERSION,
-        stage: stageSummary(),
-        runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
-      }),
-    ).rejects.toMatchObject({ reason: "portable-activation-failed" });
-    const audit = readFileSync(join(install.stateDir, "updates", "update-audit.jsonl"), "utf8");
-    expect(audit).toContain("portable-activation-result");
-    expect(audit).toContain('"status":"failed"');
-  });
-
-  it("keeps Windows cleanup-pending recovery when the same updater starts another activate", async () => {
-    const install = await makeInstall();
-    const request = {
-      sessionId: "session-same-updater-cleanup",
-      targetVersion: TARGET_VERSION,
-      stage: stageSummary(),
-      runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
-    };
-    const events: SecurityLogEvent[] = [];
-    const activator = createPortableUpdateActivator({
-      env: { KEIKO_STATE_DIR: install.stateDir },
-      homedir: () => install.home,
-      platform: "win32",
-      spawnFn: () => childProcess(),
-      versionVerifier: () => Promise.resolve(true),
-      securityLogSink: {
-        write: (event): void => {
-          events.push(event);
-        },
-      },
-    });
-    await expect(activator.activate(request)).resolves.toMatchObject({ status: "activated" });
-    const backupRoot = join(
-      dirname(install.managedRoot),
-      `.keiko-previous-${activationIdFor(request)}`,
-    );
-    const recoveryPath = join(install.stateDir, "updates", "portable-activation-recovery.json");
-    expect(existsSync(backupRoot)).toBe(true);
-    expect(JSON.parse(readFileSync(recoveryPath, "utf8"))).toMatchObject({
-      phase: "cleanup-pending",
-      updaterPid: process.pid,
-    });
-    await expect(activator.activate(request)).rejects.toMatchObject({
-      reason: "portable-activation-failed",
-    });
-    expect(existsSync(backupRoot)).toBe(true);
-    expect(JSON.parse(readFileSync(recoveryPath, "utf8"))).toMatchObject({
-      phase: "cleanup-pending",
-      updaterPid: process.pid,
-    });
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        op: "security.fs.portable-backup-cleanup",
-        extra: { outcome: "deferred" },
-      }),
-    );
-  });
-
-  it("keeps Windows backup when retrying a verified recovery that recorded updaterPid", async () => {
-    const install = await makeInstall();
-    const request = {
-      sessionId: "session-verified-pid-retry",
-      targetVersion: TARGET_VERSION,
-      stage: stageSummary(),
-      runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
-    };
-    const activator = createPortableUpdateActivator({
-      env: { KEIKO_STATE_DIR: install.stateDir },
-      homedir: () => install.home,
-      platform: "win32",
-      execPath: process.execPath,
-      spawnFn: () => childProcess(),
-      versionVerifier: () => Promise.resolve(true),
-    });
-    await expect(activator.activate(request)).resolves.toMatchObject({ status: "activated" });
-    const pending = readPortableActivationRecovery(install.stateDir);
-    expect(pending).toMatchObject({ phase: "cleanup-pending", updaterPid: process.pid });
-    if (pending === undefined) {
-      throw new TypeError("expected cleanup-pending recovery");
-    }
-    writePortableActivationRecovery({
-      stateDir: install.stateDir,
-      recovery: { ...pending, phase: "verified" },
-    });
-    await expect(activator.activate(request)).rejects.toMatchObject({
-      reason: "portable-activation-failed",
-    });
-    expect(
-      existsSync(join(dirname(install.managedRoot), `.keiko-previous-${activationIdFor(request)}`)),
-    ).toBe(true);
-    expect(readPortableActivationRecovery(install.stateDir)).toMatchObject({
-      phase: "cleanup-pending",
-      updaterPid: process.pid,
-    });
-  });
-
-  it("lets a later process finish deferred Windows backup cleanup before promoting", async () => {
-    const install = await makeInstall();
-    const firstRequest = {
-      sessionId: "session-later-process-cleanup",
-      targetVersion: TARGET_VERSION,
-      stage: stageSummary(),
-      runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
-    };
-    const activator = createPortableUpdateActivator({
-      env: { KEIKO_STATE_DIR: install.stateDir },
-      homedir: () => install.home,
-      platform: "win32",
-      spawnFn: () => childProcess(),
-      versionVerifier: () => Promise.resolve(true),
-    });
-    await expect(activator.activate(firstRequest)).resolves.toMatchObject({ status: "activated" });
-    const firstBackup = join(
-      dirname(install.managedRoot),
-      `.keiko-previous-${activationIdFor(firstRequest)}`,
-    );
-    const pending = readPortableActivationRecovery(install.stateDir);
-    expect(pending).toMatchObject({ phase: "cleanup-pending" });
-    if (pending === undefined) return;
-    writePortableActivationRecovery({
-      stateDir: install.stateDir,
-      recovery: {
-        activationId: pending.activationId,
-        stageId: pending.stageId,
-        target: TARGET,
-        phase: "cleanup-pending",
-        updaterPid: process.pid + 1,
-      },
-    });
-    const nextVersion = "0.2.13";
-    writeInstall(
-      join(dirname(install.managedRoot), ".keiko-portable-updates", "stage-2", "Keiko"),
-      nextVersion,
-    );
-    const nextRequest = {
-      sessionId: "session-later-process-next",
-      targetVersion: nextVersion,
-      stage: {
-        ...stageSummary(),
-        stageId: "stage-2",
-        packageVersion: nextVersion,
-        sha256: "c".repeat(64),
-      },
-      runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
-    };
-    await expect(activator.activate(nextRequest)).resolves.toMatchObject({ status: "activated" });
-    expect(existsSync(firstBackup)).toBe(false);
-    expect(
-      existsSync(
-        join(dirname(install.managedRoot), `.keiko-previous-${activationIdFor(nextRequest)}`),
-      ),
-    ).toBe(true);
-    expect(readPortableActivationRecovery(install.stateDir)).toMatchObject({
-      phase: "cleanup-pending",
-      updaterPid: process.pid,
-    });
-    expect(readFileSync(join(install.packageRoot, "package.json"), "utf8")).toContain(nextVersion);
-  });
-});
-
-describe("cleanupPortableActivation", () => {
-  it("leaves the Windows backup tree when this process still maps node.exe from it", () => {
-    const root = join(tmpdir(), `keiko-activation-cleanup-${String(process.pid)}`);
-    const backupRoot = join(root, "Keiko-old");
-    const stageRoot = join(root, "stage");
-    const mappedExe = join(backupRoot, "runtime", "node", "node.exe");
-    mkdirSync(dirname(mappedExe), { recursive: true });
-    mkdirSync(stageRoot, { recursive: true });
-    writeFileSync(mappedExe, "exe");
-    writeFileSync(join(stageRoot, "leftover"), "x");
-    try {
-      expect(
-        cleanupPortableActivation(
-          {
-            managedRoot: join(root, "Keiko"),
-            stageRoot,
-            candidateRoot: join(root, "candidate"),
-            backupRoot,
-          },
-          { platform: "win32", execPath: mappedExe },
-        ),
-      ).toEqual({ backupDeleteDeferred: true });
-      expect(existsSync(mappedExe)).toBe(true);
-      expect(existsSync(stageRoot)).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("leaves the Windows backup tree when this updater pid still owns cleanup", () => {
-    const root = join(tmpdir(), `keiko-activation-cleanup-pid-${String(process.pid)}`);
-    const backupRoot = join(root, "Keiko-old");
-    const stageRoot = join(root, "stage");
-    mkdirSync(backupRoot, { recursive: true });
-    mkdirSync(stageRoot, { recursive: true });
-    writeFileSync(join(backupRoot, "marker"), "old");
-    writeFileSync(join(stageRoot, "leftover"), "x");
-    try {
-      expect(
-        cleanupPortableActivation(
-          {
-            managedRoot: join(root, "Keiko"),
-            stageRoot,
-            candidateRoot: join(root, "candidate"),
-            backupRoot,
-          },
-          { platform: "win32", execPath: process.execPath, updaterPid: process.pid },
-        ),
-      ).toEqual({ backupDeleteDeferred: true });
-      expect(existsSync(backupRoot)).toBe(true);
-      expect(existsSync(stageRoot)).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("removes the Windows backup tree when a different updater pid settles cleanup", () => {
-    const root = join(tmpdir(), `keiko-activation-cleanup-other-${String(process.pid)}`);
-    const backupRoot = join(root, "Keiko-old");
-    const stageRoot = join(root, "stage");
-    mkdirSync(backupRoot, { recursive: true });
-    mkdirSync(stageRoot, { recursive: true });
-    writeFileSync(join(backupRoot, "marker"), "old");
-    try {
-      expect(
-        cleanupPortableActivation(
-          {
-            managedRoot: join(root, "Keiko"),
-            stageRoot,
-            candidateRoot: join(root, "candidate"),
-            backupRoot,
-          },
-          { platform: "win32", execPath: process.execPath, updaterPid: process.pid + 1 },
-        ),
-      ).toEqual({ backupDeleteDeferred: false });
-      expect(existsSync(backupRoot)).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("follows realpath so a Windows execPath alias into the backup is not deleted", (ctx) => {
-    if (process.platform === "win32") ctx.skip();
-    const root = join(tmpdir(), `keiko-activation-cleanup-link-${String(process.pid)}`);
-    const backupRoot = join(root, "Keiko-old");
-    const stageRoot = join(root, "stage");
-    const mappedExe = join(backupRoot, "runtime", "node", "node.exe");
-    const aliasExe = join(root, "alias", "node.exe");
-    mkdirSync(dirname(mappedExe), { recursive: true });
-    mkdirSync(dirname(aliasExe), { recursive: true });
-    mkdirSync(stageRoot, { recursive: true });
-    writeFileSync(mappedExe, "exe");
-    symlinkSync(mappedExe, aliasExe);
-    try {
-      cleanupPortableActivation(
-        {
-          managedRoot: join(root, "Keiko"),
-          stageRoot,
-          candidateRoot: join(root, "candidate"),
-          backupRoot,
-        },
-        { platform: "win32", execPath: aliasExe },
-      );
-      expect(existsSync(mappedExe)).toBe(true);
-      expect(existsSync(stageRoot)).toBe(false);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-
-  it("removes the Windows backup tree when execPath is a sibling sharing a prefix", () => {
-    const root = join(tmpdir(), `keiko-activation-cleanup-sib-${String(process.pid)}`);
-    const backupRoot = join(root, "Keiko-old");
-    const stageRoot = join(root, "stage");
-    const siblingExe = join(root, "Keiko-old-sibling", "node.exe");
-    mkdirSync(join(backupRoot, "runtime"), { recursive: true });
-    mkdirSync(dirname(siblingExe), { recursive: true });
-    mkdirSync(stageRoot, { recursive: true });
-    writeFileSync(join(backupRoot, "marker"), "old");
-    writeFileSync(siblingExe, "exe");
-    writeFileSync(join(stageRoot, "leftover"), "x");
-    try {
-      cleanupPortableActivation(
-        {
-          managedRoot: join(root, "Keiko"),
-          stageRoot,
-          candidateRoot: join(root, "candidate"),
-          backupRoot,
-        },
-        { platform: "win32", execPath: siblingExe },
-      );
-      expect(existsSync(backupRoot)).toBe(false);
-      expect(existsSync(siblingExe)).toBe(true);
-    } finally {
-      rmSync(root, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("commitPortableActivationCleanup", () => {
-  function fixture(label: string): {
-    readonly root: string;
-    readonly stateDir: string;
-    readonly recovery: PortableActivationRecovery;
-    readonly paths: {
-      readonly managedRoot: string;
-      readonly stageRoot: string;
-      readonly candidateRoot: string;
-      readonly backupRoot: string;
-    };
-  } {
-    const root = join(tmpdir(), `keiko-activation-commit-${label}-${String(process.pid)}`);
-    const backupRoot = join(root, "Keiko-old");
-    const stageRoot = join(root, "stage");
-    const stateDir = join(root, "state");
-    mkdirSync(backupRoot, { recursive: true });
-    mkdirSync(stageRoot, { recursive: true });
-    writeFileSync(join(backupRoot, "marker"), "old");
-    writeFileSync(join(stageRoot, "leftover"), "x");
-    const recovery: PortableActivationRecovery = {
-      activationId: "a".repeat(32),
-      stageId: "stage-1",
-      target: TARGET,
-      phase: "verified",
-      updaterPid: process.pid,
-    };
-    writePortableActivationRecovery({ stateDir, recovery });
-    return {
-      root,
-      stateDir,
-      recovery,
-      paths: {
-        managedRoot: join(root, "Keiko"),
-        stageRoot,
-        candidateRoot: join(root, "candidate"),
-        backupRoot,
-      },
-    };
-  }
-
-  it("keeps cleanup-pending recovery when Windows defers backup delete", () => {
-    const tree = fixture("deferred");
-    const events: SecurityLogEvent[] = [];
-    try {
-      expect(
-        commitPortableActivationCleanup({
-          stateDir: tree.stateDir,
-          paths: tree.paths,
-          recovery: tree.recovery,
-          cleanup: { platform: "win32", updaterPid: process.pid },
-          securityLogSink: {
-            write: (event): void => {
-              events.push(event);
-            },
-          },
-        }),
-      ).toBe("deferred");
-      expect(existsSync(tree.paths.backupRoot)).toBe(true);
-      expect(existsSync(tree.paths.stageRoot)).toBe(false);
-      expect(readPortableActivationRecovery(tree.stateDir)).toEqual({
-        ...tree.recovery,
-        phase: "cleanup-pending",
-        updaterPid: process.pid,
-      });
-      expect(events).toEqual([
-        expect.objectContaining({
-          op: "security.fs.portable-backup-cleanup",
-          correlationId: tree.recovery.activationId,
-          extra: { outcome: "deferred" },
-        }),
-      ]);
-    } finally {
-      rmSync(tree.root, { recursive: true, force: true });
-    }
-  });
-
-  it("clears recovery after a later Windows process removes the backup", () => {
-    const tree = fixture("removed");
-    const events: SecurityLogEvent[] = [];
-    try {
-      expect(
-        commitPortableActivationCleanup({
-          stateDir: tree.stateDir,
-          paths: tree.paths,
-          recovery: tree.recovery,
-          cleanup: { platform: "win32", updaterPid: process.pid + 1 },
-          securityLogSink: {
-            write: (event): void => {
-              events.push(event);
-            },
-          },
-        }),
-      ).toBe("removed");
-      expect(existsSync(tree.paths.backupRoot)).toBe(false);
-      expect(readPortableActivationRecovery(tree.stateDir)).toBeUndefined();
-      expect(events).toEqual([
-        expect.objectContaining({
-          op: "security.fs.portable-backup-cleanup",
-          extra: { outcome: "removed" },
-        }),
-      ]);
-    } finally {
-      rmSync(tree.root, { recursive: true, force: true });
-    }
-  });
-});
-
-// PR #3355 review (IDX62): a hostile/malformed SystemRoot/WINDIR must reach the activity log
-// through the PRODUCTION refreshPortableShortcut call path, not only keiko-security's own unit
-// suite. `readWindowsShortcutDefinition`/`writeWindowsShortcutDefinition` only take the win32
-// (cscript) route when `process.platform === "win32"`, so this block stubs the platform exactly
-// like windows-shortcuts.test.ts does to exercise that route hermetically (the resolver throws
-// strictly before any spawn is attempted — real Windows is never required).
-describe("refreshPortableShortcut logs a trust-boundary refusal (win32 route)", () => {
-  const platform = Object.getOwnPropertyDescriptor(process, "platform");
-
-  afterEach(() => {
-    if (platform !== undefined) Object.defineProperty(process, "platform", platform);
-  });
-
-  function stubWin32(): void {
-    Object.defineProperty(process, "platform", { ...platform, value: "win32" });
-  }
-
-  const HOSTILE_ENV = { SystemRoot: String.raw`\\attacker\share` };
-
-  it.each([
-    ["absent", "create"],
-    ["existing", "read"],
-  ] as const)(
-    "activation correlates the %s-shortcut refusal to its request",
-    async (shortcutState, mode) => {
-      stubWin32();
-      const install = await makeInstall();
-      const appData = join(install.home, "AppData", "Roaming");
-      const shortcutPath = join(
-        appData,
-        "Microsoft",
-        "Windows",
-        "Start Menu",
-        "Programs",
-        "Keiko.lnk",
-      );
-      if (shortcutState === "existing") {
-        mkdirSync(dirname(shortcutPath), { recursive: true });
-        writeFileSync(shortcutPath, "placeholder-shortcut-bytes", "utf8");
-      }
-      const events: SecurityLogEvent[] = [];
-      const request = {
-        sessionId: `session-correlated-${shortcutState}`,
-        targetVersion: TARGET_VERSION,
-        stage: stageSummary(),
-        runtimeFacts: {
-          packageRoot: install.packageRoot,
-          portableStateDir: install.stateDir,
-        },
-      } as const;
-      const correlationId = activationIdFor(request);
-      const activator = createPortableUpdateActivator({
-        env: {
-          ...HOSTILE_ENV,
-          APPDATA: appData,
-          KEIKO_STATE_DIR: install.stateDir,
-          LOCALAPPDATA: join(install.home, "AppData", "Local"),
-        },
-        homedir: () => install.home,
-        securityLogSink: {
-          write: (event): void => {
-            events.push(event);
-          },
-        },
-        spawnFn: () => childProcess(),
-        versionVerifier: () => Promise.resolve(true),
-      });
-
-      await expect(activator.activate(request)).resolves.toMatchObject({
-        shortcutRefreshed: false,
-      });
-      expect(events).toContainEqual(
-        expect.objectContaining({
-          correlationId,
-          op: "security.windows-shortcut.system-root-refused",
-          extra: { mode },
-        }),
-      );
-      expect(events).toContainEqual(
-        expect.objectContaining({
-          correlationId,
-          op: "security.fs.portable-backup-cleanup",
-        }),
-      );
-      expect(JSON.stringify(events)).not.toContain("attacker");
-    },
-  );
-
-  function layoutFor(installRoot: string): {
-    readonly installRoot: string;
-    readonly appRoot: string;
-    readonly packageJsonPath: string;
-    readonly setupManifestPath: string;
-    readonly launcherPath: string;
-  } {
-    return {
-      installRoot,
-      appRoot: join(installRoot, "app"),
-      packageJsonPath: join(installRoot, "app", "package.json"),
-      setupManifestPath: join(installRoot, "app", "keiko-setup-manifest.json"),
-      launcherPath: join(installRoot, "Keiko.exe"),
-    };
-  }
-
-  it("first-install branch: no prior shortcut, refuses the write and still logs the refusal", async () => {
-    stubWin32();
-    const base = await mkdtemp(join(tmpdir(), "keiko-shortcut-root-refused-absent-"));
-    tempRoots.push(base);
-    const home = join(base, "home");
-    const layout = layoutFor(join(home, "AppData", "Local", "Programs", "Keiko"));
-    const write = vi.fn<SecurityLogSink["write"]>();
-    const sink: SecurityLogSink = { write };
-
-    // Absent case: nothing under Start Menu\Programs yet, so refreshPortableShortcut takes the
-    // CREATE branch straight into writeShortcut/writeWindowsShortcutDefinition.
-    expect(
-      refreshPortableShortcut({
-        target: "windows-x64",
-        layout,
-        env: HOSTILE_ENV,
-        home,
-        securityLogSink: sink,
-      }),
-    ).toBe(false);
-    expect(write).toHaveBeenCalledTimes(1);
-    expect(write).toHaveBeenCalledWith(
-      expect.objectContaining({
-        level: "warn",
-        category: "security",
-        op: "security.windows-shortcut.system-root-refused",
-        extra: { mode: "create" },
-      }),
-    );
-  });
-
-  it("existing-shortcut branch: a prior shortcut on disk refuses the read and still logs the refusal", async () => {
-    stubWin32();
-    const base = await mkdtemp(join(tmpdir(), "keiko-shortcut-root-refused-existing-"));
-    tempRoots.push(base);
-    const home = join(base, "home");
-    const layout = layoutFor(join(home, "AppData", "Local", "Programs", "Keiko"));
-    const shortcutPath = join(
-      home,
-      "AppData",
-      "Roaming",
-      "Microsoft",
-      "Windows",
-      "Start Menu",
-      "Programs",
-      "Keiko.lnk",
-    );
-    mkdirSync(dirname(shortcutPath), { recursive: true });
-    // Any non-empty regular file stands in for a prior shortcut here: refreshPortableShortcut's
-    // overwrite guard must resolve SystemRoot to attempt the READ before it can decide whether to
-    // rewrite, and that resolution — never cscript, which is stubbed win32 never actually reaches
-    // here — is exactly what the hostile env refuses. The content is never parsed.
-    writeFileSync(shortcutPath, "placeholder-shortcut-bytes", "utf8");
-    const write = vi.fn<SecurityLogSink["write"]>();
-    const sink: SecurityLogSink = { write };
-
-    expect(
-      refreshPortableShortcut({
-        target: "windows-x64",
-        layout,
-        env: HOSTILE_ENV,
-        home,
-        securityLogSink: sink,
-      }),
-    ).toBe(false);
-    expect(write).toHaveBeenCalledTimes(1);
-    expect(write).toHaveBeenCalledWith(
-      expect.objectContaining({
-        level: "warn",
-        category: "security",
-        op: "security.windows-shortcut.system-root-refused",
-        extra: { mode: "read" },
-      }),
-    );
-  });
-
-  it("stays a silent no-op boolean when no sink is wired, matching every pre-existing caller", async () => {
-    stubWin32();
-    const base = await mkdtemp(join(tmpdir(), "keiko-shortcut-root-refused-no-sink-"));
-    tempRoots.push(base);
-    const home = join(base, "home");
-    const layout = layoutFor(join(home, "AppData", "Local", "Programs", "Keiko"));
-
-    expect(refreshPortableShortcut({ target: "windows-x64", layout, env: HOSTILE_ENV, home })).toBe(
+    await expect(activator.activate(input)).rejects.toThrow(/closed before acceptance/u);
+    expect(localState.readRuntimeState().activationWal).toBeUndefined();
+    expect(existsSync(join(install.stateDir, "updates", "handoff", activationIdFor(input)))).toBe(
       false,
     );
+    expect(kill).toHaveBeenCalled();
+  });
+
+  it("retains the prepared capsule when native child teardown is unproven", async () => {
+    const install = await makeInstall();
+    registerCurrentInstall(install);
+    const localState = createUpdateLocalStateManager({ stateDir: install.stateDir });
+    seedCancellableSession(localState);
+    const input = {
+      sessionId: "handoff-cancelled",
+      targetVersion: TARGET_VERSION,
+      stage: stageSummary(),
+      runtimeFacts: { packageRoot: install.packageRoot, portableStateDir: install.stateDir },
+    };
+    const activationId = activationIdFor(input);
+    const activator = createPortableUpdateActivator({
+      env: {
+        KEIKO_STATE_DIR: install.stateDir,
+        LOCALAPPDATA: join(install.home, "AppData", "Local"),
+      },
+      localState,
+      homedir: () => install.home,
+      currentVersion: OLD_VERSION,
+      currentProcess: () => ({
+        pid: process.pid,
+        launchId: "1".repeat(32),
+        host: "127.0.0.1",
+        port: 1983,
+        version: OLD_VERSION,
+      }),
+      newLaunchId: () => "2".repeat(32),
+      handoffCoordinator: {
+        begin: () => {
+          const current = localState.readRuntimeState();
+          localState.writeRuntimeState({
+            ...current,
+            activationWal: {
+              activationId,
+              planSha256: "a".repeat(64),
+              coordinatorSha256: "b".repeat(64),
+              intentRevision: current.revision + 1,
+              checkpoint: "prepared",
+              receiptSequence: 0,
+            },
+          });
+          return Promise.reject(
+            new PortableHandoffCoordinatorError("portable handoff coordinator did not stop", true),
+          );
+        },
+      },
+    });
+
+    await expect(activator.activate(input)).rejects.toMatchObject({
+      nativeAuthorityMayBeLive: true,
+    });
+    expect(localState.readRuntimeState().activationWal?.activationId).toBe(activationId);
+    expect(existsSync(join(install.stateDir, "updates", "handoff", activationId))).toBe(true);
   });
 });

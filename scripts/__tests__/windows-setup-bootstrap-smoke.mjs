@@ -23,6 +23,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -521,7 +522,7 @@ function runNegativePathCases(root, setupPath, executeOptions, localAppData, man
 }
 
 async function runWindowsSetupBootstrapSmoke() {
-  const root = mkdtempSync(join(tmpdir(), "keiko-setup-bootstrap-"));
+  const root = realpathSync.native(mkdtempSync(join(tmpdir(), "keiko-setup-bootstrap-")));
   const inputRoot = join(root, "input");
   const localAppData = join(root, "local-app-data");
   const managedRoot = join(localAppData, "Kéiko Üñîçødé & % ! ^ (Programs)", "Keiko");

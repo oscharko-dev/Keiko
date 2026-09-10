@@ -12,7 +12,10 @@ $scratch = [System.IO.Path]::GetFullPath($ScratchRoot)
 try {
   if (Test-Path -LiteralPath $scratch) { Remove-Item -LiteralPath $scratch -Recurse -Force }
   New-Item -ItemType Directory -Path $scratch | Out-Null
-  $manifest = Get-Content -LiteralPath (Join-Path $artifact "manifest\portable-manifest.json") -Raw | ConvertFrom-Json
+  $manifestPath = Join-Path $artifact "manifest\portable-manifest.json"
+  node scripts/check-portable-runtime-manifest.mjs --manifest $manifestPath
+  if ($LASTEXITCODE -ne 0) { throw "fresh-windows-qualification: candidate manifest is invalid" }
+  $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
   if ($manifest.artifact.platformTarget -ne "windows-x64" -or $manifest.release.releaseId -ne 0 -or $manifest.artifact.assetId -ne 0) {
     throw "fresh-windows-qualification: candidate manifest identity is invalid"
   }
@@ -24,23 +27,32 @@ try {
   New-Item -ItemType Directory -Path (Join-Path $stage "payload") | Out-Null
   Copy-Item -LiteralPath (Join-Path $scratch "extracted\Keiko") -Destination (Join-Path $stage "payload\Keiko") -Recurse
   Copy-Item -LiteralPath (Join-Path $artifact "manifest") -Destination (Join-Path $stage "manifest") -Recurse
+  node scripts/windows-portable-signing.mjs verify-generation --stage-root $stage
+  if ($LASTEXITCODE -ne 0) { throw "fresh-windows-qualification: closed generation verification failed" }
+  $resourceRootRelativePath = $manifest.windowsGeneration.resourceRoot.Replace('/', '\')
+  $generationId = $manifest.windowsGeneration.treeSha256
+  $resourceRoot = Join-Path (Join-Path $stage "payload\Keiko") $resourceRootRelativePath
   $inventory = Join-Path $scratch "inventory.json"
   $catalog = Join-Path $scratch "catalog.txt"
   node scripts/windows-portable-signing.mjs inventory --stage-root $stage --inventory $inventory --catalog $catalog
   $verification = Join-Path $scratch "verification.json"
-  ./scripts/verify-windows-portable-signing.ps1 -StageRoot $stage -InventoryPath $inventory -VerificationInput $verification -ExpectedIdentityEku $ExpectedIdentityEku
-  $activationPath = Join-Path $stage "payload\Keiko\.portable\runtime-activation.json"
+  ./scripts/verify-windows-portable-signing.ps1 -StageRoot $stage -InventoryPath $inventory -VerificationInput $verification -ExpectedIdentityEku $ExpectedIdentityEku -ResourceRootRelativePath $resourceRootRelativePath
+  $activationPath = Join-Path $resourceRoot ".portable\runtime-activation.json"
   $activation = Get-Content -LiteralPath $activationPath -Raw | ConvertFrom-Json
   $receiptPath = Join-Path $scratch "runtime-qualification.json"
   node scripts/qualify-windows-runtime-release.mjs --stage-root $stage --expected-inventory $inventory --verification-input $verification --source-commit-sha $activation.sourceCommitSha --output $receiptPath
   if ($LASTEXITCODE -ne 0) { throw "fresh-windows-qualification: runtime supervisor qualification failed" }
-  $attestor = Join-Path $stage "payload\Keiko\runtime\native\keiko-runtime-attestation.exe"
+  $attestor = Join-Path $resourceRoot "runtime\native\keiko-runtime-attestation.exe"
   $embeddedReceipt = (& $attestor --emit | Out-String).Trim()
   if ($LASTEXITCODE -ne 0) { throw "fresh-windows-qualification: runtime attestation carrier failed" }
   $qualifiedReceipt = (Get-Content -LiteralPath $receiptPath -Raw).Trim()
   $embeddedCanonical = ($embeddedReceipt | ConvertFrom-Json | ConvertTo-Json -Depth 10 -Compress)
   $qualifiedCanonical = ($qualifiedReceipt | ConvertFrom-Json | ConvertTo-Json -Depth 10 -Compress)
   if ($embeddedCanonical -cne $qualifiedCanonical) { throw "fresh-windows-qualification: runtime attestation binding mismatch" }
+  $completeInventory = Join-Path $scratch "complete-inventory.json"
+  node scripts/windows-portable-signing.mjs inventory-complete --stage-root $stage --generation-id $generationId --expected-inventory $inventory --inventory $completeInventory
+  $completeVerification = Join-Path $scratch "complete-verification.json"
+  ./scripts/verify-windows-portable-signing.ps1 -StageRoot $stage -InventoryPath $completeInventory -VerificationInput $completeVerification -ExpectedIdentityEku $ExpectedIdentityEku -ResourceRootRelativePath $resourceRootRelativePath -CompleteInventory
   Write-Host "fresh Windows qualification passed for windows-x64"
 }
 finally {

@@ -81,6 +81,10 @@ export interface UiServerDeps {
   // (method, path, status, duration, correlation id) into a plain-text JSON log the operator
   // can read. Absent by default so unit tests stay hermetic; the CLI wires the file-backed sink.
   readonly activityLog?: ServerLogSink | undefined;
+  // Closed while startup recovery validates this exact listener and active tree. The gate covers
+  // health, API, static, and upgrade traffic; the CLI opens it only after in-process post-listen
+  // reconciliation succeeds.
+  readonly readiness?: (() => boolean) | undefined;
 }
 
 // Per-request scratch space the http-request line reads at response `close`, populated as the
@@ -394,6 +398,15 @@ async function handle(
     rejectForbiddenHost(req, res);
     return;
   }
+  if (deps.readiness?.() === false) {
+    writeJson(
+      req,
+      res,
+      503,
+      errorBody("STARTUP_RECOVERY_PENDING", "Startup recovery is still in progress."),
+    );
+    return;
+  }
   // #2902 audit finding 1: computed only once the trust-boundary host check has passed (AGENTS.md
   // "validate before you process") — a FORBIDDEN_HOST request never pays the query-string scan.
   computeQueryParamFields(url, context);
@@ -565,6 +578,11 @@ export function createUiServer(deps: UiServerDeps): Server {
     );
   });
   server.on("upgrade", (req, socket, head) => {
+    if (deps.readiness?.() === false) {
+      socket.write("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+      socket.destroy();
+      return;
+    }
     if (voiceControl.handleUpgrade(req, socket, head)) {
       return;
     }

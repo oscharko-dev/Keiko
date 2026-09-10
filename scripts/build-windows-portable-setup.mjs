@@ -24,6 +24,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
+import { isDeepStrictEqual } from "node:util";
 
 import { isPortableExecutableFile } from "./lib/portable-executable.mjs";
 import {
@@ -42,6 +43,7 @@ import {
   portableManifestValidationFailuresForDeclaredLane,
   readPortableManifest,
   sha256File,
+  windowsGenerationBindingValidationFailures,
   WINDOWS_PORTABLE_SETUP_ASSET_NAME,
 } from "./portable-runtime.mjs";
 
@@ -184,12 +186,25 @@ function windowsSetupStageInputs(stageRoot) {
   const canonicalRoot = canonicalWindowsSetupStageRoot(stageRoot);
   const archivePath = join(canonicalRoot, WINDOWS_TARGET.assetName);
   const manifestPath = join(canonicalRoot, "manifest", "portable-manifest.json");
+  const setupManifestPath = join(
+    canonicalRoot,
+    "payload",
+    "Keiko",
+    ".portable",
+    "setup-manifest.json",
+  );
   const archiveStat = assertRegularFile(archivePath, "windows portable archive");
   assertRegularFile(manifestPath, "windows portable manifest", 16 * 1024 * 1024);
   if (!contained(canonicalRoot, archivePath) || !contained(canonicalRoot, manifestPath)) {
     fail("stage files must stay within the stage root");
   }
-  return { archivePath, archiveStat, manifestPath, stageRoot: canonicalRoot };
+  return {
+    archivePath,
+    archiveStat,
+    manifestPath,
+    setupManifestPath,
+    stageRoot: canonicalRoot,
+  };
 }
 
 // Asking the manifest which lane it declares is strictly stronger than the previous "pass if
@@ -209,11 +224,50 @@ function validateWindowsPortableManifestIdentity(manifest) {
   }
 }
 
+export function validateWindowsRootSetupManifest(setupManifest, manifest) {
+  assertWindowsRootSetupManifestObject(setupManifest);
+  const generationLayout = manifest.schemaVersion === 2;
+  const { product = {}, release = {} } = manifest;
+  const expectedSetupManifest = {
+    schemaVersion: generationLayout ? 2 : 1,
+    platformTarget: WINDOWS_TARGET.platformTarget,
+    packageName: product.packageName,
+    packageVersion: product.packageVersion,
+    stable: release.stable,
+    primaryLauncher: WINDOWS_TARGET.primaryLauncher,
+    bootstrapUpdateEligible: false,
+    runtime: {
+      nodePlatform: WINDOWS_TARGET.nodePlatform,
+      nodeArchitecture: WINDOWS_TARGET.nodeArchitecture,
+    },
+  };
+  if (generationLayout) expectedSetupManifest.windowsGeneration = setupManifest.windowsGeneration;
+  if (!isDeepStrictEqual(setupManifest, expectedSetupManifest)) {
+    fail("windows root setup manifest does not describe the canonical Windows package");
+  }
+  const generationFailures = generationLayout
+    ? windowsGenerationBindingValidationFailures(setupManifest.windowsGeneration, {
+        expected: manifest.windowsGeneration,
+        path: "setupManifest.windowsGeneration",
+      })
+    : [];
+  if (generationFailures.length > 0) {
+    fail(`windows root setup manifest is invalid:\n  - ${generationFailures.join("\n  - ")}`);
+  }
+}
+
+function assertWindowsRootSetupManifestObject(setupManifest) {
+  if (typeof setupManifest !== "object" || setupManifest === null || Array.isArray(setupManifest)) {
+    fail("windows root setup manifest must be an object");
+  }
+}
+
 export async function validateWindowsSetupStage(stageRoot) {
   const {
     archivePath,
     archiveStat,
     manifestPath,
+    setupManifestPath,
     stageRoot: canonicalRoot,
   } = windowsSetupStageInputs(stageRoot);
   const manifest = readPortableManifest(manifestPath);
@@ -222,6 +276,16 @@ export async function validateWindowsSetupStage(stageRoot) {
     fail(`portable manifest is invalid:\n  - ${failures.join("\n  - ")}`);
   }
   validateWindowsPortableManifestIdentity(manifest);
+  assertRegularFile(setupManifestPath, "windows root setup manifest", 64 * 1024);
+  if (!contained(canonicalRoot, setupManifestPath))
+    fail("stage files must stay within the stage root");
+  let setupManifest;
+  try {
+    setupManifest = JSON.parse(readFileSync(setupManifestPath, "utf8"));
+  } catch {
+    fail("windows root setup manifest is not valid JSON");
+  }
+  validateWindowsRootSetupManifest(setupManifest, manifest);
   if (archiveStat.size !== manifest.artifact?.sizeBytes) {
     fail("windows portable archive size does not match the manifest");
   }

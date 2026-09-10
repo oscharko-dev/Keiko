@@ -11,6 +11,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
+#include <sys/time.h>
 #include <sys/un.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -342,12 +343,29 @@ static int reconcile(const char *handle) {
   return send_response(RESPONSE_REAPED, proof, sizeof(proof)) ? 0 : 1;
 }
 
+static int probe_monitor(void) {
+  int monitor = monitor_connect();
+  struct keiko_monitor_reply reply;
+  struct timeval timeout = {.tv_sec = 1, .tv_usec = 0};
+  int available = 0;
+  if (monitor != -1 &&
+      setsockopt(monitor, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) == 0 &&
+      setsockopt(monitor, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) == 0 &&
+      monitor_request(monitor, KEIKO_MONITOR_PING, NULL) &&
+      monitor_reply(monitor, &reply) && reply.kind == KEIKO_MONITOR_ACTIVE) {
+    available = 1;
+  }
+  if (monitor != -1) close(monitor);
+  return available ? 0 : ERROR_MONITOR_UNAVAILABLE;
+}
+
 int main(int argc, char **argv) {
   struct launch_request request = {0};
   struct keiko_monitor_reply reply;
   int monitor = -1;
   pid_t root = -1;
   int result = 1;
+  if (argc == 2 && strcmp(argv[1], "--probe-monitor") == 0) return probe_monitor();
   if (argc == 3 && strcmp(argv[1], "--reconcile") == 0) return reconcile(argv[2]);
   if (argc != 1 || !read_launch_request(&request)) {
     (void)send_error(ERROR_PROTOCOL);

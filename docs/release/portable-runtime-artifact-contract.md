@@ -1,8 +1,9 @@
 # Portable Runtime Artifact Contract
 
-Status: Contract baseline for Issue #1947 and staging baseline for Issue #1948. This document
-defines the release artifact shape that later portable delivery children must implement and verify.
-It does not publish assets or change updater execution logic.
+Status: Contract baseline for Issue #1947 and staging baseline for Issue #1948. The frozen Windows
+production generation producer is implemented for the Phase A work in #3405/#3403. This document
+defines the artifact shape that producer emits and later portable delivery children must consume and
+verify. It does not claim completed Windows consumer integration or a qualified production release.
 
 Governing decisions:
 
@@ -16,8 +17,9 @@ Governing decisions:
 ## Product Contract
 
 Portable v1 is an archive-backed delivery path for stable public releases with platform-specific
-promoted journeys. On Windows, ordinary users download and run the signed
-`keiko-windows-x64-setup.exe`; setup verifies its embedded canonical ZIP, completes first-run setup
+promoted journeys. On Windows, ordinary users download and run
+`keiko-windows-x64-setup.exe` (signed for production, explicitly unsigned for evaluation); setup
+verifies its embedded canonical ZIP, completes first-run setup
 into Keiko's per-user managed install location, and launches Keiko. On macOS, users download the
 target ZIP, extract `Keiko.app`, and double-click it to complete first-run setup into the managed app
 location. After setup, users launch Keiko from the same native app surface or OS search entry. The
@@ -41,8 +43,9 @@ portable assets as a release-blocking set:
 The release is not portable-complete when any target is missing, mislabeled, checksum-mismatched,
 unsigned, unnotarized where required, or not represented in reviewed release-impact metadata.
 
-Stable releases also publish `keiko-windows-x64-setup.exe` as an Authenticode-signed companion to
-the canonical Windows ZIP. The setup embeds that exact ZIP, installs it under the per-user managed
+Stable releases also publish `keiko-windows-x64-setup.exe` as a companion to the canonical Windows
+ZIP. Production releases require Authenticode signing; the reviewed evaluation program does not
+claim that production guarantee. The setup embeds that exact ZIP, installs it under the per-user managed
 install root, and verifies that the launched Keiko process remains healthy. If a managed Keiko
 installation already exists, setup validates and launches that installation without replacing it;
 governed in-app update remains the upgrade authority. The setup is a convenience install surface
@@ -53,14 +56,18 @@ derive from the ZIP and its reviewed evidence.
 
 The portable release pipeline stages the packed Keiko package, acquires and verifies the target
 Node.js runtime and the approved OpenCode runtime, builds the native launcher and governed runtime
-helpers, and validates redacted artifact manifests. Stable-tag production jobs additionally perform
-Windows signing, macOS signing and notarization, native runtime qualification, release upload, and
-published-asset verification. First-run setup promotes the verified bundle into the managed install
-root before the Coding Workbench may activate the bundled runtime.
+helpers, and validates redacted artifact manifests. The Windows production lane signs and verifies the
+generation payload, closes and hashes it, then builds, signs, and verifies the root launcher before
+emitting an outer/setup schema-2 artifact. macOS remains schema 1. Manual and evaluation Windows
+output remains usable flat schema 1 output. Stable-tag production jobs additionally perform the platform
+signing, native qualification, release upload, and published-asset checks required by the release workflow.
+This producer contract does not assert that those external qualifications or a signed release already
+exist.
 
-Manifest schema v1 has four explicit pre-publication validation contexts — staging, evaluation,
-candidate, and published (plus the `published-contract` context used to validate this document's own
-example). Staging manifests use `verificationPolicy: "staging"`,
+Schema v1 has four explicit pre-publication validation contexts — staging, evaluation, candidate, and
+published (plus the `published-contract` context used to validate this document's own example).
+Windows production schema 2 uses the production candidate/published rules with the generation binding.
+Staging manifests use `verificationPolicy: "staging"`,
 `verificationStatus: "unverified-staging"`, `signatureVerified: false`,
 `notarizationVerified: false`, target-specific `verificationChecks` set to `false`, and
 `platformSignatureLocallyVerified: false`. They also use `artifact.assetId: 0` because GitHub
@@ -91,13 +98,46 @@ both native-helper digests re-hashed from disk at discovery AND again at launch.
 booleans must be present and `false`, never absent: a manifest that omits `verificationChecks` or
 asserts any single platform check is rejected.
 
-An evaluation artifact is never publishable and never update-eligible. The `assemble` job runs only
+An evaluation dispatch artifact is not a production publication candidate and is never one-click
+update-eligible. ADR-0121 D1 separately permits explicitly reviewed public evaluation releases; their
+publication does not establish production trust. The production `assemble` job runs only
 from a stable-tag push and still requires three mutually consistent `verified-production` targets;
 `scripts/verify-portable-runtime-signing.mjs` explicitly refuses `--policy evaluation`; and the
 update preflight and staging-download predicates still demand production/verified-production. The
 schema shape of an evaluation manifest is pinned in `scripts/__tests__/portable-runtime.test.mjs`
 rather than as a second JSON fence here, because `check:portable-manifest` validates only the FIRST
 fence in this document under the published-contract context.
+
+## Windows production generation layout
+
+Production Windows output uses outer portable-manifest schema 2 and root setup-manifest schema 2.
+The payload is assembled under `.portable/generation-staging` while it is mutable. The producer
+binds the runtime activation record, runtime attestation, helper and sidecar evidence, and the
+qualified payload before it closes the generation. It hashes the staging tree with KHT1, renames it
+to `.portable/generations/<treeSha256>`, and rehashes the destination. No file may be written under
+the closed generation after that point.
+
+The outer manifest, `provenance.windowsGeneration`, `releaseImpact.reviewedBinding.windowsGeneration`,
+and root `.portable/setup-manifest.json` carry the same exact six-field binding:
+`schemaVersion: 1`, `resourceRoot: .portable/generations/<treeSha256>`, `treeHashSchema: KHT1`,
+`treeSha256: <lowercase 64-hex tree digest>`, `launcherPath: Keiko.exe`, and
+`launcherSha256: <lowercase 64-hex final signed root-launcher digest>`.
+
+The producer inventories the staged PE files and hashes the exact bytes before mutation. It signs and
+qualifies the generation payload and runtime attestation, closes and rehashes the generation, compiles
+the literal generation id into the root `Keiko.exe`, signs that launcher separately, and verifies the
+complete PE inventory. Finalization binds the schema-2 fields and writes the root setup metadata before
+the fresh-artifact verifier checks that setup binding. It rebuilds the archive and verifies the final
+archive bytes. The setup companion is built from the bound manifest and signed as a separate root
+artifact. The root launcher, setup companion, and outer
+manifest are outside the generation tree hash; the generation tree itself remains closed.
+
+The explicit `--windows-generation-production` staging flag is production-only and cannot be used by
+evaluation output. Windows generation-v1 discovery, consumers, startup attestation and recovery
+integration are implemented. Native execution verification and the three-target production-signed
+N−1→N canaries remain incomplete; KHA1 coordinator acceptance stays disabled. Implementation and
+host-side tests do not establish platform qualification. These are release gates, not evidence
+supplied by this document.
 
 ## Archive And Evidence Layout
 
@@ -128,28 +168,32 @@ windows-x64/
       Keiko.exe
       .portable/
         setup-manifest.json
-      app/
-        package.json
-        dist/
-        node_modules/
-        release-impact.catalog.json
-      runtime/
-        native/
-          keiko-secure-workspace-read.exe
-          keiko-runtime-supervisor.exe
-          keiko-runtime-attestation.exe
-        node/
-          node.exe
-          LICENSE
-          NOTICE
-          NODE_RUNTIME_SOURCE.json
-        sidecars/
-          opencode-compatible/
-            bin/
-              opencode.exe
-            evidence/
-              LICENSE
-              sbom.cdx.json
+        generations/
+          <treeSha256>/
+            .portable/
+              runtime-activation.json
+            app/
+              package.json
+              dist/
+              node_modules/
+              release-impact.catalog.json
+            runtime/
+              native/
+                keiko-secure-workspace-read.exe
+                keiko-runtime-supervisor.exe
+                keiko-runtime-attestation.exe
+              node/
+                node.exe
+                LICENSE
+                NOTICE
+                NODE_RUNTIME_SOURCE.json
+              sidecars/
+                opencode-compatible/
+                  bin/
+                    opencode.exe
+                  evidence/
+                    LICENSE
+                    sbom.cdx.json
       support/
         keiko-support.cmd
 ```
@@ -265,6 +309,27 @@ payloads, full archives, or customer-content backups. The exact persisted
 `updatedAt`; a managed record may additionally carry an optional `managedRootLocator`
 (`default`, `home-relative`, or `absolute-local`) plus managed-only attestation hashes; a
 `setup-failed` record carries only a bounded `failureReason` code beyond the shared fields.
+
+### Exact update input and handoff boundary
+
+The updater consumes the server-owned candidate defined by ADR-0099, not a fresh lookup of `latest`
+partway through execution. Release/asset ids, archive bytes and digest, manifest and checksum
+identities, reviewed compatibility binding, platform target, and sidecar identities must remain the
+same through preflight, download, verification, staging, and handoff. Rebound or changed evidence
+requires a fresh preflight and confirmation, not substitution inside an existing attempt.
+
+Only the attested installation is a mutation target. Before replacement, a verified copy of the
+current native launcher and supervisor may occupy the activation-specific private handoff capsule
+under the existing update state root. This bounded executable control capsule is distinct from the
+staged product archive and previous installation tree, both of which remain outside runtime state.
+Its fixed plan paths and mechanical receipts must never enter release archives, support exports,
+activity evidence, or browser projections. The capsule grants no arbitrary path or command authority.
+
+ADR-0121's acknowledged ownership transfer, same-volume promotion, process-tree containment, exact
+target startup proof, and idempotent recovery are required in addition to the artifact checks. A
+manifest that passes schema and digest validation does not prove those runtime steps. Production
+qualification additionally requires two actual production-signed eligible releases on all three
+targets. Evaluation artifacts remain manual-only, including the first transition to production.
 
 ## State And Payload Exclusions
 
@@ -792,8 +857,10 @@ required contract vocabulary.
 
 Validation rules:
 
-- The top-level portable manifest `schemaVersion` remains `1`. Sidecar entries separately carry
-  `approvalSchemaVersion: 2`; schema-v1 sidecar approval and compatibility claims are rejected.
+- macOS and flat Windows manual/evaluation artifacts retain top-level portable-manifest `schemaVersion: 1`.
+  Windows production generation artifacts use top-level and root setup `schemaVersion: 2`. Sidecar
+  entries separately carry `approvalSchemaVersion: 2`; schema-v1 sidecar approval and compatibility
+  claims are rejected.
 - `nativeHelpers` is additive in schema v1. Legacy manifests without it remain parseable but expose
   no secure-read capability. Every newly staged, signed-candidate, and published artifact contains
   exactly one `keiko-secure-workspace-read` entry at the fixed target path. The entry binds target,
@@ -863,7 +930,10 @@ Validation rules:
 - macOS targets require Developer ID signature and notarization verification. Windows requires
   Authenticode publisher-chain verification. Windows point-of-use admission additionally invokes
   the fixed system verifier with a closed environment and requires every runtime attestation carrier
-  and privileged helper to have the same verified leaf signer identity as `Keiko.exe`.
+  and privileged helper to have the same verified leaf signer identity as `Keiko.exe` within that
+  release. The updater's cross-release comparison instead binds independently verified Public Trust
+  chains and the exact reviewed subscriber identity-validation EKU, permitting legitimate Azure leaf
+  rotation without relaxing same-release consistency or timestamp verification.
 - macOS point-of-use admission derives the qualified outer app's closed Developer ID TeamIdentifier
   and requires the app seal, system-extension manager, Endpoint Security extension, and secure-read
   helper to verify under that same team identity. Raw team ids remain forbidden in persisted evidence.

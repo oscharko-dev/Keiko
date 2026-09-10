@@ -28,6 +28,7 @@ import {
   isSafePortableRelativePath,
   portableTargetByName,
   PORTABLE_TARGET_NAMES,
+  WINDOWS_GENERATION_STAGING_RELATIVE_PATH,
   portableVerificationSummaryForManifest,
   sha256File,
   validatePortableEvaluationManifest,
@@ -129,6 +130,7 @@ function parseArgs(argv) {
     target: undefined,
     workflowRunAttempt: Number(process.env.GITHUB_RUN_ATTEMPT ?? 0),
     workflowRunId: Number(process.env.GITHUB_RUN_ID ?? 0),
+    windowsGenerationProduction: false,
   };
   let index = 0;
   while (index < argv.length) {
@@ -140,6 +142,12 @@ function parseArgs(argv) {
   validateNodeRuntimeOptions(options);
   validateReleaseOptions(options);
   validateAppleTeamIdentifierOption(options, target);
+  if (
+    options.windowsGenerationProduction &&
+    (target.platformTarget !== "windows-x64" || options.evaluation)
+  ) {
+    fail("--windows-generation-production requires non-evaluation windows-x64 staging");
+  }
   if (options.nodeArchive !== undefined) {
     assertNodeArchiveIdentity(options.nodeArchive, target, options.nodeVersion);
   }
@@ -157,6 +165,10 @@ function applyArg(argv, index, options) {
   // variable and no default that can set it.
   if (arg === "--evaluation-build") {
     options.evaluation = true;
+    return index;
+  }
+  if (arg === "--windows-generation-production") {
+    options.windowsGenerationProduction = true;
     return index;
   }
   if (arg === "--sidecar-runtime-spec") {
@@ -1225,11 +1237,13 @@ function ensureRuntimeNotice(runtimeRoot, archive) {
   );
 }
 
-function payloadResourceRoot(target, payloadRoot) {
+function payloadResourceRoot(target, payloadRoot, options) {
   if (target.nodePlatform === "darwin") {
     return join(payloadRoot, "Keiko.app", "Contents", "Resources");
   }
-  return payloadRoot;
+  return options.windowsGenerationProduction
+    ? join(payloadRoot, ...WINDOWS_GENERATION_STAGING_RELATIVE_PATH.split("/"))
+    : payloadRoot;
 }
 
 function payloadSupportRoot(payloadRoot) {
@@ -1529,6 +1543,7 @@ function launcherPath(target, stageRoot) {
 }
 
 function stageLauncher(target, stageRoot, resourceRoot, options, hooks) {
+  if (options.windowsGenerationProduction) return;
   const path = launcherPath(target, stageRoot);
   mkdirSync(dirname(path), { recursive: true });
   (hooks.buildPrimaryLauncher ?? buildNativeLauncher)(target, path, options);
@@ -1860,7 +1875,7 @@ function windowsToolFromPath(envPath, tool) {
   }
 }
 
-function compileWindowsLauncher(target, destination) {
+function compileWindowsLauncher(target, destination, generationId) {
   requireWindowsLauncherIconSource();
   const env = resolveWindowsMsvcEnv();
   const tempRoot = mkdtempSync(join(tmpdir(), "keiko-windows-launcher-resource-"));
@@ -1885,6 +1900,7 @@ function compileWindowsLauncher(target, destination) {
         "/DUNICODE",
         "/D_UNICODE",
         `/D${nativeLauncherTargetDefine(target)}`,
+        ...(generationId === undefined ? [] : [`/DKEIKO_PORTABLE_GENERATION_ID="${generationId}"`]),
         `/Fo:${objectPath}`,
         `/Fe:${destination}`,
         nativeLauncherSource(),
@@ -1902,6 +1918,24 @@ function compileWindowsLauncher(target, destination) {
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
+}
+
+export function buildWindowsGenerationLauncher(
+  destination,
+  generationId,
+  { compile = compileWindowsLauncher } = {},
+) {
+  if (!/^[a-f0-9]{64}$/u.test(generationId)) fail("Windows generation ID is invalid");
+  const target = portableTargetByName("windows-x64");
+  if (target === undefined) fail("Windows portable target is unavailable");
+  mkdirSync(dirname(destination), { recursive: true });
+  compile(target, destination, generationId);
+  const entry = existsSync(destination) ? lstatSync(destination) : undefined;
+  if (entry === undefined || !entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
+    fail("Windows generation launcher build did not produce the fixed executable");
+  }
+  chmodLauncher(destination);
+  return destination;
 }
 
 function requireWindowsLauncherIconSource() {
@@ -1942,14 +1976,14 @@ function stageSupportLauncher(target, stageRoot) {
   chmodLauncher(scriptPath);
 }
 
-function stageSetupManifest(target, resourceRoot) {
+function stageSetupManifest(target, resourceRoot, windowsGeneration) {
   const manifestRoot = join(resourceRoot, ".portable");
   mkdirSync(manifestRoot, { recursive: true });
   writeFileSync(
     join(manifestRoot, "setup-manifest.json"),
     JSON.stringify(
       {
-        schemaVersion: 1,
+        schemaVersion: windowsGeneration === undefined ? 1 : 2,
         platformTarget: target.platformTarget,
         packageName: rootPackage.name,
         packageVersion: rootPackage.version,
@@ -1960,11 +1994,19 @@ function stageSetupManifest(target, resourceRoot) {
           nodePlatform: target.nodePlatform,
           nodeArchitecture: target.nodeArchitecture,
         },
+        ...(windowsGeneration === undefined ? {} : { windowsGeneration }),
       },
       null,
       2,
     ) + "\n",
   );
+}
+
+export function stageWindowsPortableRootFiles(payloadRoot, windowsGeneration) {
+  const target = portableTargetByName("windows-x64");
+  if (target === undefined) fail("Windows portable target is unavailable");
+  stageSetupManifest(target, payloadRoot, cloneJson(windowsGeneration));
+  stageSupportLauncher(target, payloadRoot);
 }
 
 function macInfoPlist(target) {
@@ -2296,7 +2338,7 @@ function portableStagePaths(tmp, target, options) {
     finalRoot: resolve(options.outDir, target.platformTarget),
     payloadContainer,
     payloadRoot,
-    resourceRoot: payloadResourceRoot(target, payloadRoot),
+    resourceRoot: payloadResourceRoot(target, payloadRoot, options),
     stageRoot,
   };
 }

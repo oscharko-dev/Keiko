@@ -88,8 +88,9 @@ reviewed release-impact entry (explicitly, as `portableRuntimeArtifactContract.s
 lane as skipped rather than failed on such tags), the release notes state it together with the first-launch steps it
 implies (right-click → Open on macOS, the SmartScreen notice on Windows), and D7 is untouched —
 production signing credentials, their protected environments, and the signed-lane verification
-remain exactly as specified. When the signing subscriptions are in place, the production lane
-supersedes this status without a further amendment.
+remain exactly as specified. Available signing subscriptions do not retroactively qualify evaluation
+bytes. The production lane may replace evaluation delivery only after its native verification gates
+pass; evaluation-installed applications remain manual-only for the first production transition.
 
 Each asset must be accompanied by reviewed metadata that binds the artifact name, platform target,
 GitHub release id, release tag, asset id, asset name, size in bytes, Keiko version, bundled Node.js
@@ -173,9 +174,10 @@ separate credential-handling decision exists.
 Portable-managed installs use the existing governed updater authority rather than a parallel update
 system.
 
-The portable update path is explicit and user-confirmed. It stages the candidate archive, verifies
-the candidate, swaps it into the managed install, and relaunches. Update state, recovery snapshots,
-remediation status, and audit evidence remain content-free local runtime state.
+The portable update path is explicit and user-confirmed. It consumes ADR-0099's exact candidate
+claim, stages and verifies those immutable bytes, transfers ownership, swaps the managed install,
+and relaunches. Update state, recovery snapshots, remediation status, and canonical activity evidence
+remain bounded local runtime state.
 
 Portable update success means the new managed install is active, Keiko has relaunched, the running
 version matches the target stable release, and release-impact remediation is complete or explicitly
@@ -199,12 +201,148 @@ property. If the detected filesystem or layout cannot provide crash-safe promoti
 portable update is rejected as manual-only.
 
 On Windows, `MoveFileEx` fails with `EPERM`/`EBUSY` while any handle is open on a file in the
-tree (a transient antivirus scan of a just-extracted PE, the indexer, or an Explorer preview).
-POSIX `rename(2)` does not fail for an open destination. Atomic-publish swaps therefore retry
-those two codes with bounded backoff via the shared `atomicPublishRename` helper; they do not
-fall back to copy+delete. The promoting process also `chdir`s out of the managed tree before
-renaming it. `chdir` does not unmap `node.exe` loaded from that tree — the retry covers that
-residual lock.
+tree with incompatible sharing flags (for example, a transient scanner or an executable image).
+The existing atomic-publish helper may retry transient contention with bounded backoff; it must not
+fall back to copy+delete. Changing the working directory does not unmap the running `node.exe`, and
+retrying cannot settle a lock held by the process performing its own replacement. The old process
+must exit after a durable, acknowledged ownership transfer, before promotion begins.
+
+#### Native handoff and qualification requirements (#3405)
+
+The reviewed #3404 contract uses the current verified launcher and supervisor copied into a bounded,
+activation-specific handoff capsule outside the active, staged, and previous install trees. The
+capsule is private local control data: authenticated fixed paths and mechanical plan/receipt bytes
+are permitted there, but are never copied into API projections, activity logs, support evidence, or
+release artifacts. It is not a package backup or another update state store.
+
+The server persists semantic intent before spawning the coordinator. Native code accepts only the
+closed activation-id mode, validates the fixed plan and its authority, and acknowledges the exact
+plan digest over the inherited channel. A spawn event alone is not acceptance. Preparation remains
+cancelable; after the reviewed cutoff, uncertain failure requires recovery ownership rather than a
+new independent update. A missing coordinator capability must fail closed, never select the old
+in-process replacement path.
+
+The native coordinator executes finite mechanical steps and records hash-chained intent/completion
+receipts. It must prove old-process exit and port release before promotion, contain the new process
+tree using the existing platform supervisor, and never kill an unrelated PID. The server remains
+the sole semantic transition owner. Startup reconciles durable intent and receipts before normal
+routes become ready; exact process, launch identity, loopback port, target version, and verified tree
+must agree before success. A failed replacement may restore the previous verified tree only after
+proving the owned new process tree has stopped. Once N is verified, restart and cleanup must retain N.
+
+A recovery launch of N−1 is a new process instance with its own server-generated, plan-bound launch
+identity. It must attest the original tree and registration, then prove its own PID, version and
+loopback binding before readiness opens. Successful restoration settles a **failed update with
+recovery settled**, not a successful update, cancellation, or automatic retry. The server commits
+that result through revision-checked state; uncertain termination, incomplete restore evidence, or
+a persistence failure keeps recovery ownership. A crash between semantic verification and its
+native acknowledgement must never authorize restoration of an already verified N.
+
+These are implementation and acceptance requirements, not evidence that native qualification has
+completed. Each supported target needs a real same-port N−1→N run through the assembled application,
+failure/crash-boundary tests, and a second restart retaining N. Hermetic PR proof is distinct from
+the protected canary between two actual production-signed eligible releases. Until #2198's external
+signing prerequisites and that canary are satisfied, code may merge with explicit limits but no
+production one-click claim is permitted. Evaluation releases, including 0.3.17, remain manual-only;
+changing release metadata or a test verifier cannot make their installed bytes production trusted.
+
+#### Windows generation consumer and cutover contract (#3405)
+
+This contract freezes the remaining consumer implementation against the production generation
+producer in `50160cd10`. It does not enable native acceptance or settle platform qualification.
+Mac retains KHP version 2 with 32 fields. Windows requires KHP version 3 with 37 fields; both use
+the existing `KHP1` magic, little-endian version/count header and length-prefixed UTF-8 fields.
+Fields 0–31 retain their byte order and meaning. Windows appends exactly:
+
+| Index | Field | Required value |
+| --- | --- | --- |
+| 32 | `cutoverKind` | `windows-generation-v1` |
+| 33 | `currentGenerationTreeSha256` | 64 lowercase hexadecimal characters |
+| 34 | `candidateGenerationTreeSha256` | 64 lowercase hexadecimal characters |
+| 35 | `currentSetupManifestSha256` | 64 lowercase hexadecimal characters |
+| 36 | `candidateSetupManifestSha256` | 64 lowercase hexadecimal characters |
+
+Reject cross-target version/count combinations, unknown fields and trailing bytes. Use a
+discriminated plan union. The TypeScript encoder and native parser consume the same checked-in
+Mac and Windows hexadecimal fixtures; the Mac fixture remains byte-identical. Fields 20/21 remain
+whole-root KHT1 input evidence, never terminal Windows root hashes. Field 17 remains a reserved
+sibling backup path, required absent at acceptance.
+
+Consumers distinguish install root, selected resource root, application/package paths, runtime
+Node, root launcher/setup and generation supervisor. Windows setup/registration schema 2 uses
+only the strict six-field `windowsGeneration` binding from the artifact contract. The setup bytes,
+launcher digest, package version, target, stable managed eligibility, root identity and registration
+must agree with disk. Flat Windows schema 1 stays readable for launch/manual setup and cannot
+become one-click eligible through automatic migration. Mac schema 1 is unchanged.
+Keep the server parser/resolver internal and CLI authority parsing within its existing boundary.
+Shared frozen fixtures prevent boundary-local parser drift. KHT1 has one reviewed TypeScript
+authority in the internal security package, exposed only through a narrow workspace subpath to
+existing CLI/server dependants. Synchronous CLI attestation and asynchronous server hashing share
+the same bounded traversal/hash state machine; preserve cancellation, deadlines and server yielding.
+The server's existing handoff-tree module remains a compatibility facade for its current callers
+and producer scripts. Introduce no product-facing API, new package-root entry point, trust switch,
+verifier injection or user command. The existing private CLI/server normal-startup result may
+carry a root-bound, lock-scoped, read-only generation inspection allowance as described below;
+it grants neither trust nor deletion authority.
+
+Before prepared WAL or native acceptance, the capsule durably snapshots and revalidates the
+current launcher as `coordinator.exe`, current supervisor, `launcher.next`, previous/next setup
+manifests and previous/next registrations. Copies use no-follow reads, flush and digest rechecks.
+Restoration copies coordinator bytes into a root-local temporary file before atomic replacement;
+it never renames an executing coordinator. Candidate generation and plan-owned incoming paths
+must be absent at acceptance.
+
+After proven old-process exit and port release, the single coordinator performs this order:
+
+1. Flush promote intent; copy the candidate into `.portable/generations/.incoming-<activationId>`,
+   flush and verify KHT1,
+   then atomically publish `.portable/generations/<candidateHash>` and rehash.
+2. Atomically replace and flush root launcher, then root setup; verify their plan-bound bytes and
+   setup binding before recording promote completion.
+3. Record register intent, atomically publish and attest next registration, then register completion.
+4. Start N through the copied qualified supervisor; complete existing process/tree verification and
+   semantic runtime-state acknowledgment.
+5. Record cleanup intent; remove only the exact previous generation and plan-owned staging/incoming
+   paths, then record cleanup and complete receipts.
+
+Recovery recognizes only monotonic forward prefixes: old authorities; candidate generation added;
+candidate launcher selected; candidate setup selected; candidate registration selected. Before
+start completion, restore previous registration, setup and launcher in reverse order, attest N−1,
+then remove N. After start completion, retain N only when its owned process and all selected
+authorities attest; otherwise stop only the proven owned process tree before restoration. After
+semantic verification, never restore N−1: finish cleanup idempotently. Non-prefix mixtures require
+recovery without speculative repair. Direct active attestation covers generation KHT1, launcher,
+setup, registration, selected package/helper identities and existing process/launch/port/version
+proof; it introduces no synthetic whole-root projection.
+
+Normal-startup recovery holds the existing mutation lock before ordinary setup/registration
+validation. Without a valid nonterminal WAL, maintenance admits exactly the selected generation.
+With a validated Windows plan and receipt chain, it admits only the exact current/candidate and
+plan-owned incoming paths permitted by the phase; after cleanup completion, only candidate remains.
+Third generations, unrelated incoming paths and unbound content remain issues. Generic maintenance
+does not delete retained generations; the common recovery owner alone has plan-scoped deletion
+authority. The generation-independent support shim retains canonical producer bytes in both inputs;
+a future shim change needs a subsequent contract revision.
+
+The existing normal-startup reconciliation result transports any inspection allowance after the
+server validates its WAL, session, plan and receipt prefix. The nested allowance identifies
+`windows-generation-v1`, the managed root, activation id and exact managed-root-relative resource
+roots. The CLI consumes it only through an active inspection capability inside the existing
+managed-mutation callback; reuse after callback exit, cross-root reuse and malformed resource paths
+fail closed. Rebase the existing payload rules under each permitted resource root; admitting a root
+does not admit arbitrary contents. Generic inspection remains selected-generation-only. Repair,
+uninstall and removal APIs receive no allowance and refuse extra retained generations. No CLI
+receipt parser or additional server package-root entry point is introduced.
+
+One coordinator owns receipt policy, phase classification, deadlines, forward/restore/cleanup and
+semantic acknowledgment. Compile-selected platform adapters supply secure filesystem operations,
+KHT1 walking, process/port checks and existing supervisor transport. Windows reuses the existing
+runtime supervisor and its KRP1/KRC1/KRS1 protocol. The unreleased newline-framed update-recovery
+control uses `KUR1` to distinguish it from that unchanged binary supervisor control protocol.
+Its `runtimeStateSha256` binds the single bounded raw-byte read of canonical
+`<stateDir>/updates/runtime-state.json`. Native validation hashes those exact bytes without JSON
+reserialization. Windows reuses the same KUR1 parser and validation contract, with no platform
+variant.
 
 Supported v1 behavior excludes:
 
@@ -468,6 +606,10 @@ Security review for implementation under this ADR must cover:
 
 ## Amendment history
 
+- **2026-09-05 — Issue #3405:** Clarified exact-candidate execution, acknowledged native handoff,
+  canonical evidence versus private control data, and the distinction between implementation proof
+  and production-signed qualification. Removed the claim that retries resolve the updater's own
+  loaded executable lock; evaluation-to-production continuity remains a manual transition.
 - **2026-07-10 — Issue #2199:** Added D7 and its security, alternatives, and operating-contract
   consequences to settle the production Windows and macOS signing trust boundary for Epic #2198.
 - **2026-07-11 — Issue #2308:** Added D8 to record GitHub Artifact Attestations (build provenance

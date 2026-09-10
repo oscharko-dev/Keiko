@@ -64,6 +64,8 @@
 #include <wchar.h>
 #include <wctype.h>
 
+#include "../keiko-windows-local-volume.h"
+
 #if defined(_MSC_VER)
 // BCrypt (payload hashing + CSPRNG) lives in bcrypt.lib; neither cl invocation links it by default.
 #pragma comment(lib, "bcrypt.lib")
@@ -1272,6 +1274,35 @@ static int keiko_run_setup_step(keiko_setup_buffers *b) {
          keiko_run_and_wait(b->node_path, b->command, &b->staging_cleanup_permitted);
 }
 
+typedef int (*keiko_setup_local_step)(keiko_setup_buffers *buffers);
+
+static int keiko_run_setup_step_on_local_volume_with(
+    keiko_setup_buffers *buffers,
+    keiko_setup_local_step step
+) {
+  keiko_windows_local_volume_pin ancestor;
+  keiko_windows_local_volume_pin installed;
+  int result = 0;
+  memset(&ancestor, 0, sizeof(ancestor));
+  memset(&installed, 0, sizeof(installed));
+  ancestor.directory = INVALID_HANDLE_VALUE;
+  installed.directory = INVALID_HANDLE_VALUE;
+  if (buffers == NULL || step == NULL ||
+      !keiko_windows_local_volume_pin_path(buffers->managed_root, 0, &ancestor) ||
+      !step(buffers) || !keiko_windows_local_volume_recheck(&ancestor) ||
+      !keiko_windows_local_volume_pin_path(buffers->managed_root, 1, &installed) ||
+      !keiko_windows_local_volume_recheck(&installed)) goto cleanup;
+  result = 1;
+cleanup:
+  keiko_windows_local_volume_clear(&installed);
+  keiko_windows_local_volume_clear(&ancestor);
+  return result;
+}
+
+static int keiko_run_setup_step_on_local_volume(keiko_setup_buffers *buffers) {
+  return keiko_run_setup_step_on_local_volume_with(buffers, keiko_run_setup_step);
+}
+
 static int keiko_run_launch_step(keiko_setup_buffers *b) {
   wchar_t *managed_node = keiko_alloc_path();
   wchar_t *managed_cli = keiko_alloc_path();
@@ -1407,7 +1438,7 @@ static int keiko_run_setup(keiko_setup_buffers *b) {
   }
 
   fwprintf(stdout, L"[5/6] Installing and launching Keiko through the governed lifecycle...\n");
-  if (!keiko_run_setup_step(b)) {
+  if (!keiko_run_setup_step_on_local_volume(b)) {
     fwprintf(stderr, L"Keiko setup could not complete the governed installation.\n");
     return KEIKO_EXIT_SETUP;
   }

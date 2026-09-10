@@ -100,6 +100,7 @@ const REQUIRED_CI_COMMANDS = [
   "npm run test:coverage:ui",
   // Browser release proof.
   "npm run test:e2e:smoke",
+  "npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage",
   "npm run test:e2e:editor-debugging-2348",
   // Performance e2e evidence + freshness/budget gate (Step 07, GEN-TEST-E2E-001).
   "npm run test:e2e:workspace-perf",
@@ -160,6 +161,28 @@ const HTML_MANUAL_FIXTURE_IDS = [
 ];
 
 describe("CI test/gate wiring guard", () => {
+  it("runs the portable handoff protocol fixture suite on a genuine Windows host", () => {
+    const buildStep = ci.indexOf("      - name: Build packages for the Windows smokes");
+    const fixtureStep = ci.indexOf(
+      "      - name: Verify the Windows portable handoff protocol fixture",
+    );
+    const nextStep = ci.indexOf(
+      "      - name: Verify Git executable Windows reparse containment",
+      fixtureStep,
+    );
+    expect(buildStep).toBeGreaterThan(-1);
+    expect(fixtureStep).toBeGreaterThan(buildStep);
+    expect(nextStep).toBeGreaterThan(fixtureStep);
+    const fixtureGate = ci.slice(fixtureStep, nextStep);
+    expect(fixtureGate).toContain("if: runner.os == 'Windows'");
+    expect(fixtureGate).toContain(
+      "npx vitest run packages/keiko-server/src/update-portable-handoff-plan.test.ts",
+    );
+    expect(fixtureGate).toContain(
+      "packages/keiko-server/src/update-portable-handoff-receipts.test.ts",
+    );
+  });
+
   it("refreshes workspace evidence without replacing the immutable D12 comparison", () => {
     const performanceStep = ci.slice(
       ci.indexOf("      - name: Refresh workspace performance evidence"),

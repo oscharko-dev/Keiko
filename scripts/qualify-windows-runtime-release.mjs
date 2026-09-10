@@ -11,12 +11,13 @@ import {
 } from "./runtime-activation-manifest.mjs";
 import {
   inventoriesMatch,
-  inventoryWindowsPortablePeFiles,
+  inventoryWindowsPortableCorePeFiles,
   readWindowsPortablePeInventory,
 } from "./windows-portable-signing.mjs";
 import { assertWindowsProductionVerificationInput } from "./windows-portable-verification-input.mjs";
 import { sha256File } from "./lib/digest.mjs";
 import { writeQualificationEvidenceReceipt } from "./lib/qualification-evidence-receipt.mjs";
+import { portableResourceRoot } from "./portable-signed-archive.mjs";
 
 export { writeQualificationEvidenceReceipt };
 
@@ -153,7 +154,7 @@ function componentDigest(resourceRoot, helper, inventory) {
 
 function authenticatedQualificationInputs(input, activation) {
   const expectedInventory = readWindowsPortablePeInventory(input.expectedInventoryPath);
-  const actualInventory = inventoryWindowsPortablePeFiles(input.resourceRoot);
+  const actualInventory = inventoryWindowsPortableCorePeFiles(input.resourceRoot);
   const verification = assertWindowsProductionVerificationInput(
     input.verificationInputPath,
     activation,
@@ -257,7 +258,11 @@ export function qualifyWindowsRuntimeRelease(
   const stageRoot = resolve(required(options, "stage-root"));
   const sourceCommitSha = required(options, "source-commit-sha");
   if (!COMMIT.test(sourceCommitSha)) fail("source commit is invalid");
-  const resourceRoot = join(stageRoot, "payload", "Keiko");
+  const manifest = readJson(
+    join(stageRoot, "manifest", "portable-manifest.json"),
+    "portable manifest",
+  );
+  const resourceRoot = portableResourceRoot(stageRoot, WINDOWS_TARGET, manifest);
   const helper = join(resourceRoot, "runtime", "native", "keiko-runtime-supervisor.exe");
   const result = spawnSyncImpl(
     process.execPath,

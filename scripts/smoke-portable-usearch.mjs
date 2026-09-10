@@ -10,6 +10,7 @@ import {
   usearchRuntimeTargetKey,
 } from "../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
 import { portableTargetByName } from "./portable-runtime.mjs";
+import { portableResourceRoot } from "./portable-signed-archive.mjs";
 
 const MAX_EVIDENCE_BYTES = 16 * 1024 * 1024;
 const MAX_NATIVE_BINARY_BYTES = 128 * 1024 * 1024;
@@ -118,13 +119,6 @@ function addonFrom(manifest, targetName, approval) {
   return addon;
 }
 
-function resourceRoot(stageRoot, target) {
-  const payload = join(stageRoot, "payload", "Keiko");
-  return target.nodePlatform === "darwin"
-    ? join(payload, "Keiko.app", "Contents", "Resources")
-    : payload;
-}
-
 function assertEvidence(stageRoot, addon, approval) {
   const sbom = JSON.parse(
     readContainedText(
@@ -197,8 +191,8 @@ function requireApprovedAddon(manifest, target, targetName, runtimeManifest) {
   return { addon, approval, signedProduction };
 }
 
-function assertShippedRuntime(stageRoot, target, addon, approval, signedProduction) {
-  const root = resourceRoot(stageRoot, target);
+function assertShippedRuntime(stageRoot, targetName, manifest, addon, approval, signedProduction) {
+  const root = portableResourceRoot(stageRoot, targetName, manifest);
   const binary = containedDigest(
     stageRoot,
     join(root, ...USEARCH_BINARY_PATH.split("/")),
@@ -242,7 +236,8 @@ export function smokePortableUsearch(stageRootValue, targetName, options = {}) {
   const { addon } = approved;
   const binaryPath = assertShippedRuntime(
     stageRoot,
-    target,
+    targetName,
+    manifest,
     addon,
     approved.approval,
     approved.signedProduction,
