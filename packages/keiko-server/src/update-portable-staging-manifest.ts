@@ -238,7 +238,9 @@ function targetChecksVerified(
   const keys =
     target === "windows-x64"
       ? ["publisherChainVerified", "timestampVerified"]
-      : ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"];
+      : target === "linux-x64"
+        ? ["provenanceVerified"]
+        : ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"];
   return keys.every((key) => checks?.[key] === true);
 }
 
@@ -248,7 +250,7 @@ function securityVerified(
 ): boolean {
   const security = recordAt(manifest, "security");
   const checks = recordAt(security, "verificationChecks");
-  const macos = target !== "windows-x64";
+  const macos = target.startsWith("macos-");
   return (
     fieldEquals(security, "verificationPolicy", "production") &&
     fieldEquals(security, "verificationStatus", "verified-production") &&
