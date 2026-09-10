@@ -1,12 +1,14 @@
 import type { Readable, Writable } from "node:stream";
+import type {
+  LongLivedRuntimeArchitecture,
+  LongLivedRuntimeBackend,
+  LongLivedRuntimePlatform,
+  LongLivedRuntimeQualification,
+} from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
 import {
   CLOSED_RUNTIME_LAUNCH_PROFILE,
   qualifyLongLivedRuntime,
   type ClosedRuntimeLaunchProfile,
-  type LongLivedRuntimeArchitecture,
-  type LongLivedRuntimeBackend,
-  type LongLivedRuntimePlatform,
-  type LongLivedRuntimeQualification,
 } from "@oscharko-dev/keiko-sandbox";
 
 export type RuntimeConfinementPlatform = LongLivedRuntimePlatform;

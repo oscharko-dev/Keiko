@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 
+import type {
+  LongLivedRuntimeQualification,
+  RuntimeQualificationReceipt,
+} from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
+
 import {
   CLOSED_RUNTIME_LAUNCH_PROFILE,
   qualificationFromReceipt,
   qualifyLongLivedRuntime,
-  type RuntimeQualificationReceipt,
-  type LongLivedRuntimeQualification,
 } from "./runtime.js";
 
 const qualified: LongLivedRuntimeQualification = {

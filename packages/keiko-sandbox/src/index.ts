@@ -46,20 +46,7 @@ export {
   qualificationFromReceipt,
   qualifyLongLivedRuntime,
 } from "./runtime.js";
-export type {
-  ClosedRuntimeLaunchProfile,
-  LongLivedRuntimeArchitecture,
-  LongLivedRuntimeBackend,
-  LongLivedRuntimePlatform,
-  LongLivedRuntimeQualification,
-  LongLivedRuntimeQualificationResult,
-  RuntimeQualificationReceipt,
-  RuntimeQualificationReceiptBinding,
-  RuntimeQualificationComponentDigest,
-  RuntimeQualificationReceiptResult,
-  RuntimeQualificationSidecarDigest,
-  RuntimeQualificationTarget,
-} from "./runtime.js";
+export type { ClosedRuntimeLaunchProfile, LongLivedRuntimeQualificationResult } from "./runtime.js";
 export type {
   BackendAvailability,
   IsolatedRunDecision,

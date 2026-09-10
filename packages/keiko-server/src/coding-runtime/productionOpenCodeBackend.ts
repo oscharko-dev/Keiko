@@ -8,10 +8,8 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
-import {
-  createRuntimeGatewayConfinement,
-  type LongLivedRuntimeQualification,
-} from "@oscharko-dev/keiko-sandbox";
+import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
+import { createRuntimeGatewayConfinement } from "@oscharko-dev/keiko-sandbox";
 
 import type { OpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway.js";
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";

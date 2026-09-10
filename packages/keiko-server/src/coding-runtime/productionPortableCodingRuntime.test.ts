@@ -5,8 +5,8 @@ import { dirname, join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
+import type { RuntimeQualificationReceipt } from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
-import type { RuntimeQualificationReceipt } from "@oscharko-dev/keiko-sandbox";
 
 import { verifyPortableAttestedSidecars } from "../update-portable-sidecar-verification.js";
 import { inspectStagedSidecarPayload } from "../update-portable-sidecar-staging-verification.js";

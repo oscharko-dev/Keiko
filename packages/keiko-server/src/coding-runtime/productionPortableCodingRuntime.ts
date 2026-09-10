@@ -4,12 +4,12 @@ import { readFileSync, realpathSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
-import {
-  qualificationFromReceipt,
-  type LongLivedRuntimeQualification,
-  type RuntimeQualificationComponentDigest,
-  type RuntimeQualificationReceiptBinding,
-} from "@oscharko-dev/keiko-sandbox";
+import type {
+  LongLivedRuntimeQualification,
+  RuntimeQualificationComponentDigest,
+  RuntimeQualificationReceiptBinding,
+} from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
+import { qualificationFromReceipt } from "@oscharko-dev/keiko-sandbox";
 
 import { productionUpdateFacts } from "../update-install-mode.js";
 import {
