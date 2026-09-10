@@ -1959,7 +1959,8 @@ function buildUpdateSession(options: {
   });
 }
 
-function updateCandidateGate(
+/** @internal Exported only for owning-layer regression coverage. */
+export function updateCandidateGate(
   updateRemediation: UpdateRemediationManager,
 ): NonNullable<UpdateSessionManagerOptions["candidateGate"]> {
   return (candidate, impact): void => {

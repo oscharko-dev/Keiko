@@ -195,6 +195,21 @@ type RecoveryFailureReason =
   | "native-recovery-failed"
   | "post-native-authority-invalid";
 
+type RecoveryCompletion = "native-recovered" | "unaccepted-settled";
+
+function recordRecoveryCompleted(
+  options: PortableNormalStartupRecoveryOptions,
+  authority: RecoveryAuthority,
+  outcome: RecoveryCompletion,
+): void {
+  emitSecurityLogEvent(options.securityLogSink, {
+    category: "diagnostic",
+    correlationId: authority.session.correlationId,
+    op: "portable.normal-startup-recovery.completed",
+    extra: { outcome, target: authority.plan.target },
+  });
+}
+
 function recoveryRequired(
   options: PortableNormalStartupRecoveryOptions,
   localState: ReturnType<typeof createUpdateLocalStateManager>,
@@ -362,6 +377,7 @@ async function initialStateAttested(
 
 async function settleUnaccepted(
   authority: RecoveryAuthority,
+  localState: ReturnType<typeof createUpdateLocalStateManager>,
   stateDir: string,
   now: () => number,
 ): Promise<boolean> {
@@ -371,7 +387,6 @@ async function settleUnaccepted(
     !(await initialStateAttested(authority, stateDir))
   )
     return false;
-  const localState = createUpdateLocalStateManager({ stateDir, now });
   localState.writeRuntimeState({
     ...authority.state,
     activationWal: undefined,
@@ -618,11 +633,13 @@ async function recoverUnaccepted(
   now: () => number,
 ): Promise<PortableNormalStartupRecoveryResult> {
   try {
-    if (!(await settleUnaccepted(claimed.authority, options.stateDir, now)))
+    if (!(await settleUnaccepted(claimed.authority, localState, options.stateDir, now)))
       return recoveryRequired(options, localState, "prepared-settlement-failed", claimed.authority);
-    return releaseStateDirUpdateSessionLockForRecovery(options.stateDir, claimed.ownership)
-      ? { status: "normal" }
-      : recoveryRequired(options, localState, "prepared-settlement-failed", claimed.authority);
+    if (!releaseStateDirUpdateSessionLockForRecovery(options.stateDir, claimed.ownership)) {
+      return recoveryRequired(options, localState, "prepared-settlement-failed", claimed.authority);
+    }
+    recordRecoveryCompleted(options, claimed.authority, "unaccepted-settled");
+    return { status: "normal" };
   } catch {
     return recoveryRequired(options, localState, "prepared-settlement-failed", claimed.authority);
   }
@@ -734,6 +751,13 @@ async function attestRecoveredStartup(
   if (!(await recoveredWindowsInstallAttested(refreshedAuthority, options.stateDir))) {
     return recoveryRequired(options, localState, "post-native-authority-invalid", priorAuthority);
   }
+  recordRecoveryCompleted(options, refreshedAuthority, "native-recovered");
+  localState.recordAuditEvent("portable-relaunch-result", {
+    correlationId: refreshedAuthority.session.correlationId,
+    targetVersion: refreshedAuthority.session.targetVersion,
+    portableActivationId: refreshedAuthority.plan.activationId,
+    status: "succeeded",
+  });
   return recoveredStartupResult(refreshedAuthority, descriptor);
 }
 

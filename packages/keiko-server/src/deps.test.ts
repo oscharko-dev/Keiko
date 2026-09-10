@@ -60,6 +60,7 @@ import {
   ensureManagedTaskWorkspaceIdentity,
   redactEvidenceString,
   reconcileTaskWorkspacesAtStartup,
+  updateCandidateGate,
   type UiHandlerDeps,
 } from "./deps.js";
 import {
@@ -97,6 +98,8 @@ import {
 } from "./observability/index.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { resolvePrDescriptionApplicationServiceForContext } from "./gitDelivery/prDescriptionRoutes.js";
+import { createUpdateRemediationManager } from "./update-remediation.js";
+import { createUpdateLocalStateManager } from "./update-local-state.js";
 
 const tmpDirs: string[] = [];
 
@@ -264,6 +267,53 @@ describe("portable updater startup recovery composition", () => {
     } finally {
       await deps.dispose?.();
     }
+  });
+});
+
+describe("update candidate remediation gate", () => {
+  it("blocks an immutable candidate while migration review is required", () => {
+    const stateDir = tmp("keiko-update-candidate-gate-");
+    const remediation = createUpdateRemediationManager({
+      localState: createUpdateLocalStateManager({ stateDir }),
+    });
+    const gate = updateCandidateGate(remediation);
+
+    expect(() => {
+      gate(
+        {
+          schemaVersion: "1",
+          candidateId: "candidate-reviewed",
+          currentVersion: "0.3.17",
+          targetVersion: "0.3.18",
+          channel: "stable",
+          install: {
+            packageName: "@oscharko-dev/keiko",
+            installKind: "package-manager",
+            packageManager: "npm",
+            installIdentitySha256: "a".repeat(64),
+          },
+          release: { source: "github-release", tag: "v0.3.18" },
+          releaseImpactDigest: "b".repeat(64),
+          issuedAt: "2026-09-10T12:00:00.000Z",
+          expiresAt: "2026-09-10T12:10:00.000Z",
+        },
+        {
+          stateImpact: [
+            {
+              store: "config",
+              description: "Configuration migration requires review.",
+              remediation: "migration-required",
+              userActionRequired: true,
+            },
+          ],
+        },
+      );
+    }).toThrow(
+      expect.objectContaining({
+        code: "UPDATE_REMEDIATION_REQUIRED",
+        status: 409,
+      }),
+    );
   });
 });
 

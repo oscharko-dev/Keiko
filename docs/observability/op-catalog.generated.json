@@ -2828,7 +2828,7 @@
     {
       "op": "memory.audit.state-cache.seeded",
       "category": "memory",
-      "site": "packages/keiko-server/src/deps.ts:2109",
+      "site": "packages/keiko-server/src/deps.ts:2110",
       "package": "keiko-server"
     },
     {
@@ -2937,9 +2937,15 @@
       "package": "keiko-server"
     },
     {
+      "op": "portable.normal-startup-recovery.completed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-portable-normal-startup.ts:208",
+      "package": "keiko-server"
+    },
+    {
       "op": "portable.normal-startup-recovery.required",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/update-portable-normal-startup.ts:207",
+      "site": "packages/keiko-server/src/update-portable-normal-startup.ts:222",
       "package": "keiko-server"
     },
     {
@@ -3134,7 +3140,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3901",
+      "site": "packages/keiko-server/src/deps.ts:3902",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -3191,7 +3197,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2605",
+      "site": "packages/keiko-server/src/deps.ts:2606",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -3903,6 +3909,7 @@
     "memory.retrieval.semantic-skipped",
     "memory.salience",
     "native-file-dialog.selection.projected",
+    "portable.normal-startup-recovery.completed",
     "portable.normal-startup-recovery.required",
     "portable.windows-alert.spawn-failed",
     "portable.windows-authenticode.system-binary-refused",

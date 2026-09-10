@@ -261,6 +261,29 @@ async function waitForPhase(
 }
 
 describe("UpdateSessionManager", () => {
+  it("evaluates the candidate gate before acquiring mutation authority", () => {
+    const runCommandImpl = vi.fn<NonNullable<UpdateSessionManagerOptions["runCommandImpl"]>>();
+    const lock = new MemoryUpdateSessionLock();
+    const manager = createTestUpdateSessionManager({
+      detector: () => supportedMode(),
+      lock,
+      runCommandImpl,
+      candidateGate: () => {
+        throw new UpdateSessionError(
+          "UPDATE_REMEDIATION_REQUIRED",
+          "Required remediation must be reviewed before update execution.",
+          409,
+        );
+      },
+    });
+
+    expect(() => manager.start(claim("0.2.12"))).toThrow(
+      expect.objectContaining({ code: "UPDATE_REMEDIATION_REQUIRED", status: 409 }),
+    );
+    expect(lock.isLocked()).toBe(false);
+    expect(runCommandImpl).not.toHaveBeenCalled();
+  });
+
   it("refuses mutation when enterprise policy disables updates", () => {
     const runCommandImpl = vi.fn<NonNullable<UpdateSessionManagerOptions["runCommandImpl"]>>();
     const manager = createTestUpdateSessionManager({

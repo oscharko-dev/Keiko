@@ -16,6 +16,7 @@ import type {
   UpdateSession,
 } from "@oscharko-dev/keiko-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 import { digestUpdateCandidate } from "./update-candidate-authority.js";
 import { hashPortableHandoffTree } from "./update-portable-handoff-builder.js";
 import {
@@ -834,6 +835,7 @@ describe("portable normal startup recovery", () => {
   it("settles a verified unaccepted Windows handoff before native recovery", async () => {
     const fixture = await prepareWindows("current", "unaccepted");
     const runNative = vi.fn(() => Promise.resolve({ status: "succeeded" as const }));
+    const events: SecurityLogEvent[] = [];
 
     await expect(
       reconcilePortableNormalStartup({
@@ -844,6 +846,7 @@ describe("portable normal startup recovery", () => {
         processIdentity: "windows-preacceptance-cli",
         pidAlive: () => false,
         runNative,
+        securityLogSink: { write: (event) => events.push(event) },
       }),
     ).resolves.toEqual({ status: "normal" });
 
@@ -853,6 +856,13 @@ describe("portable normal startup recovery", () => {
     });
     expect(fixture.localState.readRuntimeState().activationWal).toBeUndefined();
     expect(runNative).not.toHaveBeenCalled();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "portable.normal-startup-recovery.completed",
+        correlationId: fixture.session.correlationId,
+        extra: { outcome: "unaccepted-settled", target: "windows-x64" },
+      }),
+    );
   });
 
   it("rejects an unaccepted Windows handoff when the N-1 generation no longer attests", async () => {
@@ -880,6 +890,7 @@ describe("portable normal startup recovery", () => {
 
   it("recovers the verified Windows candidate through coordinator.exe and grants only N", async () => {
     const fixture = await prepareWindows("candidate");
+    const events: SecurityLogEvent[] = [];
     const runNative = vi.fn((input: PortableNativeRecoveryInput) => {
       expect(input.coordinator).toBe(
         join(portableHandoffRoot(fixture.stateDir, fixture.activationId), "coordinator.exe"),
@@ -898,6 +909,7 @@ describe("portable normal startup recovery", () => {
         processIdentity: "windows-recovery-cli",
         pidAlive: () => false,
         runNative,
+        securityLogSink: { write: (event) => events.push(event) },
       }),
     ).resolves.toMatchObject({
       status: "recovered",
@@ -913,6 +925,19 @@ describe("portable normal startup recovery", () => {
       },
     });
     expect(runNative).toHaveBeenCalledOnce();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "portable.normal-startup-recovery.completed",
+        correlationId: fixture.session.correlationId,
+        extra: { outcome: "native-recovered", target: "windows-x64" },
+      }),
+    );
+    const auditEvent = events.find((event) => event.op === "update.runtime.event");
+    expect(auditEvent?.correlationId).toBe(fixture.session.correlationId);
+    expect(auditEvent?.extra).toMatchObject({
+      type: "portable-relaunch-result",
+      status: "succeeded",
+    });
   });
 
   it("anchors failed Windows native launch ownership before any child PID is published", async () => {
@@ -1235,7 +1260,7 @@ describe("portable normal startup recovery", () => {
 
   it("emits a correlated body-free diagnostic when validated ownership is still live", async () => {
     const fixture = await prepare();
-    const events: unknown[] = [];
+    const events: SecurityLogEvent[] = [];
     await expect(
       reconcilePortableNormalStartup({
         stateDir: fixture.stateDir,
