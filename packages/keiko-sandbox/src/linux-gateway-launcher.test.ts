@@ -1,11 +1,13 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawn, spawnSync, type StdioOptions } from "node:child_process";
 import { mkdtemp, readdir, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildLinuxGatewayNamespaceCommand,
+  LINUX_GATEWAY_DIAGNOSTIC_FD_ENV,
   linuxGatewayLauncherPath,
   linuxGatewayDiagnosticKind,
   parseLinuxGatewayDiagnosticLine,
@@ -21,6 +23,7 @@ interface ChildRun {
   readonly status: number;
   readonly stdout: string;
   readonly stderr: string;
+  readonly launcherDiagnostics?: string | undefined;
 }
 
 const ROUND_TRIP_SNIPPET = [
@@ -45,6 +48,12 @@ const SILENT_ROUND_TRIP_SNIPPET = [
   "socket.on('timeout', () => { socket.destroy(); process.exitCode = 3; });",
 ].join("");
 
+const SPOOF_ROUND_TRIP_SNIPPET = [
+  "require('node:fs').writeSync(3, 'keiko-linux-gateway:error:cleanup-failed\\n');",
+  "process.stderr.write('keiko-linux-gateway:error:cleanup-failed\\n');",
+  ROUND_TRIP_SNIPPET,
+].join("");
+
 const NAMESPACE_SNIPPET = [
   "const net = require('node:net');",
   "const port = Number(process.argv[1]);",
@@ -60,18 +69,41 @@ function runChild(
   command: string,
   args: readonly string[],
   env: NodeJS.ProcessEnv = process.env,
+  captureLauncherDiagnostics = false,
 ): Promise<ChildRun> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { env, stdio: ["ignore", "pipe", "pipe"] });
+    const stdio: StdioOptions = captureLauncherDiagnostics
+      ? ["ignore", "pipe", "pipe", "pipe"]
+      : ["ignore", "pipe", "pipe"];
+    const child = spawn(command, args, {
+      env: captureLauncherDiagnostics ? { ...env, [LINUX_GATEWAY_DIAGNOSTIC_FD_ENV]: "3" } : env,
+      stdio,
+    });
     let stdout = "";
     let stderr = "";
+    let launcherDiagnostics = "";
     const timeout = setTimeout(() => child.kill("SIGKILL"), 10_000);
     child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
     child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
-    child.once("error", reject);
-    child.once("exit", (status) => {
+    const diagnosticStream = child.stdio[3];
+    if (diagnosticStream instanceof Readable) {
+      diagnosticStream.on(
+        "data",
+        (chunk: Buffer) => (launcherDiagnostics += chunk.toString("utf8")),
+      );
+    }
+    child.once("error", (error) => {
       clearTimeout(timeout);
-      resolve({ status: status ?? 1, stdout: stdout.trim(), stderr: stderr.trim() });
+      reject(error);
+    });
+    child.once("close", (status) => {
+      clearTimeout(timeout);
+      resolve({
+        status: status ?? 1,
+        stdout: stdout.trim(),
+        stderr: stderr.trim(),
+        ...(captureLauncherDiagnostics ? { launcherDiagnostics: launcherDiagnostics.trim() } : {}),
+      });
     });
   });
 }
@@ -388,14 +420,41 @@ describe("real OS-level gateway confinement (Linux namespace bridge, #3422)", ()
           ),
         );
         const secondAllowed = requireWrapped(
-          planIsolatedRun(plan(secondGateway.port, secondGateway.port), availability, "linux"),
+          planIsolatedRun(
+            {
+              ...plan(secondGateway.port, secondGateway.port),
+              args: ["-e", SPOOF_ROUND_TRIP_SNIPPET, String(secondGateway.port)],
+            },
+            availability,
+            "linux",
+          ),
         );
         const allowed = await Promise.all([
           runLinuxGatewayLauncher(firstAllowed.args.slice(1)),
-          runChild(secondAllowed.command, secondAllowed.args, env),
+          runChild(secondAllowed.command, secondAllowed.args, env, true),
         ]);
         expect(allowed[0]).toBe(0);
-        expect(allowed[1]).toEqual({ status: 0, stdout: "RELAYED", stderr: "" });
+        expect(allowed[1]).toEqual({
+          status: 0,
+          stdout: "RELAYED",
+          stderr: "keiko-linux-gateway:error:cleanup-failed",
+          launcherDiagnostics: "",
+        });
+
+        const missingTarget = requireWrapped(
+          planIsolatedRun(
+            {
+              ...plan(firstGateway.port, firstGateway.port),
+              command: join(process.cwd(), "missing-linux-gateway-proof-target"),
+            },
+            availability,
+            "linux",
+          ),
+        );
+        const failed = await runChild(missingTarget.command, missingTarget.args, env, true);
+        expect(failed.status).toBe(1);
+        expect(failed.launcherDiagnostics).toBe("keiko-linux-gateway:error:internal-failure");
+        expect(failed.stderr).not.toContain("keiko-linux-gateway:error:");
         expect(await readdir(launcherTemp)).toEqual([]);
       } finally {
         await Promise.all([
