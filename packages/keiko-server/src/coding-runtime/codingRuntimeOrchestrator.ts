@@ -58,6 +58,7 @@ import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
   type ServerDiagnosticSink,
+  describeError,
 } from "../diagnostics-log.js";
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
@@ -68,7 +69,10 @@ import type {
   CodingRuntimeQuestionOperationResult,
 } from "./codingRuntimeOrchestratorTypes.js";
 import { classifyLaunchRejection, launchRejectionDiagnosticReason } from "./launchFailure.js";
-import type { CodingRuntimeTaskOutcome } from "./productionCodingRuntimeHost.js";
+import type {
+  CodingRuntimeTaskDispatchResult,
+  CodingRuntimeTaskOutcome,
+} from "./productionCodingRuntimeHost.js";
 import {
   admitCodingRuntimeIssue,
   type CodingRuntimeIssueAttachment,
@@ -615,6 +619,9 @@ export class CodingRuntimeOrchestrator {
    */
   private settledRunId: string | undefined;
   private activeEffectiveMode: CodingWorkbenchMode | undefined;
+  // F66: how many delivery continuations each live run has been given (at most
+  // DELIVERY_CONTINUATION_MAX); dropped when the run settles.
+  private readonly deliveryContinuations = new Map<string, number>();
   /** Last accepted mode retained only for same-process post-terminal description work. */
   private readonly settledEffectiveModes = new Map<string, CodingWorkbenchMode>();
   private readonly approvals = new Map<string, ApprovalChallenge>();
@@ -1490,6 +1497,7 @@ export class CodingRuntimeOrchestrator {
   private async settleTask(runId: string, outcome: CodingRuntimeTaskOutcome): Promise<void> {
     const current = this.current();
     if (current?.runId !== runId) return;
+    if (await this.continueForDelivery(current, outcome)) return;
     const stopped = await this.stopForSettlement(runId, outcome);
     const live = this.current();
     if (live?.runId !== runId) return;
@@ -1499,11 +1507,115 @@ export class CodingRuntimeOrchestrator {
       return;
     }
     const target = this.deliveryTruthfulOutcome(live, taskOutcomeState(outcome));
+    this.deliveryContinuations.delete(runId);
     if (!isLegalCodingWorkbenchRuntimeTransition(live.state, target.state)) {
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
     this.transition(live, target.state, target.failureCode);
+  }
+
+  /** Durable delivery evidence: the store's last successful commit, or a delivered draft phase. */
+  private hasDeliveryEvidence(live: CodingRuntimeSnapshot): {
+    readonly hasVerifiedCommit: boolean;
+    readonly hasDraftDelivery: boolean;
+  } {
+    return {
+      hasVerifiedCommit:
+        this.deps.snapshots.getLastSuccessfulVerifiedCommit?.(live.runId) !== undefined,
+      hasDraftDelivery:
+        live.draftDelivery !== undefined && isDeliveredDraftDeliveryPhase(live.draftDelivery.phase),
+    };
+  }
+
+  // The one-based attempt a finished turn may continue with, or undefined when it settles: only a
+  // turn that ended normally, in an issue-bound run under Full access, without delivery evidence
+  // and with continuation budget left. Every other run settles exactly as before.
+  private deliveryContinuationAttempt(
+    live: CodingRuntimeSnapshot,
+    outcome: CodingRuntimeTaskOutcome,
+  ): number | undefined {
+    if (outcome !== "succeeded" || live.issueBinding === undefined) return undefined;
+    if (this.activeRunId !== live.runId || this.activeEffectiveMode !== "autonomous-delivery")
+      return undefined;
+    const evidence = this.hasDeliveryEvidence(live);
+    if (evidence.hasVerifiedCommit || evidence.hasDraftDelivery) return undefined;
+    const attempt = (this.deliveryContinuations.get(live.runId) ?? 0) + 1;
+    return attempt > DELIVERY_CONTINUATION_MAX ? undefined : attempt;
+  }
+
+  // Dispatches the continuation into the live session in place of stopping it. A refused or failed
+  // dispatch falls back to settlement, so a continuation can never keep a run alive on its own.
+  private async continueForDelivery(
+    live: CodingRuntimeSnapshot,
+    outcome: CodingRuntimeTaskOutcome,
+  ): Promise<boolean> {
+    const attempt = this.deliveryContinuationAttempt(live, outcome);
+    if (attempt === undefined) return false;
+    const correlationId = runtimeDiagnosticCorrelationId(live.runId);
+    let dispatched: CodingRuntimeTaskDispatchResult;
+    try {
+      dispatched = await this.deps.taskDispatcher.dispatch({
+        runId: live.runId,
+        requestId: `delivery-continuation-${String(attempt)}`,
+        expectedRevision: live.revision,
+        taskIntent: DELIVERY_CONTINUATION_INTENT,
+      });
+    } catch (error) {
+      this.recordDeliveryContinuation(
+        live,
+        "delivery-continuation-refused",
+        attempt,
+        correlationId,
+        {
+          reason: "dispatch-threw",
+          ...describeError(error),
+        },
+      );
+      return false;
+    }
+    if (!dispatched.ok) {
+      this.recordDeliveryContinuation(
+        live,
+        "delivery-continuation-refused",
+        attempt,
+        correlationId,
+        {
+          reason: "dispatch-refused",
+        },
+      );
+      return false;
+    }
+    this.deliveryContinuations.set(live.runId, attempt);
+    this.recordDeliveryContinuation(live, "delivery-continued", attempt, correlationId);
+    this.operations.observeContinuation(live.runId, dispatched.completion);
+    this.advanceRevision(live, "task-submitted");
+    return true;
+  }
+
+  private recordDeliveryContinuation(
+    live: CodingRuntimeSnapshot,
+    kind: "delivery-continued" | "delivery-continuation-refused",
+    attempt: number,
+    correlationId: string,
+    detail: Readonly<Record<string, unknown>> = {},
+  ): void {
+    this.deps.activityLog?.write({
+      level: kind === "delivery-continued" ? "info" : "warn",
+      category: "process",
+      op:
+        kind === "delivery-continued"
+          ? "coding-runtime.run.delivery-continued"
+          : "coding-runtime.run.delivery-continuation-refused",
+      correlationId,
+      extra: {
+        runId: live.runId,
+        issueNumber: live.issueBinding?.issueNumber,
+        attempt,
+        max: DELIVERY_CONTINUATION_MAX,
+        ...detail,
+      },
+    });
   }
 
   /**
@@ -1541,10 +1653,7 @@ export class CodingRuntimeOrchestrator {
     // exists to close (owner review, PR #3452), so both sides ask the question that has a real
     // answer: the store's own last SUCCESSFUL commit, and a phase the contract classifies as
     // delivered.
-    const hasVerifiedCommit =
-      this.deps.snapshots.getLastSuccessfulVerifiedCommit?.(live.runId) !== undefined;
-    const hasDraftDelivery =
-      live.draftDelivery !== undefined && isDeliveredDraftDeliveryPhase(live.draftDelivery.phase);
+    const { hasVerifiedCommit, hasDraftDelivery } = this.hasDeliveryEvidence(live);
     if (hasVerifiedCommit || hasDraftDelivery) return target;
     this.deps.activityLog?.write({
       level: "warn",
@@ -1557,6 +1666,7 @@ export class CodingRuntimeOrchestrator {
         hasVerifiedCommit,
         hasDraftDelivery,
         reportedOutcome: "succeeded",
+        continuations: this.deliveryContinuations.get(live.runId) ?? 0,
       },
     });
     return { state: "failed", failureCode: "delivery-not-evidenced" };
@@ -2578,6 +2688,18 @@ export class CodingRuntimeOrchestrator {
     return this.serial(() => Promise.resolve(work()));
   }
 }
+
+/**
+ * F66 (Coding Workbench run 22, 2026-09-11): the bounded continuation an issue-bound run under Full
+ * access gets when its model ends a turn before delivery is evidenced. The operator authorized the
+ * run to deliver without per-action approval, and run 22's model stopped one step short — build
+ * verification passed, its own result named `stage-then-verify` — and the run settled
+ * `delivery-not-evidenced` at once. The continuation restates only the accepted task's delivery
+ * goal; every effect still goes through the governed tools, and nothing widens authority.
+ */
+export const DELIVERY_CONTINUATION_MAX = 2;
+export const DELIVERY_CONTINUATION_INTENT =
+  "Delivery is not evidenced yet: this issue-bound run has no verified commit and no delivered draft pull request. Continue with the next action your last tool results named, such as staging the changed files, verifying the staged candidate, committing, pushing and opening the draft pull request. Stop only when the delivery is evidenced or a governed tool refuses.";
 
 function taskOutcomeState(outcome: CodingRuntimeTaskOutcome): {
   readonly state: "failed" | "succeeded";

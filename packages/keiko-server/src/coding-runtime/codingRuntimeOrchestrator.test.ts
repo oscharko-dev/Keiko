@@ -30,6 +30,8 @@ import {
   type CodingRuntimeLaunchResolver,
   type WorkbenchDescriptionDispatchOutcome,
   type WorkbenchDescriptionDispatcher,
+  DELIVERY_CONTINUATION_INTENT,
+  DELIVERY_CONTINUATION_MAX,
 } from "./codingRuntimeOrchestrator.js";
 import type { CodingRuntimeDescriptionJobStore } from "./codingRuntimeDescriptionJobStore.js";
 import type { VerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
@@ -956,6 +958,170 @@ describe("CodingRuntimeOrchestrator", () => {
       }
     },
   );
+
+  // F66 (Coding Workbench run 22, 2026-09-11): under Full access the operator authorized the run to
+  // deliver without per-action approval, and run 22's model ended a turn one step short — build
+  // verification passed, its own result named stage-then-verify — so the run settled
+  // delivery-not-evidenced at once. Such a run now gets at most DELIVERY_CONTINUATION_MAX bounded,
+  // server-authored continuations before the delivery-truth rule above settles it.
+  function fullAccessLaunch(): ReturnType<CodingRuntimeLaunchResolver["resolve"]> {
+    return {
+      taskRef: "task-1",
+      treeBindingId: "tree",
+      adapterKind: "codex-cli",
+      runtimeSource: "codex-cli-adapter",
+      modelSource: "keiko-model-gateway",
+      effectiveMode: "autonomous-delivery",
+      executablePath: "/bin/runtime",
+      managedRoot: "/managed",
+      gatewayUrl: "http://127.0.0.1",
+      modelProfileId: "profile",
+      args: [],
+      inheritedEnvAllowlist: [],
+      shutdownTimeoutMs: 1,
+      startTimeoutMs: 1,
+    };
+  }
+
+  async function startFullAccessIssueRun(turns: number): Promise<{
+    readonly f: ReturnType<typeof fixture>;
+    readonly captured: ReturnType<typeof captureActivityLog>;
+    readonly verifiedCommits: Map<string, VerifiedCommitResult>;
+    readonly finish: readonly ((outcome: "failed" | "succeeded") => void)[];
+  }> {
+    const captured = captureActivityLog();
+    const verifiedCommits = new Map<string, VerifiedCommitResult>();
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      captured.activityLog,
+      issueIntake(),
+      undefined,
+      verifiedCommits,
+    );
+    f.launchResolver.resolve.mockReturnValueOnce(fullAccessLaunch());
+    const finish: ((outcome: "failed" | "succeeded") => void)[] = [];
+    for (let turn = 0; turn < turns; turn += 1) {
+      const completion = new Promise<"failed" | "succeeded">((resolve) => {
+        finish.push(resolve);
+      });
+      f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: true, completion });
+    }
+    await f.orchestrator.start({
+      ...start,
+      requestedMode: "autonomous-delivery",
+      issueRef: ISSUE_REF,
+    });
+    return { f, captured, verifiedCommits, finish };
+  }
+
+  function linesWithOp(
+    captured: ReturnType<typeof captureActivityLog>,
+    op: string,
+  ): readonly ServerLogEvent[] {
+    return captured.records.filter((candidate) => candidate.op === op);
+  }
+
+  it("continues an issue-bound Full access run that stopped short, then settles on its delivery", async () => {
+    const { f, captured, verifiedCommits, finish } = await startFullAccessIssueRun(2);
+
+    finish[0]?.("succeeded");
+
+    await vi.waitFor(() => {
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+    });
+    expect(f.taskDispatcher.dispatch.mock.calls[1]?.[0]).toMatchObject({
+      runId: "run-1",
+      requestId: "delivery-continuation-1",
+      taskIntent: DELIVERY_CONTINUATION_INTENT,
+    });
+    expect(linesWithOp(captured, "coding-runtime.run.delivery-continued")).toEqual([
+      expect.objectContaining({
+        level: "info",
+        extra: expect.objectContaining({
+          runId: "run-1",
+          attempt: 1,
+          max: DELIVERY_CONTINUATION_MAX,
+        }) as unknown,
+      }),
+    ]);
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("running");
+    expect(f.manager.stop).not.toHaveBeenCalled();
+
+    const row = f.rows.get("run-1");
+    if (row === undefined) throw new Error("expected the running row");
+    seedDeliveryEvidence(f.rows, verifiedCommits, row, "verified-commit");
+    finish[1]?.("succeeded");
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    expect(linesWithOp(captured, "coding-runtime.run.delivery-unevidenced")).toEqual([]);
+  });
+
+  it("settles delivery-not-evidenced once the continuation budget is spent, naming it", async () => {
+    const { f, captured, finish } = await startFullAccessIssueRun(DELIVERY_CONTINUATION_MAX + 1);
+
+    for (let turn = 0; turn <= DELIVERY_CONTINUATION_MAX; turn += 1) {
+      await vi.waitFor(() => {
+        expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(turn + 1);
+      });
+      finish[turn]?.("succeeded");
+    }
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+    expect(f.orchestrator.getSnapshot("run-1")?.failureCode).toBe("delivery-not-evidenced");
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(DELIVERY_CONTINUATION_MAX + 1);
+    expect(
+      linesWithOp(captured, "coding-runtime.run.delivery-continued").map(
+        (line) => (line.extra as { readonly attempt?: number } | undefined)?.attempt,
+      ),
+    ).toEqual([1, 2]);
+    expect(linesWithOp(captured, "coding-runtime.run.delivery-unevidenced")).toEqual([
+      expect.objectContaining({
+        extra: expect.objectContaining({ continuations: DELIVERY_CONTINUATION_MAX }) as unknown,
+      }),
+    ]);
+  });
+
+  it("settles at once when the continuation dispatch is refused", async () => {
+    const { f, captured, finish } = await startFullAccessIssueRun(1);
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: false });
+
+    finish[0]?.("succeeded");
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+    expect(f.orchestrator.getSnapshot("run-1")?.failureCode).toBe("delivery-not-evidenced");
+    expect(linesWithOp(captured, "coding-runtime.run.delivery-continuation-refused")).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        extra: expect.objectContaining({ attempt: 1, reason: "dispatch-refused" }) as unknown,
+      }),
+    ]);
+    expect(linesWithOp(captured, "coding-runtime.run.delivery-unevidenced")).toEqual([
+      expect.objectContaining({
+        extra: expect.objectContaining({ continuations: 0 }) as unknown,
+      }),
+    ]);
+  });
+
+  it("never continues a turn that failed", async () => {
+    const { f, captured, finish } = await startFullAccessIssueRun(1);
+
+    finish[0]?.("failed");
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(linesWithOp(captured, "coding-runtime.run.delivery-continued")).toEqual([]);
+  });
 
   // Run 10's other half: the verification tool was refused for want of ADR-0147 package-script
   // trust and nothing told the operator a decision was waiting for them. A governed tool that meets

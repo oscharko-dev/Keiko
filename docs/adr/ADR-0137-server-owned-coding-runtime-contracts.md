@@ -120,6 +120,17 @@ persist records while delivering nothing. Without evidence the run settles `fail
 `delivery-not-evidenced`. Ad-hoc runs are exempt, because one legitimately ends with no commit and
 inferring delivery intent from free text would turn honest successes into false failures.
 
+**Under Full access, a run that stops one step short is given a bounded continuation first**
+(PR #3452, 2026-09-11). In `autonomous-delivery` the operator authorized the run to deliver without
+per-action approval. When an issue-bound run's model ends a turn normally while no delivery is
+evidenced, the orchestrator dispatches a fixed, server-authored continuation into the live session
+instead of settling — at most `DELIVERY_CONTINUATION_MAX` (2) times per run, each logged as
+`coding-runtime.run.delivery-continued`. The continuation restates only the accepted task's
+delivery goal; every effect still goes through the governed tools and nothing widens authority. A
+refused dispatch (`delivery-continuation-refused`), an exhausted budget, a failed or cancelled
+turn, and every supervised or ask run settle exactly as above, and the `delivery-unevidenced` line
+names how many continuations the run had.
+
 The runtime adapter port accepts only the opaque authority reference, immutable execution binding,
 and closed runtime/model sources. Launch paths, argv, environment, endpoint, and credentials are
 adapter-internal server concerns deliberately excluded from the public contract.

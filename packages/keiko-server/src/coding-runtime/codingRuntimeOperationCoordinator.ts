@@ -382,6 +382,15 @@ export class CodingRuntimeOperationCoordinator {
     this.pendingTaskGenerations.delete(runId);
   }
 
+  /**
+   * F66: a delivery continuation the orchestrator dispatched while settling a finished turn. Its
+   * completion settles through the same generation bookkeeping as any other task, so the turn it
+   * replaces can never settle a second time.
+   */
+  public observeContinuation(runId: string, completion: Promise<CodingRuntimeTaskOutcome>): void {
+    this.observeTaskCompletion(runId, completion);
+  }
+
   private observeTaskCompletion(
     runId: string,
     completion: Promise<CodingRuntimeTaskOutcome>,
