@@ -55,7 +55,11 @@ import {
   resolveEvidenceDir,
   type EvidenceStore,
 } from "@oscharko-dev/keiko-evidence";
-import { keikoApiKeySecretValues, redact } from "@oscharko-dev/keiko-security";
+import {
+  bindSecurityLogCorrelation,
+  keikoApiKeySecretValues,
+  redact,
+} from "@oscharko-dev/keiko-security";
 import type { PortableReleaseTrustedKey } from "@oscharko-dev/keiko-security/portable-release-trust";
 import type {
   CodingWorkbenchMode,
@@ -1908,6 +1912,21 @@ function propagateManagedLspRestriction(
   });
 }
 
+function buildPortableUpdateActivator(
+  env: EnvSource,
+  localState: UpdateLocalStateManager,
+  runtime: ProductionPortableHandoffRuntime,
+): ReturnType<typeof createPortableUpdateActivator> {
+  return createPortableUpdateActivator({
+    env,
+    localState,
+    handoffCoordinator: runtime.coordinator,
+    currentVersion: KEIKO_PRODUCT_VERSION,
+    currentProcess: runtime.currentProcess,
+    securityLogSink: processServerLogSink(),
+  });
+}
+
 function buildUpdateSession(options: {
   readonly injected?: UpdateSessionManager | undefined;
   readonly env: EnvSource;
@@ -1943,13 +1962,11 @@ function buildUpdateSession(options: {
         options.runtimeConfig.current()?.egress ??
         resolveOutboundHttpEgressConfig(undefined, options.env),
     }),
-    portableActivator: createPortableUpdateActivator({
-      env: options.env,
-      localState: options.updateLocalState,
-      handoffCoordinator: options.portableHandoffRuntime.coordinator,
-      currentVersion: KEIKO_PRODUCT_VERSION,
-      currentProcess: options.portableHandoffRuntime.currentProcess,
-    }),
+    portableActivator: buildPortableUpdateActivator(
+      options.env,
+      options.updateLocalState,
+      options.portableHandoffRuntime,
+    ),
     portableCompletionGate: portableCompletionGate(options.updateRemediation),
     onPortableHandoffAccepted: options.portableHandoffShutdown,
     redactor: (value: string): string => {
@@ -3195,7 +3212,12 @@ function resolvedUpdatePreflight(
       ? {}
       : {
           installMode: (): ReturnType<typeof detectUpdateInstallMode> =>
-            detectUpdateInstallMode(runtimeFacts(), { ...args.options.env }),
+            detectUpdateInstallMode(
+              runtimeFacts(),
+              { ...args.options.env },
+              undefined,
+              bindSecurityLogCorrelation(processServerLogSink(), UNKNOWN_CORRELATION_ID),
+            ),
         }),
     ...(args.options.updatePreflightCatalog === undefined
       ? {}
@@ -3243,6 +3265,7 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
     sessionLock: updateSessionLock,
     ...(recoveryOwnership === undefined ? {} : { recoveryOwnership }),
     canComplete: portableCompletionGate(updateRemediation),
+    securityLogSink: processServerLogSink(),
   });
   return {
     terminal: buildTerminalManager({

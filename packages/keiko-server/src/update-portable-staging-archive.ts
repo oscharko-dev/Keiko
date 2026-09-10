@@ -641,6 +641,7 @@ async function validateStagedLayout(
   targetVersion: string,
   windowsGeneration: WindowsGenerationBinding | undefined,
   signal: AbortSignal | undefined,
+  securityLogSink: SecurityLogSink | undefined,
 ): Promise<StagedLayout> {
   const layout = stagedLayout(root, target, windowsGeneration);
   requiredStagedFile(layout.runtimeNode);
@@ -651,7 +652,13 @@ async function validateStagedLayout(
   validateSetupManifest(readJsonRecord(setupPath), target, targetVersion, windowsGeneration);
   validatePackageJson(join(layout.appRoot, "package.json"), targetVersion);
   if (target === "windows-x64" && windowsGeneration !== undefined) {
-    await validateWindowsGenerationArchive(root, layout, windowsGeneration, signal);
+    await validateWindowsGenerationArchive(
+      root,
+      layout,
+      windowsGeneration,
+      signal,
+      securityLogSink,
+    );
   }
   return layout;
 }
@@ -661,13 +668,18 @@ async function validateWindowsGenerationArchive(
   layout: StagedLayout,
   binding: WindowsGenerationBinding,
   signal: AbortSignal | undefined,
+  securityLogSink: SecurityLogSink | undefined,
 ): Promise<void> {
   const payload = join(root, PORTABLE_PAYLOAD_ROOT);
   const generationsRoot = join(payload, ".portable", "generations");
   requiredStagedFile(layout.runtimeSupervisor ?? "");
   validateWindowsGenerationDirectories(payload, generationsRoot, binding);
   validateWindowsRootFiles(payload, layout.launcher, binding);
-  const treeSha256 = await stagedWindowsGenerationDigest(layout.resourceRoot, signal);
+  const treeSha256 = await stagedWindowsGenerationDigest(
+    layout.resourceRoot,
+    signal,
+    securityLogSink,
+  );
   if (treeSha256 !== binding.treeSha256) {
     throw new PortableUpdateStagingError(
       "portable-staging-failed",
@@ -722,11 +734,13 @@ function validateWindowsRootFiles(
 async function stagedWindowsGenerationDigest(
   resourceRoot: string,
   signal: AbortSignal | undefined,
+  securityLogSink: SecurityLogSink | undefined,
 ): Promise<string> {
   try {
     return await hashPortableHandoffTree(resourceRoot, {
       signal,
       deadline: Date.now() + PORTABLE_OPERATION_TIMEOUT_MS,
+      securityLogSink,
     });
   } catch {
     throw new PortableUpdateStagingError(
@@ -798,6 +812,7 @@ export async function stageArchiveFile(input: {
       input.targetVersion,
       input.windowsGeneration,
       input.session.signal,
+      bindSecurityLogCorrelation(input.securityLogSink, input.session.sessionId),
     );
     await verifyLocalPlatform({
       root: workRoot,

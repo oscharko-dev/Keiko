@@ -5,6 +5,7 @@ import {
   hashPortableTreeKht1,
   PortableTreeAttestationError,
 } from "@oscharko-dev/keiko-security/portable-tree-attestation";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 
 const MAX_FILE_BYTES = 256 * 1024 * 1024;
 const BUFFER_BYTES = 64 * 1024;
@@ -16,6 +17,7 @@ export interface PortableHandoffOperationOptions {
   readonly deadline: number;
   readonly now?: (() => number) | undefined;
   readonly yieldControl?: (() => Promise<void>) | undefined;
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 export interface PortableHandoffOperation {
@@ -23,6 +25,7 @@ export interface PortableHandoffOperation {
   readonly deadline: number;
   readonly now: () => number;
   readonly yieldControl: () => Promise<void>;
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 export class PortableHandoffBuilderError extends Error {
@@ -51,6 +54,7 @@ export function portableHandoffOperationFrom(
     deadline: options.deadline,
     now: options.now ?? Date.now,
     yieldControl: options.yieldControl ?? defaultYieldControl,
+    ...(options.securityLogSink === undefined ? {} : { securityLogSink: options.securityLogSink }),
   };
 }
 

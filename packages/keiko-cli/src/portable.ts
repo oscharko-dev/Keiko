@@ -472,7 +472,11 @@ async function launchPortable(
   try {
     const recovered = await recoverBeforePortableLaunch(options, io, env, deps);
     if (recovered !== undefined) return recovered;
-    const source = validatePortableRoot(options.target, options.portableRoot);
+    const source = validatePortableRoot(
+      options.target,
+      options.portableRoot,
+      options.securityLogSink,
+    );
     if (sameRealPath(source.layout.installRoot, options.managedRoot)) {
       return await setupAndLaunchManaged(options, io, env, deps);
     }
@@ -681,7 +685,7 @@ function emitPortableManagedRoot(
   options: PortableCliOptions,
   io: CliIo,
 ): void {
-  assertManagedRootAllowed(managedRoot, options.stateDir, options.target);
+  assertManagedRootAllowed(managedRoot, options.stateDir, options.target, options.securityLogSink);
   const hasControlCharacter = Array.from(managedRoot).some(
     (character): boolean => (character.codePointAt(0) ?? 0) <= 0x1f,
   );

@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it } from "vitest";
+import type { SecurityLogEvent } from "./log-port.js";
 import {
   attestPortableTreeKht1Sync,
   hashPortableTreeKht1,
@@ -288,5 +289,38 @@ describe("portable KHT1 tree attestation", () => {
     await expect(hashPortableTreeKht1(root, operation({ deadline: 1 }))).rejects.toBeInstanceOf(
       PortableTreeAttestationError,
     );
+  });
+
+  it("emits body-free security events for async and sync attestation failures", async () => {
+    const root = fixtureRoot();
+    const events: SecurityLogEvent[] = [];
+    const securityLogSink = { write: (event: SecurityLogEvent): void => void events.push(event) };
+    writeFileSync(join(root, "file.txt"), "content that must not reach the log");
+
+    await expect(
+      hashPortableTreeKht1(join(root, "missing"), operation({ securityLogSink })),
+    ).rejects.toThrow();
+    expect(() => {
+      attestPortableTreeKht1Sync(root, "0".repeat(64), Date.now() + 5_000, securityLogSink);
+    }).toThrow(/digest mismatch/u);
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        category: "security",
+        level: "error",
+        op: "security.portable-tree-attestation.failed",
+        errorKind: "ENOENT",
+        extra: { driver: "async" },
+      }),
+      expect.objectContaining({
+        category: "security",
+        level: "error",
+        op: "security.portable-tree-attestation.failed",
+        errorKind: "PortableTreeAttestationError",
+        extra: { driver: "sync" },
+      }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain("content that must not reach the log");
+    expect(JSON.stringify(events)).not.toContain(root);
   });
 });

@@ -1,4 +1,5 @@
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { bindSecurityLogCorrelation, type SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type {
   UpdatePortableActivationSummary,
   UpdatePortableStagingSummary,
@@ -50,6 +51,7 @@ export interface PortableUpdateActivatorOptions {
   readonly currentProcess?: (() => PortableHandoffProcessIdentity) | undefined;
   readonly newLaunchId?: (() => string) | undefined;
   readonly restoreLaunchId?: (() => string) | undefined;
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 export { PortableUpdateActivationError } from "./update-portable-activation-files.js";
@@ -139,6 +141,7 @@ function prepareHandoffPlan(
         ? {}
         : { restoreLaunchId: options.restoreLaunchId }),
       ...(options.homedir === undefined ? {} : { home: options.homedir }),
+      securityLogSink: bindSecurityLogCorrelation(options.securityLogSink, input.sessionId),
     },
     input,
     dependencies.localState.readRuntimeState().revision + 1,

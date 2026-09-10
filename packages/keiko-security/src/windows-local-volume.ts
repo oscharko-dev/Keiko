@@ -3,6 +3,7 @@
 // archives do not carry the production attestor and an archive must never vouch for its own root.
 import { spawnSync } from "node:child_process";
 import { win32 as win32Path } from "node:path";
+import { emitSecurityLogEvent, securityErrorKind, type SecurityLogSink } from "./log-port.js";
 import { resolveWindowsPowerShellExecutable } from "./windows-system-directory.js";
 
 export const WINDOWS_LOCAL_VOLUME_TIMEOUT_MS = 10_000;
@@ -33,6 +34,7 @@ export interface WindowsLocalVolumeOptions {
   readonly platform?: NodeJS.Platform | undefined;
   readonly runner?: WindowsLocalVolumeRunner | undefined;
   readonly resolvePowerShell?: (() => string) | undefined;
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 // The path is supplied as bounded Base64 standard-input data. Keep this source fixed: interpolating a path into this
@@ -129,23 +131,37 @@ export function assertWindowsLocalVolume(
   options: WindowsLocalVolumeOptions = {},
 ): void {
   if ((options.platform ?? process.platform) !== "win32") return;
-  assertUsablePath(path);
-  const executable = options.resolvePowerShell?.() ?? resolveWindowsPowerShellExecutable();
-  const runner = options.runner ?? spawnSync;
-  const result = runner(
-    executable,
-    ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedQuery()],
-    {
-      encoding: "utf8",
-      env: trustedEnvironment(executable),
-      input: `${Buffer.from(path, "utf8").toString("base64")}\n`,
-      maxBuffer: WINDOWS_LOCAL_VOLUME_MAX_OUTPUT_BYTES,
-      shell: false,
-      timeout: WINDOWS_LOCAL_VOLUME_TIMEOUT_MS,
-      windowsHide: true,
-    },
-  );
-  if (commandFailed(result)) {
-    throw new Error("Windows managed root must be on a local volume");
+  let phase: "input" | "resolve" | "verify" = "input";
+  try {
+    assertUsablePath(path);
+    phase = "resolve";
+    const executable = options.resolvePowerShell?.() ?? resolveWindowsPowerShellExecutable();
+    const runner = options.runner ?? spawnSync;
+    phase = "verify";
+    const result = runner(
+      executable,
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", encodedQuery()],
+      {
+        encoding: "utf8",
+        env: trustedEnvironment(executable),
+        input: `${Buffer.from(path, "utf8").toString("base64")}\n`,
+        maxBuffer: WINDOWS_LOCAL_VOLUME_MAX_OUTPUT_BYTES,
+        shell: false,
+        timeout: WINDOWS_LOCAL_VOLUME_TIMEOUT_MS,
+        windowsHide: true,
+      },
+    );
+    if (commandFailed(result)) {
+      throw new Error("Windows managed root must be on a local volume");
+    }
+  } catch (error) {
+    emitSecurityLogEvent(options.securityLogSink, {
+      level: "error",
+      category: "security",
+      op: "security.windows-local-volume.refused",
+      errorKind: securityErrorKind(error),
+      extra: { phase },
+    });
+    throw error;
   }
 }

@@ -11,6 +11,7 @@ import {
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import {
   activationIdFor,
   capturePortableRegistration,
@@ -63,6 +64,7 @@ export interface PortableHandoffPlanBuilderOptions {
   readonly operationTimeoutMs?: number | undefined;
   readonly operationNow?: (() => number) | undefined;
   readonly yieldControl?: (() => Promise<void>) | undefined;
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 export interface PortableHandoffPreparedPlan {
@@ -120,6 +122,7 @@ function builderOperation(options: PortableHandoffPlanBuilderOptions): PortableH
     deadline: now() + timeout,
     now,
     yieldControl: options.yieldControl,
+    securityLogSink: options.securityLogSink,
   });
 }
 
@@ -407,6 +410,7 @@ export function createPortableHandoffTreeAttestor(input: {
   readonly operationTimeoutMs?: number | undefined;
   readonly operationNow?: (() => number) | undefined;
   readonly yieldControl?: (() => Promise<void>) | undefined;
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }): (expectedTreeSha256: string) => Promise<boolean> {
   return async (expectedTreeSha256) => {
     const now = input.operationNow ?? Date.now;
@@ -415,6 +419,7 @@ export function createPortableHandoffTreeAttestor(input: {
       deadline: now() + (input.operationTimeoutMs ?? DEFAULT_OPERATION_TIMEOUT_MS),
       now,
       yieldControl: input.yieldControl,
+      securityLogSink: input.securityLogSink,
     });
     return actual === expectedTreeSha256;
   };

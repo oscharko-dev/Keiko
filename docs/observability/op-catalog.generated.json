@@ -910,6 +910,12 @@
       "package": "keiko-security"
     },
     {
+      "op": "security.portable-tree-attestation.failed",
+      "category": "security",
+      "site": "packages/keiko-security/src/portable-tree-attestation.ts:563",
+      "package": "keiko-security"
+    },
+    {
       "op": "security.vault.entries-delete-failed",
       "category": "security",
       "site": "packages/keiko-security/src/secret-vault.ts:614",
@@ -949,6 +955,12 @@
       "op": "security.vault.shard-unreadable",
       "category": "security",
       "site": "packages/keiko-security/src/secret-vault.ts:729",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.windows-local-volume.refused",
+      "category": "security",
+      "site": "packages/keiko-security/src/windows-local-volume.ts:161",
       "package": "keiko-security"
     },
     {
@@ -2807,7 +2819,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1899",
+      "site": "packages/keiko-server/src/deps.ts:1903",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -2828,7 +2840,7 @@
     {
       "op": "memory.audit.state-cache.seeded",
       "category": "memory",
-      "site": "packages/keiko-server/src/deps.ts:2110",
+      "site": "packages/keiko-server/src/deps.ts:2115",
       "package": "keiko-server"
     },
     {
@@ -2939,13 +2951,13 @@
     {
       "op": "portable.normal-startup-recovery.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/update-portable-normal-startup.ts:208",
+      "site": "packages/keiko-server/src/update-portable-normal-startup.ts:212",
       "package": "keiko-server"
     },
     {
       "op": "portable.normal-startup-recovery.required",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/update-portable-normal-startup.ts:222",
+      "site": "packages/keiko-server/src/update-portable-normal-startup.ts:226",
       "package": "keiko-server"
     },
     {
@@ -3120,12 +3132,6 @@
       "package": "keiko-server"
     },
     {
-      "op": "security.fs.portable-backup-cleanup",
-      "category": "security",
-      "site": "packages/keiko-server/src/update-portable-activation-files.ts:1273",
-      "package": "keiko-server"
-    },
-    {
       "op": "server-log.write-failed",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/observability/server-log.ts:336",
@@ -3140,7 +3146,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3902",
+      "site": "packages/keiko-server/src/deps.ts:3913",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -3197,7 +3203,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2606",
+      "site": "packages/keiko-server/src/deps.ts:2611",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -3950,9 +3956,9 @@
     "search.rerank.completed",
     "security.fs.atomic-rename-failed",
     "security.fs.atomic-rename-retried",
-    "security.fs.portable-backup-cleanup",
     "security.keychain.fallback",
     "security.log.sink-failed",
+    "security.portable-tree-attestation.failed",
     "security.vault.entries-delete-failed",
     "security.vault.entries-deleted",
     "security.vault.entries-merge-failed",
@@ -3964,6 +3970,7 @@
     "security.windows-launcher.system-root-refused",
     "security.windows-lifecycle-opener.system-binary-missing",
     "security.windows-lifecycle-opener.system-root-refused",
+    "security.windows-local-volume.refused",
     "security.windows-portable-alert.system-binary-missing",
     "security.windows-portable-alert.system-root-refused",
     "security.windows-portable-legacy-launcher.system-binary-missing",

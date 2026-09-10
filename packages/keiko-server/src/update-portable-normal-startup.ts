@@ -11,7 +11,11 @@ import {
 } from "node:fs";
 import { join, resolve } from "node:path";
 import type { UpdateRuntimeState, UpdateSession } from "@oscharko-dev/keiko-contracts";
-import { emitSecurityLogEvent, type SecurityLogSink } from "@oscharko-dev/keiko-security";
+import {
+  bindSecurityLogCorrelation,
+  emitSecurityLogEvent,
+  type SecurityLogSink,
+} from "@oscharko-dev/keiko-security";
 import { attestPortableManagedRegistration } from "./update-portable-activation-files.js";
 import { createPortableHandoffTreeAttestor } from "./update-portable-handoff-builder.js";
 import {
@@ -356,6 +360,7 @@ function loadAuthority(
 async function initialStateAttested(
   authority: RecoveryAuthority,
   stateDir: string,
+  securityLogSink: SecurityLogSink | undefined,
 ): Promise<boolean> {
   const { plan } = authority;
   if (plan.target === "windows-x64") {
@@ -369,9 +374,13 @@ async function initialStateAttested(
       version: plan.oldProcess.version,
       expectedSha256: plan.digests.previousRegistrationSha256,
     }) &&
-    createPortableHandoffTreeAttestor({ managedRoot: plan.paths.managedRoot })(
-      plan.digests.currentTreeSha256,
-    )
+    createPortableHandoffTreeAttestor({
+      managedRoot: plan.paths.managedRoot,
+      securityLogSink: bindSecurityLogCorrelation(
+        securityLogSink,
+        authority.state.activationWal.activationId,
+      ),
+    })(plan.digests.currentTreeSha256)
   );
 }
 
@@ -380,11 +389,12 @@ async function settleUnaccepted(
   localState: ReturnType<typeof createUpdateLocalStateManager>,
   stateDir: string,
   now: () => number,
+  securityLogSink: SecurityLogSink | undefined,
 ): Promise<boolean> {
   const session = authority.state.activeSession;
   if (
     session?.sessionId !== authority.session.sessionId ||
-    !(await initialStateAttested(authority, stateDir))
+    !(await initialStateAttested(authority, stateDir, securityLogSink))
   )
     return false;
   localState.writeRuntimeState({
@@ -633,7 +643,15 @@ async function recoverUnaccepted(
   now: () => number,
 ): Promise<PortableNormalStartupRecoveryResult> {
   try {
-    if (!(await settleUnaccepted(claimed.authority, localState, options.stateDir, now)))
+    if (
+      !(await settleUnaccepted(
+        claimed.authority,
+        localState,
+        options.stateDir,
+        now,
+        options.securityLogSink,
+      ))
+    )
       return recoveryRequired(options, localState, "prepared-settlement-failed", claimed.authority);
     if (!releaseStateDirUpdateSessionLockForRecovery(options.stateDir, claimed.ownership)) {
       return recoveryRequired(options, localState, "prepared-settlement-failed", claimed.authority);

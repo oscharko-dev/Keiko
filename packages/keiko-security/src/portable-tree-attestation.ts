@@ -13,6 +13,7 @@ import {
 } from "node:fs";
 import { lstat, open, opendir, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
+import { emitSecurityLogEvent, securityErrorKind, type SecurityLogSink } from "./log-port.js";
 
 const TREE_HASH_SCHEMA = "KHT1";
 const MAX_TREE_ENTRIES = 60_000;
@@ -29,6 +30,7 @@ export interface PortableTreeKht1Operation {
   readonly deadline: number;
   readonly now: () => number;
   readonly yieldControl: () => Promise<void>;
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 export class PortableTreeAttestationError extends Error {
@@ -521,7 +523,7 @@ function runTreeMachineSync(root: string, deadline: number): string {
   }
 }
 
-export async function hashPortableTreeKht1(
+async function hashPortableTreeKht1Inner(
   root: string,
   operation: PortableTreeKht1Operation,
 ): Promise<string> {
@@ -550,13 +552,45 @@ export async function hashPortableTreeKht1(
   }
 }
 
+function logAttestationFailure(
+  sink: SecurityLogSink | undefined,
+  driver: "async" | "sync",
+  error: unknown,
+): void {
+  emitSecurityLogEvent(sink, {
+    level: "error",
+    category: "security",
+    op: "security.portable-tree-attestation.failed",
+    errorKind: securityErrorKind(error),
+    extra: { driver },
+  });
+}
+
+export async function hashPortableTreeKht1(
+  root: string,
+  operation: PortableTreeKht1Operation,
+): Promise<string> {
+  try {
+    return await hashPortableTreeKht1Inner(root, operation);
+  } catch (error) {
+    logAttestationFailure(operation.securityLogSink, "async", error);
+    throw error;
+  }
+}
+
 export function attestPortableTreeKht1Sync(
   root: string,
   expectedSha256: string,
   deadline: number,
+  securityLogSink?: SecurityLogSink,
 ): void {
-  if (!SHA256.test(expectedSha256)) fail("portable handoff tree digest is invalid");
-  const actual = Buffer.from(runTreeMachineSync(root, deadline), "hex");
-  const expected = Buffer.from(expectedSha256, "hex");
-  if (!timingSafeEqual(actual, expected)) fail("portable handoff tree digest mismatch");
+  try {
+    if (!SHA256.test(expectedSha256)) fail("portable handoff tree digest is invalid");
+    const actual = Buffer.from(runTreeMachineSync(root, deadline), "hex");
+    const expected = Buffer.from(expectedSha256, "hex");
+    if (!timingSafeEqual(actual, expected)) fail("portable handoff tree digest mismatch");
+  } catch (error) {
+    logAttestationFailure(securityLogSink, "sync", error);
+    throw error;
+  }
 }

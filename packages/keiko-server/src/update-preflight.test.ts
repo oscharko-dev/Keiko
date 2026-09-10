@@ -466,9 +466,13 @@ function releaseTrustedManifest(target: UpdatePortableTarget): {
         };
   const binding = (unsigned.releaseImpact as Record<string, Record<string, unknown>>)
     .reviewedBinding;
+  if (binding === undefined) throw new Error("portable release-impact binding fixture is missing");
   binding.platformSignatureLocallyVerified = false;
   const predicates = (unsigned.updateEligibility as Record<string, Record<string, unknown>>)
     .requiredPredicates;
+  if (predicates === undefined) {
+    throw new Error("portable update-eligibility predicates fixture is missing");
+  }
   predicates.platformSignatureLocallyVerified = false;
   predicates.releaseTrustRequired = true;
   const { privateKey, publicKey } = generateKeyPairSync("ed25519");
@@ -722,7 +726,7 @@ describe("update preflight service", () => {
     const trusted = releaseTrustedManifest(target);
     const events: {
       readonly op: string;
-      readonly extra?: Readonly<Record<string, unknown>>;
+      readonly extra?: Readonly<Record<string, unknown>> | undefined;
     }[] = [];
     const fetchImpl = vi.fn<typeof fetch>((input) => {
       const url = requestUrl(input);
@@ -740,7 +744,11 @@ describe("update preflight service", () => {
       return Promise.resolve(new Response("not found", { status: 404 }));
     });
     const deps = depsWith(fetchImpl, {
-      activityLog: { write: (event): void => events.push(event) },
+      activityLog: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
       updatePortableReleaseNow: () => Date.parse("2026-09-11T08:00:00.000Z"),
       updatePortableReleaseTrustedKeys: [trusted.trustedKey],
     });
@@ -771,7 +779,7 @@ describe("update preflight service", () => {
     const target: UpdatePortableTarget = "macos-arm64";
     const events: {
       readonly op: string;
-      readonly extra?: Readonly<Record<string, unknown>>;
+      readonly extra?: Readonly<Record<string, unknown>> | undefined;
     }[] = [];
     const fetchImpl = vi.fn<typeof fetch>((input) => {
       const url = requestUrl(input);
@@ -786,7 +794,11 @@ describe("update preflight service", () => {
       );
     });
     const deps = depsWith(fetchImpl, {
-      activityLog: { write: (event): void => events.push(event) },
+      activityLog: {
+        write: (event): void => {
+          events.push(event);
+        },
+      },
     });
 
     const report = await runUpdatePreflight(deps, {

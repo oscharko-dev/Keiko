@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import type { SecurityLogEvent } from "./log-port.js";
 import {
   assertWindowsLocalVolume,
   WINDOWS_LOCAL_VOLUME_MAX_OUTPUT_BYTES,
@@ -126,5 +127,31 @@ describe("Windows local volume authority", () => {
         },
       });
     }).not.toThrow();
+  });
+
+  it("emits a body-free security refusal before preserving the failure", () => {
+    const events: SecurityLogEvent[] = [];
+    const path = String.raw`D:\Keiko\private-customer-path`;
+
+    expect(() => {
+      assertWindowsLocalVolume(path, {
+        platform: "win32",
+        resolvePowerShell: () => POWERSHELL,
+        runner: runner({ status: 1, stderr: "private failure detail" }),
+        securityLogSink: { write: (event): void => void events.push(event) },
+      });
+    }).toThrow("local volume");
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        category: "security",
+        level: "error",
+        op: "security.windows-local-volume.refused",
+        errorKind: "Error",
+        extra: { phase: "verify" },
+      }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain(path);
+    expect(JSON.stringify(events)).not.toContain("private failure detail");
   });
 });

@@ -241,7 +241,12 @@ function validateSetupManifest(manifest: SetupManifest, target: PortableTarget):
   }
 }
 
-function validateLayout(layout: PortableLayout, manifest: SetupManifest, deadline: number): void {
+function validateLayout(
+  layout: PortableLayout,
+  manifest: SetupManifest,
+  deadline: number,
+  securityLogSink?: SecurityLogSink,
+): void {
   const requiredFiles = [
     { label: "bundled Node runtime", path: layout.runtimeNodePath },
     { label: "primary launcher", path: layout.primaryLauncherPath },
@@ -249,7 +254,9 @@ function validateLayout(layout: PortableLayout, manifest: SetupManifest, deadlin
   for (const file of requiredFiles) {
     assertPortableFilePresent(file.path, `missing portable ${file.label}`);
   }
-  if (manifest.schemaVersion === 2) validateWindowsGenerationLayout(layout, manifest, deadline);
+  if (manifest.schemaVersion === 2) {
+    validateWindowsGenerationLayout(layout, manifest, deadline, securityLogSink);
+  }
   validateAppPackage(layout.packageJsonPath, manifest.packageVersion);
 }
 
@@ -436,9 +443,15 @@ function validateWindowsGenerationLayout(
   layout: PortableLayout,
   manifest: Extract<SetupManifest, { readonly schemaVersion: 2 }>,
   deadline: number,
+  securityLogSink?: SecurityLogSink,
 ): void {
   requireWindowsGenerationDirectories(layout);
-  attestPortableTreeKht1Sync(layout.resourceRoot, manifest.windowsGeneration.treeSha256, deadline);
+  attestPortableTreeKht1Sync(
+    layout.resourceRoot,
+    manifest.windowsGeneration.treeSha256,
+    deadline,
+    securityLogSink,
+  );
   assertPortableValidationDeadline(deadline);
   assertPortableFilePresent(layout.runtimeSupervisorPath, "missing portable runtime supervisor");
   if (
@@ -681,7 +694,11 @@ function promoteToManaged(
   }
 }
 
-export function validatePortableRoot(target: PortableTarget, root: string): ValidatedPortableRoot {
+export function validatePortableRoot(
+  target: PortableTarget,
+  root: string,
+  securityLogSink?: SecurityLogSink,
+): ValidatedPortableRoot {
   const deadline = Date.now() + PORTABLE_OPERATION_TIMEOUT_MS;
   const rootLayout = layoutFor(target, root);
   if (!existsSync(rootLayout.setupManifestPath))
@@ -689,8 +706,27 @@ export function validatePortableRoot(target: PortableTarget, root: string): Vali
   const manifest = parseSetupManifest(rootLayout.setupManifestPath);
   validateSetupManifest(manifest, target);
   const layout = layoutForSetupManifest(target, root, manifest);
-  validateLayout(layout, manifest, deadline);
+  validateLayout(layout, manifest, deadline, securityLogSink);
   return { layout, manifest };
+}
+
+function validatePortableInputRoot(
+  input: {
+    readonly target: PortableTarget;
+    readonly securityLogSink?: SecurityLogSink | undefined;
+  },
+  root: string,
+): ValidatedPortableRoot {
+  return validatePortableRoot(input.target, root, input.securityLogSink);
+}
+
+function assertPortableInputManagedRoot(input: {
+  readonly managedRoot: string;
+  readonly stateDir: string;
+  readonly target: PortableTarget;
+  readonly securityLogSink?: SecurityLogSink | undefined;
+}): void {
+  assertManagedRootAllowed(input.managedRoot, input.stateDir, input.target, input.securityLogSink);
 }
 
 function createPortableUpgradePaths(
@@ -773,7 +809,7 @@ function swapStagedUpgrade(
       ...(input.securityLogSink !== undefined ? { securityLogSink: input.securityLogSink } : {}),
     });
     promoted = true;
-    const layout = validatePortableRoot(input.target, paths.managedRoot).layout;
+    const layout = validatePortableInputRoot(input, paths.managedRoot).layout;
     finalizeManagedSetup(
       {
         target: input.target,
@@ -810,7 +846,7 @@ function recoverFailedManagedInstall(
   let removeBackup = true;
   try {
     copyTreeSafe(input.source.layout.installRoot, paths.stagedTarget);
-    const stagedSource = validatePortableRoot(input.target, paths.stagedTarget);
+    const stagedSource = validatePortableInputRoot(input, paths.stagedTarget);
     return promoteStagedUpgrade(input, stagedSource, paths, verifyCurrent);
   } catch (error) {
     if (error instanceof PortableUpgradeRollbackError) removeBackup = false;
@@ -821,7 +857,7 @@ function recoverFailedManagedInstall(
 }
 
 export function upgradeManagedInstall(input: PortableManagedUpgradeInput): PortableLayout {
-  assertManagedRootAllowed(input.managedRoot, input.stateDir, input.target);
+  assertPortableInputManagedRoot(input);
   return withPortableSetupLocks(input, () => upgradeLockedManagedInstall(input));
 }
 
@@ -831,7 +867,7 @@ function upgradeLockedManagedInstall(input: PortableManagedUpgradeInput): Portab
   let removeBackup = true;
   try {
     copyTreeSafe(input.source.layout.installRoot, paths.stagedTarget);
-    const stagedSource = validatePortableRoot(input.target, paths.stagedTarget);
+    const stagedSource = validatePortableInputRoot(input, paths.stagedTarget);
     const verifyCurrent = (): void => {
       requireAttestedManagedUpgradeCurrent(input);
     };
@@ -944,7 +980,7 @@ function finalizeManagedSetup(
   now: Date,
   io: CliIo,
 ): void {
-  validatePortableRoot(options.target, layout.installRoot);
+  validatePortableRoot(options.target, layout.installRoot, options.securityLogSink);
   installNativeRegistration(
     layout,
     options.target,
@@ -996,7 +1032,7 @@ function recordPreLockSetupFailure(
   if (registrationBeforeSetup?.status === "managed") return;
   let managedRootAllowed = true;
   try {
-    assertManagedRootAllowed(options.managedRoot, options.stateDir, options.target);
+    assertPortableInputManagedRoot(options);
   } catch {
     managedRootAllowed = false;
   }
@@ -1653,8 +1689,8 @@ export function setupPortable(
     refuseCorruptRegistration(options.stateDir);
     registrationBeforeSetup = readPortableInstallRegistration(options.stateDir);
     assertSamePathSetupAttested(options);
-    const source = validatePortableRoot(options.target, options.portableRoot);
-    assertManagedRootAllowed(options.managedRoot, options.stateDir, options.target);
+    const source = validatePortableInputRoot(options, options.portableRoot);
+    assertPortableInputManagedRoot(options);
     assertFailedSetupRecoveryBound(options);
     const prepared = options.dryRun
       ? preparePortableSetup(options, source, now, io)

@@ -17,6 +17,7 @@ import type {
   UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
 import { UPDATE_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/update-session";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { assertWindowsLocalVolume } from "@oscharko-dev/keiko-security/windows-local-volume";
 import {
   generationBindingMatchesPackageLayout,
@@ -703,6 +704,7 @@ export function detectPortableUpdateInstallMode(
   facts: PortableUpdateRuntimeFacts,
   fs: PortableDetectorFs,
   packageName: string,
+  securityLogSink?: SecurityLogSink,
 ): UpdateInstallMode | undefined {
   const manifestSummary = bootstrapSummaryFromManifest(facts.packageRoot, fs, packageName);
   const registration = readPortableRegistration(facts.stateDir, fs);
@@ -711,7 +713,7 @@ export function detectPortableUpdateInstallMode(
     try {
       // Keep the original install-root spelling: canonicalization can hide mapped-share and
       // reparse boundaries which D3 explicitly denies.
-      assertWindowsLocalVolume(manifestSummary.layout.installRoot);
+      assertWindowsLocalVolume(manifestSummary.layout.installRoot, { securityLogSink });
     } catch {
       return portableUnsupportedMode(
         packageName,

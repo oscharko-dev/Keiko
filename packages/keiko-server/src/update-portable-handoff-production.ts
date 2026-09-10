@@ -1,4 +1,5 @@
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { bindSecurityLogCorrelation, type SecurityLogSink } from "@oscharko-dev/keiko-security";
 import type { UpdateActivationWalState, UpdateSession } from "@oscharko-dev/keiko-contracts";
 import { transitionUpdateSession } from "./update-lifecycle.js";
 import { attestPortableManagedRegistration } from "./update-portable-activation-files.js";
@@ -41,6 +42,7 @@ export interface ProductionPortableHandoffRuntimeOptions {
   readonly pid?: number | undefined;
   readonly verifyNativeCopy?: typeof verifyPortableHandoffNativeCopy | undefined;
   readonly canComplete?: ((session: UpdateSession) => boolean) | undefined;
+  readonly securityLogSink?: SecurityLogSink | undefined;
 }
 
 export interface ProductionPortableHandoffRuntime {
@@ -431,9 +433,10 @@ async function attestRecoveredMacInstall(
   ) {
     return false;
   }
-  return createPortableHandoffTreeAttestor({ managedRoot: plan.paths.managedRoot })(
-    input.expectedTreeSha256,
-  );
+  return createPortableHandoffTreeAttestor({
+    managedRoot: plan.paths.managedRoot,
+    securityLogSink: bindSecurityLogCorrelation(options.securityLogSink, input.activationId),
+  })(input.expectedTreeSha256);
 }
 
 function attestRecoveredInstall(
