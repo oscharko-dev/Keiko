@@ -26,7 +26,8 @@ function fail(message) {
   throw new LinuxPortableSigningError(`linux-portable-signing: ${message}`);
 }
 
-function parse(argv) {
+/** @internal Exported only for deterministic CLI-boundary tests. */
+export function parseLinuxPortableSigningArgs(argv) {
   const [command, ...args] = argv;
   if (command !== "prepare" && command !== "finalize" && command !== "verify") {
     fail("unsupported command");
@@ -298,7 +299,7 @@ export async function finalizeLinuxQualifiedPayload(options, dependencies = {}) 
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(import.meta.filename)) {
   try {
-    const input = parse(process.argv.slice(2));
+    const input = parseLinuxPortableSigningArgs(process.argv.slice(2));
     if (input.command === "prepare") prepareLinuxQualifiedPayload(input.options);
     else if (input.command === "finalize") await finalizeLinuxQualifiedPayload(input.options);
     else {

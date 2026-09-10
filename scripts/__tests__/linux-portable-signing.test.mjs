@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   finalizeLinuxQualifiedPayload,
   LinuxPortableSigningError,
+  parseLinuxPortableSigningArgs,
   prepareLinuxQualifiedPayload,
   verifyLinuxQualifiedPayload,
 } from "../linux-portable-signing.mjs";
@@ -126,6 +127,48 @@ afterEach(() => {
 });
 
 describe("Linux portable qualification sealing", () => {
+  it("parses every command and rejects malformed CLI arguments", () => {
+    for (const command of ["prepare", "finalize", "verify"]) {
+      expect(
+        parseLinuxPortableSigningArgs([
+          command,
+          "--stage-root",
+          "/tmp/stage",
+          "--source-commit-sha",
+          COMMIT,
+        ]),
+      ).toEqual({
+        command,
+        options: { "source-commit-sha": COMMIT, "stage-root": "/tmp/stage" },
+      });
+    }
+    expect(() => parseLinuxPortableSigningArgs(["publish"])).toThrow("unsupported command");
+    expect(() => parseLinuxPortableSigningArgs(["verify", "stage-root", "/tmp/stage"])).toThrow(
+      "invalid arguments",
+    );
+    expect(() => parseLinuxPortableSigningArgs(["verify", "--stage-root"])).toThrow(
+      "invalid arguments",
+    );
+  });
+
+  it("rejects malformed and relabelled manifests before changing signing state", () => {
+    const malformed = fixture();
+    const malformedPath = join(malformed.stageRoot, "manifest", "portable-manifest.json");
+    writeFileSync(malformedPath, "{");
+    expect(() => prepareLinuxQualifiedPayload(optionsFor(malformed.stageRoot))).toThrow(
+      "manifest is invalid",
+    );
+
+    const relabelled = fixture();
+    const relabelledPath = join(relabelled.stageRoot, "manifest", "portable-manifest.json");
+    const relabelledManifest = JSON.parse(readFileSync(relabelledPath, "utf8"));
+    relabelledManifest.artifact.platformTarget = "windows-x64";
+    writeFileSync(relabelledPath, `${JSON.stringify(relabelledManifest)}\n`);
+    expect(() => prepareLinuxQualifiedPayload(optionsFor(relabelled.stageRoot))).toThrow(
+      "manifest target is not Linux x64",
+    );
+  });
+
   it("marks only a complete Linux component set as production", () => {
     const value = fixture();
     const deps = dependencies(value.receipt);

@@ -67,4 +67,10 @@ describe("Linux portable Sigstore verification", () => {
     }).toThrow();
     expect(verify).not.toHaveBeenCalled();
   });
+
+  it("constructs the offline public verifier from the embedded Sigstore trust root", () => {
+    expect(() => {
+      verifyLinuxQualificationBundle(Buffer.from("receipt"), {});
+    }).toThrow("invalid bundle");
+  });
 });

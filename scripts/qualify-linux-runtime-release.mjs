@@ -42,7 +42,8 @@ function booleanOption(options, name) {
   return value === "true";
 }
 
-function parse(argv) {
+/** @internal Exported only for deterministic CLI-boundary tests. */
+export function parseQualificationArgs(argv) {
   const options = {};
   for (let index = 0; index < argv.length; index += 2) {
     const key = argv[index];
@@ -66,11 +67,12 @@ function readJson(path, label) {
   }
 }
 
-function exactCleanHead(sourceCommitSha) {
-  const head = execFileSync("/usr/bin/git", ["rev-parse", "HEAD"], {
+/** @internal Exported only for deterministic checkout-binding tests. */
+export function exactCleanHead(sourceCommitSha, execute = execFileSync) {
+  const head = execute("/usr/bin/git", ["rev-parse", "HEAD"], {
     encoding: "utf8",
   }).trim();
-  const status = execFileSync("/usr/bin/git", ["status", "--porcelain=v1"], {
+  const status = execute("/usr/bin/git", ["status", "--porcelain=v1"], {
     encoding: "utf8",
   });
   if (head !== sourceCommitSha || status.length > 0) {
@@ -213,7 +215,8 @@ export function assertQualificationReport(reportPath) {
   }
 }
 
-function runQualificationTests(reportPath, spawn = spawnSync) {
+/** @internal Exported only for deterministic proof-runner tests. */
+export function runQualificationTests(reportPath, spawn = spawnSync) {
   const result = spawn(process.execPath, linuxQualificationVitestArgs(reportPath), {
     cwd: resolve(import.meta.dirname, ".."),
     encoding: "utf8",
@@ -281,7 +284,7 @@ export function qualifyLinuxRuntimeRelease(options, dependencies = {}) {
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(import.meta.filename)) {
   try {
-    qualifyLinuxRuntimeRelease(parse(process.argv.slice(2)));
+    qualifyLinuxRuntimeRelease(parseQualificationArgs(process.argv.slice(2)));
     process.stdout.write("Linux runtime qualification passed.\n");
   } catch (error) {
     process.stderr.write(
