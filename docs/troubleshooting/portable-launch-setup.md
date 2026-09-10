@@ -6,26 +6,26 @@ the system Node/npm requirement, but it cannot bypass local security policy.
 
 ## Portable download or launcher is blocked by the operating system
 
-| Field             | Value                                                                  |
-| ----------------- | ---------------------------------------------------------------------- |
-| Severity          | Blocker                                                                |
-| Surface           | Portable launch/setup                                                  |
-| Stable identifier | `portable launcher blocked by Windows SmartScreen or macOS Gatekeeper` |
+| Field             | Value                                                  |
+| ----------------- | ------------------------------------------------------ |
+| Severity          | Blocker                                                |
+| Surface           | Portable launch/setup                                  |
+| Stable identifier | `portable launcher blocked by operating-system policy` |
 
 **Symptom**
 
 The user opens the signed Windows setup companion, or extracts the correct portable ZIP and opens
-`Keiko.exe` or `Keiko.app`, but Keiko does not start. Windows may show a Windows SmartScreen or
-Defender prompt. macOS may show a Gatekeeper,
-quarantine, signing, notarization, or "damaged app" prompt.
+`Keiko`, `Keiko.exe`, or `Keiko.app`, but Keiko does not start. Windows SmartScreen or Defender may
+show a prompt. macOS may show a Gatekeeper, quarantine, signing, notarization, or "damaged app"
+prompt.
 
 **Root Cause**
 
-Portable artifacts are downloaded executable software. Linux execution and mount policy, Windows
-SmartScreen, Defender, AppLocker, WDAC, macOS Gatekeeper, quarantine attributes, missing signing
-evidence, missing notarization, or organization-managed allowlists can block downloaded
-applications before Keiko code runs. This does not mean Keiko requires system Node/npm; it means
-the operating system or organization policy blocked execution of the bundled launcher.
+Portable artifacts are downloaded executable software. Linux execution and mount policy can block
+them. Windows SmartScreen, Defender, AppLocker, or WDAC can do the same, as can macOS Gatekeeper,
+quarantine attributes, missing signing evidence, missing notarization, or organization-managed
+allowlists. This does not mean Keiko requires system Node/npm; it means the operating system or
+organization policy blocked execution of the bundled launcher.
 
 **Diagnostic Steps**
 
@@ -153,8 +153,8 @@ install.
 
 **Symptom**
 
-The user downloads a newer portable ZIP and opens its `Keiko.exe` or `Keiko.app`, but the managed
-install remains on the previous version or Keiko reopens the previous version.
+The user downloads a newer portable ZIP and opens its `Keiko`, `Keiko.exe`, or `Keiko.app`, but the
+managed install remains on the previous version or Keiko reopens the previous version.
 
 **Root Cause**
 

@@ -109,7 +109,8 @@ steps.
 The npm/Yarn updater remains a developer and compatibility path, not the promoted product journey
 for ordinary portable users.
 
-If a user manually downloads a newer portable ZIP and opens that newer `Keiko.exe` or `Keiko.app`
+If a user manually downloads a newer portable ZIP and opens that newer `Keiko`, `Keiko.exe`, or
+`Keiko.app`
 while an older managed Keiko install is already present, the launcher treats it as a safe manual
 update fallback. Keiko validates that the clicked package is a stable newer version, stops the
 current local Keiko server, keeps an internal previous-install snapshot while swapping the managed
