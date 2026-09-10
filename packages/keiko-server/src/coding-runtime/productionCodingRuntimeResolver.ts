@@ -1168,7 +1168,8 @@ function managedVerificationOptions(
   return {
     verificationRunner: input.verificationRunner,
     requestOperatorDecision: operatorDecisionRequester(
-      input,
+      () => runtimeNow(input),
+      input.diagnostics,
       minted.authorityRef.runId,
       onRuntimeEvent,
     ),
@@ -1177,11 +1178,18 @@ function managedVerificationOptions(
 
 /**
  * Announces a decision only a local human can make, on the one channel a governed tool has to the
- * run aggregate. An event the contract rejects is dropped rather than emitted: a malformed event
- * would be refused downstream anyway, and the waiting tool still settles on its own ceiling.
+ * run aggregate. An event the contract rejects is not emitted — it would be refused downstream — but
+ * it is never dropped silently either: run 11 (2026-09-10) lost every pause this way, because the
+ * first version validated and discarded in one expression, so the tool waited its full window while
+ * the run, the operator and the log all saw nothing. The rejection is now a diagnostic under the
+ * run's correlation id, and the waiting tool still settles on its own ceiling.
+ *
+ * Exported so a test can drive the REAL requester through the contract validator; the fixture
+ * that only stubbed `requestOperatorDecision` proved the wait and never this seam.
  */
-function operatorDecisionRequester(
-  input: ProductionCodingRuntimeResolverInput,
+export function operatorDecisionRequester(
+  now: () => Date,
+  diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
   onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
 ): (decision: CodingWorkbenchOperatorDecision, outcome?: CodingWorkbenchAuxiliaryStatus) => void {
@@ -1192,12 +1200,26 @@ function operatorDecisionRequester(
       schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
       eventId: `event-operator-decision-${String(sequence)}`,
       runId,
-      occurredAt: runtimeNow(input).toISOString(),
+      occurredAt: now().toISOString(),
       kind: "operator-decision",
       operatorDecision: decision,
       ...(outcome === undefined ? {} : { auxiliaryOutcome: outcome }),
     };
-    if (validateCodingWorkbenchRuntimeEvent(event).ok) onRuntimeEvent(event);
+    const validation = validateCodingWorkbenchRuntimeEvent(event);
+    if (validation.ok) {
+      onRuntimeEvent(event);
+      return;
+    }
+    emitServerDiagnostic(diagnostics, {
+      correlationId: runId,
+      timestamp: now().toISOString(),
+      operation: "coding-runtime.operator-decision",
+      source: "production-coding-runtime-resolver.operator-decision",
+      errorClass: "OperatorDecisionEventRejected",
+      message: "coding-runtime-operator-decision-event-rejected",
+      // The contract's own closed sentences, never event content: they name which field failed.
+      code: validation.errors.join("; ").slice(0, 200),
+    });
   };
 }
 

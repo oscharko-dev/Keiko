@@ -4,6 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
+import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
+import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import { operatorDecisionRequester } from "./productionCodingRuntimeResolver.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
@@ -725,3 +729,58 @@ function workspaceFixture() {
     },
   };
 }
+
+// Run 11 (2026-09-10): the requester built `event-operator-decision-1`, the contract rejected the id
+// as evidence text, and the first version validated and discarded in one expression — the tool waited
+// its full window while the run never learned it was waiting. These pins drive the REAL requester
+// through the real validator; the tool fixture that only stubbed `requestOperatorDecision` proved the
+// wait and never this seam.
+describe("operatorDecisionRequester", () => {
+  const now = (): Date => new Date("2026-09-10T17:17:05.000Z");
+  const runId = "run-162123733010859537403366256760456230003";
+
+  it("emits contract-valid open and settled events for the run", () => {
+    const emitted: CodingWorkbenchRuntimeEvent[] = [];
+    const request = operatorDecisionRequester(now, undefined, runId, (event) => {
+      emitted.push(event);
+    });
+    request("workspace-script-trust");
+    request("workspace-script-trust", "limit-reached");
+
+    expect(emitted.map((event) => validateCodingWorkbenchRuntimeEvent(event).ok)).toEqual([
+      true,
+      true,
+    ]);
+    expect(emitted[0]).toMatchObject({
+      kind: "operator-decision",
+      runId,
+      operatorDecision: "workspace-script-trust",
+    });
+    expect(emitted[0]?.auxiliaryOutcome).toBeUndefined();
+    expect(emitted[1]).toMatchObject({ auxiliaryOutcome: "limit-reached" });
+  });
+
+  it("records a diagnostic instead of dropping an event the contract rejects", () => {
+    const emitted: CodingWorkbenchRuntimeEvent[] = [];
+    const records: ServerDiagnosticRecord[] = [];
+    const request = operatorDecisionRequester(
+      now,
+      { record: (record): void => void records.push(record) },
+      // A run id the contract refuses as evidence text — the shape of failure run 11 had.
+      "run id with spaces",
+      (event) => {
+        emitted.push(event);
+      },
+    );
+    request("workspace-script-trust");
+
+    expect(emitted).toEqual([]);
+    expect(records).toEqual([
+      expect.objectContaining({
+        operation: "coding-runtime.operator-decision",
+        errorClass: "OperatorDecisionEventRejected",
+        message: "coding-runtime-operator-decision-event-rejected",
+      }),
+    ]);
+  });
+});

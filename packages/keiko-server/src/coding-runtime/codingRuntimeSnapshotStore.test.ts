@@ -429,6 +429,37 @@ describe("CodingRuntimeSnapshotStore fail-closed validation", () => {
 });
 
 describe("pauseReason persistence (schema v34)", () => {
+  // Owner review, PR #3452: `markNonterminalRecoveryRequired` writes `state` by raw SQL and used to
+  // leave `pause_reason` behind, so a run paused for an operator decision when the process restarted
+  // became a row `assertSnapshot` refuses on the very next read — which is `startupReconcileNow`'s
+  // own `listRecentActive`, so the BFF would not have come up. The restart path must clear the
+  // reason like every other state change, and every later read of the row must work.
+  it("clears pauseReason when a restart marks a paused run recovery-required", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const s = createCodingRuntimeSnapshotStore(db);
+    s.create(snapshot());
+    s.transition("run-1", { state: "running", revision: 1, updatedAt: at });
+    s.transition("run-1", {
+      state: "paused",
+      revision: 2,
+      updatedAt: at,
+      pauseReason: "workspace-script-trust",
+    });
+
+    expect(s.markNonterminalRecoveryRequired("2026-07-13T10:00:01.000Z")).toEqual(["run-1"]);
+
+    expect(() => s.listRecentActive(1)).not.toThrow();
+    expect(s.get("run-1")).toMatchObject({ state: "recovery-required" });
+    expect(s.get("run-1")?.pauseReason).toBeUndefined();
+    const row = db
+      .prepare("SELECT pause_reason FROM coding_runtime_snapshots WHERE run_id = ?")
+      .get("run-1") as { pause_reason: string | null };
+    expect(row.pause_reason).toBeNull();
+    expect(() => s.acknowledgeRecovery("run-1", "2026-07-13T10:00:02.000Z")).not.toThrow();
+    db.close();
+  });
+
   // A `running` -> `paused` transition is the only legal path into `paused` from this fixture's
   // initial `starting` state (mirrors "persists the paused state through a running round-trip"
   // above). `pauseReason` must round-trip through both the in-memory snapshot and the persisted

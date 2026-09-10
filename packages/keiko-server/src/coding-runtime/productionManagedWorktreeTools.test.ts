@@ -2109,6 +2109,51 @@ describe("verification waiting on the operator's package-script trust decision",
     });
   });
 
+  // Owner review, PR #3452: the registry's and the catalog's ceilings run from admission, the
+  // wait's clock used to start only after the first attempt had failed — so a slow first attempt
+  // pushed the wait past the invocation's own ceiling and the model got an opaque cancellation. The
+  // wait is now measured from the handler's entry: with 10 s spent before the refusal, it ends at
+  // 25 s from entry with the tool's own refusal, and the log records the 15 s it actually waited.
+  it("measures the grace window from the handler's entry, not from the refusal", async () => {
+    vi.useFakeTimers();
+    const runToReport = vi.fn(() =>
+      Promise.reject(new WorkspaceTrustRequiredError("worktree-manifest-drift")),
+    );
+    const log: ServerLogEvent[] = [];
+    const facade = verificationFacade({
+      runToReport,
+      scriptTrustFor: trustRefusedThenGranted(() => false),
+      requestOperatorDecision: (): void => undefined,
+      verifiedCommitService: {
+        beginVerification: () =>
+          new Promise<object>((resolve) => {
+            setTimeout(() => {
+              resolve({});
+            }, 10_000);
+          }),
+      } as unknown as VerifiedCommitService,
+      records: [],
+      log,
+    });
+
+    const pending = facade.execute(verificationCall("verification-trust-clock"));
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(24_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_600);
+    expect(settled).toBe(true);
+    await expect(pending).resolves.toMatchObject({
+      status: "failed",
+      reasonCode: "WORKSPACE_TRUST_REQUIRED",
+    });
+    expect(log.find((event) => event.op === "coding-runtime.operator-decision")).toMatchObject({
+      extra: { state: "settled", reason: "expired", waitCeilingMs: 15_000 },
+    });
+  });
+
   // A decision that never comes must not hold the run for ever: the wait expires on the same
   // ceiling every other approval wait uses, and the model then gets exactly the refusal it used to
   // get immediately.

@@ -1036,6 +1036,34 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(resumed.ok).toBe(true);
   });
 
+  // Run 11 (2026-09-10): a runtime event for a run other than the live one was refused with
+  // `invalid-intent` and nothing else — the producer's ask vanished without a line. The refusal now
+  // names the event kind, both run ids and why, so a customer log shows the ask that never landed.
+  it("records a runtime event it refuses for naming a run other than the live one", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest(taskSubmitted());
+
+    const refused = await f.orchestrator.ingest({
+      ...operatorDecisionEvent(),
+      runId: "run-foreign",
+    });
+    expect(refused).toMatchObject({ ok: false, failureCode: "invalid-intent" });
+    expect(
+      captured.records.find((candidate) => candidate.op === "coding-runtime.event.dropped"),
+    ).toMatchObject({
+      level: "warn",
+      extra: {
+        eventKind: "operator-decision",
+        eventRunId: "run-foreign",
+        liveRunId: "run-1",
+        reason: "run-mismatch",
+      },
+    });
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("running");
+  });
+
   // A settle that does not match the decision the run is actually waiting on must not release it:
   // the wait belongs to one tool call, and releasing it on a foreign settle would resume a run whose
   // blocker is still in place. Recorded rather than silently dropped, so the log shows the mismatch.

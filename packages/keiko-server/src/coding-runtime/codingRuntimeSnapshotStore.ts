@@ -394,7 +394,11 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
       db.exec("BEGIN");
       try {
         const statement = db.prepare(
-          "UPDATE coding_runtime_snapshots SET state='recovery-required', failure_code='recovery-required', revision=?, updated_at=? WHERE run_id=?",
+          // `pause_reason` is cleared here as on every other state change: a run paused for an
+          // operator decision that the process restart interrupts must not keep naming a wait
+          // nobody is holding — and `assertSnapshot` would otherwise refuse the row on the very
+          // next read, which is `startupReconcileNow`'s own `listRecentActive` (owner review).
+          "UPDATE coding_runtime_snapshots SET state='recovery-required', failure_code='recovery-required', pause_reason=NULL, revision=?, updated_at=? WHERE run_id=?",
         );
         for (const row of active) statement.run(row.revision + 1, updatedAt, row.run_id);
         db.exec("COMMIT");

@@ -940,9 +940,13 @@ function buildVerificationRunner(
       if (kind === undefined) {
         return verificationPortRefusal(input, "verification-verifier-unsupported");
       }
+      // Taken at entry, right after the catalog armed its settlement timer: the registry's and the
+      // catalog's ceilings both run from admission, so the wait below must be measured from here
+      // and not from the moment the first attempt failed (owner review, PR #3452).
+      const enteredAtMs = Date.now();
       let attempt = await runVerificationAttempt(input, request, kind, guard, signal);
       if (attempt.outcome === "threw" && attempt.error instanceof WorkspaceTrustRequiredError) {
-        if (await settleWorkspaceScriptTrust(input, signal)) {
+        if (await settleWorkspaceScriptTrust(input, signal, enteredAtMs)) {
           attempt = await runVerificationAttempt(input, request, kind, guard, signal);
         }
       }
@@ -1053,9 +1057,10 @@ const SCRIPT_TRUST_WAIT_OUTCOMES: Readonly<
 export function waitForWorkspaceScriptTrust(
   probe: () => { readonly trusted: boolean } | undefined,
   signal?: AbortSignal,
+  ceilingMs: number = SCRIPT_TRUST_WAIT_CEILING_MS,
 ): Promise<ScriptTrustWaitOutcome> {
   return boundedWait<ScriptTrustWaitOutcome>({
-    ceilingMs: SCRIPT_TRUST_WAIT_CEILING_MS,
+    ceilingMs,
     intervalMs: SCRIPT_TRUST_POLL_MS,
     expired: "expired",
     cancelled: "cancelled",
@@ -1078,23 +1083,30 @@ export function waitForWorkspaceScriptTrust(
 async function settleWorkspaceScriptTrust(
   input: ProductionManagedWorktreeToolInput,
   signal: AbortSignal | undefined,
+  enteredAtMs: number,
 ): Promise<boolean> {
   const { requestOperatorDecision } = input;
   const scriptTrustFor = input.verificationRunner.scriptTrustFor;
   if (requestOperatorDecision === undefined || scriptTrustFor === undefined) return false;
+  // What is LEFT of the grace window once the first attempt has spent its share: the invocation's
+  // own ceilings run from admission, so a wait that always took the full window after a slow
+  // first attempt would be settled by them first as an opaque cancellation.
+  const ceilingMs = Math.max(0, SCRIPT_TRUST_WAIT_CEILING_MS - (Date.now() - enteredAtMs));
   requestOperatorDecision("workspace-script-trust");
   const outcome = await waitForWorkspaceScriptTrust(
     () => scriptTrustFor(input.workspaceRoot),
     signal,
+    ceilingMs,
   );
   requestOperatorDecision("workspace-script-trust", SCRIPT_TRUST_WAIT_OUTCOMES[outcome]);
-  recordScriptTrustWait(input, outcome);
+  recordScriptTrustWait(input, outcome, ceilingMs);
   return outcome === "granted";
 }
 
 function recordScriptTrustWait(
   input: ProductionManagedWorktreeToolInput,
   outcome: ScriptTrustWaitOutcome,
+  waitCeilingMs: number,
 ): void {
   (input.activityLog ?? processServerLogSink()).write({
     level: outcome === "granted" ? "info" : "warn",
@@ -1105,7 +1117,7 @@ function recordScriptTrustWait(
       decision: "workspace-script-trust",
       state: "settled",
       reason: outcome,
-      waitCeilingMs: SCRIPT_TRUST_WAIT_CEILING_MS,
+      waitCeilingMs,
       pollIntervalMs: SCRIPT_TRUST_POLL_MS,
     },
   });

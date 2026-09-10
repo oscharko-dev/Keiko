@@ -445,6 +445,31 @@ function recordRuntimeOperatorDecision(
   });
 }
 
+/**
+ * A runtime event that names a run other than the live one is refused here, and used to be refused
+ * silently: the producer saw `invalid-intent` and the log saw nothing, so a tool announcing a
+ * decision under a stale or mismatched run id left no trace of why the run never reacted. The line
+ * carries the event's kind and both ids — identifiers, not content.
+ */
+function recordRuntimeEventDropped(
+  activityLog: ServerLogSink | undefined,
+  event: CodingWorkbenchRuntimeEvent,
+  current: CodingRuntimeSnapshot | undefined,
+): void {
+  activityLog?.write({
+    level: "warn",
+    category: "process",
+    op: "coding-runtime.event.dropped",
+    correlationId: runtimeDiagnosticCorrelationId(event.runId),
+    extra: {
+      eventKind: event.kind,
+      eventRunId: event.runId,
+      reason: current === undefined ? "no-live-run" : "run-mismatch",
+      ...(current === undefined ? {} : { liveRunId: current.runId }),
+    },
+  });
+}
+
 function recordRuntimeVerificationSummary(
   activityLog: ServerLogSink | undefined,
   event: CodingWorkbenchRuntimeEvent,
@@ -1182,7 +1207,10 @@ export class CodingRuntimeOrchestrator {
     event: CodingWorkbenchRuntimeEvent,
   ): Promise<CodingRuntimeOrchestratorResult> {
     const current = this.current();
-    if (event.runId !== current?.runId) return this.fail("invalid-intent");
+    if (event.runId !== current?.runId) {
+      recordRuntimeEventDropped(this.deps.activityLog, event, current);
+      return this.fail("invalid-intent");
+    }
     if (event.kind === "failure-redacted") {
       recordRuntimeLifecycleFailure(this.deps.diagnostics, current.runId, "failure-redacted");
       return this.stopAfterIssueFailure(current, "runtime-failed");

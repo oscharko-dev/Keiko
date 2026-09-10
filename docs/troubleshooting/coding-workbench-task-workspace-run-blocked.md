@@ -534,9 +534,14 @@ delivering. Ad-hoc runs are exempt, because one legitimately ends with no commit
    verification refused for want of package-script trust (`op: "editor.verification.execute"` with
    `state: "refused"` and `reason: "WORKSPACE_TRUST_REQUIRED"`, carrying a `trustRefusal`) and a
    commit proposal refused (`status: "verification-failed"`).
-3. Check whether a decision was waiting on the operator: `op: "coding-runtime.run.operator-decision"`
-   with `state: "waiting"` names it, and its `settled` line reports how the wait ended. A `reason` of
-   `expired` means nobody decided inside the grace window.
+3. Check whether a decision was waiting on the operator. Two lines describe one wait from its two
+   ends: the run's own `op: "coding-runtime.run.operator-decision"` (`state: "waiting"` when the
+   run paused for it, `state: "settled"` with `outcome` from the auxiliary vocabulary —
+   `accepted`, `stopped`, `limit-reached`, `unavailable` — when the run resumed), and the
+   verification tool's `op: "coding-runtime.operator-decision"` (`state: "settled"` with `reason`
+   `granted`, `cancelled`, `expired` or `unavailable`, plus the wait ceiling it used). A tool line
+   with `reason: "expired"` and no run line at all means the run never paused — the ask did not
+   reach it — and that is the defect to chase first.
 4. If neither appears, the run was blocked by something else and this entry is the wrong one — the
    `delivery-unevidenced` line only reports that nothing was delivered, never why.
 
@@ -582,8 +587,12 @@ mode-graded permission.
    `state: "refused"`, `reason: "WORKSPACE_TRUST_REQUIRED"` and a `trustRefusal` naming the case
    (`worktree-manifest-drift` for a rewritten manifest, `repository-not-trusted` when the repository
    was never allowed at all).
-2. Read the paired `coding-runtime.run.operator-decision` lines. The `settled` line's `reason` is
-   `granted` when the operator decided in time, and `expired` when the grace window closed first.
+2. Read the wait from both ends. The tool's `coding-runtime.operator-decision` line settles with
+   `reason: "granted"` when the operator decided in time and `reason: "expired"` when the grace
+   window closed first; the run's `coding-runtime.run.operator-decision` lines show `state:
+"waiting"` while the run was paused for it and `state: "settled"` with `outcome: "accepted"` or
+   `"limit-reached"` when it resumed. If the tool line exists and the run lines do not, the run was
+   never told — see the delivery entry above.
 3. A run that shows `expired` here will usually also show `delivery-not-evidenced` at the end. That
    is the same story told twice, not two faults.
 
