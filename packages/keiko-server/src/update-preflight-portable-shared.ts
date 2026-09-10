@@ -16,6 +16,7 @@ export interface PortableRelease {
 }
 
 const REQUIRED_TARGETS: readonly UpdatePortableTarget[] = [
+  "linux-x64",
   "windows-x64",
   "macos-arm64",
   "macos-x64",

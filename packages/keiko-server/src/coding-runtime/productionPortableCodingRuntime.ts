@@ -30,6 +30,7 @@ import {
 } from "./macosPortableCodeIdentity.js";
 import { safeRealDirectory, safeRealFile } from "./nativeRuntimeProcessPaths.js";
 import { declaredPortableRuntimeLane, type PortableRuntimeLane } from "./portableRuntimeLane.js";
+import { verifyLinuxQualificationBundle } from "./linuxPortableSigstore.js";
 import {
   windowsPublisherIdentityMatches,
   windowsSignerIdentity,
@@ -38,6 +39,7 @@ import {
 
 const ACTIVATION_PATH = ".portable/runtime-activation.json";
 const QUALIFICATION_RECEIPT_PATH = ".portable/runtime-qualification.json";
+const QUALIFICATION_SIGSTORE_BUNDLE_PATH = ".portable/runtime-qualification.sigstore.json";
 const DIGEST = /^[a-f0-9]{64}$/u;
 const MAX_ATTESTATION_BYTES = 65_536;
 const MACOS_SYSTEM_EXTENSION_IDENTIFIER = "com.oscharko.keiko.runtime-monitor.systemextension";
@@ -423,7 +425,23 @@ function readPlatformAttestation(resourceRoot: string, target: UpdatePortableTar
 }
 
 export function readLinuxAttestation(resourceRoot: string): unknown {
-  return readRecord(safeRealFile(join(resourceRoot, ...QUALIFICATION_RECEIPT_PATH.split("/"))));
+  const receiptPath = safeRealFile(join(resourceRoot, ...QUALIFICATION_RECEIPT_PATH.split("/")));
+  const bundlePath = safeRealFile(
+    join(resourceRoot, ...QUALIFICATION_SIGSTORE_BUNDLE_PATH.split("/")),
+  );
+  const receipt = readBoundedFile(receiptPath);
+  const bundle = JSON.parse(readBoundedFile(bundlePath).toString("utf8")) as unknown;
+  verifyLinuxQualificationBundle(receipt, bundle);
+  const parsed: unknown = JSON.parse(receipt.toString("utf8"));
+  return record(parsed);
+}
+
+function readBoundedFile(path: string): Buffer {
+  const size = statSync(path).size;
+  if (size <= 0 || size > MAX_ATTESTATION_BYTES) {
+    throw new Error("runtime-attestation-size-invalid");
+  }
+  return readFileSync(path);
 }
 
 export function readWindowsAttestation(
@@ -703,6 +721,9 @@ function helperRelativePath(
   target: UpdatePortableTarget,
   name: "keiko-runtime-supervisor" | "keiko-secure-workspace-read",
 ): string {
+  if (target === "linux-x64" && name === "keiko-runtime-supervisor") {
+    return "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
+  }
   return `runtime/native/${name}${target === "windows-x64" ? ".exe" : ""}`;
 }
 

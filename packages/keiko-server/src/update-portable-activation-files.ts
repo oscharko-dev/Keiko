@@ -111,13 +111,13 @@ export function activationIdFor(input: PortableActivationFileInput): string {
 }
 
 function layoutFor(target: UpdatePortableTarget, root: string): PortableActivationLayout {
-  if (target === "windows-x64") {
+  if (target === "windows-x64" || target === "linux-x64") {
     return {
       installRoot: root,
       appRoot: join(root, "app"),
       packageJsonPath: join(root, "app", "package.json"),
       setupManifestPath: join(root, ".portable", "setup-manifest.json"),
-      launcherPath: join(root, "Keiko.exe"),
+      launcherPath: join(root, target === "windows-x64" ? "Keiko.exe" : "Keiko"),
     };
   }
   const resources = join(root, "Contents", "Resources");
@@ -256,7 +256,7 @@ function activationPathsFor(
   const parent = realpathSync(dirname(managedRoot));
   const stageRoot = join(parent, PORTABLE_STAGE_DIR_PREFIX, stageId);
   const candidateRoot =
-    target === "windows-x64"
+    target === "windows-x64" || target === "linux-x64"
       ? join(stageRoot, PORTABLE_PAYLOAD_ROOT)
       : join(stageRoot, PORTABLE_PAYLOAD_ROOT, "Keiko.app");
   assertNoSymlinkAncestor(stageRoot);
@@ -345,6 +345,7 @@ function defaultManagedRoot(target: UpdatePortableTarget, env: EnvSource, home: 
   if (target === "windows-x64") {
     return join(env.LOCALAPPDATA ?? join(home, "AppData", "Local"), "Programs", "Keiko");
   }
+  if (target === "linux-x64") return join(home, ".local", "opt", "Keiko");
   return "/Applications/Keiko.app";
 }
 
@@ -455,7 +456,12 @@ export function cleanupPortableRegistrationSnapshot(input: {
 }
 
 function isRecoveryTarget(value: unknown): value is UpdatePortableTarget {
-  return value === "windows-x64" || value === "macos-arm64" || value === "macos-x64";
+  return (
+    value === "linux-x64" ||
+    value === "windows-x64" ||
+    value === "macos-arm64" ||
+    value === "macos-x64"
+  );
 }
 
 function isRecoveryPhase(value: unknown): value is PortableActivationRecovery["phase"] {

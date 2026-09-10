@@ -57,7 +57,7 @@ export function managedRootFromPackageRoot(
   packageRoot: string | undefined,
 ): string | undefined {
   if (packageRoot === undefined || basename(packageRoot) !== "app") return undefined;
-  if (target === "windows-x64") return dirname(packageRoot);
+  if (target === "windows-x64" || target === "linux-x64") return dirname(packageRoot);
   const resources = dirname(packageRoot);
   const contents = dirname(resources);
   const bundle = dirname(contents);
