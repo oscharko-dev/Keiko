@@ -20,6 +20,9 @@ import {
   canonicalise,
   sha256Hex,
   sha256Base64,
+  createPortableReleaseTrust,
+  portableReleaseTrustKeyId,
+  verifyPortableReleaseTrust,
   ERROR_CODES,
   GatewayError,
   AUDIT_CODES,
@@ -85,6 +88,12 @@ describe("keiko-security package surface", () => {
     expect(typeof canonicalise).toBe("function");
     expect(typeof sha256Hex).toBe("function");
     expect(typeof sha256Base64).toBe("function");
+  });
+
+  it("exposes portable release trust primitives", () => {
+    expect(typeof createPortableReleaseTrust).toBe("function");
+    expect(typeof portableReleaseTrustKeyId).toBe("function");
+    expect(typeof verifyPortableReleaseTrust).toBe("function");
   });
 
   it("ERROR_CODES.AUTHENTICATION is the canonical gateway code string", () => {

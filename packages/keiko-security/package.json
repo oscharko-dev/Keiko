@@ -75,6 +75,10 @@
       "types": "./dist/portable-tree-attestation.d.ts",
       "import": "./dist/portable-tree-attestation.js"
     },
+    "./portable-release-trust": {
+      "types": "./dist/portable-release-trust.d.ts",
+      "import": "./dist/portable-release-trust.js"
+    },
     "./macos-keychain": {
       "types": "./dist/macos-keychain.d.ts",
       "import": "./dist/macos-keychain.js"
