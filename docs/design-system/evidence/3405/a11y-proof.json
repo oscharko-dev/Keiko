@@ -6,13 +6,13 @@
   "cssSha256": "a1866c44bf9be1a967cbf43e40be3c410668322157acdc0d4e2bc7db2645e7df",
   "sourceSha256": {
     "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.tsx": "3a9c9a489d7f87e2afc920fa1fa4dd412af7bbecd44900b52a8b2f4acb5acdc8",
-    "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx": "cc1e70deab4b55500fc3e219d7eba128e1ef0915c9a29dfd3fa475f995fa0199",
+    "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx": "1bda305878751d481f740f4a5e99f9cbec4b7b33b1774e3967a833f919f548bd",
     "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css": "9ae951f2aa6c98beaa04b587364291776998ba000d0e33064bffc09962d51998",
     "packages/keiko-ui/src/app/components/desktop/update/update-copy.ts": "5e34eb591f63aca2ce64fd43daba10de0e172d12014f055092b4a1a00830c2da",
     "packages/keiko-ui/src/app/globals.css": "a1866c44bf9be1a967cbf43e40be3c410668322157acdc0d4e2bc7db2645e7df",
-    "packages/keiko-ui/src/lib/api.ts": "74e2599cdb0159f82c80eb33e93aacde4991cf2538051c930b76228712b36d39",
-    "packages/keiko-ui/src/lib/i18n-messages.de.ts": "0d2f01ec43ee5fc932d2467edfaa55aaf25dcd15ad73025c89e0ae7d2d7a852d",
-    "packages/keiko-ui/src/lib/i18n-messages.en.ts": "fb3bca5f0d2e02fcd2f1cf3727b90730cff5463c821b30e4201a8a2a82e6ae69"
+    "packages/keiko-ui/src/lib/api.ts": "fe96d83e6fcf2e66265879422ea5f12d662bba402a722c35f03d3b890f3b3fe6",
+    "packages/keiko-ui/src/lib/i18n-messages.de.ts": "699f0191d2d1dcfffc9aa30a2ad67f8dc0a6f805e51a3f7c72034c14d2c6d6b2",
+    "packages/keiko-ui/src/lib/i18n-messages.en.ts": "d769fdae4b6e019ad23121d467d579f6f1ca27952a7970f5efc02b2686114d35"
   },
   "harnessProvenanceSha256": {
     "tests/e2e/config/playwright.issue-1696-update-ui.config.ts": "8831ac0020b34942be6867bdbc5c0c6480455798d9550ea95f639005b1fb7adf",

@@ -1,7 +1,7 @@
 # Updater reliability evidence — #3405 / #3403
 
-The current repair evidence was regenerated on 2026-09-08. The Chromium browser suite passed
-**8/8 in 58.6 seconds** and refreshed the tracked updater artifacts. It proves the startup notice
+The current repair evidence was regenerated on 2026-09-10. Current-branch verification passed all
+eight Chromium checks and refreshed the tracked updater artifacts. It proves the startup notice
 yields only while a visible, foreground **ready** Update window owns the same critical context and
 actions; the notice returns when that window is backgrounded or minimized, and remains available
 while the foreground updater is loading or contains only a load error.
@@ -16,6 +16,7 @@ Use the supported Node 24 runtime and the checkout's own dependencies:
 
 ```bash
 KEIKO_WRITE_TRACKED_EVIDENCE=1 npm run test:e2e:update-ui-1696
+npm run check:update-ui-evidence
 ```
 
 The retained command name now captures this directory, not historical #1696. Run only one owner

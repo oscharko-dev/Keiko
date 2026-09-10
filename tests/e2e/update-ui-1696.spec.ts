@@ -943,6 +943,7 @@ async function assertManualCheckActionIsUnobscuredAt320CssPixels(
   await settings.focus();
   await expect(updateWindow).toHaveAttribute("data-top", "false");
   await expect(notice).toBeVisible();
+  await page.keyboard.press("Tab");
   await updateWindow.focus();
   await expect(updateWindow).toHaveAttribute("data-top", "true");
   await expect(notice).not.toBeVisible();

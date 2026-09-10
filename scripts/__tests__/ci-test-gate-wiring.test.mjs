@@ -121,6 +121,7 @@ const REQUIRED_CI_COMMANDS = [
   "npm run check:error-observability",
   // Editor bundle release evidence (Step 06, RB-3).
   "npm run check:editor-release-evidence",
+  "npm run check:update-ui-evidence",
   // Version-drift governance (Step 06, RB-15).
   "npm run check:version-consistency",
   // Dependency-placement hygiene (Step 11, GEN-SYNTH-COVERAGE-005 / GEN-PKG-DEPENDENCY-001/003/004):

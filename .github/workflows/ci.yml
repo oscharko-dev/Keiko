@@ -422,6 +422,7 @@ jobs:
           npm run build:ui
           npm run check:editor-bundle-size -- --require-static-export
           npm run check:editor-release-evidence
+          npm run check:update-ui-evidence
       - name: Package surface and installable smoke
         timeout-minutes: 45
         run: |
@@ -1370,7 +1371,9 @@ jobs:
       - name: Governed updater real-BFF outage E2E (#3405)
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         timeout-minutes: 10
-        run: npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage
+        run: |
+          npm run check:update-ui-evidence
+          npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage
       # Same @smoke journeys on Gecko. Kept a SEPARATE step so a Firefox-only failure is
       # attributable at a glance instead of hiding inside the Chromium run's report.
       - name: Release smoke E2E (Firefox)
