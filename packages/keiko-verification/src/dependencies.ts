@@ -13,6 +13,8 @@
 import { join } from "node:path";
 import { redact } from "@oscharko-dev/keiko-security";
 import {
+  CommandCancelledError,
+  CommandTimeoutError,
   DEFAULT_SANDBOX_POLICY,
   runCommand,
   type CommandResult,
@@ -223,6 +225,13 @@ function installState(result: CommandResult, aborted: boolean): VerificationDepe
   return result.exitCode === 0 ? "installed" : "failed";
 }
 
+// The command boundary REJECTS on its own wall-time ceiling and on an abort; it does not resolve
+// with a timed-out result. Both are named for what they are, never collapsed into a generic failure.
+function rejectedInstallState(error: unknown): VerificationDependencyState {
+  if (error instanceof CommandTimeoutError) return "timed-out";
+  return error instanceof CommandCancelledError ? "cancelled" : "failed";
+}
+
 function installOutcome(
   result: CommandResult,
   lockfileBefore: VerificationLockfileState,
@@ -277,7 +286,7 @@ export async function runDependencyBootstrap(
       error instanceof Error ? redact(error.message) : "dependency installation failed";
     return {
       summary: {
-        state: "failed",
+        state: rejectedInstallState(error),
         lockfile: plan.lockfile,
         exitCode: null,
         durationMs: deps.now() - startedAt,
