@@ -304,6 +304,14 @@ process.exit(41);
   & $coordinatorTestOut
   if ($LASTEXITCODE -ne 0) { throw "Windows update coordinator mechanics verification failed" }
 
+  $updateEngineTest = Join-Path $root "native/portable-launcher/keiko-portable-update-engine.test.c"
+  $updateEngineTestOut = Join-Path $scratch "keiko-update-engine-test.exe"
+  $updateEngineTestObject = Join-Path $scratch "keiko-update-engine-test.obj"
+  & cl.exe @nativeFlags "/Fo:$updateEngineTestObject" "/Fe:$updateEngineTestOut" $updateEngineTest
+  if ($LASTEXITCODE -ne 0) { throw "MSVC update engine behavior build failed" }
+  & $updateEngineTestOut
+  if ($LASTEXITCODE -ne 0) { throw "Windows update engine behavior verification failed" }
+
   $handoffProtocolTest = Join-Path $root "native/portable-launcher/keiko-portable-update-protocol.test.c"
   $handoffProtocolTestOut = Join-Path $scratch "keiko-handoff-protocol-test.exe"
   $handoffProtocolTestObject = Join-Path $scratch "keiko-handoff-protocol-test.obj"

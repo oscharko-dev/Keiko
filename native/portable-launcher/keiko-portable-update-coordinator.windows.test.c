@@ -27,6 +27,7 @@ static int test_atomic_flush_allowed = 1;
 static unsigned int test_atomic_flush_calls = 0;
 static const wchar_t *test_atomic_writer_path = NULL;
 static HANDLE test_atomic_writer = INVALID_HANDLE_VALUE;
+static const char *test_coordinator_cutover_failure = NULL;
 
 static int test_atomic_replace_checkpoint(const char *name) {
   if (strcmp(name, "post-rename-before-flush") == 0) {
@@ -50,6 +51,10 @@ static int test_atomic_replace_checkpoint(const char *name) {
 
 #define KEIKO_WINDOWS_ATOMIC_REPLACE_CHECKPOINT(name) \
   test_atomic_replace_checkpoint(name)
+
+#define KEIKO_COORDINATOR_CUTOVER_CHECKPOINT(name) \
+  (test_coordinator_cutover_failure == NULL ||      \
+   strcmp(test_coordinator_cutover_failure, name) != 0)
 
 #include "keiko-portable-update-coordinator.h"
 #include "keiko-portable-recovery-control.h"
@@ -671,6 +676,301 @@ static void test_productive_file_cutovers_flush_and_recover(void) {
   free(paths);
 }
 
+typedef struct {
+  wchar_t root[TEST_PATH_CAP];
+  wchar_t managed[TEST_PATH_CAP];
+  wchar_t portable[TEST_PATH_CAP];
+  wchar_t generations[TEST_PATH_CAP];
+  wchar_t current_generation[TEST_PATH_CAP];
+  wchar_t stage[TEST_PATH_CAP];
+  wchar_t candidate[TEST_PATH_CAP];
+  wchar_t candidate_generations[TEST_PATH_CAP];
+  wchar_t candidate_generation[TEST_PATH_CAP];
+  wchar_t candidate_launcher[TEST_PATH_CAP];
+  wchar_t candidate_supervisor[TEST_PATH_CAP];
+  wchar_t launcher[TEST_PATH_CAP];
+  wchar_t setup[TEST_PATH_CAP];
+  wchar_t state[TEST_PATH_CAP];
+  wchar_t registration[TEST_PATH_CAP];
+  wchar_t capsule[TEST_PATH_CAP];
+  wchar_t backup[TEST_PATH_CAP];
+  char current_generation_sha256[65];
+  char candidate_generation_sha256[65];
+  char current_launcher_sha256[65];
+  char candidate_launcher_sha256[65];
+  char current_setup_sha256[65];
+  char candidate_setup_sha256[65];
+  char previous_registration_sha256[65];
+  char prepared_registration_sha256[65];
+  char current_supervisor_sha256[65];
+  char candidate_supervisor_sha256[65];
+  keiko_coordinator_context context;
+} windows_cutover_fixture;
+
+static void test_create_generation(
+    const wchar_t *generations,
+    const wchar_t *seed_name,
+    const char *content,
+    wchar_t output[TEST_PATH_CAP],
+    wchar_t supervisor[TEST_PATH_CAP],
+    char digest[65]
+) {
+  wchar_t seed[TEST_PATH_CAP];
+  wchar_t runtime[TEST_PATH_CAP];
+  wchar_t native[TEST_PATH_CAP];
+  assert(test_join(seed, generations, seed_name));
+  assert(CreateDirectoryW(seed, NULL));
+  assert(test_join(runtime, seed, L"\\runtime"));
+  assert(CreateDirectoryW(runtime, NULL));
+  assert(test_join(native, runtime, L"\\native"));
+  assert(CreateDirectoryW(native, NULL));
+  assert(test_join(supervisor, native, L"\\keiko-runtime-supervisor.exe"));
+  test_write(supervisor, content);
+  test_tree_hash(seed, digest);
+  assert(_snwprintf_s(output, TEST_PATH_CAP, _TRUNCATE, L"%ls\\%S", generations, digest) > 0);
+  assert(MoveFileExW(seed, output, MOVEFILE_WRITE_THROUGH));
+  assert(test_join(supervisor, output, L"\\runtime\\native\\keiko-runtime-supervisor.exe"));
+}
+
+static void test_plan_field(
+    keiko_coordinator_context *context,
+    int field,
+    const char *value
+) {
+  context->plan.field[field] = _strdup(value);
+  assert(context->plan.field[field] != NULL);
+}
+
+static void test_plan_path(
+    keiko_coordinator_context *context,
+    int field,
+    const wchar_t *value
+) {
+  context->plan.field[field] = keiko_coordinator_windows_utf8_wide(value);
+  assert(context->plan.field[field] != NULL);
+}
+
+static void windows_cutover_fixture_init(windows_cutover_fixture *fixture) {
+  wchar_t candidate_portable[TEST_PATH_CAP];
+  wchar_t current_supervisor[TEST_PATH_CAP];
+  wchar_t snapshot[TEST_PATH_CAP];
+  memset(fixture, 0, sizeof(*fixture));
+  test_create_root(fixture->root);
+  assert(test_join(fixture->managed, fixture->root, L"\\managed"));
+  assert(CreateDirectoryW(fixture->managed, NULL));
+  assert(test_join(fixture->portable, fixture->managed, L"\\.portable"));
+  assert(CreateDirectoryW(fixture->portable, NULL));
+  assert(test_join(fixture->generations, fixture->portable, L"\\generations"));
+  assert(CreateDirectoryW(fixture->generations, NULL));
+  test_create_generation(
+      fixture->generations,
+      L"\\current-seed",
+      "current supervisor\n",
+      fixture->current_generation,
+      current_supervisor,
+      fixture->current_generation_sha256
+  );
+  test_file_hash(current_supervisor, fixture->current_supervisor_sha256);
+
+  assert(test_join(fixture->stage, fixture->root, L"\\stage"));
+  assert(CreateDirectoryW(fixture->stage, NULL));
+  assert(test_join(fixture->candidate, fixture->stage, L"\\Keiko"));
+  assert(CreateDirectoryW(fixture->candidate, NULL));
+  assert(test_join(candidate_portable, fixture->candidate, L"\\.portable"));
+  assert(CreateDirectoryW(candidate_portable, NULL));
+  assert(test_join(fixture->candidate_generations, candidate_portable, L"\\generations"));
+  assert(CreateDirectoryW(fixture->candidate_generations, NULL));
+  test_create_generation(
+      fixture->candidate_generations,
+      L"\\candidate-seed",
+      "candidate supervisor\n",
+      fixture->candidate_generation,
+      fixture->candidate_supervisor,
+      fixture->candidate_generation_sha256
+  );
+  test_file_hash(fixture->candidate_supervisor, fixture->candidate_supervisor_sha256);
+
+  assert(test_join(fixture->launcher, fixture->managed, L"\\Keiko.exe"));
+  test_write(fixture->launcher, "current launcher\n");
+  test_file_hash(fixture->launcher, fixture->current_launcher_sha256);
+  assert(test_join(fixture->candidate_launcher, fixture->candidate, L"\\Keiko.exe"));
+  test_write(fixture->candidate_launcher, "candidate launcher\n");
+  test_file_hash(fixture->candidate_launcher, fixture->candidate_launcher_sha256);
+  assert(test_join(fixture->setup, fixture->portable, L"\\setup-manifest.json"));
+  test_write(fixture->setup, "current setup\n");
+  test_file_hash(fixture->setup, fixture->current_setup_sha256);
+  assert(test_join(fixture->state, fixture->root, L"\\state"));
+  assert(CreateDirectoryW(fixture->state, NULL));
+  assert(test_join(fixture->registration, fixture->state, L"\\portable-install-state.json"));
+  test_write(fixture->registration, "previous registration\n");
+  test_file_hash(fixture->registration, fixture->previous_registration_sha256);
+  assert(test_join(fixture->capsule, fixture->root, L"\\capsule"));
+  assert(CreateDirectoryW(fixture->capsule, NULL));
+  assert(test_join(fixture->backup, fixture->root, L"\\backup"));
+
+  assert(test_join(snapshot, fixture->capsule, L"\\coordinator.exe"));
+  test_write(snapshot, "current launcher\n");
+  assert(test_join(snapshot, fixture->capsule, L"\\launcher.next"));
+  test_write(snapshot, "candidate launcher\n");
+  assert(test_join(snapshot, fixture->capsule, L"\\setup-manifest.previous"));
+  test_write(snapshot, "current setup\n");
+  assert(test_join(snapshot, fixture->capsule, L"\\setup-manifest.next"));
+  test_write(snapshot, "candidate setup\n");
+  test_file_hash(snapshot, fixture->candidate_setup_sha256);
+  assert(test_join(snapshot, fixture->capsule, L"\\registration.previous"));
+  test_write(snapshot, "previous registration\n");
+  assert(test_join(snapshot, fixture->capsule, L"\\registration.next"));
+  test_write(snapshot, "prepared registration\n");
+  test_file_hash(snapshot, fixture->prepared_registration_sha256);
+
+  fixture->context.supervisor_control = -1;
+  fixture->context.supervisor_response = -1;
+  fixture->context.start_gate = -1;
+  fixture->context.managed_root.directory = INVALID_HANDLE_VALUE;
+  fixture->context.state_dir = _wcsdup(fixture->state);
+  fixture->context.capsule = _wcsdup(fixture->capsule);
+  assert(fixture->context.state_dir != NULL && fixture->context.capsule != NULL);
+  memset(fixture->context.plan_sha256, 'f', 64u);
+  fixture->context.plan_sha256[64] = '\0';
+  test_plan_field(
+      &fixture->context,
+      KEIKO_KHP_ACTIVATION_ID,
+      "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  );
+  test_plan_path(&fixture->context, KEIKO_KHP_MANAGED_ROOT, fixture->managed);
+  test_plan_path(&fixture->context, KEIKO_KHP_STAGE_ROOT, fixture->stage);
+  test_plan_path(&fixture->context, KEIKO_KHP_CANDIDATE_ROOT, fixture->candidate);
+  test_plan_path(&fixture->context, KEIKO_KHP_BACKUP_ROOT, fixture->backup);
+  test_plan_path(
+      &fixture->context,
+      KEIKO_KHP_CANDIDATE_LAUNCHER,
+      fixture->candidate_launcher
+  );
+  test_plan_path(
+      &fixture->context,
+      KEIKO_KHP_CANDIDATE_SUPERVISOR,
+      fixture->candidate_supervisor
+  );
+  test_plan_field(&fixture->context, KEIKO_KHP_CURRENT_TREE_SHA256,
+                  fixture->current_generation_sha256);
+  test_plan_field(&fixture->context, KEIKO_KHP_CANDIDATE_TREE_SHA256,
+                  fixture->candidate_generation_sha256);
+  test_plan_field(&fixture->context, KEIKO_KHP_CURRENT_GENERATION_TREE_SHA256,
+                  fixture->current_generation_sha256);
+  test_plan_field(&fixture->context, KEIKO_KHP_CANDIDATE_GENERATION_TREE_SHA256,
+                  fixture->candidate_generation_sha256);
+  test_plan_field(&fixture->context, KEIKO_KHP_CURRENT_LAUNCHER_SHA256,
+                  fixture->current_launcher_sha256);
+  test_plan_field(&fixture->context, KEIKO_KHP_CANDIDATE_LAUNCHER_SHA256,
+                  fixture->candidate_launcher_sha256);
+  test_plan_field(&fixture->context, KEIKO_KHP_CURRENT_SETUP_MANIFEST_SHA256,
+                  fixture->current_setup_sha256);
+  test_plan_field(&fixture->context, KEIKO_KHP_CANDIDATE_SETUP_MANIFEST_SHA256,
+                  fixture->candidate_setup_sha256);
+  test_plan_field(&fixture->context, KEIKO_KHP_PREVIOUS_REGISTRATION_SHA256,
+                  fixture->previous_registration_sha256);
+  test_plan_field(&fixture->context, KEIKO_KHP_PREPARED_REGISTRATION_SHA256,
+                  fixture->prepared_registration_sha256);
+  test_plan_field(&fixture->context, KEIKO_KHP_CURRENT_SUPERVISOR_SHA256,
+                  fixture->current_supervisor_sha256);
+  test_plan_field(&fixture->context, KEIKO_KHP_CANDIDATE_SUPERVISOR_SHA256,
+                  fixture->candidate_supervisor_sha256);
+  assert(keiko_coordinator_windows_roots_same_volume(&fixture->context));
+}
+
+static void windows_cutover_fixture_clear(windows_cutover_fixture *fixture) {
+  test_coordinator_cutover_failure = NULL;
+  keiko_coordinator_clear(&fixture->context);
+  assert(keiko_windows_update_remove_tree(
+      fixture->root,
+      GetTickCount64() + 120000u
+  ));
+}
+
+static void test_windows_cutover_checkpoint(
+    const char *checkpoint,
+    int expected_prefix
+) {
+  windows_cutover_fixture *fixture =
+      (windows_cutover_fixture *)calloc(1u, sizeof(*fixture));
+  int prefix = KEIKO_WINDOWS_PREFIX_INVALID;
+  assert(fixture != NULL);
+  windows_cutover_fixture_init(fixture);
+  test_coordinator_cutover_failure = checkpoint;
+  assert(!keiko_coordinator_promote_windows(
+      &fixture->context,
+      GetTickCount64() + 120000u
+  ));
+  assert(keiko_coordinator_windows_classify(
+      &fixture->context,
+      GetTickCount64() + 120000u,
+      &prefix
+  ));
+  assert(prefix == expected_prefix);
+  test_coordinator_cutover_failure = NULL;
+  assert(keiko_coordinator_restore_platform_windows(
+      &fixture->context,
+      GetTickCount64() + 120000u
+  ));
+  assert(keiko_coordinator_windows_classify(
+      &fixture->context,
+      GetTickCount64() + 120000u,
+      &prefix
+  ));
+  assert(prefix == KEIKO_WINDOWS_PREFIX_PREVIOUS);
+  windows_cutover_fixture_clear(fixture);
+  free(fixture);
+}
+
+static void test_windows_cutover_checkpoints_are_recoverable(void) {
+  windows_cutover_fixture *fixture;
+  int prefix = KEIKO_WINDOWS_PREFIX_INVALID;
+  test_windows_cutover_checkpoint(
+      "windows-promote-after-generation",
+      KEIKO_WINDOWS_PREFIX_GENERATION
+  );
+  test_windows_cutover_checkpoint(
+      "windows-promote-after-launcher",
+      KEIKO_WINDOWS_PREFIX_LAUNCHER
+  );
+  test_windows_cutover_checkpoint(
+      "windows-promote-after-setup",
+      KEIKO_WINDOWS_PREFIX_SETUP
+  );
+
+  fixture = (windows_cutover_fixture *)calloc(1u, sizeof(*fixture));
+  assert(fixture != NULL);
+  windows_cutover_fixture_init(fixture);
+  assert(keiko_coordinator_promote_windows(
+      &fixture->context,
+      GetTickCount64() + 120000u
+  ));
+  test_coordinator_cutover_failure = "windows-register-after-publish";
+  assert(!keiko_coordinator_publish_registration_windows(
+      &fixture->context,
+      GetTickCount64() + 120000u
+  ));
+  assert(keiko_coordinator_windows_classify(
+      &fixture->context,
+      GetTickCount64() + 120000u,
+      &prefix
+  ));
+  assert(prefix == KEIKO_WINDOWS_PREFIX_REGISTRATION);
+  test_coordinator_cutover_failure = NULL;
+  assert(keiko_coordinator_restore_platform_windows(
+      &fixture->context,
+      GetTickCount64() + 120000u
+  ));
+  assert(keiko_coordinator_windows_classify(
+      &fixture->context,
+      GetTickCount64() + 120000u,
+      &prefix
+  ));
+  assert(prefix == KEIKO_WINDOWS_PREFIX_PREVIOUS);
+  windows_cutover_fixture_clear(fixture);
+  free(fixture);
+}
+
 static void test_capsule_and_receipt_junctions_are_refused(void) {
   typedef struct {
     wchar_t root[TEST_PATH_CAP];
@@ -1110,6 +1410,7 @@ int wmain(void) {
   test_plan_paths_bind_exact_generation_names();
   test_generation_publish_and_file_replace();
   test_productive_file_cutovers_flush_and_recover();
+  test_windows_cutover_checkpoints_are_recoverable();
   test_capsule_and_receipt_junctions_are_refused();
   return 0;
 }

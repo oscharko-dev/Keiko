@@ -2570,6 +2570,15 @@ describe("portable runtime package scripts", () => {
     expect(source).toContain('windowsToolFromPath(env.PATH, "rc.exe")');
     expect(source).toContain("windowsLauncherResourceSource()");
   });
+
+  it("dispatches validated native update plans through the finite coordinator engine", () => {
+    const source = readFileSync("native/portable-launcher/keiko-portable-launcher.c", "utf8");
+
+    expect(source).toContain(
+      "int result = keiko_coordinator_execute_windows(coordinator) ? 0 : 74;",
+    );
+    expect(source).toContain("result = keiko_coordinator_execute_posix(&coordinator) ? 0 : 74;");
+  });
 });
 
 describe("verify-portable-runtime-signing", () => {

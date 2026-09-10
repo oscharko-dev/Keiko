@@ -2484,8 +2484,8 @@ static void keiko_coordinator_windows_engine_hold_runtime(void *opaque) {
   keiko_coordinator_windows_hold_runtime((keiko_coordinator_context *)opaque);
 }
 
-/* Compiled and analyzed with the production launcher. KHA1 remains disabled at
- * the launcher dispatch boundary until native acceptance is separately amended. */
+/* Production forward/restore transaction. All authority checks complete before this function
+ * emits KHA1 and releases the parent process to exit. */
 static inline int keiko_coordinator_execute_windows(
     keiko_coordinator_context *context
 ) {

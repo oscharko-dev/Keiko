@@ -1517,10 +1517,9 @@ static void keiko_coordinator_engine_hold_runtime(void *opaque) {
   keiko_coordinator_hold_runtime((keiko_coordinator_context *)opaque);
 }
 
-/* Compiled and analyzer-checked forward/restore transaction. The launcher does not call this
- * until crash-resume authorization is complete; therefore production KHA1 remains fail-closed. */
-static int __attribute__((unused))
-keiko_coordinator_execute_posix(keiko_coordinator_context *context) {
+/* Production forward/restore transaction. All authority checks complete before this function
+ * emits KHA1 and releases the parent process to exit. */
+static int keiko_coordinator_execute_posix(keiko_coordinator_context *context) {
   const keiko_coordinator_engine engine = {
       context,
       keiko_coordinator_engine_deadline,
@@ -1767,8 +1766,8 @@ static void keiko_coordinator_clear(keiko_coordinator_context *context) {
   context->start_gate = -1;
 }
 
-/* Returns 1 only after every pre-exit authority has been revalidated. It does not
- * emit KHA1: acceptance stays disabled until the mechanical executor is complete. */
+/* Returns 1 only after every pre-exit authority has been revalidated. KHA1 is emitted later by
+ * the executor so no mutation can precede the complete authority check. */
 static int keiko_coordinator_prepare_posix(keiko_coordinator_context *context,
                                           const char *activation_id,
                                           const char *executable) {

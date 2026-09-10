@@ -421,12 +421,11 @@ int wmain(int argc, wchar_t **argv) {
       free(executable);
       return 74;
     }
-    /* KHA1 remains fail-closed pending the native acceptance amendment and a
-     * real Windows executor/recovery qualification run. */
+    int result = keiko_coordinator_execute_windows(coordinator) ? 0 : 74;
     keiko_coordinator_clear(coordinator);
     free(coordinator);
     free(executable);
-    return 74;
+    return result;
   }
   if (argc == 3 && wcscmp(argv[1], L"--recover-update") == 0) {
     wchar_t *executable = (wchar_t *)calloc(KEIKO_PATH_CAP, sizeof(wchar_t));
@@ -544,12 +543,12 @@ int main(int argc, char **argv) {
 
   if (argc == 3 && strcmp(argv[1], "--coordinate-update") == 0) {
     keiko_coordinator_context coordinator;
+    int result;
     if (!keiko_khp_is_lower_hex(argv[2], 32u) ||
         !keiko_coordinator_prepare_posix(&coordinator, argv[2], executable)) return 74;
-    /* The parser and all pre-exit authorities are live, but KHA1 stays fail-closed
-     * until the finite executor and rollback receipt state machine are complete. */
+    result = keiko_coordinator_execute_posix(&coordinator) ? 0 : 74;
     keiko_coordinator_clear(&coordinator);
-    return 74;
+    return result;
   }
   if (argc == 3 && strcmp(argv[1], "--recover-update") == 0) {
     if (!keiko_khp_is_lower_hex(argv[2], 32u) ||
