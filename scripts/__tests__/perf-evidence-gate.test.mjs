@@ -216,7 +216,7 @@ describe("gate verdict", () => {
 
     runGate("all", false, false, {
       targets: [{ name: "editor" }],
-      evaluateTarget: (target, options, lines, drift, sink) => {
+      evaluateTarget: (target, _options, lines, _drift, sink) => {
         sink(lines.ok(target.name, "deadbee"));
         return { failures: [], notes: ["editor freshness: subject moved"] };
       },

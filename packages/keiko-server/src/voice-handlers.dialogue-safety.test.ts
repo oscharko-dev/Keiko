@@ -195,8 +195,7 @@ function stubTranscribe(outcome: SpeechToTextOutcome): {
   fn: (request: SpeechToTextRequest) => Promise<SpeechToTextOutcome>;
 } {
   return {
-    fn: (request: SpeechToTextRequest): Promise<SpeechToTextOutcome> => {
-      void request; // consumed but not stored
+    fn: (_request: SpeechToTextRequest): Promise<SpeechToTextOutcome> => {
       return Promise.resolve(outcome);
     },
   };
@@ -207,8 +206,7 @@ function stubSpeak(outcome: TextToSpeechOutcome): {
   fn: (request: TextToSpeechRequest) => Promise<TextToSpeechOutcome>;
 } {
   return {
-    fn: (request: TextToSpeechRequest): Promise<TextToSpeechOutcome> => {
-      void request;
+    fn: (_request: TextToSpeechRequest): Promise<TextToSpeechOutcome> => {
       return Promise.resolve(outcome);
     },
   };

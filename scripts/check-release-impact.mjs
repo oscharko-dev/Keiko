@@ -204,7 +204,7 @@ function validateReview(entry, index, failures) {
  * later edit or deletion must never brick every future publish of an append-only catalog
  * (review finding on #3028).
  */
-function validatePublishApprovalReference(entry, review, index, failures) {
+function validatePublishApprovalReference(_entry, review, index, failures) {
   if (process.env.KEIKO_REQUIRE_RELEASE_APPROVAL_REFERENCE !== "1") return;
   const reference = review.approvalReference;
   if (

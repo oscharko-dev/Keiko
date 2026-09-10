@@ -1300,7 +1300,6 @@ describe("createHandleGitChangeApplyDescription — the real handler Chat reache
     // exactOptionalPropertyTypes: an unresolved PR is represented by OMITTING
     // `pullRequestNumber`, never by assigning it `undefined`.
     const { pullRequestNumber, ...scope } = connectedScope(relationshipId);
-    void pullRequestNumber;
     store.updateChat(chat.id, { gitChangeScopes: [scope] });
 
     const applyHandler = createHandleGitChangeApplyDescription(fixtureOptions());

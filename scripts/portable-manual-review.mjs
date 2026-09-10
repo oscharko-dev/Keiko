@@ -374,7 +374,7 @@ function writeScripts(outDir) {
   }
 }
 
-function writeShellScript(outDir, scriptsDir, target, scenario) {
+function writeShellScript(_outDir, scriptsDir, target, scenario) {
   const path = join(scriptsDir, scriptName(target, scenario, ".sh"));
   const reviewScript = join(repoRoot, "scripts", "portable-manual-review.mjs");
   const body = [
@@ -388,7 +388,7 @@ function writeShellScript(outDir, scriptsDir, target, scenario) {
   chmodSync(path, 0o755);
 }
 
-function writeCmdScript(outDir, scriptsDir, target, scenario) {
+function writeCmdScript(_outDir, scriptsDir, target, scenario) {
   const path = join(scriptsDir, scriptName(target, scenario, ".cmd"));
   const reviewScript = join(repoRoot, "scripts", "portable-manual-review.mjs");
   const body = [

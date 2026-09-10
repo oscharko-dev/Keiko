@@ -369,7 +369,7 @@ describe("gatewayFetch", () => {
     const dir = mkdtempSync(join(tmpdir(), "keiko-embed-ca-"));
     const caBundlePath = join(dir, "ca.pem");
     writeFileSync(caBundlePath, TEST_TLS_CERT, "utf8");
-    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (req, res) => {
+    const origin = createHttpsServer({ key: TEST_TLS_KEY, cert: TEST_TLS_CERT }, (_req, res) => {
       res.writeHead(200, { "content-type": "application/json", connection: "close" });
       res.end(JSON.stringify({ data: [{ embedding: [0.6, 0.8] }], model: "probe-model" }));
     });

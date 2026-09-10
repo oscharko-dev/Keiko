@@ -58,15 +58,13 @@ describe("ModelPort request type (ADR-0173 D5)", () => {
       // parameter type via contextual typing, so this line only compiles when that declared type
       // is (or includes) GatewayCallRequest.
       call: (request, _signal) => {
-        const correlationId: string | undefined = request.logContext?.correlationId;
-        void correlationId;
+        const _correlationId: string | undefined = request.logContext?.correlationId;
         return Promise.resolve(response());
       },
       // Never actually invoked: this generator exists only so the type checker infers
       // `request`'s type from ModelPort.callStream's contextual type, same as `call` above.
       // eslint-disable-next-line @typescript-eslint/require-await
-      callStream: async function* (request, _signal): AsyncGenerator<GatewayStreamChunk> {
-        void request.logContext?.correlationId;
+      callStream: async function* (_request, _signal): AsyncGenerator<GatewayStreamChunk> {
         yield { type: "delta", token: "" };
       },
     };

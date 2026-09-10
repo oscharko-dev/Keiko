@@ -55,7 +55,7 @@ describe("runtime supervisor build", () => {
         argv: ["node", "script", "windows-x64", output],
         environment,
         spawnSyncImpl: success,
-        resolveCompilerImpl: (envPath, tool) => "C:\\Program Files\\MSVC\\bin\\" + tool,
+        resolveCompilerImpl: (_envPath, tool) => "C:\\Program Files\\MSVC\\bin\\" + tool,
       }),
     ).resolves.toBe(0);
     // Absolute path, never a bare name: options.env.PATH is not reliably searched on Windows.
@@ -84,7 +84,7 @@ describe("runtime supervisor build", () => {
         argv: ["node", "script", "windows-x64", output],
         environment,
         spawnSyncImpl: () => ({ status: null }),
-        resolveCompilerImpl: (envPath, tool) => "C:\\Program Files\\MSVC\\bin\\" + tool,
+        resolveCompilerImpl: (_envPath, tool) => "C:\\Program Files\\MSVC\\bin\\" + tool,
       }),
     ).resolves.toBe(1);
   });

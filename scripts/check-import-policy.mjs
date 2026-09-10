@@ -561,7 +561,7 @@ function parseSourceFile(path, text) {
   return ts.createSourceFile(path, text, ts.ScriptTarget.Latest, true);
 }
 
-function violationFor(rule, file, relativePath, sourceFile, specifierEntry) {
+function violationFor(rule, _file, relativePath, sourceFile, specifierEntry) {
   const location = sourceFile.getLineAndCharacterOfPosition(
     specifierEntry.node.getStart(sourceFile),
   );
