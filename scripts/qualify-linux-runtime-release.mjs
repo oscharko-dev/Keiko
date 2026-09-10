@@ -3,6 +3,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 
 import { sha256File } from "./lib/digest.mjs";
 import {
@@ -29,6 +30,12 @@ function required(options, name) {
   const value = options[name];
   if (typeof value !== "string" || value.length === 0) fail(`--${name} is required`);
   return value;
+}
+
+function booleanOption(options, name) {
+  const value = options[name] ?? "false";
+  if (value !== "true" && value !== "false") fail(`--${name} is invalid`);
+  return value === "true";
 }
 
 function parse(argv) {
@@ -191,6 +198,15 @@ export function qualificationReceiptFor(input) {
   };
 }
 
+function persistOrVerifyReceipt(path, receipt, verifyOnly) {
+  if (verifyOnly) {
+    const existing = readJson(path, "qualification receipt");
+    if (!isDeepStrictEqual(existing, receipt)) fail("qualification receipt binding is invalid");
+    return;
+  }
+  writeFileSync(path, `${JSON.stringify(receipt, null, 2)}\n`, { mode: 0o600 });
+}
+
 export function qualifyLinuxRuntimeRelease(options, dependencies = {}) {
   if ((dependencies.platform ?? process.platform) !== "linux") {
     fail("qualification requires Linux");
@@ -205,12 +221,10 @@ export function qualifyLinuxRuntimeRelease(options, dependencies = {}) {
     resolve(required(options, "test-report")),
   );
   const receipt = qualificationReceiptFor({ activationPath, resourceRoot, sourceCommitSha });
-  writeFileSync(
+  persistOrVerifyReceipt(
     join(resourceRoot, ...RECEIPT_PATH.split("/")),
-    `${JSON.stringify(receipt, null, 2)}\n`,
-    {
-      mode: 0o600,
-    },
+    receipt,
+    booleanOption(options, "verify-only"),
   );
   return receipt;
 }

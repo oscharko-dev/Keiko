@@ -112,6 +112,10 @@ describe("Linux runtime qualification", () => {
         readFileSync(join(value.resourceRoot, ".portable", "runtime-qualification.json"), "utf8"),
       ),
     ).toEqual(receipt);
+    qualifyLinuxRuntimeRelease(
+      { ...optionsFor(value), "verify-only": "true" },
+      { exactCleanHead, platform: "linux", runQualificationTests },
+    );
   });
 
   it("fails closed on the wrong host, invalid identity, and changed helper bytes", () => {
@@ -130,6 +134,12 @@ describe("Linux runtime qualification", () => {
         { platform: "linux" },
       ),
     ).toThrow("source commit is invalid");
+    expect(() =>
+      qualifyLinuxRuntimeRelease(
+        { ...options, "verify-only": "sometimes" },
+        { exactCleanHead: vi.fn(), platform: "linux", runQualificationTests: vi.fn() },
+      ),
+    ).toThrow("--verify-only is invalid");
     writeFileSync(
       join(value.resourceRoot, "runtime", "native", "keiko-secure-workspace-read"),
       "changed\n",
@@ -154,3 +164,11 @@ describe("Linux runtime qualification", () => {
     );
   });
 });
+
+function optionsFor(value) {
+  return {
+    "source-commit-sha": COMMIT,
+    "stage-root": value.stageRoot,
+    "test-report": join(value.stageRoot, "tests.json"),
+  };
+}
