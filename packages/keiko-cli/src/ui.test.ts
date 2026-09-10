@@ -458,6 +458,7 @@ describe("runUiCli", () => {
   it("refuses to listen when pre-listen recovery resolves as recovery-required", async () => {
     const { io } = captureIo();
     const createServer = vi.fn(() => fakeServer({}));
+    const sink = createRecordingSink();
 
     await expect(
       runUiCli(
@@ -468,19 +469,33 @@ describe("runUiCli", () => {
           staticRoot,
           hashesFile: join(staticRoot, "csp-hashes.json"),
           cwd: staticRoot,
+          activityLog: sink,
           updateStartupRecovery: {
-            reconcile: () => Promise.resolve({ status: "recovery-required" as const }),
+            reconcile: () =>
+              Promise.resolve({
+                status: "recovery-required" as const,
+                reason: "corrupt" as const,
+                sessionId: "session-1",
+              }),
           },
           createServer,
         },
       ),
     ).rejects.toThrow("Portable update startup recovery is required before listening.");
     expect(createServer).not.toHaveBeenCalled();
+    const event = sink.events.find(({ op }) => op === "process.fatal");
+    expect(event?.errorKind).toBe("PORTABLE_UPDATE_RECOVERY_CORRUPT");
+    expect(extraOf(event)).toMatchObject({
+      kind: "server-error",
+      recoveryReason: "corrupt",
+      sessionId: "session-1",
+    });
   });
 
   it("closes the listener when post-listen recovery resolves as recovery-required", async () => {
     const { io } = captureIo();
     const phases: string[] = [];
+    const sink = createRecordingSink();
     const close = vi.fn((done: () => void) => {
       done();
     });
@@ -494,13 +509,17 @@ describe("runUiCli", () => {
           staticRoot,
           hashesFile: join(staticRoot, "csp-hashes.json"),
           cwd: staticRoot,
+          activityLog: sink,
           updateStartupRecovery: {
             reconcile: ({ phase }) => {
               phases.push(phase);
               return Promise.resolve(
                 phase === "pre-listen"
                   ? { status: "ready" as const }
-                  : { status: "recovery-required" as const },
+                  : {
+                      status: "recovery-required" as const,
+                      reason: "persistence-failed" as const,
+                    },
               );
             },
           },
@@ -524,6 +543,9 @@ describe("runUiCli", () => {
     ).rejects.toThrow("Portable update startup recovery failed after listening.");
     expect(phases).toStrictEqual(["pre-listen", "post-listen"]);
     expect(close).toHaveBeenCalledOnce();
+    const event = sink.events.find(({ op }) => op === "process.fatal");
+    expect(event?.errorKind).toBe("PORTABLE_UPDATE_RECOVERY_PERSISTENCE_FAILED");
+    expect(extraOf(event).recoveryReason).toBe("persistence-failed");
   });
 
   it("imports legacy audit evidence after post-listen recovery and before startup reporting", async () => {

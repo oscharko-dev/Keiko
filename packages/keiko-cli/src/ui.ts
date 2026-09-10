@@ -432,6 +432,42 @@ interface DurableServerErrorClassification {
   readonly causeChain?: readonly string[] | undefined;
 }
 
+type StartupRecoveryResult = Awaited<ReturnType<UpdateStartupRecoveryPort["reconcile"]>>;
+type StartupRecoveryReason = NonNullable<StartupRecoveryResult["reason"]> | "unspecified";
+
+const STARTUP_RECOVERY_ERROR_KINDS: Readonly<Record<StartupRecoveryReason, string>> = {
+  interrupted: "PORTABLE_UPDATE_RECOVERY_INTERRUPTED",
+  corrupt: "PORTABLE_UPDATE_RECOVERY_CORRUPT",
+  incompatible: "PORTABLE_UPDATE_RECOVERY_INCOMPATIBLE",
+  "persistence-failed": "PORTABLE_UPDATE_RECOVERY_PERSISTENCE_FAILED",
+  unspecified: "PORTABLE_UPDATE_RECOVERY_REQUIRED",
+};
+
+class PortableStartupRecoveryRequiredError extends Error {
+  public readonly code: string;
+
+  public constructor(
+    message: string,
+    public readonly recoveryReason: StartupRecoveryReason,
+    public readonly sessionId: string | undefined,
+  ) {
+    super(message);
+    this.name = "PortableStartupRecoveryRequiredError";
+    this.code = STARTUP_RECOVERY_ERROR_KINDS[recoveryReason];
+  }
+}
+
+function startupRecoveryRequiredError(
+  result: StartupRecoveryResult,
+  message: string,
+): PortableStartupRecoveryRequiredError {
+  return new PortableStartupRecoveryRequiredError(
+    message,
+    result.reason ?? "unspecified",
+    result.sessionId,
+  );
+}
+
 async function classifyServerError(error: Error): Promise<DurableServerErrorClassification> {
   try {
     const { describeError } = await loadServerModule();
@@ -445,6 +481,7 @@ async function classifyServerError(error: Error): Promise<DurableServerErrorClas
 function writeDurableServerErrorLog(
   activityLog: ServerLogSink | undefined,
   described: DurableServerErrorClassification,
+  recovery?: PortableStartupRecoveryRequiredError,
 ): void {
   if (activityLog === undefined) return;
   activityLog.write({
@@ -454,6 +491,12 @@ function writeDurableServerErrorLog(
     errorKind: described.code ?? described.errorClass,
     extra: {
       kind: "server-error",
+      ...(recovery === undefined
+        ? {}
+        : {
+            recoveryReason: recovery.recoveryReason,
+            ...(recovery.sessionId === undefined ? {} : { sessionId: recovery.sessionId }),
+          }),
       ...(described.frames === undefined ? {} : { frames: described.frames }),
       ...(described.causeChain === undefined ? {} : { causeChain: described.causeChain }),
     },
@@ -1138,7 +1181,11 @@ async function recordStartupRecoveryFailure(
 ): Promise<boolean> {
   const normalized = error instanceof Error ? error : new Error("Startup recovery failed.");
   try {
-    writeDurableServerErrorLog(activityLog, await classifyServerError(normalized));
+    writeDurableServerErrorLog(
+      activityLog,
+      await classifyServerError(normalized),
+      normalized instanceof PortableStartupRecoveryRequiredError ? normalized : undefined,
+    );
     return true;
   } catch {
     return false;
@@ -1164,7 +1211,10 @@ async function reconcileBeforeListen(
     const result = await context.startupRecovery.reconcile({ phase: "pre-listen", current });
     context.handlerDeps.updateSession?.refreshDurableProjection?.();
     if (result.status !== "ready") {
-      throw new Error("Portable update startup recovery is required before listening.");
+      throw startupRecoveryRequiredError(
+        result,
+        "Portable update startup recovery is required before listening.",
+      );
     }
     return current;
   } catch (error) {
@@ -1196,7 +1246,10 @@ async function reconcileAfterListen(
     });
     context.handlerDeps.updateSession?.refreshDurableProjection?.();
     if (result.status !== "ready") {
-      throw new Error("Portable update startup recovery failed after listening.");
+      throw startupRecoveryRequiredError(
+        result,
+        "Portable update startup recovery failed after listening.",
+      );
     }
   } catch (error) {
     await closeAfterRecoveryFailure(context.server);
