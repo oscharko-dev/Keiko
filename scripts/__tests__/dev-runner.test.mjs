@@ -339,6 +339,25 @@ describe("proxyHttp request target validation", () => {
     );
   });
 
+  // Keiko's own development traffic carries secrets in the query string — an
+  // `/api/editor/agent/events?…&bridgeDecisionCapability=…` request goes through this proxy — so a
+  // diagnostic that echoed the target verbatim would write a capability token to stderr.
+  it.each([
+    ["/api/editor/agent/events?sessionId=a&bridgeDecisionCapability=SECRET-SENTINEL", 2],
+    ["/asset?access_token=SECRET-SENTINEL", 1],
+    ["/asset?", 0],
+  ])("redacts query values in %j", (target, count) => {
+    const line = upstreamFailureDiagnostic("GET", target, 4321, { code: "ECONNRESET" });
+    expect(line).not.toContain("SECRET-SENTINEL");
+    expect(line).toContain(`${target.slice(0, target.indexOf("?"))}?<${String(count)} redacted>`);
+  });
+
+  it("leaves a target without a query string untouched", () => {
+    expect(upstreamFailureDiagnostic("GET", "/plain.js", 4321, { code: "ECONNRESET" })).toContain(
+      " /plain.js to :4321 ",
+    );
+  });
+
   it("forwards a valid encoded origin-form target byte-for-byte", async () => {
     let receivedTarget;
     const upstream = createHttpServer((request, response) => {

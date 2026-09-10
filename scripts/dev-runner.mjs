@@ -837,9 +837,22 @@ const proxyAgent = new Agent({ keepAlive: false });
 // fetch and the runner said nothing, so the cause had to be reconstructed from a Playwright trace.
 // Name the request and the reason instead. Repository tooling keeps deterministic stderr output
 // rather than the product activity log (AGENTS.md §8).
+// A proxied target carries its query string, and Keiko's own development traffic puts secrets there
+// — an `/api/editor/agent/events?…&bridgeDecisionCapability=…` request goes through this very proxy.
+// Report the route and how many parameters it carried, never their values: counts, not content, is
+// the rule for every evidence surface in this repository (AGENTS.md §7).
+function redactQuery(path) {
+  const target = String(path);
+  const separator = target.indexOf("?");
+  if (separator < 0) return target;
+  const query = target.slice(separator + 1);
+  const count = query === "" ? 0 : query.split("&").length;
+  return `${target.slice(0, separator)}?<${String(count)} redacted>`;
+}
+
 export function upstreamFailureDiagnostic(method, path, targetPort, error) {
   return (
-    `dev-runner: upstream ${String(method)} ${path} to :${String(targetPort)} failed ` +
+    `dev-runner: upstream ${String(method)} ${redactQuery(path)} to :${String(targetPort)} failed ` +
     `(${String(error.code ?? error.message)})\n`
   );
 }
