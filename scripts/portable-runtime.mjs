@@ -633,15 +633,13 @@ function validateRuntimeQualification(manifest, failures, options) {
   const target = portableTargetByName(manifest.artifact?.platformTarget);
   const qualification = manifest.runtimeQualification;
   if (qualification === undefined) {
-    if (
-      requiresProductionVerification(options) &&
-      (target?.nodePlatform === "darwin" || target?.nodePlatform === "linux")
-    ) {
+    if (runtimeQualificationRequired(target, options)) {
       push(failures, "runtimeQualification", "is required for qualified production artifacts");
     }
     return;
   }
-  if (target?.nodePlatform !== "darwin" && target?.nodePlatform !== "linux") {
+  const backend = runtimeQualificationBackend(target);
+  if (backend === undefined) {
     push(failures, "runtimeQualification", "is supported only for macOS and Linux");
     return;
   }
@@ -661,9 +659,19 @@ function validateRuntimeQualification(manifest, failures, options) {
     failures,
   );
   digestAt(value, "sha256", "runtimeQualification", failures, options);
-  const backend =
-    target.nodePlatform === "linux" ? "linux-namespace-gateway" : "macos-endpoint-security";
   literalAt(value, "backend", backend, "runtimeQualification", failures);
+}
+
+function runtimeQualificationBackend(target) {
+  if (target?.nodePlatform === "linux") return "linux-namespace-gateway";
+  if (target?.nodePlatform === "darwin") return "macos-endpoint-security";
+  return undefined;
+}
+
+function runtimeQualificationRequired(target, options) {
+  return (
+    requiresProductionVerification(options) && runtimeQualificationBackend(target) !== undefined
+  );
 }
 
 function validateSidecarRuntimes(manifest, failures, options) {
@@ -1374,27 +1382,61 @@ function validateVerificationCheckConsistency(
 ) {
   if (target === undefined) return;
   if (target.nodePlatform === "win32") {
-    const windowsVerified =
-      verificationChecks.publisherChainVerified === true &&
-      verificationChecks.timestampVerified === true;
-    if (signatureVerified !== windowsVerified) {
-      push(
-        failures,
-        `${path}.signatureVerified`,
-        "must match Windows publisher-chain and timestamp verification",
-      );
-    }
+    validateWindowsVerificationConsistency(signatureVerified, verificationChecks, failures, path);
     return;
   }
   if (target.nodePlatform === "linux") {
-    if (signatureVerified !== (verificationChecks.provenanceVerified === true)) {
-      push(failures, `${path}.signatureVerified`, "must match Linux provenance verification");
-    }
-    if (notarizationVerified) {
-      push(failures, `${path}.notarizationVerified`, "must be false for Linux targets");
-    }
+    validateLinuxVerificationConsistency(
+      signatureVerified,
+      notarizationVerified,
+      verificationChecks,
+      failures,
+      path,
+    );
     return;
   }
+  validateMacosVerificationConsistency(
+    signatureVerified,
+    notarizationVerified,
+    verificationChecks,
+    failures,
+    path,
+  );
+}
+
+function validateWindowsVerificationConsistency(signatureVerified, checks, failures, path) {
+  const verified = checks.publisherChainVerified === true && checks.timestampVerified === true;
+  if (signatureVerified !== verified) {
+    push(
+      failures,
+      `${path}.signatureVerified`,
+      "must match Windows publisher-chain and timestamp verification",
+    );
+  }
+}
+
+function validateLinuxVerificationConsistency(
+  signatureVerified,
+  notarizationVerified,
+  checks,
+  failures,
+  path,
+) {
+  if (signatureVerified !== (checks.provenanceVerified === true)) {
+    push(failures, `${path}.signatureVerified`, "must match Linux provenance verification");
+  }
+  if (notarizationVerified) {
+    push(failures, `${path}.notarizationVerified`, "must be false for Linux targets");
+  }
+}
+
+function validateMacosVerificationConsistency(
+  signatureVerified,
+  notarizationVerified,
+  verificationChecks,
+  failures,
+  path,
+) {
   if (signatureVerified !== (verificationChecks.developerIdVerified === true)) {
     push(failures, `${path}.signatureVerified`, "must match macOS Developer ID verification");
   }

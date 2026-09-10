@@ -65,6 +65,7 @@ import {
 import {
   buildPortableEvaluationManifest,
   PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
+  PORTABLE_EVALUATION_TARGET_NAMES,
 } from "../lib/portable-evaluation-manifest.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -85,15 +86,11 @@ const RELEASE_IMPACT_CATALOG = JSON.parse(
   readFileSync(join(REPO_ROOT, "release-impact.catalog.json"), "utf8"),
 );
 const RELEASE_VERSION = ROOT_MANIFEST.version;
-// The exact download set a stable `latest` release must carry, derived from the same target
-// table the orchestrator uses — a restated list here could drift past a new target silently.
-// Derived from the same target table the orchestrator uses, deduplicated so a target table that
-// ever repeats a name cannot silently shorten the expected set.
-const PUBLISHED_DOWNLOAD_NAMES = [
-  ...new Set([
-    ...PORTABLE_TARGETS.map((target) => target.assetName),
-    WINDOWS_PORTABLE_SETUP_ASSET_NAME,
-  ]),
+const EVALUATION_DOWNLOAD_NAMES = [
+  ...PORTABLE_TARGETS.filter((target) =>
+    PORTABLE_EVALUATION_TARGET_NAMES.includes(target.platformTarget),
+  ).map((target) => target.assetName),
+  WINDOWS_PORTABLE_SETUP_ASSET_NAME,
 ];
 const RELEASE_NAME = ROOT_MANIFEST.name;
 const RELEASE_SPEC = `${RELEASE_NAME}@${RELEASE_VERSION}`;
@@ -761,7 +758,7 @@ function passthroughViewBody() {
 function prepublishedEvaluationState() {
   const sourceCommitSha = HEAD_SHA;
   const workflowRunId = "31300595709";
-  const downloads = PUBLISHED_DOWNLOAD_NAMES.map((name, index) => {
+  const downloads = EVALUATION_DOWNLOAD_NAMES.map((name, index) => {
     const content = Buffer.from(`prepublished ${name}\n`);
     return {
       id: 500000 + index,
@@ -1460,14 +1457,15 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
     });
 
     it("rejects an inner target relabelled against its outer bundle entry", () => {
-      const viewBody =
-        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      const viewBody = passthroughViewBody();
       lastRun = runPublish({
         npmBody: npmStub(viewBody, { failOnPublish: true }),
         initState: { published: true, tagged: true },
         portableFixtureOptions: {
-          mutateManifest: (candidate, _target, index) => {
-            if (index === 1) candidate.artifact.platformTarget = "windows-x64";
+          mutateManifest: (candidate, target) => {
+            if (target.platformTarget === "linux-x64") {
+              candidate.artifact.platformTarget = "windows-x64";
+            }
           },
         },
       });
@@ -1485,8 +1483,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
     // only thing that can make the run fail is the specific count/duplicate/missing guard
     // under test — never a same-shape neighbor.
     it("rejects a portable assets manifest missing a target before npm publish or dist-tag mutation", () => {
-      const viewBody =
-        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      const viewBody = passthroughViewBody();
       lastRun = runPublish({
         npmBody: npmStub(viewBody, { failOnPublish: true }),
         initState: { published: true, tagged: true },
@@ -1932,7 +1929,10 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         initState: { published: true, tagged: true },
         portableFixtureOptions: {
           mutateBundle: (bundle) => {
-            bundle.artifacts[0].setupSha256 = "0".repeat(64);
+            const windows = bundle.artifacts.find(
+              (artifact) => artifact.platformTarget === "windows-x64",
+            );
+            windows.setupSha256 = "0".repeat(64);
           },
         },
       });
