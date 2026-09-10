@@ -39,6 +39,7 @@ import {
   resolveConfiguredNextBundler,
   resolveNextBundler,
   upstreamAllowsSameOriginMicrophone,
+  upstreamFailureDiagnostic,
   writeAtomicUtf8File,
   writeState,
 } from "../dev-runner.mjs";
@@ -51,6 +52,19 @@ function readinessResponse(status, body, permissionsPolicy) {
     json: () => Promise.resolve(body),
     headers: { entries: () => Object.entries(values)[Symbol.iterator]() },
   };
+}
+
+// A loopback port that is bound and released, so connecting to it fails immediately rather than
+// hanging on a firewalled address.
+async function unusedLoopbackPort() {
+  const probe = createHttpServer(() => undefined);
+  await new Promise((resolve) => probe.listen(0, "127.0.0.1", resolve));
+  const address = probe.address();
+  if (address === null || typeof address === "string") throw new Error("Expected TCP address.");
+  await new Promise((resolve, reject) =>
+    probe.close((error) => (error ? reject(error) : resolve())),
+  );
+  return address.port;
 }
 
 async function proxyRoundTrip(
@@ -193,6 +207,155 @@ describe("proxyHttp request target validation", () => {
       "content-type": "text/plain; charset=utf-8",
     });
     expect(response.end).toHaveBeenCalledWith("Invalid development proxy request path.");
+  });
+
+  // A keep-alive socket that the upstream closes at the instant the proxy dispatches on it fails
+  // the request with ECONNRESET before a single byte reaches the server, and `proxyHttp` turns any
+  // upstream error into a 502. That is how a `/_next/static/chunks/*.js` fetch came back 502 twice
+  // on CI (runs 34407832798 and its `ui` re-run) while a sibling chunk requested in the same
+  // millisecond returned 200 — proving the upstream was up and only the connection had died. This
+  // proxy fronts a loopback dev server, so it has no use for pooled connections: pin that two
+  // sequential proxied requests never share one upstream socket, which removes the race by
+  // construction rather than retrying around it.
+  it("never reuses an upstream socket between proxied requests", async () => {
+    const sockets = new Set();
+    const upstream = createHttpServer((request, response) => {
+      sockets.add(request.socket);
+      response.end("proxied");
+    });
+    try {
+      await new Promise((resolve) => upstream.listen(0, "127.0.0.1", resolve));
+      const address = upstream.address();
+      if (address === null || typeof address === "string") throw new Error("Expected TCP address.");
+      for (const path of ["/first", "/second"]) {
+        const request = new PassThrough();
+        Object.assign(request, { headers: {}, method: "GET", url: path });
+        const response = new PassThrough();
+        response.writeHead = vi.fn();
+        const completed = new Promise((resolve) => response.on("end", resolve));
+        proxyHttp(request, response, address.port);
+        request.end();
+        response.resume();
+        await completed;
+        expect(response.writeHead).toHaveBeenCalledWith(200, expect.any(Object));
+      }
+      expect(sockets.size).toBe(2);
+    } finally {
+      await new Promise((resolve, reject) =>
+        upstream.close((error) => (error ? reject(error) : resolve())),
+      );
+    }
+  });
+
+  // The 502 above was unattributable because the upstream error was discarded outright: the browser
+  // saw a failed chunk fetch and the runner said nothing, so the cause had to be reconstructed from
+  // a Playwright trace. Pin that the failure now names itself.
+  it("answers an unreachable upstream with 502 and names the failing request", async () => {
+    const deadPort = await unusedLoopbackPort();
+
+    const written = [];
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk) => (written.push(String(chunk)), true));
+    try {
+      const request = new PassThrough();
+      Object.assign(request, { headers: {}, method: "GET", url: "/_next/static/chunks/probe.js" });
+      const response = new PassThrough();
+      response.writeHead = vi.fn();
+      const completed = new Promise((resolve) => response.on("end", resolve));
+      proxyHttp(request, response, deadPort);
+      request.end();
+      response.resume();
+      await completed;
+
+      expect(response.writeHead).toHaveBeenCalledWith(502, {
+        "content-type": "text/plain; charset=utf-8",
+      });
+      const diagnostic = written.join("");
+      expect(diagnostic).toContain("dev-runner: upstream GET /_next/static/chunks/probe.js");
+      expect(diagnostic).toContain(`:${String(deadPort)} failed`);
+      expect(diagnostic).toContain("ECONNREFUSED");
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  // Both guards on that failure path, because a guard whose other branch is never exercised is a
+  // guess. If the downstream browser already went away, the proxy must not write a 502 into a
+  // response nobody is reading; if headers already went out, a second writeHead would throw and
+  // replace a diagnosable upstream failure with a crash in the proxy itself.
+  it("stays silent when the downstream closed before the upstream failed", async () => {
+    const written = [];
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk) => (written.push(String(chunk)), true));
+    try {
+      const request = new PassThrough();
+      Object.assign(request, { headers: {}, method: "GET", url: "/late" });
+      const response = new PassThrough();
+      response.writeHead = vi.fn();
+      proxyHttp(request, response, await unusedLoopbackPort());
+      request.end();
+      response.emit("close");
+      await new Promise((resolve) => setTimeout(resolve, 250));
+      expect(response.writeHead).not.toHaveBeenCalled();
+      expect(written.join("")).toBe("");
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  it("does not write a second status when the upstream fails after headers went out", async () => {
+    const written = [];
+    const stderr = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((chunk) => (written.push(String(chunk)), true));
+    try {
+      const request = new PassThrough();
+      Object.assign(request, { headers: {}, method: "GET", url: "/streamed" });
+      const response = new PassThrough();
+      Object.assign(response, { headersSent: true });
+      response.writeHead = vi.fn();
+      const completed = new Promise((resolve) => response.on("end", resolve));
+      proxyHttp(request, response, await unusedLoopbackPort());
+      request.end();
+      response.resume();
+      await completed;
+      expect(response.writeHead).not.toHaveBeenCalled();
+      expect(written.join("")).toContain("dev-runner: upstream GET /streamed");
+    } finally {
+      stderr.mockRestore();
+    }
+  });
+
+  // Socket errors carry a `code`; an abort or a plain Error does not, and a diagnostic that then
+  // reads "(undefined)" would be worse than none. Pin both spellings.
+  it.each([
+    [{ code: "ECONNRESET", message: "socket hang up" }, "ECONNRESET"],
+    [{ message: "upstream vanished" }, "upstream vanished"],
+  ])("names the reason from %j", (error, expected) => {
+    expect(upstreamFailureDiagnostic("GET", "/chunk.js", 4321, error)).toBe(
+      `dev-runner: upstream GET /chunk.js to :4321 failed (${expected})\n`,
+    );
+  });
+
+  // Keiko's own development traffic carries secrets in the query string — an
+  // `/api/editor/agent/events?…&bridgeDecisionCapability=…` request goes through this proxy — so a
+  // diagnostic that echoed the target verbatim would write a capability token to stderr.
+  it.each([
+    ["/api/editor/agent/events?sessionId=a&bridgeDecisionCapability=SECRET-SENTINEL", 2],
+    ["/asset?access_token=SECRET-SENTINEL", 1],
+    ["/asset?", 0],
+  ])("redacts query values in %j", (target, count) => {
+    const line = upstreamFailureDiagnostic("GET", target, 4321, { code: "ECONNRESET" });
+    expect(line).not.toContain("SECRET-SENTINEL");
+    expect(line).toContain(`${target.slice(0, target.indexOf("?"))}?<${String(count)} redacted>`);
+  });
+
+  it("leaves a target without a query string untouched", () => {
+    expect(upstreamFailureDiagnostic("GET", "/plain.js", 4321, { code: "ECONNRESET" })).toContain(
+      " /plain.js to :4321 ",
+    );
   });
 
   it("forwards a valid encoded origin-form target byte-for-byte", async () => {
