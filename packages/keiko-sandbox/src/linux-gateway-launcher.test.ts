@@ -83,8 +83,16 @@ function runChild(
     let stderr = "";
     let launcherDiagnostics = "";
     const timeout = setTimeout(() => child.kill("SIGKILL"), 10_000);
-    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
-    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+    const stdoutStream = child.stdout;
+    const stderrStream = child.stderr;
+    if (stdoutStream === null || stderrStream === null) {
+      clearTimeout(timeout);
+      child.kill("SIGKILL");
+      reject(new Error("child-output-pipes-unavailable"));
+      return;
+    }
+    stdoutStream.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
+    stderrStream.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
     const diagnosticStream = child.stdio[3];
     if (diagnosticStream instanceof Readable) {
       diagnosticStream.on(
