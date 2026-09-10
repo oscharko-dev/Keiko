@@ -243,6 +243,21 @@ describe("portable manual review harness", () => {
     });
   });
 
+  it("embeds the Windows Job Object backend in the manual runtime attestation", () => {
+    const root = tmpReviewRoot();
+    prepareScenarioFixture(root, "windows-x64", "happy-update");
+    const extracted = join(root, "extracted");
+
+    extractZipArchiveEntries(join(root, "release-assets", "keiko-windows-x64.zip"), extracted, {
+      requireRegularEntries: true,
+    });
+
+    const attestation = jsonAt(
+      join(extracted, "Keiko", "runtime", "native", "keiko-runtime-attestation.exe"),
+    );
+    expect(attestation.backend).toBe("windows-job-object");
+  });
+
   it("retains executable modes when the Linux fixture archive is extracted", () => {
     const root = tmpReviewRoot();
     prepareScenarioFixture(root, "linux-x64", "happy-update");

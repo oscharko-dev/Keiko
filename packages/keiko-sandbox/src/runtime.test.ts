@@ -42,6 +42,39 @@ const linuxReceipt: RuntimeQualificationReceipt = {
   backend: "linux-namespace-gateway",
 };
 
+function omitRuntimeComponents(candidate: RuntimeQualificationReceipt): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...candidate };
+  delete result.runtimeComponents;
+  return result;
+}
+
+const malformedLinuxReceipts = [
+  { ...linuxReceipt, schemaVersion: 1 },
+  { ...linuxReceipt, runtimeComponents: runtimeComponents.slice(1) },
+  { ...linuxReceipt, runtimeComponents: [...runtimeComponents, runtimeComponents[0]] },
+  {
+    ...linuxReceipt,
+    runtimeComponents: [runtimeComponents[0], runtimeComponents[0], runtimeComponents[2]],
+  },
+  omitRuntimeComponents(linuxReceipt),
+  { ...linuxReceipt, runtimeComponents: [] },
+  { ...linuxReceipt, runtimeComponents: "not-an-array" },
+  {
+    ...linuxReceipt,
+    runtimeComponents: [
+      { ...runtimeComponents[0], name: "unknown" },
+      ...runtimeComponents.slice(1),
+    ],
+  },
+  {
+    ...linuxReceipt,
+    runtimeComponents: [
+      { ...runtimeComponents[0], sha256: "not-a-digest" },
+      ...runtimeComponents.slice(1),
+    ],
+  },
+];
+
 describe("long-lived runtime qualification", () => {
   it("requires an exact platform, architecture, backend, and release receipt match", () => {
     expect(qualifyLongLivedRuntime(qualified, [qualified])).toEqual({
@@ -244,12 +277,7 @@ describe("long-lived runtime qualification", () => {
       runtimeComponents,
     };
 
-    for (const candidate of [
-      { ...linuxReceipt, schemaVersion: 1 },
-      { ...linuxReceipt, runtimeComponents: runtimeComponents.slice(1) },
-      { ...linuxReceipt, runtimeComponents: [...runtimeComponents, runtimeComponents[0]] },
-      { ...linuxReceipt, runtimeComponents: [...runtimeComponents, { ...runtimeComponents[0] }] },
-    ]) {
+    for (const candidate of malformedLinuxReceipts) {
       expect(qualificationFromReceipt(candidate, binding)).toEqual({
         ok: false,
         reason: "runtime-unqualified",

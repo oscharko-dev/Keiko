@@ -1071,7 +1071,9 @@ function runtimeActivationTrustAnchor(target) {
 }
 
 function runtimeQualificationBackend(target) {
-  return target === "linux-x64" ? "linux-namespace-gateway" : "macos-endpoint-security";
+  if (target === "linux-x64") return "linux-namespace-gateway";
+  if (target === "windows-x64") return "windows-job-object";
+  return "macos-endpoint-security";
 }
 
 function reviewedTargetRuntimeEvidence(evidence) {
