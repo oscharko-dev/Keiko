@@ -4,8 +4,10 @@ import {
   CLIENT_DIAGNOSTIC_KINDS,
   CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH,
   CLIENT_DIAGNOSTIC_READY_STATES,
+  LINUX_GATEWAY_DIAGNOSTIC_KINDS,
   isClientDiagnosticIngestRequest,
   isClientDiagnosticKind,
+  isLinuxGatewayDiagnosticKind,
 } from "./diagnostics.js";
 
 function validRequest(): Record<string, unknown> {
@@ -14,6 +16,16 @@ function validRequest(): Record<string, unknown> {
     clientTs: "2026-08-21T10:00:00.000Z",
   };
 }
+
+describe("Linux gateway diagnostic contract", () => {
+  it("accepts every closed kind and rejects extensions or non-strings", () => {
+    for (const kind of LINUX_GATEWAY_DIAGNOSTIC_KINDS) {
+      expect(isLinuxGatewayDiagnosticKind(kind)).toBe(true);
+    }
+    expect(isLinuxGatewayDiagnosticKind("host-relay-failed:private-detail")).toBe(false);
+    expect(isLinuxGatewayDiagnosticKind({ kind: "host-relay-failed" })).toBe(false);
+  });
+});
 
 describe("isClientDiagnosticIngestRequest", () => {
   it("accepts the minimal required shape", () => {

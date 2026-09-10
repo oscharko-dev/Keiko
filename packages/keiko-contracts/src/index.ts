@@ -4976,13 +4976,16 @@ export type {
   CLIENT_DIAGNOSTIC_KINDS,
   CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH,
   CLIENT_DIAGNOSTIC_READY_STATES,
+  LINUX_GATEWAY_DIAGNOSTIC_KINDS,
   isClientDiagnosticIngestRequest,
   isClientDiagnosticKind,
+  isLinuxGatewayDiagnosticKind,
 } from "./diagnostics.js";
 export type {
   ClientDiagnosticIngestRequest,
   ClientDiagnosticKind,
   ClientDiagnosticReadyState,
+  LinuxGatewayDiagnosticKind,
 } from "./diagnostics.js";
 // ─── Store fingerprint (Epic #3233 §6.2, Wave 4a) ────────────────────────────────
 // A redacted, point-in-time snapshot of one persisted store's schema/integrity state, embedded

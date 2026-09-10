@@ -37,6 +37,26 @@
 export const CLIENT_DIAGNOSTIC_READY_STATES = [0, 1, 2] as const;
 export type ClientDiagnosticReadyState = (typeof CLIENT_DIAGNOSTIC_READY_STATES)[number];
 
+// Closed, body-free failure vocabulary shared by the Linux gateway launcher and the server log
+// adapter (#3422, ADR-0043 D12). This crosses a package boundary, so the leaf contracts layer owns
+// both the wire values and the guard; neither producer nor consumer may widen it independently.
+export const LINUX_GATEWAY_DIAGNOSTIC_KINDS = [
+  "cleanup-failed",
+  "host-relay-failed",
+  "internal-failure",
+  "invalid-backend",
+  "invalid-command",
+  "invalid-cwd",
+  "invalid-gateway-host",
+  "invalid-gateway-port",
+  "invalid-mode",
+  "loopback-setup-failed",
+  "loopback-tool-unavailable",
+  "namespace-relay-failed",
+  "unsupported-platform",
+] as const;
+export type LinuxGatewayDiagnosticKind = (typeof LINUX_GATEWAY_DIAGNOSTIC_KINDS)[number];
+
 // What raised the diagnostic: a caught render-boundary error, an unhandled promise rejection, an
 // SSE transport failure, or anything else a call site does not further classify.
 export const CLIENT_DIAGNOSTIC_KINDS = [
@@ -157,9 +177,16 @@ function isClientDiagnosticReadyState(value: unknown): value is ClientDiagnostic
 }
 
 const CLIENT_DIAGNOSTIC_KIND_SET: ReadonlySet<string> = new Set(CLIENT_DIAGNOSTIC_KINDS);
+const LINUX_GATEWAY_DIAGNOSTIC_KIND_SET: ReadonlySet<string> = new Set(
+  LINUX_GATEWAY_DIAGNOSTIC_KINDS,
+);
 
 export function isClientDiagnosticKind(value: unknown): value is ClientDiagnosticKind {
   return typeof value === "string" && CLIENT_DIAGNOSTIC_KIND_SET.has(value);
+}
+
+export function isLinuxGatewayDiagnosticKind(value: unknown): value is LinuxGatewayDiagnosticKind {
+  return typeof value === "string" && LINUX_GATEWAY_DIAGNOSTIC_KIND_SET.has(value);
 }
 
 const GIT_CHANGE_DESCRIPTION_ACTION_SET: ReadonlySet<string> = new Set(

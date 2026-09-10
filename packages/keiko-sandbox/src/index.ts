@@ -48,7 +48,6 @@ export {
 } from "./runtime.js";
 export type {
   ClosedRuntimeLaunchProfile,
-  LinuxGatewayDiagnosticKind,
   LongLivedRuntimeArchitecture,
   LongLivedRuntimeBackend,
   LongLivedRuntimePlatform,

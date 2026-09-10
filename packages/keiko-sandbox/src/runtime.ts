@@ -1,11 +1,14 @@
 import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants, fstatSync, writeSync } from "node:fs";
-import { access, chmod, mkdtemp, rm } from "node:fs/promises";
-import { createConnection, createServer, type Server, type Socket } from "node:net";
-import { tmpdir } from "node:os";
-import { isAbsolute, join } from "node:path";
+import { access } from "node:fs/promises";
+import { createConnection, createServer, type Server, Socket } from "node:net";
+import { isAbsolute } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  isLinuxGatewayDiagnosticKind,
+  type LinuxGatewayDiagnosticKind,
+} from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 
 export function linuxGatewayLauncherPath(): string {
   return fileURLToPath(new URL("../dist/runtime.js", import.meta.url));
@@ -311,13 +314,12 @@ function isQualificationRecord(
   );
 }
 
-// Linux gateway bridge entry point (#3422). The host process owns one private Unix socket whose
-// relay destination is fixed before the isolated child starts. A second copy of this entry point
-// runs inside the fresh network namespace, exposes the attested loopback port there, and forwards
-// every accepted stream through that Unix socket. No child-controlled value can select another
-// host destination. It lives in this existing long-lived-runtime owner so the H1 dependency closure
-// does not acquire a misleading new source identity for an implementation it already transitively
-// governs.
+// Linux gateway bridge entry point (#3422). The host and namespace launchers share one anonymous
+// Node IPC socketpair. The namespace asks for a stream by numeric id; the host connects only to the
+// already-validated gateway and transfers that connected descriptor through the socketpair. There
+// is no filesystem socket for a same-uid sidecar to discover or reuse across concurrent runs. This
+// lives in the existing long-lived-runtime owner so the H1 dependency closure does not acquire a
+// misleading new source identity for an implementation it already transitively governs.
 
 type LinuxGatewayBackend = "bubblewrap" | "unshare";
 type ForwardedSignal = "SIGINT" | "SIGHUP" | "SIGTERM";
@@ -331,13 +333,15 @@ interface CommonConfig {
   readonly args: readonly string[];
 }
 
-interface NamespaceConfig extends CommonConfig {
-  readonly socketPath: string;
-}
-
 interface Relay {
   readonly server: Server;
   readonly destroyConnections: () => void;
+  readonly dispose: () => void;
+}
+
+interface HostBridge {
+  readonly destroyConnections: () => void;
+  readonly dispose: () => void;
 }
 
 interface ChildReference {
@@ -345,42 +349,26 @@ interface ChildReference {
   failure: LinuxGatewayDiagnosticKind | undefined;
 }
 
-export type LinuxGatewayDiagnosticKind =
-  | "cleanup-failed"
-  | "host-relay-failed"
-  | "internal-failure"
-  | "invalid-backend"
-  | "invalid-command"
-  | "invalid-cwd"
-  | "invalid-gateway-host"
-  | "invalid-gateway-port"
-  | "invalid-mode"
-  | "invalid-socket-path"
-  | "loopback-setup-failed"
-  | "loopback-tool-unavailable"
-  | "namespace-relay-failed"
-  | "unsupported-platform";
+interface BridgeReadyMessage {
+  readonly kind: "ready";
+}
+
+interface BridgeOpenMessage {
+  readonly kind: "open";
+  readonly connectionId: number;
+}
+
+interface BridgeSocketMessage {
+  readonly kind: "socket";
+  readonly connectionId: number;
+}
 
 export const LINUX_GATEWAY_DIAGNOSTIC_FD_ENV = "KEIKO_LINUX_GATEWAY_DIAGNOSTIC_FD";
 export const LINUX_GATEWAY_DIAGNOSTIC_FD = 3;
 export const LINUX_GATEWAY_NAMESPACE_DIAGNOSTIC_FD = 9;
+export const LINUX_GATEWAY_NAMESPACE_IPC_FD = 10;
 const LINUX_GATEWAY_DIAGNOSTIC_PREFIX = "keiko-linux-gateway:error:";
-const LINUX_GATEWAY_DIAGNOSTIC_KINDS: ReadonlySet<string> = new Set([
-  "cleanup-failed",
-  "host-relay-failed",
-  "internal-failure",
-  "invalid-backend",
-  "invalid-command",
-  "invalid-cwd",
-  "invalid-gateway-host",
-  "invalid-gateway-port",
-  "invalid-mode",
-  "invalid-socket-path",
-  "loopback-setup-failed",
-  "loopback-tool-unavailable",
-  "namespace-relay-failed",
-  "unsupported-platform",
-]);
+const MAX_RELAY_CONNECTIONS = 64;
 
 const SIGNALS: readonly ForwardedSignal[] = ["SIGINT", "SIGHUP", "SIGTERM"];
 const LOOPBACK_TOOLS: readonly string[] = ["/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip", "/bin/ip"];
@@ -414,7 +402,7 @@ export function parseLinuxGatewayPort(value: string | undefined): number {
 
 function parseAbsolute(
   value: string | undefined,
-  errorKind: "invalid-command" | "invalid-cwd" | "invalid-socket-path",
+  errorKind: "invalid-command" | "invalid-cwd",
 ): string {
   return value !== undefined && isAbsolute(value) && !value.includes("\0")
     ? value
@@ -432,16 +420,8 @@ function parseCommon(values: readonly string[], offset: number): CommonConfig {
   };
 }
 
-function parseNamespace(values: readonly string[]): NamespaceConfig {
-  return {
-    backend: parseBackend(values[1]),
-    gatewayHost: parseGatewayHost(values[2]),
-    gatewayPort: parseLinuxGatewayPort(values[3]),
-    socketPath: parseAbsolute(values[4], "invalid-socket-path"),
-    cwd: parseAbsolute(values[5], "invalid-cwd"),
-    command: parseAbsolute(values[6], "invalid-command"),
-    args: values.slice(7),
-  };
+function parseNamespace(values: readonly string[]): CommonConfig {
+  return parseCommon(values, 1);
 }
 
 function relaySockets(client: Socket, upstream: Socket, onUpstreamError: () => void): void {
@@ -458,35 +438,209 @@ function relaySockets(client: Socket, upstream: Socket, onUpstreamError: () => v
   upstream.pipe(client);
 }
 
-function createRelay(connectUpstream: () => Socket, onFatal: () => void): Relay {
-  const connections = new Set<Socket>();
-  const server = createServer((client) => {
-    const upstream = connectUpstream();
-    connections.add(client);
-    connections.add(upstream);
-    client.once("close", () => connections.delete(client));
-    upstream.once("close", () => connections.delete(upstream));
-    relaySockets(client, upstream, onFatal);
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function hasExactKeys(record: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean {
+  const actual = Object.keys(record);
+  return actual.length === keys.length && keys.every((key) => Object.hasOwn(record, key));
+}
+
+function isBridgeReadyMessage(value: unknown): value is BridgeReadyMessage {
+  return isRecord(value) && hasExactKeys(value, ["kind"]) && value.kind === "ready";
+}
+
+function isConnectionId(value: unknown): value is number {
+  return Number.isSafeInteger(value) && typeof value === "number" && value > 0;
+}
+
+function isBridgeOpenMessage(value: unknown): value is BridgeOpenMessage {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["kind", "connectionId"]) &&
+    value.kind === "open" &&
+    isConnectionId(value.connectionId)
+  );
+}
+
+function isBridgeSocketMessage(value: unknown): value is BridgeSocketMessage {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["kind", "connectionId"]) &&
+    value.kind === "socket" &&
+    isConnectionId(value.connectionId)
+  );
+}
+
+function destroySockets(sockets: ReadonlySet<Socket>): void {
+  for (const socket of sockets) socket.destroy();
+}
+
+function transferGatewaySocket(
+  child: ChildProcess,
+  message: BridgeOpenMessage,
+  socket: Socket,
+  pending: Set<Socket>,
+  onFatal: () => void,
+): void {
+  const failTransfer = (): void => {
+    pending.delete(socket);
+    socket.destroy();
+    onFatal();
+  };
+  socket.once("error", failTransfer);
+  socket.once("connect", () => {
+    try {
+      child.send({ kind: "socket", connectionId: message.connectionId }, socket, (error) => {
+        pending.delete(socket);
+        socket.off("error", failTransfer);
+        if (error !== null) failTransfer();
+      });
+    } catch {
+      failTransfer();
+    }
   });
-  server.maxConnections = 64;
-  server.on("error", onFatal);
+}
+
+function createHostBridge(
+  child: ChildProcess,
+  config: CommonConfig,
+  onFatal: () => void,
+): HostBridge {
+  const pending = new Set<Socket>();
+  let ready = false;
+  let lastConnectionId = 0;
+  let active = true;
+  const onMessage = (message: unknown, handle: unknown): void => {
+    if (!active) return;
+    if (handle !== undefined) {
+      onFatal();
+      return;
+    }
+    if (isBridgeReadyMessage(message) && !ready) {
+      ready = true;
+      return;
+    }
+    if (!ready || !isBridgeOpenMessage(message)) {
+      onFatal();
+      return;
+    }
+    if (message.connectionId <= lastConnectionId || pending.size >= MAX_RELAY_CONNECTIONS) {
+      onFatal();
+      return;
+    }
+    lastConnectionId = message.connectionId;
+    const socket = createConnection({ host: config.gatewayHost, port: config.gatewayPort });
+    pending.add(socket);
+    transferGatewaySocket(child, message, socket, pending, onFatal);
+  };
+  child.on("message", onMessage);
   return {
-    server,
     destroyConnections: (): void => {
-      for (const connection of connections) connection.destroy();
+      destroySockets(pending);
+    },
+    dispose: (): void => {
+      active = false;
+      child.off("message", onMessage);
+      destroySockets(pending);
     },
   };
 }
 
-function hostRelay(config: CommonConfig, onFatal: () => void): Relay {
-  return createRelay(
-    () => createConnection({ host: config.gatewayHost, port: config.gatewayPort }),
-    onFatal,
-  );
+function sendBridgeOpen(message: BridgeOpenMessage, onFatal: () => void): void {
+  const send = process.send?.bind(process);
+  if (send === undefined) {
+    onFatal();
+    return;
+  }
+  try {
+    send(message, (error) => {
+      if (error !== null) onFatal();
+    });
+  } catch {
+    onFatal();
+  }
 }
 
-function namespaceRelay(config: NamespaceConfig, onFatal: () => void): Relay {
-  return createRelay(() => createConnection(config.socketPath), onFatal);
+function receiveGatewaySocket(
+  message: unknown,
+  handle: unknown,
+  pending: Map<number, Socket>,
+  connections: Set<Socket>,
+  onFatal: () => void,
+): void {
+  if (!isBridgeSocketMessage(message) || !(handle instanceof Socket)) {
+    onFatal();
+    return;
+  }
+  const client = pending.get(message.connectionId);
+  if (client === undefined) {
+    handle.destroy();
+    return;
+  }
+  pending.delete(message.connectionId);
+  connections.add(handle);
+  handle.once("close", () => {
+    connections.delete(handle);
+  });
+  relaySockets(client, handle, onFatal);
+}
+
+function namespaceRelay(onFatal: () => void): Relay {
+  const pending = new Map<number, Socket>();
+  const connections = new Set<Socket>();
+  let nextConnectionId = 1;
+  const server = createServer((client) => {
+    if (pending.size >= MAX_RELAY_CONNECTIONS || !Number.isSafeInteger(nextConnectionId)) {
+      client.destroy();
+      onFatal();
+      return;
+    }
+    const connectionId = nextConnectionId++;
+    pending.set(connectionId, client);
+    connections.add(client);
+    client.once("close", () => {
+      pending.delete(connectionId);
+      connections.delete(client);
+    });
+    sendBridgeOpen({ kind: "open", connectionId }, onFatal);
+  });
+  const onMessage = (message: unknown, handle: unknown): void => {
+    receiveGatewaySocket(message, handle, pending, connections, onFatal);
+  };
+  server.maxConnections = MAX_RELAY_CONNECTIONS;
+  server.on("error", onFatal);
+  process.on("message", onMessage);
+  process.once("disconnect", onFatal);
+  return {
+    server,
+    destroyConnections: (): void => {
+      destroySockets(connections);
+    },
+    dispose: (): void => {
+      process.off("message", onMessage);
+      process.off("disconnect", onFatal);
+    },
+  };
+}
+
+function announceNamespaceReady(): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const send = process.send?.bind(process);
+    if (send === undefined) {
+      reject(new Error("namespace-ipc-unavailable"));
+      return;
+    }
+    try {
+      send({ kind: "ready" }, (error) => {
+        if (error === null) resolve();
+        else reject(error);
+      });
+    } catch (error: unknown) {
+      reject(error instanceof Error ? error : new Error("namespace-ipc-failed"));
+    }
+  });
 }
 
 function listen(
@@ -510,6 +664,8 @@ function listen(
 
 function closeRelay(relay: Relay): Promise<void> {
   relay.destroyConnections();
+  relay.dispose();
+  if (!relay.server.listening) return Promise.resolve();
   return new Promise((resolve, reject) => {
     relay.server.close((error) => {
       if (error === undefined) resolve();
@@ -591,14 +747,13 @@ function forwardSignals(child: ChildProcess): () => void {
   };
 }
 
-function namespaceArgs(config: CommonConfig, socketPath: string): readonly string[] {
+function namespaceArgs(config: CommonConfig): readonly string[] {
   return [
     linuxGatewayLauncherPath(),
     "namespace",
     config.backend,
     config.gatewayHost,
     String(config.gatewayPort),
-    socketPath,
     config.cwd,
     config.command,
     ...config.args,
@@ -607,9 +762,8 @@ function namespaceArgs(config: CommonConfig, socketPath: string): readonly strin
 
 export function buildLinuxGatewayNamespaceCommand(
   config: CommonConfig,
-  socketPath: string,
 ): readonly [string, readonly string[]] {
-  const launcher = [process.execPath, ...namespaceArgs(config, socketPath)];
+  const launcher = [process.execPath, ...namespaceArgs(config)];
   if (config.backend === "bubblewrap") {
     // Bubblewrap passes unused inherited descriptors to its child. The caller reserves fds 3-8
     // and relocates diagnostics to fd 9 so Bubblewrap's low-numbered eventfds cannot collide.
@@ -652,7 +806,7 @@ function activeDiagnosticFd(): number | undefined {
   }
 }
 
-function diagnosticNestedLauncherStdio(): StdioOptions {
+function nestedLauncherStdio(preserveDiagnosticFd: boolean): StdioOptions {
   return [
     "inherit",
     "inherit",
@@ -663,38 +817,46 @@ function diagnosticNestedLauncherStdio(): StdioOptions {
     "ignore",
     "ignore",
     "ignore",
-    LINUX_GATEWAY_DIAGNOSTIC_FD,
+    preserveDiagnosticFd ? LINUX_GATEWAY_DIAGNOSTIC_FD : "ignore",
+    "ipc",
   ];
 }
 
-function diagnosticNestedLauncherEnvironment(): NodeJS.ProcessEnv {
-  return {
-    ...process.env,
-    [LINUX_GATEWAY_DIAGNOSTIC_FD_ENV]: String(LINUX_GATEWAY_NAMESPACE_DIAGNOSTIC_FD),
-  };
+function nestedLauncherEnvironment(preserveDiagnosticFd: boolean): NodeJS.ProcessEnv {
+  const environment = targetEnvironment();
+  return preserveDiagnosticFd
+    ? {
+        ...environment,
+        [LINUX_GATEWAY_DIAGNOSTIC_FD_ENV]: String(LINUX_GATEWAY_NAMESPACE_DIAGNOSTIC_FD),
+      }
+    : environment;
 }
 
 function targetEnvironment(): NodeJS.ProcessEnv {
+  const privateNames = new Set([
+    LINUX_GATEWAY_DIAGNOSTIC_FD_ENV,
+    "NODE_CHANNEL_FD",
+    "NODE_CHANNEL_SERIALIZATION_MODE",
+  ]);
   return Object.fromEntries(
-    Object.entries(process.env).filter(([name]) => name !== LINUX_GATEWAY_DIAGNOSTIC_FD_ENV),
+    Object.entries(process.env).filter(([name]) => !privateNames.has(name)),
   );
 }
 
 function targetStdio(): StdioOptions {
-  return activeDiagnosticFd() === LINUX_GATEWAY_NAMESPACE_DIAGNOSTIC_FD
-    ? [
-        "inherit",
-        "inherit",
-        "inherit",
-        "ignore",
-        "ignore",
-        "ignore",
-        "ignore",
-        "ignore",
-        "ignore",
-        "ignore",
-      ]
-    : ["inherit", "inherit", "inherit"];
+  return [
+    "inherit",
+    "inherit",
+    "inherit",
+    "ignore",
+    "ignore",
+    "ignore",
+    "ignore",
+    "ignore",
+    "ignore",
+    "ignore",
+    "ignore",
+  ];
 }
 
 async function executableLoopbackTool(): Promise<string> {
@@ -715,70 +877,64 @@ async function enableUnshareLoopback(): Promise<void> {
   if ((await waitForChild(child)) !== 0) fail("loopback-setup-failed");
 }
 
-async function runNamespace(config: NamespaceConfig): Promise<number> {
+async function runNamespace(config: CommonConfig): Promise<number> {
   if (config.backend === "unshare") await enableUnshareLoopback();
   const childReference: ChildReference = { current: undefined, failure: undefined };
-  const relay = namespaceRelay(config, () => {
+  const relay = namespaceRelay(() => {
     terminateForRelayFailure(childReference, "namespace-relay-failed");
   });
-  return runWithLinuxGatewayCleanup(
-    async () => {
-      await listen(relay.server, { host: config.gatewayHost, port: config.gatewayPort });
-      const child = spawn(config.command, config.args, {
-        cwd: config.cwd,
-        env: targetEnvironment(),
-        stdio: targetStdio(),
-      });
-      childReference.current = child;
-      const stopForwarding = forwardSignals(child);
-      try {
-        return await waitForChildOrRelayFailure(child, childReference);
-      } finally {
-        stopForwarding();
-      }
-    },
-    async () => {
-      if (relay.server.listening) await closeRelay(relay);
-    },
-    () => Promise.resolve(),
-  );
+  try {
+    return await runWithLinuxGatewayCleanup(
+      async () => {
+        await listen(relay.server, { host: config.gatewayHost, port: config.gatewayPort });
+        try {
+          await announceNamespaceReady();
+        } catch {
+          return fail("namespace-relay-failed");
+        }
+        const child = spawn(config.command, config.args, {
+          cwd: config.cwd,
+          env: targetEnvironment(),
+          stdio: targetStdio(),
+        });
+        childReference.current = child;
+        const stopForwarding = forwardSignals(child);
+        try {
+          return await waitForChildOrRelayFailure(child, childReference);
+        } finally {
+          stopForwarding();
+        }
+      },
+      () => closeRelay(relay),
+      () => Promise.resolve(),
+    );
+  } finally {
+    if (process.connected && process.disconnect !== undefined) process.disconnect();
+  }
 }
 
 async function runHost(config: CommonConfig): Promise<number> {
   if (process.platform !== "linux") return fail("unsupported-platform");
-  const directory = await mkdtemp(join(tmpdir(), "keiko-gateway-"));
-  const socketPath = join(directory, "relay.sock");
   const childReference: ChildReference = { current: undefined, failure: undefined };
   const preserveDiagnosticFd = activeDiagnosticFd() === LINUX_GATEWAY_DIAGNOSTIC_FD;
-  const relay = hostRelay(config, () => {
+  const [command, args] = buildLinuxGatewayNamespaceCommand(config);
+  const child = spawn(command, args, {
+    cwd: config.cwd,
+    env: nestedLauncherEnvironment(preserveDiagnosticFd),
+    stdio: nestedLauncherStdio(preserveDiagnosticFd),
+  });
+  childReference.current = child;
+  const bridge = createHostBridge(child, config, () => {
     terminateForRelayFailure(childReference, "host-relay-failed");
   });
-  return runWithLinuxGatewayCleanup(
-    async () => {
-      await chmod(directory, 0o700);
-      await listen(relay.server, socketPath);
-      await chmod(socketPath, 0o600);
-      const [command, args] = buildLinuxGatewayNamespaceCommand(config, socketPath);
-      const child = spawn(command, args, {
-        cwd: config.cwd,
-        env: preserveDiagnosticFd ? diagnosticNestedLauncherEnvironment() : targetEnvironment(),
-        stdio: preserveDiagnosticFd
-          ? diagnosticNestedLauncherStdio()
-          : ["inherit", "inherit", "inherit"],
-      });
-      childReference.current = child;
-      const stopForwarding = forwardSignals(child);
-      try {
-        return await waitForChildOrRelayFailure(child, childReference);
-      } finally {
-        stopForwarding();
-      }
-    },
-    async () => {
-      if (relay.server.listening) await closeRelay(relay);
-    },
-    async () => rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 }),
-  );
+  const stopForwarding = forwardSignals(child);
+  try {
+    return await waitForChildOrRelayFailure(child, childReference);
+  } finally {
+    stopForwarding();
+    bridge.destroyConnections();
+    bridge.dispose();
+  }
 }
 
 function isMainModule(): boolean {
@@ -801,9 +957,7 @@ export function parseLinuxGatewayDiagnosticLine(
 ): LinuxGatewayDiagnosticKind | undefined {
   if (!line.startsWith(LINUX_GATEWAY_DIAGNOSTIC_PREFIX)) return undefined;
   const kind = line.slice(LINUX_GATEWAY_DIAGNOSTIC_PREFIX.length);
-  return LINUX_GATEWAY_DIAGNOSTIC_KINDS.has(kind)
-    ? (kind as LinuxGatewayDiagnosticKind)
-    : undefined;
+  return isLinuxGatewayDiagnosticKind(kind) ? kind : undefined;
 }
 
 function emitLinuxGatewayDiagnostic(kind: LinuxGatewayDiagnosticKind): void {

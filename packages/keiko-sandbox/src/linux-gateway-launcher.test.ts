@@ -1,6 +1,6 @@
-import { spawn, spawnSync, type StdioOptions } from "node:child_process";
-import { mkdtemp, readdir, rm } from "node:fs/promises";
-import { createServer, type Server } from "node:net";
+import { spawn, spawnSync, type ChildProcess, type StdioOptions } from "node:child_process";
+import { access, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { createConnection, createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
@@ -10,6 +10,7 @@ import {
   LINUX_GATEWAY_DIAGNOSTIC_FD,
   LINUX_GATEWAY_DIAGNOSTIC_FD_ENV,
   LINUX_GATEWAY_NAMESPACE_DIAGNOSTIC_FD,
+  LINUX_GATEWAY_NAMESPACE_IPC_FD,
   linuxGatewayLauncherPath,
   linuxGatewayDiagnosticKind,
   parseLinuxGatewayDiagnosticLine,
@@ -39,23 +40,61 @@ const ROUND_TRIP_SNIPPET = [
   "socket.on('timeout', () => { process.stdout.write('TIMEOUT'); socket.destroy(); process.exitCode = 3; });",
 ].join("");
 
-const SILENT_ROUND_TRIP_SNIPPET = [
+const HELD_ROUND_TRIP_SNIPPET = [
+  "const fs = require('node:fs');",
   "const net = require('node:net');",
   "const port = Number(process.argv[1]);",
+  "const readyPath = process.argv[2];",
+  "const releasePath = process.argv[3];",
   "const socket = net.connect({ host: '127.0.0.1', port });",
-  "socket.setTimeout(3000);",
   "socket.on('connect', () => socket.write('PING'));",
-  "socket.on('data', (data) => { socket.destroy(); process.exitCode = data.toString() === 'PONG' ? 0 : 3; });",
-  "socket.on('error', () => { process.exitCode = 3; });",
-  "socket.on('timeout', () => { socket.destroy(); process.exitCode = 3; });",
+  "socket.on('data', (data) => {",
+  "  socket.destroy();",
+  "  if (data.toString() !== 'PONG') process.exit(3);",
+  "  fs.writeFileSync(readyPath, '');",
+  "  const wait = () => fs.existsSync(releasePath) ? process.exit(0) : setTimeout(wait, 20);",
+  "  wait();",
+  "});",
+  "socket.on('error', () => process.exit(4));",
+].join("");
+
+const SIBLING_BRIDGE_PROBE_SNIPPET = [
+  "const fs = require('node:fs');",
+  "const net = require('node:net');",
+  "const path = require('node:path');",
+  "const port = Number(process.argv[1]);",
+  "const directory = process.argv[2];",
+  "const sockets = fs.readdirSync(directory, { withFileTypes: true })",
+  "  .filter((entry) => entry.isDirectory() && entry.name.startsWith('keiko-gateway-'))",
+  "  .map((entry) => path.join(directory, entry.name, 'relay.sock'))",
+  "  .filter((candidate) => { try { return fs.statSync(candidate).isSocket(); } catch { return false; } });",
+  "const probe = (candidate) => new Promise((resolve) => {",
+  "  const socket = net.connect(candidate);",
+  "  let body = '';",
+  "  socket.setTimeout(1000);",
+  "  socket.on('connect', () => socket.write('PING'));",
+  "  socket.on('data', (chunk) => { body += chunk.toString(); });",
+  "  socket.on('end', () => resolve(body === 'PONG'));",
+  "  socket.on('error', () => resolve(false));",
+  "  socket.on('timeout', () => { socket.destroy(); resolve(false); });",
+  "});",
+  "Promise.all(sockets.map(probe)).then((results) => {",
+  "  if (results.filter(Boolean).length > 1) { process.stdout.write('BRIDGE_EXPOSED'); process.exit(44); }",
+  "  const socket = net.connect({ host: '127.0.0.1', port });",
+  "  socket.on('connect', () => socket.write('PING'));",
+  "  socket.on('data', (data) => { process.stdout.write(data.toString() === 'PONG' ? 'RELAYED' : 'INVALID'); socket.destroy(); });",
+  "  socket.on('error', () => { process.stdout.write('BLOCKED'); process.exitCode = 3; });",
+  "});",
 ].join("");
 
 const SPOOF_ROUND_TRIP_SNIPPET = [
   'if [ "${KEIKO_LINUX_GATEWAY_DIAGNOSTIC_FD+x}" = x ]; then exit 41; fi;',
+  'if [ "${NODE_CHANNEL_FD+x}" = x ]; then exit 40; fi;',
   "if { printf '%s\\n' 'keiko-linux-gateway:error:cleanup-failed' >&3; } 2>/dev/null; then exit 42; fi;",
   `if { printf '%s\\n' 'keiko-linux-gateway:error:cleanup-failed' >&${String(LINUX_GATEWAY_NAMESPACE_DIAGNOSTIC_FD)}; } 2>/dev/null; then exit 43; fi;`,
+  `if [ -e /proc/self/fd/${String(LINUX_GATEWAY_NAMESPACE_IPC_FD)} ]; then exit 45; fi;`,
   "printf '%s\\n' 'keiko-linux-gateway:error:cleanup-failed' >&2;",
-  'exec "$1" -e "$2" "$3"',
+  'exec "$1" -e "$2" "$3" "$4"',
 ].join(" ");
 
 const NAMESPACE_SNIPPET = [
@@ -125,6 +164,64 @@ function runChild(
   });
 }
 
+function captureNamespaceChild(
+  child: ChildProcess,
+  onMessage: (child: ChildProcess, message: unknown) => void,
+): Promise<ChildRun> {
+  return new Promise((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    const timeout = setTimeout(() => child.kill("SIGKILL"), 10_000);
+    if (child.stdout === null || child.stderr === null) {
+      reject(new Error("namespace-output-pipes-unavailable"));
+      return;
+    }
+    child.stdout.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
+    child.stderr.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
+    child.on("message", (message) => {
+      onMessage(child, message);
+    });
+    child.once("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
+    child.once("close", (status) => {
+      clearTimeout(timeout);
+      resolve({ status: status ?? 1, stdout: stdout.trim(), stderr: stderr.trim() });
+    });
+  });
+}
+
+function runNamespaceChild(
+  port: number,
+  onMessage: (child: ChildProcess, message: unknown) => void,
+): Promise<ChildRun> {
+  const child = spawn(
+    process.execPath,
+    [
+      linuxGatewayLauncherPath(),
+      "namespace",
+      "bubblewrap",
+      "127.0.0.1",
+      String(port),
+      process.cwd(),
+      process.execPath,
+      "-e",
+      NAMESPACE_SNIPPET,
+      String(port),
+    ],
+    { stdio: ["ignore", "pipe", "pipe", "ipc"] },
+  );
+  return captureNamespaceChild(child, onMessage);
+}
+
+function connectionId(message: unknown): number | undefined {
+  if (typeof message !== "object" || message === null || !("connectionId" in message)) {
+    return undefined;
+  }
+  return typeof message.connectionId === "number" ? message.connectionId : undefined;
+}
+
 function listen(server: Server, target: number | string): Promise<void> {
   return new Promise((resolve, reject) => {
     server.once("error", reject);
@@ -158,6 +255,19 @@ async function reservePort(): Promise<number> {
   return reservation.port;
 }
 
+async function waitForPath(path: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (Date.now() < deadline) {
+    try {
+      await access(path);
+      return;
+    } catch {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+  throw new Error("path-readiness-timeout");
+}
+
 function requireWrapped(
   decision: IsolatedRunDecision,
 ): Extract<IsolatedRunDecision, { kind: "wrapped" }> {
@@ -181,10 +291,7 @@ describe("Linux gateway launcher validation", () => {
     [["host", "bubblewrap", "127.0.0.1", "65536", "/tmp", "/bin/true"], "invalid-gateway-port"],
     [["host", "bubblewrap", "127.0.0.1", "1983", "relative", "/bin/true"], "invalid-cwd"],
     [["host", "bubblewrap", "127.0.0.1", "1983", "/tmp", "true"], "invalid-command"],
-    [
-      ["namespace", "bubblewrap", "127.0.0.1", "1983", "relative", "/tmp", "/bin/true"],
-      "invalid-socket-path",
-    ],
+    [["namespace", "bubblewrap", "127.0.0.1", "1983", "relative", "/bin/true"], "invalid-cwd"],
   ] as const)(
     "rejects malformed launcher arguments without starting a child",
     async (args, code) => {
@@ -280,7 +387,7 @@ describe("Linux namespace command compilation", () => {
   };
 
   it("uses a parent-bound bubblewrap network namespace", () => {
-    const [command, args] = buildLinuxGatewayNamespaceCommand(config, "/tmp/private/relay.sock");
+    const [command, args] = buildLinuxGatewayNamespaceCommand(config);
     expect(command).toBe("bwrap");
     expect(args).toEqual([
       "--unshare-net",
@@ -298,7 +405,6 @@ describe("Linux namespace command compilation", () => {
       "bubblewrap",
       "127.0.0.1",
       "1983",
-      "/tmp/private/relay.sock",
       "/work/root",
       "/trusted/opencode",
       "serve",
@@ -306,10 +412,7 @@ describe("Linux namespace command compilation", () => {
   });
 
   it("uses an owner-mapped namespace whose child dies with unshare", () => {
-    const [command, args] = buildLinuxGatewayNamespaceCommand(
-      { ...config, backend: "unshare" },
-      "/tmp/private/relay.sock",
-    );
+    const [command, args] = buildLinuxGatewayNamespaceCommand({ ...config, backend: "unshare" });
     expect(command).toBe("unshare");
     expect(args.slice(0, 5)).toEqual([
       "--map-root-user",
@@ -323,59 +426,32 @@ describe("Linux namespace command compilation", () => {
 });
 
 describe("Linux namespace relay lifecycle", () => {
-  it("relays through the private Unix socket and removes its loopback listener before returning", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "keiko-gateway-unit-"));
-    const socketPath = join(directory, "relay.sock");
+  it("relays a host-connected socket received through the anonymous IPC channel", async () => {
+    const gateway = await listenEphemeral();
     const port = await reservePort();
-    const unixServer = createServer((socket) => {
-      socket.once("data", (data) => socket.end(data.toString("utf8") === "PING" ? "PONG" : "NO"));
-    });
     try {
-      await listen(unixServer, socketPath);
-      const status = await runLinuxGatewayLauncher([
-        "namespace",
-        "bubblewrap",
-        "127.0.0.1",
-        String(port),
-        socketPath,
-        process.cwd(),
-        process.execPath,
-        "-e",
-        NAMESPACE_SNIPPET,
-        String(port),
-      ]);
-      expect(status).toBe(0);
+      const result = await runNamespaceChild(port, (child, message) => {
+        const id = connectionId(message);
+        if (id === undefined) return;
+        const socket = createConnection({ host: "127.0.0.1", port: gateway.port });
+        socket.once("connect", () => child.send({ kind: "socket", connectionId: id }, socket));
+      });
+      expect(result).toEqual({ status: 0, stdout: "", stderr: "" });
       const after = createServer();
       await listen(after, port);
       await close(after);
     } finally {
-      await close(unixServer);
-      await rm(directory, { recursive: true, force: true });
+      await close(gateway.server);
     }
   });
 
-  it("classifies an upstream relay failure instead of returning a child result", async () => {
-    const directory = await mkdtemp(join(tmpdir(), "keiko-gateway-unit-"));
-    const socketPath = join(directory, "missing.sock");
+  it("classifies a malformed IPC bridge message instead of returning a child result", async () => {
     const port = await reservePort();
-    try {
-      await expect(
-        runLinuxGatewayLauncher([
-          "namespace",
-          "bubblewrap",
-          "127.0.0.1",
-          String(port),
-          socketPath,
-          process.cwd(),
-          process.execPath,
-          "-e",
-          ROUND_TRIP_SNIPPET,
-          String(port),
-        ]),
-      ).rejects.toThrow("namespace-relay-failed");
-    } finally {
-      await rm(directory, { recursive: true, force: true });
-    }
+    const result = await runNamespaceChild(port, (child, message) => {
+      if (connectionId(message) !== undefined) child.send({ kind: "unexpected" });
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("keiko-linux-gateway:error:namespace-relay-failed");
   });
 });
 
@@ -420,11 +496,19 @@ describe("real OS-level gateway confinement (Linux namespace bridge, #3422)", ()
         );
         expect((await runChild(crossRun.command, crossRun.args, env)).stdout).toBe("BLOCKED");
 
+        const readyPath = join(launcherTemp, "first-ready");
+        const releasePath = join(launcherTemp, "first-release");
         const firstAllowed = requireWrapped(
           planIsolatedRun(
             {
               ...plan(firstGateway.port, firstGateway.port),
-              args: ["-e", SILENT_ROUND_TRIP_SNIPPET, String(firstGateway.port)],
+              args: [
+                "-e",
+                HELD_ROUND_TRIP_SNIPPET,
+                String(firstGateway.port),
+                readyPath,
+                releasePath,
+              ],
             },
             availability,
             "linux",
@@ -440,20 +524,22 @@ describe("real OS-level gateway confinement (Linux namespace bridge, #3422)", ()
                 SPOOF_ROUND_TRIP_SNIPPET,
                 "keiko-spoof-proof",
                 process.execPath,
-                ROUND_TRIP_SNIPPET,
+                SIBLING_BRIDGE_PROBE_SNIPPET,
                 String(secondGateway.port),
+                launcherTemp,
               ],
             },
             availability,
             "linux",
           ),
         );
-        const allowed = await Promise.all([
-          runLinuxGatewayLauncher(firstAllowed.args.slice(1)),
-          runChild(secondAllowed.command, secondAllowed.args, env, true),
-        ]);
-        expect(allowed[0]).toBe(0);
-        expect(allowed[1]).toEqual({
+        const firstRun = runChild(firstAllowed.command, firstAllowed.args, env);
+        await waitForPath(readyPath);
+        const secondRun = await runChild(secondAllowed.command, secondAllowed.args, env, true);
+        await writeFile(releasePath, "");
+        expect(await firstRun).toMatchObject({ status: 0 });
+        await Promise.all([rm(readyPath, { force: true }), rm(releasePath, { force: true })]);
+        expect(secondRun).toEqual({
           status: 0,
           stdout: "RELAYED",
           stderr: "keiko-linux-gateway:error:cleanup-failed",

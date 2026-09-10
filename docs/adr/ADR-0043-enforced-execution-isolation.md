@@ -17,9 +17,10 @@ code comments anticipated (no such files existed); those comments are updated to
 
 ## Version
 
-1.1 — Issue #3422 moves the internal Linux gateway launcher into the `keiko-sandbox` enforcement
-boundary while `keiko-tools` remains the disposable-command spawn boundary, and records the
-kernel-proven private diagnostics-descriptor lifecycle (2026-09-10).
+1.2 — Issue #3422 moves the internal Linux gateway launcher into the `keiko-sandbox` enforcement
+boundary while `keiko-tools` remains the disposable-command spawn boundary, replaces its
+same-uid-discoverable filesystem relay with an anonymous descriptor-transfer channel, and records
+the kernel-proven private diagnostics-descriptor lifecycle (2026-09-10).
 
 ## Context
 
@@ -70,7 +71,7 @@ read-only command tools keep `network: "inherit"` and their existing behaviour.
 
 D12's gateway-only Linux wrapper does not create another product command boundary: the planned child
 is still one command to the consumer, while the package-private launcher owns only the inseparable
-namespace peer, Unix relay, and target-child lifecycle needed to enforce that plan.
+namespace peer, anonymous descriptor relay, and target-child lifecycle needed to enforce that plan.
 
 ### D3 — Hybrid backends, fail-closed
 
@@ -213,20 +214,26 @@ request, before any process exists.
 `buildRuntimeGatewaySeatbeltCommand` remains the enforcing macOS product path (ADR-0140). Issue
 #3422 adds the corresponding Linux primitive to the generic isolated-run planner: when bubblewrap
 or unshare is available, `selectGatewayBackend` chooses that native namespace backend and
-`buildWrappedCommand` starts the packaged internal launcher in `runtime.ts`. The host launcher creates an
-owner-only, unpredictable Unix-domain socket and fixes its relay destination to the validated
-gateway address and port before spawn. Its namespace peer exposes that same port on the isolated
-loopback interface and forwards streams only through the private socket. The sidecar starts only
-after both listener boundaries are ready; descendants inherit the network namespace. No host
-network namespace, veth, NAT rule, root, or ambient `CAP_NET_ADMIN` is granted. Parent-death,
-signals, relay failure, and cleanup stay inside the wrapper's fail-closed lifecycle.
+`buildWrappedCommand` starts the packaged internal launcher in `runtime.ts`. The host and namespace
+launchers communicate over one anonymous Node IPC socketpair inherited on descriptor 10. The
+namespace peer exposes the validated port on its isolated loopback interface and requests a stream
+with a bounded, monotonically increasing connection id. The host alone connects to the validated
+gateway address and port and passes that already-connected TCP descriptor over the anonymous
+socketpair. There is no filesystem socket name, temporary relay directory, or reconnectable bridge
+capability for a same-uid sidecar to enumerate across concurrent runs. The sidecar starts only after
+the namespace listener is ready and its readiness message has crossed the IPC channel; descendants
+inherit the network namespace. No host network namespace, veth, NAT rule, root, or ambient
+`CAP_NET_ADMIN` is granted. Parent-death, signals, relay failure, and cleanup stay inside the
+wrapper's fail-closed lifecycle.
 
 Launcher failures cross a dedicated descriptor-3 diagnostics channel that the server provisions
 only for the Linux wrapper. The host launcher relocates that pipe to descriptor 9 when entering the
 network namespace and reserves descriptors 3 through 8, keeping Bubblewrap's low-numbered lifecycle
 eventfds away from it. The pipe is not claimed through `--sync-fd`, whose eventfd semantics make it
 unwritable for text diagnostics. The namespace launcher removes both descriptor 9 and its marker
-environment variable before spawning the sidecar, so the sidecar cannot forge launcher evidence.
+environment variable before spawning the sidecar. It also closes descriptor 10 and removes Node's
+IPC marker variables, so the sidecar can neither forge launcher evidence nor request or receive a
+gateway handle.
 The server accepts only the closed launcher error vocabulary and records the first failure as
 `runtime.confinement.failed`, with the run correlation id and body-free backend/source fields. A
 missing diagnostics pipe refuses the launch and terminates the just-spawned unowned process tree.
@@ -237,9 +244,12 @@ The Linux reference-runner test proves the mechanism rather than an argv string:
 child completes a PING/PONG exchange with a hostile ephemeral loopback listener, the same child
 under the planned gateway
 wrapper cannot reach that listener or a concurrent run's port, and two isolated runs can each
-complete the same data round trip only through their own real gateway listener. Missing namespace
-tools on Linux fail that reference
-proof. Containers remain ineligible because no equivalent bridge is compiled for them.
+complete the same data round trip only through their own real gateway listener. The hostile second
+sidecar also enumerates the shared temporary directory and tries every legacy `relay.sock` it finds:
+the regression proof fails against the former filesystem bridge because both concurrent gateway
+destinations are reachable, and passes only when no reconnectable bridge exists. Missing namespace
+tools on Linux fail that reference proof. Containers remain ineligible because no equivalent bridge
+is compiled for them.
 
 This does **not** yet establish Linux product coverage. Keiko still has no `linux-x64`
 `LongLivedRuntimePlatform`, `RuntimeQualificationTarget`, staged/portable artifact, discovery path,
@@ -287,8 +297,9 @@ thirteen-line wrapper over that same function (its exported name and observable 
 unchanged, so existing callers and D11's own description above still hold). There is no longer a
 second, independently-maintained copy of the "(deny network*) plus one port-specific allow" formula.
 
-Linux now selects bubblewrap, then unshare, only because D12's packaged Unix-domain bridge supplies
-the missing fixed route back to the host gateway without exposing the host network namespace.
+Linux now selects bubblewrap, then unshare, only because D12's packaged anonymous descriptor bridge
+supplies the missing fixed route back to the host gateway without exposing the host network
+namespace or a reusable filesystem capability.
 Absence of both primitives fails closed; a container runtime is never substituted because no
 container bridge implements the same contract. Invalid/accessor-backed gateway values fail as
 `invalid-network-policy` before a child is compiled, rather than being mistaken for the narrower

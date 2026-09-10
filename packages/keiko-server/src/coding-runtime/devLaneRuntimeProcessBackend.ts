@@ -13,10 +13,12 @@ import {
   resolveDarwinGitExecutable,
   type AttestedDarwinGitExecutable,
   type BackendAvailability,
-  type LinuxGatewayDiagnosticKind,
   type RuntimeGatewayConfinement,
 } from "@oscharko-dev/keiko-sandbox";
-import type { NetworkGatewayPolicy } from "@oscharko-dev/keiko-contracts";
+import type {
+  LinuxGatewayDiagnosticKind,
+  NetworkGatewayPolicy,
+} from "@oscharko-dev/keiko-contracts";
 import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import { processServerLogSink } from "../process-log-sink.js";
