@@ -65,8 +65,8 @@ function recordAt(
 }
 
 function hasExactKeys(record: Record<string, unknown>): boolean {
-  const actual = Object.keys(record).sort();
-  const expected = [...BINDING_KEYS].sort();
+  const actual = Object.keys(record).sort((left, right) => left.localeCompare(right, "en-US"));
+  const expected = [...BINDING_KEYS].sort((left, right) => left.localeCompare(right, "en-US"));
   return actual.length === expected.length && expected.every((key, index) => actual[index] === key);
 }
 

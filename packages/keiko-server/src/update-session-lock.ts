@@ -539,7 +539,9 @@ function transferRecoveryOwnership(
   try {
     durableReplaceJsonFile(lockPath, next, options, inspection.record.sessionId);
     const current = readLock(lockPath);
-    if (current === undefined || lockIdentity(current) !== lockIdentity(next)) throw new Error();
+    if (current === undefined || lockIdentity(current) !== lockIdentity(next)) {
+      throw new Error("update session lock recovery claim was not published");
+    }
   } catch {
     try {
       const current = readLock(lockPath);

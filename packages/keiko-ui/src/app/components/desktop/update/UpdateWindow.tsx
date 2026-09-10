@@ -163,16 +163,14 @@ function remediationProjectionKey(
   status: UpdateSessionStatus,
 ): string {
   const selected = sessionForDisplay(status, report);
+  let sessionLocation = "none";
+  if (status.activeSession !== undefined) sessionLocation = "active";
+  else if (status.lastSession !== undefined) sessionLocation = "last";
   return JSON.stringify({
     targetVersion: report.targetVersion,
     impact: impactInput(report),
     persistence: status.persistence,
-    sessionLocation:
-      status.activeSession !== undefined
-        ? "active"
-        : status.lastSession === undefined
-          ? "none"
-          : "last",
+    sessionLocation,
     session:
       selected === undefined
         ? undefined

@@ -671,7 +671,8 @@ function parseLegacyLine(line: string): LegacyEvent | undefined {
   }
   const value = canonicalLegacyValue(parsed);
   const canonical = JSON.stringify(value);
-  const importedId = `legacy-audit-event-${hash(`KLA1\n${canonical}`)}`;
+  const digest = hash(`KLA1\n${canonical}`);
+  const importedId = `legacy-audit-event-${digest}`;
   return { value, canonical, importedId };
 }
 
