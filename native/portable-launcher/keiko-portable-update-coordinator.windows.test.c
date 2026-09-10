@@ -684,16 +684,19 @@ typedef struct {
   wchar_t current_generation[TEST_PATH_CAP];
   wchar_t stage[TEST_PATH_CAP];
   wchar_t candidate[TEST_PATH_CAP];
+  wchar_t candidate_portable[TEST_PATH_CAP];
   wchar_t candidate_generations[TEST_PATH_CAP];
   wchar_t candidate_generation[TEST_PATH_CAP];
   wchar_t candidate_launcher[TEST_PATH_CAP];
   wchar_t candidate_supervisor[TEST_PATH_CAP];
+  wchar_t current_supervisor[TEST_PATH_CAP];
   wchar_t launcher[TEST_PATH_CAP];
   wchar_t setup[TEST_PATH_CAP];
   wchar_t state[TEST_PATH_CAP];
   wchar_t registration[TEST_PATH_CAP];
   wchar_t capsule[TEST_PATH_CAP];
   wchar_t backup[TEST_PATH_CAP];
+  wchar_t snapshot[TEST_PATH_CAP];
   char current_generation_sha256[65];
   char candidate_generation_sha256[65];
   char current_launcher_sha256[65];
@@ -758,9 +761,6 @@ static void test_plan_path(
 }
 
 static void windows_cutover_fixture_init(windows_cutover_fixture *fixture) {
-  wchar_t candidate_portable[TEST_PATH_CAP];
-  wchar_t current_supervisor[TEST_PATH_CAP];
-  wchar_t snapshot[TEST_PATH_CAP];
   memset(fixture, 0, sizeof(*fixture));
   test_create_root(fixture->root);
   assert(test_join(fixture->managed, fixture->root, L"\\managed"));
@@ -774,18 +774,22 @@ static void windows_cutover_fixture_init(windows_cutover_fixture *fixture) {
       L"\\current-seed",
       "current supervisor\n",
       fixture->current_generation,
-      current_supervisor,
+      fixture->current_supervisor,
       fixture->current_generation_sha256
   );
-  test_file_hash(current_supervisor, fixture->current_supervisor_sha256);
+  test_file_hash(fixture->current_supervisor, fixture->current_supervisor_sha256);
 
   assert(test_join(fixture->stage, fixture->root, L"\\stage"));
   assert(CreateDirectoryW(fixture->stage, NULL));
   assert(test_join(fixture->candidate, fixture->stage, L"\\Keiko"));
   assert(CreateDirectoryW(fixture->candidate, NULL));
-  assert(test_join(candidate_portable, fixture->candidate, L"\\.portable"));
-  assert(CreateDirectoryW(candidate_portable, NULL));
-  assert(test_join(fixture->candidate_generations, candidate_portable, L"\\generations"));
+  assert(test_join(fixture->candidate_portable, fixture->candidate, L"\\.portable"));
+  assert(CreateDirectoryW(fixture->candidate_portable, NULL));
+  assert(test_join(
+      fixture->candidate_generations,
+      fixture->candidate_portable,
+      L"\\generations"
+  ));
   assert(CreateDirectoryW(fixture->candidate_generations, NULL));
   test_create_generation(
       fixture->candidate_generations,
@@ -815,20 +819,20 @@ static void windows_cutover_fixture_init(windows_cutover_fixture *fixture) {
   assert(CreateDirectoryW(fixture->capsule, NULL));
   assert(test_join(fixture->backup, fixture->root, L"\\backup"));
 
-  assert(test_join(snapshot, fixture->capsule, L"\\coordinator.exe"));
-  test_write(snapshot, "current launcher\n");
-  assert(test_join(snapshot, fixture->capsule, L"\\launcher.next"));
-  test_write(snapshot, "candidate launcher\n");
-  assert(test_join(snapshot, fixture->capsule, L"\\setup-manifest.previous"));
-  test_write(snapshot, "current setup\n");
-  assert(test_join(snapshot, fixture->capsule, L"\\setup-manifest.next"));
-  test_write(snapshot, "candidate setup\n");
-  test_file_hash(snapshot, fixture->candidate_setup_sha256);
-  assert(test_join(snapshot, fixture->capsule, L"\\registration.previous"));
-  test_write(snapshot, "previous registration\n");
-  assert(test_join(snapshot, fixture->capsule, L"\\registration.next"));
-  test_write(snapshot, "prepared registration\n");
-  test_file_hash(snapshot, fixture->prepared_registration_sha256);
+  assert(test_join(fixture->snapshot, fixture->capsule, L"\\coordinator.exe"));
+  test_write(fixture->snapshot, "current launcher\n");
+  assert(test_join(fixture->snapshot, fixture->capsule, L"\\launcher.next"));
+  test_write(fixture->snapshot, "candidate launcher\n");
+  assert(test_join(fixture->snapshot, fixture->capsule, L"\\setup-manifest.previous"));
+  test_write(fixture->snapshot, "current setup\n");
+  assert(test_join(fixture->snapshot, fixture->capsule, L"\\setup-manifest.next"));
+  test_write(fixture->snapshot, "candidate setup\n");
+  test_file_hash(fixture->snapshot, fixture->candidate_setup_sha256);
+  assert(test_join(fixture->snapshot, fixture->capsule, L"\\registration.previous"));
+  test_write(fixture->snapshot, "previous registration\n");
+  assert(test_join(fixture->snapshot, fixture->capsule, L"\\registration.next"));
+  test_write(fixture->snapshot, "prepared registration\n");
+  test_file_hash(fixture->snapshot, fixture->prepared_registration_sha256);
 
   fixture->context.supervisor_control = -1;
   fixture->context.supervisor_response = -1;
