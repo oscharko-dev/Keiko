@@ -447,12 +447,6 @@ function workspaceSnippetSnapshot(
 }
 
 afterEach(() => {
-  surface.props = null;
-  surface.mounts = 0;
-  surface.unmounts = 0;
-  diffSurface.props = null;
-  diffSurface.mounts = 0;
-  diffSurface.unmounts = 0;
   delete document.documentElement.dataset.theme;
   restoreEventSource();
   _resetEditorAgentBridgeStateForTests();
@@ -464,6 +458,16 @@ afterEach(() => {
 });
 
 beforeEach(() => {
+  // Zeroed HERE, not in `afterEach`: Testing Library's automatic cleanup unmounts the previous
+  // test's tree from its own `afterEach`, which runs after this file's, so resetting there left
+  // the tear-down to land in the next test's baseline. `beforeEach` is the only point nothing
+  // else can run before the test body.
+  surface.props = null;
+  surface.mounts = 0;
+  surface.unmounts = 0;
+  diffSurface.props = null;
+  diffSurface.mounts = 0;
+  diffSurface.unmounts = 0;
   vi.mocked(fetchEditorLanguageCapabilities).mockResolvedValue(LANGUAGE_CAPABILITIES);
   vi.mocked(fetchEditorSettings).mockResolvedValue(editorSettingsSnapshot());
   vi.mocked(fetchWorkspaceSnippets).mockResolvedValue(workspaceSnippetSnapshot());
@@ -610,6 +614,25 @@ describe("EditorWidget — empty state", () => {
     expect(await screen.findByRole("note")).toHaveTextContent(
       "Wähle im Projektbaum eine Datei aus, um mit der Bearbeitung zu beginnen.",
     );
+  });
+});
+
+// Testing Library's automatic cleanup unmounts the previous test's tree from its OWN `afterEach`,
+// which runs AFTER the reset below, so every counter the probes keep leaks one tear-down into the
+// next test. Observed directly: a test whose `mounts` had correctly reset to 0 still saw the
+// previous tree's unmount. The counters therefore have to be zeroed where nothing can run before
+// the test body — `beforeEach` — not after it.
+describe("probe counter isolation", () => {
+  it("leaves a tree mounted for the next test to observe", async () => {
+    await renderLoaded();
+    expect(surface.mounts).toBe(1);
+  });
+
+  it("starts with counters nobody else has touched", () => {
+    expect({ mounts: surface.mounts, unmounts: surface.unmounts }).toEqual({
+      mounts: 0,
+      unmounts: 0,
+    });
   });
 });
 
@@ -2423,9 +2446,14 @@ describe("EditorWidget — inline completion wiring (Issue #1200)", () => {
     await screen.findByTestId("editor-surface");
     expect(surface.props?.fileModel.identity.language).toBe("markdown");
     expect(surface.props?.provideInlineCompletions).toBeUndefined();
+    // `waitFor` retries until its callback stops throwing, so an EXACT count inside it is one-way:
+    // once the counter overshoots it can never become true again, and the test burns the whole
+    // window before reporting a stale number. Wait for the settling condition, then pin the exact
+    // count immediately — the pin itself is unchanged, it just fails on the first observation.
     await waitFor(() => {
-      expect(surface.mounts).toBe(1);
+      expect(surface.mounts).toBeGreaterThanOrEqual(1);
     });
+    expect(surface.mounts).toBe(1);
 
     rerender(<EditorRuntimeWidget root="/repo" file="src/app.ts" />);
     await waitFor(() => {
@@ -2433,9 +2461,10 @@ describe("EditorWidget — inline completion wiring (Issue #1200)", () => {
     });
     await waitFor(() => {
       expect(surface.props?.provideInlineCompletions).toBeDefined();
-      expect(surface.mounts).toBe(2);
-      expect(surface.unmounts).toBeGreaterThanOrEqual(1);
+      expect(surface.mounts).toBeGreaterThanOrEqual(2);
     });
+    expect(surface.mounts).toBe(2);
+    expect(surface.unmounts).toBeGreaterThanOrEqual(1);
   });
 });
 
