@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync, type Dir, type Dirent, type PathLike } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,19 +14,25 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   const original = await importOriginal<typeof import("node:fs/promises")>();
   return {
     ...original,
-    opendir: async (
-      ...args: Parameters<typeof original.opendir>
-    ): ReturnType<typeof original.opendir> => {
-      const handle = await original.opendir(...args);
-      const path = args[0];
-      if (path !== rebind.openedRoot || rebind.reboundRoot.length > 0) return handle;
+    opendir: async (path: PathLike): Promise<Dir> => {
+      const handle = await original.opendir(path);
+      if (typeof path !== "string" || path !== rebind.openedRoot || rebind.reboundRoot.length > 0) {
+        return handle;
+      }
       rebind.reboundRoot = `${path}.opened`;
       await original.rename(path, rebind.reboundRoot);
       await original.mkdir(path);
       await original.writeFile(join(path, "outside.txt"), "must not be traversed");
-      const read = handle.read.bind(handle);
+      const readOriginal = handle.read.bind(handle);
+      const read = (): Promise<Dirent | null> =>
+        new Promise((resolve, reject) => {
+          readOriginal((error, entry) => {
+            if (error === null) resolve(entry);
+            else reject(error);
+          });
+        });
       Object.defineProperty(handle, "read", {
-        value: async (): Promise<Awaited<ReturnType<typeof read>>> => {
+        value: async (): Promise<Dirent | null> => {
           rebind.readAttempted = true;
           return await read();
         },

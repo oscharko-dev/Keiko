@@ -344,12 +344,12 @@ describe("portable handoff coordinator", () => {
       stateDir: fixture.stateDir,
       persistPrepared: () => Promise.resolve(),
       persistAccepted: () => Promise.resolve(),
-      verifyNativeCopy: async ({ kind, copiedPath }): Promise<void> => {
-        if (kind !== "coordinator") return;
+      verifyNativeCopy: ({ kind, copiedPath }): Promise<void> => {
+        if (kind !== "coordinator") return Promise.resolve();
         rmSync(copiedPath);
         mkdirSync(copiedPath);
         writeFileSync(join(copiedPath, "retained"), "retained");
-        throw preparationError;
+        return Promise.reject(preparationError);
       },
       publishCoordinatorPid: () => true,
       spawnFn,

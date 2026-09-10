@@ -415,20 +415,30 @@ async function prepareCoordinator(
       intentRevision: plan.aggregateRevision,
     };
   } catch (error) {
-    try {
-      cleanupPreparedArtifacts(plan, root, coordinator, supervisor);
-    } catch (cleanupError) {
-      throw new PortableHandoffCoordinatorError(
-        "portable handoff preparation cleanup failed",
-        false,
-        new AggregateError(
-          [error, cleanupError],
-          "portable handoff preparation and cleanup failed",
-        ),
-      );
-    }
-    throw error;
+    cleanupAfterPreparationFailure(plan, root, coordinator, supervisor, error);
   }
+}
+
+function cleanupAfterPreparationFailure(
+  plan: PortableHandoffPlan,
+  root: string,
+  coordinator: string,
+  supervisor: string,
+  preparationError: unknown,
+): never {
+  try {
+    cleanupPreparedArtifacts(plan, root, coordinator, supervisor);
+  } catch (cleanupError) {
+    throw new PortableHandoffCoordinatorError(
+      "portable handoff preparation cleanup failed",
+      false,
+      new AggregateError(
+        [preparationError, cleanupError],
+        "portable handoff preparation and cleanup failed",
+      ),
+    );
+  }
+  throw preparationError;
 }
 
 function cleanupPreparedArtifacts(
