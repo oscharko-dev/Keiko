@@ -2,7 +2,7 @@ import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process"
 import { EventEmitter } from "node:events";
 import { fstatSync } from "node:fs";
 import { access } from "node:fs/promises";
-import { createServer, type Server, Socket } from "node:net";
+import { createConnection, createServer, type Server, Socket } from "node:net";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   LINUX_GATEWAY_DIAGNOSTIC_FD,
@@ -312,6 +312,36 @@ describe("Linux gateway launcher in-process orchestration", () => {
     }
   });
 
+  it("terminates the namespace when its descriptor request is rejected", async () => {
+    const port = await reservePort();
+    const control = fakeChild();
+    let client: Socket | undefined;
+    installIpcSend((...args: unknown[]): boolean => {
+      const message = args[0];
+      if (isReadyMessage(message)) {
+        callbackFrom(args)?.(null);
+        setImmediate(() => {
+          client = createConnection({ host: "127.0.0.1", port });
+          client.on("error", () => {
+            // The fail-closed relay teardown may reset this test-owned client.
+          });
+        });
+      } else {
+        callbackFrom(args)?.(new Error("descriptor-request-rejected"));
+      }
+      return true;
+    });
+    spawnMock.mockReturnValue(control.child);
+    try {
+      await expect(runLinuxGatewayLauncher(namespaceArgs("bubblewrap", port))).rejects.toThrow(
+        "namespace-relay-failed",
+      );
+      expect(control.kill).toHaveBeenCalledWith("SIGKILL");
+    } finally {
+      client?.destroy();
+    }
+  });
+
   it("enables loopback for unshare and fails closed when setup is unavailable", async () => {
     const port = await reservePort();
     installIpcSend(successfulSend);
@@ -338,4 +368,8 @@ function successfulSend(...args: unknown[]): boolean {
 
 function undefinedSend(): boolean {
   return false;
+}
+
+function isReadyMessage(value: unknown): boolean {
+  return typeof value === "object" && value !== null && "kind" in value && value.kind === "ready";
 }
