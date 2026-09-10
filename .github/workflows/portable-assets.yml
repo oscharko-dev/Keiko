@@ -485,6 +485,8 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Run executable secure-read adversarial harness
         run: node native/secure-workspace-read/test-protocol.mjs
+      - name: Run Linux portable launcher native quality
+        run: ./scripts/check-linux-portable-launcher.sh
       - name: Validate approved runtime inputs
         run: npm run check:portable-approvals
       - name: Provision the pinned USearch native addon

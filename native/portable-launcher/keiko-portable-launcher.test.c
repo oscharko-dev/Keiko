@@ -14,5 +14,8 @@ int main(void) {
   assert(join_path(path, sizeof(path), "/tmp/Keiko.app", "/Contents/Resources") == 1);
   assert(strcmp(path, "/tmp/Keiko.app/Contents/Resources") == 0);
   assert(join_path(path, 5, "/tmp", "/Keiko") == 0);
+#if defined(__linux__)
+  assert(current_executable_path(path, 2) == 0);
+#endif
   return 0;
 }

@@ -6,6 +6,7 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  assertQualificationReport,
   LinuxRuntimeQualificationError,
   linuxQualificationVitestArgs,
   qualificationReceiptFor,
@@ -162,6 +163,54 @@ describe("Linux runtime qualification", () => {
         "--outputFile=/tmp/report.json",
       ]),
     );
+  });
+
+  it("rejects a green report when a mandatory proof is absent", () => {
+    const value = fixture();
+    const reportPath = join(value.stageRoot, "incomplete-report.json");
+    writeFileSync(
+      reportPath,
+      JSON.stringify({
+        success: true,
+        numFailedTests: 0,
+        numPendingTests: 0,
+        testResults: [
+          {
+            assertionResults: [
+              {
+                status: "passed",
+                title: "permits only the configured gateway and isolates concurrent gateway ports",
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    expect(() => assertQualificationReport(reportPath)).toThrow(
+      "Linux gateway qualification proof is incomplete",
+    );
+  });
+
+  it("rejects a stale qualification receipt in verify-only mode", () => {
+    const value = fixture();
+    const options = optionsFor(value);
+    const dependencies = {
+      exactCleanHead: vi.fn(),
+      platform: "linux",
+      runQualificationTests: vi.fn(),
+    };
+    qualifyLinuxRuntimeRelease(options, dependencies);
+    const receiptPath = join(value.resourceRoot, ".portable", "runtime-qualification.json");
+    const receipt = JSON.parse(readFileSync(receiptPath, "utf8"));
+    writeFileSync(
+      receiptPath,
+      `${JSON.stringify({ ...receipt, backend: "windows-job-object" })}\n`,
+    );
+
+    expect(() =>
+      qualifyLinuxRuntimeRelease({ ...options, "verify-only": "true" }, dependencies),
+    ).toThrow("qualification receipt binding is invalid");
   });
 });
 

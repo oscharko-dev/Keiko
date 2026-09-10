@@ -142,23 +142,27 @@ function syncReviewedPayloads(manifest) {
   binding.nativeAddons = structuredClone(manifest.nativeAddons);
 }
 
-export function prepareLinuxQualifiedPayload(options) {
+export function prepareLinuxQualifiedPayload(options, dependencies = {}) {
   const files = stageFiles(options);
   markProduction(files.manifest);
-  rebindSignedPayload(files.stageRoot, files.manifest, TARGET);
+  (dependencies.rebindSignedPayload ?? rebindSignedPayload)(
+    files.stageRoot,
+    files.manifest,
+    TARGET,
+  );
   files.manifest.runtimeActivation.trustAnchor = "sigstore-qualification-receipt";
   syncReviewedPayloads(files.manifest);
   writeFileSync(files.manifestPath, `${JSON.stringify(files.manifest, null, 2)}\n`);
 }
 
-function boundQualification(files, sourceCommitSha) {
+function boundQualification(files, sourceCommitSha, dependencies) {
   const receiptPath = join(files.resourceRoot, ...RECEIPT_PATH.split("/"));
   const bundlePath = join(files.resourceRoot, ...BUNDLE_PATH.split("/"));
   const receiptBytes = readBoundedBytes(receiptPath, "qualification receipt");
   const bundle = readBoundedJson(bundlePath, "qualification bundle");
-  verifyLinuxQualificationBundle(receiptBytes, bundle);
+  (dependencies.verifyQualificationBundle ?? verifyLinuxQualificationBundle)(receiptBytes, bundle);
   const actual = JSON.parse(receiptBytes.toString("utf8"));
-  const expected = qualificationReceiptFor({
+  const expected = (dependencies.qualificationReceiptFor ?? qualificationReceiptFor)({
     activationPath: join(files.resourceRoot, ".portable", "runtime-activation.json"),
     resourceRoot: files.resourceRoot,
     sourceCommitSha,
@@ -233,8 +237,8 @@ function assertArchive(files) {
   }
 }
 
-function assertProductionDiscovery(files) {
-  const runtime = discoverQualifiedPortableOpenCode({
+function assertProductionDiscovery(files, discover = discoverQualifiedPortableOpenCode) {
+  const runtime = discover({
     env: {},
     platform: "linux",
     arch: "x64",
@@ -249,10 +253,10 @@ function assertProductionDiscovery(files) {
   }
 }
 
-export function verifyLinuxQualifiedPayload(options) {
+export function verifyLinuxQualifiedPayload(options, dependencies = {}) {
   const files = stageFiles(options);
   const sourceCommitSha = required(options, "source-commit-sha");
-  const qualification = boundQualification(files, sourceCommitSha);
+  const qualification = boundQualification(files, sourceCommitSha, dependencies);
   if (
     files.manifest.runtimeQualification?.path !== RECEIPT_PATH ||
     files.manifest.runtimeQualification?.sha256 !== sha256File(qualification.receiptPath) ||
@@ -260,25 +264,31 @@ export function verifyLinuxQualifiedPayload(options) {
   ) {
     fail("qualification manifest binding is invalid");
   }
-  const failures = validatePortableCandidateManifest(files.manifest);
+  const failures = (dependencies.validateManifest ?? validatePortableCandidateManifest)(
+    files.manifest,
+  );
   if (failures.length > 0) fail(`production manifest is invalid: ${failures.join("; ")}`);
   assertArchive(files);
-  assertProductionDiscovery(files);
+  assertProductionDiscovery(files, dependencies.discoverQualifiedRuntime);
   return files;
 }
 
-export async function finalizeLinuxQualifiedPayload(options) {
+export async function finalizeLinuxQualifiedPayload(options, dependencies = {}) {
   const files = stageFiles(options);
   const sourceCommitSha = required(options, "source-commit-sha");
-  const qualification = boundQualification(files, sourceCommitSha);
+  const qualification = boundQualification(files, sourceCommitSha, dependencies);
   bindQualification(files.manifest, qualification.receiptPath);
   const archivePath = rebuildArchive(files);
-  await rebindExistingSignedArchive(files.stageRoot, files.manifest, archivePath, TARGET, {
-    payloadAlreadyRebound: true,
-  });
+  await (dependencies.rebindExistingSignedArchive ?? rebindExistingSignedArchive)(
+    files.stageRoot,
+    files.manifest,
+    archivePath,
+    TARGET,
+    { payloadAlreadyRebound: true },
+  );
   writeVerificationSummary(files);
   writeFileSync(files.manifestPath, `${JSON.stringify(files.manifest, null, 2)}\n`);
-  verifyLinuxQualifiedPayload(options);
+  verifyLinuxQualifiedPayload(options, dependencies);
   process.stdout.write(
     `Linux portable signing: PASS ${basename(archivePath)} ${qualification.receipt.result}\n`,
   );

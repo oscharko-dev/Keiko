@@ -212,6 +212,35 @@ describe("portable manual review harness", () => {
     );
   });
 
+  it("creates a schema-valid Linux fixture with the production runtime identity", async () => {
+    const root = tmpReviewRoot();
+    prepareScenarioFixture(root, "linux-x64", "happy-update");
+
+    const entries = await zipEntryNames(join(root, "release-assets", "keiko-linux-x64.zip"));
+    const manifest = jsonAt(join(root, "release-assets", "linux-x64-portable-manifest.json"));
+    const supervisor = manifest.nativeHelpers.find(
+      (helper) => helper.name === "keiko-runtime-supervisor",
+    );
+
+    expect(entries).toContain("Keiko/app/package.json");
+    expect(entries).toContain("Keiko/runtime/node/bin/node");
+    expect(entries).toContain("Keiko/Keiko");
+    expect(
+      validatePortablePublishedManifest(manifest, {
+        releaseId: manifest.release.releaseId,
+        assetId: manifest.artifact.assetId,
+      }),
+    ).toEqual([]);
+    expect(manifest.security.verificationChecks).toEqual({ provenanceVerified: true });
+    expect(manifest.runtimeActivation.trustAnchor).toBe("sigstore-qualification-receipt");
+    expect(manifest.runtimeQualification.backend).toBe("linux-namespace-gateway");
+    expect(supervisor).toMatchObject({
+      executablePath: "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js",
+      source: { path: "packages/keiko-sandbox/src" },
+      protocol: { requestMagic: "none", responseMagic: "none" },
+    });
+  });
+
   it("generates a valid schema-v2 OpenCode whole-product sidecar manifest", () => {
     const root = tmpReviewRoot();
     prepareScenarioFixture(root, "macos-arm64", "sidecar-present");

@@ -1,10 +1,16 @@
-import { createHash } from "node:crypto";
-import { describe, expect, it, vi } from "vitest";
+import { createHash, generateKeyPairSync } from "node:crypto";
+import { describe, expect, it, type Mock, vi } from "vitest";
 
 import {
   LINUX_QUALIFICATION_SIGSTORE_POLICY,
+  type SigstoreBundleVerifier,
   verifyLinuxQualificationBundle,
 } from "./linuxPortableSigstore.js";
+
+function verifierMock(): Mock<SigstoreBundleVerifier["verify"]> {
+  const { publicKey } = generateKeyPairSync("ed25519");
+  return vi.fn<SigstoreBundleVerifier["verify"]>(() => ({ key: publicKey }));
+}
 
 function serializedBundle(receipt: Buffer): object {
   return {
@@ -25,7 +31,7 @@ function serializedBundle(receipt: Buffer): object {
 
 describe("Linux portable Sigstore verification", () => {
   it("binds the exact receipt bytes to the release workflow and GitHub OIDC issuer", () => {
-    const verify = vi.fn(() => ({ key: {} }));
+    const verify = verifierMock();
     const receipt = Buffer.from('{"result":"passed"}\n', "utf8");
 
     verifyLinuxQualificationBundle(receipt, serializedBundle(receipt), { verify });
@@ -54,9 +60,11 @@ describe("Linux portable Sigstore verification", () => {
   });
 
   it("rejects malformed bundles before the verifier can run", () => {
-    const verify = vi.fn(() => ({ key: {} }));
+    const verify = verifierMock();
 
-    expect(() => verifyLinuxQualificationBundle(Buffer.from("receipt"), {}, { verify })).toThrow();
+    expect(() => {
+      verifyLinuxQualificationBundle(Buffer.from("receipt"), {}, { verify });
+    }).toThrow();
     expect(verify).not.toHaveBeenCalled();
   });
 });

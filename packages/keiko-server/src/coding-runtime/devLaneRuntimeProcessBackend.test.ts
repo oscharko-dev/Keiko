@@ -370,6 +370,37 @@ describe("dev-lane runtime process backend", () => {
     });
   });
 
+  it("refuses when the injected platform drifts from the backend identity", () => {
+    const fixture = stageFixture();
+    const spawnRuntime = vi.fn(() => fakeChild(4711, true));
+    const backend = createProductionDevLaneRuntimeProcessBackend({
+      identity: LINUX_IDENTITY,
+      gatewayConfinement: gatewayConfinement(),
+      runtimeRoot: fixture.runtimeRoot,
+      platform: "darwin",
+      probeAvailability: () => ({
+        bubblewrap: true,
+        unshare: true,
+        seatbelt: false,
+        docker: false,
+        podman: false,
+      }),
+      spawnRuntime,
+      killProcessGroup: () => undefined,
+    });
+
+    expect(() =>
+      backend.spawnOwnedTree({
+        ...launchRequest(fixture),
+        qualification: {
+          ...LINUX_IDENTITY,
+          releaseReceipt: `sha256:${"0".repeat(64)}`,
+        },
+      }),
+    ).toThrow("runtime-gateway-platform-identity-drift");
+    expect(spawnRuntime).not.toHaveBeenCalled();
+  });
+
   it("refuses executables outside the runtime root and unsafe paths, fail closed", () => {
     const fixture = stageFixture();
     const backend = createDevLaneRuntimeProcessBackend({

@@ -203,4 +203,24 @@ describe("long-lived runtime qualification", () => {
       },
     });
   });
+
+  it.each([
+    ["linux-x64", "windows-job-object"],
+    ["windows-x64", "macos-endpoint-security"],
+    ["macos-arm64", "windows-job-object"],
+    ["macos-x64", "linux-namespace-gateway"],
+  ] as const)("rejects a %s receipt bound to %s", (platformTarget, backend) => {
+    const candidate = { ...receipt, platformTarget, backend };
+
+    expect(
+      qualificationFromReceipt(candidate, {
+        platformTarget,
+        sourceCommitSha: receipt.sourceCommitSha,
+        activationManifestSha256: receipt.activationManifestSha256,
+        supervisorSha256: receipt.supervisorSha256,
+        secureReadSha256: receipt.secureReadSha256,
+        sidecars: receipt.sidecars,
+      }),
+    ).toEqual({ ok: false, reason: "runtime-unqualified" });
+  });
 });

@@ -225,7 +225,7 @@ function assetName(target) {
 }
 
 function launcherName(target) {
-  return target === "windows-x64" ? "Keiko.exe" : "Keiko.app";
+  return targetByName(target).primaryLauncher;
 }
 
 function scriptName(target, scenario, ext) {
@@ -329,6 +329,7 @@ From this directory, run one generated script, for example:
 ./scripts/start-macos-arm64-happy-update.sh
 ./scripts/start-macos-arm64-bad-checksum.sh
 ./scripts/start-macos-x64-happy-update.sh
+./scripts/start-linux-x64-happy-update.sh
 ./scripts/start-windows-x64-happy-update.sh
 \`\`\`
 
@@ -503,6 +504,19 @@ function writeWindowsLayout(root, target, version, sidecar) {
   writeSidecarPayload(root, target, sidecar);
 }
 
+function writeLinuxLayout(root, target, version, sidecar) {
+  ensureDir(join(root, "runtime", "node", "bin"));
+  ensureDir(join(root, ".portable"));
+  ensureDir(join(root, "support"));
+  writeAppPackage(join(root, "app"), version);
+  writeFileSync(join(root, "runtime", "node", "bin", "node"), "fixture node\n");
+  writeFileSync(join(root, "Keiko"), "#!/usr/bin/env sh\n");
+  writeFileSync(join(root, "support", "keiko-support.sh"), "#!/usr/bin/env sh\n");
+  writeJson(join(root, ".portable", "setup-manifest.json"), setupManifest(target, version));
+  writeNativeHelperPayload(root, target);
+  writeSidecarPayload(root, target, sidecar);
+}
+
 function writeMacLayout(root, target, version, sidecar) {
   const bundle = join(root, "Keiko.app");
   const resources = join(bundle, "Contents", "Resources");
@@ -524,12 +538,13 @@ function writeMacLayout(root, target, version, sidecar) {
 function writePortablePayload(root, target, version, sidecar = "absent") {
   const payloadRoot = join(root, "Keiko");
   if (target === "windows-x64") writeWindowsLayout(payloadRoot, target, version, sidecar);
+  else if (target === "linux-x64") writeLinuxLayout(payloadRoot, target, version, sidecar);
   else writeMacLayout(payloadRoot, target, version, sidecar);
   return payloadRoot;
 }
 
 function runtimeResourceRoot(payloadRoot, target) {
-  return target === "windows-x64"
+  return target === "windows-x64" || target === "linux-x64"
     ? payloadRoot
     : join(payloadRoot, "Keiko.app", "Contents", "Resources");
 }
@@ -548,10 +563,7 @@ function runtimeQualificationReceipt(manifest) {
       name: sidecar.name,
       sha256: sidecar.payloadSha256,
     })),
-    backend:
-      manifest.artifact.platformTarget === "windows-x64"
-        ? "windows-job-object"
-        : "macos-endpoint-security",
+    backend: runtimeQualificationBackend(manifest.artifact.platformTarget),
     result: "passed",
   };
 }
@@ -565,7 +577,7 @@ function writeRuntimeEvidencePayload(payloadRoot, target, manifest) {
   if (target === "windows-x64") {
     writeManualWindowsAttestation(resourceRoot, manifest, receipt);
   } else {
-    writeManualMacosQualification(resourceRoot, manifest, receipt);
+    writeManualQualification(resourceRoot, manifest, receipt);
   }
 }
 
@@ -577,7 +589,7 @@ function writeManualWindowsAttestation(resourceRoot, manifest, receipt) {
   manifest.releaseImpact.reviewedBinding.runtimeAttestation = manifest.runtimeAttestation;
 }
 
-function writeManualMacosQualification(resourceRoot, manifest, receipt) {
+function writeManualQualification(resourceRoot, manifest, receipt) {
   const path = join(resourceRoot, ".portable", "runtime-qualification.json");
   writeJson(path, receipt);
   manifest.runtimeQualification.sha256 = sha256File(path);
@@ -588,18 +600,20 @@ function writeManagedInstall(root, target, version) {
   const managedRoot = managedRootPath(root, target);
   rmSync(managedRoot, { recursive: true, force: true });
   if (target === "windows-x64") writeWindowsLayout(managedRoot, target, version, "absent");
+  else if (target === "linux-x64") writeLinuxLayout(managedRoot, target, version, "absent");
   else writeMacLayout(dirname(managedRoot), target, version, "absent");
   return managedRoot;
 }
 
 function managedRootPath(root, target) {
   if (target === "windows-x64") return join(root, "managed", "Programs", "Keiko");
+  if (target === "linux-x64") return join(root, "managed", ".local", "opt", "Keiko");
   return join(root, "managed", "Applications", "Keiko.app");
 }
 
 function packageRootFor(root, target) {
   const managedRoot = managedRootPath(root, target);
-  if (target === "windows-x64") return join(managedRoot, "app");
+  if (target === "windows-x64" || target === "linux-x64") return join(managedRoot, "app");
   return join(managedRoot, "Contents", "Resources", "app");
 }
 
@@ -697,6 +711,9 @@ function nativeHelperBytes(target, name) {
 }
 
 function nativeHelperExecutablePath(target, name) {
+  if (target === "linux-x64" && name === "keiko-runtime-supervisor") {
+    return "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
+  }
   return `runtime/native/${name}${target === "windows-x64" ? ".exe" : ""}`;
 }
 
@@ -713,8 +730,10 @@ function nativeHelper(target, version, signingVerified, name) {
   const secureRead = name === "keiko-secure-workspace-read";
   let sourcePath = "native/secure-workspace-read";
   if (!secureRead) {
-    const supervisorPlatform = target === "windows-x64" ? "windows" : "macos";
-    sourcePath = `native/runtime-supervisor/${supervisorPlatform}`;
+    sourcePath =
+      target === "linux-x64"
+        ? "packages/keiko-sandbox/src"
+        : `native/runtime-supervisor/${target === "windows-x64" ? "windows" : "macos"}`;
   }
   const bytes = nativeHelperBytes(target, name);
   const digest = sha256(bytes);
@@ -727,8 +746,8 @@ function nativeHelper(target, version, signingVerified, name) {
     executablePath: nativeHelperExecutablePath(target, name),
     protocol: {
       schemaVersion: 1,
-      requestMagic: secureRead ? "KSR1" : "KRP1",
-      responseMagic: secureRead ? "KSS1" : "KRS1",
+      requestMagic: secureRead ? "KSR1" : target === "linux-x64" ? "none" : "KRP1",
+      responseMagic: secureRead ? "KSS1" : target === "linux-x64" ? "none" : "KRS1",
     },
     source: {
       commitSha: "a".repeat(40),
@@ -824,24 +843,27 @@ function sidecarSigningEvidence(target, executableSha256, executableTreeSha256) 
 }
 
 function signingEvidence(target, verified) {
-  const macos = target !== "windows-x64";
+  const runtimeTarget = targetByName(target);
+  const macos = runtimeTarget.nodePlatform === "darwin";
   return {
     verificationPolicy: "production",
     verificationStatus: verified ? "verified-production" : "verification-failed",
     verificationReasonCodes: verified ? [] : ["manual-review-unsigned-fixture"],
-    signatureKind: target === "windows-x64" ? "authenticode" : "developer-id-notarized",
+    signatureKind: runtimeTarget.signatureKind,
     signatureVerified: verified,
     notarizationRequired: macos,
     notarizationVerified: macos && verified,
     verificationChecks:
-      target === "windows-x64"
+      runtimeTarget.nodePlatform === "win32"
         ? { publisherChainVerified: verified, timestampVerified: verified }
-        : {
-            developerIdVerified: verified,
-            notarizationVerified: verified,
-            stapleVerified: verified,
-            assessmentVerified: verified,
-          },
+        : runtimeTarget.nodePlatform === "linux"
+          ? { provenanceVerified: verified }
+          : {
+              developerIdVerified: verified,
+              notarizationVerified: verified,
+              stapleVerified: verified,
+              assessmentVerified: verified,
+            },
   };
 }
 
@@ -951,8 +973,7 @@ function portableManifest(input) {
     schemaVersion: 1,
     path: RUNTIME_ACTIVATION_RELATIVE_PATH,
     sha256: "e".repeat(64),
-    trustAnchor:
-      target.nodePlatform === "win32" ? "authenticode-attestor" : "developer-id-app-resource-seal",
+    trustAnchor: runtimeActivationTrustAnchor(target),
   };
   const targetEvidence = portableTargetRuntimeEvidence(input.target, input.signingVerified);
   const manifest = {
@@ -992,7 +1013,7 @@ function portableTargetRuntimeEvidence(target, signingVerified) {
         schemaVersion: 1,
         path: ".portable/runtime-qualification.json",
         sha256: "f".repeat(64),
-        backend: "macos-endpoint-security",
+        backend: runtimeQualificationBackend(target),
       },
     };
   }
@@ -1006,6 +1027,17 @@ function portableTargetRuntimeEvidence(target, signingVerified) {
       signing: componentSigningEvidence(target, signingVerified),
     },
   };
+}
+
+function runtimeActivationTrustAnchor(target) {
+  if (target.nodePlatform === "win32") return "authenticode-attestor";
+  return target.nodePlatform === "linux"
+    ? "sigstore-qualification-receipt"
+    : "developer-id-app-resource-seal";
+}
+
+function runtimeQualificationBackend(target) {
+  return target === "linux-x64" ? "linux-namespace-gateway" : "macos-endpoint-security";
 }
 
 function reviewedTargetRuntimeEvidence(evidence) {

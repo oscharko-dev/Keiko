@@ -538,6 +538,7 @@ describe("Linux portable production qualification workflow", () => {
       return indexes[0] ?? -1;
     };
     const prepare = stepIndex(stage.steps, "Bind the reviewed Linux production payload");
+    const launcherQuality = stepIndex(stage.steps, "Run Linux portable launcher native quality");
     const qualify = stepIndex(stage.steps, "Qualify the exact Linux runtime and namespace gateway");
     const attest = stepIndex(
       stage.steps,
@@ -548,6 +549,8 @@ describe("Linux portable production qualification workflow", () => {
 
     expect(stage.environment).toBe("portable-release-signing");
     expect(stage.permissions).toEqual({ contents: "read", "id-token": "write" });
+    expect(launcherQuality).toBeLessThan(prepare);
+    expect(stage.steps[launcherQuality].run).toBe("./scripts/check-linux-portable-launcher.sh");
     expect(prepare).toBeLessThan(qualify);
     expect(qualify).toBeLessThan(attest);
     expect(attest).toBeLessThan(finalize);

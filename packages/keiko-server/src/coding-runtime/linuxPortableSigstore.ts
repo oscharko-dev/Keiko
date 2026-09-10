@@ -9,7 +9,7 @@ const GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
 const RELEASE_WORKFLOW_IDENTITY =
   /^https:\/\/github\.com\/oscharko-dev\/Keiko\/\.github\/workflows\/portable-assets\.yml@refs\/tags\/v\d+\.\d+\.\d+$/u;
 
-interface SigstoreBundleVerifier {
+export interface SigstoreBundleVerifier {
   verify(
     entity: Parameters<Verifier["verify"]>[0],
     policy: Parameters<Verifier["verify"]>[1],

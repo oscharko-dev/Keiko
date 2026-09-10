@@ -148,7 +148,7 @@ export function linuxQualificationVitestArgs(reportPath) {
   ];
 }
 
-function assertQualificationReport(reportPath) {
+export function assertQualificationReport(reportPath) {
   const report = readJson(reportPath, "qualification test report");
   const assertions = (report.testResults ?? []).flatMap((result) => result.assertionResults ?? []);
   const passed = new Set(

@@ -580,6 +580,17 @@ function defaultVerificationChecks(target) {
   return macVerificationChecks();
 }
 
+function macSignatureLocallyVerified(candidate, checks) {
+  return (
+    candidate.security.signatureVerified === true &&
+    candidate.security.notarizationVerified === true &&
+    checks.developerIdVerified === true &&
+    checks.notarizationVerified === true &&
+    checks.stapleVerified === true &&
+    checks.assessmentVerified === true
+  );
+}
+
 function platformSignatureLocallyVerified(candidate) {
   const target = portableTarget(candidate.artifact.platformTarget);
   const checks = candidate.security.verificationChecks;
@@ -593,14 +604,7 @@ function platformSignatureLocallyVerified(candidate) {
   if (target.nodePlatform === "linux") {
     return candidate.security.signatureVerified === true && checks.provenanceVerified === true;
   }
-  return (
-    candidate.security.signatureVerified === true &&
-    candidate.security.notarizationVerified === true &&
-    checks.developerIdVerified === true &&
-    checks.notarizationVerified === true &&
-    checks.stapleVerified === true &&
-    checks.assessmentVerified === true
-  );
+  return macSignatureLocallyVerified(candidate, checks);
 }
 
 function syncReviewedBinding(candidate) {
@@ -708,28 +712,36 @@ function setVerificationState(candidate, options = {}) {
   syncReviewedBinding(candidate);
 }
 
+function signatureVerified(target, checks) {
+  if (target.nodePlatform === "win32") {
+    return checks.publisherChainVerified === true && checks.timestampVerified === true;
+  }
+  return target.nodePlatform === "linux"
+    ? checks.provenanceVerified === true
+    : checks.developerIdVerified === true;
+}
+
+function activationTrustAnchor(target, policy) {
+  if (policy === "staging") return "unverified-staging";
+  if (target.nodePlatform === "win32") return "authenticode-attestor";
+  return target.nodePlatform === "linux"
+    ? "sigstore-qualification-receipt"
+    : "developer-id-app-resource-seal";
+}
+
 function setRootVerificationState(candidate, target, checks, options) {
   candidate.security.verificationPolicy = options.verificationPolicy ?? "production";
   candidate.security.verificationStatus = options.verificationStatus ?? "verified-production";
   candidate.security.verificationReasonCodes = options.verificationReasonCodes ?? [];
   candidate.security.verificationChecks = checks;
-  candidate.security.signatureVerified =
-    target.nodePlatform === "win32"
-      ? checks.publisherChainVerified === true && checks.timestampVerified === true
-      : target.nodePlatform === "linux"
-        ? checks.provenanceVerified === true
-        : checks.developerIdVerified === true;
+  candidate.security.signatureVerified = signatureVerified(target, checks);
   candidate.security.notarizationRequired = target.nodePlatform === "darwin";
   candidate.security.notarizationVerified =
     target.nodePlatform === "darwin" ? checks.notarizationVerified === true : false;
-  candidate.runtimeActivation.trustAnchor =
-    candidate.security.verificationPolicy === "staging"
-      ? "unverified-staging"
-      : target.nodePlatform === "win32"
-        ? "authenticode-attestor"
-        : target.nodePlatform === "linux"
-          ? "sigstore-qualification-receipt"
-          : "developer-id-app-resource-seal";
+  candidate.runtimeActivation.trustAnchor = activationTrustAnchor(
+    target,
+    candidate.security.verificationPolicy,
+  );
 }
 
 function setTargetRuntimeEvidence(candidate, target) {
@@ -1801,7 +1813,7 @@ describe("validatePortableManifest", () => {
   });
 
   it("accepts generic sidecar runtime metadata for every portable target", () => {
-    for (const platformTarget of ["windows-x64", "macos-arm64", "macos-x64"]) {
+    for (const platformTarget of ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]) {
       const candidate = manifest();
       setManifestTarget(candidate, platformTarget);
       setVerificationState(candidate);

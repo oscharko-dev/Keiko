@@ -333,8 +333,11 @@ static int current_executable_path(char *out, size_t cap) {
   }
   return realpath(raw, out) != NULL;
 #elif defined(__linux__)
+  if (cap < 2) {
+    return 0;
+  }
   ssize_t length = readlink("/proc/self/exe", out, cap - 1);
-  if (length <= 0 || (size_t)length >= cap) {
+  if (length <= 0 || (size_t)length >= cap - 1) {
     return 0;
   }
   out[length] = '\0';

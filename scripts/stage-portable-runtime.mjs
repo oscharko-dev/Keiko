@@ -102,8 +102,8 @@ const PORTABLE_RELEASE_IMPACT_CONTRACT = Object.freeze({
   parentEpic: 1942,
   programEpic: 1944,
   stagingOnly: true,
-  targets: Object.freeze(["windows-x64", "macos-arm64", "macos-x64"]),
 });
+const LEGACY_PORTABLE_TARGETS = Object.freeze(["windows-x64", "macos-arm64", "macos-x64"]);
 
 function fail(message) {
   console.error(`portable-stage failed: ${message}`);
@@ -2281,11 +2281,11 @@ function releaseImpactEntryMatches(entry, options) {
     entry.releaseTag === options.releaseTag &&
     entry.review?.status === "reviewed" &&
     entry.review?.humanApproved === true &&
-    portableRuntimeContractMatches(entry.portableRuntimeArtifactContract)
+    portableRuntimeContractMatches(entry.portableRuntimeArtifactContract, options.target)
   );
 }
 
-function portableRuntimeContractMatches(contract) {
+function portableRuntimeContractMatches(contract, requestedTarget) {
   return (
     contract !== null &&
     typeof contract === "object" &&
@@ -2293,14 +2293,20 @@ function portableRuntimeContractMatches(contract) {
     contract.parentEpic === PORTABLE_RELEASE_IMPACT_CONTRACT.parentEpic &&
     contract.programEpic === PORTABLE_RELEASE_IMPACT_CONTRACT.programEpic &&
     contract.stagingOnly === PORTABLE_RELEASE_IMPACT_CONTRACT.stagingOnly &&
-    sameStringSet(contract.targets, PORTABLE_RELEASE_IMPACT_CONTRACT.targets)
+    reviewedPortableTargetSet(contract.targets, requestedTarget)
   );
 }
 
-function sameStringSet(actual, expected) {
-  if (!Array.isArray(actual) || actual.length !== expected.length) return false;
+function reviewedPortableTargetSet(actual, requestedTarget) {
+  if (!Array.isArray(actual)) return false;
   const actualSet = new Set(actual);
-  return actualSet.size === expected.length && expected.every((value) => actualSet.has(value));
+  const knownTargets = new Set(PORTABLE_TARGET_NAMES);
+  return (
+    actualSet.size === actual.length &&
+    LEGACY_PORTABLE_TARGETS.every((target) => actualSet.has(target)) &&
+    actualSet.has(requestedTarget) &&
+    actual.every((target) => knownTargets.has(target))
+  );
 }
 
 export async function assemblePortableStage(options, hooks = {}) {
