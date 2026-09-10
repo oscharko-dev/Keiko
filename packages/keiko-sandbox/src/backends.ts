@@ -4,6 +4,7 @@
 
 import { basename, dirname, isAbsolute } from "node:path";
 import { isValidNetworkGatewayPolicy } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import { LINUX_GATEWAY_LAUNCHER_PATH } from "./linux-gateway-launcher.js";
 import type { IsolatedRunPlan, NetworkGatewayPolicy, SandboxBackend } from "./types.js";
 
 export interface WrappedCommand {
@@ -112,6 +113,47 @@ function unshareArgs(plan: IsolatedRunPlan): readonly string[] {
   return ["--map-root-user", "--net", plan.command, ...plan.args];
 }
 
+function buildLinuxGatewayCommand(
+  backend: "bubblewrap" | "unshare",
+  plan: IsolatedRunPlan,
+  gateway: NetworkGatewayPolicy,
+): WrappedCommand {
+  if (
+    !isAbsolute(plan.command) ||
+    plan.command.includes("\0") ||
+    !isAbsolute(plan.cwd) ||
+    plan.cwd.includes("\0") ||
+    plan.args.some((argument) => argument.includes("\0"))
+  ) {
+    throw new TypeError("linux-gateway-launch-input-invalid");
+  }
+  return {
+    command: process.execPath,
+    args: [
+      LINUX_GATEWAY_LAUNCHER_PATH,
+      "host",
+      backend,
+      gateway.host,
+      String(gateway.port),
+      plan.cwd,
+      plan.command,
+      ...plan.args,
+    ],
+  };
+}
+
+function buildBubblewrapCommand(plan: IsolatedRunPlan): WrappedCommand {
+  return isValidNetworkGatewayPolicy(plan.network)
+    ? buildLinuxGatewayCommand("bubblewrap", plan, plan.network)
+    : { command: "bwrap", args: bubblewrapArgs(plan) };
+}
+
+function buildUnshareCommand(plan: IsolatedRunPlan): WrappedCommand {
+  return isValidNetworkGatewayPolicy(plan.network)
+    ? buildLinuxGatewayCommand("unshare", plan, plan.network)
+    : { command: "unshare", args: unshareArgs(plan) };
+}
+
 function seatbeltArgs(plan: IsolatedRunPlan): readonly string[] {
   return ["-p", SEATBELT_DENY_EGRESS_PROFILE, plan.command, ...plan.args];
 }
@@ -189,9 +231,9 @@ export function buildWrappedCommand(
 ): WrappedCommand | undefined {
   switch (backend) {
     case "bubblewrap":
-      return { command: "bwrap", args: bubblewrapArgs(plan) };
+      return buildBubblewrapCommand(plan);
     case "unshare":
-      return { command: "unshare", args: unshareArgs(plan) };
+      return buildUnshareCommand(plan);
     case "seatbelt":
       return isValidNetworkGatewayPolicy(plan.network)
         ? buildGatewaySeatbeltCommand(

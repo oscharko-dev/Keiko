@@ -19,11 +19,11 @@ const FAIL_CLOSED_REASON =
 // would produce, instead of a second, independently-worded string (AGENTS.md #7).
 export const GATEWAY_UNSUPPORTED_ON_HOST_REASON =
   "unsupported-on-this-host: gateway-allowlist isolation was requested but no backend on this " +
-  "platform can bind a child process to exactly the configured loopback gateway destination. A " +
-  "Linux bubblewrap/unshare network namespace (and a container's own network namespace) has no " +
-  "route back to the parent's loopback socket without additional bridging this host does not " +
-  "provide, and no Windows-native equivalent exists yet. Falling back to a weaker isolation tier " +
-  "or an unconfined spawn is not an acceptable substitute. Untrusted network access is not granted.";
+  "platform can bind a child process to exactly the configured loopback gateway destination. " +
+  "Linux needs bubblewrap or unshare with the packaged gateway bridge, macOS needs Seatbelt, and " +
+  "Windows needs its native WFP enforcement path. Containers are not a substitute because they " +
+  "have no qualifying host-gateway bridge. Falling back to a weaker isolation tier or an " +
+  "unconfined spawn is not acceptable. Untrusted network access is not granted.";
 
 function noneEnforcedAttestation(platform: NodeJS.Platform): IsolatedRunDecision["attestation"] {
   return { backend: "none", networkEnforced: false, filesystemEnforced: false, platform };

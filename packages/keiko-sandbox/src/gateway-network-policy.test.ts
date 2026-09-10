@@ -46,11 +46,18 @@ describe("selectGatewayBackend", () => {
     expect(selectGatewayBackend("darwin", { ...ALL, seatbelt: false })).toBe("none");
   });
 
-  // The critical "no weaker fallback" proof (#2951): Linux offers bubblewrap/unshare/docker/podman
-  // for OTHER policies, but none of them can reach the host's loopback gateway from inside their
-  // own network namespace, so gateway selection must never choose one of them.
-  it("never selects a Linux or container backend for gateway policy even when all are available", () => {
-    expect(selectGatewayBackend("linux", ALL)).toBe("none");
+  it("prefers bubblewrap for the Linux namespace bridge", () => {
+    expect(selectGatewayBackend("linux", ALL)).toBe("bubblewrap");
+  });
+
+  it("uses unshare when bubblewrap is unavailable on Linux", () => {
+    expect(selectGatewayBackend("linux", { ...ALL, bubblewrap: false })).toBe("unshare");
+  });
+
+  it("does not substitute a container when Linux namespace primitives are unavailable", () => {
+    expect(selectGatewayBackend("linux", { ...ALL, bubblewrap: false, unshare: false })).toBe(
+      "none",
+    );
   });
 
   it("fails closed on win32, which has no confining backend at all for this policy", () => {
@@ -84,18 +91,42 @@ describe("planIsolatedRun with a gateway-allowlist network policy", () => {
     expect(profile).not.toContain("remote ip");
   });
 
-  it("fails closed on Linux with the shared unsupported-on-this-host reason, never a weaker run", () => {
+  it("wraps the Linux command with the bubblewrap gateway launcher", () => {
     const decision = planIsolatedRun(basePlan, ALL, "linux");
-    expect(decision.kind).toBe("fail-closed");
-    if (decision.kind !== "fail-closed") throw new Error("expected fail-closed");
-    expect(decision.reason).toBe(GATEWAY_UNSUPPORTED_ON_HOST_REASON);
-    expect(decision.reason).toMatch(/^unsupported-on-this-host: /);
+    expect(decision.kind).toBe("wrapped");
+    if (decision.kind !== "wrapped") throw new Error("expected wrapped");
+    expect(decision.command).toBe(process.execPath);
+    expect(decision.args[0]).toMatch(/keiko-sandbox\/dist\/linux-gateway-launcher\.js$/);
+    expect(decision.args.slice(1)).toEqual([
+      "host",
+      "bubblewrap",
+      "127.0.0.1",
+      "1983",
+      "/work/root",
+      "/trusted/opencode",
+      "serve",
+    ]);
     expect(decision.attestation).toEqual({
-      backend: "none",
-      networkEnforced: false,
+      backend: "bubblewrap",
+      networkEnforced: true,
       filesystemEnforced: false,
       platform: "linux",
     });
+  });
+
+  it("wraps with unshare when that is the only Linux namespace primitive", () => {
+    const decision = planIsolatedRun(basePlan, { ...NONE, unshare: true }, "linux");
+    expect(decision.kind).toBe("wrapped");
+    if (decision.kind !== "wrapped") throw new Error("expected wrapped");
+    expect(decision.args.slice(1, 3)).toEqual(["host", "unshare"]);
+    expect(decision.attestation.backend).toBe("unshare");
+  });
+
+  it("fails closed on Linux when no namespace primitive is available", () => {
+    const decision = planIsolatedRun(basePlan, { ...NONE, docker: true }, "linux");
+    expect(decision.kind).toBe("fail-closed");
+    if (decision.kind !== "fail-closed") throw new Error("expected fail-closed");
+    expect(decision.reason).toBe(GATEWAY_UNSUPPORTED_ON_HOST_REASON);
   });
 
   it("fails closed on win32 with the identical reason keiko-server's native backend must match", () => {

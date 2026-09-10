@@ -53,17 +53,19 @@ export function selectEnforcingBackend(
   return selectNetworkOnlyBackend(platform, availability);
 }
 
-// Gateway-allowlist selection (ADR-0043 D14, #2951) is deliberately its own function, not a branch
-// of selectNetworkOnlyBackend: a bubblewrap/unshare Linux network namespace and a container's
-// `--network=none`/bridge namespace both isolate the child from the HOST's loopback socket, so they
-// cannot reach the attested gateway port without additional bridging this host does not provide —
-// picking one of them here would be the "weaker fallback" the acceptance criteria forbid. Only
-// macOS Seatbelt can bind a child to exactly one loopback destination today; every other platform
-// (including Windows, which has no entry in `BackendAvailability` at all) returns "none" so the
-// caller fails the run closed instead of running it unconfined or under the wrong isolation.
+// Gateway-allowlist selection (ADR-0043 D14, #2951/#3422) is deliberately its own function. Linux
+// gateway runs use the packaged Unix-domain bridge compiled by buildWrappedCommand; containers are
+// never substituted because their network namespace has no corresponding bridge. Windows remains
+// fail-closed here until its native WFP backend is implemented.
 export function selectGatewayBackend(
   platform: NodeJS.Platform,
   availability: BackendAvailability,
 ): SandboxBackend {
+  if (platform === "linux" && availability.bubblewrap) {
+    return "bubblewrap";
+  }
+  if (platform === "linux" && availability.unshare) {
+    return "unshare";
+  }
   return platform === "darwin" && availability.seatbelt ? "seatbelt" : "none";
 }
