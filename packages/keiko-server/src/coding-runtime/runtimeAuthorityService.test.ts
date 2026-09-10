@@ -949,6 +949,7 @@ describe("CodingRuntimeAuthorityService", () => {
     ).toEqual([
       expect.objectContaining({
         level: "warn",
+        errorKind: "CodingRuntimeAuthorityStateRefusal",
         correlationId: minted.authorityRef.runId,
         extra: {
           condition: "state-not-admissible",

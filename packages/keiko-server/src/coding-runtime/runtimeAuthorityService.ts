@@ -123,6 +123,30 @@ const MINT_FAILURE_ERROR_KIND: Readonly<Record<RuntimeAuthorityMintFailureReason
   "capability-issuance-refused": "CodingRuntimeAuthorityCapabilityFailure",
 };
 
+/**
+ * The closed conditions a tool-path capability recheck can be refused for, and the error class each
+ * clusters under in `keiko support analyze --clusters` — the same shape `MINT_FAILURE_ERROR_KIND`
+ * gives a refused mint (owner review, 2026-09-10). `registry-refused` carries the registry's own
+ * reason as a separate field so the class stays closed while the reason stays visible.
+ */
+type RevalidationRefusalCondition =
+  | "state-not-admissible"
+  | "tree-binding-missing"
+  | "run-mismatch"
+  | "delegation-mismatch"
+  | "audience-mismatch"
+  | "capability-invalid"
+  | "registry-refused";
+const REVALIDATION_REFUSAL_ERROR_KIND: Readonly<Record<RevalidationRefusalCondition, string>> = {
+  "state-not-admissible": "CodingRuntimeAuthorityStateRefusal",
+  "tree-binding-missing": "CodingRuntimeAuthorityBindingFailure",
+  "run-mismatch": "CodingRuntimeAuthorityBindingFailure",
+  "delegation-mismatch": "CodingRuntimeAuthorityDelegationFailure",
+  "audience-mismatch": "CodingRuntimeAuthorityCapabilityFailure",
+  "capability-invalid": "CodingRuntimeAuthorityCapabilityFailure",
+  "registry-refused": "CodingRuntimeAuthorityRegistrationFailure",
+};
+
 function deliveryScopeGranted(mode: CodingWorkbenchMode): boolean {
   return codingWorkbenchPolicyEffectFor(mode, "delivery", "medium") !== "denied";
 }
@@ -929,7 +953,7 @@ export class CodingRuntimeAuthorityService {
     if (!authenticated.ok || authenticated.binding.audience !== "tool-facade") {
       this.recordRevalidationRefused(
         admissibleStates,
-        authenticated.ok ? "audience" : "capability",
+        authenticated.ok ? "audience-mismatch" : "capability-invalid",
       );
       return authenticated.ok
         ? capabilityFailure("invalid")
@@ -953,7 +977,7 @@ export class CodingRuntimeAuthorityService {
       ),
     );
     if (!resolution.ok)
-      this.recordRevalidationRefused(admissibleStates, `registry:${resolution.reason}`);
+      this.recordRevalidationRefused(admissibleStates, "registry-refused", resolution.reason);
     return resolution;
   }
 
@@ -962,7 +986,7 @@ export class CodingRuntimeAuthorityService {
     admissibleStates: ReadonlySet<CodingWorkbenchRuntimeStateName>,
     reference: CodingRuntimeAuthorityRef | undefined,
     delegationMatches: (reference: CodingRuntimeAuthorityRef) => boolean,
-  ): string | undefined {
+  ): RevalidationRefusalCondition | undefined {
     if (!admissibleStates.has(this.runtimeState.state)) return "state-not-admissible";
     if (this.activeTreeBindingId === undefined) return "tree-binding-missing";
     if (reference === undefined || this.runtimeState.runId !== reference.runId) {
@@ -980,17 +1004,20 @@ export class CodingRuntimeAuthorityService {
    */
   private recordRevalidationRefused(
     admissibleStates: ReadonlySet<CodingWorkbenchRuntimeStateName>,
-    condition: string,
+    condition: RevalidationRefusalCondition,
+    registryReason?: string,
   ): void {
     (this.activityLog ?? processServerLogSink()).write({
       category: "security",
       op: "coding-runtime.authority.revalidation-refused",
       correlationId: this.runtimeState.runId ?? UNKNOWN_CORRELATION_ID,
       level: "warn",
+      errorKind: REVALIDATION_REFUSAL_ERROR_KIND[condition],
       extra: {
         condition,
         runtimeState: this.runtimeState.state,
         admissibleStates: [...admissibleStates],
+        ...(registryReason === undefined ? {} : { registryReason }),
       },
     });
   }
