@@ -25,7 +25,12 @@ import {
   type GitDeliveryIssuedApproval,
 } from "./approvalStore.js";
 import { executeGovernedMutation } from "./execution.js";
-import { runtimeGitDiff, runtimeGitStatus, runtimeGitReadDeps } from "./runtimeGitRead.js";
+import {
+  runtimeGitDiff,
+  runtimeGitStatus,
+  runtimeGitReadDeps,
+  runtimeWorkspaceFs,
+} from "./runtimeGitRead.js";
 import {
   snapshotRuntimeGitRequest,
   type RuntimeGitRequest,
@@ -268,10 +273,17 @@ export class RuntimeGitService {
     if (this.proposals.size >= 64 || !context.buffersClean()) return undefined;
     const execution = this.options.execution ?? {};
     const facts = await readVerifiedCommitFacts(context, execution);
-    const worktreeDigest = await readGitStageCandidate(context.workspace.root, paths);
+    const worktreeDigest = await readGitStageCandidate(
+      context.workspace.root,
+      paths,
+      runtimeWorkspaceFs(context),
+    );
     const diff = await runtimeGitDiff(context, execution, "unstaged", paths);
     if (!(await stageSelectionReviewed(context, execution, paths, diff))) return undefined;
-    if ((await readGitStageCandidate(context.workspace.root, paths)) !== worktreeDigest)
+    if (
+      (await readGitStageCandidate(context.workspace.root, paths, runtimeWorkspaceFs(context))) !==
+      worktreeDigest
+    )
       return undefined;
     const proposal = buildStageProposal(context, facts, paths, worktreeDigest, diff, this.now());
     const proposalId = proposal.proposalId;
@@ -314,7 +326,11 @@ export class RuntimeGitService {
     proposal: RuntimeGitProposal,
   ): Promise<boolean> {
     const current = await readVerifiedCommitFacts(context, this.options.execution ?? {});
-    const digest = await readGitStageCandidate(context.workspace.root, proposal.command.pathspecs);
+    const digest = await readGitStageCandidate(
+      context.workspace.root,
+      proposal.command.pathspecs,
+      runtimeWorkspaceFs(context),
+    );
     return (
       context.buffersClean() &&
       current.headSha === proposal.binding.headSha &&

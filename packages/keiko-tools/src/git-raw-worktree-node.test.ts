@@ -1,10 +1,15 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
-import { readGitRawWorktreeSnapshot } from "./git-raw-worktree-node.js";
+import { PathDeniedError, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import {
+  workspaceFsWithOwnedRootAuthority,
+  workspaceInfoWithOwnedRootAuthority,
+} from "@oscharko-dev/keiko-workspace/internal/owned-root-mint";
+import { readGitRawChanges, readGitRawWorktreeSnapshot } from "./git-raw-worktree-node.js";
 import {
   GitWorktreeReadError,
   readGitBlobText,
@@ -203,5 +208,74 @@ describe("racy-clean guard wiring (owner audit finding b2-7)", () => {
     // filesystem state was.
     expect(call?.[3]).toBeDefined();
     expect(call?.[3]).toBe(readGitIndexWriteTimeNs(root));
+  });
+});
+
+// Run 5 (2026-09-10): the first `keiko_verification` inside a managed task worktree failed with
+// PathDeniedError from this reader's stat comparator -- the git commands already resolved their cwd
+// through the owned-root port the prover bound to the WorkspaceInfo (git-worktree-snapshot-node),
+// but the reader's own filesystem helpers still asked the plain node port with a bare root string.
+// Every filesystem helper now resolves through the same bound port; the plain projection of the
+// same root keeps failing closed.
+describe("a managed worktree below an always-denied segment", () => {
+  const dirs: string[] = [];
+  function deniedRepository(): string {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-raw-worktree-denied-")));
+    dirs.push(base);
+    const managed = join(base, ".keiko", "ui", "task-workspaces", "repo_1", "ws_1");
+    mkdirSync(managed, { recursive: true });
+    git(["init", "-q", "-b", "main"], managed);
+    git(["config", "user.name", "Keiko Test"], managed);
+    git(["config", "user.email", "keiko@example.test"], managed);
+    writeFileSync(join(managed, "a.txt"), "v1\n");
+    writeFileSync(join(managed, "b.txt"), "b\n");
+    git(["add", "a.txt", "b.txt"], managed);
+    git(["-c", "commit.gpgsign=false", "commit", "-qm", "base"], managed);
+    // One modified tracked file (content read), one unchanged tracked file (stat comparison) and
+    // one untracked file exercise every filesystem helper of the reader.
+    writeFileSync(join(managed, "a.txt"), "v2\n");
+    writeFileSync(join(managed, "untracked.txt"), "new\n");
+    return managed;
+  }
+  function plainWorkspace(rootPath: string): WorkspaceInfo {
+    return { ...workspace, root: rootPath, selectedRoot: rootPath };
+  }
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("fails closed for the plain projection of the root", async () => {
+    const managed = deniedRepository();
+    await expect(
+      readGitRawChanges({
+        workspace: plainWorkspace(managed),
+        processEnv: { PATH: process.env.PATH },
+      }),
+    ).rejects.toBeInstanceOf(PathDeniedError);
+  });
+
+  it("reads status and content once the WorkspaceInfo carries the owned-root authority", async () => {
+    const managed = deniedRepository();
+    const bound = workspaceInfoWithOwnedRootAuthority(
+      plainWorkspace(managed),
+      workspaceFsWithOwnedRootAuthority(nodeWorkspaceFs, managed),
+    );
+    const raw = await readGitRawChanges({
+      workspace: bound,
+      processEnv: { PATH: process.env.PATH },
+    });
+    expect(raw.branch).toBe("main");
+    expect(raw.truncated).toBe(false);
+    expect(raw.changes.map((change) => [change.path, change.worktreeStatus])).toEqual([
+      ["a.txt", "M"],
+      ["untracked.txt", "?"],
+    ]);
+    const snapshot = await readGitRawWorktreeSnapshot({
+      workspace: bound,
+      processEnv: { PATH: process.env.PATH },
+    });
+    expect(snapshot.unstagedFileCount).toBe(1);
+    expect(snapshot.untrackedFileCount).toBe(1);
   });
 });

@@ -31,13 +31,14 @@ import {
 } from "./git-mutation-adapter.js";
 import { CommandCancelledError, CommandTimeoutError } from "./errors.js";
 import {
-  nodeSpawnFn,
-  runCommand,
+  type CommandTerminationEvidence,
   type ExecutableResolver,
   type HomeProvider,
+  nodeSpawnFn,
+  runCommand,
   type RunCommandDeps,
   type SpawnFn,
-  type CommandTerminationEvidence,
+  workspaceFsOf,
 } from "./exec.js";
 import {
   GOVERNED_GIT_IDENTITY_SANDBOX_POLICY,
@@ -300,6 +301,7 @@ async function execStage(
     const succeeded = await stageExactFiles(
       {
         workspaceRoot: ctx.runDeps.workspace.root,
+        fs: workspaceFsOf(ctx.runDeps),
         check: () => verifiedFactsMatch(ctx, request),
         authorized: () => !ctx.signal.aborted && ctx.beforeIndexUpdate?.() !== false,
         run: (argv, stdin, indexPath) =>

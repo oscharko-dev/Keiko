@@ -16,7 +16,11 @@
 
 import { gitEnv } from "@oscharko-dev/keiko-git";
 import { createHash } from "node:crypto";
-import { PathDeniedError, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import {
+  PathDeniedError,
+  type WorkspaceFs,
+  type WorkspaceInfo,
+} from "@oscharko-dev/keiko-workspace";
 import type { CommandRule, CommandResult, SandboxPolicy } from "./types.js";
 import {
   DEFAULT_SANDBOX_POLICY,
@@ -116,6 +120,9 @@ export const GIT_REMOTE_URL_READ_SANDBOX_POLICY: SandboxPolicy = Object.freeze({
 
 export interface NodeGitWorktreeReaderDeps {
   readonly workspace: WorkspaceInfo;
+  // The read-only port the lane's filesystem helpers resolve containment through (workspace-port.ts
+  // `workspaceFsOf`): explicit here, else the owned-root port bound to `workspace`, else node.
+  readonly fs?: WorkspaceFs | undefined;
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly now?: (() => number) | undefined;
   readonly spawn?: SpawnFn | undefined;

@@ -30,6 +30,7 @@ import {
   type BackendAvailability,
 } from "@oscharko-dev/keiko-sandbox";
 import {
+  boundWorkspaceFs,
   containedRealPathInfo,
   isDenied,
   isWithinWorkspace,
@@ -37,7 +38,6 @@ import {
   resolveWithinWorkspace,
   type WorkspaceFs,
   type WorkspaceInfo,
-  boundWorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { CommandCancelledError, CommandDeniedError, CommandTimeoutError } from "./errors.js";
@@ -754,13 +754,22 @@ function assertExecutableOutsideWorkspace(
   }
 }
 
-// The port every root-relative check in this module resolves through: an explicit `deps.fs`, else
-// the owned-root port the prover bound to a Keiko-owned root's WorkspaceInfo, else the plain node
-// port. A managed task worktree lives below the state directory's always-denied `.keiko` segment;
-// resolving its cwd through the plain port re-admitted it under the user-workspace rules and refused
-// every git lane command inside it before spawn, on every installation with the default state
-// directory (2026-09-10). The binding is minted only by the server's managed-root prover.
-function workspaceFsOf(deps: Pick<RunCommandDeps, "workspace" | "fs">): WorkspaceFs {
+export interface WorkspacePortDeps {
+  readonly workspace: WorkspaceInfo;
+  readonly fs?: WorkspaceFs | undefined;
+}
+
+/**
+ * The port every root-relative check in this package resolves through: an explicit `deps.fs`, else
+ * the owned-root port the prover bound to a Keiko-owned root's WorkspaceInfo, else the plain node
+ * port. A managed task worktree lives below the state directory's always-denied `.keiko` segment;
+ * resolving its paths through the plain port re-admits it under the user-workspace rules and refuses
+ * it. The spawn boundary learned this on 2026-09-10 (every git lane command refused before spawn);
+ * the raw status reader's own filesystem helpers -- the index stat comparator, the index write-time
+ * reader, the stage-file reader -- still asked the plain port with a bare root string and refused
+ * the first verification of the same day's run 5. One resolver, every filesystem consumer.
+ */
+export function workspaceFsOf(deps: WorkspacePortDeps): WorkspaceFs {
   return deps.fs ?? boundWorkspaceFs(deps.workspace, nodeWorkspaceFs);
 }
 

@@ -334,7 +334,7 @@ async function boundedFile(
   remainingBytes: number,
 ): Promise<GitStageFile> {
   try {
-    return await readGitStageFile(root, path, remainingBytes);
+    return await readGitStageFile(root, path, { maxBytes: remainingBytes });
   } catch {
     throw new Error("qualification continuation file is unsafe or too large");
   }

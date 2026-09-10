@@ -156,7 +156,13 @@ port. Consumers that only ever receive the projection — every Git lane's deps 
 the root's own authority instead of re-admitting the root under generic workspace admission, which
 denies the state directory's `.keiko` segment; before this binding every Git command inside a managed
 worktree was refused before spawn on a default installation (2026-09-10). Binding accepts only a port
-minted for exactly that root and adds no capability of its own.
+minted for exactly that root and adds no capability of its own. The same rule reaches every
+filesystem helper below such a root, not only the spawn boundary: the raw status reader's stat
+comparator and index write-time reader, the stage-file reader, the index transaction and the
+exact-file staging effect take the bound port (`workspaceFsOf` in `keiko-tools`,
+`runtimeWorkspaceFs` in the server's git delivery) instead of asking the plain node port with a bare
+root string — the first verification inside a managed worktree was refused exactly that way on
+2026-09-10, after the spawn boundary had already been corrected.
 Connected-context detection uses marker-only language metadata because its request-local candidate
 inventory already performs the bounded repository walk; structural diagnostics derive additional
 observed languages from that shared inventory instead of scanning the repository twice.

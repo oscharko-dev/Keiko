@@ -30,6 +30,7 @@ import {
   type NodeGitWorktreeReaderDeps,
 } from "./git-worktree-snapshot-node.js";
 import type { GitWorktreeSnapshot } from "./git-mutation-preflight.js";
+import { workspaceFsOf } from "./exec.js";
 
 const MAX_INSPECTED_PATHS = 10_000;
 const MAX_CONTENT_BYTES = 8_388_608;
@@ -70,7 +71,10 @@ async function inspectWorkingFile(
   index: IndexEntry | undefined,
   remainingBytes: number,
 ): Promise<{ status: GitStatusCode; bytes: number; untracked: boolean }> {
-  const file = await readGitStageFile(deps.workspace.root, path, remainingBytes);
+  const file = await readGitStageFile(deps.workspace.root, path, {
+    maxBytes: remainingBytes,
+    fs: workspaceFsOf(deps),
+  });
   if (index === undefined)
     return { status: " ", bytes: file.bytes.length, untracked: file.mode !== "0" };
   if (file.mode === "0") return { status: "D", bytes: 0, untracked: false };
@@ -95,7 +99,7 @@ export async function readGitRawChanges(deps: NodeGitWorktreeReaderDeps): Promis
     head,
     index,
     parseGitIndexStat(await readGitIndexStat(deps)),
-    readGitIndexWriteTimeNs(deps.workspace.root),
+    readGitIndexWriteTimeNs(deps.workspace.root, workspaceFsOf(deps)),
   );
   const stagedTreeDigest = gitIndexEntriesDigest([...index.values()]);
   if (
@@ -154,7 +158,13 @@ async function workingStatus(
 ): Promise<{ status: GitStatusCode; bytes: number; untracked: boolean }> {
   return index.has(path) &&
     index.get(path)?.mode === head.get(path)?.mode &&
-    indexStatMatches(deps.workspace.root, path, stats.get(path), indexWriteTimeNs)
+    indexStatMatches(
+      deps.workspace.root,
+      path,
+      stats.get(path),
+      indexWriteTimeNs,
+      workspaceFsOf(deps),
+    )
     ? { status: " " as const, bytes: 0, untracked: false }
     : await inspectWorkingFile(deps, path, index.get(path), remainingBytes);
 }

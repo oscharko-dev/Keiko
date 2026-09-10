@@ -278,3 +278,49 @@ history response budget is derived from the same ceilings, and every history fai
 oversized pull, non-JSON answer — leaves a diagnostic naming its closed reason. A `part-type` or
 `tool-unapproved` refusal after an OpenCode version change is a protocol review, never a bound to
 raise.
+
+## Every `keiko_verification` fails inside a managed worktree with `PathDeniedError` from the raw status reader
+
+| Field             | Value                                                                                                                                                   |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Severity          | High                                                                                                                                                    |
+| Surface           | Coding runtime / Git delivery                                                                                                                           |
+| Stable identifier | `coding-runtime.verification` with `errorKind: "PathDeniedError"`, `tool-catalog.invocation-settled` with `handler-failed` for `keiko.verification.run` |
+
+**Symptom**
+
+The run edits files successfully (`keiko_changeset_edit · Succeeded`, `coding-runtime.editor-mutation.settled`
+with `state: "succeeded"`), then every `keiko_verification` fails within about a hundred milliseconds
+and the agent re-issues it. The activity log shows `coding-runtime.verification` diagnostics with
+`errorKind: "PathDeniedError"` whose frames run through `keiko-workspace/dist/realpath.js`,
+`keiko-tools/dist/git-index-stat.js` and `keiko-tools/dist/git-raw-worktree-node.js`, each followed by
+`tool-catalog.invocation-settled` with `status: "failed"`, `reason: "handler-failed"`. The same
+refusal would follow for the first staging or editor diff of the run.
+
+**Root Cause**
+
+A managed task worktree lives below the state directory's always-denied `.keiko` segment. The git
+commands of the raw status reader already resolved their working directory through the owned-root
+port the managed prover binds to the run's `WorkspaceInfo` (the 2026-09-10 start-refusal repair), but
+the reader's own filesystem helpers — the index stat comparator, the index write-time reader, the
+stage-file reader and the index transaction — took a bare root string and resolved containment
+through the plain node port, which re-admits the root under the user-workspace rules and refuses it.
+
+**Diagnostic Steps**
+
+1. `keiko support analyze bundle.jsonl --correlation-id <run id>`; the first
+   `coding-runtime.verification` failure names the gate in its `frames`
+   (`git-index-stat.js` → `indexStatMatches`, or `gitIndexTransaction.js` → `readGitStageFile`).
+2. Confirm the worktree root lies below a `.keiko` segment (`task-workspace.lifecycle` lines carry the
+   workspace id; the managed root is the state directory's `ui/task-workspaces`).
+3. A failure with the same frames on a build that contains the repair means the run's
+   `WorkspaceInfo` reached the reader without its binding: check the composition that built the
+   `VerifiedCommitRunContext` for the run.
+
+**Resolution**
+
+Update to a build that contains the 2026-09-10 repair: every filesystem helper of the raw status
+reader, the stage-file reader, the index transaction and the exact-file staging effect resolves
+containment through the port bound to the workspace (`workspaceFsOf` in keiko-tools,
+`runtimeWorkspaceFs` in the server's git delivery), while the plain port keeps refusing the same
+root. No operator action is needed; the model's next verification succeeds.

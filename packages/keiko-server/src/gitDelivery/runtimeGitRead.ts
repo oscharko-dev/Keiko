@@ -11,6 +11,8 @@ import {
   GIT_EDITOR_DIFF_MAX_FILES,
 } from "@oscharko-dev/keiko-contracts/runtime/git-editor";
 import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
+import { boundWorkspaceFs, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { readGitStageFile } from "@oscharko-dev/keiko-workspace/internal/git-index";
 import {
   readGitRevision,
@@ -25,6 +27,16 @@ import { parseGitEditorUnifiedDiff } from "../gitDiffParser.js";
 import { gitDeliveryTerminationHandler, type GitDeliveryExecutionSeams } from "./execution.js";
 import type { VerifiedCommitRunContext } from "./verifiedCommitTypes.js";
 import { runtimeGitPaths } from "../coding-runtime/codingRuntimeGitIpc.js";
+/**
+ * The port a run's filesystem reads resolve containment through: the owned-root port the managed
+ * prover bound to the run's WorkspaceInfo, else the plain node port. A managed task worktree below
+ * the always-denied `.keiko` segment is admitted only through that binding (2026-09-10).
+ */
+export function runtimeWorkspaceFs(
+  context: Pick<VerifiedCommitRunContext, "workspace">,
+): WorkspaceFs {
+  return boundWorkspaceFs(context.workspace, nodeWorkspaceFs);
+}
 export function runtimeGitReadDeps(
   context: VerifiedCommitRunContext,
   execution: GitDeliveryExecutionSeams,
@@ -177,7 +189,9 @@ async function workingSide(
   path: string,
   hashLength: number,
 ): Promise<FileSide> {
-  const file = await readGitStageFile(context.workspace.root, path);
+  const file = await readGitStageFile(context.workspace.root, path, {
+    fs: runtimeWorkspaceFs(context),
+  });
   return {
     objectId: file.mode === "0" ? "" : gitBlobObjectId(file.bytes, hashLength),
     mode: file.mode,

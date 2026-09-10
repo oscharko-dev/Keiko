@@ -1,6 +1,10 @@
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { assertContainedRealPath, resolveWithinWorkspace } from "@oscharko-dev/keiko-workspace";
+import {
+  assertContainedRealPath,
+  resolveWithinWorkspace,
+  type WorkspaceFs,
+} from "@oscharko-dev/keiko-workspace";
 
 const GIT_DIR_POINTER_PREFIX = "gitdir: ";
 const GIT_DIR_POINTER_MAX_BYTES = 4096;
@@ -56,14 +60,18 @@ export function indexStatMatches(
   path: string,
   expected: GitIndexStat | undefined,
   indexWriteTimeNs?: string,
+  // The port containment resolves through. A managed task worktree below the always-denied `.keiko`
+  // segment is admitted only by the owned-root port the prover bound to it; the plain default keeps
+  // refusing it (run 5, 2026-09-10: every verification failed here with PathDeniedError).
+  fs: WorkspaceFs = nodeWorkspaceFs,
 ): boolean {
   if (expected === undefined) return false;
   if (indexWriteTimeNs !== undefined && BigInt(expected.mtimeNs) >= BigInt(indexWriteTimeNs))
     return false;
   const absolute = resolveWithinWorkspace(root, path);
-  if (!nodeWorkspaceFs.exists(absolute)) return false;
-  assertContainedRealPath(nodeWorkspaceFs, root, dirname(absolute), "git-raw-parent");
-  const stat = nodeWorkspaceFs.stat(absolute);
+  if (!fs.exists(absolute)) return false;
+  assertContainedRealPath(fs, root, dirname(absolute), "git-raw-parent");
+  const stat = fs.stat(absolute);
   return (
     stat.isFile &&
     stat.hardLinkCount === 1 &&
@@ -79,9 +87,14 @@ export function indexStatMatches(
 // through `assertContainedRealPath`: escaping `root` is the correct, expected shape here, not a
 // containment violation. Bounded/validated strictly; any unexpected shape returns `undefined`
 // rather than throwing, so a caller stat-hit falls back to raw content (safe) instead of failing.
-function resolvePointedGitdir(root: string, dotGit: string, size: number): string | undefined {
+function resolvePointedGitdir(
+  fs: WorkspaceFs,
+  root: string,
+  dotGit: string,
+  size: number,
+): string | undefined {
   if (size <= 0 || size > GIT_DIR_POINTER_MAX_BYTES) return undefined;
-  const raw = nodeWorkspaceFs.readFileUtf8(dotGit).trim();
+  const raw = fs.readFileUtf8(dotGit).trim();
   if (!raw.startsWith(GIT_DIR_POINTER_PREFIX)) return undefined;
   const target = raw.slice(GIT_DIR_POINTER_PREFIX.length).trim();
   if (target.length === 0 || target.includes("\n")) return undefined;
@@ -91,14 +104,14 @@ function resolvePointedGitdir(root: string, dotGit: string, size: number): strin
 // Resolves the real gitdir — `root/.git` for an ordinary clone, or the worktree-pointer target for
 // a linked worktree/submodule — without following a symlink at `.git` itself (a symlinked `.git` is
 // refused, matching `indexStatMatches`'s own no-symlink stance on the tracked file it stats).
-function resolveGitdirForIndex(root: string): string | undefined {
+function resolveGitdirForIndex(fs: WorkspaceFs, root: string): string | undefined {
   const dotGit = resolveWithinWorkspace(root, ".git");
-  if (!nodeWorkspaceFs.exists(dotGit)) return undefined;
-  assertContainedRealPath(nodeWorkspaceFs, root, dirname(dotGit), "git-raw-parent");
-  const stat = nodeWorkspaceFs.stat(dotGit);
+  if (!fs.exists(dotGit)) return undefined;
+  assertContainedRealPath(fs, root, dirname(dotGit), "git-raw-parent");
+  const stat = fs.stat(dotGit);
   if (stat.isSymbolicLink) return undefined;
   if (stat.isDirectory) return dotGit;
-  return stat.isFile ? resolvePointedGitdir(root, dotGit, stat.size) : undefined;
+  return stat.isFile ? resolvePointedGitdir(fs, root, dotGit, stat.size) : undefined;
 }
 
 /**
@@ -108,13 +121,16 @@ function resolveGitdirForIndex(root: string): string | undefined {
  * `undefined`, which callers treat exactly like "not supplied" — `indexStatMatches`'s prior,
  * pre-guard behaviour — rather than failing the read outright.
  */
-export function readGitIndexWriteTimeNs(root: string): string | undefined {
+export function readGitIndexWriteTimeNs(
+  root: string,
+  fs: WorkspaceFs = nodeWorkspaceFs,
+): string | undefined {
   try {
-    const gitdir = resolveGitdirForIndex(root);
+    const gitdir = resolveGitdirForIndex(fs, root);
     if (gitdir === undefined) return undefined;
     const indexPath = join(gitdir, "index");
-    if (!nodeWorkspaceFs.exists(indexPath)) return undefined;
-    const stat = nodeWorkspaceFs.stat(indexPath);
+    if (!fs.exists(indexPath)) return undefined;
+    const stat = fs.stat(indexPath);
     if (!stat.isFile || stat.isSymbolicLink || stat.hardLinkCount !== 1) return undefined;
     return stat.mtimeNs;
   } catch {
