@@ -174,7 +174,7 @@ export async function handleGrantWorkspaceScriptTrust(
   if (isRouteResult(guard)) return guard;
   return runHandler(async () => {
     const projectId = trustProjectId(await readJsonObject(ctx.req));
-    guard.grant(projectId);
+    guard.grant(projectId, ctx.correlationId);
     return { status: 200, body: guard.status(projectId) };
   });
 }
@@ -187,7 +187,7 @@ export async function handleRevokeWorkspaceScriptTrust(
   if (isRouteResult(guard)) return guard;
   return runHandler(async () => {
     const projectId = trustProjectId(await readJsonObject(ctx.req));
-    guard.revoke(projectId);
+    guard.revoke(projectId, ctx.correlationId);
     return { status: 200, body: guard.status(projectId) };
   });
 }

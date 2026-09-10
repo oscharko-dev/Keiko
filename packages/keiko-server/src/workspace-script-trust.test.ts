@@ -19,6 +19,7 @@ import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
 import { deriveWorkspaceRootRef } from "./workspaceTrust/canonicalTrustIdentity.js";
 import { createInMemoryUiStore, createNodeUiStore, type UiStore } from "./store/index.js";
 import type { ServerLogEvent } from "./observability/index.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { restoreV13SchemaFixture } from "./store/legacySchemaTestFixture.js";
 import {
   createWorkspaceScriptTrustService,
@@ -318,6 +319,40 @@ describe("WorkspaceScriptTrustService", () => {
     expect(
       verification.discover(root).kinds.find((entry) => entry.kind === "typecheck")?.trustState,
     ).toBe("approval-required");
+  });
+
+  // F64 (PR #3452): the human grant is the decision every later verification of this root rests on
+  // (and, for a managed worktree, every run admission). It used to leave no activity line, so run 20's
+  // log could not show the grant its verifications depended on.
+  it("records every human grant and revoke body-free under the request's correlation id", () => {
+    const records: ServerLogEvent[] = [];
+    const trust = createWorkspaceScriptTrustService({
+      store,
+      activityLog: { write: (event: ServerLogEvent): void => void records.push(event) },
+    });
+
+    trust.grant(root, "request-grant");
+    trust.revoke(root);
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        category: "security",
+        op: "workspace-script-trust.granted",
+        correlationId: "request-grant",
+        extra: {
+          basis: "known",
+          manifestDigest: expect.stringMatching(/^[0-9a-f]{64}$/u) as unknown,
+          revision: expect.any(Number) as unknown,
+        },
+      }),
+      expect.objectContaining({
+        category: "security",
+        op: "workspace-script-trust.revoked",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        extra: expect.objectContaining({ basis: "known" }) as unknown,
+      }),
+    ]);
+    expect(JSON.stringify(records)).not.toContain(root);
   });
 
   it("projects server-owned status and preserves an honest digest-invalidation reason", () => {

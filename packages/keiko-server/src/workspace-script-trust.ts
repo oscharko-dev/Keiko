@@ -12,6 +12,7 @@
 // ./workspaceTrust/canonicalTrustIdentity.ts; the row persistence lives in the UiStore.
 
 import { createHash } from "node:crypto";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { CodedHttpError, httpStatusFor } from "@oscharko-dev/keiko-contracts/runtime/http-error";
@@ -104,12 +105,12 @@ export interface WorkspaceRunManifestAdmission {
 }
 
 export interface WorkspaceScriptTrustService {
-  readonly grant: (projectId: string) => WorkspaceScriptTrustSnapshot;
+  readonly grant: (projectId: string, correlationId?: string) => WorkspaceScriptTrustSnapshot;
   readonly deriveFromTrustedRoot: (
     projectId: string,
     trustedProjectId: string,
   ) => WorkspaceScriptTrustSnapshot;
-  readonly revoke: (projectId: string) => WorkspaceScriptTrustSnapshot;
+  readonly revoke: (projectId: string, correlationId?: string) => WorkspaceScriptTrustSnapshot;
   readonly status: (projectId: string) => WorkspaceTrustStatus;
   readonly isTrusted: (projectId: string, workspace: WorkspaceInfo) => boolean;
   readonly trustLevelForRoot: (root: string) => WorkspaceTrustLevel;
@@ -656,7 +657,35 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     return projectedTrusted;
   }
 
-  public readonly grant = (projectId: string): WorkspaceScriptTrustSnapshot => {
+  // F64 (PR #3452): a human grant or revoke is the decision every later verification of the root
+  // rests on, and it used to leave no line at all, so a customer log could not show why a run's
+  // verification was, or was not, admitted. Body-free: the basis outcome, the manifest's digest and
+  // the record revision, never a path or project id.
+  private recordHumanDecision(
+    decision: "granted" | "revoked",
+    basis: WorkspaceFact<WorkspaceTrustBasisDigest>,
+    revision: number,
+    correlationId: string | undefined,
+  ): void {
+    this.activityLog.write({
+      category: "security",
+      op:
+        decision === "granted"
+          ? "workspace-script-trust.granted"
+          : "workspace-script-trust.revoked",
+      correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+      extra: {
+        basis: basis.outcome,
+        ...(basis.outcome === "known" ? { manifestDigest: basis.value } : {}),
+        revision,
+      },
+    });
+  }
+
+  public readonly grant = (
+    projectId: string,
+    correlationId?: string,
+  ): WorkspaceScriptTrustSnapshot => {
     const canonicalRoot = this.canonicalRootOf(projectId);
     const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
     // `absent` is a complete, knowable basis: the root has no package scripts, so there is nothing
@@ -671,13 +700,9 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     const binding = requireCurrentObjectIdentity(
       currentTrustContext(this.store, canonicalRoot, basis),
     );
-    persistRecord(
-      this.store,
-      binding,
-      "trusted",
-      "human-grant",
-      nextRevision(this.store, binding.rootRef),
-    );
+    const revision = nextRevision(this.store, binding.rootRef);
+    persistRecord(this.store, binding, "trusted", "human-grant", revision);
+    this.recordHumanDecision("granted", basis, revision, correlationId);
     return { trusted: true };
   };
 
@@ -708,19 +733,18 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     return { trusted: true };
   };
 
-  public readonly revoke = (projectId: string): WorkspaceScriptTrustSnapshot => {
+  public readonly revoke = (
+    projectId: string,
+    correlationId?: string,
+  ): WorkspaceScriptTrustSnapshot => {
     const canonicalRoot = this.canonicalRootOf(projectId);
     const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
     const binding = requireCurrentObjectIdentity(
       currentTrustContext(this.store, canonicalRoot, basis),
     );
-    persistRecord(
-      this.store,
-      binding,
-      "restricted",
-      "human-revocation",
-      nextRevision(this.store, binding.rootRef),
-    );
+    const revision = nextRevision(this.store, binding.rootRef);
+    persistRecord(this.store, binding, "restricted", "human-revocation", revision);
+    this.recordHumanDecision("revoked", basis, revision, correlationId);
     this.notifyRestricted(canonicalRoot);
     return { trusted: false };
   };
