@@ -605,6 +605,9 @@ int main(int argc, char **argv) {
   assert(join_path(path, sizeof(path), "/tmp/Keiko.app", "/Contents/Resources") == 1);
   assert(strcmp(path, "/tmp/Keiko.app/Contents/Resources") == 0);
   assert(join_path(path, 5, "/tmp", "/Keiko") == 0);
+#if defined(__linux__)
+  assert(current_executable_path(path, 2) == 0);
+#endif
   test_spawn_preserves_fixed_protocol_descriptors(argv[0]);
   test_reconcile_requires_zero_live_proof(argv[0]);
   test_atomic_promote_survives_each_cutover_boundary();

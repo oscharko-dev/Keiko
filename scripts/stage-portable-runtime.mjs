@@ -103,8 +103,8 @@ const PORTABLE_RELEASE_IMPACT_CONTRACT = Object.freeze({
   parentEpic: 1942,
   programEpic: 1944,
   stagingOnly: true,
-  targets: Object.freeze(["windows-x64", "macos-arm64", "macos-x64"]),
 });
+const LEGACY_PORTABLE_TARGETS = Object.freeze(["windows-x64", "macos-arm64", "macos-x64"]);
 
 function fail(message) {
   console.error(`portable-stage failed: ${message}`);
@@ -1545,6 +1545,7 @@ function createZipArchive(payloadContainer, assetName, outRoot) {
 
 function launcherPath(target, stageRoot) {
   if (target.primaryLauncher === "Keiko.exe") return join(stageRoot, "Keiko.exe");
+  if (target.primaryLauncher === "Keiko") return join(stageRoot, "Keiko");
   return join(stageRoot, "Keiko.app", "Contents", "MacOS", "Keiko");
 }
 
@@ -1686,6 +1687,12 @@ function buildSecureReadHelper(target, destination) {
 }
 
 function runtimeSupervisorSource(target) {
+  if (target.nodePlatform === "linux") {
+    return {
+      path: "packages/keiko-sandbox/src",
+      root: join(repoRoot, "packages", "keiko-sandbox", "src"),
+    };
+  }
   const platform = target.nodePlatform === "win32" ? "windows" : "macos";
   return {
     path: `native/runtime-supervisor/${platform}`,
@@ -1694,6 +1701,9 @@ function runtimeSupervisorSource(target) {
 }
 
 function runtimeSupervisorExecutablePath(target) {
+  if (target.nodePlatform === "linux") {
+    return "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
+  }
   return `runtime/native/${RUNTIME_SUPERVISOR_NAME}${target.nodePlatform === "win32" ? ".exe" : ""}`;
 }
 
@@ -1701,7 +1711,9 @@ function stageRuntimeSupervisor(target, resourceRoot, options, hooks) {
   const executablePath = runtimeSupervisorExecutablePath(target);
   const destination = join(resourceRoot, ...executablePath.split("/"));
   mkdirSync(dirname(destination), { recursive: true });
-  (hooks.buildRuntimeSupervisor ?? buildRuntimeSupervisor)(target, destination);
+  if (target.nodePlatform !== "linux") {
+    (hooks.buildRuntimeSupervisor ?? buildRuntimeSupervisor)(target, destination);
+  }
   const entry = existsSync(destination) ? lstatSync(destination) : undefined;
   if (entry === undefined || !entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
     fail("runtime supervisor build did not produce the fixed executable");
@@ -1715,7 +1727,10 @@ function stageRuntimeSupervisor(target, resourceRoot, options, hooks) {
     kind: "runtime-process-supervisor",
     name: RUNTIME_SUPERVISOR_NAME,
     options,
-    protocol: { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" },
+    protocol:
+      target.nodePlatform === "linux"
+        ? { schemaVersion: 1, requestMagic: "none", responseMagic: "none" }
+        : { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" },
     sourcePath: source.path,
     sourceRoot: source.root,
     target,
@@ -1819,6 +1834,10 @@ function buildNativeLauncher(target, destination, options) {
     compileWindowsLauncher(target, destination);
     return;
   }
+  if (target.nodePlatform === "linux" && process.platform === "linux") {
+    compileLinuxLauncher(target, destination);
+    return;
+  }
   fail(
     `pass --launcher-binary for ${target.platformTarget}, or run portable staging on a native ${target.nodePlatform} builder`,
   );
@@ -1855,6 +1874,21 @@ function compileMacLauncher(target, destination) {
     "-Wextra",
     "-arch",
     macCompilerArch(target),
+    `-D${nativeLauncherTargetDefine(target)}`,
+    nativeLauncherSource(),
+    "-o",
+    destination,
+  ]);
+}
+
+function compileLinuxLauncher(target, destination) {
+  run("cc", [
+    "-std=c11",
+    "-Os",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-D_GNU_SOURCE",
     `-D${nativeLauncherTargetDefine(target)}`,
     nativeLauncherSource(),
     "-o",
@@ -1970,12 +2004,14 @@ function stageSupportLauncher(target, stageRoot) {
     return;
   }
   const scriptPath = join(supportRoot, "keiko-support.sh");
+  const primaryLauncher =
+    target.nodePlatform === "linux" ? "../Keiko" : "../Keiko.app/Contents/MacOS/Keiko";
   writeFileSync(
     scriptPath,
     [
       "#!/bin/sh",
       'SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)',
-      'exec "$SCRIPT_DIR/../Keiko.app/Contents/MacOS/Keiko" "$@"',
+      `exec "$SCRIPT_DIR/${primaryLauncher}" "$@"`,
       "",
     ].join("\n"),
   );
@@ -2294,11 +2330,11 @@ function releaseImpactEntryMatches(entry, options) {
     entry.releaseTag === options.releaseTag &&
     entry.review?.status === "reviewed" &&
     entry.review?.humanApproved === true &&
-    portableRuntimeContractMatches(entry.portableRuntimeArtifactContract)
+    portableRuntimeContractMatches(entry.portableRuntimeArtifactContract, options.target)
   );
 }
 
-function portableRuntimeContractMatches(contract) {
+function portableRuntimeContractMatches(contract, requestedTarget) {
   return (
     contract !== null &&
     typeof contract === "object" &&
@@ -2306,14 +2342,20 @@ function portableRuntimeContractMatches(contract) {
     contract.parentEpic === PORTABLE_RELEASE_IMPACT_CONTRACT.parentEpic &&
     contract.programEpic === PORTABLE_RELEASE_IMPACT_CONTRACT.programEpic &&
     contract.stagingOnly === PORTABLE_RELEASE_IMPACT_CONTRACT.stagingOnly &&
-    sameStringSet(contract.targets, PORTABLE_RELEASE_IMPACT_CONTRACT.targets)
+    reviewedPortableTargetSet(contract.targets, requestedTarget)
   );
 }
 
-function sameStringSet(actual, expected) {
-  if (!Array.isArray(actual) || actual.length !== expected.length) return false;
+function reviewedPortableTargetSet(actual, requestedTarget) {
+  if (!Array.isArray(actual)) return false;
   const actualSet = new Set(actual);
-  return actualSet.size === expected.length && expected.every((value) => actualSet.has(value));
+  const knownTargets = new Set(PORTABLE_TARGET_NAMES);
+  return (
+    actualSet.size === actual.length &&
+    LEGACY_PORTABLE_TARGETS.every((target) => actualSet.has(target)) &&
+    actualSet.has(requestedTarget) &&
+    actual.every((target) => knownTargets.has(target))
+  );
 }
 
 export async function assemblePortableStage(options, hooks = {}) {

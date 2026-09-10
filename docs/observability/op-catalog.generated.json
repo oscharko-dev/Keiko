@@ -1909,7 +1909,7 @@
     {
       "op": "coding.runtime.discover",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:168",
+      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:184",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -3062,13 +3062,13 @@
     {
       "op": "runtime.confinement.failed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:255",
+      "site": "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:311",
       "package": "keiko-server"
     },
     {
       "op": "runtime.confinement.failed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:300",
+      "site": "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:377",
       "package": "keiko-server"
     },
     {
@@ -3080,7 +3080,13 @@
     {
       "op": "runtime.confinement.spawned",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:271",
+      "site": "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:345",
+      "package": "keiko-server"
+    },
+    {
+      "op": "runtime.confinement.unavailable",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/devLaneRuntimeProcessBackend.ts:330",
       "package": "keiko-server"
     },
     {
@@ -3402,7 +3408,7 @@
     {
       "op": "update.portable-asset.redirect-refused",
       "category": "security",
-      "site": "packages/keiko-server/src/update-preflight-portable-evidence.ts:363",
+      "site": "packages/keiko-server/src/update-preflight-portable-evidence.ts:367",
       "package": "keiko-server"
     },
     {
@@ -3414,7 +3420,7 @@
     {
       "op": "update.portable-fetch.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/update-preflight-portable-evidence.ts:372",
+      "site": "packages/keiko-server/src/update-preflight-portable-evidence.ts:376",
       "package": "keiko-server"
     },
     {
@@ -3427,13 +3433,13 @@
     {
       "op": "update.release-trust.verify",
       "category": "security",
-      "site": "packages/keiko-server/src/update-preflight-portable-evidence.ts:500",
+      "site": "packages/keiko-server/src/update-preflight-portable-evidence.ts:504",
       "package": "keiko-server"
     },
     {
       "op": "update.release-trust.verify",
       "category": "security",
-      "site": "packages/keiko-server/src/update-preflight-portable-evidence.ts:514",
+      "site": "packages/keiko-server/src/update-preflight-portable-evidence.ts:518",
       "package": "keiko-server"
     },
     {

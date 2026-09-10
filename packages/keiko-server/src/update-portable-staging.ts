@@ -257,6 +257,7 @@ async function stageCandidateArchive(
       targetVersion: release.targetVersion,
       stageId,
       sidecars,
+      nativePlatformVerificationRequired: stageAssets.nativePlatformVerificationRequired,
       ...(windowsGeneration === undefined ? {} : { windowsGeneration }),
       ...(options.platformVerifier === undefined
         ? {}

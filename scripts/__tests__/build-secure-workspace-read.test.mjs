@@ -70,6 +70,16 @@ describe("secure workspace read compiler environment", () => {
     ).toEqual({ PATH: "/trusted/bin" });
   });
 
+  it("keeps the Linux compiler environment minimal", () => {
+    expect(
+      buildCompilerEnvironment("linux-x64", {
+        PATH: "/trusted/bin",
+        INCLUDE: "ignored",
+        HOME: "ignored",
+      }),
+    ).toEqual({ PATH: "/trusted/bin" });
+  });
+
   it("forwards exact Windows toolchain paths and excludes injection variables", () => {
     const environment = buildCompilerEnvironment("windows-x64", {
       PATH: "C:\\MSVC\\bin;C:\\Windows\\System32",
@@ -180,6 +190,41 @@ describe("secure workspace read compiler environment", () => {
         LIB: "C:\\SDK\\lib;C:\\MSVC\\lib",
         LIBPATH: "C:\\MSVC\\libpath",
       },
+      stdio: "inherit",
+    });
+  });
+
+  it("builds the Linux helper with a hardened C11 compiler invocation", async () => {
+    const root = await mkdtemp(join(tmpdir(), "keiko-secure-read-build-"));
+    temporaryDirectories.push(root);
+    const destination = join(root, "nested", "secure-read");
+    let invocation;
+
+    const status = await runSecureWorkspaceReadBuild({
+      argv: ["node", "build-secure-workspace-read.mjs", "linux-x64", destination],
+      environment: { PATH: "/trusted/bin", SECRET: "not-for-the-compiler" },
+      spawnSyncImpl: (command, args, options) => {
+        invocation = { args, command, options };
+        return { status: 0 };
+      },
+    });
+
+    expect(status).toBe(0);
+    expect(invocation.command).toBe("cc");
+    expect(invocation.args).toEqual(
+      expect.arrayContaining([
+        "-std=c11",
+        "-Wall",
+        "-Wextra",
+        "-Werror",
+        "-O2",
+        "-D_GNU_SOURCE",
+        "-o",
+        destination,
+      ]),
+    );
+    expect(invocation.options).toEqual({
+      env: { PATH: "/trusted/bin" },
       stdio: "inherit",
     });
   });

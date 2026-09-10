@@ -134,6 +134,17 @@ function layoutFor(
       windowsGeneration: binding,
     };
   }
+  if (target === "linux-x64") {
+    return {
+      installRoot: root,
+      resourceRoot: root,
+      appRoot: join(root, "app"),
+      packageJsonPath: join(root, "app", "package.json"),
+      setupManifestPath: join(root, ".portable", "setup-manifest.json"),
+      launcherPath: join(root, "Keiko"),
+      runtimeSupervisorPath: join(root, "runtime", "native", "keiko-runtime-supervisor"),
+    };
+  }
   const resources = join(root, "Contents", "Resources");
   return {
     installRoot: root,
@@ -295,7 +306,7 @@ function activationPathsFor(
   const parent = realpathSync(dirname(managedRoot));
   const stageRoot = join(parent, PORTABLE_STAGE_DIR_PREFIX, stageId);
   const candidateRoot =
-    target === "windows-x64"
+    target === "windows-x64" || target === "linux-x64"
       ? join(stageRoot, PORTABLE_PAYLOAD_ROOT)
       : join(stageRoot, PORTABLE_PAYLOAD_ROOT, "Keiko.app");
   assertNoSymlinkAncestor(stageRoot);
@@ -333,6 +344,7 @@ function defaultManagedRoot(target: UpdatePortableTarget, env: EnvSource, home: 
   if (target === "windows-x64") {
     return join(env.LOCALAPPDATA ?? join(home, "AppData", "Local"), "Programs", "Keiko");
   }
+  if (target === "linux-x64") return join(home, ".local", "opt", "Keiko");
   return "/Applications/Keiko.app";
 }
 

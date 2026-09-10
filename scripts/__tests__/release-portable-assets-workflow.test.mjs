@@ -41,7 +41,7 @@ function namedStep(job, name) {
 }
 
 describe("portable release-trust workflow", () => {
-  it("builds and natively smokes all three stable targets without platform signing", () => {
+  it("builds and natively smokes all four stable targets without Apple or Microsoft signing", () => {
     const stage = workflowJob("stage");
     expect(stage.strategy.matrix.include).toEqual([
       { platform_target: "windows-x64", runner: "windows-latest" },
@@ -60,12 +60,23 @@ describe("portable release-trust workflow", () => {
     expect(namedStep(stage, "Build unsigned Windows setup companion").if).toBe(
       "runner.os == 'Windows'",
     );
+    const linux = workflowJob("stage-linux-production");
+    expect(linux["runs-on"]).toBe("ubuntu-latest");
+    expect(namedStep(linux, "Stage stable runtime for Keiko release trust").run).toContain(
+      "--release",
+    );
   });
 
   it("keeps native signing optional and out of the release authority path", () => {
-    expect(Object.keys(portableWorkflowDocument.jobs)).toEqual(["stage", "assemble"]);
+    expect(Object.keys(portableWorkflowDocument.jobs)).toEqual([
+      "stage",
+      "stage-linux-manual",
+      "stage-linux-production",
+      "qualify-linux-production",
+      "assemble",
+    ]);
     expect(portableWorkflow).not.toMatch(
-      /portable-release-signing|AZURE_|APPLE_|artifact-signing-action|notarytool|codesign/u,
+      /AZURE_|APPLE_|artifact-signing-action|notarytool|codesign/u,
     );
     expect(workflowJob("stage").environment).toBeUndefined();
     expect(workflowJob("stage").permissions).toEqual({
@@ -73,12 +84,14 @@ describe("portable release-trust workflow", () => {
       contents: "read",
       statuses: "read",
     });
+    expect(workflowJob("stage-linux-production").environment).toBe("portable-release-signing");
   });
 
   it("assembles only a complete stable matrix and keeps attestations supplementary", () => {
     const assemble = workflowJob("assemble");
-    expect(assemble.needs).toBe("stage");
+    expect(assemble.needs).toEqual(["stage", "stage-linux-production", "qualify-linux-production"]);
     expect(assemble.if).toContain("needs.stage.result == 'success'");
+    expect(assemble.if).toContain("needs.qualify-linux-production.result == 'success'");
     expect(assemble.if).toContain("!contains(github.ref_name, '-')");
     expect(assemble.permissions).toEqual({
       attestations: "write",
@@ -89,7 +102,7 @@ describe("portable release-trust workflow", () => {
       "portable-release-assets",
     );
     expect(assemble.steps.filter((step) => step.uses?.startsWith("actions/attest@"))).toHaveLength(
-      5,
+      6,
     );
   });
 
@@ -111,6 +124,29 @@ describe("portable release-trust workflow", () => {
     expect(evaluation.run).toContain("--evaluation");
     expect(ordinary.if).toContain("!inputs.evaluation_build");
     expect(ordinary.run).not.toContain("--evaluation");
+    const linux = workflowJob("stage-linux-manual");
+    expect(namedStep(linux, "Stage unsigned evaluation runtime for manual smoke").run).toContain(
+      "--evaluation",
+    );
+    expect(linux.permissions).toEqual({ contents: "read" });
+  });
+
+  it("attests Linux only after exact runtime qualification and re-verifies without OIDC", () => {
+    const stage = workflowJob("stage-linux-production");
+    const fresh = workflowJob("qualify-linux-production");
+    const stepIndex = (job, name) => job.steps.findIndex((step) => step.name === name);
+    const qualify = stepIndex(stage, "Qualify the exact Linux runtime and namespace gateway");
+    const attest = stepIndex(stage, "Attest the exact qualification receipt with GitHub OIDC");
+    const finalize = stepIndex(stage, "Seal and verify the production Linux archive");
+    const upload = stepIndex(stage, "Upload verified Linux target artifact");
+
+    expect(stage.permissions["id-token"]).toBe("write");
+    expect(qualify).toBeGreaterThan(-1);
+    expect(qualify).toBeLessThan(attest);
+    expect(attest).toBeLessThan(finalize);
+    expect(finalize).toBeLessThan(upload);
+    expect(fresh.permissions).toEqual({ contents: "read" });
+    expect(JSON.stringify(fresh)).toContain("--verify-only true");
   });
 
   it("pins portable staging to the release workflow authority", () => {

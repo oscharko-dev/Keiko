@@ -341,14 +341,13 @@ describe("CI test/gate wiring guard", () => {
     const nodeSetupCount = node24SetupCount + node26SetupCount;
     const verificationCount =
       runtimeWorkflows.match(/node scripts\/check-runtime-toolchain\.mjs --exact/gu)?.length ?? 0;
-    // This inventory now covers all eight workflows that select Node. Issue #3403 retired six
-    // credential-bound Apple/Microsoft signing lanes; the platform-neutral staging matrix remains
-    // native and the release workflow applies the mandatory Keiko signature. Exact counts make a
-    // removed or unreviewed new lane fail, while the pairing below proves every lane verifies the
-    // governed toolchain.
-    expect(node24SetupCount).toBe(20);
+    // This inventory covers every workflow that selects Node. Issue #3403 retired the six
+    // credential-bound Apple/Microsoft production-signing lanes; Issue #3451 adds three Linux
+    // staging/qualification lanes. The load-bearing pairing below proves every lane verifies the
+    // governed toolchain, while the exact counts make a removed or unreviewed new lane fail.
+    expect(node24SetupCount).toBe(23);
     expect(node26SetupCount).toBe(1);
-    expect(nodeSetupCount).toBe(21);
+    expect(nodeSetupCount).toBe(24);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
     expect(ci).toContain("NODE_26_COMPATIBILITY_RESULT");

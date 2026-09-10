@@ -231,6 +231,10 @@
       "types": "./dist/diagnostics.d.ts",
       "import": "./dist/diagnostics.js"
     },
+    "./runtime/runtime-qualification": {
+      "types": "./dist/runtime-qualification.d.ts",
+      "import": "./dist/runtime-qualification.js"
+    },
     "./runtime/discussion-intelligence": {
       "types": "./dist/discussion-intelligence.d.ts",
       "import": "./dist/discussion-intelligence.js"

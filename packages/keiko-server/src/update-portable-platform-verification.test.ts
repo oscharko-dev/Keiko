@@ -43,6 +43,40 @@ const WINDOWS_PUBLISHER = `1.3.6.1.4.1.311.97.12345|${WINDOWS_ROOT}|${"A".repeat
 const MACOS_TEAM_OUTPUT = "TeamIdentifier=ABCDE12345\n";
 
 describe("portable platform verification", () => {
+  it("verifies the staged Linux production root through its bound Sigstore qualification", async () => {
+    const roots: string[] = [];
+    const verifier = createPortablePlatformVerifier({
+      hostPlatform: "linux",
+      linuxRuntimeVerifier: (root) => {
+        roots.push(root);
+        return true;
+      },
+    });
+
+    await verifier({
+      target: "linux-x64",
+      stagedRoot: "/home/keiko/stage",
+      launcherPath: "/home/keiko/stage/Keiko/Keiko",
+    });
+
+    expect(roots).toEqual(["/home/keiko/stage/Keiko"]);
+  });
+
+  it("fails closed when Linux qualification or provenance cannot be re-established", async () => {
+    const verifier = createPortablePlatformVerifier({
+      hostPlatform: "linux",
+      linuxRuntimeVerifier: () => false,
+    });
+
+    await expect(
+      verifier({
+        target: "linux-x64",
+        stagedRoot: "/home/keiko/stage",
+        launcherPath: "/home/keiko/stage/Keiko/Keiko",
+      }),
+    ).rejects.toMatchObject({ reason: "portable-verification-failed" });
+  });
+
   it("runs local Authenticode verification for Windows launchers", async () => {
     const trustedRoot = String.raw`D:\Windows`;
     const recorder = commandRecorder(() => WINDOWS_PUBLISHER);

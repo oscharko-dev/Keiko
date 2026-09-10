@@ -97,6 +97,16 @@ const MANAGED_INSTALL_RULES: Readonly<
     }
   >
 > = {
+  "linux-root": {
+    exactFiles: [
+      "Keiko",
+      ".portable/setup-manifest.json",
+      "app/package.json",
+      "app/release-impact.catalog.json",
+      "support/keiko-support.sh",
+    ],
+    recursivePrefixes: ["app/dist/", "app/node_modules/", "runtime/node/"],
+  },
   "windows-root": {
     exactFiles: [
       "Keiko.exe",
@@ -266,6 +276,7 @@ export function nativeRegistrationKinds(
   home: string,
 ): readonly NativeRegistrationKind[] {
   if (target === "windows-x64") return ["windows-start-menu"];
+  if (target === "linux-x64") return [];
   return portableManagedRootMode(target, managedRoot, env, home) === "default"
     ? ["macos-system-applications"]
     : [];

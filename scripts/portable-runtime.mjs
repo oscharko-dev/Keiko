@@ -25,6 +25,18 @@ export function portablePayloadRelativePath(root, path) {
 
 export const PORTABLE_TARGETS = Object.freeze([
   Object.freeze({
+    assetName: "keiko-linux-x64.zip",
+    nodeArchiveExtension: "tar.gz",
+    nodeArchiveTarget: "linux-x64",
+    nodeArchitecture: "x64",
+    nodePlatform: "linux",
+    platformTarget: "linux-x64",
+    primaryLauncher: "Keiko",
+    runtimeTarget: "linux-x64",
+    sidecarArchiveName: "opencode-linux-x64.tar.gz",
+    signatureKind: "github-oidc-attested",
+  }),
+  Object.freeze({
     assetName: "keiko-windows-x64.zip",
     nodeArchiveExtension: "zip",
     nodeArchiveTarget: "win-x64",
@@ -33,6 +45,7 @@ export const PORTABLE_TARGETS = Object.freeze([
     platformTarget: "windows-x64",
     primaryLauncher: "Keiko.exe",
     runtimeTarget: "win32-x64",
+    sidecarArchiveName: "opencode-windows-x64.zip",
     signatureKind: "authenticode",
   }),
   Object.freeze({
@@ -44,6 +57,7 @@ export const PORTABLE_TARGETS = Object.freeze([
     platformTarget: "macos-arm64",
     primaryLauncher: "Keiko.app",
     runtimeTarget: "darwin-arm64",
+    sidecarArchiveName: "opencode-darwin-arm64.zip",
     signatureKind: "developer-id-notarized",
   }),
   Object.freeze({
@@ -55,6 +69,7 @@ export const PORTABLE_TARGETS = Object.freeze([
     platformTarget: "macos-x64",
     primaryLauncher: "Keiko.app",
     runtimeTarget: "darwin-x64",
+    sidecarArchiveName: "opencode-darwin-x64.zip",
     signatureKind: "developer-id-notarized",
   }),
 ]);
@@ -94,6 +109,7 @@ export const PORTABLE_VERIFICATION_REASON_CODES = Object.freeze([
   "macos-developer-id-unverified",
   "macos-notarization-unverified",
   "macos-staple-unverified",
+  "github-provenance-unverified",
   "non-production-artifact",
   "non-production-unsigned-allowed",
   "staging-unverified",
@@ -393,6 +409,7 @@ function verificationCheckTemplate(target, verified) {
       timestampVerified: verified,
     };
   }
+  if (target.nodePlatform === "linux") return { provenanceVerified: verified };
   return {
     developerIdVerified: verified,
     notarizationVerified: verified,
@@ -408,15 +425,25 @@ export function createPortableVerificationChecks(platformTarget, verified = fals
 }
 
 function verificationCheckKeys(target) {
-  return target?.nodePlatform === "win32"
-    ? ["publisherChainVerified", "timestampVerified"]
-    : ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"];
+  if (target?.nodePlatform === "win32") {
+    return ["publisherChainVerified", "timestampVerified"];
+  }
+  if (target?.nodePlatform === "linux") return ["provenanceVerified"];
+  return ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"];
 }
 
 function forbiddenVerificationCheckKeys(target) {
-  return target?.nodePlatform === "win32"
-    ? ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"]
-    : ["publisherChainVerified", "timestampVerified"];
+  const all = [
+    "publisherChainVerified",
+    "timestampVerified",
+    "provenanceVerified",
+    "developerIdVerified",
+    "notarizationVerified",
+    "stapleVerified",
+    "assessmentVerified",
+  ];
+  const allowed = new Set(verificationCheckKeys(target));
+  return all.filter((key) => !allowed.has(key));
 }
 
 function validateProduct(manifest, failures) {
@@ -650,11 +677,16 @@ function validateRuntimeActivationTrustAnchor(manifest, trustAnchor, failures, o
   }
   if (!requiresProductionVerification(options)) return;
   const target = portableTargetByName(manifest.artifact?.platformTarget);
-  const expected =
-    target?.nodePlatform === "win32" ? "authenticode-attestor" : "developer-id-app-resource-seal";
+  const expected = runtimeActivationTrustAnchor(target);
   if (trustAnchor !== expected) {
     push(failures, "runtimeActivation.trustAnchor", `must be ${expected}`);
   }
+}
+
+function runtimeActivationTrustAnchor(target) {
+  if (target?.nodePlatform === "win32") return "authenticode-attestor";
+  if (target?.nodePlatform === "linux") return "sigstore-qualification-receipt";
+  return "developer-id-app-resource-seal";
 }
 
 function validateRuntimeAttestation(manifest, failures, options) {
@@ -695,13 +727,14 @@ function validateRuntimeQualification(manifest, failures, options) {
   const target = portableTargetByName(manifest.artifact?.platformTarget);
   const qualification = manifest.runtimeQualification;
   if (qualification === undefined) {
-    if (requiresProductionVerification(options) && target?.nodePlatform === "darwin") {
-      push(failures, "runtimeQualification", "is required for macOS production artifacts");
+    if (runtimeQualificationRequired(target, options)) {
+      push(failures, "runtimeQualification", "is required for qualified production artifacts");
     }
     return;
   }
-  if (target?.nodePlatform !== "darwin") {
-    push(failures, "runtimeQualification", "is supported only for macOS");
+  const backend = runtimeQualificationBackend(target);
+  if (backend === undefined) {
+    push(failures, "runtimeQualification", "is supported only for macOS and Linux");
     return;
   }
   const value = recordAt(manifest, "runtimeQualification", "manifest", failures);
@@ -720,7 +753,19 @@ function validateRuntimeQualification(manifest, failures, options) {
     failures,
   );
   digestAt(value, "sha256", "runtimeQualification", failures, options);
-  literalAt(value, "backend", "macos-endpoint-security", "runtimeQualification", failures);
+  literalAt(value, "backend", backend, "runtimeQualification", failures);
+}
+
+function runtimeQualificationBackend(target) {
+  if (target?.nodePlatform === "linux") return "linux-namespace-gateway";
+  if (target?.nodePlatform === "darwin") return "macos-endpoint-security";
+  return undefined;
+}
+
+function runtimeQualificationRequired(target, options) {
+  return (
+    requiresProductionVerification(options) && runtimeQualificationBackend(target) !== undefined
+  );
 }
 
 function validateSidecarRuntimes(manifest, failures, options) {
@@ -922,12 +967,20 @@ function nativeHelperContract(name, target) {
     };
   }
   if (name === "keiko-runtime-supervisor") {
+    const linux = target.nodePlatform === "linux";
+    const sourcePlatform = target.nodePlatform === "win32" ? "windows" : "macos";
     return {
       bomName: name,
-      executablePath: `runtime/native/${name}${suffix}`,
+      executablePath: linux
+        ? "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js"
+        : `runtime/native/${name}${suffix}`,
       kind: "runtime-process-supervisor",
-      protocol: { requestMagic: "KRP1", responseMagic: "KRS1" },
-      sourcePath: `native/runtime-supervisor/${target.nodePlatform === "win32" ? "windows" : "macos"}`,
+      protocol: linux
+        ? { requestMagic: "none", responseMagic: "none" }
+        : { requestMagic: "KRP1", responseMagic: "KRS1" },
+      sourcePath: linux
+        ? "packages/keiko-sandbox/src"
+        : `native/runtime-supervisor/${sourcePlatform}`,
     };
   }
   return undefined;
@@ -1424,18 +1477,61 @@ function validateVerificationCheckConsistency(
 ) {
   if (target === undefined) return;
   if (target.nodePlatform === "win32") {
-    const windowsVerified =
-      verificationChecks.publisherChainVerified === true &&
-      verificationChecks.timestampVerified === true;
-    if (signatureVerified !== windowsVerified) {
-      push(
-        failures,
-        `${path}.signatureVerified`,
-        "must match Windows publisher-chain and timestamp verification",
-      );
-    }
+    validateWindowsVerificationConsistency(signatureVerified, verificationChecks, failures, path);
     return;
   }
+  if (target.nodePlatform === "linux") {
+    validateLinuxVerificationConsistency(
+      signatureVerified,
+      notarizationVerified,
+      verificationChecks,
+      failures,
+      path,
+    );
+    return;
+  }
+  validateMacosVerificationConsistency(
+    signatureVerified,
+    notarizationVerified,
+    verificationChecks,
+    failures,
+    path,
+  );
+}
+
+function validateWindowsVerificationConsistency(signatureVerified, checks, failures, path) {
+  const verified = checks.publisherChainVerified === true && checks.timestampVerified === true;
+  if (signatureVerified !== verified) {
+    push(
+      failures,
+      `${path}.signatureVerified`,
+      "must match Windows publisher-chain and timestamp verification",
+    );
+  }
+}
+
+function validateLinuxVerificationConsistency(
+  signatureVerified,
+  notarizationVerified,
+  checks,
+  failures,
+  path,
+) {
+  if (signatureVerified !== (checks.provenanceVerified === true)) {
+    push(failures, `${path}.signatureVerified`, "must match Linux provenance verification");
+  }
+  if (notarizationVerified) {
+    push(failures, `${path}.notarizationVerified`, "must be false for Linux targets");
+  }
+}
+
+function validateMacosVerificationConsistency(
+  signatureVerified,
+  notarizationVerified,
+  verificationChecks,
+  failures,
+  path,
+) {
   if (signatureVerified !== (verificationChecks.developerIdVerified === true)) {
     push(failures, `${path}.signatureVerified`, "must match macOS Developer ID verification");
   }
@@ -1972,9 +2068,9 @@ function securityVerifiedForTarget(target, security) {
   const checks = security?.verificationChecks;
   if (!isRecord(checks)) return false;
   if (security?.signatureVerified !== true) return false;
-  return target.nodePlatform === "win32"
-    ? windowsSignatureVerified(checks)
-    : macosSignatureVerified(security, checks);
+  if (target.nodePlatform === "win32") return windowsSignatureVerified(checks);
+  if (target.nodePlatform === "linux") return checks.provenanceVerified === true;
+  return macosSignatureVerified(security, checks);
 }
 
 function verificationTargetMatches(security, target) {

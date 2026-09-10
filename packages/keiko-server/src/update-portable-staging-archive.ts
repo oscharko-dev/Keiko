@@ -524,7 +524,7 @@ function verifyExtractedTree(root: string, expectedSha256: string): void {
 }
 
 function setupManifestPath(root: string, target: UpdatePortableTarget): string {
-  if (target === "windows-x64") {
+  if (target === "windows-x64" || target === "linux-x64") {
     return join(root, PORTABLE_PAYLOAD_ROOT, ".portable", "setup-manifest.json");
   }
   return join(
@@ -630,6 +630,15 @@ function stagedLayout(
       runtimeNode: generation.runtimeNodePath,
       runtimeSupervisor: generation.runtimeSupervisorPath,
       launcher: generation.rootLauncherPath,
+    };
+  }
+  if (target === "linux-x64") {
+    return {
+      resourceRoot: payload,
+      appRoot: join(payload, "app"),
+      runtimeNode: join(payload, "runtime", "node", "bin", "node"),
+      runtimeSupervisor: join(payload, "runtime", "native", "keiko-runtime-supervisor"),
+      launcher: join(payload, "Keiko"),
     };
   }
   const bundle = join(payload, "Keiko.app");
@@ -765,7 +774,11 @@ function currentTrustAnchorLayout(
   | undefined {
   const managedRoot = managedRootFromPackageRoot(target, packageRoot);
   if (managedRoot === undefined) return undefined;
-  if (target === "windows-x64") return { currentLauncherPath: join(managedRoot, "Keiko.exe") };
+  if (target === "windows-x64" || target === "linux-x64") {
+    return {
+      currentLauncherPath: join(managedRoot, target === "windows-x64" ? "Keiko.exe" : "Keiko"),
+    };
+  }
   return {
     currentLauncherPath: join(managedRoot, "Contents", "MacOS", "Keiko"),
     currentAppBundlePath: managedRoot,
@@ -800,6 +813,7 @@ export async function stageArchiveFile(input: {
   readonly targetVersion: string;
   readonly stageId: string;
   readonly sidecars: readonly PortableSidecarRuntimeVerification[];
+  readonly nativePlatformVerificationRequired?: boolean | undefined;
   readonly windowsGeneration?: WindowsGenerationBinding | undefined;
   readonly platformVerifier?: PortablePlatformVerifier | undefined;
   readonly securityLogSink?: SecurityLogSink | undefined;
@@ -821,13 +835,15 @@ export async function stageArchiveFile(input: {
       input.session.signal,
       bindSecurityLogCorrelation(input.securityLogSink, input.session.sessionId),
     );
-    await verifyLocalPlatform({
-      root: workRoot,
-      target: input.target,
-      layout,
-      session: input.session,
-      verifier: input.platformVerifier,
-    });
+    if (input.nativePlatformVerificationRequired !== false) {
+      await verifyLocalPlatform({
+        root: workRoot,
+        target: input.target,
+        layout,
+        session: input.session,
+        verifier: input.platformVerifier,
+      });
+    }
     verifyStagedSidecarPayloads({
       resourceRoot: layout.resourceRoot,
       sidecars: input.sidecars,

@@ -29,6 +29,7 @@ export function runtimeActivationManifest(manifest) {
     },
     security,
     nativeHelpers: clone(manifest.nativeHelpers),
+    nativeAddons: clone(manifest.nativeAddons ?? []),
     sidecarRuntimes: clone(manifest.sidecarRuntimes ?? []),
     releaseImpact: {
       reviewedBinding: {
@@ -43,6 +44,7 @@ export function runtimeActivationManifest(manifest) {
         notarizationVerified: security.notarizationVerified,
         verificationChecks: clone(security.verificationChecks),
         nativeHelpers: clone(manifest.nativeHelpers),
+        nativeAddons: clone(manifest.nativeAddons ?? []),
       },
     },
   };

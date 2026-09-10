@@ -86,7 +86,7 @@ type CommonPortableHandoffPlanInput = Omit<PortableHandoffPlanFields, "actions">
 
 export interface MacosPortableHandoffPlan extends PortableHandoffPlanFields {
   readonly schemaVersion: 2;
-  readonly target: "macos-arm64" | "macos-x64";
+  readonly target: "linux-x64" | "macos-arm64" | "macos-x64";
 }
 
 export interface WindowsPortableHandoffPlan extends PortableHandoffPlanFields {
@@ -233,7 +233,12 @@ function assertTopology(plan: PortableHandoffPlan): void {
 }
 
 function isTarget(value: unknown): value is UpdatePortableTarget {
-  return value === "windows-x64" || value === "macos-arm64" || value === "macos-x64";
+  return (
+    value === "linux-x64" ||
+    value === "windows-x64" ||
+    value === "macos-arm64" ||
+    value === "macos-x64"
+  );
 }
 
 function hasValidLaunchIdentity(plan: PortableHandoffPlan): boolean {
@@ -600,7 +605,7 @@ function parsePlan(content: Buffer): PortableHandoffPlan {
   const common = parseCommonPlanFields(field);
   const target = common.target;
   if (parsed.version === 2) {
-    if (target !== "macos-arm64" && target !== "macos-x64")
+    if (target !== "linux-x64" && target !== "macos-arm64" && target !== "macos-x64")
       fail("portable handoff plan is malformed");
     return createPortableHandoffPlan({ ...common, target });
   }

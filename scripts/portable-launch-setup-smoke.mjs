@@ -93,6 +93,18 @@ function writeWindowsFixture(root, target, version = SMOKE_FIXTURE_VERSION) {
   return root;
 }
 
+function writeLinuxFixture(root, target, version = SMOKE_FIXTURE_VERSION) {
+  mkdirSync(join(root, "runtime", "node", "bin"), { recursive: true });
+  mkdirSync(join(root, ".portable"), { recursive: true });
+  mkdirSync(join(root, "support"), { recursive: true });
+  writeAppFixture(join(root, "app"), version);
+  writeFileSync(join(root, "runtime", "node", "bin", "node"), "fixture node\n");
+  writeFileSync(join(root, "Keiko"), "fixture launcher\n");
+  writeFileSync(join(root, "support", "keiko-support.sh"), "support launcher\n");
+  writeFileSync(join(root, ".portable", "setup-manifest.json"), setupManifest(target, version));
+  return root;
+}
+
 function writeMacFixture(root, target, version = SMOKE_FIXTURE_VERSION) {
   const appRoot = join(root, "Keiko.app");
   const resources = join(appRoot, "Contents", "Resources");
@@ -112,9 +124,9 @@ function writeMacFixture(root, target, version = SMOKE_FIXTURE_VERSION) {
 }
 
 function writeFixture(root, target, version = SMOKE_FIXTURE_VERSION) {
-  return target.nodePlatform === "win32"
-    ? writeWindowsFixture(root, target, version)
-    : writeMacFixture(root, target, version);
+  if (target.nodePlatform === "win32") return writeWindowsFixture(root, target, version);
+  if (target.nodePlatform === "linux") return writeLinuxFixture(root, target, version);
+  return writeMacFixture(root, target, version);
 }
 
 function targetEnv(target, home) {
@@ -129,11 +141,12 @@ function targetEnv(target, home) {
 
 function managedRoot(target, home) {
   if (target.nodePlatform === "win32") return join(home, "AppData", "Local", "Programs", "Keiko");
+  if (target.nodePlatform === "linux") return join(home, ".local", "opt", "Keiko");
   return join(home, "Applications", "Keiko.app");
 }
 
 function managedAppRoot(target, root) {
-  if (target.nodePlatform === "win32") return join(root, "app");
+  if (target.nodePlatform !== "darwin") return join(root, "app");
   return join(root, "Contents", "Resources", "app");
 }
 

@@ -65,6 +65,7 @@ import {
 import {
   buildPortableEvaluationManifest,
   PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
+  PORTABLE_EVALUATION_TARGET_NAMES,
 } from "../lib/portable-evaluation-manifest.mjs";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -85,15 +86,11 @@ const RELEASE_IMPACT_CATALOG = JSON.parse(
   readFileSync(join(REPO_ROOT, "release-impact.catalog.json"), "utf8"),
 );
 const RELEASE_VERSION = ROOT_MANIFEST.version;
-// The exact download set a stable `latest` release must carry, derived from the same target
-// table the orchestrator uses — a restated list here could drift past a new target silently.
-// Derived from the same target table the orchestrator uses, deduplicated so a target table that
-// ever repeats a name cannot silently shorten the expected set.
-const PUBLISHED_DOWNLOAD_NAMES = [
-  ...new Set([
-    ...PORTABLE_TARGETS.map((target) => target.assetName),
-    WINDOWS_PORTABLE_SETUP_ASSET_NAME,
-  ]),
+const EVALUATION_DOWNLOAD_NAMES = [
+  ...PORTABLE_TARGETS.filter((target) =>
+    PORTABLE_EVALUATION_TARGET_NAMES.includes(target.platformTarget),
+  ).map((target) => target.assetName),
+  WINDOWS_PORTABLE_SETUP_ASSET_NAME,
 ];
 const RELEASE_NAME = ROOT_MANIFEST.name;
 const RELEASE_SPEC = `${RELEASE_NAME}@${RELEASE_VERSION}`;
@@ -127,6 +124,7 @@ function targetVerificationChecks(target) {
   if (target.nodePlatform === "win32") {
     return { publisherChainVerified: true, timestampVerified: true };
   }
+  if (target.nodePlatform === "linux") return { provenanceVerified: true };
   return {
     developerIdVerified: true,
     notarizationVerified: true,
@@ -193,7 +191,9 @@ function portableManifestObject(
   const runtimeAttestation =
     target.nodePlatform === "win32" ? portableRuntimeAttestation(target) : undefined;
   const runtimeQualification =
-    target.nodePlatform === "darwin" ? portableRuntimeQualification() : undefined;
+    target.nodePlatform === "darwin" || target.nodePlatform === "linux"
+      ? portableRuntimeQualification(target)
+      : undefined;
   return {
     schemaVersion: 1,
     product: portableProduct(),
@@ -239,6 +239,9 @@ function nativeHelperBytes(target, name) {
 }
 
 function nativeHelperExecutablePath(target, name) {
+  if (target.nodePlatform === "linux" && name === "keiko-runtime-supervisor") {
+    return "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
+  }
   return `runtime/native/${name}${target.nodePlatform === "win32" ? ".exe" : ""}`;
 }
 
@@ -255,13 +258,15 @@ function portableNativeHelper(target, name) {
     executablePath: nativeHelperExecutablePath(target, name),
     protocol: {
       schemaVersion: 1,
-      requestMagic: supervisor ? "KRP1" : "KSR1",
-      responseMagic: supervisor ? "KRS1" : "KSS1",
+      requestMagic: supervisor ? (target.nodePlatform === "linux" ? "none" : "KRP1") : "KSR1",
+      responseMagic: supervisor ? (target.nodePlatform === "linux" ? "none" : "KRS1") : "KSS1",
     },
     source: {
       commitSha: HEAD_SHA,
       path: supervisor
-        ? `native/runtime-supervisor/${target.nodePlatform === "win32" ? "windows" : "macos"}`
+        ? target.nodePlatform === "linux"
+          ? "packages/keiko-sandbox/src"
+          : `native/runtime-supervisor/${target.nodePlatform === "win32" ? "windows" : "macos"}`
         : "native/secure-workspace-read",
       treeSha256: digestFor(`${name}\n`),
     },
@@ -285,7 +290,11 @@ function portableRuntimeActivation(target) {
     path: ".portable/runtime-activation.json",
     sha256: "d".repeat(64),
     trustAnchor:
-      target.nodePlatform === "win32" ? "authenticode-attestor" : "developer-id-app-resource-seal",
+      target.nodePlatform === "win32"
+        ? "authenticode-attestor"
+        : target.nodePlatform === "linux"
+          ? "sigstore-qualification-receipt"
+          : "developer-id-app-resource-seal",
   };
 }
 
@@ -307,12 +316,13 @@ function portableRuntimeAttestation(target) {
   };
 }
 
-function portableRuntimeQualification() {
+function portableRuntimeQualification(target) {
   return {
     schemaVersion: 1,
     path: ".portable/runtime-qualification.json",
     sha256: "e".repeat(64),
-    backend: "macos-endpoint-security",
+    backend:
+      target.nodePlatform === "linux" ? "linux-namespace-gateway" : "macos-endpoint-security",
   };
 }
 
@@ -749,7 +759,7 @@ function passthroughViewBody() {
 function prepublishedEvaluationState() {
   const sourceCommitSha = HEAD_SHA;
   const workflowRunId = "31300595709";
-  const downloads = PUBLISHED_DOWNLOAD_NAMES.map((name, index) => {
+  const downloads = EVALUATION_DOWNLOAD_NAMES.map((name, index) => {
     const content = Buffer.from(`prepublished ${name}\n`);
     return {
       id: 500000 + index,
@@ -1451,14 +1461,15 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
     });
 
     it("rejects an inner target relabelled against its outer bundle entry", () => {
-      const viewBody =
-        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      const viewBody = passthroughViewBody();
       lastRun = runPublish({
         npmBody: npmStub(viewBody, { failOnPublish: true }),
         initState: { published: true, tagged: true },
         portableFixtureOptions: {
-          mutateManifest: (candidate, _target, index) => {
-            if (index === 1) candidate.artifact.platformTarget = "windows-x64";
+          mutateManifest: (candidate, target) => {
+            if (target.platformTarget === "linux-x64") {
+              candidate.artifact.platformTarget = "windows-x64";
+            }
           },
         },
       });
@@ -1476,22 +1487,21 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
     // only thing that can make the run fail is the specific count/duplicate/missing guard
     // under test — never a same-shape neighbor.
     it("rejects a portable assets manifest missing a target before npm publish or dist-tag mutation", () => {
-      const viewBody =
-        'if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }';
+      const viewBody = passthroughViewBody();
       lastRun = runPublish({
         npmBody: npmStub(viewBody, { failOnPublish: true }),
         initState: { published: true, tagged: true },
         portableFixtureOptions: {
-          // Drop the third (macos-x64) target: only two of the three required artifacts remain.
+          // Drop the final (macos-x64) target: only three of the four required artifacts remain.
           mutateBundle: (bundle) => {
-            bundle.artifacts = bundle.artifacts.slice(0, 2);
+            bundle.artifacts = bundle.artifacts.slice(0, -1);
           },
         },
       });
 
       expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain(
-        "portable assets manifest must list exactly three artifacts.",
+        "portable assets manifest must list exactly four artifacts.",
       );
       expect(lastRun.stderr).toContain("missing portable asset entry for macos-x64.");
       expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
@@ -1506,16 +1516,16 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         npmBody: npmStub(viewBody, { failOnPublish: true }),
         initState: { published: true, tagged: true },
         portableFixtureOptions: {
-          // Append a fourth artifact: the three real targets remain untouched and well-formed.
+          // Append a fifth artifact: the four real targets remain untouched and well-formed.
           mutateBundle: (bundle) => {
-            bundle.artifacts.push({ platformTarget: "linux-x64" });
+            bundle.artifacts.push({ platformTarget: "freebsd-x64" });
           },
         },
       });
 
       expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain(
-        "portable assets manifest must list exactly three artifacts.",
+        "portable assets manifest must list exactly four artifacts.",
       );
       expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(false);
       expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
@@ -1530,9 +1540,15 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         initState: { published: true, tagged: true },
         portableFixtureOptions: {
           // Replace the macos-arm64 entry with a second copy of windows-x64: the artifact
-          // count stays at three, so only the duplicate-target guard can catch this.
+          // count stays at four, so only the duplicate-target guard can catch this.
           mutateBundle: (bundle) => {
-            bundle.artifacts[1] = { ...bundle.artifacts[0] };
+            const windows = bundle.artifacts.find(
+              (artifact) => artifact.platformTarget === "windows-x64",
+            );
+            const macosArm64 = bundle.artifacts.findIndex(
+              (artifact) => artifact.platformTarget === "macos-arm64",
+            );
+            bundle.artifacts[macosArm64] = { ...windows };
           },
         },
       });
@@ -1917,7 +1933,10 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         initState: { published: true, tagged: true },
         portableFixtureOptions: {
           mutateBundle: (bundle) => {
-            bundle.artifacts[0].setupSha256 = "0".repeat(64);
+            const windows = bundle.artifacts.find(
+              (artifact) => artifact.platformTarget === "windows-x64",
+            );
+            windows.setupSha256 = "0".repeat(64);
           },
         },
       });
@@ -1935,7 +1954,10 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         initState: { published: true, tagged: true },
         portableFixtureOptions: {
           mutateBundle: (bundle) => {
-            bundle.artifacts[0].setupSizeBytes += 1;
+            const windows = bundle.artifacts.find(
+              (artifact) => artifact.platformTarget === "windows-x64",
+            );
+            windows.setupSizeBytes += 1;
           },
         },
       });
@@ -1954,7 +1976,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       });
 
       expect(lastRun.status).toBe(1);
-      expect(lastRun.stderr).toContain("exactly the three first-class ZIP assets");
+      expect(lastRun.stderr).toContain("exactly the four first-class ZIP assets");
       expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
       expect(lastRun.calls.some((line) => line.startsWith('npm ["dist-tag","add"'))).toBe(false);
     });

@@ -16,11 +16,12 @@ import {
 import { dirname, join } from "node:path";
 
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
-import {
-  qualificationFromReceipt,
-  type LongLivedRuntimeQualification,
-  type RuntimeQualificationReceiptBinding,
-} from "@oscharko-dev/keiko-sandbox";
+import type {
+  LongLivedRuntimeQualification,
+  RuntimeQualificationComponentDigest,
+  RuntimeQualificationReceiptBinding,
+} from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
+import { qualificationFromReceipt } from "@oscharko-dev/keiko-sandbox";
 
 import { productionUpdateFacts } from "../update-install-mode.js";
 import {
@@ -42,6 +43,7 @@ import {
 } from "./macosPortableCodeIdentity.js";
 import { safeRealDirectory, safeRealFile } from "./nativeRuntimeProcessPaths.js";
 import { declaredPortableRuntimeLane, type PortableRuntimeLane } from "./portableRuntimeLane.js";
+import { verifyLinuxQualificationBundle } from "./linuxPortableSigstore.js";
 import {
   windowsPublisherIdentityMatches,
   windowsSignerIdentity,
@@ -56,7 +58,8 @@ import {
 } from "../update-portable-windows-generation.js";
 
 const ACTIVATION_PATH = ".portable/runtime-activation.json";
-const MACOS_RECEIPT_PATH = ".portable/runtime-qualification.json";
+const QUALIFICATION_RECEIPT_PATH = ".portable/runtime-qualification.json";
+const QUALIFICATION_SIGSTORE_BUNDLE_PATH = ".portable/runtime-qualification.sigstore.json";
 const DIGEST = /^[a-f0-9]{64}$/u;
 const MAX_ATTESTATION_BYTES = 65_536;
 const MAX_WINDOWS_SETUP_BYTES = 64 * 1024;
@@ -64,7 +67,12 @@ const MAX_WINDOWS_LAUNCHER_BYTES = 64 * 1024 * 1024;
 const WINDOWS_IDENTITY_READ_CHUNK_BYTES = 64 * 1024;
 const WINDOWS_IDENTITY_READ_DEADLINE_MS = 5_000;
 const MACOS_SYSTEM_EXTENSION_IDENTIFIER = "com.oscharko.keiko.runtime-monitor.systemextension";
-const TARGETS = new Set<UpdatePortableTarget>(["windows-x64", "macos-arm64", "macos-x64"]);
+const TARGETS = new Set<UpdatePortableTarget>([
+  "linux-x64",
+  "windows-x64",
+  "macos-arm64",
+  "macos-x64",
+]);
 
 export interface QualifiedPortableOpenCodeRuntime {
   readonly installRoot: string;
@@ -131,6 +139,7 @@ interface PortableRuntimeCandidate {
   readonly sourceCommitSha: string;
   readonly supervisorSha256: string;
   readonly secureReadSha256: string;
+  readonly runtimeComponents?: readonly RuntimeQualificationComponentDigest[];
   readonly sidecar: PortableSidecarRuntimeVerification;
   readonly platformAssurance: PortableRuntimeLane;
 }
@@ -145,6 +154,13 @@ interface BoundActivation {
   readonly activation: Record<string, unknown>;
   readonly activationPath: string;
   readonly sourceCommitSha: string;
+}
+
+interface CandidateRuntimeBindings {
+  readonly supervisorSha256: string;
+  readonly secureReadSha256: string;
+  readonly runtimeComponents?: readonly RuntimeQualificationComponentDigest[];
+  readonly sidecar: PortableSidecarRuntimeVerification;
 }
 
 /**
@@ -188,23 +204,42 @@ function portableRuntimeCandidate(
   if (bound === undefined) return undefined;
   const platformAssurance = honouredLane(bound.activation, selectedRoots, target, input);
   if (platformAssurance === undefined) return undefined;
-  const helpers = boundHelperDigests(selectedRoots.resourceRoot, bound.activation, target);
-  const sidecar = qualifiedSidecar(
+  const bindings = candidateRuntimeBindings(
     selectedRoots.resourceRoot,
     bound.activation,
     target,
     platformAssurance,
   );
-  if (helpers === undefined || sidecar === undefined) return undefined;
+  if (bindings === undefined) return undefined;
   return {
     ...selectedRoots,
     target,
     activation: bound.activation,
     activationSha256: sha256File(bound.activationPath),
     sourceCommitSha: bound.sourceCommitSha,
-    ...helpers,
-    sidecar,
+    ...bindings,
     platformAssurance,
+  };
+}
+
+function candidateRuntimeBindings(
+  root: string,
+  activation: Record<string, unknown>,
+  target: UpdatePortableTarget,
+  lane: PortableRuntimeLane,
+): CandidateRuntimeBindings | undefined {
+  const helpers = boundHelperDigests(root, activation, target);
+  if (helpers === undefined) return undefined;
+  const sidecar = qualifiedSidecar(root, activation, target, lane);
+  if (sidecar === undefined) return undefined;
+  const runtimeComponents = boundRuntimeComponents(root, activation, target);
+  if (target === "linux-x64" && runtimeComponents === undefined) {
+    throw new Error("runtime-component-binding-invalid");
+  }
+  return {
+    ...helpers,
+    ...(runtimeComponents === undefined ? {} : { runtimeComponents }),
+    sidecar,
   };
 }
 
@@ -221,6 +256,7 @@ function honouredLane(
 ): PortableRuntimeLane | undefined {
   const declared = artifactDeclaredLane(activation);
   if (declared === undefined) return undefined;
+  if (target === "linux-x64" && declared !== "release-qualified") return undefined;
   if (
     declared === "evaluation-unqualified" &&
     releaseSignedInstall(roots.installRoot, roots.resourceRoot, target, input.commandRunner)
@@ -269,6 +305,10 @@ function releaseSignedInstall(
   target: UpdatePortableTarget,
   commandRunner: PortableRuntimeCommandRunner | undefined,
 ): boolean {
+  // Linux has no platform code-signing seal equivalent to Authenticode or Developer ID. Its
+  // production runtime is admitted only through the OIDC-attested qualification lane, so Linux
+  // may never self-declare the weaker evaluation lane.
+  if (target === "linux-x64") return true;
   const signedCode = releaseSignedCodePath(installRoot, resourceRoot, target);
   // No signable code where a real install always has some: there is no release seal to downgrade
   // FROM, so this is not the attack this predicate guards. Discovery's own checks still apply.
@@ -397,6 +437,9 @@ function receiptBinding(candidate: PortableRuntimeCandidate): RuntimeQualificati
     sidecars: [
       { name: candidate.sidecar.summary.name, sha256: candidate.sidecar.summary.payloadSha256 },
     ],
+    ...(candidate.runtimeComponents === undefined
+      ? {}
+      : { runtimeComponents: candidate.runtimeComponents }),
   };
 }
 
@@ -411,7 +454,8 @@ function platformQualification(
     target: candidate.target,
   });
   const result = qualificationFromReceipt(receipt, binding);
-  return result.ok ? result.qualification : undefined;
+  if (!result.ok) throw new Error("runtime-qualification-binding-invalid");
+  return result.qualification;
 }
 
 /**
@@ -455,11 +499,40 @@ const PLATFORM_ATTESTATION: PortableRuntimeAttestationPort = Object.freeze({
     readonly installRoot: string;
     readonly resourceRoot: string;
     readonly target: UpdatePortableTarget;
-  }) =>
-    target === "windows-x64"
-      ? readWindowsAttestation(resourceRoot, runPortableRuntimeCommand, installRoot)
-      : readMacosAttestation(resourceRoot, target),
+  }): unknown => readPlatformAttestation(installRoot, resourceRoot, target),
 });
+
+function readPlatformAttestation(
+  installRoot: string,
+  resourceRoot: string,
+  target: UpdatePortableTarget,
+): unknown {
+  if (target === "windows-x64") {
+    return readWindowsAttestation(resourceRoot, runPortableRuntimeCommand, installRoot);
+  }
+  if (target === "linux-x64") return readLinuxAttestation(resourceRoot);
+  return readMacosAttestation(resourceRoot, target);
+}
+
+export function readLinuxAttestation(resourceRoot: string): unknown {
+  const receiptPath = safeRealFile(join(resourceRoot, ...QUALIFICATION_RECEIPT_PATH.split("/")));
+  const bundlePath = safeRealFile(
+    join(resourceRoot, ...QUALIFICATION_SIGSTORE_BUNDLE_PATH.split("/")),
+  );
+  const receipt = readBoundedFile(receiptPath);
+  const bundle = JSON.parse(readBoundedFile(bundlePath).toString("utf8")) as unknown;
+  verifyLinuxQualificationBundle(receipt, bundle);
+  const parsed: unknown = JSON.parse(receipt.toString("utf8"));
+  return record(parsed);
+}
+
+function readBoundedFile(path: string): Buffer {
+  const size = statSync(path).size;
+  if (size <= 0 || size > MAX_ATTESTATION_BYTES) {
+    throw new Error("runtime-attestation-size-invalid");
+  }
+  return readFileSync(path);
+}
 
 export function readWindowsAttestation(
   resourceRoot: string,
@@ -530,7 +603,7 @@ export function readMacosAttestation(
   if (status.status !== 0 || status.stdout.trim() !== "active" || status.stderr !== "") {
     throw new Error("runtime-system-extension-inactive");
   }
-  return readRecord(safeRealFile(join(resourceRoot, ...MACOS_RECEIPT_PATH.split("/"))));
+  return readRecord(safeRealFile(join(resourceRoot, ...QUALIFICATION_RECEIPT_PATH.split("/"))));
 }
 
 function macosRuntimeCodePaths(resourceRoot: string): {
@@ -649,6 +722,7 @@ function isAbsentPathError(error: unknown): boolean {
 }
 
 function runtimeTarget(platform: NodeJS.Platform, arch: string): UpdatePortableTarget | undefined {
+  if (platform === "linux" && arch === "x64") return "linux-x64";
   if (platform === "win32" && arch === "x64") return "windows-x64";
   if (platform === "darwin" && arch === "arm64") return "macos-arm64";
   if (platform === "darwin" && arch === "x64") return "macos-x64";
@@ -899,6 +973,58 @@ function boundHelperDigests(
     : { supervisorSha256: supervisor, secureReadSha256: secureRead };
 }
 
+function boundRuntimeComponents(
+  root: string,
+  activation: Record<string, unknown>,
+  target: UpdatePortableTarget,
+): readonly RuntimeQualificationComponentDigest[] | undefined {
+  if (target !== "linux-x64") return undefined;
+  const launcher = installedFileDigest(root, "Keiko");
+  const node = installedFileDigest(root, "runtime/node/bin/node");
+  const usearch = boundUsearchDigest(root, activation);
+  if (launcher === undefined || node === undefined || usearch === undefined) return undefined;
+  return [
+    { name: "primary-launcher", sha256: launcher },
+    { name: "node-runtime", sha256: node },
+    { name: "usearch", sha256: usearch },
+  ];
+}
+
+function installedFileDigest(root: string, relativePath: string): string | undefined {
+  const path = safeRealFile(join(root, ...relativePath.split("/")));
+  return statSync(path).size > 0 ? sha256File(path) : undefined;
+}
+
+function boundUsearchDigest(root: string, activation: Record<string, unknown>): string | undefined {
+  const addons = Array.isArray(activation.nativeAddons) ? activation.nativeAddons : [];
+  const matches = addons.map(record).filter((addon) => addon?.name === "usearch");
+  if (matches.length !== 1) return undefined;
+  const addon = matches[0];
+  const expectedSize = addon?.sizeBytes;
+  const expectedDigest = stringField(addon, "shippedSha256", DIGEST);
+  if (!usearchBindingIsValid(addon, expectedSize, expectedDigest)) return undefined;
+  const path = safeRealFile(join(root, "runtime", "native", "usearch.node"));
+  const entry = statSync(path);
+  return entry.size === expectedSize && sha256File(path) === expectedDigest
+    ? expectedDigest
+    : undefined;
+}
+
+function usearchBindingIsValid(
+  addon: Record<string, unknown> | undefined,
+  expectedSize: unknown,
+  expectedDigest: string | undefined,
+): expectedSize is number {
+  return (
+    addon?.platformTarget === "linux-x64" &&
+    addon.executablePath === "runtime/native/usearch.node" &&
+    typeof expectedSize === "number" &&
+    Number.isSafeInteger(expectedSize) &&
+    expectedSize > 0 &&
+    expectedDigest !== undefined
+  );
+}
+
 function boundHelperDigest(
   root: string,
   helpers: readonly unknown[],
@@ -949,6 +1075,9 @@ function helperRelativePath(
   target: UpdatePortableTarget,
   name: "keiko-runtime-supervisor" | "keiko-secure-workspace-read",
 ): string {
+  if (target === "linux-x64" && name === "keiko-runtime-supervisor") {
+    return "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
+  }
   return `runtime/native/${name}${target === "windows-x64" ? ".exe" : ""}`;
 }
 

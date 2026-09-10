@@ -200,9 +200,10 @@ describe("workflow Node toolchain parity", () => {
     // Without this, a YAML shape change that made `stepGroups` return nothing would turn every
     // assertion below into a loop over an empty array and report success.
     // The exact count is intentional: a workflow disappearing is as relevant as an unreviewed
-    // workflow appearing. Issue #3403 retired six credential-bound Apple/Microsoft signing lanes;
-    // the remaining 21 lanes cover every workflow and composite action discovered above.
-    expect(withSetupNode).toHaveLength(21);
+    // workflow appearing. Issue #3403 retired six credential-bound Apple/Microsoft signing lanes
+    // and added three Linux runtime qualification lanes; the resulting 24 lanes cover every
+    // workflow and composite action discovered above.
+    expect(withSetupNode).toHaveLength(24);
   });
 
   it("pins every actions/setup-node step to an approved exact Node version", () => {

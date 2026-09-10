@@ -199,7 +199,7 @@ function targetFailures(manifest, target, expected) {
 
 function collectTargetManifests(manifests, failures) {
   if (!Array.isArray(manifests) || manifests.length !== PORTABLE_TARGETS.length) {
-    failures.push("release set must contain exactly three portable targets");
+    failures.push("release set must contain exactly four portable targets");
   }
   const byTarget = new Map();
   for (const manifest of manifests ?? []) {
@@ -309,16 +309,16 @@ function assertRuntimeActivationEvidence(stageRoot, manifest, target, sbom) {
   if (target.nodePlatform === "win32") {
     assertRuntimeAttestationEvidence(resourceRoot, manifest, sbom);
   } else {
-    assertMacosRuntimeQualificationEvidence(resourceRoot, manifest);
+    assertRuntimeQualificationEvidence(resourceRoot, manifest, target);
   }
 }
 
-function assertMacosRuntimeQualificationEvidence(resourceRoot, manifest) {
+function assertRuntimeQualificationEvidence(resourceRoot, manifest, target) {
   const qualification = manifest.runtimeQualification;
   const path = regularContainedFile(
     resourceRoot,
     qualification.path,
-    "macOS runtime qualification",
+    `${target.platformTarget} runtime qualification`,
   );
   const bytes = readFileSync(path);
   const receipt = JSON.parse(bytes.toString("utf8"));
@@ -335,7 +335,8 @@ function assertMacosRuntimeQualificationEvidence(resourceRoot, manifest) {
       name: sidecar.name,
       sha256: sidecar.payloadSha256,
     })),
-    backend: "macos-endpoint-security",
+    backend:
+      target.nodePlatform === "linux" ? "linux-namespace-gateway" : "macos-endpoint-security",
     result: "passed",
   };
   if (

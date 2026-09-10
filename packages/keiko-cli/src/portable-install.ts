@@ -139,7 +139,7 @@ class PortableManagedRegistrationRepairError extends Error {
 }
 
 const STABLE_SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
-const PORTABLE_TARGETS = ["windows-x64", "macos-arm64", "macos-x64"] as const;
+const PORTABLE_TARGETS = ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"] as const;
 const PORTABLE_SETUP_LOCK = "portable-setup.lock";
 // Match the bounded portable staging and handoff operation budget for validation of the same payload.
 const PORTABLE_OPERATION_TIMEOUT_MS = 15 * 60_000;
@@ -156,7 +156,7 @@ function parseSetupRuntime(value: unknown): SetupRuntimeManifest {
   if (!isRecord(value)) throw new Error("portable setup manifest runtime is malformed");
   const nodePlatform = value.nodePlatform;
   const nodeArchitecture = value.nodeArchitecture;
-  if (nodePlatform !== "win32" && nodePlatform !== "darwin") {
+  if (nodePlatform !== "linux" && nodePlatform !== "win32" && nodePlatform !== "darwin") {
     throw new Error("portable setup manifest runtime platform is unsupported");
   }
   if (nodeArchitecture !== "x64" && nodeArchitecture !== "arm64") {
@@ -176,7 +176,7 @@ function parseSetupManifest(path: string): SetupManifest {
     throw new Error("portable setup manifest is malformed");
   }
   const targetName = typeof raw.platformTarget === "string" ? raw.platformTarget : undefined;
-  if (targetName !== "windows-x64" && targetName !== "macos-arm64" && targetName !== "macos-x64") {
+  if (!isPortableTarget(targetName)) {
     throw new Error("portable setup manifest target is unsupported");
   }
   return parseSetupManifestRecord(raw, targetName);
