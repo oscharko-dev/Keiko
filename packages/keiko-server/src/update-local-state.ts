@@ -92,6 +92,7 @@ import {
   PROCESS_START_IDENTITY,
 } from "./process-identity.js";
 import { digestUpdateCandidate } from "./update-candidate-authority.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 
 interface AuditEventRecord {
   readonly event: UpdateRuntimeAuditEvent;
@@ -1673,7 +1674,7 @@ function recordAuditEvent(
     emitServerDiagnostic(
       context.diagnostics,
       serverDiagnosticFromError({
-        correlationId: event.correlationId ?? "update-runtime-activity",
+        correlationId: event.correlationId ?? UNKNOWN_CORRELATION_ID,
         operation: "update.runtime.activity-log",
         source: "update-local-state",
         error,

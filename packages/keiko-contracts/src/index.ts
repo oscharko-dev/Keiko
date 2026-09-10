@@ -131,9 +131,11 @@ export type {
 
 // ─── Update availability / preflight (Issues #1692, #3405) ────────────────────
 export type {
+  UPDATE_CANDIDATE_SCHEMA_VERSION,
   UpdateCandidateClaim,
   UpdateCandidateInstallIdentity,
   UpdateCandidatePortableIdentity,
+  UpdateCandidateReleaseIdentity,
   UpdateCandidateSnapshot,
 } from "./update-candidate.js";
 export type {
@@ -211,7 +213,9 @@ export type {
   UpdateUnsupportedReason,
 } from "./update-session.js";
 export type {
+  UPDATE_CANCELLATION_CUTOFFS,
   UPDATE_INSTALL_MODE_KINDS,
+  UPDATE_LIFECYCLE_PHASES,
   parseUpdateRestartVerificationRequest,
   parseUpdateSessionStartRequest,
   UPDATE_INSTALL_MODE_STATUSES,
@@ -244,6 +248,8 @@ export type {
   UpdateRemediationStatus,
   UpdateRuntimeAuditEvent,
   UpdateRuntimeEventType,
+  UpdateRuntimeRecoveryState,
+  UpdateRuntimeRecoveryStatus,
   UpdateRuntimeStateReadResult,
   UpdateRuntimeWarningCode,
   UpdateRuntimeState,
@@ -251,10 +257,12 @@ export type {
   UpdateStoreHealth,
 } from "./update-local-state.js";
 export type {
+  UPDATE_ACTIVATION_WAL_CHECKPOINTS,
   UPDATE_HEALTH_LABELS,
   UPDATE_HEALTH_STATES,
   UPDATE_LOCAL_STATE_SCHEMA_VERSION,
   UPDATE_REMEDIATION_STATUSES,
+  UPDATE_RUNTIME_RECOVERY_STATUSES,
   UPDATE_RUNTIME_EVENT_TYPES,
   UPDATE_RUNTIME_WARNING_CODES,
   UPDATE_STATE_STORES,

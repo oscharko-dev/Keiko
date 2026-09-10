@@ -205,6 +205,28 @@ describe("portable platform verification", () => {
     expect(recorder.calls).toHaveLength(2);
   });
 
+  it("fails closed when only the verified Windows root identity differs", async () => {
+    const recorder = commandRecorder((call) =>
+      call.args.at(-1)?.includes("current") === true
+        ? `1.3.6.1.4.1.311.97.12345|${"D".repeat(40)}|${"B".repeat(40)}`
+        : WINDOWS_PUBLISHER,
+    );
+    const verifier = createPortablePlatformVerifier({
+      hostPlatform: "win32",
+      runCommand: recorder.run,
+    });
+
+    await expect(
+      verifier({
+        target: "windows-x64",
+        stagedRoot: "C:\\Users\\keiko\\stage",
+        launcherPath: "C:\\Users\\keiko\\stage\\Keiko.exe",
+        currentLauncherPath: "C:\\Users\\keiko\\current\\Keiko.exe",
+      }),
+    ).rejects.toMatchObject({ reason: "portable-verification-failed" });
+    expect(recorder.calls).toHaveLength(2);
+  });
+
   it("fails closed when the local host cannot verify the target platform", async () => {
     const recorder = commandRecorder();
     const verifier = createPortablePlatformVerifier({

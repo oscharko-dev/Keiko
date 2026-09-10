@@ -23,6 +23,7 @@ import {
   type UpdateSessionClaimRequest,
 } from "@/lib/api";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import type {
   UpdatePreflightReport,
   UpdateRemediationAction,
@@ -486,10 +487,10 @@ function primaryActionTextForAvailableReport(
   t: I18nTranslate,
 ): string {
   if (isUpdateCheckUnavailable(report)) return t("updates.primary.unavailable");
+  if (isManualUpdatePath(report, session)) return t("updates.primary.manual");
   if (report.updateAvailable && candidateRequest(report) === undefined) {
     return t("updates.primary.claimUnavailable");
   }
-  if (isManualUpdatePath(report, session)) return t("updates.primary.manual");
   if (remediation.overallStatus === "manual-review-required") {
     return t("updates.primary.manualReview");
   }
@@ -1737,6 +1738,7 @@ export function UpdateWindow({ api = DEFAULT_API }: UpdateWindowProps): ReactNod
           // visible and schedule another bounded observation attempt rather than fabricating an
           // outcome or freezing the window on a stale error.
           remediationRefreshRequiredRef.current = true;
+          reportClientDiagnostic("update-window: transient-poll-failed");
           setReconnecting(true);
           setPollFailures((failures) => failures + 1);
           return;

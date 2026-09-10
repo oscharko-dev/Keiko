@@ -11,6 +11,11 @@ import { ApiError } from "@/lib/api";
 import { UpdateWindow, type UpdateWindowApi } from "./UpdateWindow";
 import styles from "./UpdateWindow.module.css";
 
+const reportClientDiagnosticMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/client-diagnostics", () => ({
+  reportClientDiagnostic: reportClientDiagnosticMock,
+}));
+
 function preflight(overrides: Partial<UpdatePreflightReport> = {}): UpdatePreflightReport {
   return {
     schemaVersion: 1,
@@ -410,6 +415,25 @@ describe("UpdateWindow", () => {
       "href",
       "https://github.com/oscharko-dev/Keiko/releases/tag/v0.2.10",
     );
+  });
+
+  it("keeps the manual update action when no executable candidate claim exists", async () => {
+    const manualReport = portableReleaseReport({
+      manualUpdateRequired: true,
+      oneClickEligible: false,
+      userActionRequired: true,
+    });
+    Reflect.deleteProperty(manualReport, "candidate");
+    const api = apiFor({
+      report: manualReport,
+      status: portableManagedStatus(),
+    });
+
+    render(<UpdateWindow api={api} />);
+
+    expect(await screen.findByText("Portable update needs attention")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open manual download" })).toBeInTheDocument();
+    expect(screen.queryByText(/needs a new server-approved update claim/i)).toBeNull();
   });
 
   it("uses policy-disabled copy for portable-managed updates blocked by local policy", async () => {
@@ -2269,6 +2293,7 @@ describe("UpdateWindow", () => {
       await act(async () => {
         await Promise.resolve();
       });
+      reportClientDiagnosticMock.mockClear();
       expect(screen.getByRole("progressbar", { name: "Update progress" })).toBeInTheDocument();
 
       await act(async () => {
@@ -2276,6 +2301,9 @@ describe("UpdateWindow", () => {
       });
       expect(screen.getByText(/Reconnecting to the local Keiko backend/i)).toBeInTheDocument();
       expect(screen.getByRole("progressbar", { name: "Update progress" })).toBeInTheDocument();
+      expect(reportClientDiagnosticMock).toHaveBeenCalledWith(
+        "update-window: transient-poll-failed",
+      );
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(5_000);

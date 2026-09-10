@@ -190,6 +190,41 @@ afterEach(() => {
 });
 
 describe("runLifecycleCli", () => {
+  it.each([
+    ["invalid alphabet", "%%%"],
+    ["non-canonical base64url", "a"],
+    ["malformed JSON", Buffer.from("{", "utf8").toString("base64url")],
+    ["non-object JSON", Buffer.from('"launch"', "utf8").toString("base64url")],
+    [
+      "missing launch id",
+      Buffer.from(JSON.stringify({ expectedVersion: SDK_VERSION }), "utf8").toString("base64url"),
+    ],
+    [
+      "malformed launch id",
+      Buffer.from(JSON.stringify({ launchId: "not-a-launch-id" }), "utf8").toString("base64url"),
+    ],
+  ])("fails closed for a recovered launch with %s", async (_label, encoded) => {
+    const root = makeRoot();
+    const c = makeIo();
+    const spawnFn = vi.fn();
+
+    const code = await runLifecycle(
+      "start",
+      [],
+      c.io,
+      { KEIKO_PORTABLE_RECOVERED_LAUNCH: encoded },
+      {
+        cwd: root,
+        spawnFn,
+        isPortAvailable: () => Promise.resolve(true),
+      },
+    );
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("recovered portable launch identity is invalid");
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
   it("uses the bounded native HTTP health probe instead of fetch", async () => {
     const root = makeRoot();
     const c = makeIo();

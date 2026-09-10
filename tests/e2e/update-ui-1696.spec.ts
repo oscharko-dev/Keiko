@@ -884,7 +884,7 @@ async function openUpdateFromSettings(
   return page.locator(await windowSelector(updateWindow));
 }
 
-async function expectKeyboardFocusVisible(page: Page, control: Locator): Promise<void> {
+async function expectKeyboardFocusVisible(control: Locator): Promise<void> {
   await control.focus();
   await expect(control).toBeFocused();
   await expect
@@ -893,7 +893,7 @@ async function expectKeyboardFocusVisible(page: Page, control: Locator): Promise
 }
 
 async function expectKeyboardTraversal(page: Page, control: Locator): Promise<void> {
-  await expectKeyboardFocusVisible(page, control);
+  await expectKeyboardFocusVisible(control);
   await page.keyboard.press("Tab");
   await expect
     .poll(() => control.evaluate((element) => document.activeElement !== element))
@@ -903,7 +903,7 @@ async function expectKeyboardTraversal(page: Page, control: Locator): Promise<vo
 }
 
 async function activateWithKeyboard(page: Page, control: Locator): Promise<void> {
-  await expectKeyboardFocusVisible(page, control);
+  await expectKeyboardFocusVisible(control);
   await page.keyboard.press("Enter");
 }
 
@@ -932,7 +932,7 @@ async function assertManualCheckActionIsUnobscuredAt320CssPixels(
   // The startup alert remains available before the foreground updater opens. Once it does, the
   // window owns the same update context and the notice must stop covering its manual-path action.
   await expect(notice).not.toBeVisible();
-  await expectKeyboardFocusVisible(page, checkAgain);
+  await expectKeyboardFocusVisible(checkAgain);
   await checkAgain.click();
   await expect(
     updateWindow.getByText(
