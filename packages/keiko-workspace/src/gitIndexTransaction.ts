@@ -142,11 +142,25 @@ export interface GitStageReadOptions {
   // always-denied `.keiko` segment, the plain default keeps refusing it (2026-09-10).
   readonly fs?: WorkspaceFs | undefined;
 }
+/**
+ * The most bytes one staged file may carry, and the most a whole stage candidate may sum to. Until
+ * 2026-09-10 both were 64 KiB: a lockfile, a bundled asset or eight ordinary source files together
+ * could not be staged by a governed run at all, and the refusal surfaced as a failed Git effect
+ * (Coding Workbench run 13, owner review of PR #3452). The per-file bound equals the raw worktree
+ * scan's content budget — a file the scan cannot read is never listed as a change, so nothing
+ * admitted for staging can exceed it — and the candidate bound keeps a fifty-path selection's
+ * resident bytes to what one local process can hold while it digests and writes them.
+ */
+export const GIT_STAGE_FILE_MAX_BYTES = 8 * 1024 * 1024;
+export const GIT_STAGE_CANDIDATE_MAX_BYTES = 32 * 1024 * 1024;
 function stageReadSettings(options: GitStageReadOptions): {
   readonly fs: WorkspaceFs;
   readonly maxBytes: number;
 } {
-  return { fs: options.fs ?? nodeWorkspaceFs, maxBytes: options.maxBytes ?? 65_536 };
+  return {
+    fs: options.fs ?? nodeWorkspaceFs,
+    maxBytes: options.maxBytes ?? GIT_STAGE_FILE_MAX_BYTES,
+  };
 }
 /** Stable no-follow content read. A symlink contributes only its contained relative target bytes. */
 export async function readGitStageFile(

@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  GIT_STAGE_CANDIDATE_MAX_BYTES,
   withGitIndexTransaction,
   readGitStageFile,
   type GitStageFile,
@@ -51,7 +52,7 @@ async function readFiles(
   for (const path of paths) {
     const file = await readGitStageFile(root, path, { fs });
     size += file.bytes.length;
-    if (size > 65_536) throw new Error("git-stage-candidate-too-large");
+    if (size > GIT_STAGE_CANDIDATE_MAX_BYTES) throw new Error("git-stage-candidate-too-large");
     files.push(file);
   }
   return files;

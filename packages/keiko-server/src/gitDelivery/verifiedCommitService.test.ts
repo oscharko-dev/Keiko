@@ -2,6 +2,7 @@ import { runtimeGitDiff, runtimeGitStatus } from "./runtimeGitRead.js";
 import { readVerifiedCommitFacts } from "./verifiedCommitFacts.js";
 import { redactLogFields } from "../observability/log-redaction.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { GIT_STAGE_FILE_MAX_BYTES } from "@oscharko-dev/keiko-workspace/internal/git-index";
 import { RuntimeGitService } from "./runtimeGitService.js";
 import { commitFacadeFixture } from "./verifiedCommitFacadeTestSupport.js";
 import { execFileSync } from "node:child_process";
@@ -878,9 +879,11 @@ describe("productive runtime status/diff/stage lane", () => {
   // response at the 60 KB budget, the selection was refused as unreviewable, the tool reported a
   // revoked Git authority, and the run stopped one step short of delivering. Admission now reads
   // Git's own change list and each pending path's two sides: a response budget never refuses a path.
+  // The same eight files are also 125 KB of raw content together — twice the 64 KiB the stage
+  // candidate digest used to refuse whole (owner review of PR #3452, 2026-09-10).
   it("admits a selection whose rendered review exceeds the diff reader's response budget", async () => {
     const body = Array.from(
-      { length: 120 },
+      { length: 300 },
       (_value, index) => `export const value${String(index)} = "${"v".repeat(24)}";\n`,
     ).join("");
     const tracked = ["one.js", "two.js", "three.js"];
@@ -914,7 +917,7 @@ describe("productive runtime status/diff/stage lane", () => {
     if (proposed.kind !== "stage") throw new Error("stage proposal unavailable");
     expect(gitService.review(proposed.proposalId)?.review).toMatchObject({
       fileCount: 8,
-      addedLines: 8 * 120,
+      addedLines: 8 * 300,
       deletedLines: 4,
     });
     expect(
@@ -1063,7 +1066,7 @@ describe("productive runtime status/diff/stage lane", () => {
   });
 
   it("reports a thrown Git failure as execution-failed on a body-free failure line", async () => {
-    writeFileSync(join(root, "large.js"), `export const value = "${"x".repeat(70_000)}";\n`);
+    writeFileSync(join(root, "large.bin"), Buffer.alloc(GIT_STAGE_FILE_MAX_BYTES + 1, 0x78));
     const gitService = new RuntimeGitService({
       ...options,
       mode: (): "supervised-coding" => "supervised-coding",
@@ -1080,7 +1083,7 @@ describe("productive runtime status/diff/stage lane", () => {
           idempotencyKey: "too-large",
           operation: "stage",
           phase: "propose",
-          paths: ["large.js"],
+          paths: ["large.bin"],
         },
         { check: () => true },
       ),

@@ -14,7 +14,11 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PathDeniedError } from "./errors.js";
 import { nodeWorkspaceFs } from "./fs.js";
-import { readGitStageFile, withGitIndexTransaction } from "./gitIndexTransaction.js";
+import {
+  GIT_STAGE_FILE_MAX_BYTES,
+  readGitStageFile,
+  withGitIndexTransaction,
+} from "./gitIndexTransaction.js";
 import { workspaceFsWithOwnedRootAuthority } from "./ownedRootMint.js";
 let root: string;
 function git(args: readonly string[], cwd = root): string {
@@ -38,6 +42,17 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 describe("existing workspace Git metadata index owner", () => {
+  // Owner review of PR #3452 (2026-09-10): a 64 KiB default kept a lockfile or a bundled asset from
+  // ever being staged by a governed run. The default now equals the raw scan's content budget, and
+  // a file beyond it is still refused rather than read in part.
+  it("reads a stage file up to the raw scan's content budget and refuses one beyond it", async () => {
+    writeFileSync(join(root, "lock.json"), Buffer.alloc(100 * 1024, 0x7b));
+    const file = await readGitStageFile(root, "lock.json");
+    expect(file.bytes.byteLength).toBe(100 * 1024);
+    writeFileSync(join(root, "huge.bin"), Buffer.alloc(GIT_STAGE_FILE_MAX_BYTES + 1, 0x00));
+    await expect(readGitStageFile(root, "huge.bin")).rejects.toThrow();
+  });
+
   it("holds Git's own lock until the exact index transaction ends", async () => {
     const index = readFileSync(join(root, ".git/index"));
     await withGitIndexTransaction(

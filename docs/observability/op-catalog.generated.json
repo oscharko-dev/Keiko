@@ -1439,19 +1439,19 @@
     {
       "op": "coding-runtime.authority.mint-failed",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:498",
+      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:522",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.authority.minted",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:543",
+      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:567",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.authority.revalidation-refused",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:987",
+      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:1012",
       "package": "keiko-server"
     },
     {
@@ -1476,7 +1476,7 @@
     {
       "op": "coding-runtime.description-authority",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:653",
+      "site": "packages/keiko-server/src/coding-runtime/runtimeAuthorityService.ts:677",
       "package": "keiko-server"
     },
     {
