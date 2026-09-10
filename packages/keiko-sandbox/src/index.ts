@@ -39,12 +39,15 @@ export {
 } from "./runtime-gateway.js";
 export {
   CLOSED_RUNTIME_LAUNCH_PROFILE,
+  LINUX_GATEWAY_DIAGNOSTIC_FD_ENV,
   PRODUCTION_RUNTIME_QUALIFICATIONS,
+  parseLinuxGatewayDiagnosticLine,
   qualificationFromReceipt,
   qualifyLongLivedRuntime,
 } from "./runtime.js";
 export type {
   ClosedRuntimeLaunchProfile,
+  LinuxGatewayDiagnosticKind,
   LongLivedRuntimeArchitecture,
   LongLivedRuntimeBackend,
   LongLivedRuntimePlatform,

@@ -88,11 +88,12 @@ function launchRequest(paths: ReturnType<typeof fixture>): RuntimeSupervisorLaun
   };
 }
 
-function fakeChild(): DevLaneRuntimeChildProcess {
+function fakeChild(launcherDiagnostics?: PassThrough): DevLaneRuntimeChildProcess {
   return {
     pid: 4711,
     stdout: new PassThrough(),
     stderr: new PassThrough(),
+    ...(launcherDiagnostics === undefined ? {} : { launcherDiagnostics }),
     settled: (): boolean => false,
     kill: (): boolean => true,
     onExit: (): void => {
@@ -201,5 +202,79 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
       "runtime-gateway-confinement-unavailable",
     );
     expect(spawns).toBe(0);
+  });
+
+  it("records trusted Linux launcher failures without accepting sidecar stderr as evidence", () => {
+    const paths = fixture();
+    const activityLog = createBufferedServerLogSink();
+    const launcherDiagnostics = new PassThrough();
+    const child = fakeChild(launcherDiagnostics);
+    const sidecarStderr = child.stderr as PassThrough;
+    let diagnosticsRequested = false;
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: paths.runtimeRoot,
+      gatewayConfinement: gatewayConfinement(),
+      probeAvailability: () => ALL,
+      platform: "linux",
+      resolveGitExecutable: () => ATTESTED_GIT,
+      activityLog,
+      spawnRuntime: (_command, _args, options) => {
+        diagnosticsRequested = options.launcherDiagnostics;
+        return child;
+      },
+    });
+
+    backend.spawnOwnedTree(launchRequest(paths));
+    sidecarStderr.write("keiko-linux-gateway:error:cleanup-failed\n");
+    expect(activityLog.events.filter((event) => event.op === "runtime.confinement.failed")).toEqual(
+      [],
+    );
+
+    launcherDiagnostics.write("keiko-linux-gateway:error:host-relay-failed\n");
+    expect(diagnosticsRequested).toBe(true);
+    expect(activityLog.events).toContainEqual({
+      category: "process",
+      level: "error",
+      op: "runtime.confinement.failed",
+      correlationId: "run-2951",
+      errorKind: "host-relay-failed",
+      extra: {
+        backend: "bubblewrap",
+        diagnosticSource: "linux-gateway-launcher",
+        frames: [],
+        causeChain: [],
+      },
+    });
+  });
+
+  it("kills and refuses a Linux wrapper whose private diagnostic channel is missing", () => {
+    const paths = fixture();
+    const child = fakeChild();
+    const kills: NodeJS.Signals[] = [];
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: paths.runtimeRoot,
+      gatewayConfinement: gatewayConfinement(),
+      probeAvailability: () => ALL,
+      platform: "linux",
+      resolveGitExecutable: () => ATTESTED_GIT,
+      activityLog: createBufferedServerLogSink(),
+      spawnRuntime: () => ({
+        ...child,
+        kill: (signal): boolean => {
+          kills.push(signal);
+          return true;
+        },
+      }),
+      killProcessGroup: () => {
+        throw new Error("group-kill-unavailable");
+      },
+    });
+
+    expect(() => backend.spawnOwnedTree(launchRequest(paths))).toThrow(
+      "linux-gateway-diagnostics-unavailable",
+    );
+    expect(kills).toEqual(["SIGKILL"]);
   });
 });

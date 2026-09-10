@@ -1,6 +1,6 @@
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess, type StdioOptions } from "node:child_process";
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, fstatSync, writeSync } from "node:fs";
 import { access, chmod, mkdtemp, rm } from "node:fs/promises";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
@@ -342,19 +342,56 @@ interface Relay {
 
 interface ChildReference {
   current: ChildProcess | undefined;
+  failure: LinuxGatewayDiagnosticKind | undefined;
 }
+
+export type LinuxGatewayDiagnosticKind =
+  | "cleanup-failed"
+  | "host-relay-failed"
+  | "internal-failure"
+  | "invalid-backend"
+  | "invalid-command"
+  | "invalid-cwd"
+  | "invalid-gateway-host"
+  | "invalid-gateway-port"
+  | "invalid-mode"
+  | "invalid-socket-path"
+  | "loopback-setup-failed"
+  | "loopback-tool-unavailable"
+  | "namespace-relay-failed"
+  | "unsupported-platform";
+
+export const LINUX_GATEWAY_DIAGNOSTIC_FD_ENV = "KEIKO_LINUX_GATEWAY_DIAGNOSTIC_FD";
+const LINUX_GATEWAY_DIAGNOSTIC_FD = 3;
+const LINUX_GATEWAY_DIAGNOSTIC_PREFIX = "keiko-linux-gateway:error:";
+const LINUX_GATEWAY_DIAGNOSTIC_KINDS: ReadonlySet<string> = new Set([
+  "cleanup-failed",
+  "host-relay-failed",
+  "internal-failure",
+  "invalid-backend",
+  "invalid-command",
+  "invalid-cwd",
+  "invalid-gateway-host",
+  "invalid-gateway-port",
+  "invalid-mode",
+  "invalid-socket-path",
+  "loopback-setup-failed",
+  "loopback-tool-unavailable",
+  "namespace-relay-failed",
+  "unsupported-platform",
+]);
 
 const SIGNALS: readonly ForwardedSignal[] = ["SIGINT", "SIGHUP", "SIGTERM"];
 const LOOPBACK_TOOLS: readonly string[] = ["/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip", "/bin/ip"];
 
 class LinuxGatewayLauncherError extends Error {
-  public constructor(public readonly errorKind: string) {
+  public constructor(public readonly errorKind: LinuxGatewayDiagnosticKind) {
     super(errorKind);
     this.name = "LinuxGatewayLauncherError";
   }
 }
 
-function fail(errorKind: string): never {
+function fail(errorKind: LinuxGatewayDiagnosticKind): never {
   throw new LinuxGatewayLauncherError(errorKind);
 }
 
@@ -366,7 +403,7 @@ function parseGatewayHost(value: string | undefined): "127.0.0.1" | "::1" {
   return value === "127.0.0.1" || value === "::1" ? value : fail("invalid-gateway-host");
 }
 
-function parseGatewayPort(value: string | undefined): number {
+export function parseLinuxGatewayPort(value: string | undefined): number {
   if (value === undefined || !/^[1-9]\d{0,4}$/u.test(value)) {
     return fail("invalid-gateway-port");
   }
@@ -374,7 +411,10 @@ function parseGatewayPort(value: string | undefined): number {
   return port <= 65_535 ? port : fail("invalid-gateway-port");
 }
 
-function parseAbsolute(value: string | undefined, errorKind: string): string {
+function parseAbsolute(
+  value: string | undefined,
+  errorKind: "invalid-command" | "invalid-cwd" | "invalid-socket-path",
+): string {
   return value !== undefined && isAbsolute(value) && !value.includes("\0")
     ? value
     : fail(errorKind);
@@ -384,7 +424,7 @@ function parseCommon(values: readonly string[], offset: number): CommonConfig {
   return {
     backend: parseBackend(values[offset]),
     gatewayHost: parseGatewayHost(values[offset + 1]),
-    gatewayPort: parseGatewayPort(values[offset + 2]),
+    gatewayPort: parseLinuxGatewayPort(values[offset + 2]),
     cwd: parseAbsolute(values[offset + 3], "invalid-cwd"),
     command: parseAbsolute(values[offset + 4], "invalid-command"),
     args: values.slice(offset + 5),
@@ -395,7 +435,7 @@ function parseNamespace(values: readonly string[]): NamespaceConfig {
   return {
     backend: parseBackend(values[1]),
     gatewayHost: parseGatewayHost(values[2]),
-    gatewayPort: parseGatewayPort(values[3]),
+    gatewayPort: parseLinuxGatewayPort(values[3]),
     socketPath: parseAbsolute(values[4], "invalid-socket-path"),
     cwd: parseAbsolute(values[5], "invalid-cwd"),
     command: parseAbsolute(values[6], "invalid-command"),
@@ -403,13 +443,16 @@ function parseNamespace(values: readonly string[]): NamespaceConfig {
   };
 }
 
-function relaySockets(client: Socket, upstream: Socket): void {
+function relaySockets(client: Socket, upstream: Socket, onUpstreamError: () => void): void {
   const close = (): void => {
     client.destroy();
     upstream.destroy();
   };
   client.once("error", close);
-  upstream.once("error", close);
+  upstream.once("error", () => {
+    close();
+    onUpstreamError();
+  });
   client.pipe(upstream);
   upstream.pipe(client);
 }
@@ -422,7 +465,7 @@ function createRelay(connectUpstream: () => Socket, onFatal: () => void): Relay 
     connections.add(upstream);
     client.once("close", () => connections.delete(client));
     upstream.once("close", () => connections.delete(upstream));
-    relaySockets(client, upstream);
+    relaySockets(client, upstream, onFatal);
   });
   server.maxConnections = 64;
   server.on("error", onFatal);
@@ -483,6 +526,57 @@ function waitForChild(child: ChildProcess): Promise<number> {
   });
 }
 
+function terminateForRelayFailure(
+  reference: ChildReference,
+  failure: "host-relay-failed" | "namespace-relay-failed",
+): void {
+  if (reference.failure !== undefined) return;
+  reference.failure = failure;
+  reference.current?.kill("SIGKILL");
+}
+
+async function waitForChildOrRelayFailure(
+  child: ChildProcess,
+  reference: ChildReference,
+): Promise<number> {
+  const status = await waitForChild(child);
+  return reference.failure === undefined ? status : fail(reference.failure);
+}
+
+type LinuxGatewayRunOutcome =
+  | { readonly kind: "completed"; readonly status: number }
+  | { readonly kind: "failed"; readonly error: unknown };
+
+async function captureLinuxGatewayRun(run: () => Promise<number>): Promise<LinuxGatewayRunOutcome> {
+  try {
+    return { kind: "completed", status: await run() };
+  } catch (error: unknown) {
+    return { kind: "failed", error };
+  }
+}
+
+async function cleanupFailure(cleanup: () => Promise<void>): Promise<boolean> {
+  try {
+    await cleanup();
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+export async function runWithLinuxGatewayCleanup(
+  run: () => Promise<number>,
+  close: () => Promise<void>,
+  remove: () => Promise<void>,
+): Promise<number> {
+  const outcome = await captureLinuxGatewayRun(run);
+  const closeFailed = await cleanupFailure(close);
+  const removeFailed = await cleanupFailure(remove);
+  if (outcome.kind === "failed") throw outcome.error;
+  if (closeFailed || removeFailed) return fail("cleanup-failed");
+  return outcome.status;
+}
+
 function forwardSignals(child: ChildProcess): () => void {
   const listeners = SIGNALS.map((signal) => {
     const listener = (): void => {
@@ -513,6 +607,7 @@ function namespaceArgs(config: CommonConfig, socketPath: string): readonly strin
 export function buildLinuxGatewayNamespaceCommand(
   config: CommonConfig,
   socketPath: string,
+  preserveDiagnosticFd = false,
 ): readonly [string, readonly string[]] {
   const launcher = [process.execPath, ...namespaceArgs(config, socketPath)];
   if (config.backend === "bubblewrap") {
@@ -522,6 +617,7 @@ export function buildLinuxGatewayNamespaceCommand(
         "--unshare-net",
         "--die-with-parent",
         "--new-session",
+        ...(preserveDiagnosticFd ? ["--sync-fd", String(LINUX_GATEWAY_DIAGNOSTIC_FD)] : []),
         "--dev-bind",
         "/",
         "/",
@@ -533,6 +629,36 @@ export function buildLinuxGatewayNamespaceCommand(
     ];
   }
   return ["unshare", ["--map-root-user", "--net", "--kill-child=SIGKILL", "--", ...launcher]];
+}
+
+function diagnosticFdEnabled(): boolean {
+  if (process.env[LINUX_GATEWAY_DIAGNOSTIC_FD_ENV] !== String(LINUX_GATEWAY_DIAGNOSTIC_FD)) {
+    return false;
+  }
+  try {
+    fstatSync(LINUX_GATEWAY_DIAGNOSTIC_FD);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function nestedLauncherStdio(preserveDiagnosticFd: boolean): StdioOptions {
+  return preserveDiagnosticFd
+    ? ["inherit", "inherit", "inherit", "inherit"]
+    : ["inherit", "inherit", "inherit"];
+}
+
+function targetEnvironment(): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(process.env).filter(([name]) => name !== LINUX_GATEWAY_DIAGNOSTIC_FD_ENV),
+  );
+}
+
+function targetStdio(): StdioOptions {
+  return diagnosticFdEnabled()
+    ? ["inherit", "inherit", "inherit", "ignore"]
+    : ["inherit", "inherit", "inherit"];
 }
 
 async function executableLoopbackTool(): Promise<string> {
@@ -555,47 +681,69 @@ async function enableUnshareLoopback(): Promise<void> {
 
 async function runNamespace(config: NamespaceConfig): Promise<number> {
   if (config.backend === "unshare") await enableUnshareLoopback();
-  const childReference: ChildReference = { current: undefined };
+  const childReference: ChildReference = { current: undefined, failure: undefined };
   const relay = namespaceRelay(config, () => {
-    childReference.current?.kill("SIGKILL");
+    terminateForRelayFailure(childReference, "namespace-relay-failed");
   });
-  await listen(relay.server, { host: config.gatewayHost, port: config.gatewayPort });
-  const child = spawn(config.command, config.args, { cwd: config.cwd, stdio: "inherit" });
-  childReference.current = child;
-  const stopForwarding = forwardSignals(child);
-  try {
-    return await waitForChild(child);
-  } finally {
-    stopForwarding();
-    await closeRelay(relay);
-  }
+  return runWithLinuxGatewayCleanup(
+    async () => {
+      await listen(relay.server, { host: config.gatewayHost, port: config.gatewayPort });
+      const child = spawn(config.command, config.args, {
+        cwd: config.cwd,
+        env: targetEnvironment(),
+        stdio: targetStdio(),
+      });
+      childReference.current = child;
+      const stopForwarding = forwardSignals(child);
+      try {
+        return await waitForChildOrRelayFailure(child, childReference);
+      } finally {
+        stopForwarding();
+      }
+    },
+    async () => {
+      if (relay.server.listening) await closeRelay(relay);
+    },
+    () => Promise.resolve(),
+  );
 }
 
 async function runHost(config: CommonConfig): Promise<number> {
   if (process.platform !== "linux") return fail("unsupported-platform");
   const directory = await mkdtemp(join(tmpdir(), "keiko-gateway-"));
   const socketPath = join(directory, "relay.sock");
-  const childReference: ChildReference = { current: undefined };
+  const childReference: ChildReference = { current: undefined, failure: undefined };
+  const preserveDiagnosticFd = diagnosticFdEnabled();
   const relay = hostRelay(config, () => {
-    childReference.current?.kill("SIGKILL");
+    terminateForRelayFailure(childReference, "host-relay-failed");
   });
-  try {
-    await chmod(directory, 0o700);
-    await listen(relay.server, socketPath);
-    await chmod(socketPath, 0o600);
-    const [command, args] = buildLinuxGatewayNamespaceCommand(config, socketPath);
-    const child = spawn(command, args, { cwd: config.cwd, stdio: "inherit" });
-    childReference.current = child;
-    const stopForwarding = forwardSignals(child);
-    try {
-      return await waitForChild(child);
-    } finally {
-      stopForwarding();
-    }
-  } finally {
-    if (relay.server.listening) await closeRelay(relay);
-    await rm(directory, { recursive: true, force: true });
-  }
+  return runWithLinuxGatewayCleanup(
+    async () => {
+      await chmod(directory, 0o700);
+      await listen(relay.server, socketPath);
+      await chmod(socketPath, 0o600);
+      const [command, args] = buildLinuxGatewayNamespaceCommand(
+        config,
+        socketPath,
+        preserveDiagnosticFd,
+      );
+      const child = spawn(command, args, {
+        cwd: config.cwd,
+        stdio: nestedLauncherStdio(preserveDiagnosticFd),
+      });
+      childReference.current = child;
+      const stopForwarding = forwardSignals(child);
+      try {
+        return await waitForChildOrRelayFailure(child, childReference);
+      } finally {
+        stopForwarding();
+      }
+    },
+    async () => {
+      if (relay.server.listening) await closeRelay(relay);
+    },
+    async () => rm(directory, { recursive: true, force: true, maxRetries: 3, retryDelay: 25 }),
+  );
 }
 
 function isMainModule(): boolean {
@@ -609,15 +757,38 @@ export async function runLinuxGatewayLauncher(values: readonly string[]): Promis
   return fail("invalid-mode");
 }
 
-export function linuxGatewayDiagnosticKind(error: unknown): string {
+export function linuxGatewayDiagnosticKind(error: unknown): LinuxGatewayDiagnosticKind {
   return error instanceof LinuxGatewayLauncherError ? error.errorKind : "internal-failure";
+}
+
+export function parseLinuxGatewayDiagnosticLine(
+  line: string,
+): LinuxGatewayDiagnosticKind | undefined {
+  if (!line.startsWith(LINUX_GATEWAY_DIAGNOSTIC_PREFIX)) return undefined;
+  const kind = line.slice(LINUX_GATEWAY_DIAGNOSTIC_PREFIX.length);
+  return LINUX_GATEWAY_DIAGNOSTIC_KINDS.has(kind)
+    ? (kind as LinuxGatewayDiagnosticKind)
+    : undefined;
+}
+
+function emitLinuxGatewayDiagnostic(kind: LinuxGatewayDiagnosticKind): void {
+  const line = `${LINUX_GATEWAY_DIAGNOSTIC_PREFIX}${kind}\n`;
+  if (diagnosticFdEnabled()) {
+    try {
+      writeSync(LINUX_GATEWAY_DIAGNOSTIC_FD, line, undefined, "utf8");
+      return;
+    } catch {
+      // Fall back to the closed stderr protocol if the private parent channel was lost.
+    }
+  }
+  process.stderr.write(line);
 }
 
 if (isMainModule()) {
   try {
     process.exitCode = await runLinuxGatewayLauncher(process.argv.slice(2));
   } catch (error: unknown) {
-    process.stderr.write(`keiko-linux-gateway:error:${linuxGatewayDiagnosticKind(error)}\n`);
+    emitLinuxGatewayDiagnostic(linuxGatewayDiagnosticKind(error));
     process.exitCode = 1;
   }
 }

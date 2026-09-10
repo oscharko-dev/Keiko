@@ -17,7 +17,8 @@ code comments anticipated (no such files existed); those comments are updated to
 
 ## Version
 
-1.0
+1.1 — Issue #3422 moves the internal Linux gateway launcher into the `keiko-sandbox` enforcement
+boundary while `keiko-tools` remains the disposable-command spawn boundary (2026-09-10).
 
 ## Context
 
@@ -219,10 +220,21 @@ after both listener boundaries are ready; descendants inherit the network namesp
 network namespace, veth, NAT rule, root, or ambient `CAP_NET_ADMIN` is granted. Parent-death,
 signals, relay failure, and cleanup stay inside the wrapper's fail-closed lifecycle.
 
+Launcher failures cross a dedicated descriptor-3 diagnostics channel that the server provisions
+only for the Linux wrapper. Bubblewrap preserves that descriptor explicitly; the namespace launcher
+removes both the descriptor and its marker environment variable before spawning the sidecar, so
+sidecar stderr cannot forge launcher evidence. The server accepts only the closed launcher error
+vocabulary and records the first failure as `runtime.confinement.failed`, with the run correlation
+id and body-free backend/source fields. A missing diagnostics pipe refuses the launch and terminates
+the just-spawned unowned process tree. This prepares the existing composition boundary for #3451
+without claiming that a Linux runtime target is already qualified.
+
 The Linux reference-runner test proves the mechanism rather than an argv string: the unconfined
-child reaches a hostile ephemeral loopback listener, the same child under the planned gateway
+child completes a PING/PONG exchange with a hostile ephemeral loopback listener, the same child
+under the planned gateway
 wrapper cannot reach that listener or a concurrent run's port, and two isolated runs can each
-reach only their own real gateway listener. Missing namespace tools on Linux fail that reference
+complete the same data round trip only through their own real gateway listener. Missing namespace
+tools on Linux fail that reference
 proof. Containers remain ineligible because no equivalent bridge is compiled for them.
 
 This does **not** yet establish Linux product coverage. Keiko still has no `linux-x64`
