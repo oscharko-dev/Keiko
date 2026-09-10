@@ -1525,6 +1525,7 @@ function createZipArchive(payloadContainer, assetName, outRoot) {
 
 function launcherPath(target, stageRoot) {
   if (target.primaryLauncher === "Keiko.exe") return join(stageRoot, "Keiko.exe");
+  if (target.primaryLauncher === "Keiko") return join(stageRoot, "Keiko");
   return join(stageRoot, "Keiko.app", "Contents", "MacOS", "Keiko");
 }
 
@@ -1665,6 +1666,12 @@ function buildSecureReadHelper(target, destination) {
 }
 
 function runtimeSupervisorSource(target) {
+  if (target.nodePlatform === "linux") {
+    return {
+      path: "packages/keiko-sandbox/src",
+      root: join(repoRoot, "packages", "keiko-sandbox", "src"),
+    };
+  }
   const platform = target.nodePlatform === "win32" ? "windows" : "macos";
   return {
     path: `native/runtime-supervisor/${platform}`,
@@ -1673,6 +1680,9 @@ function runtimeSupervisorSource(target) {
 }
 
 function runtimeSupervisorExecutablePath(target) {
+  if (target.nodePlatform === "linux") {
+    return "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
+  }
   return `runtime/native/${RUNTIME_SUPERVISOR_NAME}${target.nodePlatform === "win32" ? ".exe" : ""}`;
 }
 
@@ -1680,7 +1690,9 @@ function stageRuntimeSupervisor(target, resourceRoot, options, hooks) {
   const executablePath = runtimeSupervisorExecutablePath(target);
   const destination = join(resourceRoot, ...executablePath.split("/"));
   mkdirSync(dirname(destination), { recursive: true });
-  (hooks.buildRuntimeSupervisor ?? buildRuntimeSupervisor)(target, destination);
+  if (target.nodePlatform !== "linux") {
+    (hooks.buildRuntimeSupervisor ?? buildRuntimeSupervisor)(target, destination);
+  }
   const entry = existsSync(destination) ? lstatSync(destination) : undefined;
   if (entry === undefined || !entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
     fail("runtime supervisor build did not produce the fixed executable");
@@ -1694,7 +1706,10 @@ function stageRuntimeSupervisor(target, resourceRoot, options, hooks) {
     kind: "runtime-process-supervisor",
     name: RUNTIME_SUPERVISOR_NAME,
     options,
-    protocol: { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" },
+    protocol:
+      target.nodePlatform === "linux"
+        ? { schemaVersion: 1, requestMagic: "none", responseMagic: "none" }
+        : { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" },
     sourcePath: source.path,
     sourceRoot: source.root,
     target,
@@ -1798,6 +1813,10 @@ function buildNativeLauncher(target, destination, options) {
     compileWindowsLauncher(target, destination);
     return;
   }
+  if (target.nodePlatform === "linux" && process.platform === "linux") {
+    compileLinuxLauncher(target, destination);
+    return;
+  }
   fail(
     `pass --launcher-binary for ${target.platformTarget}, or run portable staging on a native ${target.nodePlatform} builder`,
   );
@@ -1834,6 +1853,21 @@ function compileMacLauncher(target, destination) {
     "-Wextra",
     "-arch",
     macCompilerArch(target),
+    `-D${nativeLauncherTargetDefine(target)}`,
+    nativeLauncherSource(),
+    "-o",
+    destination,
+  ]);
+}
+
+function compileLinuxLauncher(target, destination) {
+  run("cc", [
+    "-std=c11",
+    "-Os",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-D_GNU_SOURCE",
     `-D${nativeLauncherTargetDefine(target)}`,
     nativeLauncherSource(),
     "-o",
@@ -1930,12 +1964,14 @@ function stageSupportLauncher(target, stageRoot) {
     return;
   }
   const scriptPath = join(supportRoot, "keiko-support.sh");
+  const primaryLauncher =
+    target.nodePlatform === "linux" ? "../Keiko" : "../Keiko.app/Contents/MacOS/Keiko";
   writeFileSync(
     scriptPath,
     [
       "#!/bin/sh",
       'SCRIPT_DIR=$(cd "$(dirname "$0")" && pwd)',
-      'exec "$SCRIPT_DIR/../Keiko.app/Contents/MacOS/Keiko" "$@"',
+      `exec "$SCRIPT_DIR/${primaryLauncher}" "$@"`,
       "",
     ].join("\n"),
   );

@@ -575,7 +575,9 @@ function macVerificationChecks(overrides = {}) {
 }
 
 function defaultVerificationChecks(target) {
-  return target.nodePlatform === "win32" ? windowsVerificationChecks() : macVerificationChecks();
+  if (target.nodePlatform === "win32") return windowsVerificationChecks();
+  if (target.nodePlatform === "linux") return { provenanceVerified: true };
+  return macVerificationChecks();
 }
 
 function platformSignatureLocallyVerified(candidate) {
@@ -587,6 +589,9 @@ function platformSignatureLocallyVerified(candidate) {
       checks.publisherChainVerified === true &&
       checks.timestampVerified === true
     );
+  }
+  if (target.nodePlatform === "linux") {
+    return candidate.security.signatureVerified === true && checks.provenanceVerified === true;
   }
   return (
     candidate.security.signatureVerified === true &&
@@ -659,7 +664,11 @@ function setManifestTarget(candidate, platformTarget) {
   candidate.runtime.nodePlatform = target.nodePlatform;
   candidate.runtime.nodeArchitecture = target.nodeArchitecture;
   candidate.runtimeActivation.trustAnchor =
-    target.nodePlatform === "win32" ? "authenticode-attestor" : "developer-id-app-resource-seal";
+    target.nodePlatform === "win32"
+      ? "authenticode-attestor"
+      : target.nodePlatform === "linux"
+        ? "sigstore-qualification-receipt"
+        : "developer-id-app-resource-seal";
   for (const helper of candidate.nativeHelpers) {
     const suffix = target.nodePlatform === "win32" ? ".exe" : "";
     helper.platformTarget = target.platformTarget;
@@ -670,7 +679,14 @@ function setManifestTarget(candidate, platformTarget) {
     helper.signing.notarizationRequired = target.nodePlatform === "darwin";
     helper.signing.notarizationVerified = target.nodePlatform === "darwin";
     if (helper.name === "keiko-runtime-supervisor") {
-      helper.source.path = `native/runtime-supervisor/${target.nodePlatform === "win32" ? "windows" : "macos"}`;
+      if (target.nodePlatform === "linux") {
+        helper.executablePath = "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js";
+        helper.protocol = { schemaVersion: 1, requestMagic: "none", responseMagic: "none" };
+        helper.source.path = "packages/keiko-sandbox/src";
+      } else {
+        helper.protocol = { schemaVersion: 1, requestMagic: "KRP1", responseMagic: "KRS1" };
+        helper.source.path = `native/runtime-supervisor/${target.nodePlatform === "win32" ? "windows" : "macos"}`;
+      }
     }
   }
   candidate.entrypoints.primaryLauncher = target.primaryLauncher;
@@ -700,7 +716,9 @@ function setRootVerificationState(candidate, target, checks, options) {
   candidate.security.signatureVerified =
     target.nodePlatform === "win32"
       ? checks.publisherChainVerified === true && checks.timestampVerified === true
-      : checks.developerIdVerified === true;
+      : target.nodePlatform === "linux"
+        ? checks.provenanceVerified === true
+        : checks.developerIdVerified === true;
   candidate.security.notarizationRequired = target.nodePlatform === "darwin";
   candidate.security.notarizationVerified =
     target.nodePlatform === "darwin" ? checks.notarizationVerified === true : false;
@@ -709,7 +727,9 @@ function setRootVerificationState(candidate, target, checks, options) {
       ? "unverified-staging"
       : target.nodePlatform === "win32"
         ? "authenticode-attestor"
-        : "developer-id-app-resource-seal";
+        : target.nodePlatform === "linux"
+          ? "sigstore-qualification-receipt"
+          : "developer-id-app-resource-seal";
 }
 
 function setTargetRuntimeEvidence(candidate, target) {
@@ -720,6 +740,14 @@ function setTargetRuntimeEvidence(candidate, target) {
       path: ".portable/runtime-qualification.json",
       sha256: DIGEST_1,
       backend: "macos-endpoint-security",
+    };
+  } else if (target.nodePlatform === "linux") {
+    delete candidate.runtimeAttestation;
+    candidate.runtimeQualification = {
+      schemaVersion: 1,
+      path: ".portable/runtime-qualification.json",
+      sha256: DIGEST_1,
+      backend: "linux-namespace-gateway",
     };
   } else {
     delete candidate.runtimeQualification;
@@ -848,7 +876,7 @@ function rebindAssemblerSidecar(sidecar, sidecarRoot, executablePath) {
 }
 
 function writeAssemblerQualificationFixture(candidate, target, resourceRoot) {
-  if (target.nodePlatform !== "darwin") return;
+  if (target.nodePlatform !== "darwin" && target.nodePlatform !== "linux") return;
   const helpers = new Map(candidate.nativeHelpers.map((helper) => [helper.name, helper]));
   const qualificationBytes = `${JSON.stringify(
     {
@@ -863,7 +891,8 @@ function writeAssemblerQualificationFixture(candidate, target, resourceRoot) {
         name: sidecar.name,
         sha256: sidecar.payloadSha256,
       })),
-      backend: "macos-endpoint-security",
+      backend:
+        target.nodePlatform === "linux" ? "linux-namespace-gateway" : "macos-endpoint-security",
       result: "passed",
     },
     null,
@@ -1009,7 +1038,7 @@ async function assembleStageForTest(
       commitSha: COMMIT_SHA,
       dryRun: false,
       evaluation,
-      appleTeamId: target === "windows-x64" ? undefined : "AB12CD34EF",
+      appleTeamId: target.startsWith("macos-") ? "AB12CD34EF" : undefined,
       nodeArchive: nodeArchive.path,
       nodeArchiveUrl: undefined,
       nodeCacheDir: join(dir, "cache"),
@@ -1279,8 +1308,7 @@ function sidecarExecutablePath(payloadRootPath, target) {
 }
 
 function verifiedSidecarSigning(target) {
-  const verificationChecks =
-    target.nodePlatform === "win32" ? windowsVerificationChecks() : macVerificationChecks();
+  const verificationChecks = defaultVerificationChecks(target);
   return {
     verificationPolicy: "production",
     verificationStatus: "verified-production",
@@ -1348,12 +1376,14 @@ function stagingSidecarSigning(target) {
     verificationChecks:
       target.nodePlatform === "win32"
         ? windowsVerificationChecks({ publisherChainVerified: false, timestampVerified: false })
-        : macVerificationChecks({
-            assessmentVerified: false,
-            developerIdVerified: false,
-            notarizationVerified: false,
-            stapleVerified: false,
-          }),
+        : target.nodePlatform === "linux"
+          ? { provenanceVerified: false }
+          : macVerificationChecks({
+              assessmentVerified: false,
+              developerIdVerified: false,
+              notarizationVerified: false,
+              stapleVerified: false,
+            }),
     shippedExecutableSha256: DIGEST_D,
     shippedExecutableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
     shippedExecutableTreeSha256: DIGEST_C,
@@ -1500,6 +1530,7 @@ describe("portable runtime target contract", () => {
         platformTarget: target.platformTarget,
       })),
     ).toEqual([
+      { assetName: "keiko-linux-x64.zip", platformTarget: "linux-x64" },
       { assetName: "keiko-windows-x64.zip", platformTarget: "windows-x64" },
       { assetName: "keiko-macos-arm64.zip", platformTarget: "macos-arm64" },
       { assetName: "keiko-macos-x64.zip", platformTarget: "macos-x64" },
@@ -2199,7 +2230,7 @@ describe("validatePortableReleaseSet", () => {
     version: ROOT_PACKAGE_VERSION,
   };
 
-  it("accepts exactly the three canonical verified candidates", () => {
+  it("accepts exactly the four canonical verified candidates", () => {
     expect(validatePortableReleaseSet(candidateSet(), expected)).toEqual([]);
   });
 
@@ -2217,8 +2248,8 @@ describe("validatePortableReleaseSet", () => {
   });
 
   it.each([
-    ["missing", (set) => set.slice(1), "exactly three"],
-    ["extra", (set) => [...set, manifest()], "exactly three"],
+    ["missing", (set) => set.slice(1), "exactly four"],
+    ["extra", (set) => [...set, manifest()], "exactly four"],
     ["duplicate", (set) => [...set.slice(0, 2), set[0]], "duplicate portable target"],
     [
       "case collision",
@@ -2231,7 +2262,7 @@ describe("validatePortableReleaseSet", () => {
     [
       "relabelled",
       (set) => {
-        set[0].artifact.platformTarget = "linux-x64";
+        set[0].artifact.platformTarget = "solaris-x64";
         return set;
       },
       "unsupported or relabelled",
@@ -2239,7 +2270,7 @@ describe("validatePortableReleaseSet", () => {
     [
       "architecture drift",
       (set) => {
-        set[2].runtime.nodeArchitecture = "arm64";
+        set[3].runtime.nodeArchitecture = "arm64";
         return set;
       },
       "runtime.nodeArchitecture",
@@ -2318,7 +2349,8 @@ describe("assemblePortableReleaseAssets bounds", () => {
     const copiedSetup = readFileSync(
       join(bundleRoot, "artifacts", "windows-x64", WINDOWS_PORTABLE_SETUP_ASSET_NAME),
     );
-    expect(bundle.artifacts[0]).toMatchObject({
+    const windows = bundle.artifacts.find((artifact) => artifact.platformTarget === "windows-x64");
+    expect(windows).toMatchObject({
       platformTarget: "windows-x64",
       setupPath: `artifacts/windows-x64/${WINDOWS_PORTABLE_SETUP_ASSET_NAME}`,
       setupSha256: createHash("sha256").update(copiedSetup).digest("hex"),
@@ -2347,7 +2379,8 @@ describe("assemblePortableReleaseAssets bounds", () => {
     });
 
     expect(readFileSync(stagedSetup)).toEqual(mutatedSourceBytes);
-    expect(bundle.artifacts[0]).toMatchObject({
+    const windows = bundle.artifacts.find((artifact) => artifact.platformTarget === "windows-x64");
+    expect(windows).toMatchObject({
       setupSha256: createHash("sha256").update(copiedBytes).digest("hex"),
       setupSizeBytes: copiedBytes.length,
     });
