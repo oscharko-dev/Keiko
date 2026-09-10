@@ -1891,7 +1891,7 @@
     {
       "op": "coding.runtime.discover",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:144",
+      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:153",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
