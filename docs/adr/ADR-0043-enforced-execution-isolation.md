@@ -50,18 +50,25 @@ Introduce `@oscharko-dev/keiko-sandbox`, a near-leaf package (depends only on `k
 the `SandboxPolicy`/`NetworkPolicy`/attestation types). It owns the **isolation strategy only**:
 backend availability probing, deterministic per-platform backend selection, pure construction of the
 wrapper argv/profile that denies egress, a content-free `SandboxAttestation` (`{ backend,
-networkEnforced, platform }`), and the fail-closed verdict. It performs **no process spawning** — the
-wrapper builders and selection are pure functions, the probe is a thin filesystem read. The package is
-the platform's reusable isolation brain, consumable anywhere an enforced run is needed.
+networkEnforced, platform }`), and the fail-closed verdict. The disposable `network: "none"` builders
+and selection remain pure functions and the probe remains a thin filesystem read. The gateway-only
+Linux extension in D12 additionally owns the internal namespace and relay subprocesses because their
+lifecycle is the enforcement boundary itself; consumers still receive one wrapped command. The
+package is the platform's reusable isolation owner, consumable anywhere an enforced run is needed.
 
 ### D2 — One spawn boundary applies the wrapper
 
-The single subprocess boundary remains `keiko-tools/src/exec.ts` `runCommand`. When a caller passes
+The single disposable-command subprocess boundary remains `keiko-tools/src/exec.ts` `runCommand`.
+When a caller passes
 `policy.network === "none"`, `runCommand` asks keiko-sandbox for an enforcing wrapper and spawns the
 wrapped command, recording the attestation on `CommandResult`. No second spawning path is introduced
 (preserving the ADR-0019 invariant that verification and tools share one command boundary). Callers
 that do not request `network: "none"` are unaffected — egress enforcement is opt-in per call, so the
 read-only command tools keep `network: "inherit"` and their existing behaviour.
+
+D12's gateway-only Linux wrapper does not create another product command boundary: the planned child
+is still one command to the consumer, while the package-private launcher owns only the inseparable
+namespace peer, Unix relay, and target-child lifecycle needed to enforce that plan.
 
 ### D3 — Hybrid backends, fail-closed
 
@@ -230,7 +237,9 @@ the exact-port WFP implementation. The cross-platform acceptance criterion remai
 ### D13 — Does not relax D1–D10
 
 This confinement mechanism is additive: it does not change `network: "none"`, the disposable-run
-backends, or the CI-proven egress denial in D5. It is a second, narrower policy shape for a shape of
+backends, their `keiko-tools` spawn boundary, or the CI-proven egress denial in D5. D12's
+package-private launcher is the enforcement implementation for the new gateway-only plan, not a
+second general-purpose command execution API. It is a second, narrower policy shape for a shape of
 execution (long-lived, one-endpoint-allowed) that D1–D10 did not address, scoped today to the one
 platform (macOS) that has a production long-lived sidecar activation path (ADR-0140). The Linux
 planner/bridge primitive in D12 extends this second shape without changing any disposable-run argv

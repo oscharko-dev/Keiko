@@ -3,7 +3,7 @@
   "version": "0.3.17",
   "type": "module",
   "license": "Apache-2.0",
-  "description": "Internal sandbox package: the reusable OS/container egress-isolation strategy (ADR-0043). Pure backend-wrapper builders + selection + attestation, with a thin availability probe. Spawning stays in keiko-tools; this package only decides how a `network: \"none\"` command is wrapped so an outbound connection from the child fails. Not published independently.",
+  "description": "Internal sandbox package: reusable OS/container egress isolation and gateway-only Linux namespace confinement (ADR-0043). Owns backend selection, wrapper construction, attestation, availability probes, and the internal Linux namespace/relay launcher. Not published independently.",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
