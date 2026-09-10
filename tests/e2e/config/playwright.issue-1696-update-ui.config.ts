@@ -31,6 +31,7 @@ export default defineConfig({
   reporter: process.env.CI ? [["github"], ["line"]] : "line",
   use: {
     baseURL: `http://127.0.0.1:${String(publicPort)}`,
+    permissions: ["clipboard-write"],
     trace: "off",
     video: "off",
     screenshot: "off",
