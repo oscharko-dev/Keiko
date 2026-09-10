@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  copyNetworkGatewayPolicy,
   DEFAULT_COMMAND_RULES,
   DEFAULT_SANDBOX_POLICY,
   isValidNetworkGatewayPolicy,
@@ -82,6 +83,30 @@ describe("isValidNetworkGatewayPolicy", () => {
   it("rejects non-object and malformed inputs", () => {
     for (const hostile of [null, undefined, "gateway", 42, [], []])
       expect(isValidNetworkGatewayPolicy(hostile)).toBe(false);
+  });
+
+  it("rejects accessors and hidden fields without invoking attacker-controlled code", () => {
+    let reads = 0;
+    const accessor = Object.defineProperty({ mode: "gateway", port: 1983 }, "host", {
+      enumerable: true,
+      get: (): string => {
+        reads += 1;
+        return "127.0.0.1";
+      },
+    });
+    const hidden = Object.defineProperty({ ...valid }, "hidden", { value: "widen-me" });
+
+    expect(isValidNetworkGatewayPolicy(accessor)).toBe(false);
+    expect(copyNetworkGatewayPolicy(accessor)).toBeUndefined();
+    expect(isValidNetworkGatewayPolicy(hidden)).toBe(false);
+    expect(reads).toBe(0);
+  });
+
+  it("returns an immutable data-only policy copy", () => {
+    const copied = copyNetworkGatewayPolicy(valid);
+    expect(copied).toEqual(valid);
+    expect(copied).not.toBe(valid);
+    expect(Object.isFrozen(copied)).toBe(true);
   });
 });
 

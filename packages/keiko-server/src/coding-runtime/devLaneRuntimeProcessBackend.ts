@@ -1,10 +1,13 @@
-import { spawn, type ChildProcessByStdio } from "node:child_process";
+import { spawn } from "node:child_process";
 import { dirname } from "node:path";
-import type { Readable } from "node:stream";
+import { Readable } from "node:stream";
 import {
   copyRuntimeGatewayConfinement,
   currentPlatform,
   isRuntimeGatewayConfinement,
+  LINUX_GATEWAY_DIAGNOSTIC_FD,
+  LINUX_GATEWAY_DIAGNOSTIC_FD_ENV,
+  parseLinuxGatewayDiagnosticLine,
   planIsolatedRun,
   probeBackends,
   resolveDarwinGitExecutable,
@@ -12,10 +15,14 @@ import {
   type BackendAvailability,
   type RuntimeGatewayConfinement,
 } from "@oscharko-dev/keiko-sandbox";
-import type { NetworkGatewayPolicy } from "@oscharko-dev/keiko-contracts";
+import type {
+  LinuxGatewayDiagnosticKind,
+  NetworkGatewayPolicy,
+} from "@oscharko-dev/keiko-contracts";
 import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { createCodingRuntimeLineParser } from "./codingRuntimeProcessIo.js";
 
 import {
   invalidRequest,
@@ -50,6 +57,7 @@ export interface DevLaneRuntimeChildProcess {
   readonly pid: number | undefined;
   readonly stdout: Readable;
   readonly stderr: Readable;
+  readonly launcherDiagnostics?: Readable | undefined;
   /** Synchronous exit fact (Node sets exitCode/signalCode before the async exit event fires). */
   settled(): boolean;
   kill(signal: NodeJS.Signals): boolean;
@@ -64,6 +72,7 @@ export type DevLaneRuntimeSpawn = (
     readonly cwd: string;
     readonly env: Readonly<Record<string, string>>;
     readonly detached: true;
+    readonly launcherDiagnostics: boolean;
     readonly shell: false;
   },
 ) => DevLaneRuntimeChildProcess;
@@ -161,24 +170,23 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
       cwd,
       env: { ...request.env, PATH: dirname(gitExecutable.path) },
       detached: true,
+      launcherDiagnostics: linuxGatewayLauncherBackend(decision.attestation.backend),
       shell: false,
     });
-    this.activityLog.write({
-      category: "process",
-      op: "runtime.confinement.spawned",
-      correlationId: request.runId,
-      extra: {
-        backend: decision.attestation.backend,
-        policyDigest: policy.policyDigest,
-        authorityDigest: policy.envelopeDigest,
-        runtimeArtifactDigest: policy.runtimeArtifactDigest,
-        modelProfileDigest: policy.modelProfileDigest,
-        treeBindingId: policy.treeBindingId,
-        profile: policy.profile,
-        childExecutablePolicy: "runtime-and-attested-git-only",
-        childExecutableDigest: gitExecutable.sha256,
-      },
-    });
+    attachOrTerminateLinuxGatewayDiagnostics(
+      child,
+      this.activityLog,
+      request.runId,
+      decision.attestation.backend,
+      this.killProcessGroup,
+    );
+    recordConfinementSpawned(
+      this.activityLog,
+      request.runId,
+      decision.attestation.backend,
+      policy,
+      gitExecutable.sha256,
+    );
     const tree = ownTree(`dev-lane-opencode-${String(this.nextTreeId++)}`, child, (error) => {
       recordConfinementFailure(this.activityLog, request.runId, error);
     });
@@ -251,6 +259,124 @@ function recordConfinementFailure(sink: ServerLogSink, runId: string, error: unk
   });
 }
 
+function recordConfinementSpawned(
+  sink: ServerLogSink,
+  runId: string,
+  backend: string,
+  policy: RuntimeGatewayConfinement,
+  childExecutableDigest: string,
+): void {
+  sink.write({
+    category: "process",
+    op: "runtime.confinement.spawned",
+    correlationId: runId,
+    extra: {
+      backend,
+      policyDigest: policy.policyDigest,
+      authorityDigest: policy.envelopeDigest,
+      runtimeArtifactDigest: policy.runtimeArtifactDigest,
+      modelProfileDigest: policy.modelProfileDigest,
+      treeBindingId: policy.treeBindingId,
+      profile: policy.profile,
+      childExecutablePolicy: "runtime-and-attested-git-only",
+      childExecutableDigest,
+    },
+  });
+}
+
+function linuxGatewayLauncherBackend(backend: string): boolean {
+  return backend === "bubblewrap" || backend === "unshare";
+}
+
+function recordLinuxGatewayLauncherFailure(
+  sink: ServerLogSink,
+  runId: string,
+  backend: string,
+  errorKind: LinuxGatewayDiagnosticKind,
+): void {
+  sink.write({
+    category: "process",
+    level: "error",
+    op: "runtime.confinement.failed",
+    correlationId: runId,
+    errorKind,
+    extra: {
+      backend,
+      diagnosticSource: "linux-gateway-launcher",
+      frames: [],
+      causeChain: [],
+    },
+  });
+}
+
+function attachLinuxGatewayDiagnostics(
+  child: DevLaneRuntimeChildProcess,
+  sink: ServerLogSink,
+  runId: string,
+  backend: string,
+): void {
+  if (!linuxGatewayLauncherBackend(backend)) return;
+  const diagnostics = child.launcherDiagnostics;
+  if (diagnostics === undefined) throw new Error("linux-gateway-diagnostics-unavailable");
+  let reported = false;
+  const report = (errorKind: LinuxGatewayDiagnosticKind): void => {
+    if (reported) return;
+    reported = true;
+    recordLinuxGatewayLauncherFailure(sink, runId, backend, errorKind);
+  };
+  const parser = createCodingRuntimeLineParser({
+    maxLineBytes: 128,
+    onLine: (line) => {
+      report(parseLinuxGatewayDiagnosticLine(line) ?? "internal-failure");
+    },
+  });
+  diagnostics.on("data", (chunk) => {
+    const value = Buffer.isBuffer(chunk) ? chunk : String(chunk);
+    if (!parser.push(value).ok) report("internal-failure");
+  });
+  diagnostics.once("end", () => {
+    if (!parser.finish().ok) report("internal-failure");
+  });
+  diagnostics.once("error", () => {
+    report("internal-failure");
+  });
+}
+
+function attachOrTerminateLinuxGatewayDiagnostics(
+  child: DevLaneRuntimeChildProcess,
+  sink: ServerLogSink,
+  runId: string,
+  backend: string,
+  killProcessGroup: (pid: number, signal: NodeJS.Signals) => void,
+): void {
+  try {
+    attachLinuxGatewayDiagnostics(child, sink, runId, backend);
+  } catch (error) {
+    terminateUnownedChild(child, killProcessGroup);
+    throw error;
+  }
+}
+
+function terminateUnownedChild(
+  child: DevLaneRuntimeChildProcess,
+  killProcessGroup: (pid: number, signal: NodeJS.Signals) => void,
+): void {
+  if (child.settled()) return;
+  if (child.pid !== undefined) {
+    try {
+      killProcessGroup(child.pid, "SIGKILL");
+      return;
+    } catch {
+      // Fall back to the immediate child when the detached group cannot be addressed.
+    }
+  }
+  try {
+    child.kill("SIGKILL");
+  } catch {
+    // The enclosing launch failure is recorded and remains authoritative if the child raced exit.
+  }
+}
+
 function ownTree(
   treeId: string,
   child: DevLaneRuntimeChildProcess,
@@ -291,17 +417,32 @@ function spawnDevLaneChild(
   args: readonly string[],
   options: Parameters<DevLaneRuntimeSpawn>[2],
 ): DevLaneRuntimeChildProcess {
-  const child: ChildProcessByStdio<null, Readable, Readable> = spawn(executable, [...args], {
+  const child = spawn(executable, [...args], {
     cwd: options.cwd,
-    env: { ...options.env },
+    env: {
+      ...options.env,
+      ...(options.launcherDiagnostics
+        ? { [LINUX_GATEWAY_DIAGNOSTIC_FD_ENV]: String(LINUX_GATEWAY_DIAGNOSTIC_FD) }
+        : {}),
+    },
     detached: true,
     shell: false,
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: options.launcherDiagnostics
+      ? ["ignore", "pipe", "pipe", "pipe"]
+      : ["ignore", "pipe", "pipe"],
   });
+  if (child.stdout === null || child.stderr === null)
+    throw new TypeError("dev-lane-runtime-pipes-unavailable");
+  const launcherDiagnostics = options.launcherDiagnostics
+    ? child.stdio[LINUX_GATEWAY_DIAGNOSTIC_FD]
+    : undefined;
+  if (options.launcherDiagnostics && !(launcherDiagnostics instanceof Readable))
+    throw new TypeError("linux-gateway-diagnostics-unavailable");
   return {
     pid: child.pid,
     stdout: child.stdout,
     stderr: child.stderr,
+    ...(launcherDiagnostics instanceof Readable ? { launcherDiagnostics } : {}),
     settled: (): boolean => child.exitCode !== null || child.signalCode !== null,
     kill: (signal): boolean => child.kill(signal),
     onExit: (listener): void => {

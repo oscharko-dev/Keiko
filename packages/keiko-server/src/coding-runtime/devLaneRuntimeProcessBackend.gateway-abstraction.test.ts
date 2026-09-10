@@ -3,14 +3,17 @@
 // directly, so a host with no confining backend fails the launch closed rather than spawning the
 // hardcoded seatbelt path unconditionally. This file is new (not an edit to the existing suite) per
 // the write-scope split for this change.
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
+import { EventEmitter } from "node:events";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createRuntimeGatewayConfinement,
+  LINUX_GATEWAY_DIAGNOSTIC_FD_ENV,
   type BackendAvailability,
 } from "@oscharko-dev/keiko-sandbox";
 import { createBufferedServerLogSink } from "../observability/index.js";
@@ -23,6 +26,13 @@ import {
   CLOSED_RUNTIME_LAUNCH_PROFILE,
   type RuntimeSupervisorLaunchRequest,
 } from "./runtimeProcessSupervisor.js";
+
+const spawnMock = vi.hoisted(() => vi.fn<typeof spawn>());
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return { ...actual, spawn: spawnMock };
+});
 
 const IDENTITY = { platform: "darwin", arch: "arm64", backend: "macos-app-sandbox" } as const;
 const ALL: BackendAvailability = {
@@ -42,6 +52,10 @@ const NONE: BackendAvailability = {
 };
 
 const roots: string[] = [];
+beforeEach(() => {
+  spawnMock.mockReset();
+});
+
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -88,11 +102,12 @@ function launchRequest(paths: ReturnType<typeof fixture>): RuntimeSupervisorLaun
   };
 }
 
-function fakeChild(): DevLaneRuntimeChildProcess {
+function fakeChild(launcherDiagnostics?: PassThrough): DevLaneRuntimeChildProcess {
   return {
     pid: 4711,
     stdout: new PassThrough(),
     stderr: new PassThrough(),
+    ...(launcherDiagnostics === undefined ? {} : { launcherDiagnostics }),
     settled: (): boolean => false,
     kill: (): boolean => true,
     onExit: (): void => {
@@ -102,6 +117,44 @@ function fakeChild(): DevLaneRuntimeChildProcess {
       // Never invoked in these tests; present only to satisfy the DevLaneRuntimeChildProcess shape.
     },
   };
+}
+
+interface SpawnedChildControl {
+  readonly child: ChildProcess;
+  readonly stdout: PassThrough | null;
+  readonly stderr: PassThrough | null;
+  readonly diagnostics: PassThrough | null;
+  readonly kill: ReturnType<typeof vi.fn>;
+}
+
+function spawnedChild(
+  options: {
+    readonly stdout?: boolean;
+    readonly stderr?: boolean;
+    readonly diagnostics?: boolean;
+    readonly pid?: number | undefined;
+  } = {},
+): SpawnedChildControl {
+  const child = new EventEmitter() as ChildProcess;
+  const stdout = options.stdout === false ? null : new PassThrough();
+  const stderr = options.stderr === false ? null : new PassThrough();
+  const diagnostics = options.diagnostics === true ? new PassThrough() : null;
+  const kill = vi.fn(() => true);
+  Object.assign(child, {
+    pid: options.pid,
+    stdout,
+    stderr,
+    stdio: [null, stdout, stderr, diagnostics],
+    exitCode: null,
+    signalCode: null,
+    kill,
+  });
+  return { child, stdout, stderr, diagnostics, kill };
+}
+
+function requireSpawnOptions(value: unknown): SpawnOptions {
+  if (typeof value !== "object" || value === null) throw new Error("spawn-options-unavailable");
+  return value;
 }
 
 describe("dev-lane backend consumes the shared gateway plan/backend abstraction", () => {
@@ -181,7 +234,7 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
     );
   });
 
-  it("fails closed on a platform with no gateway backend at all (e.g. linux), never a weaker run", () => {
+  it("fails closed on a platform with no gateway backend at all (Windows), never a weaker run", () => {
     const paths = fixture();
     let spawns = 0;
     const backend = createDevLaneRuntimeProcessBackend({
@@ -189,7 +242,7 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
       runtimeRoot: paths.runtimeRoot,
       gatewayConfinement: gatewayConfinement(),
       probeAvailability: () => ALL,
-      platform: "linux",
+      platform: "win32",
       resolveGitExecutable: () => ATTESTED_GIT,
       spawnRuntime: () => {
         spawns += 1;
@@ -201,5 +254,172 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
       "runtime-gateway-confinement-unavailable",
     );
     expect(spawns).toBe(0);
+  });
+
+  it("records trusted Linux launcher failures without accepting sidecar stderr as evidence", () => {
+    const paths = fixture();
+    const activityLog = createBufferedServerLogSink();
+    const launcherDiagnostics = new PassThrough();
+    const child = fakeChild(launcherDiagnostics);
+    const sidecarStderr = child.stderr as PassThrough;
+    let diagnosticsRequested = false;
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: paths.runtimeRoot,
+      gatewayConfinement: gatewayConfinement(),
+      probeAvailability: () => ALL,
+      platform: "linux",
+      resolveGitExecutable: () => ATTESTED_GIT,
+      activityLog,
+      spawnRuntime: (_command, _args, options) => {
+        diagnosticsRequested = options.launcherDiagnostics;
+        return child;
+      },
+    });
+
+    backend.spawnOwnedTree(launchRequest(paths));
+    sidecarStderr.write("keiko-linux-gateway:error:cleanup-failed\n");
+    expect(activityLog.events.filter((event) => event.op === "runtime.confinement.failed")).toEqual(
+      [],
+    );
+
+    launcherDiagnostics.write("keiko-linux-gateway:error:host-relay-failed\n");
+    expect(diagnosticsRequested).toBe(true);
+    expect(activityLog.events).toContainEqual({
+      category: "process",
+      level: "error",
+      op: "runtime.confinement.failed",
+      correlationId: "run-2951",
+      errorKind: "host-relay-failed",
+      extra: {
+        backend: "bubblewrap",
+        diagnosticSource: "linux-gateway-launcher",
+        frames: [],
+        causeChain: [],
+      },
+    });
+  });
+
+  it("kills and refuses a Linux wrapper whose private diagnostic channel is missing", () => {
+    const paths = fixture();
+    const child = fakeChild();
+    const kills: NodeJS.Signals[] = [];
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: paths.runtimeRoot,
+      gatewayConfinement: gatewayConfinement(),
+      probeAvailability: () => ALL,
+      platform: "linux",
+      resolveGitExecutable: () => ATTESTED_GIT,
+      activityLog: createBufferedServerLogSink(),
+      spawnRuntime: () => ({
+        ...child,
+        kill: (signal): boolean => {
+          kills.push(signal);
+          return true;
+        },
+      }),
+      killProcessGroup: () => {
+        throw new Error("group-kill-unavailable");
+      },
+    });
+
+    expect(() => backend.spawnOwnedTree(launchRequest(paths))).toThrow(
+      "linux-gateway-diagnostics-unavailable",
+    );
+    expect(kills).toEqual(["SIGKILL"]);
+  });
+
+  it("uses the production spawn adapter with a private Linux diagnostic pipe", () => {
+    const paths = fixture();
+    const activityLog = createBufferedServerLogSink();
+    const control = spawnedChild({ diagnostics: true });
+    spawnMock.mockReturnValue(control.child);
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: paths.runtimeRoot,
+      gatewayConfinement: gatewayConfinement(),
+      probeAvailability: () => ALL,
+      platform: "linux",
+      resolveGitExecutable: () => ATTESTED_GIT,
+      activityLog,
+    });
+
+    const tree = backend.spawnOwnedTree(launchRequest(paths));
+    const options = requireSpawnOptions(spawnMock.mock.calls[0]?.[2]);
+    expect(options.detached).toBe(true);
+    expect(options.shell).toBe(false);
+    expect(options.stdio).toEqual(["ignore", "pipe", "pipe", "pipe"]);
+    expect(options.env?.[LINUX_GATEWAY_DIAGNOSTIC_FD_ENV]).toBe("3");
+    control.diagnostics?.write("keiko-linux-gateway:error:host-relay-failed\n");
+    expect(activityLog.events).toContainEqual(
+      expect.objectContaining({
+        op: "runtime.confinement.failed",
+        errorKind: "host-relay-failed",
+      }),
+    );
+    control.diagnostics?.emit("end");
+    control.diagnostics?.emit("error", new Error("late-diagnostic-error"));
+    expect(
+      activityLog.events.filter((event) => event.op === "runtime.confinement.failed"),
+    ).toHaveLength(1);
+    backend.signalTree(tree, "force");
+    expect(control.kill).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("uses the production spawn adapter without a diagnostic pipe for seatbelt", () => {
+    const paths = fixture();
+    const control = spawnedChild({ pid: 4711 });
+    spawnMock.mockReturnValue(control.child);
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: paths.runtimeRoot,
+      gatewayConfinement: gatewayConfinement(),
+      probeAvailability: () => ALL,
+      platform: "darwin",
+      resolveGitExecutable: () => ATTESTED_GIT,
+    });
+
+    backend.spawnOwnedTree(launchRequest(paths));
+    const options = requireSpawnOptions(spawnMock.mock.calls[0]?.[2]);
+    expect(options.stdio).toEqual(["ignore", "pipe", "pipe"]);
+    expect(options.env?.[LINUX_GATEWAY_DIAGNOSTIC_FD_ENV]).toBeUndefined();
+  });
+
+  it.each([
+    ["stdout", { stdout: false }],
+    ["stderr", { stderr: false }],
+  ] as const)("fails closed when the production adapter has no %s pipe", (_name, childOptions) => {
+    const paths = fixture();
+    spawnMock.mockReturnValue(spawnedChild(childOptions).child);
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: paths.runtimeRoot,
+      gatewayConfinement: gatewayConfinement(),
+      probeAvailability: () => ALL,
+      platform: "darwin",
+      resolveGitExecutable: () => ATTESTED_GIT,
+    });
+
+    expect(() => backend.spawnOwnedTree(launchRequest(paths))).toThrow(
+      "dev-lane-runtime-pipes-unavailable",
+    );
+  });
+
+  it("fails closed when the production adapter has no readable diagnostic pipe", () => {
+    const paths = fixture();
+    spawnMock.mockReturnValue(spawnedChild().child);
+    const backend = createDevLaneRuntimeProcessBackend({
+      identity: IDENTITY,
+      runtimeRoot: paths.runtimeRoot,
+      gatewayConfinement: gatewayConfinement(),
+      probeAvailability: () => ALL,
+      platform: "linux",
+      resolveGitExecutable: () => ATTESTED_GIT,
+    });
+
+    expect(() => backend.spawnOwnedTree(launchRequest(paths))).toThrow(
+      "linux-gateway-diagnostics-unavailable",
+    );
   });
 });
