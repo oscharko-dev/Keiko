@@ -334,6 +334,40 @@ describe("portable handoff coordinator", () => {
     expect(spawnFn).not.toHaveBeenCalled();
   });
 
+  it("preserves preparation and cleanup failures without spawning", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-handoff-cleanup-failure-"));
+    roots.push(root);
+    const fixture = prepare(root);
+    const preparationError = new Error("native verification failed");
+    const spawnFn = vi.fn();
+    const coordinator = createPortableHandoffCoordinator({
+      stateDir: fixture.stateDir,
+      persistPrepared: () => Promise.resolve(),
+      persistAccepted: () => Promise.resolve(),
+      verifyNativeCopy: async ({ kind, copiedPath }): Promise<void> => {
+        if (kind !== "coordinator") return;
+        rmSync(copiedPath);
+        mkdirSync(copiedPath);
+        writeFileSync(join(copiedPath, "retained"), "retained");
+        throw preparationError;
+      },
+      publishCoordinatorPid: () => true,
+      spawnFn,
+    });
+
+    const error = await coordinator
+      .begin({ sessionId: "session-1", activationId: fixture.plan.activationId })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PortableHandoffCoordinatorError);
+    expect((error as Error).message).toBe("portable handoff preparation cleanup failed");
+    const cause = (error as Error).cause;
+    expect(cause).toBeInstanceOf(AggregateError);
+    expect((cause as AggregateError).errors[0]).toBe(preparationError);
+    expect((cause as AggregateError).errors[1]).toBeInstanceOf(AggregateError);
+    expect(spawnFn).not.toHaveBeenCalled();
+  });
+
   it("persists prepared intent before a fixed-argv spawn and keeps the parent pipe open", async () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-handoff-"));
     roots.push(root);

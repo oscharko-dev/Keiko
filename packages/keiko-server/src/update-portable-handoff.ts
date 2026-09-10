@@ -415,15 +415,45 @@ async function prepareCoordinator(
       intentRevision: plan.aggregateRevision,
     };
   } catch (error) {
-    rmSync(coordinator, { force: true });
-    rmSync(supervisor, { force: true });
-    if (plan.target === "windows-x64") {
-      for (const name of ["launcher.next", "setup-manifest.previous", "setup-manifest.next"]) {
-        rmSync(join(root, name), { force: true });
-      }
+    try {
+      cleanupPreparedArtifacts(plan, root, coordinator, supervisor);
+    } catch (cleanupError) {
+      throw new PortableHandoffCoordinatorError(
+        "portable handoff preparation cleanup failed",
+        false,
+        new AggregateError(
+          [error, cleanupError],
+          "portable handoff preparation and cleanup failed",
+        ),
+      );
     }
     throw error;
   }
+}
+
+function cleanupPreparedArtifacts(
+  plan: PortableHandoffPlan,
+  root: string,
+  coordinator: string,
+  supervisor: string,
+): void {
+  const paths = [coordinator, supervisor];
+  if (plan.target === "windows-x64") {
+    paths.push(
+      ...["launcher.next", "setup-manifest.previous", "setup-manifest.next"].map((name) =>
+        join(root, name),
+      ),
+    );
+  }
+  const errors: unknown[] = [];
+  for (const path of paths) {
+    try {
+      rmSync(path, { force: true });
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  if (errors.length > 0) throw new AggregateError(errors, "prepared artifact cleanup failed");
 }
 
 interface WindowsSnapshotArtifact {
