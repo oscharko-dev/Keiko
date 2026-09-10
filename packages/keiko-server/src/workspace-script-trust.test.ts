@@ -1157,4 +1157,57 @@ describe("managed task worktrees below the state directory", () => {
       managedStore.close();
     }
   });
+
+  // ADR-0147 D3 (2026-09-10): the decision consumers ask once a repository's grant has stopped
+  // covering its worktree. Only the operator's OWN grant for the worktree's current bytes answers
+  // true — a derived record inherits the repository's grant and has to stop with it — and drift
+  // after the grant invalidates it exactly as on every other decision path.
+  it("holds a human grant for a registered worktree only while its own manifest is that grant's basis", () => {
+    const fixture = managedFixture();
+    const managedStore = createInMemoryUiStore();
+    try {
+      managedStore.createProject(fixture.repositoryRoot, "repository");
+      managedStore.createProject(fixture.worktreeRoot, "worktree");
+      const trust = createWorkspaceScriptTrustService({
+        store: managedStore,
+        managedRoot: fixture.managedRoot,
+      });
+      expect(trust.grant(fixture.repositoryRoot)).toEqual({ trusted: true });
+      expect(trust.deriveFromTrustedRoot(fixture.worktreeRoot, fixture.repositoryRoot)).toEqual({
+        trusted: true,
+      });
+      // Derived: trusted, but not the operator's own decision about this root.
+      expect(trust.trustLevelForRoot(fixture.worktreeRoot)).toBe("trusted");
+      expect(trust.holdsHumanGrantForRoot(fixture.worktreeRoot)).toBe(false);
+
+      // The run rewrites the worktree manifest; the operator then grants exactly those bytes.
+      const rewritten = (build: string): string =>
+        JSON.stringify({ name: "shared", scripts: { test: "vitest run", build } });
+      writeFileSync(join(fixture.worktreeRoot, "package.json"), rewritten("vite build"));
+      expect(trust.holdsHumanGrantForRoot(fixture.worktreeRoot)).toBe(false);
+      expect(trust.grant(fixture.worktreeRoot)).toEqual({ trusted: true });
+      expect(trust.holdsHumanGrantForRoot(fixture.worktreeRoot)).toBe(true);
+      expect(trust.status(fixture.worktreeRoot)).toMatchObject({
+        trust: "trusted",
+        reason: "human-grant",
+      });
+
+      // A further rewrite: the grant no longer describes the bytes and is invalidated.
+      writeFileSync(
+        join(fixture.worktreeRoot, "package.json"),
+        rewritten("vite build && node ./post.js"),
+      );
+      expect(trust.holdsHumanGrantForRoot(fixture.worktreeRoot)).toBe(false);
+      expect(trust.status(fixture.worktreeRoot)).toMatchObject({
+        trust: "restricted",
+        reason: "trust-basis-changed",
+      });
+
+      // Unregistered and denied roots never hold one.
+      expect(trust.holdsHumanGrantForRoot(join(fixture.managedRoot, "repo_9", "ws_9"))).toBe(false);
+      expect(trust.holdsHumanGrantForRoot(fixture.deniedOutsider)).toBe(false);
+    } finally {
+      managedStore.close();
+    }
+  });
 });

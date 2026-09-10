@@ -1,8 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { WorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts";
+import type {
+  EditorVerificationCatalog,
+  WorkspaceTrustStatus,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  EDITOR_VERIFICATION_KINDS,
+  EDITOR_VERIFICATION_SCHEMA_VERSION,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import { ApiError } from "./api";
 import {
+  fetchVerificationCatalog,
   fetchWorkspaceTrustStatus,
   mutateWorkspaceTrust,
   workspaceTrustFailure,
@@ -22,8 +30,64 @@ function status(projectId = "/repo-a", trust: "trusted" | "restricted" = "truste
   } satisfies WorkspaceTrustStatus;
 }
 
+function catalog(projectId = "/worktree-a"): EditorVerificationCatalog {
+  return {
+    schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
+    projectId,
+    workspaceTrust: status(projectId),
+    kinds: EDITOR_VERIFICATION_KINDS.map((kind) => ({
+      kind,
+      available: true,
+      trustState: "approval-required" as const,
+    })),
+  };
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+// The one catalog read the Editor's verification card and the Coding Workbench's trust affordance
+// share (ADR-0147 D3, 2026-09-10): the runner's own decision, adopted only when the payload
+// validates and names the root that was asked about.
+describe("verification catalog API", () => {
+  it("returns the server catalog for the requested root", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify(catalog()), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchVerificationCatalog("/worktree-a")).resolves.toMatchObject({
+      projectId: "/worktree-a",
+      kinds: expect.arrayContaining([
+        expect.objectContaining({ kind: "typecheck", trustState: "approval-required" }),
+      ]) as unknown,
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/editor/verification/catalog?projectId=%2Fworktree-a",
+      undefined,
+    );
+  });
+
+  it("rejects a catalog that names another root, a malformed one, and a non-ok response", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(new Response(JSON.stringify(catalog("/repo-b")), { status: 200 })),
+    );
+    await expect(fetchVerificationCatalog("/worktree-a")).rejects.toThrow(
+      "malformed verification catalog",
+    );
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{}", { status: 200 })));
+    await expect(fetchVerificationCatalog("/worktree-a")).rejects.toThrow(
+      "malformed verification catalog",
+    );
+
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("nope", { status: 404 })));
+    await expect(fetchVerificationCatalog("/worktree-a")).rejects.toThrow(
+      "verification catalog rejected",
+    );
+  });
 });
 
 describe("workspace trust API", () => {

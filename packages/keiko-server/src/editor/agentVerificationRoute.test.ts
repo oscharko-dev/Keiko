@@ -1301,6 +1301,49 @@ describe("handleEditorAgentVerificationRun managed task worktree (PR #3381)", ()
     },
   );
 
+  // ADR-0147 D3 (2026-09-10): a rewritten worktree manifest is admitted only under an explicit human
+  // grant recorded for the worktree root itself — asked of the same `decideScriptTrust` the runner
+  // uses, so this route can neither deny a verification the runner would run nor admit one it
+  // refuses. The grant is asked about the WORKTREE root, never the repository's.
+  it("admits a rewritten worktree manifest under the worktree root's own explicit grant", async () => {
+    registerManagedSession(fixture.worktreeRoot, false);
+    const manifest = JSON.stringify({ name: "fixture", scripts: { typecheck: "tsc" } });
+    writeFileSync(join(fixture.repositoryRoot, "package.json"), manifest, "utf8");
+    writeFileSync(join(fixture.worktreeRoot, "package.json"), `${manifest}\n`, "utf8");
+    const manager = new FakeManager();
+    manager.report = { ...failingReport(), workspaceRoot: fixture.worktreeRoot };
+    const authorityRef = managedAuthorityRef(fixture.worktreeRoot);
+    const humanGrantAsked: string[] = [];
+    const deps = {
+      verificationRunner: manager,
+      autonomousDeliveryDeploymentCeiling: CEILING,
+      workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome =>
+        managedAccess(requestedRoot, nodeWorkspaceFs, fixture.repositoryRoot),
+      workspaceScriptTrust: {
+        trustLevelForRoot: (root: string): "trusted" | "restricted" =>
+          root === fixture.repositoryRoot ? "trusted" : "restricted",
+        holdsHumanGrantForRoot: (root: string): boolean => {
+          humanGrantAsked.push(root);
+          return root === fixture.worktreeRoot;
+        },
+      },
+    } as unknown as UiHandlerDeps;
+
+    const result = await handleEditorAgentVerificationRun(
+      ctx({
+        schemaVersion: "1",
+        sessionId: MANAGED_SESSION_ID,
+        kind: "typecheck",
+        authorityRef,
+      }),
+      deps,
+    );
+
+    expect(resultBody(result)).toMatchObject({ outcome: "completed" });
+    expect(humanGrantAsked).toEqual([fixture.worktreeRoot]);
+    expect(manager.calls).toBe(1);
+  });
+
   // CodeRabbit, PR #3381 (outside the diff, agentVerificationRoute.ts:194): the POLICY-time access
   // lookup asked the resolver without a correlation id, so a `workspace.root.denied` line emitted
   // by THIS lookup — the one that can observe an access change between the two root-binding checks

@@ -959,6 +959,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "This path is not an opened project. Open the repository as a project before changing its GitHub issue access.",
   "codingWorkbench.trust.restrictedNotice":
     "Verification needs to run this repository's package scripts, and they are not yet trusted.",
+  "codingWorkbench.trust.driftNotice":
+    "This run changed the worktree's package.json. Verification needs to run the rewritten package scripts, and allowing them is your decision for exactly this manifest.",
   "codingWorkbench.trust.allow": "Allow package scripts for verification",
   "codingWorkbench.trust.allowing": "Allowing…",
 } as const;

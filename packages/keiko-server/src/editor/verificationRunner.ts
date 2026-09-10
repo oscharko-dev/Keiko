@@ -46,7 +46,11 @@ import {
   type ExecuteVerificationArgs,
   type ExecuteVerificationResult,
 } from "./verificationExecution.js";
-import { VerificationRunnerError } from "./verificationRunnerErrors.js";
+import {
+  VerificationRunnerError,
+  WorkspaceTrustRequiredError,
+  type ScriptTrustRefusal,
+} from "./verificationRunnerErrors.js";
 import type { Project, UiStore } from "../store/index.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import type { ServerLogSink } from "../observability/index.js";
@@ -120,6 +124,11 @@ export interface VerificationRunnerManagerOptions {
   readonly fs?: WorkspaceFs | undefined;
   readonly isWorkspaceTrustedForPackageScripts?:
     VerificationRunnerWorkspaceTrustDecider | undefined;
+  // ADR-0147 D3 — the managed worktree root's OWN explicit human grant, asked only once the
+  // repository's standing grant stops covering the worktree (its `package.json` rewritten by the
+  // governed run, or no repository grant at all). Defaults fail closed, so a composition that wires
+  // no decider can never admit a drifted worktree.
+  readonly isWorktreeTrustedByHumanGrant?: ((canonicalRoot: string) => boolean) | undefined;
   readonly now?: (() => number) | undefined;
   // Injectable execution port; tests supply a deterministic report/probe without spawning.
   readonly execute?: VerificationExecutePort | undefined;
@@ -172,16 +181,11 @@ interface ResolvedVerificationWorkspace {
   // facts would never match its repository's grant).
   readonly trustProjectId: string;
   readonly trustWorkspace: WorkspaceInfo;
-  // The repository root the root that will actually run scripts must STILL match — the roots, not
-  // the boolean they compare to. The grant is bound to exact manifest bytes (ADR-0147 D3), so a
-  // comparison taken once at resolution time and reused at the effect boundary would accept a
+  // The repository a managed worktree must STILL match is read from `access` on every ask
+  // (`decideScriptTrust`), never as a boolean taken once at resolution time: the grant is bound to
+  // exact manifest bytes (ADR-0147 D3), so a comparison reused at the effect boundary would accept a
   // `package.json` replaced between the two checks and spawn a script no human approved (P1,
-  // PR #3381 review). `trustedForScripts` therefore re-derives the comparison from these roots on
-  // every ask, so the at-effect answer is read from the filesystem in the same synchronous step
-  // that admits the run. `undefined` for an ordinary root, which is its own basis and has nothing to
-  // compare against; a managed access always names one (`WorkspaceRootAccess`'s `managed-task`
-  // branch REQUIRES `repositoryRoot`).
-  readonly trustBasisRepositoryRoot: string | undefined;
+  // PR #3381 review).
 }
 
 interface PreparedVerificationRun {
@@ -193,6 +197,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private readonly store: UiStore;
   private readonly fs: WorkspaceFs;
   private readonly isTrusted: VerificationRunnerWorkspaceTrustDecider;
+  private readonly worktreeHumanGrant: (canonicalRoot: string) => boolean;
   private readonly now: () => number;
   private readonly executePort: VerificationExecutePort;
   private readonly maxConcurrentRuns: number;
@@ -208,6 +213,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     this.store = opts.store;
     this.fs = opts.fs ?? nodeWorkspaceFs;
     this.isTrusted = opts.isWorkspaceTrustedForPackageScripts ?? ((): boolean => false);
+    this.worktreeHumanGrant = opts.isWorktreeTrustedByHumanGrant ?? ((): boolean => false);
     this.now = opts.now ?? Date.now;
     this.executePort = opts.execute ?? executeVerificationEnforced;
     this.maxConcurrentRuns = opts.maxConcurrentRuns ?? DEFAULT_MAX_CONCURRENT_RUNS;
@@ -401,11 +407,10 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     resolved: ResolvedVerificationWorkspace,
     scriptKinds: readonly VerificationKind[],
   ): void {
-    if (scriptKinds.length === 0 || this.trustedForScripts(resolved)) return;
-    throw new VerificationRunnerError(
-      "WORKSPACE_TRUST_REQUIRED",
-      "Repository package scripts require server-side workspace trust before execution.",
-    );
+    if (scriptKinds.length === 0) return;
+    const decision = this.scriptTrust(resolved);
+    if (decision.trusted) return;
+    throw new WorkspaceTrustRequiredError(decision.refusal);
   }
 
   private scriptSteps(
@@ -559,6 +564,12 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         state: "refused",
         runnerId: workspace?.testFramework ?? "unknown",
         reason,
+        // WHY script trust refused (ADR-0147 D3 vocabulary). Without it a worktree whose manifest
+        // the run itself rewrote read exactly like a repository nobody had trusted (run 8,
+        // 2026-09-10), and the operator was pointed at the wrong grant.
+        ...(error instanceof WorkspaceTrustRequiredError
+          ? { trustRefusal: error.trustRefusal }
+          : {}),
         ...(detail.frames === undefined ? {} : { frames: detail.frames }),
         ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
       },
@@ -736,26 +747,19 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   }
 
   private trustedForScripts(resolved: ResolvedVerificationWorkspace): boolean {
-    try {
-      return (
-        this.trustBasisMatchesNow(resolved) &&
-        this.isTrusted(resolved.trustProjectId, resolved.trustWorkspace)
-      );
-    } catch {
-      return false;
-    }
+    return this.scriptTrust(resolved).trusted;
   }
 
   // Re-derived from the filesystem on EVERY ask — plan time, at-effect, and catalog projection —
-  // never cached on the resolved workspace. See `ResolvedVerificationWorkspace.trustBasisRepositoryRoot`.
-  private trustBasisMatchesNow(resolved: ResolvedVerificationWorkspace): boolean {
-    const repositoryRoot = resolved.trustBasisRepositoryRoot;
-    // An ORDINARY root is its own trust basis and has nothing to compare against — and it is now the
-    // only kind that reaches this branch, because `WorkspaceRootAccess`'s `managed-task` member
-    // REQUIRES `repositoryRoot`. The previous fail-closed answer for "a managed access naming no
-    // repository" (CodeRabbit, PR #3381) guarded a configuration the type no longer admits.
-    if (repositoryRoot === undefined) return true;
-    return worktreeSharesRepositoryTrustBasis(resolved.access, repositoryRoot, this.fs);
+  // never cached on the resolved workspace (see `ResolvedVerificationWorkspace`).
+  private scriptTrust(resolved: ResolvedVerificationWorkspace): ScriptTrustDecision {
+    return decideScriptTrust({
+      access: resolved.access,
+      repositoryFs: this.fs,
+      standingTrust: (): boolean =>
+        this.isTrusted(resolved.trustProjectId, resolved.trustWorkspace),
+      worktreeHumanGrant: (): boolean => this.worktreeHumanGrant(resolved.access.canonicalRoot),
+    });
   }
 
   private resolveWorkspace(
@@ -791,8 +795,6 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         workspace,
         trustProjectId: projectId,
         trustWorkspace: workspace,
-        // An ordinary root is its own basis, so there is nothing to compare against.
-        trustBasisRepositoryRoot: undefined,
       };
     }
     return {
@@ -802,7 +804,6 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       trustWorkspace: detectWorkspaceAt(repositoryRoot, this.fs, {
         scanSourceFilesForLanguages: false,
       }),
-      trustBasisRepositoryRoot: repositoryRoot,
     };
   }
 
@@ -879,6 +880,68 @@ export function worktreeSharesRepositoryTrustBasis(
     );
   } catch {
     return false;
+  }
+}
+
+export type ScriptTrustBasis = "own-root" | "repository" | "worktree-human-grant";
+
+export type ScriptTrustDecision =
+  | { readonly trusted: true; readonly basis: ScriptTrustBasis }
+  | { readonly trusted: false; readonly refusal: ScriptTrustRefusal };
+
+export interface ScriptTrustDecisionInput {
+  readonly access: WorkspaceRootAccess;
+  // The port the REPOSITORY's manifest is read through (the worktree's is read through `access.fs`).
+  readonly repositoryFs: WorkspaceFs;
+  // The standing grant of the root that owns the decision: the root itself, or for a managed
+  // worktree the repository it was bound from.
+  readonly standingTrust: () => boolean;
+  // The managed worktree root's own explicit human grant for its current manifest bytes
+  // (`WorkspaceScriptTrustService.holdsHumanGrantForRoot`). Asked only after the repository's
+  // grant stopped covering the worktree, so a byte-identical worktree never touches its own record.
+  readonly worktreeHumanGrant: () => boolean;
+}
+
+/**
+ * The ONE package-script trust rule (ADR-0147 D3), asked by the verification runner, the command
+ * runner and the agent verification route so no two consumers can disagree about one grant:
+ *
+ *  - an ordinary root runs scripts under its own standing grant;
+ *  - a managed task worktree runs them under its REPOSITORY's grant while its own `package.json` is
+ *    byte-identical to the repository's (`worktreeSharesRepositoryTrustBasis`);
+ *  - once a governed run has rewritten that manifest — or the repository was never granted — the
+ *    only remaining basis is an explicit human grant recorded for the worktree root itself, bound
+ *    to the rewritten bytes. A record merely DERIVED from the repository never serves here, so
+ *    revoking the repository still stops every worktree that only inherited its grant.
+ *
+ * Every refusal names why, in the closed `ScriptTrustRefusal` vocabulary; any failure of the
+ * decision itself fails closed as `decision-failed`.
+ */
+export function decideScriptTrust(input: ScriptTrustDecisionInput): ScriptTrustDecision {
+  try {
+    const standing = input.standingTrust();
+    if (input.access.kind !== "managed-task") {
+      return standing
+        ? { trusted: true, basis: "own-root" }
+        : { trusted: false, refusal: "root-not-trusted" };
+    }
+    if (
+      standing &&
+      worktreeSharesRepositoryTrustBasis(
+        input.access,
+        input.access.repositoryRoot,
+        input.repositoryFs,
+      )
+    ) {
+      return { trusted: true, basis: "repository" };
+    }
+    if (input.worktreeHumanGrant()) return { trusted: true, basis: "worktree-human-grant" };
+    return {
+      trusted: false,
+      refusal: standing ? "worktree-manifest-drift" : "repository-not-trusted",
+    };
+  } catch {
+    return { trusted: false, refusal: "decision-failed" };
   }
 }
 

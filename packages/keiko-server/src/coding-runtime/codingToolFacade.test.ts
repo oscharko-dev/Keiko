@@ -618,6 +618,30 @@ describe("CodingToolFacade", () => {
     });
   });
 
+  // ADR-0147 D3 (Coding Workbench run 8, 2026-09-10): a verification the runner refused for want of
+  // package-script trust is the operator's decision, not the model's. The fixed guidance says so and
+  // names the one place it can change, so the model reports the blocker instead of retrying the
+  // verifier or routing around it.
+  it("tells the model that a trust-refused verification is the operator's decision", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "failed", reasonCode: "WORKSPACE_TRUST_REQUIRED" }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "verification", verifierId: "unit" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "WORKSPACE_TRUST_REQUIRED" }],
+      reasonCode: "WORKSPACE_TRUST_REQUIRED",
+      guidance: expect.stringContaining("Only the operator can allow them") as unknown as string,
+    });
+  });
+
   // #3390: a structural refusal carries the route's sentence and a fixed recovery instruction, so
   // the model repairs the patch instead of resending it. The sentence is admitted only as one
   // bounded printable-ASCII line, and only for the structural codes.
@@ -851,6 +875,11 @@ describe("CodingToolFacade", () => {
       status: "failed",
       reasonCode: code,
       evidence: [{ kind: "governed-delegate", code }],
+      // Exactly one refusal carries operator-facing guidance: the trust refusal is the operator's
+      // decision to change, not the model's (ADR-0147 D3, 2026-09-10). Every other code stays bare.
+      ...(code === "WORKSPACE_TRUST_REQUIRED"
+        ? { guidance: expect.stringContaining("Only the operator can allow them") as unknown }
+        : {}),
     });
   });
 

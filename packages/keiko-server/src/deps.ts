@@ -1805,6 +1805,8 @@ function buildCommandRunner(options: {
     ),
     isWorkspaceTrustedForPackageScripts: (projectId, workspace): boolean =>
       options.workspaceScriptTrust.isTrusted(projectId, workspace),
+    isWorktreeTrustedByHumanGrant: (canonicalRoot): boolean =>
+      options.workspaceScriptTrust.holdsHumanGrantForRoot(canonicalRoot),
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);
       return typeof redacted === "string" ? redacted : value;
@@ -1836,6 +1838,8 @@ function buildVerificationRunner(options: {
     ),
     isWorkspaceTrustedForPackageScripts: (projectId, workspace): boolean =>
       options.workspaceScriptTrust.isTrusted(projectId, workspace),
+    isWorktreeTrustedByHumanGrant: (canonicalRoot): boolean =>
+      options.workspaceScriptTrust.holdsHumanGrantForRoot(canonicalRoot),
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);
       return typeof redacted === "string" ? redacted : value;

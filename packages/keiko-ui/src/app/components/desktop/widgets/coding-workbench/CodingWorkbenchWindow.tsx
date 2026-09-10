@@ -447,6 +447,7 @@ function liveRepositoryTrustBindingOf(
   }
   return {
     repositoryRoot: instance.repositoryRoot,
+    worktreeRoot: liveWorkspaceRootOf(workspace),
     repositoryId: instance.repositoryId,
     workspaceId: instance.workspaceId,
     correlationId: instance.auditCorrelationId,
@@ -704,6 +705,7 @@ function WorkbenchContent({
         />
         <CodingWorkbenchTrustAffordance
           binding={sessionRepositoryTrustBinding(state, runWorkspace, activeWorkspace)}
+          runRevision={state.run.value?.revision}
         />
       </header>
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">

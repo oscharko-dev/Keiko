@@ -505,7 +505,10 @@ function projectGovernedFailure(
   if (typeof reasonCode !== "string" || !GOVERNED_FAILURE_REASON_CODES.has(reasonCode)) {
     return projected("failed");
   }
-  const result = projected("failed", reasonCode, true);
+  const result = {
+    ...projected("failed", reasonCode, true),
+    ...verificationFailureCoaching(request, reasonCode),
+  };
   const verificationFailure =
     request.action === "verification" && reasonCode === "VERIFICATION_FAILED"
       ? codingToolVerificationFailure(value.verificationFailure)
@@ -518,6 +521,23 @@ function projectGovernedFailure(
         evidence: [{ kind: "governed-delegate", code: reasonCode }],
         verificationFailure,
       };
+}
+
+// What the model is told when the verification runner refuses for want of package-script trust
+// (ADR-0147 D3). Only the operator can change that state, in the Coding Workbench header; the bare
+// code left the model to retry the verifier or route around it (Coding Workbench run 8, 2026-09-10).
+const VERIFICATION_FAILURE_GUIDANCE: Readonly<Record<string, string>> = {
+  WORKSPACE_TRUST_REQUIRED:
+    "Package scripts in this workspace may not run yet: either the repository's scripts were never allowed, or this run changed package.json and the operator has to allow the rewritten scripts. Only the operator can allow them, in the Coding Workbench header. Report this blocker, do not retry verification until it has been allowed, and never run the scripts another way.",
+};
+
+function verificationFailureCoaching(
+  request: CodingToolActionRequest,
+  reasonCode: string,
+): { readonly guidance?: string } {
+  const guidance =
+    request.action === "verification" ? VERIFICATION_FAILURE_GUIDANCE[reasonCode] : undefined;
+  return guidance === undefined ? {} : { guidance };
 }
 
 function codingToolVerificationFailure(value: unknown): CodingToolVerificationFailure | undefined {

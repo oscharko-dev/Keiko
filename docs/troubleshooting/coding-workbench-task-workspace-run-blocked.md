@@ -46,7 +46,12 @@ did not name that reason.
 "edit-refused"` and `errorKind` set to the editor conflict code, or `op:
 "coding-runtime.verification"` with `"verification-refused"` and `errorKind` set to the runner
    code (`WORKSPACE_TRUST_REQUIRED`, `PROJECT_NOT_FOUND`, `NO_RUNNABLE_STEPS`). Both carry the run
-   id as `correlationId`.
+   id as `correlationId`. For `WORKSPACE_TRUST_REQUIRED`, the runner's own line on the same
+   correlation id — `op: "editor.verification.execute"`, `state: "refused"` — names WHY in
+   `trustRefusal` (since 2026-09-10): `repository-not-trusted` (the bound repository holds no
+   current grant), `worktree-manifest-drift` (the repository is trusted, but the run rewrote the
+   worktree's `package.json`), `root-not-trusted` (an ordinary root without a grant) or
+   `decision-failed` (an unreadable manifest or trust store; fails closed).
 2. `GET /api/editor/agent/audit` lists the refused `applyChangeset` with its `denyReason` or
    `conflictCode`.
 3. `GET /api/coding-sidecar/gateway/profile` answers `{ "status": "unavailable", "reason":
@@ -72,11 +77,17 @@ The grant is recorded for the REPOSITORY root, and a task worktree runs its scri
 only while the worktree's `package.json` is byte-identical to the repository's. That is what the
 grant is bound to (ADR-0147 D3), and a governed run may edit `package.json` inside its own worktree:
 the runner compares the two manifests before every verification and answers
-`WORKSPACE_TRUST_REQUIRED` when they differ, rather than spawning a rewritten script under a
-decision the human made about different bytes. Re-granting trust does not clear this: the grant the
-runner reads is always the repository's. Bring the two manifests back into agreement — land the
-worktree's `package.json` change in the repository, or revert it in the worktree — and the runner
-admits the scripts again. An unreadable manifest on either side fails closed the same way.
+`WORKSPACE_TRUST_REQUIRED` with `trustRefusal: "worktree-manifest-drift"` when they differ, rather
+than spawning a rewritten script under a decision the human made about different bytes. Re-granting
+the repository does not clear this — the repository is still trusted, for its own bytes. Since
+2026-09-10 the exit is a second, explicit decision about the worktree: the Coding Workbench header
+shows "Allow package scripts for verification" with the drift notice as soon as the runner's own
+decision for the run's worktree is approval-required, and that action records a grant for the
+WORKTREE root, bound to the rewritten manifest. The model is told the same in the tool result
+(`guidance`): the decision is the operator's, and verification is not to be retried before it. A
+grant merely derived from the repository never serves as that exit, so revoking the repository still
+stops every worktree that only inherited its grant; a further rewrite after the worktree grant
+invalidates it again. An unreadable manifest on either side fails closed the same way.
 
 ---
 

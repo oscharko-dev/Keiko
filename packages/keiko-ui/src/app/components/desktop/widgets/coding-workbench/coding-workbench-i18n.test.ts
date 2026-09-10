@@ -161,10 +161,11 @@ describe("Coding Workbench translations", () => {
     expect(de).not.toBe(en);
   });
 
-  // #3390 wave: the trust affordance's three strings — restated in both catalogs, not copied
-  // verbatim from one to the other.
+  // #3390 wave: the trust affordance's strings — restated in both catalogs, not copied verbatim
+  // from one to the other. The drift notice (ADR-0147 D3, 2026-09-10) joins them.
   it.each([
     "codingWorkbench.trust.restrictedNotice",
+    "codingWorkbench.trust.driftNotice",
     "codingWorkbench.trust.allow",
     "codingWorkbench.trust.allowing",
   ] as const)("localizes %s in both catalogs", (key) => {

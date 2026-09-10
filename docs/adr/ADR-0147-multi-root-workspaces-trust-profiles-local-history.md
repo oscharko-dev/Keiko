@@ -21,6 +21,14 @@ and `manifestDigest` are excluded from the equality check that governs re-author
 recorded as provenance but change on ordinary focus/reorder within the same workspace and were the
 false-positive drivers ADR-0155 removed.
 
+Amended on 2026-09-10 (Coding Workbench run 8, PR #3452) so that D3 admits a managed task
+worktree's package scripts under an explicit human grant recorded for the worktree root itself once
+its `package.json` no longer matches the repository's trust basis — the repository's grant cannot
+clear that drift, and until this amendment nothing could — and so that every script-trust refusal
+names its reason in one closed vocabulary on the run's own activity line. Derived records never serve
+as that alternative basis; revoking the repository still stops every worktree that only inherited its
+grant.
+
 The independent architecture, security, and contract-test reviews required by Issue #2520 were
 completed before implementation. The maintainer clarified on
 [Issue #2520](https://github.com/oscharko-dev/Keiko/issues/2520#issuecomment-5012022731) that
@@ -201,10 +209,20 @@ binding dimension and current trust-basis digest matches. Every other cell proje
 `CommandTaskTrustState = "approval-required"`. A digest/root mismatch immediately persists a
 restricted invalidation at a newer revision. Restoring the old `package.json` bytes therefore does
 not resurrect the prior grant; a new explicit grant is required. A managed task worktree is a
-registered project row but never a package-script trust basis of its own: its script decision is
-resolved from the repository it was bound from, and holds only while the worktree's `package.json`
-is byte-identical to that repository's — the same trust-basis digest this decision already binds
-(PR #3381). Its canonical root is resolved by containment in the Keiko-owned managed root
+registered project row whose script decision is resolved from the repository it was bound from, and
+that inherited decision holds only while the worktree's `package.json` is byte-identical to that
+repository's — the same trust-basis digest this decision already binds (PR #3381). Once a governed
+run has rewritten that manifest, or while the repository holds no grant, the only remaining basis is
+an explicit human grant recorded for the worktree root itself, bound to the worktree's current bytes
+(`WorkspaceScriptTrustService.holdsHumanGrantForRoot`, asked by the one shared `decideScriptTrust`
+rule the verification runner, the command runner and the agent verification route all use). A
+record merely derived from the repository never serves as that alternative — it inherits the
+repository's grant and stops with it — and the Coding Workbench offers the worktree grant as one
+explicit operator action only once the runner's own decision for the worktree is approval-required
+(2026-09-10, run 8). Every refusal names its reason in the closed vocabulary `root-not-trusted`,
+`repository-not-trusted`, `worktree-manifest-drift`, `decision-failed` on the run's own activity
+line (`editor.verification.execute`, `state: "refused"`, `trustRefusal`). Its canonical root is
+resolved by containment in the Keiko-owned managed root
 (`<stateDir>/ui/task-workspaces`), never through the user-workspace root rules: those deny every
 path below the state directory's `.keiko` segment, and applying them to the worktree refused every
 grant, status read and repository-derived trust for it — binding a trusted repository failed

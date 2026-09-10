@@ -101,6 +101,12 @@ export interface WorkspaceScriptTrustService {
   readonly status: (projectId: string) => WorkspaceTrustStatus;
   readonly isTrusted: (projectId: string, workspace: WorkspaceInfo) => boolean;
   readonly trustLevelForRoot: (root: string) => WorkspaceTrustLevel;
+  // ADR-0147 D3 — true only while the root's durable record is the operator's OWN grant for the
+  // root's current manifest bytes. A record derived from a trusted repository never answers true:
+  // it inherits that repository's grant and has to stop with it. This is the one alternative basis
+  // `decideScriptTrust` (editor/verificationRunner.ts) accepts for a managed worktree whose
+  // `package.json` a governed run rewrote away from the repository's trust basis.
+  readonly holdsHumanGrantForRoot: (root: string) => boolean;
   readonly recomputeForRoots?: (roots: readonly string[]) => readonly WorkspaceTrustLevel[];
   // #2628 — additive listener registration so composition-time consumers (buildPeripherals
   // wires managed-LSP restriction propagation this way) receive every persisted restriction
@@ -716,6 +722,28 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
         : "restricted";
     } catch {
       return "restricted";
+    }
+  };
+
+  public readonly holdsHumanGrantForRoot = (root: string): boolean => {
+    try {
+      const projectPath = registeredProjectPathForRoot(this.store, this.fs, root);
+      const canonicalRoot = realPathOrUndefined(this.fs, root);
+      if (projectPath === undefined || canonicalRoot === undefined) return false;
+      const workspace = workspaceInfoForRoot(canonicalRoot);
+      // The full fail-closed decision first — every binding dimension and the current basis digest
+      // — so a stale human grant invalidates exactly as it does on every other decision path.
+      if (!this.isTrusted(projectPath, workspace)) return false;
+      const decisionRoot = this.canonicalRootOf(projectPath, workspace);
+      const context = currentTrustContext(
+        this.store,
+        decisionRoot,
+        resolveTrustBasisFact(this.fs, decisionRoot),
+      );
+      const assessment = readAssessment(this.store, context.binding.rootRef);
+      return assessment.outcome === "known" && assessment.value.reason === "human-grant";
+    } catch {
+      return false;
     }
   };
 

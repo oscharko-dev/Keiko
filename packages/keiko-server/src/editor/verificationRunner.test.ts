@@ -19,6 +19,7 @@ import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { ExecuteVerificationResult } from "./verificationExecution.js";
 import {
   createVerificationRunnerManager,
+  decideScriptTrust,
   type VerificationExecutePort,
   type VerificationRunInput,
   type VerificationRunnerManager,
@@ -368,13 +369,143 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
 
       expect(() =>
         manager.execute(input({ projectId: worktreeRoot, kinds: ["typecheck"] })),
-      ).toThrow(expect.objectContaining({ code: "WORKSPACE_TRUST_REQUIRED" }));
+      ).toThrow(
+        expect.objectContaining({
+          code: "WORKSPACE_TRUST_REQUIRED",
+          trustRefusal: "worktree-manifest-drift",
+        }),
+      );
       expect(port.calls).toBe(0);
       // The same worktree with a byte-identical manifest keeps the repository's grant.
       writeFileSync(join(worktreeRoot, "package.json"), PACKAGE_JSON, "utf8");
       const { done } = collect(manager);
       manager.execute(input({ projectId: worktreeRoot, kinds: ["typecheck"] }));
       await done;
+      expect(port.calls).toBe(1);
+    } finally {
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  // ADR-0147 D3 (Coding Workbench run 8, 2026-09-10): a governed run that rewrote its worktree
+  // manifest can only continue under an explicit human grant recorded for the worktree root itself.
+  // The refusal names WHY on the run's own activity line — before this it read exactly like a
+  // repository nobody had trusted, and the operator was pointed at a grant that cannot clear drift.
+  it("admits a drifted worktree only under the worktree root's own explicit grant and logs the refusal reason", async () => {
+    const worktreeRoot = mkdtempSync(join(tmpdir(), "keiko-verify-worktree-grant-"));
+    try {
+      writeFileSync(
+        join(worktreeRoot, "package.json"),
+        PACKAGE_JSON.replace('"tsc --noEmit"', '"tsc --noEmit && vite build"'),
+        "utf8",
+      );
+      mkdirSync(join(worktreeRoot, "src"), { recursive: true });
+      writeFileSync(join(worktreeRoot, "src", "a.test.ts"), "test('x', () => {});\n", "utf8");
+      const port = fakePort(report(["typecheck"]));
+      const events: ServerLogEvent[] = [];
+      const humanGrantAsked: string[] = [];
+      let worktreeGranted = false;
+      const manager = makeManager({
+        activityLog: { write: (event): void => void events.push(event) },
+        resolveWorkspaceRootAccess: (root): WorkspaceRootAccess | undefined =>
+          root === worktreeRoot
+            ? {
+                kind: "managed-task",
+                canonicalRoot: worktreeRoot,
+                fs: nodeWorkspaceFs,
+                repositoryRoot: workspaceRoot,
+              }
+            : undefined,
+        execute: port.port,
+        isWorkspaceTrustedForPackageScripts: (): boolean => true,
+        isWorktreeTrustedByHumanGrant: (canonicalRoot): boolean => {
+          humanGrantAsked.push(canonicalRoot);
+          return worktreeGranted;
+        },
+      });
+      const typecheckTrust = (): string | undefined =>
+        manager.discover(worktreeRoot).kinds.find((entry) => entry.kind === "typecheck")
+          ?.trustState;
+
+      expect(() =>
+        manager.execute(
+          input({ projectId: worktreeRoot, kinds: ["typecheck"], correlationId: "run-drift" }),
+        ),
+      ).toThrow(
+        expect.objectContaining({
+          code: "WORKSPACE_TRUST_REQUIRED",
+          trustRefusal: "worktree-manifest-drift",
+        }),
+      );
+      expect(humanGrantAsked).toEqual([worktreeRoot]);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          op: "editor.verification.execute",
+          correlationId: "run-drift",
+          errorKind: "WORKSPACE_TRUST_REQUIRED",
+          extra: expect.objectContaining({
+            state: "refused",
+            reason: "WORKSPACE_TRUST_REQUIRED",
+            trustRefusal: "worktree-manifest-drift",
+          }) as unknown,
+        }),
+      );
+      expect(typecheckTrust()).toBe("approval-required");
+
+      worktreeGranted = true;
+      expect(typecheckTrust()).toBe("trusted");
+      const { done } = collect(manager);
+      manager.execute(input({ projectId: worktreeRoot, kinds: ["typecheck"] }));
+      await done;
+      expect(port.calls).toBe(1);
+    } finally {
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  // The worktree's own record is consulted only once the repository's grant has stopped covering
+  // it: a byte-identical worktree under a trusted repository never touches it (no invalidation
+  // side effect on a derived record), and an untrusted repository names ITSELF as the reason.
+  it("names an untrusted repository and asks the worktree grant only when the repository does not cover it", async () => {
+    const worktreeRoot = mkdtempSync(join(tmpdir(), "keiko-verify-worktree-covered-"));
+    try {
+      writeFileSync(join(worktreeRoot, "package.json"), PACKAGE_JSON, "utf8");
+      mkdirSync(join(worktreeRoot, "src"), { recursive: true });
+      writeFileSync(join(worktreeRoot, "src", "a.test.ts"), "test('x', () => {});\n", "utf8");
+      const port = fakePort(report(["typecheck"]));
+      const humanGrant = vi.fn((): boolean => false);
+      let repositoryTrusted = true;
+      const manager = makeManager({
+        resolveWorkspaceRootAccess: (root): WorkspaceRootAccess | undefined =>
+          root === worktreeRoot
+            ? {
+                kind: "managed-task",
+                canonicalRoot: worktreeRoot,
+                fs: nodeWorkspaceFs,
+                repositoryRoot: workspaceRoot,
+              }
+            : undefined,
+        execute: port.port,
+        isWorkspaceTrustedForPackageScripts: (): boolean => repositoryTrusted,
+        isWorktreeTrustedByHumanGrant: humanGrant,
+      });
+
+      const { done } = collect(manager);
+      manager.execute(input({ projectId: worktreeRoot, kinds: ["typecheck"] }));
+      await done;
+      expect(port.calls).toBe(1);
+      expect(humanGrant).not.toHaveBeenCalled();
+
+      repositoryTrusted = false;
+      expect(() =>
+        manager.execute(input({ projectId: worktreeRoot, kinds: ["typecheck"] })),
+      ).toThrow(
+        expect.objectContaining({
+          code: "WORKSPACE_TRUST_REQUIRED",
+          trustRefusal: "repository-not-trusted",
+        }),
+      );
+      expect(humanGrant).toHaveBeenCalledExactlyOnceWith(worktreeRoot);
       expect(port.calls).toBe(1);
     } finally {
       rmSync(worktreeRoot, { recursive: true, force: true });
@@ -976,5 +1107,51 @@ describe("VerificationRunnerManager — catalog + edge cases", () => {
     expect(() =>
       manager.execute(input({ kinds: ["targeted-test"], targetPath: "src/missing.test.ts" })),
     ).toThrow(VerificationRunnerError);
+  });
+});
+
+// The ONE package-script trust rule every consumer asks (verification runner, command runner, agent
+// verification route). An ordinary root is decided by its own standing grant alone — the worktree
+// decider is never consulted for it — and any decider that throws fails the decision closed under
+// its own reason instead of surfacing as an admitted run or an unexplained refusal.
+describe("decideScriptTrust", () => {
+  const ordinary: WorkspaceRootAccess = {
+    kind: "ordinary",
+    canonicalRoot: "/ordinary",
+    fs: nodeWorkspaceFs,
+  };
+
+  it("decides an ordinary root by its own standing grant alone", () => {
+    const worktreeHumanGrant = vi.fn((): boolean => true);
+    expect(
+      decideScriptTrust({
+        access: ordinary,
+        repositoryFs: nodeWorkspaceFs,
+        standingTrust: (): boolean => true,
+        worktreeHumanGrant,
+      }),
+    ).toEqual({ trusted: true, basis: "own-root" });
+    expect(
+      decideScriptTrust({
+        access: ordinary,
+        repositoryFs: nodeWorkspaceFs,
+        standingTrust: (): boolean => false,
+        worktreeHumanGrant,
+      }),
+    ).toEqual({ trusted: false, refusal: "root-not-trusted" });
+    expect(worktreeHumanGrant).not.toHaveBeenCalled();
+  });
+
+  it("fails closed under its own reason when a decider throws", () => {
+    expect(
+      decideScriptTrust({
+        access: ordinary,
+        repositoryFs: nodeWorkspaceFs,
+        standingTrust: (): boolean => {
+          throw new Error("trust store unavailable");
+        },
+        worktreeHumanGrant: (): boolean => true,
+      }),
+    ).toEqual({ trusted: false, refusal: "decision-failed" });
   });
 });

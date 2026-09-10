@@ -18,6 +18,13 @@ import type { CodingWorkbenchWorkspaceProjection } from "@/lib/coding-workbench-
 /** The settled, server-validated repository identity whose package-script trust a run may mutate. */
 export interface CodingWorkbenchRepositoryTrustBinding {
   readonly repositoryRoot: string;
+  /**
+   * The managed worktree the run's scripts actually execute in, or null while the live binding
+   * names none. Its repository's grant covers it only while its `package.json` is byte-identical to
+   * the repository's; once the run has rewritten that manifest, the operator's grant has to be
+   * recorded for THIS root (ADR-0147 D3).
+   */
+  readonly worktreeRoot: string | null;
   readonly repositoryId: string;
   readonly workspaceId: string;
   readonly correlationId: string;

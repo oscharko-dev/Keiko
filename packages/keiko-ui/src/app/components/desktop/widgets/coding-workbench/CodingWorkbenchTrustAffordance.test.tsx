@@ -1,24 +1,47 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { WorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  EditorVerificationCatalog,
+  WorkspaceTrustStatus,
+} from "@oscharko-dev/keiko-contracts";
+import {
+  EDITOR_VERIFICATION_KINDS,
+  EDITOR_VERIFICATION_SCHEMA_VERSION,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
-import { CodingWorkbenchTrustAffordance } from "./CodingWorkbenchTrustAffordance";
+import { WORKSPACE_TRUST_CHANGED_EVENT } from "@/lib/workspace-trust-api";
+import {
+  CodingWorkbenchTrustAffordance,
+  WORKTREE_TRUST_SETTLE_MS,
+} from "./CodingWorkbenchTrustAffordance";
 import type { CodingWorkbenchRepositoryTrustBinding } from "./useCodingWorkbenchRunWorkspace";
 
 const fetchStatus = vi.hoisted(() => vi.fn());
 const mutateTrust = vi.hoisted(() => vi.fn());
+const fetchCatalog = vi.hoisted(() => vi.fn());
+const diagnostic = vi.hoisted(() => vi.fn());
 
 // Reuses the SAME client the Editor's own verification-trust surface calls
 // (`useWorkspaceTrust` → `@/lib/workspace-trust-api`) — mocking at this boundary exercises the real
 // hook wiring (fetch-on-mount, grant-then-adopt-response) rather than a second, hand-rolled fetch
-// path (AGENTS.md §5).
+// path (AGENTS.md §5). The verification catalog is the runner's own script-trust decision for the
+// run's worktree (ADR-0147 D3), read through the same module.
 vi.mock("@/lib/workspace-trust-api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/workspace-trust-api")>()),
   fetchWorkspaceTrustStatus: fetchStatus,
   mutateWorkspaceTrust: mutateTrust,
+  fetchVerificationCatalog: fetchCatalog,
 }));
+
+vi.mock("@/lib/client-diagnostics", () => ({
+  reportClientDiagnostic: diagnostic,
+}));
+
+const ALLOW = "Allow package scripts for verification";
+const RESTRICTED_NOTICE = /not yet trusted/u;
+const DRIFT_NOTICE = /changed the worktree's package\.json/u;
 
 function status(projectId: string, trust: "trusted" | "restricted"): WorkspaceTrustStatus {
   return {
@@ -32,14 +55,50 @@ function status(projectId: string, trust: "trusted" | "restricted"): WorkspaceTr
   };
 }
 
-function binding(repositoryRoot = "/repo-a"): CodingWorkbenchRepositoryTrustBinding {
+// The runner's decision for the worktree: every script-backed kind carries the same state, and
+// targeted-test — Keiko-synthesized, exempt from script trust — stays trusted as in production.
+function catalog(
+  projectId: string,
+  scripts: "trusted" | "approval-required",
+): EditorVerificationCatalog {
+  return {
+    schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
+    projectId,
+    workspaceTrust: status(projectId, scripts === "trusted" ? "trusted" : "restricted"),
+    kinds: EDITOR_VERIFICATION_KINDS.map((kind) => ({
+      kind,
+      available: kind !== "targeted-test",
+      trustState: kind === "targeted-test" ? "trusted" : scripts,
+    })),
+  };
+}
+
+function binding(
+  repositoryRoot = "/repo-a",
+  worktreeRoot: string | null = "/worktree-a",
+): CodingWorkbenchRepositoryTrustBinding {
   return {
     repositoryRoot,
+    worktreeRoot,
     repositoryId: "repository-a",
     workspaceId: "workspace-a",
     correlationId: "correlation-workspace-a",
   };
 }
+
+// What the real client does after a successful mutation: broadcast the change, which re-reads the
+// runner's decision.
+function grantSucceeds(nextCatalog: EditorVerificationCatalog): void {
+  mutateTrust.mockImplementation((projectId: string): Promise<WorkspaceTrustStatus> => {
+    fetchCatalog.mockResolvedValue(nextCatalog);
+    window.dispatchEvent(new CustomEvent(WORKSPACE_TRUST_CHANGED_EVENT, { detail: { projectId } }));
+    return Promise.resolve(status(projectId, "trusted"));
+  });
+}
+
+beforeEach(() => {
+  fetchCatalog.mockResolvedValue(catalog("/worktree-a", "trusted"));
+});
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -50,6 +109,7 @@ describe("CodingWorkbenchTrustAffordance", () => {
     const { container } = render(<CodingWorkbenchTrustAffordance binding={null} />);
 
     expect(fetchStatus).not.toHaveBeenCalled();
+    expect(fetchCatalog).not.toHaveBeenCalled();
     expect(container).toBeEmptyDOMElement();
   });
 
@@ -58,6 +118,9 @@ describe("CodingWorkbenchTrustAffordance", () => {
     const { container } = render(<CodingWorkbenchTrustAffordance binding={binding()} />);
 
     await waitFor(() => expect(fetchStatus).toHaveBeenCalledWith("/repo-a"));
+    await waitFor(() =>
+      expect(fetchCatalog).toHaveBeenCalledWith("/worktree-a", expect.anything()),
+    );
     expect(screen.queryByTestId("coding-workbench-trust-affordance")).not.toBeInTheDocument();
     expect(container).toBeEmptyDOMElement();
   });
@@ -66,33 +129,28 @@ describe("CodingWorkbenchTrustAffordance", () => {
     fetchStatus.mockResolvedValue(status("/repo-a", "restricted"));
     render(<CodingWorkbenchTrustAffordance binding={binding()} />);
 
-    const action = await screen.findByRole("button", {
-      name: "Allow package scripts for verification",
-    });
+    const action = await screen.findByRole("button", { name: ALLOW });
     expect(action).toBeEnabled();
+    expect(screen.getByText(RESTRICTED_NOTICE)).toBeInTheDocument();
   });
 
   it("removes a retained restricted action as soon as the validated binding disappears", async () => {
     fetchStatus.mockResolvedValue(status("/repo-a", "restricted"));
     const view = render(<CodingWorkbenchTrustAffordance binding={binding()} />);
-    await screen.findByRole("button", { name: "Allow package scripts for verification" });
+    await screen.findByRole("button", { name: ALLOW });
 
     view.rerender(<CodingWorkbenchTrustAffordance binding={null} />);
 
-    expect(
-      screen.queryByRole("button", { name: "Allow package scripts for verification" }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: ALLOW })).not.toBeInTheDocument();
   });
 
-  it("grants trust for the workspace root through the existing grant route on click", async () => {
+  it("grants trust for the repository root through the existing grant route on click", async () => {
     fetchStatus.mockResolvedValue(status("/repo-a", "restricted"));
     mutateTrust.mockResolvedValue(status("/repo-a", "trusted"));
     const user = userEvent.setup();
     render(<CodingWorkbenchTrustAffordance binding={binding()} />);
 
-    const action = await screen.findByRole("button", {
-      name: "Allow package scripts for verification",
-    });
+    const action = await screen.findByRole("button", { name: ALLOW });
     await user.click(action);
 
     expect(mutateTrust).toHaveBeenCalledExactlyOnceWith("/repo-a", "grant");
@@ -116,19 +174,109 @@ describe("CodingWorkbenchTrustAffordance", () => {
     const user = userEvent.setup();
     render(<CodingWorkbenchTrustAffordance binding={binding()} />);
 
-    const action = await screen.findByRole("button", {
-      name: "Allow package scripts for verification",
-    });
+    const action = await screen.findByRole("button", { name: ALLOW });
     await user.click(action);
 
     expect(await screen.findByRole("button", { name: "Allowing…" })).toBeDisabled();
     resolveMutate(status("/repo-a", "trusted"));
   });
 
+  // ADR-0147 D3 (Coding Workbench run 8, 2026-09-10): the repository stays TRUSTED while the run's
+  // rewritten worktree manifest is refused, so the repository status can never surface this case.
+  // The runner's own decision for the worktree does, and the exit it offers is a grant recorded for
+  // the WORKTREE root — the repository's grant cannot clear drift. The repository status is the only
+  // status read: the worktree's record is never re-derived in the browser.
+  it("offers the worktree grant when the repository is trusted but the run's worktree manifest drifted", async () => {
+    fetchStatus.mockResolvedValue(status("/repo-a", "trusted"));
+    fetchCatalog.mockResolvedValue(catalog("/worktree-a", "approval-required"));
+    grantSucceeds(catalog("/worktree-a", "trusted"));
+    const user = userEvent.setup();
+    render(<CodingWorkbenchTrustAffordance binding={binding()} runRevision={3} />);
+
+    const action = await screen.findByRole("button", { name: ALLOW });
+    expect(screen.getByText(DRIFT_NOTICE)).toBeInTheDocument();
+    expect(screen.queryByText(RESTRICTED_NOTICE)).not.toBeInTheDocument();
+    await user.click(action);
+
+    expect(mutateTrust).toHaveBeenCalledExactlyOnceWith("/worktree-a", "grant");
+    expect(fetchStatus).not.toHaveBeenCalledWith("/worktree-a");
+    await waitFor(() =>
+      expect(screen.queryByRole("button", { name: ALLOW })).not.toBeInTheDocument(),
+    );
+  });
+
+  it("keeps the repository grant first while the repository itself is restricted", async () => {
+    fetchStatus.mockResolvedValue(status("/repo-a", "restricted"));
+    fetchCatalog.mockResolvedValue(catalog("/worktree-a", "approval-required"));
+    mutateTrust.mockResolvedValue(status("/repo-a", "trusted"));
+    const user = userEvent.setup();
+    render(<CodingWorkbenchTrustAffordance binding={binding()} />);
+
+    const action = await screen.findByRole("button", { name: ALLOW });
+    expect(screen.getByText(RESTRICTED_NOTICE)).toBeInTheDocument();
+    expect(screen.queryByText(DRIFT_NOTICE)).not.toBeInTheDocument();
+    await user.click(action);
+
+    expect(mutateTrust).toHaveBeenCalledExactlyOnceWith("/repo-a", "grant");
+  });
+
+  // A verification refused mid-run is when the exit has to appear: the run's revision moving
+  // re-reads the runner's decision once the activity settles.
+  it("re-reads the worktree decision once the run's activity settles", async () => {
+    fetchStatus.mockResolvedValue(status("/repo-a", "trusted"));
+    const view = render(<CodingWorkbenchTrustAffordance binding={binding()} runRevision={1} />);
+    await waitFor(() => expect(fetchCatalog).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("button", { name: ALLOW })).not.toBeInTheDocument();
+
+    fetchCatalog.mockResolvedValue(catalog("/worktree-a", "approval-required"));
+    view.rerender(<CodingWorkbenchTrustAffordance binding={binding()} runRevision={2} />);
+
+    await screen.findByRole(
+      "button",
+      { name: ALLOW },
+      { timeout: WORKTREE_TRUST_SETTLE_MS + 2000 },
+    );
+    expect(fetchCatalog).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports a refused worktree grant under the server's correlation id and keeps the action", async () => {
+    fetchStatus.mockResolvedValue(status("/repo-a", "trusted"));
+    fetchCatalog.mockResolvedValue(catalog("/worktree-a", "approval-required"));
+    mutateTrust.mockRejectedValue(
+      Object.assign(new Error("denied"), {
+        code: "PROJECT_NOT_FOUND",
+        correlationId: "trust-grant-refusal-1",
+      }),
+    );
+    const user = userEvent.setup();
+    render(<CodingWorkbenchTrustAffordance binding={binding()} />);
+
+    await user.click(await screen.findByRole("button", { name: ALLOW }));
+
+    await waitFor(() =>
+      expect(diagnostic).toHaveBeenCalledWith(
+        "[keiko] coding workbench worktree trust grant refused",
+        { correlationId: "trust-grant-refusal-1" },
+      ),
+    );
+    expect(await screen.findByRole("button", { name: ALLOW })).toBeEnabled();
+  });
+
+  it("reads no worktree decision while the binding names no worktree", async () => {
+    fetchStatus.mockResolvedValue(status("/repo-a", "trusted"));
+    const { container } = render(
+      <CodingWorkbenchTrustAffordance binding={binding("/repo-a", null)} />,
+    );
+
+    await waitFor(() => expect(fetchStatus).toHaveBeenCalledWith("/repo-a"));
+    expect(fetchCatalog).not.toHaveBeenCalled();
+    expect(container).toBeEmptyDOMElement();
+  });
+
   it("has no serious or critical axe violations while the action is shown", async () => {
     fetchStatus.mockResolvedValue(status("/repo-a", "restricted"));
     const { container } = render(<CodingWorkbenchTrustAffordance binding={binding()} />);
-    await screen.findByRole("button", { name: "Allow package scripts for verification" });
+    await screen.findByRole("button", { name: ALLOW });
 
     const report = await axe(container);
     expect(

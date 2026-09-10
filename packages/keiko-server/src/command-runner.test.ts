@@ -229,6 +229,48 @@ describe("CommandRunnerManager — discovery", () => {
     }
   });
 
+  // ADR-0147 D3 (2026-09-10): once a governed run has rewritten its worktree manifest, the one basis
+  // left is an explicit human grant for the worktree root itself — the same `decideScriptTrust` the
+  // verification runner asks, so the command catalog and the at-effect gate agree with it.
+  it("admits a drifted managed worktree under the worktree root's own explicit human grant", async () => {
+    const worktreeRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-cmd-worktree-grant-")));
+    try {
+      writeFileSync(
+        join(worktreeRoot, "package.json"),
+        PACKAGE_JSON.replace('"vitest run"', '"vitest run --coverage"'),
+        "utf8",
+      );
+      store.createProject(worktreeRoot, "worktree");
+      const spawn = vi.fn(makeSpawn());
+      let granted = false;
+      const manager = makeManager(spawn, {
+        resolveWorkspaceRootAccess: (): WorkspaceRootAccess => ({
+          kind: "managed-task",
+          canonicalRoot: worktreeRoot,
+          fs: nodeWorkspaceFs,
+          repositoryRoot: workspaceRoot,
+        }),
+        isWorktreeTrustedByHumanGrant: (canonicalRoot): boolean =>
+          canonicalRoot === worktreeRoot && granted,
+      });
+      const testTrust = (): string | undefined =>
+        manager.discover(worktreeRoot).tasks.find((task) => task.id === "npm-script:test")
+          ?.trustState;
+
+      expect(testTrust()).toBe("approval-required");
+      await expect(
+        manager.execute({ projectId: worktreeRoot, taskId: "npm-script:test" }),
+      ).rejects.toThrow(expect.objectContaining({ code: "TASK_REQUIRES_TRUST" }));
+
+      granted = true;
+      expect(testTrust()).toBe("trusted");
+      await manager.execute({ projectId: worktreeRoot, taskId: "npm-script:test" });
+      expect(spawn).toHaveBeenCalledTimes(1);
+    } finally {
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
   // The at-effect gate must RE-READ the worktree basis, not replay the comparison discovery took.
   // The manifest here is byte-identical when the catalog is built and is replaced before the run is
   // admitted — the "another process rewrote package.json between the two checks" window. The trust

@@ -2033,46 +2033,46 @@
     {
       "op": "editor.verification.execute",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/agentVerificationRoute.ts:389",
+      "site": "packages/keiko-server/src/editor/agentVerificationRoute.ts:398",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "editor.verification.execute",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/agentVerificationRoute.ts:409",
+      "site": "packages/keiko-server/src/editor/agentVerificationRoute.ts:418",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "editor.verification.execute",
       "category": "process",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:514",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:519",
       "package": "keiko-server"
     },
     {
       "op": "editor.verification.execute",
       "category": "process",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:527",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:532",
       "package": "keiko-server"
     },
     {
       "op": "editor.verification.execute",
       "category": "process",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:555",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:560",
       "package": "keiko-server"
     },
     {
       "op": "editor.verification.execute",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:649",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:660",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "editor.verification.subscriber",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/editor/verificationRunner.ts:851",
+      "site": "packages/keiko-server/src/editor/verificationRunner.ts:852",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -2814,7 +2814,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1858",
+      "site": "packages/keiko-server/src/deps.ts:1862",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -2835,7 +2835,7 @@
     {
       "op": "memory.audit.state-cache.seeded",
       "category": "memory",
-      "site": "packages/keiko-server/src/deps.ts:2026",
+      "site": "packages/keiko-server/src/deps.ts:2030",
       "package": "keiko-server"
     },
     {
@@ -3129,7 +3129,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3739",
+      "site": "packages/keiko-server/src/deps.ts:3743",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -3186,7 +3186,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2522",
+      "site": "packages/keiko-server/src/deps.ts:2526",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

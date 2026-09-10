@@ -62,6 +62,12 @@ const prUpdateExecuteMock = vi.hoisted(() => vi.fn());
 // pre-existing assertion in this file is unaffected. The dedicated suite further down overrides it.
 const trustStatusMock = vi.hoisted(() => vi.fn());
 const trustMutateMock = vi.hoisted(() => vi.fn());
+// The affordance also reads the verification runner's own decision for the run's worktree through
+// the shared catalog client (ADR-0147 D3, 2026-09-10). Unreadable here — the suites in this file
+// exercise the repository-restricted branch and every other surface, never the worktree drift one.
+const verificationCatalogMock = vi.hoisted(() =>
+  vi.fn(() => Promise.reject(new Error("verification catalog rejected"))),
+);
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -108,6 +114,7 @@ vi.mock("@/lib/workspace-trust-api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/workspace-trust-api")>()),
   fetchWorkspaceTrustStatus: trustStatusMock,
   mutateWorkspaceTrust: trustMutateMock,
+  fetchVerificationCatalog: verificationCatalogMock,
 }));
 
 vi.mock("@/lib/useCodingWorkbenchEditorBridge", () => ({
