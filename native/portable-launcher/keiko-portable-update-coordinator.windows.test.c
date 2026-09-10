@@ -707,6 +707,12 @@ typedef struct {
   keiko_coordinator_context context;
 } windows_cutover_fixture;
 
+typedef struct {
+  wchar_t seed[TEST_PATH_CAP];
+  wchar_t runtime[TEST_PATH_CAP];
+  wchar_t native[TEST_PATH_CAP];
+} test_generation_paths;
+
 static void test_create_generation(
     const wchar_t *generations,
     const wchar_t *seed_name,
@@ -715,21 +721,22 @@ static void test_create_generation(
     wchar_t supervisor[TEST_PATH_CAP],
     char digest[65]
 ) {
-  wchar_t seed[TEST_PATH_CAP];
-  wchar_t runtime[TEST_PATH_CAP];
-  wchar_t native[TEST_PATH_CAP];
-  assert(test_join(seed, generations, seed_name));
-  assert(CreateDirectoryW(seed, NULL));
-  assert(test_join(runtime, seed, L"\\runtime"));
-  assert(CreateDirectoryW(runtime, NULL));
-  assert(test_join(native, runtime, L"\\native"));
-  assert(CreateDirectoryW(native, NULL));
-  assert(test_join(supervisor, native, L"\\keiko-runtime-supervisor.exe"));
+  test_generation_paths *paths =
+      (test_generation_paths *)calloc(1u, sizeof(*paths));
+  assert(paths != NULL);
+  assert(test_join(paths->seed, generations, seed_name));
+  assert(CreateDirectoryW(paths->seed, NULL));
+  assert(test_join(paths->runtime, paths->seed, L"\\runtime"));
+  assert(CreateDirectoryW(paths->runtime, NULL));
+  assert(test_join(paths->native, paths->runtime, L"\\native"));
+  assert(CreateDirectoryW(paths->native, NULL));
+  assert(test_join(supervisor, paths->native, L"\\keiko-runtime-supervisor.exe"));
   test_write(supervisor, content);
-  test_tree_hash(seed, digest);
+  test_tree_hash(paths->seed, digest);
   assert(_snwprintf_s(output, TEST_PATH_CAP, _TRUNCATE, L"%ls\\%S", generations, digest) > 0);
-  assert(MoveFileExW(seed, output, MOVEFILE_WRITE_THROUGH));
+  assert(MoveFileExW(paths->seed, output, MOVEFILE_WRITE_THROUGH));
   assert(test_join(supervisor, output, L"\\runtime\\native\\keiko-runtime-supervisor.exe"));
+  free(paths);
 }
 
 static void test_plan_field(

@@ -2,7 +2,7 @@
   "releaseEvidenceVersion": 1,
   "staticExport": {
     "root": "dist/ui/static",
-    "fileCount": 279
+    "fileCount": 280
   },
   "b1": {
     "firstLoadScriptCount": 19,
@@ -11,17 +11,17 @@
   },
   "b2": {
     "budgetBytes": 2621440,
-    "shipsTotalBytes": 1026644,
-    "loadedTotalBytes": 1026644,
+    "shipsTotalBytes": 1024487,
+    "loadedTotalBytes": 1024487,
     "ok": true,
     "shipsOk": true,
     "loadedOk": true
   },
   "b3": {
     "budgetBytes": 768000,
-    "largestWorkerBytes": 112765,
+    "largestWorkerBytes": 111932,
     "largestWorkerLabel": "editor",
-    "largestLoadedWorkerBytes": 112765,
+    "largestLoadedWorkerBytes": 111932,
     "largestLoadedWorkerLabel": "editor",
     "ok": true,
     "shipsOk": true,
@@ -30,12 +30,12 @@
   "workers": [
     {
       "label": "editor",
-      "gzipBytes": 112765,
+      "gzipBytes": 111932,
       "path": "dist/ui/static/_next/static/chunks/41umh1jrct7g7.js"
     },
     {
       "label": "editor",
-      "gzipBytes": 151,
+      "gzipBytes": 152,
       "path": "dist/ui/static/_next/static/media/editor.worker.1duyl2hr9iop5.js"
     },
     {
@@ -49,25 +49,25 @@
   "editorRuntimeChunks": [
     {
       "path": "dist/ui/static/_next/static/chunks/1wntg-7ptuw73.js",
-      "gzipBytes": 618550,
+      "gzipBytes": 617301,
       "rawBytes": 2525072,
       "workerLabel": null
     },
     {
       "path": "dist/ui/static/_next/static/chunks/0p3tz2bb4xr29.js",
-      "gzipBytes": 295055,
+      "gzipBytes": 294979,
       "rawBytes": 1265421,
       "workerLabel": null
     },
     {
       "path": "dist/ui/static/_next/static/chunks/41umh1jrct7g7.js",
-      "gzipBytes": 112765,
+      "gzipBytes": 111932,
       "rawBytes": 369177,
       "workerLabel": "editor"
     },
     {
       "path": "dist/ui/static/_next/static/media/editor.worker.1duyl2hr9iop5.js",
-      "gzipBytes": 151,
+      "gzipBytes": 152,
       "rawBytes": 240,
       "workerLabel": "editor"
     },
@@ -78,5 +78,5 @@
       "workerLabel": "editor"
     }
   ],
-  "measurementSha256": "b1cdc10729a37ca78401d822d857f0d8fe3c2b7665818341738ffa6447880ea6"
+  "measurementSha256": "8d9a3002aff3bff98cace68185f45cb6380863e9eb298630551ffb31aaf08c51"
 }
