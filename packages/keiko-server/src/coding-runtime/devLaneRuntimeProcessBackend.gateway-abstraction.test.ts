@@ -358,6 +358,11 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
         errorKind: "host-relay-failed",
       }),
     );
+    control.diagnostics?.emit("end");
+    control.diagnostics?.emit("error", new Error("late-diagnostic-error"));
+    expect(
+      activityLog.events.filter((event) => event.op === "runtime.confinement.failed"),
+    ).toHaveLength(1);
     backend.signalTree(tree, "force");
     expect(control.kill).toHaveBeenCalledWith("SIGKILL");
   });
