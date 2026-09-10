@@ -5,6 +5,17 @@ production one-click claim. Parent epic: [#3403](https://github.com/oscharko-dev
 The [reviewed baseline audit](built-in-updater-audit-3404.md) defines the repair contract and deletion
 register; the [issue](https://github.com/oscharko-dev/Keiko/issues/3405) owns acceptance criteria.
 
+## Release-trust amendment (2026-09-10)
+
+The release owner confirmed that no production-signed Apple or Microsoft qualification will be
+available and that the updater must work without it. ADR-0121 D7 now makes a protected,
+platform-neutral Ed25519 signature over the final API-bound manifest the mandatory update trust
+anchor. Historical references below to production-signed canaries remain evidence of the prior
+contract, not current blockers. Native verification is still strict when evidence is present, but
+its absence no longer blocks stable publication or one-click update. The unchanged archive digest,
+provenance, target, release-impact, containment, atomic activation, recovery, and exact-version
+checks remain mandatory.
+
 ## Current checkpoint (2026-09-08)
 
 Later dated entries supersede historical failures below. The repaired restricted-token

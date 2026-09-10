@@ -34,6 +34,7 @@ import {
   validatePortableEvaluationManifest,
   validatePortableManifest,
   validatePortablePublishedManifest,
+  validatePortableReleaseTrustCandidateManifest,
   validatePortableStagingManifest,
   verifySha256File,
 } from "../portable-runtime.mjs";
@@ -1017,12 +1018,14 @@ async function assembleStageForTest(
   sidecarRuntimeSpecs = [],
   evaluation = false,
   windowsGenerationProduction = false,
+  release = false,
 ) {
   return assemblePortableStage(
     {
       commitSha: COMMIT_SHA,
       dryRun: false,
       evaluation,
+      release,
       appleTeamId: target === "windows-x64" ? undefined : "AB12CD34EF",
       nodeArchive: nodeArchive.path,
       nodeArchiveUrl: undefined,
@@ -3321,6 +3324,16 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
       [sidecarSpec],
       true,
     );
+    const release = await assembleStageForTest(
+      "windows-x64",
+      nodeArchive,
+      join(dir, "out-release"),
+      dir,
+      [sidecarSpec],
+      true,
+      false,
+      true,
+    );
 
     const plainSidecar = plain.manifest.sidecarRuntimes[0];
     const evaluationSidecar = evaluation.manifest.sidecarRuntimes[0];
@@ -3373,6 +3386,14 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
       "evaluation-unsigned-allowed",
     ]);
     expect(evaluation.manifest.runtimeActivation.trustAnchor).toBe("evaluation-unqualified");
+    expect(release.manifest.security).toEqual(evaluation.manifest.security);
+    expect(release.manifest.updateEligibility.requiredPredicates.releaseTrustRequired).toBe(true);
+    expect(release.manifest.updateEligibility.manualOnlyWhen).toContain(
+      "release-trust-cannot-be-verified",
+    );
+    expect(release.manifest.updateEligibility.manualOnlyWhen).not.toContain(
+      "signature-or-notarization-cannot-be-verified",
+    );
 
     // All FOUR writers move together, and the staging vocabulary appears nowhere in the evaluation
     // manifest or in the activation document the runtime reads at discovery.
@@ -3393,6 +3414,11 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
 
     // The lane the producer emits is the lane the manifest validates against, and only that one.
     expect(validatePortableEvaluationManifest(evaluation.manifest)).toEqual([]);
+    expect(validatePortableEvaluationManifest(release.manifest)).toEqual([]);
+    expect(validatePortableReleaseTrustCandidateManifest(release.manifest)).toEqual([]);
+    expect(validatePortableReleaseTrustCandidateManifest(evaluation.manifest)).toContain(
+      "updateEligibility.requiredPredicates.releaseTrustRequired: must be true for a stable release-trust candidate",
+    );
     expect(validatePortableStagingManifest(evaluation.manifest)).not.toEqual([]);
     expect(validatePortableStagingManifest(plain.manifest)).toEqual([]);
     expect(validatePortableEvaluationManifest(plain.manifest)).not.toEqual([]);

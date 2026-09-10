@@ -211,13 +211,15 @@ function trustedPublicKey(
   trustedKeys: readonly PortableReleaseTrustedKey[],
 ): KeyObject | undefined {
   const candidate = trustedKeys.find((key) => key.keyId === trust.keyId);
-  if (
-    candidate === undefined ||
-    portableReleaseTrustKeyId(candidate.publicKeyPem) !== trust.keyId
-  ) {
+  if (candidate === undefined) {
     return undefined;
   }
-  return createPublicKey(candidate.publicKeyPem);
+  try {
+    if (portableReleaseTrustKeyId(candidate.publicKeyPem) !== trust.keyId) return undefined;
+    return createPublicKey(candidate.publicKeyPem);
+  } catch {
+    return undefined;
+  }
 }
 
 export function verifyPortableReleaseTrust(

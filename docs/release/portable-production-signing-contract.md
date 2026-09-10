@@ -1,8 +1,13 @@
-# Portable Production Signing Contract
+# Optional Native Platform Signing Contract
 
-This document is the authoritative, redacted operator contract for production signing of Keiko's
-three portable release assets. It implements ADR-0121 D7 and is consumed by issues #2200, #2201, and
-#2202. It does not replace the archive, manifest, or release-impact schema in the
+Status: optional defense-in-depth capability, not used by the stable release or updater gate.
+
+This document preserves the strict operator contract for optionally adding native platform
+signatures to Keiko's portable assets. Since the Epic #3403 amendment to ADR-0121 D7, stable
+publication and one-click updates instead use Keiko's platform-neutral Ed25519 manifest signature
+and must work when every provider described below is absent. Optional native verification must never
+be presented as successful unless every rule in this document passes. It does not replace the
+archive, manifest, or release-impact schema in the
 [Portable Runtime Artifact Contract](portable-runtime-artifact-contract.md).
 
 The Windows producer now has a frozen Phase A generation format for #3405/#3403. This contract
@@ -11,7 +16,7 @@ integration, N−1/N or cross-platform native qualification, or an approved sign
 
 ## Trust boundary
 
-Production signing is available only to native jobs attached to the protected GitHub environment
+Optional native signing is available only to native jobs attached to the protected GitHub environment
 `portable-release-signing`. Environment protection and workflow validation are independent controls;
 both must pass.
 

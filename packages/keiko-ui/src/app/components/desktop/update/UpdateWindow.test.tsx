@@ -700,7 +700,8 @@ describe("UpdateWindow", () => {
           {
             code: "portable-signing-unverified",
             severity: "high",
-            message: "The portable update is missing verified signing or notarization evidence.",
+            message:
+              "The portable update has neither valid Keiko release trust nor optional native signing evidence.",
             userActionRequired: true,
           },
         ],
@@ -715,7 +716,9 @@ describe("UpdateWindow", () => {
     expect(screen.queryByRole("link", { name: "Open manual download" })).toBeNull();
     fireEvent.click(screen.getByText("Technical details and logs"));
     expect(
-      screen.getByText("The portable update is missing verified signing or notarization evidence."),
+      screen.getByText(
+        "The portable update has neither valid Keiko release trust nor optional native signing evidence.",
+      ),
     ).toBeInTheDocument();
   });
 

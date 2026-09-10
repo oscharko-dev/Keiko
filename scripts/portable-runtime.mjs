@@ -1936,8 +1936,10 @@ function validateManualOnlyWhen(update, failures, options) {
   ) {
     push(failures, "updateEligibility.manualOnlyWhen", "must contain non-empty strings");
   } else {
+    const predicates = update.requiredPredicates;
+    const releaseTrustRequired = isRecord(predicates) && predicates.releaseTrustRequired === true;
     const blocker =
-      options.context === "published-release-trust"
+      options.context === "published-release-trust" || releaseTrustRequired
         ? "release-trust-cannot-be-verified"
         : "signature-or-notarization-cannot-be-verified";
     if (!update.manualOnlyWhen.includes(blocker)) {
@@ -2153,6 +2155,22 @@ export function validatePortableEvaluationManifest(manifest, options = {}) {
     context: "evaluation",
     requireNativeHelpers: true,
   });
+}
+
+/** A stable-tag candidate is unsigned only until the protected publisher binds and signs it. */
+export function validatePortableReleaseTrustCandidateManifest(manifest, options = {}) {
+  const failures = validatePortableEvaluationManifest(manifest, options);
+  if (manifest?.updateEligibility?.requiredPredicates?.releaseTrustRequired !== true) {
+    push(
+      failures,
+      "updateEligibility.requiredPredicates.releaseTrustRequired",
+      "must be true for a stable release-trust candidate",
+    );
+  }
+  if (manifest?.releaseTrust !== undefined) {
+    push(failures, "releaseTrust", "must be absent before the protected publisher signs it");
+  }
+  return failures;
 }
 
 export function validatePortableCandidateManifest(manifest, options = {}) {

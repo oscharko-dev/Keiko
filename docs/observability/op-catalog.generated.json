@@ -2807,7 +2807,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1895",
+      "site": "packages/keiko-server/src/deps.ts:1899",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -2828,7 +2828,7 @@
     {
       "op": "memory.audit.state-cache.seeded",
       "category": "memory",
-      "site": "packages/keiko-server/src/deps.ts:2105",
+      "site": "packages/keiko-server/src/deps.ts:2109",
       "package": "keiko-server"
     },
     {
@@ -3134,7 +3134,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3896",
+      "site": "packages/keiko-server/src/deps.ts:3900",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -3191,7 +3191,7 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2601",
+      "site": "packages/keiko-server/src/deps.ts:2605",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -3392,6 +3392,18 @@
       "category": "diagnostic",
       "site": "packages/keiko-server/src/update-preflight-catalog.ts:215",
       "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.release-trust.verify",
+      "category": "security",
+      "site": "packages/keiko-server/src/update-preflight-portable-evidence.ts:454",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.release-trust.verify",
+      "category": "security",
+      "site": "packages/keiko-server/src/update-preflight-portable-evidence.ts:468",
       "package": "keiko-server"
     },
     {
@@ -3978,6 +3990,7 @@
     "update.candidate.issued",
     "update.candidate.rejected",
     "update.preflight.bundled-catalog.read",
+    "update.release-trust.verify",
     "update.remediation.execute",
     "update.runtime.activity-log",
     "update.runtime.event",

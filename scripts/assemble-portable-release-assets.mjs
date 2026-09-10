@@ -20,7 +20,7 @@ import {
   WINDOWS_PORTABLE_SETUP_ASSET_NAME,
   sha256File,
   validatePortableCandidateManifest,
-  validatePortableEvaluationManifest,
+  validatePortableReleaseTrustCandidateManifest,
 } from "./portable-runtime.mjs";
 import {
   RUNTIME_ACTIVATION_RELATIVE_PATH,
@@ -153,7 +153,7 @@ function commonIdentity(manifest) {
 function targetFailures(manifest, target, expected) {
   const failures =
     manifest.security?.verificationPolicy === "evaluation"
-      ? validatePortableEvaluationManifest(manifest)
+      ? validatePortableReleaseTrustCandidateManifest(manifest)
       : validatePortableCandidateManifest(manifest);
   const checks = [
     [

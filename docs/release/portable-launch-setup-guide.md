@@ -1,9 +1,9 @@
 # Portable Launch And Setup Guide
 
-This guide covers archive-first portable installation and managed setup. Production-signed and
-evaluation downloads have different trust guarantees. The updater reliability repair and its native
-qualification are tracked by #3403/#3405; a setup smoke or parser test is not proof of a production
-built-in update.
+This guide covers archive-first portable installation, managed setup, and platform-neutral Keiko
+release trust. Apple and Microsoft platform signatures are optional defense in depth; they are not
+required for installation or updating. Native smoke or parser tests alone are not proof of the
+complete built-in update.
 
 ## Primary User Journey
 
@@ -37,22 +37,22 @@ first-class artifacts:
 | `macos-arm64`   | `keiko-macos-arm64.zip` | `Keiko.app`      |
 | `macos-x64`     | `keiko-macos-x64.zip`   | `Keiko.app`      |
 
-The release also provides `keiko-windows-x64-setup.exe` as the companion install surface for
-the Windows ZIP. It is signed for production releases and unsigned for the explicitly labeled
-evaluation program. Users who need the archive-first fallback may still download, extract, and open
+The release also provides unsigned `keiko-windows-x64-setup.exe` as the companion install surface
+for the Windows ZIP. Its exact bytes are covered by the protected Keiko release manifest signature.
+Users who need the archive-first fallback may still download, extract, and open
 `keiko-windows-x64.zip`; both paths delegate managed installation to the same attested portable
 lifecycle. Reopening setup validates and launches an existing managed installation without
 replacing it. Governed in-app update remains the upgrade path.
 
 macOS arm64 and macOS x64 have the same release-blocking importance. A release is not
-portable-complete when either macOS architecture is missing, unsigned, unnotarized where required,
-or not covered by the same launch/setup verification.
+portable-complete when either macOS architecture is missing or not covered by the same digest,
+provenance, release-trust, and launch/setup verification.
 
 ### Verifying a downloaded artifact
 
-Production release archives and their SBOMs (`<platform-target>-sbom.cdx.json`, also published as
-release assets) require GitHub Artifact Attestations in addition to platform code signatures.
-Evaluation downloads do not inherit those production guarantees. An
+Stable release archives and their SBOMs (`<platform-target>-sbom.cdx.json`, also published as
+release assets) carry GitHub Artifact Attestations in addition to Keiko's bundled Ed25519 release
+trust. An
 operator can verify a downloaded file independently of Keiko's own release tooling with the
 [GitHub CLI](https://cli.github.com/):
 
@@ -64,8 +64,8 @@ gh attestation verify windows-x64-sbom.cdx.json --repo oscharko-dev/Keiko
 
 A successful verification proves the file was built by the recorded `portable-assets` workflow run
 at the recorded commit, without needing to trust anything other than GitHub's Sigstore-backed
-attestation service. This is independent of, and in addition to, the Authenticode/notarization
-signature required for production qualification (see [ADR-0121](../adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md#d8--release-archives-and-sboms-carry-independently-verifiable-github-artifact-attestations)).
+attestation service. This is independent of, and in addition to, the manifest signature Keiko
+verifies automatically (see [ADR-0121](../adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md#d8--release-archives-and-sboms-carry-independently-verifiable-github-artifact-attestations)).
 Attestation verification is optional; it is not part of the managed setup journey below.
 
 ## Managed Setup
@@ -92,10 +92,9 @@ boundary instead of relocating the app to a writable parent.
 
 ## Update Journey
 
-Current evaluation releases require reviewed manual installation. The repaired native coordinator
-still refuses update acceptance while its qualification gates are incomplete. The automatic
-replacement and relaunch behavior below describes the qualified release contract; it is not a claim
-that current releases can execute a one-click update or automatic re-download fallback.
+Stable releases carrying valid Keiko release trust are one-click eligible even when no Apple or
+Microsoft platform signature exists. A manual dispatch/evaluation artifact has no release signature
+and remains manual-only.
 
 The portable-managed update path uses the existing in-app notice and Update window. One-click
 execution is offered only for a fresh eligible candidate on an attested managed installation and
@@ -106,14 +105,10 @@ reconnect, and success requires verified target startup. Follow the displayed re
 action if the installation cannot establish that proof; do not clear update state or delete the
 managed tree to force another attempt.
 
-Evaluation builds, including 0.3.17, are intentionally manual-only. Their signatures cannot establish
-production publisher continuity. The first production transition therefore requires a manual install
-using the target release's reviewed instructions, not the Update button. Preserve `.keiko` runtime
-state. Do not alter signing metadata, disable platform trust checks, or treat a skipped signing job
-as qualification. A production one-click claim additionally requires genuine N−1→N canary results
-between two production-signed eligible releases on all three targets; #2198 tracks the external
-signing prerequisites. Until those results exist, availability of a newer download is not evidence
-that an evaluation installation can update itself.
+Legacy evaluation builds without a release signature, including 0.3.17, remain manual-only. The
+first transition from such a build uses the target release's reviewed manual installation path while
+preserving `.keiko` state. From the first release-trusted install onward, a valid newer signed
+manifest can update on all supported targets without platform-vendor signing or extra user tools.
 
 The npm/Yarn updater remains a developer and compatibility path, not the promoted product journey
 for ordinary portable users.

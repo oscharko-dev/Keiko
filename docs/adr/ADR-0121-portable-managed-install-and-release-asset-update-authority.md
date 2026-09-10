@@ -4,7 +4,8 @@
 
 Accepted (Issue #1946, 2026-07-05); amended for the Windows setup companion (Issue #2966,
 2026-08-04); construction surface replaced by a Keiko-owned native bootstrap (Issue #2992,
-2026-08-29).
+2026-08-29); platform-neutral release trust adopted for unsigned native delivery (Epic #3403,
+2026-09-10).
 
 ## Context
 
@@ -58,15 +59,16 @@ Each stable release will expose exactly three platform-target archive assets:
 Those archives remain the authoritative portable payloads and update inputs. The macOS archives
 are the promoted macOS install surface. Windows stable releases additionally expose the
 `keiko-windows-x64-setup.exe` companion as the promoted ordinary-user Windows install surface —
-production releases sign it; an `evaluation` release (below) ships it unsigned exactly as its
-archive and says so in the notes; the
+the Keiko release manifest binds and signs its exact digest even when the executable has no
+Authenticode signature; the
 Windows ZIP remains the manual and troubleshooting fallback. The setup companion embeds the exact
 reviewed `windows-x64` archive and delegates installation and launch to the same portable lifecycle.
 It does not create another platform target, payload authority, or update channel.
 
 The three platform targets are release-blocking as a set, and the Windows setup companion is
 release-blocking for `windows-x64`. A stable release is not portable-complete when a required
-archive or companion is missing, unnotarized where required, or unverified.
+archive or companion is missing, digest-mismatched, provenance-invalid, or lacks valid Keiko
+release trust.
 
 **Where completeness is decided (amended 2026-08-09, issue #2802).** Release-blocking is answered
 against the published release, not against a publish input. Before npm learns the `latest`
@@ -78,34 +80,29 @@ so it refused every stable release the project could build. Assets that ARE hand
 the full qualified-run provenance and digest binding; assets already on the tag are verified by
 presence and by the reviewed metadata bound to them.
 
-**Signing status for the 0.3.x public evaluation program (amended 2026-08-09, issue #2802).** A
-stable release may carry `evaluation` signing status: bundles that are sealed — `codesign --verify
---deep --strict` passes, so macOS does not report a damaged app — but carry no Apple Developer ID,
-no notarization, and no Azure trusted publisher. This is the release owner's scope decision for
-Keiko's first public download release and it is bounded three ways: the status is recorded in the
-reviewed release-impact entry (explicitly, as `portableRuntimeArtifactContract.signingScope:
-"evaluation"` — the signal the portable-assets workflow reads to conclude its production signing
-lane as skipped rather than failed on such tags), the release notes state it together with the first-launch steps it
-implies (right-click → Open on macOS, the SmartScreen notice on Windows), and D7 is untouched —
-production signing credentials, their protected environments, and the signed-lane verification
-remain exactly as specified. Available signing subscriptions do not retroactively qualify evaluation
-bytes. The production lane may replace evaluation delivery only after its native verification gates
-pass; evaluation-installed applications remain manual-only for the first production transition.
+**Platform-neutral release trust (amended 2026-09-10, Epic #3403).** Stable archives and the setup
+companion do not require Apple Developer ID, Apple notarization, Microsoft Artifact Signing, or any
+other platform-vendor subscription. The native evidence remains honest: unsigned artifacts declare
+`evaluation` / `evaluation-unqualified` and every platform-signature Boolean remains false. Stable
+installability instead requires the Keiko Ed25519 release signature defined by D7. The signed
+manifest binds the final GitHub release and asset identifiers, target, version, source commit,
+archive digest, size, provenance, SBOM, release-impact record, and native verification state. The
+release UI may explain the ordinary first-launch operating-system warning, but that warning is not
+an update blocker. A platform signature, when available, is optional defense in depth and never the
+only trust anchor.
 
 Each asset must be accompanied by reviewed metadata that binds the artifact name, platform target,
 GitHub release id, release tag, asset id, asset name, size in bytes, Keiko version, bundled Node.js
 runtime identity, archive SHA-256 digest, package/build provenance, SBOM/license evidence, and
-signing/notarization status to the same reviewed release-impact entry. Tag or filename matching
+native verification status and Keiko release trust to the same reviewed release-impact entry. Tag or filename matching
 alone is insufficient. Any mismatch fails closed before extraction. Artifact metadata is
 operational evidence; it must not contain customer paths, credentials, prompts, model output,
 repository content, or raw logs.
 
 The Windows setup companion must be bound to the reviewed Windows archive name and digest and be
-proven as the only additional top-level PE after the Windows payload inventory is sealed. On a
-production-signed release it must additionally carry its own Authenticode chain and RFC3161
-timestamp verification; on an `evaluation` release those chains do not exist by definition — the
-companion's binding is its SHA-256 digest in the evaluation manifest, verified byte for byte
-before promotion, with the SmartScreen first-launch step stated in the release notes.
+proven as the only additional top-level PE after the Windows payload inventory is sealed. Its
+SHA-256 digest and byte size are bound into the release-signed Windows manifest and verified before
+promotion. Optional Authenticode evidence is recorded when present but is not required.
 
 ### D2 — Launchers stay thin
 
@@ -118,11 +115,10 @@ They may locate, start, and relaunch the managed install, but they do not introd
 Tauri, or a native wrapper runtime in this wave. Wrapper ownership remains deferred until a later
 decision creates a real need for it.
 
-Native launcher trust is part of portable installability. macOS portable assets must verify the
-approved Developer ID signature and notarization status before staging or promotion. Windows
-portable assets must verify the approved Authenticode publisher chain before promotion. If a
-platform cannot produce and locally verify that proof in v1, portable self-update on that platform
-is manual-only.
+Native launcher integrity is part of portable installability and is established by the signed
+manifest's digest and provenance bindings. Native platform signatures, notarization, and publisher
+chains are verified and recorded when present, but their absence does not make a release or
+self-update manual-only.
 
 ### D3 — First-run install state is separate from `.keiko`
 
@@ -367,54 +363,36 @@ Child implementation work may branch for development and QA, but the only branch
 is the integrated branch after integrated end-to-end QA has passed and a human reviewer has approved
 the result.
 
-### D7 — Production signing uses protected, provider-managed trust
+### D7 — Stable delivery uses protected, platform-neutral Keiko release trust
 
-Production portable signing is an extension of this ADR's installability authority, not a second
-artifact or evidence contract. The operator boundary and implementation interface are defined in the
-[Portable Production Signing Contract](../release/portable-production-signing-contract.md).
+The mandatory update trust anchor is an Ed25519 signature over a deterministic canonical projection
+of the final per-target manifest. The application ships an explicit set of trusted Ed25519 public
+keys. The corresponding private key exists only as `KEIKO_PORTABLE_RELEASE_SIGNING_KEY` in the
+protected `npm-publish` GitHub environment; build jobs, native runners, repository contents, release
+assets, logs, and evidence never receive it.
 
-Windows production artifacts use an Azure Artifact Signing **Basic** account with a **PublicTrust**
-certificate profile. The GitHub workload authenticates to Azure with environment-bound OIDC and has
-only `Artifact Signing Certificate Profile Signer` at the certificate-profile resource scope. Azure
-retains the non-exportable signing key and provides the RFC 3161 timestamp service. Repository,
-environment, or runner secrets must not contain a Windows signing private key or an Azure client
-secret. A `PublicTrust Test` profile is forbidden for production. The account and profile aliases
-select the signing resource but are not recoverable signer identity. Every signed PE must verify both a
-valid Public Trust/code-signing chain and the exact reviewed subscriber identity-validation EKU
-`1.3.6.1.4.1.311.97.<subscriber suffix>`. The workflow must not pin a rotating leaf thumbprint, public
-key, or certificate subject.
+The protected publisher signs only after GitHub assigns the immutable release id and asset id. The
+signed projection includes the manifest schema, metadata version, signing and expiry timestamps,
+key id, product version, source commit, release id and tag, target, asset id/name/size/SHA-256,
+provenance, evidence paths, release-impact binding, native verification state, and update-eligibility
+predicates. Any mutation, target substitution, partial release, unknown key, malformed encoding,
+expired metadata, signature failure, or metadata version below an enforced high-water mark fails
+closed before download or staging. A target version must also be strictly newer than the installed
+version, so a valid older release cannot downgrade an installation.
 
-macOS production artifacts use a Developer ID Application identity with hardened runtime. Every
-embedded Mach-O is signed leaf-to-root before the app; each target app is submitted with a team App
-Store Connect API key through `notarytool`, accepted, stapled, and assessed locally before its final
-archive is created. Apple certificate/key material exists only as protected environment secrets and is
-decoded into owner-only, per-run temporary storage and a generated temporary keychain. Cleanup is
-unconditional and a cleanup failure fails the job. The notarization key is a dedicated team key with
-the least-privilege `Developer` role; broader roles and unrelated use are forbidden. Team keys apply
-across all apps and cannot be restricted to Keiko alone, so this operational isolation is mandatory.
+Key ids are SHA-256 digests of the public SPKI bytes. Rotation is additive: ship a release that
+trusts old and new public keys before signing exclusively with the new private key. Removing a key
+requires a later reviewed release after the overlap. Compromise response removes the private secret,
+publishes a security advisory, and ships a trusted-root update; signatures by unknown or removed keys
+remain rejected. Metadata has a bounded lifetime so a captured signed response cannot remain current
+indefinitely.
 
-Production signing is permitted only on protected native runners for a reviewed stable tag in the
-`portable-release-signing` GitHub environment. The same native job must sign, calculate or verify the
-artifact digest, verify every Windows PE against the exact reviewed subscriber identity-validation EKU
-and valid Public Trust/code-signing chain or verify macOS against the expected Developer ID identity and
-Team ID, and produce the platform booleans consumed by the existing signing verifier. A later job, a
-manually supplied Boolean, or the Ubuntu bundle assembler cannot assert that proof. Missing
-configuration, unavailable tools, provider failure, revoked identity, incomplete signing, failed
-notarization, failed stapling, failed assessment, or partial target completion fails closed and cannot
-produce or promote `verified-production`.
-
-The evidence remains the existing portable manifest and `evidence/signing-verification.json`
-projection. Provider logs, certificate bodies, notarization logs, credentials, private paths, and raw
-stdout/stderr are forbidden. The raw subscriber EKU is protected configuration and must not appear in
-posted or committed evidence. Azure's short-lived leaf certificate rotation is not an identity change:
-verification binds the Public Trust/code-signing chain and reviewed subscriber identity-validation EKU
-rather than pinning a leaf thumbprint, public key, certificate subject, account, or profile alias. An
-intentional subscriber identity EKU change requires a reviewed amendment to the signing contract and
-renewed qualification.
-
-Authenticode establishes publisher and artifact integrity but does not guarantee that Microsoft
-SmartScreen will suppress warnings for every new file hash. SmartScreen reputation remains a
-Microsoft-controlled signal and is not an installability acceptance criterion.
+Apple Developer ID, notarization, Authenticode, and RFC 3161 evidence remain supported as optional
+defense in depth. When present they must pass their existing strict verifiers and be reported
+truthfully; no code path may synthesize positive native evidence. Their absence, provider outage, or
+lack of subscriptions does not block publishing or updating. Microsoft SmartScreen and macOS
+Gatekeeper warnings are operating-system reputation/user-consent signals, not Keiko artifact
+authenticity criteria.
 
 ### D8 — Release archives and SBOMs carry independently verifiable GitHub Artifact Attestations
 
@@ -424,21 +402,21 @@ the archive to its `evidence/sbom.cdx.json` as that attestation's predicate, and
 build-provenance attestation over the SBOM document itself so the SBOM file has its own attestation
 subject and is independently verifiable (`gh attestation verify <sbom-file>`) without requiring the
 archive. All three are generated with GitHub's keyless, Sigstore-backed `actions/attest` action
-using the same environment-scoped `id-token: write` OIDC mechanism already established for Windows
-production signing in D7 — no new secret material or credential class is introduced.
+using an assembly-job-scoped `id-token: write` permission. No release-signing key is exposed to that
+job.
 
 Attestation generation runs once, in the `assemble` job of `.github/workflows/portable-assets.yml`,
 strictly after `validatePortableReleaseSet` has proven the reviewed bundle contains exactly three
-mutually consistent, qualification-bound targets. A missing, mismatched, or non-production target
-fails that gate before any attestation step runs; there is no path that attests an incomplete or
-unverified release set. The `ci` workflow's root, per-workspace, and UI CycloneDX SBOMs receive the
+mutually consistent, release-trust-required targets. A missing, mismatched, or integrity-invalid
+target fails that gate before any attestation step runs; there is no path that attests an incomplete
+release set. The `ci` workflow's root, per-workspace, and UI CycloneDX SBOMs receive the
 same treatment as build-provenance attestations of the SBOM documents themselves, scoped to `push`
 events on integration branches, so pull-request and `workflow_dispatch` runs stay pre-signing and do
 not accumulate attestations for commits that never ship. A `workflow_dispatch` run produces
 `unverified-staging` by default and, when the run explicitly requests the ADR-0163 D9 evaluation
-build, `evaluation-unqualified` instead. Neither is a production lane, neither is attested, and
-neither can reach the `assemble` job — which runs only from a stable-tag push and still demands
-three mutually consistent `verified-production` targets.
+build, `evaluation-unqualified` instead. Neither dispatch mode is attested or can reach `assemble`.
+Stable-tag builds also report unsigned native status honestly, but additionally declare
+`releaseTrustRequired`; only that stable path can be assembled and passed to the protected publisher.
 
 This is additive evidence, not a replacement for the existing portable manifest, the content-free
 `evidence/signing-verification.json` projection, or the `provenance.intoto.jsonl` statement. Those
@@ -446,16 +424,16 @@ remain Keiko's own reviewed, internally validated evidence. A GitHub Artifact At
 independently, cryptographically verifiable claim anchored to the exact GitHub Actions workflow run
 and commit that produced the artifact, checkable by any consumer with `gh attestation verify`
 without trusting Keiko's own manifest-validation code. Attestations are supplementary trust evidence
-for archive and SBOM consumers; they do not replace the existing signing/notarization acceptance
-criteria. The final publisher additionally requires the Windows setup companion's build-provenance
-attestation before release upload so locally replaced setup bytes cannot cross the publish boundary.
+for archive and SBOM consumers; they supplement rather than replace the Keiko manifest signature.
+The final publisher additionally requires the Windows setup companion's build-provenance attestation
+before release upload so locally replaced setup bytes cannot cross the publish boundary.
 
 ## Security and threat model
 
 Security review for implementation under this ADR must cover:
 
-- **Asset authenticity and completeness.** Missing, wrong-platform, malformed, unsigned,
-  unnotarized, checksum-mismatched, or provenance-mismatched assets are not installable.
+- **Asset authenticity and completeness.** Missing, wrong-platform, malformed, unsigned-manifest,
+  expired-metadata, checksum-mismatched, or provenance-mismatched assets are not installable.
 - **Archive extraction.** Portable archives are hostile input. Extraction must reject path
   traversal, absolute paths, symlink or hardlink escapes, device/special files, and unexpected
   executable placement before writing into the managed install.
@@ -552,8 +530,8 @@ Security review for implementation under this ADR must cover:
   payloads from being mixed.
 - The portable update path can reuse the existing governed updater and evidence semantics instead of
   creating a second mutation authority.
-- Windows private-key custody stays with Azure, Apple key material stays ephemeral on protected native
-  runners, and both platforms reuse the existing content-free signing evidence projection.
+- One platform-neutral public-key trust policy protects every target and remains independent of
+  vendor signing subscriptions. Optional native evidence reuses the existing content-free projection.
 
 ### Negative
 
@@ -561,9 +539,8 @@ Security review for implementation under this ADR must cover:
 - The portable path needs thin per-platform launchers and archive packaging support.
 - Portable installs that cannot attest a single managed target must fall back to manual
   instructions.
-- Stable portable delivery depends on protected GitHub environments and available Azure and Apple
-  signing/notarization services; an outage blocks production promotion while secret-free staging
-  remains available.
+- Stable portable delivery depends on the protected GitHub publisher environment and the Keiko
+  Ed25519 key. Apple or Microsoft signing-service outages have no effect on release availability.
 
 ## Alternatives considered
 
@@ -575,12 +552,14 @@ Security review for implementation under this ADR must cover:
    owns compatibility and remediation, and a second catalog would drift.
 4. GitHub Release notes as the installability authority. Rejected because prose is not a source of
    installability truth.
-5. Exportable OV/EV keys or a self-hosted Windows signing token in GitHub. Rejected because Azure
-   Artifact Signing provides managed key custody and OIDC-scoped workload authorization.
-6. Azure `PublicTrust Test` for production. Rejected because test profiles do not establish the
-   production publisher trust required by this ADR.
-7. An individual App Store Connect API key for notarization. Rejected because the production
-   `notarytool` path requires a team key and a shared, revocable release identity.
+5. Require native vendor signing for update authenticity. Rejected because it creates two external
+   availability dependencies, cannot protect non-native manifest metadata uniformly, and is not
+   available for the release. Native signing remains optional defense in depth.
+6. Trust only GitHub Artifact Attestations at update runtime. Rejected because offline verification
+   requires additional trust-root material and tooling; attestations remain valuable independent
+   supply-chain evidence while bundled Ed25519 verification keeps runtime admission deterministic.
+7. Distribute a signer or package-manager dependency to users. Rejected because the update must work
+   from the bundled product with no npm, CLI, or manually downloaded verification package.
 
 ## Compatibility with existing ADRs
 
@@ -600,12 +579,17 @@ Security review for implementation under this ADR must cover:
 - [ADR-0038: Shared proxy- and custom-CA-aware outbound HTTP egress](ADR-0038-outbound-egress.md)
 - [ADR-0048: Evidence and Quality Intelligence artifact confidentiality hardening](ADR-0048-evidence-artifact-confidentiality.md)
 - [ADR-0099: Governed in-app updates and release-impact contract](ADR-0099-governed-in-app-updates-and-release-impact-contract.md)
-- [Portable Production Signing Contract](../release/portable-production-signing-contract.md)
+- [Optional Native Platform Signing Contract](../release/portable-production-signing-contract.md)
 - [Local runtime state contract](../local-runtime-state-contract.md)
 - Issue #1946
 
 ## Amendment history
 
+- **2026-09-10 — Epic #3403:** Replaced mandatory Apple/Microsoft production signing with the
+  protected, platform-neutral Ed25519 release-trust contract in D1, D2, D7, and D8. Native signing
+  remains strictly verified when present but is no longer an installability, publication, or update
+  prerequisite. Stable Windows, macOS, and Linux-hosted updater operation requires no user-installed
+  npm, verification CLI, or manually downloaded package.
 - **2026-09-05 — Issue #3405:** Clarified exact-candidate execution, acknowledged native handoff,
   canonical evidence versus private control data, and the distinction between implementation proof
   and production-signed qualification. Removed the claim that retries resolve the updater's own

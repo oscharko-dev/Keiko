@@ -18,8 +18,8 @@ Governing decisions:
 
 Portable v1 is an archive-backed delivery path for stable public releases with platform-specific
 promoted journeys. On Windows, ordinary users download and run
-`keiko-windows-x64-setup.exe` (signed for production, explicitly unsigned for evaluation); setup
-verifies its embedded canonical ZIP, completes first-run setup
+`keiko-windows-x64-setup.exe`; the unsigned setup bytes are bound by Keiko's signed release
+manifest. Setup verifies its embedded canonical ZIP, completes first-run setup
 into Keiko's per-user managed install location, and launches Keiko. On macOS, users download the
 target ZIP, extract `Keiko.app`, and double-click it to complete first-run setup into the managed app
 location. After setup, users launch Keiko from the same native app surface or OS search entry. The
@@ -34,18 +34,18 @@ the primary install/start path. Shell launchers may exist only for support and a
 Every stable release that claims portable product delivery must publish exactly these first-class
 portable assets as a release-blocking set:
 
-| Platform target | Required asset name     | Archive format | Primary launcher | Runtime target | Signing evidence                              | Stable release requirement                           |
-| --------------- | ----------------------- | -------------- | ---------------- | -------------- | --------------------------------------------- | ---------------------------------------------------- |
-| `windows-x64`   | `keiko-windows-x64.zip` | ZIP            | `Keiko.exe`      | `win32-x64`    | Authenticode publisher-chain verification     | Required whenever portable delivery is advertised    |
-| `macos-arm64`   | `keiko-macos-arm64.zip` | ZIP            | `Keiko.app`      | `darwin-arm64` | Developer ID signature and notarization proof | Equal priority with `macos-x64`; never best-effort   |
-| `macos-x64`     | `keiko-macos-x64.zip`   | ZIP            | `Keiko.app`      | `darwin-x64`   | Developer ID signature and notarization proof | Equal priority with `macos-arm64`; never best-effort |
+| Platform target | Required asset name     | Archive format | Primary launcher | Runtime target | Mandatory trust evidence       | Stable release requirement                           |
+| --------------- | ----------------------- | -------------- | ---------------- | -------------- | ------------------------------ | ---------------------------------------------------- |
+| `windows-x64`   | `keiko-windows-x64.zip` | ZIP            | `Keiko.exe`      | `win32-x64`    | Keiko Ed25519 release manifest | Required whenever portable delivery is advertised    |
+| `macos-arm64`   | `keiko-macos-arm64.zip` | ZIP            | `Keiko.app`      | `darwin-arm64` | Keiko Ed25519 release manifest | Equal priority with `macos-x64`; never best-effort   |
+| `macos-x64`     | `keiko-macos-x64.zip`   | ZIP            | `Keiko.app`      | `darwin-x64`   | Keiko Ed25519 release manifest | Equal priority with `macos-arm64`; never best-effort |
 
 The release is not portable-complete when any target is missing, mislabeled, checksum-mismatched,
-unsigned, unnotarized where required, or not represented in reviewed release-impact metadata.
+missing a valid Keiko release signature, or not represented in reviewed release-impact metadata.
 
 Stable releases also publish `keiko-windows-x64-setup.exe` as a companion to the canonical Windows
-ZIP. Production releases require Authenticode signing; the reviewed evaluation program does not
-claim that production guarantee. The setup embeds that exact ZIP, installs it under the per-user managed
+ZIP. Authenticode is optional; the signed manifest binds the setup digest, size, asset id, and name.
+The setup embeds that exact ZIP, installs it under the per-user managed
 install root, and verifies that the launched Keiko process remains healthy. If a managed Keiko
 installation already exists, setup validates and launches that installation without replacing it;
 governed in-app update remains the upgrade authority. The setup is a convenience install surface
@@ -55,17 +55,15 @@ derive from the ZIP and its reviewed evidence.
 ## Current Staging Status
 
 The portable release pipeline stages the packed Keiko package, acquires and verifies the target
-Node.js runtime and the approved OpenCode runtime, builds the native launcher and governed runtime
-helpers, and validates redacted artifact manifests. The Windows production lane signs and verifies the
-generation payload, closes and hashes it, then builds, signs, and verifies the root launcher before
-emitting an outer/setup schema-2 artifact. macOS remains schema 1. Manual and evaluation Windows
-output remains usable flat schema 1 output. Stable-tag production jobs additionally perform the platform
-signing, native qualification, release upload, and published-asset checks required by the release workflow.
-This producer contract does not assert that those external qualifications or a signed release already
-exist.
+Node.js runtime and approved OpenCode runtime, builds the native launcher and governed runtime
+helpers, and validates redacted artifact manifests on native runners. Stable-tag jobs emit honest
+`evaluation/evaluation-unqualified` native evidence plus `releaseTrustRequired: true`. Assembly
+revalidates every non-platform predicate. After upload assigns final identities, the protected
+publisher adds and verifies the Ed25519 release signature. macOS and ordinary Windows output use
+schema 1; the optional native-qualified Windows generation format remains schema 2.
 
-Schema v1 has four explicit pre-publication validation contexts — staging, evaluation, candidate, and
-published (plus the `published-contract` context used to validate this document's own example).
+Schema v1 has staging, evaluation, candidate, published, and `published-release-trust` validation
+contexts (plus `published-contract` for this document's example).
 Windows production schema 2 uses the production candidate/published rules with the generation binding.
 Staging manifests use `verificationPolicy: "staging"`,
 `verificationStatus: "unverified-staging"`, `signatureVerified: false`,
@@ -77,9 +75,9 @@ any positive pre-upload identity is rejected. After upload, the published contex
 ids that exactly match the GitHub API release/asset snapshot. The manifest example below remains the
 production-complete contract for artifacts that may be promoted as portable release assets.
 
-### The evaluation lane (ADR-0163 D9)
+### Unsigned native and stable release-trust lanes (ADR-0163 D9)
 
-An explicitly requested `workflow_dispatch` run (`evaluation_build: true`) produces the fourth
+An explicitly requested `workflow_dispatch` run (`evaluation_build: true`) produces the evaluation
 context instead of staging. Its declared triple is `verificationPolicy: "evaluation"`,
 `verificationStatus: "evaluation-unqualified"`, and reason codes exactly
 `["evaluation-artifact", "evaluation-unsigned-allowed"]`, written in the manifest security block,
@@ -87,6 +85,12 @@ every sidecar signing block, every native-helper signing block, and the native a
 `runtimeActivation.trustAnchor` is `evaluation-unqualified` — the anchor states plainly that NO
 platform seal binds the activation document the runtime reads at discovery. Like staging, it uses
 `release.releaseId: 0` and `artifact.assetId: 0`.
+
+A stable tag uses the separate `--release-build` producer flag. Before publication it carries the
+same truthful native evidence, plus `updateEligibility.requiredPredicates.releaseTrustRequired:
+true`. The protected publisher binds positive GitHub release/asset ids and then adds the Keiko
+Ed25519 `releaseTrust` object. The published validator and runtime cryptographically verify that
+object; a dispatch artifact never receives it.
 
 Unlike staging, an evaluation artifact ACTIVATES: the packaged runtime will run its bundled
 OpenCode sidecar. What that waives is exactly the platform signature, notarization and attestation
@@ -98,12 +102,10 @@ both native-helper digests re-hashed from disk at discovery AND again at launch.
 booleans must be present and `false`, never absent: a manifest that omits `verificationChecks` or
 asserts any single platform check is rejected.
 
-An evaluation dispatch artifact is not a production publication candidate and is never one-click
-update-eligible. ADR-0121 D1 separately permits explicitly reviewed public evaluation releases; their
-publication does not establish production trust. The production `assemble` job runs only
-from a stable-tag push and still requires three mutually consistent `verified-production` targets;
-`scripts/verify-portable-runtime-signing.mjs` explicitly refuses `--policy evaluation`; and the
-update preflight and staging-download predicates still demand production/verified-production. The
+An evaluation dispatch artifact is not a publication candidate and is never one-click eligible.
+The stable-tag release-trust profile is assembled only as a mutually consistent three-target set and
+becomes one-click eligible only after its final manifest signature verifies. Native evidence stays
+`evaluation-unqualified`; the signature does not relabel it as Apple- or Microsoft-qualified. The
 schema shape of an evaluation manifest is pinned in `scripts/__tests__/portable-runtime.test.mjs`
 rather than as a second JSON fence here, because `check:portable-manifest` validates only the FIRST
 fence in this document under the published-contract context.
