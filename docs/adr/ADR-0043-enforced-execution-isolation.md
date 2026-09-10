@@ -222,10 +222,11 @@ network namespace, veth, NAT rule, root, or ambient `CAP_NET_ADMIN` is granted. 
 signals, relay failure, and cleanup stay inside the wrapper's fail-closed lifecycle.
 
 Launcher failures cross a dedicated descriptor-3 diagnostics channel that the server provisions
-only for the Linux wrapper. Bubblewrap passes that otherwise-unused inherited descriptor to the
-namespace child; it must not claim descriptor 3 through `--sync-fd`, whose eventfd semantics make a
-text diagnostics pipe unwritable. The namespace launcher removes both the descriptor and its marker
-environment variable before spawning the sidecar, so sidecar stderr cannot forge launcher evidence.
+only for the Linux wrapper. The host launcher relocates that pipe to descriptor 9 when entering the
+network namespace and reserves descriptors 3 through 8, keeping Bubblewrap's low-numbered lifecycle
+eventfds away from it. The pipe is not claimed through `--sync-fd`, whose eventfd semantics make it
+unwritable for text diagnostics. The namespace launcher removes both descriptor 9 and its marker
+environment variable before spawning the sidecar, so the sidecar cannot forge launcher evidence.
 The server accepts only the closed launcher error vocabulary and records the first failure as
 `runtime.confinement.failed`, with the run correlation id and body-free backend/source fields. A
 missing diagnostics pipe refuses the launch and terminates the just-spawned unowned process tree.

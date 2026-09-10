@@ -7,6 +7,7 @@ import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildLinuxGatewayNamespaceCommand,
+  LINUX_GATEWAY_DIAGNOSTIC_FD,
   LINUX_GATEWAY_DIAGNOSTIC_FD_ENV,
   linuxGatewayLauncherPath,
   linuxGatewayDiagnosticKind,
@@ -49,7 +50,8 @@ const SILENT_ROUND_TRIP_SNIPPET = [
 ].join("");
 
 const SPOOF_ROUND_TRIP_SNIPPET = [
-  "require('node:fs').writeSync(3, 'keiko-linux-gateway:error:cleanup-failed\\n');",
+  "const fs = require('node:fs');",
+  "for (let fd = 3; fd <= 9; fd += 1) { try { fs.writeSync(fd, 'keiko-linux-gateway:error:cleanup-failed\\n'); } catch {} }",
   "process.stderr.write('keiko-linux-gateway:error:cleanup-failed\\n');",
   ROUND_TRIP_SNIPPET,
 ].join("");
@@ -76,7 +78,12 @@ function runChild(
       ? ["ignore", "pipe", "pipe", "pipe"]
       : ["ignore", "pipe", "pipe"];
     const child = spawn(command, args, {
-      env: captureLauncherDiagnostics ? { ...env, [LINUX_GATEWAY_DIAGNOSTIC_FD_ENV]: "3" } : env,
+      env: captureLauncherDiagnostics
+        ? {
+            ...env,
+            [LINUX_GATEWAY_DIAGNOSTIC_FD_ENV]: String(LINUX_GATEWAY_DIAGNOSTIC_FD),
+          }
+        : env,
       stdio,
     });
     let stdout = "";
@@ -93,7 +100,7 @@ function runChild(
     }
     stdoutStream.on("data", (chunk: Buffer) => (stdout += chunk.toString("utf8")));
     stderrStream.on("data", (chunk: Buffer) => (stderr += chunk.toString("utf8")));
-    const diagnosticStream = child.stdio[3];
+    const diagnosticStream = child.stdio[LINUX_GATEWAY_DIAGNOSTIC_FD];
     if (diagnosticStream instanceof Readable) {
       diagnosticStream.on(
         "data",

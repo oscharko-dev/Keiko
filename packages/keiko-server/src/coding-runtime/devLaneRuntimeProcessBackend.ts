@@ -5,6 +5,7 @@ import {
   copyRuntimeGatewayConfinement,
   currentPlatform,
   isRuntimeGatewayConfinement,
+  LINUX_GATEWAY_DIAGNOSTIC_FD,
   LINUX_GATEWAY_DIAGNOSTIC_FD_ENV,
   parseLinuxGatewayDiagnosticLine,
   planIsolatedRun,
@@ -418,7 +419,9 @@ function spawnDevLaneChild(
     cwd: options.cwd,
     env: {
       ...options.env,
-      ...(options.launcherDiagnostics ? { [LINUX_GATEWAY_DIAGNOSTIC_FD_ENV]: "3" } : {}),
+      ...(options.launcherDiagnostics
+        ? { [LINUX_GATEWAY_DIAGNOSTIC_FD_ENV]: String(LINUX_GATEWAY_DIAGNOSTIC_FD) }
+        : {}),
     },
     detached: true,
     shell: false,
@@ -428,7 +431,9 @@ function spawnDevLaneChild(
   });
   if (child.stdout === null || child.stderr === null)
     throw new TypeError("dev-lane-runtime-pipes-unavailable");
-  const launcherDiagnostics = options.launcherDiagnostics ? child.stdio[3] : undefined;
+  const launcherDiagnostics = options.launcherDiagnostics
+    ? child.stdio[LINUX_GATEWAY_DIAGNOSTIC_FD]
+    : undefined;
   if (options.launcherDiagnostics && !(launcherDiagnostics instanceof Readable))
     throw new TypeError("linux-gateway-diagnostics-unavailable");
   return {

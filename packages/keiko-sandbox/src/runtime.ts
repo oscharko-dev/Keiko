@@ -362,7 +362,8 @@ export type LinuxGatewayDiagnosticKind =
   | "unsupported-platform";
 
 export const LINUX_GATEWAY_DIAGNOSTIC_FD_ENV = "KEIKO_LINUX_GATEWAY_DIAGNOSTIC_FD";
-const LINUX_GATEWAY_DIAGNOSTIC_FD = 3;
+export const LINUX_GATEWAY_DIAGNOSTIC_FD = 3;
+const LINUX_GATEWAY_NAMESPACE_DIAGNOSTIC_FD = 9;
 const LINUX_GATEWAY_DIAGNOSTIC_PREFIX = "keiko-linux-gateway:error:";
 const LINUX_GATEWAY_DIAGNOSTIC_KINDS: ReadonlySet<string> = new Set([
   "cleanup-failed",
@@ -610,8 +611,8 @@ export function buildLinuxGatewayNamespaceCommand(
 ): readonly [string, readonly string[]] {
   const launcher = [process.execPath, ...namespaceArgs(config, socketPath)];
   if (config.backend === "bubblewrap") {
-    // Bubblewrap passes unused inherited descriptors to its child. Do not name fd 3 with
-    // `--sync-fd`: that option owns an eventfd and makes the diagnostic pipe unwritable.
+    // Bubblewrap passes unused inherited descriptors to its child. The caller reserves fds 3-8
+    // and relocates diagnostics to fd 9 so Bubblewrap's low-numbered eventfds cannot collide.
     return [
       "bwrap",
       [
@@ -631,22 +632,46 @@ export function buildLinuxGatewayNamespaceCommand(
   return ["unshare", ["--map-root-user", "--net", "--kill-child=SIGKILL", "--", ...launcher]];
 }
 
-function diagnosticFdEnabled(): boolean {
-  if (process.env[LINUX_GATEWAY_DIAGNOSTIC_FD_ENV] !== String(LINUX_GATEWAY_DIAGNOSTIC_FD)) {
-    return false;
+function configuredDiagnosticFd(): number | undefined {
+  const configured = process.env[LINUX_GATEWAY_DIAGNOSTIC_FD_ENV];
+  if (configured === String(LINUX_GATEWAY_DIAGNOSTIC_FD)) return LINUX_GATEWAY_DIAGNOSTIC_FD;
+  if (configured === String(LINUX_GATEWAY_NAMESPACE_DIAGNOSTIC_FD)) {
+    return LINUX_GATEWAY_NAMESPACE_DIAGNOSTIC_FD;
   }
+  return undefined;
+}
+
+function activeDiagnosticFd(): number | undefined {
+  const fd = configuredDiagnosticFd();
+  if (fd === undefined) return undefined;
   try {
-    fstatSync(LINUX_GATEWAY_DIAGNOSTIC_FD);
-    return true;
+    fstatSync(fd);
+    return fd;
   } catch {
-    return false;
+    return undefined;
   }
 }
 
-function nestedLauncherStdio(preserveDiagnosticFd: boolean): StdioOptions {
-  return preserveDiagnosticFd
-    ? ["inherit", "inherit", "inherit", "inherit"]
-    : ["inherit", "inherit", "inherit"];
+function diagnosticNestedLauncherStdio(): StdioOptions {
+  return [
+    "inherit",
+    "inherit",
+    "inherit",
+    "ignore",
+    "ignore",
+    "ignore",
+    "ignore",
+    "ignore",
+    "ignore",
+    LINUX_GATEWAY_DIAGNOSTIC_FD,
+  ];
+}
+
+function diagnosticNestedLauncherEnvironment(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    [LINUX_GATEWAY_DIAGNOSTIC_FD_ENV]: String(LINUX_GATEWAY_NAMESPACE_DIAGNOSTIC_FD),
+  };
 }
 
 function targetEnvironment(): NodeJS.ProcessEnv {
@@ -656,8 +681,19 @@ function targetEnvironment(): NodeJS.ProcessEnv {
 }
 
 function targetStdio(): StdioOptions {
-  return diagnosticFdEnabled()
-    ? ["inherit", "inherit", "inherit", "ignore"]
+  return activeDiagnosticFd() === LINUX_GATEWAY_NAMESPACE_DIAGNOSTIC_FD
+    ? [
+        "inherit",
+        "inherit",
+        "inherit",
+        "ignore",
+        "ignore",
+        "ignore",
+        "ignore",
+        "ignore",
+        "ignore",
+        "ignore",
+      ]
     : ["inherit", "inherit", "inherit"];
 }
 
@@ -713,7 +749,7 @@ async function runHost(config: CommonConfig): Promise<number> {
   const directory = await mkdtemp(join(tmpdir(), "keiko-gateway-"));
   const socketPath = join(directory, "relay.sock");
   const childReference: ChildReference = { current: undefined, failure: undefined };
-  const preserveDiagnosticFd = diagnosticFdEnabled();
+  const preserveDiagnosticFd = activeDiagnosticFd() === LINUX_GATEWAY_DIAGNOSTIC_FD;
   const relay = hostRelay(config, () => {
     terminateForRelayFailure(childReference, "host-relay-failed");
   });
@@ -725,7 +761,10 @@ async function runHost(config: CommonConfig): Promise<number> {
       const [command, args] = buildLinuxGatewayNamespaceCommand(config, socketPath);
       const child = spawn(command, args, {
         cwd: config.cwd,
-        stdio: nestedLauncherStdio(preserveDiagnosticFd),
+        env: preserveDiagnosticFd ? diagnosticNestedLauncherEnvironment() : targetEnvironment(),
+        stdio: preserveDiagnosticFd
+          ? diagnosticNestedLauncherStdio()
+          : ["inherit", "inherit", "inherit"],
       });
       childReference.current = child;
       const stopForwarding = forwardSignals(child);
@@ -769,9 +808,10 @@ export function parseLinuxGatewayDiagnosticLine(
 
 function emitLinuxGatewayDiagnostic(kind: LinuxGatewayDiagnosticKind): void {
   const line = `${LINUX_GATEWAY_DIAGNOSTIC_PREFIX}${kind}\n`;
-  if (diagnosticFdEnabled()) {
+  const diagnosticFd = activeDiagnosticFd();
+  if (diagnosticFd !== undefined) {
     try {
-      writeSync(LINUX_GATEWAY_DIAGNOSTIC_FD, line, undefined, "utf8");
+      writeSync(diagnosticFd, line, undefined, "utf8");
       return;
     } catch {
       // Fall back to the closed stderr protocol if the private parent channel was lost.
