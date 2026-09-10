@@ -473,8 +473,9 @@ bootstrap's redacted output tail reaches the coding model through the orchestrat
 
 Two bounds follow from this decision rather than being chosen next to it. The governed
 verification tool is settled by the tool catalog at
-`VERIFICATION_TOOL_MAX_DURATION_MS` (keiko-contracts), derived as the install ceiling plus every
-planned step at its own wall-time ceiling plus one settlement grace — the sandbox default of 30 s
+`VERIFICATION_TOOL_MAX_DURATION_MS` (keiko-contracts), derived as the install ceiling plus the one
+step a governed call runs (it names exactly one verifier) at its own wall-time ceiling plus one
+settlement grace — the sandbox default of 30 s
 never fit a real install-then-build sequence — and the sidecar tool bridge and the generated plugin
 client each outlive that settlement by the contract's grace, so the facade's answer (the report, or
 the catalog's own timeout) always reaches the sidecar. The governed-invocation registry's 30 s TTL is

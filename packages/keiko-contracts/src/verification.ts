@@ -84,16 +84,18 @@ export interface VerificationDependencySummary {
 }
 
 // ─── The governed verification tool's settlement budget ────────────────────────────
-// Derived from the orchestrator's own enforced limits, never chosen: one governed call may install
-// dependencies and then run every planned step in sequence, each up to its wall-time ceiling. The
-// tool catalog settles the verification tool at this budget (`keiko.verification.run`), the sidecar
-// tool bridge and the generated plugin client both outlive it by their own grace, so a real build or
-// test run reports its result instead of an opaque timeout (Coding Workbench runs 13–15).
-export const VERIFICATION_MAX_PLAN_STEPS = 5;
+// Derived from the orchestrator's own enforced limits, never chosen. One governed call names exactly
+// one verifier (`keiko_verification` takes one `verifierId`; the coding facade asks the runner for that
+// one kind), so it may install dependencies and then run that one step, each up to its own wall-time
+// ceiling. The tool catalog settles the verification tool at this budget (`keiko.verification.run`),
+// the sidecar tool bridge and the generated plugin client both outlive it by their own grace, so a
+// real build or test run reports its result instead of an opaque timeout (Coding Workbench runs
+// 13–15).
+export const VERIFICATION_TOOL_STEPS_PER_CALL = 1;
 export const VERIFICATION_SETTLEMENT_GRACE_MS = 15_000;
 export const VERIFICATION_TOOL_MAX_DURATION_MS =
   DEPENDENCY_INSTALL_LIMITS.wallTimeMs +
-  VERIFICATION_MAX_PLAN_STEPS * DEFAULT_VERIFICATION_LIMITS.wallTimeMs +
+  VERIFICATION_TOOL_STEPS_PER_CALL * DEFAULT_VERIFICATION_LIMITS.wallTimeMs +
   VERIFICATION_SETTLEMENT_GRACE_MS;
 
 // ─── The governed verification tool's wait for a human decision ────────────────────

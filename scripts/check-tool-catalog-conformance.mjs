@@ -591,7 +591,7 @@ export async function checkH1ProducerCheckpoint(
   { checkpointPath = H1_PRODUCER_CHECKPOINT_PATH } = {},
   {
     execute = execFileSync,
-    identityFailures = realProducerIdentityFailures,
+    identityFailures = producerLineageFailures,
     ownedPaths = H1_OWNED_SOURCE_PATHS,
   } = {},
 ) {
@@ -663,6 +663,270 @@ export async function realProducerIdentityFailures(root, record) {
       "H1 handoff evidence identity mismatch: durable record's profile cannot be compiled by the current producer",
     ];
   }
+}
+
+// ADR-0175 amendment (PR #3452, 2026-09-10): a producer change after the H1 landing is admitted by
+// an append-only lineage of owner-issued producer checkpoints. Each entry binds the identity it
+// introduces to the identity it replaced and to SHA-256-pinned verification and independent-review
+// receipts; the durable H1 records keep their historical identity untouched. The current producer
+// must equal a record's identity, or be the last identity of a lineage that starts at that record —
+// so a producer change without its own checkpoint still fails, now with the reason it failed.
+export const TOOL_CATALOG_PRODUCER_LINEAGE_PATH =
+  "docs/architecture/tool-catalog-producer-lineage.v1.json";
+const LINEAGE_FIELDS = Object.freeze(["schemaVersion", "profile", "entries"]);
+const LINEAGE_ENTRY_FIELDS = Object.freeze([
+  "sequence",
+  "predecessor",
+  "catalogRevision",
+  "projectionDigest",
+  "handlerSetDigest",
+  "sourceCommit",
+  "integrationPr",
+  "reason",
+  "verificationRef",
+  "reviewRef",
+]);
+const LINEAGE_IDENTITY_FIELDS = Object.freeze(["catalogRevision", "projectionDigest"]);
+const LINEAGE_VERIFICATION_FIELDS = Object.freeze([
+  "schemaVersion",
+  "status",
+  "verificationKind",
+  "sequence",
+  "sourceCommit",
+  "catalogRevision",
+  "projectionDigest",
+  "command",
+  "testFiles",
+  "testCount",
+  "result",
+]);
+const LINEAGE_REVIEW_FIELDS = Object.freeze([
+  "schemaVersion",
+  "status",
+  "reviewKind",
+  "sequence",
+  "sourceCommit",
+  "catalogRevision",
+  "projectionDigest",
+  "handlerSetDigest",
+  "reviewer",
+  "criteria",
+]);
+const LINEAGE_REASON = /^[a-z]+(?:-[a-z]+){0,8}$/u;
+
+async function compiledProducerIdentity(root, profile) {
+  const producer = await loadToolCatalogProducer(root);
+  const catalog =
+    profile.id === "opencode"
+      ? producer.createKeikoToolCatalog([producer.opencodeRegistrationSet()])
+      : producer.createInitialToolCatalog();
+  const projection = producer.compileToolProjection(catalog, profile);
+  return {
+    catalogRevision: projection.catalogRevision,
+    projectionDigest: projection.projectionDigest,
+  };
+}
+
+function sameProducerIdentity(a, b) {
+  return a.catalogRevision === b.catalogRevision && a.projectionDigest === b.projectionDigest;
+}
+
+function recordIdentityMismatch(current, record) {
+  const failures = [];
+  if (current.catalogRevision !== record.catalogRevision)
+    failures.push(
+      "H1 handoff evidence identity mismatch: catalogRevision does not match the current producer",
+    );
+  if (current.projectionDigest !== record.projectionDigest)
+    failures.push(
+      "H1 handoff evidence identity mismatch: projectionDigest does not match the current producer",
+    );
+  return failures;
+}
+
+function readProducerLineage(root, lineagePath) {
+  try {
+    return { lineage: JSON.parse(readFileSync(join(root, lineagePath), "utf8")) };
+  } catch (error) {
+    if (error?.code === "ENOENT") return { lineage: undefined };
+    return { failures: ["tool-catalog producer lineage malformed: not valid JSON"] };
+  }
+}
+
+function pinnedLineageReceipt(root, ref, sequence, kind) {
+  const path = `docs/qa/evidence/tool-catalog-producer-${String(sequence)}-${kind}.v1.json`;
+  const prefix = `${path}#sha256=`;
+  if (typeof ref !== "string" || !ref.startsWith(prefix) || !HEX_64.test(ref.slice(prefix.length)))
+    return {
+      failure: `tool-catalog producer lineage entry ${String(sequence)} has an invalid ${kind} reference`,
+    };
+  try {
+    const bytes = readFileSync(join(root, path), "utf8");
+    if (sha256Hex(bytes) !== ref.slice(prefix.length))
+      return {
+        failure: `tool-catalog producer lineage entry ${String(sequence)} has a stale ${kind} receipt`,
+      };
+    return { receipt: JSON.parse(bytes) };
+  } catch {
+    return {
+      failure: `tool-catalog producer lineage entry ${String(sequence)} has a missing or malformed ${kind} receipt`,
+    };
+  }
+}
+
+function validLineageIdentity(value) {
+  return (
+    hasExactFields(value, LINEAGE_IDENTITY_FIELDS) &&
+    HEX_64.test(value.catalogRevision) &&
+    HEX_64.test(value.projectionDigest)
+  );
+}
+
+function validLineageEntryShape(entry, index) {
+  return (
+    hasExactFields(entry, LINEAGE_ENTRY_FIELDS) &&
+    entry.sequence === index + 1 &&
+    validLineageIdentity(entry.predecessor) &&
+    HEX_64.test(entry.catalogRevision) &&
+    HEX_64.test(entry.projectionDigest) &&
+    HEX_64.test(entry.handlerSetDigest) &&
+    HEX_40.test(entry.sourceCommit) &&
+    isPositiveInteger(entry.integrationPr) &&
+    typeof entry.reason === "string" &&
+    LINEAGE_REASON.test(entry.reason)
+  );
+}
+
+function receiptBindsEntry(receipt, entry) {
+  return (
+    receipt.schemaVersion === 1 &&
+    receipt.sequence === entry.sequence &&
+    receipt.sourceCommit === entry.sourceCommit &&
+    receipt.catalogRevision === entry.catalogRevision &&
+    receipt.projectionDigest === entry.projectionDigest
+  );
+}
+
+function validLineageVerificationReceipt(receipt, entry) {
+  return (
+    hasExactFields(receipt, LINEAGE_VERIFICATION_FIELDS) &&
+    receiptBindsEntry(receipt, entry) &&
+    receipt.status === "verified" &&
+    receipt.verificationKind === "deterministic-production-managed" &&
+    isNonEmptyString(receipt.command) &&
+    isPositiveInteger(receipt.testFiles) &&
+    isPositiveInteger(receipt.testCount) &&
+    receipt.result === "passed"
+  );
+}
+
+function validReviewCriterion(criterion) {
+  return (
+    hasExactFields(criterion, ["label", "result"]) &&
+    isNonEmptyString(criterion.label) &&
+    criterion.result === "verified"
+  );
+}
+
+function validLineageReviewReceipt(receipt, entry) {
+  return (
+    hasExactFields(receipt, LINEAGE_REVIEW_FIELDS) &&
+    receiptBindsEntry(receipt, entry) &&
+    receipt.status === "accepted" &&
+    receipt.reviewKind === "independent-source-and-evidence-audit" &&
+    receipt.handlerSetDigest === entry.handlerSetDigest &&
+    isNonEmptyString(receipt.reviewer) &&
+    Array.isArray(receipt.criteria) &&
+    receipt.criteria.length > 0 &&
+    receipt.criteria.every(validReviewCriterion)
+  );
+}
+
+function lineageReceiptFailures(root, entry) {
+  const failures = [];
+  const verification = pinnedLineageReceipt(
+    root,
+    entry.verificationRef,
+    entry.sequence,
+    "verification",
+  );
+  if (verification.failure !== undefined) failures.push(verification.failure);
+  else if (!validLineageVerificationReceipt(verification.receipt, entry))
+    failures.push(
+      `tool-catalog producer lineage entry ${String(entry.sequence)} verification receipt does not bind it`,
+    );
+  const review = pinnedLineageReceipt(root, entry.reviewRef, entry.sequence, "review");
+  if (review.failure !== undefined) failures.push(review.failure);
+  else if (!validLineageReviewReceipt(review.receipt, entry))
+    failures.push(
+      `tool-catalog producer lineage entry ${String(entry.sequence)} review receipt does not bind it`,
+    );
+  return failures;
+}
+
+function lineageEntryFailures(root, entry, index, previous) {
+  if (!validLineageEntryShape(entry, index))
+    return [`tool-catalog producer lineage entry ${String(index + 1)} malformed`];
+  return [
+    ...(sameProducerIdentity(entry.predecessor, previous)
+      ? []
+      : [
+          `tool-catalog producer lineage broken: entry ${String(entry.sequence)} does not continue the identity before it`,
+        ]),
+    ...lineageReceiptFailures(root, entry),
+  ];
+}
+
+function producerLineageChainFailures(root, lineage, record, current) {
+  if (
+    !hasExactFields(lineage, LINEAGE_FIELDS) ||
+    lineage.schemaVersion !== 1 ||
+    !Array.isArray(lineage.entries) ||
+    lineage.entries.length === 0
+  )
+    return ["tool-catalog producer lineage malformed: unexpected shape"];
+  if (
+    !isCatalogProfileRef(lineage.profile) ||
+    lineage.profile.id !== record.profile.id ||
+    lineage.profile.version !== record.profile.version
+  )
+    return ["tool-catalog producer lineage profile does not match the record"];
+  const failures = [];
+  let previous = record;
+  lineage.entries.forEach((entry, index) => {
+    failures.push(...lineageEntryFailures(root, entry, index, previous));
+    previous = entry;
+  });
+  if (failures.length === 0 && !sameProducerIdentity(previous, current))
+    failures.push(
+      "tool-catalog producer lineage stale: the current producer is not the lineage's last identity",
+    );
+  return failures;
+}
+
+/**
+ * The current producer against a durable H1 record: equal, or reachable through the whole
+ * owner-issued lineage. Without a lineage file a mismatch reports exactly what it always did.
+ */
+export async function producerLineageFailures(
+  root,
+  record,
+  { lineagePath = TOOL_CATALOG_PRODUCER_LINEAGE_PATH, identity = compiledProducerIdentity } = {},
+) {
+  if (typeof record.profile?.id !== "string") return [];
+  let current;
+  try {
+    current = await identity(root, record.profile);
+  } catch {
+    return [
+      "H1 handoff evidence identity mismatch: durable record's profile cannot be compiled by the current producer",
+    ];
+  }
+  if (sameProducerIdentity(current, record)) return [];
+  const read = readProducerLineage(root, lineagePath);
+  if (read.failures !== undefined) return read.failures;
+  if (read.lineage === undefined) return recordIdentityMismatch(current, record);
+  return producerLineageChainFailures(root, read.lineage, record, current);
 }
 
 // Resolves a caller-declared commit against real Git, never trusting the string alone: the commit
@@ -818,7 +1082,7 @@ export async function checkH1HandoffEvidence(
   landingPins,
   {
     execute = execFileSync,
-    identityFailures = realProducerIdentityFailures,
+    identityFailures = producerLineageFailures,
     receiptFailures = landingReceiptFailures,
     sourceHeadFailures = realSourceHeadFailures,
     provenancePath = H1_PROVENANCE_PATH,

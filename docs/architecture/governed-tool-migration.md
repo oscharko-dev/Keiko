@@ -127,7 +127,11 @@ the PR froze. The source and squash merge resolve to the same complete Git tree 
 integration does not preserve commit ancestry. Checkpoint review may be an independent agent's
 review of the exact producer contents with a retained artifact/hash; final delivery additionally
 pins GitHub's source-head required checks and review-thread settlement.
-Producer changes require fresh verification and review evidence. Durable provenance survives,
+Producer changes require fresh verification and review evidence. After the H1 landing, that evidence
+is an entry of the append-only producer lineage (`docs/architecture/tool-catalog-producer-lineage.v1.json`,
+ADR-0175 amendment of 2026-09-10): the entry continues the previous identity, names the new one, and
+pins a passing managed verification and an independent audit receipt; the H1 records themselves are
+never rewritten. Durable provenance survives,
 is independently revalidated by #3415, and is not a projection-digest input. Final required-check
 and actual GitHub merge evidence are now recorded because they exist; no separate dev PR or merge
 was needed for this producer/consumer handoff.

@@ -492,10 +492,39 @@ fails the architecture consistency gate. Runtime conformance, performance and li
 remain #3415/#3390 delivery criteria. This imposes explicit migration work but prevents silent
 schema drift, false readiness and competing authority systems.
 
+## Amendment — post-landing producer changes carry their own owner-issued checkpoint (PR #3452, 2026-09-10)
+
+The durable H1 records (`h1-provenance.v1.json`, `h1-producer-checkpoint.v1.json`) certify the
+producer identity that landed with #3394. Their identity check compared that historical identity to
+the CURRENT producer, so every later producer change — however well verified and reviewed — could
+only be admitted by rewriting a historical record. Producer changes still require fresh verification
+and review evidence (this ADR, D3); that evidence now has a durable place that does not rewrite
+history.
+
+`docs/architecture/tool-catalog-producer-lineage.v1.json` is an append-only lineage of owner-issued
+producer checkpoints. Each entry names the identity it replaces (`predecessor`), the identity it
+introduces (`catalogRevision`, `projectionDigest`, `handlerSetDigest`), the source commit and
+integration PR that carry the change, a closed `reason`, and two SHA-256-pinned receipts under
+`docs/qa/evidence/tool-catalog-producer-<sequence>-{verification,review}.v1.json`: a passing
+deterministic managed verification of the producer at that source commit, and an independent
+source-and-evidence audit that accepts every stated criterion. `producerLineageFailures`
+(check-tool-catalog-conformance.mjs) is the one identity check for both H1 records: the recompiled
+current producer must equal the record's identity, or be the last identity of a lineage whose first
+entry continues exactly that identity, with consecutive sequences, each entry continuing the one
+before it, and every receipt bound to its entry. A producer changed again without a new entry fails
+`lineage stale`; an entry that does not continue the record fails `lineage broken`; a receipt
+edited after pinning fails `stale receipt`. Without a lineage file the check reports exactly the
+historical mismatch it always did.
+
+First entry: the verification tool's settlement budget derived from the verification
+orchestrator's enforced limits (`VERIFICATION_TOOL_MAX_DURATION_MS`, ADR-0043 D17) and the
+verification tool's description naming the commit-proof blocking paths (Coding Workbench runs 13–19).
+
 ## Version History
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.3 | 2026-09-10 | Post-landing producer changes are admitted through an append-only lineage of owner-issued checkpoints with pinned verification and independent-review receipts; the H1 records keep their historical identity (PR #3452). |
 | 1.2 | 2026-09-10 | D4: the catalog ceilings also bound the arguments recorded in the sidecar's durable tool-part rows and derive the history response budget; a refused part row is named body-free in the reconciliation diagnostic (PR #3452). |
 | 1.1 | 2026-09-09 | Record the completed #3394 squash-delivery semantics: final signed source and dev-reachable merge are distinct identities with equal complete Git trees; pin exact-schema required-check and review-settlement receipts and the refreshed owned-source closure (#3414, #3415). |
 | 1.0 | 2026-09-04 | Accept the governed-tool ownership, pure package boundary, version/digest/result/state/evidence contract and workspace-only coding raw-coordinate lane (#3411); implementation belongs to the named delivery owners. Consolidate delivery into owner-selected PR #3394 with reviewed producer checkpoints instead of dedicated dev merges. |
