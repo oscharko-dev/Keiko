@@ -57,9 +57,10 @@ import {
   createOperatorProvisioningQualification,
   currentGatewayEgressConfig,
   currentRedactionSecrets,
+  disposeRuntimeServicesRecorded,
   ensureManagedTaskWorkspaceIdentity,
-  redactEvidenceString,
   reconcileTaskWorkspacesAtStartup,
+  redactEvidenceString,
   type UiHandlerDeps,
 } from "./deps.js";
 import {
@@ -624,6 +625,50 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     expect(shutdown[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
     expect(JSON.stringify(shutdown)).not.toContain(stateDir);
   }, 15000);
+
+  // Owner review, PR #3452: the teardown's cleanup can fail on its own. Both branches of that failure
+  // go through the helper the dispose closure runs in its `finally`, reproduced here in the same
+  // shape: the faulted cleanup is recorded with its full body-free description either way, an earlier
+  // failure is never masked, and the cleanup's own error surfaces when nothing else was failing.
+  it("keeps the earlier failure when the cleanup also faults, and records why it faulted", async (): Promise<void> => {
+    const records: Readonly<Record<string, unknown>>[] = [];
+    const earlier = new Error("orchestrator shutdown failed");
+    const cleanupError = new Error("cleanup failed", { cause: new TypeError("inner") });
+    const teardown = async (): Promise<void> => {
+      try {
+        throw earlier;
+      } finally {
+        await disposeRuntimeServicesRecorded(
+          () => Promise.reject(cleanupError),
+          (cleanup): void => void records.push(cleanup),
+          true,
+        );
+      }
+    };
+
+    await expect(teardown()).rejects.toBe(earlier);
+    expect(records).toEqual([
+      expect.objectContaining({
+        cleanup: "faulted",
+        errorClass: "Error",
+        causeChain: ["TypeError"],
+      }),
+    ]);
+  });
+
+  it("surfaces the cleanup's own error when the shutdown itself succeeded", async (): Promise<void> => {
+    const records: Readonly<Record<string, unknown>>[] = [];
+    const cleanupError = new Error("cleanup failed");
+
+    await expect(
+      disposeRuntimeServicesRecorded(
+        () => Promise.reject(cleanupError),
+        (cleanup): void => void records.push(cleanup),
+        false,
+      ),
+    ).rejects.toBe(cleanupError);
+    expect(records).toEqual([expect.objectContaining({ cleanup: "faulted", errorClass: "Error" })]);
+  });
 
   it("materializes the managed root before content-bearing routes classify ordinary roots", async (): Promise<void> => {
     const stateDir = tmp("managed-root-composition-");

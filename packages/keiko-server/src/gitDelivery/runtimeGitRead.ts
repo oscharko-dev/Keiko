@@ -24,6 +24,7 @@ import {
   readGitBlobText,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { parseGitEditorUnifiedDiff } from "../gitDiffParser.js";
+import { lineChangeCounts, lineDiffSide, unifiedDiffHunks } from "./lineDiff.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
@@ -97,30 +98,22 @@ interface DiffSides {
   readonly oldMode: string;
   readonly newMode: string;
 }
-function textLines(text: string): readonly string[] {
-  return text === "" ? [] : text.replace(/\n$/u, "").split("\n");
-}
-function rawPatch(sides: DiffSides): string {
-  const before = textLines(sides.before);
-  const after = textLines(sides.after);
+// The patch the editor's diff parser reads: Git's own headers for the change, then the hunks of the
+// in-process line diff of the two raw sides, so a one-line edit is one hunk inside its context and
+// not a whole-file replacement (CodeRabbit review, PR #3452; lineDiff.ts says why not `git diff`).
+function unifiedPatch(sides: DiffSides): string {
   const a = JSON.stringify(`a/${sides.path}`);
   const b = JSON.stringify(`b/${sides.path}`);
   const headers = patchHeaders(sides, a, b);
-  if (sides.before === sides.after) return `${headers.join("\n")}\n`;
+  const hunks = unifiedDiffHunks(lineDiffSide(sides.before), lineDiffSide(sides.after));
+  if (hunks.length === 0) return `${headers.join("\n")}\n`;
   return [
     ...headers,
     `--- ${sides.added ? "/dev/null" : a}`,
     `+++ ${sides.deleted ? "/dev/null" : b}`,
-    `@@ -${String(before.length === 0 ? 0 : 1)},${String(before.length)} +${String(after.length === 0 ? 0 : 1)},${String(after.length)} @@`,
-    ...patchLines(sides.before, "-"),
-    ...patchLines(sides.after, "+"),
+    ...hunks,
     "",
   ].join("\n");
-}
-function patchLines(text: string, prefix: string): readonly string[] {
-  const lines = textLines(text).map((line) => `${prefix}${line}`);
-  if (text.length > 0 && !text.endsWith("\n")) lines.push(String.raw`\ No newline at end of file`);
-  return lines;
 }
 function patchHeaders(sides: DiffSides, a: string, b: string): readonly string[] {
   return [
@@ -145,7 +138,7 @@ function diffFile(sides: DiffSides, scope: GitEditorDiffScope): GitEditorDiffFil
       removedLines: 0,
       truncated: false,
     };
-  return parseGitEditorUnifiedDiff(rawPatch(sides), {
+  return parseGitEditorUnifiedDiff(unifiedPatch(sides), {
     scope,
     selectedRootPrefix: "",
     processTruncated: false,
@@ -327,9 +320,10 @@ export async function admitStageSelection(
 }
 
 /**
- * Line counts for an admitted selection, read from each pending path's two sides — the same sides
- * the diff reader renders, counted whole instead of rendered under a response budget. A fully staged
- * path contributes nothing: there is no index-to-worktree change left to count.
+ * Line counts for an admitted selection: the changed lines of each pending path's two sides, from
+ * the same line diff the diff reader renders but never limited by its response budget. A one-line
+ * edit counts 1/1, not every line of both sides (CodeRabbit review, PR #3452). A fully staged path
+ * contributes nothing: there is no index-to-worktree change left to count.
  */
 export async function reviewStageSelection(
   context: VerifiedCommitRunContext,
@@ -343,8 +337,9 @@ export async function reviewStageSelection(
       throw new Error("git-runtime-authority-denied");
     const sides = await readSides(context, execution, change.path, "unstaged");
     if (sides.binary || sides.same) continue;
-    addedLines += textLines(sides.after).length;
-    deletedLines += textLines(sides.before).length;
+    const counts = lineChangeCounts(lineDiffSide(sides.before), lineDiffSide(sides.after));
+    addedLines += counts.added;
+    deletedLines += counts.deleted;
   }
   return { fileCount: selection.length, addedLines, deletedLines };
 }

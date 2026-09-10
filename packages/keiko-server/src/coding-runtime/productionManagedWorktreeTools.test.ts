@@ -2395,6 +2395,27 @@ describe("verification waiting on the operator's package-script trust decision",
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  // The path the fix above exists for (owner review, PR #3452): the first probe keeps the wait open,
+  // and the one fired by the interval — after the promise executor has long returned — throws. The
+  // wait still settles through its closed `unavailable` outcome and releases every timer; before the
+  // fix that throw escaped the timer callback and the wait never settled.
+  it("settles unavailable when a probe fired by the interval throws", async () => {
+    vi.useFakeTimers();
+    let probes = 0;
+    const outcome = waitForWorkspaceScriptTrust((): { readonly trusted: boolean } => {
+      probes += 1;
+      if (probes === 1) return { trusted: false };
+      throw new Error("workspace resolver failed closed");
+    });
+    expect(probes).toBe(1);
+
+    await vi.advanceTimersToNextTimerAsync();
+
+    await expect(outcome).resolves.toBe("unavailable");
+    expect(probes).toBe(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   // An aborted tool call ends the wait immediately; the run is going away and nobody is deciding.
   it("settles cancelled when the tool call is aborted", async () => {
     vi.useFakeTimers();

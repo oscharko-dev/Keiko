@@ -1,4 +1,9 @@
-import { runtimeGitDiff, runtimeGitStatus } from "./runtimeGitRead.js";
+import {
+  admitStageSelection,
+  reviewStageSelection,
+  runtimeGitDiff,
+  runtimeGitStatus,
+} from "./runtimeGitRead.js";
 import { readVerifiedCommitFacts } from "./verifiedCommitFacts.js";
 import { redactLogFields } from "../observability/log-redaction.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -1273,6 +1278,40 @@ describe("productive runtime status/diff/stage lane", () => {
       kind: "meta",
       text: "\\ No newline at end of file",
     });
+  });
+  // CodeRabbit review, PR #3452: a one-line edit inside unchanged context used to count and render as
+  // a whole-file replacement, both in the operator's stage review and in the model-facing diff. Both
+  // now come from one line diff of the two raw sides (lineDiff.ts), never from a filtered read.
+  it("counts and renders only the changed line of a file inside unchanged context", async () => {
+    const lines = Array.from(
+      { length: 40 },
+      (_, index) => `export const line${String(index)} = ${String(index)};`,
+    );
+    writeFileSync(join(root, "context.js"), `${lines.join("\n")}\n`);
+    git(["add", "context.js"]);
+    git(["commit", "-qm", "context"]);
+    lines[20] = "export const line20 = -20;";
+    writeFileSync(join(root, "context.js"), `${lines.join("\n")}\n`);
+    const execution = options.execution ?? {};
+
+    const worktree = await runtimeGitDiff(context(), execution, "unstaged", ["context.js"]);
+    expect(worktree.files).toEqual([
+      expect.objectContaining({ path: "context.js", addedLines: 1, removedLines: 1 }),
+    ]);
+    expect(worktree.files[0]?.hunks).toHaveLength(1);
+    const selection = await admitStageSelection(context(), execution, ["context.js"]);
+    await expect(reviewStageSelection(context(), execution, selection ?? [])).resolves.toEqual({
+      fileCount: 1,
+      addedLines: 1,
+      deletedLines: 1,
+    });
+
+    git(["add", "context.js"]);
+    const staged = await runtimeGitDiff(context(), execution, "staged", ["context.js"]);
+    expect(staged.files).toEqual([
+      expect.objectContaining({ path: "context.js", addedLines: 1, removedLines: 1 }),
+    ]);
+    expect(staged.files[0]?.hunks).toHaveLength(1);
   });
   it("expands a directory diff through bounded Git-owned changed paths", async () => {
     mkdirSync(join(root, "nested"));

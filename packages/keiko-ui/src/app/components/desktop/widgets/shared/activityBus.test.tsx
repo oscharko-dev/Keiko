@@ -127,4 +127,67 @@ describe("activityBus", () => {
       time: Date.parse(event.occurredAt),
     });
   });
+
+  function decisionEvent(
+    cursor: string,
+    sequence: number,
+    auxiliaryOutcome?: "accepted" | "denied",
+    runId = "run-1",
+  ): CodingWorkbenchRuntimeSseEvent {
+    return {
+      schemaVersion: "1",
+      cursor,
+      sequence,
+      occurredAt: "2026-06-15T10:00:02.000Z",
+      kind: "runtime-event",
+      runId,
+      state: auxiliaryOutcome === undefined ? "awaiting-approval" : "running",
+      revision: sequence,
+      eventKind: "operator-decision",
+      ...(auxiliaryOutcome === undefined ? {} : { auxiliaryOutcome }),
+    };
+  }
+
+  // Owner review, PR #3452: the open decision and its settlement are two events with two cursors,
+  // so the settlement must retire the pending entry instead of sitting beside it.
+  it("retires the open decision entry its settlement follows", () => {
+    act(() =>
+      logRuntimeActivityEvents([
+        decisionEvent("cursor-2", 2),
+        decisionEvent("cursor-3", 3, "accepted"),
+      ]),
+    );
+
+    expect(getActivity()).toHaveLength(1);
+    expect(getActivity()[0]).toMatchObject({ id: "run-1:cursor-3", type: "approved" });
+  });
+
+  it("does not re-admit an open decision replayed after its settlement", () => {
+    act(() =>
+      logRuntimeActivityEvents([
+        decisionEvent("cursor-2", 2),
+        decisionEvent("cursor-3", 3, "denied"),
+      ]),
+    );
+    act(() => logRuntimeActivityEvents([decisionEvent("cursor-2", 2)]));
+
+    expect(getActivity().map((entry) => entry.type)).toEqual(["rejected"]);
+  });
+
+  it("keeps a settled decision when the run opens its next one, and never crosses runs", () => {
+    act(() =>
+      logRuntimeActivityEvents([
+        decisionEvent("cursor-2", 2),
+        decisionEvent("cursor-9", 9, undefined, "run-2"),
+        decisionEvent("cursor-3", 3, "accepted"),
+        decisionEvent("cursor-5", 5),
+      ]),
+    );
+
+    expect(getActivity().map((entry) => [entry.id, entry.type])).toEqual([
+      ["run-1:cursor-5", "approval"],
+      ["run-1:cursor-3", "approved"],
+      ["run-2:cursor-9", "approval"],
+    ]);
+  });
 });

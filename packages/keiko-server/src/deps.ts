@@ -4637,10 +4637,11 @@ function recordRuntimeShutdown(
   activityLog: ServerLogSink,
   correlationId: string,
   state: "started" | "completed",
-  extra: Readonly<Record<string, number | boolean | string>>,
+  extra: Readonly<Record<string, unknown>>,
 ): void {
   activityLog.write({
-    level: state === "started" ? "warn" : "info",
+    // A faulted cleanup makes the completion line a warning even when the teardown itself ended.
+    level: state === "started" || extra.cleanup === "faulted" ? "warn" : "info",
     category: "process",
     op: "server.runtime.shutdown",
     correlationId,
@@ -4654,18 +4655,21 @@ function recordRuntimeShutdown(
 // rejecting `disposeRuntimeServices` used to leave only the `started` line behind, and its error
 // replaced the orchestrator's own. The cleanup's disposition rides on the line; its error is
 // rethrown only when nothing else was already failing, so the original error survives.
-async function disposeRuntimeServicesRecorded(
+export async function disposeRuntimeServicesRecorded(
   dispose: () => Promise<void>,
-  record: (cleanup: Readonly<Record<string, string>>) => void,
+  record: (cleanup: Readonly<Record<string, unknown>>) => void,
   alreadyFailing: boolean,
 ): Promise<void> {
   let failure: unknown;
-  let cleanup: Readonly<Record<string, string>> = { cleanup: "completed" };
+  let cleanup: Readonly<Record<string, unknown>> = { cleanup: "completed" };
   try {
     await dispose();
   } catch (error) {
     failure = error;
-    cleanup = { cleanup: "faulted", cleanupErrorClass: describeError(error).errorClass };
+    // The whole body-free description (class, code, dist-anchored frames, cause chain): while an
+    // earlier failure propagates, this line is the only evidence of why the cleanup itself failed
+    // (owner review, PR #3452).
+    cleanup = { cleanup: "faulted", ...describeError(error) };
   } finally {
     record(cleanup);
   }
