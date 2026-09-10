@@ -526,10 +526,10 @@ describe("real OS-level gateway confinement (Linux namespace bridge, #3422)", ()
       if (!availability.bubblewrap && !availability.unshare) {
         throw new Error("linux-gateway-proof-backend-unavailable");
       }
+      const externalHost = nonLoopbackIpv4Address();
       const firstGateway = await listenEphemeral();
       const secondGateway = await listenEphemeral();
       const hostile = await listenEphemeral();
-      const externalHost = nonLoopbackIpv4Address();
       const externalHostService = await listenEphemeral(externalHost);
       const launcherTemp = await mkdtemp(join(tmpdir(), "keiko-gateway-proof-"));
       const env = { ...process.env, TMPDIR: launcherTemp };

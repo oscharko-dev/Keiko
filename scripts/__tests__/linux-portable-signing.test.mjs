@@ -195,6 +195,17 @@ describe("Linux portable qualification sealing", () => {
     );
   });
 
+  it("rejects a bound archive with incomplete qualification evidence", async () => {
+    const value = fixture();
+    const deps = dependencies(value.receipt);
+    prepareLinuxQualifiedPayload(optionsFor(value.stageRoot), deps);
+    rmSync(join(value.resourceRoot, ".portable", "setup-manifest.json"));
+
+    await expect(finalizeLinuxQualifiedPayload(optionsFor(value.stageRoot), deps)).rejects.toThrow(
+      "production archive evidence is incomplete",
+    );
+  });
+
   it("rejects a payload symlink that escapes the signed resource root", async () => {
     const value = fixture();
     const deps = dependencies(value.receipt);
