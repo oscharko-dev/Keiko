@@ -2498,8 +2498,8 @@ describe("verificationLivenessRefusal", () => {
   });
 
   it("reports nothing while every condition holds", () => {
-    expect(verificationLivenessRefusal(liveInput, liveGuard, new AbortController().signal)).toBe(
-      undefined,
-    );
+    expect(
+      verificationLivenessRefusal(liveInput, liveGuard, new AbortController().signal),
+    ).toBeUndefined();
   });
 });
