@@ -112,6 +112,8 @@ export interface CommandRunnerManagerOptions {
   // ADR-0147 D3 — the managed worktree root's own explicit human grant; see the verification
   // runner's option of the same name. Defaults fail closed.
   readonly isWorktreeTrustedByHumanGrant?: ((canonicalRoot: string) => boolean) | undefined;
+  /** ADR-0147 D3, autonomous-delivery amendment: see `VerificationRunnerManagerOptions`. */
+  readonly isWorktreeManifestRunAdmitted?: ((canonicalRoot: string) => boolean) | undefined;
   readonly now?: (() => number) | undefined;
   readonly resolveWorkspaceRootAccess?:
     ((requestedRoot: string) => WorkspaceRootAccess | undefined) | undefined;
@@ -322,6 +324,7 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
   private readonly runDeps: Partial<RunCommandDeps>;
   private readonly isWorkspaceTrustedForPackageScripts: CommandRunnerWorkspaceTrustDecider;
   private readonly worktreeHumanGrant: (canonicalRoot: string) => boolean;
+  private readonly runAdmittedManifest: (canonicalRoot: string) => boolean;
   private readonly now: () => number;
   private readonly rootAccessResolver:
     ((requestedRoot: string) => WorkspaceRootAccess | undefined) | undefined;
@@ -340,6 +343,7 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
     this.isWorkspaceTrustedForPackageScripts =
       opts.isWorkspaceTrustedForPackageScripts ?? ((): boolean => false);
     this.worktreeHumanGrant = opts.isWorktreeTrustedByHumanGrant ?? ((): boolean => false);
+    this.runAdmittedManifest = opts.isWorktreeManifestRunAdmitted ?? ((): boolean => false);
     this.now = opts.now ?? Date.now;
     this.rootAccessResolver = opts.resolveWorkspaceRootAccess;
   }
@@ -418,6 +422,7 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
       standingTrust: (): boolean =>
         this.isWorkspaceTrustedForPackageScripts(resolved.trustProjectId, resolved.trustWorkspace),
       worktreeHumanGrant: (): boolean => this.worktreeHumanGrant(resolved.access.canonicalRoot),
+      runAdmittedManifest: (): boolean => this.runAdmittedManifest(resolved.access.canonicalRoot),
     }).trusted;
   }
 

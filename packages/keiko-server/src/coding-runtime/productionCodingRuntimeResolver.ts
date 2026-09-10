@@ -125,6 +125,7 @@ import {
 } from "./codingToolApprovalBridge.js";
 import { createServerApprovedSkillCatalog, type SkillCatalog } from "./skillCatalog.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
+import type { WorkspaceScriptTrustService } from "../workspace-script-trust.js";
 import { isIdentityProofFailure } from "../task-workspace/errors.js";
 
 type MintedRuntime = Extract<CodingRuntimeMintResult, { readonly ok: true }>;
@@ -200,6 +201,13 @@ export interface ProductionCodingRuntimeResolverInput {
   readonly researchFetchImpl?: ProductionManagedWorktreeToolInput["researchFetchImpl"] | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly resolveWorkspaceRootAccess: (requestedRoot: string) => WorkspaceRootAccess | undefined;
+  /**
+   * ADR-0147 D3, autonomous-delivery amendment: the server-owned script-trust service, so an
+   * autonomous run's own manifest edits are admitted for its worktree and dropped with the run.
+   * Optional so a composition without it keeps every mode asking, exactly as before.
+   */
+  readonly workspaceScriptTrust?:
+    Pick<WorkspaceScriptTrustService, "admitRunManifest" | "revokeRunAdmissions"> | undefined;
 }
 
 interface ResolverRunRecord extends ProductionRuntimeRunRecord {
@@ -964,6 +972,7 @@ function createBackendRun({
       leases,
       research,
       () => runtimeNow(input),
+      input.workspaceScriptTrust,
     ),
     onRuntimeEvent,
     // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) reads as "not
@@ -1151,9 +1160,26 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
     explicitSkillInvocations: explicitSkills,
     ...(input.commandRunner === undefined ? {} : { commandRunner: input.commandRunner }),
     ...managedVerificationOptions(input, minted, onRuntimeEvent),
+    ...runManifestAdmission(input, context, minted),
     onRuntimeEvent,
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
   });
+}
+
+// The run-scoped manifest admission (ADR-0147 D3, autonomous-delivery amendment), bound to this
+// run's worktree, run id and authority expiry; absent when the composition has no trust service.
+export function runManifestAdmission(
+  input: Pick<ProductionCodingRuntimeResolverInput, "workspaceScriptTrust">,
+  context: Pick<CodingRuntimeTrustedContext, "workspaceRoot" | "expiresAt">,
+  minted: Pick<MintedRuntime, "authorityRef">,
+): Pick<ProductionManagedWorktreeToolInput, "admitRunManifest"> {
+  const admit = input.workspaceScriptTrust?.admitRunManifest;
+  if (admit === undefined) return {};
+  return {
+    admitRunManifest: (): void => {
+      admit(context.workspaceRoot, minted.authorityRef.runId, context.expiresAt);
+    },
+  };
 }
 
 /** The verification port plus the channel a refused verification uses to ask for a decision. */
@@ -1339,12 +1365,15 @@ function authorityLifecycle(
   leases: ReturnType<typeof createCodingRuntimeEditorMutationLeaseCoordinator>,
   research: ResearchComposition,
   now: () => Date,
+  scriptTrust?: Pick<WorkspaceScriptTrustService, "revokeRunAdmissions">,
 ): ProductionRuntimeBackendInput["authorityLifecycle"] {
   return {
     revokeRuntime: (runId): boolean => {
       controller.abort();
       invocations.revokeRun(runId);
       leases.revokeRun(runId);
+      // ADR-0147 D3, autonomous-delivery amendment: the run's own manifest admissions end with it.
+      scriptTrust?.revokeRunAdmissions?.(runId);
       // Drop every read-only research grant AND any unanswered research ask for the run so a
       // terminate/revoke leaves no orphaned internet reach for the parent or any child (#2387).
       research.grants.invalidateRun(runId);

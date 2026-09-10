@@ -243,6 +243,14 @@ export interface ProductionManagedWorktreeToolInput {
     outcome?: CodingWorkbenchAuxiliaryStatus,
   ) => void;
   readonly commandRunner?: Pick<CommandRunnerManager, "execute"> | undefined;
+  /**
+   * ADR-0147 D3, autonomous-delivery amendment (owner decision, 2026-09-10): records the worktree's
+   * current `package.json` as a manifest this run's governed effect left behind, so the operator's
+   * standing repository grant covers it for the rest of the run. Called after every completed edit
+   * and command effect while the run's effective mode is `autonomous-delivery`, never in the two
+   * modes that ask before risky work. Absent in a composition without the trust service.
+   */
+  readonly admitRunManifest?: (() => void) | undefined;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   /** Body-free activity-log sink for the H1 search handler; defaults to the process-wide log. */
@@ -465,9 +473,10 @@ function governedPorts(
     Promise.resolve({ status: "failed" });
   return {
     ...readEdit,
+    editorChangeset: admittingRunManifest(readEdit.editorChangeset, input),
     ...auxiliaryPorts(input, catalog),
     repositorySearch: buildRepositorySearchPort(input),
-    commandRunner: buildCommandRunner(input),
+    commandRunner: admittingRunManifest(buildCommandRunner(input), input),
     verificationRunner: buildVerificationRunner(input),
     gitAuthority: buildRuntimeGitPort(input),
     deliveryAuthority: buildVerifiedCommitPort(input),
@@ -477,6 +486,36 @@ function governedPorts(
     ),
     egressAuthority: buildEgressAuthority(input, failed),
   };
+}
+
+// ADR-0147 D3, autonomous-delivery amendment (owner decision, 2026-09-10). In `autonomous-delivery`
+// the operator has authorized this run to edit the workspace and verify it without per-action
+// approval, so a `package.json` the run's own governed effect leaves behind is admitted for package
+// scripts under the operator's standing repository grant (`WorkspaceScriptTrustService
+// .admitRunManifest`); its scripts still run only under the verification runner's enforced egress
+// isolation (ADR-0043), and the pull request carries the manifest diff to review before anything
+// persists. The two modes that ask before risky work keep asking for a rewritten manifest. The
+// admission is renewed after EVERY completed effect — edit or vetted command, since either may
+// rewrite the manifest — so a manifest changed by anything else since (another process, the
+// operator's editor) is the same drift the next verification refused before this amendment.
+function admittingRunManifest<Kind extends "edit" | "command">(
+  port: GovernedCodingToolPort<Kind>,
+  input: ProductionManagedWorktreeToolInput,
+): GovernedCodingToolPort<Kind> {
+  const admit = input.admitRunManifest;
+  if (admit === undefined) return port;
+  return {
+    execute: async (request, signal, guard): Promise<GovernedCodingToolResult> => {
+      const result = await port.execute(request, signal, guard);
+      if (result.status === "completed" && effectiveModeOf(input) === "autonomous-delivery")
+        admit();
+      return result;
+    },
+  };
+}
+
+function effectiveModeOf(input: ProductionManagedWorktreeToolInput): CodingWorkbenchMode {
+  return input.effectiveModeNow?.() ?? input.effectiveMode;
 }
 
 // The facade's closed failure code for each reason the runtime Git service answers without a

@@ -29,6 +29,16 @@ names its reason in one closed vocabulary on the run's own activity line. Derive
 as that alternative basis; revoking the repository still stops every worktree that only inherited its
 grant.
 
+Amended again on 2026-09-10 (owner decision, Coding Workbench run 14, PR #3452) so that D3 admits,
+in `autonomous-delivery` only, the manifest a governed effect of the live run itself left behind
+under the operator's standing repository grant: the mode's promise is file and verification work
+inside the validated Authority Envelope without per-action approval (ADR-0129, ADR-0138), the
+scripts still execute only under the enforced, fail-closed egress isolation of ADR-0043, and the
+pull request carries the manifest diff to review before anything persists. Asking a human to approve
+each byte of a manifest the run was authorized to write added friction without containment — run 14
+paused twice within 22 seconds for the same manifest and delivered nothing. The two modes that ask
+before risky work keep asking.
+
 The independent architecture, security, and contract-test reviews required by Issue #2520 were
 completed before implementation. The maintainer clarified on
 [Issue #2520](https://github.com/oscharko-dev/Keiko/issues/2520#issuecomment-5012022731) that
@@ -225,9 +235,28 @@ rule the verification runner, the command runner and the agent verification rout
 record merely derived from the repository never serves as that alternative — it inherits the
 repository's grant and stops with it — and the Coding Workbench offers the worktree grant as one
 explicit operator action only once the runner's own decision for the worktree is approval-required
-(2026-09-10, run 8). Every refusal names its reason in the closed vocabulary `root-not-trusted`,
-`repository-not-trusted`, `worktree-manifest-drift`, `decision-failed` on the run's own activity
-line (`editor.verification.execute`, `state: "refused"`, `trustRefusal`). Its canonical root is
+(2026-09-10, run 8). In `autonomous-delivery` — and in no other mode — one further basis exists under
+the repository's standing grant: the worktree's current `package.json` is exactly the one the run's
+own last governed effect (an edit or a vetted command) left behind, recorded by
+`WorkspaceScriptTrustService.admitRunManifest` after every completed effect and consulted by the same
+`decideScriptTrust` rule as `run-manifest`. The operator's authority for this basis is the mode
+itself: `autonomous-delivery` authorizes the run to edit the workspace, including its manifest, and
+to verify it without per-action approval (ADR-0129, ADR-0138 D4), while the containment that makes
+this safe is not the grant but the execution boundary — the verification runner executes package
+scripts only under ADR-0043's enforced, fail-closed egress isolation, and the pull request carries the
+manifest diff to review before anything persists. The admission is held in memory only, keyed by the
+worktree's canonical root, bound to the exact manifest bytes (the same trust-basis fact), expires
+with the run's authority and is revoked with the run; a manifest changed by anything else since — the
+operator's editor, another process — no longer matches and is the same `worktree-manifest-drift` as
+before. A repository nobody trusted admits no run manifest (`repository-not-trusted` stands), an
+explicit worktree grant takes precedence, and `governed-assist` and `supervised-coding` never use this
+basis: they ask before risky work by definition. Every admission and revocation leaves a body-free
+line (`workspace-script-trust.run-manifest-admitted` with the manifest digest,
+`workspace-script-trust.run-manifest-revoked` with the count), and the runner's selection line names
+the basis the scripts ran under (`trustBasis`). Every refusal names its reason in the closed
+vocabulary `root-not-trusted`, `repository-not-trusted`, `worktree-manifest-drift`,
+`decision-failed` on the run's own activity line (`editor.verification.execute`,
+`state: "refused"`, `trustRefusal`). Its canonical root is
 resolved by containment in the Keiko-owned managed root
 (`<stateDir>/ui/task-workspaces`), never through the user-workspace root rules: those deny every
 path below the state directory's `.keiko` segment, and applying them to the worktree refused every

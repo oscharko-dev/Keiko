@@ -191,6 +191,8 @@ function verificationWorkspaceTrust(
       repositoryFs: nodeWorkspaceFs,
       standingTrust: (): boolean => trust.trustLevelForRoot(standingRoot) === "trusted",
       worktreeHumanGrant: (): boolean => trust.holdsHumanGrantForRoot(access.canonicalRoot),
+      // The editor agent is not a governed run: no run authority ever admits a manifest here.
+      runAdmittedManifest: (): boolean => false,
     }).trusted
       ? "trusted"
       : "restricted";

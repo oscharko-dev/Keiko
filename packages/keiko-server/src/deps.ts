@@ -1813,6 +1813,8 @@ function buildCommandRunner(options: {
       options.workspaceScriptTrust.isTrusted(projectId, workspace),
     isWorktreeTrustedByHumanGrant: (canonicalRoot): boolean =>
       options.workspaceScriptTrust.holdsHumanGrantForRoot(canonicalRoot),
+    isWorktreeManifestRunAdmitted: (canonicalRoot): boolean =>
+      options.workspaceScriptTrust.holdsRunAdmissionForRoot?.(canonicalRoot) ?? false,
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);
       return typeof redacted === "string" ? redacted : value;
@@ -1846,6 +1848,8 @@ function buildVerificationRunner(options: {
       options.workspaceScriptTrust.isTrusted(projectId, workspace),
     isWorktreeTrustedByHumanGrant: (canonicalRoot): boolean =>
       options.workspaceScriptTrust.holdsHumanGrantForRoot(canonicalRoot),
+    isWorktreeManifestRunAdmitted: (canonicalRoot): boolean =>
+      options.workspaceScriptTrust.holdsRunAdmissionForRoot?.(canonicalRoot) ?? false,
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);
       return typeof redacted === "string" ? redacted : value;
@@ -3507,6 +3511,7 @@ function composePersistenceTaskWorkspaceServices(
     createWorkspaceScriptTrustService({
       store: persistence.store,
       managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
+      activityLog: options.activityLog ?? processServerLogSink(),
     });
   const services = composeTaskWorkspaceServices({
     options,
@@ -5117,6 +5122,9 @@ function qualifiedRuntimeResolver(
     ...input.ports,
     commandRunner: input.commandRunner,
     verificationRunner: input.verificationRunner,
+    // ADR-0147 D3, autonomous-delivery amendment: the same server-owned trust service the runners
+    // decide on, so a run's own manifest edits are admitted and revoked through one record.
+    workspaceScriptTrust: args.bundle.workspaceScriptTrust,
     ...(verifiedCommit === undefined ? {} : { verifiedCommit }),
     ...(draftDelivery === undefined ? {} : { draftDelivery }),
     runtimeMutationLeaseBroker: input.runtimeMutationLeaseBroker,

@@ -45,6 +45,8 @@ import type {
   WorkspaceTrustRecordRowInput,
 } from "./store/index.js";
 import { isManagedTargetContained } from "./task-workspace/managed-root.js";
+import type { ServerLogSink } from "./observability/server-log.js";
+import { processServerLogSink } from "./process-log-sink.js";
 import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
 import {
   deriveWorkspaceRootRef,
@@ -91,6 +93,16 @@ export interface WorkspaceScriptTrustSnapshot {
   readonly trusted: boolean;
 }
 
+/** Why `admitRunManifest` recorded nothing — the closed vocabulary of its evidence line. */
+export type WorkspaceRunManifestAdmissionRefusal =
+  "authority-expired" | "root-unresolvable" | "root-unregistered" | "manifest-unreadable";
+
+/** What `admitRunManifest` recorded: the basis outcome and, for a real manifest, its digest. */
+export interface WorkspaceRunManifestAdmission {
+  readonly basis: "known" | "absent";
+  readonly manifestDigest?: WorkspaceTrustBasisDigest | undefined;
+}
+
 export interface WorkspaceScriptTrustService {
   readonly grant: (projectId: string) => WorkspaceScriptTrustSnapshot;
   readonly deriveFromTrustedRoot: (
@@ -107,6 +119,28 @@ export interface WorkspaceScriptTrustService {
   // `decideScriptTrust` (editor/verificationRunner.ts) accepts for a managed worktree whose
   // `package.json` a governed run rewrote away from the repository's trust basis.
   readonly holdsHumanGrantForRoot: (root: string) => boolean;
+  /**
+   * ADR-0147 D3, autonomous-delivery amendment (owner decision, 2026-09-10): records the registered
+   * worktree's CURRENT package-script basis as one a governed effect of the live run left behind, so
+   * that the repository's standing grant covers it for that run. Returns what was recorded, or
+   * `undefined` when the root is not a registered project or its manifest basis cannot be read —
+   * nothing is admitted then. The admission is held in memory only: it lives and dies with the run
+   * (`revokeRunAdmissions`) and expires with the run's authority.
+   */
+  readonly admitRunManifest?: (
+    root: string,
+    runId: string,
+    expiresAt: string,
+  ) => WorkspaceRunManifestAdmission | undefined;
+  /**
+   * True while the root's current package-script basis is exactly the one its live run's last
+   * governed effect left behind (`admitRunManifest`). A manifest changed by anything else since —
+   * another process, the operator's editor — no longer matches and the caller falls back to the
+   * refusal it always gave.
+   */
+  readonly holdsRunAdmissionForRoot?: (root: string) => boolean;
+  /** Drops every admission the run holds and returns how many there were. */
+  readonly revokeRunAdmissions?: (runId: string) => number;
   readonly recomputeForRoots?: (roots: readonly string[]) => readonly WorkspaceTrustLevel[];
   // #2628 — additive listener registration so composition-time consumers (buildPeripherals
   // wires managed-LSP restriction propagation this way) receive every persisted restriction
@@ -130,6 +164,16 @@ export interface WorkspaceScriptTrustServiceOptions {
    * unconfigured service keeps refusing a denied root whatever its shape.
    */
   readonly managedRoot?: string | undefined;
+  /** Body-free activity-log sink for the run-manifest admission lines; defaults to the process log. */
+  readonly activityLog?: ServerLogSink | undefined;
+  /** Clock for admission expiry; production uses `Date.now`. */
+  readonly now?: (() => number) | undefined;
+}
+
+interface RunManifestAdmission {
+  readonly runId: string;
+  readonly basis: WorkspaceFact<WorkspaceTrustBasisDigest>;
+  readonly expiresAtMs: number;
 }
 
 function realPathOrThrow(fs: WorkspaceFs, path: string, message: string): string {
@@ -550,11 +594,18 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
   // (kept for callers that construct the service directly) and subscribeOnRestricted callers
   // deliver the same notification without either path silently dropping the other.
   private readonly restrictionListeners = new Set<(canonicalRoot: string) => void>();
+  // Run-scoped, in-memory: the package-script basis a live autonomous run's last governed effect
+  // left behind, keyed by the worktree's canonical root. Never persisted — a restart ends the run.
+  private readonly runAdmissions = new Map<string, RunManifestAdmission>();
+  private readonly activityLog: ServerLogSink;
+  private readonly now: () => number;
 
   public constructor(options: WorkspaceScriptTrustServiceOptions) {
     this.store = options.store;
     this.fs = options.fs ?? nodeWorkspaceFs;
     this.managedRoot = options.managedRoot;
+    this.activityLog = options.activityLog ?? processServerLogSink();
+    this.now = options.now ?? Date.now;
     if (options.onRestricted !== undefined) {
       this.restrictionListeners.add(options.onRestricted);
     }
@@ -745,6 +796,113 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     } catch {
       return false;
     }
+  };
+
+  // The same registered-root resolution `holdsHumanGrantForRoot` uses, so an admission recorded for
+  // a root and the later lookup for the same root can never disagree about its key.
+  private registeredCanonicalRoot(root: string): string | undefined {
+    const projectPath = registeredProjectPathForRoot(this.store, this.fs, root);
+    const canonicalRoot = realPathOrUndefined(this.fs, root);
+    if (projectPath === undefined || canonicalRoot === undefined) return undefined;
+    return this.canonicalRootOf(projectPath, workspaceInfoForRoot(canonicalRoot));
+  }
+
+  public readonly admitRunManifest = (
+    root: string,
+    runId: string,
+    expiresAt: string,
+  ): WorkspaceRunManifestAdmission | undefined => {
+    const candidate = this.runAdmissionCandidate(root, expiresAt);
+    if ("refusal" in candidate) {
+      // A refused admission is why the NEXT verification of this worktree may pause for a human
+      // decision although the run is autonomous — it must be reconstructible from the log.
+      this.activityLog.write({
+        category: "security",
+        op: "workspace-script-trust.run-manifest-not-admitted",
+        correlationId: runId,
+        extra: { reason: candidate.refusal },
+      });
+      return undefined;
+    }
+    const { canonicalRoot, basis, expiresAtMs } = candidate;
+    this.runAdmissions.set(canonicalRoot, { runId, basis, expiresAtMs });
+    const admission: WorkspaceRunManifestAdmission =
+      basis.outcome === "known"
+        ? { basis: "known", manifestDigest: basis.value }
+        : { basis: "absent" };
+    this.activityLog.write({
+      category: "security",
+      op: "workspace-script-trust.run-manifest-admitted",
+      correlationId: runId,
+      extra: { ...admission, expiresAt },
+    });
+    return admission;
+  };
+
+  // The preconditions of an admission, each refusal in one closed vocabulary: the authority must
+  // still be live, the root must be a registered project whose canonical root resolves, and the
+  // manifest must be readable. `absent` is a real basis (no package scripts at all, ADR-0147 D9);
+  // `unknown`/`unavailable` is an unreadable manifest and admits nothing.
+  private runAdmissionCandidate(
+    root: string,
+    expiresAt: string,
+  ):
+    | {
+        readonly canonicalRoot: string;
+        readonly basis: WorkspaceFact<WorkspaceTrustBasisDigest>;
+        readonly expiresAtMs: number;
+      }
+    | { readonly refusal: WorkspaceRunManifestAdmissionRefusal } {
+    const expiresAtMs = Date.parse(expiresAt);
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= this.now()) {
+      return { refusal: "authority-expired" };
+    }
+    let canonicalRoot: string | undefined;
+    try {
+      canonicalRoot = this.registeredCanonicalRoot(root);
+    } catch {
+      return { refusal: "root-unresolvable" };
+    }
+    if (canonicalRoot === undefined) return { refusal: "root-unregistered" };
+    const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
+    if (basis.outcome !== "known" && basis.outcome !== "absent") {
+      return { refusal: "manifest-unreadable" };
+    }
+    return { canonicalRoot, basis, expiresAtMs };
+  }
+
+  public readonly holdsRunAdmissionForRoot = (root: string): boolean => {
+    try {
+      const canonicalRoot = this.registeredCanonicalRoot(root);
+      if (canonicalRoot === undefined) return false;
+      const admission = this.runAdmissions.get(canonicalRoot);
+      if (admission === undefined) return false;
+      if (admission.expiresAtMs <= this.now()) {
+        this.runAdmissions.delete(canonicalRoot);
+        return false;
+      }
+      return trustBasisFactsMatch(admission.basis, resolveTrustBasisFact(this.fs, canonicalRoot));
+    } catch {
+      return false;
+    }
+  };
+
+  public readonly revokeRunAdmissions = (runId: string): number => {
+    let revoked = 0;
+    for (const [canonicalRoot, admission] of this.runAdmissions) {
+      if (admission.runId !== runId) continue;
+      this.runAdmissions.delete(canonicalRoot);
+      revoked += 1;
+    }
+    if (revoked > 0) {
+      this.activityLog.write({
+        category: "security",
+        op: "workspace-script-trust.run-manifest-revoked",
+        correlationId: runId,
+        extra: { count: revoked },
+      });
+    }
+    return revoked;
   };
 
   /**

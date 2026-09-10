@@ -578,9 +578,16 @@ covers a managed worktree only while that manifest is byte-identical to the repo
 that adds a dependency or a script legitimately falls outside it and needs a fresh human decision
 for the rewritten manifest.
 
-Only a local human can make that decision. It is not an Authority Envelope approval and is asked
-identically in all three autonomy modes, because script trust is a hard boundary rather than a
-mode-graded permission.
+Only a local human can make that decision. It is not an Authority Envelope approval. In
+`governed-assist` and `supervised-coding` it is asked for every rewritten manifest. In
+`autonomous-delivery` (owner decision, 2026-09-10) a manifest the run's OWN governed effect left
+behind is admitted under the repository's standing grant — the run never pauses for its own edits,
+and the log shows `op: "workspace-script-trust.run-manifest-admitted"` after each completed edit or
+command and `trustBasis: "run-manifest"` on the runner's `selected` line. A Full-access run that
+pauses here therefore means one of two things: the repository was never trusted
+(`trustRefusal: "repository-not-trusted"`), or the manifest changed outside the run's governed
+effects since the last admission (`worktree-manifest-drift` with no admission line preceding it —
+another process or the operator's editor wrote it).
 
 **Diagnostic Steps**
 
