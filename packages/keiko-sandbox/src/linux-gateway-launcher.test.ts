@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   buildLinuxGatewayNamespaceCommand,
-  LINUX_GATEWAY_LAUNCHER_PATH,
+  linuxGatewayLauncherPath,
   linuxGatewayDiagnosticKind,
   runLinuxGatewayLauncher,
 } from "./runtime.js";
@@ -143,7 +143,7 @@ describe("Linux gateway launcher validation", () => {
   it("emits only the closed diagnostic code from the assembled CLI", () => {
     const result = spawnSync(
       process.execPath,
-      [LINUX_GATEWAY_LAUNCHER_PATH, "invalid-mode", "secret-endpoint"],
+      [linuxGatewayLauncherPath(), "invalid-mode", "secret-endpoint"],
       { encoding: "utf8", timeout: 5_000 },
     );
     expect(result.status).toBe(1);
@@ -193,7 +193,7 @@ describe("Linux namespace command compilation", () => {
       "/work/root",
       "--",
       process.execPath,
-      LINUX_GATEWAY_LAUNCHER_PATH,
+      linuxGatewayLauncherPath(),
       "namespace",
       "bubblewrap",
       "127.0.0.1",

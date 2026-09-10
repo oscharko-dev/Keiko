@@ -4,7 +4,7 @@
 
 import { basename, dirname, isAbsolute } from "node:path";
 import { copyNetworkGatewayPolicy } from "@oscharko-dev/keiko-contracts/runtime/tools";
-import { LINUX_GATEWAY_LAUNCHER_PATH } from "./runtime.js";
+import { linuxGatewayLauncherPath } from "./runtime.js";
 import type { IsolatedRunPlan, NetworkGatewayPolicy, SandboxBackend } from "./types.js";
 
 export interface WrappedCommand {
@@ -130,7 +130,7 @@ function buildLinuxGatewayCommand(
   return {
     command: process.execPath,
     args: [
-      LINUX_GATEWAY_LAUNCHER_PATH,
+      linuxGatewayLauncherPath(),
       "host",
       backend,
       gateway.host,

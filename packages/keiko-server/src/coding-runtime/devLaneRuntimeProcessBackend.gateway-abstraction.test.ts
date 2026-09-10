@@ -181,7 +181,7 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
     );
   });
 
-  it("fails closed on a platform with no gateway backend at all (e.g. linux), never a weaker run", () => {
+  it("fails closed on a platform with no gateway backend at all (Windows), never a weaker run", () => {
     const paths = fixture();
     let spawns = 0;
     const backend = createDevLaneRuntimeProcessBackend({
@@ -189,7 +189,7 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
       runtimeRoot: paths.runtimeRoot,
       gatewayConfinement: gatewayConfinement(),
       probeAvailability: () => ALL,
-      platform: "linux",
+      platform: "win32",
       resolveGitExecutable: () => ATTESTED_GIT,
       spawnRuntime: () => {
         spawns += 1;

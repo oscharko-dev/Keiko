@@ -7,9 +7,9 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-export const LINUX_GATEWAY_LAUNCHER_PATH = fileURLToPath(
-  new URL("../dist/runtime.js", import.meta.url),
-);
+export function linuxGatewayLauncherPath(): string {
+  return fileURLToPath(new URL("../dist/runtime.js", import.meta.url));
+}
 
 export type LongLivedRuntimePlatform = "darwin" | "win32";
 export type LongLivedRuntimeArchitecture = "arm64" | "x64";
@@ -498,7 +498,7 @@ function forwardSignals(child: ChildProcess): () => void {
 
 function namespaceArgs(config: CommonConfig, socketPath: string): readonly string[] {
   return [
-    LINUX_GATEWAY_LAUNCHER_PATH,
+    linuxGatewayLauncherPath(),
     "namespace",
     config.backend,
     config.gatewayHost,
