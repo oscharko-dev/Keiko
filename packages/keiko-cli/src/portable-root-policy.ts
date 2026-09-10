@@ -36,7 +36,7 @@ function pathLooksSystemManaged(normalized: string): boolean {
 
 function isCanonicalMacosManagedRoot(path: string, target: PortableTarget): boolean {
   return (
-    target !== "windows-x64" &&
+    (target === "macos-arm64" || target === "macos-x64") &&
     normalizedPath(resolve(path)) === normalizedPath("/Applications/Keiko.app")
   );
 }

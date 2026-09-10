@@ -35,6 +35,12 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 
 const IDENTITY = { platform: "darwin", arch: "arm64", backend: "macos-app-sandbox" } as const;
+const LINUX_IDENTITY = {
+  platform: "linux",
+  arch: "x64",
+  backend: "linux-namespace-gateway",
+} as const;
+const RELEASE_RECEIPT = `sha256:${"0".repeat(64)}`;
 const ALL: BackendAvailability = {
   bubblewrap: true,
   unshare: true,
@@ -88,7 +94,10 @@ function gatewayConfinement(): ReturnType<typeof createRuntimeGatewayConfinement
   });
 }
 
-function launchRequest(paths: ReturnType<typeof fixture>): RuntimeSupervisorLaunchRequest {
+function launchRequest(
+  paths: ReturnType<typeof fixture>,
+  identity: typeof IDENTITY | typeof LINUX_IDENTITY = IDENTITY,
+): RuntimeSupervisorLaunchRequest {
   return {
     runId: "run-2951",
     recoveryHandle: "0".repeat(32),
@@ -97,7 +106,7 @@ function launchRequest(paths: ReturnType<typeof fixture>): RuntimeSupervisorLaun
     args: ["serve"],
     cwd: paths.cwd,
     env: { OPENCODE_DISABLE_PROJECT_CONFIG: "true" },
-    qualification: { ...IDENTITY, releaseReceipt: `sha256:${"0".repeat(64)}` },
+    qualification: { ...identity, releaseReceipt: RELEASE_RECEIPT },
     launchProfile: CLOSED_RUNTIME_LAUNCH_PROFILE,
   };
 }
@@ -229,12 +238,19 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
       "runtime-gateway-confinement-unavailable",
     );
     expect(spawns).toBe(0);
-    expect(activityLog.events).toContainEqual(
-      expect.objectContaining({ op: "runtime.confinement.failed" }),
+    expect(activityLog.events).toContainEqual({
+      category: "process",
+      level: "info",
+      op: "runtime.confinement.unavailable",
+      correlationId: "run-2951",
+      extra: IDENTITY,
+    });
+    expect(activityLog.events.some((event) => event.op === "runtime.confinement.failed")).toBe(
+      false,
     );
   });
 
-  it("fails closed on a platform with no gateway backend at all (Windows), never a weaker run", () => {
+  it("rejects a mismatched host/backend identity before any weaker run", () => {
     const paths = fixture();
     let spawns = 0;
     const backend = createDevLaneRuntimeProcessBackend({
@@ -251,7 +267,7 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
     });
 
     expect(() => backend.spawnOwnedTree(launchRequest(paths))).toThrow(
-      "runtime-gateway-confinement-unavailable",
+      "runtime-gateway-platform-identity-drift",
     );
     expect(spawns).toBe(0);
   });
@@ -264,7 +280,7 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
     const sidecarStderr = child.stderr as PassThrough;
     let diagnosticsRequested = false;
     const backend = createDevLaneRuntimeProcessBackend({
-      identity: IDENTITY,
+      identity: LINUX_IDENTITY,
       runtimeRoot: paths.runtimeRoot,
       gatewayConfinement: gatewayConfinement(),
       probeAvailability: () => ALL,
@@ -277,7 +293,7 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
       },
     });
 
-    backend.spawnOwnedTree(launchRequest(paths));
+    backend.spawnOwnedTree(launchRequest(paths, LINUX_IDENTITY));
     sidecarStderr.write("keiko-linux-gateway:error:cleanup-failed\n");
     expect(activityLog.events.filter((event) => event.op === "runtime.confinement.failed")).toEqual(
       [],
@@ -305,7 +321,7 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
     const child = fakeChild();
     const kills: NodeJS.Signals[] = [];
     const backend = createDevLaneRuntimeProcessBackend({
-      identity: IDENTITY,
+      identity: LINUX_IDENTITY,
       runtimeRoot: paths.runtimeRoot,
       gatewayConfinement: gatewayConfinement(),
       probeAvailability: () => ALL,
@@ -324,7 +340,7 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
       },
     });
 
-    expect(() => backend.spawnOwnedTree(launchRequest(paths))).toThrow(
+    expect(() => backend.spawnOwnedTree(launchRequest(paths, LINUX_IDENTITY))).toThrow(
       "linux-gateway-diagnostics-unavailable",
     );
     expect(kills).toEqual(["SIGKILL"]);
@@ -336,7 +352,7 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
     const control = spawnedChild({ diagnostics: true });
     spawnMock.mockReturnValue(control.child);
     const backend = createDevLaneRuntimeProcessBackend({
-      identity: IDENTITY,
+      identity: LINUX_IDENTITY,
       runtimeRoot: paths.runtimeRoot,
       gatewayConfinement: gatewayConfinement(),
       probeAvailability: () => ALL,
@@ -345,7 +361,7 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
       activityLog,
     });
 
-    const tree = backend.spawnOwnedTree(launchRequest(paths));
+    const tree = backend.spawnOwnedTree(launchRequest(paths, LINUX_IDENTITY));
     const options = requireSpawnOptions(spawnMock.mock.calls[0]?.[2]);
     expect(options.detached).toBe(true);
     expect(options.shell).toBe(false);
@@ -410,7 +426,7 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
     const paths = fixture();
     spawnMock.mockReturnValue(spawnedChild().child);
     const backend = createDevLaneRuntimeProcessBackend({
-      identity: IDENTITY,
+      identity: LINUX_IDENTITY,
       runtimeRoot: paths.runtimeRoot,
       gatewayConfinement: gatewayConfinement(),
       probeAvailability: () => ALL,
@@ -418,7 +434,7 @@ describe("dev-lane backend consumes the shared gateway plan/backend abstraction"
       resolveGitExecutable: () => ATTESTED_GIT,
     });
 
-    expect(() => backend.spawnOwnedTree(launchRequest(paths))).toThrow(
+    expect(() => backend.spawnOwnedTree(launchRequest(paths, LINUX_IDENTITY))).toThrow(
       "linux-gateway-diagnostics-unavailable",
     );
   });

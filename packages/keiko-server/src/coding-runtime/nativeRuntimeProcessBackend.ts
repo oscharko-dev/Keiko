@@ -4,10 +4,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { Readable, Writable } from "node:stream";
+import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
 import {
   copyRuntimeGatewayConfinement,
   GATEWAY_UNSUPPORTED_ON_HOST_REASON,
-  type LongLivedRuntimeQualification,
   type RuntimeGatewayConfinement,
 } from "@oscharko-dev/keiko-sandbox";
 

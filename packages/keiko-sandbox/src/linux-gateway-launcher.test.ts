@@ -1,7 +1,7 @@
 import { spawn, spawnSync, type ChildProcess, type StdioOptions } from "node:child_process";
 import { access, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { createConnection, createServer, type Server } from "node:net";
-import { tmpdir } from "node:os";
+import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { describe, expect, it, vi } from "vitest";
@@ -38,6 +38,16 @@ const ROUND_TRIP_SNIPPET = [
   "socket.on('data', (data) => { const ok = data.toString() === 'PONG'; process.stdout.write(ok ? 'RELAYED' : 'INVALID'); socket.destroy(); process.exitCode = ok ? 0 : 3; });",
   "socket.on('error', () => { process.stdout.write('BLOCKED'); process.exitCode = 3; });",
   "socket.on('timeout', () => { process.stdout.write('TIMEOUT'); socket.destroy(); process.exitCode = 3; });",
+].join("");
+
+const EXTERNAL_DESTINATION_SNIPPET = [
+  "const net = require('node:net');",
+  "const socket = net.connect({ host: process.argv[1], port: Number(process.argv[2]) });",
+  "socket.setTimeout(3000);",
+  "socket.on('connect', () => socket.write('PING'));",
+  "socket.on('data', (data) => { const ok = data.toString() === 'PONG'; process.stdout.write(ok ? 'REACHED' : 'INVALID'); socket.destroy(); process.exitCode = ok ? 0 : 4; });",
+  "socket.on('error', () => { process.stdout.write('BLOCKED'); process.exitCode = 3; });",
+  "socket.on('timeout', () => { process.stdout.write('BLOCKED'); socket.destroy(); process.exitCode = 3; });",
 ].join("");
 
 const HELD_ROUND_TRIP_SNIPPET = [
@@ -239,14 +249,27 @@ function close(server: Server): Promise<void> {
   });
 }
 
-async function listenEphemeral(): Promise<{ readonly server: Server; readonly port: number }> {
+async function listenEphemeral(
+  host = "127.0.0.1",
+): Promise<{ readonly server: Server; readonly port: number }> {
   const server = createServer((socket) => {
     socket.once("data", (data) => socket.end(data.toString("utf8") === "PING" ? "PONG" : "NO"));
   });
-  await listen(server, 0);
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, host, resolve);
+  });
   const address = server.address();
   if (address === null || typeof address === "string") throw new Error("listen-failed");
   return { server, port: address.port };
+}
+
+function nonLoopbackIpv4Address(): string {
+  for (const entries of Object.values(networkInterfaces())) {
+    const address = entries?.find((entry) => entry.family === "IPv4" && !entry.internal)?.address;
+    if (address !== undefined) return address;
+  }
+  throw new Error("non-loopback-ipv4-unavailable");
 }
 
 async function reservePort(): Promise<number> {
@@ -503,9 +526,11 @@ describe("real OS-level gateway confinement (Linux namespace bridge, #3422)", ()
       if (!availability.bubblewrap && !availability.unshare) {
         throw new Error("linux-gateway-proof-backend-unavailable");
       }
+      const externalHost = nonLoopbackIpv4Address();
       const firstGateway = await listenEphemeral();
       const secondGateway = await listenEphemeral();
       const hostile = await listenEphemeral();
+      const externalHostService = await listenEphemeral(externalHost);
       const launcherTemp = await mkdtemp(join(tmpdir(), "keiko-gateway-proof-"));
       const env = { ...process.env, TMPDIR: launcherTemp };
       const plan = (gatewayPort: number, destinationPort: number): IsolatedRunPlan => ({
@@ -528,6 +553,35 @@ describe("real OS-level gateway confinement (Linux namespace bridge, #3422)", ()
         const deniedResult = await runChild(denied.command, denied.args, env);
         expect(["BLOCKED", "TIMEOUT"]).toContain(deniedResult.stdout);
         expect(deniedResult.stdout).not.toBe("RELAYED");
+
+        const externalControl = await runChild(process.execPath, [
+          "-e",
+          EXTERNAL_DESTINATION_SNIPPET,
+          externalHost,
+          String(externalHostService.port),
+        ]);
+        expect(externalControl).toMatchObject({ status: 0, stdout: "REACHED", stderr: "" });
+
+        const external = requireWrapped(
+          planIsolatedRun(
+            {
+              ...plan(firstGateway.port, firstGateway.port),
+              args: [
+                "-e",
+                EXTERNAL_DESTINATION_SNIPPET,
+                externalHost,
+                String(externalHostService.port),
+              ],
+            },
+            availability,
+            "linux",
+          ),
+        );
+        expect(await runChild(external.command, external.args, env)).toMatchObject({
+          status: 3,
+          stdout: "BLOCKED",
+          stderr: "",
+        });
 
         const crossRun = requireWrapped(
           planIsolatedRun(plan(firstGateway.port, secondGateway.port), availability, "linux"),
@@ -619,6 +673,7 @@ describe("real OS-level gateway confinement (Linux namespace bridge, #3422)", ()
           close(firstGateway.server),
           close(secondGateway.server),
           close(hostile.server),
+          close(externalHostService.server),
         ]);
         await rm(launcherTemp, { recursive: true, force: true });
       }

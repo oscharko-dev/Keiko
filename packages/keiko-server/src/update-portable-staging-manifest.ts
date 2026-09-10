@@ -235,11 +235,14 @@ function targetChecksVerified(
   target: UpdatePortableTarget,
   checks: Record<string, unknown> | undefined,
 ): boolean {
-  const keys =
-    target === "windows-x64"
-      ? ["publisherChainVerified", "timestampVerified"]
-      : ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"];
+  const keys = targetVerificationCheckKeys(target);
   return keys.every((key) => checks?.[key] === true);
+}
+
+function targetVerificationCheckKeys(target: UpdatePortableTarget): readonly string[] {
+  if (target === "windows-x64") return ["publisherChainVerified", "timestampVerified"];
+  if (target === "linux-x64") return ["provenanceVerified"];
+  return ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"];
 }
 
 function securityVerified(
@@ -248,7 +251,7 @@ function securityVerified(
 ): boolean {
   const security = recordAt(manifest, "security");
   const checks = recordAt(security, "verificationChecks");
-  const macos = target !== "windows-x64";
+  const macos = target.startsWith("macos-");
   return (
     fieldEquals(security, "verificationPolicy", "production") &&
     fieldEquals(security, "verificationStatus", "verified-production") &&

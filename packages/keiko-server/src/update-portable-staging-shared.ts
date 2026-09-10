@@ -106,16 +106,19 @@ export function runtimeFor(target: UpdatePortableTarget): {
   readonly arch: string;
 } {
   if (target === "windows-x64") return { platform: "win32", arch: "x64" };
+  if (target === "linux-x64") return { platform: "linux", arch: "x64" };
   if (target === "macos-arm64") return { platform: "darwin", arch: "arm64" };
   return { platform: "darwin", arch: "x64" };
 }
 
 export function primaryLauncher(target: UpdatePortableTarget): string {
-  return target === "windows-x64" ? "Keiko.exe" : "Keiko.app";
+  if (target === "windows-x64") return "Keiko.exe";
+  return target === "linux-x64" ? "Keiko" : "Keiko.app";
 }
 
 export function signatureKind(target: UpdatePortableTarget): string {
-  return target === "windows-x64" ? "authenticode" : "developer-id-notarized";
+  if (target === "windows-x64") return "authenticode";
+  return target === "linux-x64" ? "github-oidc-attested" : "developer-id-notarized";
 }
 
 export function recordAt(

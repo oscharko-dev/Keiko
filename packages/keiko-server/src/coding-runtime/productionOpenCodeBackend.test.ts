@@ -4,6 +4,7 @@ import { join } from "node:path";
 
 import type { CodingToolResult } from "./codingToolIpc.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as gatewayBackend from "./devLaneRuntimeProcessBackend.js";
 import * as nativeBackend from "./nativeRuntimeProcessBackend.js";
 import { createRuntimeGatewayConfinement } from "@oscharko-dev/keiko-sandbox";
 import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
@@ -160,6 +161,45 @@ describe("production OpenCode backend composition", () => {
       }
     },
   );
+
+  it("composes a release-qualified Linux run through the namespace gateway backend", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-linux-gateway-composition-"));
+    try {
+      const portable = releaseQualifiedLinuxRuntime(root);
+      const input = backendInput(root, portable);
+      const request = runInput(root);
+      const gatewayFactory = vi.spyOn(gatewayBackend, "createDevLaneRuntimeProcessBackend");
+      const nativeFactory = vi.spyOn(nativeBackend, "createNativeRuntimeProcessBackend");
+
+      const run = createProductionOpenCodeBackend(input).createRun(request);
+
+      expect(run.launch.confinement).toMatchObject({
+        platform: "linux",
+        arch: "x64",
+        backend: "linux-namespace-gateway",
+      });
+      expect(gatewayFactory).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          identity: {
+            platform: "linux",
+            arch: "x64",
+            backend: "linux-namespace-gateway",
+          },
+          gatewayConfinement: createRuntimeGatewayConfinement({
+            gatewayUrl: input.gatewayUrl,
+            runId: request.minted.authorityRef.runId,
+            treeBindingId: request.minted.treeBindingId,
+            envelopeDigest: request.minted.authorityRef.envelopeDigest,
+            runtimeArtifactDigest: portable.sidecar.shippedExecutableSha256,
+            modelProfileDigest: codingRuntimeFactDigest(request.context.modelProfile),
+          }),
+        }),
+      );
+      expect(nativeFactory).not.toHaveBeenCalled();
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
 });
 
 function releaseQualifiedNativeRuntime(root: string): QualifiedPortableOpenCodeRuntime {
@@ -218,6 +258,25 @@ function releaseQualifiedNativeRuntime(root: string): QualifiedPortableOpenCodeR
       releaseReceipt: `sha256:${digest}`,
     },
     nativeHelperPath: helperPath,
+  };
+}
+
+function releaseQualifiedLinuxRuntime(root: string): QualifiedPortableOpenCodeRuntime {
+  const runtime = releaseQualifiedNativeRuntime(root);
+  return {
+    ...runtime,
+    target: "linux-x64",
+    qualification: {
+      platform: "linux",
+      arch: "x64",
+      backend: "linux-namespace-gateway",
+      releaseReceipt: runtime.qualification.releaseReceipt,
+    },
+    sidecar: {
+      ...runtime.sidecar,
+      summary: { ...runtime.sidecar.summary, platformTarget: "linux-x64" },
+      executablePath: `${runtime.sidecar.payloadRootPath}/opencode`,
+    },
   };
 }
 

@@ -14,6 +14,8 @@ import { join, sep } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import yauzl from "yauzl";
 
+import { extractZipArchiveEntries } from "../lib/zip-archive.mjs";
+
 import {
   approvedNodeVersion,
   browserOpenCommand,
@@ -210,6 +212,69 @@ describe("portable manual review harness", () => {
     expect(entries).toContain(
       "Keiko/Keiko.app/Contents/Resources/runtime/native/keiko-secure-workspace-read",
     );
+  });
+
+  it("creates a schema-valid Linux fixture with the production runtime identity", async () => {
+    const root = tmpReviewRoot();
+    prepareScenarioFixture(root, "linux-x64", "happy-update");
+
+    const entries = await zipEntryNames(join(root, "release-assets", "keiko-linux-x64.zip"));
+    const manifest = jsonAt(join(root, "release-assets", "linux-x64-portable-manifest.json"));
+    const supervisor = manifest.nativeHelpers.find(
+      (helper) => helper.name === "keiko-runtime-supervisor",
+    );
+
+    expect(entries).toContain("Keiko/app/package.json");
+    expect(entries).toContain("Keiko/runtime/node/bin/node");
+    expect(entries).toContain("Keiko/Keiko");
+    expect(
+      validatePortablePublishedManifest(manifest, {
+        releaseId: manifest.release.releaseId,
+        assetId: manifest.artifact.assetId,
+      }),
+    ).toEqual([]);
+    expect(manifest.security.verificationChecks).toEqual({ provenanceVerified: true });
+    expect(manifest.runtimeActivation.trustAnchor).toBe("sigstore-qualification-receipt");
+    expect(manifest.runtimeQualification.backend).toBe("linux-namespace-gateway");
+    expect(supervisor).toMatchObject({
+      executablePath: "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js",
+      source: { path: "packages/keiko-sandbox/src" },
+      protocol: { requestMagic: "none", responseMagic: "none" },
+    });
+  });
+
+  it("embeds the Windows Job Object backend in the manual runtime attestation", () => {
+    const root = tmpReviewRoot();
+    prepareScenarioFixture(root, "windows-x64", "happy-update");
+    const extracted = join(root, "extracted");
+
+    extractZipArchiveEntries(join(root, "release-assets", "keiko-windows-x64.zip"), extracted, {
+      requireRegularEntries: true,
+    });
+
+    const attestation = jsonAt(
+      join(extracted, "Keiko", "runtime", "native", "keiko-runtime-attestation.exe"),
+    );
+    expect(attestation.backend).toBe("windows-job-object");
+  });
+
+  it("retains executable modes when the Linux fixture archive is extracted", () => {
+    const root = tmpReviewRoot();
+    prepareScenarioFixture(root, "linux-x64", "happy-update");
+    const extracted = join(root, "extracted");
+
+    extractZipArchiveEntries(join(root, "release-assets", "keiko-linux-x64.zip"), extracted, {
+      requireRegularEntries: true,
+    });
+
+    for (const relativePath of [
+      "runtime/node/bin/node",
+      "Keiko",
+      "support/keiko-support.sh",
+      "runtime/native/keiko-secure-workspace-read",
+    ]) {
+      expect(statSync(join(extracted, "Keiko", relativePath)).mode & 0o111).toBe(0o100);
+    }
   });
 
   it("generates a valid schema-v2 OpenCode whole-product sidecar manifest", () => {

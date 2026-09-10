@@ -57,7 +57,7 @@ export function managedRootFromPackageRoot(
   packageRoot: string | undefined,
 ): string | undefined {
   if (packageRoot === undefined || basename(packageRoot) !== "app") return undefined;
-  if (target === "windows-x64") return dirname(packageRoot);
+  if (target === "windows-x64" || target === "linux-x64") return dirname(packageRoot);
   const resources = dirname(packageRoot);
   const contents = dirname(resources);
   const bundle = dirname(contents);
@@ -322,7 +322,7 @@ function verifyExtractedTree(root: string, expectedSha256: string): void {
 }
 
 function setupManifestPath(root: string, target: UpdatePortableTarget): string {
-  if (target === "windows-x64") {
+  if (target === "windows-x64" || target === "linux-x64") {
     return join(root, PORTABLE_PAYLOAD_ROOT, ".portable", "setup-manifest.json");
   }
   return join(
@@ -394,6 +394,13 @@ function stagedLayout(
       launcher: join(payload, "Keiko.exe"),
     };
   }
+  if (target === "linux-x64") {
+    return {
+      appRoot: join(payload, "app"),
+      runtimeNode: join(payload, "runtime", "node", "bin", "node"),
+      launcher: join(payload, "Keiko"),
+    };
+  }
   const bundle = join(payload, "Keiko.app");
   return {
     appBundlePath: bundle,
@@ -405,7 +412,7 @@ function stagedLayout(
 
 function stagedResourceRoot(root: string, target: UpdatePortableTarget): string {
   const payload = join(root, PORTABLE_PAYLOAD_ROOT);
-  if (target === "windows-x64") return payload;
+  if (target === "windows-x64" || target === "linux-x64") return payload;
   return join(payload, "Keiko.app", "Contents", "Resources");
 }
 
@@ -431,7 +438,11 @@ function currentTrustAnchorLayout(
   | undefined {
   const managedRoot = managedRootFromPackageRoot(target, packageRoot);
   if (managedRoot === undefined) return undefined;
-  if (target === "windows-x64") return { currentLauncherPath: join(managedRoot, "Keiko.exe") };
+  if (target === "windows-x64" || target === "linux-x64") {
+    return {
+      currentLauncherPath: join(managedRoot, target === "windows-x64" ? "Keiko.exe" : "Keiko"),
+    };
+  }
   return {
     currentLauncherPath: join(managedRoot, "Contents", "MacOS", "Keiko"),
     currentAppBundlePath: managedRoot,

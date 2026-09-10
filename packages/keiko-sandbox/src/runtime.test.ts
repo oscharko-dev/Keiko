@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 
+import type {
+  LongLivedRuntimeQualification,
+  RuntimeQualificationReceipt,
+} from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
+
 import {
   CLOSED_RUNTIME_LAUNCH_PROFILE,
   qualificationFromReceipt,
   qualifyLongLivedRuntime,
-  type RuntimeQualificationReceipt,
-  type LongLivedRuntimeQualification,
 } from "./runtime.js";
 
 const qualified: LongLivedRuntimeQualification = {
@@ -27,6 +30,53 @@ const receipt: RuntimeQualificationReceipt = {
   backend: "windows-job-object",
   result: "passed",
 };
+
+const runtimeComponents = [
+  { name: "primary-launcher", sha256: "6".repeat(64) },
+  { name: "node-runtime", sha256: "7".repeat(64) },
+  { name: "usearch", sha256: "8".repeat(64) },
+] as const;
+
+const linuxReceipt: RuntimeQualificationReceipt = {
+  ...receipt,
+  schemaVersion: 2,
+  platformTarget: "linux-x64",
+  runtimeComponents,
+  backend: "linux-namespace-gateway",
+};
+
+function omitRuntimeComponents(candidate: RuntimeQualificationReceipt): Record<string, unknown> {
+  const result: Record<string, unknown> = { ...candidate };
+  delete result.runtimeComponents;
+  return result;
+}
+
+const malformedLinuxReceipts = [
+  { ...linuxReceipt, schemaVersion: 1 },
+  { ...linuxReceipt, runtimeComponents: runtimeComponents.slice(1) },
+  { ...linuxReceipt, runtimeComponents: [...runtimeComponents, runtimeComponents[0]] },
+  {
+    ...linuxReceipt,
+    runtimeComponents: [runtimeComponents[0], runtimeComponents[0], runtimeComponents[2]],
+  },
+  omitRuntimeComponents(linuxReceipt),
+  { ...linuxReceipt, runtimeComponents: [] },
+  { ...linuxReceipt, runtimeComponents: "not-an-array" },
+  {
+    ...linuxReceipt,
+    runtimeComponents: [
+      { ...runtimeComponents[0], name: "unknown" },
+      ...runtimeComponents.slice(1),
+    ],
+  },
+  {
+    ...linuxReceipt,
+    runtimeComponents: [
+      { ...runtimeComponents[0], sha256: "not-a-digest" },
+      ...runtimeComponents.slice(1),
+    ],
+  },
+];
 
 describe("long-lived runtime qualification", () => {
   it("requires an exact platform, architecture, backend, and release receipt match", () => {
@@ -178,4 +228,83 @@ describe("long-lived runtime qualification", () => {
       });
     },
   );
+
+  it("accepts linux-x64 only with the namespace gateway backend", () => {
+    const result = qualificationFromReceipt(linuxReceipt, {
+      platformTarget: "linux-x64",
+      sourceCommitSha: receipt.sourceCommitSha,
+      activationManifestSha256: receipt.activationManifestSha256,
+      supervisorSha256: receipt.supervisorSha256,
+      secureReadSha256: receipt.secureReadSha256,
+      sidecars: receipt.sidecars,
+      runtimeComponents,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      qualification: {
+        platform: "linux",
+        arch: "x64",
+        backend: "linux-namespace-gateway",
+      },
+    });
+  });
+
+  it.each(runtimeComponents)("rejects Linux runtime drift in $name", (component) => {
+    const binding = {
+      platformTarget: "linux-x64" as const,
+      sourceCommitSha: receipt.sourceCommitSha,
+      activationManifestSha256: receipt.activationManifestSha256,
+      supervisorSha256: receipt.supervisorSha256,
+      secureReadSha256: receipt.secureReadSha256,
+      sidecars: receipt.sidecars,
+      runtimeComponents: runtimeComponents.map((entry) =>
+        entry.name === component.name ? { ...entry, sha256: "9".repeat(64) } : entry,
+      ),
+    };
+
+    expect(qualificationFromReceipt(linuxReceipt, binding)).toEqual({
+      ok: false,
+      reason: "runtime-unqualified",
+    });
+  });
+
+  it("rejects legacy or incomplete Linux component receipts", () => {
+    const binding = {
+      platformTarget: "linux-x64" as const,
+      sourceCommitSha: receipt.sourceCommitSha,
+      activationManifestSha256: receipt.activationManifestSha256,
+      supervisorSha256: receipt.supervisorSha256,
+      secureReadSha256: receipt.secureReadSha256,
+      sidecars: receipt.sidecars,
+      runtimeComponents,
+    };
+
+    for (const candidate of malformedLinuxReceipts) {
+      expect(qualificationFromReceipt(candidate, binding)).toEqual({
+        ok: false,
+        reason: "runtime-unqualified",
+      });
+    }
+  });
+
+  it.each([
+    ["linux-x64", "windows-job-object"],
+    ["windows-x64", "macos-endpoint-security"],
+    ["macos-arm64", "windows-job-object"],
+    ["macos-x64", "linux-namespace-gateway"],
+  ] as const)("rejects a %s receipt bound to %s", (platformTarget, backend) => {
+    const candidate = { ...receipt, platformTarget, backend };
+
+    expect(
+      qualificationFromReceipt(candidate, {
+        platformTarget,
+        sourceCommitSha: receipt.sourceCommitSha,
+        activationManifestSha256: receipt.activationManifestSha256,
+        supervisorSha256: receipt.supervisorSha256,
+        secureReadSha256: receipt.secureReadSha256,
+        sidecars: receipt.sidecars,
+      }),
+    ).toEqual({ ok: false, reason: "runtime-unqualified" });
+  });
 });

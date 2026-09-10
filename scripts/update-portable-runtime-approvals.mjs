@@ -26,12 +26,6 @@ const RAW_HOSTS = Object.freeze(["raw.githubusercontent.com"]);
 const DEFAULT_UPDATE_DEPS = Object.freeze({ fetchFn: globalThis.fetch });
 const OPENCODE_RELEASE_BASE = "https://github.com/anomalyco/opencode/releases/download";
 const OPENCODE_LICENSE_BASE = "https://raw.githubusercontent.com/anomalyco/opencode";
-const OPENCODE_ARCHIVE_BY_TARGET = Object.freeze({
-  "macos-arm64": "opencode-darwin-arm64.zip",
-  "macos-x64": "opencode-darwin-x64.zip",
-  "windows-x64": "opencode-windows-x64.zip",
-});
-
 function fail(message) {
   throw new Error(`update-portable-approvals: ${message}`);
 }
@@ -119,7 +113,7 @@ async function approvedNodeSection(version, deps) {
 async function approvedOpencodeArchives(version, existingArchives, deps) {
   const archives = {};
   for (const target of PORTABLE_TARGET_NAMES) {
-    const name = OPENCODE_ARCHIVE_BY_TARGET[target];
+    const name = portableTargetByName(target).sidecarArchiveName;
     const url = `${OPENCODE_RELEASE_BASE}/v${version}/${name}`;
     const payload = await fetchBuffer(url, ARCHIVE_MAX_BYTES, RELEASE_HOSTS, deps);
     const digest = sha256(payload);

@@ -31,6 +31,15 @@ function payloadLayout(target, payloadRoot) {
       supportLauncher: join(payloadRoot, "support", "keiko-support.cmd"),
     };
   }
+  if (target.nodePlatform === "linux") {
+    return {
+      packageJson: join(payloadRoot, "app", "package.json"),
+      primaryLauncher: join(payloadRoot, "Keiko"),
+      runtimeNode: join(payloadRoot, "runtime", "node", "bin", "node"),
+      setupManifest: join(payloadRoot, ".portable", "setup-manifest.json"),
+      supportLauncher: join(payloadRoot, "support", "keiko-support.sh"),
+    };
+  }
   const resources = join(payloadRoot, "Keiko.app", "Contents", "Resources");
   return {
     packageJson: join(resources, "app", "package.json"),

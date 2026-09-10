@@ -371,8 +371,8 @@ Rules:
   Coding Workbench contract and ADR-0124, ADR-0125, and ADR-0138; do not reconstruct them locally.
 - The macOS development lane is explicitly opted in and confined to repositories that carry the
   checkout marker. It never substitutes for packaged qualification (ADR-0140).
-- Packaged installs are release-qualified only for the fixed `windows-x64`, `macos-arm64`, and
-  `macos-x64` ZIP targets; unsupported targets fail closed (ADR-0163).
+- Packaged installs are release-qualified only for the fixed `linux-x64`, `windows-x64`,
+  `macos-arm64`, and `macos-x64` ZIP targets; unsupported targets fail closed (ADR-0163).
 
 ### Historical records, planning baselines, and delivery evidence
 

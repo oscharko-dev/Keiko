@@ -51,9 +51,14 @@ function runtime(
       },
     },
     qualification: {
-      platform: target === "windows-x64" ? "win32" : "darwin",
+      platform: target === "linux-x64" ? "linux" : target === "windows-x64" ? "win32" : "darwin",
       arch: target === "macos-arm64" ? "arm64" : "x64",
-      backend: target === "windows-x64" ? "windows-job-object" : "macos-endpoint-security",
+      backend:
+        target === "linux-x64"
+          ? "linux-namespace-gateway"
+          : target === "windows-x64"
+            ? "windows-job-object"
+            : "macos-endpoint-security",
       releaseReceipt: `sha256:${digest}`,
     },
     nativeHelperPath: "/managed/Keiko/runtime/native/supervisor",
@@ -130,8 +135,37 @@ function secureReadManifest(evaluation: boolean): Record<string, unknown> {
   };
 }
 
+function linuxSecureReadManifest(): Record<string, unknown> {
+  const value = structuredClone(secureReadManifest(false));
+  const helpers = value.nativeHelpers as Record<string, unknown>[];
+  const helper = helpers[0];
+  if (helper === undefined) throw new TypeError("fixture helper is missing");
+  const signing = helper.signing as Record<string, unknown>;
+  helper.platformTarget = "linux-x64";
+  helper.architecture = "x64";
+  helper.sbomBomRef = `pkg:generic/keiko-secure-workspace-read@${PACKAGE_VERSION}?platform=linux-x64`;
+  signing.signatureKind = "github-oidc-attested";
+  signing.notarizationRequired = false;
+  signing.notarizationVerified = false;
+  const security = value.security as Record<string, unknown>;
+  security.signatureKind = "github-oidc-attested";
+  security.notarizationRequired = false;
+  security.notarizationVerified = false;
+  security.verificationChecks = { provenanceVerified: true };
+  value.artifact = { platformTarget: "linux-x64" };
+  value.runtime = { nodePlatform: "linux", nodeArchitecture: "x64" };
+  const reviewed = (value.releaseImpact as { reviewedBinding: Record<string, unknown> })
+    .reviewedBinding;
+  reviewed.signatureKind = "github-oidc-attested";
+  reviewed.notarizationRequired = false;
+  reviewed.notarizationVerified = false;
+  reviewed.verificationChecks = { provenanceVerified: true };
+  reviewed.nativeHelpers = structuredClone(helpers);
+  return value;
+}
+
 describe("packaged secure workspace-read composition", () => {
-  it.each(["windows-x64", "macos-arm64", "macos-x64"] as const)(
+  it.each(["linux-x64", "windows-x64", "macos-arm64", "macos-x64"] as const)(
     "fails closed without an attested %s secure-read binding",
     (target) => {
       expect(
@@ -146,7 +180,7 @@ describe("packaged secure workspace-read composition", () => {
 
   // The evaluation lane waives the two OS-vouching deps, never the manifest binding: an artifact
   // whose secure-read helper evidence is absent stays refused on both lanes.
-  it.each(["windows-x64", "macos-arm64", "macos-x64"] as const)(
+  it.each(["linux-x64", "windows-x64", "macos-arm64", "macos-x64"] as const)(
     "fails closed without an evaluation-lane %s secure-read binding",
     (target) => {
       expect(
@@ -178,6 +212,20 @@ describe("packaged secure workspace-read composition", () => {
         ...runtime("macos-arm64", platformAssurance),
         installRoot: "/Applications/Keiko.app/Contents/Resources",
         manifest: secureReadManifest(evaluation),
+      },
+      resolveWorkspaceRoot: () => "/workspace",
+      safeCwd: "/safe",
+    });
+
+    expect(port).toBeDefined();
+  });
+
+  it("constructs the receipt-bound Linux production secure-read port", () => {
+    const port = createPackagedSecureWorkspaceTextReadPort({
+      runtime: {
+        ...runtime("linux-x64"),
+        installRoot: "/opt/Keiko",
+        manifest: linuxSecureReadManifest(),
       },
       resolveWorkspaceRoot: () => "/workspace",
       safeCwd: "/safe",

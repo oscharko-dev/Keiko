@@ -280,7 +280,11 @@ function signingIntegrityVerified(
   return (
     signingKeysExact(signing) &&
     fieldEquals(signing, "signatureKind", signatureKind(target)) &&
-    fieldEquals(signing, "notarizationRequired", target !== "windows-x64") &&
+    fieldEquals(
+      signing,
+      "notarizationRequired",
+      target === "macos-arm64" || target === "macos-x64",
+    ) &&
     shippedExecutableEvidenceVerified(signing)
   );
 }
@@ -305,7 +309,7 @@ function releaseQualifiedAttestationVerified(
   signing: Record<string, unknown>,
   target: UpdatePortableTarget,
 ): boolean {
-  const macos = target !== "windows-x64";
+  const macos = target === "macos-arm64" || target === "macos-x64";
   return (
     fieldEquals(signing, "verificationPolicy", "production") &&
     fieldEquals(signing, "verificationStatus", "verified-production") &&

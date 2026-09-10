@@ -5,14 +5,15 @@
   - [ADR-0121](ADR-0121-portable-managed-install-and-release-asset-update-authority.md) D3 by
     accepting the canonical `/Applications/Keiko.app` root and one-time macOS approval flow.
   - [ADR-0137](ADR-0137-server-owned-coding-runtime-contracts.md) D5 by defining the packaged
-    qualification and activation chain for all three supported targets.
+    qualification and activation chain for all four supported targets.
   - [ADR-0140](ADR-0140-macos-dev-lane-activation-of-the-managed-coding-runtime.md) by completing
     the Wave-5 packaged path without changing the deliberately weaker development lane.
 
 ## Context
 
-The portable release contract already produces one ZIP for Windows x64, macOS arm64, and macOS
-x64, and each ZIP contains Node.js plus the review-approved OpenCode runtime. The launcher also
+The portable release contract originally produced one ZIP for Windows x64, macOS arm64, and macOS
+x64. Issue #3451 adds Linux x64 to that exact production set; each ZIP contains Node.js plus the
+review-approved OpenCode runtime. The launcher also
 copies a downloaded archive into a managed install automatically. Those facts did not
 make Coding Workbench release-ready:
 
@@ -60,8 +61,8 @@ do not suppress the System Extension or Full Disk Access consent decisions.
 
 ### D1 — The release unit is one self-contained, exact-target ZIP
 
-The release matrix remains exactly `windows-x64`, `macos-arm64`, and `macos-x64`. Every production
-ZIP contains:
+The release matrix is exactly `linux-x64`, `windows-x64`, `macos-arm64`, and `macos-x64`. Every
+production ZIP contains:
 
 - the primary launcher and packaged application;
 - the exact supported Node.js runtime;
@@ -82,6 +83,15 @@ runtime DLL. Their link lines also retain `/DEPENDENTLOADFLAG:0x800`; together w
 fail-closed DLL-directory initialization, this keeps later dynamic dependency resolution confined
 to the system directory. The Windows native-quality gate derives and proves these exact production
 flags for every producer.
+
+**Amended 2026-09-10 — Linux x64 production qualification (#3451).** Linux stages the exact native
+launcher and secure-read helper, the packaged supervisor entry point, Node.js, OpenCode, and USearch.
+The exact staged tree must pass the real bubblewrap/unshare namespace-gateway proof from ADR-0043.
+Its content-bound qualification receipt is signed with GitHub OIDC in the protected release
+environment and is verified offline against Sigstore's embedded public trust root and the exact
+repository, workflow, source commit, target, backend, and component digests on a fresh runner and at
+point of use. Linux has no evaluation or unconfined fallback: missing namespace support or any stale,
+partial, differently targeted, or differently attested evidence keeps the runtime unavailable.
 
 There are exactly three pre-signing lanes, and a lane is a declaration the artifact carries in its
 own manifest, never an argument a caller supplies:
@@ -127,7 +137,8 @@ activation uses a smaller, closed runtime attestation whose identity contains on
 - schema and qualification-suite versions;
 - target and source commit;
 - supervisor backend and protocol identity;
-- exact shipped supervisor, secure-read, and OpenCode payload digests;
+- exact shipped supervisor, secure-read, OpenCode payload, native-addon, Node.js executable, and
+  primary-launcher digests;
 - the qualification result; and
 - content-free platform evidence flags.
 
@@ -145,6 +156,16 @@ supervisor and system extension pass qualification and before the outer `Keiko.a
 signature. Point-of-use verification requires the outer code-resource seal, nested code
 signatures, notarization/stapling assessment, exact team identity, required entitlements, and exact
 component digests. A copied JSON file outside those trust anchors is never sufficient.
+
+On Linux, the closed v2 receipt is bound to the exact staged activation manifest, supervisor,
+secure-read helper, OpenCode payload, `Keiko` launcher, Node.js executable, and USearch native
+addon. The activation projection carries the reviewed native-addon identity and shipped digest;
+the receipt additionally binds the actual launcher's and Node.js executable's staged bytes. A
+Sigstore bundle created through GitHub OIDC anchors the receipt to the protected `portable-assets`
+workflow identity and source commit. Immediately before admitting the runtime, production
+discovery reopens each fixed, contained, regular single-link file and compares its SHA-256 digest
+with that offline-verified receipt. No network result, mutable key file, caller Boolean, unsigned
+receipt, legacy Linux receipt, or post-qualification byte replacement can authorize activation.
 
 Stale, malformed, failed, differently targeted, differently signed, differently hashed, or
 unsealed evidence returns `runtime-unqualified`.
@@ -203,11 +224,13 @@ content-free unavailable states. Keiko cannot approve either permission on the u
 
 Production composition resolves the secure-read helper by name from the closed runtime attestation,
 opens it without following links or reparse points, verifies stable file identity and exact bytes,
-and verifies its platform signature at every admitted read. On macOS, the verified app resource
+and verifies its platform trust evidence at every admitted read. On macOS, the verified app resource
 seal proves the containing immutable resource tree. On Windows, the signed attestation's exact
 helper digest plus independent Authenticode verification supplies the equivalent point-of-use
 binding. The helper's verified signer identity must match the independently verified primary
-`Keiko.exe` launcher identity on every admitted read.
+`Keiko.exe` launcher identity on every admitted read. On Linux, the offline-verified OIDC receipt
+binds the helper digest and supervisor source identity to the same exact qualified payload; a
+different signature kind, workflow identity, receipt, helper, or source tree is rejected.
 
 The process port uses the fixed helper path, empty environment, no shell, no caller-controlled
 arguments, and a server-owned safe working directory. Failure to construct this port keeps the
@@ -242,7 +265,7 @@ The three existing modes and their monotonic stricter-wins policy remain the onl
 
 ### D8 — Release and first-run claims are executable gates
 
-Before a production artifact can enter the exact-three bundle:
+Before a production artifact can enter the exact-four bundle:
 
 1. native compiler/analyzer and protocol tests pass for the target;
 2. the exact staged supervisor, secure-read helper, OpenCode payload, attestation carrier, and
@@ -256,13 +279,15 @@ Before a production artifact can enter the exact-three bundle:
    re-derived and verified;
 7. a clean disposable extraction performs automatic managed installation without network or
    developer tooling;
-8. both macOS targets prove installation and execution from `/Applications`, System Extension
+8. Linux proves launcher and secure-read native quality, production discovery, and real
+   namespace-gateway isolation on the exact sealed bytes;
+9. both macOS targets prove installation and execution from `/Applications`, System Extension
    activation, Full Disk Access handling, and automatic continuation after approval; and
-9. production discovery proves either an available closed runtime or the exact expected
+10. production discovery proves either an available closed runtime or the exact expected
    content-free macOS approval state.
 
 The checks run with signing credentials removed before payload execution. A qualification job may
-produce evidence but cannot publish or widen a manifest. Assembly still requires all three exact
+produce evidence but cannot publish or widen a manifest. Assembly still requires all four exact
 targets from one commit and one successful stable-tag workflow.
 
 ### D9 — One explicitly declared, unsigned evaluation lane may activate
@@ -271,6 +296,10 @@ Keiko ships a portable EVALUATION build in which the bundled OpenCode sidecar ac
 Apple or Microsoft code signing. The lane exists because platform signing credentials are a
 procurement dependency, and a product that cannot be exercised at all until they land cannot be
 evaluated at all.
+
+The evaluation program remains the explicitly reviewed three-target Windows/macOS program. Linux is
+production-only and cannot be selected by `evaluation_build`; this prevents unsigned or
+namespace-unqualified Linux bytes from being mistaken for the #3451 release target.
 
 **How it is entered.** Only `workflow_dispatch` with `evaluation_build: true`, which appends one
 bare `--evaluation-build` flag to the staging producer. There is no environment variable, no
@@ -389,6 +418,8 @@ green. This is the class audit finding F-01 closed, and it must not be reintrodu
   browser-authored authority front door alongside `CODING_RUNTIME_ROUTE_GROUP` and the Git-delivery
   admission and approval store that ADR-0137 makes normative.
 - Fresh installs no longer depend on update-only metadata.
+- Linux x64 activation is tied to the exact OIDC-attested receipt and real namespace-gateway proof;
+  absence of either namespace backend refuses before spawn.
 - Windows activation is tied to the exact shipped Job Object backend instead of a writable JSON
   receipt.
 - A release-signed macOS install explicitly pays the one-time administrator, System Extension, and
@@ -449,3 +480,5 @@ green. This is the class audit finding F-01 closed, and it must not be reintrodu
 | ------- | ---------- | ------ |
 | 1.0     | 2026-07-27 | Accepted the self-contained release-qualified Coding Workbench runtime. |
 | 1.1     | 2026-09-03 | Recorded the D1 Windows native-helper packaging amendment: `/MT` statically links the CRT while `/DEPENDENTLOADFLAG:0x800` and fail-closed DLL-directory initialization retain the DLL-planting defense. |
+| 1.2     | 2026-09-10 | Added the production-only `linux-x64` release target, offline GitHub-OIDC Sigstore qualification, exact component/source binding, fresh-runner re-verification, and namespace-gateway activation. |
+| 1.3     | 2026-09-10 | Closed the Linux launch-path binding for Issue #3451: receipt schema v2 and production discovery now bind and rehash the launcher, Node.js executable, and USearch addon in addition to the existing activation, helper, and sidecar evidence. |

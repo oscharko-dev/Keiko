@@ -16,12 +16,13 @@ const COMMIT = "c".repeat(40);
 
 function helper(target = "macos-arm64", evaluation = false) {
   const mac = target.startsWith("macos-");
+  const linux = target === "linux-x64";
   return {
     name: "keiko-secure-workspace-read",
     kind: "secure-workspace-text-read",
     platformTarget: target,
     architecture: target.endsWith("arm64") ? "arm64" : "x64",
-    executablePath: `runtime/native/keiko-secure-workspace-read${mac ? "" : ".exe"}`,
+    executablePath: `runtime/native/keiko-secure-workspace-read${mac || linux ? "" : ".exe"}`,
     protocol: { schemaVersion: 1, requestMagic: "KSR1", responseMagic: "KSS1" },
     source: {
       commitSha: COMMIT,
@@ -33,7 +34,11 @@ function helper(target = "macos-arm64", evaluation = false) {
     sizeBytes: BYTES.byteLength,
     sbomBomRef: `pkg:generic/keiko-secure-workspace-read@0.2.15?platform=${target}`,
     signing: {
-      signatureKind: mac ? "developer-id-notarized" : "authenticode",
+      signatureKind: mac
+        ? "developer-id-notarized"
+        : linux
+          ? "github-oidc-attested"
+          : "authenticode",
       verificationStatus: evaluation ? "evaluation-unqualified" : "verified-production",
       signatureVerified: !evaluation,
       notarizationRequired: mac,
@@ -42,18 +47,30 @@ function helper(target = "macos-arm64", evaluation = false) {
   };
 }
 
+function verificationChecks(target: string, verified: boolean): Record<string, boolean> {
+  if (target.startsWith("macos-")) {
+    return {
+      developerIdVerified: verified,
+      notarizationVerified: verified,
+      stapleVerified: verified,
+      assessmentVerified: verified,
+    };
+  }
+  return target === "linux-x64"
+    ? { provenanceVerified: verified }
+    : { publisherChainVerified: verified, timestampVerified: verified };
+}
+
+function nodePlatform(target: string): string {
+  if (target.startsWith("macos-")) return "darwin";
+  return target === "linux-x64" ? "linux" : "win32";
+}
+
 function manifest(target = "macos-arm64", evaluation = false) {
   const nativeHelper = helper(target, evaluation);
   const mac = target.startsWith("macos-");
   const verified = !evaluation;
-  const checks = mac
-    ? {
-        developerIdVerified: verified,
-        notarizationVerified: verified,
-        stapleVerified: verified,
-        assessmentVerified: verified,
-      }
-    : { publisherChainVerified: verified, timestampVerified: verified };
+  const checks = verificationChecks(target, verified);
   const security = {
     verificationPolicy: evaluation ? "evaluation" : "production",
     verificationStatus: evaluation ? "evaluation-unqualified" : "verified-production",
@@ -71,7 +88,7 @@ function manifest(target = "macos-arm64", evaluation = false) {
     product: { packageVersion: "0.2.15" },
     artifact: { platformTarget: target },
     runtime: {
-      nodePlatform: mac ? "darwin" : "win32",
+      nodePlatform: nodePlatform(target),
       nodeArchitecture: nativeHelper.architecture,
     },
     nativeHelpers: [nativeHelper],
@@ -91,6 +108,26 @@ function manifest(target = "macos-arm64", evaluation = false) {
       },
     },
   };
+}
+
+function linuxManifestWithSupervisor() {
+  const value = manifest("linux-x64");
+  const supervisor = {
+    ...structuredClone(value.nativeHelpers[0]!),
+    name: "keiko-runtime-supervisor",
+    kind: "runtime-process-supervisor",
+    executablePath: "app/node_modules/@oscharko-dev/keiko-sandbox/dist/runtime.js",
+    protocol: { schemaVersion: 1, requestMagic: "none", responseMagic: "none" },
+    source: {
+      commitSha: COMMIT,
+      path: "packages/keiko-sandbox/src",
+      treeSha256: "e".repeat(64),
+    },
+    sbomBomRef: "pkg:generic/keiko-runtime-supervisor@0.2.15?platform=linux-x64",
+  };
+  value.nativeHelpers.push(supervisor);
+  value.releaseImpact.reviewedBinding.nativeHelpers.push(structuredClone(supervisor));
+  return value;
 }
 
 /**
@@ -326,6 +363,7 @@ describe("portable secure workspace-read binding", () => {
   });
 
   it.each([
+    [{ os: "linux", arch: "x64" }, "linux-x64", "/opt/Keiko"],
     [{ os: "win32", arch: "x64" }, "windows-x64", String.raw`C:\Keiko\Resources`],
     [{ os: "darwin", arch: "arm64" }, "macos-arm64", "/Keiko/Resources"],
     [{ os: "darwin", arch: "x64" }, "macos-x64", "/Keiko/Resources"],
@@ -337,7 +375,7 @@ describe("portable secure workspace-read binding", () => {
         platform,
         resourceRoot,
       })?.artifact.target,
-    ).toBe(platform.os === "win32" ? "win32-x64" : `darwin-${platform.arch}`);
+    ).toBe(platform.os === "darwin" ? `darwin-${platform.arch}` : `${platform.os}-x64`);
   });
 
   it("selects the secure-read helper from the exact release helper set", () => {
@@ -366,25 +404,6 @@ describe("portable secure workspace-read binding", () => {
         resourceRoot: "/Applications/Keiko.app/Contents/Resources",
       }),
     ).toBeDefined();
-  });
-
-  it("rejects Linux before parsing or touching point-of-use dependencies", async () => {
-    const malformed = new Proxy(
-      {},
-      {
-        get: () => {
-          throw new Error("manifest touched");
-        },
-      },
-    );
-    expect(
-      resolvePortableSecureWorkspaceReadBinding({
-        manifest: malformed,
-        lane: "release-qualified",
-        platform: { os: "linux", arch: "x64" },
-        resourceRoot: "/Keiko/Resources",
-      }),
-    ).toBeUndefined();
   });
 
   it("fails closed when an unknown supported-target manifest is ambiguous", () => {
@@ -440,6 +459,50 @@ describe("portable secure workspace-read binding", () => {
         }),
       ).toBeUndefined();
     }
+  });
+
+  it.each([
+    [
+      "supervisor protocol",
+      (value: ReturnType<typeof linuxManifestWithSupervisor>) => {
+        value.nativeHelpers[1]!.protocol.requestMagic = "KRP1";
+        value.releaseImpact.reviewedBinding.nativeHelpers[1]!.protocol.requestMagic = "KRP1";
+      },
+    ],
+    [
+      "supervisor source",
+      (value: ReturnType<typeof linuxManifestWithSupervisor>) => {
+        value.nativeHelpers[1]!.source.path = "native/runtime-supervisor/macos";
+        value.releaseImpact.reviewedBinding.nativeHelpers[1]!.source.path =
+          "native/runtime-supervisor/macos";
+      },
+    ],
+    [
+      "Sigstore signature kind",
+      (value: ReturnType<typeof linuxManifestWithSupervisor>) => {
+        value.security.signatureKind = "authenticode";
+        value.releaseImpact.reviewedBinding.signatureKind = "authenticode";
+      },
+    ],
+    [
+      "provenance result",
+      (value: ReturnType<typeof linuxManifestWithSupervisor>) => {
+        value.security.verificationChecks.provenanceVerified = false;
+        value.releaseImpact.reviewedBinding.verificationChecks.provenanceVerified = false;
+      },
+    ],
+  ])("rejects Linux %s drift", (_label, mutate) => {
+    const value = linuxManifestWithSupervisor();
+    mutate(value);
+
+    expect(
+      resolvePortableSecureWorkspaceReadBinding({
+        manifest: value,
+        lane: "release-qualified",
+        platform: { os: "linux", arch: "x64" },
+        resourceRoot: "/opt/Keiko",
+      }),
+    ).toBeUndefined();
   });
 });
 

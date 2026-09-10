@@ -17,6 +17,7 @@ import { URL } from "node:url";
 
 import {
   PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
+  PORTABLE_EVALUATION_TARGET_NAMES,
   portableEvaluationManifestFailures,
 } from "./portable-evaluation-manifest.mjs";
 import { extractZipArchiveEntries } from "./zip-archive.mjs";
@@ -324,6 +325,11 @@ function refuse(ports, summary, failures) {
  */
 export function portableReleaseGate(ports) {
   const expectedNames = portableDownloadAssetNames(ports.targets, ports.setupAssetName);
+  const evaluationTargets = exactEvaluationTargets(ports.targets);
+  const evaluationExpectedNames = portableDownloadAssetNames(
+    evaluationTargets,
+    ports.setupAssetName,
+  );
   const readers = releaseReaders({
     gh: ports.gh,
     downloadJson: (url) => downloadJsonAsset(ports.fetchAssetToFile, url),
@@ -349,38 +355,50 @@ export function portableReleaseGate(ports) {
      * proven them, so a run that cannot leaves the repository exactly as it found it.
      */
     verifyPrepublished(tag, repository, workflowPath, sourceCommitSha) {
-      const release = readers.readRelease(repository, tag);
-      const { failures, expectedDownloads, workflowRunId, runArtifacts } =
-        prepublishedReleaseFailures({
-          tag,
-          repository,
-          workflowPath,
-          expectedNames,
-          sourceCommitSha,
-          release,
-          readLatestRelease: readers.readLatestRelease,
-          readManifest: readers.readManifest,
-          readRun: readers.readRun,
-        });
-      refuse(ports, "prepublished portable downloads are not usable", failures);
-      // The evidence declares digests; the RUN proves them. Checked before the bytes are fetched,
-      // so a forged manifest cannot even direct the download.
-      refuse(
-        ports,
-        "prepublished portable downloads are not the bytes their workflow run produced",
-        runArtifactDigestFailures(
-          expectedDownloads,
-          (artifacts, names) =>
-            ports.collectRunArtifactDigests(repository, workflowRunId, artifacts, names),
-          evaluationArtifactNames(ports.targets),
-          runArtifacts,
-        ),
-      );
-      ports.verifyBytes(release.assets, expectedDownloads);
-      ports.log(`release-publish: prepublished downloads on ${tag} match their evidence.`);
-      return true;
+      return verifyPrepublishedRelease(ports, readers, evaluationTargets, evaluationExpectedNames, {
+        tag,
+        repository,
+        workflowPath,
+        sourceCommitSha,
+      });
     },
   };
+}
+
+function verifyPrepublishedRelease(ports, readers, targets, expectedNames, input) {
+  const release = readers.readRelease(input.repository, input.tag);
+  const { failures, expectedDownloads, workflowRunId, runArtifacts } = prepublishedReleaseFailures({
+    ...input,
+    expectedNames,
+    release,
+    readLatestRelease: readers.readLatestRelease,
+    readManifest: readers.readManifest,
+    readRun: readers.readRun,
+  });
+  refuse(ports, "prepublished portable downloads are not usable", failures);
+  refuse(
+    ports,
+    "prepublished portable downloads are not the bytes their workflow run produced",
+    runArtifactDigestFailures(
+      expectedDownloads,
+      (artifacts, names) =>
+        ports.collectRunArtifactDigests(input.repository, workflowRunId, artifacts, names),
+      evaluationArtifactNames(targets),
+      runArtifacts,
+    ),
+  );
+  ports.verifyBytes(release.assets, expectedDownloads);
+  ports.log(`release-publish: prepublished downloads on ${input.tag} match their evidence.`);
+  return true;
+}
+
+function exactEvaluationTargets(targets) {
+  const byName = new Map(targets.map((target) => [target.platformTarget, target]));
+  return PORTABLE_EVALUATION_TARGET_NAMES.map((name) => {
+    const target = byName.get(name);
+    if (target === undefined) throw new Error("portable evaluation target table is incomplete");
+    return target;
+  });
 }
 
 /**

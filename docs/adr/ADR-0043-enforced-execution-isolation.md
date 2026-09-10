@@ -17,10 +17,11 @@ code comments anticipated (no such files existed); those comments are updated to
 
 ## Version
 
-1.2 — Issue #3422 moves the internal Linux gateway launcher into the `keiko-sandbox` enforcement
+1.3 — Issue #3422 moves the internal Linux gateway launcher into the `keiko-sandbox` enforcement
 boundary while `keiko-tools` remains the disposable-command spawn boundary, replaces its
 same-uid-discoverable filesystem relay with an anonymous descriptor-transfer channel, and records
-the kernel-proven private diagnostics-descriptor lifecycle (2026-09-10).
+the kernel-proven private diagnostics-descriptor lifecycle. Issue #3451 binds that primitive to the
+release-qualified `linux-x64` runtime and its exact production evidence (2026-09-10).
 
 ## Context
 
@@ -209,7 +210,7 @@ caller: it refuses to spawn the sidecar at all when no
 confinement policy is attached, or when the policy's `runId`/`treeBindingId` drift from the launch
 request, before any process exists.
 
-### D12 — macOS is product-wired; Linux has a proven primitive; Windows remains fail-closed
+### D12 — macOS and Linux are product-wired; Windows remains fail-closed
 
 `buildRuntimeGatewaySeatbeltCommand` remains the enforcing macOS product path (ADR-0140). Issue
 #3422 adds the corresponding Linux primitive to the generic isolated-run planner: when bubblewrap
@@ -237,8 +238,6 @@ gateway handle.
 The server accepts only the closed launcher error vocabulary and records the first failure as
 `runtime.confinement.failed`, with the run correlation id and body-free backend/source fields. A
 missing diagnostics pipe refuses the launch and terminates the just-spawned unowned process tree.
-This prepares the existing composition boundary for #3451 without claiming that a Linux runtime
-target is already qualified.
 
 The Linux reference-runner test proves the mechanism rather than an argv string: the unconfined
 child completes a PING/PONG exchange with a hostile ephemeral loopback listener, the same child
@@ -251,14 +250,18 @@ destinations are reachable, and passes only when no reconnectable bridge exists.
 tools on Linux fail that reference proof. Containers remain ineligible because no equivalent bridge
 is compiled for them.
 
-This does **not** yet establish Linux product coverage. Keiko still has no `linux-x64`
-`LongLivedRuntimePlatform`, `RuntimeQualificationTarget`, staged/portable artifact, discovery path,
-or release-qualified long-lived runtime. Issue #3451 owns those surfaces and must consume this
-primitive before Linux can be described as shipped. Windows production composition already
-attaches the exact gateway policy to its native backend, but the native protocol/helper cannot
-enforce it, so it refuses before spawn with `GATEWAY_UNSUPPORTED_ON_HOST_REASON`. Issue #3423 owns
-the exact-port WFP implementation. The cross-platform acceptance criterion remains open until
-#3451 and #3423 have their own platform-native proofs.
+Issue #3451 establishes Linux product coverage by adding `linux-x64` to the closed long-lived and
+portable target vocabularies, staging the exact launcher, Node.js, OpenCode, USearch, supervisor,
+and secure-read payload, and routing production composition through this namespace gateway. The
+exact staged runtime must pass the non-vacuous reference proof above; its content-bound
+qualification receipt is signed through the protected release environment with GitHub OIDC and is
+verified offline against the embedded Sigstore trust root and exact repository/workflow identity on
+a fresh read-only runner and again at point of use. Missing namespace support, receipt drift,
+component drift, a stale source commit, or a backend other than `linux-namespace-gateway` keeps the
+runtime unavailable before spawn. Windows production composition already attaches the exact gateway
+policy to its native backend, but the native protocol/helper cannot enforce it, so it refuses before
+spawn with `GATEWAY_UNSUPPORTED_ON_HOST_REASON`. Issue #3423 owns the exact-port WFP implementation;
+the cross-platform acceptance criterion remains open only on that Windows-native proof.
 
 ### D13 — Does not relax D1–D10
 
@@ -266,10 +269,9 @@ This confinement mechanism is additive: it does not change `network: "none"`, th
 backends, their `keiko-tools` spawn boundary, or the CI-proven egress denial in D5. D12's
 package-private launcher is the enforcement implementation for the new gateway-only plan, not a
 second general-purpose command execution API. It is a second, narrower policy shape for a shape of
-execution (long-lived, one-endpoint-allowed) that D1–D10 did not address, scoped today to the one
-platform (macOS) that has a production long-lived sidecar activation path (ADR-0140). The Linux
-planner/bridge primitive in D12 extends this second shape without changing any disposable-run argv
-or claiming a Linux product activation path.
+execution (long-lived, one-endpoint-allowed) that D1–D10 did not address. macOS enforces it through
+Seatbelt; release-qualified Linux enforces it through D12's anonymous descriptor bridge and private
+network namespace. Neither changes any disposable-run argv.
 
 ## Addendum — a contract-level `NetworkGatewayPolicy` and an honest cross-platform posture (2026-09-05)
 
@@ -318,9 +320,10 @@ and release-qualified native lanes. Process-tree qualification alone cannot auth
 network launch. Until a native backend can enforce the policy, starting that run refuses before
 spawning a helper and records `runtime.confinement.failed`; omitting the policy to keep a launch
 working is a fail-open defect. The macOS app-sandbox and dev lanes enforce the same policy through
-Seatbelt. #2951 remains open for #3451's Linux product target and #3423's Windows-native WFP
-enforcement; neither target can be represented as a qualified end-to-end journey before its own
-reference-runner proof.
+Seatbelt. #2951 remains open for #3423's Windows-native WFP enforcement. The Linux target is
+represented only after #3451's exact staged payload, offline-attested qualification, fresh-runner
+verification, and reference-runner proof all pass; no source-only or declared Boolean can qualify
+it.
 
 
 ## Addendum — the governed tool facade rides the ONE attested loopback destination, never a second (2026-09-05)

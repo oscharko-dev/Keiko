@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
+import { dirname } from "node:path";
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
 import {
   type PortablePlatformVerificationInput,
@@ -10,6 +11,7 @@ import {
   type WindowsAuthenticodeSystemOptions,
   windowsAuthenticodeIdentityScript,
 } from "./coding-runtime/windowsPortableAuthenticode.js";
+import { discoverQualifiedPortableOpenCode } from "./coding-runtime/productionPortableCodingRuntime.js";
 
 const VERIFY_TIMEOUT_MS = 30_000;
 const MAX_COMMAND_OUTPUT_BYTES = 16_384;
@@ -23,11 +25,13 @@ type PlatformCommandRunner = (
 
 export interface PortablePlatformVerifierOptions {
   readonly hostPlatform?: NodeJS.Platform | undefined;
+  readonly linuxRuntimeVerifier?: ((resourceRoot: string) => boolean) | undefined;
   readonly runCommand?: PlatformCommandRunner | undefined;
   readonly windowsSystem?: WindowsAuthenticodeSystemOptions | undefined;
 }
 
 function targetHostPlatform(target: UpdatePortableTarget): NodeJS.Platform {
+  if (target === "linux-x64") return "linux";
   return target === "windows-x64" ? "win32" : "darwin";
 }
 
@@ -206,6 +210,30 @@ async function verifyMacos(
   assertSameSignerIdentity(staged, current);
 }
 
+function productionLinuxRuntimeVerified(resourceRoot: string): boolean {
+  const runtime = discoverQualifiedPortableOpenCode({
+    env: {},
+    platform: "linux",
+    arch: "x64",
+    installRoot: resourceRoot,
+  });
+  return (
+    runtime?.target === "linux-x64" &&
+    runtime.platformAssurance === "release-qualified" &&
+    runtime.qualification.backend === "linux-namespace-gateway"
+  );
+}
+
+function verifyLinux(
+  input: PortablePlatformVerificationInput,
+  verifier: (resourceRoot: string) => boolean,
+): void {
+  const resourceRoot = dirname(input.launcherPath);
+  if (!verifier(resourceRoot)) {
+    throw verifierUnavailable("Linux qualification and Sigstore evidence did not verify");
+  }
+}
+
 export function createPortablePlatformVerifier(
   options: PortablePlatformVerifierOptions = {},
 ): (input: PortablePlatformVerificationInput) => Promise<void> {
@@ -217,6 +245,10 @@ export function createPortablePlatformVerifier(
     }
     if (input.target === "windows-x64") {
       await verifyWindows(input, commandRunner, options.windowsSystem);
+      return;
+    }
+    if (input.target === "linux-x64") {
+      verifyLinux(input, options.linuxRuntimeVerifier ?? productionLinuxRuntimeVerified);
       return;
     }
     await verifyMacos(input, commandRunner);

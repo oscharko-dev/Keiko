@@ -23,7 +23,7 @@ import {
 
 const MAX_SIGNATURE_CHECK_MS = 10_000;
 
-type PortableNativeTarget = "win32-x64" | "darwin-arm64" | "darwin-x64";
+type PortableNativeTarget = "linux-x64" | "win32-x64" | "darwin-arm64" | "darwin-x64";
 
 export type MacosCodeCommandRunner = (command: string, args: readonly string[]) => Promise<boolean>;
 
@@ -40,10 +40,8 @@ export function createNodePortableSecureWorkspaceReadInspection(
   return Object.freeze({
     inspectPath: inspectPathEntries,
     openReadSameIdentity,
-    verifySignature: (
-      executable: string,
-      target: "win32-x64" | "darwin-arm64" | "darwin-x64",
-    ): Promise<boolean> => verifySignature(executable, target, options),
+    verifySignature: (executable: string, target: PortableNativeTarget): Promise<boolean> =>
+      verifySignature(executable, target, options),
   });
 }
 
@@ -127,6 +125,11 @@ function verifySignature(
   target: PortableNativeTarget,
   options: NodePortableSecureWorkspaceReadInspectionOptions,
 ): Promise<boolean> {
+  // Linux has no per-file platform signature. Production discovery has already verified the
+  // GitHub-OIDC Sigstore receipt that binds this helper digest; the same-identity reopen and hash
+  // below is the point-of-use proof. Returning true here means no second OS signature exists, not
+  // that any hash or receipt check is waived.
+  if (target === "linux-x64") return Promise.resolve(true);
   return target === "win32-x64"
     ? verifyWindowsAuthenticode(executable, options)
     : verifyMacosCode(executable, options);
@@ -180,7 +183,7 @@ export function provePortableImmutableResourceTree(
 ): Promise<boolean> {
   // Windows has no immutable app-resource seal. The caller instead reopens and hashes the
   // receipt-bound helper, then independently matches its Authenticode signer on every admission.
-  if (target === "win32-x64") return Promise.resolve(true);
+  if (target === "win32-x64" || target === "linux-x64") return Promise.resolve(true);
   const manifestTarget = target === "darwin-arm64" ? "macos-arm64" : "macos-x64";
   const appRoot = dirname(dirname(resourceRoot));
   if (expectedTeamIdentifier === undefined || !isMacosTeamIdentifier(expectedTeamIdentifier)) {
