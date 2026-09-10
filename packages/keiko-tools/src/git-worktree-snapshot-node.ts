@@ -120,8 +120,9 @@ export const GIT_REMOTE_URL_READ_SANDBOX_POLICY: SandboxPolicy = Object.freeze({
 
 export interface NodeGitWorktreeReaderDeps {
   readonly workspace: WorkspaceInfo;
-  // The read-only port the lane's filesystem helpers resolve containment through (workspace-port.ts
-  // `workspaceFsOf`): explicit here, else the owned-root port bound to `workspace`, else node.
+  // The read-only port every containment check of this lane resolves through (exec.ts
+  // `workspaceFsOf`, for the spawn boundary and the raw reader's filesystem helpers alike): explicit
+  // here, else the owned-root port bound to `workspace`, else node.
   readonly fs?: WorkspaceFs | undefined;
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly now?: (() => number) | undefined;
@@ -174,6 +175,9 @@ function buildReadContext(deps: NodeGitWorktreeReaderDeps): ReadContext {
         : {}),
       ...(deps.home !== undefined ? { home: deps.home } : {}),
       ...(deps.onTerminated !== undefined ? { onTerminated: deps.onTerminated } : {}),
+      // An explicit port must reach the spawn boundary too, not only the raw reader's own
+      // filesystem helpers (review of PR #3452).
+      ...(deps.fs !== undefined ? { fs: deps.fs } : {}),
     },
     signal: deps.signal ?? new AbortController().signal,
     timeoutMs: deps.timeoutMs,

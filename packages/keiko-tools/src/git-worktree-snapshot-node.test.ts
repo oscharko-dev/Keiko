@@ -777,4 +777,23 @@ describe("a workspace root below an always-denied segment", () => {
       rmSync(fixture.base, { recursive: true, force: true });
     }
   });
+
+  // Review of PR #3452: the reader's `fs` reached only the raw reader's filesystem helpers; the
+  // spawn-based reads rebuilt their RunCommandDeps without it, so an explicit port was silently
+  // dropped there. The plain WorkspaceInfo carries no binding here on purpose: only the explicit
+  // port can admit the root.
+  it("honours an explicit port for the spawn-based reads, not only the bound WorkspaceInfo", async () => {
+    const fixture = deniedRepository();
+    try {
+      const snapshot = await readGitWorktreeSnapshot({
+        ...deps(),
+        workspace: workspaceInfo(fixture.root),
+        fs: workspaceFsWithOwnedRootAuthority(nodeWorkspaceFs, fixture.root),
+      });
+      expect(snapshot.currentBranchName).toBe("main");
+      expect(snapshot.headSha).toMatch(/^[a-f0-9]{40}$/u);
+    } finally {
+      rmSync(fixture.base, { recursive: true, force: true });
+    }
+  });
 });
