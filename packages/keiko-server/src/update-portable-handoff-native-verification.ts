@@ -63,8 +63,11 @@ function runCommand(
         maxBuffer: MAX_OUTPUT_BYTES,
       },
       (error, stdout, stderr) => {
+        let status: number | null = null;
+        if (error === null) status = 0;
+        else if (typeof error.code === "number") status = error.code;
         resolve({
-          status: error === null ? 0 : typeof error.code === "number" ? error.code : null,
+          status,
           stdout,
           stderr,
         });

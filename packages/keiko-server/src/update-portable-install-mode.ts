@@ -135,8 +135,8 @@ function safeSha256(value: unknown): string | undefined {
 }
 
 function hasExactKeys(record: Record<string, unknown>, expected: readonly string[]): boolean {
-  const actual = Object.keys(record).sort();
-  const wanted = [...expected].sort();
+  const actual = Object.keys(record).sort((left, right) => left.localeCompare(right, "en-US"));
+  const wanted = [...expected].sort((left, right) => left.localeCompare(right, "en-US"));
   return actual.length === wanted.length && wanted.every((key, index) => actual[index] === key);
 }
 

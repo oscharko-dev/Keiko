@@ -67,7 +67,7 @@ function nowIso(now: () => number): string {
 }
 
 function validHandoffPort(portText: string | undefined, port: number): boolean {
-  return /^[1-9][0-9]{0,4}$/u.test(portText ?? "") && Number.isSafeInteger(port) && port <= 65_535;
+  return /^[1-9]\d{0,4}$/u.test(portText ?? "") && Number.isSafeInteger(port) && port <= 65_535;
 }
 
 function validCurrentProcessInput(
@@ -215,9 +215,7 @@ function projectRecoveredSession(
 }
 
 function resolvedPromise<T>(work: () => T | PromiseLike<T>): Promise<T> {
-  return new Promise<T>((resolve) => {
-    resolve(work());
-  });
+  return Promise.resolve().then(work);
 }
 
 function recoveryActiveSession(

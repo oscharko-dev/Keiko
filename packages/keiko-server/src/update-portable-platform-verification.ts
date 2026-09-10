@@ -158,7 +158,7 @@ function windowsSignerIdentity(output: string): WindowsPublisherIdentity {
   if (
     extra.length > 0 ||
     subscriberEku === undefined ||
-    !/^1\.3\.6\.1\.4\.1\.311\.97\.[0-9]+(?:\.[0-9]+)*$/u.test(subscriberEku) ||
+    !/^1\.3\.6\.1\.4\.1\.311\.97\.\d+(?:\.\d+)*$/u.test(subscriberEku) ||
     rootThumbprint === undefined ||
     !/^[A-F0-9]{40,128}$/u.test(rootThumbprint) ||
     leafThumbprint === undefined ||

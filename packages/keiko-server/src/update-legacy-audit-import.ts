@@ -643,7 +643,8 @@ function parseLegacyLine(line: string): LegacyEvent | undefined {
   }
   const value = canonicalLegacyValue(parsed);
   const canonical = JSON.stringify(value);
-  return { value, canonical, importedId: `legacy-audit-event-${hash(`KLA1\n${canonical}`)}` };
+  const importedId = `legacy-audit-event-${hash(`KLA1\n${canonical}`)}`;
+  return { value, canonical, importedId };
 }
 
 function decodeUtf8(bytes: Buffer): string | undefined {
@@ -990,7 +991,7 @@ function importPrepared(
       const events = prepared.events
         .filter((event) => !represented.has(event.importedId))
         .map(importedEventLog);
-      if (events.some((event) => event === undefined)) {
+      if (events.includes(undefined)) {
         scanReason = "source-invalid";
         return { status: "deferred" };
       }

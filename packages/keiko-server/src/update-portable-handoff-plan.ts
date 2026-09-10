@@ -536,7 +536,7 @@ function readPlanFields(content: Buffer): {
 }
 
 function numericField(value: string | undefined): number {
-  if (value === undefined || !/^(?:0|[1-9][0-9]{0,15})$/u.test(value))
+  if (value === undefined || !/^(?:0|[1-9]\d{0,15})$/u.test(value))
     fail("portable handoff plan is malformed");
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed)) fail("portable handoff plan is malformed");

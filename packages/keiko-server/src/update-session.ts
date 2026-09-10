@@ -184,21 +184,16 @@ export interface UpdateSessionManagerOptions {
 }
 
 function candidateError(reason: UpdateCandidateRejection): UpdateSessionError {
-  const code =
-    reason === "expired"
-      ? "UPDATE_CANDIDATE_EXPIRED"
-      : reason === "replayed"
-        ? "UPDATE_CANDIDATE_REPLAYED"
-        : "UPDATE_CANDIDATE_INVALID";
-  return new UpdateSessionError(
-    code,
-    reason === "expired"
-      ? "The reviewed update candidate expired. Run preflight again."
-      : reason === "replayed"
-        ? "The reviewed update candidate was already consumed."
-        : "The reviewed update candidate no longer matches this installation.",
-    409,
-  );
+  let code = "UPDATE_CANDIDATE_INVALID";
+  let message = "The reviewed update candidate no longer matches this installation.";
+  if (reason === "expired") {
+    code = "UPDATE_CANDIDATE_EXPIRED";
+    message = "The reviewed update candidate expired. Run preflight again.";
+  } else if (reason === "replayed") {
+    code = "UPDATE_CANDIDATE_REPLAYED";
+    message = "The reviewed update candidate was already consumed.";
+  }
+  return new UpdateSessionError(code, message, 409);
 }
 
 class UpdateSessionManagerImpl implements UpdateSessionManager {

@@ -32,7 +32,6 @@ import {
   digestPortableHandoffFile,
   hashPortableHandoffTree,
   portableHandoffOperationFrom,
-  PORTABLE_HANDOFF_TREE_HASH_SCHEMA,
   PortableHandoffBuilderError,
   type PortableHandoffOperation,
 } from "./update-portable-handoff-tree.js";
@@ -40,7 +39,8 @@ import {
 const PREPARED_REGISTRATION = "registration.next";
 const DEFAULT_OPERATION_TIMEOUT_MS = 15 * 60 * 1_000;
 
-export { hashPortableHandoffTree, PORTABLE_HANDOFF_TREE_HASH_SCHEMA, PortableHandoffBuilderError };
+export { hashPortableHandoffTree, PortableHandoffBuilderError };
+export { PORTABLE_HANDOFF_TREE_HASH_SCHEMA } from "./update-portable-handoff-tree.js";
 export type { PortableHandoffOperationOptions } from "./update-portable-handoff-tree.js";
 
 export interface PortableHandoffProcessIdentity {

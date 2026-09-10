@@ -220,7 +220,7 @@ export function windowsAuthenticodePublisherIdentityScript(): string {
     windowsAuthenticodeVerifierLoaderScript() +
     "function E($c){@($c.Extensions|?{$_.Oid.Value -eq '2.5.29.37'}|%{" +
     "([Security.Cryptography.X509Certificates.X509EnhancedKeyUsageExtension]::new($_,$_.Critical)).EnhancedKeyUsages|%{$_.Value}})};" +
-    "function P($c){@(Get-ChildItem -LiteralPath Cert:\\LocalMachine\\AuthRoot|?{$_.Thumbprint -eq $c.Thumbprint}).Count -eq 1};" +
+    String.raw`function P($c){@(Get-ChildItem -LiteralPath Cert:\LocalMachine\AuthRoot|?{$_.Thumbprint -eq $c.Thumbprint}).Count -eq 1};` +
     "function R($c,$time,$eku){$x=[Security.Cryptography.X509Certificates.X509Chain]::new();try{" +
     "$x.ChainPolicy.RevocationMode='Online';$x.ChainPolicy.RevocationFlag='EntireChain';" +
     "$x.ChainPolicy.VerificationTime=$time.UtcDateTime;" +

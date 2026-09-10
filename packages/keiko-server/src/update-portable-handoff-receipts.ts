@@ -22,7 +22,7 @@ import {
 } from "./update-portable-handoff-plan.js";
 
 const HEX_SHA256 = /^[a-f0-9]{64}$/u;
-const RECEIPT_NAME = /^(?<sequence>[0-9]{6})\.khr$/u;
+const RECEIPT_NAME = /^(?<sequence>\d{6})\.khr$/u;
 const RECEIPT_KINDS = new Set([
   "prepared",
   "old-exit",
@@ -40,7 +40,7 @@ const MAX_RECEIPT_BYTES = 4096;
 const MAX_RECEIPTS = 15;
 const VERIFIED_ACK_FILE = "verified.ack";
 const VERIFIED_ACK_BYTES = 69;
-const VERIFIED_ACK_TEMP = /^\.verified-ack-(?:[1-9][0-9]*)\.tmp$/u;
+const VERIFIED_ACK_TEMP = /^\.verified-ack-(?:[1-9]\d*)\.tmp$/u;
 const MAX_HANDOFF_ROOT_ENTRIES = 32;
 
 export type PortableHandoffReceiptKind =
@@ -450,7 +450,7 @@ function parseReceipt(content: Buffer): PortableHandoffReceipt {
 }
 
 function canonicalNumber(value: string): number {
-  if (!/^(?:0|[1-9][0-9]{0,15})$/u.test(value)) fail("portable handoff receipt is malformed");
+  if (!/^(?:0|[1-9]\d{0,15})$/u.test(value)) fail("portable handoff receipt is malformed");
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed)) fail("portable handoff receipt is malformed");
   return parsed;
@@ -494,7 +494,7 @@ function receiptNames(root: string): string[] {
   } finally {
     directory.closeSync();
   }
-  return names.sort();
+  return names.sort((left, right) => left.localeCompare(right, "en-US"));
 }
 
 function readReceiptJournal(root: string, activationId: string): PortableHandoffReceipt[] {
