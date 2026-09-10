@@ -73,4 +73,31 @@ describe("activityBus", () => {
       time: Date.parse(event.occurredAt),
     });
   });
+
+  // #3390 wave: `operator-decision` is a governed pause reason, not a routine step, so it must
+  // project through the SAME RUNTIME_EVENT_PRESENTATION table as an approval carrying its own
+  // label — never silently fall back to a generic step the way an unmapped kind would.
+  it("projects an operator-decision runtime event as an approval on the operator's own label", () => {
+    const event: CodingWorkbenchRuntimeSseEvent = {
+      schemaVersion: "1",
+      cursor: "cursor-2",
+      sequence: 2,
+      occurredAt: "2026-06-15T10:00:02.000Z",
+      kind: "runtime-event",
+      runId: "run-1",
+      state: "awaiting-approval",
+      revision: 3,
+      eventKind: "operator-decision",
+    };
+
+    act(() => logRuntimeActivityEvents([event]));
+
+    expect(getActivity()[0]).toMatchObject({
+      id: "run-1:cursor-2",
+      type: "approval",
+      labelKey: "activity.event.operatorDecision",
+      agent: "runtime",
+      time: Date.parse(event.occurredAt),
+    });
+  });
 });

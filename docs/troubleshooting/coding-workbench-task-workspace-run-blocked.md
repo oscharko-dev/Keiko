@@ -491,3 +491,111 @@ missing required properties (and states that every declared property is required
 whose value failed, and the number of undeclared properties to remove, so the first retry can
 succeed. The schema itself is unchanged: its required list is the dialect's rule and is bound into
 the H1 provenance record.
+
+---
+
+## A run fails with `delivery-not-evidenced`
+
+| Field             | Value                                                               |
+| ----------------- | ------------------------------------------------------------------- |
+| Severity          | High                                                                |
+| Surface           | Local server / Coding Workbench                                     |
+| Stable identifier | `delivery-not-evidenced`, `coding-runtime.run.delivery-unevidenced` |
+
+**Symptom**
+
+A run started from an accepted GitHub issue ends as failed with `failureCode: "delivery-not-evidenced"`.
+The timeline shows the model working and then stopping, and the task branch carries no new commit.
+The activity log contains one `op: "coding-runtime.run.delivery-unevidenced"` warning on the run's
+own correlation id, naming the issue number and reporting `hasVerifiedCommit: false` and
+`hasDraftDelivery: false` next to `reportedOutcome: "succeeded"`.
+
+**Root Cause**
+
+This outcome is not the defect — it is the report of one. An issue-bound run is the product's
+delivery flow, so it may not claim success on the strength of the model having stopped emitting tool
+calls. The run settles `failed` unless durable server-owned evidence says something was delivered: a
+SUCCESSFUL verified-commit receipt, or a draft delivery record in a phase that means an artifact
+exists. A record of an ATTEMPT — a commit proposal refused because nothing had been verified, a push
+still awaiting approval, a delivery in recovery — is deliberately not evidence.
+
+The real cause is always earlier in the same timeline: the run was blocked and stopped instead of
+delivering. Ad-hoc runs are exempt, because one legitimately ends with no commit.
+
+**Diagnostic Steps**
+
+1. Reconstruct the run's timeline and read it from the beginning, not from the end.
+
+   ```bash
+   keiko support analyze bundle.jsonl --correlation-id <runId> --json
+   ```
+
+2. Look for the last blocking refusal before the run stopped. The two that end a run this way are a
+   verification refused for want of package-script trust (`op: "editor.verification.execute"` with
+   `state: "refused"` and `reason: "WORKSPACE_TRUST_REQUIRED"`, carrying a `trustRefusal`) and a
+   commit proposal refused (`status: "verification-failed"`).
+3. Check whether a decision was waiting on the operator: `op: "coding-runtime.run.operator-decision"`
+   with `state: "waiting"` names it, and its `settled` line reports how the wait ended. A `reason` of
+   `expired` means nobody decided inside the grace window.
+4. If neither appears, the run was blocked by something else and this entry is the wrong one — the
+   `delivery-unevidenced` line only reports that nothing was delivered, never why.
+
+**Resolution**
+
+Resolve the blocker the timeline names and start the run again; there is nothing to repair in the
+run that already failed. For a trust refusal, see the entry below. Do not treat the failure code as
+the problem: a run that reports this has told the truth about delivering nothing, and suppressing it
+would restore the false green it replaced.
+
+---
+
+## A run pauses and waits for package-script trust
+
+| Field             | Value                                                              |
+| ----------------- | ------------------------------------------------------------------ |
+| Severity          | High                                                               |
+| Surface           | Local server / Coding Workbench                                    |
+| Stable identifier | `WORKSPACE_TRUST_REQUIRED`, `coding-runtime.run.operator-decision` |
+
+**Symptom**
+
+A run stops mid-work and the Workbench reports it as paused. The header shows a notice saying the
+run needs this workspace's package scripts allowed, with one action. The Resume control is not
+offered. The activity log carries `op: "coding-runtime.run.operator-decision"` with
+`state: "waiting"` and `decision: "workspace-script-trust"`.
+
+**Root Cause**
+
+The run tried to verify its work, and the verification runner refused because it holds no
+package-script grant for the workspace's CURRENT `package.json` bytes. A repository's standing grant
+covers a managed worktree only while that manifest is byte-identical to the repository's, so a run
+that adds a dependency or a script legitimately falls outside it and needs a fresh human decision
+for the rewritten manifest.
+
+Only a local human can make that decision. It is not an Authority Envelope approval and is asked
+identically in all three autonomy modes, because script trust is a hard boundary rather than a
+mode-graded permission.
+
+**Diagnostic Steps**
+
+1. Confirm which refusal the runner issued: `op: "editor.verification.execute"` with
+   `state: "refused"`, `reason: "WORKSPACE_TRUST_REQUIRED"` and a `trustRefusal` naming the case
+   (`worktree-manifest-drift` for a rewritten manifest, `repository-not-trusted` when the repository
+   was never allowed at all).
+2. Read the paired `coding-runtime.run.operator-decision` lines. The `settled` line's `reason` is
+   `granted` when the operator decided in time, and `expired` when the grace window closed first.
+3. A run that shows `expired` here will usually also show `delivery-not-evidenced` at the end. That
+   is the same story told twice, not two faults.
+
+**Resolution**
+
+Allow the scripts from the notice in the Coding Workbench header. The decision is recorded for
+exactly the manifest bytes in front of you, and the run continues by itself.
+
+The grace window is bounded by the governed tool invocation's own lifetime, so a decision made long
+after the run paused arrives too late for that verification attempt. Start the run again once the
+grant is recorded; it will not need the decision a second time unless the manifest changes again.
+
+Never widen the boundary to avoid the prompt. Granting trust for a manifest you have not looked at
+defeats the only control standing between a rewritten `package.json` and arbitrary code running on
+the machine.

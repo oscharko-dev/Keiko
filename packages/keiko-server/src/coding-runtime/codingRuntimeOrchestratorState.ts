@@ -56,12 +56,7 @@ export class CodingRuntimeOrchestratorState {
       runtimeSource: snapshot.runtimeSource,
       modelSource: snapshot.modelSource,
       ...(snapshot.failureCode ? { failureCode: snapshot.failureCode } : {}),
-      ...(snapshot.state === "recovery-required" && snapshot.recoveryAcknowledgedAt
-        ? { recoveryAcknowledged: true as const }
-        : {}),
-      ...(snapshot.state === "awaiting-approval" && this.deps.pendingPermission(snapshot.runId)
-        ? { pendingPermission: this.deps.pendingPermission(snapshot.runId) }
-        : {}),
+      ...this.stateBoundDetail(snapshot),
       ...snapshotDetail(snapshot),
     };
     const validated = validateCodingWorkbenchRuntimeSnapshot(out);
@@ -69,6 +64,27 @@ export class CodingRuntimeOrchestratorState {
       throw new Error(`invalid runtime snapshot projection: ${validated.errors.join(", ")}`);
     }
     return out;
+  }
+
+  /**
+   * The three fields the contract admits only alongside their own state. Kept together so each one
+   * is written next to the state that licenses it — the snapshot validator rejects any of them on
+   * another state, and reading them from one place makes that pairing visible.
+   */
+  private stateBoundDetail(
+    snapshot: CodingRuntimeSnapshot,
+  ): Partial<Pick<PublicSnapshot, "recoveryAcknowledged" | "pendingPermission" | "pauseReason">> {
+    if (snapshot.state === "recovery-required") {
+      return snapshot.recoveryAcknowledgedAt ? { recoveryAcknowledged: true as const } : {};
+    }
+    if (snapshot.state === "awaiting-approval") {
+      const pendingPermission = this.deps.pendingPermission(snapshot.runId);
+      return pendingPermission === undefined ? {} : { pendingPermission };
+    }
+    if (snapshot.state === "paused") {
+      return snapshot.pauseReason === undefined ? {} : { pauseReason: snapshot.pauseReason };
+    }
+    return {};
   }
 
   public idle(): PublicSnapshot {

@@ -415,6 +415,31 @@ describe("Coding Workbench runtime API contracts", () => {
     ).toMatchObject({ ok: false });
   });
 
+  it("binds pause reason to paused snapshots only", () => {
+    const paused = {
+      schemaVersion: "1",
+      state: "paused",
+      revision: 3,
+      updatedAt: AT,
+      runId: "run-1",
+      pauseReason: "workspace-script-trust",
+    };
+    expect(validateCodingWorkbenchRuntimeSnapshot(paused)).toEqual({ ok: true, value: paused });
+    // Absent pauseReason on a paused run is deliberately legal: it is what `paused` meant before a
+    // governed tool could ask for an operator decision (an operator-initiated pause).
+    const { pauseReason: _pauseReason, ...pausedWithoutReason } = paused;
+    expect(validateCodingWorkbenchRuntimeSnapshot(pausedWithoutReason)).toEqual({
+      ok: true,
+      value: pausedWithoutReason,
+    });
+    expect(validateCodingWorkbenchRuntimeSnapshot({ ...paused, state: "running" })).toMatchObject({
+      ok: false,
+    });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({ ...paused, pauseReason: "operator-override" }),
+    ).toMatchObject({ ok: false });
+  });
+
   it("projects recovery acknowledgement only as durable recovery-required server truth", () => {
     const recovery = {
       schemaVersion: "1",

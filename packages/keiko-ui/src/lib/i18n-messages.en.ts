@@ -371,6 +371,7 @@ export const EN_MESSAGES = {
   "activity.event.skillInvoked": "Skill invocation completed",
   "activity.event.childRunStarted": "Child run started",
   "activity.event.childRunCompleted": "Child run completed",
+  "activity.event.operatorDecision": "Your decision needed",
   "activity.event.failureRedacted": "Runtime failure recorded",
   "activity.kind.step": "Step",
   "activity.kind.approval": "Approval requested",

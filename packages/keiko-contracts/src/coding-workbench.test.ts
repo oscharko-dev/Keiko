@@ -186,6 +186,7 @@ describe("coding-workbench constants", () => {
     ]);
     expect(CODING_WORKBENCH_CODEX_RUNTIME_BINARY_SOURCES).toEqual(["managed-sidecar-runtime"]);
     expect(CODING_WORKBENCH_RUNTIME_EVENT_KINDS).toContain("permission-requested");
+    expect(CODING_WORKBENCH_RUNTIME_EVENT_KINDS).toContain("operator-decision");
     expect(CODING_WORKBENCH_ACTION_CLASSES).toContain("delivery-substrate");
     expect(CODING_WORKBENCH_SUPERVISED_ACTION_KINDS).toEqual([
       "file-edit",
@@ -1805,6 +1806,80 @@ describe("validateCodingWorkbenchRuntimeEvent (#2387 auxiliary kinds)", () => {
         contentTrust: "untrusted",
       }),
     ).toMatchObject({ ok: false });
+  });
+});
+
+describe("validateCodingWorkbenchRuntimeEvent (operator-decision)", () => {
+  function operatorDecisionEvent(): Record<string, unknown> {
+    return {
+      schemaVersion: CODING_WORKBENCH_SCHEMA_VERSION,
+      eventId: "evt-1",
+      runId: "run-1986",
+      occurredAt: "2026-07-07T12:00:00Z",
+      kind: "operator-decision",
+    };
+  }
+
+  it("accepts an open decision carrying only the required operatorDecision", () => {
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...operatorDecisionEvent(),
+        operatorDecision: "workspace-script-trust",
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("accepts a settled decision carrying a legal auxiliaryOutcome", () => {
+    expect(
+      validateCodingWorkbenchRuntimeEvent({
+        ...operatorDecisionEvent(),
+        operatorDecision: "workspace-script-trust",
+        auxiliaryOutcome: "accepted",
+      }).ok,
+    ).toBe(true);
+  });
+
+  it("requires operatorDecision", () => {
+    const parsed = validateCodingWorkbenchRuntimeEvent(operatorDecisionEvent());
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain("event.operatorDecision is required");
+    }
+  });
+
+  it("rejects an operatorDecision outside the closed vocabulary", () => {
+    const parsed = validateCodingWorkbenchRuntimeEvent({
+      ...operatorDecisionEvent(),
+      operatorDecision: "workspace-trust-override",
+    });
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain("event.operatorDecision is invalid");
+    }
+  });
+
+  it("rejects an auxiliaryOutcome outside the closed vocabulary", () => {
+    const parsed = validateCodingWorkbenchRuntimeEvent({
+      ...operatorDecisionEvent(),
+      operatorDecision: "workspace-script-trust",
+      auxiliaryOutcome: "granted",
+    });
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain("event.auxiliaryOutcome is invalid");
+    }
+  });
+
+  it("rejects a key outside the operator-decision allowed set", () => {
+    const parsed = validateCodingWorkbenchRuntimeEvent({
+      ...operatorDecisionEvent(),
+      operatorDecision: "workspace-script-trust",
+      permissionRequest: validPermissionRequest(),
+    });
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.errors).toContain("event.permissionRequest is not allowed");
+    }
   });
 });
 

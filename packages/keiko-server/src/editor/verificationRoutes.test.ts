@@ -32,6 +32,7 @@ import type {
   EditorVerificationCatalogDiscovery,
   VerificationRunnerEventEmitter,
   VerificationRunnerManager,
+  ScriptTrustDecision,
 } from "./verificationRunner.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { createWorkspaceScriptTrustService } from "../workspace-script-trust.js";
@@ -60,6 +61,13 @@ class FakeManager implements VerificationRunnerManager {
     };
     return { runId: run.runId, run };
   };
+
+  // The runner's own package-script decision as a pure query. These doubles never exercise the
+  // operator-decision wait, so they report the workspace as trusted and no wait is ever entered.
+  public readonly scriptTrustFor = (): ScriptTrustDecision => ({
+    trusted: true,
+    basis: "repository",
+  });
 
   public readonly runToReport = (): Promise<never> => {
     throw new Error("runToReport is not exercised by the human-facing route tests.");

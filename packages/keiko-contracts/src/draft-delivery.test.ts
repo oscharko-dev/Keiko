@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { GITHUB_ISSUE_NUMBER_MAX } from "./github-issue-reference.js";
 import {
+  isDeliveredDraftDeliveryPhase,
   isDraftDeliveryBinding,
   isDraftDeliveryRecord,
   type DraftDeliveryBinding,
+  type DraftDeliveryPhase,
   type DraftDeliveryRecord,
 } from "./draft-delivery.js";
 
@@ -54,7 +56,7 @@ const completed: DraftDeliveryRecord = {
   reason: "completed",
   pullRequest,
 };
-const phases = [
+const phases: readonly DraftDeliveryPhase[] = [
   "push-proposed",
   "pushing",
   "pushed",
@@ -274,5 +276,18 @@ describe("durable delivery phase and remote identity contract", () => {
         pullRequest: { ...pullRequest, headRef: binding.headRef.toUpperCase() },
       }),
     ).toBe(false);
+  });
+});
+
+describe("isDeliveredDraftDeliveryPhase", () => {
+  // Both proposal phases (`push-proposed`, `pr-proposed`) are approval-gated and have not acted on
+  // anything yet; both in-flight phases (`pushing`, `creating-pr`) describe an attempt still under
+  // way; and `recovery-required` is proof an attempt was made and did NOT complete. None of those
+  // five phases ever produced a durable artifact — only a push that actually reached the remote
+  // (`pushed`) or a draft pull request that actually exists (`draft-created`) counts as delivery.
+  const deliveredPhases = new Set<DraftDeliveryPhase>(["pushed", "draft-created"]);
+
+  it.each(phases)("reports %s as delivered only when the phase actually completed", (phase) => {
+    expect(isDeliveredDraftDeliveryPhase(phase)).toBe(deliveredPhases.has(phase));
   });
 });

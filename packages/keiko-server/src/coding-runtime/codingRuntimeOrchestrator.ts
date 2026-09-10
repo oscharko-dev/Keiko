@@ -7,6 +7,8 @@ import type {
   CodingWorkbenchRuntimeEvent,
   CodingWorkbenchRuntimePendingApprovalReview,
   CodingWorkbenchRuntimePendingPermission,
+  CodingWorkbenchAuxiliaryStatus,
+  CodingWorkbenchOperatorDecision,
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimePendingResearch,
   CodingWorkbenchRuntimeResearchGrant,
@@ -17,6 +19,7 @@ import type {
   CodingWorkbenchIssueBinding,
 } from "@oscharko-dev/keiko-contracts";
 import { isLegalCodingWorkbenchRuntimeTransition } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { isDeliveredDraftDeliveryPhase } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import {
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
   parseCodingWorkbenchRuntimeResumeRequest,
@@ -409,6 +412,35 @@ function recordRuntimeApprovalWaiting(
       actionClass: permission.actionClass,
       actionKind: permission.actionKind,
       ...(queuePosition === undefined ? {} : { queuePosition }),
+    },
+  });
+}
+
+/**
+ * The run's own record that a human decision is outstanding, and that it settled. This is what a
+ * customer's log has to reconstruct: WHICH decision blocked the run, at which revision it began
+ * waiting, and how the wait ended. The governed tool writes the matching
+ * `coding-runtime.operator-decision` line from its side; the two share the run's correlation id.
+ */
+function recordRuntimeOperatorDecision(
+  activityLog: ServerLogSink | undefined,
+  snapshot: CodingRuntimeSnapshot,
+  decision: CodingWorkbenchOperatorDecision,
+  state: "waiting" | "settled" | "not-admissible",
+  outcome?: CodingWorkbenchAuxiliaryStatus,
+): void {
+  activityLog?.write({
+    level: state === "not-admissible" ? "warn" : "info",
+    category: "process",
+    op: "coding-runtime.run.operator-decision",
+    correlationId: runtimeDiagnosticCorrelationId(snapshot.runId),
+    extra: {
+      runId: snapshot.runId,
+      revision: snapshot.revision,
+      runState: snapshot.state,
+      decision,
+      state,
+      ...(outcome === undefined ? {} : { outcome }),
     },
   });
 }
@@ -1165,12 +1197,67 @@ export class CodingRuntimeOrchestrator {
   ): Promise<CodingRuntimeOrchestratorResult | undefined> {
     const terminal = event.kind === "runtime-stopped" || event.kind === "failure-redacted";
     if (current.state !== "paused" || terminal) return undefined;
+    // A run paused FOR a decision is resumed by that decision settling, so this one event is the
+    // exception to a paused run absorbing its runtime events.
+    if (event.kind === "operator-decision") return this.ingestOperatorDecision(current, event);
     if (event.kind === "permission-requested") {
       const challenge = this.approvalChallenge(current, event);
       if (challenge === undefined) return this.fail("invalid-intent");
       if (this.approvals.has(current.runId)) return await this.queueApproval(current, challenge);
       this.approvals.set(current.runId, challenge);
     }
+    return { ok: true, snapshot: this.publicSnapshotWithDescription(current) };
+  }
+
+  /**
+   * A governed tool met a decision only a local human can make and is waiting in place for it. The
+   * run says so: `running` -> `paused` naming the decision, and back to `running` the moment the
+   * wait settles — whichever way it settled, because the tool then either retries the effect or
+   * hands the model its refusal, and in both cases the run is no longer waiting on a person.
+   *
+   * This is deliberately NOT the Authority Envelope approval plane. The decision it carries is a
+   * hard, mode-independent boundary (ADR-0147 package-script trust), recorded on the workspace's own
+   * trust surface and minting no action authority, so routing it through `awaiting-approval` would
+   * mint the wrong artifact and, in `governed-assist`, collapse that mode's separate per-command
+   * approval into a workspace trust grant.
+   *
+   * Every other run state absorbs the event unchanged: a run already stopping, settling or awaiting
+   * an approval is not a run that can start waiting on this, and forcing a transition there would
+   * either be refused as illegal or overwrite a state the operator is already acting on.
+   */
+  private ingestOperatorDecision(
+    current: CodingRuntimeSnapshot,
+    event: CodingWorkbenchRuntimeEvent,
+  ): CodingRuntimeOrchestratorResult {
+    const decision = event.operatorDecision;
+    if (decision === undefined) return this.fail("invalid-intent");
+    const open = event.auxiliaryOutcome === undefined;
+    if (open && current.state === "running") {
+      const paused = this.transition(current, "paused", undefined, decision);
+      if (paused.ok)
+        recordRuntimeOperatorDecision(this.deps.activityLog, current, decision, "waiting");
+      return paused;
+    }
+    if (!open && current.state === "paused" && current.pauseReason === decision) {
+      const resumed = this.transition(current, "running");
+      if (resumed.ok) {
+        recordRuntimeOperatorDecision(
+          this.deps.activityLog,
+          current,
+          decision,
+          "settled",
+          event.auxiliaryOutcome,
+        );
+      }
+      return resumed;
+    }
+    recordRuntimeOperatorDecision(
+      this.deps.activityLog,
+      current,
+      decision,
+      "not-admissible",
+      event.auxiliaryOutcome,
+    );
     return { ok: true, snapshot: this.publicSnapshotWithDescription(current) };
   }
 
@@ -1181,6 +1268,7 @@ export class CodingRuntimeOrchestrator {
     if (event.kind === "permission-requested") {
       return await this.ingestPermissionRequested(current, event);
     }
+    if (event.kind === "operator-decision") return this.ingestOperatorDecision(current, event);
     if (event.kind === "task-submitted") return this.ingestTaskSubmitted(current);
     if (event.kind === "runtime-stopped") return this.ingestRuntimeStopped(current);
     recordRuntimeVerificationSummary(this.deps.activityLog, event);
@@ -1380,8 +1468,16 @@ export class CodingRuntimeOrchestrator {
     readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
   } {
     if (target.state !== "succeeded" || live.issueBinding === undefined) return target;
-    const hasVerifiedCommit = live.verifiedCommitResult !== undefined;
-    const hasDraftDelivery = live.draftDelivery !== undefined;
+    // Presence is not delivery. A `verifiedCommitResult` is persisted for every proposal outcome,
+    // `verification-failed` and `blocked` included, and a `draftDelivery` record exists as soon as a
+    // push is PROPOSED. Reading either as evidence would re-admit the false success this method
+    // exists to close (owner review, PR #3452), so both sides ask the question that has a real
+    // answer: the store's own last SUCCESSFUL commit, and a phase the contract classifies as
+    // delivered.
+    const hasVerifiedCommit =
+      this.deps.snapshots.getLastSuccessfulVerifiedCommit?.(live.runId) !== undefined;
+    const hasDraftDelivery =
+      live.draftDelivery !== undefined && isDeliveredDraftDeliveryPhase(live.draftDelivery.phase);
     if (hasVerifiedCommit || hasDraftDelivery) return target;
     this.deps.activityLog?.write({
       level: "warn",
@@ -1966,11 +2062,12 @@ export class CodingRuntimeOrchestrator {
     current: CodingRuntimeSnapshot,
     state: CodingWorkbenchRuntimeStateName,
     failureCode?: CodingWorkbenchRuntimeFailureCode,
+    pauseReason?: CodingWorkbenchOperatorDecision,
   ): CodingRuntimeOrchestratorResult {
     if (!isLegalCodingWorkbenchRuntimeTransition(current.state, state)) {
       return this.fail("invalid-intent");
     }
-    const next = this.createTransitionSnapshot(current, state, failureCode);
+    const next = this.createTransitionSnapshot(current, state, failureCode, pauseReason);
     const published = this.publishTransition(next);
     this.recordTransitionEvidence(next, state, failureCode);
     if (this.shouldTransitionToRecoveryRequired(published, state)) {
@@ -1984,6 +2081,7 @@ export class CodingRuntimeOrchestrator {
     current: CodingRuntimeSnapshot,
     state: CodingWorkbenchRuntimeStateName,
     failureCode?: CodingWorkbenchRuntimeFailureCode,
+    pauseReason?: CodingWorkbenchOperatorDecision,
   ): CodingRuntimeSnapshot {
     const result = TERMINAL_STATES.has(state) ? this.deps.manager.result(current.runId) : undefined;
     return this.deps.snapshots.transition(current.runId, {
@@ -1991,6 +2089,7 @@ export class CodingRuntimeOrchestrator {
       revision: current.revision + 1,
       updatedAt: this.now().toISOString(),
       ...(failureCode ? { failureCode } : {}),
+      ...(pauseReason === undefined ? {} : { pauseReason }),
       ...(result === undefined ? {} : { result }),
     });
   }
@@ -2441,6 +2540,11 @@ function resumeAdmission(
   if (!parsed.ok || parsed.value.requestId !== runId || current?.state !== "paused") {
     return undefined;
   }
+  // A run paused for a human decision has a governed tool waiting in place for that decision, and
+  // the runtime was never itself paused. Resuming it would return the run to `running` while the
+  // tool still waits, and the operator's real action — making the decision — would then arrive at a
+  // run no longer recorded as waiting for it. The decision resumes the run; Resume does not.
+  if (current.pauseReason !== undefined) return undefined;
   return {
     current,
     requestedMode: parsed.value.requestedMode ?? activeEffectiveMode ?? current.requestedMode,

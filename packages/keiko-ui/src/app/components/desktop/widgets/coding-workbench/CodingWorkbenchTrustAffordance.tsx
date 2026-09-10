@@ -22,7 +22,10 @@
 // status just makes the one exit visible instead of requiring the operator to already know it exists.
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import type { EditorVerificationCatalog } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchOperatorDecision,
+  EditorVerificationCatalog,
+} from "@oscharko-dev/keiko-contracts";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import {
   fetchVerificationCatalog,
@@ -50,6 +53,12 @@ export interface CodingWorkbenchTrustAffordanceProps {
    * needs the exit to appear.
    */
   readonly runRevision?: number | undefined;
+  /**
+   * The run's own reason for being paused. `workspace-script-trust` means a governed tool is
+   * waiting in place for exactly the decision this affordance offers, so the notice says the run is
+   * held rather than merely that scripts could be allowed.
+   */
+  readonly pauseReason?: CodingWorkbenchOperatorDecision | undefined;
 }
 
 type WorktreeScriptTrust = "trusted" | "approval-required";
@@ -60,7 +69,10 @@ interface WorktreeTrustGrant {
 }
 
 interface PendingTrustDecision {
-  readonly notice: "codingWorkbench.trust.restrictedNotice" | "codingWorkbench.trust.driftNotice";
+  readonly notice:
+    | "codingWorkbench.trust.restrictedNotice"
+    | "codingWorkbench.trust.driftNotice"
+    | "codingWorkbench.trust.runWaitingNotice";
   readonly granting: boolean;
   readonly onAllow: () => void;
 }
@@ -75,6 +87,7 @@ export const WORKTREE_TRUST_SETTLE_MS = 1500;
 export function CodingWorkbenchTrustAffordance({
   binding,
   runRevision,
+  pauseReason,
 }: CodingWorkbenchTrustAffordanceProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const repository = useWorkspaceTrust(binding?.repositoryRoot);
@@ -83,7 +96,7 @@ export function CodingWorkbenchTrustAffordance({
   const worktreeGrant = useWorktreeTrustGrant(worktreeRoot, binding?.correlationId);
   useTrustBindingDiagnostic(binding);
   if (binding === null) return null;
-  const pending = pendingTrustDecision(repository, worktreeScripts, worktreeGrant);
+  const pending = pendingTrustDecision(repository, worktreeScripts, worktreeGrant, pauseReason);
   if (pending === undefined) return null;
   return (
     <TrustRestrictedNotice
@@ -108,7 +121,19 @@ function pendingTrustDecision(
   repository: WorkspaceTrustView,
   worktreeScripts: WorktreeScriptTrust | undefined,
   worktreeGrant: WorktreeTrustGrant,
+  pauseReason: CodingWorkbenchOperatorDecision | undefined,
 ): PendingTrustDecision | undefined {
+  // A run held for this exact decision comes first and is stated as such. It is the only branch
+  // that does not read the catalog: the server already refused the run's verification for want of
+  // the grant, which is a stronger statement of the same fact than a re-read could make, and a
+  // catalog read that failed would otherwise hide the notice at the one moment it is load-bearing.
+  if (pauseReason === "workspace-script-trust") {
+    return {
+      notice: "codingWorkbench.trust.runWaitingNotice",
+      granting: repository.mutating || worktreeGrant.granting,
+      onAllow: worktreeGrant.grant,
+    };
+  }
   if (repository.status?.trust === "restricted") {
     return {
       notice: "codingWorkbench.trust.restrictedNotice",

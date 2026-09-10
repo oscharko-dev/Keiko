@@ -13,7 +13,7 @@ interface VersionRollback {
   readonly sql: string;
 }
 
-// One rollback fragment per structural forward migration (V14..V33), undoing what that
+// One rollback fragment per structural forward migration (V14..V34), undoing what that
 // migration's own `V<n>_SQL` in schema.ts added to reach it — never more, never less — so a rewind
 // can stop at any intermediate version and leave every earlier version's data and shape untouched.
 // Declared newest-first (descending): dropping the newest objects before older ones is always safe
@@ -26,6 +26,10 @@ interface VersionRollback {
 // `coding_runtime_snapshots` (no column added), so there is nothing to structurally undo at fixture
 // granularity.
 const ROLLBACKS: readonly VersionRollback[] = [
+  {
+    version: 34,
+    sql: `ALTER TABLE coding_runtime_snapshots DROP COLUMN pause_reason;`,
+  },
   { version: 32, sql: `DROP TABLE git_journey_outcomes;\n${originalJourneyTableSql()}` },
   {
     version: 31,

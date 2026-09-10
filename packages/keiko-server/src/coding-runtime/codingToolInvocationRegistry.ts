@@ -6,7 +6,14 @@ import {
 export const CODING_TOOL_INVOCATION_MAX_LIVE_PER_RUN = 8;
 export const CODING_TOOL_INVOCATION_MAX_BYTES_PER_ENTRY = 262_144;
 export const CODING_TOOL_INVOCATION_MAX_AGGREGATE_BYTES = 2 * 1024 * 1024;
-const MAX_TTL_MS = 30_000;
+/**
+ * The ceiling on one governed invocation's life in this registry, from staging until it is
+ * settled — its abort controller fires at this point. Exported so a tool that waits in place for
+ * something a person has to decide can be pinned to settle its own wait BELOW it; a wait that ran
+ * past it would surface as an opaque cancellation instead of the tool's own closed refusal.
+ */
+export const CODING_TOOL_INVOCATION_MAX_TTL_MS = 30_000;
+const MAX_TTL_MS = CODING_TOOL_INVOCATION_MAX_TTL_MS;
 const MAX_IDENTITIES = 2_048;
 const MAX_REVOKED_RUNS = 2_048;
 

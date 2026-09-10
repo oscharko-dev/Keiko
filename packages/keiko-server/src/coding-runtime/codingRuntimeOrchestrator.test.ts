@@ -169,7 +169,15 @@ function fixture(
       )
         ? change.updatedAt
         : undefined;
-      const next = { ...current, ...change, terminalAt } as CodingRuntimeSnapshot;
+      // `pauseReason` is WRITTEN, never merged — the production store does the same, so that
+      // leaving `paused` drops the reason from the row itself. A fixture that let the spread of
+      // `current` win could not detect a stale reason outliving its wait (AGENTS.md §7).
+      const next = {
+        ...current,
+        ...change,
+        pauseReason: change.pauseReason,
+        terminalAt,
+      } as CodingRuntimeSnapshot;
       rows.set(id, next);
       return next;
     },
@@ -477,6 +485,33 @@ function verificationPermission(requestId: string, expiresAt = "2026-01-01T00:01
   };
 }
 
+// The event that carries a started run from `ready` into `running`, which is the only state an
+// outstanding operator decision can pause.
+function taskSubmitted() {
+  return {
+    schemaVersion: "1" as const,
+    eventId: "event-task-submitted",
+    runId: "run-1",
+    occurredAt: "2026-01-01T00:00:00.000Z",
+    kind: "task-submitted" as const,
+  };
+}
+
+function operatorDecisionEvent(
+  outcome?: "accepted" | "stopped" | "limit-reached" | "unavailable",
+  decision: "workspace-script-trust" = "workspace-script-trust",
+) {
+  return {
+    schemaVersion: "1" as const,
+    eventId: `event-operator-decision-${outcome ?? "open"}`,
+    runId: "run-1",
+    occurredAt: "2026-01-01T00:00:00.000Z",
+    kind: "operator-decision" as const,
+    operatorDecision: decision,
+    ...(outcome === undefined ? {} : { auxiliaryOutcome: outcome }),
+  };
+}
+
 const ACTIVE_REPOSITORY_ROOT = mkdtempSync(
   join(realpathSync(tmpdir()), "keiko-orchestrator-issue-"),
 );
@@ -580,6 +615,77 @@ function historicalVerifiedCommit(run: CodingRuntimeSnapshot): VerifiedCommitRes
     issueBindingDigest: ISSUE_BINDING.bindingDigest,
     headSha: "2".repeat(40),
   };
+}
+
+type DeliveryEvidenceKind =
+  | "none"
+  | "verified-commit"
+  | "draft-delivery"
+  | "verification-failed-commit"
+  | "proposed-draft"
+  | "recovery-draft";
+
+/**
+ * Puts a run into the state each evidence case describes. A SUCCESSFUL commit lands in the store's
+ * last-successful projection as well as on the row, because that projection — not the row — is what
+ * the delivery-truth rule reads; an unsuccessful one lands only on the row, which is exactly the
+ * shape `verifiedCommitService.persist` leaves behind for a refused proposal.
+ */
+function seedDeliveryEvidence(
+  rows: Map<string, CodingRuntimeSnapshot>,
+  verifiedCommits: Map<string, VerifiedCommitResult>,
+  run: CodingRuntimeSnapshot,
+  kind: DeliveryEvidenceKind,
+): void {
+  if (kind === "verified-commit") {
+    const receipt = historicalVerifiedCommit(run);
+    verifiedCommits.set(run.runId, receipt);
+    rows.set(run.runId, { ...run, verifiedCommitResult: receipt });
+    return;
+  }
+  if (kind === "verification-failed-commit") {
+    // A refused proposal committed nothing, so the contract requires both commit facts to be
+    // ABSENT — which is precisely why presence of the record says nothing about delivery.
+    const {
+      headSha: _headSha,
+      committedTreeDigest: _tree,
+      ...refused
+    } = historicalVerifiedCommit(run);
+    rows.set(run.runId, {
+      ...run,
+      verifiedCommitResult: {
+        ...refused,
+        status: "verification-failed",
+        reason: "verification-missing",
+      },
+    });
+    return;
+  }
+  if (kind === "draft-delivery") {
+    rows.set(run.runId, { ...run, draftDelivery: historicalDraft(run) });
+    return;
+  }
+  if (kind === "proposed-draft") {
+    rows.set(run.runId, {
+      ...run,
+      draftDelivery: {
+        ...historicalDraft(run),
+        phase: "push-proposed",
+        reason: "approval-required",
+      },
+    });
+    return;
+  }
+  if (kind === "recovery-draft") {
+    rows.set(run.runId, {
+      ...run,
+      draftDelivery: {
+        ...historicalDraft(run),
+        phase: "recovery-required",
+        reason: "provider-failed",
+      },
+    });
+  }
 }
 
 function persistHistoricalDraft(
@@ -766,8 +872,8 @@ describe("CodingRuntimeOrchestrator", () => {
     // The shutdown ended nothing, so it wrote no new terminal line — and the cause line says so
     // instead of asserting an ending that never happened.
     expect(
-      captured.records.filter((candidate) => candidate.op === "coding-runtime.run.settled").length,
-    ).toBe(settledBefore);
+      captured.records.filter((candidate) => candidate.op === "coding-runtime.run.settled"),
+    ).toHaveLength(settledBefore);
     expect(f.orchestrator.snapshot().state).toBe("recovery-required");
   });
 
@@ -787,15 +893,34 @@ describe("CodingRuntimeOrchestrator", () => {
   // refused wrote files, stopped, and settled `succeeded` — with nothing verified, committed, pushed
   // or delivered. "The model stopped emitting tool calls" is not delivery, and the operator saw
   // green. An issue-bound run now needs durable delivery evidence to claim success.
+  //
+  // Owner review, same PR: the first version of this rule read field PRESENCE, which re-admitted the
+  // very bug it closes. A `verifiedCommitResult` is persisted for EVERY proposal outcome — a first
+  // commit proposal rejected `verification-failed` because nothing had been verified yet leaves one
+  // behind — and a `draftDelivery` record exists from the moment a push is PROPOSED. Both are proof
+  // that delivery was attempted and did not complete, so both are pinned here as NOT evidence.
   it.each([
     ["no delivery evidence at all", "none", "failed", "delivery-not-evidenced"],
     ["a verified commit receipt", "verified-commit", "succeeded", undefined],
     ["a draft delivery record", "draft-delivery", "succeeded", undefined],
+    ["a refused commit proposal", "verification-failed-commit", "failed", "delivery-not-evidenced"],
+    ["a push still awaiting approval", "proposed-draft", "failed", "delivery-not-evidenced"],
+    ["a delivery in recovery", "recovery-draft", "failed", "delivery-not-evidenced"],
   ] as const)(
     "settles an issue-bound run that reported success with %s",
     async (_label, evidenceKind, expectedState, expectedFailureCode) => {
       const captured = captureActivityLog();
-      const f = fixture(undefined, undefined, [], undefined, captured.activityLog, issueIntake());
+      const verifiedCommits = new Map<string, VerifiedCommitResult>();
+      const f = fixture(
+        undefined,
+        undefined,
+        [],
+        undefined,
+        captured.activityLog,
+        issueIntake(),
+        undefined,
+        verifiedCommits,
+      );
       let resolveCompletion: ((outcome: "succeeded") => void) | undefined;
       const completion = new Promise<"succeeded">((resolve) => {
         resolveCompletion = resolve;
@@ -804,11 +929,7 @@ describe("CodingRuntimeOrchestrator", () => {
       await f.orchestrator.start({ ...start, issueRef: ISSUE_REF });
       const row = f.rows.get("run-1");
       if (row === undefined) throw new Error("expected the started run row");
-      if (evidenceKind === "verified-commit") {
-        f.rows.set("run-1", { ...row, verifiedCommitResult: historicalVerifiedCommit(row) });
-      } else if (evidenceKind === "draft-delivery") {
-        f.rows.set("run-1", { ...row, draftDelivery: historicalDraft(row) });
-      }
+      seedDeliveryEvidence(f.rows, verifiedCommits, row, evidenceKind);
 
       resolveCompletion?.("succeeded");
 
@@ -834,6 +955,103 @@ describe("CodingRuntimeOrchestrator", () => {
       }
     },
   );
+
+  // Run 10's other half: the verification tool was refused for want of ADR-0147 package-script
+  // trust and nothing told the operator a decision was waiting for them. A governed tool that meets
+  // such a decision now waits in place and the run says so — `paused`, naming the decision — and
+  // returns to `running` the moment the wait settles, whichever way it settled: the tool then either
+  // retries the effect or hands the model its refusal, and in neither case is a person still holding
+  // the run up.
+  it("pauses a running run for an outstanding operator decision and resumes it when it settles", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest(taskSubmitted());
+
+    await f.orchestrator.ingest(operatorDecisionEvent());
+    expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+      state: "paused",
+      pauseReason: "workspace-script-trust",
+    });
+
+    await f.orchestrator.ingest(operatorDecisionEvent("accepted"));
+    const resumed = f.orchestrator.getSnapshot("run-1");
+    expect(resumed?.state).toBe("running");
+    expect(resumed?.pauseReason).toBeUndefined();
+    // The ROW, not only the projection: the projection hides a reason on any non-paused state, so
+    // asserting it alone would pass over a stale reason left behind in durable truth.
+    expect(f.rows.get("run-1")?.pauseReason).toBeUndefined();
+
+    const lines = captured.records.filter(
+      (candidate) => candidate.op === "coding-runtime.run.operator-decision",
+    );
+    expect(lines.map((line) => line.extra?.state)).toEqual(["waiting", "settled"]);
+    expect(lines[0]?.extra).toMatchObject({ runId: "run-1", decision: "workspace-script-trust" });
+    expect(lines[1]?.extra).toMatchObject({ outcome: "accepted" });
+  });
+
+  // A refused decision ends the wait exactly as an accepted one does. The DIFFERENCE is what the
+  // waiting tool returns to the model, not whether the run is still held.
+  it.each(["stopped", "limit-reached", "unavailable"] as const)(
+    "returns a decision-paused run to running when the wait settles %s",
+    async (outcome) => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      await f.orchestrator.ingest(taskSubmitted());
+      await f.orchestrator.ingest(operatorDecisionEvent());
+
+      await f.orchestrator.ingest(operatorDecisionEvent(outcome));
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("running");
+    },
+  );
+
+  // The operator's Resume is not the exit here: the tool is waiting on the DECISION, and a run
+  // returned to `running` behind its back would leave that decision arriving at a run no longer
+  // recorded as waiting for it.
+  it("refuses an operator resume while a run waits on a decision", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest(taskSubmitted());
+    await f.orchestrator.ingest(operatorDecisionEvent());
+
+    const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
+    expect(resumed).toMatchObject({ ok: false, failureCode: "invalid-intent" });
+    expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+      state: "paused",
+      pauseReason: "workspace-script-trust",
+    });
+  });
+
+  // An operator's own pause carries no reason, and must keep resuming the way it always has —
+  // otherwise the new field would silently disable the Resume control for every manual pause.
+  it("leaves an operator-initiated pause resumable and reasonless", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest(taskSubmitted());
+
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("paused");
+    expect(f.orchestrator.getSnapshot("run-1")?.pauseReason).toBeUndefined();
+    const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
+    expect(resumed.ok).toBe(true);
+  });
+
+  // A settle that does not match the decision the run is actually waiting on must not release it:
+  // the wait belongs to one tool call, and releasing it on a foreign settle would resume a run whose
+  // blocker is still in place. Recorded rather than silently dropped, so the log shows the mismatch.
+  it("records a settle that does not match the outstanding decision without resuming", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest(taskSubmitted());
+
+    await f.orchestrator.ingest(operatorDecisionEvent("accepted"));
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("running");
+    const line = captured.records.find(
+      (candidate) => candidate.op === "coding-runtime.run.operator-decision",
+    );
+    expect(line).toMatchObject({ level: "warn", extra: { state: "not-admissible" } });
+  });
 
   // An ad-hoc task legitimately ends with no commit: inferring delivery intent from free text would
   // turn honest successes into false failures, so the rule binds the issue-bound flow only.

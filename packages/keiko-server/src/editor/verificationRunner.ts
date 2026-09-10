@@ -115,6 +115,18 @@ export interface VerificationRunnerManager {
     signal: AbortSignal,
   ) => Promise<VerificationReport>;
   readonly abort: (runId: string) => boolean;
+  /**
+   * The runner's OWN package-script trust decision for a project, as a pure query: it resolves the
+   * workspace and applies `decideScriptTrust`, and it neither executes a step nor writes an
+   * activity line. A caller that has just been refused `WORKSPACE_TRUST_REQUIRED` polls this to
+   * learn when the operator's decision has landed; re-deriving the ADR-0147 D3 rule at that call
+   * site would be a second implementation of the one rule this method exists to keep single.
+   *
+   * A workspace that cannot be resolved at all is `undefined` — not `false`: "no decision" and
+   * "decided against" are different answers, and a caller waiting for a human must not read an
+   * unreadable workspace as a pending decision that could still arrive.
+   */
+  readonly scriptTrustFor: (projectId: string) => ScriptTrustDecision | undefined;
   readonly subscribe: (listener: VerificationRunnerEventEmitter) => () => void;
   readonly inFlightCount: () => number;
 }
@@ -752,6 +764,17 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
 
   // Re-derived from the filesystem on EVERY ask — plan time, at-effect, and catalog projection —
   // never cached on the resolved workspace (see `ResolvedVerificationWorkspace`).
+  scriptTrustFor = (projectId: string): ScriptTrustDecision | undefined => {
+    try {
+      return this.scriptTrust(this.resolveWorkspace(projectId));
+    } catch {
+      // Resolution failing closed is not a trust verdict. Swallowing it here is deliberate and
+      // narrow: `prepare` still surfaces the same failure through the runner's structured error
+      // path the moment verification is actually attempted, so nothing is lost from the log.
+      return undefined;
+    }
+  };
+
   private scriptTrust(resolved: ResolvedVerificationWorkspace): ScriptTrustDecision {
     return decideScriptTrust({
       access: resolved.access,

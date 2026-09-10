@@ -53,7 +53,11 @@ import {
   handleEditorAgentVerificationRun,
   verificationAuthorityDenyReason,
 } from "./agentVerificationRoute.js";
-import type { VerificationRunInput, VerificationRunnerManager } from "./verificationRunner.js";
+import type {
+  ScriptTrustDecision,
+  VerificationRunInput,
+  VerificationRunnerManager,
+} from "./verificationRunner.js";
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 
@@ -209,6 +213,13 @@ class FakeManager implements VerificationRunnerManager {
   public readonly abort = (): boolean => false;
   public readonly inFlightCount = (): number => 0;
   public readonly subscribe = (): (() => void) => (): void => undefined;
+  // The runner's own package-script decision as a pure query. These doubles never exercise the
+  // operator-decision wait, so they report the workspace as trusted and no wait is ever entered.
+  public readonly scriptTrustFor = (): ScriptTrustDecision => ({
+    trusted: true,
+    basis: "repository",
+  });
+
   public readonly runToReport = (
     input: VerificationRunInput,
     signal: AbortSignal,

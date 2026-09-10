@@ -389,6 +389,7 @@ export const DE_MESSAGES = {
   "activity.event.skillInvoked": "Skill-Aufruf abgeschlossen",
   "activity.event.childRunStarted": "Untergeordneter Lauf gestartet",
   "activity.event.childRunCompleted": "Untergeordneter Lauf abgeschlossen",
+  "activity.event.operatorDecision": "Deine Entscheidung nötig",
   "activity.event.failureRedacted": "Runtime-Fehler erfasst",
   "activity.kind.step": "Schritt",
   "activity.kind.approval": "Freigabe angefordert",

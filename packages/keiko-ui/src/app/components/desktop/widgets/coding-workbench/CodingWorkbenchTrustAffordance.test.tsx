@@ -42,6 +42,7 @@ vi.mock("@/lib/client-diagnostics", () => ({
 const ALLOW = "Allow package scripts for verification";
 const RESTRICTED_NOTICE = /not yet trusted/u;
 const DRIFT_NOTICE = /does not cover this task workspace's package scripts/u;
+const RUN_WAITING_NOTICE = /This run is paused/u;
 
 function status(projectId: string, trust: "trusted" | "restricted"): WorkspaceTrustStatus {
   return {
@@ -237,6 +238,48 @@ describe("CodingWorkbenchTrustAffordance", () => {
     await user.click(action);
 
     expect(mutateTrust).toHaveBeenCalledExactlyOnceWith("/repo-a", "grant");
+  });
+
+  // #3390 wave (2026-09-10, Coding Workbench run 8): the server already refused the run's
+  // verification for want of the workspace-script-trust grant, and `pendingTrustDecision` reads
+  // this pause reason before it ever reads the catalog (CodingWorkbenchTrustAffordance.tsx). This
+  // is the load-bearing pin: a stale "trusted" catalog read, or an outright failed one, must never
+  // hide the one notice that explains why the run is not moving — both are asserted here.
+  it.each([
+    ["a rejected catalog read", "reject" as const],
+    ["a catalog that already reports the worktree scripts as trusted", "trusted" as const],
+  ])(
+    "shows the run-waiting notice while paused on workspace-script-trust, even with %s",
+    async (_label, mode) => {
+      fetchStatus.mockResolvedValue(status("/repo-a", "trusted"));
+      if (mode === "reject") {
+        fetchCatalog.mockRejectedValue(new Error("catalog unavailable"));
+      } else {
+        fetchCatalog.mockResolvedValue(catalog("/worktree-a", "trusted"));
+      }
+
+      render(
+        <CodingWorkbenchTrustAffordance binding={binding()} pauseReason="workspace-script-trust" />,
+      );
+
+      expect(await screen.findByText(RUN_WAITING_NOTICE)).toBeInTheDocument();
+      expect(await screen.findByRole("button", { name: ALLOW })).toBeEnabled();
+    },
+  );
+
+  it("grants the worktree, not the repository, when the run-waiting action is clicked", async () => {
+    fetchStatus.mockResolvedValue(status("/repo-a", "trusted"));
+    fetchCatalog.mockResolvedValue(catalog("/worktree-a", "trusted"));
+    mutateTrust.mockResolvedValue(status("/worktree-a", "trusted"));
+    const user = userEvent.setup();
+    render(
+      <CodingWorkbenchTrustAffordance binding={binding()} pauseReason="workspace-script-trust" />,
+    );
+
+    const action = await screen.findByRole("button", { name: ALLOW });
+    await user.click(action);
+
+    expect(mutateTrust).toHaveBeenCalledExactlyOnceWith("/worktree-a", "grant");
   });
 
   // A verification refused mid-run is when the exit has to appear: the run's revision moving

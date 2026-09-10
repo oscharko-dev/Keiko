@@ -8,7 +8,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   CodeTaskGrantId,
   CommandTaskRunResult,
+  CodingWorkbenchAuxiliaryStatus,
   CodingWorkbenchMode,
+  CodingWorkbenchOperatorDecision,
   CodingWorkbenchRuntimeAuthorityFacts,
   VerificationReport,
   VerificationStatus,
@@ -19,7 +21,10 @@ import { GitRawWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
-import { VerificationRunnerError } from "../editor/verificationRunnerErrors.js";
+import {
+  VerificationRunnerError,
+  WorkspaceTrustRequiredError,
+} from "../editor/verificationRunnerErrors.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import {
   createProductionManagedWorktreeToolFacade,
@@ -28,7 +33,10 @@ import {
   recordProposalApprovalResolutionFailure,
   resolveChildModelForRun,
   waitForRuntimeProposalApproval,
+  waitForWorkspaceScriptTrust,
+  SCRIPT_TRUST_WAIT_CEILING_MS,
 } from "./productionManagedWorktreeTools.js";
+import { CODING_TOOL_INVOCATION_MAX_TTL_MS } from "./codingToolInvocationRegistry.js";
 import type { SkillCatalog } from "./skillCatalog.js";
 import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
 import type {
@@ -45,6 +53,7 @@ import type { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
 import {
   createVerificationRunnerManager,
   type VerificationExecutePort,
+  type ScriptTrustDecision,
   type VerificationRunnerManager,
 } from "../editor/verificationRunner.js";
 import { createInMemoryUiStore } from "../store/index.js";
@@ -2029,6 +2038,192 @@ function failedVerificationReport(): VerificationReport {
 // The minimal live-and-authorized verification wiring: authority granted, managed access proven,
 // expiry decades away, so every refusal these tests observe comes from the run OUTCOME (or the
 // thrown error) and never from a liveness or policy check.
+// Run 10 of the Workbench engagement (2026-09-10). Verification was refused because the run had
+// rewritten `package.json`, so the repository's ADR-0147 grant no longer covered the worktree's
+// scripts. The tool handed the model the bare refusal, the model correctly reported the blocker and
+// stopped, and no surface ever told the operator a decision was waiting on them.
+//
+// The tool now waits in place — the same shape a git-stage or commit proposal already waits in —
+// announces the open decision so the run can report itself paused, and makes ONE further attempt
+// once the decision lands. The second attempt is a whole attempt, not a bare `runToReport` retry:
+// the candidate-verification ticket brackets each run.
+describe("verification waiting on the operator's package-script trust decision", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function trustRefusedThenGranted(granted: () => boolean) {
+    return (): ScriptTrustDecision =>
+      granted()
+        ? { trusted: true, basis: "worktree-human-grant" }
+        : { trusted: false, refusal: "worktree-manifest-drift" };
+  }
+
+  function verificationCall(actionId: string): { capability: string; body: string } {
+    return {
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "verification",
+        actionId,
+        idempotencyKey: `${actionId}-key`,
+        verifierId: "test",
+      }),
+    };
+  }
+
+  it("announces the decision, waits, and verifies once the operator allows the scripts", async () => {
+    vi.useFakeTimers();
+    let granted = false;
+    const announced: { decision: string; outcome?: string }[] = [];
+    const runToReport = vi.fn(() =>
+      granted
+        ? Promise.resolve(verificationReport("passed"))
+        : Promise.reject(new WorkspaceTrustRequiredError("worktree-manifest-drift")),
+    );
+    const log: ServerLogEvent[] = [];
+    const facade = verificationFacade({
+      runToReport,
+      scriptTrustFor: trustRefusedThenGranted(() => granted),
+      requestOperatorDecision: (decision, outcome): void => {
+        announced.push({ decision, ...(outcome === undefined ? {} : { outcome }) });
+        // Stands for the operator clicking Allow while the tool waits.
+        if (outcome === undefined) granted = true;
+      },
+      records: [],
+      log,
+    });
+
+    const pending = facade.execute(verificationCall("verification-trust-wait"));
+    await vi.advanceTimersByTimeAsync(600);
+
+    await expect(pending).resolves.toMatchObject({ status: "completed" });
+    expect(runToReport).toHaveBeenCalledTimes(2);
+    expect(announced).toEqual([
+      { decision: "workspace-script-trust" },
+      { decision: "workspace-script-trust", outcome: "accepted" },
+    ]);
+    expect(log.find((event) => event.op === "coding-runtime.operator-decision")).toMatchObject({
+      level: "info",
+      correlationId: "run-verification-3",
+      extra: { decision: "workspace-script-trust", state: "settled", reason: "granted" },
+    });
+  });
+
+  // A decision that never comes must not hold the run for ever: the wait expires on the same
+  // ceiling every other approval wait uses, and the model then gets exactly the refusal it used to
+  // get immediately.
+  it("returns the runner's refusal when the decision never arrives", async () => {
+    vi.useFakeTimers();
+    const announced: { decision: string; outcome?: string }[] = [];
+    const runToReport = vi.fn(() =>
+      Promise.reject(new WorkspaceTrustRequiredError("worktree-manifest-drift")),
+    );
+    const log: ServerLogEvent[] = [];
+    const facade = verificationFacade({
+      runToReport,
+      scriptTrustFor: trustRefusedThenGranted(() => false),
+      requestOperatorDecision: (decision, outcome): void => {
+        announced.push({ decision, ...(outcome === undefined ? {} : { outcome }) });
+      },
+      records: [],
+      log,
+    });
+
+    const pending = facade.execute(verificationCall("verification-trust-expiry"));
+    // Past the wait's own ceiling but still inside the governed invocation's life, which is the
+    // whole point of pinning one below the other: the tool answers with its own refusal rather than
+    // the caller seeing an opaque cancellation.
+    await vi.advanceTimersByTimeAsync(SCRIPT_TRUST_WAIT_CEILING_MS + 600);
+
+    await expect(pending).resolves.toMatchObject({
+      status: "failed",
+      reasonCode: "WORKSPACE_TRUST_REQUIRED",
+    });
+    expect(runToReport).toHaveBeenCalledTimes(1);
+    expect(announced.at(-1)).toEqual({
+      decision: "workspace-script-trust",
+      outcome: "limit-reached",
+    });
+    expect(log.find((event) => event.op === "coding-runtime.operator-decision")).toMatchObject({
+      level: "warn",
+      extra: { state: "settled", reason: "expired" },
+    });
+  });
+
+  // A composition with no way to announce the decision — no runtime event sink — must behave
+  // exactly as it did before the wait existed, rather than blocking on a decision nobody can see.
+  it("keeps the immediate refusal when no decision can be announced", async () => {
+    const runToReport = vi.fn(() =>
+      Promise.reject(new WorkspaceTrustRequiredError("repository-not-trusted")),
+    );
+    const facade = verificationFacade({
+      runToReport,
+      scriptTrustFor: trustRefusedThenGranted(() => false),
+      records: [],
+    });
+
+    await expect(
+      facade.execute(verificationCall("verification-trust-none")),
+    ).resolves.toMatchObject({ status: "failed", reasonCode: "WORKSPACE_TRUST_REQUIRED" });
+    expect(runToReport).toHaveBeenCalledTimes(1);
+  });
+
+  // The load-bearing relation between the wait and the governed invocation's own ceiling. A wait
+  // allowed to run to that ceiling is settled as an opaque cancellation before the tool can answer
+  // — proven on this fixture: at a 30 s wait the call returned `cancelled`, at 29 s the refusal.
+  it("settles its wait strictly inside the governed invocation's life", () => {
+    expect(SCRIPT_TRUST_WAIT_CEILING_MS).toBeGreaterThan(0);
+    expect(SCRIPT_TRUST_WAIT_CEILING_MS).toBeLessThan(CODING_TOOL_INVOCATION_MAX_TTL_MS);
+  });
+
+  // The wait itself, in isolation: an unresolvable workspace is not a verdict a human can change,
+  // so waiting on it would hold the run for the full ceiling with nothing to decide.
+  it("settles unavailable rather than waiting when the decision cannot be read", async () => {
+    vi.useFakeTimers();
+    const outcome = waitForWorkspaceScriptTrust(() => undefined);
+    await vi.advanceTimersByTimeAsync(600);
+    await expect(outcome).resolves.toBe("unavailable");
+  });
+
+  // An aborted tool call ends the wait immediately; the run is going away and nobody is deciding.
+  it("settles cancelled when the tool call is aborted", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const outcome = waitForWorkspaceScriptTrust(
+      () => ({ trusted: false, refusal: "worktree-manifest-drift" }),
+      controller.signal,
+    );
+    controller.abort();
+    await expect(outcome).resolves.toBe("cancelled");
+  });
+});
+
+// Trusted unless a test says otherwise, so every case that is not about script trust keeps its
+// single-attempt behaviour and never announces a decision.
+function verificationRunnerOptions(options: {
+  readonly runToReport: VerificationRunnerManager["runToReport"];
+  readonly scriptTrustFor?: VerificationRunnerManager["scriptTrustFor"];
+  readonly requestOperatorDecision?: (
+    decision: CodingWorkbenchOperatorDecision,
+    outcome?: CodingWorkbenchAuxiliaryStatus,
+  ) => void;
+}): Pick<
+  Parameters<typeof createProductionManagedWorktreeToolFacade>[0],
+  "verificationRunner" | "requestOperatorDecision"
+> {
+  return {
+    verificationRunner: {
+      runToReport: options.runToReport,
+      scriptTrustFor:
+        options.scriptTrustFor ??
+        ((): ScriptTrustDecision => ({ trusted: true, basis: "repository" })),
+    },
+    ...(options.requestOperatorDecision === undefined
+      ? {}
+      : { requestOperatorDecision: options.requestOperatorDecision }),
+  };
+}
+
 function verificationFacade(options: {
   readonly ciRepairBudget?: CiRepairExecutionBudget;
   readonly verifiedCommitService?: VerifiedCommitService;
@@ -2038,6 +2233,11 @@ function verificationFacade(options: {
   readonly events?: CodingWorkbenchRuntimeEvent[];
   readonly ciObservationService?: CiObservationService;
   readonly runToReport: VerificationRunnerManager["runToReport"];
+  readonly scriptTrustFor?: VerificationRunnerManager["scriptTrustFor"];
+  readonly requestOperatorDecision?: (
+    decision: CodingWorkbenchOperatorDecision,
+    outcome?: CodingWorkbenchAuxiliaryStatus,
+  ) => void;
   readonly workspaceRoot?: string;
   readonly records: ServerDiagnosticRecord[];
 }): ReturnType<typeof createProductionManagedWorktreeToolFacade> {
@@ -2092,7 +2292,7 @@ function verificationFacade(options: {
         }),
     },
     invocationRegistry: createCodingToolInvocationRegistry(),
-    verificationRunner: { runToReport: options.runToReport },
+    ...verificationRunnerOptions(options),
     diagnostics: { record: (record): void => void options.records.push(record) },
     ...(options.log === undefined
       ? {}

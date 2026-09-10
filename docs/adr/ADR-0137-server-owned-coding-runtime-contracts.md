@@ -89,10 +89,36 @@ concurrent start returns `active-run-conflict` deterministically.
 ### D3 — Runtime state and failures are closed
 
 The server-owned state vocabulary is exactly `unavailable`, `idle`, `starting`, `ready`, `running`,
-`awaiting-approval`, `stopping`, `succeeded`, `failed`, `cancelled`, `taken-over`, and
+`paused`, `awaiting-approval`, `stopping`, `succeeded`, `failed`, `cancelled`, `taken-over`, and
 `recovery-required`. Legal transitions are an explicit total table; unknown states and implicit
 self-transitions fail closed. Failure codes distinguish authority resolution, expiry, replay,
 revocation, concurrency, and each drift axis without carrying raw process or model content.
+
+**A paused run says what it is waiting for.** `paused` covers two different situations and the
+operator has to be able to tell them apart, so the snapshot carries an optional `pauseReason` from a
+closed vocabulary. Absent means an operator paused the run from the Workbench, which is what
+`paused` meant before. A value names a decision only a local human can make, which a governed tool
+has met and is waiting in place for; the run returns to `running` when that wait settles, either
+way, because the tool then retries the effect or hands the model its refusal.
+
+Such a decision is deliberately NOT an Authority Envelope approval and does not enter the
+`awaiting-approval` plane. The first member, `workspace-script-trust`, is the ADR-0147 D3
+package-script grant: a hard, mode-independent boundary recorded as a durable workspace record, not
+a one-use action authority. Routing it through the approval plane would mint the wrong artifact and,
+in `governed-assist`, collapse that mode's separate per-command approval into a workspace trust
+grant. The wait a governed tool may hold for such a decision is bounded by the governed tool
+invocation's own lifetime, so the tool always answers with its own closed refusal rather than an
+opaque expiry; a decision that outlives a single tool call leaves the run to report a truthful
+failure rather than a silent success.
+
+**An issue-bound run may not report a delivery it cannot evidence.** A run accepted for a GitHub
+issue is the product's delivery flow. It settles `succeeded` only when durable server-owned evidence
+says something was delivered — a successful verified-commit receipt, or a draft delivery record in a
+phase that means an artifact exists. The record of an ATTEMPT is not evidence: a commit proposal
+refused for want of verification, a push still awaiting approval, and a delivery in recovery all
+persist records while delivering nothing. Without evidence the run settles `failed` with
+`delivery-not-evidenced`. Ad-hoc runs are exempt, because one legitimately ends with no commit and
+inferring delivery intent from free text would turn honest successes into false failures.
 
 The runtime adapter port accepts only the opaque authority reference, immutable execution binding,
 and closed runtime/model sources. Launch paths, argv, environment, endpoint, and credentials are

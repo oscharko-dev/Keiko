@@ -99,6 +99,10 @@ const ALLOWED_CODING_RUNTIME_SNAPSHOT_COLUMNS = new Set([
   "runtime_source",
   "model_source",
   "failure_code",
+  // A closed one-member vocabulary naming WHICH human decision a paused run waits on. It carries no
+  // path, manifest byte, workspace name or model text — the decision's subject is the run's own
+  // workspace, which the row already identifies by digest.
+  "pause_reason",
   "created_at",
   "updated_at",
   "terminal_at",

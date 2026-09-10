@@ -835,6 +835,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.skill-invoked": "Skill invoked",
   "codingWorkbench.event.child-run-started": "Child agent started",
   "codingWorkbench.event.child-run-completed": "Child agent completed",
+  "codingWorkbench.event.operator-decision": "Your decision needed",
   "codingWorkbench.event.failure-redacted": "Failure reported",
   "codingWorkbench.event.detail": "Sequence {sequence}. Revision {revision}.",
   "codingWorkbench.event.detailFailure":
@@ -959,6 +960,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "This path is not an opened project. Open the repository as a project before changing its GitHub issue access.",
   "codingWorkbench.trust.restrictedNotice":
     "Verification needs to run this repository's package scripts, and they are not yet trusted.",
+  "codingWorkbench.trust.runWaitingNotice":
+    "This run is paused: it needs to run this workspace's package scripts to verify its work, and only you can allow them for exactly these manifest bytes. The run continues by itself once you decide.",
   "codingWorkbench.trust.driftNotice":
     "The repository's approval does not cover this task workspace's package scripts, usually because this run changed package.json. Allowing them is your decision for exactly this manifest.",
   "codingWorkbench.trust.allow": "Allow package scripts for verification",

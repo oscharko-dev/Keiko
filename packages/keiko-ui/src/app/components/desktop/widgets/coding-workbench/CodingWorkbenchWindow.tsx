@@ -25,6 +25,7 @@ import type {
   CodingWorkbenchSupervisedActionKind,
   CodingWorkbenchSupervisedPolicyReason,
   CodingWorkbenchMode,
+  CodingWorkbenchOperatorDecision,
   CodingWorkbenchPermissionRequestKind,
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimePendingPermission,
@@ -397,6 +398,22 @@ function selectedResumeMode(
     : currentMode;
 }
 
+/**
+ * Whether the operator's own Resume is the right exit for a paused run.
+ *
+ * A run paused because a governed tool is waiting on the operator's decision resumes ITSELF when
+ * that decision lands, and the server refuses an operator resume while the reason stands. Offering
+ * Resume there would name a second exit that does not exist and would read as "the run is stuck",
+ * when the run is waiting for the very action the trust notice is offering. A reasonless pause is
+ * the operator's own, and keeps resuming exactly as it always has.
+ */
+export function operatorResumeAvailable(
+  resumeMode: CodingWorkbenchMode | null,
+  pauseReason: CodingWorkbenchOperatorDecision | undefined,
+): boolean {
+  return resumeMode !== null && pauseReason === undefined;
+}
+
 export interface CodingWorkbenchGitTarget {
   readonly root: string | null;
   readonly binding: "repository" | "task-workspace";
@@ -706,6 +723,7 @@ function WorkbenchContent({
         <CodingWorkbenchTrustAffordance
           binding={sessionRepositoryTrustBinding(state, runWorkspace, activeWorkspace)}
           runRevision={state.run.value?.revision}
+          pauseReason={state.run.value?.pauseReason}
         />
       </header>
       <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
@@ -899,7 +917,7 @@ function WorkbenchColumns({
       }}
       canStart={state.canStart}
       runState={state.run.value?.state}
-      canResume={resumeMode !== null}
+      canResume={operatorResumeAvailable(resumeMode, pausedRun?.pauseReason)}
       mutationPending={state.mutation.status === "pending"}
       startBusy={state.mutation.kind === "start" && state.mutation.status === "pending"}
       repositoryLabel={repositoryLabel(repositoryRoot)}

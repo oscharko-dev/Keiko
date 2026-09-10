@@ -8,7 +8,9 @@ import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.
 import type { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
 import type { VerifiedCommitService } from "../gitDelivery/verifiedCommitTypes.js";
 import type {
+  CodingWorkbenchAuxiliaryStatus,
   CodingWorkbenchMode,
+  CodingWorkbenchOperatorDecision,
   CodingWorkbenchRuntimeAdapterKind,
   CodingWorkbenchRuntimeAuthorityFacts,
   CodingWorkbenchRuntimeEvent,
@@ -17,7 +19,10 @@ import type {
   VerificationReport,
   VerificationStatus,
 } from "@oscharko-dev/keiko-contracts";
-import { isVerificationFailureLocation } from "@oscharko-dev/keiko-contracts/runtime/verification";
+import {
+  isVerificationFailureLocation,
+  VERIFICATION_TOOL_OPERATOR_DECISION_GRACE_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { codingWorkbenchPolicyEffectFor } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
@@ -30,7 +35,10 @@ import type {
   VerificationRunInput,
   VerificationRunnerManager,
 } from "../editor/verificationRunner.js";
-import { VerificationRunnerError } from "../editor/verificationRunnerErrors.js";
+import {
+  VerificationRunnerError,
+  WorkspaceTrustRequiredError,
+} from "../editor/verificationRunnerErrors.js";
 import {
   contentFreeErrorClass,
   describeError,
@@ -98,38 +106,74 @@ export function waitForRuntimeProposalApproval(
   signal?: AbortSignal,
   onResolutionFailure?: (error: unknown) => void,
 ): Promise<ProposalApprovalWaitOutcome> {
-  return new Promise((resolve) => {
-    let interval: ReturnType<typeof setInterval> | undefined;
-    const timeout = setTimeout((): void => {
-      finish("expired");
-    }, MAX_APPROVAL_CHALLENGE_TTL_MS);
-    const finish = (outcome: ProposalApprovalWaitOutcome): void => {
-      if (interval === undefined) return;
-      clearInterval(interval);
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", abort);
-      interval = undefined;
-      resolve(outcome);
-    };
-    const abort = (): void => {
-      finish("cancelled");
-    };
-    const inspect = (): void => {
+  return boundedWait<ProposalApprovalWaitOutcome>({
+    ceilingMs: MAX_APPROVAL_CHALLENGE_TTL_MS,
+    intervalMs: PROPOSAL_APPROVAL_POLL_MS,
+    expired: "expired",
+    cancelled: "cancelled",
+    signal,
+    inspect: (): ProposalApprovalWaitOutcome | undefined => {
       try {
-        if (signal?.aborted === true) finish("cancelled");
-        else if (probe.review(proposalId) === undefined) finish("unavailable");
-        else if (probe.matchesApproval(proposalId)) finish("approved");
+        if (probe.review(proposalId) === undefined) return "unavailable";
+        return probe.matchesApproval(proposalId) ? "approved" : undefined;
       } catch (error) {
         // A live authority/workspace resolver may fail closed after the proposal was displayed.
         // Settle the bounded wait through its existing unavailable outcome; an exception escaping
         // this interval callback would be an uncaught process-level failure.
         onResolutionFailure?.(error);
-        finish("unavailable");
+        return "unavailable";
       }
+    },
+  });
+}
+
+interface BoundedWaitInput<Outcome extends string> {
+  readonly ceilingMs: number;
+  readonly intervalMs: number;
+  /** Settled when the ceiling passes with `inspect` never having answered. */
+  readonly expired: Outcome;
+  /** Settled when `signal` aborts first. */
+  readonly cancelled: Outcome;
+  readonly signal?: AbortSignal | undefined;
+  /** Probed once at once and then every interval; a value settles the wait, `undefined` keeps it. */
+  readonly inspect: () => Outcome | undefined;
+}
+
+/**
+ * The one bounded poll every in-place wait in this module is built on: a proposal awaiting its
+ * approval and a verification awaiting the operator's package-script trust decision differ only in
+ * what they probe and what the ceiling and abort mean to their caller. One skeleton means one
+ * place where the interval, the ceiling timer and the abort listener are guaranteed to be released
+ * together on every exit.
+ */
+function boundedWait<Outcome extends string>(input: BoundedWaitInput<Outcome>): Promise<Outcome> {
+  return new Promise((resolve) => {
+    let interval: ReturnType<typeof setInterval> | undefined;
+    const timeout = setTimeout((): void => {
+      finish(input.expired);
+    }, input.ceilingMs);
+    const finish = (outcome: Outcome): void => {
+      if (interval === undefined) return;
+      clearInterval(interval);
+      clearTimeout(timeout);
+      input.signal?.removeEventListener("abort", abort);
+      interval = undefined;
+      resolve(outcome);
     };
-    interval = setInterval(inspect, PROPOSAL_APPROVAL_POLL_MS);
-    signal?.addEventListener("abort", abort, { once: true });
-    inspect();
+    const abort = (): void => {
+      finish(input.cancelled);
+    };
+    const tick = (): void => {
+      if (input.signal?.aborted === true) {
+        finish(input.cancelled);
+        return;
+      }
+      const outcome = input.inspect();
+      if (outcome !== undefined) finish(outcome);
+    };
+    interval = setInterval(tick, input.intervalMs);
+    input.signal?.addEventListener("abort", abort, { once: true });
+    tick();
   });
 }
 
@@ -167,7 +211,21 @@ export interface ProductionManagedWorktreeToolInput {
   readonly skillCatalog?: SkillCatalog | undefined;
   readonly explicitSkillInvocations?: ExplicitSkillInvocationTracker | undefined;
   readonly childModelPortFactory?: ((modelId: string) => ModelPort | undefined) | undefined;
-  readonly verificationRunner: Pick<VerificationRunnerManager, "runToReport">;
+  // `scriptTrustFor` is the runner's own package-script decision as a pure query, and is optional
+  // for the same reason `requestOperatorDecision` is: a composition that supplies neither cannot
+  // wait for an operator and keeps the immediate refusal it always had. Both are needed to wait.
+  readonly verificationRunner: Pick<VerificationRunnerManager, "runToReport"> &
+    Partial<Pick<VerificationRunnerManager, "scriptTrustFor">>;
+  /**
+   * Announces a decision only a local human can make, and then announces how it settled. A tool
+   * that meets one waits in place for it; this is how the run itself reports that it is waiting,
+   * so the operator sees a paused run naming the decision rather than a run that gave up. Absent
+   * in a composition without a runtime event sink — the tool then fails closed exactly as before.
+   */
+  readonly requestOperatorDecision?: (
+    decision: CodingWorkbenchOperatorDecision,
+    outcome?: CodingWorkbenchAuxiliaryStatus,
+  ) => void;
   readonly commandRunner?: Pick<CommandRunnerManager, "execute"> | undefined;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
@@ -882,33 +940,175 @@ function buildVerificationRunner(
       if (kind === undefined) {
         return verificationPortRefusal(input, "verification-verifier-unsupported");
       }
-      let report: VerificationReport;
-      let ticket: object | undefined;
-      let commitProof: CodingToolVerificationResult | undefined;
-      try {
-        ticket = await input.verifiedCommitService?.beginVerification();
-        if (!verificationCompletionLive(input, guard, signal)) {
-          return verificationPortRefusal(input, "verification-authority-revoked");
+      let attempt = await runVerificationAttempt(input, request, kind, guard, signal);
+      if (attempt.outcome === "threw" && attempt.error instanceof WorkspaceTrustRequiredError) {
+        if (await settleWorkspaceScriptTrust(input, signal)) {
+          attempt = await runVerificationAttempt(input, request, kind, guard, signal);
         }
-        report = await input.verificationRunner.runToReport(
-          verificationRunInput(input, request, kind),
-          signal ?? new AbortController().signal,
-        );
-        if (!verificationCompletionLive(input, guard, signal)) {
-          return verificationPortRefusal(input, "verification-authority-revoked");
-        }
-        commitProof = await completeCandidateVerification(input, ticket, report, guard, signal);
-      } catch (error) {
-        return verificationRefused(input, error);
       }
+      if (attempt.outcome === "refused") return attempt.result;
+      if (attempt.outcome === "threw") return verificationRefused(input, attempt.error);
       if (!verificationCompletionLive(input, guard, signal)) {
         return verificationPortRefusal(input, "verification-authority-revoked");
       }
       verificationSequence += 1;
-      publishVerification(input, verificationSequence, report, request);
-      return verificationOutcome(input, report, guard, signal, commitProof);
+      publishVerification(input, verificationSequence, attempt.report, request);
+      return verificationOutcome(input, attempt.report, guard, signal, attempt.commitProof);
     },
   };
+}
+
+type VerificationAttempt =
+  | { readonly outcome: "refused"; readonly result: VerificationPortResult }
+  | {
+      readonly outcome: "completed";
+      readonly report: VerificationReport;
+      readonly commitProof: CodingToolVerificationResult | undefined;
+    }
+  | { readonly outcome: "threw"; readonly error: unknown };
+
+/**
+ * One whole attempt at the verification effect, extracted so it can be made a second time after an
+ * operator's package-script trust decision. Extracting it rather than retrying `runToReport` alone
+ * is deliberate: the candidate-verification ticket and the liveness re-checks bracket the run, and
+ * a retry that reused the first attempt's ticket would attribute the second run's report to the
+ * first run's commit candidate.
+ */
+async function runVerificationAttempt(
+  input: ProductionManagedWorktreeToolInput,
+  request: Extract<
+    import("./codingToolIpc.js").CodingToolActionRequest,
+    { readonly action: "verification" }
+  >,
+  kind: VerificationKind,
+  guard: CodingToolMutationGuard,
+  signal: AbortSignal | undefined,
+): Promise<VerificationAttempt> {
+  // Built on demand, never in advance: `verificationPortRefusal` EMITS the refusal diagnostic as a
+  // side effect, so materialising it up front would report a revoked authority on every attempt
+  // that then succeeded.
+  const revoked = (): VerificationAttempt => ({
+    outcome: "refused",
+    result: verificationPortRefusal(input, "verification-authority-revoked"),
+  });
+  try {
+    const ticket = await input.verifiedCommitService?.beginVerification();
+    if (!verificationCompletionLive(input, guard, signal)) return revoked();
+    const report = await input.verificationRunner.runToReport(
+      verificationRunInput(input, request, kind),
+      signal ?? new AbortController().signal,
+    );
+    if (!verificationCompletionLive(input, guard, signal)) return revoked();
+    const commitProof = await completeCandidateVerification(input, ticket, report, guard, signal);
+    return { outcome: "completed", report, commitProof };
+  } catch (error) {
+    return { outcome: "threw", error };
+  }
+}
+
+// ADR-0147 D3 refuses package scripts the operator has not allowed for these exact manifest bytes,
+// and only the operator can change that. Before this the verification tool returned that refusal
+// straight to the model, which — correctly following its own guidance — reported the blocker and
+// stopped; run 10 of the Coding Workbench engagement then settled with nothing verified, committed
+// or delivered, and no surface had ever told the operator a decision was waiting for them.
+//
+// The tool now waits in place for that decision, exactly as a git-stage or commit proposal already
+// waits for its approval, and the run reports itself `paused` naming the decision. This is NOT the
+// Authority Envelope approval plane: the decision is recorded on the workspace's own trust surface,
+// mints no action authority, and is asked identically in all three autonomy modes because script
+// trust is a hard, mode-independent boundary.
+//
+// The poll is slower than a proposal's: each probe resolves the workspace and re-reads the manifest
+// bytes, and a human decision does not need 25 ms resolution.
+const SCRIPT_TRUST_POLL_MS = 500;
+
+/**
+ * How long the tool waits: the share of a governed verification call that the contract reserves
+ * for a human decision. A wait that ran to the five-minute approval ceiling would be settled
+ * before it returned — by the governed-invocation registry's TTL and by the catalog descriptor's
+ * duration bound, both 30 s today — as an opaque cancellation, and the model would lose the one
+ * string that tells it what a person has to do. The co-located test pins this constant below the
+ * registry's ceiling.
+ *
+ * This bounds the GRACE WINDOW, not the decision: an operator watching the Workbench sees the
+ * notice the moment the run reports itself paused and can allow the scripts inside it, and the run
+ * then continues with no interruption at all. A decision that does not arrive in the window is not
+ * lost — the run stays paused naming it, and the model is handed the truthful refusal instead of a
+ * silent success. A decision that outlives a single tool call is a separate mechanism this does not
+ * claim to provide.
+ */
+export const SCRIPT_TRUST_WAIT_CEILING_MS = VERIFICATION_TOOL_OPERATOR_DECISION_GRACE_MS;
+
+type ScriptTrustWaitOutcome = "granted" | "cancelled" | "expired" | "unavailable";
+
+const SCRIPT_TRUST_WAIT_OUTCOMES: Readonly<
+  Record<ScriptTrustWaitOutcome, CodingWorkbenchAuxiliaryStatus>
+> = Object.freeze({
+  granted: "accepted",
+  cancelled: "stopped",
+  expired: "limit-reached",
+  unavailable: "unavailable",
+});
+
+export function waitForWorkspaceScriptTrust(
+  probe: () => { readonly trusted: boolean } | undefined,
+  signal?: AbortSignal,
+): Promise<ScriptTrustWaitOutcome> {
+  return boundedWait<ScriptTrustWaitOutcome>({
+    ceilingMs: SCRIPT_TRUST_WAIT_CEILING_MS,
+    intervalMs: SCRIPT_TRUST_POLL_MS,
+    expired: "expired",
+    cancelled: "cancelled",
+    signal,
+    inspect: (): ScriptTrustWaitOutcome | undefined => {
+      const decision = probe();
+      // An unresolvable workspace is not a verdict: it can never become a grant, so waiting on a
+      // human for it would hang the run for the full ceiling with nothing to decide.
+      if (decision === undefined) return "unavailable";
+      return decision.trusted ? "granted" : undefined;
+    },
+  });
+}
+
+/**
+ * Announces the open decision, waits for it, announces how it settled, and reports whether the
+ * caller may try the effect again. The decision is announced BEFORE the wait's first probe, so the
+ * run reports itself paused for the whole window an operator could decide in.
+ */
+async function settleWorkspaceScriptTrust(
+  input: ProductionManagedWorktreeToolInput,
+  signal: AbortSignal | undefined,
+): Promise<boolean> {
+  const { requestOperatorDecision } = input;
+  const scriptTrustFor = input.verificationRunner.scriptTrustFor;
+  if (requestOperatorDecision === undefined || scriptTrustFor === undefined) return false;
+  requestOperatorDecision("workspace-script-trust");
+  const outcome = await waitForWorkspaceScriptTrust(
+    () => scriptTrustFor(input.workspaceRoot),
+    signal,
+  );
+  requestOperatorDecision("workspace-script-trust", SCRIPT_TRUST_WAIT_OUTCOMES[outcome]);
+  recordScriptTrustWait(input, outcome);
+  return outcome === "granted";
+}
+
+function recordScriptTrustWait(
+  input: ProductionManagedWorktreeToolInput,
+  outcome: ScriptTrustWaitOutcome,
+): void {
+  (input.activityLog ?? processServerLogSink()).write({
+    level: outcome === "granted" ? "info" : "warn",
+    category: "process",
+    op: "coding-runtime.operator-decision",
+    correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID,
+    extra: {
+      decision: "workspace-script-trust",
+      state: "settled",
+      reason: outcome,
+      waitCeilingMs: SCRIPT_TRUST_WAIT_CEILING_MS,
+      pollIntervalMs: SCRIPT_TRUST_POLL_MS,
+    },
+  });
 }
 
 function verificationOutcome(

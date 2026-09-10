@@ -1,12 +1,14 @@
 import {
   CODING_WORKBENCH_MODEL_SOURCES,
   CODING_WORKBENCH_MODES,
+  CODING_WORKBENCH_OPERATOR_DECISIONS,
   CODING_WORKBENCH_RUNTIME_SOURCES,
   isCodingWorkbenchModeWidening,
   resolveEffectiveCodingWorkbenchMode,
   type CodingWorkbenchAuxiliaryStatus,
   type CodingWorkbenchContentTrust,
   type CodingWorkbenchModelSource,
+  type CodingWorkbenchOperatorDecision,
   type CodingWorkbenchMode,
   type CodingWorkbenchPermissionRequest,
   type CodingWorkbenchRuntimeEventKind,
@@ -238,6 +240,13 @@ export interface CodingWorkbenchRuntimeSnapshot {
   readonly recoveryAcknowledged?: true | undefined;
   /** Present exactly while the runtime is awaiting an operator decision. */
   readonly pendingPermission?: CodingWorkbenchRuntimePendingPermission | undefined;
+  /**
+   * Why the run is `paused`. Absent means an operator paused it from the Workbench, which is what
+   * `paused` used to mean unconditionally. A value names a decision only a local human can make and
+   * a governed tool is waiting in place for; the run resumes itself once that decision lands, so
+   * the operator's action is the decision, not a Resume click.
+   */
+  readonly pauseReason?: CodingWorkbenchOperatorDecision | undefined;
   /** Terminal, body-free process outcome; never contains stdout or stderr content. */
   readonly result?: CodingWorkbenchRuntimeResult | undefined;
   /**
@@ -555,6 +564,7 @@ export function validateCodingWorkbenchRuntimeSnapshot(
       "failureCode",
       "recoveryAcknowledged",
       "pendingPermission",
+      "pauseReason",
       "result",
       "issueBinding",
       "verifiedCommitResult",
@@ -835,6 +845,19 @@ function validateSnapshotFields(value: Record<string, unknown>, errors: string[]
   validateFailureCode(value.failureCode, errors);
   validateRecoveryAcknowledgement(value, errors);
   validatePendingPermission(value, errors);
+  validatePauseReason(value, errors);
+}
+
+// A pause reason outside `paused` would describe a state the run is not in. The converse is
+// deliberately permitted: an operator-initiated pause carries no reason, which is what `paused`
+// meant before a governed tool could ask for a decision.
+function validatePauseReason(value: Record<string, unknown>, errors: string[]): void {
+  if (value.pauseReason === undefined) return;
+  if (!isOneOf(value.pauseReason, CODING_WORKBENCH_OPERATOR_DECISIONS)) {
+    errors.push("pauseReason is invalid");
+    return;
+  }
+  if (value.state !== "paused") errors.push("pauseReason is only allowed when state is paused");
 }
 
 function validateRecoveryAcknowledgement(value: Record<string, unknown>, errors: string[]): void {

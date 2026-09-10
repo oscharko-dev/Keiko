@@ -867,6 +867,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.skill-invoked": "Skill aufgerufen",
   "codingWorkbench.event.child-run-started": "Unteragent gestartet",
   "codingWorkbench.event.child-run-completed": "Unteragent abgeschlossen",
+  "codingWorkbench.event.operator-decision": "Deine Entscheidung nötig",
   "codingWorkbench.event.failure-redacted": "Fehler gemeldet",
   "codingWorkbench.event.detail": "Sequenz {sequence}. Revision {revision}.",
   "codingWorkbench.event.detailFailure":
@@ -999,6 +1000,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Dieser Pfad ist kein geöffnetes Projekt. Öffne das Repository als Projekt, bevor du seinen GitHub-Issue-Zugriff änderst.",
   "codingWorkbench.trust.restrictedNotice":
     "Die Verifizierung muss die Paket-Skripte dieses Repositorys ausführen, sie sind aber noch nicht freigegeben.",
+  "codingWorkbench.trust.runWaitingNotice":
+    "Dieser Run ist pausiert: Er muss die Paket-Skripte dieses Task-Workspace ausführen, um seine Arbeit zu verifizieren, und nur du kannst sie für genau dieses Manifest zulassen. Der Run läuft von selbst weiter, sobald du entschieden hast.",
   "codingWorkbench.trust.driftNotice":
     "Die Freigabe des Repositorys deckt die Paket-Skripte dieses Task-Workspace nicht ab, meist weil dieser Run die package.json geändert hat. Sie zuzulassen ist deine Entscheidung für genau dieses Manifest.",
   "codingWorkbench.trust.allow": "Paket-Skripte für die Verifizierung zulassen",

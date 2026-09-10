@@ -28,9 +28,12 @@ import { createRuntimeGitPreparation } from "./productionRuntimeGitPreparation.j
 import { isAbsolute } from "node:path";
 
 import type {
+  CodingWorkbenchAuxiliaryStatus,
+  CodingWorkbenchOperatorDecision,
   CodingWorkbenchRuntimeEvent,
   CodingWorkbenchRuntimeIntent,
 } from "@oscharko-dev/keiko-contracts";
+import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import {
   codingWorkbenchCodeTaskDeliveryEffectFor,
@@ -1147,10 +1150,55 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
     skillCatalog,
     explicitSkillInvocations: explicitSkills,
     ...(input.commandRunner === undefined ? {} : { commandRunner: input.commandRunner }),
-    verificationRunner: input.verificationRunner,
+    ...managedVerificationOptions(input, minted, onRuntimeEvent),
     onRuntimeEvent,
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
   });
+}
+
+/** The verification port plus the channel a refused verification uses to ask for a decision. */
+function managedVerificationOptions(
+  input: ProductionCodingRuntimeResolverInput,
+  minted: MintedRuntime,
+  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+): Pick<
+  import("./productionManagedWorktreeTools.js").ProductionManagedWorktreeToolInput,
+  "verificationRunner" | "requestOperatorDecision"
+> {
+  return {
+    verificationRunner: input.verificationRunner,
+    requestOperatorDecision: operatorDecisionRequester(
+      input,
+      minted.authorityRef.runId,
+      onRuntimeEvent,
+    ),
+  };
+}
+
+/**
+ * Announces a decision only a local human can make, on the one channel a governed tool has to the
+ * run aggregate. An event the contract rejects is dropped rather than emitted: a malformed event
+ * would be refused downstream anyway, and the waiting tool still settles on its own ceiling.
+ */
+function operatorDecisionRequester(
+  input: ProductionCodingRuntimeResolverInput,
+  runId: string,
+  onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void,
+): (decision: CodingWorkbenchOperatorDecision, outcome?: CodingWorkbenchAuxiliaryStatus) => void {
+  let sequence = 0;
+  return (decision, outcome): void => {
+    sequence += 1;
+    const event: CodingWorkbenchRuntimeEvent = {
+      schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+      eventId: `event-operator-decision-${String(sequence)}`,
+      runId,
+      occurredAt: runtimeNow(input).toISOString(),
+      kind: "operator-decision",
+      operatorDecision: decision,
+      ...(outcome === undefined ? {} : { auxiliaryOutcome: outcome }),
+    };
+    if (validateCodingWorkbenchRuntimeEvent(event).ok) onRuntimeEvent(event);
+  };
 }
 
 function managedPromptReservation(

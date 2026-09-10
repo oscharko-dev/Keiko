@@ -49,6 +49,19 @@ export const DEFAULT_VERIFICATION_LIMITS: VerificationResourceLimits = {
   network: "none",
 } as const;
 
+// ─── The governed verification tool's wait for a human decision ────────────────────
+// How long the governed verification tool may wait in place for a decision only a local human can
+// make (an ADR-0147 package-script trust grant) before it hands the model the truthful refusal
+// instead. It lives in the contract because two layers must agree on it: the server-side tool that
+// waits, and the tool-catalog budget the verification tool is eventually settled at.
+//
+// It must stay strictly below every ceiling a governed verification call is settled at today, or
+// the caller receives an opaque `timeout`/`cancelled` instead of the tool's own closed refusal —
+// the one string that tells the model what a person has to do. Both current ceilings are 30 s:
+// the sandbox default the catalog descriptor inherits (`DEFAULT_SANDBOX_POLICY.defaultTimeoutMs`)
+// and the governed-invocation registry's TTL; the server pins this constant against the latter.
+export const VERIFICATION_TOOL_OPERATOR_DECISION_GRACE_MS = 25_000;
+
 // ─── Structured failure locations (Issue #2210, ADR-0126 D3) ─────────────────────
 // Bounds a later, best-effort parser (Issue #2211) may attach to VerificationResult.locations.
 // The parser reads the already-redacted, byte-capped CommandResult output and clamps to these caps

@@ -7,6 +7,7 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 
 import { TaskStartSection, type TaskComposerActions } from "./CodingWorkbenchSections";
+import { operatorResumeAvailable } from "./CodingWorkbenchWindow";
 
 function composerActions(): TaskComposerActions {
   return { onStart: vi.fn(), onPause: vi.fn(), onResume: vi.fn(), onSend: vi.fn() };
@@ -142,6 +143,25 @@ describe("Coding Workbench composer", () => {
     await user.click(screen.getByRole("button", { name: "Resume run" }));
     expect(actions.onSend).toHaveBeenCalledOnce();
     expect(actions.onResume).toHaveBeenCalledOnce();
+  });
+
+  // A run paused because a governed tool is waiting on the operator's decision resumes itself when
+  // that decision lands, and the server refuses an operator resume while the reason stands. The
+  // control must not offer a second exit that does not exist.
+  it.each([
+    ["an operator's own pause", undefined, true],
+    ["a run waiting on a package-script trust decision", "workspace-script-trust" as const, false],
+  ] as const)("withholds the resume control for %s", (_label, pauseReason, expected) => {
+    expect(operatorResumeAvailable("supervised-coding", pauseReason)).toBe(expected);
+  });
+
+  it("has no resume control to offer without a resolved mode", () => {
+    expect(operatorResumeAvailable(null, undefined)).toBe(false);
+  });
+
+  it("disables the resume control when the run may not be resumed by the operator", () => {
+    renderComposerWithOverrides({ runState: "paused", canResume: false });
+    expect(screen.getByRole("button", { name: "Resume run" })).toBeDisabled();
   });
 
   it("disables the follow-up Send button when the draft is empty", () => {

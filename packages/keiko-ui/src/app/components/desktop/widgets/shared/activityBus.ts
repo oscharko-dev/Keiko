@@ -44,6 +44,7 @@ const RUNTIME_EVENT_PRESENTATION: Record<
   "skill-invoked": { type: "step", labelKey: "activity.event.skillInvoked" },
   "child-run-started": { type: "run", labelKey: "activity.event.childRunStarted" },
   "child-run-completed": { type: "step", labelKey: "activity.event.childRunCompleted" },
+  "operator-decision": { type: "approval", labelKey: "activity.event.operatorDecision" },
   "failure-redacted": { type: "rejected", labelKey: "activity.event.failureRedacted" },
 };
 

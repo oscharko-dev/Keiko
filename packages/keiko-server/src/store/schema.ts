@@ -9,7 +9,7 @@ import {
   migrateWorkspaceRootObjectIdentities,
 } from "./workspaceManifests.js";
 
-export const SCHEMA_VERSION = 33;
+export const SCHEMA_VERSION = 34;
 
 interface Migration {
   readonly version: number;
@@ -1211,6 +1211,18 @@ CREATE INDEX idx_coding_runtime_settled_oldest
   WHERE terminal_at IS NOT NULL;
 `;
 
+// V34: `coding_runtime_snapshots.pause_reason` — why a paused run is paused, when a governed tool
+// asked for a decision only a local human can make (ADR-0137 D3). Durable because a BFF restart
+// must not leave the operator looking at a paused run with nothing saying what it waits for. A
+// plain ADD COLUMN: no table-level CHECK changes, so unlike V20/V30/V33 no rebuild is needed. NULL
+// on every existing row is the correct reading of history — every pause recorded before this column
+// existed was operator-initiated, which is exactly what NULL means.
+const V34_SQL = `
+ALTER TABLE coding_runtime_snapshots ADD COLUMN pause_reason TEXT
+  CHECK (pause_reason IS NULL OR pause_reason IN ('workspace-script-trust'));
+UPDATE coding_runtime_snapshots SET pause_reason = NULL WHERE state <> 'paused';
+`;
+
 // KEIKO-0573: exported so a co-located test can assert strict ascending version order across the
 // array. Not re-exported through packages/keiko-server/src/store/index.ts, so no packaged surface
 // change.
@@ -1248,6 +1260,7 @@ export const MIGRATIONS: readonly Migration[] = [
   { version: 31, sql: V31_SQL },
   { version: 32, sql: "", apply: migrateJourneyOutcomeProjection },
   { version: 33, sql: V33_SQL },
+  { version: 34, sql: V34_SQL },
 ];
 
 function currentUserVersion(db: DatabaseSync): number {
