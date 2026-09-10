@@ -410,7 +410,7 @@ function selectedResumeMode(
 export function operatorResumeAvailable(
   resumeMode: CodingWorkbenchMode | null,
   pauseReason: CodingWorkbenchOperatorDecision | undefined,
-): boolean {
+): resumeMode is CodingWorkbenchMode {
   return resumeMode !== null && pauseReason === undefined;
 }
 
