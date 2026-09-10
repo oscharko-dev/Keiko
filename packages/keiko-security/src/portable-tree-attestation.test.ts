@@ -176,11 +176,12 @@ describe("portable KHT1 tree attestation", () => {
     expect(rebound).toBe(true);
   });
 
-  it("rejects concurrent content mutation through the sync driver", () => {
+  it("rejects concurrent content mutation through the sync driver", async () => {
     const root = fixtureRoot();
     const victim = join(root, "a.txt");
     writeFileSync(victim, "old");
     writeFileSync(join(root, "z.bin"), Buffer.alloc(32 * 1024 * 1024));
+    const expected = await hashPortableTreeKht1(root, operation());
     startMutationWorker(
       `
         let revision = 0;
@@ -195,8 +196,8 @@ describe("portable KHT1 tree attestation", () => {
     );
 
     expect(() => {
-      attestPortableTreeKht1Sync(root, "0".repeat(64), Date.now() + 5_000);
-    }).toThrow(/changed/u);
+      attestPortableTreeKht1Sync(root, expected, Date.now() + 5_000);
+    }).toThrow();
   });
 
   it("rejects concurrent parent-directory rebinding through the sync driver", () => {
