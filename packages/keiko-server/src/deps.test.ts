@@ -613,6 +613,9 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
         // What the teardown achieved, not "the call did not throw": this composition has a control
         // plane with no live run, so its shutdown ends cleanly (owner review, PR #3452).
         runtimeShutdown: "ended",
+        // The cleanup's own disposition rides on the same line, so a rejecting cleanup can never
+        // leave only the `started` half behind (CodeRabbit review, 2026-09-10).
+        cleanup: "completed",
         durationMs: expect.any(Number) as unknown,
       },
     });

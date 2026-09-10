@@ -114,6 +114,7 @@ export function waitForRuntimeProposalApproval(
     intervalMs: PROPOSAL_APPROVAL_POLL_MS,
     expired: "expired",
     cancelled: "cancelled",
+    threw: "unavailable",
     signal,
     inspect: (): ProposalApprovalWaitOutcome | undefined => {
       try {
@@ -137,6 +138,12 @@ interface BoundedWaitInput<Outcome extends string> {
   readonly expired: Outcome;
   /** Settled when `signal` aborts first. */
   readonly cancelled: Outcome;
+  /**
+   * Settled when `inspect` throws. A probe that throws inside the interval callback would otherwise
+   * reject nothing and leave the interval live — an uncaught process-level failure with the wait
+   * never settling (CodeRabbit review, 2026-09-10).
+   */
+  readonly threw: Outcome;
   readonly signal?: AbortSignal | undefined;
   /** Probed once at once and then every interval; a value settles the wait, `undefined` keeps it. */
   readonly inspect: () => Outcome | undefined;
@@ -171,7 +178,13 @@ function boundedWait<Outcome extends string>(input: BoundedWaitInput<Outcome>): 
         finish(input.cancelled);
         return;
       }
-      const outcome = input.inspect();
+      let outcome: Outcome | undefined;
+      try {
+        outcome = input.inspect();
+      } catch {
+        finish(input.threw);
+        return;
+      }
       if (outcome !== undefined) finish(outcome);
     };
     interval = setInterval(tick, input.intervalMs);
@@ -1082,6 +1095,7 @@ export function waitForWorkspaceScriptTrust(
     intervalMs: SCRIPT_TRUST_POLL_MS,
     expired: "expired",
     cancelled: "cancelled",
+    threw: "unavailable",
     signal,
     inspect: (): ScriptTrustWaitOutcome | undefined => {
       const decision = probe();

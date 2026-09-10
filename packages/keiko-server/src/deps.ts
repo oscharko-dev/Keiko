@@ -105,6 +105,7 @@ import type { ChatTurnSerializer } from "./chat-turn-serializer.js";
 import {
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
   defaultServerDiagnosticSink,
+  describeError,
   evidenceRetentionDiagnosticObserver,
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -4644,6 +4645,31 @@ function recordRuntimeShutdown(
 
 // Everything the teardown itself tears down, in the order the graph requires. Extracted so the
 // dispose closure stays the shutdown's EVIDENCE bracket and nothing more.
+// The completion line is written whatever the cleanup does (CodeRabbit review, 2026-09-10): a
+// rejecting `disposeRuntimeServices` used to leave only the `started` line behind, and its error
+// replaced the orchestrator's own. The cleanup's disposition rides on the line; its error is
+// rethrown only when nothing else was already failing, so the original error survives.
+async function disposeRuntimeServicesRecorded(
+  dispose: () => Promise<void>,
+  record: (cleanup: Readonly<Record<string, string>>) => void,
+  alreadyFailing: boolean,
+): Promise<void> {
+  let failure: unknown;
+  let cleanup: Readonly<Record<string, string>> = { cleanup: "completed" };
+  try {
+    await dispose();
+  } catch (error) {
+    failure = error;
+    cleanup = { cleanup: "faulted", cleanupErrorClass: describeError(error).errorClass };
+  } finally {
+    record(cleanup);
+  }
+  if (failure === undefined || alreadyFailing) return;
+  throw failure instanceof Error
+    ? failure
+    : new Error("runtime-services-dispose-failed", { cause: failure });
+}
+
 async function disposeRuntimeServices(
   args: UiHandlerDepsAssemblyArgs,
   services: UiHandlerRuntimeServices,
@@ -4707,18 +4733,25 @@ function createUiHandlerDispose(
       runtimeShutdown = "faulted";
       throw error;
     } finally {
-      await disposeRuntimeServices(
-        args,
-        services,
-        atlassianRegistries,
-        codingAppSessionDenialWindows,
+      await disposeRuntimeServicesRecorded(
+        () =>
+          disposeRuntimeServices(
+            args,
+            services,
+            atlassianRegistries,
+            codingAppSessionDenialWindows,
+          ),
+        (cleanup) => {
+          recordRuntimeShutdown(activityLog, correlationId, "completed", {
+            durationMs: Date.now() - startedAtMs,
+            openSseStreamCount,
+            activeRunCount,
+            runtimeShutdown,
+            ...cleanup,
+          });
+        },
+        runtimeShutdown === "faulted",
       );
-      recordRuntimeShutdown(activityLog, correlationId, "completed", {
-        durationMs: Date.now() - startedAtMs,
-        openSseStreamCount,
-        activeRunCount,
-        runtimeShutdown,
-      });
     }
   };
 }

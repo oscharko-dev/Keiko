@@ -129,8 +129,11 @@ const PHASE_REASONS: Readonly<Record<DraftDeliveryPhase, ReadonlySet<string>>> =
  * `recovery-required` or `push-proposed` record is proof that delivery was ATTEMPTED and did not
  * complete.
  */
-export function isDeliveredDraftDeliveryPhase(phase: DraftDeliveryPhase): boolean {
-  const reasons = PHASE_REASONS[phase];
+export function isDeliveredDraftDeliveryPhase(phase: string): boolean {
+  // Exported on the runtime subpath, so a JavaScript caller can hand in any string: a value that is
+  // not one of the table's own phases is never delivered - not a thrown `size` read on `undefined`.
+  if (!Object.hasOwn(PHASE_REASONS, phase)) return false;
+  const reasons = PHASE_REASONS[phase as DraftDeliveryPhase];
   return reasons.size === 1 && reasons.has("completed");
 }
 

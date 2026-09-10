@@ -290,4 +290,21 @@ describe("isDeliveredDraftDeliveryPhase", () => {
   it.each(phases)("reports %s as delivered only when the phase actually completed", (phase) => {
     expect(isDeliveredDraftDeliveryPhase(phase)).toBe(deliveredPhases.has(phase));
   });
+
+  // The runtime subpath exports this predicate, so a JavaScript caller can bypass the phase union.
+  // Every value outside the table - empty, wrong case, padded, a prototype key, a phase with a
+  // control character appended - is not delivered, and none of them may throw.
+  it.each([
+    "",
+    "unknown",
+    "PUSHED",
+    " pushed",
+    "pushed ",
+    `pushed${String.fromCharCode(7)}`,
+    "__proto__",
+    "constructor",
+    "toString",
+  ])("never reports %j as delivered and never throws on it", (value) => {
+    expect(isDeliveredDraftDeliveryPhase(value)).toBe(false);
+  });
 });

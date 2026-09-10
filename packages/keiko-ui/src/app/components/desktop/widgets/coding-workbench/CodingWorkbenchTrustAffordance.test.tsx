@@ -267,6 +267,27 @@ describe("CodingWorkbenchTrustAffordance", () => {
     },
   );
 
+  // A run paused for its worktree's decision while the binding carries no worktree root has
+  // nothing the action could grant: the notice still explains the pause, the action is disabled,
+  // and a click grants nothing (CodeRabbit review, 2026-09-10).
+  it("keeps the run-waiting notice but disables the action when the binding has no worktree root", async () => {
+    fetchStatus.mockResolvedValue(status("/repo-a", "trusted"));
+    fetchCatalog.mockResolvedValue(catalog("/worktree-a", "trusted"));
+    const user = userEvent.setup();
+    render(
+      <CodingWorkbenchTrustAffordance
+        binding={binding("/repo-a", null)}
+        pauseReason="workspace-script-trust"
+      />,
+    );
+
+    expect(await screen.findByText(RUN_WAITING_NOTICE)).toBeInTheDocument();
+    const action = await screen.findByRole("button", { name: ALLOW });
+    expect(action).toBeDisabled();
+    await user.click(action);
+    expect(mutateTrust).not.toHaveBeenCalled();
+  });
+
   it("grants the worktree, not the repository, when the run-waiting action is clicked", async () => {
     fetchStatus.mockResolvedValue(status("/repo-a", "trusted"));
     fetchCatalog.mockResolvedValue(catalog("/worktree-a", "trusted"));

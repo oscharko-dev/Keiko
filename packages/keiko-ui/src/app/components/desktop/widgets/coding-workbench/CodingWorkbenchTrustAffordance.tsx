@@ -74,6 +74,12 @@ interface PendingTrustDecision {
     | "codingWorkbench.trust.driftNotice"
     | "codingWorkbench.trust.runWaitingNotice";
   readonly granting: boolean;
+  /**
+   * False when the action has no root to act on: a run paused for its worktree's decision while the
+   * binding carries no worktree root. The notice still explains the pause; the action is disabled
+   * rather than rendered as an "Allow" that would grant nothing (CodeRabbit review, 2026-09-10).
+   */
+  readonly available: boolean;
   readonly onAllow: () => void;
 }
 
@@ -96,12 +102,18 @@ export function CodingWorkbenchTrustAffordance({
   const worktreeGrant = useWorktreeTrustGrant(worktreeRoot, binding?.correlationId);
   useTrustBindingDiagnostic(binding);
   if (binding === null) return null;
-  const pending = pendingTrustDecision(repository, worktreeScripts, worktreeGrant, pauseReason);
+  const pending = pendingTrustDecision(
+    repository,
+    worktreeScripts,
+    { ...worktreeGrant, available: worktreeRoot !== null },
+    pauseReason,
+  );
   if (pending === undefined) return null;
   return (
     <TrustRestrictedNotice
       notice={t(pending.notice)}
       granting={pending.granting}
+      available={pending.available}
       onAllow={pending.onAllow}
       t={t}
     />
@@ -120,7 +132,7 @@ export function CodingWorkbenchTrustAffordance({
 function pendingTrustDecision(
   repository: WorkspaceTrustView,
   worktreeScripts: WorktreeScriptTrust | undefined,
-  worktreeGrant: WorktreeTrustGrant,
+  worktreeGrant: WorktreeTrustGrant & { readonly available: boolean },
   pauseReason: CodingWorkbenchOperatorDecision | undefined,
 ): PendingTrustDecision | undefined {
   // A run held for this exact decision comes first and is stated as such. It is the only branch
@@ -131,6 +143,7 @@ function pendingTrustDecision(
     return {
       notice: "codingWorkbench.trust.runWaitingNotice",
       granting: repository.mutating || worktreeGrant.granting,
+      available: worktreeGrant.available,
       onAllow: worktreeGrant.grant,
     };
   }
@@ -138,6 +151,7 @@ function pendingTrustDecision(
     return {
       notice: "codingWorkbench.trust.restrictedNotice",
       granting: repository.mutating,
+      available: true,
       onAllow: (): void => {
         void repository.grant();
       },
@@ -147,6 +161,7 @@ function pendingTrustDecision(
     return {
       notice: "codingWorkbench.trust.driftNotice",
       granting: worktreeGrant.granting,
+      available: worktreeGrant.available,
       onAllow: worktreeGrant.grant,
     };
   }
@@ -263,18 +278,25 @@ function useWorktreeTrustGrant(
 function TrustRestrictedNotice({
   notice,
   granting,
+  available,
   onAllow,
   t,
 }: {
   readonly notice: string;
   readonly granting: boolean;
+  readonly available: boolean;
   readonly onAllow: () => void;
   readonly t: CodingWorkbenchTranslate;
 }): ReactNode {
   return (
     <div className={styles["cmp-trust-notice"]} data-testid="coding-workbench-trust-affordance">
       <span className={styles["cmp-trust-notice-text"]}>{notice}</span>
-      <button type="button" className={styles.button} disabled={granting} onClick={onAllow}>
+      <button
+        type="button"
+        className={styles.button}
+        disabled={granting || !available}
+        onClick={onAllow}
+      >
         {granting ? t("codingWorkbench.trust.allowing") : t("codingWorkbench.trust.allow")}
       </button>
     </div>

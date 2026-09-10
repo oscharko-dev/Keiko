@@ -2175,6 +2175,34 @@ describe("CodingWorkbenchWindow", () => {
     expect(liveActions.takeover).toHaveBeenCalledOnce();
   });
 
+  // A run paused FOR the operator's package-script decision offers no Resume and no resume-mode
+  // selector: both read the same `operatorResumeAvailable` predicate, so the header can never say
+  // "Resume autonomy" about a run that is waiting for the trust action instead (CodeRabbit review,
+  // 2026-09-10).
+  it("hides the resume-mode selector while the run is paused for an operator decision", () => {
+    const pausedForDecision = liveState({
+      canStart: false,
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({
+          state: "paused",
+          pauseReason: "workspace-script-trust",
+          runId: "run-1",
+          requestedMode: "autonomous-delivery",
+          effectiveMode: "autonomous-delivery",
+        }),
+      },
+    });
+    runtimeHookMock.mockReturnValue({ state: pausedForDecision, actions: actions() });
+    render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    expect(screen.queryByRole("combobox", { name: "Resume autonomy" })).not.toBeInTheDocument();
+    // The composer's own resume control stays rendered but offers nothing: disabled, exactly as it
+    // is for every state the operator cannot resume from.
+    expect(screen.getByRole("button", { name: "Resume run" })).toBeDisabled();
+  });
+
   it("resumes a full-access run with the explicitly selected supervised mode", async () => {
     const user = userEvent.setup();
     const liveActions = actions();

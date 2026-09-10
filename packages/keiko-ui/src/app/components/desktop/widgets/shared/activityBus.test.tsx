@@ -77,6 +77,33 @@ describe("activityBus", () => {
   // #3390 wave: `operator-decision` is a governed pause reason, not a routine step, so it must
   // project through the SAME RUNTIME_EVENT_PRESENTATION table as an approval carrying its own
   // label — never silently fall back to a generic step the way an unmapped kind would.
+  // A settled decision must leave the pending-approval shape: each closed outcome projects onto the
+  // activity kind it already has, and only an event WITHOUT an outcome is still an open approval.
+  it.each([
+    ["accepted", "approved", "activity.event.operatorDecisionAccepted"],
+    ["denied", "rejected", "activity.event.operatorDecisionDenied"],
+    ["unavailable", "rejected", "activity.event.operatorDecisionUnavailable"],
+    ["limit-reached", "rejected", "activity.event.operatorDecisionExpired"],
+    ["stopped", "stopped", "activity.event.operatorDecisionStopped"],
+  ] as const)("projects a settled operator decision (%s) as %s", (outcome, type, labelKey) => {
+    const event: CodingWorkbenchRuntimeSseEvent = {
+      schemaVersion: "1",
+      cursor: `cursor-${outcome}`,
+      sequence: 3,
+      occurredAt: "2026-06-15T10:00:03.000Z",
+      kind: "runtime-event",
+      runId: "run-1",
+      state: "running",
+      revision: 4,
+      eventKind: "operator-decision",
+      auxiliaryOutcome: outcome,
+    };
+
+    act(() => logRuntimeActivityEvents([event]));
+
+    expect(getActivity()[0]).toMatchObject({ id: `run-1:cursor-${outcome}`, type, labelKey });
+  });
+
   it("projects an operator-decision runtime event as an approval on the operator's own label", () => {
     const event: CodingWorkbenchRuntimeSseEvent = {
       schemaVersion: "1",

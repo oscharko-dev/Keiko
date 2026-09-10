@@ -53,10 +53,11 @@ needed the process supervisor's own console, which a customer does not have.
 
 **Resolution**
 
-Start the run again. A shutdown is not a governance refusal and leaves no residue in the task
-workspace: the worktree, its branch and any committed work are intact, and the run's authority ended
-with it. If the shutdowns are unexpected, the `started` lines and their timestamps are the record of
-how often and when the process is going away.
+Start the run again. A shutdown is not a governance refusal and adds no governance or recovery record
+for the run: the worktree, its branch, any committed work and any uncommitted workspace changes the
+run had made remain exactly as they were; only the run's authority ended with the process. If the
+shutdowns are unexpected, the `started` lines and their timestamps are the record of how often and
+when the process is going away.
 
 ---
 

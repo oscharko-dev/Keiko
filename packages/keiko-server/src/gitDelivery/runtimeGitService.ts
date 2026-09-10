@@ -68,6 +68,16 @@ export interface RuntimeGitRefusal {
 export type RuntimeGitOutcome = CodingRuntimeGitResult | RuntimeGitRefusal;
 type RuntimeGitRefusalCondition =
   "signal-aborted" | "run-not-live" | "guard-rejected" | "mode-unavailable";
+/** A stage effect that threw, carrying the proposal it was redeeming for the failure result. */
+class StageEffectFailure extends Error {
+  public constructor(
+    public readonly proposal: RuntimeGitProposal,
+    public override readonly cause: unknown,
+  ) {
+    super("git-stage-effect-failed");
+    this.name = "StageEffectFailure";
+  }
+}
 const REFUSED_AUTHORITY: RuntimeGitRefusal = { kind: "refused", reason: "authority-revoked" };
 const REFUSED_EXECUTION: RuntimeGitRefusal = { kind: "refused", reason: "execution-failed" };
 /** Open stage proposals the service holds at once; one more is blocked as `proposal-limit`. */
@@ -229,25 +239,33 @@ export class RuntimeGitService {
       this.log(context, phase, { state: "withheld", reason: "authority-revoked" }, "refused");
       return REFUSED_AUTHORITY;
     } catch (error) {
-      this.log(
-        context,
-        phase,
-        { state: "failed", ...describeError(error), ...thrownGitCode(error) },
-        "failed",
-      );
-      return this.failureOutcome(request);
+      return this.failed(context, phase, error);
     }
   }
-  // A stage redemption that threw still names its proposal, so the model can tell a failed effect
-  // from a refused request; every other operation has no result to fail and is refused as such.
-  private failureOutcome(request: RuntimeGitRequest): RuntimeGitOutcome {
-    const proposal =
-      request.operation === "stage" && request.phase === "execute"
-        ? this.proposals.get(request.proposalId)
-        : undefined;
-    return proposal === undefined
-      ? REFUSED_EXECUTION
-      : this.result(proposal, "failed", "execution-failed");
+  // A read that threw because authority closed under it (`git-runtime-authority-denied`,
+  // `verified-commit-authority-unavailable`) is the authority refusal, not a failed Git effect
+  // (CodeRabbit review, 2026-09-10): the model may read only `authority-revoked` as such. A stage
+  // redemption that threw still names its proposal, so the model can tell a failed effect from a
+  // refused request; every other operation has no result to fail and is refused as such.
+  private failed(
+    context: VerifiedCommitRunContext,
+    phase: string,
+    error: unknown,
+  ): RuntimeGitOutcome {
+    if (context.signal?.aborted === true || !context.stillAuthorized()) {
+      this.log(context, phase, { state: "refused", reason: "authority-revoked" }, "refused");
+      return REFUSED_AUTHORITY;
+    }
+    const cause = error instanceof StageEffectFailure ? error.cause : error;
+    this.log(
+      context,
+      phase,
+      { state: "failed", ...describeError(cause), ...thrownGitCode(cause) },
+      "failed",
+    );
+    return error instanceof StageEffectFailure
+      ? this.result(error.proposal, "failed", "execution-failed")
+      : REFUSED_EXECUTION;
   }
   private guardedContext(
     guard: CodingToolMutationGuard,
@@ -384,7 +402,14 @@ export class RuntimeGitService {
       return this.result(proposal, "drift", "candidate-drift");
     this.proposals.delete(id);
     this.options.invalidateVerification();
-    return this.mutateStage(context, proposal, consumed?.claim ?? { required: false });
+    // The proposal leaves the redeemable map BEFORE the effect runs (a redeemed proposal must never
+    // be redeemable twice), so a throwing effect carries it out with itself for the failure result
+    // instead of being looked up in a map it has already left (CodeRabbit review, 2026-09-10).
+    try {
+      return await this.mutateStage(context, proposal, consumed?.claim ?? { required: false });
+    } catch (error) {
+      throw new StageEffectFailure(proposal, error);
+    }
   }
   // `review()` rejects an id it never held, one already redeemed or expired, and one whose run,
   // envelope or authority no longer match. Only the last is the model's authority; the rest are a

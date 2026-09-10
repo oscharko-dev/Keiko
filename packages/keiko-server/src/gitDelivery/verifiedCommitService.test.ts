@@ -30,6 +30,7 @@ import { createCodingRuntimeSnapshotStore } from "../coding-runtime/codingRuntim
 import { runMigrations } from "../store/schema.js";
 import { createVerifiedCommitService } from "./verifiedCommitService.js";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
+import { executeGovernedMutation } from "./execution.js";
 import type {
   VerifiedCommitRunContext,
   VerifiedCommitService,
@@ -51,6 +52,13 @@ vi.mock("../gitChangeSnapshotService.js", () => ({
   },
 }));
 
+// The governed stage effect is the one dispatch step a test cannot make throw from the outside
+// (its Git command runner is real and its inputs are validated first), so the module is wrapped
+// once with the real implementation and a single test replaces one call with a rejection.
+vi.mock("./execution.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./execution.js")>();
+  return { ...actual, executeGovernedMutation: vi.fn(actual.executeGovernedMutation) };
+});
 let root: string;
 let db: DatabaseSync;
 let live: boolean;
@@ -1098,6 +1106,113 @@ describe("productive runtime status/diff/stage lane", () => {
       extra: expect.objectContaining({ phase: "stage-propose", runId: "run-1" }) as unknown,
     });
     expect(JSON.stringify(events)).not.toContain("xxxx");
+  });
+
+  // Authority that closes UNDER a dispatch makes the facts or review read throw
+  // (`verified-commit-authority-unavailable`, `git-runtime-authority-denied`); that is the authority
+  // refusal, not a failed Git effect, and the model may read only `authority-revoked` as such
+  // (CodeRabbit review, 2026-09-10).
+  it("answers authority-revoked, not execution-failed, when authority closes during dispatch", async () => {
+    const gitService = new RuntimeGitService({
+      ...options,
+      mode: (): "supervised-coding" => "supervised-coding",
+      invalidateVerification: (): void => {
+        service.invalidate();
+      },
+    });
+    live = false;
+
+    expect(
+      await gitService.execute(
+        {
+          action: "git",
+          actionId: "closing",
+          idempotencyKey: "closing",
+          operation: "stage",
+          phase: "propose",
+          paths: ["code.js"],
+        },
+        { check: () => true },
+      ),
+    ).toEqual({ kind: "refused", reason: "authority-revoked" });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "git.runtime-action",
+        correlationId: "verified-commit-test",
+        extra: {
+          phase: "stage-propose",
+          runId: "run-1",
+          state: "refused",
+          reason: "authority-revoked",
+        },
+      }),
+    );
+    expect(
+      events.some((event) => event.op === "git.runtime-action" && event.extra?.state === "failed"),
+    ).toBe(false);
+  });
+
+  // A redeemed proposal leaves the redeemable map before its effect runs; a throwing effect must
+  // still answer with THAT proposal's failed result, never with the generic refusal the map lookup
+  // used to produce once the proposal was gone (CodeRabbit review, 2026-09-10).
+  it("binds a throwing stage effect to the proposal it was redeeming", async () => {
+    const gitService = new RuntimeGitService({
+      ...options,
+      mode: (): "supervised-coding" => "supervised-coding",
+      invalidateVerification: (): void => {
+        service.invalidate();
+      },
+    });
+    writeFileSync(join(root, "other.js"), "export const other = 4;\n");
+    const proposed = await gitService.execute(
+      {
+        action: "git",
+        actionId: "effect",
+        idempotencyKey: "effect",
+        operation: "stage",
+        phase: "propose",
+        paths: ["other.js"],
+      },
+      { check: () => true },
+    );
+    if (proposed.kind !== "stage") throw new Error("stage proposal unavailable");
+    vi.mocked(executeGovernedMutation).mockRejectedValueOnce(
+      new Error("git-stage-effect-exploded"),
+    );
+
+    expect(
+      await gitService.execute(
+        {
+          action: "git",
+          actionId: "effect-execute",
+          idempotencyKey: "effect-execute",
+          operation: "stage",
+          phase: "execute",
+          proposalId: proposed.proposalId,
+        },
+        { check: () => true },
+      ),
+    ).toEqual({
+      kind: "stage",
+      proposalId: proposed.proposalId,
+      status: "failed",
+      reason: "execution-failed",
+      pathCount: 1,
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        op: "git.runtime-action",
+        level: "warn",
+        errorKind: "internal",
+        extra: expect.objectContaining({
+          phase: "stage-execute",
+          state: "failed",
+          code: "git-stage-effect-exploded",
+        }) as unknown,
+      }),
+    );
+    // A redeemed proposal never becomes redeemable again, whatever its effect did.
+    expect(gitService.review(proposed.proposalId)).toBeUndefined();
   });
 
   it("captures stage operands before the first asynchronous admission read", async () => {

@@ -760,20 +760,36 @@ describe("operatorDecisionRequester", () => {
     expect(emitted[1]).toMatchObject({ auxiliaryOutcome: "limit-reached" });
   });
 
-  it("records a diagnostic instead of dropping an event the contract rejects", () => {
+  // The run id is the one caller-supplied field the contract can refuse; every shape it refuses
+  // must reach the log as the diagnostic and never as a dropped event, and every shape it accepts
+  // must reach the run. Table-driven over the boundaries of the evidence-label rule (a label is at
+  // most 96 characters of `[A-Za-z0-9.:/_-]`): empty, spaces, a control character, the longest
+  // accepted run id, and the first one beyond it (CodeRabbit review, 2026-09-10).
+  it.each([
+    ["an empty run id", "", false],
+    ["a run id with spaces (run 11's shape)", "run id with spaces", false],
+    ["a run id carrying a control character", `run-1${String.fromCharCode(7)}`, false],
+    ["the longest accepted run id", `run-${"9".repeat(92)}`, true],
+    ["the first run id beyond the label bound", `run-${"9".repeat(93)}`, false],
+  ])("routes %s through the real validator", (_label, runId, accepted) => {
     const emitted: CodingWorkbenchRuntimeEvent[] = [];
     const records: ServerDiagnosticRecord[] = [];
     const request = operatorDecisionRequester(
       now,
       { record: (record): void => void records.push(record) },
-      // A run id the contract refuses as evidence text — the shape of failure run 11 had.
-      "run id with spaces",
+      runId,
       (event) => {
         emitted.push(event);
       },
     );
     request("workspace-script-trust");
 
+    if (accepted) {
+      expect(emitted).toHaveLength(1);
+      expect(emitted[0]).toMatchObject({ runId, kind: "operator-decision" });
+      expect(records).toEqual([]);
+      return;
+    }
     expect(emitted).toEqual([]);
     expect(records).toEqual([
       expect.objectContaining({

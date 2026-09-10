@@ -424,7 +424,11 @@ function recordRuntimeApprovalWaiting(
  */
 function recordRuntimeOperatorDecision(
   activityLog: ServerLogSink | undefined,
-  snapshot: CodingRuntimeSnapshot,
+  snapshot: {
+    readonly runId: string;
+    readonly revision: number;
+    readonly state: CodingWorkbenchRuntimeStateName;
+  },
   decision: CodingWorkbenchOperatorDecision,
   state: "waiting" | "settled" | "not-admissible",
   outcome?: CodingWorkbenchAuxiliaryStatus,
@@ -1260,10 +1264,18 @@ export class CodingRuntimeOrchestrator {
     const decision = event.operatorDecision;
     if (decision === undefined) return this.fail("invalid-intent");
     const open = event.auxiliaryOutcome === undefined;
+    // Both lines record the snapshot that BEGAN or ENDED the wait — the post-transition one — so the
+    // log's revision and run state are the ones the store now holds (CodeRabbit review, 2026-09-10).
     if (open && current.state === "running") {
       const paused = this.transition(current, "paused", undefined, decision);
-      if (paused.ok)
-        recordRuntimeOperatorDecision(this.deps.activityLog, current, decision, "waiting");
+      if (paused.ok) {
+        recordRuntimeOperatorDecision(
+          this.deps.activityLog,
+          { ...paused.snapshot, runId: current.runId },
+          decision,
+          "waiting",
+        );
+      }
       return paused;
     }
     if (!open && current.state === "paused" && current.pauseReason === decision) {
@@ -1271,7 +1283,7 @@ export class CodingRuntimeOrchestrator {
       if (resumed.ok) {
         recordRuntimeOperatorDecision(
           this.deps.activityLog,
-          current,
+          { ...resumed.snapshot, runId: current.runId },
           decision,
           "settled",
           event.auxiliaryOutcome,

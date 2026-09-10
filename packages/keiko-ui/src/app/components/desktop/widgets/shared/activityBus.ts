@@ -48,6 +48,30 @@ const RUNTIME_EVENT_PRESENTATION: Record<
   "failure-redacted": { type: "rejected", labelKey: "activity.event.failureRedacted" },
 };
 
+// An `operator-decision` event with no `auxiliaryOutcome` is an OPEN decision; one carrying an
+// outcome has settled and must not stay in the feed as a pending approval (CodeRabbit review,
+// 2026-09-10). The closed outcome vocabulary maps onto the activity kinds it already has.
+const OPERATOR_DECISION_SETTLED: Record<
+  NonNullable<RuntimeEvent["auxiliaryOutcome"]>,
+  { type: ActivityType; labelKey: MessageKey }
+> = {
+  accepted: { type: "approved", labelKey: "activity.event.operatorDecisionAccepted" },
+  denied: { type: "rejected", labelKey: "activity.event.operatorDecisionDenied" },
+  unavailable: { type: "rejected", labelKey: "activity.event.operatorDecisionUnavailable" },
+  "limit-reached": { type: "rejected", labelKey: "activity.event.operatorDecisionExpired" },
+  stopped: { type: "stopped", labelKey: "activity.event.operatorDecisionStopped" },
+};
+
+function runtimeEventPresentation(event: RuntimeEvent): {
+  type: ActivityType;
+  labelKey: MessageKey;
+} {
+  if (event.eventKind !== "operator-decision" || event.auxiliaryOutcome === undefined) {
+    return RUNTIME_EVENT_PRESENTATION[event.eventKind];
+  }
+  return OPERATOR_DECISION_SETTLED[event.auxiliaryOutcome];
+}
+
 declare global {
   interface Window {
     [STORE_KEY]?: ActivityEvent[];
@@ -72,7 +96,7 @@ export function logActivity(event: Omit<ActivityEvent, "time">): void {
 export function logRuntimeActivityEvents(events: readonly CodingWorkbenchRuntimeSseEvent[]): void {
   for (const event of events) {
     if (event.kind !== "runtime-event") continue;
-    const presentation = RUNTIME_EVENT_PRESENTATION[event.eventKind];
+    const presentation = runtimeEventPresentation(event);
     appendActivity({
       id: `${event.runId}:${event.cursor}`,
       type: presentation.type,

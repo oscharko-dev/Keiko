@@ -1271,7 +1271,8 @@ function RuntimeControls({
   return (
     <div className={styles.runtimeControls} aria-label={t("codingWorkbench.controls.title")}>
       <span>{t("codingWorkbench.controls.help")}</span>
-      {state.run.value?.state === "paused" && resumeMode !== null ? (
+      {state.run.value?.state === "paused" &&
+      operatorResumeAvailable(resumeMode, state.run.value.pauseReason) ? (
         <div className={styles.resumeModeControl}>
           <label className={styles.resumeModeLabel} htmlFor="coding-workbench-resume-mode">
             {t("codingWorkbench.controls.resumeMode.label")}

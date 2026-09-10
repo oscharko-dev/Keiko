@@ -2269,6 +2269,22 @@ describe("verification waiting on the operator's package-script trust decision",
     await expect(outcome).resolves.toBe("unavailable");
   });
 
+  // A probe that throws (a workspace resolver failing closed mid-wait) settles the wait through its
+  // closed `unavailable` outcome and releases the interval, instead of rejecting from inside a timer
+  // callback and leaving the run paused with no settled decision (CodeRabbit review, 2026-09-10).
+  it("settles unavailable and releases its timers when the probe throws", async () => {
+    vi.useFakeTimers();
+    let probes = 0;
+    const outcome = waitForWorkspaceScriptTrust((): { readonly trusted: boolean } => {
+      probes += 1;
+      throw new Error("workspace resolver failed closed");
+    });
+    await expect(outcome).resolves.toBe("unavailable");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(probes).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   // An aborted tool call ends the wait immediately; the run is going away and nobody is deciding.
   it("settles cancelled when the tool call is aborted", async () => {
     vi.useFakeTimers();

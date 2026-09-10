@@ -988,6 +988,14 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(lines.map((line) => line.extra?.state)).toEqual(["waiting", "settled"]);
     expect(lines[0]?.extra).toMatchObject({ runId: "run-1", decision: "workspace-script-trust" });
     expect(lines[1]?.extra).toMatchObject({ outcome: "accepted" });
+    // Each line records the snapshot that BEGAN or ENDED the wait, i.e. the post-transition state
+    // and revision the store now holds — not the snapshot the event arrived on (CodeRabbit review,
+    // 2026-09-10: the waiting line used to say `running` at the old revision).
+    expect(lines[0]?.extra).toMatchObject({ runState: "paused" });
+    expect(lines[1]?.extra).toMatchObject({ runState: "running" });
+    const finalRevision = f.orchestrator.getSnapshot("run-1")?.revision;
+    if (finalRevision === undefined) throw new Error("run snapshot missing");
+    expect(lines.map((line) => line.extra?.revision)).toEqual([finalRevision - 1, finalRevision]);
   });
 
   // A refused decision ends the wait exactly as an accepted one does. The DIFFERENCE is what the
