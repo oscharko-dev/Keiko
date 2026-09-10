@@ -282,10 +282,12 @@ jobs:
         # model-generated code, so the deny-by-default egress boundary must be proven on every run.
         # The egress test fails the job if an outbound connection from inside network:"none" succeeds.
         # keiko-sandbox imports the shared NetworkGatewayPolicy guard from keiko-contracts at runtime
-        # (ADR-0043 D11), and an isolated workspace test needs that package built first (AGENTS.md §2);
-        # `npm run typecheck` builds every package but runs later, so build the one dependency here.
+        # (ADR-0043 D11), and its real Linux gateway proof executes the assembled bridge entry point.
+        # `npm run typecheck` builds every package but runs later, so build the dependency and the
+        # sandbox package here before the focused proof (AGENTS.md §2).
         run: |
           npm --workspace @oscharko-dev/keiko-contracts run build
+          npm --workspace @oscharko-dev/keiko-sandbox run build
           npm --workspace @oscharko-dev/keiko-sandbox test
       - name: Verify Keiko Editor package
         run: |

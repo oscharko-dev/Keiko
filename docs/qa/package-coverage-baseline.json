@@ -198,15 +198,15 @@
       }
     },
     "keiko-sandbox": {
-      "files": 11,
+      "files": 13,
       "uncoveredFiles": 0,
-      "uncoveredLines": 3,
-      "totalLines": 301,
+      "uncoveredLines": 45,
+      "totalLines": 472,
       "coverage": {
-        "lines": 99,
-        "statements": 95.74,
-        "branches": 94.71,
-        "functions": 99.02
+        "lines": 90.47,
+        "statements": 88.05,
+        "branches": 92.12,
+        "functions": 93.55
       }
     },
     "keiko-sdk": {

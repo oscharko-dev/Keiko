@@ -9,8 +9,9 @@ import { access, chmod, mkdtemp, rm } from "node:fs/promises";
 import { createConnection, createServer, type Server, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { constants } from "node:fs";
+import { LINUX_GATEWAY_LAUNCHER_PATH } from "./linux-gateway-path.js";
 
 type LinuxGatewayBackend = "bubblewrap" | "unshare";
 type ForwardedSignal = "SIGINT" | "SIGHUP" | "SIGTERM";
@@ -39,10 +40,6 @@ interface ChildReference {
 
 const SIGNALS: readonly ForwardedSignal[] = ["SIGINT", "SIGHUP", "SIGTERM"];
 const LOOPBACK_TOOLS: readonly string[] = ["/usr/sbin/ip", "/sbin/ip", "/usr/bin/ip", "/bin/ip"];
-
-export const LINUX_GATEWAY_LAUNCHER_PATH = fileURLToPath(
-  new URL("../dist/linux-gateway-launcher.js", import.meta.url),
-);
 
 class LinuxGatewayLauncherError extends Error {
   public constructor(public readonly errorKind: string) {
@@ -207,7 +204,7 @@ function namespaceArgs(config: CommonConfig, socketPath: string): readonly strin
   ];
 }
 
-function wrapperCommand(
+export function buildLinuxGatewayNamespaceCommand(
   config: CommonConfig,
   socketPath: string,
 ): readonly [string, readonly string[]] {
@@ -280,7 +277,7 @@ async function runHost(config: CommonConfig): Promise<number> {
     await chmod(directory, 0o700);
     await listen(relay.server, socketPath);
     await chmod(socketPath, 0o600);
-    const [command, args] = wrapperCommand(config, socketPath);
+    const [command, args] = buildLinuxGatewayNamespaceCommand(config, socketPath);
     const child = spawn(command, args, { cwd: config.cwd, stdio: "inherit" });
     childReference.current = child;
     const stopForwarding = forwardSignals(child);
@@ -300,21 +297,21 @@ function isMainModule(): boolean {
   return entry !== undefined && import.meta.url === pathToFileURL(entry).href;
 }
 
-async function main(values: readonly string[]): Promise<number> {
+export async function runLinuxGatewayLauncher(values: readonly string[]): Promise<number> {
   if (values[0] === "host") return runHost(parseCommon(values, 1));
   if (values[0] === "namespace") return runNamespace(parseNamespace(values));
   return fail("invalid-mode");
 }
 
-function diagnosticKind(error: unknown): string {
+export function linuxGatewayDiagnosticKind(error: unknown): string {
   return error instanceof LinuxGatewayLauncherError ? error.errorKind : "internal-failure";
 }
 
 if (isMainModule()) {
   try {
-    process.exitCode = await main(process.argv.slice(2));
+    process.exitCode = await runLinuxGatewayLauncher(process.argv.slice(2));
   } catch (error: unknown) {
-    process.stderr.write(`keiko-linux-gateway:error:${diagnosticKind(error)}\n`);
+    process.stderr.write(`keiko-linux-gateway:error:${linuxGatewayDiagnosticKind(error)}\n`);
     process.exitCode = 1;
   }
 }

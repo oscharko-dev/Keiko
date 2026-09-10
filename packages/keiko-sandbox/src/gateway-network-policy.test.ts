@@ -4,8 +4,12 @@
 // path directly; runtime-gateway.test.ts (owned by another change in flight) covers the direct API
 // and the real macOS OS-level proof.
 import { describe, expect, it } from "vitest";
-import { buildWrappedCommand } from "./backends.js";
-import { GATEWAY_UNSUPPORTED_ON_HOST_REASON, planIsolatedRun } from "./plan.js";
+import { buildGatewaySeatbeltCommand, buildWrappedCommand } from "./backends.js";
+import {
+  GATEWAY_UNSUPPORTED_ON_HOST_REASON,
+  INVALID_NETWORK_POLICY_REASON,
+  planIsolatedRun,
+} from "./plan.js";
 import { selectGatewayBackend } from "./select.js";
 import type { BackendAvailability, IsolatedRunPlan, NetworkGatewayPolicy } from "./types.js";
 
@@ -139,6 +143,42 @@ describe("planIsolatedRun with a gateway-allowlist network policy", () => {
   it("fails closed on macOS itself when no seatbelt binary is present", () => {
     const decision = planIsolatedRun(basePlan, NONE, "darwin");
     expect(decision.kind).toBe("fail-closed");
+  });
+
+  it("rejects accessors without invoking them or compiling a narrower substitute", () => {
+    let reads = 0;
+    const hostile = Object.defineProperty({ mode: "gateway", port: 1983 }, "host", {
+      enumerable: true,
+      get: (): string => {
+        reads += 1;
+        return "127.0.0.1";
+      },
+    });
+    const decision = planIsolatedRun(
+      { ...basePlan, network: hostile as NetworkGatewayPolicy },
+      ALL,
+      "linux",
+    );
+
+    expect(decision.kind).toBe("fail-closed");
+    if (decision.kind !== "fail-closed") throw new Error("expected fail-closed");
+    expect(decision.reason).toBe(INVALID_NETWORK_POLICY_REASON);
+    expect(reads).toBe(0);
+    expect(() =>
+      buildWrappedCommand("bubblewrap", {
+        ...basePlan,
+        network: hostile as NetworkGatewayPolicy,
+      }),
+    ).toThrow("sandbox-network-policy-invalid");
+    expect(() =>
+      buildGatewaySeatbeltCommand(
+        hostile as NetworkGatewayPolicy,
+        "/trusted/opencode",
+        [],
+        "/qualified/apple/git",
+      ),
+    ).toThrow("gateway-network-policy-invalid");
+    expect(reads).toBe(0);
   });
 });
 

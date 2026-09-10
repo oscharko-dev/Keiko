@@ -3,7 +3,7 @@
 // (egress requested but unenforceable). The attestation it returns is recorded on the CommandResult so
 // keiko-verification can report an HONEST `enforced` network flag (ADR-0043).
 
-import { isValidNetworkGatewayPolicy } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import { copyNetworkGatewayPolicy } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { buildWrappedCommand } from "./backends.js";
 import { selectEnforcingBackend, selectGatewayBackend } from "./select.js";
 import type { BackendAvailability, IsolatedRunDecision, IsolatedRunPlan } from "./types.js";
@@ -25,6 +25,11 @@ export const GATEWAY_UNSUPPORTED_ON_HOST_REASON =
   "have no qualifying host-gateway bridge. Falling back to a weaker isolation tier or an " +
   "unconfined spawn is not acceptable. Untrusted network access is not granted.";
 
+export const INVALID_NETWORK_POLICY_REASON =
+  'invalid-network-policy: isolation requires exactly "inherit", "none", or a data-only gateway ' +
+  "policy containing one loopback host and one in-range port. Accessors, extra fields, and " +
+  "malformed values are rejected. Untrusted code is not executed.";
+
 function noneEnforcedAttestation(platform: NodeJS.Platform): IsolatedRunDecision["attestation"] {
   return { backend: "none", networkEnforced: false, filesystemEnforced: false, platform };
 }
@@ -34,7 +39,8 @@ export function planIsolatedRun(
   availability: BackendAvailability,
   platform: NodeJS.Platform,
 ): IsolatedRunDecision {
-  if (plan.network === "inherit") {
+  const network = plan.network;
+  if (network === "inherit") {
     return {
       kind: "passthrough",
       command: plan.command,
@@ -42,8 +48,16 @@ export function planIsolatedRun(
       attestation: noneEnforcedAttestation(platform),
     };
   }
-  if (isValidNetworkGatewayPolicy(plan.network)) {
-    return planGatewayRun(plan, availability, platform);
+  const gateway = copyNetworkGatewayPolicy(network);
+  if (gateway !== undefined) {
+    return planGatewayRun({ ...plan, network: gateway }, availability, platform);
+  }
+  if (network !== "none") {
+    return {
+      kind: "fail-closed",
+      reason: INVALID_NETWORK_POLICY_REASON,
+      attestation: noneEnforcedAttestation(platform),
+    };
   }
   const filesystem = plan.filesystem ?? "inherit";
   const backend = selectEnforcingBackend(platform, availability, filesystem);
