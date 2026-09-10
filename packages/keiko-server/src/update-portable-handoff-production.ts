@@ -230,7 +230,13 @@ function createRecoveryReadActivation(
   localState: UpdateLocalStateManager,
 ): UpdateStartupRecoveryOptions["readActivation"] {
   return () => {
-    const state = localState.readRuntimeState();
+    const inspected = localState.inspectRuntimeState();
+    if (!("state" in inspected)) {
+      return {
+        failureReason: inspected.status === "unwritable" ? "persistence-failed" : inspected.status,
+      };
+    }
+    const state = inspected.state;
     const session =
       state.activeSession ?? (state.activationWal === undefined ? undefined : state.lastSession);
     return {

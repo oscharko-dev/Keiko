@@ -3176,7 +3176,8 @@ function resolvedUpdateStartupRecovery(
   portableRuntime: ProductionPortableHandoffRuntime,
 ): UpdateStartupRecoveryPort | undefined {
   if (args.options.updateStartupRecovery !== undefined) return args.options.updateStartupRecovery;
-  return localState.readRuntimeState().activationWal === undefined
+  const inspected = localState.inspectRuntimeState();
+  return "state" in inspected && inspected.state.activationWal === undefined
     ? undefined
     : portableRuntime.recovery;
 }

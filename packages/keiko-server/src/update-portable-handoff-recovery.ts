@@ -59,6 +59,7 @@ export interface UpdateStartupRecoveryOptions {
   readonly readActivation: () => {
     readonly sessionId?: string | undefined;
     readonly activationWal?: UpdateActivationWalState | undefined;
+    readonly failureReason?: RecoveryReason | undefined;
   };
   readonly persistActivation: (input: {
     readonly sessionId: string;
@@ -176,7 +177,15 @@ function effectiveWal(
 function loadRecoveryContext(
   options: UpdateStartupRecoveryOptions,
 ): RecoveryContext | RecoveryResult {
-  const aggregate = options.readActivation();
+  let aggregate: ReturnType<UpdateStartupRecoveryOptions["readActivation"]>;
+  try {
+    aggregate = options.readActivation();
+  } catch {
+    return result("recovery-required", undefined, "persistence-failed");
+  }
+  if (aggregate.failureReason !== undefined) {
+    return result("recovery-required", aggregate.sessionId, aggregate.failureReason);
+  }
   const wal = aggregate.activationWal;
   if (wal === undefined) return result("ready", aggregate.sessionId);
   const sessionId = aggregate.sessionId;

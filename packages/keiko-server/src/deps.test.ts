@@ -231,6 +231,42 @@ function operatorDapDocument(): Record<string, unknown> {
   };
 }
 
+describe("portable updater startup recovery composition", () => {
+  it.each([
+    ["corrupt", "{broken"],
+    ["incompatible", JSON.stringify({ schemaVersion: 999 })],
+  ])("surfaces %s runtime state through the non-throwing recovery port", async (_kind, raw) => {
+    const stateDir = tmp("keiko-update-recovery-composition-");
+    mkdirSync(join(stateDir, "updates"), { recursive: true });
+    writeFileSync(join(stateDir, "updates", "runtime-state.json"), raw, "utf8");
+
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("keiko-update-recovery-evidence-"),
+      env: { KEIKO_STATE_DIR: stateDir },
+      store: createInMemoryUiStore(),
+    });
+    try {
+      const recovery = deps.updateStartupRecovery;
+      expect(recovery).toBeDefined();
+      await expect(
+        recovery?.reconcile({
+          phase: "pre-listen",
+          current: {
+            pid: process.pid,
+            launchId: "ab".repeat(16),
+            host: "127.0.0.1",
+            port: 1983,
+            version: "0.3.17",
+          },
+        }),
+      ).resolves.toMatchObject({ status: "recovery-required", reason: _kind });
+    } finally {
+      await deps.dispose?.();
+    }
+  });
+});
+
 function qualifiedOperatorDapDocument(): {
   readonly document: Record<string, unknown>;
   readonly nodePath: string;
