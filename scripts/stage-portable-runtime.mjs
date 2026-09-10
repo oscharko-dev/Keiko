@@ -117,6 +117,7 @@ function parseArgs(argv) {
     commitSha: process.env.GITHUB_SHA,
     dryRun: false,
     evaluation: false,
+    release: false,
     launcherBinary: undefined,
     nodeArchive: undefined,
     nodeArchiveUrl: undefined,
@@ -165,6 +166,11 @@ function applyArg(argv, index, options) {
   // variable and no default that can set it.
   if (arg === "--evaluation-build") {
     options.evaluation = true;
+    return index;
+  }
+  if (arg === "--release-build") {
+    options.evaluation = true;
+    options.release = true;
     return index;
   }
   if (arg === "--windows-generation-production") {
@@ -2191,7 +2197,7 @@ function manifestReleaseImpact(input) {
   };
 }
 
-function manifestUpdateEligibility() {
+function manifestUpdateEligibility(release) {
   return {
     stableOnly: true,
     rollbackSupported: false,
@@ -2200,13 +2206,14 @@ function manifestUpdateEligibility() {
       managedRootAttested: true,
       artifactShaVerified: true,
       platformSignatureLocallyVerified: false,
+      ...(release ? { releaseTrustRequired: true } : {}),
       manifestReleaseImpactBound: true,
       sameVolumeCrashSafePromotionAvailable: true,
       relaunchVersionVerificationAvailable: true,
     },
     manualOnlyWhen: [
       "managed-root-cannot-be-attested",
-      "signature-or-notarization-cannot-be-verified",
+      release ? "release-trust-cannot-be-verified" : "signature-or-notarization-cannot-be-verified",
       "crash-safe-promotion-unavailable",
       "admin-or-organization-managed-root",
       "prerelease-beta-downgrade-or-rollback",
@@ -2255,7 +2262,7 @@ function manifestFor(
       nativeHelpers,
       nativeAddons,
     }),
-    updateEligibility: manifestUpdateEligibility(),
+    updateEligibility: manifestUpdateEligibility(options.release === true),
   };
   if (sidecarRuntimes.length > 0) manifest.sidecarRuntimes = sidecarRuntimes;
   return manifest;

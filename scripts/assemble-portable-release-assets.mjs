@@ -20,6 +20,7 @@ import {
   WINDOWS_PORTABLE_SETUP_ASSET_NAME,
   sha256File,
   validatePortableCandidateManifest,
+  validatePortableEvaluationManifest,
 } from "./portable-runtime.mjs";
 import {
   RUNTIME_ACTIVATION_RELATIVE_PATH,
@@ -150,7 +151,10 @@ function commonIdentity(manifest) {
 }
 
 function targetFailures(manifest, target, expected) {
-  const failures = validatePortableCandidateManifest(manifest);
+  const failures =
+    manifest.security?.verificationPolicy === "evaluation"
+      ? validatePortableEvaluationManifest(manifest)
+      : validatePortableCandidateManifest(manifest);
   const checks = [
     [
       "artifact.platformTarget",
@@ -302,9 +306,13 @@ function assertRuntimeActivationEvidence(stageRoot, manifest, target, sbom) {
     fail(`${target.platformTarget} runtime activation binding is invalid`);
   }
   if (target.nodePlatform === "win32") {
-    assertRuntimeAttestationEvidence(resourceRoot, manifest, sbom);
+    if (manifest.security.verificationPolicy !== "evaluation") {
+      assertRuntimeAttestationEvidence(resourceRoot, manifest, sbom);
+    }
   } else {
-    assertMacosRuntimeQualificationEvidence(resourceRoot, manifest);
+    if (manifest.security.verificationPolicy !== "evaluation") {
+      assertMacosRuntimeQualificationEvidence(resourceRoot, manifest);
+    }
   }
 }
 
@@ -381,13 +389,7 @@ function assertNativeHelperEvidence(stageRoot, manifest, target, sbom) {
 // This release gate deliberately evaluates the complete helper proof in one atomic assertion.
 // eslint-disable-next-line complexity
 function assertOneNativeHelperEvidence(stageRoot, helper, target, sbom) {
-  if (
-    helper.signing?.verificationStatus !== "verified-production" ||
-    helper.signing?.signatureVerified !== true ||
-    (target.nodePlatform === "darwin" && helper.signing?.notarizationVerified !== true)
-  ) {
-    fail(`${target.platformTarget} native helper is not production verified`);
-  }
+  assertNativeHelperTrustState(helper, target);
   const resourceRoot = sidecarPayloadRoot(stageRoot, target);
   const executable = regularContainedFile(resourceRoot, helper.executablePath, "native helper");
   const bytes = readFileSync(executable);
@@ -407,6 +409,26 @@ function assertOneNativeHelperEvidence(stageRoot, helper, target, sbom) {
     hashes[0].content !== helper.shippedSha256
   ) {
     fail(`${target.platformTarget} native helper SBOM binding is invalid`);
+  }
+}
+
+function assertNativeHelperTrustState(helper, target) {
+  if (helper.signing?.verificationPolicy === "evaluation") {
+    if (
+      helper.signing.verificationStatus !== "evaluation-unqualified" ||
+      helper.signing.signatureVerified !== false ||
+      helper.signing.notarizationVerified !== false
+    ) {
+      fail(`${target.platformTarget} native helper has inconsistent release-trust evidence`);
+    }
+    return;
+  }
+  if (
+    helper.signing?.verificationStatus !== "verified-production" ||
+    helper.signing?.signatureVerified !== true ||
+    (target.nodePlatform === "darwin" && helper.signing?.notarizationVerified !== true)
+  ) {
+    fail(`${target.platformTarget} native helper is not production verified`);
   }
 }
 

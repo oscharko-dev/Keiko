@@ -80,6 +80,7 @@ const ROOT_RELEASE_TAG = `v${ROOT_PACKAGE_VERSION}`;
 const LIFECYCLE_EXPECTATIONS = new Map([
   ["staging", ["staging", "unverified-staging"]],
   ["evaluation", ["evaluation", "evaluation-unqualified"]],
+  ["published-release-trust", ["evaluation", "evaluation-unqualified"]],
   ["candidate", ["production", "verified-production"]],
   ["published", ["production", "verified-production"]],
   ["published-contract", ["production", "verified-production"]],

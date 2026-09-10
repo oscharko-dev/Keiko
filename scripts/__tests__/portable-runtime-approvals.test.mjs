@@ -619,6 +619,16 @@ describe("portable assets stage helper", () => {
     // The opt-in is additive: it changes nothing else the wrapper derives.
     expect(evaluation.filter((arg) => arg !== "--evaluation-build")).toEqual(plain);
 
+    const release = stageArgumentsForTarget(
+      { ...base, release: true },
+      approvals,
+      "a".repeat(40),
+      "0.2.14",
+      { runAttempt: 3, runId: 987654321 },
+    );
+    expect(release.filter((arg) => arg === "--release-build")).toHaveLength(1);
+    expect(release).not.toContain("--evaluation-build");
+
     const production = stageArgumentsForTarget(
       { ...base, windowsGenerationProduction: true },
       approvals,

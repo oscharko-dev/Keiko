@@ -83,6 +83,7 @@ export const PORTABLE_MANIFEST_VALIDATION_CONTEXTS = Object.freeze([
   "evaluation",
   "candidate",
   "published",
+  "published-release-trust",
   "published-contract",
 ]);
 export const PORTABLE_VERIFICATION_REASON_CODES = Object.freeze([
@@ -297,7 +298,9 @@ function usesZeroReleaseIdentity(options) {
 // qualification gates and nothing else. Every digest, size, containment and provenance predicate
 // stays outside this Set and therefore stays mandatory on every lane.
 function requiresProductionVerification(options) {
-  return !new Set(["staging", "non-production", "evaluation"]).has(options.context);
+  return !new Set(["staging", "non-production", "evaluation", "published-release-trust"]).has(
+    options.context,
+  );
 }
 
 function push(failures, path, message) {
@@ -634,9 +637,11 @@ function validateRuntimeActivation(manifest, failures, options) {
  * the staging one (ADR-0163 D9).
  */
 function validateRuntimeActivationTrustAnchor(manifest, trustAnchor, failures, options) {
-  const preSigningAnchor = { staging: "unverified-staging", evaluation: "evaluation-unqualified" }[
-    options.context
-  ];
+  const preSigningAnchor = {
+    staging: "unverified-staging",
+    evaluation: "evaluation-unqualified",
+    "published-release-trust": "evaluation-unqualified",
+  }[options.context];
   if (preSigningAnchor !== undefined) {
     if (trustAnchor !== preSigningAnchor) {
       push(failures, "runtimeActivation.trustAnchor", `must be ${preSigningAnchor}`);
@@ -1535,7 +1540,9 @@ function validateLifecycleVerificationContext(policy, status, path, options, fai
 
 function lifecycleVerificationExpectation(context) {
   if (context === "staging") return { policy: "staging", status: "unverified-staging" };
-  if (context === "evaluation") return { policy: "evaluation", status: "evaluation-unqualified" };
+  if (new Set(["evaluation", "published-release-trust"]).has(context)) {
+    return { policy: "evaluation", status: "evaluation-unqualified" };
+  }
   return { policy: "production", status: "verified-production" };
 }
 
@@ -1751,7 +1758,7 @@ function validateReviewedBinding(manifest, binding, failures, options) {
 }
 
 function validatePublishedSetupAssetBinding(manifest, binding, failures, options) {
-  if (options.context !== "published") return;
+  if (!new Set(["published", "published-release-trust"]).has(options.context)) return;
   const path = "releaseImpact.reviewedBinding.setupAsset";
   if (manifest.artifact?.platformTarget !== "windows-x64") {
     if (binding.setupAsset !== undefined) push(failures, path, "is supported only for Windows x64");
@@ -1889,7 +1896,7 @@ function validateUpdateEligibility(manifest, failures, options) {
   if (!booleanAt(update, "eligibleAfterSetupOnly", "updateEligibility", failures))
     push(failures, "updateEligibility.eligibleAfterSetupOnly", "must be true");
   validateUpdatePredicates(manifest, update, failures, options);
-  validateManualOnlyWhen(update, failures);
+  validateManualOnlyWhen(update, failures, options);
 }
 
 function validateUpdatePredicates(manifest, update, failures, options) {
@@ -1921,15 +1928,21 @@ function validateUpdatePredicates(manifest, update, failures, options) {
   }
 }
 
-function validateManualOnlyWhen(update, failures) {
+function validateManualOnlyWhen(update, failures, options) {
   if (!Array.isArray(update.manualOnlyWhen) || update.manualOnlyWhen.length === 0) {
     push(failures, "updateEligibility.manualOnlyWhen", "must list manual-only blockers");
   } else if (
     update.manualOnlyWhen.some((entry) => typeof entry !== "string" || entry.length === 0)
   ) {
     push(failures, "updateEligibility.manualOnlyWhen", "must contain non-empty strings");
-  } else if (!update.manualOnlyWhen.includes("signature-or-notarization-cannot-be-verified")) {
-    push(failures, "updateEligibility.manualOnlyWhen", "must include signature blocker");
+  } else {
+    const blocker =
+      options.context === "published-release-trust"
+        ? "release-trust-cannot-be-verified"
+        : "signature-or-notarization-cannot-be-verified";
+    if (!update.manualOnlyWhen.includes(blocker)) {
+      push(failures, "updateEligibility.manualOnlyWhen", `must include ${blocker}`);
+    }
   }
 }
 
@@ -2069,7 +2082,7 @@ function normalizedValidationOptions(options) {
 }
 
 function validateApiIdentity(options, failures) {
-  if (options.context !== "published") return;
+  if (!new Set(["published", "published-release-trust"]).has(options.context)) return;
   if (
     !isRecord(options.apiIdentity) ||
     !Number.isSafeInteger(options.apiIdentity.releaseId) ||
@@ -2151,10 +2164,14 @@ export function validatePortableCandidateManifest(manifest, options = {}) {
 }
 
 export function validatePortablePublishedManifest(manifest, apiIdentity, options = {}) {
+  const context =
+    manifest?.security?.verificationPolicy === "evaluation" && isRecord(manifest?.releaseTrust)
+      ? "published-release-trust"
+      : "published";
   return validatePortableManifest(manifest, {
     ...options,
     apiIdentity,
-    context: "published",
+    context,
     requireNativeHelpers: true,
   });
 }

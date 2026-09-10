@@ -32,6 +32,7 @@ import {
   portableVerificationSummaryForManifest,
   readPortableManifest,
   validatePortableCandidateManifest,
+  validatePortableEvaluationManifest,
   validatePortablePublishedManifest,
   WINDOWS_PORTABLE_SETUP_ASSET_NAME,
 } from "./portable-runtime.mjs";
@@ -864,7 +865,11 @@ function validatePortableAssetFiles({
   if (basename(archivePath) !== target.assetName) {
     failures.push(`${target.platformTarget}.archivePath must be named ${target.assetName}.`);
   }
-  for (const failure of validatePortableCandidateManifest(manifest)) {
+  const manifestFailures =
+    manifest.security?.verificationPolicy === "evaluation"
+      ? validatePortableEvaluationManifest(manifest)
+      : validatePortableCandidateManifest(manifest);
+  for (const failure of manifestFailures) {
     failures.push(`${target.platformTarget}.${failure}`);
   }
   if (manifest.product?.packageVersion !== rootManifest.version) {

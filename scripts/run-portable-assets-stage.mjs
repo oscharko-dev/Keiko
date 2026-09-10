@@ -21,6 +21,7 @@ function fail(message) {
 function parseArgs(argv) {
   const options = {
     evaluation: false,
+    release: false,
     outDir: join(repoRoot, ".portable-runtime", "staging"),
     payloadRoot: join(repoRoot, ".portable-sidecar-payloads"),
     target: "",
@@ -50,10 +51,13 @@ function validateOptions(options) {
   ) {
     fail("--windows-generation-production requires non-evaluation windows-x64 staging");
   }
+  if (options.evaluation && options.release)
+    fail("--evaluation and --release are mutually exclusive");
 }
 
 function applyBooleanOption(arg, options) {
   if (arg === "--evaluation") options.evaluation = true;
+  else if (arg === "--release") options.release = true;
   else if (arg === "--windows-generation-production") options.windowsGenerationProduction = true;
   else return false;
   return true;
@@ -133,6 +137,7 @@ export function stageArgumentsForTarget(
   // Absent by default and present exactly once when the caller opted in; nothing else in this
   // wrapper — no environment variable, no approval file — can introduce it.
   if (options.evaluation === true) args.push("--evaluation-build");
+  if (options.release === true) args.push("--release-build");
   if (options.windowsGenerationProduction === true) args.push("--windows-generation-production");
   return args;
 }
@@ -158,7 +163,11 @@ export function runPortableAssetsStage(argv, env = process.env) {
     env.APPLE_TEAM_ID,
   );
   const specCount = args.filter((arg) => arg === "--sidecar-runtime-spec").length;
-  const lane = options.evaluation === true ? "evaluation-unqualified" : "unverified-staging";
+  const lane = options.release
+    ? "release-trust-pending"
+    : options.evaluation
+      ? "evaluation-unqualified"
+      : "unverified-staging";
   console.log(
     `portable-assets-stage: staging ${options.target} (${lane}) with node ${approvals.node.version} and ${String(specCount)} sidecar spec(s)`,
   );
