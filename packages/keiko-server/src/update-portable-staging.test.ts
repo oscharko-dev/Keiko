@@ -845,6 +845,29 @@ describe("portable update staging", () => {
     expect(readFileSync(join(install.root, "active.txt"), "utf8")).toBe("active");
   });
 
+  it("classifies a missing managed install root as non-retryable preflight ineligibility", async () => {
+    const archive = await portableArchive();
+    const base = mkdtempSync(join(tmpdir(), "keiko-portable-missing-root-"));
+    tempRoots.push(base);
+    const fetchImpl = responseFor(archive);
+    const stager = createPortableUpdateStager({
+      env: {},
+      fetchImpl,
+      platformVerifier: verifyPlatform,
+    });
+
+    await expect(
+      stager.stage({
+        candidate: candidate(archive),
+        sessionId: "session-missing-root",
+        targetVersion: TARGET_VERSION,
+        installMode: portableMode(),
+        runtimeFacts: { packageRoot: join(base, "Programs", "Keiko", "app") },
+      }),
+    ).rejects.toMatchObject({ reason: "portable-preflight-ineligible" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("cancels during extraction, removes partial staging, and preserves the active tree", async () => {
     const archive = await portableArchive();
     const install = makeManagedInstall();

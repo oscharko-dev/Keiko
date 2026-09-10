@@ -647,5 +647,13 @@ describe("portable handoff coordinator", () => {
       .catch((caught: unknown) => caught);
     expect(error).toBeInstanceOf(PortableHandoffCoordinatorError);
     expect((error as PortableHandoffCoordinatorError).nativeAuthorityMayBeLive).toBe(true);
+    const cause = (error as PortableHandoffCoordinatorError).cause;
+    expect(cause).toBeInstanceOf(AggregateError);
+    expect((cause as AggregateError).errors).toHaveLength(2);
+    expect((cause as AggregateError).errors[0]).toBeInstanceOf(PortableHandoffCoordinatorError);
+    expect((cause as AggregateError).errors[1]).toMatchObject({
+      message: "portable handoff coordinator did not stop",
+      nativeAuthorityMayBeLive: true,
+    });
   });
 });

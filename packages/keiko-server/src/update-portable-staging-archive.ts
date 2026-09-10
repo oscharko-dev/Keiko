@@ -237,6 +237,24 @@ function availableDiskBytes(path: string): number {
   return stats.bavail * stats.bsize;
 }
 
+function assertManagedRootAvailable(managedRoot: string): void {
+  try {
+    const root = lstatSync(managedRoot);
+    if (!root.isDirectory() || root.isSymbolicLink()) {
+      throw new PortableUpdateStagingError(
+        "portable-preflight-ineligible",
+        "managed install root is unavailable",
+      );
+    }
+  } catch (error) {
+    if (error instanceof PortableUpdateStagingError) throw error;
+    throw new PortableUpdateStagingError(
+      "portable-preflight-ineligible",
+      "managed install root is unavailable",
+    );
+  }
+}
+
 export function assertPortableDiskHeadroom(
   session: PortableUpdateStageInput,
   target: UpdatePortableTarget,
@@ -250,6 +268,7 @@ export function assertPortableDiskHeadroom(
       "portable disk facts are unavailable",
     );
   }
+  assertManagedRootAvailable(managedRoot);
   const currentBytes = boundedCurrentTreeSize(managedRoot, session.signal);
   const available = availableBytes?.(managedRoot) ?? availableDiskBytes(managedRoot);
   const required = requiredPortableDiskBytes(

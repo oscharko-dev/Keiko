@@ -68,8 +68,9 @@ export class PortableHandoffCoordinatorError extends Error {
   public constructor(
     message: string,
     public readonly nativeAuthorityMayBeLive = false,
+    cause?: unknown,
   ) {
-    super(message);
+    super(message, cause === undefined ? undefined : { cause });
     this.name = "PortableHandoffCoordinatorError";
   }
 }
@@ -592,10 +593,24 @@ async function beginPortableHandoff(
   try {
     await acceptPreparedCoordinator(options, prepared, child, input);
   } catch (error) {
-    await cleanupFailedCoordinator(
-      child,
-      options.teardownTimeoutMs ?? COORDINATOR_TEARDOWN_TIMEOUT_MS,
-    );
+    try {
+      await cleanupFailedCoordinator(
+        child,
+        options.teardownTimeoutMs ?? COORDINATOR_TEARDOWN_TIMEOUT_MS,
+      );
+    } catch (cleanupError) {
+      const retainedAuthority =
+        cleanupError instanceof PortableHandoffCoordinatorError &&
+        cleanupError.nativeAuthorityMayBeLive;
+      throw new PortableHandoffCoordinatorError(
+        "portable handoff coordinator did not stop after acceptance failed",
+        retainedAuthority,
+        new AggregateError(
+          [error, cleanupError],
+          "portable handoff acceptance and teardown failed",
+        ),
+      );
+    }
     throw error;
   }
   (child.stdin as NodeJS.WritableStream & { unref?: () => void }).unref?.();
