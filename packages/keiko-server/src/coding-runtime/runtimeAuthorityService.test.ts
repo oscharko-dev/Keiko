@@ -923,6 +923,47 @@ describe("CodingRuntimeAuthorityService", () => {
     });
   });
 
+  // Run 12 (2026-09-10): a verification refused while its sibling paused the run surfaced only as
+  // `verification-authority-revoked`; the authority's own refusal left no line. Every refusal now
+  // names its condition, so a paused run reads as exactly that in a customer's log.
+  it("records why a tool-path recheck is refused, naming the state the run was actually in", () => {
+    const activity: ServerLogEvent[] = [];
+    const authority = mintFailureService(activity);
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+    const recheck = {
+      capability: minted.toolFacadeCapability,
+      adapterKind: "model-gateway-sidecar" as const,
+      liveFacts: facts(),
+      workspaceRoot: ROOT,
+      deploymentCeiling: "autonomous-delivery" as const,
+      nowIso: NOW,
+    };
+    expect(authority.pause(minted.authorityRef.runId, NOW)).toMatchObject({ ok: true });
+    expect(authority.revalidateCapabilityForMutation(recheck)).toEqual({
+      ok: false,
+      reason: "authority-resolution-failed",
+    });
+    expect(
+      activity.filter((event) => event.op === "coding-runtime.authority.revalidation-refused"),
+    ).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        correlationId: minted.authorityRef.runId,
+        extra: {
+          condition: "state-not-admissible",
+          runtimeState: "paused",
+          admissibleStates: ["running"],
+        },
+      }),
+    ]);
+    // The operator-admission variant admits the paused run and therefore writes nothing.
+    expect(authority.revalidateCapabilityForOperatorAdmission(recheck)).toMatchObject({ ok: true });
+    expect(
+      activity.filter((event) => event.op === "coding-runtime.authority.revalidation-refused"),
+    ).toHaveLength(1);
+  });
+
   it("admits operator operations on a paused run while the tool path stays running-only", () => {
     const authority = service();
     const minted = mint(authority);

@@ -927,20 +927,23 @@ export class CodingRuntimeAuthorityService {
       Date.parse(input.nowIso),
     );
     if (!authenticated.ok || authenticated.binding.audience !== "tool-facade") {
+      this.recordRevalidationRefused(
+        admissibleStates,
+        authenticated.ok ? "audience" : "capability",
+      );
       return authenticated.ok
         ? capabilityFailure("invalid")
         : capabilityFailure(authenticated.reason);
     }
     const reference = this.activeAuthorityRef;
-    if (
-      !admissibleStates.has(this.runtimeState.state) ||
-      this.activeTreeBindingId === undefined ||
-      this.runtimeState.runId !== reference?.runId ||
-      !capabilityMatchesDelegation(authenticated.binding, reference, input)
-    ) {
+    const condition = this.revalidationRefusalCondition(admissibleStates, reference, (ref) =>
+      capabilityMatchesDelegation(authenticated.binding, ref, input),
+    );
+    if (condition !== undefined || reference === undefined) {
+      this.recordRevalidationRefused(admissibleStates, condition ?? "run-mismatch");
       return { ok: false, reason: "authority-resolution-failed" };
     }
-    return this.restrictResolution(
+    const resolution = this.restrictResolution(
       this.registry.revalidateRuntime(
         reference,
         input.liveFacts,
@@ -949,6 +952,47 @@ export class CodingRuntimeAuthorityService {
         input.nowIso,
       ),
     );
+    if (!resolution.ok)
+      this.recordRevalidationRefused(admissibleStates, `registry:${resolution.reason}`);
+    return resolution;
+  }
+
+  /** The first structural condition a recheck fails, in the order the gate has always applied. */
+  private revalidationRefusalCondition(
+    admissibleStates: ReadonlySet<CodingWorkbenchRuntimeStateName>,
+    reference: CodingRuntimeAuthorityRef | undefined,
+    delegationMatches: (reference: CodingRuntimeAuthorityRef) => boolean,
+  ): string | undefined {
+    if (!admissibleStates.has(this.runtimeState.state)) return "state-not-admissible";
+    if (this.activeTreeBindingId === undefined) return "tree-binding-missing";
+    if (reference === undefined || this.runtimeState.runId !== reference.runId) {
+      return "run-mismatch";
+    }
+    return delegationMatches(reference) ? undefined : "delegation-mismatch";
+  }
+
+  /**
+   * Every refusal of a capability recheck used to leave the log empty: the caller's guard collapsed
+   * it into a boolean and the model saw `verification-authority-revoked` for reasons as different
+   * as a paused run, a revoked tree binding and drifted live facts (run 12, 2026-09-10). One line
+   * per refusal names the condition, the admissible states the check asked for and the state the
+   * run was actually in — identifiers and closed words, never envelope content.
+   */
+  private recordRevalidationRefused(
+    admissibleStates: ReadonlySet<CodingWorkbenchRuntimeStateName>,
+    condition: string,
+  ): void {
+    (this.activityLog ?? processServerLogSink()).write({
+      category: "security",
+      op: "coding-runtime.authority.revalidation-refused",
+      correlationId: this.runtimeState.runId ?? UNKNOWN_CORRELATION_ID,
+      level: "warn",
+      extra: {
+        condition,
+        runtimeState: this.runtimeState.state,
+        admissibleStates: [...admissibleStates],
+      },
+    });
   }
 
   // KEIKO-0737: the combined revoke(runId, nowIso) was only ever exercised by its own unit test
