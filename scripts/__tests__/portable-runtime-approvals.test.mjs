@@ -285,8 +285,8 @@ describe("portable runtime approvals validation", () => {
     drift.node.version = "24.99.0";
     expect(() => validatePortableRuntimeApprovals(drift)).toThrow(/v24\.99\.0/u);
     const unknown = approvedFixture();
-    unknown.node.archives["linux-x64"] = unknown.node.archives["windows-x64"];
-    expect(() => validatePortableRuntimeApprovals(unknown)).toThrow(/unknown key linux-x64/u);
+    unknown.node.archives["freebsd-x64"] = unknown.node.archives["windows-x64"];
+    expect(() => validatePortableRuntimeApprovals(unknown)).toThrow(/unknown key freebsd-x64/u);
     const traversal = approvedFixture();
     traversal.sidecarRuntimes[0].archives["windows-x64"].executableName = "../opencode.exe";
     expect(() => validatePortableRuntimeApprovals(traversal)).toThrow(/plain file name/u);
@@ -711,23 +711,25 @@ describe("update portable runtime approvals", () => {
   // extractor, so it can only carry the previous value forward. That is honest when the archive
   // bytes are unchanged and a lie when they are not. These two cases pin both halves: unchanged
   // bytes still carry the tree pin forward, changed bytes fail closed here instead of at tag time.
-  const OPENCODE_ZIPS = new Map([
+  const OPENCODE_ARCHIVES = new Map([
+    ["opencode-linux-x64.tar.gz", Buffer.from("l1")],
     ["opencode-darwin-arm64.zip", storeOnlyZip([["opencode", Buffer.from("m1")]])],
     ["opencode-darwin-x64.zip", storeOnlyZip([["opencode", Buffer.from("m2")]])],
     ["opencode-windows-x64.zip", storeOnlyZip([["opencode.exe", Buffer.from("w1")]])],
   ]);
-  const ZIP_NAME_BY_TARGET = {
+  const ARCHIVE_NAME_BY_TARGET = {
+    "linux-x64": "opencode-linux-x64.tar.gz",
     "macos-arm64": "opencode-darwin-arm64.zip",
     "macos-x64": "opencode-darwin-x64.zip",
     "windows-x64": "opencode-windows-x64.zip",
   };
 
-  /** Fixture whose approved sha256 values match OPENCODE_ZIPS, i.e. a re-download of the same
+  /** Fixture whose approved sha256 values match OPENCODE_ARCHIVES, i.e. a re-download of the same
    * bytes. Without this the "updates pins" case below would be exercising the drift path. */
   function fixtureMatchingFakeArchives() {
     const approvals = approvedFixture();
     for (const [target, archive] of Object.entries(approvals.sidecarRuntimes[0].archives)) {
-      archive.sha256 = sha256Hex(OPENCODE_ZIPS.get(ZIP_NAME_BY_TARGET[target]));
+      archive.sha256 = sha256Hex(OPENCODE_ARCHIVES.get(ARCHIVE_NAME_BY_TARGET[target]));
     }
     return approvals;
   }
@@ -741,9 +743,10 @@ describe("update portable runtime approvals", () => {
       ]),
     );
     const fakeRepoRoot = fixtureRepoRoot(approvals);
-    const zipByName = OPENCODE_ZIPS;
+    const archiveByName = OPENCODE_ARCHIVES;
     const license = Buffer.from("MIT License\n");
     const shasums = [
+      `${"0".repeat(64)}  node-v23.1.0-linux-x64.tar.gz`,
       `${"1".repeat(64)}  node-v23.1.0-win-x64.zip`,
       `${"2".repeat(64)}  node-v23.1.0-darwin-arm64.tar.gz`,
       `${"3".repeat(64)}  node-v23.1.0-darwin-x64.tar.gz`,
@@ -754,7 +757,7 @@ describe("update portable runtime approvals", () => {
         ? Buffer.from(shasums)
         : String(url).endsWith("LICENSE")
           ? license
-          : zipByName.get(name);
+          : archiveByName.get(name);
       if (body === undefined) return Promise.reject(new Error(`unexpected url ${String(url)}`));
       return Promise.resolve({
         ok: true,
@@ -776,7 +779,7 @@ describe("update portable runtime approvals", () => {
     const updated = loadPortableRuntimeApprovals(fakeRepoRoot);
     expect(updated.node.archives["windows-x64"].sha256).toBe("1".repeat(64));
     expect(updated.sidecarRuntimes[0].archives["windows-x64"].sha256).toBe(
-      sha256Hex(zipByName.get("opencode-windows-x64.zip")),
+      sha256Hex(archiveByName.get("opencode-windows-x64.zip")),
     );
     expect(
       Object.fromEntries(
@@ -797,6 +800,7 @@ describe("update portable runtime approvals", () => {
     const approvals = fixtureMatchingFakeArchives();
     const fakeRepoRoot = fixtureRepoRoot(approvals);
     const drifted = new Map([
+      ["opencode-linux-x64.tar.gz", Buffer.from("materially-different-content")],
       [
         "opencode-darwin-arm64.zip",
         storeOnlyZip([["opencode", Buffer.from("materially-different-content")]]),
@@ -811,6 +815,7 @@ describe("update portable runtime approvals", () => {
       ],
     ]);
     const shasums = [
+      `${"0".repeat(64)}  node-v23.1.0-linux-x64.tar.gz`,
       `${"1".repeat(64)}  node-v23.1.0-win-x64.zip`,
       `${"2".repeat(64)}  node-v23.1.0-darwin-arm64.tar.gz`,
       `${"3".repeat(64)}  node-v23.1.0-darwin-x64.tar.gz`,

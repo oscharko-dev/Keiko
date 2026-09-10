@@ -37,11 +37,16 @@ import {
 } from "./windowsPortableAuthenticode.js";
 
 const ACTIVATION_PATH = ".portable/runtime-activation.json";
-const MACOS_RECEIPT_PATH = ".portable/runtime-qualification.json";
+const QUALIFICATION_RECEIPT_PATH = ".portable/runtime-qualification.json";
 const DIGEST = /^[a-f0-9]{64}$/u;
 const MAX_ATTESTATION_BYTES = 65_536;
 const MACOS_SYSTEM_EXTENSION_IDENTIFIER = "com.oscharko.keiko.runtime-monitor.systemextension";
-const TARGETS = new Set<UpdatePortableTarget>(["windows-x64", "macos-arm64", "macos-x64"]);
+const TARGETS = new Set<UpdatePortableTarget>([
+  "linux-x64",
+  "windows-x64",
+  "macos-arm64",
+  "macos-x64",
+]);
 
 export interface QualifiedPortableOpenCodeRuntime {
   readonly installRoot: string;
@@ -183,6 +188,7 @@ function honouredLane(
 ): PortableRuntimeLane | undefined {
   const declared = artifactDeclaredLane(activation);
   if (declared === undefined) return undefined;
+  if (target === "linux-x64" && declared !== "release-qualified") return undefined;
   if (
     declared === "evaluation-unqualified" &&
     releaseSignedInstall(root, target, input.commandRunner)
@@ -230,6 +236,10 @@ function releaseSignedInstall(
   target: UpdatePortableTarget,
   commandRunner: PortableRuntimeCommandRunner | undefined,
 ): boolean {
+  // Linux has no platform code-signing seal equivalent to Authenticode or Developer ID. Its
+  // production artifact is admitted only through the OIDC-attested release/qualification lane;
+  // consequently an artifact may never self-declare the weaker evaluation lane on Linux.
+  if (target === "linux-x64") return true;
   const signedCode = releaseSignedCodePath(root, target);
   // No signable code where a real install always has some: there is no release seal to downgrade
   // FROM, so this is not the attack this predicate guards. Discovery's own checks still apply.
@@ -403,11 +413,18 @@ const PLATFORM_ATTESTATION: PortableRuntimeAttestationPort = Object.freeze({
   }: {
     readonly resourceRoot: string;
     readonly target: UpdatePortableTarget;
-  }) =>
-    target === "windows-x64"
-      ? readWindowsAttestation(resourceRoot)
-      : readMacosAttestation(resourceRoot, target),
+  }): unknown => readPlatformAttestation(resourceRoot, target),
 });
+
+function readPlatformAttestation(resourceRoot: string, target: UpdatePortableTarget): unknown {
+  if (target === "windows-x64") return readWindowsAttestation(resourceRoot);
+  if (target === "linux-x64") return readLinuxAttestation(resourceRoot);
+  return readMacosAttestation(resourceRoot, target);
+}
+
+export function readLinuxAttestation(resourceRoot: string): unknown {
+  return readRecord(safeRealFile(join(resourceRoot, ...QUALIFICATION_RECEIPT_PATH.split("/"))));
+}
 
 export function readWindowsAttestation(
   resourceRoot: string,
@@ -477,7 +494,7 @@ export function readMacosAttestation(
   if (status.status !== 0 || status.stdout.trim() !== "active" || status.stderr !== "") {
     throw new Error("runtime-system-extension-inactive");
   }
-  return readRecord(safeRealFile(join(resourceRoot, ...MACOS_RECEIPT_PATH.split("/"))));
+  return readRecord(safeRealFile(join(resourceRoot, ...QUALIFICATION_RECEIPT_PATH.split("/"))));
 }
 
 function macosRuntimeCodePaths(resourceRoot: string): {
@@ -569,6 +586,7 @@ function isAbsentPathError(error: unknown): boolean {
 }
 
 function runtimeTarget(platform: NodeJS.Platform, arch: string): UpdatePortableTarget | undefined {
+  if (platform === "linux" && arch === "x64") return "linux-x64";
   if (platform === "win32" && arch === "x64") return "windows-x64";
   if (platform === "darwin" && arch === "arm64") return "macos-arm64";
   if (platform === "darwin" && arch === "x64") return "macos-x64";

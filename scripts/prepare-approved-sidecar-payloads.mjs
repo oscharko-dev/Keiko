@@ -211,12 +211,13 @@ export function extractApprovedExecutable(
   archivePath,
   executableName,
   destination,
-  archiveAdapter = createPortableZipAdapter(process.platform, runResolvedHostExecutable),
+  archiveAdapter,
 ) {
-  assertSafeSingleExecutableEntry(archiveAdapter.list(archivePath), executableName);
+  const adapter = archiveAdapter ?? approvedArchiveAdapter(archivePath);
+  assertSafeSingleExecutableEntry(adapter.list(archivePath), executableName);
   const extractRoot = mkdtempSync(join(tmpdir(), "keiko-sidecar-extract-"));
   try {
-    archiveAdapter.extract(archivePath, extractRoot);
+    adapter.extract(archivePath, extractRoot);
     const extracted = join(extractRoot, executableName);
     if (!existsSync(extracted) || !statSync(extracted).isFile()) {
       fail("approved archive did not produce the expected executable");
@@ -227,6 +228,35 @@ export function extractApprovedExecutable(
   } finally {
     rmSync(extractRoot, { recursive: true, force: true });
   }
+}
+
+function approvedArchiveAdapter(archivePath) {
+  return archivePath.endsWith(".tar.gz")
+    ? createPortableTarAdapter(runResolvedHostExecutable)
+    : createPortableZipAdapter(process.platform, runResolvedHostExecutable);
+}
+
+export function createPortableTarAdapter(commandRunner = runResolvedHostExecutable) {
+  return {
+    list(archivePath) {
+      const names = tarLines(commandRunner("tar", ["-tzf", archivePath]).stdout);
+      const details = tarLines(commandRunner("tar", ["-tvzf", archivePath]).stdout);
+      if (names.length !== details.length || details.some((line) => line[0] !== "-")) {
+        fail("approved tar archive must contain only regular files");
+      }
+      return names;
+    },
+    extract(archivePath, extractRoot) {
+      commandRunner("tar", ["-xzf", archivePath, "-C", extractRoot, "--no-same-owner"]);
+    },
+  };
+}
+
+function tarLines(output) {
+  return output
+    .split(/\r?\n/u)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
 }
 
 function chmodExecutable(path) {

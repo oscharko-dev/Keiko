@@ -21,6 +21,18 @@ export function portablePayloadRelativePath(root, path) {
 
 export const PORTABLE_TARGETS = Object.freeze([
   Object.freeze({
+    assetName: "keiko-linux-x64.zip",
+    nodeArchiveExtension: "tar.gz",
+    nodeArchiveTarget: "linux-x64",
+    nodeArchitecture: "x64",
+    nodePlatform: "linux",
+    platformTarget: "linux-x64",
+    primaryLauncher: "Keiko",
+    runtimeTarget: "linux-x64",
+    sidecarArchiveName: "opencode-linux-x64.tar.gz",
+    signatureKind: "github-oidc-attested",
+  }),
+  Object.freeze({
     assetName: "keiko-windows-x64.zip",
     nodeArchiveExtension: "zip",
     nodeArchiveTarget: "win-x64",
@@ -29,6 +41,7 @@ export const PORTABLE_TARGETS = Object.freeze([
     platformTarget: "windows-x64",
     primaryLauncher: "Keiko.exe",
     runtimeTarget: "win32-x64",
+    sidecarArchiveName: "opencode-windows-x64.zip",
     signatureKind: "authenticode",
   }),
   Object.freeze({
@@ -40,6 +53,7 @@ export const PORTABLE_TARGETS = Object.freeze([
     platformTarget: "macos-arm64",
     primaryLauncher: "Keiko.app",
     runtimeTarget: "darwin-arm64",
+    sidecarArchiveName: "opencode-darwin-arm64.zip",
     signatureKind: "developer-id-notarized",
   }),
   Object.freeze({
@@ -51,6 +65,7 @@ export const PORTABLE_TARGETS = Object.freeze([
     platformTarget: "macos-x64",
     primaryLauncher: "Keiko.app",
     runtimeTarget: "darwin-x64",
+    sidecarArchiveName: "opencode-darwin-x64.zip",
     signatureKind: "developer-id-notarized",
   }),
 ]);
@@ -89,6 +104,7 @@ export const PORTABLE_VERIFICATION_REASON_CODES = Object.freeze([
   "macos-developer-id-unverified",
   "macos-notarization-unverified",
   "macos-staple-unverified",
+  "github-provenance-unverified",
   "non-production-artifact",
   "non-production-unsigned-allowed",
   "staging-unverified",
@@ -385,6 +401,7 @@ function verificationCheckTemplate(target, verified) {
       timestampVerified: verified,
     };
   }
+  if (target.nodePlatform === "linux") return { provenanceVerified: verified };
   return {
     developerIdVerified: verified,
     notarizationVerified: verified,
@@ -400,15 +417,25 @@ export function createPortableVerificationChecks(platformTarget, verified = fals
 }
 
 function verificationCheckKeys(target) {
-  return target?.nodePlatform === "win32"
-    ? ["publisherChainVerified", "timestampVerified"]
-    : ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"];
+  if (target?.nodePlatform === "win32") {
+    return ["publisherChainVerified", "timestampVerified"];
+  }
+  if (target?.nodePlatform === "linux") return ["provenanceVerified"];
+  return ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"];
 }
 
 function forbiddenVerificationCheckKeys(target) {
-  return target?.nodePlatform === "win32"
-    ? ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"]
-    : ["publisherChainVerified", "timestampVerified"];
+  const all = [
+    "publisherChainVerified",
+    "timestampVerified",
+    "provenanceVerified",
+    "developerIdVerified",
+    "notarizationVerified",
+    "stapleVerified",
+    "assessmentVerified",
+  ];
+  const allowed = new Set(verificationCheckKeys(target));
+  return all.filter((key) => !allowed.has(key));
 }
 
 function validateProduct(manifest, failures) {

@@ -23,8 +23,14 @@ import {
 
 describe("update session portable contract", () => {
   it("pins portable install-mode vocabulary", () => {
-    expect(UPDATE_PORTABLE_TARGETS).toEqual(["windows-x64", "macos-arm64", "macos-x64"]);
+    expect(UPDATE_PORTABLE_TARGETS).toEqual([
+      "linux-x64",
+      "windows-x64",
+      "macos-arm64",
+      "macos-x64",
+    ]);
     expect(UPDATE_PORTABLE_TARGET_ASSET_NAMES).toEqual({
+      "linux-x64": "keiko-linux-x64.zip",
       "windows-x64": "keiko-windows-x64.zip",
       "macos-arm64": "keiko-macos-arm64.zip",
       "macos-x64": "keiko-macos-x64.zip",

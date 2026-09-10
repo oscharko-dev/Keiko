@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { URL } from "node:url";
 
-import { PORTABLE_TARGET_NAMES } from "./portable-runtime.mjs";
+import { PORTABLE_TARGET_NAMES, portableTargetByName } from "./portable-runtime.mjs";
 
 export const PORTABLE_RUNTIME_APPROVALS_FILE = "portable-runtime-approvals.json";
 export const APPROVED_NODE_ARCHIVE_HOSTS = Object.freeze(["nodejs.org", "dist.nodejs.org"]);
@@ -124,10 +124,6 @@ function validateArchiveEntry(entry, allowedHosts, context, sidecar) {
   };
 }
 
-function darwinArchiveSlug(target) {
-  return target === "macos-arm64" ? "darwin-arm64" : "darwin-x64";
-}
-
 function validateArchives(record, allowedHosts, context, sidecar = false) {
   exactKeys(record, PORTABLE_TARGET_NAMES, context);
   const result = {};
@@ -153,8 +149,8 @@ function validateNodeSection(node) {
     `${context}.archives`,
   );
   for (const target of PORTABLE_TARGET_NAMES) {
-    const expectedName =
-      target === "windows-x64" ? "win-x64.zip" : `${darwinArchiveSlug(target)}.tar.gz`;
+    const portable = portableTargetByName(target);
+    const expectedName = `${portable.nodeArchiveTarget}.${portable.nodeArchiveExtension}`;
     const expectedUrl = `https://nodejs.org/dist/v${version}/node-v${version}-${expectedName}`;
     validateLiteral(archives[target].url, expectedUrl, `${context}.archives.${target}.url`);
   }
@@ -278,10 +274,7 @@ function validateLicense(license, context) {
 function validateSidecarArchives(rawArchives, context) {
   const archives = validateArchives(rawArchives, APPROVED_SIDECAR_ARCHIVE_HOSTS, context, true);
   for (const target of PORTABLE_TARGET_NAMES) {
-    const asset =
-      target === "windows-x64"
-        ? "opencode-windows-x64.zip"
-        : `opencode-${darwinArchiveSlug(target)}.zip`;
+    const asset = portableTargetByName(target).sidecarArchiveName;
     validateLiteral(
       archives[target].url,
       `https://github.com/anomalyco/opencode/releases/download/${OPENCODE_PIN.tag}/${asset}`,
