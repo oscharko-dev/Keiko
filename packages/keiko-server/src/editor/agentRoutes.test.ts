@@ -63,6 +63,7 @@ import {
 import type { GitProcessOptions, GitProcessResult } from "@oscharko-dev/keiko-git";
 import { forwardWorkspaceFs, nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { PathDeniedError } from "@oscharko-dev/keiko-workspace";
+import { EDITOR_AGENT_NAVIGATION_DOCUMENT_MAX_BYTES as NAVIGATION_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { STREAMING, type RouteContext } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
@@ -4220,6 +4221,43 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
       expect(() =>
         serverResolvedDocumentText(undefined, fixture.root, "src/a.ts", undefined),
       ).toThrow(PathDeniedError);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  // Empty, hostile and boundary inputs on the same managed port (AGENTS.md §10; CodeRabbit,
+  // PR #3452). Supplied text is returned verbatim and reads nothing — including the empty string,
+  // which must not fall through to a server-side read; a path that escapes the worktree is refused
+  // by the port rather than read; and the navigation byte ceiling is enforced AT the limit and above
+  // it, so one oversized document cannot be pulled into a navigation response.
+  it("holds empty, escaping and oversized navigateSymbol documents to the managed port's rules", () => {
+    const fixture = createManagedAgentWorkspaceFixture();
+    try {
+      const deps = {
+        workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome =>
+          fixture.resolveAccess(requestedRoot),
+      };
+      writeWorkspaceFile(fixture.root, "src/a.ts", "export const a = 1;\n");
+      writeWorkspaceFile(fixture.root, "src/at-limit.ts", "x".repeat(NAVIGATION_MAX_BYTES));
+      writeWorkspaceFile(fixture.root, "src/over-limit.ts", "x".repeat(NAVIGATION_MAX_BYTES + 1));
+
+      // Empty supplied text is still supplied text: returned as-is, no read, no throw.
+      expect(serverResolvedDocumentText(deps, fixture.root, "src/a.ts", "")).toBe("");
+      expect(serverResolvedDocumentText(deps, fixture.root, "does-not-exist.ts", "")).toBe("");
+
+      // Hostile paths: an escape, an absolute path, and a traversal that lands back inside.
+      for (const hostile of ["../escape.ts", "/etc/passwd", "src/../../escape.ts"]) {
+        expect(() => serverResolvedDocumentText(deps, fixture.root, hostile, undefined)).toThrow();
+      }
+
+      // Boundary: exactly at the ceiling reads; one byte over is refused.
+      expect(
+        serverResolvedDocumentText(deps, fixture.root, "src/at-limit.ts", undefined),
+      ).toHaveLength(NAVIGATION_MAX_BYTES);
+      expect(() =>
+        serverResolvedDocumentText(deps, fixture.root, "src/over-limit.ts", undefined),
+      ).toThrow();
     } finally {
       fixture.dispose();
     }

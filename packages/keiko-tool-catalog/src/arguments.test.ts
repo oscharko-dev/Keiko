@@ -74,6 +74,54 @@ describe("catalog invocation argument qualification", () => {
       expect(JSON.stringify((failure as ToolCatalogError).shape)).not.toContain("root");
     },
   );
+  // PR #3452 review (CodeRabbit): every case above leaves `droppedPathCount` at 0, so the cap itself
+  // was unpinned. A schema with more mismatching properties than the report cap must keep BOTH lists
+  // bounded, count exactly what it left out, and still quote no argument value.
+  it("bounds both mismatch lists at the cap and counts the paths it left out", () => {
+    const width = 40;
+    const properties = Object.fromEntries(
+      Array.from({ length: width }, (_, index) => [
+        `p${String(index).padStart(2, "0")}`,
+        { type: "string", minLength: 1, maxLength: 8 },
+      ]),
+    );
+    const descriptor = createToolDescriptor({
+      ...declaration(),
+      inputSchema: {
+        type: "object",
+        properties,
+        required: Object.keys(properties),
+        additionalProperties: false,
+      },
+    });
+    const secret = "SENTINEL_VALUE";
+    // Half the declared properties are present but too long (invalid paths); half are absent
+    // (missing required). Both lists overflow the cap of 16 by four entries each.
+    const input = Object.fromEntries(
+      Array.from({ length: width / 2 }, (_, index) => [
+        `p${String(index).padStart(2, "0")}`,
+        secret,
+      ]),
+    );
+
+    const failure = ((): unknown => {
+      try {
+        validateToolArguments(input, descriptor);
+        return undefined;
+      } catch (error) {
+        return error;
+      }
+    })();
+
+    expect(failure).toBeInstanceOf(ToolCatalogError);
+    const shape = (failure as ToolCatalogError).shape;
+    expect(shape?.invalidPaths).toHaveLength(16);
+    expect(shape?.missingRequired).toHaveLength(16);
+    expect(shape?.droppedPathCount).toBe(width - 32);
+    expect(shape?.unexpectedPropertyCount).toBe(0);
+    expect(JSON.stringify(shape)).not.toContain(secret);
+  });
+
   it("rejects untrusted descriptor identity and byte-bound violations", () => {
     const { descriptor } = fixture();
     expect(() =>

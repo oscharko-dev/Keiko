@@ -1,7 +1,9 @@
-# Public API surface — 0.2.15 baseline
+# Public API surface — 0.3.17 baseline
 
 This document summarizes the current approved customer-facing surface for
-`@oscharko-dev/keiko`. It is current-state only.
+`@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
+this describes, so a reader can tell at a glance whether it still applies. The stability notes below
+keep every earlier release reason, including the compatibility-only symbols published at 0.2.15.
 
 ## Root product package — `@oscharko-dev/keiko`
 

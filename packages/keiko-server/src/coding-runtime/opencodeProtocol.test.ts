@@ -6,6 +6,7 @@ import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/gover
 
 import {
   OPENCODE_APPROVED_ENDPOINTS,
+  OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS,
   OPENCODE_HISTORY_RESPONSE_MAX_BYTES,
   OPENCODE_HISTORY_TOOL_PART_MAX_BYTES,
   createOpenCodeSseDecoder,
@@ -900,18 +901,27 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
     }
   });
 
+  // The properties the budgets must satisfy, not the arithmetic that produces them. Restating the
+  // formula here (as this test first did) passes for any edit that changes both sides together, so
+  // it pins nothing (AGENTS.md §7; CodeRabbit, PR #3452).
   it("derives the history budgets from the catalog ceilings, never from a restated constant", () => {
-    // Metadata budget plus two argument bodies: the largest part one call can leave.
-    expect(OPENCODE_HISTORY_TOOL_PART_MAX_BYTES).toBe(
-      64 * 1024 + 2 * TOOL_CATALOG_LIMITS.maxArgumentBytes,
+    // One governed call can leave BOTH an input and an output body at the catalog's own ceiling; a
+    // part budget under that would refuse a legal call's own record.
+    expect(OPENCODE_HISTORY_TOOL_PART_MAX_BYTES).toBeGreaterThan(
+      2 * TOOL_CATALOG_LIMITS.maxArgumentBytes,
     );
-    // Eight catch-up calls of three argument-bearing rows each, above the ordinary 1 MiB of rows.
-    expect(OPENCODE_HISTORY_RESPONSE_MAX_BYTES).toBe(
-      1024 * 1024 + 8 * (3 * 64 * 1024 + 4 * TOOL_CATALOG_LIMITS.maxArgumentBytes),
+    // A catch-up pull must hold the ordinary metadata rows AND every call it is allowed to catch up
+    // on, each with at least one argument body.
+    expect(OPENCODE_HISTORY_RESPONSE_MAX_BYTES).toBeGreaterThan(
+      1024 * 1024 + OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS * TOOL_CATALOG_LIMITS.maxArgumentBytes,
     );
+    // And it must still hold several whole parts, so one large call cannot exhaust a pull.
     expect(OPENCODE_HISTORY_RESPONSE_MAX_BYTES).toBeGreaterThan(
       3 * OPENCODE_HISTORY_TOOL_PART_MAX_BYTES,
     );
+    // Every budget is derived from the catalog ceiling: a ceiling of zero would leave the metadata
+    // allowance alone, which is what makes these strict inequalities meaningful rather than trivia.
+    expect(OPENCODE_HISTORY_CATCH_UP_TOOL_CALLS).toBeGreaterThan(0);
   });
 
   it("re-bounds tool arguments by the catalog ceilings and names the refusing gate body-free", () => {
