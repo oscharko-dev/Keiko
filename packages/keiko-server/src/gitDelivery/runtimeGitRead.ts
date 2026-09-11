@@ -24,7 +24,14 @@ import {
   readGitBlobText,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { parseGitEditorUnifiedDiff } from "../gitDiffParser.js";
-import { lineChangeCounts, lineDiffSide, unifiedDiffHunks } from "./lineDiff.js";
+import {
+  lineChangeCounts,
+  lineDiffSide,
+  searchLineChanges,
+  unifiedDiffHunks,
+  type LineChangeBlock,
+  type LineDiffSide,
+} from "./lineDiff.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
@@ -61,6 +68,32 @@ export function logDeniedPathExclusion(
     correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
     extra: { deniedPathCount },
   });
+}
+/** Where a diff search that stopped at a bound is recorded, and under which operation. */
+interface DiffSearchLog {
+  readonly seams: GitDeliveryTerminationLogSeam;
+  readonly correlationId: string | undefined;
+}
+/**
+ * A diff search that stopped at a bound shows its region as one replaced block: correct, never
+ * minimal. The line names the bound and the sides' line counts, so a whole-file hunk in the editor or
+ * a whole-file count in a stage review is reconstructable from the log alone (AGENTS.md §8).
+ */
+function searchLoggedLineChanges(
+  log: DiffSearchLog,
+  before: LineDiffSide,
+  after: LineDiffSide,
+): readonly LineChangeBlock[] {
+  const search = searchLineChanges(before, after);
+  if (search.bound !== undefined) {
+    (log.seams.activityLog ?? processServerLogSink()).write({
+      category: "process",
+      op: "git.runtime-diff.search-bounded",
+      correlationId: log.correlationId ?? UNKNOWN_CORRELATION_ID,
+      extra: { bound: search.bound, oldLines: before.lines.length, newLines: after.lines.length },
+    });
+  }
+  return search.blocks;
 }
 export function runtimeGitReadDeps(
   context: VerifiedCommitRunContext,
@@ -101,11 +134,13 @@ interface DiffSides {
 // The patch the editor's diff parser reads: Git's own headers for the change, then the hunks of the
 // in-process line diff of the two raw sides, so a one-line edit is one hunk inside its context and
 // not a whole-file replacement (CodeRabbit review, PR #3452; lineDiff.ts says why not `git diff`).
-function unifiedPatch(sides: DiffSides): string {
+function unifiedPatch(sides: DiffSides, log: DiffSearchLog): string {
   const a = JSON.stringify(`a/${sides.path}`);
   const b = JSON.stringify(`b/${sides.path}`);
   const headers = patchHeaders(sides, a, b);
-  const hunks = unifiedDiffHunks(lineDiffSide(sides.before), lineDiffSide(sides.after));
+  const before = lineDiffSide(sides.before);
+  const after = lineDiffSide(sides.after);
+  const hunks = unifiedDiffHunks(before, after, searchLoggedLineChanges(log, before, after));
   if (hunks.length === 0) return `${headers.join("\n")}\n`;
   return [
     ...headers,
@@ -125,7 +160,11 @@ function patchHeaders(sides: DiffSides, a: string, b: string): readonly string[]
       : []),
   ];
 }
-function diffFile(sides: DiffSides, scope: GitEditorDiffScope): GitEditorDiffFile | undefined {
+function diffFile(
+  sides: DiffSides,
+  scope: GitEditorDiffScope,
+  log: DiffSearchLog,
+): GitEditorDiffFile | undefined {
   if ((sides.added && sides.deleted) || sides.same) return undefined;
   if (sides.binary)
     return {
@@ -138,7 +177,7 @@ function diffFile(sides: DiffSides, scope: GitEditorDiffScope): GitEditorDiffFil
       removedLines: 0,
       truncated: false,
     };
-  return parseGitEditorUnifiedDiff(unifiedPatch(sides), {
+  return parseGitEditorUnifiedDiff(unifiedPatch(sides, log), {
     scope,
     selectedRootPrefix: "",
     processTruncated: false,
@@ -264,7 +303,10 @@ async function readSelectedDiffFiles(
   for (const path of paths) {
     if (!context.stillAuthorized() || context.signal?.aborted === true)
       throw new Error("git-runtime-authority-denied");
-    const file = diffFile(await readSides(context, execution, path, scope), scope);
+    const file = diffFile(await readSides(context, execution, path, scope), scope, {
+      seams: execution,
+      correlationId: context.correlationId,
+    });
     if (file === undefined) continue;
     truncated ||= file.truncated;
     totalBytes += Buffer.byteLength(JSON.stringify(file));
@@ -337,7 +379,10 @@ export async function reviewStageSelection(
       throw new Error("git-runtime-authority-denied");
     const sides = await readSides(context, execution, change.path, "unstaged");
     if (sides.binary || sides.same) continue;
-    const counts = lineChangeCounts(lineDiffSide(sides.before), lineDiffSide(sides.after));
+    const before = lineDiffSide(sides.before);
+    const after = lineDiffSide(sides.after);
+    const log = { seams: execution, correlationId: context.correlationId };
+    const counts = lineChangeCounts(before, after, searchLoggedLineChanges(log, before, after));
     addedLines += counts.added;
     deletedLines += counts.deleted;
   }

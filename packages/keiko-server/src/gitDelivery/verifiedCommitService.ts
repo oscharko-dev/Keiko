@@ -27,7 +27,6 @@ import {
 } from "./approvalStore.js";
 import { executeGovernedMutation, readStagedConflictMarkerFileCountFor } from "./execution.js";
 import {
-  readVerifiedCommitBlockingPaths,
   readVerifiedCommitFacts,
   sameVerifiedCommitFacts,
   verifiedCommitMessageDigest,
@@ -41,6 +40,7 @@ import type {
   VerifiedCommitRunContext,
   VerifiedCommitService,
   VerifiedCommitServiceOptions,
+  VerifiedCommitBlockingPaths,
 } from "./verifiedCommitTypes.js";
 
 const TTL_MS = 5 * 60 * 1000;
@@ -207,6 +207,7 @@ class VerifiedCommitController implements VerifiedCommitService {
   }
 
   public async beginVerification(): Promise<VerificationTicketOutcome> {
+    // An unclean read always carries its paths; the empty set only types the impossible absence.
     this.invalidate();
     const context = this.context();
     if (context === undefined) return { kind: "unavailable" };
@@ -214,7 +215,7 @@ class VerifiedCommitController implements VerifiedCommitService {
     if (!facts.clean) {
       // Named, not merely counted, for the model: the blocking paths travel on the tool result,
       // only their counts on this line (run 16, 2026-09-10).
-      const blocking = await readVerifiedCommitBlockingPaths(context, this.options.execution ?? {});
+      const blocking = facts.blocking ?? NO_BLOCKING_PATHS;
       this.log(context, "verification-unavailable", {
         reason: "candidate-not-staged",
         unstagedCount: blocking.unstagedCount,
@@ -767,6 +768,13 @@ class VerifiedCommitController implements VerifiedCommitService {
     return recovered;
   }
 }
+
+const NO_BLOCKING_PATHS: VerifiedCommitBlockingPaths = Object.freeze({
+  unstagedCount: 0,
+  untrackedCount: 0,
+  unstaged: [],
+  untracked: [],
+});
 
 export function createVerifiedCommitService(
   options: VerifiedCommitServiceOptions,

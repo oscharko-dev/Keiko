@@ -16,6 +16,7 @@ import {
   resolveDraftDeliveryTemplate,
   DRAFT_DELIVERY_TEMPLATE_MAX_BYTES,
   DRAFT_DELIVERY_TEMPLATE_DIRECTORY_MAX_ENTRIES,
+  DRAFT_DELIVERY_RELATED_ISSUES_MAX,
 } from "./draftDeliveryTemplate.js";
 
 // Secret-shaped fixture assembled at runtime: the validator must refuse this exact shape, but the
@@ -427,4 +428,76 @@ describe("bounded governed template reads", () => {
     expect(encoded).toContain("3387-template-fixture");
     expect(encoded).toContain("bodyDigest");
   });
+});
+
+// Zero-coverage finding on PR #3452: the related-issues bound, its validation, its rendered line
+// and its logged count had no tests at all.
+describe("related-issue line, bound and logged count", () => {
+  it("renders the related-issues line in order and no other issues text", async () => {
+    const f = await fixture();
+    const result = resolveDraftDeliveryTemplate({ ...f.input, relatedIssueNumbers: [2, 3] });
+    expect(result).toMatchObject({
+      status: "ready",
+      body: `Closes #42\n\nRelated issues: #2, #3\n\n${framePrDescriptionRegion("")}`,
+    });
+  });
+
+  it("renders no related-issues line for an empty list and logs a zero count", async () => {
+    const f = await fixture();
+    const result = resolveDraftDeliveryTemplate({ ...f.input, relatedIssueNumbers: [] });
+    expect(result).toMatchObject({
+      status: "ready",
+      body: `Closes #42\n\n${framePrDescriptionRegion("")}`,
+    });
+    expect(f.log).toMatchObject([
+      { op: "git.draft-template", correlationId, extra: { state: "ready", relatedIssueCount: 0 } },
+    ]);
+  });
+
+  it("logs the related-issue count on the emitted git.draft-template line", async () => {
+    const f = await fixture();
+    resolveDraftDeliveryTemplate({ ...f.input, relatedIssueNumbers: [2, 3, 4] });
+    expect(f.log).toMatchObject([
+      { op: "git.draft-template", correlationId, extra: { state: "ready", relatedIssueCount: 3 } },
+    ]);
+  });
+
+  it("rejects more related issues than DRAFT_DELIVERY_RELATED_ISSUES_MAX", async () => {
+    const f = await fixture();
+    const relatedIssueNumbers = Array.from(
+      { length: DRAFT_DELIVERY_RELATED_ISSUES_MAX + 1 },
+      (_, index) => index + 100,
+    );
+    expect(resolveDraftDeliveryTemplate({ ...f.input, relatedIssueNumbers })).toEqual({
+      status: "blocked",
+      reason: "invalid-issue-binding",
+    });
+  });
+
+  it("rejects a duplicate related issue number", async () => {
+    const f = await fixture();
+    expect(resolveDraftDeliveryTemplate({ ...f.input, relatedIssueNumbers: [7, 7] })).toEqual({
+      status: "blocked",
+      reason: "invalid-issue-binding",
+    });
+  });
+
+  it("rejects a related issue number that self-references the bound issue", async () => {
+    const f = await fixture();
+    expect(resolveDraftDeliveryTemplate({ ...f.input, relatedIssueNumbers: [42] })).toEqual({
+      status: "blocked",
+      reason: "invalid-issue-binding",
+    });
+  });
+
+  it.each([0, -1, 1.5, Number.NaN])(
+    "rejects a non-positive or non-integer related issue number: %s",
+    async (invalid) => {
+      const f = await fixture();
+      expect(resolveDraftDeliveryTemplate({ ...f.input, relatedIssueNumbers: [invalid] })).toEqual({
+        status: "blocked",
+        reason: "invalid-issue-binding",
+      });
+    },
+  );
 });

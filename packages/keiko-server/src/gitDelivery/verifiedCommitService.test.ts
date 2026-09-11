@@ -4,7 +4,12 @@ import {
   runtimeGitDiff,
   runtimeGitStatus,
 } from "./runtimeGitRead.js";
+import {
+  readGitRawChanges,
+  readGitRawWorktreeSnapshot,
+} from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { readVerifiedCommitFacts } from "./verifiedCommitFacts.js";
+import { LINE_DIFF_MAX_EDIT_DISTANCE } from "./lineDiff.js";
 import { redactLogFields } from "../observability/log-redaction.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { GIT_STAGE_FILE_MAX_BYTES } from "@oscharko-dev/keiko-workspace/internal/git-index";
@@ -64,6 +69,18 @@ vi.mock("../gitChangeSnapshotService.js", () => ({
 vi.mock("./execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./execution.js")>();
   return { ...actual, executeGovernedMutation: vi.fn(actual.executeGovernedMutation) };
+});
+// Counted, never replaced: every test reads real Git through the originals, and the single-read pin
+// below can assert how many raw reads a refusal took. Both public entry points are counted, because
+// the snapshot reader performs its raw read inside keiko-tools where no mock can see it.
+vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("@oscharko-dev/keiko-tools/internal/git-mutation")>();
+  return {
+    ...actual,
+    readGitRawChanges: vi.fn(actual.readGitRawChanges),
+    readGitRawWorktreeSnapshot: vi.fn(actual.readGitRawWorktreeSnapshot),
+  };
 });
 let root: string;
 let db: DatabaseSync;
@@ -428,6 +445,29 @@ describe("verified Code-task commit service", () => {
   // Coding Workbench run 16 (2026-09-10): the refusal named no path, and the model — which had
   // staged every file it wrote — could not find the lockfile the dependency install had created. The
   // outcome names the blocking paths for the model; the activity line keeps counts only.
+  // Review finding on #3452: the blocking paths came from a SECOND raw read taken after the facts
+  // read that produced the refusal, with no cross-check, so a tree touched in between could hand the
+  // model paths that contradict the refusal they ride on. Facts and paths now come from one read.
+  it("names the blocking paths from the same raw read that refused the candidate", async () => {
+    writeFileSync(join(root, "code.js"), "export const value = 3;\n");
+    writeFileSync(join(root, "package-lock.json"), "{}\n");
+    const rawReads = vi.mocked(readGitRawChanges);
+    const snapshotReads = vi.mocked(readGitRawWorktreeSnapshot);
+    rawReads.mockClear();
+    snapshotReads.mockClear();
+
+    expect(await service.beginVerification()).toEqual({
+      kind: "refused",
+      reason: "candidate-not-staged",
+      blocking: {
+        unstagedCount: 1,
+        untrackedCount: 1,
+        unstaged: ["code.js"],
+        untracked: ["package-lock.json"],
+      },
+    });
+    expect(rawReads.mock.calls.length + snapshotReads.mock.calls.length).toBe(1);
+  });
   it("names the paths that keep an unclean candidate from commit proof and logs only their counts", async () => {
     writeFileSync(join(root, "code.js"), "export const value = 3;\n");
     writeFileSync(join(root, "package-lock.json"), "{}\n");
@@ -1312,6 +1352,44 @@ describe("productive runtime status/diff/stage lane", () => {
       expect.objectContaining({ path: "context.js", addedLines: 1, removedLines: 1 }),
     ]);
     expect(staged.files[0]?.hunks).toHaveLength(1);
+  });
+  // A diff search that stops at a bound shows its region as one replaced block: correct, not minimal.
+  // The log names the bound and the sides' sizes, so a whole-file hunk or count is reconstructable
+  // from the log alone (AGENTS.md §8).
+  it("logs a diff search that stopped at its bound, for the editor diff and the stage review", async () => {
+    const count = LINE_DIFF_MAX_EDIT_DISTANCE + 100;
+    const lines = Array.from(
+      { length: count },
+      (_, index) => `export const v${String(index)} = 1;`,
+    );
+    writeFileSync(join(root, "bounded.js"), `${lines.join("\n")}\n`);
+    git(["add", "bounded.js"]);
+    git(["commit", "-qm", "bounded"]);
+    writeFileSync(
+      join(root, "bounded.js"),
+      `${lines.map((line) => line.replace("1;", "2;")).join("\n")}\n`,
+    );
+    const execution = options.execution ?? {};
+    events.length = 0;
+
+    await runtimeGitDiff(context(), execution, "unstaged", ["bounded.js"]);
+    const selection = await admitStageSelection(context(), execution, ["bounded.js"]);
+    await expect(reviewStageSelection(context(), execution, selection ?? [])).resolves.toEqual({
+      fileCount: 1,
+      addedLines: count,
+      deletedLines: count,
+    });
+
+    const line = {
+      category: "process",
+      op: "git.runtime-diff.search-bounded",
+      correlationId: "verified-commit-test",
+      extra: { bound: "distance", oldLines: count, newLines: count },
+    };
+    expect(events.filter((event) => event.op === line.op)).toEqual([
+      expect.objectContaining(line),
+      expect.objectContaining(line),
+    ]);
   });
   it("expands a directory diff through bounded Git-owned changed paths", async () => {
     mkdirSync(join(root, "nested"));

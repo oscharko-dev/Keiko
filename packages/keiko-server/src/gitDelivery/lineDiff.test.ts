@@ -3,6 +3,7 @@ import {
   lineChangeBlocks,
   lineChangeCounts,
   lineDiffSide,
+  searchLineChanges,
   unifiedDiffHunks,
   type LineChangeBlock,
   type LineDiffSide,
@@ -57,6 +58,16 @@ function generated(seed: number, length: number): string[] {
     state = (state * 1_103_515_245 + 12_345) % 2_147_483_648;
     return "abc"[state % 3] ?? "a";
   });
+}
+
+// (x^run y)^blocks against (x^run z)^blocks: every diagonal near the path holds long runs of
+// matches, the shape that drives Myers' search towards its O((N + M) * D) worst case.
+function periodicSide(separator: string, run: number, blocks: number): LineDiffSide {
+  const lines: string[] = [];
+  for (let block = 0; block < blocks; block += 1) {
+    lines.push(...Array.from({ length: run }, () => "x"), separator);
+  }
+  return { lines, missingFinalNewline: false };
 }
 
 describe("lineChangeBlocks", () => {
@@ -123,9 +134,39 @@ describe("lineChangeBlocks", () => {
     ]);
     expect(lineChangeBlocks(side(before), side(after))).toHaveLength(3);
   });
+
+  it("reports the region as one block once the search exhausts its work budget", () => {
+    // The distance bound alone does not bound Myers' work, which grows with (N + M) * D
+    // (CodeRabbit review, PR #3452). Small, this shape keeps its minimal script; at millions of
+    // lines within the distance bound, the search stops at its budget and reports the region.
+    expect(lineChangeBlocks(periodicSide("y", 10, 20), periodicSide("z", 10, 20))).toHaveLength(20);
+    const before = periodicSide("y", 8_000, 400);
+    const after = periodicSide("z", 8_000, 400);
+    expect(searchLineChanges(before, after)).toEqual({
+      blocks: [
+        {
+          oldStart: 8_000,
+          oldEnd: before.lines.length,
+          newStart: 8_000,
+          newEnd: after.lines.length,
+        },
+      ],
+      bound: "work",
+    });
+  });
 });
 
 describe("unifiedDiffHunks", () => {
+  it("renders a region replaced wholesale, however many lines it spans", () => {
+    // A fallback block can hold every line of a file near the reader's byte limit. Its lines must
+    // never travel as call arguments, which overflow the stack past a few hundred thousand.
+    const before = side(Array.from({ length: 300_000 }, (_, index) => `old ${String(index)}`));
+    const after = side(Array.from({ length: 300_000 }, (_, index) => `new ${String(index)}`));
+    const hunks = unifiedDiffHunks(before, after);
+    expect(hunks).toHaveLength(600_001);
+    expect(hunks[0]).toBe("@@ -1,300000 +1,300000 @@");
+  });
+
   it("shares one hunk between edits whose context touches and splits distant ones", () => {
     const before = numbered(30);
     const near = [...before];

@@ -1,6 +1,7 @@
 import {
+  GitRawWorktreeReadError,
   readGitRawChanges,
-  readGitRawWorktreeSnapshot,
+  readGitRemoteAliases,
   readGitRevision,
   gitCommitMessageDigest,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
@@ -13,15 +14,27 @@ import {
   type VerifiedCommitFacts,
   type VerifiedCommitRunContext,
 } from "./verifiedCommitTypes.js";
-import type { GitWorktreeSnapshot } from "@oscharko-dev/keiko-tools";
+type RawChangedFiles = Awaited<ReturnType<typeof readGitRawChanges>>["changes"];
 
-function cleanCandidate(context: VerifiedCommitRunContext, snapshot: GitWorktreeSnapshot): boolean {
+function cleanCandidate(context: VerifiedCommitRunContext, changes: RawChangedFiles): boolean {
   return (
     context.buffersClean() &&
-    snapshot.unstagedFileCount === 0 &&
-    snapshot.untrackedFileCount === 0 &&
+    !changes.some((file) => file.unstaged || file.untracked) &&
     context.stillAuthorized()
   );
+}
+
+// The paths that keep the candidate from being clean. The two lists are cut at
+// VERIFIED_COMMIT_BLOCKING_PATHS_MAX; the counts stay exact.
+function blockingPathsOf(changes: RawChangedFiles): VerifiedCommitBlockingPaths {
+  const unstaged = changes.filter((file) => file.unstaged && !file.untracked);
+  const untracked = changes.filter((file) => file.untracked);
+  return {
+    unstagedCount: unstaged.length,
+    untrackedCount: untracked.length,
+    unstaged: unstaged.slice(0, VERIFIED_COMMIT_BLOCKING_PATHS_MAX).map((file) => file.path),
+    untracked: untracked.slice(0, VERIFIED_COMMIT_BLOCKING_PATHS_MAX).map((file) => file.path),
+  };
 }
 
 export function verifiedCommitMessageDigest(message: string): string {
@@ -39,50 +52,29 @@ export async function readVerifiedCommitFacts(
     signal: context.signal,
     onTerminated: gitDeliveryTerminationHandler(seams, context.correlationId),
   };
-  const snapshot = await readGitRawWorktreeSnapshot(deps);
-  logDeniedPathExclusion(seams, context.correlationId, snapshot.deniedPathCount);
+  // ONE raw read supplies the facts AND an unclean candidate's blocking paths, so the paths can never
+  // contradict the refusal they ride on. They used to come from a second read taken after this one,
+  // with no cross-check (review finding on PR #3452).
+  const raw = await readGitRawChanges(deps);
+  if (raw.truncated) throw new GitRawWorktreeReadError("git-raw-snapshot-incomplete");
+  logDeniedPathExclusion(seams, context.correlationId, raw.deniedPathCount);
   const baseSha = await readGitRevision(deps, context.baseRef);
-  if (
-    snapshot.headSha === undefined ||
-    snapshot.stagedTreeDigest === undefined ||
-    snapshot.currentBranchName !== context.headRef
-  )
-    throw new Error("verified-commit-repository-drift");
+  if (raw.branch !== context.headRef) throw new Error("verified-commit-repository-drift");
   const { digest: repositoryDigest } = await readVerifiedRepositoryIdentity(
     deps,
     context.workspaceDigest,
-    snapshot.remoteAliases,
+    await readGitRemoteAliases(deps),
   );
   if (repositoryDigest !== context.repositoryDigest)
     throw new Error("verified-commit-repository-drift");
+  const clean = cleanCandidate(context, raw.changes);
   return {
-    headSha: snapshot.headSha,
+    headSha: raw.headSha,
     baseSha,
-    stagedTreeDigest: snapshot.stagedTreeDigest,
+    stagedTreeDigest: raw.stagedTreeDigest,
     repositoryDigest,
-    clean: cleanCandidate(context, snapshot),
-  };
-}
-
-// The paths that keep the candidate from being clean, read from the same raw change list the
-// snapshot's counts come from — only on the refusal path, so the proof path pays nothing. The two
-// lists are cut at VERIFIED_COMMIT_BLOCKING_PATHS_MAX; the counts stay exact.
-export async function readVerifiedCommitBlockingPaths(
-  context: VerifiedCommitRunContext,
-  seams: GitDeliveryExecutionSeams,
-): Promise<VerifiedCommitBlockingPaths> {
-  const raw = await readGitRawChanges({
-    workspace: context.workspace,
-    signal: context.signal,
-    onTerminated: gitDeliveryTerminationHandler(seams, context.correlationId),
-  });
-  const unstaged = raw.changes.filter((file) => file.unstaged && !file.untracked);
-  const untracked = raw.changes.filter((file) => file.untracked);
-  return {
-    unstagedCount: unstaged.length,
-    untrackedCount: untracked.length,
-    unstaged: unstaged.slice(0, VERIFIED_COMMIT_BLOCKING_PATHS_MAX).map((file) => file.path),
-    untracked: untracked.slice(0, VERIFIED_COMMIT_BLOCKING_PATHS_MAX).map((file) => file.path),
+    clean,
+    ...(clean ? {} : { blocking: blockingPathsOf(raw.changes) }),
   };
 }
 

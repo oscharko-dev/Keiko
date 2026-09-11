@@ -25,6 +25,7 @@ import {
 import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/server-log.js";
+import { MAX_LINKED_ISSUES } from "../coding-context/codingRuntimeIssueIntake.js";
 
 // Three fixed GitHub default locations, no recursive enumeration or model-selected template.
 // One sentinel entry makes discovery overflow explicit instead of selecting an arbitrary prefix.
@@ -85,7 +86,10 @@ function validateAuthoredMetadata(text: string): void {
   if (hasIssueClosingDirective(text)) throw new TemplateResolutionError("issue-directive");
 }
 
-export const DRAFT_DELIVERY_RELATED_ISSUES_MAX = 8;
+// Single source of truth for the bound: the intake's `MAX_LINKED_ISSUES` (the epic-children read at
+// `coding-context/codingRuntimeIssueIntake.ts`) and this template's related-issue line share the
+// exact same number, so the two can never drift apart (zero-test-coverage finding on PR #3452).
+export const DRAFT_DELIVERY_RELATED_ISSUES_MAX = MAX_LINKED_ISSUES;
 
 function validRelatedIssues(input: DraftDeliveryTemplateInput): boolean {
   const related = input.relatedIssueNumbers ?? [];

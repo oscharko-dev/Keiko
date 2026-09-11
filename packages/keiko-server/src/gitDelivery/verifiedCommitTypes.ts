@@ -37,6 +37,8 @@ export interface VerifiedCommitFacts {
   readonly stagedTreeDigest: string;
   readonly repositoryDigest: string;
   readonly clean: boolean;
+  /** An unclean candidate's blocking paths, from the same raw read as every other fact here. */
+  readonly blocking?: VerifiedCommitBlockingPaths | undefined;
 }
 
 export interface VerifiedCommitProposal {
