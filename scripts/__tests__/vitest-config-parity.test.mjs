@@ -83,6 +83,11 @@ describe("vitest config timeout parity (GEN-TEST-FLAKE-001)", () => {
       `--config ${JUDGING_COVERAGE_CONFIG}`,
     );
   });
+
+  it("keeps generated assets out of the LCOV report Sonar cannot resolve", async () => {
+    const coverage = await loadConfig(JUDGING_COVERAGE_CONFIG);
+    expect(coverage.test.coverage.exclude).toContain("**/*.generated.*");
+  });
 });
 
 // KEIKO-0251: the root suite's `include` list collected zero *.test.tsx files while the package
