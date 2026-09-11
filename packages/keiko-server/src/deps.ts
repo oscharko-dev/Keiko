@@ -4874,7 +4874,7 @@ export async function disposeRuntimeServicesRecorded(
     // The whole body-free description (class, code, dist-anchored frames, cause chain): while an
     // earlier failure propagates, this line is the only evidence of why the cleanup itself failed
     // (owner review, PR #3452).
-    cleanup = { cleanup: "faulted", ...describeError(error) };
+    cleanup = { cleanup: "faulted", ...teardownFaultDescription(error) };
   } finally {
     record(cleanup);
   }
@@ -4884,20 +4884,39 @@ export async function disposeRuntimeServicesRecorded(
     : new Error("runtime-services-dispose-failed", { cause: failure });
 }
 
+// Two or more teardown steps failed: every failure is kept, in step order, the first one leading.
+export class TeardownFaults extends AggregateError {
+  public override readonly name = "TeardownFaults";
+}
+
+// A teardown that failed in several steps is described by its first failure, with the count and
+// every failed step's class in step order, so no fault is dropped from the completion line (owner
+// review, PR #3452). A single failure keeps its full description, as before.
+function teardownFaultDescription(error: unknown): Readonly<Record<string, unknown>> {
+  const failures: readonly unknown[] = error instanceof TeardownFaults ? error.errors : [error];
+  return {
+    ...describeError(failures[0]),
+    failedStepCount: failures.length,
+    failedStepErrorClasses: failures.map((failure) => describeError(failure).errorClass),
+  };
+}
+
 // Every teardown step is attempted, whatever an earlier one did. A throwing step used to abandon
 // the rest -- the runtime composition, the LSP pool, the graph-owned registries and the shared
-// node:sqlite close with its WAL checkpoint (CodeRabbit review, PR #3452). The first failure is
-// rethrown once every step has run, so `disposeRuntimeServicesRecorded` still records a fault.
+// node:sqlite close with its WAL checkpoint (CodeRabbit review, PR #3452). Once every step has run,
+// a single failure is rethrown as it is and several as one `TeardownFaults`, so
+// `disposeRuntimeServicesRecorded` records the fault and every failed step (owner review).
 async function runTeardownSteps(steps: readonly (() => void | Promise<void>)[]): Promise<void> {
-  let firstFailure: { readonly error: unknown } | undefined;
+  const failures: unknown[] = [];
   for (const step of steps) {
     try {
       await step();
     } catch (error) {
-      firstFailure ??= { error };
+      failures.push(error);
     }
   }
-  if (firstFailure !== undefined) throw firstFailure.error;
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new TeardownFaults(failures, "runtime-teardown-faulted");
 }
 
 async function disposeRuntimeServices(

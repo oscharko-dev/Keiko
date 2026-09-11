@@ -62,6 +62,7 @@ import {
   reconcileTaskWorkspacesAtStartup,
   redactEvidenceString,
   updateCandidateGate,
+  TeardownFaults,
   type UiHandlerDeps,
 } from "./deps.js";
 import {
@@ -71,6 +72,7 @@ import {
 } from "./diagnostics-log.js";
 import type { WorkspaceReconciliationService } from "./task-workspace/types.js";
 import { currentOpenSseStreamCount } from "./sse-write.js";
+import { createWorkspaceWatchService } from "./editor/watch/workspaceWatchService.js";
 import type {
   WorkspaceInstance,
   WorkspaceReconciliationReport,
@@ -799,7 +801,9 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     expect(caught).toBe(closeFailure);
     // Every later step still ran although the first one threw: the shared node:sqlite handle, which
     // the last step closes, is closed (CodeRabbit review, PR #3452).
-    expect(() => deps.store.listProjects()).toThrow();
+    expect(() => {
+      deps.store.listProjects();
+    }).toThrow();
     const shutdown = records.filter((event) => event.op === "server.runtime.shutdown");
     expect(shutdown).toHaveLength(2);
     expect(shutdown[1]).toMatchObject({
@@ -809,6 +813,63 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
         state: "completed",
         cleanup: "faulted",
         errorClass: "Error",
+        failedStepCount: 1,
+        failedStepErrorClasses: ["Error"],
+      },
+    });
+  }, 15000);
+
+  // Owner review, PR #3452: when several steps fail, every failure survives in step order, the first
+  // one leads the completion line, and the line names how many steps failed and their classes. One
+  // failing step cannot tell "keep the first" from "keep the last"; two with different classes can.
+  it("keeps every failed teardown step, the first one leading, when several steps fault", async (): Promise<void> => {
+    const records: ServerLogEvent[] = [];
+    const stateDir = tmp("shutdown-faults-evidence-");
+    const workspaceWatchService = createWorkspaceWatchService();
+    const watchFailure = new TypeError("watch service dispose failed");
+    vi.spyOn(workspaceWatchService, "disposeAll").mockImplementation(() => {
+      throw watchFailure;
+    });
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("shutdown-faults-evidence-ev-"),
+      env: {},
+      uiDbPath: join(stateDir, "keiko-ui.db"),
+      workspaceWatchService,
+      activityLog: { write: (event: ServerLogEvent): void => void records.push(event) },
+    });
+    if (deps.gitChangeSnapshotService === undefined) {
+      throw new Error("snapshot service not composed");
+    }
+    const closeFailure = new Error("snapshot service close failed");
+    const close = vi.spyOn(deps.gitChangeSnapshotService, "close").mockImplementation(() => {
+      throw closeFailure;
+    });
+
+    let caught: unknown;
+    try {
+      await deps.dispose?.();
+    } catch (error) {
+      caught = error;
+    } finally {
+      close.mockRestore();
+    }
+
+    expect(caught).toBeInstanceOf(TeardownFaults);
+    expect((caught as TeardownFaults).errors as unknown[]).toEqual([closeFailure, watchFailure]);
+    // The steps after both failures still ran: the SQLite handle the last step closes is closed.
+    expect(() => {
+      deps.store.listProjects();
+    }).toThrow();
+    const completed = records.filter((event) => event.op === "server.runtime.shutdown")[1];
+    expect(completed).toMatchObject({
+      level: "warn",
+      extra: {
+        state: "completed",
+        cleanup: "faulted",
+        errorClass: "Error",
+        failedStepCount: 2,
+        failedStepErrorClasses: ["Error", "TypeError"],
       },
     });
   }, 15000);

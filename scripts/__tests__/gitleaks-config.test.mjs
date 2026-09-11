@@ -60,14 +60,69 @@ function stringValue(raw) {
   return quoted === null ? raw.trim() : unquote(quoted[1]);
 }
 
+// Where a line leaves the reader: inside a multi-line string (its delimiter) or in plain TOML
+// (null). A basic or literal string is skipped whole, and a `#` outside a string ends the line, so
+// a comment or a quoted `'''` can never open a multi-line string and hide the allowlist after it
+// (CodeRabbit review, PR #3452).
+// Just past the multi-line string that closes at or after `i`, or -1 while it stays open. Only a
+// `"""` string has escapes.
+function multilineCloseIndex(line, delimiter, i) {
+  let j = i;
+  while (j < line.length) {
+    if (delimiter === '"""' && line[j] === "\\") {
+      j += 2;
+    } else if (line.startsWith(delimiter, j)) {
+      return j + 3;
+    } else {
+      j += 1;
+    }
+  }
+  return -1;
+}
+
+// Just past the single-line string that starts at `i`: a literal one ends at the next `'`, a basic
+// one at the next unescaped `"`.
+function stringEndIndex(line, i) {
+  if (line[i] === "'") {
+    const close = line.indexOf("'", i + 1);
+    return close < 0 ? line.length : close + 1;
+  }
+  let j = i + 1;
+  while (j < line.length && line[j] !== '"') j += line[j] === "\\" ? 2 : 1;
+  return j + 1;
+}
+
+function openMultilineAfter(line, open) {
+  let delimiter = open;
+  let i = 0;
+  while (i < line.length) {
+    if (delimiter !== null) {
+      const close = multilineCloseIndex(line, delimiter, i);
+      if (close < 0) return delimiter;
+      delimiter = null;
+      i = close;
+    } else if (line[i] === "#") {
+      return null;
+    } else if (line.startsWith("'''", i) || line.startsWith('"""', i)) {
+      delimiter = line.slice(i, i + 3);
+      i += 3;
+    } else if (line[i] === '"' || line[i] === "'") {
+      i = stringEndIndex(line, i);
+    } else {
+      i += 1;
+    }
+  }
+  return delimiter;
+}
+
 // The keys of every allowlist table. A line inside a multi-line string is text, not an assignment.
 function allowlistTables(text) {
   const tables = [];
   let current;
-  let insideMultiline = false;
+  let open = null;
   for (const line of text.split("\n")) {
-    const wasInside = insideMultiline;
-    if ((line.match(/'''|"""/gu) ?? []).length % 2 === 1) insideMultiline = !insideMultiline;
+    const wasInside = open !== null;
+    open = openMultilineAfter(line, open);
     if (wasInside) continue;
     const header = HEADER.exec(line);
     if (header !== null) {
@@ -184,6 +239,55 @@ describe("the allowlist checks reject a weakened configuration", () => {
       expect(orCombinedAllowlists(other)).toEqual(["commits, paths"]);
     },
   );
+
+  // Owner review, PR #3452: a multi-line string may hold text that looks like a header or an
+  // assignment. It is text: no second table, no overriding condition, no extra criterion, and the
+  // real keys after its closing delimiter are read again.
+  it.each(["'''", '"""'])("treats a %s multi-line string's content as text", (quote) => {
+    const multiline = [
+      "[[allowlists]]",
+      `description = ${quote}one fixture line,`,
+      "[[allowlists]]",
+      'condition = "OR"',
+      "stopwords = ['x']",
+      quote,
+      'condition = "AND"',
+      'commits = ["0000000000000000000000000000000000000000"]',
+      "paths = ['''fixtures/example\\.test\\.ts''']",
+    ].join("\n");
+    expect(allowlistTables(multiline)).toHaveLength(1);
+    expect([...(allowlistTables(multiline)[0]?.keys() ?? [])]).toEqual([
+      "description",
+      "condition",
+      "commits",
+      "paths",
+    ]);
+    expect(unknownAllowlistKeys(multiline)).toEqual([]);
+    expect(orCombinedAllowlists(multiline)).toEqual([]);
+  });
+
+  it.each([
+    ["a comment line", (config) => `# """\n${config}`],
+    [
+      "a trailing comment",
+      (config) =>
+        config.replace(
+          'description = "one fixture line in one commit"',
+          "description = \"one fixture line in one commit\" # '''",
+        ),
+    ],
+    [
+      "a delimiter inside a string",
+      (config) =>
+        config.replace(
+          'description = "one fixture line in one commit"',
+          "description = \"a ''' in a basic string\"",
+        ),
+    ],
+  ])("does not read %s as a multi-line string", (_label, withDelimiter) => {
+    const orCombined = withDelimiter(scoped.replace('condition = "AND"', 'condition = "OR"'));
+    expect(orCombinedAllowlists(orCombined)).toEqual(["commits, paths"]);
+  });
 
   it("accepts AND in any TOML string form", () => {
     const literal = scoped.replace('condition = "AND"', "condition = 'AND' # one commit, one path");
