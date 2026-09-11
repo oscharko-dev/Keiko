@@ -121,8 +121,8 @@ persist records while delivering nothing. Without evidence the run settles `fail
 inferring delivery intent from free text would turn honest successes into false failures.
 
 **Under Full access, a run that stops one step short is given a bounded continuation first**
-(PR #3452, 2026-09-11). In `autonomous-delivery` the operator authorized the run to deliver without
-per-action approval. When an issue-bound run's model ends a turn normally while no delivery is
+(PR #3452, 2026-09-11). In `autonomous-delivery` the operator's accepted Authority Envelope
+authorizes delivery without a per-action approval (D4). When an issue-bound run's model ends a turn normally while no delivery is
 evidenced, the orchestrator dispatches a fixed, server-authored continuation into the live session
 instead of settling — at most `DELIVERY_CONTINUATION_MAX` (2) times per run, each logged as
 `coding-runtime.run.delivery-continued`. The continuation restates only the accepted task's
@@ -151,9 +151,14 @@ Content-bearing live prompt, response, diff, and diagnostic events are transient
 access-controlled. Durable operational events and evidence are a separate content-free projection;
 they carry only ids, digests, counts, booleans, closed states/codes, and safe labels.
 
-Commit, push, pull-request create/update, merge, and Authority Envelope widening each require their
-own action-bound, one-use human approval in addition to runtime authority. No mode, connector scope,
-or earlier start confirmation pre-approves those delivery actions.
+Delivery approval, one rule for D3 and D4. In `governed-assist` and `supervised-coding`, commit,
+push and pull-request create/update each require their own action-bound, one-use human approval in
+addition to runtime authority; no connector scope or earlier start confirmation pre-approves them.
+`autonomous-delivery` is the one mode whose accepted Authority Envelope authorizes those three
+actions inside the envelope without a per-action approval (ADR-0129 Full access, ADR-0138 D2): the
+policy decides `allowed`, every effect still runs through the governed delivery tools, and D3's
+delivery-truth rule decides whether the run delivered. Merge and Authority Envelope widening
+require their own human approval in every mode (ADR-0087).
 
 ### D5 — Process-tree ownership and platform qualification are fail-closed invariants
 

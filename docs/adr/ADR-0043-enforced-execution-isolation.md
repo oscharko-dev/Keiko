@@ -23,6 +23,12 @@ same-uid-discoverable filesystem relay with an anonymous descriptor-transfer cha
 the kernel-proven private diagnostics-descriptor lifecycle. Issue #3451 binds that primitive to the
 release-qualified `linux-x64` runtime and its exact production evidence (2026-09-10).
 
+1.4 — PR #3452 adds D17: the verification orchestrator installs a workspace's declared dependencies
+before its script steps, the one verification command that keeps host network. A managed task
+worktree is a clean checkout, so without it no project created from nothing could be verified
+(Coding Workbench run 15, 2026-09-10). D17 also records the sources such an install may use and its
+refusals (2026-09-11).
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a
@@ -454,10 +460,14 @@ the same keiko-tools command boundary as every step (`DEPENDENCY_INSTALL_COMMAND
 install` and nothing else, no leading flags, `-c`/`--call` denied), under
 `DEPENDENCY_INSTALL_LIMITS` (240 s wall time, 1 MiB output) and with **host network**. This is the
 one verification command that keeps egress, and the reason it may is the same reason D1–D10 deny
-it elsewhere: those steps EXECUTE untrusted, model-written code; `npm install --ignore-scripts`
-executes none — no project lifecycle script, no dependency's `postinstall`, only npm's own
-resolution and unpacking of what the manifest declares — and the code it fetches runs solely inside
-the sandboxed, egress-denied steps that follow. The child receives the ephemeral empty HOME every
+it elsewhere: those steps EXECUTE untrusted, model-written code. `--ignore-scripts` disables npm's
+lifecycle hooks only. The install runs no project lifecycle script and no dependency's
+`postinstall`, but it is itself a host-network process, and the code it unpacks is executed later
+by the plan's own steps (`npm run …`, `npx`, `node --test`). Those steps run with
+`network: "none"`. The orchestrator's default `networkEnforcement: "enforce-or-fail-closed"`,
+which every server verification path uses, requires an enforcing backend and refuses a step it
+cannot confine; only a caller that explicitly selects the `inherit` compatibility mode lets steps
+inherit host network. The child receives the ephemeral empty HOME every
 governed command receives (C5), so only npm's default registry configuration applies, and a
 project-level `.npmrc` refuses the bootstrap outright (`refused`, `project npm config present`):
 a manifest cannot redirect the install to a registry nobody configured. An unreadable manifest
