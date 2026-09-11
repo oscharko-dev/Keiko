@@ -487,9 +487,12 @@ async function proveSkillDiscoveryConsumption(timeline: Locator): Promise<void> 
     invokedSkillDerivedFromResult: true,
   });
   for (const tool of ["keiko_skill_discover", "keiko_skill"]) {
+    // Matched on the card's exact label, so `keiko_skill` cannot also match
+    // `keiko_skill_discover`. A `hasText` regular expression cannot do it: the text engine reads a
+    // pattern with the repository's mandatory `u` flag as literal text and matches nothing.
     const succeeded = timeline
       .locator('[data-tool-state="succeeded"]')
-      .filter({ hasText: new RegExp(String.raw`\b${tool}\b`, "u") });
+      .filter({ has: timeline.page().getByText(`Tool activity: ${tool}`, { exact: true }) });
     await expect(succeeded).toHaveCount(1);
   }
   await expect(timeline.getByText("Skill invoked", { exact: true }).first()).toBeVisible();
