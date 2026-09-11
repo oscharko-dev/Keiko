@@ -1047,15 +1047,22 @@ function wireRequestFor(
   }
 }
 
+// The catalog descriptor of every generated tool, by alias, compiled once when this module loads.
+// The registration set is deterministic, and compiling it for every lookup rebuilt all of its
+// descriptors twice per tool for every bundle: the scripted transcripts generate a bundle per tool
+// call, and doing so turned their CI runs into timeouts (PR #3452).
+const CATALOG_DESCRIPTORS_BY_ALIAS: ReadonlyMap<string, ToolDescriptor> = new Map(
+  opencodeRegistrationSet().entries.map((entry) => [entry.alias, entry.descriptor]),
+);
+
 // The native plugin and actual provider use one description owner. Otherwise richer native
 // read/edit guidance is replaced by a generic catalog description at the gateway boundary.
 function toolCatalogDescriptor(action: GeneratedToolAction): ToolDescriptor {
   const definition = OPENCODE_TOOL_SOURCE_DEFINITIONS.find((tool) => tool.action === action);
-  const entry = opencodeRegistrationSet().entries.find(
-    (candidate) => candidate.alias === definition?.name,
-  );
-  if (entry === undefined) throw new TypeError("OpenCode tool is missing from the catalog");
-  return entry.descriptor;
+  const descriptor =
+    definition === undefined ? undefined : CATALOG_DESCRIPTORS_BY_ALIAS.get(definition.name);
+  if (descriptor === undefined) throw new TypeError("OpenCode tool is missing from the catalog");
+  return descriptor;
 }
 
 function toolDescription(action: GeneratedToolAction): string {
