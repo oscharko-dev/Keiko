@@ -10,6 +10,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import { DraftDeliveryFixture } from "./draftDeliveryServiceTestSupport.js";
 import { DraftDeliveryController } from "./draftDeliveryService.js";
+import {
+  resolveDraftDeliveryTemplate,
+  DRAFT_DELIVERY_RELATED_ISSUES_MAX,
+} from "./draftDeliveryTemplate.js";
 
 let fixture: DraftDeliveryFixture;
 beforeEach(async () => {
@@ -563,4 +567,58 @@ describe("pending delivery retry semantics", () => {
     expect(fixture.service.review(id(second))).toBeDefined();
     expect(fixture.createCount).toBe(0);
   });
+});
+
+describe("draft delivery related issues (#3452)", () => {
+  const relatedTitle = "feat: bounded change";
+  function expectedTemplateBody(relatedIssueNumbers: readonly number[]): string {
+    const result = resolveDraftDeliveryTemplate({
+      workspace: fixture.context.workspace,
+      issueBinding: fixture.issue,
+      relatedIssueNumbers,
+      title: relatedTitle,
+      correlationId: fixture.context.correlationId,
+    });
+    if (result.status !== "ready") throw new Error("fixture template must resolve");
+    return result.body;
+  }
+  it("renders resolved related issue numbers into the created pull request body", async () => {
+    const service = new DraftDeliveryController({
+      ...fixture.options,
+      resolveRelatedIssues: (): Promise<readonly number[]> => Promise.resolve([7, 9]),
+    });
+    await execute(await service.proposePush(), service);
+    await execute(await service.proposePullRequest(relatedTitle), service);
+    expect(fixture.createBody).toBe(expectedTemplateBody([7, 9]));
+    expect(fixture.events.find((event) => event.op === "git.draft-template")).toMatchObject({
+      extra: { relatedIssueCount: 2 },
+    });
+  });
+  it("omits the related issues line and reports zero count without a resolver", async () => {
+    await execute(await fixture.service.proposePush());
+    await execute(await fixture.service.proposePullRequest(relatedTitle));
+    expect(fixture.createBody).toBe(expectedTemplateBody([]));
+    expect(fixture.createBody).not.toContain("Related issues");
+    expect(fixture.events.find((event) => event.op === "git.draft-template")).toMatchObject({
+      extra: { relatedIssueCount: 0 },
+    });
+  });
+  it.each([
+    [[7, 7]],
+    [[1]],
+    [Array.from({ length: DRAFT_DELIVERY_RELATED_ISSUES_MAX + 1 }, (_, i) => i + 100)],
+  ])(
+    "refuses a resolver payload the template's related-issue guard rejects: %j",
+    async (related) => {
+      const service = new DraftDeliveryController({
+        ...fixture.options,
+        resolveRelatedIssues: (): Promise<readonly number[]> => Promise.resolve(related),
+      });
+      await execute(await service.proposePush(), service);
+      expect(await service.proposePullRequest(relatedTitle)).toMatchObject({
+        record: { phase: "recovery-required", reason: "payload-changed" },
+      });
+      expect(fixture.createCount).toBe(0);
+    },
+  );
 });

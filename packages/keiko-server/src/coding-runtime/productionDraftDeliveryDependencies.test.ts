@@ -12,6 +12,8 @@ import {
   createNodeGitPullRequestAdapter,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { resolveGitHubIssue } from "../coding-context/githubIssueResolution.js";
+import { resolvedLinkedIssueNumbers } from "../coding-context/codingRuntimeIssueIntake.js";
+import { describeError } from "../diagnostics-log.js";
 import { githubIssueReaderRepositoryId } from "../coding-context/githubIssueReaderAuthorization.js";
 import type { DraftDeliveryRunContext } from "../gitDelivery/draftDeliveryTypes.js";
 import { resolveProjectWorkspace } from "../gitDelivery/execution.js";
@@ -38,6 +40,15 @@ vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal
     ...actual,
     createNodeGitPublishAdapter: vi.fn(actual.createNodeGitPublishAdapter),
     createNodeGitPullRequestAdapter: vi.fn(actual.createNodeGitPullRequestAdapter),
+  };
+});
+
+vi.mock("../coding-context/codingRuntimeIssueIntake.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../coding-context/codingRuntimeIssueIntake.js")>();
+  return {
+    ...actual,
+    resolvedLinkedIssueNumbers: vi.fn(actual.resolvedLinkedIssueNumbers),
   };
 });
 
@@ -676,5 +687,71 @@ describe("production journey CI reader (issue-to-PR handoff readiness renewal)",
     expect(
       createProductionJourneyCiReader(f.deps, { repositoryId, correlationId: "journey-ci-1" }),
     ).toBeUndefined();
+  });
+});
+
+describe("resolves and logs related issues for the pull request body (#3452)", () => {
+  it("returns unavailable and logs zero count when the checkout cannot be resolved", async () => {
+    const f = await fixture();
+    f.stillAuthorized.mockReturnValue(false);
+    expect(await f.factory.resolveRelatedIssues(f.context)).toEqual([]);
+    expect(f.events.at(-1)).toMatchObject({
+      category: "process",
+      op: "git.draft-related-issues",
+      correlationId: "delivery-42",
+    });
+    expect(f.events.at(-1)?.extra).toEqual({ runId: "run-42", state: "unavailable", count: 0 });
+    expect(vi.mocked(resolvedLinkedIssueNumbers)).not.toHaveBeenCalled();
+  });
+  it("returns unavailable and logs zero count when the freshly re-read issue has drifted", async () => {
+    const f = await fixture();
+    f.object.body = "Changed accepted content";
+    expect(await f.factory.resolveRelatedIssues(f.context)).toEqual([]);
+    expect(f.events.at(-1)).toMatchObject({
+      category: "process",
+      op: "git.draft-related-issues",
+      correlationId: "delivery-42",
+    });
+    expect(f.events.at(-1)?.extra).toEqual({ runId: "run-42", state: "unavailable", count: 0 });
+    expect(vi.mocked(resolvedLinkedIssueNumbers)).not.toHaveBeenCalled();
+  });
+  it("returns unavailable and logs the classified failure body-free when resolution throws", async () => {
+    const f = await fixture();
+    const failure = new Error("private failure detail");
+    vi.mocked(resolvedLinkedIssueNumbers).mockRejectedValueOnce(failure);
+    expect(await f.factory.resolveRelatedIssues(f.context)).toEqual([]);
+    expect(f.events.at(-1)).toMatchObject({
+      category: "process",
+      op: "git.draft-related-issues",
+      correlationId: "delivery-42",
+      level: "warn",
+      errorKind: "internal",
+    });
+    expect(f.events.at(-1)?.extra).toEqual({
+      runId: "run-42",
+      state: "unavailable",
+      count: 0,
+      ...describeError(failure),
+    });
+    expect(JSON.stringify(f.events)).not.toContain("private failure detail");
+  });
+  it("returns and logs the resolved related issue numbers for the currently bound issue", async () => {
+    const f = await fixture();
+    vi.mocked(resolvedLinkedIssueNumbers).mockResolvedValueOnce([7, 9]);
+    expect(await f.factory.resolveRelatedIssues(f.context)).toEqual([7, 9]);
+    expect(vi.mocked(resolvedLinkedIssueNumbers)).toHaveBeenCalledWith(f.deps, {
+      repositoryRoot: f.root,
+      body: f.object.body,
+      boundIssue: f.context.issueBinding.issueNumber,
+      correlationId: f.context.correlationId,
+      runId: f.context.runId,
+      signal: f.abort.signal,
+    });
+    expect(f.events.at(-1)).toMatchObject({
+      category: "process",
+      op: "git.draft-related-issues",
+      correlationId: "delivery-42",
+    });
+    expect(f.events.at(-1)?.extra).toEqual({ runId: "run-42", state: "resolved", count: 2 });
   });
 });
