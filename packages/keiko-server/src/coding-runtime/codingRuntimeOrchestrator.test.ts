@@ -47,7 +47,11 @@ import { createPendingResearchApprovals } from "./researchApprovalIssuance.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
-import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
+import {
+  errorKindOf,
+  type ServerLogEvent,
+  type ServerLogSink,
+} from "../observability/server-log.js";
 import type {
   AuxiliaryResearchScopeV1,
   CodingWorkbenchIssueBinding,
@@ -1121,6 +1125,109 @@ describe("CodingRuntimeOrchestrator", () => {
     });
     expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
     expect(linesWithOp(captured, "coding-runtime.run.delivery-continued")).toEqual([]);
+  });
+
+  // Owner review, PR #3452: the evidence reader throws on an oversized, malformed or foreign commit
+  // record. That throw used to escape settlement BEFORE the runtime was stopped, leaving it running
+  // with no recovery transition. It is now an answer: no continuation, the runtime stopped, and the
+  // run asks for recovery instead of guessing its outcome.
+  it("stops the runtime and asks for recovery when the delivery evidence record is unreadable", async () => {
+    const { f, captured, verifiedCommits, finish } = await startFullAccessIssueRun(1);
+    const unreadable = new Error("verified-commit record does not bind this runtime");
+    vi.spyOn(verifiedCommits, "get").mockImplementation(() => {
+      throw unreadable;
+    });
+
+    finish[0]?.("succeeded");
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("recovery-required");
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(f.manager.stop).toHaveBeenCalled();
+    expect(linesWithOp(captured, "coding-runtime.run.delivery-continuation-refused")).toEqual([
+      expect.objectContaining({
+        errorKind: errorKindOf(unreadable),
+        extra: expect.objectContaining({ attempt: 1, reason: "evidence-unreadable" }) as unknown,
+      }),
+    ]);
+    expect(linesWithOp(captured, "coding-runtime.run.delivery-evidence-unreadable")).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        errorKind: errorKindOf(unreadable),
+        extra: expect.objectContaining({ runId: "run-1" }) as unknown,
+      }),
+    ]);
+  });
+
+  it("names the failure kind when the continuation dispatch throws", async () => {
+    const { f, captured, finish } = await startFullAccessIssueRun(1);
+    const thrown = new Error("sidecar went away");
+    f.taskDispatcher.dispatch.mockRejectedValueOnce(thrown);
+
+    finish[0]?.("succeeded");
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+    expect(linesWithOp(captured, "coding-runtime.run.delivery-continuation-refused")).toEqual([
+      expect.objectContaining({
+        errorKind: errorKindOf(thrown),
+        extra: expect.objectContaining({ attempt: 1, reason: "dispatch-threw" }) as unknown,
+      }),
+    ]);
+  });
+
+  // Owner review, PR #3452: a stop or takeover is not serialized with settlement, so it can land
+  // while the continuation is being dispatched. The continuation is then abandoned: nothing is
+  // recorded against the superseded revision and the operator's stop owns the run's outcome.
+  it("abandons a continuation the operator stopped while it was being dispatched", async () => {
+    const { f, captured, finish } = await startFullAccessIssueRun(1);
+    let releaseDispatch:
+      ((result: Awaited<ReturnType<typeof f.taskDispatcher.dispatch>>) => void) | undefined;
+    f.taskDispatcher.dispatch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseDispatch = resolve;
+        }),
+    );
+
+    finish[0]?.("succeeded");
+    await vi.waitFor(() => {
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+    });
+    await f.orchestrator.stop("run-1", { requestId: "run-1" });
+    releaseDispatch?.({ ok: true, completion: new Promise<"succeeded">(() => undefined) });
+
+    await vi.waitFor(() => {
+      expect(linesWithOp(captured, "coding-runtime.run.delivery-continuation-refused")).toEqual([
+        expect.objectContaining({
+          extra: expect.objectContaining({ attempt: 1, reason: "run-superseded" }) as unknown,
+        }),
+      ]);
+    });
+    expect(linesWithOp(captured, "coding-runtime.run.delivery-continued")).toEqual([]);
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("cancelled");
+  });
+
+  // CodeRabbit review, PR #3452: the continuation count was cleared only on the task-settlement
+  // path, so a continued run that was stopped, taken over or moved to recovery kept its entry.
+  it("forgets a run's continuation count when the run settles by another path", async () => {
+    const { f, finish } = await startFullAccessIssueRun(2);
+    finish[0]?.("succeeded");
+    await vi.waitFor(() => {
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+    });
+    const continuations = (
+      f.orchestrator as unknown as { readonly deliveryContinuations: ReadonlyMap<string, number> }
+    ).deliveryContinuations;
+    await vi.waitFor(() => {
+      expect(continuations.get("run-1")).toBe(1);
+    });
+
+    await f.orchestrator.stop("run-1", { requestId: "run-1" });
+
+    expect(continuations.has("run-1")).toBe(false);
   });
 
   // Run 10's other half: the verification tool was refused for want of ADR-0147 package-script

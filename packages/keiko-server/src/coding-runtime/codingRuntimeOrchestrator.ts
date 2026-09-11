@@ -609,6 +609,38 @@ const GRANT_VISIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new S
  * Keeps all lifecycle mutation behind one promise tail. This deliberately provides no replay API:
  * after a process restart durable active rows are recovery-required until an operator starts anew.
  */
+type DeliveryEvidence =
+  | {
+      readonly readable: true;
+      readonly hasVerifiedCommit: boolean;
+      readonly hasDraftDelivery: boolean;
+    }
+  | { readonly readable: false; readonly error: unknown };
+
+type DeliveryContinuationRefusal =
+  "dispatch-threw" | "dispatch-refused" | "evidence-unreadable" | "run-superseded";
+
+// A settlement target is taken only when the delivery evidence could be read and the transition to
+// it is legal; anything else asks for recovery.
+function isLegalSettlementTarget<T extends { readonly state: CodingWorkbenchRuntimeStateName }>(
+  live: CodingRuntimeSnapshot,
+  target: T | undefined,
+): target is T {
+  return target !== undefined && isLegalCodingWorkbenchRuntimeTransition(live.state, target.state);
+}
+
+function deliveryContinuationExtra(
+  live: CodingRuntimeSnapshot,
+  attempt: number,
+): Readonly<Record<string, unknown>> {
+  return {
+    runId: live.runId,
+    issueNumber: live.issueBinding?.issueNumber,
+    attempt,
+    max: DELIVERY_CONTINUATION_MAX,
+  };
+}
+
 export class CodingRuntimeOrchestrator {
   private tail: Promise<void> = Promise.resolve();
   private activeRunId: string | undefined;
@@ -1507,30 +1539,54 @@ export class CodingRuntimeOrchestrator {
       return;
     }
     const target = this.deliveryTruthfulOutcome(live, taskOutcomeState(outcome));
-    this.deliveryContinuations.delete(runId);
-    if (!isLegalCodingWorkbenchRuntimeTransition(live.state, target.state)) {
+    if (!isLegalSettlementTarget(live, target)) {
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
     this.transition(live, target.state, target.failureCode);
   }
 
-  /** Durable delivery evidence: the store's last successful commit, or a delivered draft phase. */
-  private hasDeliveryEvidence(live: CodingRuntimeSnapshot): {
-    readonly hasVerifiedCommit: boolean;
-    readonly hasDraftDelivery: boolean;
-  } {
+  /**
+   * Durable delivery evidence: the store's last successful commit, or a delivered draft phase. The
+   * commit reader fails closed on an oversized, malformed or foreign record by throwing; that throw is
+   * an answer here ("unreadable"), never an escape from settlement: a settlement that threw before
+   * stopping the runtime would leave it running with no recovery transition (owner review, PR #3452).
+   */
+  private deliveryEvidence(live: CodingRuntimeSnapshot): DeliveryEvidence {
+    let hasVerifiedCommit: boolean;
+    try {
+      hasVerifiedCommit =
+        this.deps.snapshots.getLastSuccessfulVerifiedCommit?.(live.runId) !== undefined;
+    } catch (error) {
+      return { readable: false, error };
+    }
     return {
-      hasVerifiedCommit:
-        this.deps.snapshots.getLastSuccessfulVerifiedCommit?.(live.runId) !== undefined,
+      readable: true,
+      hasVerifiedCommit,
       hasDraftDelivery:
         live.draftDelivery !== undefined && isDeliveredDraftDeliveryPhase(live.draftDelivery.phase),
     };
   }
 
+  private recordDeliveryEvidenceUnreadable(live: CodingRuntimeSnapshot, error: unknown): void {
+    this.deps.activityLog?.write({
+      level: "warn",
+      category: "process",
+      op: "coding-runtime.run.delivery-evidence-unreadable",
+      correlationId: runtimeDiagnosticCorrelationId(live.runId),
+      errorKind: errorKindOf(error),
+      extra: {
+        runId: live.runId,
+        issueNumber: live.issueBinding?.issueNumber,
+        ...describeError(error),
+      },
+    });
+  }
+
   // The one-based attempt a finished turn may continue with, or undefined when it settles: only a
-  // turn that ended normally, in an issue-bound run under Full access, without delivery evidence
-  // and with continuation budget left. Every other run settles exactly as before.
+  // turn that ended normally, in an issue-bound run under Full access, with continuation budget left.
+  // Every other run settles exactly as before; `continueForDelivery` then asks whether delivery is
+  // already evidenced.
   private deliveryContinuationAttempt(
     live: CodingRuntimeSnapshot,
     outcome: CodingRuntimeTaskOutcome,
@@ -1538,8 +1594,6 @@ export class CodingRuntimeOrchestrator {
     if (outcome !== "succeeded" || live.issueBinding === undefined) return undefined;
     if (this.activeRunId !== live.runId || this.activeEffectiveMode !== "autonomous-delivery")
       return undefined;
-    const evidence = this.hasDeliveryEvidence(live);
-    if (evidence.hasVerifiedCommit || evidence.hasDraftDelivery) return undefined;
     const attempt = (this.deliveryContinuations.get(live.runId) ?? 0) + 1;
     return attempt > DELIVERY_CONTINUATION_MAX ? undefined : attempt;
   }
@@ -1553,6 +1607,40 @@ export class CodingRuntimeOrchestrator {
     const attempt = this.deliveryContinuationAttempt(live, outcome);
     if (attempt === undefined) return false;
     const correlationId = runtimeDiagnosticCorrelationId(live.runId);
+    const evidence = this.deliveryEvidence(live);
+    if (!evidence.readable) {
+      this.recordDeliveryContinuationRefused(
+        live,
+        attempt,
+        correlationId,
+        "evidence-unreadable",
+        evidence.error,
+      );
+      return false;
+    }
+    if (evidence.hasVerifiedCommit || evidence.hasDraftDelivery) return false;
+    const dispatched = await this.dispatchDeliveryContinuation(live, attempt, correlationId);
+    if (dispatched === undefined) return false;
+    // An operator's stop or takeover is not serialized with settlement: it has to stay immediate
+    // even while a dispatch hangs. The run may therefore have ended or moved while this continuation
+    // was dispatched; it is then abandoned, never recorded against a superseded revision, and the
+    // stop or takeover owns the run's settlement (owner review, PR #3452).
+    if (this.continuationSuperseded(live)) {
+      this.recordDeliveryContinuationRefused(live, attempt, correlationId, "run-superseded");
+      return true;
+    }
+    this.deliveryContinuations.set(live.runId, attempt);
+    this.recordDeliveryContinued(live, attempt, correlationId);
+    this.operations.observeContinuation(live.runId, dispatched.completion);
+    this.advanceRevision(live, "task-submitted");
+    return true;
+  }
+
+  private async dispatchDeliveryContinuation(
+    live: CodingRuntimeSnapshot,
+    attempt: number,
+    correlationId: string,
+  ): Promise<Extract<CodingRuntimeTaskDispatchResult, { readonly ok: true }> | undefined> {
     let dispatched: CodingRuntimeTaskDispatchResult;
     try {
       dispatched = await this.deps.taskDispatcher.dispatch({
@@ -1562,58 +1650,59 @@ export class CodingRuntimeOrchestrator {
         taskIntent: DELIVERY_CONTINUATION_INTENT,
       });
     } catch (error) {
-      this.recordDeliveryContinuation(
-        live,
-        "delivery-continuation-refused",
-        attempt,
-        correlationId,
-        {
-          reason: "dispatch-threw",
-          ...describeError(error),
-        },
-      );
-      return false;
+      this.recordDeliveryContinuationRefused(live, attempt, correlationId, "dispatch-threw", error);
+      return undefined;
     }
     if (!dispatched.ok) {
-      this.recordDeliveryContinuation(
-        live,
-        "delivery-continuation-refused",
-        attempt,
-        correlationId,
-        {
-          reason: "dispatch-refused",
-        },
-      );
-      return false;
+      this.recordDeliveryContinuationRefused(live, attempt, correlationId, "dispatch-refused");
+      return undefined;
     }
-    this.deliveryContinuations.set(live.runId, attempt);
-    this.recordDeliveryContinuation(live, "delivery-continued", attempt, correlationId);
-    this.operations.observeContinuation(live.runId, dispatched.completion);
-    this.advanceRevision(live, "task-submitted");
-    return true;
+    return dispatched;
   }
 
-  private recordDeliveryContinuation(
+  private continuationSuperseded(live: CodingRuntimeSnapshot): boolean {
+    const current = this.current();
+    if (current === undefined) return true;
+    return (
+      this.activeRunId !== live.runId ||
+      current.runId !== live.runId ||
+      current.revision !== live.revision
+    );
+  }
+
+  private recordDeliveryContinued(
     live: CodingRuntimeSnapshot,
-    kind: "delivery-continued" | "delivery-continuation-refused",
     attempt: number,
     correlationId: string,
-    detail: Readonly<Record<string, unknown>> = {},
   ): void {
     this.deps.activityLog?.write({
-      level: kind === "delivery-continued" ? "info" : "warn",
+      level: "info",
       category: "process",
-      op:
-        kind === "delivery-continued"
-          ? "coding-runtime.run.delivery-continued"
-          : "coding-runtime.run.delivery-continuation-refused",
+      op: "coding-runtime.run.delivery-continued",
       correlationId,
+      extra: deliveryContinuationExtra(live, attempt),
+    });
+  }
+
+  // Every refusal names its reason; one that follows a thrown error also carries its errorKind and
+  // body-free frames, like every other caught failure in this file (AGENTS.md §8).
+  private recordDeliveryContinuationRefused(
+    live: CodingRuntimeSnapshot,
+    attempt: number,
+    correlationId: string,
+    reason: DeliveryContinuationRefusal,
+    error?: unknown,
+  ): void {
+    this.deps.activityLog?.write({
+      level: "warn",
+      category: "process",
+      op: "coding-runtime.run.delivery-continuation-refused",
+      correlationId,
+      ...(error === undefined ? {} : { errorKind: errorKindOf(error) }),
       extra: {
-        runId: live.runId,
-        issueNumber: live.issueBinding?.issueNumber,
-        attempt,
-        max: DELIVERY_CONTINUATION_MAX,
-        ...detail,
+        ...deliveryContinuationExtra(live, attempt),
+        reason,
+        ...(error === undefined ? {} : describeError(error)),
       },
     });
   }
@@ -1642,10 +1731,12 @@ export class CodingRuntimeOrchestrator {
       readonly state: "failed" | "succeeded";
       readonly failureCode?: "runtime-failed" | undefined;
     },
-  ): {
-    readonly state: "failed" | "succeeded";
-    readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
-  } {
+  ):
+    | {
+        readonly state: "failed" | "succeeded";
+        readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+      }
+    | undefined {
     if (target.state !== "succeeded" || live.issueBinding === undefined) return target;
     // Presence is not delivery. A `verifiedCommitResult` is persisted for every proposal outcome,
     // `verification-failed` and `blocked` included, and a `draftDelivery` record exists as soon as a
@@ -1653,7 +1744,13 @@ export class CodingRuntimeOrchestrator {
     // exists to close (owner review, PR #3452), so both sides ask the question that has a real
     // answer: the store's own last SUCCESSFUL commit, and a phase the contract classifies as
     // delivered.
-    const { hasVerifiedCommit, hasDraftDelivery } = this.hasDeliveryEvidence(live);
+    // Evidence that cannot be read settles nothing on a guess: the run asks for recovery instead.
+    const evidence = this.deliveryEvidence(live);
+    if (!evidence.readable) {
+      this.recordDeliveryEvidenceUnreadable(live, evidence.error);
+      return undefined;
+    }
+    const { hasVerifiedCommit, hasDraftDelivery } = evidence;
     if (hasVerifiedCommit || hasDraftDelivery) return target;
     this.deps.activityLog?.write({
       level: "warn",
@@ -2648,6 +2745,9 @@ export class CodingRuntimeOrchestrator {
       this.activeEffectiveMode = undefined;
     this.approvals.delete(next.runId);
     this.queuedApprovals.delete(next.runId);
+    // Every settlement ends a run's continuation budget, not only the task-settlement path: a
+    // continued run that is stopped, taken over or moved to recovery must not keep its entry.
+    this.deliveryContinuations.delete(next.runId);
     this.operations.clear(next.runId);
     this.pruneSettled();
   }
