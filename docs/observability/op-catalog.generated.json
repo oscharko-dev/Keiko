@@ -504,13 +504,13 @@
     {
       "op": "chat.request.dispatch",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:1139",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:1156",
       "package": "keiko-model-gateway"
     },
     {
       "op": "chat.response.streamed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:1067",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:1084",
       "package": "keiko-model-gateway"
     },
     {
@@ -991,7 +991,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:57",
+      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:59",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -1379,6 +1379,18 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-app-session.channel.closed",
+      "category": "http",
+      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:100",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-app-session.channel.opened",
+      "category": "http",
+      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:92",
+      "package": "keiko-server"
+    },
+    {
       "op": "coding-app-session.channel.subscribe",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/coding-app-session/sessionChannel.ts:165",
@@ -1393,9 +1405,27 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-app-session.paired",
+      "category": "http",
+      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:182",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-app-session.rotated",
+      "category": "http",
+      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:318",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-app-session.signed-out",
+      "category": "http",
+      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:330",
+      "package": "keiko-server"
+    },
+    {
       "op": "coding-context.github-authorization.changed",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-context/githubAuthorizationRoutes.ts:178",
+      "site": "packages/keiko-server/src/coding-context/githubAuthorizationRoutes.ts:181",
       "package": "keiko-server"
     },
     {
@@ -1895,19 +1925,19 @@
     {
       "op": "coding-runtime.verification",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1272",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1297",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.verification",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1424",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1449",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.verification",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1471",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1496",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -1976,14 +2006,14 @@
     {
       "op": "coding-workbench.issue.preview",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-context/issuePreviewRoutes.ts:272",
+      "site": "packages/keiko-server/src/coding-context/issuePreviewRoutes.ts:273",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-workbench.issue.previewed",
       "category": "http",
-      "site": "packages/keiko-server/src/coding-context/issuePreviewRoutes.ts:224",
+      "site": "packages/keiko-server/src/coding-context/issuePreviewRoutes.ts:225",
       "package": "keiko-server"
     },
     {
@@ -3831,7 +3861,12 @@
     "cli.lifecycle.stop-requested",
     "client.diagnostic",
     "client.diagnostic.rate-limited",
+    "coding-app-session.channel.closed",
+    "coding-app-session.channel.opened",
     "coding-app-session.channel.subscribe",
+    "coding-app-session.paired",
+    "coding-app-session.rotated",
+    "coding-app-session.signed-out",
     "coding-context.github-authorization.changed",
     "coding-context.github-authorization.evaluated",
     "coding-context.github-remote.evaluated",

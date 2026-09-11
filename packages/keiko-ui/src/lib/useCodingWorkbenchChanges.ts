@@ -16,7 +16,10 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 
 import { fetchGitDiff, fetchGitHistory, fetchGitStatus } from "./api";
-import { codingAppSessionPairingSettled } from "./coding-app-session-client";
+import {
+  codingAppSessionPairingSettled,
+  useCodingAppSessionRedemptions,
+} from "./coding-app-session-client";
 import {
   parseUnifiedDiff,
   type DiffParseResult,
@@ -144,6 +147,8 @@ function useChangesSnapshot(input: {
   readonly setState: Dispatch<SetStateAction<CodingWorkbenchChangesState>>;
 }): void {
   const { bindingPending, client, epoch, root, runId, setState } = input;
+  // A re-pair without a page load reads the changes again (F65).
+  const redemptions = useCodingAppSessionRedemptions();
   const seenRunIdRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     // A runId change is a hard boundary: the stale-while-revalidate preservation only applies
@@ -184,7 +189,7 @@ function useChangesSnapshot(input: {
     return () => {
       cancelled = true;
     };
-  }, [bindingPending, client, epoch, root, runId, setState]);
+  }, [bindingPending, client, epoch, redemptions, root, runId, setState]);
 }
 
 function diffState(

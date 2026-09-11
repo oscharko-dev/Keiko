@@ -6,6 +6,11 @@ import type {
   CodingWorkbenchRuntimeApprovalReviewChannelPayload,
 } from "@oscharko-dev/keiko-contracts";
 
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import {
+  redeemCodingAppSessionPairingNavigation,
+  type CodingAppSessionPairingSeams,
+} from "./coding-app-session-client";
 import {
   useCodingWorkbenchApprovalReview,
   type UseCodingWorkbenchApprovalReviewInput,
@@ -14,7 +19,8 @@ import {
 const getApprovalReviewMock = vi.hoisted(() => vi.fn());
 const pairingSettledMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./coding-app-session-client", () => ({
+vi.mock("./coding-app-session-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./coding-app-session-client")>()),
   codingAppSessionPairingSettled: pairingSettledMock,
 }));
 
@@ -348,5 +354,35 @@ describe("useCodingWorkbenchApprovalReview", () => {
     expect(capturedSignal?.aborted).toBe(false);
     unmount();
     expect(capturedSignal?.aborted).toBe(true);
+  });
+});
+
+// A launcher re-pair that arrives without a page load (F65): a fragment, and a pair endpoint that
+// acknowledges it.
+const REPAIR_SEAMS: CodingAppSessionPairingSeams = {
+  readFragment: (): string =>
+    encodeCodingAppSessionPairingFragment({
+      requestId: "req_re-pair",
+      issuedAtMs: 1,
+      claim: "e".repeat(64),
+    }),
+  stripFragment: (): void => undefined,
+  postPairing: (): Promise<unknown> => Promise.resolve({ schemaVersion: "1" }),
+};
+
+describe("useCodingWorkbenchApprovalReview after a re-pair without a page load (F65)", () => {
+  it("reads the review again", async () => {
+    vi.useRealTimers();
+    pairingSettledMock.mockResolvedValue(true);
+    getApprovalReviewMock.mockResolvedValue(active());
+    renderHook(() => useCodingWorkbenchApprovalReview(RUN));
+    await waitFor(() => expect(getApprovalReviewMock).toHaveBeenCalled());
+    const before = getApprovalReviewMock.mock.calls.length;
+
+    await act(async () => {
+      await redeemCodingAppSessionPairingNavigation(REPAIR_SEAMS);
+    });
+
+    await waitFor(() => expect(getApprovalReviewMock.mock.calls.length).toBeGreaterThan(before));
   });
 });

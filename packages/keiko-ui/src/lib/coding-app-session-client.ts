@@ -12,6 +12,7 @@
  * reports the honest paired/unpaired state through its channel payload instead.
  */
 
+import { useSyncExternalStore } from "react";
 import type { CodingAppSessionPairingAttestation } from "@oscharko-dev/keiko-contracts";
 import {
   CODING_APP_SESSION_PAIRING_FRAGMENT_PREFIX,
@@ -87,4 +88,43 @@ export function redeemCodingAppSessionPairingOnBoot(): Promise<boolean> {
  */
 export function codingAppSessionPairingSettled(): Promise<boolean> {
   return redeemCodingAppSessionPairingOnBoot();
+}
+
+// F65: a pairing can arrive without a page load (the launcher link opened in the tab that already
+// shows the app, after a lane restart dropped its session), long after the boot attempt every
+// protected read orders behind. Each such redemption that posted an attestation is counted here,
+// and every read that depends on the session re-runs on the count, the app-session channel
+// included. The boot redemption is not counted: every read already waits for it.
+let navigationRedemptions = 0;
+const redemptionListeners = new Set<() => void>();
+
+function subscribeToRedemptions(listener: () => void): () => void {
+  redemptionListeners.add(listener);
+  return (): void => {
+    redemptionListeners.delete(listener);
+  };
+}
+
+function redemptionCount(): number {
+  return navigationRedemptions;
+}
+
+/** How many pairings this window redeemed after its boot; session reads re-run on it (F65). */
+export function useCodingAppSessionRedemptions(): number {
+  return useSyncExternalStore(subscribeToRedemptions, redemptionCount, () => 0);
+}
+
+/**
+ * Redeems a pairing fragment that arrived by same-document navigation (`hashchange`). It waits for
+ * a boot attempt already under way and never starts one, because a fragment present at boot
+ * belongs to that attempt; an attestation it posts re-runs every read that depends on the session.
+ */
+export async function redeemCodingAppSessionPairingNavigation(
+  seams: CodingAppSessionPairingSeams | undefined = defaultSeams(),
+): Promise<boolean> {
+  await bootRedemption;
+  if (!(await redeemCodingAppSessionPairingFragment(seams))) return false;
+  navigationRedemptions += 1;
+  for (const listener of redemptionListeners) listener();
+  return true;
 }

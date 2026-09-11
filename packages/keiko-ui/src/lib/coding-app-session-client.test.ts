@@ -1,3 +1,4 @@
+import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { CodingAppSessionPairingAttestation } from "@oscharko-dev/keiko-contracts";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
@@ -5,7 +6,9 @@ import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contr
 import {
   codingAppSessionPairingSettled,
   redeemCodingAppSessionPairingFragment,
+  redeemCodingAppSessionPairingNavigation,
   redeemCodingAppSessionPairingOnBoot,
+  useCodingAppSessionRedemptions,
   type CodingAppSessionPairingSeams,
 } from "./coding-app-session-client";
 
@@ -107,5 +110,49 @@ describe("boot pairing ordering (#2478, Qodo #2514 finding 3)", () => {
     expect(second).toBe(first);
     expect(codingAppSessionPairingSettled()).toBe(first);
     await expect(first).resolves.toBe(false);
+  });
+});
+
+describe("pairing redeemed without a page load (F65)", () => {
+  it("counts a posted redemption and re-renders every reader of the count", async () => {
+    const view = renderHook(() => useCodingAppSessionRedemptions());
+    const before = view.result.current;
+    const arrival = seams(encodeCodingAppSessionPairingFragment(attestation));
+
+    await act(async () => {
+      await expect(redeemCodingAppSessionPairingNavigation(arrival.seams)).resolves.toBe(true);
+    });
+
+    expect(arrival.posted()).toHaveLength(1);
+    expect(arrival.stripped()).toBe(1);
+    expect(view.result.current).toBe(before + 1);
+  });
+
+  it("counts neither a navigation without a fragment nor one whose post failed", async () => {
+    const view = renderHook(() => useCodingAppSessionRedemptions());
+    const before = view.result.current;
+    const failing: CodingAppSessionPairingSeams = {
+      readFragment: () => encodeCodingAppSessionPairingFragment(attestation),
+      stripFragment: vi.fn(),
+      postPairing: () => Promise.reject(new TypeError("pair endpoint unreachable")),
+    };
+
+    await act(async () => {
+      await expect(redeemCodingAppSessionPairingNavigation(seams("").seams)).resolves.toBe(false);
+      await expect(redeemCodingAppSessionPairingNavigation(failing)).resolves.toBe(false);
+    });
+
+    expect(view.result.current).toBe(before);
+  });
+
+  it("does not count the boot redemption, which every read already waits for", async () => {
+    const view = renderHook(() => useCodingAppSessionRedemptions());
+    const before = view.result.current;
+
+    await act(async () => {
+      await redeemCodingAppSessionPairingOnBoot();
+    });
+
+    expect(view.result.current).toBe(before);
   });
 });

@@ -9,6 +9,11 @@ import {
   useCodingWorkbenchResearch,
   type UseCodingWorkbenchResearchInput,
 } from "./useCodingWorkbenchResearch";
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import {
+  redeemCodingAppSessionPairingNavigation,
+  type CodingAppSessionPairingSeams,
+} from "./coding-app-session-client";
 import { ApiError } from "./api";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "./client-diagnostics";
 import {
@@ -19,7 +24,8 @@ import {
 const getResearchMock = vi.hoisted(() => vi.fn());
 const pairingSettledMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./coding-app-session-client", () => ({
+vi.mock("./coding-app-session-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./coding-app-session-client")>()),
   codingAppSessionPairingSettled: pairingSettledMock,
 }));
 
@@ -420,5 +426,35 @@ describe("useCodingWorkbenchResearch", () => {
     });
     await vi.advanceTimersByTimeAsync(10_000);
     expect(getResearchMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+// A launcher re-pair that arrives without a page load (F65): a fragment, and a pair endpoint that
+// acknowledges it.
+const REPAIR_SEAMS: CodingAppSessionPairingSeams = {
+  readFragment: (): string =>
+    encodeCodingAppSessionPairingFragment({
+      requestId: "req_re-pair",
+      issuedAtMs: 1,
+      claim: "e".repeat(64),
+    }),
+  stripFragment: (): void => undefined,
+  postPairing: (): Promise<unknown> => Promise.resolve({ schemaVersion: "1" }),
+};
+
+describe("useCodingWorkbenchResearch after a re-pair without a page load (F65)", () => {
+  it("reads the research channel again", async () => {
+    vi.useRealTimers();
+    pairingSettledMock.mockResolvedValue(true);
+    getResearchMock.mockResolvedValue(active());
+    renderHook(() => useCodingWorkbenchResearch(RUN));
+    await waitFor(() => expect(getResearchMock).toHaveBeenCalled());
+    const before = getResearchMock.mock.calls.length;
+
+    await act(async () => {
+      await redeemCodingAppSessionPairingNavigation(REPAIR_SEAMS);
+    });
+
+    await waitFor(() => expect(getResearchMock.mock.calls.length).toBeGreaterThan(before));
   });
 });

@@ -154,6 +154,47 @@ function fixture(
   return { projection, response, record, sessionId };
 }
 
+describe("channel lifecycle lines (F65)", () => {
+  function channelLines(): readonly unknown[] {
+    return sink.events.filter((event) => event.op.startsWith("coding-app-session.channel."));
+  }
+
+  it("logs a live stream's opening and, once it closes, how long it stayed open", async () => {
+    const { response } = fixture();
+    await vi.advanceTimersByTimeAsync(1_500);
+    response.destroy();
+
+    expect(channelLines()).toEqual([
+      expect.objectContaining({
+        op: "coding-app-session.channel.opened",
+        correlationId: CORRELATION,
+        extra: { live: true },
+      }),
+      expect.objectContaining({
+        op: "coding-app-session.channel.closed",
+        correlationId: CORRELATION,
+        durationMs: 1_500,
+      }),
+    ]);
+  });
+
+  it("logs a stream without a channel as opened, not live", () => {
+    const response = new StreamResponse();
+    responses.push(response);
+    openCodingAppSessionStream(
+      response as unknown as ServerResponse,
+      new EventEmitter() as IncomingMessage,
+      undefined,
+      undefined,
+      CORRELATION,
+    );
+
+    expect(channelLines()).toEqual([
+      expect.objectContaining({ op: "coding-app-session.channel.opened", extra: { live: false } }),
+    ]);
+  });
+});
+
 function terminalReason(): unknown {
   const event = sink.events.find((entry) => entry.op === "sse.stream.closed");
   expect(event?.correlationId).toBe(CORRELATION);

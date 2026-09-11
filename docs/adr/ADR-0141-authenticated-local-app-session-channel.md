@@ -142,6 +142,12 @@ It is not backpressure. The writer separately handles a false write result and a
 exception, including the initial reset, live snapshot and heartbeat. Closure must not turn a
 successful terminal write into an error or allow a previously queued snapshot to reopen the
 stream. Existing stream counters and correlated activity-log events record genuine write errors.
+The routes log the session's lifecycle body-free (PR #3452, F65): a pairing that issued a session
+(`coding-app-session.paired`), a rotation, a sign-out, each fetch stream's opening, live or
+content-free, and a live stream's close with how long it stayed open. A denied pairing or rotation
+writes no line of its own and stays in the rate-limited aggregate diagnostic (KEIKO-0838). A
+pairing fragment that arrives by same-document navigation (after a lane restart, say) is redeemed
+like a boot fragment, and every session read in the window runs again after it.
 
 ### D7 — The CI pairing fake mints read authority and is therefore production-unreachable by construction
 

@@ -16,7 +16,10 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 
 import { ApiError } from "./api";
-import { codingAppSessionPairingSettled } from "./coding-app-session-client";
+import {
+  codingAppSessionPairingSettled,
+  useCodingAppSessionRedemptions,
+} from "./coding-app-session-client";
 import {
   answerCodingWorkbenchRuntimeQuestion,
   listCodingWorkbenchRuntimeQuestions,
@@ -254,8 +257,11 @@ interface ListingInput {
 
 function useQuestionListing(input: ListingInput): void {
   const { active, consumedRef, epoch, runId, revisionRef, setState, terminal } = input;
+  // A re-pair without a page load lists again: a listing that found the window unpaired would
+  // otherwise stay unpaired (F65).
+  const redemptions = useCodingAppSessionRedemptions();
   const coordinatorRef = useRef<ListingCoordinator | null>(null);
-  const resyncRef = useRef({ epoch, runId });
+  const resyncRef = useRef({ epoch, redemptions, runId });
   useEffect(() => {
     if (!active || runId === undefined) {
       coordinatorRef.current = null;
@@ -277,13 +283,14 @@ function useQuestionListing(input: ListingInput): void {
   }, [active, consumedRef, runId, revisionRef, setState, terminal]);
   useEffect(() => {
     const previous = resyncRef.current;
-    resyncRef.current = { epoch, runId };
-    if (!active || previous.runId !== runId || previous.epoch === epoch) return;
+    resyncRef.current = { epoch, redemptions, runId };
+    if (!active || previous.runId !== runId) return;
+    if (previous.epoch === epoch && previous.redemptions === redemptions) return;
     const coordinator = coordinatorRef.current;
     if (coordinator !== null && coordinator.environment.runId === runId) {
       startQuestionListing(coordinator, true);
     }
-  }, [active, epoch, runId]);
+  }, [active, epoch, redemptions, runId]);
 }
 
 interface ListingEnvironment {

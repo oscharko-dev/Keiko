@@ -3,8 +3,18 @@ import { access, readFile, rm } from "node:fs/promises";
 import { Agent, createServer, request } from "node:http";
 import { connect } from "node:net";
 import { createRequire } from "node:module";
-import { mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  watch,
+  writeFileSync,
+} from "node:fs";
+import { dirname, extname, join, resolve } from "node:path";
 import { clearTimeout, setTimeout } from "node:timers";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, URL } from "node:url";
@@ -25,14 +35,14 @@ const bffScript = join(repoRoot, "scripts", "dev-bff.mjs");
 const nextBin = requireFromUi.resolve("next/dist/bin/next");
 const nextLockPath = join(uiDir, ".next", "lock");
 const children = new Map();
+// Children the runner stops on purpose, respawned without counting as a crash (F71).
+const intendedRestarts = new Set();
 const maxRestarts = Number(process.env.KEIKO_DEV_MAX_RESTARTS ?? "3");
 const restartDelayMs = Number(process.env.KEIKO_DEV_RESTART_DELAY_MS ?? "500");
 const restartStabilityMs = Number(process.env.KEIKO_DEV_RESTART_STABILITY_MS ?? "300000");
 const nextBundlerPreference = process.env.KEIKO_DEV_NEXT_BUNDLER ?? "auto";
 const skipPackageWatchForTest =
   process.env.NODE_ENV === "test" && process.env.KEIKO_DEV_TEST_SKIP_PACKAGE_WATCH === "1";
-const skipBffWatchForTest =
-  process.env.NODE_ENV === "test" && process.env.KEIKO_DEV_TEST_SKIP_BFF_WATCH === "1";
 export const DEV_RUNNER_SHUTDOWN_GRACE_MS = 35_000;
 export function resolveNextBundler(preference) {
   if (preference === "auto" || preference === "turbopack") return "turbopack";
@@ -53,6 +63,7 @@ export function resolveConfiguredNextBundler(preference) {
 
 let nextBundler = resolveConfiguredNextBundler(nextBundlerPreference);
 let server;
+let bffCodeWatch;
 let shuttingDown = false;
 let publicReady = false;
 let readinessCheckRunning = false;
@@ -480,6 +491,12 @@ function spawnChild(label, command, args, options) {
     if (label === "bff") microphoneAllowance.revoke();
     writeState({ ready: false, lastExit: { label, code, signal } });
     if (shuttingDown) return;
+    if (intendedRestarts.delete(label)) {
+      // The BFF's code changed: an intended restart respawns at once and is not a crash, so it is
+      // not counted against the restart budget (F71).
+      restartChildAfterDelay(label);
+      return;
+    }
     console.error(`[dev] ${label} exited unexpectedly.`);
     if (label === "next" && nextBundler === "turbopack" && nextBundlerPreference === "auto") {
       nextBundler = "webpack";
@@ -577,10 +594,30 @@ async function waitForPublicReadiness() {
 }
 
 function startBff() {
-  spawnChild("bff", process.execPath, bffProcessArgs(bffScript, !skipBffWatchForTest), {
+  spawnChild("bff", process.execPath, bffProcessArgs(bffScript), {
     cwd: repoRoot,
     env: bffChildEnv(bffPort, publicPort, stateDir),
   });
+}
+
+function startBffCodeWatch() {
+  const roots = bffCodeRoots(repoRoot);
+  const tracker = createContentDigestTracker();
+  tracker.seed(bffCodeFiles(roots));
+  bffCodeWatch = createBffCodeWatch({ roots, tracker, onChange: restartBffForCodeChange });
+}
+
+// One controlled restart for a burst of code changes: the BFF is stopped on purpose and respawned
+// as soon as it exited. A BFF that is not running, or already restarting, is left alone: its next
+// start loads the new code anyway.
+function restartBffForCodeChange(changed) {
+  const child = children.get("bff");
+  if (shuttingDown || child === undefined || intendedRestarts.has("bff")) return;
+  console.error(
+    `[dev] bff code changed (${String(changed.length)} file(s)); restarting the bff ...`,
+  );
+  intendedRestarts.add("bff");
+  child.kill("SIGTERM");
 }
 
 // The packaged CLI exports the public loopback port to the server; the dev lane mirrors it so
@@ -594,8 +631,123 @@ export function bffChildEnv(bffListenPort, publicUiPort, keikoStateDir) {
   };
 }
 
-export function bffProcessArgs(scriptPath, watchEnabled) {
-  return watchEnabled ? ["--watch", "--watch-preserve-output", scriptPath] : [scriptPath];
+// F71: `node --watch` restarted the BFF on every write to a file it had loaded, a content-identical
+// one included (a touched source whose rebuild emits the same JavaScript), and a restart ends a
+// live run. The BFF runs as a plain process; the runner watches its code and restarts it only when
+// a file's content changed.
+export function bffProcessArgs(scriptPath) {
+  return [scriptPath];
+}
+
+// Hermetic tests keep one stable BFF process: a rebuild mid-suite must not restart it.
+export function bffCodeWatchEnabled(env) {
+  return !(env.NODE_ENV === "test" && env.KEIKO_DEV_TEST_SKIP_BFF_WATCH === "1");
+}
+
+const BFF_CODE_EXTENSIONS = new Set([".js", ".mjs", ".cjs", ".json"]);
+
+export function isBffCodePath(path) {
+  return BFF_CODE_EXTENSIONS.has(extname(path));
+}
+
+function fileDigest(path) {
+  try {
+    return createHash("sha256").update(readFileSync(path)).digest("hex");
+  } catch {
+    // A file that is gone, or cannot be read, has no content: its absence is the change.
+    return undefined;
+  }
+}
+
+/**
+ * The last content seen for each watched file. `changed(paths)` names the paths whose bytes differ
+ * from it, a new or removed file included, and records the new content; a path that was only
+ * touched is never named.
+ */
+export function createContentDigestTracker(readDigest = fileDigest) {
+  const digests = new Map();
+  return {
+    seed(paths) {
+      for (const path of paths) digests.set(path, readDigest(path));
+    },
+    changed(paths) {
+      const changed = [];
+      for (const path of new Set(paths)) {
+        const next = readDigest(path);
+        if (digests.get(path) === next) continue;
+        digests.set(path, next);
+        changed.push(path);
+      }
+      return changed;
+    },
+  };
+}
+
+function watchedFile(root, name) {
+  if (!root.recursive) return root.path;
+  return name === null ? undefined : join(root.path, String(name));
+}
+
+/**
+ * Watches the BFF's code (a directory recursively, or one file) and calls `onChange` with the paths
+ * whose content changed, once per burst: a rebuild writes many files at once.
+ */
+export function createBffCodeWatch({
+  roots,
+  tracker,
+  onChange,
+  debounceMs = 300,
+  watchImpl = watch,
+  schedule = setTimeout,
+  cancel = clearTimeout,
+}) {
+  const pending = new Set();
+  let timer;
+  const flush = () => {
+    timer = undefined;
+    const changed = tracker.changed([...pending]);
+    pending.clear();
+    if (changed.length > 0) onChange(changed);
+  };
+  const watchers = roots.map((root) =>
+    watchImpl(root.path, { recursive: root.recursive, persistent: false }, (_event, name) => {
+      const file = watchedFile(root, name);
+      if (file === undefined || !isBffCodePath(file)) return;
+      pending.add(file);
+      if (timer !== undefined) cancel(timer);
+      timer = schedule(flush, debounceMs);
+    }),
+  );
+  return {
+    close() {
+      for (const watcher of watchers) watcher.close();
+      if (timer !== undefined) cancel(timer);
+    },
+  };
+}
+
+// What the BFF loads from this checkout: every built package, and its own two scripts.
+function bffCodeRoots(root) {
+  const packages = join(root, "packages");
+  const dists = readdirSync(packages, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => join(packages, entry.name, "dist"))
+    .filter((dist) => existsSync(dist));
+  return [
+    ...dists.map((path) => ({ path, recursive: true })),
+    { path: join(root, "scripts", "dev-bff.mjs"), recursive: false },
+    { path: join(root, "scripts", "lib", "dev-bff-shutdown.mjs"), recursive: false },
+  ];
+}
+
+function bffCodeFiles(roots) {
+  return roots.flatMap((root) =>
+    root.recursive
+      ? readdirSync(root.path, { recursive: true })
+          .map((name) => join(root.path, String(name)))
+          .filter(isBffCodePath)
+      : [root.path],
+  );
 }
 
 export function packageBuildWatchArgs() {
@@ -959,6 +1111,7 @@ function serveStarting(res) {
 function shutdown(code = 0) {
   if (shuttingDown) return;
   shuttingDown = true;
+  bffCodeWatch?.close();
   writeState({ ready: false, shuttingDown: true });
   server?.close(() => undefined);
   for (const child of children.values()) {
@@ -1015,6 +1168,7 @@ if (invokedDirectly) {
   // The readiness integration test exercises BFF/Next warmup and runs beside the package suite.
   // Its test-only seam prevents a real tsc --watch from mutating the shared dist graph mid-suite.
   if (!skipPackageWatchForTest) startPackageBuildWatch();
+  if (bffCodeWatchEnabled(process.env)) startBffCodeWatch();
   startBff();
   startNext();
 

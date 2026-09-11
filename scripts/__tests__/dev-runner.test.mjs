@@ -19,7 +19,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEV_RUNNER_SHUTDOWN_GRACE_MS,
   bffChildEnv,
+  bffCodeWatchEnabled,
   bffProcessArgs,
+  createBffCodeWatch,
+  createContentDigestTracker,
+  isBffCodePath,
   canonicalLocalhostRedirectLocation,
   checkNextPortFree,
   copyHeadersSafely,
@@ -444,19 +448,141 @@ describe("proxyHttp request target validation", () => {
   });
 });
 
+// F71 relocates the former pin of this block: interactive development still reloads the BFF's
+// code, now through the runner's content-gated watch (createBffCodeWatch below) instead of
+// `node --watch`, and hermetic tests still run one stable BFF process (bffCodeWatchEnabled).
 describe("bffProcessArgs", () => {
-  it("keeps watch mode for interactive development", () => {
-    expect(bffProcessArgs("/repo/scripts/dev-bff.mjs", true)).toEqual([
-      "--watch",
-      "--watch-preserve-output",
+  it("starts the BFF as a plain process, never under node --watch", () => {
+    expect(bffProcessArgs("/repo/scripts/dev-bff.mjs")).toEqual(["/repo/scripts/dev-bff.mjs"]);
+  });
+});
+
+describe("bffCodeWatchEnabled", () => {
+  it("watches the BFF's code in interactive development", () => {
+    expect(bffCodeWatchEnabled({})).toBe(true);
+    expect(bffCodeWatchEnabled({ NODE_ENV: "test" })).toBe(true);
+  });
+
+  it("keeps hermetic tests on one stable BFF process", () => {
+    expect(bffCodeWatchEnabled({ NODE_ENV: "test", KEIKO_DEV_TEST_SKIP_BFF_WATCH: "1" })).toBe(
+      false,
+    );
+  });
+});
+
+describe("isBffCodePath", () => {
+  it("counts only what the BFF loads at run time", () => {
+    expect(["a.js", "a.mjs", "a.cjs", "a.json"].every(isBffCodePath)).toBe(true);
+    expect(["a.d.ts", "a.js.map", "a.tsbuildinfo", "a.ts"].some(isBffCodePath)).toBe(false);
+  });
+});
+
+describe("createContentDigestTracker", () => {
+  it("names a file whose content changed and never one that was only touched", () => {
+    const contents = new Map([
+      ["/dist/a.js", "one"],
+      ["/dist/b.js", "two"],
+    ]);
+    const tracker = createContentDigestTracker((path) => contents.get(path));
+    tracker.seed(["/dist/a.js", "/dist/b.js"]);
+
+    expect(tracker.changed(["/dist/a.js", "/dist/b.js"])).toEqual([]);
+    contents.set("/dist/a.js", "one, changed");
+    expect(tracker.changed(["/dist/a.js", "/dist/b.js", "/dist/a.js"])).toEqual(["/dist/a.js"]);
+    expect(tracker.changed(["/dist/a.js"])).toEqual([]);
+  });
+
+  it("names a file that appeared or disappeared", () => {
+    const contents = new Map([["/dist/a.js", "one"]]);
+    const tracker = createContentDigestTracker((path) => contents.get(path));
+    tracker.seed(["/dist/a.js"]);
+
+    contents.set("/dist/c.js", "new");
+    contents.delete("/dist/a.js");
+    expect(tracker.changed(["/dist/a.js", "/dist/c.js"])).toEqual(["/dist/a.js", "/dist/c.js"]);
+  });
+});
+
+describe("createBffCodeWatch", () => {
+  function harness(contents) {
+    const listeners = new Map();
+    const watchImpl = vi.fn((path, _options, listener) => {
+      listeners.set(path, listener);
+      return { close: vi.fn() };
+    });
+    const timers = [];
+    const schedule = vi.fn((callback) => timers.push(callback));
+    const cancel = vi.fn((id) => {
+      timers[id - 1] = undefined;
+    });
+    const tracker = createContentDigestTracker((path) => contents.get(path));
+    tracker.seed([...contents.keys()]);
+    const onChange = vi.fn();
+    const handle = createBffCodeWatch({
+      roots: [
+        { path: "/repo/packages/a/dist", recursive: true },
+        { path: "/repo/scripts/dev-bff.mjs", recursive: false },
+      ],
+      tracker,
+      onChange,
+      watchImpl,
+      schedule,
+      cancel,
+    });
+    const runTimers = () => {
+      for (const callback of timers.splice(0)) callback?.();
+    };
+    return { handle, listeners, onChange, runTimers, watchImpl };
+  }
+
+  it("restarts nothing for a content-identical write or a file the BFF does not load", () => {
+    const contents = new Map([
+      ["/repo/packages/a/dist/index.js", "v1"],
+      ["/repo/packages/a/dist/index.d.ts", "t1"],
+    ]);
+    const { listeners, onChange, runTimers } = harness(contents);
+    contents.set("/repo/packages/a/dist/index.d.ts", "t2");
+
+    listeners.get("/repo/packages/a/dist")("change", "index.js");
+    listeners.get("/repo/packages/a/dist")("change", "index.d.ts");
+    runTimers();
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("restarts once for a burst of writes that changed code", () => {
+    const contents = new Map([
+      ["/repo/packages/a/dist/index.js", "v1"],
+      ["/repo/packages/a/dist/util.js", "u1"],
+      ["/repo/scripts/dev-bff.mjs", "b1"],
+    ]);
+    const { listeners, onChange, runTimers } = harness(contents);
+    contents.set("/repo/packages/a/dist/index.js", "v2");
+    contents.set("/repo/scripts/dev-bff.mjs", "b2");
+
+    listeners.get("/repo/packages/a/dist")("change", "index.js");
+    listeners.get("/repo/packages/a/dist")("change", "util.js");
+    listeners.get("/repo/scripts/dev-bff.mjs")("change", "dev-bff.mjs");
+    runTimers();
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith([
+      "/repo/packages/a/dist/index.js",
       "/repo/scripts/dev-bff.mjs",
     ]);
   });
 
-  it("uses a stable one-shot process for hermetic tests", () => {
-    expect(bffProcessArgs("/repo/scripts/dev-bff.mjs", false)).toEqual([
-      "/repo/scripts/dev-bff.mjs",
-    ]);
+  it("closes its watchers and drops a pending burst", () => {
+    const contents = new Map([["/repo/packages/a/dist/index.js", "v1"]]);
+    const { handle, listeners, onChange, runTimers, watchImpl } = harness(contents);
+    contents.set("/repo/packages/a/dist/index.js", "v2");
+    listeners.get("/repo/packages/a/dist")("change", "index.js");
+
+    handle.close();
+    runTimers();
+
+    expect(onChange).not.toHaveBeenCalled();
+    for (const result of watchImpl.mock.results) expect(result.value.close).toHaveBeenCalled();
   });
 });
 
