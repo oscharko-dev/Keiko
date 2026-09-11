@@ -331,8 +331,10 @@ function connectBridge(
   capabilityOverride?: string | readonly string[] | null,
   bridgeStreamIdOverride?: string,
   correlationId?: string,
+  acceptWrite: (index: number) => boolean = (): boolean => true,
 ): {
   readonly frames: () => string;
+  readonly destroyed: () => boolean;
   readonly close: () => void;
   readonly outcome: ReturnType<typeof handleEditorAgentEvents>;
   readonly requestUrl: () => string | undefined;
@@ -340,17 +342,18 @@ function connectBridge(
 } {
   const writes: string[] = [];
   const closeHandlers: (() => void)[] = [];
+  const destroy = vi.fn();
   const res = {
     writeHead: vi.fn(),
     write: vi.fn((chunk: string) => {
       writes.push(chunk);
-      return true;
+      return acceptWrite(writes.length - 1);
     }),
     on: vi.fn((event: string, cb: () => void) => {
       if (event === "close") closeHandlers.push(cb);
     }),
     end: vi.fn(),
-    destroy: vi.fn(),
+    destroy,
   } as unknown as ServerResponse;
   const req = { on: vi.fn() } as unknown as IncomingMessage;
   const sessionIds: readonly string[] =
@@ -379,6 +382,7 @@ function connectBridge(
   const outcome = handleEditorAgentEvents({ correlationId, req, res, params: {}, url });
   return {
     frames: (): string => writes.join(""),
+    destroyed: (): boolean => destroy.mock.calls.length > 0,
     outcome,
     requestUrl: (): string | undefined => req.url,
     contextUrl: (): string => url.toString(),
@@ -3681,6 +3685,36 @@ describe("editor agent routes — Issue #1392 liveness and queue lifecycle", () 
           op: "sse.stream.closed",
           correlationId: UNKNOWN_CORRELATION_ID,
           extra: expect.objectContaining({ frameCount: 1 }) as unknown,
+        }),
+      ]);
+    });
+
+    // CodeRabbit review, PR #3452: a refused ready frame used to be ignored, leaving the controller
+    // and the session subscription alive until some other close path ran. It now takes the same
+    // abort-and-destroy path as every event frame.
+    it("destroys a bridge stream whose ready frame is refused and closes it as backpressure-killed", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      await registerSnapshotOnly();
+      const bridge = connectBridge(
+        "session-1",
+        undefined,
+        undefined,
+        "corr-agent-bridge-2",
+        () => false,
+      );
+
+      expect(bridge.destroyed()).toBe(true);
+      bridge.close();
+
+      expect(closedLines(sink)).toEqual([
+        expect.objectContaining({
+          op: "sse.stream.closed",
+          correlationId: "corr-agent-bridge-2",
+          extra: expect.objectContaining({
+            frameCount: 1,
+            reason: "backpressure-killed",
+          }) as unknown,
         }),
       ]);
     });

@@ -47,7 +47,6 @@ import {
   type ServerLogEvent,
 } from "./observability/index.js";
 import { UI_HOST } from "./server.js";
-import { readyMessage } from "./sse.js";
 import { closeUiTestServer, startUiTestServer } from "./ui-test-server/_support.js";
 
 // `staticRoot` only has to exist: every request in this file targets an `/api/...` route, so
@@ -184,7 +183,7 @@ describe("(a) client disconnect mid-response — real socket abort", () => {
 });
 
 describe("(b) SSE terminal line — real frame/byte counters", () => {
-  it("logs sse.stream.closed with frameCount 3 and bytesStreamed equal to the bytes actually written", async () => {
+  it("logs sse.stream.closed with frameCount 4 and bytesStreamed equal to the bytes actually written", async () => {
     const handlerDeps = minimalHandlerDeps();
     const runId = randomUUID();
     const eventSink = new QueueEventSink();
@@ -220,16 +219,13 @@ describe("(b) SSE terminal line — real frame/byte counters", () => {
         started.sink,
         (candidate) => candidate.op === "sse.stream.closed",
       );
-      expect(event.extra?.frameCount).toBe(3);
-
-      // The response is exactly [3 counted event frames][1 uncounted `ready` frame], in that order
-      // (verified from `openSseStream`: buffer replay happens before the `ready` write). Deriving
-      // the expected byte count from the REAL bytes the server sent — rather than recomputing the
-      // SSE framing formula independently — means this assertion can never drift from whatever the
-      // production frame format actually is.
-      const totalBytes = Buffer.byteLength(text, "utf8");
-      const readyBytes = Buffer.byteLength(readyMessage(), "utf8");
-      expect(event.extra?.bytesStreamed).toBe(totalBytes - readyBytes);
+      // The response is exactly [3 replayed event frames][1 `ready` frame], and all four are counted:
+      // the ready frame used to be written bare and left out of the counters, which is the evidence
+      // gap this pin now closes (owner review, PR #3452). Deriving the expected byte count from the
+      // REAL bytes the server sent, rather than recomputing the SSE framing formula independently,
+      // means this assertion can never drift from whatever the production frame format actually is.
+      expect(event.extra?.frameCount).toBe(4);
+      expect(event.extra?.bytesStreamed).toBe(Buffer.byteLength(text, "utf8"));
     } finally {
       if (started !== undefined) await closeUiTestServer(started.server);
       handlerDeps.store.close();

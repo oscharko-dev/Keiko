@@ -12,7 +12,7 @@ import { parseRunRequest } from "./run-request.js";
 import type { RunRequest, RunVoiceOrigin } from "./run-request.js";
 import { startRun, applyRun, type EngineContext } from "./run-engine.js";
 import { ActiveRunLimitError, type AppliableSnapshot, type RunRecord } from "./runs.js";
-import { SSE_HEADERS, writeMessageEvent, readyMessage, startSseHeartbeat } from "./sse.js";
+import { SSE_HEADERS, writeMessageEvent, writeReadyMessage, startSseHeartbeat } from "./sse.js";
 import { markSseStreamBackpressureKilled } from "./sse-write.js";
 import { getServerLogger } from "./observability/index.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
@@ -640,7 +640,7 @@ export function handleAllRunEvents(ctx: RouteContext, deps: UiHandlerDeps): Hand
     deps.registry.subscribe?.((record: RunRecord): void => {
       attachRun(record, -1);
     }) ?? ((): void => undefined);
-  ctx.res.write(readyMessage());
+  writeReadyMessage(ctx.res, ctx.correlationId);
 
   const close = (): void => {
     if (closed) return;
@@ -712,7 +712,7 @@ function openSseStream(
     },
   };
   const detach = record.sink.attach(writer, afterSeq);
-  res.write(readyMessage());
+  writeReadyMessage(res, correlationId);
   res.on("close", detach);
   if (record.sink.isTerminated()) {
     detach();

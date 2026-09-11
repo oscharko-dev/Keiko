@@ -115,7 +115,7 @@ import {
   type RouteContext,
   type RouteResult,
 } from "../routes.js";
-import { SSE_HEADERS, startSseHeartbeat, writeReadyMessage } from "../sse.js";
+import { readyMessage, SSE_HEADERS, startSseHeartbeat } from "../sse.js";
 import { writeOrDestroy } from "../sse-write.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { readJsonObject } from "../files.js";
@@ -3918,7 +3918,8 @@ function openAgentSseStream(
   if (dispose === undefined) return asHandlerOutcome(bridgeCapabilityError());
   res.writeHead(200, SSE_HEADERS);
   startSseHeartbeat(res);
-  writeReadyMessage(res, correlationId);
+  // Refused, the ready frame aborts the controller and destroys the stream like any event frame.
+  writeOrDestroy(res, readyMessage(), controller, undefined, correlationId);
   ctx.req.on("close", () => {
     res.end();
   });

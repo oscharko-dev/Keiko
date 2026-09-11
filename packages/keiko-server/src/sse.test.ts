@@ -1,3 +1,6 @@
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { SSE_HEADERS, startSseHeartbeat, writeReadyMessage } from "./sse.js";
 import {
@@ -166,5 +169,31 @@ describe("writeReadyMessage (#3452 audit finding sse.ts:108)", () => {
       correlationId: "corr-ready-1",
       extra: { frameCount: 1, reason: "client-disconnected" },
     });
+  });
+});
+
+// #3452 audit finding sse.ts:108 (pin): every SSE opener in this package must send its ready frame
+// through `writeReadyMessage`, never a bare `res.write(readyMessage())`. `recordSseStreamFrame`
+// (sse-write.ts) attaches a stream's frame/byte counters and its terminal `close` listener lazily,
+// on the FIRST recorded frame — a bare write skips that call entirely, so a stream that opens, sends
+// only `ready`, and closes before its first real event or heartbeat tick never creates that state
+// at all and is invisible to the terminal `sse.stream.closed` line: no frame count, no duration, no
+// correlation id. The owning-layer helper already exists (this file); a bare write is a regression,
+// not a missing feature (AGENTS.md §8 Rule 1 — every change ships its own body-free evidence, built
+// through the owning layer's existing port, never a parallel path). This pin is static rather than
+// behavioural because the defect is textual — which write call a route happens to use — not a
+// runtime state a mock could exercise from outside the route module.
+describe("bare ready-frame write pin (#3452 audit finding sse.ts:108)", () => {
+  it("never bare-writes the ready frame anywhere under keiko-server/src", () => {
+    const srcRoot = dirname(fileURLToPath(import.meta.url));
+    const bareReadyWrite = /\.write\(\s*readyMessage\(\)\s*\)/u;
+    const relativePaths = readdirSync(srcRoot, { recursive: true }) as string[];
+    const offenders = relativePaths
+      .filter((path) => path.endsWith(".ts") && !path.endsWith(".test.ts"))
+      .filter((path) => bareReadyWrite.test(readFileSync(join(srcRoot, path), "utf8")));
+
+    expect(offenders, `bare res.write(readyMessage()) found in:\n${offenders.join("\n")}`).toEqual(
+      [],
+    );
   });
 });

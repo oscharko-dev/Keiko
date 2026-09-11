@@ -13,7 +13,7 @@ import { CommandRunnerError } from "./command-runner-errors.js";
 import type { CommandRunInput, CommandRunnerManager } from "./command-runner.js";
 import type { CommandRunnerEvent } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
-import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "./sse.js";
+import { SSE_HEADERS, startSseHeartbeat, readyMessage } from "./sse.js";
 import { writeOrDestroy, type SseBackpressureSignal } from "./sse-write.js";
 import { redactedEventJson } from "./sse-frame-cache.js";
 import {
@@ -172,7 +172,7 @@ export function handleDeleteCommandRun(ctx: RouteContext, deps: UiHandlerDeps): 
 export function handleCommandEvents(ctx: RouteContext, deps: UiHandlerDeps): HandlerOutcome {
   const guard = requireRunner(deps);
   if (isRouteResult(guard)) return guard;
-  openCommandSseStream(ctx.res, guard, deps.redactor);
+  openCommandSseStream(ctx.res, guard, deps.redactor, undefined, ctx.correlationId);
   ctx.req.on("close", () => {
     ctx.res.end();
   });
@@ -187,6 +187,7 @@ export function openCommandSseStream(
   manager: CommandRunnerManager,
   redactor: UiHandlerDeps["redactor"],
   onBackpressure?: (signal: SseBackpressureSignal) => void,
+  correlationId?: string,
 ): void {
   res.writeHead(200, SSE_HEADERS);
   startSseHeartbeat(res);
@@ -208,7 +209,9 @@ export function openCommandSseStream(
     unsubscribe();
   };
   controller.signal.addEventListener("abort", stop, { once: true });
-  res.write(readyMessage());
+  // The ready frame takes the same abort-and-destroy path as every event frame: refused, it aborts
+  // this controller at once, which unsubscribes the stream, so the socket is destroyed exactly once.
+  writeOrDestroy(res, readyMessage(), controller, onBackpressure, correlationId);
   res.on("close", () => {
     stop();
   });
