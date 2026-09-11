@@ -63,6 +63,16 @@ export interface CodingWorkbenchTrustAffordanceProps {
 
 type WorktreeScriptTrust = "trusted" | "approval-required";
 
+/**
+ * A worktree script-trust decision paired with the root it was read for, so a decision belonging to
+ * a since-replaced root can never be mistaken for the current root's decision (see
+ * `useWorktreeScriptTrust`).
+ */
+interface WorktreeScriptTrustState {
+  readonly root: string;
+  readonly decision: WorktreeScriptTrust | undefined;
+}
+
 interface WorktreeTrustGrant {
   readonly granting: boolean;
   readonly grant: () => void;
@@ -198,12 +208,21 @@ function scriptTrustOf(catalog: EditorVerificationCatalog): WorktreeScriptTrust 
  * nor hide the one it needs. Re-read immediately on mount and after every trust mutation, and after
  * the settle delay when the run's revision moves. An unreadable decision resolves to undefined: no
  * action is offered on a decision that could not be read.
+ *
+ * The decision is stored together with the root it was read for (`WorktreeScriptTrustState`). When
+ * `root` changes — one run's worktree replaced by another's — the read for the new root has not
+ * answered yet, so a decision recorded for the OLD root must never be handed back as if it were the
+ * new root's: `pendingTrustDecision` would combine the old root's "approval-required" state with a
+ * grant callback already bound to the new root, granting trust to the new worktree on the strength
+ * of the old one's decision (CWE-863, CodeRabbit review, PR #3452). The hook therefore returns
+ * undefined for every render whose `root` does not match the stored decision's root — the stale
+ * decision stays cached underneath so it answers again at once if `root` comes back.
  */
 function useWorktreeScriptTrust(
   root: string | null,
   runRevision: number | undefined,
 ): WorktreeScriptTrust | undefined {
-  const [decision, setDecision] = useState<WorktreeScriptTrust>();
+  const [state, setState] = useState<WorktreeScriptTrustState>();
   const [trustTick, setTrustTick] = useState(0);
   const immediateKey = useRef<string>(undefined);
   useEffect(() => {
@@ -218,7 +237,7 @@ function useWorktreeScriptTrust(
   useEffect(() => {
     if (root === null) {
       immediateKey.current = undefined;
-      setDecision(undefined);
+      setState(undefined);
       return;
     }
     // A new root or a trust mutation is read at once; a run-revision move alone waits to settle.
@@ -230,10 +249,10 @@ function useWorktreeScriptTrust(
       () => {
         fetchVerificationCatalog(root, controller.signal)
           .then((catalog) => {
-            if (!controller.signal.aborted) setDecision(scriptTrustOf(catalog));
+            if (!controller.signal.aborted) setState({ root, decision: scriptTrustOf(catalog) });
           })
           .catch(() => {
-            if (!controller.signal.aborted) setDecision(undefined);
+            if (!controller.signal.aborted) setState({ root, decision: undefined });
           });
       },
       immediate || runRevision === undefined ? 0 : WORKTREE_TRUST_SETTLE_MS,
@@ -243,7 +262,9 @@ function useWorktreeScriptTrust(
       controller.abort();
     };
   }, [root, trustTick, runRevision]);
-  return decision;
+  // A decision read for a since-replaced root is treated as no decision at all: never shown or
+  // acted on while the current root's own catalog read is still in flight.
+  return state?.root === root ? state.decision : undefined;
 }
 
 /**

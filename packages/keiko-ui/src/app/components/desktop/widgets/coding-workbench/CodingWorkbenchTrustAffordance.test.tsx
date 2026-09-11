@@ -356,6 +356,39 @@ describe("CodingWorkbenchTrustAffordance", () => {
     expect(container).toBeEmptyDOMElement();
   });
 
+  // CWE-863 (CodeRabbit review, PR #3452): a worktree-root change must drop root A's decision at
+  // once, not keep rendering it while root B's own catalog read is still in flight -- otherwise a
+  // click would grant B's root on the strength of A's stale "approval-required" decision, because
+  // `useWorktreeTrustGrant(worktreeRoot, ...)` always rebinds to the CURRENT root while the old
+  // `useWorktreeScriptTrust` state could still be answering for the OLD one.
+  it("stops offering A's drift-notice allow action once the worktree root changes to B, before B's catalog answers", async () => {
+    fetchStatus.mockResolvedValue(status("/repo-a", "trusted"));
+    fetchCatalog.mockResolvedValue(catalog("/worktree-a", "approval-required"));
+    const view = render(
+      <CodingWorkbenchTrustAffordance binding={binding("/repo-a", "/worktree-a")} />,
+    );
+
+    await screen.findByRole("button", { name: ALLOW });
+    expect(screen.getByText(DRIFT_NOTICE)).toBeInTheDocument();
+
+    // Root B's own catalog read is still unresolved at the point of the assertions below.
+    let resolveCatalogB: (value: EditorVerificationCatalog) => void = () => undefined;
+    fetchCatalog.mockReturnValue(
+      new Promise<EditorVerificationCatalog>((resolve) => {
+        resolveCatalogB = resolve;
+      }),
+    );
+    view.rerender(<CodingWorkbenchTrustAffordance binding={binding("/repo-a", "/worktree-b")} />);
+    await waitFor(() =>
+      expect(fetchCatalog).toHaveBeenCalledWith("/worktree-b", expect.anything()),
+    );
+
+    expect(screen.queryByRole("button", { name: ALLOW })).not.toBeInTheDocument();
+    expect(screen.queryByText(DRIFT_NOTICE)).not.toBeInTheDocument();
+
+    resolveCatalogB(catalog("/worktree-b", "trusted"));
+  });
+
   it("has no serious or critical axe violations while the action is shown", async () => {
     fetchStatus.mockResolvedValue(status("/repo-a", "restricted"));
     const { container } = render(<CodingWorkbenchTrustAffordance binding={binding()} />);

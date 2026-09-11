@@ -667,18 +667,28 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     revision: number,
     correlationId: string | undefined,
   ): void {
+    const joined = correlationId ?? UNKNOWN_CORRELATION_ID;
+    const extra = {
+      basis: basis.outcome,
+      ...(basis.outcome === "known" ? { manifestDigest: basis.value } : {}),
+      revision,
+    };
+    // Two literal `op` sites, never a computed one: the generated op catalog can only enumerate a
+    // literal, and a computed op would enter it as `<dynamic>`, hiding a rename from its drift check.
+    if (decision === "granted") {
+      this.activityLog.write({
+        category: "security",
+        op: "workspace-script-trust.granted",
+        correlationId: joined,
+        extra,
+      });
+      return;
+    }
     this.activityLog.write({
       category: "security",
-      op:
-        decision === "granted"
-          ? "workspace-script-trust.granted"
-          : "workspace-script-trust.revoked",
-      correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-      extra: {
-        basis: basis.outcome,
-        ...(basis.outcome === "known" ? { manifestDigest: basis.value } : {}),
-        revision,
-      },
+      op: "workspace-script-trust.revoked",
+      correlationId: joined,
+      extra,
     });
   }
 

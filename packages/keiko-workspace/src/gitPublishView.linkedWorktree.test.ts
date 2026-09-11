@@ -109,4 +109,21 @@ describe("withGitPublishView through a linked worktree (#3452 boundWorkspaceFs)"
       privateRoot,
     );
   });
+
+  // Hostile mirror of the case above: a port minted for one Keiko-owned root must never unlock a
+  // DIFFERENT denied root. workspaceInfoWithOwnedRootAuthority is the only way an owned-root port
+  // ever reaches withGitPublishView (via boundWorkspaceFs's WorkspaceInfo -> port lookup), so this
+  // pins the binder itself refusing the mismatched pairing rather than merely re-proving test 2's
+  // plain-WorkspaceInfo denial against a second root.
+  it("refuses to bind a port minted for one managed worktree to a different managed worktree's WorkspaceInfo", () => {
+    const managedA = join(root, ".keiko", "task-workspaces", "ws_1");
+    const managedB = join(root, ".keiko", "task-workspaces", "ws_2");
+    git(["worktree", "add", "-qb", "feature/linked-hostile-a", managedA]);
+    git(["worktree", "add", "-qb", "feature/linked-hostile-b", managedB]);
+    const ownedFsForA = workspaceFsWithOwnedRootAuthority(nodeWorkspaceFs, managedA);
+
+    expect(() =>
+      workspaceInfoWithOwnedRootAuthority(ordinaryWorkspace(managedB), ownedFsForA),
+    ).toThrow("owned-root authority does not name this workspace root");
+  });
 });

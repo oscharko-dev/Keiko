@@ -674,6 +674,53 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     expect(records).toEqual([expect.objectContaining({ cleanup: "faulted", errorClass: "Error" })]);
   });
 
+  // Owner review, PR #3452: the two lines above exercise `recordRuntimeShutdown`'s warn-level
+  // branch only through `disposeRuntimeServicesRecorded` called directly with a hand-rolled
+  // record callback -- the level-selection branch inside `recordRuntimeShutdown` itself was never
+  // driven through the composed `dispose()` a real process actually calls. This drives a teardown
+  // step (`gitChangeSnapshotService.close`) that genuinely throws through `buildUiHandlerDeps`'s
+  // own composed dispose(), so the warn level is proven from the seam a customer's process uses.
+  it("marks the completion line a warning when a composed teardown step actually faults", async (): Promise<void> => {
+    const records: ServerLogEvent[] = [];
+    const stateDir = tmp("shutdown-fault-evidence-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("shutdown-fault-evidence-ev-"),
+      env: {},
+      uiDbPath: join(stateDir, "keiko-ui.db"),
+      activityLog: { write: (event: ServerLogEvent): void => void records.push(event) },
+    });
+    if (deps.gitChangeSnapshotService === undefined) {
+      throw new Error("snapshot service not composed");
+    }
+    const closeFailure = new Error("snapshot service close failed");
+    const close = vi.spyOn(deps.gitChangeSnapshotService, "close").mockImplementation(() => {
+      throw closeFailure;
+    });
+
+    let caught: unknown;
+    try {
+      await deps.dispose?.();
+    } catch (error) {
+      caught = error;
+    } finally {
+      close.mockRestore();
+    }
+
+    expect(caught).toBe(closeFailure);
+    const shutdown = records.filter((event) => event.op === "server.runtime.shutdown");
+    expect(shutdown).toHaveLength(2);
+    expect(shutdown[1]).toMatchObject({
+      level: "warn",
+      category: "process",
+      extra: {
+        state: "completed",
+        cleanup: "faulted",
+        errorClass: "Error",
+      },
+    });
+  }, 15000);
+
   it("materializes the managed root before content-bearing routes classify ordinary roots", async (): Promise<void> => {
     const stateDir = tmp("managed-root-composition-");
     const deps = buildUiHandlerDeps({
