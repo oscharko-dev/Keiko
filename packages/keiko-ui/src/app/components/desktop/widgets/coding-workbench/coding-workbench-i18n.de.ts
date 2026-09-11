@@ -903,6 +903,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.skills.reason.incompatible": "Nicht kompatibel",
   "codingWorkbench.skills.reason.handlerUnavailable": "Kein Handler",
   "codingWorkbench.skills.reason.authorityDenied": "Berechtigung verweigert",
+  "codingWorkbench.skills.unavailable": "Die freigegebenen Skills konnten nicht gelesen werden.",
+  "codingWorkbench.skills.retry": "Erneut versuchen",
   "codingWorkbench.skills.reason.budgetExhausted": "Budget erschöpft",
   "codingWorkbench.announcement.researchActive": "Internet-Recherche-Berechtigung aktiv.",
   "codingWorkbench.alert.actionFailedCode":

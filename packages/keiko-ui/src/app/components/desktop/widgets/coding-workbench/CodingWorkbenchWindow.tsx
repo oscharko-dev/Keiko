@@ -1074,7 +1074,11 @@ function WorkbenchColumns({
               if (research.grant !== null) void actions.revokeResearchGrant(research.grant);
             }}
           />
-          <ApprovedSkillsDisclosure skills={skills.skills ?? undefined} />
+          <ApprovedSkillsDisclosure
+            status={skills.status}
+            skills={skills.skills ?? undefined}
+            retry={skills.retry}
+          />
           <Timeline
             events={state.events}
             activity={activity}

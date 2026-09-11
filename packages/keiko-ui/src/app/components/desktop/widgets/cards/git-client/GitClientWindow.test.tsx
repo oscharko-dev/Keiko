@@ -887,6 +887,31 @@ describe("GitClientWindow — repository list", () => {
     act(() => resolve({ projects: [] }));
   });
 
+  // PR #3452 review: the re-pair effect (F65) can leave two repository listings in flight. Without a
+  // sequence guard the OLDER answer lands last and overwrites the newer one, so the operator ends up
+  // looking at the repository list of a session that has already been replaced.
+  it("ignores a repository listing that a newer request already replaced", async () => {
+    let resolveOlder!: (value: { projects: readonly ProjectWithAvailability[] }) => void;
+    const older = new Promise<{ projects: readonly ProjectWithAvailability[] }>((res) => {
+      resolveOlder = res;
+    });
+    const first = makeClient({ listRepositories: vi.fn(() => older) });
+    const { rerender } = render(<GitClientWindow client={first} />);
+
+    const second = makeClient({ listRepositories: vi.fn(async () => ({ projects: [REPO_B] })) });
+    rerender(<GitClientWindow client={second} />);
+    await screen.findByRole("button", { name: /beta/ });
+    expect(screen.queryByRole("button", { name: /alpha/ })).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveOlder({ projects: [REPO_A] });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("button", { name: /beta/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /alpha/ })).not.toBeInTheDocument();
+  });
+
   it("shows the error message when listRepositories rejects", async () => {
     const client = makeClient({
       listRepositories: vi.fn(async () => {

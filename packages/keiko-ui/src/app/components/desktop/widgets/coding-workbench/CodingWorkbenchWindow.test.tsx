@@ -3233,3 +3233,49 @@ describe("CodingWorkbenchWindow #3389 mark-ready propose control", () => {
     expect(screen.queryByRole("button", { name: /merge|close issue/iu })).not.toBeInTheDocument();
   });
 });
+
+// PR #3452 review: the skills channel distinguishes a ready EMPTY listing from a channel it could
+// not read. Passing only the listing collapsed both into "render nothing" and made the hook's retry
+// unreachable — the operator had no way back from a transient failure.
+describe("CodingWorkbenchWindow approved-skills channel state (#3417)", () => {
+  it("shows the unreadable channel and reaches the hook's retry", async () => {
+    const retry = vi.fn();
+    skillsHookMock.mockReturnValue({ status: "unavailable", skills: null, retry });
+    renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({ state: "running", runId: "run-1" }),
+        },
+        events: [event(1)],
+      }),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/keiko-checkout", "/repos/keiko-checkout"),
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: "Try again" }));
+
+    expect(retry).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a ready empty listing silent", () => {
+    skillsHookMock.mockReturnValue({ status: "ready", skills: null, retry: vi.fn() });
+    renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({ state: "running", runId: "run-1" }),
+        },
+        events: [event(1)],
+      }),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/keiko-checkout", "/repos/keiko-checkout"),
+    );
+
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
+  });
+});

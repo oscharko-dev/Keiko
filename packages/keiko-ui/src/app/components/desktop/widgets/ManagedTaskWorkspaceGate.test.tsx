@@ -106,5 +106,7 @@ describe("managedTaskWorkspaceAccess", () => {
     expect(
       managedTaskWorkspaceAccess(managed(), ACTIVE_ROOT, { pathReadAuthority: "available" }),
     ).toBeNull();
+    // A window without a target root is not the bound managed root, so it is never gated.
+    expect(managedTaskWorkspaceAccess(managed(), undefined, unpaired)).toBeNull();
   });
 });

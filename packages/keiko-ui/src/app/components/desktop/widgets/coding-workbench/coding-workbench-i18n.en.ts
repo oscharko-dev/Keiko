@@ -871,6 +871,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.skills.reason.incompatible": "Incompatible",
   "codingWorkbench.skills.reason.handlerUnavailable": "No handler",
   "codingWorkbench.skills.reason.authorityDenied": "Authority denied",
+  "codingWorkbench.skills.unavailable": "The approved skills could not be read.",
+  "codingWorkbench.skills.retry": "Try again",
   "codingWorkbench.skills.reason.budgetExhausted": "Budget exhausted",
   "codingWorkbench.announcement.researchActive": "Internet research grant active.",
   "codingWorkbench.alert.actionFailedCode":

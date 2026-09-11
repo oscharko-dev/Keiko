@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import type { CodingWorkbenchSkillsStatus } from "@/lib/useCodingWorkbenchSkills";
 import type {
   SkillCategory,
   SkillDiscoveryEntryV1,
@@ -39,11 +40,27 @@ const REASON_LABELS: Readonly<Record<SkillUnavailableReason, CodingWorkbenchMess
  * ever reaches it, and the general runtime snapshot cannot carry it at all.
  */
 export function ApprovedSkillsDisclosure({
+  status,
   skills,
+  retry,
 }: {
+  readonly status: CodingWorkbenchSkillsStatus;
   readonly skills: SkillDiscoveryResultV1 | undefined;
+  readonly retry: () => void;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
+  // A channel that could not be read is not the same fact as a run with no approved skill: the
+  // operator is told which one it is, and keeps the one recourse the hook offers.
+  if (status === "unavailable") {
+    return (
+      <p className={styles["cmp-skills-unavailable"]} role="note">
+        {t("codingWorkbench.skills.unavailable")}{" "}
+        <button type="button" onClick={retry}>
+          {t("codingWorkbench.skills.retry")}
+        </button>
+      </p>
+    );
+  }
   if (skills === undefined || skills.skills.length === 0) return null;
   return (
     <details className={styles["cmp-skills-disclosure"]}>

@@ -888,6 +888,9 @@ export function GitClientWindow({
   const [sidebarWidth, setSidebarWidth] = useState(SIDEBAR_DEFAULT_WIDTH);
   const syncSeqRef = useRef(0);
   const historyRequestSequenceRef = useRef(0);
+  // The re-pair effect reloads the repository list (F65), so two listings can be in flight at once;
+  // the SAME sequence guard the history and sync reads use keeps the older answer from landing.
+  const reposRequestSequenceRef = useRef(0);
   const repositoryConnectSeqRef = useRef(0);
   const newBranchReturnFocusRef = useRef<HTMLElement | null>(null);
   const worktreeConfirmationReturnFocusRef = useRef<HTMLElement | null>(null);
@@ -926,14 +929,18 @@ export function GitClientWindow({
   const redemptions = useCodingAppSessionRedemptions();
 
   const loadRepositories = useCallback((): void => {
+    reposRequestSequenceRef.current += 1;
+    const requestSequence = reposRequestSequenceRef.current;
     setReposLoading(true);
     setReposError(null);
     void client.listRepositories().then(
       (res) => {
+        if (reposRequestSequenceRef.current !== requestSequence) return;
         setRepositories(res.projects);
         setReposLoading(false);
       },
       (err: unknown) => {
+        if (reposRequestSequenceRef.current !== requestSequence) return;
         setRepositories([]);
         setReposLoading(false);
         setReposError(formatGitError(err));

@@ -4989,6 +4989,10 @@ describe("CodingRuntimeOrchestrator approved skills (#3417)", () => {
 
     expect(f.orchestrator.approvedSkills("run-1")).toEqual(APPROVED_SKILLS);
     expect(f.orchestrator.approvedSkills("run-2")).toBeUndefined();
+    // A route parameter is operator input: an empty or traversal-shaped id answers nothing, so a
+    // later lookup change cannot hand the current run's skills to a malformed route.
+    expect(f.orchestrator.approvedSkills("")).toBeUndefined();
+    expect(f.orchestrator.approvedSkills("../run-1")).toBeUndefined();
     expect(JSON.stringify(f.orchestrator.snapshot())).not.toContain("skl_repo-structure-summary");
   });
 });

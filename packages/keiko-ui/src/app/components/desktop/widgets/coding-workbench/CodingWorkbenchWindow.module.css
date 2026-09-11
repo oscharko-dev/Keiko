@@ -1301,6 +1301,12 @@
   overflow-wrap: anywhere;
 }
 
+.cmp-skills-unavailable {
+  margin: var(--space-4) 0 0;
+  color: var(--text-secondary);
+  font-size: var(--text-caption);
+}
+
 .cmp-skill-category,
 .cmp-skill-readiness {
   color: var(--text-tertiary);
