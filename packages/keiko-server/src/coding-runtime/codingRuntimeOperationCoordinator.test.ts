@@ -204,6 +204,31 @@ describe("CodingRuntimeOperationCoordinator", () => {
     expect(resumePaused).not.toHaveBeenCalled();
   });
 
+  // CodeRabbit review, PR #3452: the resume moves the revision N -> N+1 and the follow-up's own
+  // advance N+1 -> N+2. A replay record committed at the ADMISSION revision N is evicted by the next
+  // reserve at N+2 (N + 1 < N + 2), so the same requestId would dispatch a second replacement task.
+  it("still refuses the same requestId after a paused follow-up resumed the run and advanced it", async () => {
+    let live: CodingRuntimeSnapshot = { ...runningSnapshot(), state: "paused", revision: 3 };
+    const resumePaused = vi.fn((): Promise<CodingRuntimeOrchestratorResult> => {
+      live = { ...live, state: "running", revision: 4 };
+      return Promise.resolve({ ok: true, snapshot: publicSnapshot() });
+    });
+    const taskDispatcher = dispatcher();
+    const subject = coordinator({ current: () => live, resumePaused, taskDispatcher });
+
+    await expect(subject.submitFollowUp("run-1", followUp("req-1", 3))).resolves.toMatchObject({
+      ok: true,
+    });
+    live = { ...live, revision: 5 };
+    await expect(subject.submitFollowUp("run-1", followUp("req-1", 5))).resolves.toEqual({
+      ok: false,
+      failureCode: "invalid-intent",
+    });
+
+    expect(taskDispatcher.replace).toHaveBeenCalledOnce();
+    expect(taskDispatcher.dispatch).not.toHaveBeenCalled();
+  });
+
   it("KEIKO-0722: exhausting the per-run replay cap yields replay-cap-exhausted, not invalid-intent", async () => {
     const taskDispatcher = dispatcher();
     const subject = coordinator({ taskDispatcher });

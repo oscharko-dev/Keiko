@@ -1128,6 +1128,16 @@ describe("CodingToolFacade", () => {
       "an untracked path escaping the workspace with ..",
       { ...validBlocking, untracked: ["../secrets.env"] },
     ],
+    // The canonical root-relative identifier contract (isRootRelativeFileIdentifier), not a
+    // POSIX-only approximation of it: Windows drive, rooted and backslash forms are foreign too.
+    ["a drive-absolute unstaged path", { ...validBlocking, unstaged: [String.raw`C:\repo\file`] }],
+    ["a drive-relative untracked path", { ...validBlocking, untracked: ["C:file"] }],
+    ["a backslash-rooted unstaged path", { ...validBlocking, unstaged: [String.raw`\repo\file`] }],
+    [
+      "a backslash traversal in an untracked path",
+      { ...validBlocking, untracked: [String.raw`..\file`] },
+    ],
+    ["a NUL byte in an unstaged path", { ...validBlocking, unstaged: ["src/a\u0000.ts"] }],
     [
       `more than ${String(VERIFIED_COMMIT_BLOCKING_PATHS_MAX)} unstaged paths`,
       {

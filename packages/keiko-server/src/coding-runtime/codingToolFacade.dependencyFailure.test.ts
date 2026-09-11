@@ -1,5 +1,6 @@
 import type { VerificationDependencySummary } from "@oscharko-dev/keiko-contracts";
 import { VERIFICATION_DEPENDENCY_FAILURE_STATES } from "@oscharko-dev/keiko-contracts/runtime/verification";
+import { VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS } from "@oscharko-dev/keiko-verification";
 import { describe, expect, it, vi } from "vitest";
 
 import { createCodingToolFacade } from "./codingToolFacade.js";
@@ -84,6 +85,27 @@ describe("dependency bootstrap failures through the facade", () => {
     },
   );
 
+  // The guard the facade applies to a forwarded excerpt (validVerificationFailureExcerpt in
+  // codingToolFacade.ts) accepts 1..VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS characters unmodified,
+  // plus exactly one character more: outputExcerpt (keiko-verification/src/excerpt.ts) truncates by
+  // prefixing a single ellipsis character to a MAX_CHARS-length tail, so a truncated excerpt is
+  // always exactly MAX_CHARS + 1 long ("bounded by the same cap it was cut to"). That is the true
+  // accepted maximum, not an off-by-one.
+  it("forwards a failure whose excerpt is exactly the longest length outputExcerpt ever produces", async () => {
+    const failure = {
+      summary: dependencyBootstrapFailureSummary("failed"),
+      locations: [],
+      truncated: false,
+      excerpt: "e".repeat(VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS + 1),
+      dependencies: dependencyRecord("failed"),
+    };
+
+    await expect(executeWith(failure)).resolves.toEqual({
+      ...FAILED,
+      verificationFailure: failure,
+    });
+  });
+
   it.each([
     {
       name: "the summary names another state than its record",
@@ -127,6 +149,26 @@ describe("dependency bootstrap failures through the facade", () => {
           "dependency installation failed: npm install failed (exit 1); no verification step ran",
         locations: [],
         truncated: false,
+        dependencies: dependencyRecord("failed"),
+      },
+    },
+    {
+      name: "the excerpt is empty",
+      failure: {
+        summary: dependencyBootstrapFailureSummary("failed"),
+        locations: [],
+        truncated: false,
+        excerpt: "",
+        dependencies: dependencyRecord("failed"),
+      },
+    },
+    {
+      name: "the excerpt is one character past the longest length outputExcerpt ever produces",
+      failure: {
+        summary: dependencyBootstrapFailureSummary("failed"),
+        locations: [],
+        truncated: false,
+        excerpt: "e".repeat(VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS + 2),
         dependencies: dependencyRecord("failed"),
       },
     },

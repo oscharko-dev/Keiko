@@ -53,7 +53,9 @@ interface RuntimeOperationCoordinatorDeps {
 
 interface RuntimeOperationReservation {
   readonly requestId: string;
-  readonly commit: () => void;
+  // Records the requestId as spent at the revision the operation applied at: the admission revision
+  // unless the operation itself moved the run first (a follow-up into a pause resumes it).
+  readonly commit: (appliedRevision?: number) => void;
   readonly release: () => void;
 }
 
@@ -175,7 +177,11 @@ export class CodingRuntimeOperationCoordinator {
         return failure("authority-resolution-failed");
       }
       settleGenerationReservation(dispatched.generation, true);
-      operation.reservation.commit();
+      // Committed at the revision the replacement was dispatched against, not the one it was
+      // admitted at: a resume moved the run N -> N+1 before this advance to N+2, and a record kept at
+      // N would already be evicted by the next admission, dispatching the same requestId twice
+      // (CodeRabbit review, PR #3452).
+      operation.reservation.commit(live.revision);
       this.observeTaskCompletion(
         runId,
         dispatched.result.completion,
@@ -674,9 +680,9 @@ class RuntimeOperationReplayCoordinator {
     };
     const reservation: RuntimeOperationReservation = {
       requestId,
-      commit: (): void => {
+      commit: (appliedRevision = liveRevision): void => {
         if (!active) return;
-        committed.set(requestId, liveRevision);
+        committed.set(requestId, appliedRevision);
         this.committed.set(runId, committed);
         release();
       },

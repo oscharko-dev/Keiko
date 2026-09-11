@@ -23,6 +23,7 @@ import {
   EDITOR_AGENT_FAILURE_CODES,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { validateAuxiliaryCapabilityOutcomeV1 } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
+import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import {
   isVerificationDependencySummary,
   isVerificationFailureLocation,
@@ -402,7 +403,9 @@ function isCodingToolVerificationResult(value: unknown): value is CodingToolVeri
   );
 }
 
-// Bounded, workspace-relative and exact-keyed, like every other payload crossing this boundary.
+// Bounded, workspace-relative and exact-keyed, like every other payload crossing this boundary. A
+// path is held to the repository's one root-relative identifier contract, never a POSIX-only
+// approximation of it: drive, rooted, backslash and NUL forms are refused as surely as "..".
 function isVerifiedCommitBlockingPaths(value: unknown): value is VerifiedCommitBlockingPaths {
   if (!isRecord(value) || Object.keys(value).length !== 4) return false;
   return (
@@ -423,11 +426,7 @@ function isBlockingPathList(value: unknown): value is readonly string[] {
     value.length <= VERIFIED_COMMIT_BLOCKING_PATHS_MAX &&
     value.every(
       (path) =>
-        typeof path === "string" &&
-        path.length > 0 &&
-        path.length <= 512 &&
-        !path.startsWith("/") &&
-        !path.split("/").includes(".."),
+        typeof path === "string" && path.length <= 512 && isRootRelativeFileIdentifier(path),
     )
   );
 }

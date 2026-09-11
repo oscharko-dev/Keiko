@@ -36,6 +36,7 @@ import {
   waitForWorkspaceScriptTrust,
   verificationLivenessRefusal,
   SCRIPT_TRUST_WAIT_CEILING_MS,
+  type ProductionManagedWorktreeToolInput,
 } from "./productionManagedWorktreeTools.js";
 import { dependencyBootstrapFailureSummary } from "./codingToolIpc.js";
 import { CODING_TOOL_INVOCATION_MAX_TTL_MS } from "./codingToolInvocationRegistry.js";
@@ -710,6 +711,7 @@ describe("production managed worktree tools", () => {
   it.each([
     ["autonomous-delivery", "none", 1],
     ["autonomous-delivery", "timed-out", 0],
+    ["autonomous-delivery", "non-zero-exit", 0],
     ["supervised-coding", "none", 0],
     ["governed-assist", "none", 0],
   ] as const)(
@@ -780,6 +782,96 @@ describe("production managed worktree tools", () => {
         }),
       });
       expect(execute).toHaveBeenCalledOnce();
+      expect(admitRunManifest).toHaveBeenCalledTimes(admissions);
+    },
+  );
+
+  // Same admittingRunManifest wrapper as the command port above, applied to the edit port: a
+  // completed edit effect in `autonomous-delivery` admits the run's manifest, a failed one admits
+  // nothing (ADR-0147 D3, autonomous-delivery amendment, owner decision 2026-09-10).
+  function baseEditAdmissionInput(): Omit<
+    ProductionManagedWorktreeToolInput,
+    "editorAgentClient" | "admitRunManifest" | "onRuntimeEvent"
+  > {
+    return {
+      authority: {
+        revalidateCapabilityForMutation: () => ({
+          ok: true as const,
+          envelope: authorizedEnvelope(),
+        }),
+        resolveCapabilityForDelegation: () => ({
+          ok: true as const,
+          envelope: authorizedEnvelope(),
+        }),
+      },
+      authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
+      workspaceRoot: "/managed/worktree",
+      resolveWorkspaceRootAccess,
+      authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+      effectiveMode: "autonomous-delivery",
+      deploymentCeiling: "autonomous-delivery",
+      liveFacts: () => FACTS,
+      secureWorkspaceTextRead: {
+        readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+      },
+      // registerMutationLease requires a coordinator once a producer binding is present (it is,
+      // via liveFacts) — its absence is a silent EDIT_PREPARE_FAILED before the mocked editor
+      // action ever runs, never a signal about the edit outcome under test.
+      mutationLeaseCoordinator: {
+        register: () => true,
+        discard: () => true,
+        waitForMutation: () => Promise.resolve("succeeded"),
+      },
+      invocationRegistry: createCodingToolInvocationRegistry(),
+      verificationRunner: { runToReport: vi.fn() },
+    };
+  }
+
+  it.each([
+    ["completed", 1],
+    ["failed", 0],
+  ] as const)(
+    "admits the run's manifest after a %s edit in autonomous-delivery (→ %d admission)",
+    async (outcome, admissions) => {
+      const admitRunManifest = vi.fn();
+      const action = vi.fn(() =>
+        outcome === "completed"
+          ? Promise.resolve({
+              ok: true as const,
+              value: {
+                result: {
+                  schemaVersion: "1" as const,
+                  actionId: "edit-1",
+                  sessionId: "session-1",
+                  status: "queued" as const,
+                },
+              },
+            })
+          : Promise.resolve({
+              ok: false as const,
+              error: { kind: "route" as const, code: "denied", message: "denied" },
+            }),
+      );
+      const facade = createProductionManagedWorktreeToolFacade({
+        ...baseEditAdmissionInput(),
+        editorAgentClient: { action },
+        admitRunManifest,
+        onRuntimeEvent: vi.fn(),
+      });
+
+      await facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "edit",
+          actionId: "edit-1",
+          idempotencyKey: "edit-key-1",
+          changeset: {
+            patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
+            files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
+          },
+        }),
+      });
+      expect(action).toHaveBeenCalledOnce();
       expect(admitRunManifest).toHaveBeenCalledTimes(admissions);
     },
   );
