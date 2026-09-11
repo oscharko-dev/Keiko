@@ -979,12 +979,6 @@
     },
     {
       "op": "<dynamic>",
-      "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1607",
-      "package": "keiko-server"
-    },
-    {
-      "op": "<dynamic>",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/diagnostics-log.ts:316",
       "package": "keiko-server"
@@ -1482,7 +1476,7 @@
     {
       "op": "coding-runtime.description",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:2597",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:2694",
       "package": "keiko-server"
     },
     {
@@ -1685,9 +1679,27 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-runtime.run.delivery-continuation-refused",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1699",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.run.delivery-continued",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1681",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.run.delivery-evidence-unreadable",
+      "category": "process",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1575",
+      "package": "keiko-server"
+    },
+    {
       "op": "coding-runtime.run.delivery-unevidenced",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1661",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1758",
       "package": "keiko-server"
     },
     {
@@ -1699,7 +1711,7 @@
     {
       "op": "coding-runtime.run.issue-context-attached",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1956",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:2053",
       "package": "keiko-server"
     },
     {
@@ -1711,7 +1723,7 @@
     {
       "op": "coding-runtime.run.recovery-acknowledged",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1231",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1263",
       "package": "keiko-server"
     },
     {
@@ -1723,7 +1735,7 @@
     {
       "op": "coding-runtime.run.shutdown",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1761",
+      "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOrchestrator.ts:1858",
       "package": "keiko-server"
     },
     {
@@ -3694,6 +3706,9 @@
     "coding-runtime.read-only-child.runner-failed",
     "coding-runtime.readiness.failed",
     "coding-runtime.readiness.phase",
+    "coding-runtime.run.delivery-continuation-refused",
+    "coding-runtime.run.delivery-continued",
+    "coding-runtime.run.delivery-evidence-unreadable",
     "coding-runtime.run.delivery-unevidenced",
     "coding-runtime.run.issue-binding-refused",
     "coding-runtime.run.issue-context-attached",
