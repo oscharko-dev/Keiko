@@ -2,6 +2,7 @@ import { opencodeRegistrationSet } from "@oscharko-dev/keiko-tool-catalog";
 import type { ToolDescriptor } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import {
   DEFAULT_SANDBOX_POLICY,
+  GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS,
   GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
 } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { isAbsolute } from "node:path";
@@ -1146,7 +1147,8 @@ function governedPermissionSource(): readonly string[] {
     "    permission: governedPermission,",
     "    patterns: request.patterns,",
     "    always: [],",
-    "    metadata: { ...request.metadata, expiresAt: new Date(Date.now() + 300000).toISOString() },",
+    // The ask expires with the one human-decision wait every governed layer budgets (PR #3452 review).
+    `    metadata: { ...request.metadata, expiresAt: new Date(Date.now() + ${String(GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS)}).toISOString() },`,
     "  });",
     "}",
   ];

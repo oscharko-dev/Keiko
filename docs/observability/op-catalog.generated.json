@@ -1524,7 +1524,7 @@
     {
       "op": "coding-runtime.compaction",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:740",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:741",
       "package": "keiko-server"
     },
     {
@@ -1723,13 +1723,13 @@
     {
       "op": "coding-runtime.readiness.failed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:586",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:587",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.readiness.phase",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:602",
+      "site": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:603",
       "package": "keiko-server"
     },
     {
