@@ -63,7 +63,7 @@ function escapesRoot(root, candidate) {
   return contained === ".." || contained.startsWith(`..${sep}`) || isAbsolute(contained);
 }
 
-function trustedLoaderContext(helperPath, env) {
+export function resolveTrustedLoaderContext(env) {
   const systemRoot = env.SystemRoot;
   const runnerTemp = env.RUNNER_TEMP;
   if (systemRoot === undefined || runnerTemp === undefined) {
@@ -78,7 +78,7 @@ function trustedLoaderContext(helperPath, env) {
   );
   return {
     helperPath: assertContainedRegularFile(
-      helperPath,
+      join(runnerTemp, HELPER_FILE_NAME),
       runnerTemp,
       HELPER_FILE_NAME,
       "restricted-token helper",
@@ -174,18 +174,11 @@ export async function checkWindowsPortableAuthenticodeLoader({
   assertCorruptInputsDenied({ helperPath, input, powershellPath, probe, run, systemRoot });
 }
 
-function parseHelperArgument(argv) {
-  if (argv.length !== 4 || argv[2] !== "--helper" || argv[3] === undefined) {
-    throw new Error("exactly one --helper argument is required");
-  }
-  return argv[3];
-}
-
 if (
   process.argv[1] !== undefined &&
   import.meta.url === pathToFileURL(resolve(process.argv[1])).href
 ) {
-  const context = trustedLoaderContext(parseHelperArgument(process.argv), process.env);
+  const context = resolveTrustedLoaderContext(process.env);
   await checkWindowsPortableAuthenticodeLoader(context);
   process.stdout.write("windows-portable-authenticode-loader: PASS\n");
 }

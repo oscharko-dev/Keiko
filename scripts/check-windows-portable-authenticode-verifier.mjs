@@ -1,4 +1,5 @@
 import { Buffer } from "node:buffer";
+import { spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -32,6 +33,9 @@ const FRAMEWORK_REFERENCE_SUFFIX = join(
   ".NETFramework",
   "v4.8.1",
 );
+const VSWHERE_SUFFIX = join("Microsoft Visual Studio", "Installer", "vswhere.exe");
+const DISCOVERY_TIMEOUT_MS = 30_000;
+const DISCOVERY_OUTPUT_BYTES = 16_384;
 
 function assertContainedPath(root, candidate, label) {
   const contained = relative(root, candidate);
@@ -94,6 +98,53 @@ export function resolveTrustedVerifierToolchain(options, environment = process.e
     compilerPath: trustedCompilerPath(options.compilerPath, visualStudioRoot),
     referenceDirectory: canonicalReferences,
   };
+}
+
+function discoverVisualStudioInstallation(programFilesX86Root, run) {
+  const vswherePath = realpathSync(resolve(programFilesX86Root, VSWHERE_SUFFIX));
+  assertContainedPath(realpathSync(programFilesX86Root), vswherePath, "Visual Studio locator");
+  if (!lstatSync(vswherePath).isFile()) {
+    throw new Error("Visual Studio locator path is not a regular file");
+  }
+  const result = run(
+    vswherePath,
+    [
+      "-latest",
+      "-products",
+      "*",
+      "-requires",
+      "Microsoft.Component.MSBuild",
+      "-property",
+      "installationPath",
+    ],
+    {
+      encoding: "utf8",
+      maxBuffer: DISCOVERY_OUTPUT_BYTES,
+      shell: false,
+      timeout: DISCOVERY_TIMEOUT_MS,
+      windowsHide: true,
+    },
+  );
+  const installations = result.stdout?.split(/\r?\n/u).filter((line) => line.trim() !== "") ?? [];
+  if (result.error !== undefined || result.status !== 0 || installations.length !== 1) {
+    throw new Error("exactly one latest Visual Studio MSBuild installation is required");
+  }
+  return installations[0];
+}
+
+export function discoverTrustedVerifierToolchain(environment = process.env, run = spawnSync) {
+  const programFilesX86 = environment["ProgramFiles(x86)"];
+  if (programFilesX86 === undefined || !isAbsolute(programFilesX86)) {
+    throw new Error("ProgramFiles(x86) is required for Visual Studio discovery");
+  }
+  const installation = discoverVisualStudioInstallation(resolve(programFilesX86), run);
+  return resolveTrustedVerifierToolchain(
+    {
+      compilerPath: join(installation, COMPILER_SUFFIX),
+      referenceDirectory: join(programFilesX86, FRAMEWORK_REFERENCE_SUFFIX),
+    },
+    environment,
+  );
 }
 
 function assertSourceBinding(asset) {
@@ -214,24 +265,8 @@ export function checkWindowsPortableAuthenticodeVerifier({
   }
 }
 
-function parseArguments(argv) {
-  const options = {};
-  for (let index = 2; index < argv.length; index += 2) {
-    const key = argv[index];
-    const value = argv[index + 1];
-    if (value === undefined) throw new Error(`missing value for ${String(key)}`);
-    if (key === "--compiler") options.compilerPath = value;
-    else if (key === "--references") options.referenceDirectory = value;
-    else throw new Error(`unknown argument ${String(key)}`);
-  }
-  if (options.compilerPath === undefined || options.referenceDirectory === undefined) {
-    throw new Error("--compiler and --references are required");
-  }
-  return options;
-}
-
-export function executeCheckCli(argv = process.argv) {
-  const options = resolveTrustedVerifierToolchain(parseArguments(argv));
+export function executeCheckCli() {
+  const options = discoverTrustedVerifierToolchain();
   checkWindowsPortableAuthenticodeVerifier(options);
   process.stdout.write("windows-portable-authenticode-verifier: PASS\n");
 }

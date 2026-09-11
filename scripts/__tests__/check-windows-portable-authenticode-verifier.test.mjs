@@ -2,11 +2,12 @@ import { Buffer } from "node:buffer";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   COMMITTED_VERIFIER_ASSET,
   assertCommittedVerifierAsset,
+  discoverTrustedVerifierToolchain,
   resolveTrustedVerifierToolchain,
 } from "../check-windows-portable-authenticode-verifier.mjs";
 
@@ -36,13 +37,19 @@ function trustedToolchainFixture() {
     ".NETFramework",
     "v4.8.1",
   );
+  const installationPath = join(programFiles, "Microsoft Visual Studio", "2022", "Enterprise");
+  const vswherePath = join(programFilesX86, "Microsoft Visual Studio", "Installer", "vswhere.exe");
   mkdirSync(join(compilerPath, ".."), { recursive: true });
   mkdirSync(referenceDirectory, { recursive: true });
+  mkdirSync(join(vswherePath, ".."), { recursive: true });
   writeFileSync(compilerPath, "reviewed compiler");
+  writeFileSync(vswherePath, "reviewed locator");
   return {
     compilerPath,
     environment: { ProgramFiles: programFiles, "ProgramFiles(x86)": programFilesX86 },
+    installationPath,
     referenceDirectory,
+    vswherePath,
   };
 }
 
@@ -126,6 +133,25 @@ describe("committed Windows portable Authenticode verifier asset", () => {
         fixture.environment,
       ),
     ).toThrow(/approved .NET Framework 4.8.1 path/u);
+  });
+
+  it("discovers the pinned toolchain without accepting command-line paths", () => {
+    const fixture = trustedToolchainFixture();
+    const run = vi.fn().mockReturnValue({
+      status: 0,
+      stderr: "",
+      stdout: `${fixture.installationPath}\r\n`,
+    });
+
+    expect(discoverTrustedVerifierToolchain(fixture.environment, run)).toEqual({
+      compilerPath: realpathSync(fixture.compilerPath),
+      referenceDirectory: realpathSync(fixture.referenceDirectory),
+    });
+    expect(run).toHaveBeenCalledWith(
+      realpathSync(fixture.vswherePath),
+      expect.arrayContaining(["-latest", "-requires", "Microsoft.Component.MSBuild"]),
+      expect.objectContaining({ shell: false }),
+    );
   });
 
   it.each([

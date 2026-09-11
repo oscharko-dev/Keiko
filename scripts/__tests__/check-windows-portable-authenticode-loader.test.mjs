@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   assertContainedRegularFile,
   checkWindowsPortableAuthenticodeLoader,
+  resolveTrustedLoaderContext,
 } from "../check-windows-portable-authenticode-loader.mjs";
 
 const RUNTIME = "packages/keiko-server/dist/coding-runtime/windowsPortableAuthenticode.js";
@@ -34,6 +35,34 @@ describe("Windows Authenticode restricted-token loader check", () => {
         "helper",
       ),
     ).toThrow(/approved absolute executable path/u);
+  });
+
+  it("derives the restricted helper from the runner-owned temporary directory", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-loader-context-test-"));
+    roots.push(root);
+    const runnerTemp = join(root, "runner-temp");
+    const systemRoot = join(root, "Windows");
+    const helperPath = join(runnerTemp, "windows-portable-authenticode-standard-token-loader.exe");
+    const powershellPath = join(
+      systemRoot,
+      "System32",
+      "WindowsPowerShell",
+      "v1.0",
+      "powershell.exe",
+    );
+    mkdirSync(join(powershellPath, ".."), { recursive: true });
+    mkdirSync(runnerTemp, { recursive: true });
+    writeFileSync(helperPath, "helper");
+    writeFileSync(powershellPath, "powershell");
+
+    expect(
+      resolveTrustedLoaderContext({ RUNNER_TEMP: runnerTemp, SystemRoot: systemRoot }),
+    ).toEqual(
+      expect.objectContaining({
+        helperPath: realpathSync(helperPath),
+        powershellPath: realpathSync(powershellPath),
+      }),
+    );
   });
 
   it("passes the exact asset and requires both corrupt inputs to be denied", async () => {

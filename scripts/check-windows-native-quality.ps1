@@ -430,13 +430,13 @@ static const size_t KEIKO_RUNTIME_ATTESTATION_LENGTH = 20u;
       -not (Test-Path -LiteralPath $frameworkReferences -PathType Container)) {
     throw "The reviewed C# compiler or .NET Framework references were not found"
   }
-  node (Join-Path $root "scripts/check-windows-portable-authenticode-verifier.mjs") `
-    --compiler $csharpCompiler --references $frameworkReferences
+  node (Join-Path $root "scripts/check-windows-portable-authenticode-verifier.mjs")
   if ($LASTEXITCODE -ne 0) { throw "Authenticode verifier deterministic asset check failed" }
 
   $standardTokenSource = Join-Path $root `
     "scripts/windows-portable-authenticode-standard-token-loader.test.cs"
-  $standardTokenHelper = Join-Path $scratch "windows-portable-authenticode-standard-token-loader.exe"
+  $standardTokenHelper = Join-Path $env:RUNNER_TEMP `
+    "windows-portable-authenticode-standard-token-loader.exe"
   $standardTokenReferences = @(
     "mscorlib.dll", "System.dll", "System.Core.dll", "System.Security.dll" |
       ForEach-Object { "/reference:" + (Join-Path $frameworkReferences $_) }
@@ -454,8 +454,7 @@ static const size_t KEIKO_RUNTIME_ATTESTATION_LENGTH = 20u;
       -not (Test-Path -LiteralPath $serverRuntime -PathType Leaf)) {
     throw "Trusted Windows PowerShell or built Authenticode runtime was not found"
   }
-  node (Join-Path $root "scripts/check-windows-portable-authenticode-loader.mjs") `
-    --helper $standardTokenHelper
+  node (Join-Path $root "scripts/check-windows-portable-authenticode-loader.mjs")
   if ($LASTEXITCODE -ne 0) { throw "Restricted-token Authenticode loader verification failed" }
 
   $project = Join-Path $PSScriptRoot "native-quality/windows-rfc3161-quality.csproj"
