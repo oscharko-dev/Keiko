@@ -302,6 +302,7 @@ describe("createCodingAppSessionChannel", () => {
     });
     expect(channel.rotate(undefined)).toEqual({ rotated: false });
     expect(channel.signOut(undefined)).toBe(false);
+    expect(channel.signOut("")).toBe(false);
     expect(channel.signOut("sess_000000000000000000000000.wrong")).toBe(false);
   });
 

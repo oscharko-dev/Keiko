@@ -9,7 +9,7 @@
 
 import { createServer } from "node:net";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
-import { once } from "node:events";
+import { EventEmitter, once } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -797,7 +797,7 @@ describe("restart supervision", () => {
 describe("child supervision", () => {
   const idleChild = ["-e", "setInterval(() => {}, 1_000)"];
 
-  function supervised() {
+  function supervised(spawnProcess) {
     const budget = createRestartBudget(3, 60_000);
     const respawned = [];
     const crashes = [];
@@ -808,8 +808,18 @@ describe("child supervision", () => {
       onExit: (label, _code, signal) => exits.push({ label, signal }),
       respawn: (label) => respawned.push(label),
       onCrash: (label, verdict) => crashes.push({ label, ...verdict }),
+      ...(spawnProcess === undefined ? {} : { spawnProcess }),
     });
     return { budget, respawned, crashes, exits, supervisor };
+  }
+
+  // A stand-in process the test drives by emitting its events; `pid` is undefined exactly when the
+  // process never spawned, as Node reports it.
+  function fakeChild(pid) {
+    const child = new EventEmitter();
+    child.pid = pid;
+    child.kill = vi.fn(() => true);
+    return child;
   }
 
   it("respawns a child stopped on purpose without counting it against the restart budget", async () => {
@@ -844,6 +854,67 @@ describe("child supervision", () => {
   it("leaves a child that is not running alone", () => {
     const { supervisor } = supervised();
     expect(supervisor.restartOnPurpose("bff")).toBe(false);
+  });
+
+  // CodeRabbit on PR #3452: Node can emit `error` and then `exit` for the same process. Each child
+  // ends once, so its crash is counted once and a restart on purpose respawns once.
+  it("counts a child that never spawned once, even when an exit follows its error", () => {
+    const child = fakeChild(undefined);
+    const { respawned, crashes, supervisor } = supervised(() => child);
+    supervisor.spawn("bff", "missing-binary", [], {});
+
+    child.emit("error", new Error("spawn ENOENT"));
+    child.emit("exit", null, null);
+
+    expect(crashes).toEqual([{ label: "bff", allowed: true, count: 1 }]);
+    expect(respawned).toEqual([]);
+    expect(supervisor.children.has("bff")).toBe(false);
+  });
+
+  it("counts a running child's crash once when an error precedes its exit", () => {
+    const child = fakeChild(4242);
+    const { crashes, supervisor } = supervised(() => child);
+    supervisor.spawn("bff", "node", [], {});
+
+    child.emit("error", new Error("channel closed"));
+    expect(supervisor.children.get("bff")).toBe(child);
+    child.emit("exit", 1, null);
+
+    expect(crashes).toEqual([{ label: "bff", allowed: true, count: 1 }]);
+  });
+
+  it("waits for the exit of a running child whose stop failed, then respawns it once", () => {
+    const child = fakeChild(4242);
+    const { respawned, crashes, supervisor } = supervised(() => child);
+    supervisor.spawn("bff", "node", [], {});
+
+    expect(supervisor.restartOnPurpose("bff")).toBe(true);
+    child.emit("error", new Error("kill EPERM"));
+    expect(respawned).toEqual([]);
+
+    child.emit("exit", null, "SIGTERM");
+    child.emit("error", new Error("late"));
+    expect(respawned).toEqual(["bff"]);
+    expect(crashes).toEqual([]);
+  });
+
+  it("drops a restart on purpose when the child it was meant for never spawned", () => {
+    const first = fakeChild(undefined);
+    const second = fakeChild(4343);
+    const queue = [first, second];
+    const { respawned, crashes, supervisor } = supervised(() => queue.shift());
+    supervisor.spawn("bff", "missing-binary", [], {});
+    expect(supervisor.restartOnPurpose("bff")).toBe(true);
+    first.emit("error", new Error("spawn ENOENT"));
+
+    supervisor.spawn("bff", "node", [], {});
+    second.emit("exit", 1, null);
+
+    expect(respawned).toEqual([]);
+    expect(crashes).toEqual([
+      { label: "bff", allowed: true, count: 1 },
+      { label: "bff", allowed: true, count: 2 },
+    ]);
   });
 });
 

@@ -246,13 +246,22 @@ export function createChildSupervisor(hooks) {
   };
 }
 
+// A child ends once. Node can emit `error` and then `exit` for the same process, and a child that
+// never spawned emits `error` alone, so both handlers settle it through one guard: its crash is
+// counted once and a restart on purpose respawns once. An `error` from a running child (a failed
+// kill or message) settles nothing; the `exit` that follows it does. A replaced child's late events
+// find its label taken by the successor and are ignored.
 function superviseChild({ hooks, children, intendedRestarts }, label, child) {
+  const settle = () => {
+    if (children.get(label) !== child) return false;
+    children.delete(label);
+    return true;
+  };
   const crashed = () => {
     hooks.onCrash(label, hooks.restartBudget.recordExit(label));
   };
   child.on("exit", (code, signal) => {
-    if (children.get(label) !== child) return;
-    children.delete(label);
+    if (!settle()) return;
     hooks.onExit?.(label, code, signal);
     if (hooks.isShuttingDown()) return;
     if (intendedRestarts.delete(label)) {
@@ -264,7 +273,9 @@ function superviseChild({ hooks, children, intendedRestarts }, label, child) {
   });
   child.on("error", (error) => {
     hooks.onError?.(label, error);
-    if (!hooks.isShuttingDown()) crashed();
+    if (child.pid !== undefined || !settle() || hooks.isShuttingDown()) return;
+    intendedRestarts.delete(label);
+    crashed();
   });
 }
 
