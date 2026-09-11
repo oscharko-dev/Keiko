@@ -554,6 +554,26 @@ describe("shellShortcutState — a refusal is reported, not swallowed", () => {
     expect(message).toContain("setting=RESERVED_KEYBINDING");
   });
 
+  // Review on PR #3452: the bound holds for the note's own parts, not only for the named refusals.
+  // The whole-setting refusal and the unknown-command count used to be appended unchecked, so a long
+  // setting code beside a large unknown count overflowed the bound and the note was redacted whole.
+  it("keeps every note within the logged bound, the setting refusal and unknown count included", () => {
+    const unknown = Array.from({ length: 64 }, (_value, index) => ({
+      commandId: `outside.registry.${String(index)}`,
+      reasonCode: "UNKNOWN_COMMAND" as const,
+    }));
+    const named = EDITOR_M7_COMMAND_REGISTRY.slice(0, 8).map((command) => ({
+      commandId: command.id,
+      reasonCode: "KEYBINDING_COLLISION" as const,
+    }));
+    for (const refusals of [unknown, [...unknown, ...named], named, unknown.slice(0, 1)]) {
+      const message =
+        shellShortcutRefusalDiagnostic(refusals, "SECURITY_PREREQUISITE_MISSING") ?? "";
+      expect(message.length).toBeLessThanOrEqual(CLIENT_NOTE_MAX_LENGTH);
+      expect(message).toContain("setting=SECURITY_PREREQUISITE_MISSING");
+    }
+  });
+
   // A whole-setting refusal names no command: the record that caused it is never echoed back, so
   // the reason code is all the operator gets — and all they may be given.
   it("reports a whole-setting refusal by reason code alone", () => {
