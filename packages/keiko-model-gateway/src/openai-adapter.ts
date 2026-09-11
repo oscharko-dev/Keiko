@@ -588,13 +588,14 @@ function errorSignal(payload: unknown): string {
     .toLowerCase();
 }
 
+const CONTEXT_OVERFLOW_SIGNAL =
+  /context[_ -]?length[_ -]?exceeded|context window|context.*exceed|maximum context|too many tokens|prompt too long|context overflow/;
+
 function isContextOverflow(status: number, payload: unknown): boolean {
   if (status !== 400 && status !== 413 && status !== 422) {
     return false;
   }
-  return /context[_ -]?length[_ -]?exceeded|context window|context.*exceed|maximum context|too many tokens|prompt too long|context overflow/.test(
-    errorSignal(payload),
-  );
+  return CONTEXT_OVERFLOW_SIGNAL.test(errorSignal(payload));
 }
 
 function isModelRefusal(payload: unknown): boolean {
@@ -654,12 +655,26 @@ function throwOnStreamedFailure(chunk: unknown, modelId: string, secrets: readon
   );
 }
 
-// The status a failure frame reports. A frame without one reports an upstream failure (502), or a
-// rate limit when that is what it says.
+// What a failure frame without a status says, first match wins: the terminal failures before the
+// rate limit, so an overflow, a rejected key or a malformed request is never retried as an upstream
+// failure and generated again (PR #3452 review). OpenAI and Azure name a failure in `code`, `type`
+// and `message`; only a proxy such as LiteLLM writes its HTTP status.
+const STREAMED_FAILURE_SIGNALS: readonly (readonly [RegExp, number])[] = [
+  [CONTEXT_OVERFLOW_SIGNAL, 400],
+  [/invalid[_ -]?api[_ -]?key|authentication/, 401],
+  [/permission/, 403],
+  [/rate[_ -]?limit|too many requests/, 429],
+  [/invalid[_ -]?request/, 400],
+];
+
+// The status a failure frame reports: LiteLLM's `code` is the upstream HTTP status as a string. A
+// frame without one is classified by what it says, and one that says nothing known reports an
+// upstream failure (502).
 function streamedFailureStatus(chunk: unknown, error: Record<string, unknown>): number {
   const code = typeof error.code === "number" ? error.code : Number(error.code);
   if (Number.isInteger(code) && code >= 400 && code <= 599) return code;
-  return /rate[_ -]?limit|too many requests/.test(errorSignal(chunk)) ? 429 : 502;
+  const signal = errorSignal(chunk);
+  return STREAMED_FAILURE_SIGNALS.find(([pattern]) => pattern.test(signal))?.[1] ?? 502;
 }
 
 function apiKeyHeaders(config: ModelProviderConfig): Record<string, string> {
@@ -707,7 +722,6 @@ interface StreamAccumulator {
   finishReason: FinishReason;
   prompt: number;
   completion: number;
-  usageReported: boolean;
   // The provider's own usage record, kept as it came, so the streamed answer is normalized exactly
   // like a whole one.
   usage: Record<string, unknown> | undefined;
@@ -721,7 +735,6 @@ function newStreamAccumulator(): StreamAccumulator {
     finishReason: "stop",
     prompt: 0,
     completion: 0,
-    usageReported: false,
     usage: undefined,
     toolCalls: new Map(),
   };
@@ -820,7 +833,6 @@ function applyChunkMetadata(chunk: unknown, acc: StreamAccumulator): void {
   if (usage !== undefined && isRecord(chunk) && isRecord(chunk.usage)) {
     acc.prompt = usage.prompt;
     acc.completion = usage.completion;
-    acc.usageReported = providerReportedUsage(chunk);
     acc.usage = chunk.usage;
   }
   acc.refusal += refusalFromChunk(chunk);

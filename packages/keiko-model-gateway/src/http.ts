@@ -1745,20 +1745,15 @@ function dataDeadlineFor(idleTimeoutMs: number | undefined): DataDeadline | unde
   return idleTimeoutMs === undefined ? undefined : dataDeadline(idleTimeoutMs);
 }
 
-// Reads a Server-Sent-Events response as a stream of parsed JSON `data:` payloads. Incomplete lines
-// are buffered across reads; `data: [DONE]` terminates; cumulative bytes are capped exactly like
-// readJsonCapped. A null body yields nothing. `idleTimeoutMs` bounds the wait for each data event;
-// `signal` ends the read the moment it aborts, with its reason.
-export async function* readSseStream(
-  response: Response,
-  maxBytes: number = MAX_RESPONSE_BYTES,
-  idleTimeoutMs?: number,
-  signal?: AbortSignal,
+// The payloads of one SSE read, up to `data: [DONE]` or the end of the body. Incomplete lines are
+// buffered across reads, cumulative bytes are capped exactly like readJsonCapped, and the wait for
+// each data event is bounded. readSseStream owns the reader and releases it.
+async function* ssePayloads(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  maxBytes: number,
+  idleTimeoutMs: number | undefined,
+  signal: AbortSignal | undefined,
 ): AsyncGenerator {
-  if (response.body === null) {
-    return;
-  }
-  const reader = response.body.getReader();
   const decoder = new TextDecoder();
   const deadline = dataDeadlineFor(idleTimeoutMs);
   const ended = { done: false };
@@ -1786,4 +1781,28 @@ export async function* readSseStream(
     if (ended.done) return;
   }
   yield* dataPayloads([buffer + decoder.decode()], ended);
+}
+
+// Reads a Server-Sent-Events response as a stream of parsed JSON `data:` payloads. Incomplete lines
+// are buffered across reads; `data: [DONE]` terminates; cumulative bytes are capped exactly like
+// readJsonCapped. A null body yields nothing. `idleTimeoutMs` bounds the wait for each data event;
+// `signal` ends the read the moment it aborts, with its reason.
+export async function* readSseStream(
+  response: Response,
+  maxBytes: number = MAX_RESPONSE_BYTES,
+  idleTimeoutMs?: number,
+  signal?: AbortSignal,
+): AsyncGenerator {
+  if (response.body === null) {
+    return;
+  }
+  const reader = response.body.getReader();
+  try {
+    yield* ssePayloads(reader, maxBytes, idleTimeoutMs, signal);
+  } finally {
+    // Every exit releases the body: the end of the stream, a failure, and a consumer that stops
+    // early. A throw in the consumer's loop body closes this generator through return(), which
+    // runs this block and nothing else (PR #3452 review). Cancelling a finished reader is a no-op.
+    void reader.cancel().catch(() => undefined);
+  }
 }

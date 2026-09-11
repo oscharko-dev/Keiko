@@ -5,6 +5,7 @@
 // and an error frame whose `code` is the upstream HTTP status as a string, followed by `[DONE]`.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  AuthenticationError,
   ContextOverflowError,
   ModelRefusalError,
   ProviderError,
@@ -13,7 +14,11 @@ import {
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { gatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
-import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
+import {
+  logErrorKind,
+  type ModelGatewayLogEvent,
+  type ModelGatewayLogSink,
+} from "./observability.js";
 import type {
   GatewayRequest,
   GatewayStreamChunk,
@@ -25,7 +30,7 @@ import type {
 const CONFIG: ModelProviderConfig = {
   modelId: "example-chat-model",
   baseUrl: "https://provider.example/v1",
-  apiKey: ["example-test-token-", "1234567890abcd"].join(""),
+  apiKey: "fixture",
   timeoutMs: 30_000,
   maxRetries: 2,
   retryBaseDelayMs: 500,
@@ -340,8 +345,9 @@ describe("OpenAiAdapter.callStream with read bounds: the answer matches a whole 
       }),
       { headers: { "content-type": "application/json" } },
     );
+    const log = recorder();
     const chunks: GatewayStreamChunk[] = [];
-    for await (const chunk of adapterWith(() => Promise.resolve(whole)).callStream(
+    for await (const chunk of adapterWith(() => Promise.resolve(whole), log.sink).callStream(
       REQUEST,
       CONFIG,
       BOUNDS,
@@ -350,6 +356,10 @@ describe("OpenAiAdapter.callStream with read bounds: the answer matches a whole 
     }
     expect(chunks[0]).toEqual({ type: "delta", token: "whole" });
     expect(chunks[1]).toMatchObject({ type: "done", response: { content: "whole" } });
+    expect(streamedLine(log.events)).toMatchObject({
+      level: "info",
+      extra: { outcome: "whole-body", dataEvents: 0, silenceMs: 1_000, readBudgetMs: 10_000 },
+    });
   });
 });
 
@@ -392,31 +402,84 @@ describe("OpenAiAdapter.callStream through a LiteLLM proxy", () => {
       "an upstream rate limit",
       { message: "Rate limit reached", type: "None", param: "None", code: "429" },
       RateLimitError,
+      true,
     ],
     [
       "an OpenAI-style rate limit",
       { message: "slow down", type: "rate_limit_error", code: "rate_limit_exceeded" },
       RateLimitError,
+      true,
     ],
     [
       "an upstream context overflow",
       { message: "This model's maximum context length is 128000 tokens", code: "400" },
       ContextOverflowError,
+      false,
+    ],
+    [
+      "a context overflow without a status",
+      { message: "This model's maximum context length is 128000 tokens" },
+      ContextOverflowError,
+      false,
+    ],
+    [
+      "an OpenAI-style context overflow",
+      {
+        message: "Please reduce the length of the messages.",
+        type: "invalid_request_error",
+        code: "context_length_exceeded",
+      },
+      ContextOverflowError,
+      false,
+    ],
+    [
+      "a rejected key without a status",
+      {
+        message: "Incorrect API key provided.",
+        type: "invalid_request_error",
+        code: "invalid_api_key",
+      },
+      AuthenticationError,
+      false,
+    ],
+    [
+      "an invalid request without a status",
+      { message: "Invalid value for 'tool_choice'.", type: "invalid_request_error", code: null },
+      ProviderError,
+      false,
     ],
     [
       "an upstream server error",
       { message: "upstream failed", type: "None", param: "None", code: "500" },
       ProviderError,
+      true,
     ],
-    ["a failure without a status", { message: "upstream connection reset" }, ProviderError],
-  ])("maps %s reported mid-stream like the same HTTP failure", async (_case, error, expected) => {
-    const reading = answerOf(
-      adapterWith(() =>
-        Promise.resolve(sse([delta("partial "), data({ error }), DONE])),
-      ).callStream(REQUEST, CONFIG, BOUNDS),
-    );
-    await expect(reading).rejects.toBeInstanceOf(expected);
-  });
+    ["a failure without a status", { message: "upstream connection reset" }, ProviderError, true],
+  ])(
+    "maps %s reported mid-stream like the same HTTP failure, and releases the body",
+    async (_case, error, expected, retryable) => {
+      const provider = drivenStream();
+      const log = recorder();
+      for (const line of [delta("partial "), data({ error }), DONE]) provider.push(line);
+      provider.end();
+      const failure: unknown = await answerOf(
+        adapterWith(() => Promise.resolve(provider.response), log.sink).callStream(
+          REQUEST,
+          CONFIG,
+          BOUNDS,
+        ),
+      ).catch((thrown: unknown) => thrown);
+
+      expect(failure).toBeInstanceOf(expected);
+      expect(failure).toMatchObject({ retryable });
+      expect(provider.cancelled()).toBe(true);
+      expect(streamedLine(log.events)).toMatchObject({
+        level: "warn",
+        errorKind: logErrorKind(failure),
+        extra: { outcome: "failed", dataEvents: 2 },
+      });
+    },
+  );
 
   it("keeps a mid-stream server failure retryable and names it as reported in the stream", async () => {
     const reading = answerOf(

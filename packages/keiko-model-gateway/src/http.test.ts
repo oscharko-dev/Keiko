@@ -1630,6 +1630,42 @@ describe("readSseStream", () => {
     const chunks = await collect(readSseStream(nullBody));
     expect(chunks).toEqual([]);
   });
+
+  // A consumer that leaves the loop early closes the generator through return(). The body must
+  // still be released, or every mid-stream failure the adapter throws on would leave the
+  // provider's connection open (PR #3452 review).
+  it.each([
+    ["throws", "consumer stopped"],
+    ["breaks", undefined],
+  ])("releases the body when its consumer %s mid-stream", async (_exit, failure) => {
+    let cancelled = false;
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        for (const line of ['data: {"a":1}\n', 'data: {"b":2}\n', "data: [DONE]\n"]) {
+          controller.enqueue(encoder.encode(line));
+        }
+        controller.close();
+      },
+      cancel(): void {
+        cancelled = true;
+      },
+    });
+    const seen: unknown[] = [];
+    const consume = async (): Promise<void> => {
+      for await (const payload of readSseStream(new Response(body))) {
+        seen.push(payload);
+        if (seen.length < 2) continue;
+        if (failure !== undefined) throw new TypeError(failure);
+        break;
+      }
+    };
+    if (failure === undefined) await consume();
+    else await expect(consume()).rejects.toThrow(failure);
+
+    expect(seen).toEqual([{ a: 1 }, { b: 2 }]);
+    expect(cancelled).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

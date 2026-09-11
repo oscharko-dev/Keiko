@@ -525,9 +525,14 @@ events. What is left of the call's end-to-end budget bounds the whole read. A lo
 keeps producing is therefore never cut off at `timeoutMs` and generated again, and a silent
 provider still ends with a retryable `TimeoutError`. A keep-alive comment (a LiteLLM proxy's
 `: ping` while it waits for its upstream) is not a data event. An error frame inside the stream
-(`data: {"error": …}`, LiteLLM's `code` being the upstream HTTP status as a string) maps like the
-same HTTP failure. The streamed answer runs through the same normalization as a whole body, and an
-endpoint that answers a streamed request with `application/json` is read as that whole body.
+(`data: {"error": …}`) maps like the same HTTP failure: LiteLLM's `code` is the upstream HTTP status
+as a string, and a frame that names no status (OpenAI and Azure name a failure in `code`, `type`
+and `message`) is classified by what it says (a context overflow, a rejected key, a missing
+permission, a rate limit or an invalid request) before it falls back to a retryable upstream
+failure (502), so a terminal failure is never generated again. The read releases the provider's
+body on every exit, also when its consumer stops early. The streamed answer runs through the same
+normalization as a whole body, and an endpoint that answers a streamed request with
+`application/json` is read as that whole body.
 Coding run 30 (2026-09-11): two gpt-5.4 generations of 4.8k to 5.9k output tokens at 27 to 45
 tokens per second were cut off at 120 s and generated a second time; Azure answered both with
 HTTP 200.
