@@ -389,6 +389,38 @@ describe("verified Code-task commit service", () => {
       ),
     ).toBe(true);
   });
+  // F80 (coding runs 26 and 27): the pre-effect write-ahead marker was logged under the "result"
+  // phase, so every successful commit first read in the activity log as a recovery-required result.
+  // The marker is the durable precondition reconcile() reads after a crash, not an outcome: one
+  // execute() writes one write-ahead line and, after the Git effect, exactly one result line.
+  it("logs the pre-effect write-ahead under its own phase, ahead of exactly one terminal result line", async () => {
+    const proposalId = await verifiedProposal();
+    const approval = await claim(proposalId);
+    const before = events.length;
+    const result = await service.execute(proposalId, approval);
+    expect(result?.status, JSON.stringify(events)).toBe("succeeded");
+    const lines = events.slice(before).filter((event) => event.op === "git.verified-commit");
+    const phases = lines.map((event) => event.extra?.phase);
+    const writeAhead = lines.filter((event) => event.extra?.phase === "write-ahead");
+    const results = lines.filter((event) => event.extra?.phase === "result");
+    expect(writeAhead).toHaveLength(1);
+    expect(writeAhead[0]).toMatchObject({
+      correlationId: "verified-commit-test",
+      extra: {
+        runId: "run-1",
+        state: "recovery-required",
+        reason: "execution-uncertain",
+        proposalId,
+      },
+    });
+    expect(writeAhead[0]).not.toHaveProperty("level");
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({
+      correlationId: "verified-commit-test",
+      extra: { runId: "run-1", state: "succeeded", proposalId },
+    });
+    expect(phases.indexOf("write-ahead")).toBeLessThan(phases.indexOf("result"));
+  });
   it("uses Full access policy authorization without minting a local-operator approval", async () => {
     let policyAllowsWithoutApproval = true;
     service = createVerifiedCommitService({

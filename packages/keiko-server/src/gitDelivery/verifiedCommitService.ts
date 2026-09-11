@@ -591,7 +591,10 @@ class VerifiedCommitController implements VerifiedCommitService {
       )
     )
       return result;
-    this.log(context, "result", {
+    // The marker is the write-ahead, not an outcome: logged as a "result" it showed every
+    // successful commit as recovery-required first (coding runs 26 and 27, F80). The terminal result
+    // follows from `record()`; reconcile() reads the persisted marker, never this line.
+    this.log(context, "write-ahead", {
       state: "recovery-required",
       reason: "execution-uncertain",
       proposalId: binding.proposalId,
