@@ -11,8 +11,8 @@
   },
   "b2": {
     "budgetBytes": 2621440,
-    "shipsTotalBytes": 1026782,
-    "loadedTotalBytes": 1026782,
+    "shipsTotalBytes": 1026774,
+    "loadedTotalBytes": 1026774,
     "ok": true,
     "shipsOk": true,
     "loadedOk": true
@@ -54,9 +54,9 @@
       "workerLabel": null
     },
     {
-      "path": "dist/ui/static/_next/static/chunks/438odh-su3yiz.js",
-      "gzipBytes": 295193,
-      "rawBytes": 1265708,
+      "path": "dist/ui/static/_next/static/chunks/1yiiigw5l63v1.js",
+      "gzipBytes": 295185,
+      "rawBytes": 1265646,
       "workerLabel": null
     },
     {
@@ -78,5 +78,5 @@
       "workerLabel": "editor"
     }
   ],
-  "measurementSha256": "18e2a6e19698f293fb039fafd6e9d1dd3687dd972c6db3b2d266cee427117a28"
+  "measurementSha256": "ab14ce6d25ba05001a760e9aa04ec132787ee10902b6adf4e5afd83a19100306"
 }
