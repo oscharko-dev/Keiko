@@ -109,6 +109,22 @@ export function readyMessage(): string {
   return `event: ready\ndata: {}\n\n`;
 }
 
+// #3452 audit finding sse.ts:108: several openers write the ready frame with a bare `res.write`,
+// bypassing `recordSseStreamFrame` entirely. `sseStreamState` (sse-write.ts) attaches its terminal
+// `close` listener lazily, on the FIRST recorded frame — so a stream that opens, sends only `ready`,
+// and closes before its first real event or its first heartbeat tick never creates that state at
+// all, and the stream is invisible to `sse.stream.closed` (no reason, no duration, no frame count).
+// This is the ready-frame counterpart to `writeEvent`/`writeMessageEvent` just above: same
+// record-then-write shape, so a caller that opens with `ready` gets the same guarantee those get.
+// `correlationId`, when supplied, is bound to the stream by the same set-once-wins rule
+// `recordSseStreamFrame` already applies — most openers call this before their first event write, so
+// it is normally this call that actually attaches the id (mirrors `writeOrDestroy`'s own parameter).
+export function writeReadyMessage(res: ServerResponse, correlationId?: string): boolean {
+  const frame = readyMessage();
+  recordSseStreamFrame(res, frame, correlationId);
+  return res.write(frame);
+}
+
 // Writes one framed event to the response stream. Returns Node's backpressure signal so the caller can
 // detach a slow client instead of letting the HTTP response buffer grow without bound.
 export function writeEvent(res: ServerResponse, event: StreamEvent, redactor: Redactor): boolean {

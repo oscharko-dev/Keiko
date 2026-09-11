@@ -87,6 +87,15 @@ import {
   editorAgentWorkspaceRootDigest,
 } from "./agentAuthorityRegistry.js";
 import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+  type BufferedServerLogSink,
+  type ServerLogEvent,
+} from "../observability/index.js";
 import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
 import { deriveManagedWorktreePath } from "../task-workspace/naming.js";
 import {
@@ -321,6 +330,7 @@ function connectBridge(
   sessionId: string | readonly string[] | undefined,
   capabilityOverride?: string | readonly string[] | null,
   bridgeStreamIdOverride?: string,
+  correlationId?: string,
 ): {
   readonly frames: () => string;
   readonly close: () => void;
@@ -366,7 +376,7 @@ function connectBridge(
   const query = queryParts.length === 0 ? "" : `?${queryParts.join("&")}`;
   (req as { url?: string }).url = `/api/editor/agent/events${query}`;
   const url = new URL(`http://localhost/api/editor/agent/events${query}`);
-  const outcome = handleEditorAgentEvents({ correlationId: undefined, req, res, params: {}, url });
+  const outcome = handleEditorAgentEvents({ correlationId, req, res, params: {}, url });
   return {
     frames: (): string => writes.join(""),
     outcome,
@@ -3616,6 +3626,64 @@ describe("editor agent routes — Issue #1392 liveness and queue lifecycle", () 
     expect(bridge1.frames()).toContain("event: editor-agent:action");
     expect(observer.frames()).not.toContain("event: editor-agent:action");
     expect(bridge2.frames()).not.toContain("event: editor-agent:action");
+  });
+
+  // The editor-agent SSE bridge wrote its ready frame and every event frame with a bare
+  // `res.write`, bypassing `recordSseStreamFrame` (sse-write.ts): the stream never counted a frame,
+  // never attached a correlation id, and never produced its terminal `sse.stream.closed` line, so a
+  // customer log could not show a bridge had been open at all (AGENTS.md §8). Every frame now goes
+  // through the shared recording path under the request's correlation id.
+  describe("editor-agent bridge stream evidence", () => {
+    function closedLines(sink: BufferedServerLogSink): readonly ServerLogEvent[] {
+      return sink.events.filter((event) => event.op === "sse.stream.closed");
+    }
+
+    afterEach(() => {
+      resetServerLogger();
+    });
+
+    it("closes with one sse.stream.closed line counting the ready and event frames under the request's correlation id", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      await registerSnapshotOnly();
+      const bridge = connectBridge("session-1", undefined, undefined, "corr-agent-bridge-1");
+
+      await handleEditorAgentActions(
+        context(navAction({ actionId: "a-evidence", idempotencyKey: "k-evidence" })),
+      );
+      bridge.close();
+
+      expect(bridge.frames()).toContain("event: editor-agent:action");
+      expect(closedLines(sink)).toEqual([
+        expect.objectContaining({
+          category: "http",
+          op: "sse.stream.closed",
+          correlationId: "corr-agent-bridge-1",
+          extra: {
+            frameCount: 2,
+            bytesStreamed: Buffer.byteLength(bridge.frames(), "utf8"),
+            reason: "client-disconnected",
+          },
+        }),
+      ]);
+    });
+
+    it("closes under UNKNOWN_CORRELATION_ID, never without an id, when the request carries none", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      await registerSnapshotOnly();
+      const bridge = connectBridge("session-1");
+
+      bridge.close();
+
+      expect(closedLines(sink)).toEqual([
+        expect.objectContaining({
+          op: "sse.stream.closed",
+          correlationId: UNKNOWN_CORRELATION_ID,
+          extra: expect.objectContaining({ frameCount: 1 }) as unknown,
+        }),
+      ]);
+    });
   });
 
   it("never writes raw source content to logs", async () => {

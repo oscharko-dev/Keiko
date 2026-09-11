@@ -1,5 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
-import { SSE_HEADERS, startSseHeartbeat } from "./sse.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { SSE_HEADERS, startSseHeartbeat, writeReadyMessage } from "./sse.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/index.js";
 
 describe("SSE_HEADERS", () => {
   it("disables intermediary buffering for low-latency event delivery", () => {
@@ -112,5 +118,53 @@ describe("startSseHeartbeat process-liveness", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// #3452 audit finding sse.ts:108: several openers wrote the ready frame with a bare `res.write`,
+// bypassing `recordSseStreamFrame` entirely. `sseStreamState` (sse-write.ts) attaches its terminal
+// `close` listener lazily, on the FIRST recorded frame — a stream whose only write is the ready
+// frame before it closes therefore never created that state at all, and never produced a terminal
+// `sse.stream.closed` line: an operator could not even tell the attempt happened.
+describe("writeReadyMessage (#3452 audit finding sse.ts:108)", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  function listenableFakeRes(): {
+    res: import("node:http").ServerResponse;
+    write: ReturnType<typeof vi.fn>;
+    fireClose: () => void;
+  } {
+    const listeners = new Map<string, () => void>();
+    const write = vi.fn().mockReturnValue(true);
+    const res = {
+      writableEnded: false,
+      write,
+      destroy: vi.fn(),
+      on: (event: string, handler: () => void) => {
+        listeners.set(event, handler);
+      },
+    } as unknown as import("node:http").ServerResponse;
+    return { res, write, fireClose: () => listeners.get("close")?.() };
+  }
+
+  it("records the ready frame so a stream that closes right after it still gets a terminal sse.stream.closed line, carrying the supplied correlation id", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const { res, write, fireClose } = listenableFakeRes();
+
+    const accepted = writeReadyMessage(res, "corr-ready-1");
+    fireClose();
+
+    expect(accepted).toBe(true);
+    expect(write).toHaveBeenCalledExactlyOnceWith("event: ready\ndata: {}\n\n");
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]).toMatchObject({
+      category: "http",
+      op: "sse.stream.closed",
+      correlationId: "corr-ready-1",
+      extra: { frameCount: 1, reason: "client-disconnected" },
+    });
   });
 });

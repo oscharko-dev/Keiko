@@ -107,7 +107,7 @@ import {
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { workspaceRootAccessOrUndefined } from "../task-workspace/workspace-root-access.js";
-import { isValidCorrelationId } from "../correlation.js";
+import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   errorBody,
   STREAMING,
@@ -115,7 +115,8 @@ import {
   type RouteContext,
   type RouteResult,
 } from "../routes.js";
-import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "../sse.js";
+import { SSE_HEADERS, startSseHeartbeat, writeReadyMessage } from "../sse.js";
+import { writeOrDestroy } from "../sse-write.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { readJsonObject } from "../files.js";
 import { handleGitStatus, handleGitStructuredDiff, handleGitBlame } from "../gitRoutes.js";
@@ -3901,19 +3902,30 @@ function openAgentSseStream(
   bridgeStreamId: string | undefined,
 ): HandlerOutcome {
   const res: ServerResponse = ctx.res;
+  // Every frame goes through the shared recording path (sse-write.ts) under the request's
+  // correlation id, so the stream counts its frames and bytes and closes with its terminal
+  // `sse.stream.closed` line; a request without an id records the sanctioned fallback rather than
+  // no id at all (AGENTS.md §8). A bridge that stops draining is aborted and destroyed, which also
+  // marks that line `backpressure-killed`.
+  const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+  const controller = new AbortController();
   const subscriber = (event: EditorAgentEvent): void => {
+    if (controller.signal.aborted) return;
     const frame = `id: ${event.eventId}\nevent: editor-agent:${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
-    if (!res.write(frame)) res.destroy();
+    writeOrDestroy(res, frame, controller, undefined, correlationId);
   };
   const dispose = connectEditorAgentSessions(connections, bridgeStreamId, subscriber);
   if (dispose === undefined) return asHandlerOutcome(bridgeCapabilityError());
   res.writeHead(200, SSE_HEADERS);
   startSseHeartbeat(res);
-  res.write(readyMessage());
+  writeReadyMessage(res, correlationId);
   ctx.req.on("close", () => {
     res.end();
   });
-  res.on("close", dispose);
+  res.on("close", () => {
+    controller.abort();
+    dispose();
+  });
   return asHandlerOutcome(STREAMING);
 }
 
