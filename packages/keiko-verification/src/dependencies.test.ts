@@ -442,6 +442,77 @@ describe("planDependencyBootstrap — dependency sources", () => {
   });
 });
 
+// npm installs what each workspace member declares, from the member's own manifest (PR #3452
+// review): the rule that holds for the root holds there, before npm runs.
+describe("planDependencyBootstrap — workspace members", () => {
+  function writeMember(
+    root: string,
+    folder: string,
+    manifest: Readonly<Record<string, unknown>>,
+  ): void {
+    mkdirSync(join(root, folder), { recursive: true });
+    writeManifest(join(root, folder), manifest);
+  }
+
+  it.each([
+    ["dependencies", "file:../../outside"],
+    ["devDependencies", "./vendor/tool"],
+    ["optionalDependencies", "left-pad-1.3.0.tgz"],
+    ["peerDependencies", "https://example.com/left-pad-1.3.0.tgz"],
+    ["dependencies", "github:owner/repo"],
+  ])("refuses a workspace member whose %s names the location %j", (section, specifier) => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.3.0" }, workspaces: ["packages/*"] });
+    writeMember(root, "packages/a", { name: "a", dependencies: { "left-pad": "1.3.0" } });
+    writeMember(root, "packages/b", { name: "b", [section]: { probe: specifier } });
+    expect(planFor(root)).toEqual({
+      kind: "refused",
+      reason: "unapproved-source",
+      lockfile: "absent",
+    });
+  });
+
+  it("plans an install when every member it reaches names registry specifiers", () => {
+    const root = tempRoot();
+    writeManifest(root, {
+      devDependencies: { typescript: "^6.0.3" },
+      workspaces: ["packages/*", "tools/**"],
+    });
+    writeMember(root, "packages/a", { name: "a", dependencies: { "left-pad": "1.3.0", b: "*" } });
+    writeMember(root, "tools/cli/deep", { name: "deep", devDependencies: { vitest: "^4.1.0" } });
+    mkdirSync(join(root, "packages", "not-a-package"));
+    // npm never installs from what it does not reach: node_modules and dot-folders.
+    writeMember(root, "tools/node_modules/x", { name: "x", dependencies: { y: "file:../y" } });
+    writeMember(root, "tools/.cache/x", { name: "x", dependencies: { y: "file:../y" } });
+    expect(planFor(root)).toEqual({ kind: "install", lockfile: "absent" });
+  });
+
+  it("refuses a workspace member manifest it cannot read", () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.3.0" }, workspaces: ["packages/*"] });
+    mkdirSync(join(root, "packages", "a"), { recursive: true });
+    writeManifestText(join(root, "packages", "a"), "{ not json");
+    expect(planFor(root)).toEqual({
+      kind: "refused",
+      reason: "manifest-unreadable",
+      lockfile: "absent",
+    });
+  });
+
+  it.each(["packages/{a,b}", "packages/?", "packages/[ab]", "packages/@(a|b)"])(
+    "refuses workspaces it cannot resolve to their members: %j",
+    (pattern) => {
+      const root = tempRoot();
+      writeManifest(root, { dependencies: { "left-pad": "1.3.0" }, workspaces: [pattern] });
+      expect(planFor(root)).toEqual({
+        kind: "refused",
+        reason: "workspaces-unresolved",
+        lockfile: "absent",
+      });
+    },
+  );
+});
+
 describe("runDependencyBootstrap — settled plans (no spawn)", () => {
   it("settles 'none' without spawning", async () => {
     const rec = recordingSpawn();
@@ -492,6 +563,18 @@ describe("runDependencyBootstrap — settled plans (no spawn)", () => {
       bootstrapDepsFor(tempRoot(), rec.fn),
     );
     expect(outcome.summary.detail).toBe("package.json unreadable; dependency installation refused");
+    expect(rec.calls()).toHaveLength(0);
+  });
+
+  it("settles 'refused' (workspaces-unresolved) without spawning, with its fixed detail", async () => {
+    const rec = recordingSpawn();
+    const outcome = await runDependencyBootstrap(
+      { kind: "refused", reason: "workspaces-unresolved", lockfile: "absent" },
+      bootstrapDepsFor(tempRoot(), rec.fn),
+    );
+    expect(outcome.summary.detail).toBe(
+      "a workspaces pattern cannot be resolved to its members; dependency installation refused",
+    );
     expect(rec.calls()).toHaveLength(0);
   });
 });

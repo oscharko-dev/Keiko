@@ -285,12 +285,15 @@ describe("startRegistryEgressProxy", () => {
 });
 
 describe("registryEgressEnv", () => {
-  it("routes every npm fetch through the proxy, bypasses nothing and refuses Git", () => {
+  it("routes every npm fetch through the proxy, bypasses nothing and refuses what it cannot see", () => {
     expect(registryEgressEnv("http://127.0.0.1:4873", REGISTRY)).toEqual({
       npm_config_proxy: "http://127.0.0.1:4873",
       npm_config_https_proxy: "http://127.0.0.1:4873",
       npm_config_noproxy: "",
       npm_config_allow_git: "none",
+      npm_config_allow_remote: "none",
+      npm_config_allow_file: "none",
+      npm_config_allow_directory: "root",
       npm_config_registry: REGISTRY,
     });
   });

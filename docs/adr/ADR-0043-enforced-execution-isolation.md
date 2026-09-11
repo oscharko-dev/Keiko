@@ -33,6 +33,10 @@ refusals (2026-09-11).
 through a loopback proxy that tunnels to the approved registry, with Git dependencies refused, and
 the install's tunnels and refusals are counted on its summary and activity line (2026-09-11).
 
+1.6 — PR #3452 review: the pre-install check also reads the manifest of every workspace member npm
+would install, and npm itself refuses what the proxy cannot see: `allow-remote=none`,
+`allow-file=none` and `allow-directory=root` join `allow-git=none` (2026-09-11).
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a
@@ -480,10 +484,17 @@ runs.
 
 Host network makes every source npm would contact part of that boundary (PR #3452 review: CWE-918,
 CWE-494). Before npm runs, the bootstrap checks every source it would be handed. Each specifier in
-`dependencies`, `devDependencies`, `optionalDependencies` and `peerDependencies`, and each
-`overrides` value, must resolve through the registry: a version, a range, a dist-tag, or an `npm:`
+`dependencies`, `devDependencies`, `optionalDependencies` and `peerDependencies`, in the root
+manifest and in the manifest of every workspace member, and each root `overrides` value (npm reads
+no member's), must resolve through the registry: a version, a range, a dist-tag, or an `npm:`
 alias of one. A URL, a Git remote or hosted shorthand, a path or a tarball refuses the bootstrap
 (`refused`, `unapproved-source`), and so does a `workspaces` pattern that leaves the workspace.
+The members are the folders the `workspaces` patterns name, found as npm finds them
+(`node_modules` is never searched and a wildcard never matches a dot-folder) and over-approximated
+where that is safe: a negated pattern is ignored, since it only removes members. Members that
+cannot be enumerated cannot be checked, so a pattern that uses glob syntax other than `*` and `**`,
+that reaches a folder a symbolic link places outside the workspace, or whose search passes its
+bounds refuses the bootstrap (`refused`, `workspaces-unresolved`).
 Each entry of `package-lock.json`, `npm-shrinkwrap.json` and npm's hidden lockfile of the installed
 tree must be the workspace itself, a folder or link inside it, a package bundled in its parent's
 tarball, or a package fetched over HTTPS from the approved registry (`DEPENDENCY_APPROVED_REGISTRY`,
@@ -492,14 +503,22 @@ Subresource Integrity hash; anything else refuses the bootstrap, and a lockfile 
 or older than version 2 refuses it as `lockfile-unreadable`. Holding the host to that one public
 registry excludes private, loopback and link-local destinations by construction.
 
-A registry package may itself declare a URL or Git dependency, which no pre-install check can see,
-so the install's egress is confined as well (`registryEgress.ts`; PR #3452 review, CWE-918). npm
-runs with `proxy` and `https-proxy` set to a loopback proxy the bootstrap starts for that one
-install, an empty `noproxy`, the registry pinned, and `allow-git=none`. The proxy tunnels a
+A registry package may itself declare a URL, Git, tarball-file or folder dependency, which no
+pre-install check can see, so the install is confined as well (`registryEgress.ts`; PR #3452
+review, CWE-918). npm runs with `proxy` and `https-proxy` set to a loopback proxy the bootstrap
+starts for that one install, an empty `noproxy`, the registry pinned, `allow-git=none`,
+`allow-remote=none`, `allow-file=none` and `allow-directory=root`. The proxy tunnels a
 `CONNECT` to the approved registry's own host and port and answers every other destination with
 `403`: another host or port, an IP literal, a plain-HTTP request. It never sees plaintext: what
 flows through a tunnel is npm's TLS session, verified against the registry's certificate. A Git
-dependency therefore fails before git runs, and a URL dependency fails at the proxy. Any refused
+dependency therefore fails before git runs, a URL before it is fetched, and a tarball file or a
+folder, which needs no network and so never reaches the proxy, before npm reads it (`EALLOWGIT`,
+`EALLOWREMOTE`, `EALLOWFILE`, `EALLOWDIRECTORY`). `allow-directory` is `root`, not `none`: npm
+holds the links it makes for the workspace's own members to the same gate, so `none` refuses
+every workspace install, and the folders the root and member manifests may name are refused
+before npm runs. npm 11.14.0 added the file, folder and URL gates and 11.15.0 stopped
+`allow-remote=none` blocking registry tarballs (npm/cli#9347); Keiko requires npm 11.16.0 or
+later, and an npm that fetched a URL anyway would still fail at the proxy. Any refused
 destination settles the bootstrap `refused`, including one npm tolerates because it names an
 optional dependency and installs around it: a package in the tree still reached for an unapproved
 source. A proxy that cannot start never runs npm, and a proxy that faults during the install fails

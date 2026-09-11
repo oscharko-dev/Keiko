@@ -11,16 +11,17 @@
 // redirect the install to a registry nobody configured.
 //
 // Host network makes every source npm would contact part of that boundary (CodeRabbit review, PR
-// #3452: CWE-918, CWE-494). Before npm runs, each specifier the manifest declares must resolve
-// through the registry (a version, a range, a dist-tag, or an `npm:` alias of one), and each entry
-// of a lockfile, or of the tree npm already installed, must be fetched over HTTPS from the approved
-// registry against an integrity hash, or be a folder or link inside the workspace. A URL, a Git
-// remote, a path or a tarball names a destination nobody approved and refuses the bootstrap. A
-// registry package may itself name such a source, where no pre-install check can see it, so the
-// install's egress is confined as well (registryEgress.ts): npm reaches the network only through a
-// loopback proxy that tunnels to the approved registry and refuses every other destination, and it
-// refuses Git dependencies outright. After npm exits, the tree it installed is still held to the
-// same rule.
+// #3452: CWE-918, CWE-494). Before npm runs, each specifier the root manifest and every workspace
+// member's manifest declare must resolve through the registry (a version, a range, a dist-tag, or
+// an `npm:` alias of one), and each entry of a lockfile, or of the tree npm already installed, must
+// be fetched over HTTPS from the approved registry against an integrity hash, or be a folder or link
+// inside the workspace. A URL, a Git remote, a path or a tarball names a destination nobody approved
+// and refuses the bootstrap. A registry package may itself name such a source, where no pre-install
+// check can see it, so the install is confined as well (registryEgress.ts): npm reaches the network
+// only through a loopback proxy that tunnels to the approved registry and refuses every other
+// destination, and npm itself refuses Git, URL and tarball-file dependencies and any folder a
+// package below the workspace's own manifests names. After npm exits, the tree it installed is
+// still held to the same rule.
 
 import { join } from "node:path";
 import { redact } from "@oscharko-dev/keiko-security";
@@ -49,6 +50,7 @@ import {
   type RegistryEgressCounts,
   type RegistryEgressProxy,
 } from "./registryEgress.js";
+import { workspaceMemberRoots } from "./workspaceMembers.js";
 
 // Only `npm install` with lifecycle scripts disabled; the argument vector is fixed by this module
 // and never model-supplied, so the rule is a second, independent statement of the same invariant.
@@ -110,7 +112,11 @@ const INSTALL_LOCATION = /(?:^|\/)node_modules\//u;
 const INTEGRITY_HASH = /^sha(?:1|256|384|512)-[A-Za-z0-9+/]+={0,2}$/u;
 
 export type DependencyBootstrapRefusal =
-  "project-npm-config" | "manifest-unreadable" | "lockfile-unreadable" | "unapproved-source";
+  | "project-npm-config"
+  | "manifest-unreadable"
+  | "lockfile-unreadable"
+  | "unapproved-source"
+  | "workspaces-unresolved";
 
 export type DependencyBootstrapPlan =
   | { readonly kind: "none" }
@@ -227,15 +233,20 @@ function overridesApproved(overrides: unknown): boolean {
 }
 
 // npm links every folder a workspace pattern matches; a pattern must stay inside the workspace.
-function workspacesContained(workspaces: unknown): boolean {
+function workspacesContained(workspaces: unknown): workspaces is readonly string[] {
   return (
     Array.isArray(workspaces) && workspaces.every((pattern: unknown) => isContainedPath(pattern))
   );
 }
 
+// Every section npm installs from names a registry specifier.
+function declaredSourcesApproved(manifest: Readonly<Record<string, unknown>>): boolean {
+  return SOURCE_SECTIONS.every((section) => specifiersApproved(manifest[section]));
+}
+
 function manifestSourcesApproved(manifest: Readonly<Record<string, unknown>>): boolean {
   return (
-    SOURCE_SECTIONS.every((section) => specifiersApproved(manifest[section])) &&
+    declaredSourcesApproved(manifest) &&
     (manifest.overrides === undefined || overridesApproved(manifest.overrides)) &&
     (manifest.workspaces === undefined || workspacesContained(manifest.workspaces))
   );
@@ -298,12 +309,35 @@ function lockfileVerdict(path: string, fs: WorkspaceFs): LockfileVerdict | undef
     : "unapproved-source";
 }
 
+// npm installs what each workspace member's own manifest declares, so the rule that holds for the
+// root holds there (npm reads only the root's `overrides`). A member folder without a manifest is
+// not a package npm installs.
+function memberSourceRefusal(
+  root: string,
+  workspaces: readonly string[],
+  fs: WorkspaceFs,
+): DependencyBootstrapRefusal | undefined {
+  const members = workspaceMemberRoots(root, workspaces, fs);
+  if (members === undefined) return "workspaces-unresolved";
+  for (const member of members) {
+    const manifest = readManifest(member, fs);
+    if (manifest === "unreadable") return "manifest-unreadable";
+    if (manifest !== "absent" && !declaredSourcesApproved(manifest)) return "unapproved-source";
+  }
+  return undefined;
+}
+
 function sourceRefusal(
   root: string,
   manifest: Readonly<Record<string, unknown>>,
   fs: WorkspaceFs,
 ): DependencyBootstrapRefusal | undefined {
   if (!manifestSourcesApproved(manifest)) return "unapproved-source";
+  const workspaces = manifest.workspaces;
+  const memberRefusal = workspacesContained(workspaces)
+    ? memberSourceRefusal(root, workspaces, fs)
+    : undefined;
+  if (memberRefusal !== undefined) return memberRefusal;
   for (const name of SOURCE_LOCKFILES) {
     const verdict = lockfileVerdict(join(root, name), fs);
     if (verdict !== undefined && verdict !== "approved") return verdict;
@@ -368,6 +402,8 @@ const REFUSAL_DETAIL: Readonly<Record<DependencyBootstrapRefusal, string>> = {
     "lockfile unreadable or older than version 2; dependency installation refused",
   "unapproved-source":
     "a dependency source is not the approved HTTPS registry; dependency installation refused",
+  "workspaces-unresolved":
+    "a workspaces pattern cannot be resolved to its members; dependency installation refused",
 };
 // The egress proxy refused a destination during the install: a package in the tree reached for a
 // source other than the approved registry, which is a refusal, not a failure.

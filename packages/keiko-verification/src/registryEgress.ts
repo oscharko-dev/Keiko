@@ -2,9 +2,10 @@
 // and npm offers no destination allowlist of its own. This module is that allowlist. The install is
 // pointed at a loopback proxy that tunnels a CONNECT to the approved registry's own host and port
 // and refuses every other destination: another host or port, an IP literal, a plain-HTTP request.
-// Git dependencies never reach it (git would not use npm's proxy), so npm is told to refuse them
-// outright. What flows through a tunnel is npm's TLS session with the registry, verified by npm
-// against the registry's certificate; the proxy only decides where a connection may go.
+// Some sources never reach it: git would not use npm's proxy, and a tarball file or a folder needs
+// no network at all. npm is told to refuse those itself (`registryEgressEnv`). What flows through
+// a tunnel is npm's TLS session with the registry, verified by npm against the registry's
+// certificate; the proxy only decides where a connection may go.
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import { connect, type Socket } from "node:net";
 
@@ -48,9 +49,15 @@ export interface RegistryEgressOptions {
 }
 
 /**
- * The npm configuration that routes every fetch of the install through the proxy: an empty
- * `noproxy` lets no destination bypass it, `allow-git=none` refuses a Git dependency before git
- * runs, and the registry is pinned to the approved one.
+ * The npm configuration that routes every fetch of the install through the proxy and has npm
+ * refuse what the proxy cannot see: an empty `noproxy` lets no destination bypass the proxy, and
+ * the registry is pinned to the approved one. `allow-git=none` refuses a Git dependency before git
+ * runs, `allow-remote=none` a URL before it is fetched, and `allow-file=none` a tarball file.
+ * `allow-directory=root` refuses a folder that any package but the root and the workspace's
+ * members names: `none` would refuse the links npm makes for the members themselves, and the
+ * folders the root and member manifests name are refused before npm runs (dependencies.ts). npm
+ * 11.14.0 added the file, folder and URL gates and 11.15.0 stopped `allow-remote=none` blocking
+ * registry tarballs (npm/cli#9347); Keiko requires npm 11.16.0 or later.
  */
 export function registryEgressEnv(
   proxyUrl: string,
@@ -61,6 +68,9 @@ export function registryEgressEnv(
     npm_config_https_proxy: proxyUrl,
     npm_config_noproxy: "",
     npm_config_allow_git: "none",
+    npm_config_allow_remote: "none",
+    npm_config_allow_file: "none",
+    npm_config_allow_directory: "root",
     npm_config_registry: registry,
   };
 }
