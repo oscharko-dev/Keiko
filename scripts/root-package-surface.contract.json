@@ -640,6 +640,7 @@
     "VerificationResultSummary",
     "VerificationStatus",
     "VerificationStep",
+    "VerificationStepOutput",
     "VerificationSummary",
     "VerifiedFindings",
     "verifyEmbeddingCapability",

@@ -1,6 +1,6 @@
 import type { VerificationDependencySummary } from "@oscharko-dev/keiko-contracts";
 import { VERIFICATION_DEPENDENCY_FAILURE_STATES } from "@oscharko-dev/keiko-contracts/runtime/verification";
-import { VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS } from "@oscharko-dev/keiko-verification";
+import { VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { describe, expect, it, vi } from "vitest";
 
 import { createCodingToolFacade } from "./codingToolFacade.js";

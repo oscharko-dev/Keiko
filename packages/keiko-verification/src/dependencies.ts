@@ -416,7 +416,6 @@ function installDeps(deps: DependencyBootstrapDeps): RunCommandDeps {
     now: deps.now,
     fs: deps.fs,
     ...(deps.resolveExecutable === undefined ? {} : { resolveExecutable: deps.resolveExecutable }),
-    ...(deps.onTerminated === undefined ? {} : { onTerminated: deps.onTerminated }),
     ...(deps.sandboxAvailability === undefined
       ? {}
       : { sandboxAvailability: deps.sandboxAvailability }),
@@ -476,7 +475,13 @@ export async function runDependencyBootstrap(
         timeoutMs: DEPENDENCY_INSTALL_LIMITS.wallTimeMs,
         signal: deps.signal ?? new AbortController().signal,
       },
-      installDeps(deps),
+      {
+        ...installDeps(deps),
+        // Named at the call site, so this file alone proves the termination-evidence wiring
+        // (scripts/__tests__/run-command-evidence-wiring.test.mjs): an install the boundary kills
+        // leaves the same evidence as every governed step.
+        ...(deps.onTerminated === undefined ? {} : { onTerminated: deps.onTerminated }),
+      },
     );
     return checkedInstall(
       installOutcome(

@@ -49,21 +49,6 @@ export type {
   VerificationStepOutput,
 } from "./orchestrator.js";
 
-export {
-  DEPENDENCY_INSTALL_ARGS,
-  DEPENDENCY_INSTALL_COMMAND_RULES,
-  planDependencyBootstrap,
-  runDependencyBootstrap,
-} from "./dependencies.js";
-export type {
-  DependencyBootstrapDeps,
-  DependencyBootstrapOutcome,
-  DependencyBootstrapPlan,
-  DependencyBootstrapRefusal,
-} from "./dependencies.js";
-
-export { outputExcerpt, VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS } from "./excerpt.js";
-
 export { buildVerificationSummary, renderMarkdownSummary, summarizeForAudit } from "./summary.js";
 export type {
   AuditResultEntry,

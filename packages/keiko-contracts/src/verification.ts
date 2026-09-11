@@ -223,6 +223,11 @@ const VERIFICATION_COMMAND_MAX_CHARS = 256;
 const VERIFICATION_ARGUMENT_MAX_CHARS = 4_096;
 const VERIFICATION_OUTPUT_SUMMARY_MAX_CHARS = 1_024;
 export const VERIFICATION_DETAIL_MAX_CHARS = 1_024;
+// The longest redacted output tail handed to the caller that repairs a failed step or install (the
+// coding model behind the governed verification tool, ADR-0126 D3). keiko-verification cuts the tail
+// to this many characters behind one ellipsis, and the coding facade admits exactly that shape, so the
+// bound is the contract between the two rather than either side's own number.
+export const VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS = 4096;
 const VERIFICATION_NOTE_MAX_CHARS = 1_024;
 const VERIFICATION_RULE_ID_MAX_CHARS = 128;
 const VERIFICATION_SIGNAL_MAX_CHARS = 128;

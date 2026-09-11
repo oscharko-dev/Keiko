@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS, outputExcerpt } from "./excerpt.js";
+import { VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/verification";
+import { outputExcerpt } from "./excerpt.js";
 
 describe("outputExcerpt — below the cap", () => {
   it("combines stdout and stderr with a newline and trims the result", () => {

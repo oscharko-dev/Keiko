@@ -28,8 +28,8 @@ import {
   isVerificationDependencySummary,
   isVerificationFailureLocation,
   VERIFICATION_DEPENDENCY_FAILURE_STATES,
+  VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS,
 } from "@oscharko-dev/keiko-contracts/runtime/verification";
-import { VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS } from "@oscharko-dev/keiko-verification";
 
 import {
   CODING_TOOL_MAX_BODY_BYTES,

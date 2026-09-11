@@ -7,8 +7,7 @@
 
 import { redact } from "@oscharko-dev/keiko-security";
 import type { CommandResult } from "@oscharko-dev/keiko-tools";
-
-export const VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS = 4096;
+import { VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS } from "@oscharko-dev/keiko-contracts/runtime/verification";
 
 export function outputExcerpt(
   result: Pick<CommandResult, "stdout" | "stderr">,
