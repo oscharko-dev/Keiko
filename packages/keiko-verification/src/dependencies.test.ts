@@ -13,6 +13,7 @@ import {
   type DependencyBootstrapDeps,
 } from "./dependencies.js";
 import { recordingSpawn, scriptChildClose } from "./_support.js";
+import { registryEgressEnv, type RegistryEgressProxy } from "./registryEgress.js";
 
 const roots: string[] = [];
 
@@ -519,6 +520,7 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
       lockfile: "absent",
       exitCode: 0,
       durationMs: expect.any(Number) as number,
+      egress: { allowed: 0, refused: 0 },
     });
     expect(outcome.excerpt).toBeUndefined();
   });
@@ -566,6 +568,7 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
       exitCode: 0,
       durationMs: expect.any(Number) as number,
       detail: expect.stringContaining("approved HTTPS registry") as string,
+      egress: { allowed: 0, refused: 0 },
     });
     expect(outcome.excerpt).toBeUndefined();
   });
@@ -674,6 +677,10 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
           terminations.push(evidence);
         },
       });
+      // npm starts once the egress proxy is listening; the run goes away while it runs.
+      await vi.waitFor(() => {
+        expect(rec.calls()).toHaveLength(1);
+      });
       controller.abort();
       // The abort must reach the child before it closes: an implementation that ignored the signal
       // would still read "cancelled" off the aborted signal once the child closed on its own
@@ -687,6 +694,160 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
       expect(outcome.summary.exitCode).toBeNull();
       expect(outcome.summary.state).toBe("cancelled");
       expect(terminations).toEqual([expect.objectContaining({ reason: "abort" })]);
+    } finally {
+      signals.restore();
+    }
+  });
+});
+
+// The install's egress (ADR-0043 D17): npm reaches the network only through the registry egress
+// proxy, which the bootstrap starts, hands to npm through its pinned environment, counts and closes.
+describe("runDependencyBootstrap — registry egress", () => {
+  function fakeEgressProxy(
+    counts = { allowed: 0, refused: 0 },
+  ): RegistryEgressProxy & { readonly closed: () => number } {
+    let closed = 0;
+    return {
+      url: "http://127.0.0.1:4873",
+      counts: () => counts,
+      close: (): Promise<void> => {
+        closed += 1;
+        return Promise.resolve();
+      },
+      closed: () => closed,
+    };
+  }
+
+  function installPlan(root: string): ReturnType<typeof planDependencyBootstrap> {
+    writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
+    return planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs);
+  }
+
+  it("runs npm behind the egress proxy, records its tunnels and closes it", async () => {
+    const root = tempRoot();
+    const plan = installPlan(root);
+    writeInstalledTree(root);
+    const proxy = fakeEgressProxy({ allowed: 3, refused: 0 });
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+
+    const outcome = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, rec.fn),
+      startEgressProxy: () => Promise.resolve(proxy),
+    });
+
+    const env = rec.calls()[0]?.options.env;
+    expect(env).toMatchObject(registryEgressEnv(proxy.url, DEPENDENCY_APPROVED_REGISTRY));
+    // The configuration is only as good as its wiring: the proxy itself must reach the child.
+    expect(env?.npm_config_https_proxy).toBe(proxy.url);
+    expect(outcome.summary).toMatchObject({
+      state: "installed",
+      egress: { allowed: 3, refused: 0 },
+    });
+    expect(proxy.closed()).toBe(1);
+  });
+
+  it("settles an install that failed after a refused destination as refused", async () => {
+    const root = tempRoot();
+    const plan = installPlan(root);
+    const proxy = fakeEgressProxy({ allowed: 1, refused: 2 });
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { stderr: "npm error 403 Forbidden\n", exitCode: 1 });
+
+    const outcome = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, rec.fn),
+      startEgressProxy: () => Promise.resolve(proxy),
+    });
+
+    expect(outcome.summary).toMatchObject({
+      state: "refused",
+      exitCode: 1,
+      egress: { allowed: 1, refused: 2 },
+      detail: expect.stringContaining("source other than the approved HTTPS registry") as string,
+    });
+    expect(proxy.closed()).toBe(1);
+  });
+
+  it("keeps an install that failed without a refused destination a failure", async () => {
+    const root = tempRoot();
+    const plan = installPlan(root);
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { stderr: "npm error ETARGET\n", exitCode: 1 });
+
+    const outcome = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, rec.fn),
+      startEgressProxy: () => Promise.resolve(fakeEgressProxy({ allowed: 2, refused: 0 })),
+    });
+
+    expect(outcome.summary).toMatchObject({ state: "failed", egress: { allowed: 2, refused: 0 } });
+  });
+
+  it("fails closed without spawning npm when the egress proxy cannot start", async () => {
+    const root = tempRoot();
+    const plan = installPlan(root);
+    const rec = recordingSpawn();
+
+    const outcome = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, rec.fn),
+      startEgressProxy: () => Promise.reject(new Error("listen EADDRINUSE")),
+    });
+
+    expect(rec.calls()).toHaveLength(0);
+    expect(outcome.summary).toMatchObject({
+      state: "failed",
+      exitCode: null,
+      detail: expect.stringContaining("egress proxy could not start") as string,
+    });
+    expect(outcome.summary).not.toHaveProperty("egress");
+  });
+
+  it("cancels an install whose run went away before npm started, without spawning it", async () => {
+    const root = tempRoot();
+    const plan = installPlan(root);
+    const proxy = fakeEgressProxy();
+    const controller = new AbortController();
+    controller.abort();
+    const rec = recordingSpawn();
+
+    const outcome = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, rec.fn),
+      signal: controller.signal,
+      startEgressProxy: () => Promise.resolve(proxy),
+    });
+
+    expect(rec.calls()).toHaveLength(0);
+    expect(outcome.summary).toMatchObject({
+      state: "cancelled",
+      egress: { allowed: 0, refused: 0 },
+    });
+    expect(proxy.closed()).toBe(1);
+  });
+
+  it("closes the egress proxy when the run aborts the install", async () => {
+    const root = tempRoot();
+    const plan = installPlan(root);
+    const proxy = fakeEgressProxy();
+    const controller = new AbortController();
+    const signals = recordTerminationSignals();
+    try {
+      const rec = recordingSpawn(); // never closes on its own
+      const pending = runDependencyBootstrap(plan, {
+        ...bootstrapDepsFor(root, rec.fn),
+        signal: controller.signal,
+        startEgressProxy: () => Promise.resolve(proxy),
+      });
+      await vi.waitFor(() => {
+        expect(rec.calls()).toHaveLength(1);
+      });
+      controller.abort();
+      await vi.waitFor(() => {
+        expect(signals.sent(rec.child)).toContain("SIGTERM");
+      });
+      rec.child.emit("close", null, "SIGTERM");
+      const outcome = await pending;
+
+      expect(outcome.summary.state).toBe("cancelled");
+      expect(proxy.closed()).toBe(1);
     } finally {
       signals.restore();
     }

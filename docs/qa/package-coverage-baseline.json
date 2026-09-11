@@ -282,7 +282,7 @@
       }
     },
     "keiko-verification": {
-      "files": 13,
+      "files": 14,
       "uncoveredFiles": 0,
       "uncoveredLines": 13,
       "totalLines": 407,

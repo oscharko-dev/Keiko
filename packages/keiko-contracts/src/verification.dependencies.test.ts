@@ -90,6 +90,29 @@ describe("isVerificationDependencySummary", () => {
     expect(isVerificationDependencySummary(summary)).toBe(true);
   });
 
+  it("accepts the install's egress counts", () => {
+    expect(
+      isVerificationDependencySummary(dependencySummary({ egress: { allowed: 12, refused: 0 } })),
+    ).toBe(true);
+  });
+
+  it("rejects egress counts that are not non-negative integers, or that carry anything else", () => {
+    const malformed: readonly unknown[] = [
+      { allowed: -1, refused: 0 },
+      { allowed: 1.5, refused: 0 },
+      { allowed: 1, refused: "0" },
+      { allowed: 1 },
+      { allowed: 1, refused: 0, host: "registry.npmjs.org" },
+      null,
+    ];
+    for (const egress of malformed) {
+      expect(
+        isVerificationDependencySummary({ ...dependencySummary(), egress }),
+        JSON.stringify(egress),
+      ).toBe(false);
+    }
+  });
+
   it("rejects a non-object value", () => {
     expect(isVerificationDependencySummary(null)).toBe(false);
     expect(isVerificationDependencySummary("installed")).toBe(false);

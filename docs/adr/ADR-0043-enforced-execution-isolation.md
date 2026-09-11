@@ -29,6 +29,10 @@ worktree is a clean checkout, so without it no project created from nothing coul
 (Coding Workbench run 15, 2026-09-10). D17 also records the sources such an install may use and its
 refusals (2026-09-11).
 
+1.5 — PR #3452 review: D17's install no longer has open egress. npm reaches the network only
+through a loopback proxy that tunnels to the approved registry, with Git dependencies refused, and
+the install's tunnels and refusals are counted on its summary and activity line (2026-09-11).
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a
@@ -486,17 +490,26 @@ tarball, or a package fetched over HTTPS from the approved registry (`DEPENDENCY
 npm's default `https://registry.npmjs.org/`, without credentials or another port) against a
 Subresource Integrity hash; anything else refuses the bootstrap, and a lockfile that is unreadable
 or older than version 2 refuses it as `lockfile-unreadable`. Holding the host to that one public
-registry excludes private, loopback and link-local destinations by construction. After npm exits,
-the tree it installed is held to the same rule through its hidden lockfile: an install that left
-none, or one naming another source, is `refused` and its steps are skipped. That last check exists
-because npm offers no destination allowlist. A registry package may itself declare a URL or Git
-dependency, and when no lockfile pins it npm fetches it during the install; the sandbox's network
-model is `inherit` or `none`, so that fetch cannot be prevented at this layer, but nothing it
-brought is ever run by the steps that follow.
+registry excludes private, loopback and link-local destinations by construction.
+
+A registry package may itself declare a URL or Git dependency, which no pre-install check can see,
+so the install's egress is confined as well (`registryEgress.ts`; PR #3452 review, CWE-918). npm
+runs with `proxy` and `https-proxy` set to a loopback proxy the bootstrap starts for that one
+install, an empty `noproxy`, the registry pinned, and `allow-git=none`. The proxy tunnels a
+`CONNECT` to the approved registry's own host and port and answers every other destination with
+`403`: another host or port, an IP literal, a plain-HTTP request. It never sees plaintext: what
+flows through a tunnel is npm's TLS session, verified against the registry's certificate. A Git
+dependency therefore fails before git runs, and a URL dependency fails at the proxy; an install
+that failed after a refused destination settles `refused`, and one whose proxy cannot start never
+runs npm. The install reaches the registry directly, as it did before, so a network that requires
+an upstream proxy is not supported. After npm exits, the tree it installed is still held to the
+same rule through its hidden lockfile: an install that left none, or one naming another source, is
+`refused` and its steps are skipped.
 
 The outcome is part of the report (`VerificationReport.dependencies`: state, lockfile
-`present`/`created`/`absent`, npm's exit code, duration, a short redacted detail) and of the
-activity log (`editor.verification.dependencies`, the same fields), never the install's output.
+`present`/`created`/`absent`, npm's exit code, duration, a short redacted detail, the tunnels
+and refusals of its egress) and of the activity log (`editor.verification.dependencies`, the same
+fields, the counts as `egressAllowed` and `egressRefused`), never the install's output.
 When the bootstrap does not leave the workspace fit for its steps (`refused`, `failed`,
 `timed-out`), the steps are recorded as skipped with that reason and the report is `failed` —
 `matchesOverallStatus` applies the same rule on the wire — so a report whose steps all read

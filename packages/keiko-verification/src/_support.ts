@@ -17,7 +17,12 @@ export interface FakeChild extends EventEmitter {
   pid: number;
   kill: (signal?: NodeJS.Signals) => boolean;
   killed: NodeJS.Signals[];
+  // True while a recordingSpawn holds the child and has not handed it out yet. A real child cannot
+  // exit before its spawn, so a close scripted in that window waits for it.
+  awaitingSpawn: boolean;
 }
+
+const SPAWNED = "fake-child:spawned";
 
 export function makeFakeChild(pid = 4242): FakeChild {
   const child = new EventEmitter() as FakeChild;
@@ -25,6 +30,7 @@ export function makeFakeChild(pid = 4242): FakeChild {
   child.stderr = new EventEmitter();
   child.pid = pid;
   child.killed = [];
+  child.awaitingSpawn = false;
   child.kill = (signal?: NodeJS.Signals): boolean => {
     child.killed.push(signal ?? "SIGTERM");
     return true;
@@ -46,17 +52,23 @@ export interface SpawnRecorder {
 // skipped-step test can assert the spawn was NEVER called.
 export function recordingSpawn(child: FakeChild = makeFakeChild()): SpawnRecorder {
   const calls: { command: string; args: readonly string[]; options: SpawnOptions }[] = [];
+  child.awaitingSpawn = true;
   return {
     child,
     calls: () => calls,
     fn: (command, args, options): ChildProcess => {
       calls.push({ command, args: [...args], options });
+      child.awaitingSpawn = false;
+      child.emit(SPAWNED);
       return child as unknown as ChildProcess;
     },
   };
 }
 
-// Closes the child on the next microtask so runCommand wires its listeners first. `scenario`
+// Closes the child on the next microtask, after its spawn, so runCommand has wired its listeners
+// first. A recorder's child scripted before the recorder handed it out waits for that spawn, as a
+// real child's exit follows its start however much asynchronous work the caller does in between; a
+// child a spawn function creates and scripts in the same call is already being spawned. `opts`
 // drives the streams and exit: emit output, then a close with the given exit code/signal.
 export function scriptChildClose(
   child: FakeChild,
@@ -67,15 +79,19 @@ export function scriptChildClose(
     signal?: NodeJS.Signals | null;
   },
 ): void {
-  queueMicrotask(() => {
-    if (opts.stdout !== undefined) {
-      child.stdout.emit("data", Buffer.from(opts.stdout, "utf8"));
-    }
-    if (opts.stderr !== undefined) {
-      child.stderr.emit("data", Buffer.from(opts.stderr, "utf8"));
-    }
-    child.emit("close", opts.exitCode ?? 0, opts.signal ?? null);
-  });
+  const close = (): void => {
+    queueMicrotask(() => {
+      if (opts.stdout !== undefined) {
+        child.stdout.emit("data", Buffer.from(opts.stdout, "utf8"));
+      }
+      if (opts.stderr !== undefined) {
+        child.stderr.emit("data", Buffer.from(opts.stderr, "utf8"));
+      }
+      child.emit("close", opts.exitCode ?? 0, opts.signal ?? null);
+    });
+  };
+  if (child.awaitingSpawn) child.once(SPAWNED, close);
+  else close();
 }
 
 export interface FakeMonitor extends ResourceMonitor {

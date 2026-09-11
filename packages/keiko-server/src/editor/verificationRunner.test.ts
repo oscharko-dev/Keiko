@@ -1040,6 +1040,39 @@ describe("VerificationRunnerManager — runToReport's dependency-bootstrap and s
     expect(JSON.stringify(dependencyLines)).not.toContain(workspaceRoot);
   });
 
+  it("carries the install's registry egress counts on the dependencies line", async () => {
+    const events: ServerLogEvent[] = [];
+    const withEgress: VerificationReport = {
+      ...report(["targeted-test"]),
+      dependencies: {
+        state: "refused",
+        lockfile: "absent",
+        exitCode: 1,
+        durationMs: 900,
+        egress: { allowed: 4, refused: 1 },
+      },
+    };
+    const manager = makeManager({
+      activityLog: { write: (event): void => void events.push(event) },
+      execute: fakePort(withEgress).port,
+    });
+
+    await manager.runToReport(
+      input({
+        kinds: ["targeted-test"],
+        targetPath: "src/a.test.ts",
+        correlationId: "deps-egress",
+      }),
+      new AbortController().signal,
+    );
+
+    const line = events.find((event) => event.op === "editor.verification.dependencies");
+    expect(line).toMatchObject({
+      correlationId: "deps-egress",
+      extra: { state: "refused", egressAllowed: 4, egressRefused: 1 },
+    });
+  });
+
   it("writes no editor.verification.dependencies line when the report carries no dependencies summary", async () => {
     const events: ServerLogEvent[] = [];
     const manager = makeManager({

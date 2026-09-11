@@ -15,10 +15,12 @@
 // through the registry (a version, a range, a dist-tag, or an `npm:` alias of one), and each entry
 // of a lockfile, or of the tree npm already installed, must be fetched over HTTPS from the approved
 // registry against an integrity hash, or be a folder or link inside the workspace. A URL, a Git
-// remote, a path or a tarball names a destination nobody approved and refuses the bootstrap. After
-// npm exits, the tree it installed is held to the same rule: a registry package may itself name such
-// a source and npm offers no destination allowlist, so that one fetch cannot be prevented, but
-// nothing it brought is ever run by the steps that follow.
+// remote, a path or a tarball names a destination nobody approved and refuses the bootstrap. A
+// registry package may itself name such a source, where no pre-install check can see it, so the
+// install's egress is confined as well (registryEgress.ts): npm reaches the network only through a
+// loopback proxy that tunnels to the approved registry and refuses every other destination, and it
+// refuses Git dependencies outright. After npm exits, the tree it installed is still held to the
+// same rule.
 
 import { join } from "node:path";
 import { redact } from "@oscharko-dev/keiko-security";
@@ -41,6 +43,12 @@ import {
   type VerificationLockfileState,
 } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { outputExcerpt } from "./excerpt.js";
+import {
+  registryEgressEnv,
+  startRegistryEgressProxy,
+  type RegistryEgressCounts,
+  type RegistryEgressProxy,
+} from "./registryEgress.js";
 
 // Only `npm install` with lifecycle scripts disabled; the argument vector is fixed by this module
 // and never model-supplied, so the rule is a second, independent statement of the same invariant.
@@ -125,6 +133,8 @@ export interface DependencyBootstrapDeps {
   readonly onTerminated?: RunCommandDeps["onTerminated"] | undefined;
   readonly sandboxAvailability?: RunCommandDeps["sandboxAvailability"] | undefined;
   readonly platform?: RunCommandDeps["platform"] | undefined;
+  // Starts the registry egress proxy the install runs behind; tests inject their own.
+  readonly startEgressProxy?: (() => Promise<RegistryEgressProxy>) | undefined;
 }
 
 export interface DependencyBootstrapOutcome {
@@ -359,6 +369,12 @@ const REFUSAL_DETAIL: Readonly<Record<DependencyBootstrapRefusal, string>> = {
   "unapproved-source":
     "a dependency source is not the approved HTTPS registry; dependency installation refused",
 };
+// npm failed after the egress proxy refused a destination: the install reached for a source other
+// than the approved registry, which is a refusal, not a failure.
+const EGRESS_REFUSAL_DETAIL =
+  "the install reached for a source other than the approved HTTPS registry; dependency installation refused";
+const EGRESS_UNAVAILABLE_DETAIL =
+  "the registry egress proxy could not start; dependency installation refused";
 
 // After an install, the refusal names the tree npm left, not an installation that never ran.
 const INSTALLED_TREE_REFUSAL_DETAIL: Readonly<
@@ -401,7 +417,7 @@ function settled(
   };
 }
 
-function installDeps(deps: DependencyBootstrapDeps): RunCommandDeps {
+function installDeps(deps: DependencyBootstrapDeps, egressProxyUrl: string): RunCommandDeps {
   return {
     workspace: deps.workspace,
     policy: {
@@ -409,6 +425,11 @@ function installDeps(deps: DependencyBootstrapDeps): RunCommandDeps {
       maxOutputBytes: DEPENDENCY_INSTALL_LIMITS.maxOutputBytes,
       defaultTimeoutMs: DEPENDENCY_INSTALL_LIMITS.wallTimeMs,
       network: DEPENDENCY_INSTALL_LIMITS.network,
+      // Host network, reached only through the registry egress proxy (registryEgress.ts).
+      pinnedEnv: {
+        ...DEFAULT_SANDBOX_POLICY.pinnedEnv,
+        ...registryEgressEnv(egressProxyUrl, DEPENDENCY_APPROVED_REGISTRY),
+      },
     },
     commandRules: DEPENDENCY_INSTALL_COMMAND_RULES,
     spawn: deps.spawn,
@@ -466,6 +487,56 @@ export async function runDependencyBootstrap(
   if (plan.kind === "refused")
     return settled("refused", plan.lockfile, REFUSAL_DETAIL[plan.reason]);
   const startedAt = deps.now();
+  let proxy: RegistryEgressProxy;
+  try {
+    proxy = await (deps.startEgressProxy ?? startApprovedRegistryProxy)();
+  } catch {
+    // No proxy, no install: npm never runs with an unconfined network.
+    return {
+      summary: {
+        state: "failed",
+        lockfile: plan.lockfile,
+        exitCode: null,
+        durationMs: deps.now() - startedAt,
+        detail: EGRESS_UNAVAILABLE_DETAIL,
+      },
+    };
+  }
+  try {
+    const outcome = await installBehindProxy(plan.lockfile, deps, proxy.url, startedAt);
+    return withEgress(outcome, proxy.counts());
+  } finally {
+    await proxy.close();
+  }
+}
+
+function startApprovedRegistryProxy(): Promise<RegistryEgressProxy> {
+  return startRegistryEgressProxy({ registry: DEPENDENCY_APPROVED_REGISTRY });
+}
+
+// The install's egress on its record. A failed install after the proxy refused a destination is
+// named for what it was: npm reached for a source other than the approved registry.
+function withEgress(
+  outcome: DependencyBootstrapOutcome,
+  egress: RegistryEgressCounts,
+): DependencyBootstrapOutcome {
+  const refusedSource = egress.refused > 0 && outcome.summary.state === "failed";
+  return {
+    ...outcome,
+    summary: {
+      ...outcome.summary,
+      ...(refusedSource ? { state: "refused" as const, detail: EGRESS_REFUSAL_DETAIL } : {}),
+      egress,
+    },
+  };
+}
+
+async function installBehindProxy(
+  lockfile: VerificationLockfileState,
+  deps: DependencyBootstrapDeps,
+  egressProxyUrl: string,
+  startedAt: number,
+): Promise<DependencyBootstrapOutcome> {
   try {
     const result = await runCommand(
       {
@@ -476,7 +547,7 @@ export async function runDependencyBootstrap(
         signal: deps.signal ?? new AbortController().signal,
       },
       {
-        ...installDeps(deps),
+        ...installDeps(deps, egressProxyUrl),
         // Named at the call site, so this file alone proves the termination-evidence wiring
         // (scripts/__tests__/run-command-evidence-wiring.test.mjs): an install the boundary kills
         // leaves the same evidence as every governed step.
@@ -486,7 +557,7 @@ export async function runDependencyBootstrap(
     return checkedInstall(
       installOutcome(
         result,
-        plan.lockfile,
+        lockfile,
         lockfileState(deps.workspace.root, deps.fs),
         deps.signal?.aborted === true,
       ),
@@ -500,7 +571,7 @@ export async function runDependencyBootstrap(
     return {
       summary: {
         state: rejectedInstallState(error),
-        lockfile: plan.lockfile,
+        lockfile,
         exitCode: null,
         durationMs: deps.now() - startedAt,
         detail,

@@ -595,8 +595,9 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   }
 
   // ADR-0043 D17: the dependency bootstrap's own body-free line — its state, whether a lockfile
-  // was present or created, npm's exit code and the duration — so a report whose steps were all
-  // skipped can be read back to the install that left them without their dependencies.
+  // was present or created, npm's exit code, the duration and the install's registry egress counts
+  // — so a report whose steps were all skipped can be read back to the install that left them
+  // without their dependencies.
   private recordDependencyBootstrap(correlationId: string, report: VerificationReport): void {
     const dependencies = report.dependencies;
     if (dependencies === undefined) return;
@@ -609,6 +610,13 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         lockfile: dependencies.lockfile,
         exitCode: dependencies.exitCode,
         durationMs: dependencies.durationMs,
+        // Tunnels the install opened to the approved registry, and destinations it was refused.
+        ...(dependencies.egress === undefined
+          ? {}
+          : {
+              egressAllowed: dependencies.egress.allowed,
+              egressRefused: dependencies.egress.refused,
+            }),
       },
     });
   }

@@ -73,6 +73,14 @@ export type VerificationLockfileState = "present" | "created" | "absent";
 export const VERIFICATION_DEPENDENCY_FAILURE_STATES: ReadonlySet<VerificationDependencyState> =
   new Set<VerificationDependencyState>(["refused", "failed", "timed-out"]);
 
+/** The dependency install's network use: counts only, never a destination or a byte. */
+export interface VerificationDependencyEgress {
+  // Tunnels opened to the approved registry.
+  readonly allowed: number;
+  // Requests refused for naming any other destination.
+  readonly refused: number;
+}
+
 /** Body-free record of the dependency bootstrap on a report: never output, never a path. */
 export interface VerificationDependencySummary {
   readonly state: VerificationDependencyState;
@@ -81,6 +89,8 @@ export interface VerificationDependencySummary {
   readonly durationMs: number;
   // A short, redacted reason for a refused or failed bootstrap (e.g. "project npm config present").
   readonly detail?: string | undefined;
+  // The install's egress through the registry proxy (ADR-0043 D17); absent when npm never ran.
+  readonly egress?: VerificationDependencyEgress | undefined;
 }
 
 // ─── The governed verification tool's settlement budget ────────────────────────────
@@ -516,14 +526,24 @@ function hasDependencySummaryExecution(value: Readonly<Record<string, unknown>>)
   return value.detail === undefined || isBoundedText(value.detail, VERIFICATION_DETAIL_MAX_CHARS);
 }
 
+function isVerificationDependencyEgress(value: unknown): value is VerificationDependencyEgress {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["allowed", "refused"]) &&
+    isIntegerWithin(value.allowed, 0, Number.MAX_SAFE_INTEGER) &&
+    isIntegerWithin(value.refused, 0, Number.MAX_SAFE_INTEGER)
+  );
+}
+
 export function isVerificationDependencySummary(
   value: unknown,
 ): value is VerificationDependencySummary {
   return (
     isRecord(value) &&
-    hasOnlyKeys(value, ["state", "lockfile", "exitCode", "durationMs", "detail"]) &&
+    hasOnlyKeys(value, ["state", "lockfile", "exitCode", "durationMs", "detail", "egress"]) &&
     hasDependencySummaryStates(value) &&
-    hasDependencySummaryExecution(value)
+    hasDependencySummaryExecution(value) &&
+    (value.egress === undefined || isVerificationDependencyEgress(value.egress))
   );
 }
 
