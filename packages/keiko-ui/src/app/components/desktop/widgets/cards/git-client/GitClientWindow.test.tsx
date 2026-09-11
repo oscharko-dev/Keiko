@@ -34,6 +34,11 @@ import type {
 import type { GitRepositoryStatusResponse } from "@/lib/types";
 import type { GitEditorDiffResponse } from "@oscharko-dev/keiko-contracts";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
+import {
+  redeemCodingAppSessionPairingNavigation,
+  type CodingAppSessionPairingSeams,
+} from "@/lib/coding-app-session-client";
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import type { GitClientSeam } from "./git-client-seam";
 import { GitClientWindow } from "./GitClientWindow";
 import { parseUnifiedDiff } from "../shared/diffParser";
@@ -3442,5 +3447,48 @@ describe("desktop-locked active root (#3390, rehearsal run-21)", () => {
     );
     expect(updateCfg).toHaveBeenCalledWith({ projectPath: "" });
     expect(client.getStatus).not.toHaveBeenCalled();
+  });
+});
+
+// A launcher re-pair that arrives without a page load (F65): a fragment, and a pair endpoint that
+// acknowledges it.
+const REPAIR_SEAMS: CodingAppSessionPairingSeams = {
+  readFragment: (): string =>
+    encodeCodingAppSessionPairingFragment({
+      requestId: "req_git-re-pair",
+      issuedAtMs: 1,
+      claim: "f".repeat(64),
+    }),
+  stripFragment: (): void => undefined,
+  postPairing: (): Promise<unknown> => Promise.resolve({ schemaVersion: "1" }),
+};
+
+// PR #3452 review: the reads of a managed task workspace are answered only for a paired browser,
+// and the window stayed on the unpaired answer after a re-pair until the page was reloaded.
+describe("GitClientWindow after a re-pair without a page load (F65)", () => {
+  it("reads every repository view again", async () => {
+    const client = makeClient();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    const reads = [
+      client.listRepositories,
+      client.listBranches,
+      client.getSummary,
+      client.getRemotes,
+      client.getStatus,
+    ];
+    await waitFor(() => {
+      for (const read of reads) expect(read).toHaveBeenCalled();
+    });
+    const before = reads.map((read) => vi.mocked(read).mock.calls.length);
+
+    await act(async () => {
+      await redeemCodingAppSessionPairingNavigation(REPAIR_SEAMS);
+    });
+
+    await waitFor(() => {
+      reads.forEach((read, index) => {
+        expect(vi.mocked(read).mock.calls.length).toBeGreaterThan(before[index] ?? 0);
+      });
+    });
   });
 });

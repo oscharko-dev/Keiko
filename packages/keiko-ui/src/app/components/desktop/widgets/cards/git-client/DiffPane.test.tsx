@@ -7,6 +7,11 @@ import { axe } from "jest-axe";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GitEditorDiffFile, GitEditorDiffResponse } from "@oscharko-dev/keiko-contracts";
 import type { GitDiffScope } from "@/lib/types";
+import {
+  redeemCodingAppSessionPairingNavigation,
+  type CodingAppSessionPairingSeams,
+} from "@/lib/coding-app-session-client";
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import type { GitClientSeam } from "./git-client-seam";
 import { DiffPane } from "./DiffPane";
 import selectableTextStyles from "../shared/selectableText.module.css";
@@ -389,5 +394,33 @@ describe("DiffPane — structured navigation", () => {
     await screen.findByText("Binary file — no text diff to display.");
 
     expect(await axe(container)).toHaveNoViolations();
+  });
+});
+
+// A launcher re-pair that arrives without a page load (F65): a fragment, and a pair endpoint that
+// acknowledges it.
+const REPAIR_SEAMS: CodingAppSessionPairingSeams = {
+  readFragment: (): string =>
+    encodeCodingAppSessionPairingFragment({
+      requestId: "req_diff-re-pair",
+      issuedAtMs: 1,
+      claim: "d".repeat(64),
+    }),
+  stripFragment: (): void => undefined,
+  postPairing: (): Promise<unknown> => Promise.resolve({ schemaVersion: "1" }),
+};
+
+// PR #3452 review: a diff of a managed task workspace is answered only for a paired browser, so the
+// selected change's diff is read again once a re-pair arrives without a page load.
+describe("DiffPane after a re-pair without a page load (F65)", () => {
+  it("reads the selected change's diff again", async () => {
+    const { client } = renderPane();
+    await waitFor(() => expect(client.getStructuredDiff).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      await redeemCodingAppSessionPairingNavigation(REPAIR_SEAMS);
+    });
+
+    await waitFor(() => expect(client.getStructuredDiff).toHaveBeenCalledTimes(2));
   });
 });

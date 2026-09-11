@@ -7,6 +7,7 @@ import type {
   GitEditorDiffResponse,
   GitEditorDiffScope,
 } from "@oscharko-dev/keiko-contracts";
+import { useCodingAppSessionRedemptions } from "@/lib/coding-app-session-client";
 import { useTranslate } from "@/lib/i18n";
 import type { GitDiffScope, GitHistoryEntry } from "@/lib/types";
 import { DiffFileSection } from "../shared/diffView";
@@ -94,6 +95,8 @@ export function DiffPane({
   const t = useTranslate();
   const [state, setState] = useState<DiffState>(EMPTY_DIFF);
   const handledRevealRef = useRef(0);
+  // A re-pair without a page load reads the diff again (F65).
+  const redemptions = useCodingAppSessionRedemptions();
 
   useEffect(() => {
     if (selectedCommit !== null) {
@@ -137,6 +140,7 @@ export function DiffPane({
   }, [
     client,
     onRevealFile,
+    redemptions,
     repositoryRoot,
     revealRequestId,
     revision,

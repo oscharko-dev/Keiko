@@ -21,6 +21,7 @@ import type { AgentRunCfg } from "./cards/AgentRunWidget";
 import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
 import { workspaceRootTargets } from "../workspaceRootTargets";
 import { BoundRootTarget, type BoundRootSurfaceType } from "./BoundRootTarget";
+import { ManagedTaskWorkspaceGate } from "./ManagedTaskWorkspaceGate";
 import { createWindowChunkFallback } from "./WindowChunkFallback";
 
 const windowChunkFallback = createWindowChunkFallback("window chunk"); // i18n-exempt: diagnostic stage id, never rendered
@@ -652,25 +653,27 @@ registerWindowRender("governedGit", (cfg, ctx) => {
       honorConfiguredRoot={honorConfiguredRoot}
     >
       {(projectId) => (
-        <GitClientWindow
-          key={projectId ?? ""}
-          projectId={projectId}
-          lockedToActiveRoot={!honorConfiguredRoot && ctx.activeBinding !== null}
-          initialPath={initialPath}
-          initialCommit={initialCommit}
-          initialRepositoryDialog={initialRepositoryDialog}
-          onRepositoryConnected={(root: string) => {
-            const returnWindow = str(cfg, "repositoryReturnWindow");
-            if (!returnWindow) return;
-            ctx.updateWindow(returnWindow, { cfg: { repositoryPath: root } });
-            ctx.focusWindow(returnWindow);
-            ctx.updateCfg({ repositoryReturnWindow: "" });
-          }}
-          onOpenFiles={(root: string) => ctx.openWindow("files", { root })}
-          onOpenEditor={(root: string) => ctx.openWindow("editor", { root })}
-          onOpenEditorFile={ctx.openEditorFile}
-          updateCfg={(patch: Record<string, WindowCfgValue>) => ctx.updateCfg(patch)}
-        />
+        <ManagedTaskWorkspaceGate ctx={ctx} root={projectId}>
+          <GitClientWindow
+            key={projectId ?? ""}
+            projectId={projectId}
+            lockedToActiveRoot={!honorConfiguredRoot && ctx.activeBinding !== null}
+            initialPath={initialPath}
+            initialCommit={initialCommit}
+            initialRepositoryDialog={initialRepositoryDialog}
+            onRepositoryConnected={(root: string) => {
+              const returnWindow = str(cfg, "repositoryReturnWindow");
+              if (!returnWindow) return;
+              ctx.updateWindow(returnWindow, { cfg: { repositoryPath: root } });
+              ctx.focusWindow(returnWindow);
+              ctx.updateCfg({ repositoryReturnWindow: "" });
+            }}
+            onOpenFiles={(root: string) => ctx.openWindow("files", { root })}
+            onOpenEditor={(root: string) => ctx.openWindow("editor", { root })}
+            onOpenEditorFile={ctx.openEditorFile}
+            updateCfg={(patch: Record<string, WindowCfgValue>) => ctx.updateCfg(patch)}
+          />
+        </ManagedTaskWorkspaceGate>
       )}
     </BoundRootSurface>
   );

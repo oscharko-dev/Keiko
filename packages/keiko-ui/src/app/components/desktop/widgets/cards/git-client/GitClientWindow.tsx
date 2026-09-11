@@ -22,6 +22,7 @@ import type {
 } from "react";
 import type { GitBranchListEntry } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
+import { useCodingAppSessionRedemptions } from "@/lib/coding-app-session-client";
 import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import {
   useOptionalWidgetTranslate,
@@ -920,6 +921,10 @@ export function GitClientWindow({
     restoreModalTriggerFocus(target);
   }, []);
 
+  // A re-pair without a page load reads every Git view again (F65): the reads of a managed task
+  // workspace are answered only for a paired browser (PR #3452 review).
+  const redemptions = useCodingAppSessionRedemptions();
+
   const loadRepositories = useCallback((): void => {
     setReposLoading(true);
     setReposError(null);
@@ -938,7 +943,7 @@ export function GitClientWindow({
 
   useEffect(() => {
     loadRepositories();
-  }, [loadRepositories]);
+  }, [loadRepositories, redemptions]);
 
   useRightPaneFocus(rightPaneMode, rightPaneRef);
 
@@ -993,7 +998,7 @@ export function GitClientWindow({
     return () => {
       cancelled = true;
     };
-  }, [client, selectedPath, statusRevision]);
+  }, [client, redemptions, selectedPath, statusRevision]);
 
   // Repository summary carries upstream/ahead/behind/remotes for the #1576 sync control.
   useEffect(() => {
@@ -1024,7 +1029,7 @@ export function GitClientWindow({
     return () => {
       cancelled = true;
     };
-  }, [client, selectedPath, statusRevision]);
+  }, [client, redemptions, selectedPath, statusRevision]);
 
   // Dedicated remotes data may contain provider URLs for safe owner/repo inference. The compact
   // summary remains alias-only so sync state never needs URL metadata.
@@ -1050,7 +1055,7 @@ export function GitClientWindow({
     return () => {
       cancelled = true;
     };
-  }, [client, selectedPath]);
+  }, [client, redemptions, selectedPath]);
 
   // History loads independently from status; selecting the first commit gives the detail pane a
   // deterministic populated state while preserving user selection when it still exists.
@@ -1119,7 +1124,7 @@ export function GitClientWindow({
         historyRequestSequenceRef.current += 1;
       }
     };
-  }, [client, initialCommit, optionalT, selectedPath, statusRevision, tab]);
+  }, [client, initialCommit, optionalT, redemptions, selectedPath, statusRevision, tab]);
 
   const loadMoreHistory = useCallback((): void => {
     if (selectedPath === null || history === null || !history.truncated || historyLoadingMore) {
@@ -1180,7 +1185,7 @@ export function GitClientWindow({
     return () => {
       cancelled = true;
     };
-  }, [client, selectedPath, statusRevision]);
+  }, [client, redemptions, selectedPath, statusRevision]);
 
   useEffect((): (() => void) => {
     const onRepositoryStateInvalidated = (event: Event): void => {
