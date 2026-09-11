@@ -433,6 +433,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The subscription source is selected; the gateway is not in use.",
   "codingWorkbench.source.unavailableReason.model-context-window-insufficient":
     "The configured model's context window is too small for a coding run (minimum 32,000 tokens). Increase the model's context window or choose a larger model in Settings → Models.",
+  "codingWorkbench.source.unavailableReason.tool-calling-unverified":
+    "The coding model's tool-calling check is missing or older than 24 hours. Check tool calling again in Settings → Models.",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
   "codingWorkbench.modelSource.openaiGateway": "OpenAI through Gateway",
   "codingWorkbench.modelSource.codexSubscription": "ChatGPT/Codex subscription",

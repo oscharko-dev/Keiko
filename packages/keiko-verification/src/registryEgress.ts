@@ -30,6 +30,9 @@ export interface RegistryEgressProxy {
   // `http://127.0.0.1:<port>`, the value npm's `proxy` and `https-proxy` are set to.
   readonly url: string;
   readonly counts: () => RegistryEgressCounts;
+  // The code of a server-level fault (for example EMFILE on accept) that closed the proxy while the
+  // install ran, or undefined. The install then fails: its egress was cut, not confined.
+  readonly fault: () => string | undefined;
   // Closes the listener and every live tunnel.
   readonly close: () => Promise<void>;
 }
@@ -40,6 +43,8 @@ export interface RegistryEgressOptions {
   // Opens the upstream connection of an approved tunnel. Tests inject it so no test ever reaches
   // the real registry.
   readonly connectUpstream?: ((host: string, port: number) => Socket) | undefined;
+  // Tests only: observe the listening server, for instance to inject a server-level fault.
+  readonly inspectServer?: ((server: Server) => void) | undefined;
 }
 
 /**
@@ -79,6 +84,7 @@ function approvedDestination(registry: string): Destination {
 interface ProxyState {
   allowed: number;
   refused: number;
+  fault?: string;
   readonly sockets: Set<Socket>;
 }
 
@@ -187,9 +193,24 @@ export async function startRegistryEgressProxy(
     tunnel(state, client, head, connectUpstream(destination.host, destination.port));
   });
   const port = await listen(server);
+  // For the whole listening life, not only while listen() is pending: a server-level 'error' with no
+  // listener is an uncaught exception, and one failed accept() must end this install, never the
+  // process hosting it (PR #3452 review).
+  server.on("error", (error: unknown) => {
+    state.fault = faultCode(error);
+    void closeProxy(server, state);
+  });
+  options.inspectServer?.(server);
   return {
     url: `http://127.0.0.1:${String(port)}`,
     counts: () => ({ allowed: state.allowed, refused: state.refused }),
+    fault: () => state.fault,
     close: () => closeProxy(server, state),
   };
+}
+
+// A body-free name for a server fault: the system error code when there is one.
+function faultCode(error: unknown): string {
+  const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+  return typeof code === "string" && code.length > 0 ? code : "server-error";
 }

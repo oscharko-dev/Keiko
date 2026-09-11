@@ -526,7 +526,10 @@ export type CodingWorkbenchSidecarGatewayUnavailableReason =
   // Appended (epic #3384, #3390 closeout): the profile is otherwise configured and probed, but
   // `runMetadata.maxPromptTokens` sits below `CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS`
   // — a run minted against it would fail its very first gateway call.
-  | "model-context-window-insufficient";
+  | "model-context-window-insufficient"
+  // Appended (PR #3452, F73): the coding model qualifies in every other respect, but its forced
+  // tool-call proof is missing or older than 24 h. The remedy is a new probe, not another model.
+  | "tool-calling-unverified";
 
 /**
  * The floor `runMetadata.maxPromptTokens` must clear before a coding run is allowed to look

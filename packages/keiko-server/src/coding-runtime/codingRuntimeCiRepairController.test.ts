@@ -325,6 +325,7 @@ describe("CI repair accounting around admitted model work", () => {
     // needs both.
     const authenticateCapability = (): RuntimeCapabilityResolution => ({
       ok: true,
+      issuedAtMs: 0,
       binding: {
         runId: "run-1",
         workspaceRootDigest: "a".repeat(64),
@@ -352,6 +353,7 @@ describe("CI repair accounting around admitted model work", () => {
     const authority = {
       authenticateCapability: (): RuntimeCapabilityResolution => ({
         ok: true,
+        issuedAtMs: 0,
         binding: {
           runId: "run-1",
           workspaceRootDigest: "a".repeat(64),

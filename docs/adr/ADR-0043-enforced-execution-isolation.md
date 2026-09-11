@@ -499,9 +499,11 @@ install, an empty `noproxy`, the registry pinned, and `allow-git=none`. The prox
 `CONNECT` to the approved registry's own host and port and answers every other destination with
 `403`: another host or port, an IP literal, a plain-HTTP request. It never sees plaintext: what
 flows through a tunnel is npm's TLS session, verified against the registry's certificate. A Git
-dependency therefore fails before git runs, and a URL dependency fails at the proxy; an install
-that failed after a refused destination settles `refused`, and one whose proxy cannot start never
-runs npm. The install reaches the registry directly, as it did before, so a network that requires
+dependency therefore fails before git runs, and a URL dependency fails at the proxy. Any refused
+destination settles the bootstrap `refused`, including one npm tolerates because it names an
+optional dependency and installs around it: a package in the tree still reached for an unapproved
+source. A proxy that cannot start never runs npm, and a proxy that faults during the install fails
+the bootstrap, because its egress was cut rather than confined. The install reaches the registry directly, as it did before, so a network that requires
 an upstream proxy is not supported. After npm exits, the tree it installed is still held to the
 same rule through its hidden lockfile: an install that left none, or one naming another source, is
 `refused` and its steps are skipped.

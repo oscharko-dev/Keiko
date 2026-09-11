@@ -101,6 +101,44 @@ describe("executeWithRetry", () => {
     expect(calls).toBe(4);
   });
 
+  // Each of the three stop reasons names itself on the exhausted line; a reordered decision or a
+  // collapsed mapping would otherwise pass every behavioural test (PR #3452 review).
+  it.each([
+    { reason: "terminal", error: (): Error => new AuthenticationError("nope"), calls: 1 },
+    { reason: "max-retries", error: (): Error => new TransportError("down"), calls: 4 },
+  ])(
+    "names a $reason stop on the exhausted line",
+    async ({ reason, error, calls: expectedCalls }) => {
+      const { clock } = stubClock();
+      const events: ModelGatewayLogEvent[] = [];
+      let calls = 0;
+      await expect(
+        executeWithRetry(
+          () => {
+            calls += 1;
+            return Promise.reject(error());
+          },
+          RETRY_CONFIG,
+          clock,
+          undefined,
+          () => 1,
+          {
+            sink: {
+              write: (event): void => {
+                events.push(event);
+              },
+            },
+          },
+        ),
+      ).rejects.toBeInstanceOf(Error);
+      expect(calls).toBe(expectedCalls);
+      const exhausted = events.filter((event) => event.op === "gateway.retry.exhausted");
+      expect(exhausted).toHaveLength(1);
+      expect(exhausted[0]?.extra).toMatchObject({ reason, attempt: expectedCalls });
+      expect(exhausted[0]?.extra).not.toHaveProperty("delayMs");
+    },
+  );
+
   it("does not retry a non-retryable error", async () => {
     const { clock, sleeps } = stubClock();
     let calls = 0;

@@ -17,6 +17,7 @@ import {
   type ModelTokenAccounting,
 } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
 import { providerRequestBudgetMs } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
+import { MAX_TIMER_DELAY_MS } from "./abort-race.js";
 import type {
   CodingWorkbenchModelSource,
   CodingWorkbenchSidecarGatewayRunMetadata,
@@ -831,6 +832,7 @@ function currentModelSource(deps: UiHandlerDeps): CodingWorkbenchModelSource {
 function resolveGatewayProfile(
   deps: UiHandlerDeps,
   selectedModelId?: string,
+  verificationAtMs?: number,
 ): ResolvedGatewayProfile {
   const config = currentGatewayConfig(deps);
   const gateway = config === undefined ? undefined : currentGateway(deps);
@@ -844,6 +846,9 @@ function resolveGatewayProfile(
     // its own live error, while the projection is what a surface is allowed to CLAIM.
     gatewayVerification: currentGatewayVerification(deps),
     ...(selectedModelId === undefined ? {} : { modelId: selectedModelId }),
+    // An admitted run's calls judge the tool-calling proof as of its admission (F73); the profile
+    // projection and every new run judge it now.
+    ...(verificationAtMs === undefined ? {} : { verificationAtMs }),
   });
   return { config, gateway, modelSource, result };
 }
@@ -1109,26 +1114,43 @@ function runtimeCapabilityAuthenticator(
   return deps.runtimeCapabilityAuthenticator;
 }
 
-function authenticatedRuntimeBinding(value: unknown):
-  | {
-      readonly runId: string;
-      readonly adapterKind?: RuntimeAdapterKind | undefined;
-      readonly modelProfileId?: string | undefined;
-      readonly reasoningEffort?: ModelReasoningEffort | undefined;
-    }
-  | undefined {
+interface AuthenticatedRuntimeBinding {
+  readonly runId: string;
+  readonly adapterKind?: RuntimeAdapterKind | undefined;
+  readonly modelProfileId?: string | undefined;
+  readonly reasoningEffort?: ModelReasoningEffort | undefined;
+  // When the run was admitted (its capability issued): a sidecar call judges the model's
+  // tool-calling proof as of this instant, so a proof that ages out mid-run cannot strand the run
+  // (coding run 24, F73).
+  readonly admittedAtMs?: number | undefined;
+}
+
+function authenticatedRuntimeBinding(value: unknown): AuthenticatedRuntimeBinding | undefined {
   if (!isRecord(value) || value.ok !== true || !isRecord(value.binding)) return undefined;
   if (typeof value.binding.runId !== "string" || value.binding.runId.length === 0) return undefined;
-  const adapterKind = runtimeAdapterKind(value.binding.adapterKind);
-  const effort = value.binding.reasoningEffort;
   return {
     runId: value.binding.runId,
+    ...optionalBindingFields(value.binding),
+    ...(isAdmissionInstant(value.issuedAtMs) ? { admittedAtMs: value.issuedAtMs } : {}),
+  };
+}
+
+function optionalBindingFields(
+  binding: Readonly<Record<string, unknown>>,
+): Omit<AuthenticatedRuntimeBinding, "runId" | "admittedAtMs"> {
+  const adapterKind = runtimeAdapterKind(binding.adapterKind);
+  const effort = binding.reasoningEffort;
+  return {
     ...(adapterKind === undefined ? {} : { adapterKind }),
-    ...(typeof value.binding.modelProfileId === "string"
-      ? { modelProfileId: value.binding.modelProfileId }
+    ...(typeof binding.modelProfileId === "string"
+      ? { modelProfileId: binding.modelProfileId }
       : {}),
     ...(isModelReasoningEffort(effort) ? { reasoningEffort: effort } : {}),
   };
+}
+
+function isAdmissionInstant(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 function runtimeAdapterKind(value: unknown): RuntimeAdapterKind | undefined {
@@ -1286,6 +1308,19 @@ interface AuthenticatedGatewayRequest {
   readonly adapterKind?: RuntimeAdapterKind | undefined;
   readonly modelProfileId?: string | undefined;
   readonly reasoningEffort?: ModelReasoningEffort | undefined;
+  readonly admittedAtMs?: number | undefined;
+}
+
+// The optional facts a runtime capability carries onto the authenticated request.
+function runtimeBindingFields(
+  binding: AuthenticatedRuntimeBinding,
+): Omit<AuthenticatedGatewayRequest, "runtimeAuthenticated" | "runId" | "capability"> {
+  return {
+    ...(binding.adapterKind === undefined ? {} : { adapterKind: binding.adapterKind }),
+    ...(binding.modelProfileId === undefined ? {} : { modelProfileId: binding.modelProfileId }),
+    ...(binding.reasoningEffort === undefined ? {} : { reasoningEffort: binding.reasoningEffort }),
+    ...(binding.admittedAtMs === undefined ? {} : { admittedAtMs: binding.admittedAtMs }),
+  };
 }
 
 function authenticateGatewayRequest(
@@ -1324,10 +1359,21 @@ function authenticateGatewayRequest(
       gatewayReadinessRegistry(deps) !== undefined,
     runId: binding.runId,
     capability,
-    ...(binding.adapterKind === undefined ? {} : { adapterKind: binding.adapterKind }),
-    ...(binding.modelProfileId === undefined ? {} : { modelProfileId: binding.modelProfileId }),
-    ...(binding.reasoningEffort === undefined ? {} : { reasoningEffort: binding.reasoningEffort }),
+    ...runtimeBindingFields(binding),
   };
+}
+
+// The profile an authenticated request is served under: its run's model, with the tool-calling proof
+// judged as of the run's admission (F73).
+function resolveAuthenticatedGatewayProfile(
+  deps: UiHandlerDeps,
+  authentication: AuthenticatedGatewayRequest,
+): ResolvedGatewayProfile {
+  return resolveGatewayProfile(
+    deps,
+    gatewayProfileModelIdForAuthentication(authentication),
+    authentication.admittedAtMs,
+  );
 }
 
 function gatewayProfileModelIdForAuthentication(
@@ -1448,7 +1494,9 @@ export function codingSidecarGatewayRequestDeadlineMs(
   const provider = config.providers.find((candidate) => candidate.modelId === modelId);
   // An unconfigured model is refused before any provider call; 30 s only bounds that refusal.
   const budget = provider === undefined ? 30_000 : providerRequestBudgetMs(provider);
-  return budget + GATEWAY_ROUTE_DEADLINE_GRACE_MS;
+  // Armed with AbortSignal.timeout, which fires at once past 2^31 - 1 ms: an absurd budget must not
+  // turn the backstop into an immediate abort.
+  return Math.min(budget + GATEWAY_ROUTE_DEADLINE_GRACE_MS, MAX_TIMER_DELAY_MS);
 }
 
 function gatewayRequestCancellation(
@@ -2223,10 +2271,7 @@ async function runHandleCodingSidecarGatewayChatCompletions(
 ): Promise<RouteResult | typeof STREAMING> {
   const authentication = authenticateGatewayRequest(ctx, deps);
   if (isRouteResult(authentication)) return authentication;
-  const resolved = resolveGatewayProfile(
-    deps,
-    gatewayProfileModelIdForAuthentication(authentication),
-  );
+  const resolved = resolveAuthenticatedGatewayProfile(deps, authentication);
   if (!isAvailableGatewayProfile(resolved))
     return unavailableGatewayProfile(ctx, deps, resolved, authentication);
   const validated = await readValidatedChatRequest(ctx, resolved, authentication);

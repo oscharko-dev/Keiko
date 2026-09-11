@@ -382,5 +382,6 @@ describe("openVerificationSseStream (AC6)", () => {
       reason: "x",
     });
     expect(fake.writes).toHaveLength(writesAfter);
+    expect(fake.destroyCount).toBe(1);
   });
 });

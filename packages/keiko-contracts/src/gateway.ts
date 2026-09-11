@@ -300,17 +300,34 @@ const CODING_WORKBENCH_USE_CASES: ReadonlySet<string> = new Set([
   "software-development",
 ]);
 
-/** The single browser/server rule for models eligible to power the Coding Workbench. */
-export function isCodingWorkbenchModel(capability: ModelCapability): boolean {
-  return (
+/**
+ * Why a capability can or cannot power the Coding Workbench at `nowMs`. A model that qualifies in
+ * every other respect but whose forced tool-call proof is missing or older than
+ * `TOOL_CALLING_VERIFICATION_MAX_AGE_MS` is `tool-calling-unverified`: the remedy is a new probe,
+ * not another model. `nowMs` lets an admitted run judge the proof as of its admission (F73).
+ */
+export type CodingWorkbenchModelEligibility = "eligible" | "tool-calling-unverified" | "ineligible";
+
+export function codingWorkbenchModelEligibility(
+  capability: ModelCapability,
+  nowMs = Date.now(),
+): CodingWorkbenchModelEligibility {
+  const qualified =
     capability.kind === "chat" &&
     capability.toolCalling &&
-    isToolCallingVerificationFresh(capability.toolCallingVerification) &&
     capability.workflowEligible &&
     capability.preferredUseCases.some((value) =>
       CODING_WORKBENCH_USE_CASES.has(normalizedCodingUseCase(value)),
-    )
-  );
+    );
+  if (!qualified) return "ineligible";
+  return isToolCallingVerificationFresh(capability.toolCallingVerification, nowMs)
+    ? "eligible"
+    : "tool-calling-unverified";
+}
+
+/** The single browser/server rule for models eligible to power the Coding Workbench. */
+export function isCodingWorkbenchModel(capability: ModelCapability, nowMs = Date.now()): boolean {
+  return codingWorkbenchModelEligibility(capability, nowMs) === "eligible";
 }
 
 // ─── Completion / infilling capability helpers (Issue #1210, ADR-0042 D5) ──────

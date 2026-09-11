@@ -1,104 +1,155 @@
 // The proxy and the npm configuration confine the install only if npm honours them. This spawns the
-// real npm with the install's own argv and egress configuration against manifests naming the two
-// kinds of source a registry package can declare transitively, past every pre-install check: a
-// tarball on a loopback address and a Git remote. npm must fail both installs without a single
-// connection reaching the loopback listener (PR #3452 review, CWE-918).
+// real npm with the install's own argv and egress configuration against manifests naming the kinds
+// of source a registry package can declare transitively, past every pre-install check: a tarball on
+// a loopback address and each Git form npm resolves. Every install must fail for its own reason
+// (EALLOWGIT before git runs, E403 at the proxy) without one connection reaching the loopback
+// listener (PR #3452 review, CWE-918).
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { connect, createServer, type Server } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { DEPENDENCY_APPROVED_REGISTRY, DEPENDENCY_INSTALL_ARGS } from "./dependencies.js";
-import { registryEgressEnv, startRegistryEgressProxy } from "./registryEgress.js";
+import {
+  registryEgressEnv,
+  startRegistryEgressProxy,
+  type RegistryEgressProxy,
+} from "./registryEgress.js";
 
-const cleanups: (() => Promise<void> | void)[] = [];
+interface Lane {
+  readonly root: string;
+  readonly env: NodeJS.ProcessEnv;
+  readonly proxy: RegistryEgressProxy;
+  readonly loopback: string;
+  readonly connections: () => number;
+  readonly dialled: () => number;
+  readonly close: () => Promise<void>;
+}
 
-afterEach(async () => {
-  for (const cleanup of cleanups.splice(0)) await cleanup();
-});
-
-async function recordingListener(): Promise<{ port: number; connections: () => number }> {
+async function startLane(): Promise<Lane> {
+  const root = mkdtempSync(join(tmpdir(), "keiko-registry-egress-"));
+  const home = join(root, "home");
+  mkdirSync(home);
   let connections = 0;
-  const server: Server = createServer((socket) => {
+  const listener: Server = createServer((socket) => {
     connections += 1;
     socket.destroy();
   });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  cleanups.push(
-    () =>
-      new Promise<void>((resolve) => {
-        server.close(() => {
+  listener.listen(0, "127.0.0.1");
+  await once(listener, "listening");
+  const address = listener.address();
+  if (address === null || typeof address === "string") throw new Error("no TCP address");
+  let dialled = 0;
+  const proxy = await startRegistryEgressProxy({
+    registry: DEPENDENCY_APPROVED_REGISTRY,
+    // No manifest here needs the registry. A dial would mean npm went somewhere unexpected, and it
+    // lands on the recording listener, so the assertions catch it either way.
+    connectUpstream: () => {
+      dialled += 1;
+      return connect({ host: "127.0.0.1", port: address.port });
+    },
+  });
+  const env: NodeJS.ProcessEnv = {
+    PATH: process.env.PATH,
+    HOME: home,
+    npm_config_cache: join(root, "cache"),
+    npm_config_update_notifier: "false",
+    // A refused fetch is final; npm's default retries would only make this suite slow.
+    npm_config_fetch_retries: "0",
+    ...registryEgressEnv(proxy.url, DEPENDENCY_APPROVED_REGISTRY),
+  };
+  return {
+    root,
+    env,
+    proxy,
+    loopback: `127.0.0.1:${String(address.port)}`,
+    connections: () => connections,
+    dialled: () => dialled,
+    close: async (): Promise<void> => {
+      await proxy.close();
+      await new Promise<void>((resolve) => {
+        listener.close(() => {
           resolve();
         });
-      }),
-  );
-  const address = server.address();
-  if (address === null || typeof address === "string") throw new Error("no TCP address");
-  return { port: address.port, connections: () => connections };
+      });
+      rmSync(root, { recursive: true, force: true });
+    },
+  };
 }
 
-function npmInstall(root: string, dependency: string, env: NodeJS.ProcessEnv): Promise<number> {
-  const workspace = mkdtempSync(join(root, "workspace-"));
+// Installs one dependency in a fresh workspace and returns npm's exit code and output.
+async function npmInstall(
+  lane: Lane,
+  dependency: string,
+): Promise<{ readonly code: number; readonly output: string }> {
+  const workspace = mkdtempSync(join(lane.root, "workspace-"));
   writeFileSync(
     join(workspace, "package.json"),
     JSON.stringify({ name: "egress-probe", version: "1.0.0", dependencies: { probe: dependency } }),
   );
   const child = spawn("npm", [...DEPENDENCY_INSTALL_ARGS], {
     cwd: workspace,
-    env,
-    stdio: "ignore",
+    env: lane.env,
+    stdio: ["ignore", "pipe", "pipe"],
   });
-  return new Promise((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", (code) => {
-      resolve(code ?? -1);
-    });
-  });
+  let output = "";
+  const collect = (chunk: Buffer): void => {
+    output = (output + chunk.toString("utf8")).slice(-65_536);
+  };
+  child.stdout.on("data", collect);
+  child.stderr.on("data", collect);
+  const [code] = (await once(child, "close")) as [number | null];
+  return { code: code ?? -1, output };
 }
 
 // npm is `npm.cmd` on Windows and cannot be spawned without a shell; the Linux and macOS lanes run it.
 describe.skipIf(process.platform === "win32")("npm under the registry egress configuration", () => {
-  it("fails a loopback tarball and a Git dependency without reaching either", async () => {
-    const root = mkdtempSync(join(tmpdir(), "keiko-registry-egress-"));
-    cleanups.push(() => {
-      rmSync(root, { recursive: true, force: true });
-    });
-    const home = join(root, "home");
-    mkdirSync(home);
-    const listener = await recordingListener();
-    let dialled = 0;
-    const proxy = await startRegistryEgressProxy({
-      registry: DEPENDENCY_APPROVED_REGISTRY,
-      // Neither manifest needs the registry. A dial would mean npm went somewhere unexpected, and it
-      // lands on the recording listener, so the assertions below catch it either way.
-      connectUpstream: () => {
-        dialled += 1;
-        return connect({ host: "127.0.0.1", port: listener.port });
-      },
-    });
-    cleanups.push(() => proxy.close());
-    const env: NodeJS.ProcessEnv = {
-      PATH: process.env.PATH,
-      HOME: home,
-      npm_config_cache: join(root, "cache"),
-      npm_config_update_notifier: "false",
-      // A refused fetch is final; npm's default retries would only make this test slow.
-      npm_config_fetch_retries: "0",
-      ...registryEgressEnv(proxy.url, DEPENDENCY_APPROVED_REGISTRY),
-    };
-    const loopback = `127.0.0.1:${String(listener.port)}`;
+  let lane: Lane;
 
-    const tarball = await npmInstall(root, `http://${loopback}/probe.tgz`, env);
-    const git = await npmInstall(root, `git+https://${loopback}/probe.git`, env);
+  beforeAll(async () => {
+    lane = await startLane();
+  });
 
-    expect(tarball).not.toBe(0);
-    expect(git).not.toBe(0);
-    expect(listener.connections()).toBe(0);
-    // The tarball request reached the proxy and was refused there; Git never reached it.
-    expect(proxy.counts()).toEqual({ allowed: 0, refused: 1 });
-    expect(dialled).toBe(0);
+  afterAll(async () => {
+    await lane.close();
+  });
+
+  it("fails a loopback tarball at the proxy without reaching it", async () => {
+    const before = lane.proxy.counts();
+
+    const { code, output } = await npmInstall(lane, `http://${lane.loopback}/probe.tgz`);
+
+    expect(code).not.toBe(0);
+    expect(output).toMatch(/E403|403 Forbidden/u);
+    expect(lane.proxy.counts()).toEqual({ allowed: before.allowed, refused: before.refused + 1 });
+    expect(lane.connections()).toBe(0);
+    expect(lane.dialled()).toBe(0);
   }, 60_000);
+
+  it.each([
+    ["git+https", (loopback: string): string => `git+https://${loopback}/probe.git`],
+    ["git+http", (loopback: string): string => `git+http://${loopback}/probe.git`],
+    ["git+ssh", (loopback: string): string => `git+ssh://git@${loopback}/probe.git`],
+    ["git://", (loopback: string): string => `git://${loopback}/probe.git`],
+    ["github: shorthand", (): string => "github:keiko-egress-probe/probe"],
+    ["owner/repo shorthand", (): string => "keiko-egress-probe/probe"],
+    ["gitlab: shorthand", (): string => "gitlab:keiko-egress-probe/probe"],
+    ["bitbucket: shorthand", (): string => "bitbucket:keiko-egress-probe/probe"],
+  ])(
+    "refuses a %s dependency before git runs",
+    async (_form, spec) => {
+      const before = lane.proxy.counts();
+
+      const { code, output } = await npmInstall(lane, spec(lane.loopback));
+
+      expect(code).not.toBe(0);
+      expect(output).toContain("EALLOWGIT");
+      expect(lane.proxy.counts()).toEqual(before);
+      expect(lane.connections()).toBe(0);
+      expect(lane.dialled()).toBe(0);
+    },
+    60_000,
+  );
 });

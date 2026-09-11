@@ -369,12 +369,14 @@ const REFUSAL_DETAIL: Readonly<Record<DependencyBootstrapRefusal, string>> = {
   "unapproved-source":
     "a dependency source is not the approved HTTPS registry; dependency installation refused",
 };
-// npm failed after the egress proxy refused a destination: the install reached for a source other
-// than the approved registry, which is a refusal, not a failure.
+// The egress proxy refused a destination during the install: a package in the tree reached for a
+// source other than the approved registry, which is a refusal, not a failure.
 const EGRESS_REFUSAL_DETAIL =
   "the install reached for a source other than the approved HTTPS registry; dependency installation refused";
 const EGRESS_UNAVAILABLE_DETAIL =
   "the registry egress proxy could not start; dependency installation refused";
+const EGRESS_FAULT_DETAIL =
+  "the registry egress proxy failed during the install; dependency installation refused";
 
 // After an install, the refusal names the tree npm left, not an installation that never ran.
 const INSTALLED_TREE_REFUSAL_DETAIL: Readonly<
@@ -504,7 +506,7 @@ export async function runDependencyBootstrap(
   }
   try {
     const outcome = await installBehindProxy(plan.lockfile, deps, proxy.url, startedAt);
-    return withEgress(outcome, proxy.counts());
+    return withEgress(outcome, proxy.counts(), proxy.fault());
   } finally {
     await proxy.close();
   }
@@ -514,20 +516,24 @@ function startApprovedRegistryProxy(): Promise<RegistryEgressProxy> {
   return startRegistryEgressProxy({ registry: DEPENDENCY_APPROVED_REGISTRY });
 }
 
-// The install's egress on its record. A failed install after the proxy refused a destination is
-// named for what it was: npm reached for a source other than the approved registry.
+// The install's egress on its record. Any refused destination refuses the bootstrap, whether npm
+// then failed or carried on: npm tolerates an optional dependency it could not fetch and prunes it,
+// so exit 0 does not mean nothing reached out (PR #3452 review). A proxy that faulted mid-install
+// fails it: its egress was cut, not confined.
 function withEgress(
   outcome: DependencyBootstrapOutcome,
   egress: RegistryEgressCounts,
+  fault: string | undefined,
 ): DependencyBootstrapOutcome {
-  const refusedSource = egress.refused > 0 && outcome.summary.state === "failed";
+  const summary = { ...outcome.summary, egress };
+  if (fault !== undefined) {
+    return { ...outcome, summary: { ...summary, state: "failed", detail: EGRESS_FAULT_DETAIL } };
+  }
+  const state = outcome.summary.state;
+  const reachedOut = egress.refused > 0 && (state === "installed" || state === "failed");
   return {
     ...outcome,
-    summary: {
-      ...outcome.summary,
-      ...(refusedSource ? { state: "refused" as const, detail: EGRESS_REFUSAL_DETAIL } : {}),
-      egress,
-    },
+    summary: reachedOut ? { ...summary, state: "refused", detail: EGRESS_REFUSAL_DETAIL } : summary,
   };
 }
 

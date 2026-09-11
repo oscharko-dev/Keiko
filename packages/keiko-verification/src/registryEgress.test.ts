@@ -221,6 +221,45 @@ describe("startRegistryEgressProxy", () => {
     expect(status).toBe("HTTP/1.1 403 Forbidden");
   });
 
+  // A malformed request never reaches a CONNECT or request handler: the parser's clientError path
+  // destroys that one socket and the proxy keeps serving (PR #3452 review).
+  it("drops a malformed request and keeps serving", async () => {
+    const proxy = await proxyWith();
+    const socket = connect({ host: "127.0.0.1", port: Number(new URL(proxy.url).port) });
+    cleanups.push(() => {
+      socket.destroy();
+      return Promise.resolve();
+    });
+    await once(socket, "connect");
+    const closed = once(socket, "close");
+    socket.write("\u0000\u0001 not an HTTP request\r\n\r\n");
+
+    await expect(closed).resolves.toBeDefined();
+    const { status } = await connectThrough(proxy, "example.com:443");
+    expect(status).toBe("HTTP/1.1 403 Forbidden");
+    expect(proxy.counts()).toEqual({ allowed: 0, refused: 1 });
+  });
+
+  // A server-level fault (a failed accept, EMFILE) must close this proxy and name the fault, never
+  // surface as an uncaught exception in the process hosting it (PR #3452 review).
+  it("closes itself and names a server-level fault instead of throwing", async () => {
+    let server: import("node:http").Server | undefined;
+    const proxy = await startRegistryEgressProxy({
+      registry: REGISTRY,
+      inspectServer: (listening) => {
+        server = listening;
+      },
+    });
+    cleanups.push(() => proxy.close());
+
+    server?.emit("error", Object.assign(new Error("accept failed"), { code: "EMFILE" }));
+
+    expect(proxy.fault()).toBe("EMFILE");
+    await vi.waitFor(() => {
+      expect(server?.listening).toBe(false);
+    });
+  });
+
   it("closes a live tunnel when the proxy closes", async () => {
     const upstreamPort = await echoUpstream();
     const proxy = await startRegistryEgressProxy({

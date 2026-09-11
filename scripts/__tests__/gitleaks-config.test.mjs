@@ -44,28 +44,74 @@ function allowlistTables(text) {
   return tables;
 }
 
-const tables = allowlistTables(
-  readFileSync(new URL("../../.gitleaks.toml", import.meta.url), "utf8"),
-);
+// Every key gitleaks would silently drop.
+function unknownAllowlistKeys(text) {
+  return allowlistTables(text).flatMap((table) =>
+    [...table.keys()].filter((key) => !ALLOWLIST_KEYS.has(key)),
+  );
+}
+
+// Every allowlist that combines criteria without `condition = "AND"`, named by its criteria.
+function orCombinedAllowlists(text) {
+  return allowlistTables(text)
+    .map((table) => [...table.keys()].filter((key) => CRITERIA.has(key)))
+    .filter((criteria, index) => {
+      const table = allowlistTables(text)[index];
+      return criteria.length > 1 && table?.get("condition") !== '"AND"';
+    })
+    .map((criteria) => criteria.join(", "));
+}
+
+const repositoryConfig = readFileSync(new URL("../../.gitleaks.toml", import.meta.url), "utf8");
 
 describe(".gitleaks.toml allowlists", () => {
   it("are found by this reader", () => {
-    expect(tables.length).toBeGreaterThan(0);
+    expect(allowlistTables(repositoryConfig).length).toBeGreaterThan(0);
   });
 
   it("use only keys gitleaks reads", () => {
-    const unknown = tables.flatMap((table) =>
-      [...table.keys()].filter((key) => !ALLOWLIST_KEYS.has(key)),
-    );
-    expect(unknown).toEqual([]);
+    expect(unknownAllowlistKeys(repositoryConfig)).toEqual([]);
   });
 
   it("combine several criteria with AND, never gitleaks' default OR", () => {
-    for (const table of tables) {
-      const criteria = [...table.keys()].filter((key) => CRITERIA.has(key));
-      if (criteria.length > 1) {
-        expect(table.get("condition"), `allowlist combining ${criteria.join(", ")}`).toBe('"AND"');
-      }
-    }
+    expect(orCombinedAllowlists(repositoryConfig)).toEqual([]);
+  });
+});
+
+// The checks above only prove something if they reject the regressions they exist for.
+describe("the allowlist checks reject a weakened configuration", () => {
+  const scoped = [
+    "[[allowlists]]",
+    'description = "one fixture line in one commit"',
+    'condition = "AND"',
+    'commits = ["0000000000000000000000000000000000000000"]',
+    "paths = [",
+    "  '''fixtures/example\\.test\\.ts''',",
+    "]",
+  ].join("\n");
+
+  it("accepts a scoped allowlist", () => {
+    expect(unknownAllowlistKeys(scoped)).toEqual([]);
+    expect(orCombinedAllowlists(scoped)).toEqual([]);
+  });
+
+  it("reports the misspelt combinator gitleaks drops, and the OR it leaves behind", () => {
+    const misspelt = scoped.replace('condition = "AND"', 'matchCondition = "AND"');
+    expect(unknownAllowlistKeys(misspelt)).toEqual(["matchcondition"]);
+    expect(orCombinedAllowlists(misspelt)).toEqual(["commits, paths"]);
+  });
+
+  it("reports combined criteria that name no combinator at all", () => {
+    const missing = scoped.replace('condition = "AND"\n', "");
+    expect(orCombinedAllowlists(missing)).toEqual(["commits, paths"]);
+  });
+
+  it("reports an explicit OR", () => {
+    const explicitOr = scoped.replace('condition = "AND"', 'condition = "OR"');
+    expect(orCombinedAllowlists(explicitOr)).toEqual(["commits, paths"]);
+  });
+
+  it("reports an unknown key anywhere in an allowlist", () => {
+    expect(unknownAllowlistKeys(`${scoped}\nregexTargets = "line"`)).toEqual(["regextargets"]);
   });
 });

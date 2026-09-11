@@ -705,11 +705,13 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
 describe("runDependencyBootstrap — registry egress", () => {
   function fakeEgressProxy(
     counts = { allowed: 0, refused: 0 },
+    fault?: string,
   ): RegistryEgressProxy & { readonly closed: () => number } {
     let closed = 0;
     return {
       url: "http://127.0.0.1:4873",
       counts: () => counts,
+      fault: () => fault,
       close: (): Promise<void> => {
         closed += 1;
         return Promise.resolve();
@@ -780,6 +782,50 @@ describe("runDependencyBootstrap — registry egress", () => {
     });
 
     expect(outcome.summary).toMatchObject({ state: "failed", egress: { allowed: 2, refused: 0 } });
+  });
+
+  // npm tolerates an optional dependency it could not fetch and exits 0; the refused destination is
+  // still a package reaching for an unapproved source (PR #3452 review).
+  it("refuses an install that succeeded although the proxy refused a destination", async () => {
+    const root = tempRoot();
+    const plan = installPlan(root);
+    writeInstalledTree(root);
+    const proxy = fakeEgressProxy({ allowed: 6, refused: 1 });
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+
+    const outcome = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, rec.fn),
+      startEgressProxy: () => Promise.resolve(proxy),
+    });
+
+    expect(outcome.summary).toMatchObject({
+      state: "refused",
+      exitCode: 0,
+      egress: { allowed: 6, refused: 1 },
+      detail: expect.stringContaining("source other than the approved HTTPS registry") as string,
+    });
+  });
+
+  it("fails an install during which the egress proxy faulted", async () => {
+    const root = tempRoot();
+    const plan = installPlan(root);
+    writeInstalledTree(root);
+    const proxy = fakeEgressProxy({ allowed: 3, refused: 0 }, "EMFILE");
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { exitCode: 0 });
+
+    const outcome = await runDependencyBootstrap(plan, {
+      ...bootstrapDepsFor(root, rec.fn),
+      startEgressProxy: () => Promise.resolve(proxy),
+    });
+
+    expect(outcome.summary).toMatchObject({
+      state: "failed",
+      egress: { allowed: 3, refused: 0 },
+      detail: expect.stringContaining("egress proxy failed during the install") as string,
+    });
+    expect(proxy.closed()).toBe(1);
   });
 
   it("fails closed without spawning npm when the egress proxy cannot start", async () => {

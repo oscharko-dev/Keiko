@@ -33,6 +33,7 @@ describe("reservePromptWithCiRepair", () => {
         audience === "model-gateway"
           ? {
               ok: true,
+              issuedAtMs: 0,
               binding: {
                 runId: "run-1",
                 workspaceRootDigest: "a".repeat(64),
@@ -63,6 +64,7 @@ describe("reservePromptWithCiRepair", () => {
     const authority: Authority = {
       authenticateCapability: () => ({
         ok: true,
+        issuedAtMs: 0,
         binding: {
           runId: "run-2",
           workspaceRootDigest: "a".repeat(64),
@@ -93,6 +95,7 @@ describe("reservePromptWithCiRepair", () => {
     const authority: Authority = {
       authenticateCapability: () => ({
         ok: true,
+        issuedAtMs: 0,
         binding: {
           runId: "run-3",
           workspaceRootDigest: "a".repeat(64),

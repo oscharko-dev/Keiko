@@ -615,6 +615,22 @@ describe("parseGatewayConfig", () => {
     expect(() => parseGatewayConfig(raw)).toThrow(/timeoutMs/);
   });
 
+  // A timer armed with more than 2^31 - 1 ms fires at once, so a larger timeoutMs would abort every
+  // call the moment it starts (PR #3452 review).
+  it("rejects a timeoutMs beyond what a timer can hold, and accepts the largest one", () => {
+    const tooLong = rawWithProvider((p) => ({ ...p, timeoutMs: 2 ** 31 }));
+    expect(() => parseGatewayConfig(tooLong)).toThrow(/timeoutMs/);
+    const longest = rawWithProvider((p) => ({ ...p, timeoutMs: 2 ** 31 - 1 }));
+    expect(parseGatewayConfig(longest).providers[0]?.timeoutMs).toBe(2 ** 31 - 1);
+  });
+
+  // An integer past 2^53 is not one JavaScript can count with; the retry loop and the budget derived
+  // from maxRetries must never be handed one (PR #3452 review).
+  it("rejects a maxRetries that is not a safe integer", () => {
+    const raw = rawWithProvider((p) => ({ ...p, maxRetries: 2 ** 53 }));
+    expect(() => parseGatewayConfig(raw)).toThrow(/maxRetries/);
+  });
+
   it("accepts a provider modelId that is not in the capability registry", () => {
     const raw = rawWithProvider((p) => ({ ...p, modelId: "not-in-registry" }));
     const config = parseGatewayConfig(raw);

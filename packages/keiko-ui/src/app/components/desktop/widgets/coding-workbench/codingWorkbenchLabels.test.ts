@@ -123,6 +123,27 @@ describe("lifecycleAnnouncement source reason", () => {
     );
   });
 
+  it("announces a coding model whose tool-calling proof aged out by that reason", () => {
+    const state: CodingWorkbenchRuntimeState = {
+      ...createInitialCodingWorkbenchRuntimeState("governed-assist", "managed-gateway"),
+      source: {
+        status: "ready",
+        error: null,
+        value: {
+          runtimePreference: "managed-gateway",
+          modelSource: "keiko-model-gateway",
+          runtimeSource: "keiko-sidecar",
+          available: false,
+          unavailableReason: "tool-calling-unverified",
+          verification: "unverified",
+        },
+      },
+    };
+    expect(lifecycleAnnouncement(state, t)).toContain(
+      "codingWorkbench.source.unavailableReason.tool-calling-unverified",
+    );
+  });
+
   it("stays silent about a reason the catalog does not know", () => {
     const state: CodingWorkbenchRuntimeState = {
       ...createInitialCodingWorkbenchRuntimeState("governed-assist", "managed-gateway"),

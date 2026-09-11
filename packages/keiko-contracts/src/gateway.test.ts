@@ -17,8 +17,10 @@ import {
   isAsYouTypeCompletionModel,
   isConfiguredVoiceProvider,
   isConversationEligibleModel,
+  codingWorkbenchModelEligibility,
   isCodingWorkbenchModel,
   isVoiceCapability,
+  TOOL_CALLING_VERIFICATION_MAX_AGE_MS,
   listVoicePersonas,
   MODEL_COST_RANK,
   modelSupportsInfilling,
@@ -91,6 +93,31 @@ describe("isCodingWorkbenchModel", () => {
     expect(isCodingWorkbenchModel(cap({ ...coding, kind: "embedding" }))).toBe(false);
     expect(isCodingWorkbenchModel(cap({ ...coding, toolCalling: false }))).toBe(false);
     expect(isCodingWorkbenchModel(cap({ ...coding, workflowEligible: false }))).toBe(false);
+  });
+
+  // A forced tool-call proof expires 24 h after its probe. Coding run 24 (2026-09-11) was admitted
+  // with a proof 3.5 min short of that age and lost its model mid-run (F73), so eligibility is
+  // judged as of an instant the caller names, and a stale proof has a name of its own.
+  it("judges the tool-calling proof as of the instant it is asked for", () => {
+    const checkedAt = Date.parse("2026-09-10T04:30:32.744Z");
+    const model = cap({
+      preferredUseCases: ["Coding"],
+      toolCallingVerification: {
+        status: "verified",
+        checkedAt: new Date(checkedAt).toISOString(),
+        probe: "gateway-tool-calling-v1",
+        configurationFingerprint: "test-fingerprint",
+      },
+    });
+    const admitted = checkedAt + TOOL_CALLING_VERIFICATION_MAX_AGE_MS - 210_000;
+    const later = checkedAt + TOOL_CALLING_VERIFICATION_MAX_AGE_MS + 3_732;
+    expect(isCodingWorkbenchModel(model, admitted)).toBe(true);
+    expect(isCodingWorkbenchModel(model, later)).toBe(false);
+    expect(codingWorkbenchModelEligibility(model, admitted)).toBe("eligible");
+    expect(codingWorkbenchModelEligibility(model, later)).toBe("tool-calling-unverified");
+    expect(codingWorkbenchModelEligibility(cap({ preferredUseCases: ["Chat"] }), admitted)).toBe(
+      "ineligible",
+    );
   });
 });
 

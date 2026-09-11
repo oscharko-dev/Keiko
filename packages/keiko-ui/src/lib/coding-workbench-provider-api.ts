@@ -66,6 +66,8 @@ const CODING_WORKBENCH_SIDECAR_UNAVAILABLE_REASONS = new Set([
   // #3390 closeout: an otherwise-configured, probed profile whose derived `maxPromptTokens` is
   // below the coding runtime's minimum (epic #3384 readiness gap).
   "model-context-window-insufficient",
+  // PR #3452 (F73): the coding model's forced tool-call proof has aged out or is missing.
+  "tool-calling-unverified",
 ]);
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {

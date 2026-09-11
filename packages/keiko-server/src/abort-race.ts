@@ -30,7 +30,8 @@ interface ArmedAbortDeadline extends AbortDeadlineContext {
   finish(): void;
 }
 
-const MAX_TIMER_DELAY_MS = 2_147_483_647;
+// A timer armed with more than 2^31 - 1 ms fires at once (setTimeout, AbortSignal.timeout).
+export const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 function armDeadlineTimer(timeoutMs: number, onTimeout: () => void): () => void {
   if (!Number.isFinite(timeoutMs)) return () => undefined;

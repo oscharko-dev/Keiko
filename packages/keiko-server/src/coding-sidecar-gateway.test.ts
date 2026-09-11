@@ -15,6 +15,7 @@ import {
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
 import { providerRequestBudgetMs } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
+import { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
@@ -44,6 +45,7 @@ import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
 import { STREAMING, type RouteContext, type RouteResult } from "./routes.js";
 import { resetGatewayInstanceCacheForTests } from "./gateway-instance-cache.js";
+import { MAX_TIMER_DELAY_MS } from "./abort-race.js";
 import { OPENCODE_RUNTIME_READINESS_PROMPT } from "./coding-runtime/opencodeLaunchProfile.js";
 
 // Installs a buffered process logger at `level` and returns its sink, mirroring
@@ -2248,6 +2250,18 @@ describe("coding-sidecar gateway", () => {
     }
   });
 
+  // A timer armed with more than 2^31 - 1 ms fires at once: a budget that large must not turn the
+  // route's backstop into an immediate abort (PR #3452 review).
+  it("keeps the route deadline inside what a timer can hold", () => {
+    const vast = provider({ maxRetries: 1_000_000 });
+    const deadline = codingSidecarGatewayRequestDeadlineMs(
+      configValue(vast, capability()),
+      vast.modelId,
+    );
+    expect(deadline).toBe(MAX_TIMER_DELAY_MS);
+    expect(providerRequestBudgetMs(vast)).toBeGreaterThan(deadline);
+  });
+
   it("bounds an unconfigured model like a default provider that never retries", () => {
     const unconfigured = configValue(provider(), capability());
     const defaultProvider = provider({
@@ -2313,6 +2327,81 @@ describe("coding-sidecar gateway", () => {
       vi.unstubAllGlobals();
       resetGatewayInstanceCacheForTests();
     }
+  });
+
+  // Coding run 24 (2026-09-11, F73): admitted while the forced tool-call proof was fresh, the run
+  // lost its model 3.5 min later, when the proof aged out; every later call was refused.
+  function agedProofCapability(): ModelCapability {
+    return capability({
+      toolCallingVerification: {
+        status: "verified",
+        checkedAt: new Date(
+          Date.now() - TOOL_CALLING_VERIFICATION_MAX_AGE_MS - 60_000,
+        ).toISOString(),
+        probe: "gateway-tool-calling-v1",
+        configurationFingerprint: "test-fingerprint",
+      },
+    });
+  }
+
+  it("keeps serving a run admitted while the tool-calling proof was fresh after it ages out", async () => {
+    const chat = vi.fn((): Promise<NormalizedResponse> =>
+      Promise.resolve(assistantResponse("azure-coding-model")),
+    );
+    const deps = {
+      ...runtimeGatewayDeps(
+        () => ({
+          ok: true,
+          binding: { runId: "run-admitted", modelProfileId: "azure-coding-model" },
+          issuedAtMs: Date.now() - TOOL_CALLING_VERIFICATION_MAX_AGE_MS / 2,
+        }),
+        () => chat,
+      ),
+      config: configValue(provider(), agedProofCapability()),
+    } as UiHandlerDeps;
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "continue" }],
+        tools: modelVisibleTools(),
+      }),
+      deps,
+    );
+
+    assertRouteResult(result);
+    expect(result.status).toBe(200);
+    expect(chat).toHaveBeenCalledOnce();
+  });
+
+  it("refuses a run admitted after the proof aged out and names the stale proof", async () => {
+    const diagnostics = { record: vi.fn<(record: ServerDiagnosticRecord) => void>() };
+    const deps = {
+      ...runtimeGatewayDeps(() => ({
+        ok: true,
+        binding: { runId: "run-stale", modelProfileId: "azure-coding-model" },
+        issuedAtMs: Date.now() - 1_000,
+      })),
+      config: configValue(provider(), agedProofCapability()),
+      diagnostics,
+    } as UiHandlerDeps;
+
+    const result = await handleCodingSidecarGatewayChatCompletions(
+      authenticatedContext({
+        model: "coding",
+        messages: [{ role: "user", content: "continue" }],
+        tools: modelVisibleTools(),
+      }),
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 503 });
+    expect(diagnostics.record).toHaveBeenCalledWith(
+      expect.objectContaining({
+        errorClass: "CodingSidecarGatewayUnavailable",
+        code: expect.stringContaining("reason=tool-calling-unverified") as string,
+      }),
+    );
   });
 
   it("passes the sidecar deadline through to an in-flight provider call", async () => {
