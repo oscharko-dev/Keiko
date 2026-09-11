@@ -68,14 +68,18 @@ let readinessCheckRunning = false;
 export function createMicrophoneAllowanceController(initialAllowance = false) {
   let allowance = initialAllowance === true;
   let revision = 0;
+  const revoke = () => {
+    revision += 1;
+    allowance = false;
+    return revision;
+  };
   return {
     current: () => allowance,
     revision: () => revision,
-    revoke: () => {
-      revision += 1;
-      allowance = false;
-      return revision;
-    },
+    revoke,
+    // Only the BFF answers the microphone policy, so only its exit withdraws the allowance. The
+    // supervisor reports every child's exit here, and nothing else decides (PR #3452 review).
+    childExited: (label) => (label === "bff" ? revoke() : revision),
     observe: (observedRevision, nextAllowance) => {
       if (observedRevision !== revision) return false;
       allowance = nextAllowance === true;
@@ -289,7 +293,7 @@ const supervisor = createChildSupervisor({
   },
   onExit: (label, code, signal) => {
     publicReady = false;
-    if (label === "bff") microphoneAllowance.revoke();
+    microphoneAllowance.childExited(label);
     writeState({ ready: false, lastExit: { label, code, signal } });
   },
   onUnexpectedExit: (label) => {
@@ -567,10 +571,6 @@ async function fetchOk(url, validate = async () => true) {
   const response = await globalThis.fetch(url, { cache: "no-store" });
   if (!response.ok) return `HTTP ${String(response.status)}`;
   return (await validate(response)) ? "ok" : "unexpected response";
-}
-
-export function microphoneAllowanceAfterChildExit(label, currentAllowance) {
-  return label === "bff" ? false : currentAllowance === true;
 }
 
 export async function probeApiReadiness(url, fetchImpl = globalThis.fetch) {

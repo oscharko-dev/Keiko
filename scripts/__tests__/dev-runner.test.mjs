@@ -33,7 +33,6 @@ import {
   findAvailableNextPort,
   forwardedUpstreamHeaders,
   normalizeUpstreamLocation,
-  microphoneAllowanceAfterChildExit,
   packageBuildWatchArgs,
   preflightNextRespawn,
   proxyHttp,
@@ -1479,9 +1478,17 @@ describe("forwardedUpstreamHeaders", () => {
     },
   );
 
+  // The supervisor reports every child's exit to the controller (PR #3452 review): the rule lives in
+  // the one object production calls, not in a helper beside it.
   it("clears a prior allowance on BFF exit without coupling it to unrelated child exits", () => {
-    expect(microphoneAllowanceAfterChildExit("bff", true)).toBe(false);
-    expect(microphoneAllowanceAfterChildExit("next", true)).toBe(true);
+    const policy = createMicrophoneAllowanceController(true);
+    const revision = policy.revision();
+
+    expect(policy.childExited("next")).toBe(revision);
+    expect(policy.current()).toBe(true);
+    expect(policy.childExited("bff")).toBe(revision + 1);
+    expect(policy.current()).toBe(false);
+    expect(policy.observe(revision, true)).toBe(false);
   });
 
   it("keeps microphone capability disabled after failed health probes", async () => {
