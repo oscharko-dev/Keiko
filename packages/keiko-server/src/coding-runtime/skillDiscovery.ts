@@ -109,6 +109,24 @@ export function approvedSkillProjection(
   };
 }
 
+/**
+ * The operator's view of the catalog: every approved skill with the readiness a run can tell before
+ * any live question. Authority and budget are facts of one call, not of the catalog, so this
+ * projection never asks them and can never spend one (#3417).
+ */
+export function operatorSkillProjection(
+  catalog: Pick<SkillCatalog, "list" | "digest">,
+  facts: SkillStaticFacts,
+): SkillDiscoveryResultV1 {
+  return {
+    schemaVersion: SKILL_DISCOVERY_SCHEMA_VERSION,
+    catalogDigest: catalog.digest(),
+    skills: catalog
+      .list()
+      .map((entry) => discoveryEntry(entry, staticSkillReadiness(entry, facts))),
+  };
+}
+
 /** The model's view of a projection: only the skills that are ready and that it may invoke now. */
 export function invocableSkillDiscovery(
   projection: SkillDiscoveryResultV1,

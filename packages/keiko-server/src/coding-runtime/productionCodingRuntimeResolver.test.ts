@@ -1,5 +1,6 @@
 /* eslint-disable @typescript-eslint/explicit-function-return-type -- Local resolver fixtures are contextually typed. */
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -86,6 +87,38 @@ describe("production coding runtime resolver", () => {
     confirmations.issue(approved);
     host.launchResolver.resolve(request);
     expect(createRun.mock.calls[0]?.[0].context.issueBinding).toEqual(issueBinding);
+  });
+
+  // #3417: one server-approved skill catalog, composed once. Every run's tools are built from it,
+  // and the operator's projection reads that same catalog, with the readiness it can tell itself.
+  it("answers the operator's approved skills from the one catalog every run shares", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(
+        fixture,
+        vi.fn((input: ProductionRuntimeBackendInput) => backendRun(input.request.runId)),
+        confirmations.consumer,
+      ),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    // Before any run exists: a catalog composed per run could answer nothing here.
+    const composed = host.approvedSkills?.();
+
+    expect(composed === undefined ? undefined : validateSkillDiscoveryResultV1(composed).ok).toBe(
+      true,
+    );
+    expect(composed?.skills.map((skill) => skill.skillId)).toEqual([
+      "skl_repo-structure-summary@1",
+    ]);
+    expect(composed?.skills[0]?.readiness).toEqual({ state: "ready" });
+
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+    host.launchResolver.resolve(request);
+
+    // The run composes its tools from that same catalog, so the operator's digest does not move.
+    expect(host.approvedSkills?.().catalogDigest).toBe(composed?.catalogDigest);
   });
 
   it("starts an approved research grant lifetime at operator approval time", async () => {

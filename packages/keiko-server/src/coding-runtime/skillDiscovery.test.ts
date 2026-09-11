@@ -8,6 +8,7 @@ import {
 } from "./skillCatalog.js";
 import {
   approvedSkillProjection,
+  operatorSkillProjection,
   invocableSkillDiscovery,
   skillReadiness,
   staticSkillReadiness,
@@ -144,5 +145,37 @@ describe("skill discovery projection (#3417)", () => {
       "skl_ready@1",
       "skl_explicit@1",
     ]);
+  });
+});
+
+describe("the operator's skill projection (#3417)", () => {
+  it("lists every approved skill with the readiness a run can tell before any live question", () => {
+    const catalog = createServerApprovedSkillCatalog([
+      skill("skl_a@1"),
+      skill("skl_b@1", { enabled: false }),
+    ]);
+
+    const projection = operatorSkillProjection(catalog, facts());
+
+    expect(validateSkillDiscoveryResultV1(projection).ok).toBe(true);
+    expect(projection.catalogDigest).toBe(catalog.digest());
+    expect(projection.skills.map((entry) => [entry.skillId, entry.readiness])).toEqual([
+      ["skl_a@1", { state: "ready" }],
+      ["skl_b@1", { state: "unavailable", reason: "disabled" }],
+    ]);
+  });
+
+  it("asks neither the live authority nor the budget, so the operator's view spends nothing", () => {
+    const authorityAllowsRead = vi.fn(() => false);
+    const delegatedReadFits = vi.fn(() => false);
+
+    const projection = operatorSkillProjection(
+      createServerApprovedSkillCatalog([skill("skl_a@1")]),
+      facts({ authorityAllowsRead, delegatedReadFits }),
+    );
+
+    expect(projection.skills[0]?.readiness).toEqual({ state: "ready" });
+    expect(authorityAllowsRead).not.toHaveBeenCalled();
+    expect(delegatedReadFits).not.toHaveBeenCalled();
   });
 });

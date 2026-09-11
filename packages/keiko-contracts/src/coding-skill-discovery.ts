@@ -88,6 +88,7 @@ const CAPABILITY_ID_MAX_CHARS = 128;
 const PROFILE_ID_PATTERN = /^[a-z][a-z0-9-]{0,63}$/u;
 
 const RESULT_KEYS = ["schemaVersion", "catalogDigest", "skills"] as const;
+const SKILLS_CHANNEL_KEYS = ["session", "skills"] as const;
 const ENTRY_KEYS = [
   "skillId",
   "version",
@@ -269,5 +270,59 @@ export function validateSkillDiscoveryResultV1(
   errors.push(...skillsErrors(ownField(value, "skills")));
   return errors.length === 0
     ? { ok: true, value: value as unknown as SkillDiscoveryResultV1 }
+    : { ok: false, errors };
+}
+
+// ─── The operator's channel (#3417) ──────────────────────────────────────────────
+
+/** Session facet of a channel-carried skills payload: the status of the presented cookie only. */
+export const CODING_WORKBENCH_RUNTIME_SKILLS_SESSION_STATES = ["active", "unpaired"] as const;
+
+export type CodingWorkbenchRuntimeSkillsSession =
+  (typeof CODING_WORKBENCH_RUNTIME_SKILLS_SESSION_STATES)[number];
+
+/**
+ * The approved skills of one run as carried over the AUTHENTICATED app-session channel: the same
+ * closed, body-free record discovery reports the model, with the readiness a run can tell before any
+ * live question. `session` reflects only whether the caller's own cookie is a valid app session,
+ * never the existence of a run or of a skill, so an unpaired browser renders an honest re-pair state
+ * and the payload is not an existence oracle (ADR-0141 D6).
+ */
+export interface CodingWorkbenchRuntimeSkillsChannelPayload {
+  readonly session: CodingWorkbenchRuntimeSkillsSession;
+  readonly skills?: SkillDiscoveryResultV1 | undefined;
+}
+
+/**
+ * The single source of the constant content-free projection every unauthenticated caller of the
+ * skills route receives (ADR-0141 D6): independent of run existence and of the catalog.
+ */
+export function unpairedCodingWorkbenchRuntimeSkillsChannelPayload(): CodingWorkbenchRuntimeSkillsChannelPayload {
+  return { session: "unpaired" };
+}
+
+/**
+ * Validate a channel-carried skills payload: exact keys, a valid session facet, a listing that holds
+ * the discovery contract, and the invariant that an `unpaired` payload carries no skills.
+ */
+export function validateCodingWorkbenchRuntimeSkillsChannelPayload(
+  value: unknown,
+): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeSkillsChannelPayload> {
+  if (!isRecord(value)) return { ok: false, errors: ["skills channel payload must be an object"] };
+  const errors = unknownKeys(value, SKILLS_CHANNEL_KEYS, "skillsChannelPayload");
+  const session = ownField(value, "session");
+  if (!isOneOf(session, CODING_WORKBENCH_RUNTIME_SKILLS_SESSION_STATES)) {
+    errors.push("skillsChannelPayload.session is invalid");
+  }
+  const skills = ownField(value, "skills");
+  if (session === "unpaired" && skills !== undefined) {
+    errors.push("skillsChannelPayload.skills must be absent when the session is unpaired");
+  }
+  if (skills !== undefined) {
+    const listing = validateSkillDiscoveryResultV1(skills);
+    if (!listing.ok) errors.push(...listing.errors);
+  }
+  return errors.length === 0
+    ? { ok: true, value: value as unknown as CodingWorkbenchRuntimeSkillsChannelPayload }
     : { ok: false, errors };
 }

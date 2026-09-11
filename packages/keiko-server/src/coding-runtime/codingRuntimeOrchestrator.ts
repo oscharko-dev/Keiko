@@ -2,21 +2,22 @@
 import { createHash, randomUUID } from "node:crypto";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type {
+  CodingWorkbenchAuxiliaryStatus,
+  CodingWorkbenchIssueBinding,
   CodingWorkbenchMode,
+  CodingWorkbenchOperatorDecision,
   CodingWorkbenchRuntimeApprovalDecisionRequest,
   CodingWorkbenchRuntimeEvent,
+  CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimePendingApprovalReview,
   CodingWorkbenchRuntimePendingPermission,
-  CodingWorkbenchAuxiliaryStatus,
-  CodingWorkbenchOperatorDecision,
-  CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimePendingResearch,
   CodingWorkbenchRuntimeResearchGrant,
   CodingWorkbenchRuntimeResult,
-  CodingWorkbenchRuntimeStartRequest,
   CodingWorkbenchRuntimeSnapshot as PublicSnapshot,
+  CodingWorkbenchRuntimeStartRequest,
   CodingWorkbenchRuntimeStateName,
-  CodingWorkbenchIssueBinding,
+  SkillDiscoveryResultV1,
 } from "@oscharko-dev/keiko-contracts";
 import { isLegalCodingWorkbenchRuntimeTransition } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
@@ -1062,6 +1063,16 @@ export class CodingRuntimeOrchestrator {
       domains,
       expiresAt: new Date(newest.expiresAtMs).toISOString(),
     };
+  }
+
+  /**
+   * The approved skills of the run the operator is watching, for the AUTHENTICATED skills channel
+   * (#3417). The projection is the closed, body-free record discovery reports, with the readiness the
+   * catalog can tell on its own; the live authority and budget belong to an invocation, not to this
+   * view. A run that is not the current one has none.
+   */
+  approvedSkills(runId: string): SkillDiscoveryResultV1 | undefined {
+    return this.current()?.runId === runId ? this.deps.approvedSkills?.() : undefined;
   }
 
   decideApproval(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {

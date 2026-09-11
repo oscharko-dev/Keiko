@@ -83,6 +83,10 @@ import {
   type UseCodingWorkbenchResearchResult,
 } from "@/lib/useCodingWorkbenchResearch";
 import {
+  useCodingWorkbenchSkills,
+  type UseCodingWorkbenchSkillsResult,
+} from "@/lib/useCodingWorkbenchSkills";
+import {
   useCodingWorkbenchApprovalReview,
   type CodingWorkbenchApprovalReviewStatus,
   type UseCodingWorkbenchApprovalReviewResult,
@@ -118,6 +122,7 @@ import {
   type CodingWorkbenchRunWorkspace,
   type CodingWorkbenchRunWorkspaceBinding,
 } from "./useCodingWorkbenchRunWorkspace";
+import { ApprovedSkillsDisclosure } from "./CodingWorkbenchApprovedSkills";
 import { ResearchGrantChip } from "./CodingWorkbenchResearchGrant";
 import { CodingWorkbenchTrustAffordance } from "./CodingWorkbenchTrustAffordance";
 import { requestGatewayModelCatalogRefresh } from "../shared/gatewaySetupBus";
@@ -553,6 +558,26 @@ function sessionWorkspaceProjection(
   return live !== null && live.workspaceId === bound.workspaceId ? live : bound;
 }
 
+type WorkbenchRunValue = ReturnType<typeof useCodingWorkbenchRuntime>["state"]["run"]["value"];
+
+interface WorkbenchRunChannels {
+  readonly research: UseCodingWorkbenchResearchResult;
+  readonly skills: UseCodingWorkbenchSkillsResult;
+}
+
+// The per-run authenticated channels the window reads beside its own state: the research ask and
+// grant (#2387) and the approved skills (#3417). Both are addressed by the SAME run identity and
+// revision, so the window resolves them once here instead of re-deriving that identity per channel.
+function useRunChannels(run: WorkbenchRunValue): WorkbenchRunChannels {
+  const research = useCodingWorkbenchResearch({
+    runId: run?.runId,
+    revision: run?.revision,
+    permissionRequestId: run?.pendingPermission?.requestId,
+  });
+  const skills = useCodingWorkbenchSkills({ runId: run?.runId, revision: run?.revision });
+  return { research, skills };
+}
+
 export function CodingWorkbenchWindow({
   selectedRoot,
   onOpenGit = noopOpenGit,
@@ -569,11 +594,7 @@ export function CodingWorkbenchWindow({
   );
   useEffect(() => requestGatewayModelCatalogRefresh(), []);
   useCodingModelSelection(state, actions, codingModels);
-  const research = useCodingWorkbenchResearch({
-    runId: state.run.value?.runId,
-    revision: state.run.value?.revision,
-    permissionRequestId: state.run.value?.pendingPermission?.requestId,
-  });
+  const { research, skills } = useRunChannels(state.run.value);
   // Run attribution is answered from the run's OWN workspace for its whole life, never from the
   // live pointer (#3381 review) — see `useCodingWorkbenchRunWorkspace`.
   const runWorkspace = useRunWorkspaceBinding(state, activeWorkspace);
@@ -616,6 +637,7 @@ export function CodingWorkbenchWindow({
       workbenchLabel={workbenchLabel}
       onDecision={decideApproval}
       research={research}
+      skills={skills}
       codingModels={codingModels}
       authority={authority}
       onOpenGit={onOpenGit}
@@ -659,6 +681,7 @@ interface WorkbenchContentProps {
   readonly workbenchLabel: string;
   readonly onDecision: (decision: "approved" | "denied") => void;
   readonly research: UseCodingWorkbenchResearchResult;
+  readonly skills: UseCodingWorkbenchSkillsResult;
   readonly codingModels: readonly ModelCapability[];
   readonly authority: WorkbenchAuthoritySelection;
   readonly onOpenGit: (target: CodingWorkbenchGitTarget) => void;
@@ -773,6 +796,7 @@ function WorkbenchColumns({
   focusRef,
   onDecision,
   research,
+  skills,
   codingModels,
   authority,
   onOpenGit,
@@ -1050,6 +1074,7 @@ function WorkbenchColumns({
               if (research.grant !== null) void actions.revokeResearchGrant(research.grant);
             }}
           />
+          <ApprovedSkillsDisclosure skills={skills.skills ?? undefined} />
           <Timeline
             events={state.events}
             activity={activity}

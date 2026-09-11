@@ -261,6 +261,7 @@ export const API_ROUTE_LITERAL_SEGMENTS: ReadonlySet<string> = new Set([
   "settings",
   "setup",
   "sign-out",
+  "skills",
   "snapshot",
   "snapshots",
   "snippets",

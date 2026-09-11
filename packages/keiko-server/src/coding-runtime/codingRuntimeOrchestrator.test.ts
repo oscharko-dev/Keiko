@@ -56,7 +56,9 @@ import type {
   AuxiliaryResearchScopeV1,
   CodingWorkbenchIssueBinding,
   CodingWorkbenchIssueBindingFailure,
+  SkillDiscoveryResultV1,
 } from "@oscharko-dev/keiko-contracts";
+import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import { CODING_WORKBENCH_ISSUE_BINDING_FAILURES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import {
   draftDeliveryLineageRecord,
@@ -113,6 +115,29 @@ function orderedRows(rows: Map<string, CodingRuntimeSnapshot>): CodingRuntimeSna
       right.updatedAt.localeCompare(left.updatedAt) || left.runId.localeCompare(right.runId),
   );
 }
+
+// #3417: the operator's view of the approved skills, as the composed runtime host answers it.
+// Derived through the contract's own validator, never restated here: the branded skill ids and
+// digests are the producer's, so a fixture cannot drift away from the shape the host answers.
+const APPROVED_SKILLS: SkillDiscoveryResultV1 = (() => {
+  const validated = validateSkillDiscoveryResultV1({
+    schemaVersion: 1,
+    catalogDigest: "a".repeat(64),
+    skills: [
+      {
+        skillId: "skl_repo-structure-summary@1",
+        version: "1",
+        sourceDigest: "b".repeat(64),
+        category: "repository-analysis",
+        capabilities: ["keiko.workspace.read"],
+        compatibility: { profile: "opencode", minVersion: 1, maxVersion: 1 },
+        readiness: { state: "ready" },
+      },
+    ],
+  });
+  if (!validated.ok) throw new Error(`fixture is not a listing: ${validated.errors.join(", ")}`);
+  return validated.value;
+})();
 
 function fixture(
   activityProjection?: CodingSafeActivityProjection,
@@ -352,6 +377,7 @@ function fixture(
       serverPrincipal: () => "server",
       researchGrants,
       pendingResearchApprovals,
+      approvedSkills: () => APPROVED_SKILLS,
       ...(diagnostics ? { diagnostics } : {}),
       ...(activityLog ? { activityLog } : {}),
       ...(issueIntake ? { issueIntake } : {}),
@@ -4951,5 +4977,18 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
         reason: "interrupted",
       });
     });
+  });
+});
+
+// #3417: the approved skills the operator is shown belong to the run they are watching, and the
+// general snapshot stays unable to carry them.
+describe("CodingRuntimeOrchestrator approved skills (#3417)", () => {
+  it("projects the approved skills of the current run only, never onto the snapshot", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+
+    expect(f.orchestrator.approvedSkills("run-1")).toEqual(APPROVED_SKILLS);
+    expect(f.orchestrator.approvedSkills("run-2")).toBeUndefined();
+    expect(JSON.stringify(f.orchestrator.snapshot())).not.toContain("skl_repo-structure-summary");
   });
 });

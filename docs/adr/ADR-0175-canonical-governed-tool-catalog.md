@@ -582,6 +582,10 @@ second registry, index or policy path exists.
   catalog revision and digest, the approved and listed counts, the unavailable counts per closed
   reason and the duration — never a skill body, path, prompt, argument, output or credential.
 
+The operator sees the same projection through the run's authenticated app-session channel
+(`GET /runs/:runId/skills`, ADR-0141), with the readiness the catalog can tell on its own; nothing
+of a skill's body, path, prompt, argument or output reaches either surface.
+
 The descriptor is a producer change, and no lineage entry admits it yet. The one entry issued in
 this pull request was withdrawn (1.4: the owner issues an entry, never the change it certifies),
 and the owner issues the next one once, for the final producer of PR #3452. Until then the

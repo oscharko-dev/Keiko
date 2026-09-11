@@ -38,6 +38,8 @@ const runtimeHookMock = vi.hoisted(() => vi.fn());
 const questionsHookMock = vi.hoisted(() => vi.fn());
 const activityHookMock = vi.hoisted(() => vi.fn());
 const researchHookMock = vi.hoisted(() => vi.fn());
+// #3417: the approved-skills channel has a hook of its own; every suite here stays hermetic through it.
+const skillsHookMock = vi.hoisted(() => vi.fn());
 const approvalReviewHookMock = vi.hoisted(() => vi.fn());
 const autonomyHookMock = vi.hoisted(() => vi.fn());
 const editorBridgeHookMock = vi.hoisted(() => vi.fn());
@@ -100,6 +102,10 @@ vi.mock("@/lib/useCodingWorkbenchSafeActivity", () => ({
 
 vi.mock("@/lib/useCodingWorkbenchResearch", () => ({
   useCodingWorkbenchResearch: researchHookMock,
+}));
+
+vi.mock("@/lib/useCodingWorkbenchSkills", () => ({
+  useCodingWorkbenchSkills: skillsHookMock,
 }));
 
 vi.mock("@/lib/useCodingWorkbenchApprovalReview", () => ({
@@ -372,6 +378,7 @@ beforeEach(() => {
   activityHookMock.mockReturnValue(IDLE_ACTIVITY);
   approvalReviewHookMock.mockReturnValue({ status: "idle", review: null, retry: vi.fn() });
   researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null, retry: vi.fn() });
+  skillsHookMock.mockReturnValue({ status: "idle", skills: null, retry: vi.fn() });
   editorBridgeHookMock.mockReset();
   editorBridgeHookMock.mockReturnValue({
     pendingReview: null,

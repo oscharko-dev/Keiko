@@ -894,6 +894,16 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.research.revoking": "Wird widerrufen…",
   "codingWorkbench.research.revokeLabel":
     "Internet-Recherche-Berechtigung für diesen Lauf und seine Unteragenten widerrufen",
+  "codingWorkbench.skills.summary": "Freigegebene Skills ({count})",
+  "codingWorkbench.skills.ready": "Bereit",
+  "codingWorkbench.skills.category.repositoryAnalysis": "Repository-Analyse",
+  "codingWorkbench.skills.category.publicResearch": "Öffentliche Recherche",
+  "codingWorkbench.skills.category.documentationLookup": "Dokumentationssuche",
+  "codingWorkbench.skills.reason.disabled": "Deaktiviert",
+  "codingWorkbench.skills.reason.incompatible": "Nicht kompatibel",
+  "codingWorkbench.skills.reason.handlerUnavailable": "Kein Handler",
+  "codingWorkbench.skills.reason.authorityDenied": "Berechtigung verweigert",
+  "codingWorkbench.skills.reason.budgetExhausted": "Budget erschöpft",
   "codingWorkbench.announcement.researchActive": "Internet-Recherche-Berechtigung aktiv.",
   "codingWorkbench.alert.actionFailedCode":
     "Die angeforderte Runtime-Aktion ist fehlgeschlagen ({code}). Prüfe den Live-Zustand und versuche es erneut.",

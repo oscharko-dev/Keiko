@@ -4,6 +4,8 @@ import type { CodeTaskSkillId } from "./code-task-auxiliary.js";
 import { withPollutedPrototype } from "./code-task-pollution-test-support.js";
 import {
   isSkillCapabilitySet,
+  unpairedCodingWorkbenchRuntimeSkillsChannelPayload,
+  validateCodingWorkbenchRuntimeSkillsChannelPayload,
   isSkillCompatibilityV1,
   SKILL_DISCOVERY_LIMITS,
   SKILL_DISCOVERY_SCHEMA_VERSION,
@@ -174,5 +176,44 @@ describe("skill identity helpers (#3417)", () => {
     expect(isSkillCapabilitySet([])).toBe(true);
     expect(isSkillCapabilitySet(["keiko.repo.search", "keiko.workspace.read"])).toBe(true);
     expect(isSkillCapabilitySet(["keiko.workspace.read", "keiko.repo.search"])).toBe(false);
+  });
+});
+
+function channelValidates(value: unknown): boolean {
+  return validateCodingWorkbenchRuntimeSkillsChannelPayload(value).ok;
+}
+
+describe("validateCodingWorkbenchRuntimeSkillsChannelPayload (#3417)", () => {
+  it("accepts the constant unpaired projection, an active listing and an active run without one", () => {
+    expect(unpairedCodingWorkbenchRuntimeSkillsChannelPayload()).toEqual({ session: "unpaired" });
+    expect(channelValidates(unpairedCodingWorkbenchRuntimeSkillsChannelPayload())).toBe(true);
+    expect(channelValidates({ session: "active", skills: listing([entry()]) })).toBe(true);
+    expect(channelValidates({ session: "active", skills: listing([]) })).toBe(true);
+    expect(channelValidates({ session: "active" })).toBe(true);
+  });
+
+  it("refuses skills while unpaired, an unknown key, an invalid session and a payload that is not one", () => {
+    expect(channelValidates({ session: "unpaired", skills: listing([]) })).toBe(false);
+    expect(channelValidates({ session: "active", skills: listing([]), extra: 1 })).toBe(false);
+    expect(channelValidates({ session: "paired" })).toBe(false);
+    expect(channelValidates({})).toBe(false);
+    expect(channelValidates("active")).toBe(false);
+  });
+
+  it("refuses a listing that leaves the discovery contract", () => {
+    expect(
+      channelValidates({ session: "active", skills: listing([entry({ summary: "reads files" })]) }),
+    ).toBe(false);
+    expect(channelValidates({ session: "active", skills: { schemaVersion: 2, skills: [] } })).toBe(
+      false,
+    );
+  });
+
+  it("refuses a payload with a polluted prototype instead of reading an inherited listing", () => {
+    const smuggled: unknown = Object.assign(Object.create({ skills: listing([entry()]) }), {
+      session: "unpaired",
+    });
+
+    expect(channelValidates(smuggled)).toBe(false);
   });
 });

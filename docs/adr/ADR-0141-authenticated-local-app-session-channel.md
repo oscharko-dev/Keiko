@@ -299,6 +299,18 @@ transport contract: any query parameter is rejected. It does not session-branch 
 because doing so would create two general status projections and weaken D3/D6; the stronger
 owner-layer invariant is that neither projection can represent model-selected research content.
 
+## Approved-skill channel (Issue #3417)
+
+The approved skills of a run are catalog state, not model-selected content, but they name what the
+run may do next, so they ride the same authenticated channel rather than the general projection:
+`GET /runs/:runId/skills` answers the paired operator with the closed, body-free record discovery
+reports the model — the pinned `id@version`, the source digest, one closed category, the catalogued
+capability ids, the compatibility range and the readiness the catalog itself can tell. The live
+authority and the remaining budget are facts of one invocation, not of the catalog, so they stay out
+of this view and can never be spent by looking. An unpaired read returns the single
+`{ session: "unpaired" }` projection before run resolution, independent of run, catalog or skill
+existence, and `CodingWorkbenchRuntimeSnapshot` carries none of it.
+
 ## Consequences
 
 - W1.5 can enforce this authority on the content-bearing routes and migrate the runtime-question

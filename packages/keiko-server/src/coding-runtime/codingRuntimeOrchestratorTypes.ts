@@ -1,10 +1,11 @@
 import type {
+  CodingWorkbenchIssueBinding,
+  CodingWorkbenchIssueBindingFailure,
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimeQuestionsResponse,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeStartRequest,
-  CodingWorkbenchIssueBinding,
-  CodingWorkbenchIssueBindingFailure,
+  SkillDiscoveryResultV1,
 } from "@oscharko-dev/keiko-contracts";
 
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
@@ -76,6 +77,12 @@ export interface CodingRuntimeOrchestratorDeps {
    * (no qualified runtime host), that channel has no grant and revoke fails closed.
    */
   readonly researchGrants?: ResearchGrantRegistry | undefined;
+  /**
+   * The operator's view of the approved skills of the current run (#3417): every approved skill with
+   * the readiness the catalog itself can tell. Absent without a qualified runtime host, and then the
+   * skills channel simply carries none.
+   */
+  readonly approvedSkills?: (() => SkillDiscoveryResultV1) | undefined;
   /**
    * The live #2387 research asks awaiting an operator decision. Read non-consumingly to project the
    * reviewable host and request line onto the AUTHENTICATED research channel; when absent, that

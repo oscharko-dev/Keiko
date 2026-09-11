@@ -862,6 +862,16 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.research.revoking": "Revoking…",
   "codingWorkbench.research.revokeLabel":
     "Revoke the internet research grant for this run and its child agents",
+  "codingWorkbench.skills.summary": "Approved skills ({count})",
+  "codingWorkbench.skills.ready": "Ready",
+  "codingWorkbench.skills.category.repositoryAnalysis": "Repository analysis",
+  "codingWorkbench.skills.category.publicResearch": "Public research",
+  "codingWorkbench.skills.category.documentationLookup": "Documentation lookup",
+  "codingWorkbench.skills.reason.disabled": "Disabled",
+  "codingWorkbench.skills.reason.incompatible": "Incompatible",
+  "codingWorkbench.skills.reason.handlerUnavailable": "No handler",
+  "codingWorkbench.skills.reason.authorityDenied": "Authority denied",
+  "codingWorkbench.skills.reason.budgetExhausted": "Budget exhausted",
   "codingWorkbench.announcement.researchActive": "Internet research grant active.",
   "codingWorkbench.alert.actionFailedCode":
     "The requested runtime action failed ({code}). Review the live state and retry.",

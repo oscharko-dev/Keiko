@@ -1,6 +1,7 @@
 import type {
-  CodingWorkbenchRuntimeEvent,
   CodingWorkbenchMode,
+  CodingWorkbenchRuntimeEvent,
+  SkillDiscoveryResultV1,
 } from "@oscharko-dev/keiko-contracts";
 
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
@@ -42,6 +43,9 @@ export interface CodingRuntimeHost {
   // Server-level registry of read-only research grants (#2387). Present once the runtime host is
   // composed; the orchestrator reads it to project the live grant on the snapshot and to revoke it.
   readonly researchGrants?: ResearchGrantRegistry | undefined;
+  // The operator's view of the approved skills (#3417). Present once the runtime host is composed;
+  // the orchestrator reads it for the authenticated skills channel and nowhere else.
+  readonly approvedSkills?: (() => SkillDiscoveryResultV1) | undefined;
   // Live #2387 research asks awaiting a decision. Present once the runtime host is composed; the
   // orchestrator reads it non-consumingly to project the reviewable host and request line onto the
   // authenticated research channel so the operator can see what they are approving.
@@ -218,6 +222,9 @@ function createControlPlaneOrchestrator(
     serverPrincipal: input.serverPrincipal,
     ...(input.runtimeHost?.researchGrants
       ? { researchGrants: input.runtimeHost.researchGrants }
+      : {}),
+    ...(input.runtimeHost?.approvedSkills
+      ? { approvedSkills: input.runtimeHost.approvedSkills }
       : {}),
     ...(input.runtimeHost?.pendingResearchApprovals
       ? { pendingResearchApprovals: input.runtimeHost.pendingResearchApprovals }

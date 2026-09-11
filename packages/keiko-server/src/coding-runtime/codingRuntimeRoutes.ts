@@ -9,6 +9,7 @@ import type {
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimeQuestionsChannelPayload,
   CodingWorkbenchRuntimeResearchChannelPayload,
+  CodingWorkbenchRuntimeSkillsChannelPayload,
   CodingWorkbenchRuntimeSseEvent,
   CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
@@ -17,6 +18,7 @@ import { parseCodingWorkbenchRuntimeReadinessRequest } from "@oscharko-dev/keiko
 import { resolveEffectiveCodingWorkbenchMode } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-approval-review";
 import { unpairedCodingWorkbenchRuntimeQuestionsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
+import { unpairedCodingWorkbenchRuntimeSkillsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import { unpairedCodingWorkbenchRuntimeResearchChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research";
 import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -603,6 +605,30 @@ export function handleCodingRuntimeResearch(ctx: RouteContext, deps: UiHandlerDe
 }
 
 /**
+ * The authenticated skills projection (#3417): every approved skill of the run the operator is
+ * watching, with the readiness the catalog itself can tell. The record is the closed, body-free one
+ * discovery reports the model. An unpaired caller receives the one constant content-free payload
+ * BEFORE any run resolution, so this route is never an existence oracle (ADR-0141 D6); a run without
+ * a composed runtime host simply carries no skills.
+ */
+export function handleCodingRuntimeSkills(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    return { status: 200, body: unpairedCodingWorkbenchRuntimeSkillsChannelPayload() };
+  }
+  const runId = ctx.params.runId;
+  if (runId === undefined) return notFound(ctx.correlationId);
+  const required = requireRuntime(deps, ctx.correlationId);
+  if (isRouteResult(required)) return required;
+  if (!required.orchestrator.getSnapshot(runId)) return notFound(ctx.correlationId);
+  const skills = required.orchestrator.approvedSkills(runId);
+  const payload: CodingWorkbenchRuntimeSkillsChannelPayload = {
+    session: "active",
+    ...(skills === undefined ? {} : { skills }),
+  };
+  return { status: 200, body: payload };
+}
+
+/**
  * The authenticated approval-review projection (#2802): which workspace files the pending edit
  * approval would write and how large the change is. A human cannot exercise control over a change
  * they are not shown (ADR-0129 D1) — and the paths are model-selected, so like the research ask
@@ -757,6 +783,11 @@ export const CODING_RUNTIME_ROUTE_GROUP: readonly RouteDefinition[] = [
     method: "GET",
     pattern: "/api/coding-workbench/runtime/runs/:runId/research",
     handler: handleCodingRuntimeResearch,
+  },
+  {
+    method: "GET",
+    pattern: "/api/coding-workbench/runtime/runs/:runId/skills",
+    handler: handleCodingRuntimeSkills,
   },
   {
     method: "GET",

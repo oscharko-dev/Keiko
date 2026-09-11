@@ -1126,11 +1126,20 @@ export type {
   SkillReadinessV1,
   SkillUnavailableReason,
 } from "./coding-skill-discovery.js";
+// Type-only, like every other name this barrel carries (`runtime-surface.test.ts`): the runtime
+// values themselves -- the vocabulary, the bounds, the schema version, the validators and the
+// unpaired projection -- are imported from
+// `@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery`, never through this entrypoint.
 export type {
+  CODING_WORKBENCH_RUNTIME_SKILLS_SESSION_STATES,
+  CodingWorkbenchRuntimeSkillsChannelPayload,
+  CodingWorkbenchRuntimeSkillsSession,
   SKILL_CATEGORIES,
   SKILL_DISCOVERY_LIMITS,
   SKILL_DISCOVERY_SCHEMA_VERSION,
   SKILL_UNAVAILABLE_REASONS,
+  unpairedCodingWorkbenchRuntimeSkillsChannelPayload,
+  validateCodingWorkbenchRuntimeSkillsChannelPayload,
   validateSkillDiscoveryResultV1,
 } from "./coding-skill-discovery.js";
 
