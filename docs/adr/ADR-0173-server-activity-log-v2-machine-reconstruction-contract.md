@@ -538,9 +538,11 @@ request":
   browser error classes and the `typeof` of a thrown non-Error) survives, and every producer
   reports any other name as `Error`. A note is admitted only within the logged-string bound
   (`MAX_LOG_STRING_LENGTH`, which producers read as `CLIENT_NOTE_MAX_LENGTH`), and a producer
-  whose parts would not fit folds them into a count (review on PR #3452). Anything else,
-  including a code-owned template filled with foreign text, still collapses to the shape marker,
-  so the browser can never widen what the log admits.
+  whose parts would not fit folds them into a count (review on PR #3452). Anything else, including a code-owned template filled with foreign text, takes the generic
+  redaction every logged string takes: an over-long value, a secret, a personal identifier, a
+  structured payload, prose and an unknown path each become their marker, and only a value none of
+  those checks flags survives as sent (an empty note, or a short code-like one), so the browser can
+  never widen what the log admits.
   A valid original request correlation takes precedence. Reports without one, including reports
   whose supplied id fails validation, use the validated ingest request correlation; internal
   callers without either use `UNKNOWN_CORRELATION_ID`. Rate-limit notices use the ingest request

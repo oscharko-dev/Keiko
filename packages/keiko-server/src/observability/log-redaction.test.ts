@@ -1271,6 +1271,14 @@ describe("code-owned client diagnostic notes (F29)", () => {
     expect(CLIENT_NOTE_MAX_LENGTH).toBe(MAX_LOG_STRING_LENGTH);
   });
 
+  // Review on PR #3452, empty input: an empty or blank note is not a code-owned shape, so it takes the
+  // generic path every other note does, which replaces secrets, personal data and unsafe shapes and
+  // keeps a value that carries nothing (client-diagnostics-routes.test.ts keeps "boundary caught
+  // TypeError" the same way). An empty string has no body to remove, so it reaches the log as sent.
+  it.each(["", " "])("keeps an empty or blank note (%j) body-free as sent", (clientNote) => {
+    expect(redactLogFields({ clientNote })).toEqual({ clientNote });
+  });
+
   it("refuses a failure note whose class name is shaped like a credential", () => {
     const clientNote = `[keiko] app shell crashed: ${["AKIA", "IOSFODNN7EXAMPLE"].join("")}`;
     expect(redactLogFields({ clientNote })?.clientNote).not.toBe(clientNote);

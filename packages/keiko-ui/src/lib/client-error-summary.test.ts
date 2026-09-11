@@ -11,6 +11,13 @@ describe("clientErrorSummary", () => {
       "TypeError",
     );
     expect(clientErrorSummary(hostile)).toBe("Error");
+    // An empty or blank name is no class either (review on PR #3452).
+    const nameless = new Error("x");
+    nameless.name = "";
+    const blank = new Error("x");
+    blank.name = "   ";
+    expect(clientErrorSummary(nameless)).toBe("Error");
+    expect(clientErrorSummary(blank)).toBe("Error");
     expect(clientErrorSummary("token=sk-secret")).toBe("string");
     expect(clientErrorSummary(null)).toBe("object");
   });
