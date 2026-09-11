@@ -23,6 +23,7 @@ import type {
   EditorAgentGovernedAuthorityReference,
   VerificationKind,
   VerificationReport,
+  VerificationResult,
   VerificationStatus,
 } from "@oscharko-dev/keiko-contracts";
 import {
@@ -72,6 +73,8 @@ import {
   dependencyBootstrapFailureSummary,
   type CodingToolVerificationFailure,
   type CodingToolVerificationResult,
+  type VerificationNotRunReason,
+  type VerificationNotRunStep,
 } from "./codingToolIpc.js";
 import {
   createCodingRepositorySearchHandler,
@@ -972,6 +975,7 @@ type VerificationPortResult =
       readonly status: "failed";
       readonly reasonCode?: string | undefined;
       readonly verificationFailure?: CodingToolVerificationFailure | undefined;
+      readonly notRun?: readonly VerificationNotRunStep[] | undefined;
     };
 
 // What a finished run that did not pass tells the model. Exhaustive by TYPE, not by convention:
@@ -1208,19 +1212,71 @@ function verificationOutcome(
   signal: AbortSignal | undefined,
 ): VerificationPortResult {
   const { report, commitProof } = attempt;
-  if (report.overallStatus !== "passed") {
-    const verificationFailure = modelVerificationFailure(report, attempt.failureOutput);
-    return {
-      status: "failed",
-      reasonCode: VERIFICATION_OUTCOME_REASON_CODES[report.overallStatus],
-      ...(verificationFailure === undefined ? {} : { verificationFailure }),
-    };
-  }
+  if (report.overallStatus !== "passed") return failedVerificationOutcome(input, attempt);
   // A passing runner whose authority lapsed is a refusal, never a failed test run.
   const refusal = verificationLivenessRefusal(input, guard, signal);
   return refusal === undefined
     ? { status: "completed", ...(commitProof === undefined ? {} : { verification: commitProof }) }
     : verificationPortRefusal(input, "verification-authority-revoked", refusal);
+}
+
+function failedVerificationOutcome(
+  input: ProductionManagedWorktreeToolInput,
+  attempt: Extract<VerificationAttempt, { readonly outcome: "completed" }>,
+): VerificationPortResult {
+  const { report } = attempt;
+  const reasonCode =
+    VERIFICATION_OUTCOME_REASON_CODES[
+      report.overallStatus as Exclude<VerificationStatus, "passed">
+    ];
+  const verificationFailure = modelVerificationFailure(report, attempt.failureOutput);
+  const notRun = reasonCode === "VERIFICATION_NOT_RUN" ? notRunSteps(report) : undefined;
+  if (notRun !== undefined) recordVerificationNotRun(input, notRun);
+  return {
+    status: "failed",
+    reasonCode,
+    ...(verificationFailure === undefined ? {} : { verificationFailure }),
+    ...(notRun === undefined ? {} : { notRun }),
+  };
+}
+
+// A run that never executed used to reach the model as a bare VERIFICATION_NOT_RUN, and the model
+// picked another verifier at once without knowing why (F74, Coding Workbench run 24). Each step it
+// did not run now carries the closed reason: a verifier the repository defines no script for, a
+// dependency install that never completed, a policy denial or a cancellation.
+const NOT_RUN_STEP_LIMIT = 5;
+
+function notRunSteps(report: VerificationReport): readonly VerificationNotRunStep[] {
+  return report.results
+    .filter((result) => result.status !== "passed")
+    .slice(0, NOT_RUN_STEP_LIMIT)
+    .map((result) => ({ kind: result.kind, reason: notRunReason(result) }));
+}
+
+function notRunReason(result: VerificationResult): VerificationNotRunReason {
+  if (result.status === "denied") return "denied";
+  if (result.status === "cancelled") return "cancelled";
+  const detail = result.detail ?? "";
+  if (detail.startsWith("dependencies unavailable: bootstrap ")) return "dependencies-unavailable";
+  return /^no [a-z-]+ script detected in package\.json$/u.test(detail)
+    ? "script-missing"
+    : "skipped";
+}
+
+function recordVerificationNotRun(
+  input: ProductionManagedWorktreeToolInput,
+  steps: readonly VerificationNotRunStep[],
+): void {
+  (input.activityLog ?? processServerLogSink()).write({
+    category: "process",
+    op: "coding-runtime.verification",
+    correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID,
+    extra: {
+      state: "not-run",
+      stepCount: steps.length,
+      steps: steps.map((step) => `${step.kind}:${step.reason}`),
+    },
+  });
 }
 
 // What the model is told about a run that did not pass: the failed step's structured locations

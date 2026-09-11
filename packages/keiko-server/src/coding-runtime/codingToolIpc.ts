@@ -17,6 +17,7 @@ import type {
   VerificationDependencyState,
   VerificationDependencySummary,
   VerificationFailureLocation,
+  VerificationKind,
   VerifiedCommitResult,
   CodingRuntimeGitResult,
 } from "@oscharko-dev/keiko-contracts";
@@ -90,6 +91,16 @@ export interface CodingToolVerificationFailure {
   readonly excerpt?: string | undefined;
   /** The dependency bootstrap's body-free summary when it, not a step, failed the run. */
   readonly dependencies?: VerificationDependencySummary | undefined;
+}
+
+/** Why a verification step did not run (F74): a closed reason the model can act on. */
+export type VerificationNotRunReason =
+  "script-missing" | "dependencies-unavailable" | "denied" | "cancelled" | "skipped";
+
+/** One step of a verification that never executed, and why (F74). Model-facing and body-free. */
+export interface VerificationNotRunStep {
+  readonly kind: VerificationKind;
+  readonly reason: VerificationNotRunReason;
 }
 
 /**

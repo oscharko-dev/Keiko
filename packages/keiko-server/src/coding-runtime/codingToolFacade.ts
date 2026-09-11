@@ -10,6 +10,7 @@ import {
   type CodingRuntimeGitResult,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { isVerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
+import { isVerificationKind } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import { isCodingRepositoryResult } from "./codingRepositorySearchHandler.js";
 import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
@@ -46,6 +47,7 @@ import {
   type CodingToolResult,
   type CodingToolVerificationFailure,
   type CodingToolVerificationResult,
+  type VerificationNotRunReason,
 } from "./codingToolIpc.js";
 // KEIKO-0695: hoisted from below EDIT_FAILURE_REASON_CODES to the top-of-file import block.
 import type {
@@ -558,6 +560,7 @@ function projectGovernedFailure(
   const result = {
     ...projected("failed", reasonCode, true),
     ...governedFailureCoaching(request, reasonCode),
+    ...verificationNotRunDetail(request, reasonCode, value.notRun),
   };
   const verificationFailure =
     request.action === "verification" && reasonCode === "VERIFICATION_FAILED"
@@ -583,6 +586,10 @@ const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string,
   verification: {
     WORKSPACE_TRUST_REQUIRED:
       "Package scripts in this workspace may not run yet: either the repository's scripts were never allowed, or this run changed package.json and the operator has to allow the rewritten scripts. Only the operator can allow them, in the Coding Workbench header. Report this blocker, do not retry verification until it has been allowed, and never run the scripts another way.",
+    // F74 (Coding Workbench run 24): a verifier with nothing to run answered a bare code, and the
+    // model picked another verifier at once without knowing why.
+    VERIFICATION_NOT_RUN:
+      "No verification step ran, so nothing was checked. A missing script means package.json defines no script for that verifier: choose a verifier the repository defines, or add the script as part of your change. Dependencies that did not install, a policy denial or a cancellation are blockers to report. Do not retry the same verifier unchanged.",
   },
   git: {
     "git-proposal-unknown":
@@ -598,6 +605,40 @@ function governedFailureCoaching(
 ): { readonly guidance?: string } {
   const guidance = GOVERNED_FAILURE_GUIDANCE[request.action]?.[reasonCode];
   return guidance === undefined ? {} : { guidance };
+}
+
+// The steps of a verification that never executed, in closed words (F74). The port builds them from
+// its own report; they are still checked here, like every value the facade forwards to the model.
+const NOT_RUN_WORDS: Readonly<Record<VerificationNotRunReason, string>> = {
+  "script-missing": "no such script in package.json",
+  "dependencies-unavailable": "dependencies did not install",
+  denied: "denied by policy",
+  cancelled: "cancelled",
+  skipped: "skipped",
+};
+
+function isNotRunStep(value: unknown): value is { kind: string; reason: VerificationNotRunReason } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "kind" in value &&
+    "reason" in value &&
+    isVerificationKind(value.kind) &&
+    typeof value.reason === "string" &&
+    Object.hasOwn(NOT_RUN_WORDS, value.reason)
+  );
+}
+
+function verificationNotRunDetail(
+  request: CodingToolActionRequest,
+  reasonCode: string,
+  notRun: unknown,
+): { readonly detail?: string } {
+  if (request.action !== "verification" || reasonCode !== "VERIFICATION_NOT_RUN") return {};
+  const steps = Array.isArray(notRun) ? notRun.filter(isNotRunStep).slice(0, 5) : [];
+  if (steps.length === 0) return {};
+  const named = steps.map((step) => `${step.kind} (${NOT_RUN_WORDS[step.reason]})`);
+  return { detail: `No verification step ran: ${named.join(", ")}.` };
 }
 
 // A stage proposal the runtime Git service blocks at admission is a complete Git result, not a

@@ -614,6 +614,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Generated with some evidence omitted.",
   "codingWorkbench.descriptionStatus.reason.fallback-generated":
     "Generated deterministically; the model was unavailable.",
+  "codingWorkbench.descriptionStatus.reason.fallback-output-refused":
+    "Generated deterministically; the model's answer was refused as unsafe or invalid.",
   "codingWorkbench.descriptionStatus.reason.stale-snapshot":
     "The change moved since this draft was generated.",
   "codingWorkbench.descriptionStatus.reason.expired":
@@ -935,6 +937,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.issue.error.authority-denied":
     "The current authority does not allow binding a run to this issue. Review the autonomy mode and try again.",
   "codingWorkbench.issue.error.cancelled": "The issue intake was cancelled. No run was started.",
+  "codingWorkbench.issue.error.unknown-repository":
+    "Open this repository in the workbench first, then preview the issue.",
   "codingWorkbench.issue.error.unavailable-runtime":
     "The coding runtime is unavailable on this installation, so an issue-bound run cannot start. The preview stays for reference; confirm once the runtime is active.",
   "codingWorkbench.issue.error.unknown":

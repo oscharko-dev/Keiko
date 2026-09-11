@@ -49,6 +49,29 @@ describe("useCodingWorkbenchIssueIntake — transient read failure", () => {
     });
   });
 
+  // F63: previewing before the repository is open is refused with UNKNOWN_REPOSITORY; the intake
+  // names that step instead of the generic "unknown" copy.
+  it("maps UNKNOWN_REPOSITORY to unknown-repository, not unknown", async () => {
+    previewMock.mockRejectedValueOnce(
+      new ApiError(
+        "UNKNOWN_REPOSITORY",
+        "Open the repository before previewing an issue for it.",
+        409,
+      ),
+    );
+
+    const { result } = renderHook(() => useCodingWorkbenchIssueIntake("/repos/not-opened"));
+    act(() => {
+      result.current.change("#42");
+    });
+    act(() => {
+      result.current.preview();
+    });
+
+    await waitFor(() => expect(result.current.state.kind).toBe("failed"));
+    expect(result.current.state).toMatchObject({ kind: "failed", failure: "unknown-repository" });
+  });
+
   it("still falls back to unknown for a code outside the closed vocabulary and the transient code", async () => {
     previewMock.mockRejectedValueOnce(
       new ApiError("SOME_UNRELATED_CODE", "message not shown", 500),

@@ -637,6 +637,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Mit teilweise ausgelassenen Belegen erstellt.",
   "codingWorkbench.descriptionStatus.reason.fallback-generated":
     "Deterministisch erstellt; das Modell war nicht verfügbar.",
+  "codingWorkbench.descriptionStatus.reason.fallback-output-refused":
+    "Deterministisch erstellt; die Antwort des Modells wurde als unsicher oder ungültig abgelehnt.",
   "codingWorkbench.descriptionStatus.reason.stale-snapshot":
     "Die Änderung hat sich seit der Entwurfserstellung weiterentwickelt.",
   "codingWorkbench.descriptionStatus.reason.expired":
@@ -975,6 +977,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die aktuelle Autorität erlaubt es nicht, einen Lauf an dieses Issue zu binden. Prüfe den Autonomiemodus und versuche es erneut.",
   "codingWorkbench.issue.error.cancelled":
     "Die Issue-Aufnahme wurde abgebrochen. Es wurde kein Lauf gestartet.",
+  "codingWorkbench.issue.error.unknown-repository":
+    "Öffne dieses Repository zuerst in der Workbench und lade dann die Vorschau des Issues.",
   "codingWorkbench.issue.error.unavailable-runtime":
     "Die Coding-Runtime ist auf dieser Installation nicht verfügbar, daher kann kein issue-gebundener Lauf starten. Die Vorschau bleibt zur Ansicht; bestätige, sobald die Runtime aktiv ist.",
   "codingWorkbench.issue.error.unknown":

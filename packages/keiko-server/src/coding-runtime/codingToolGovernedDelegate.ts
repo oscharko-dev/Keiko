@@ -21,6 +21,7 @@ import type {
   CodingToolReadResult,
   CodingToolVerificationFailure,
   CodingToolVerificationResult,
+  VerificationNotRunStep,
 } from "./codingToolIpc.js";
 
 export type CodingToolActionOf<Kind extends CodingToolActionRequest["action"]> = Extract<
@@ -60,6 +61,8 @@ export type GovernedCodingToolResult =
       readonly reasonCode?: string | undefined;
       readonly message?: string | undefined;
       readonly verificationFailure?: CodingToolVerificationFailure | undefined;
+      /** The steps of a verification that never executed, each with its closed reason (F74). */
+      readonly notRun?: readonly VerificationNotRunStep[] | undefined;
     };
 
 export interface CodingToolGovernedPorts {
@@ -191,6 +194,9 @@ function governedFailureOutcome(
       reasonCode: result.reasonCode,
       verificationFailure: result.verificationFailure,
     };
+  }
+  if (action === "verification" && result.notRun !== undefined) {
+    return { outcome: "failed", reasonCode: result.reasonCode, notRun: result.notRun };
   }
   return action === "edit" && result.message !== undefined
     ? { outcome: "failed", reasonCode: result.reasonCode, message: result.message }

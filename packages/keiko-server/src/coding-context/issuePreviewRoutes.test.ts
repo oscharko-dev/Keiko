@@ -90,6 +90,14 @@ describe("issue preview request lifecycle", () => {
     const result = await createCodingWorkbenchIssuePreviewHandler(resolver)(f.ctx, f.deps);
     expect(result.status).toBe(status);
     expect(resolver).not.toHaveBeenCalled();
+    // F63: a refused request leaves its own line, as every other preview outcome does.
+    expect(f.activity.events).toContainEqual(
+      expect.objectContaining({
+        op: "coding-workbench.issue.previewed",
+        status,
+        extra: { outcome: status === 413 ? "request-too-large" : "invalid-request" },
+      }),
+    );
   });
 
   it("rejects an unregistered checkout without invoking a resolver", async () => {
@@ -99,6 +107,14 @@ describe("issue preview request lifecycle", () => {
     expect(result.status).toBe(409);
     expect(result.body).toMatchObject({ error: { code: "UNKNOWN_REPOSITORY" } });
     expect(resolver).not.toHaveBeenCalled();
+    // F63: "Preview issue" before the repository is open was refused with no server-side line.
+    expect(f.activity.events).toContainEqual(
+      expect.objectContaining({
+        op: "coding-workbench.issue.previewed",
+        status: 409,
+        extra: { outcome: "unknown-repository" },
+      }),
+    );
   });
 
   it("reports an upstream exception with correlated redacted diagnostics and disposes listeners", async () => {

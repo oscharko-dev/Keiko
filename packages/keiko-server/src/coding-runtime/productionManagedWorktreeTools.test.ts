@@ -1147,6 +1147,58 @@ describe("production managed worktree tools", () => {
     },
   );
 
+  // F74 (Coding Workbench run 24): a skipped run names the step it did not run and why, to the model
+  // and in the activity log, instead of a bare VERIFICATION_NOT_RUN.
+  it("names each step a run did not execute, with its closed reason, and logs it", async () => {
+    const log: ServerLogEvent[] = [];
+    const [template] = failedVerificationReport().results;
+    if (template === undefined) throw new TypeError("fixture result missing");
+    const facade = verificationFacade({
+      runToReport: () =>
+        Promise.resolve({
+          ...verificationReport("skipped"),
+          results: [
+            {
+              ...template,
+              kind: "typecheck",
+              scriptName: undefined,
+              status: "skipped",
+              exitCode: null,
+              durationMs: 0,
+              outputSummary: "",
+              locations: undefined,
+              detail: "no typecheck script detected in package.json",
+            },
+          ],
+          counts: { ...verificationReport("skipped").counts, skipped: 1 },
+        }),
+      records: [],
+      log,
+    });
+
+    await expect(
+      facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "verification-not-run",
+          idempotencyKey: "verification-not-run-key",
+          verifierId: "typecheck",
+        }),
+      }),
+    ).resolves.toMatchObject({
+      status: "failed",
+      reasonCode: "VERIFICATION_NOT_RUN",
+      detail: "No verification step ran: typecheck (no such script in package.json).",
+    });
+    expect(log).toContainEqual(
+      expect.objectContaining({
+        op: "coding-runtime.verification",
+        extra: { state: "not-run", stepCount: 1, steps: ["typecheck:script-missing"] },
+      }),
+    );
+  });
+
   it("reports a passed run as completed", async () => {
     const facade = verificationFacade({
       runToReport: () => Promise.resolve(verificationReport("passed")),

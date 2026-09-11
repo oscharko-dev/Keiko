@@ -1370,6 +1370,38 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
     expect(generatePrDescriptionMock).toHaveBeenCalledOnce();
   });
 
+  // F56 (Coding Workbench run 24): a fallback stood in for a model answer that was refused as unsafe
+  // or invalid output, and the status said the model had been unavailable.
+  it.each([
+    ["unsafe-model-output", "fallback-output-refused"],
+    ["invalid-model-output", "fallback-output-refused"],
+    ["model-unavailable", "fallback-generated"],
+  ] as const)("names a fallback whose model answer was %s as %s", async (reason, expected) => {
+    const generated = generatedDescription();
+    generatePrDescriptionMock.mockResolvedValueOnce({
+      ...generated,
+      artifact: { ...generated.artifact, outcome: "fallback", reason },
+    });
+    const dispatcher = createProductionWorkbenchDescriptionDispatcher(
+      fakeDeps({
+        snapshots: {
+          ...fakeSnapshots(() =>
+            Promise.resolve({ reference: "ref-1", snapshot: snapshotFixture() }),
+          ),
+          recheck: () => Promise.resolve({ state: "current", snapshot: snapshotFixture() }),
+        },
+        descriptionAuthority: admittingPort(),
+        generation: {
+          gateway: { chat: vi.fn() },
+          config: {} as PrDescription.PrDescriptionDeps["config"],
+          log: { write: () => undefined },
+        },
+      }),
+    );
+    const outcome = await dispatcher.generate(SCOPE, new AbortController().signal);
+    expect(outcome).toMatchObject({ reason: expected, artifactOutcome: "fallback" });
+  });
+
   it("retains the exact generated artifact once and exposes that same proposal", async () => {
     const generated = generatedDescription();
     generatePrDescriptionMock.mockResolvedValueOnce(generated);

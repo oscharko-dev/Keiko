@@ -23,7 +23,11 @@ export interface AcceptedWorkbenchIssue {
 // (coding-workbench-issue-errors.ts stays closed on purpose). This UI-local state distinguishes it
 // from a genuinely unreadable issue so the retry-worded copy can be shown instead of "unknown".
 export type IssueIntakeFailure =
-  CodingWorkbenchIssueBindingFailure | "unknown" | "unavailable-runtime" | "read-transient-failure";
+  | CodingWorkbenchIssueBindingFailure
+  | "unknown"
+  | "unavailable-runtime"
+  | "read-transient-failure"
+  | "unknown-repository";
 type IssueIntakeState =
   | { readonly kind: "empty" | "loading" | "cancelled" }
   | { readonly kind: "ready"; readonly response: GitHubIssuePreviewResponseWire }
@@ -34,10 +38,14 @@ type IssueIntakeState =
     };
 
 const READ_TRANSIENT_FAILURE_CODE = "CODING_WORKBENCH_ISSUE_READ_TRANSIENT_FAILURE";
+// The route refuses a repository the workbench has not opened yet with this free error code (F63):
+// it names what the operator must do first instead of the generic "unknown" copy.
+const UNKNOWN_REPOSITORY_CODE = "UNKNOWN_REPOSITORY";
 
 function issueFailure(error: unknown): IssueIntakeFailure {
   if (typeof error !== "object" || error === null || !("code" in error)) return "unknown";
   if (error.code === READ_TRANSIENT_FAILURE_CODE) return "read-transient-failure";
+  if (error.code === UNKNOWN_REPOSITORY_CODE) return "unknown-repository";
   return codingWorkbenchIssueFailure(error.code) ?? "unknown";
 }
 

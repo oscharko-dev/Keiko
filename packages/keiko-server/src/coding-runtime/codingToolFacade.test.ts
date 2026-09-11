@@ -643,6 +643,40 @@ describe("CodingToolFacade", () => {
     });
   });
 
+  // F74 (Coding Workbench run 24): a verifier with nothing to run answered a bare code, so the model
+  // picked another verifier at once without knowing why. The steps that did not run are named with
+  // their closed reasons, and a step the facade cannot recognise is not forwarded.
+  it("tells the model which verification steps did not run and why", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "failed",
+        reasonCode: "VERIFICATION_NOT_RUN",
+        notRun: [
+          { kind: "typecheck", reason: "script-missing" },
+          { kind: "test", reason: "dependencies-unavailable" },
+          { kind: "../../etc", reason: "script-missing" },
+          { kind: "lint", reason: "made-up" },
+        ],
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "verification", verifierId: "unit" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "VERIFICATION_NOT_RUN" }],
+      reasonCode: "VERIFICATION_NOT_RUN",
+      detail:
+        "No verification step ran: typecheck (no such script in package.json), test (dependencies did not install).",
+      guidance: expect.stringContaining("No verification step ran") as unknown as string,
+    });
+  });
+
   // Coding Workbench run 13 (2026-09-10): a stage proposal the runtime Git service blocks is a
   // completed Git result, not a failure — but its closed reason alone left the model guessing. The
   // admission reasons carry the one recovery the model can perform itself.
@@ -972,10 +1006,14 @@ describe("CodingToolFacade", () => {
       status: "failed",
       reasonCode: code,
       evidence: [{ kind: "governed-delegate", code }],
-      // Exactly one refusal carries operator-facing guidance: the trust refusal is the operator's
-      // decision to change, not the model's (ADR-0147 D3, 2026-09-10). Every other code stays bare.
+      // Two refusals carry guidance: the trust refusal is the operator's decision to change, not the
+      // model's (ADR-0147 D3, 2026-09-10), and a run where no step ran tells the model what that
+      // means for its next step (F74). Every other code stays bare.
       ...(code === "WORKSPACE_TRUST_REQUIRED"
         ? { guidance: expect.stringContaining("Only the operator can allow them") as unknown }
+        : {}),
+      ...(code === "VERIFICATION_NOT_RUN"
+        ? { guidance: expect.stringContaining("No verification step ran") as unknown }
         : {}),
     });
   });

@@ -1154,6 +1154,19 @@ const UNAVAILABLE_REASON: Record<PrDescriptionReason, WorkbenchDescriptionReason
   "invalid-request": "provider-failed",
 };
 
+// A fallback stands in either because the model gave no usable answer or because its answer was
+// refused as unsafe or invalid output; the status names which (F56, Coding Workbench run 24).
+const REFUSED_MODEL_OUTPUT: ReadonlySet<PrDescriptionReason> = new Set([
+  "invalid-model-output",
+  "unsafe-model-output",
+]);
+
+function generatedReason(artifact: PrDescriptionArtifact): WorkbenchDescriptionReason {
+  return artifact.outcome === "fallback" && REFUSED_MODEL_OUTPUT.has(artifact.reason)
+    ? "fallback-output-refused"
+    : GENERATED_REASON[artifact.outcome];
+}
+
 function workbenchDescriptionOutcome(
   result: PrDescription.PrDescriptionGenerationResult,
   proposalId?: string,
@@ -1161,7 +1174,7 @@ function workbenchDescriptionOutcome(
   if (result.status !== "generated") return { reason: UNAVAILABLE_REASON[result.reason] };
   const { artifact } = result;
   return {
-    reason: GENERATED_REASON[artifact.outcome],
+    reason: generatedReason(artifact),
     snapshotDigest: artifact.binding.snapshotDigest,
     draftDigest: artifact.artifactDigest,
     artifactOutcome: artifact.outcome,

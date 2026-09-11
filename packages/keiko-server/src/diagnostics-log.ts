@@ -410,7 +410,6 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "safe-activity-dropped-validation-rejected",
   "safe-activity-dropped-redactor-collapsed",
   "safe-activity-dropped-projection-rejected",
-  "safe-activity-dropped-capacity-rejected",
   "safe-activity-dropped-subscriber-rejected",
   "safe-activity-purged-stop",
   "safe-activity-purged-takeover",
