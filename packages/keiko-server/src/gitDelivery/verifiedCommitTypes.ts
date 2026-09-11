@@ -108,6 +108,11 @@ export interface VerifiedCommitService {
     report: VerificationReport,
     guard?: { readonly check: () => boolean; readonly signal?: AbortSignal | undefined },
   ): Promise<boolean>;
+  /**
+   * Keeps a completed verification that could not become a commit proof (the work was not fully
+   * staged) in the run's verification history, for the pull request's check list (F57).
+   */
+  observeVerification(report: VerificationReport): void;
   propose(message: string): Promise<VerifiedCommitResult | undefined>;
   approve(proposalId: string): Promise<GitDeliveryApprovalClaim | undefined>;
   /** Synchronous human-decision surface; execution still rechecks every live candidate fact. */

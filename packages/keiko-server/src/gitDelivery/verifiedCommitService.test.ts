@@ -421,6 +421,52 @@ describe("verified Code-task commit service", () => {
     });
     expect(phases.indexOf("write-ahead")).toBeLessThan(phases.indexOf("result"));
   });
+  // F57 (runs 19–28): the pull request's check list comes from the run's verification history,
+  // which the commit proof's evidence record carries. A verification of unstaged work cannot prove a
+  // commit but is still a check the run ran, and beginVerification()'s own invalidate() must keep it.
+  it("carries every verification of the run, unstaged ones included, in the proof's evidence", async () => {
+    service.observeVerification(report());
+    const proposalId = await verifiedProposal();
+    const verification = events.filter((event) => event.extra?.phase === "verification").at(-1);
+    expect(verification).toMatchObject({ extra: { passed: true, checkCount: 2 } });
+    const stored: unknown = JSON.parse(
+      evidence.get(String(verification?.extra?.verificationEvidenceId)) ?? "null",
+    );
+    expect(stored).toMatchObject({
+      checks: {
+        omitted: 0,
+        records: [
+          { steps: [{ kind: "typecheck", status: "passed", exitCode: 0 }] },
+          {
+            stagedTreeDigest: service.review(proposalId)?.binding.stagedTreeDigest,
+            steps: [{ kind: "typecheck", status: "passed", exitCode: 0 }],
+          },
+        ],
+      },
+    });
+    expect(stored).not.toHaveProperty(["checks", "records", 0, "stagedTreeDigest"]);
+  });
+  it("starts a new run's verification history empty", async () => {
+    let runId = "run-1";
+    service = createVerifiedCommitService({ ...options, context: () => ({ ...context(), runId }) });
+    service.observeVerification(report());
+    runId = "run-2";
+    const ticket = ticketOf(await service.beginVerification());
+    if (ticket === undefined) throw new Error("verification ticket unavailable");
+    expect(await service.completeVerification(ticket, report())).toBe(true);
+    expect(events.filter((event) => event.extra?.phase === "verification").at(-1)).toMatchObject({
+      extra: { runId: "run-2", checkCount: 1 },
+    });
+  });
+  it("keeps nothing for a verification observed without a live run", async () => {
+    live = false;
+    service.observeVerification(report());
+    live = true;
+    await verifiedProposal();
+    expect(events.filter((event) => event.extra?.phase === "verification").at(-1)).toMatchObject({
+      extra: { checkCount: 1 },
+    });
+  });
   it("uses Full access policy authorization without minting a local-operator approval", async () => {
     let policyAllowsWithoutApproval = true;
     service = createVerifiedCommitService({

@@ -1354,6 +1354,7 @@ describe("production managed worktree tools", () => {
       const completeVerification = vi.fn<VerifiedCommitService["completeVerification"]>(() =>
         Promise.resolve(recorded),
       );
+      const observeVerification = vi.fn<VerifiedCommitService["observeVerification"]>();
       const facade = verificationFacade({
         runToReport: () => Promise.resolve(verificationReport("passed")),
         records: [],
@@ -1361,6 +1362,7 @@ describe("production managed worktree tools", () => {
           ...verificationService(),
           beginVerification,
           completeVerification,
+          observeVerification,
         },
       });
 
@@ -1377,6 +1379,8 @@ describe("production managed worktree tools", () => {
       ).resolves.toMatchObject({ status: "completed", verification: expected });
       expect(beginVerification).toHaveBeenCalledOnce();
       expect(completeVerification).toHaveBeenCalledTimes(ticket.kind === "ticket" ? 1 : 0);
+      // F57: a run's check that cannot prove a commit is still kept for the pull request's list.
+      expect(observeVerification).toHaveBeenCalledTimes(ticket.kind === "ticket" ? 0 : 1);
     },
   );
 
@@ -2799,6 +2803,7 @@ function verificationService(): VerifiedCommitService {
   return {
     beginVerification: vi.fn(() => Promise.resolve({ kind: "ticket" as const, ticket: {} })),
     completeVerification: vi.fn(() => Promise.resolve(true)),
+    observeVerification: vi.fn(),
     propose: vi.fn(),
     approve: vi.fn(),
     issueApproval: vi.fn(),

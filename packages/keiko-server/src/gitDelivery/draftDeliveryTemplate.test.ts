@@ -18,6 +18,7 @@ import {
   DRAFT_DELIVERY_TEMPLATE_DIRECTORY_MAX_ENTRIES,
   DRAFT_DELIVERY_RELATED_ISSUES_MAX,
 } from "./draftDeliveryTemplate.js";
+import { renderDraftDeliveryChecks, type DraftDeliveryChecks } from "./draftDeliveryChecks.js";
 
 // Secret-shaped fixture assembled at runtime: the validator must refuse this exact shape, but the
 // source tree must not carry a literal that secret scanners flag as a credential.
@@ -517,4 +518,59 @@ describe("related-issue line, bound and logged count", () => {
       });
     },
   );
+});
+
+// F57 (runs 19–28): the server-owned body's "Checks" section and its logged shape.
+describe("verification checks section (F57)", () => {
+  const checks: DraftDeliveryChecks = {
+    status: "listed",
+    evidenceId: "verification-1",
+    headSha: "6".repeat(40),
+    committedTreeDigest: "c".repeat(64),
+    history: {
+      records: [
+        {
+          startedAtMs: 1,
+          stagedTreeDigest: "c".repeat(64),
+          steps: [{ kind: "build", status: "passed", exitCode: 0, durationMs: 867 }],
+        },
+      ],
+      omitted: 0,
+    },
+  };
+  it("places the section after the related-issue line and before the managed region", async () => {
+    const f = await fixture();
+    const section = renderDraftDeliveryChecks(checks);
+    expect(
+      resolveDraftDeliveryTemplate({
+        ...f.input,
+        relatedIssueNumbers: [7],
+        verificationChecks: checks,
+      }),
+    ).toMatchObject({
+      status: "ready",
+      body: `Closes #42\n\nRelated issues: #7\n\n${section.markdown}\n\n${framePrDescriptionRegion("")}`,
+      checkRowCount: section.rowCount,
+    });
+    expect(f.log.at(-1)).toMatchObject({
+      op: "git.draft-template",
+      extra: { state: "ready", checksState: "listed", checkRowCount: 1 },
+    });
+  });
+  it("carries the unavailable statement, logged as such, when the evidence could not be read", async () => {
+    const f = await fixture();
+    const result = resolveDraftDeliveryTemplate({
+      ...f.input,
+      verificationChecks: { status: "unavailable", reason: "evidence-invalid" },
+    });
+    expect(result.status === "ready" ? result.body : "").toContain(
+      "Keiko could not read its verification evidence for this commit",
+    );
+    expect(f.log.at(-1)).toMatchObject({ extra: { checksState: "unavailable", checkRowCount: 0 } });
+  });
+  it("logs an absent section for a composition without a verified-commit context", async () => {
+    const f = await fixture();
+    expect(resolveDraftDeliveryTemplate(f.input)).not.toHaveProperty("checkRowCount");
+    expect(f.log.at(-1)).toMatchObject({ extra: { checksState: "absent", checkRowCount: 0 } });
+  });
 });

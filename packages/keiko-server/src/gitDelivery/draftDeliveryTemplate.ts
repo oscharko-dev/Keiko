@@ -26,6 +26,7 @@ import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import { MAX_LINKED_ISSUES } from "../coding-context/codingRuntimeIssueIntake.js";
+import { renderDraftDeliveryChecks, type DraftDeliveryChecks } from "./draftDeliveryChecks.js";
 
 // Three fixed GitHub default locations, no recursive enumeration or model-selected template.
 // One sentinel entry makes discovery overflow explicit instead of selecting an arbitrary prefix.
@@ -56,6 +57,8 @@ export type DraftDeliveryTemplateResult =
       readonly bodyDigest: string;
       readonly templateBytes: number;
       readonly templateDigest?: string;
+      /** Rows of the rendered "Checks" section; absent when the input carried no checks. */
+      readonly checkRowCount?: number;
     }
   | { readonly status: "blocked"; readonly reason: DraftDeliveryTemplateFailure };
 
@@ -68,6 +71,11 @@ export interface DraftDeliveryTemplateInput {
    * children). Rendered as a non-closing "Related issues" line: the bound issue alone is closed.
    */
   readonly relatedIssueNumbers?: readonly number[];
+  /**
+   * The run's verification history for the "Checks" section (ADR-0086 D9). Absent in compositions
+   * without a verified-commit context, which then carry no such section.
+   */
+  readonly verificationChecks?: DraftDeliveryChecks;
   readonly title: string;
   readonly correlationId: string;
   readonly fs?: WorkspaceFs;
@@ -206,6 +214,15 @@ function readTemplate(input: DraftDeliveryTemplateInput, fs: WorkspaceFs, path: 
   return read.text;
 }
 
+function renderedChecks(input: DraftDeliveryTemplateInput): {
+  readonly section: string;
+  readonly rowCount?: number;
+} {
+  if (input.verificationChecks === undefined) return { section: "" };
+  const rendered = renderDraftDeliveryChecks(input.verificationChecks);
+  return { section: `${rendered.markdown}\n\n`, rowCount: rendered.rowCount };
+}
+
 function compose(
   input: DraftDeliveryTemplateInput,
 ): Extract<DraftDeliveryTemplateResult, { status: "ready" }> {
@@ -216,7 +233,8 @@ function compose(
   if (resolveDefaultPath(fs, input.workspace.root) !== path)
     throw new TemplateResolutionError("template-unreadable");
   const prefix = template.length === 0 ? "" : `${template}\n\n`;
-  const body = `${prefix}Closes #${String(input.issueBinding.issueNumber)}\n\n${relatedIssuesLine(input)}${framePrDescriptionRegion("")}`;
+  const checks = renderedChecks(input);
+  const body = `${prefix}Closes #${String(input.issueBinding.issueNumber)}\n\n${relatedIssuesLine(input)}${checks.section}${framePrDescriptionRegion("")}`;
   return {
     status: "ready",
     title: input.title,
@@ -225,6 +243,7 @@ function compose(
     bodyDigest: sha256Hex(body),
     templateBytes: Buffer.byteLength(template, "utf8"),
     ...(path === undefined ? {} : { templateDigest: sha256Hex(template) }),
+    ...(checks.rowCount === undefined ? {} : { checkRowCount: checks.rowCount }),
   };
 }
 
@@ -256,6 +275,8 @@ export function resolveDraftDeliveryTemplate(
         templateBytes: result.templateBytes,
         templateDigest: result.templateDigest,
         relatedIssueCount: input.relatedIssueNumbers?.length ?? 0,
+        checksState: input.verificationChecks?.status ?? "absent",
+        checkRowCount: result.checkRowCount ?? 0,
       },
     });
     return result;

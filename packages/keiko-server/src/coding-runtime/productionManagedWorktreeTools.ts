@@ -1287,6 +1287,8 @@ async function completeCandidateVerification(
 ): Promise<CodingToolVerificationResult | undefined> {
   if (input.verifiedCommitService === undefined || begun === undefined) return undefined;
   if (begun.kind !== "ticket") {
+    // Not a commit proof, but still a check the run ran: kept for the pull request's list (F57).
+    input.verifiedCommitService.observeVerification(report);
     return {
       commitProof: "unavailable",
       reasonCode: "candidate-not-staged",

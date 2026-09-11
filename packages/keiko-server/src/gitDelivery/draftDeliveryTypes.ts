@@ -49,6 +49,7 @@ export interface DraftDeliveryDependencies {
     | "adoptDraftDeliveryFromPredecessor"
     | "ciReadiness"
     | "ciRepairBudget"
+    | "getLastSuccessfulVerifiedCommit"
   >;
   readonly mutationDeps: GitDeliveryMutationDeps;
   readonly execution?: GitDeliveryExecutionSeams;

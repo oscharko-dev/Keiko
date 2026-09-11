@@ -33,6 +33,12 @@ import {
 } from "./verifiedCommitFacts.js";
 import { reconcileVerifiedCommit } from "./verifiedCommitRecovery.js";
 import { commitVerificationReportPassed } from "./verifiedCommitVerification.js";
+import {
+  appendVerificationCheck,
+  EMPTY_VERIFICATION_CHECK_HISTORY,
+  verificationCheckRecord,
+  type VerificationCheckHistory,
+} from "./verificationChecks.js";
 import type {
   VerificationTicketOutcome,
   VerifiedCommitFacts,
@@ -181,6 +187,10 @@ class VerifiedCommitController implements VerifiedCommitService {
   private generation = 0;
   private tickets = new WeakMap<object, VerificationTicket>();
   private proof: VerificationProof | undefined;
+  // The run's verification history for the pull request's check list (F57). Keyed by run so a new
+  // run starts empty, and kept across invalidate(), which every new verification calls.
+  private checks:
+    { readonly runId: string; readonly history: VerificationCheckHistory } | undefined;
   private readonly proposals = new Map<string, VerifiedCommitProposal>();
   private executing = false;
   private executionLeases = new WeakMap<
@@ -257,16 +267,42 @@ class VerifiedCommitController implements VerifiedCommitService {
     }
     if (!this.verificationGuardLive(context, guard)) return false;
     const passed = verificationPassed(before, after, report, this.now());
-    const evidenceId = this.recordVerificationEvidence(context, before.facts, report);
+    const history = this.recordCheck(context.runId, report, before.facts.stagedTreeDigest);
+    const evidenceId = this.recordVerificationEvidence(context, before.facts, report, history);
     this.proof = { ...before, passed, evidenceId };
-    this.log(context, "verification", { passed, verificationEvidenceId: evidenceId });
+    this.log(context, "verification", {
+      passed,
+      verificationEvidenceId: evidenceId,
+      checkCount: history.records.length,
+    });
     return passed;
+  }
+
+  public observeVerification(report: VerificationReport): void {
+    const context = this.context();
+    if (context !== undefined) this.recordCheck(context.runId, report);
+  }
+
+  private recordCheck(
+    runId: string,
+    report: VerificationReport,
+    stagedTreeDigest?: string,
+  ): VerificationCheckHistory {
+    const previous =
+      this.checks?.runId === runId ? this.checks.history : EMPTY_VERIFICATION_CHECK_HISTORY;
+    const history = appendVerificationCheck(
+      previous,
+      verificationCheckRecord(report, stagedTreeDigest),
+    );
+    this.checks = { runId, history };
+    return history;
   }
 
   private recordVerificationEvidence(
     context: VerifiedCommitRunContext,
     facts: VerifiedCommitFacts,
     report: VerificationReport,
+    history: VerificationCheckHistory,
   ): string {
     const evidence = {
       schemaVersion: "1",
@@ -285,6 +321,8 @@ class VerifiedCommitController implements VerifiedCommitService {
         outputDigest: sha256Hex(result.outputSummary),
         commandDigest: sha256Hex(canonicalise([result.command, result.args])),
       })),
+      // The run's verification history up to this proof, for the pull request's check list (F57).
+      checks: history,
     };
     const evidenceId = `verification-${sha256Hex(canonicalise(evidence)).slice(0, 40)}`;
     this.options.mutationDeps.evidenceStore.put(evidenceId, JSON.stringify(evidence));

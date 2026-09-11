@@ -40,6 +40,7 @@ import {
   type DraftDeliveryCommand,
 } from "./draftDeliveryLedger.js";
 import { resolveDraftDeliveryTemplate } from "./draftDeliveryTemplate.js";
+import { readDraftDeliveryChecks } from "./draftDeliveryChecks.js";
 import { executeDraftDeliveryEffect } from "./draftDeliveryEffects.js";
 import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
@@ -271,26 +272,35 @@ export class DraftDeliveryController implements DraftDeliveryService {
     assertKnownDraftIdentity(current, remote);
     if (remote.headSha !== current.binding.headSha) throw new DraftDeliveryFailure("remote-drift");
     if (remote.pullRequest !== undefined) return this.reconcileCurrent(context);
-    const template = await this.composeTemplate(context, title);
+    const template = await this.composeTemplate(context, current, title);
     if (template.status !== "ready") throw new DraftDeliveryFailure("payload-changed");
     return this.pullRequestProposal(context, current, template.title, template.body);
   }
-  // The server-owned body: the authored template, the closing line for the bound issue and the
-  // epic's resolved children as a non-closing related-issue line (run 19, 2026-09-10).
+  // The server-owned body: the authored template, the closing line for the bound issue, the epic's
+  // resolved children as a non-closing related-issue line (run 19, 2026-09-10) and the checks the
+  // run's verification evidence records for the committed change (F57, run 28).
   private async composeTemplate(
     context: DraftDeliveryRunContext,
+    record: DraftDeliveryRecord,
     title: string,
   ): Promise<ReturnType<typeof resolveDraftDeliveryTemplate>> {
     const relatedIssueNumbers = (await this.options.resolveRelatedIssues?.(context)) ?? [];
+    const activityLog = this.options.execution?.activityLog;
+    const verificationChecks = readDraftDeliveryChecks({
+      snapshots: this.options.snapshots,
+      evidenceStore: this.options.mutationDeps.evidenceStore,
+      record,
+      correlationId: context.correlationId,
+      activityLog: activityLog ?? processServerLogSink(),
+    });
     return resolveDraftDeliveryTemplate({
       workspace: context.workspace,
       issueBinding: context.issueBinding,
       relatedIssueNumbers,
+      verificationChecks,
       title,
       correlationId: context.correlationId,
-      ...(this.options.execution?.activityLog === undefined
-        ? {}
-        : { activityLog: this.options.execution.activityLog }),
+      ...(activityLog === undefined ? {} : { activityLog }),
     });
   }
   private samePrProposal(record: DraftDeliveryRecord, title: string): boolean {

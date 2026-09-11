@@ -181,6 +181,18 @@ source of an automatic closing reference. The issue-bound default base comes fro
 workspace provision; branch-name inference and model text cannot select it. Existing generic
 policy and metadata behavior remain available.
 
+Below the closing and related-issue lines the server-owned body carries one more trusted section,
+`## Checks` (F57, Coding Workbench runs 19–28): the run's governed verification history, rendered
+deterministically. Every completed `keiko_verification` call, staged or not, is kept as closed
+vocabulary and numbers — each step's kind, status, exit code and duration, a dependency install
+when one ran, and whether it ran on the working tree, an earlier staged change or the committed
+change — and frozen into the commit proof's evidence record, which the receipt of the delivered
+commit binds (resolved through the run's successful HEAD lineage, never merely its latest
+result). The section is read back from that record only: it holds no command, argument, output,
+path, repository or model text, and names the commit and the evidence it came from. When the record cannot be
+read the section says so instead of listing anything. Like the closing line it lies outside the
+managed region, so a later managed-region replacement preserves it (ADR-0174 D4).
+
 The owning runtime snapshot schema retains a bounded `DraftDeliveryRecord` alongside the verified
 commit, with an independent compare-and-swap revision and explicit push/PR/recovery phases.
 It binds the run, authority and workspace digests, frozen issue, origin, exact base/head,

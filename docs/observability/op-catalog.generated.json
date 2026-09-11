@@ -1889,13 +1889,13 @@
     {
       "op": "coding-runtime.verification",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1366",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1368",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.verification",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1413",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1415",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -2525,6 +2525,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "git.draft-checks",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryChecks.ts:104",
+      "package": "keiko-server"
+    },
+    {
       "op": "git.draft-delivery",
       "category": "process",
       "site": "packages/keiko-server/src/gitDelivery/draftDeliveryLedger.ts:169",
@@ -2539,19 +2545,19 @@
     {
       "op": "git.draft-delivery",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryService.ts:176",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryService.ts:177",
       "package": "keiko-server"
     },
     {
       "op": "git.draft-delivery",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryService.ts:188",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryService.ts:189",
       "package": "keiko-server"
     },
     {
       "op": "git.draft-delivery",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryService.ts:410",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryService.ts:420",
       "package": "keiko-server"
     },
     {
@@ -2593,13 +2599,13 @@
     {
       "op": "git.draft-template",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryTemplate.ts:250",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryTemplate.ts:269",
       "package": "keiko-server"
     },
     {
       "op": "git.draft-template",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryTemplate.ts:266",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryTemplate.ts:287",
       "package": "keiko-server"
     },
     {
@@ -2755,7 +2761,7 @@
     {
       "op": "git.verified-commit",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:744",
+      "site": "packages/keiko-server/src/gitDelivery/verifiedCommitService.ts:782",
       "package": "keiko-server"
     },
     {
@@ -4009,6 +4015,7 @@
     "git.delivery.readiness.observed",
     "git.delivery.repository.mismatch",
     "git.delivery.sync.approval.minted",
+    "git.draft-checks",
     "git.draft-delivery",
     "git.draft-delivery.repository-drift",
     "git.draft-push.preparation",

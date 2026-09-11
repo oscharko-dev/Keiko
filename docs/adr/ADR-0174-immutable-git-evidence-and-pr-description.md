@@ -76,7 +76,9 @@ Repository content and refinement instructions are untrusted input, separated fr
 instructions by the existing prompt-segmentation mechanism. Every accepted claim references a
 supplied evidence id. Unknown fields, invalid evidence references, malformed output and unsafe
 content fail validation. Calls, tokens, input/output/chunk bytes and elapsed time are bounded.
-The renderer never converts changed test files into a claim that tests ran.
+The renderer never converts changed test files into a claim that tests ran. A delivered pull
+request's check results are never the model's to state: the server-owned body lists them from
+Keiko's own verification evidence (ADR-0086 D9), and a narrative still cannot assert one.
 
 Artifact outcomes are `complete`, `partial`, `fallback` and `failed`. Metadata-derived fallback
 and omission statements are deterministic. A partial snapshot cannot become a complete claim;

@@ -14,6 +14,9 @@ import {
   resolveDraftDeliveryTemplate,
   DRAFT_DELIVERY_RELATED_ISSUES_MAX,
 } from "./draftDeliveryTemplate.js";
+import { readDraftDeliveryChecks } from "./draftDeliveryChecks.js";
+import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import { PR_DESCRIPTION_REGION_START } from "@oscharko-dev/keiko-contracts/runtime/pr-description-region";
 
 let fixture: DraftDeliveryFixture;
 beforeEach(async () => {
@@ -571,11 +574,26 @@ describe("pending delivery retry semantics", () => {
 
 describe("draft delivery related issues (#3452)", () => {
   const relatedTitle = "feat: bounded change";
+  function currentRecord(): DraftDeliveryRecord {
+    const record = fixture.snapshots.get(fixture.context.runId)?.draftDelivery;
+    if (record === undefined) throw new Error("fixture has no draft delivery record");
+    return record;
+  }
   function expectedTemplateBody(relatedIssueNumbers: readonly number[]): string {
+    // The checks section comes from the production reader over the fixture's own receipt and
+    // evidence store; it is never restated here.
+    const verificationChecks = readDraftDeliveryChecks({
+      snapshots: fixture.snapshots,
+      evidenceStore: fixture.options.mutationDeps.evidenceStore,
+      record: currentRecord(),
+      correlationId: fixture.context.correlationId,
+      activityLog: { write: (): void => undefined },
+    });
     const result = resolveDraftDeliveryTemplate({
       workspace: fixture.context.workspace,
       issueBinding: fixture.issue,
       relatedIssueNumbers,
+      verificationChecks,
       title: relatedTitle,
       correlationId: fixture.context.correlationId,
     });
@@ -621,4 +639,57 @@ describe("draft delivery related issues (#3452)", () => {
       expect(fixture.createCount).toBe(0);
     },
   );
+});
+
+// F57 (runs 19–28): the created pull request lists the checks the commit proof's evidence records.
+describe("draft delivery checks (F57)", () => {
+  const checksTitle = "feat: bounded change";
+  it("lists the committed change's checks from the commit proof's evidence in the created body", async () => {
+    await execute(await fixture.service.proposePush());
+    const commit = fixture.snapshots.get(fixture.context.runId)?.verifiedCommitResult;
+    const committed = commit?.committedTreeDigest;
+    const head = commit?.headSha;
+    if (committed === undefined || head === undefined)
+      throw new Error("fixture receipt must carry the committed tree and head");
+    fixture.evidence.set(
+      "verification-1",
+      JSON.stringify({
+        checks: {
+          records: [
+            {
+              startedAtMs: 1,
+              stagedTreeDigest: committed,
+              steps: [{ kind: "build", status: "passed", exitCode: 0, durationMs: 867 }],
+            },
+          ],
+          omitted: 0,
+        },
+      }),
+    );
+    await execute(await fixture.service.proposePullRequest(checksTitle));
+    expect(fixture.createBody).toContain("| build | passed | 0 | 867 ms | committed change |");
+    expect(fixture.createBody).toContain(
+      `Evidence for commit ${head.slice(0, 12)}: verification-1`,
+    );
+    expect(fixture.createBody.indexOf("## Checks")).toBeLessThan(
+      fixture.createBody.indexOf(PR_DESCRIPTION_REGION_START),
+    );
+    expect(fixture.events.find((event) => event.op === "git.draft-checks")).toMatchObject({
+      extra: { state: "listed", recordCount: 1, verificationEvidenceId: "verification-1" },
+    });
+    expect(fixture.events.find((event) => event.op === "git.draft-template")).toMatchObject({
+      extra: { checksState: "listed", checkRowCount: 1 },
+    });
+  });
+  it("says the checks could not be read when the proof's evidence is missing", async () => {
+    await execute(await fixture.service.proposePush());
+    await execute(await fixture.service.proposePullRequest(checksTitle));
+    expect(fixture.createBody).toContain(
+      "Keiko could not read its verification evidence for this commit",
+    );
+    expect(fixture.events.find((event) => event.op === "git.draft-checks")).toMatchObject({
+      level: "warn",
+      extra: { state: "unavailable", reason: "evidence-missing" },
+    });
+  });
 });
