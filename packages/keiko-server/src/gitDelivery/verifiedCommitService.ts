@@ -280,7 +280,14 @@ class VerifiedCommitController implements VerifiedCommitService {
 
   public observeVerification(report: VerificationReport): void {
     const context = this.context();
-    if (context !== undefined) this.recordCheck(context.runId, report);
+    if (context === undefined) return;
+    const history = this.recordCheck(context.runId, report);
+    // The history is what the pull request's check list reads, so an addition on the unstaged path
+    // leaves a line just as the proof path's does (review on PR #3452).
+    this.log(context, "verification-observed", {
+      checkCount: history.records.length,
+      omittedCount: history.omitted,
+    });
   }
 
   private recordCheck(

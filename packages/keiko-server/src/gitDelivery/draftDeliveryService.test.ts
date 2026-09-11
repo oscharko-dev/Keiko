@@ -612,6 +612,26 @@ describe("draft delivery related issues (#3452)", () => {
       extra: { relatedIssueCount: 2 },
     });
   });
+  // CodeRabbit review on PR #3452: a rejecting resolver escaped composeTemplate and moved the
+  // delivery to recovery-required, against the port's best-effort contract.
+  it("omits the related issues line and keeps delivering when the resolver rejects", async () => {
+    const service = new DraftDeliveryController({
+      ...fixture.options,
+      resolveRelatedIssues: (): Promise<readonly number[]> =>
+        Promise.reject(new Error("/private/issue/reader token=sk-private-secret")),
+    });
+    await execute(await service.proposePush(), service);
+    await execute(await service.proposePullRequest(relatedTitle), service);
+    expect(fixture.createBody).toBe(expectedTemplateBody([]));
+    expect(fixture.createBody).not.toContain("Related issues");
+    expect(fixture.events.find((event) => event.op === "git.draft-related-issues")).toMatchObject({
+      level: "warn",
+      errorKind: "internal",
+      extra: { state: "unavailable", count: 0, errorClass: "Error" },
+    });
+    expect(JSON.stringify(fixture.events)).not.toContain("sk-private-secret");
+    expect(JSON.stringify(fixture.events)).not.toContain("/private/issue");
+  });
   it("omits the related issues line and reports zero count without a resolver", async () => {
     await execute(await fixture.service.proposePush());
     await execute(await fixture.service.proposePullRequest(relatedTitle));

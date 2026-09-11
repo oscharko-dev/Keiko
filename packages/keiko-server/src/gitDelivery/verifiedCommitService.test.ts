@@ -463,8 +463,21 @@ describe("verified Code-task commit service", () => {
     service.observeVerification(report());
     live = true;
     await verifiedProposal();
+    expect(events.some((event) => event.extra?.phase === "verification-observed")).toBe(false);
     expect(events.filter((event) => event.extra?.phase === "verification").at(-1)).toMatchObject({
       extra: { checkCount: 1 },
+    });
+  });
+  // Review on PR #3452: an observed (unstaged) verification joins the history the pull request's
+  // check list reads, so it leaves a body-free line like the proof path does.
+  it("logs every verification it observes for the check list", () => {
+    service.observeVerification(report());
+    const observed = events.filter((event) => event.extra?.phase === "verification-observed");
+    expect(observed).toHaveLength(1);
+    expect(observed[0]).toMatchObject({
+      op: "git.verified-commit",
+      correlationId: "verified-commit-test",
+      extra: { phase: "verification-observed", runId: "run-1", checkCount: 1, omittedCount: 0 },
     });
   });
   it("uses Full access policy authorization without minting a local-operator approval", async () => {

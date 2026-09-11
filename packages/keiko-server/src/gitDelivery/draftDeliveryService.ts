@@ -284,7 +284,7 @@ export class DraftDeliveryController implements DraftDeliveryService {
     record: DraftDeliveryRecord,
     title: string,
   ): Promise<ReturnType<typeof resolveDraftDeliveryTemplate>> {
-    const relatedIssueNumbers = (await this.options.resolveRelatedIssues?.(context)) ?? [];
+    const relatedIssueNumbers = await this.relatedIssues(context);
     const activityLog = this.options.execution?.activityLog;
     const verificationChecks = readDraftDeliveryChecks({
       snapshots: this.options.snapshots,
@@ -302,6 +302,24 @@ export class DraftDeliveryController implements DraftDeliveryService {
       correlationId: context.correlationId,
       ...(activityLog === undefined ? {} : { activityLog }),
     });
+  }
+  // Best effort by the port's contract: a resolver that rejects omits the related-issue line and
+  // never refuses the delivery. Enforced here, at the one boundary every composition passes
+  // (CodeRabbit review on PR #3452); the failure is logged body-free under the resolver's own op.
+  private async relatedIssues(context: DraftDeliveryRunContext): Promise<readonly number[]> {
+    try {
+      return (await this.options.resolveRelatedIssues?.(context)) ?? [];
+    } catch (error) {
+      (this.options.execution?.activityLog ?? processServerLogSink()).write({
+        category: "process",
+        op: "git.draft-related-issues",
+        correlationId: context.correlationId,
+        level: "warn",
+        errorKind: "internal",
+        extra: { runId: context.runId, state: "unavailable", count: 0, ...describeError(error) },
+      });
+      return [];
+    }
   }
   private samePrProposal(record: DraftDeliveryRecord, title: string): boolean {
     if (record.phase !== "pr-proposed") return false;

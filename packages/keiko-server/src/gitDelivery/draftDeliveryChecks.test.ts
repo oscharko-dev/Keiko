@@ -256,7 +256,9 @@ describe("rendering the Checks section (F57)", () => {
         "| type check | timed out | none | 120.0 s | earlier staged change |",
         "| build | passed | 0 | 867 ms | committed change |",
         "",
-        `Evidence for commit 666666666666: ${EVIDENCE_ID}`,
+        '"Ran on" names the state each check verified: "committed change" is the exact tree of the commit named below; "earlier staged change" and "working tree" are earlier states of the work, so their results do not prove that commit.',
+        "",
+        `Evidence for commit 666666666666: ${EVIDENCE_ID}. Later commits on this branch are not covered here.`,
       ].join("\n"),
     });
   });

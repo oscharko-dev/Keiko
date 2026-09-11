@@ -166,6 +166,11 @@ const TABLE_HEAD =
 const UNAVAILABLE =
   "Keiko could not read its verification evidence for this commit, so no checks are listed here.";
 const NO_STEPS = "Keiko recorded no verification step for this commit.";
+// Review on PR #3452: the column is only as useful as its meaning is stated.
+const LEGEND =
+  '"Ran on" names the state each check verified: "committed change" is the exact tree of the ' +
+  'commit named below; "earlier staged change" and "working tree" are earlier states of the work, ' +
+  "so their results do not prove that commit.";
 
 function formatDuration(durationMs: number): string {
   return durationMs < 1000
@@ -229,6 +234,12 @@ function omittedLine(omitted: number): string {
   return `\n\n${String(omitted)} earlier verification ${omitted === 1 ? "call is" : "calls are"} not listed.`;
 }
 
+// The section describes one commit. A later commit pushed to the same pull request is not covered
+// by it, and the section says so rather than letting a reader assume it (review on PR #3452).
+function evidenceLine(checks: Extract<DraftDeliveryChecks, { status: "listed" }>): string {
+  return `Evidence for commit ${checks.headSha.slice(0, 12)}: ${checks.evidenceId}. Later commits on this branch are not covered here.`;
+}
+
 export interface RenderedDraftDeliveryChecks {
   readonly markdown: string;
   readonly rowCount: number;
@@ -243,9 +254,9 @@ export function renderDraftDeliveryChecks(
   const rows = checks.history.records.flatMap((record) =>
     recordRows(record, checks.committedTreeDigest),
   );
-  const table = rows.length === 0 ? NO_STEPS : `${TABLE_HEAD}\n${rows.join("\n")}`;
+  const table = rows.length === 0 ? NO_STEPS : `${TABLE_HEAD}\n${rows.join("\n")}\n\n${LEGEND}`;
   return {
-    markdown: `${HEADING}\n\n${INTRO}\n\n${table}${omittedLine(checks.history.omitted)}\n\nEvidence for commit ${checks.headSha.slice(0, 12)}: ${checks.evidenceId}`,
+    markdown: `${HEADING}\n\n${INTRO}\n\n${table}${omittedLine(checks.history.omitted)}\n\n${evidenceLine(checks)}`,
     rowCount: rows.length,
   };
 }

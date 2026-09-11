@@ -566,6 +566,7 @@ describe("verification checks section (F57)", () => {
     expect(result.status === "ready" ? result.body : "").toContain(
       "Keiko could not read its verification evidence for this commit",
     );
+    expect(result).toMatchObject({ status: "ready", checkRowCount: 0 });
     expect(f.log.at(-1)).toMatchObject({ extra: { checksState: "unavailable", checkRowCount: 0 } });
   });
   it("logs an absent section for a composition without a verified-commit context", async () => {
