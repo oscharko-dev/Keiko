@@ -2,6 +2,8 @@
 // chain only ever executes on a Windows host with Visual Studio, so vswhere and the vcvars
 // import are exercised here through module-level mocks of spawnSync/existsSync — no process
 // is spawned and no Windows host is required.
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const spawnSyncMock = vi.fn();
@@ -19,7 +21,8 @@ vi.mock("node:fs", async (importOriginal) => {
 const realFs = await vi.importActual("node:fs");
 existsSyncMock.mockImplementation((path) => realFs.existsSync(path));
 
-const { resolveWindowsMsvcEnv } = await import("../stage-portable-runtime.mjs");
+const { buildWindowsGenerationLauncher, resolveWindowsMsvcEnv } =
+  await import("../stage-portable-runtime.mjs");
 const { windowsToolFromPath } = await import("../lib/windows-msvc.mjs");
 
 const VSWHERE_SUFFIX = ["Microsoft Visual Studio", "Installer", "vswhere.exe"].join(
@@ -159,5 +162,54 @@ describe("resolveWindowsMsvcEnv", () => {
       .mockReturnValueOnce(vcvarsDump(["Path=C:\\VS\\bin"]));
     expect(() => resolveWindowsMsvcEnv({})).toThrow("process.exit(1)");
     expect(String(errorSpy.mock.calls.at(-1)?.[0])).toContain("did not define INCLUDE and LIB");
+  });
+});
+
+describe("buildWindowsGenerationLauncher", () => {
+  const generationId = "a".repeat(64);
+
+  it("binds the exact generation ID to the injected Windows launcher compiler", () => {
+    const root = realFs.mkdtempSync(join(tmpdir(), "keiko-generation-launcher-"));
+    const destination = join(root, "nested", "Keiko.exe");
+    const compile = vi.fn((_target, output) => realFs.writeFileSync(output, "launcher fixture"));
+
+    try {
+      expect(buildWindowsGenerationLauncher(destination, generationId, { compile })).toBe(
+        destination,
+      );
+      expect(compile).toHaveBeenCalledOnce();
+      expect(compile.mock.calls[0]?.[0]?.platformTarget).toBe("windows-x64");
+      expect(compile.mock.calls[0]?.slice(1)).toEqual([destination, generationId]);
+      expect(realFs.statSync(destination).isFile()).toBe(true);
+    } finally {
+      realFs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects malformed bindings and compiler output that is not a fixed executable", () => {
+    const root = realFs.mkdtempSync(join(tmpdir(), "keiko-generation-launcher-"));
+    const destination = join(root, "Keiko.exe");
+    const compile = vi.fn();
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code) => {
+      throw new Error(`process.exit(${String(code)})`);
+    });
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      expect(() =>
+        buildWindowsGenerationLauncher(destination, "not-a-generation", { compile }),
+      ).toThrow("process.exit(1)");
+      expect(compile).not.toHaveBeenCalled();
+      expect(() => buildWindowsGenerationLauncher(destination, generationId, { compile })).toThrow(
+        "process.exit(1)",
+      );
+      expect(String(errorSpy.mock.calls.at(-1)?.[0])).toContain(
+        "generation launcher build did not produce the fixed executable",
+      );
+    } finally {
+      errorSpy.mockRestore();
+      exitSpy.mockRestore();
+      realFs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

@@ -6,19 +6,19 @@
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/support-analyze.ts:1085",
+      "site": "packages/keiko-cli/src/support-analyze.ts:1334",
       "package": "keiko-cli"
     },
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/support-analyze.ts:1094",
+      "site": "packages/keiko-cli/src/support-analyze.ts:1343",
       "package": "keiko-cli"
     },
     {
       "op": "<dynamic>",
       "category": "unknown",
-      "site": "packages/keiko-cli/src/support-analyze.ts:566",
+      "site": "packages/keiko-cli/src/support-analyze.ts:795",
       "package": "keiko-cli"
     },
     {
@@ -54,7 +54,7 @@
     {
       "op": "process.exiting",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:688",
+      "site": "packages/keiko-cli/src/ui.ts:756",
       "package": "keiko-cli"
     },
     {
@@ -66,19 +66,19 @@
     {
       "op": "process.fatal",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:428",
+      "site": "packages/keiko-cli/src/ui.ts:490",
       "package": "keiko-cli"
     },
     {
       "op": "process.heartbeat",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:894",
+      "site": "packages/keiko-cli/src/ui.ts:990",
       "package": "keiko-cli"
     },
     {
       "op": "process.started",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:1009",
+      "site": "packages/keiko-cli/src/ui.ts:1105",
       "package": "keiko-cli"
     },
     {
@@ -127,6 +127,12 @@
       "op": "security.windows-portable-legacy-launcher.system-root-refused",
       "category": "security",
       "site": "packages/keiko-cli/src/security-log.ts:43",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "update.runtime.legacy-import-deferred",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/ui.ts:1311",
       "package": "keiko-cli"
     },
     {
@@ -904,6 +910,12 @@
       "package": "keiko-security"
     },
     {
+      "op": "security.portable-tree-attestation.failed",
+      "category": "security",
+      "site": "packages/keiko-security/src/portable-tree-attestation.ts:578",
+      "package": "keiko-security"
+    },
+    {
       "op": "security.vault.entries-delete-failed",
       "category": "security",
       "site": "packages/keiko-security/src/secret-vault.ts:614",
@@ -943,6 +955,12 @@
       "op": "security.vault.shard-unreadable",
       "category": "security",
       "site": "packages/keiko-security/src/secret-vault.ts:729",
+      "package": "keiko-security"
+    },
+    {
+      "op": "security.windows-local-volume.refused",
+      "category": "security",
+      "site": "packages/keiko-security/src/windows-local-volume.ts:162",
       "package": "keiko-security"
     },
     {
@@ -1068,7 +1086,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:739",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1153",
       "package": "keiko-server"
     },
     {
@@ -1965,7 +1983,7 @@
     {
       "op": "coding.runtime.discover",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:153",
+      "site": "packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts:184",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -2911,7 +2929,7 @@
     {
       "op": "managed-lsp.trust.restrict",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:1872",
+      "site": "packages/keiko-server/src/deps.ts:1917",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -2932,7 +2950,7 @@
     {
       "op": "memory.audit.state-cache.seeded",
       "category": "memory",
-      "site": "packages/keiko-server/src/deps.ts:2040",
+      "site": "packages/keiko-server/src/deps.ts:2141",
       "package": "keiko-server"
     },
     {
@@ -3041,15 +3059,27 @@
       "package": "keiko-server"
     },
     {
+      "op": "portable.normal-startup-recovery.completed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-portable-normal-startup.ts:212",
+      "package": "keiko-server"
+    },
+    {
+      "op": "portable.normal-startup-recovery.required",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-portable-normal-startup.ts:226",
+      "package": "keiko-server"
+    },
+    {
       "op": "portable.windows-authenticode.system-binary-refused",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/windowsPortableAuthenticode.ts:63",
+      "site": "packages/keiko-server/src/coding-runtime/windowsPortableAuthenticode.ts:76",
       "package": "keiko-server"
     },
     {
       "op": "portable.windows-authenticode.system-binary-refused",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/windowsPortableAuthenticode.ts:71",
+      "site": "packages/keiko-server/src/coding-runtime/windowsPortableAuthenticode.ts:84",
       "package": "keiko-server"
     },
     {
@@ -3129,7 +3159,7 @@
     {
       "op": "request",
       "category": "http",
-      "site": "packages/keiko-server/src/server.ts:507",
+      "site": "packages/keiko-server/src/server.ts:520",
       "package": "keiko-server"
     },
     {
@@ -3218,41 +3248,35 @@
       "package": "keiko-server"
     },
     {
-      "op": "security.fs.portable-backup-cleanup",
-      "category": "security",
-      "site": "packages/keiko-server/src/update-portable-activation-files.ts:817",
+      "op": "server-log.write-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/observability/server-log.ts:336",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:331",
-      "package": "keiko-server"
-    },
-    {
-      "op": "server-log.write-failed",
-      "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:357",
+      "site": "packages/keiko-server/src/observability/server-log.ts:362",
       "package": "keiko-server"
     },
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:3818",
+      "site": "packages/keiko-server/src/deps.ts:4013",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "server.request",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/server.ts:535",
+      "site": "packages/keiko-server/src/server.ts:548",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "server.runtime.shutdown",
       "category": "process",
-      "site": "packages/keiko-server/src/deps.ts:4646",
+      "site": "packages/keiko-server/src/deps.ts:4841",
       "package": "keiko-server"
     },
     {
@@ -3301,14 +3325,14 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2600",
+      "site": "packages/keiko-server/src/deps.ts:2701",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "task-workspace.repository.registered",
       "category": "security",
-      "site": "packages/keiko-server/src/deps.ts:2305",
+      "site": "packages/keiko-server/src/deps.ts:2406",
       "package": "keiko-server"
     },
     {
@@ -3468,8 +3492,57 @@
     {
       "op": "update-session.lock-quarantine-prune",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/update-session-lock.ts:573",
+      "site": "packages/keiko-server/src/update-session-lock.ts:688",
       "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.candidate.activity-log",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-candidate-authority.ts:107",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.candidate.consumed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-candidate-authority.ts:377",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.candidate.issued",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-candidate-authority.ts:308",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.candidate.rejected",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-candidate-authority.ts:340",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.candidate.rejected",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-candidate-authority.ts:353",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.portable-asset.redirect-refused",
+      "category": "security",
+      "site": "packages/keiko-server/src/update-preflight-portable-evidence.ts:367",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.portable-fetch.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-preflight-portable-assets.ts:204",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.portable-fetch.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-preflight-portable-evidence.ts:376",
       "package": "keiko-server"
     },
     {
@@ -3480,9 +3553,66 @@
       "package": "keiko-server"
     },
     {
+      "op": "update.release-trust.verify",
+      "category": "security",
+      "site": "packages/keiko-server/src/update-preflight-portable-evidence.ts:504",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.release-trust.verify",
+      "category": "security",
+      "site": "packages/keiko-server/src/update-preflight-portable-evidence.ts:518",
+      "package": "keiko-server"
+    },
+    {
       "op": "update.remediation.execute",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/update-remediation.ts:295",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.runtime.activity-log",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-local-state.ts:1678",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.runtime.event",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-legacy-audit-import.ts:748",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.runtime.event",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-local-state.ts:1657",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.runtime.legacy-snapshot-imported",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-legacy-audit-import.ts:755",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.session.activity-log",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-session.ts:832",
+      "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.session.lifecycle",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-session.ts:810",
+      "package": "keiko-server"
+    },
+    {
+      "op": "update.session.portable-handoff-shutdown",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/update-session.ts:1057",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -3970,6 +4100,8 @@
     "memory.retrieval.semantic-skipped",
     "memory.salience",
     "native-file-dialog.selection.projected",
+    "portable.normal-startup-recovery.completed",
+    "portable.normal-startup-recovery.required",
     "portable.windows-alert.spawn-failed",
     "portable.windows-authenticode.system-binary-refused",
     "pr-description.apply.blocked",
@@ -4009,9 +4141,9 @@
     "search.rerank.completed",
     "security.fs.atomic-rename-failed",
     "security.fs.atomic-rename-retried",
-    "security.fs.portable-backup-cleanup",
     "security.keychain.fallback",
     "security.log.sink-failed",
+    "security.portable-tree-attestation.failed",
     "security.vault.entries-delete-failed",
     "security.vault.entries-deleted",
     "security.vault.entries-merge-failed",
@@ -4023,6 +4155,7 @@
     "security.windows-launcher.system-root-refused",
     "security.windows-lifecycle-opener.system-binary-missing",
     "security.windows-lifecycle-opener.system-root-refused",
+    "security.windows-local-volume.refused",
     "security.windows-portable-alert.system-binary-missing",
     "security.windows-portable-alert.system-root-refused",
     "security.windows-portable-legacy-launcher.system-binary-missing",
@@ -4059,8 +4192,22 @@
     "tool-catalog.projection",
     "tool-catalog.settlement-emit-failed",
     "update-session.lock-quarantine-prune",
+    "update.candidate.activity-log",
+    "update.candidate.consumed",
+    "update.candidate.issued",
+    "update.candidate.rejected",
+    "update.portable-asset.redirect-refused",
+    "update.portable-fetch.failed",
     "update.preflight.bundled-catalog.read",
+    "update.release-trust.verify",
     "update.remediation.execute",
+    "update.runtime.activity-log",
+    "update.runtime.event",
+    "update.runtime.legacy-import-deferred",
+    "update.runtime.legacy-snapshot-imported",
+    "update.session.activity-log",
+    "update.session.lifecycle",
+    "update.session.portable-handoff-shutdown",
     "voice.live-dictation.capacity-rejected",
     "voice.live-dictation.initial-frame-timeout",
     "voice.live-dictation.negotiate",

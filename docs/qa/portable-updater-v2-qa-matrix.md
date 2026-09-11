@@ -1,11 +1,15 @@
 # Portable Updater V2 QA Matrix
 
-Status: Issue #1960 closeout evidence for Epic #1945, integrated under program Epic #1944.
+Status: historical Issue #1960 fixture/contract coverage for Epic #1945, integrated under program
+Epic #1944. Current updater repair and qualification are owned by #3403/#3405.
 
-This matrix closes the portable updater v2 implementation epic by mapping the user journey,
-security/failure coverage, platform targets, and known limits to executable tests and release
-evidence. It does not add runtime behavior; the implementation lives in the child issues and their
-merged PRs.
+This matrix records the earlier implementation's coverage map. It is not a native production-update
+qualification record. The [#3404 lifecycle audit](built-in-updater-audit-3404.md) identifies the gaps
+that the historical fixtures could not prove, including same-port process transfer and genuine
+N−1→N execution. Preserve the historical links below for traceability; use current-head evidence
+from #3405 to settle the repair, not old green fixtures or injected version verifiers.
+The [current repair evidence ledger](built-in-updater-repair-3405.md) separates development checks
+from the outstanding integrated-head, native and production-canary requirements.
 
 ## Scope Under Verification
 
@@ -40,7 +44,7 @@ The matrix preserves these non-goals:
 | #1985 | [#2030](https://github.com/oscharko-dev/Keiko/pull/2030) | `005344e7`        | Sidecar identity, license/SBOM/signing evidence, staged sidecar payload digest verification, and failed sidecar activation blocking.                  |
 | #1958 | [#2032](https://github.com/oscharko-dev/Keiko/pull/2032) | `35cfd2ae`        | Existing update notice/window and CLI fallback adapted for eligible and blocked portable update paths without a separate updater UI.                  |
 | #1959 | [#2036](https://github.com/oscharko-dev/Keiko/pull/2036) | `a0ad6b8c`        | Portable activation completion gated through existing release-impact remediation and content-free runtime state.                                      |
-| #1960 | this PR                                                  | pending           | QA matrix, coverage map, security/failure settlement, and updater epic closeout evidence.                                                             |
+| #1960 | [#2038](https://github.com/oscharko-dev/Keiko/pull/2038) | `137225e1`        | Historical QA matrix and fixture coverage map; not native production-signed update qualification.                                                     |
 
 ## Platform Coverage
 
@@ -53,11 +57,29 @@ first-class artifacts.
 | `macos-arm64` | `keiko-macos-arm64.zip` | First-class, release-blocking | `packages/keiko-contracts/src/update-session.test.ts`, `scripts/__tests__/portable-runtime.test.mjs`, `scripts/__tests__/release-publish-pipeline.test.mjs`, `scripts/__tests__/portable-launch-setup-smoke.test.mjs`, `packages/keiko-server/src/update-preflight.test.ts`, `tests/e2e/update-ui-1696.spec.ts`.                                    |
 | `macos-x64`   | `keiko-macos-x64.zip`   | First-class, release-blocking | `packages/keiko-contracts/src/update-session.test.ts`, `scripts/__tests__/portable-runtime.test.mjs`, `scripts/__tests__/release-publish-pipeline.test.mjs`, `scripts/__tests__/portable-launch-setup-smoke.test.mjs`, `packages/keiko-server/src/update-preflight.test.ts`.                                                                        |
 
-macOS arm64 and macOS x64 have equal release importance. Production signing checks must apply to
-both macOS targets at the same level; see `scripts/__tests__/portable-runtime.test.mjs` cases for
-equal macOS verification checks and production notarization checks.
+macOS arm64 and macOS x64 have equal release importance. Keiko release-trust checks apply equally to
+both targets; optional native evidence is verified with the same strictness when present. See
+`scripts/__tests__/portable-runtime.test.mjs` for the equal target and evidence checks.
 
-## Coverage Map
+The table names test surfaces, not target-native run results. Each target must independently run
+an installed assembled N−1 application against immutable N assets through the production BFF, CLI,
+launcher, verifier, stager, activator, state, and canonical logging path. Assert old PID exit,
+same-port target startup, durable success, cleanup, and a second restart retaining N. Injected child
+processes, route mocks, text runtimes, and `--version` payload smoke cannot settle this requirement.
+
+Normal PR proof must cover bad signature/provenance/digest, interrupted download, cancellation,
+resource exhaustion, crash boundaries, relaunch/health timeout, stale lock/concurrent attempts, and
+cleanup recovery, including platform-native contention/quarantine cases. Separately, a release
+canary must upgrade between two real Keiko-signed eligible releases and repeat verification on fresh
+native runners. Missing Apple/Microsoft credentials do not block it; evaluation downloads and
+skipped native journeys cannot substitute for that canary.
+
+## Historical Coverage Map
+
+The rows below describe the earlier fixture scope, not current native acceptance. In particular,
+the later ADR-0163 canonical `/Applications/Keiko.app` exception replaces the old user-local-only
+macOS assumption; it does not permit arbitrary machine-wide or IT-managed mutation. Current
+runtime-state and handoff confidentiality follow the amended ADR-0099/ADR-0121 contracts.
 
 | Area                           | Primary evidence                                                                                                                                                                                                                   | Coverage statement                                                                                                                                                                                  |
 | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -73,34 +95,35 @@ equal macOS verification checks and production notarization checks.
 | CLI fallback                   | `packages/keiko-cli/src/update.test.ts`, `packages/keiko-cli/src/update-output.ts`, `packages/keiko-cli/src/update.ts`                                                                                                             | CLI compatibility remains available but does not promote npm/Yarn as the normal user path; portable managed output avoids shell-primary recovery.                                                   |
 | Security and redaction         | `scripts/__tests__/portable-runtime.test.mjs`, `packages/keiko-server/src/update-portable-staging.test.ts`, `packages/keiko-server/src/update-portable-activation.test.ts`, `packages/keiko-server/src/update-local-state.test.ts` | Manifest, staging, activation, and audit paths fail closed on secrets, private paths, credential URLs, raw logs, package-manager output, state payload references, traversal, and payload mismatch. |
 
-## Scenario Matrix
+## Historical Scenario Matrix
 
-| Scenario                              | Starting condition                                                                                       | Expected result                                                                                                          | Primary evidence                                                                                 |
-| ------------------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
-| Current release                       | Running version already equals latest stable target.                                                     | No install action; current release notes may be shown.                                                                   | `update-preflight.test.ts`, `UpdateWindow.test.tsx`.                                             |
-| Stable portable update available      | `portable-managed` install with matching reviewed GitHub Release Asset.                                  | Existing update window shows one `Update Keiko` action; no npm/channel choice.                                           | `update-preflight.test.ts`, `UpdateWindow.test.tsx`, `update-ui-1696.spec.ts`.                   |
-| Unsupported portable bootstrap        | Keiko runs from an unmanaged ZIP/bootstrap folder.                                                       | One-click self-update is blocked; user can download latest manually when relevant.                                       | `update-install-mode.test.ts`, `update-preflight.test.ts`, `UpdateWindow.test.tsx`.              |
-| System or IT-managed install          | Portable install record indicates system-managed authority.                                              | Self-update is ineligible in v1; no mutation of machine-wide locations.                                                  | `update-install-mode.test.ts`.                                                                   |
-| Policy disabled                       | Local update mutation policy is disabled.                                                                | Server and CLI fail closed before staging or mutation.                                                                   | `update-session.test.ts`, `update.test.ts`.                                                      |
-| Missing platform asset                | Release lacks the selected target asset or companion manifest/checksum asset.                            | One-click readiness is blocked with portable asset-missing evidence.                                                     | `update-preflight.test.ts`, `release-publish-pipeline.test.mjs`.                                 |
-| Malformed manifest                    | Portable manifest is invalid or does not bind to the asset.                                              | One-click readiness is blocked before download/stage mutation.                                                           | `update-preflight.test.ts`, `portable-runtime.test.mjs`.                                         |
-| Checksum mismatch                     | Checksum binding does not match the selected asset.                                                      | One-click readiness or staging fails closed; current install remains unchanged.                                          | `update-preflight.test.ts`, `update-portable-staging.test.ts`.                                   |
-| Missing signing/notarization evidence | Production manifest lacks required Authenticode or Developer ID/notarization proof.                      | Production verification fails; pull-request/staging artifacts remain explicitly non-production.                          | `portable-runtime.test.mjs`, `verify-portable-runtime-signing.mjs`.                              |
-| Network/download failure              | Asset or release metadata request cannot complete safely.                                                | Report is degraded or staging fails; no success state is claimed.                                                        | `update-preflight.test.ts`, `update-portable-staging.test.ts`.                                   |
-| Archive traversal or unsafe entry     | Asset contains traversal, absolute, drive-relative, UNC, wrong-root, or symlink entries.                 | Extraction/staging fails closed without mutating the active install.                                                     | `portable-runtime.test.mjs`, `update-portable-staging.test.ts`.                                  |
-| Sidecar absent                        | Portable asset has no sidecar runtimes.                                                                  | Update remains valid when Coding Workbench sidecar is not included.                                                      | `update-preflight.test.ts`, `update-portable-staging.test.ts`, `portable-runtime.test.mjs`.      |
-| Sidecar present                       | Release-impact and manifest require a bundled sidecar payload.                                           | Sidecar metadata, license/SBOM/signing evidence, platform, and digest are verified as part of the complete Keiko asset.  | `update-preflight.test.ts`, `update-portable-staging.test.ts`, `portable-runtime.test.mjs`.      |
-| Sidecar failure                       | Required sidecar missing, wrong platform, incomplete evidence, or digest mismatch.                       | One-click readiness or activation is blocked; no independent sidecar updater is introduced.                              | `update-preflight.test.ts`, `update-portable-staging.test.ts`, `portable-runtime.test.mjs`.      |
-| Staging success                       | Asset downloads and verifies.                                                                            | Stage summary and audit events are content-free; no payload path or private URL is persisted.                            | `update-portable-staging.test.ts`, `update-local-state.test.ts`.                                 |
-| Activation success                    | Staged install promotes, registration/shortcut refresh succeeds, relaunch/version verification succeeds. | Session can proceed to success only if remediation says the update can complete.                                         | `update-portable-activation.test.ts`, `update-session.test.ts`.                                  |
-| Activation failure                    | Candidate incomplete, registration refresh fails, relaunch fails, or version verification fails.         | Failure is retryable where safe; current install is preserved when possible.                                             | `update-portable-activation.test.ts`, `update-session.test.ts`.                                  |
-| Pending remediation                   | Release-impact/local health requires follow-up after activation.                                         | Update remains non-terminal; affected features are unavailable or degraded until action completes or is safely deferred. | `update-integration.test.ts`, `update-remediation.test.ts`, `update-remediation-routes.test.ts`. |
-| Remediation failure                   | User-approved remediation fails or throws.                                                               | Full update completion remains blocked and state is resumable/content-free.                                              | `update-remediation.test.ts`.                                                                    |
-| Safe remediation defer                | Deferrable follow-up is deferred.                                                                        | Affected features are marked degraded and update completion may proceed only when safe.                                  | `update-remediation.test.ts`.                                                                    |
-| UI blocked path                       | Portable asset malformed or install mode ineligible.                                                     | Update window exposes retry/check/current-details/manual-download paths only; no shell-primary or legacy tab UX.         | `UpdateWindow.test.tsx`, `update-ui-1696.spec.ts`.                                               |
-| CLI compatibility path                | User invokes `keiko update` from a supported package-manager install.                                    | npm/Yarn compatibility remains, but portable-managed output does not promote package-manager commands.                   | `update.test.ts`, `update-output.ts`.                                                            |
+| Scenario                            | Starting condition                                                                                       | Expected result                                                                                                          | Primary evidence                                                                                 |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------ |
+| Current release                     | Running version already equals latest stable target.                                                     | No install action; current release notes may be shown.                                                                   | `update-preflight.test.ts`, `UpdateWindow.test.tsx`.                                             |
+| Stable portable update available    | `portable-managed` install with matching reviewed GitHub Release Asset.                                  | Existing update window shows one `Update Keiko` action; no npm/channel choice.                                           | `update-preflight.test.ts`, `UpdateWindow.test.tsx`, `update-ui-1696.spec.ts`.                   |
+| Unsupported portable bootstrap      | Keiko runs from an unmanaged ZIP/bootstrap folder.                                                       | One-click self-update is blocked; user can download latest manually when relevant.                                       | `update-install-mode.test.ts`, `update-preflight.test.ts`, `UpdateWindow.test.tsx`.              |
+| System or IT-managed install        | Portable install record indicates system-managed authority.                                              | Self-update is ineligible in v1; no mutation of machine-wide locations.                                                  | `update-install-mode.test.ts`.                                                                   |
+| Policy disabled                     | Local update mutation policy is disabled.                                                                | Server and CLI fail closed before staging or mutation.                                                                   | `update-session.test.ts`, `update.test.ts`.                                                      |
+| Missing platform asset              | Release lacks the selected target asset or companion manifest/checksum asset.                            | One-click readiness is blocked with portable asset-missing evidence.                                                     | `update-preflight.test.ts`, `release-publish-pipeline.test.mjs`.                                 |
+| Malformed manifest                  | Portable manifest is invalid or does not bind to the asset.                                              | One-click readiness is blocked before download/stage mutation.                                                           | `update-preflight.test.ts`, `portable-runtime.test.mjs`.                                         |
+| Checksum mismatch                   | Checksum binding does not match the selected asset.                                                      | One-click readiness or staging fails closed; current install remains unchanged.                                          | `update-preflight.test.ts`, `update-portable-staging.test.ts`.                                   |
+| Missing/invalid Keiko release trust | Published manifest lacks a valid, identity-bound Ed25519 release signature.                              | One-click verification fails before download or mutation.                                                                | `portable-runtime.test.mjs`, release-trust and preflight tests.                                  |
+| False native-signature claim        | Manifest claims Authenticode or Developer ID/notarization evidence that cannot be verified.              | Optional defense-in-depth evidence fails closed; no positive native status is synthesized.                               | `portable-runtime.test.mjs`, platform verification tests.                                        |
+| Network/download failure            | Asset or release metadata request cannot complete safely.                                                | Report is degraded or staging fails; no success state is claimed.                                                        | `update-preflight.test.ts`, `update-portable-staging.test.ts`.                                   |
+| Archive traversal or unsafe entry   | Asset contains traversal, absolute, drive-relative, UNC, wrong-root, or symlink entries.                 | Extraction/staging fails closed without mutating the active install.                                                     | `portable-runtime.test.mjs`, `update-portable-staging.test.ts`.                                  |
+| Sidecar absent                      | Portable asset has no sidecar runtimes.                                                                  | Update remains valid when Coding Workbench sidecar is not included.                                                      | `update-preflight.test.ts`, `update-portable-staging.test.ts`, `portable-runtime.test.mjs`.      |
+| Sidecar present                     | Release-impact and manifest require a bundled sidecar payload.                                           | Sidecar metadata, license/SBOM/signing evidence, platform, and digest are verified as part of the complete Keiko asset.  | `update-preflight.test.ts`, `update-portable-staging.test.ts`, `portable-runtime.test.mjs`.      |
+| Sidecar failure                     | Required sidecar missing, wrong platform, incomplete evidence, or digest mismatch.                       | One-click readiness or activation is blocked; no independent sidecar updater is introduced.                              | `update-preflight.test.ts`, `update-portable-staging.test.ts`, `portable-runtime.test.mjs`.      |
+| Staging success                     | Asset downloads and verifies.                                                                            | Stage summary and audit events are content-free; no payload path or private URL is persisted.                            | `update-portable-staging.test.ts`, `update-local-state.test.ts`.                                 |
+| Activation success                  | Staged install promotes, registration/shortcut refresh succeeds, relaunch/version verification succeeds. | Session can proceed to success only if remediation says the update can complete.                                         | `update-portable-activation.test.ts`, `update-session.test.ts`.                                  |
+| Activation failure                  | Candidate incomplete, registration refresh fails, relaunch fails, or version verification fails.         | Failure is retryable where safe; current install is preserved when possible.                                             | `update-portable-activation.test.ts`, `update-session.test.ts`.                                  |
+| Pending remediation                 | Release-impact/local health requires follow-up after activation.                                         | Update remains non-terminal; affected features are unavailable or degraded until action completes or is safely deferred. | `update-integration.test.ts`, `update-remediation.test.ts`, `update-remediation-routes.test.ts`. |
+| Remediation failure                 | User-approved remediation fails or throws.                                                               | Full update completion remains blocked and state is resumable/content-free.                                              | `update-remediation.test.ts`.                                                                    |
+| Safe remediation defer              | Deferrable follow-up is deferred.                                                                        | Affected features are marked degraded and update completion may proceed only when safe.                                  | `update-remediation.test.ts`.                                                                    |
+| UI blocked path                     | Portable asset malformed or install mode ineligible.                                                     | Update window exposes retry/check/current-details/manual-download paths only; no shell-primary or legacy tab UX.         | `UpdateWindow.test.tsx`, `update-ui-1696.spec.ts`.                                               |
+| CLI compatibility path              | User invokes `keiko update` from a supported package-manager install.                                    | npm/Yarn compatibility remains, but portable-managed output does not promote package-manager commands.                   | `update.test.ts`, `update-output.ts`.                                                            |
 
-## Security Settlement
+## Historical Security Coverage
 
 - Public update metadata stays server-side; the browser only calls the local BFF.
 - GitHub Release Assets are used for portable installability; release-impact remains the
@@ -109,14 +132,14 @@ equal macOS verification checks and production notarization checks.
   install modes.
 - Archive staging rejects traversal, wrong-root entries, symlink escapes, missing runtime files, and
   digest mismatch before activation.
-- Production portable manifests fail closed on unverified signing/notarization, rollback eligibility,
+- Production portable manifests fail closed on invalid Keiko release trust, false native-evidence claims, rollback eligibility,
   secrets, private paths, credential URLs, raw logs, package-manager output, and state payload
   references.
 - Runtime state persists content-free summaries only: target, asset identifiers, hashes, status,
   warning codes, stage/activation ids, and remediation status. It does not persist customer
   repositories, prompts, model output, package payloads, raw logs, private paths, or credentials.
 
-## UX Settlement
+## Historical UX Coverage
 
 - The primary portable user journey stays download once, click launcher, then use the existing update
   notice/window with one explicit update action.
@@ -131,7 +154,9 @@ equal macOS verification checks and production notarization checks.
 
 ## Verification Commands
 
-Run from the repository root when refreshing #1960 evidence:
+The following commands locate the historical unit/integration/UI surfaces. Run from the repository
+root on the supported toolchain; command presence is not a current result. #3405's acceptance
+criteria additionally require native assembled-application and real BFF-outage evidence.
 
 ```sh
 npm run build:packages
@@ -145,14 +170,15 @@ npm run format:check
 npm test
 npm run arch:check
 npm run arch:check:negative
-.keiko-scripts/verify-receipt.sh 1960
-.keiko-scripts/audit-receipt.sh 1960 --findings 0 --user-facing false
 ```
 
-Final program QA in #1961 is recorded in
-[Portable Product Delivery V2 Integrated QA](portable-product-delivery-v2-integrated-qa.md). It
-must re-run the integrated program evidence after the latest `dev` sync and prove the complete
-first-run setup plus updater journey before any `dev` PR is marked ready for human review.
+Historical program QA from #1961 is recorded in
+[Portable Product Delivery V2 Integrated QA](portable-product-delivery-v2-integrated-qa.md).
+For #3405 and the integrated #3403 head, rerun the full verify, independent audit, and user-facing
+Playwright receipt workflow only after the corresponding work is complete. The audit must determine
+the actual finding count; this document does not predeclare a clean audit or a non-user-facing scope.
+Current-head evidence must also show required-lane reachability for the real BFF outage/reconnect
+journey (`npm run check:e2e-suite-wiring`).
 
 ## Known Limits And Follow-ups
 
@@ -163,5 +189,6 @@ The following remain intentionally out of #1960 and #1945:
 - Organization-managed update control surfaces or support-center workflows.
 - Private channels, prerelease channels, canary channels, silent background updates, and remote
   backups.
-- Final all-platform release artifact execution against real signed production binaries. #1961 owns
-  integrated release QA for the full program branch.
+- The historical #1960 coverage did not prove all-platform updates against real signed production
+  binaries. That evidence is required by #3405, with external production qualification tracked
+  explicitly under #2198 rather than treated as complete by the historical closeout.

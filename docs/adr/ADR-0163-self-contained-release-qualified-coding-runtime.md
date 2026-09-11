@@ -297,13 +297,12 @@ Apple or Microsoft code signing. The lane exists because platform signing creden
 procurement dependency, and a product that cannot be exercised at all until they land cannot be
 evaluated at all.
 
-The evaluation program remains the explicitly reviewed three-target Windows/macOS program. Linux is
-production-only and cannot be selected by `evaluation_build`; this prevents unsigned or
-namespace-unqualified Linux bytes from being mistaken for the #3451 release target.
-
-**How it is entered.** Only `workflow_dispatch` with `evaluation_build: true`, which appends one
-bare `--evaluation-build` flag to the staging producer. There is no environment variable, no
-default, and no checkout marker. The producer then writes `evaluation` / `evaluation-unqualified`
+**How it is entered.** A manual evaluation uses `workflow_dispatch` with
+`evaluation_build: true`, which appends one bare `--evaluation-build` flag. A stable tag uses the
+separate bare `--release-build` flag; it writes the same honest native-verification state and also
+sets the outer updater predicate `releaseTrustRequired: true`. There is no environment variable,
+default, or checkout marker that can select either lane. The producer writes
+`evaluation` / `evaluation-unqualified`
 plus the reason codes `evaluation-artifact` and `evaluation-unsigned-allowed` in all four places it
 declares a lane — the manifest security block, every sidecar signing block, every native-helper
 signing block, and the native addon — and stamps the activation document's `trustAnchor` as
@@ -393,12 +392,13 @@ it truthy before the point-of-use verifier runs at all, so setting it `false` on
 silently disable every workspace read with no diagnostic. It stays `true` on every lane; ADR-0140's
 dev lane sets it `true` on an ad-hoc-signed helper for the same reason.
 
-**It is never promotable.** The lane is reachable only from the activation entry point, which takes
-it as an explicit, closed-by-default argument. The update/promotion entry point takes no lane
-argument at all, and the preflight and staging-download predicates are untouched: an evaluation
-artifact stays update-INELIGIBLE. The runtime may activate an unsigned sidecar; the product may
-never self-update from one. The signing verifier explicitly REJECTS `--policy evaluation` rather
-than laundering it into a pull-request-shaped lane.
+**Dispatch output is never promotable; stable release-trust output is.** An ordinary or evaluation
+dispatch carries no release signature and cannot reach assembly or publication. A stable-tag build
+may be promoted only after the protected publisher binds its final GitHub release/asset identities
+and adds a valid, unexpired Keiko Ed25519 manifest signature as defined by ADR-0121 D7. Preflight and
+staging reverify that signature and every unchanged digest/provenance/containment predicate. This
+does not relabel native evidence: the sidecar remains `evaluation-unqualified` and macOS keeps the
+weaker honestly declared containment until optional native qualification exists.
 
 **It is never silently green.** The readiness contract carries `runtimeEvidenceClass`, REQUIRED
 whenever `runtimeAvailable` is true, and the evaluation lane reports ADR-0140's existing
@@ -430,14 +430,11 @@ green. This is the class audit finding F-01 closed, and it must not be reintrodu
 - A future Keiko Native distribution may replace the portable host and onboarding surface, but it
   cannot weaken the same Endpoint Security entitlement, user/MDM approval, tree ownership, Model
   Gateway, or authority invariants.
-- **Production** macOS artifacts cannot be emitted until the Apple Developer ID and separately
-  granted Endpoint Security entitlement are provisioned. This is a release prerequisite, not a code
-  fallback. The D9 evaluation lane does not change that: what it publishes is an evaluation
-  artifact, never a production one, and its macOS build carries weaker process containment
-  precisely because that entitlement is absent. Since the 2026-08-09 amendment above it may be
-  published deliberately — as a beta prerelease, or as the public download release that declares
-  its `evaluation` status and stays ineligible for the governed one-click update — but it can never
-  be presented as, or promoted into, a production-signed artifact.
+- Platform-vendor-qualified macOS artifacts still require Apple Developer ID and the separately
+  granted Endpoint Security entitlement. Stable Keiko releases do not: they may publish and update
+  with platform-neutral ADR-0121 D7 release trust while retaining weaker, honestly declared macOS
+  process containment. They must never be presented as Apple-notarized or Endpoint
+  Security-qualified when those proofs are absent.
 - An evaluation build is honest about being one, everywhere an operator can see it: the artifact
   name, the manifest lane, the activation trust anchor, the readiness projection, and four UI
   surfaces.
@@ -480,5 +477,7 @@ green. This is the class audit finding F-01 closed, and it must not be reintrodu
 | ------- | ---------- | ------ |
 | 1.0     | 2026-07-27 | Accepted the self-contained release-qualified Coding Workbench runtime. |
 | 1.1     | 2026-09-03 | Recorded the D1 Windows native-helper packaging amendment: `/MT` statically links the CRT while `/DEPENDENTLOADFLAG:0x800` and fail-closed DLL-directory initialization retain the DLL-planting defense. |
-| 1.2     | 2026-09-10 | Added the production-only `linux-x64` release target, offline GitHub-OIDC Sigstore qualification, exact component/source binding, fresh-runner re-verification, and namespace-gateway activation. |
+| 1.2     | 2026-09-10 | Allowed stable unsigned native payloads to use ADR-0121 D7 platform-neutral release trust without claiming native qualification; dispatch artifacts remain unpublishable. |
+| 1.2     | 2026-09-10 | Added the production-only `linux-x64` runtime target, offline GitHub-OIDC Sigstore qualification, exact component/source binding, fresh-runner re-verification, and namespace-gateway activation. |
 | 1.3     | 2026-09-10 | Closed the Linux launch-path binding for Issue #3451: receipt schema v2 and production discovery now bind and rehash the launcher, Node.js executable, and USearch addon in addition to the existing activation, helper, and sidecar evidence. |
+| 1.4     | 2026-09-10 | Allowed stable Windows and macOS payloads to use ADR-0121 D7 platform-neutral release trust without claiming native qualification; dispatch artifacts remain unpublishable. |

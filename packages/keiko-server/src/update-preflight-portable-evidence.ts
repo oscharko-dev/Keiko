@@ -1,4 +1,10 @@
 import { createHash } from "node:crypto";
+import {
+  KEIKO_PORTABLE_RELEASE_TRUSTED_KEYS,
+  verifyPortableReleaseTrust,
+  type PortableReleaseTrustFailureReason,
+  type PortableReleaseTrustVerification,
+} from "@oscharko-dev/keiko-security/portable-release-trust";
 import { gatewayFetch, readBytesCapped } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import {
   type UpdatePreflightBlocker,
@@ -8,11 +14,16 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayEgressConfig } from "./deps.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
   type GitHubAsset,
+  PortableAssetRedirectError,
   type PortableRelease,
+  fetchGitHubReleaseAsset,
+  fetchWithPortableRetry,
   firstClassArchiveSetComplete,
   portableBlocker,
+  portableFetchFailureReason,
   requiredAssetName,
 } from "./update-preflight-portable-shared.js";
 import { isRecord } from "./update-preflight-registry.js";
@@ -20,10 +31,12 @@ import {
   PortableSidecarVerificationError,
   verifyPortableManifestSidecars,
 } from "./update-portable-sidecar-verification.js";
+import { portableManifestGenerationSchemaVerified } from "./update-portable-windows-generation.js";
 
 const MAX_PORTABLE_MANIFEST_BYTES = 256_000;
 const MAX_CHECKSUM_BYTES = 32_000;
 const UPDATE_PREFLIGHT_TIMEOUT_MS = 8_000;
+const PORTABLE_EVIDENCE_DEADLINE_MS = 30_000;
 const HEX_SHA256 = /^[a-f0-9]{64}$/u;
 const COMMIT_SHA = /^[a-f0-9]{40}$/u;
 interface TextAsset {
@@ -39,12 +52,17 @@ interface PortableAssetResolution {
 
 interface ValidatedPortableManifest {
   readonly archiveSha256: string;
+  readonly releaseTrust?: {
+    readonly keyId: string;
+    readonly metadataVersion: number;
+  };
+  readonly uncompressedSizeBytes: number;
   readonly sidecarRuntimes: readonly UpdatePortableSidecarSummary[];
 }
 
 class PortableSigningVerificationError extends Error {
-  constructor() {
-    super("portable signing evidence is not verified");
+  constructor(readonly trustReason: PortableReleaseTrustFailureReason | "missing") {
+    super("portable release trust is not verified");
     this.name = "PortableSigningVerificationError";
   }
 }
@@ -65,16 +83,26 @@ async function fetchTextAsset(
   deps: UiHandlerDeps,
   asset: GitHubAsset,
   maxBytes: number,
+  deadlineAt: number,
 ): Promise<TextAsset | undefined> {
-  const response = await gatewayFetch(asset.downloadUrl, {
-    method: "GET",
-    headers: { Accept: "application/octet-stream", "User-Agent": "Keiko" },
-    fetchImpl: deps.gatewayReadinessFetch,
-    timeoutMs: UPDATE_PREFLIGHT_TIMEOUT_MS,
-    maxResponseBytes: maxBytes,
-    egress: currentGatewayEgressConfig(deps),
-  });
-  if (!response.ok) return undefined;
+  const response = await fetchGitHubReleaseAsset(asset.downloadUrl, (url) =>
+    fetchWithPortableRetry(
+      () =>
+        gatewayFetch(url, {
+          method: "GET",
+          headers: { Accept: "application/octet-stream", "User-Agent": "Keiko" },
+          fetchImpl: deps.gatewayReadinessFetch,
+          timeoutMs: Math.max(1, Math.min(UPDATE_PREFLIGHT_TIMEOUT_MS, deadlineAt - Date.now())),
+          maxResponseBytes: maxBytes,
+          egress: currentGatewayEgressConfig(deps),
+        }),
+      { deadlineAt },
+    ),
+  );
+  if (!response.ok) {
+    await response.body?.cancel();
+    return undefined;
+  }
   const bytes = await readBytesCapped(response, maxBytes);
   return {
     text: new TextDecoder().decode(bytes),
@@ -149,7 +177,7 @@ function targetVerificationCheckKeys(target: UpdatePortableTarget): readonly str
   return ["developerIdVerified", "notarizationVerified", "stapleVerified", "assessmentVerified"];
 }
 
-function securityVerified(
+function nativeSecurityVerified(
   manifest: Record<string, unknown>,
   target: UpdatePortableTarget,
 ): boolean {
@@ -167,7 +195,21 @@ function securityVerified(
   ]);
 }
 
-function validManifestBooleans(manifest: Record<string, unknown>): boolean {
+function releaseTrustVerification(
+  deps: UiHandlerDeps,
+  manifest: Record<string, unknown>,
+): PortableReleaseTrustVerification {
+  return verifyPortableReleaseTrust(manifest, {
+    now: new Date(deps.updatePortableReleaseNow?.() ?? Date.now()),
+    trustedKeys: deps.updatePortableReleaseTrustedKeys ?? KEIKO_PORTABLE_RELEASE_TRUSTED_KEYS,
+  });
+}
+
+function validManifestBooleans(
+  manifest: Record<string, unknown>,
+  nativeVerified: boolean,
+  releaseTrustVerified: boolean,
+): boolean {
   const release = recordAt(manifest, "release");
   const updateEligibility = recordAt(manifest, "updateEligibility");
   const predicates = requiredPredicates(manifest);
@@ -178,7 +220,8 @@ function validManifestBooleans(manifest: Record<string, unknown>): boolean {
     fieldEquals(updateEligibility, "eligibleAfterSetupOnly", true),
     fieldEquals(predicates, "artifactShaVerified", true),
     fieldEquals(predicates, "manifestReleaseImpactBound", true),
-    fieldEquals(predicates, "platformSignatureLocallyVerified", true),
+    fieldEquals(predicates, "platformSignatureLocallyVerified", nativeVerified),
+    nativeVerified || fieldEquals(predicates, "releaseTrustRequired", releaseTrustVerified),
   ]);
 }
 
@@ -187,6 +230,13 @@ function artifactSha256(manifest: Record<string, unknown>): string | undefined {
   if (artifact === undefined) return undefined;
   const sha256 = artifact.sha256;
   return typeof sha256 === "string" && HEX_SHA256.test(sha256) ? sha256 : undefined;
+}
+
+function artifactUncompressedSize(manifest: Record<string, unknown>): number | undefined {
+  const value = recordAt(manifest, "artifact")?.uncompressedSizeBytes;
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= 2 ** 31
+    ? value
+    : undefined;
 }
 
 function validManifestIdentity(
@@ -199,7 +249,7 @@ function validManifestIdentity(
   const artifact = recordAt(manifest, "artifact");
   const releaseRecord = recordAt(manifest, "release");
   return all([
-    manifest.schemaVersion === 1 &&
+    portableManifestGenerationSchemaVerified(manifest, target) &&
       fieldEquals(product, "packageName", "@oscharko-dev/keiko") &&
       fieldEquals(product, "packageVersion", release.targetVersion),
     fieldEquals(releaseRecord, "releaseId", release.id),
@@ -219,6 +269,7 @@ function reviewedBindingValid(
   release: PortableRelease,
   archive: GitHubAsset,
   target: UpdatePortableTarget,
+  nativeVerified: boolean,
 ): boolean {
   const releaseImpact = recordAt(manifest, "releaseImpact");
   const binding =
@@ -236,24 +287,39 @@ function reviewedBindingValid(
     fieldEquals(binding, "platformTarget", target),
     fieldEquals(binding, "packageVersion", release.targetVersion),
     fieldEquals(binding, "archiveSha256", archiveSha256),
-    fieldEquals(binding, "platformSignatureLocallyVerified", true),
+    fieldEquals(binding, "platformSignatureLocallyVerified", nativeVerified),
   ]);
 }
 
 function validateManifest(
+  deps: UiHandlerDeps,
   manifest: Record<string, unknown>,
   release: PortableRelease,
   archive: GitHubAsset,
   target: UpdatePortableTarget,
 ): ValidatedPortableManifest | undefined {
   const sha256 = artifactSha256(manifest);
-  if (sha256 === undefined) return undefined;
+  const uncompressedSizeBytes = artifactUncompressedSize(manifest);
+  const nativeVerified = nativeSecurityVerified(manifest, target);
+  const releaseTrust = releaseTrustVerification(deps, manifest);
+  if (sha256 === undefined || uncompressedSizeBytes === undefined) return undefined;
   if (!validManifestIdentity(manifest, release, archive, target)) return undefined;
-  if (!validManifestBooleans(manifest)) return undefined;
-  if (!securityVerified(manifest, target)) throw new PortableSigningVerificationError();
-  if (!reviewedBindingValid(manifest, release, archive, target)) return undefined;
+  if (!nativeVerified && !releaseTrust.ok) {
+    throw new PortableSigningVerificationError(releaseTrust.reason);
+  }
+  if (!validManifestBooleans(manifest, nativeVerified, releaseTrust.ok)) return undefined;
+  if (!reviewedBindingValid(manifest, release, archive, target, nativeVerified)) return undefined;
   return {
     archiveSha256: sha256,
+    ...(releaseTrust.ok
+      ? {
+          releaseTrust: {
+            keyId: releaseTrust.keyId,
+            metadataVersion: releaseTrust.metadataVersion,
+          },
+        }
+      : {}),
+    uncompressedSizeBytes,
     sidecarRuntimes: verifyPortableManifestSidecars(manifest, target).summaries,
   };
 }
@@ -286,12 +352,51 @@ async function readAssetSafely(
   deps: UiHandlerDeps,
   asset: GitHubAsset,
   maxBytes: number,
+  deadlineAt: number,
+  target: UpdatePortableTarget,
+  assetKind: "manifest" | "checksum",
 ): Promise<TextAsset | undefined> {
   try {
-    return await fetchTextAsset(deps, asset, maxBytes);
-  } catch {
+    return await fetchTextAsset(deps, asset, maxBytes, deadlineAt);
+  } catch (error) {
+    if (error instanceof PortableAssetRedirectError) {
+      deps.activityLog?.write({
+        category: "security",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        level: "warn",
+        op: "update.portable-asset.redirect-refused",
+        extra: { assetKind, reason: error.reason, target },
+      });
+    } else {
+      deps.activityLog?.write({
+        category: "diagnostic",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        errorKind: "PORTABLE_FETCH_FAILURE",
+        level: "warn",
+        op: "update.portable-fetch.failed",
+        extra: { assetKind, reason: portableFetchFailureReason(error), target },
+      });
+    }
     return undefined;
   }
+}
+
+function readManifestAsset(
+  deps: UiHandlerDeps,
+  asset: GitHubAsset,
+  deadlineAt: number,
+  target: UpdatePortableTarget,
+): Promise<TextAsset | undefined> {
+  return readAssetSafely(deps, asset, MAX_PORTABLE_MANIFEST_BYTES, deadlineAt, target, "manifest");
+}
+
+function readChecksumAsset(
+  deps: UiHandlerDeps,
+  asset: GitHubAsset,
+  deadlineAt: number,
+  target: UpdatePortableTarget,
+): Promise<TextAsset | undefined> {
+  return readAssetSafely(deps, asset, MAX_CHECKSUM_BYTES, deadlineAt, target, "checksum");
 }
 
 export async function resolvePortableAsset(
@@ -349,10 +454,12 @@ async function resolvePortableEvidence(
   manifestAsset: GitHubAsset,
   checksumAsset: GitHubAsset,
 ): Promise<PortableAssetResolution> {
-  const manifestText = await readAssetSafely(deps, manifestAsset, MAX_PORTABLE_MANIFEST_BYTES);
+  const deadlineAt = Date.now() + PORTABLE_EVIDENCE_DEADLINE_MS;
+  const manifestText = await readManifestAsset(deps, manifestAsset, deadlineAt, target);
   const manifest = manifestText === undefined ? undefined : manifestRecord(manifestText.text);
-  const validated = validateManifestSafely(manifest, release, archive, target);
+  const validated = validateManifestSafely(deps, manifest, release, archive, target);
   if (validated instanceof PortableSigningVerificationError) {
+    recordReleaseTrustFailure(deps, target, validated.trustReason, manifest);
     return signingResolution(target);
   }
   if (validated instanceof PortableSidecarVerificationError) {
@@ -361,7 +468,8 @@ async function resolvePortableEvidence(
   if (manifestText === undefined || manifest === undefined || validated === undefined) {
     return malformedResolution(target, "The matching portable manifest is malformed.");
   }
-  const checksum = await readAssetSafely(deps, checksumAsset, MAX_CHECKSUM_BYTES);
+  recordReleaseTrustSuccess(deps, target, validated.releaseTrust);
+  const checksum = await readChecksumAsset(deps, checksumAsset, deadlineAt, target);
   if (
     checksum === undefined ||
     !checksumIncludesArchive(checksum.text, validated.archiveSha256, archive.name)
@@ -375,12 +483,45 @@ async function resolvePortableEvidence(
     manifestAsset,
     checksumAsset,
     manifestSha256: manifestText.sha256,
+    checksumSha256: checksum.sha256,
     archiveSha256: validated.archiveSha256,
+    uncompressedSizeBytes: validated.uncompressedSizeBytes,
     sidecarRuntimes: validated.sidecarRuntimes,
   });
 }
 
+function recordReleaseTrustFailure(
+  deps: UiHandlerDeps,
+  target: UpdatePortableTarget,
+  reason: PortableReleaseTrustFailureReason | "missing",
+  manifest: Record<string, unknown> | undefined,
+): void {
+  if (manifest?.releaseTrust === undefined) return;
+  deps.activityLog?.write({
+    category: "security",
+    correlationId: UNKNOWN_CORRELATION_ID,
+    level: "warn",
+    op: "update.release-trust.verify",
+    extra: { reason, status: "failed", target },
+  });
+}
+
+function recordReleaseTrustSuccess(
+  deps: UiHandlerDeps,
+  target: UpdatePortableTarget,
+  trust: ValidatedPortableManifest["releaseTrust"],
+): void {
+  if (trust === undefined) return;
+  deps.activityLog?.write({
+    category: "security",
+    correlationId: UNKNOWN_CORRELATION_ID,
+    op: "update.release-trust.verify",
+    extra: { ...trust, status: "succeeded", target },
+  });
+}
+
 function validateManifestSafely(
+  deps: UiHandlerDeps,
   manifest: Record<string, unknown> | undefined,
   release: PortableRelease,
   archive: GitHubAsset,
@@ -392,7 +533,7 @@ function validateManifestSafely(
   | undefined {
   if (manifest === undefined) return undefined;
   try {
-    return validateManifest(manifest, release, archive, target);
+    return validateManifest(deps, manifest, release, archive, target);
   } catch (error) {
     if (error instanceof PortableSigningVerificationError) return error;
     if (error instanceof PortableSidecarVerificationError) return error;
@@ -450,7 +591,7 @@ function signingResolution(target: UpdatePortableTarget): PortableAssetResolutio
     blockers: [
       portableBlocker(
         "portable-signing-unverified",
-        "The portable update is missing verified signing or notarization evidence.",
+        "The portable update has neither valid Keiko release trust nor optional native signing evidence.",
       ),
     ],
     warnings: [],
@@ -482,7 +623,9 @@ function eligibleResolution(input: {
   readonly manifestAsset: GitHubAsset;
   readonly checksumAsset: GitHubAsset;
   readonly manifestSha256: string;
+  readonly checksumSha256: string;
   readonly archiveSha256: string;
+  readonly uncompressedSizeBytes: number;
   readonly sidecarRuntimes: readonly UpdatePortableSidecarSummary[];
 }): PortableAssetResolution {
   return {
@@ -497,10 +640,16 @@ function eligibleResolution(input: {
         assetId: input.archive.id,
         releaseId: input.release.id,
         sizeBytes: input.archive.size,
+        uncompressedSizeBytes: input.uncompressedSizeBytes,
         sha256: input.archiveSha256,
         manifestAssetName: input.manifestAsset.name,
+        manifestAssetId: input.manifestAsset.id,
+        manifestSizeBytes: input.manifestAsset.size,
         manifestSha256: input.manifestSha256,
         checksumAssetName: input.checksumAsset.name,
+        checksumAssetId: input.checksumAsset.id,
+        checksumSizeBytes: input.checksumAsset.size,
+        checksumSha256: input.checksumSha256,
         checksumVerified: true,
         ...(input.sidecarRuntimes.length > 0 ? { sidecarRuntimes: input.sidecarRuntimes } : {}),
       },

@@ -52,6 +52,7 @@ export {
 // #3026 — cross-package types belong in contracts, and this seam is not a cross-package
 // contract).
 export { portableInstallCarriesReleaseSignature } from "./coding-runtime/productionPortableCodingRuntime.js";
+export { createUpdateCandidateAuthority } from "./update-candidate-authority.js";
 export {
   createUpdateLocalStateManager,
   type CreateUpdateSnapshotInput,
@@ -78,7 +79,19 @@ export {
   type UpdateSessionManager,
   type UpdateSessionManagerOptions,
   type UpdateSessionStartOutcome,
+  type PortableHandoffShutdownRequest,
 } from "./update-session.js";
+export {
+  type UpdateStartupRecoveryCurrent,
+  type UpdateStartupRecoveryPort,
+} from "./update-portable-handoff-recovery.js";
+export { reconcilePortableNormalStartup } from "./update-portable-normal-startup.js";
+export {
+  importLegacyUpdateAuditSnapshot,
+  type ImportLegacyUpdateAuditSnapshotOptions,
+  type LegacyUpdateAuditImportDeferredReason,
+  type LegacyUpdateAuditImportOutcome,
+} from "./update-legacy-audit-import.js";
 export {
   createUpdateRemediationManager,
   UpdateRemediationError,

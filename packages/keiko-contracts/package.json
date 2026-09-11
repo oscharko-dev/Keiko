@@ -639,6 +639,10 @@
       "types": "./dist/unit-test-events.d.ts",
       "import": "./dist/unit-test-events.js"
     },
+    "./runtime/update-candidate": {
+      "types": "./dist/update-candidate.d.ts",
+      "import": "./dist/update-candidate.js"
+    },
     "./runtime/update-local-state": {
       "types": "./dist/update-local-state.d.ts",
       "import": "./dist/update-local-state.js"

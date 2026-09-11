@@ -23,7 +23,17 @@ import { monitorEventLoopDelay } from "node:perf_hooks";
 import type { UpdateInstallModeKind } from "@oscharko-dev/keiko-contracts";
 import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
-import type { ServerLogSink, UiHandlerDeps } from "@oscharko-dev/keiko-server";
+import type {
+  BuildHandlerDepsOptions,
+  ImportLegacyUpdateAuditSnapshotOptions,
+  LegacyUpdateAuditImportOutcome,
+  PortableHandoffShutdownRequest,
+  ServerLogThreshold,
+  ServerLogSink,
+  UiHandlerDeps,
+  UpdateStartupRecoveryCurrent,
+  UpdateStartupRecoveryPort,
+} from "@oscharko-dev/keiko-server";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { resolvePreferredInstallLayout } from "./install-layout.js";
 // GEN-PERF-CLI-001 — the server module graph (routes, local-knowledge/sqlite wiring,
@@ -38,6 +48,7 @@ import {
   isKeikoUiLaunchId,
   KEIKO_UI_LAUNCH_ID_ENV,
   peekShutdownRequest,
+  writeShutdownRequest,
 } from "./state-paths.js";
 
 const ALLOWED_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
@@ -79,6 +90,10 @@ interface RawUiOptions {
 // Test seam: inject a server factory and the resolved asset paths so unit tests never bind a real
 // socket or require a built dist/. Defaults resolve the packaged assets relative to this module.
 export interface UiCliDeps {
+  // Process-local harness seam. Production callers leave this undefined and retain the default
+  // buildUiHandlerDeps composition; E2E callers may replace dependency construction without
+  // replacing the real listener, readiness gate, CSP/static serving, or shutdown lifecycle.
+  readonly buildHandlerDeps?: ((options: BuildHandlerDepsOptions) => UiHandlerDeps) | undefined;
   readonly createServer?: (deps: {
     staticRoot: string;
     csp: string;
@@ -89,6 +104,7 @@ export interface UiCliDeps {
     cspProvider?: (() => string | Promise<string>) | undefined;
     port: number;
     handlerDeps: UiHandlerDeps;
+    readiness?: (() => boolean) | undefined;
   }) => Server | Promise<Server>;
   readonly staticRoot?: string;
   readonly hashesFile?: string;
@@ -115,6 +131,15 @@ export interface UiCliDeps {
   // one that throws — drives `probeInstallModeKind`'s try/catch contract through `runUiCli` itself
   // without needing a real launch (which the injected-server path otherwise never probes at all).
   readonly installModeProbe?: () => Promise<UpdateInstallModeKind | undefined>;
+  readonly updateStartupRecovery?: UpdateStartupRecoveryPort | undefined;
+  // Test-only opt-in for startup-order assertions. Production loads the canonical importer from
+  // keiko-server after the real listener and recovery proof are ready. An injected listener with
+  // no explicit importer keeps the long-standing no-filesystem unit-test behavior.
+  readonly importLegacyUpdateAuditSnapshot?:
+    | ((
+        options: ImportLegacyUpdateAuditSnapshotOptions,
+      ) => LegacyUpdateAuditImportOutcome | Promise<LegacyUpdateAuditImportOutcome>)
+    | undefined;
 }
 
 interface LiveCspSource {
@@ -407,6 +432,42 @@ interface DurableServerErrorClassification {
   readonly causeChain?: readonly string[] | undefined;
 }
 
+type StartupRecoveryResult = Awaited<ReturnType<UpdateStartupRecoveryPort["reconcile"]>>;
+type StartupRecoveryReason = NonNullable<StartupRecoveryResult["reason"]> | "unspecified";
+
+const STARTUP_RECOVERY_ERROR_KINDS: Readonly<Record<StartupRecoveryReason, string>> = {
+  interrupted: "PORTABLE_UPDATE_RECOVERY_INTERRUPTED",
+  corrupt: "PORTABLE_UPDATE_RECOVERY_CORRUPT",
+  incompatible: "PORTABLE_UPDATE_RECOVERY_INCOMPATIBLE",
+  "persistence-failed": "PORTABLE_UPDATE_RECOVERY_PERSISTENCE_FAILED",
+  unspecified: "PORTABLE_UPDATE_RECOVERY_REQUIRED",
+};
+
+class PortableStartupRecoveryRequiredError extends Error {
+  public readonly code: string;
+
+  public constructor(
+    message: string,
+    public readonly recoveryReason: StartupRecoveryReason,
+    public readonly sessionId: string | undefined,
+  ) {
+    super(message);
+    this.name = "PortableStartupRecoveryRequiredError";
+    this.code = STARTUP_RECOVERY_ERROR_KINDS[recoveryReason];
+  }
+}
+
+function startupRecoveryRequiredError(
+  result: StartupRecoveryResult,
+  message: string,
+): PortableStartupRecoveryRequiredError {
+  return new PortableStartupRecoveryRequiredError(
+    message,
+    result.reason ?? "unspecified",
+    result.sessionId,
+  );
+}
+
 async function classifyServerError(error: Error): Promise<DurableServerErrorClassification> {
   try {
     const { describeError } = await loadServerModule();
@@ -420,6 +481,7 @@ async function classifyServerError(error: Error): Promise<DurableServerErrorClas
 function writeDurableServerErrorLog(
   activityLog: ServerLogSink | undefined,
   described: DurableServerErrorClassification,
+  recovery?: PortableStartupRecoveryRequiredError,
 ): void {
   if (activityLog === undefined) return;
   activityLog.write({
@@ -429,6 +491,12 @@ function writeDurableServerErrorLog(
     errorKind: described.code ?? described.errorClass,
     extra: {
       kind: "server-error",
+      ...(recovery === undefined
+        ? {}
+        : {
+            recoveryReason: recovery.recoveryReason,
+            ...(recovery.sessionId === undefined ? {} : { sessionId: recovery.sessionId }),
+          }),
       ...(described.frames === undefined ? {} : { frames: described.frames }),
       ...(described.causeChain === undefined ? {} : { causeChain: described.causeChain }),
     },
@@ -789,16 +857,24 @@ async function buildHandlerDepsOrReport(
   effectiveEnv: EnvSource,
   io: CliIo,
   localGitMutationEnv: EnvSource | undefined,
+  updateStartupRecovery: UpdateStartupRecoveryPort | undefined,
+  buildHandlerDeps: UiCliDeps["buildHandlerDeps"],
 ): Promise<UiHandlerDeps | number> {
   const { buildUiHandlerDeps, UiStoreError } = await loadServerModule();
   try {
-    return buildUiHandlerDeps({
+    return (buildHandlerDeps ?? buildUiHandlerDeps)({
       configPath: resolveUiConfigPath(parsed, effectiveEnv),
       evidenceDir: parsed.evidenceDir,
       uiDbPath: parsed.uiDbPath,
       initialProjectPath: cwd,
       env: effectiveEnv,
       ...(localGitMutationEnv === undefined ? {} : { localGitMutationEnv }),
+      updateStartupRecovery,
+      portableHandoffShutdown: createPortableHandoffShutdownTrigger({
+        stateDir: resolveRuntimeStateDir(cwd, effectiveEnv),
+        pid: process.pid,
+        launchId: effectiveEnv[KEIKO_UI_LAUNCH_ID_ENV],
+      }),
     });
   } catch (error) {
     if (error instanceof UiStoreError) {
@@ -807,6 +883,26 @@ async function buildHandlerDepsOrReport(
     }
     throw error;
   }
+}
+
+export function createPortableHandoffShutdownTrigger(input: {
+  readonly stateDir: string;
+  readonly pid: number;
+  readonly launchId: string | undefined;
+}): (request: PortableHandoffShutdownRequest) => Promise<void> {
+  return (request): Promise<void> => {
+    if (
+      !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(request.sessionId) ||
+      !/^[a-f0-9]{32}$/u.test(request.activationId) ||
+      !isKeikoUiLaunchId(input.launchId ?? "") ||
+      request.pid !== input.pid ||
+      request.launchId !== input.launchId
+    ) {
+      return Promise.reject(new Error("Portable handoff shutdown identity is invalid."));
+    }
+    writeShutdownRequest(input.stateDir, input.pid, input.launchId);
+    return Promise.resolve();
+  };
 }
 
 async function registerLaunchProjectOrReport(
@@ -972,7 +1068,7 @@ interface ProcessStartedContext {
   readonly parsed: UiCliArgs;
   readonly handlerDeps: UiHandlerDeps;
   readonly stateDirSource: StateDirSource;
-  readonly logLevel: string;
+  readonly logLevel: ServerLogThreshold;
   // Threaded from `UiCliDeps.installModeProbe`. Undefined on every real launch that does not
   // override it (the real detector runs) and on the injected-server path with no override (no
   // probe runs at all, matching today's behavior) — defined only when a test explicitly injects
@@ -1036,12 +1132,195 @@ interface StartUiServerOptions {
   readonly deps: UiCliDeps;
   readonly stateDir: string;
   readonly stateDirSource: StateDirSource;
-  readonly logLevel: string;
+  readonly logLevel: ServerLogThreshold;
+  readonly runtimeEnv: EnvSource;
+}
+
+function startupRecoveryCurrent(parsed: UiCliArgs, env: EnvSource): UpdateStartupRecoveryCurrent {
+  const launchId = env[KEIKO_UI_LAUNCH_ID_ENV];
+  if (!isKeikoUiLaunchId(launchId ?? "")) {
+    throw new Error("Portable update startup recovery requires a valid launch identity.");
+  }
+  return {
+    pid: process.pid,
+    launchId: launchId ?? "",
+    host: UI_HOST,
+    port: parsed.port,
+    version: KEIKO_PRODUCT_VERSION,
+  };
+}
+
+function serverMatchesExpectedBinding(server: Server, port: number): boolean {
+  if (typeof server.address !== "function") return false;
+  const address = server.address();
+  return (
+    typeof address === "object" &&
+    address !== null &&
+    address.address === UI_HOST &&
+    address.port === port
+  );
+}
+
+async function closeAfterRecoveryFailure(server: Server): Promise<void> {
+  await new Promise<void>((resolve) => {
+    closeServerBounded(server, resolve, SHUTDOWN_FORCE_CLOSE_GRACE_MS);
+  });
+}
+
+function closeStartupActivityLog(
+  activityLog: ServerLogSink | undefined,
+  closeActivityLog: (() => void) | undefined,
+): void {
+  if (closeActivityLog !== undefined) closeActivityLog();
+  else activityLog?.close?.();
+}
+
+async function recordStartupRecoveryFailure(
+  activityLog: ServerLogSink | undefined,
+  error: unknown,
+): Promise<boolean> {
+  const normalized = error instanceof Error ? error : new Error("Startup recovery failed.");
+  try {
+    writeDurableServerErrorLog(
+      activityLog,
+      await classifyServerError(normalized),
+      normalized instanceof PortableStartupRecoveryRequiredError ? normalized : undefined,
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+interface StartupRecoveryContext {
+  readonly startupRecovery: UpdateStartupRecoveryPort | undefined;
+  readonly parsed: UiCliArgs;
+  readonly runtimeEnv: EnvSource;
+  readonly handlerDeps: UiHandlerDeps;
+  readonly activityLog: ServerLogSink | undefined;
+  readonly closeActivityLog: (() => void) | undefined;
+  readonly io: CliIo;
+}
+
+async function reconcileBeforeListen(
+  context: StartupRecoveryContext,
+): Promise<UpdateStartupRecoveryCurrent | undefined> {
+  if (context.startupRecovery === undefined) return undefined;
+  try {
+    const current = startupRecoveryCurrent(context.parsed, context.runtimeEnv);
+    const result = await context.startupRecovery.reconcile({ phase: "pre-listen", current });
+    context.handlerDeps.updateSession?.refreshDurableProjection?.();
+    if (result.status !== "ready") {
+      throw startupRecoveryRequiredError(
+        result,
+        "Portable update startup recovery is required before listening.",
+      );
+    }
+    return current;
+  } catch (error) {
+    try {
+      if (!(await recordStartupRecoveryFailure(context.activityLog, error))) {
+        context.io.err("keiko ui: startup recovery diagnostic could not be persisted.\n");
+      }
+    } finally {
+      closeStartupActivityLog(context.activityLog, context.closeActivityLog);
+    }
+    throw error;
+  }
+}
+
+async function reconcileAfterListen(
+  context: StartupRecoveryContext & {
+    readonly current: UpdateStartupRecoveryCurrent | undefined;
+    readonly server: Server;
+  },
+): Promise<void> {
+  if (context.startupRecovery === undefined || context.current === undefined) return;
+  try {
+    if (!serverMatchesExpectedBinding(context.server, context.parsed.port)) {
+      throw new Error("Portable update startup recovery observed an unexpected listener binding.");
+    }
+    const result = await context.startupRecovery.reconcile({
+      phase: "post-listen",
+      current: context.current,
+    });
+    context.handlerDeps.updateSession?.refreshDurableProjection?.();
+    if (result.status !== "ready") {
+      throw startupRecoveryRequiredError(
+        result,
+        "Portable update startup recovery failed after listening.",
+      );
+    }
+  } catch (error) {
+    await closeAfterRecoveryFailure(context.server);
+    try {
+      if (!(await recordStartupRecoveryFailure(context.activityLog, error))) {
+        context.io.err("keiko ui: startup recovery diagnostic could not be persisted.\n");
+      }
+    } finally {
+      closeStartupActivityLog(context.activityLog, context.closeActivityLog);
+    }
+    throw error;
+  }
+}
+
+async function reportStartedAndWaitForShutdown(input: {
+  readonly server: Server;
+  readonly options: StartUiServerOptions;
+  readonly activityLog: ServerLogSink | undefined;
+  readonly closeActivityLog: (() => void) | undefined;
+  readonly isRealLaunch: boolean;
+}): Promise<void> {
+  const { server, options, activityLog, closeActivityLog, isRealLaunch } = input;
+  const { parsed, handlerDeps, io, deps, stateDir, stateDirSource, logLevel } = options;
+  const startedAt = Date.now();
+  io.out(`Keiko UI listening on http://${UI_HOST}:${String(parsed.port)}\n`);
+  const stopHeartbeat = await reportProcessStarted({
+    activityLog,
+    isRealLaunch,
+    parsed,
+    handlerDeps,
+    stateDirSource,
+    logLevel,
+    installModeProbe: deps.installModeProbe,
+  });
+  await maybeWaitForShutdown(server, deps, {
+    activityLog,
+    startedAt,
+    onShutdown: stopHeartbeat,
+    closeActivityLog,
+    peekShutdownRequest: () =>
+      peekShutdownRequest(stateDir, process.pid, process.env[KEIKO_UI_LAUNCH_ID_ENV]),
+  });
+}
+
+async function importLegacyAuditAfterRecovery(
+  options: StartUiServerOptions,
+  isRealLaunch: boolean,
+  activityLog: ServerLogSink | undefined,
+): Promise<LegacyUpdateAuditImportOutcome | undefined> {
+  const importer =
+    options.deps.importLegacyUpdateAuditSnapshot ??
+    (isRealLaunch ? (await loadServerModule()).importLegacyUpdateAuditSnapshot : undefined);
+  if (importer === undefined) return undefined;
+  const outcome = await importer({ stateDir: options.stateDir, level: options.logLevel });
+  if (outcome.status === "deferred" && outcome.reason !== "log-level-filtered") {
+    activityLog?.write({
+      level: "warn",
+      category: "diagnostic",
+      op: "update.runtime.legacy-import-deferred",
+      extra: { reason: outcome.reason },
+    });
+    options.io.err(
+      "keiko ui: legacy update audit persistence was deferred; retained source will be retried.\n",
+    );
+  }
+  return outcome;
 }
 
 async function startUiServer(options: StartUiServerOptions): Promise<void> {
   const { staticRoot, csp, cspProvider, parsed, handlerDeps, io, deps, stateDir } = options;
-  const { stateDirSource, logLevel } = options;
+  const { runtimeEnv } = options;
   const isRealLaunch = deps.createServer === undefined;
   // Injected-server tests must not force-load the real server module graph. The same rule governs
   // the activity log: `createFileServerLogSink` mkdirs `<stateDir>/logs` on construction, so
@@ -1060,12 +1339,25 @@ async function startUiServer(options: StartUiServerOptions): Promise<void> {
   const closeActivityLog = isRealLaunch
     ? (await loadServerModule()).closeFileServerLogSinks
     : undefined;
+  const startupRecovery = handlerDeps.updateStartupRecovery;
+  const readiness = { open: startupRecovery === undefined };
+  const recoveryContext = {
+    startupRecovery,
+    parsed,
+    runtimeEnv,
+    handlerDeps,
+    activityLog,
+    closeActivityLog,
+    io,
+  };
+  const recoveryCurrent = await reconcileBeforeListen(recoveryContext);
   const server = await factory({
     staticRoot,
     csp,
     ...(cspProvider === undefined ? {} : { cspProvider }),
     port: parsed.port,
     handlerDeps,
+    readiness: () => readiness.open,
     ...(activityLog === undefined ? {} : { activityLog }),
   });
   applyServerTimeouts(server);
@@ -1075,29 +1367,20 @@ async function startUiServer(options: StartUiServerOptions): Promise<void> {
   // io.err (body-free) AND the activity log, then drives a bounded fatal shutdown, instead of
   // being logged and left running, or crashing the process with a raw stack.
   attachDurableServerErrorListener(server, io, activityLog);
-  const startedAt = Date.now();
+  await reconcileAfterListen({ ...recoveryContext, current: recoveryCurrent, server });
+  if (recoveryCurrent !== undefined) readiness.open = true;
+  await importLegacyAuditAfterRecovery(options, isRealLaunch, activityLog);
   // Printed before the (possibly filesystem-probing, on the real launch path) `process.started`
   // write below, so the operator's terminal reports "listening" the instant it is true rather
   // than waiting on install-mode detection.
-  io.out(`Keiko UI listening on http://${UI_HOST}:${String(parsed.port)}\n`);
-  const stopHeartbeat = await reportProcessStarted({
-    activityLog,
-    isRealLaunch,
-    parsed,
-    handlerDeps,
-    stateDirSource,
-    logLevel,
-    installModeProbe: deps.installModeProbe,
-  });
   // Block only in the real CLI path (no injected factory). Injected-server tests skip blocking so
   // they don't hang; the real process must stay alive until signalled.
-  await maybeWaitForShutdown(server, deps, {
+  await reportStartedAndWaitForShutdown({
+    server,
+    options,
     activityLog,
-    startedAt,
-    onShutdown: stopHeartbeat,
+    isRealLaunch,
     closeActivityLog,
-    peekShutdownRequest: () =>
-      peekShutdownRequest(stateDir, process.pid, process.env[KEIKO_UI_LAUNCH_ID_ENV]),
   });
 }
 
@@ -1190,12 +1473,15 @@ async function launchUiFromDeps(
   // and the injected-server test path alike — this is a second, memoized, already-cached call, not
   // a new load.
   const logLevel = (await loadServerModule()).resolveServerLogThreshold(effectiveEnv);
+  const runtimeEnv = withDefaultLocalRuntimeStateEnv(stateDir, parsed, effectiveEnv, cwd);
   const handlerDeps = await buildHandlerDepsOrReport(
     parsed,
     cwd,
-    withDefaultLocalRuntimeStateEnv(stateDir, parsed, effectiveEnv, cwd),
+    runtimeEnv,
     io,
     deps.localGitMutationEnv,
+    deps.updateStartupRecovery,
+    deps.buildHandlerDeps,
   );
   if (typeof handlerDeps === "number") return handlerDeps;
   try {
@@ -1212,6 +1498,7 @@ async function launchUiFromDeps(
       stateDir,
       stateDirSource,
       logLevel,
+      runtimeEnv,
     });
     return 0;
   } finally {

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 
 // Audit KEIKO-0118: keiko-ui sits in the root config's `ignores`, so the repo-wide complexity /
 // function-length / explicit-return-type bar reached every package EXCEPT the product's largest TSX
@@ -50,6 +50,14 @@ async function loadConfigs() {
   };
 }
 
+let repositoryConfigs;
+
+// Loading the real root and package ESLint graphs is cold integration setup, not an assertion;
+// give that immutable fixture a scoped budget while every test keeps the default body timeout.
+beforeAll(async () => {
+  repositoryConfigs = await loadConfigs();
+}, 60_000);
+
 function readSuppressions() {
   return JSON.parse(readFileSync(SUPPRESSIONS, "utf8"));
 }
@@ -78,8 +86,8 @@ const SUPPRESSION_CEILING = 1325;
 
 describe("keiko-ui is held to the repository lint bar (KEIKO-0118)", () => {
   for (const rule of BARRED_RULES) {
-    it(`enables ${rule} at exactly the root config's setting`, async () => {
-      const { root, ui } = await loadConfigs();
+    it(`enables ${rule} at exactly the root config's setting`, () => {
+      const { root, ui } = repositoryConfigs;
       const expected = enabledSetting(root, rule);
 
       expect(expected, `${rule} must be enabled in the root config`).toBeDefined();
@@ -87,8 +95,8 @@ describe("keiko-ui is held to the repository lint bar (KEIKO-0118)", () => {
     });
   }
 
-  it("keeps keiko-ui in the root config's ignores (the package config is the only owner)", async () => {
-    const { root } = await loadConfigs();
+  it("keeps keiko-ui in the root config's ignores (the package config is the only owner)", () => {
+    const { root } = repositoryConfigs;
     const ignores = root.flatMap((block) => block?.ignores ?? []);
 
     expect(ignores).toContain("packages/keiko-ui/**");

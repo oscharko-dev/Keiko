@@ -410,6 +410,7 @@ function recordRemediationAudit(
   correlationId: string,
 ): void {
   const result = options.localState.recordAuditEvent(remediationAuditEventType(status), {
+    correlationId,
     targetVersion: request.targetVersion,
     store: draft.store,
     remediation: draft.remediation,

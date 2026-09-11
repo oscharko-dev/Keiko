@@ -72,13 +72,17 @@ function provisionedRuntimeFixture() {
   };
 }
 
-function portableSmokeFixture() {
+function portableSmokeFixture({ generationLayout = false, targetName } = {}) {
   const stageRoot = temporaryRoot();
-  const target = hostPortableTarget();
+  const target = targetName === undefined ? hostPortableTarget() : portableTargetByName(targetName);
+  if (target === undefined) throw new Error("expected a supported portable target");
+  const generationId = "a".repeat(64);
   const resources =
     target.nodePlatform === "darwin"
       ? join(stageRoot, "payload", "Keiko", "Keiko.app", "Contents", "Resources")
-      : join(stageRoot, "payload", "Keiko");
+      : generationLayout
+        ? join(stageRoot, "payload", "Keiko", ".portable", "generations", generationId)
+        : join(stageRoot, "payload", "Keiko");
   const binary = join(resources, "runtime", "native", "usearch.node");
   const license = join(resources, "runtime", "licenses", "usearch", "LICENSE");
   const binarySha256 = sha256Fixture(binary, "fixture native addon");
@@ -104,6 +108,19 @@ function portableSmokeFixture() {
   const manifest = {
     artifact: { platformTarget: target.platformTarget },
     nativeAddons: [addon],
+    ...(generationLayout
+      ? {
+          schemaVersion: 2,
+          windowsGeneration: {
+            schemaVersion: 1,
+            resourceRoot: `.portable/generations/${generationId}`,
+            treeHashSchema: "KHT1",
+            treeSha256: generationId,
+            launcherPath: "Keiko.exe",
+            launcherSha256: "b".repeat(64),
+          },
+        }
+      : {}),
   };
   writeJson(manifestPath, manifest);
   writeJson(join(stageRoot, "evidence", "sbom.cdx.json"), {
@@ -177,6 +194,34 @@ describe("portable USearch staging", () => {
     });
 
     expect(loadRuntime).toHaveBeenCalledWith(realpathSync(fixture.binary), "fixture-version");
+  });
+
+  it("loads the signed addon only from the bound Windows generation", () => {
+    const fixture = portableSmokeFixture({ generationLayout: true, targetName: "windows-x64" });
+    const loadRuntime = vi.fn();
+
+    smokePortableUsearch(fixture.stageRoot, fixture.target.platformTarget, {
+      loadRuntime,
+      runtimeManifest: fixture.runtimeManifest,
+    });
+
+    expect(loadRuntime).toHaveBeenCalledWith(realpathSync(fixture.binary), "fixture-version");
+    expect(realpathSync(fixture.binary)).toContain(
+      join(".portable", "generations", fixture.manifest.windowsGeneration.treeSha256),
+    );
+  });
+
+  it("rejects a Windows generation path that is not the exact validated binding", () => {
+    const fixture = portableSmokeFixture({ generationLayout: true, targetName: "windows-x64" });
+    fixture.manifest.windowsGeneration.resourceRoot = "runtime";
+    writeJson(fixture.manifestPath, fixture.manifest);
+
+    expect(() =>
+      smokePortableUsearch(fixture.stageRoot, fixture.target.platformTarget, {
+        loadRuntime: vi.fn(),
+        runtimeManifest: fixture.runtimeManifest,
+      }),
+    ).toThrow("Windows generation binding is invalid");
   });
 
   it("validates the native version accessor when the pinned runtime exposes one", () => {

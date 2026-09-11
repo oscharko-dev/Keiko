@@ -1,13 +1,17 @@
 import type { PathLike } from "node:fs";
+import { createHash } from "node:crypto";
 import {
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
+  truncateSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
@@ -17,6 +21,9 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 const renameControl = vi.hoisted(() => ({
   recreateLockTarget: undefined as string | undefined,
   restoreTarget: undefined as string | undefined,
+}));
+const readControl = vi.hoisted(() => ({
+  growPath: undefined as string | undefined,
 }));
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -44,6 +51,18 @@ vi.mock("node:fs", async (importOriginal) => {
       }
       actual.renameSync(oldPath, newPath);
     },
+    readSync: (...args: Parameters<typeof actual.readSync>): number => {
+      const path = readControl.growPath;
+      if (path !== undefined) {
+        const opened = actual.fstatSync(args[0]);
+        const current = actual.lstatSync(path);
+        if (opened.dev === current.dev && opened.ino === current.ino) {
+          readControl.growPath = undefined;
+          actual.appendFileSync(path, "x");
+        }
+      }
+      return actual.readSync(...args);
+    },
   };
 });
 
@@ -53,11 +72,19 @@ import {
   portableManagedSetupLockPath,
   portableSourceCanReplaceManaged,
   portableSourceIsNewer,
+  recoverableFailedManagedRoot,
   upgradeManagedInstall,
+  validatePortableRoot,
   withPortableManagedMutation,
 } from "./portable-install.js";
-import type { PortableManagedUpgradeFn, ValidatedPortableRoot } from "./portable-install.js";
-import { writeManagedRegistration } from "./portable-registration.js";
+import type {
+  PortableManagedInspectionAllowance,
+  PortableManagedInspectionFn,
+  PortableManagedUpgradeFn,
+  ValidatedPortableRoot,
+} from "./portable-install.js";
+import { writeFailedRegistration, writeManagedRegistration } from "./portable-registration.js";
+import { hashPortableTreeKht1 } from "@oscharko-dev/keiko-security/portable-tree-attestation";
 import {
   PACKAGE_NAME,
   layoutFor,
@@ -115,9 +142,64 @@ function seedPortableRoot(
   return { layout, manifest };
 }
 
+async function seedWindowsGenerationRoot(root: string): Promise<string> {
+  const launcher = Buffer.from("signed root launcher");
+  rmSync(join(root, ".portable", "generations"), { recursive: true, force: true });
+  const provisionalRoot = join(root, ".portable", "generations", "pending");
+  mkdirSync(join(provisionalRoot, "app"), { recursive: true });
+  mkdirSync(join(provisionalRoot, "runtime", "node"), { recursive: true });
+  mkdirSync(join(provisionalRoot, "runtime", "native"), { recursive: true });
+  mkdirSync(join(root, "support"), { recursive: true });
+  writeFileSync(
+    join(provisionalRoot, "app", "package.json"),
+    JSON.stringify({ name: PACKAGE_NAME, version: "0.3.17" }),
+  );
+  writeFileSync(join(provisionalRoot, "runtime", "node", "node.exe"), "node");
+  writeFileSync(
+    join(provisionalRoot, "runtime", "native", "keiko-runtime-supervisor.exe"),
+    "supervisor",
+  );
+  writeFileSync(join(root, "Keiko.exe"), launcher);
+  writeFileSync(
+    join(root, "support", "keiko-support.cmd"),
+    '@echo off\r\nset "SCRIPT_DIR=%~dp0"\r\n"%SCRIPT_DIR%..\\Keiko.exe" %*\r\n',
+  );
+  const treeSha256 = await hashPortableTreeKht1(provisionalRoot, {
+    deadline: Date.now() + 5_000,
+    now: Date.now,
+    yieldControl: () => Promise.resolve(),
+  });
+  const generationRoot = join(root, ".portable", "generations", treeSha256);
+  renameSync(provisionalRoot, generationRoot);
+  const binding = {
+    schemaVersion: 1,
+    resourceRoot: `.portable/generations/${treeSha256}`,
+    treeHashSchema: "KHT1",
+    treeSha256,
+    launcherPath: "Keiko.exe",
+    launcherSha256: createHash("sha256").update(launcher).digest("hex"),
+  } as const;
+  writeFileSync(
+    join(root, ".portable", "setup-manifest.json"),
+    JSON.stringify({
+      schemaVersion: 2,
+      platformTarget: "windows-x64",
+      packageName: PACKAGE_NAME,
+      packageVersion: "0.3.17",
+      stable: true,
+      primaryLauncher: "Keiko.exe",
+      bootstrapUpdateEligible: false,
+      runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
+      windowsGeneration: binding,
+    }),
+  );
+  return treeSha256;
+}
+
 afterEach(() => {
   renameControl.recreateLockTarget = undefined;
   renameControl.restoreTarget = undefined;
+  readControl.growPath = undefined;
   for (const root of tempRoots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -130,6 +212,7 @@ function portable(version: string, target = "windows-x64"): ValidatedPortableRoo
       appRoot: "/user/Keiko/app",
       packageJsonPath: "/user/Keiko/app/package.json",
       runtimeNodePath: "/user/Keiko/runtime/node/node.exe",
+      runtimeSupervisorPath: "/user/Keiko/runtime/native/keiko-runtime-supervisor.exe",
       primaryLauncherPath: "/user/Keiko/Keiko.exe",
       setupManifestPath: "/user/Keiko/.portable/setup-manifest.json",
     },
@@ -147,6 +230,186 @@ function portable(version: string, target = "windows-x64"): ValidatedPortableRoo
 }
 
 describe("portable install decisions", () => {
+  it("validates a Windows schema 2 root through its attested generation layout", async () => {
+    const root = makePolicyAllowedRoot();
+    const generation = await seedWindowsGenerationRoot(root);
+
+    const validated = validatePortableRoot("windows-x64", root);
+    expect(validated.manifest.schemaVersion).toBe(2);
+    expect(validated.layout.resourceRoot).toContain(generation);
+    expect(validated.layout.primaryLauncherPath).toBe(join(root, "Keiko.exe"));
+    expect(validated.layout.setupManifestPath).toBe(join(root, ".portable", "setup-manifest.json"));
+  });
+
+  it("recovers a failed Windows schema 2 install through its retained generation identity", async () => {
+    const root = makePolicyAllowedRoot();
+    const managedRoot = join(root, "managed", "Keiko");
+    const stateDir = join(root, "state");
+    await seedWindowsGenerationRoot(managedRoot);
+    const validated = validatePortableRoot("windows-x64", managedRoot);
+    writeManagedRegistration({
+      stateDir,
+      layout: validated.layout,
+      manifest: validated.manifest,
+      env: {},
+      home: root,
+      now: new Date("2026-09-07T12:00:00.000Z"),
+    });
+    writeFailedRegistration(
+      "windows-x64",
+      stateDir,
+      new Date("2026-09-07T12:01:00.000Z"),
+      "runtime invalid",
+    );
+
+    expect(recoverableFailedManagedRoot("windows-x64", managedRoot, stateDir)).toBe(managedRoot);
+    writeFileSync(validated.layout.primaryLauncherPath, "rebound launcher");
+    expect(recoverableFailedManagedRoot("windows-x64", managedRoot, stateDir)).toBeUndefined();
+  });
+
+  it("rejects post-closure non-PE mutations of a Windows generation", async () => {
+    const root = makePolicyAllowedRoot();
+    const generation = await seedWindowsGenerationRoot(root);
+    writeFileSync(
+      join(
+        root,
+        ".portable",
+        "generations",
+        generation,
+        "runtime",
+        "native",
+        "keiko-runtime-supervisor.exe",
+      ),
+      "replacement supervisor",
+    );
+    expect(() => validatePortableRoot("windows-x64", root)).toThrow(
+      "portable handoff tree digest mismatch",
+    );
+  });
+
+  it("rejects rebound or noncanonical Windows schema 2 root files", async () => {
+    const root = makePolicyAllowedRoot();
+    const generation = await seedWindowsGenerationRoot(root);
+    const reboundGeneration = "b".repeat(64);
+    renameSync(
+      join(root, ".portable", "generations", generation),
+      join(root, ".portable", "generations", reboundGeneration),
+    );
+    const manifestPath = join(root, ".portable", "setup-manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      windowsGeneration: { resourceRoot: string; treeSha256: string };
+    };
+    manifest.windowsGeneration.resourceRoot = `.portable/generations/${reboundGeneration}`;
+    manifest.windowsGeneration.treeSha256 = reboundGeneration;
+    writeFileSync(manifestPath, JSON.stringify(manifest), "utf8");
+    expect(() => validatePortableRoot("windows-x64", root)).toThrow(
+      "portable handoff tree digest mismatch",
+    );
+
+    await seedWindowsGenerationRoot(root);
+    writeFileSync(join(root, "Keiko.exe"), "replacement launcher");
+    expect(() => validatePortableRoot("windows-x64", root)).toThrow(
+      "portable root launcher digest mismatch",
+    );
+
+    await seedWindowsGenerationRoot(root);
+    writeFileSync(join(root, "support", "keiko-support.cmd"), "@echo off\r\n");
+    expect(() => validatePortableRoot("windows-x64", root)).toThrow(
+      "portable Windows support launcher is not canonical",
+    );
+  });
+
+  it("rejects sparse oversized root launchers and support files before materializing them", async () => {
+    const root = makePolicyAllowedRoot();
+    await seedWindowsGenerationRoot(root);
+    truncateSync(join(root, "Keiko.exe"), 64 * 1024 * 1024 + 1);
+    expect(() => validatePortableRoot("windows-x64", root)).toThrow(
+      "portable root launcher is unsafe",
+    );
+
+    await seedWindowsGenerationRoot(root);
+    truncateSync(join(root, "support", "keiko-support.cmd"), 64 * 1024 * 1024 + 1);
+    expect(() => validatePortableRoot("windows-x64", root)).toThrow(
+      "portable Windows support launcher is not canonical",
+    );
+  });
+
+  it("rejects a support file that grows after its exact-size check", async () => {
+    const root = makePolicyAllowedRoot();
+    await seedWindowsGenerationRoot(root);
+    readControl.growPath = join(root, "support", "keiko-support.cmd");
+
+    expect(() => validatePortableRoot("windows-x64", root)).toThrow(
+      "portable Windows support launcher is not canonical",
+    );
+  });
+
+  it("streams an in-budget root launcher hash", async () => {
+    const root = makePolicyAllowedRoot();
+    await seedWindowsGenerationRoot(root);
+    const launcher = Buffer.alloc(128 * 1024, 0x5a);
+    const launcherPath = join(root, "Keiko.exe");
+    writeFileSync(launcherPath, launcher);
+    const manifestPath = join(root, ".portable", "setup-manifest.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+      windowsGeneration: { launcherSha256: string };
+    };
+    manifest.windowsGeneration.launcherSha256 = createHash("sha256").update(launcher).digest("hex");
+    writeFileSync(manifestPath, JSON.stringify(manifest), "utf8");
+
+    expect(validatePortableRoot("windows-x64", root).layout.primaryLauncherPath).toBe(launcherPath);
+  });
+
+  it("enforces the absolute schema 2 validation deadline", async () => {
+    const root = makePolicyAllowedRoot();
+    await seedWindowsGenerationRoot(root);
+    const clock = vi.spyOn(Date, "now").mockReturnValueOnce(1).mockReturnValue(900_002);
+    try {
+      expect(() => validatePortableRoot("windows-x64", root)).toThrow(
+        "portable handoff preparation timed out",
+      );
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("rejects symlinked and multiply-linked Windows generation files", async () => {
+    const root = makePolicyAllowedRoot();
+    const generation = await seedWindowsGenerationRoot(root);
+    const supervisor = join(
+      root,
+      ".portable",
+      "generations",
+      generation,
+      "runtime",
+      "native",
+      "keiko-runtime-supervisor.exe",
+    );
+    const replacement = join(root, "supervisor-replacement.exe");
+    writeFileSync(replacement, "supervisor");
+    rmSync(supervisor);
+    symlinkSync(replacement, supervisor);
+    expect(() => validatePortableRoot("windows-x64", root)).toThrow(
+      "portable handoff tree contains an unsupported entry",
+    );
+
+    const secondRoot = makePolicyAllowedRoot();
+    await seedWindowsGenerationRoot(secondRoot);
+    const support = join(secondRoot, "support", "keiko-support.cmd");
+    const secondLink = join(secondRoot, "support-copy.cmd");
+    linkSync(support, secondLink);
+    expect(() => validatePortableRoot("windows-x64", secondRoot)).toThrow(
+      "portable Windows support launcher is not canonical",
+    );
+  });
+
+  it("preserves macOS and schema 1 flat portable validation", () => {
+    const root = makePolicyAllowedRoot();
+    seedPortableRoot("macos-arm64", root, "0.3.17");
+
+    expect(validatePortableRoot("macos-arm64", root).manifest.schemaVersion).toBe(1);
+  });
+
   it("keeps managed-root lock identity stable when the root gains a different real path", () => {
     const policyRoot = makePolicyAllowedRoot();
     const managedRoot = join(policyRoot, "managed-root");
@@ -258,6 +521,150 @@ describe("portable install decisions", () => {
     expect(() => escapedUpgrade(input)).toThrow(
       "portable upgrade lock capability is no longer active",
     );
+  });
+
+  it("scopes Windows generation inspection to an active matching mutation lock", async () => {
+    const root = makePolicyAllowedRoot();
+    const managedRoot = join(root, "managed", "Keiko");
+    const stateDir = join(root, ".keiko-state");
+    const selected = await seedWindowsGenerationRoot(managedRoot);
+    const layout = validatePortableRoot("windows-x64", managedRoot).layout;
+    const candidate = "b".repeat(64);
+    const activationId = "c".repeat(32);
+    const incoming = `.portable/generations/.incoming-${activationId}`;
+    for (const resourceRoot of [`.portable/generations/${candidate}`, incoming]) {
+      const absoluteRoot = join(managedRoot, ...resourceRoot.split("/"));
+      mkdirSync(join(absoluteRoot, "app"), { recursive: true });
+      mkdirSync(join(absoluteRoot, "runtime", "native"), { recursive: true });
+      writeFileSync(
+        join(absoluteRoot, "app", "package.json"),
+        JSON.stringify({ name: PACKAGE_NAME, version: "0.3.18" }),
+      );
+      writeFileSync(
+        join(absoluteRoot, "runtime", "native", "keiko-runtime-attestation.exe"),
+        "attestation",
+      );
+    }
+    const allowance: PortableManagedInspectionAllowance = {
+      kind: "windows-generation-v1",
+      managedRoot,
+      activationId,
+      allowedResourceRoots: [
+        `.portable/generations/${selected}`,
+        `.portable/generations/${candidate}`,
+        incoming,
+      ],
+    };
+
+    await withPortableManagedMutation(
+      { target: "windows-x64", managedRoot, stateDir },
+      (_upgrade, inspect) => {
+        const scan = inspect(layout, allowance);
+        expect(scan.issues).toEqual([]);
+        expect(scan.files).toContain(
+          join(
+            managedRoot,
+            ".portable",
+            "generations",
+            candidate,
+            "runtime",
+            "native",
+            "keiko-runtime-attestation.exe",
+          ),
+        );
+        mkdirSync(join(managedRoot, ".portable", "generations", "d".repeat(64)));
+        expect(inspect(layout, allowance).issues).toContain(
+          `portable managed install contains unknown entry: .portable/generations/${"d".repeat(64)}`,
+        );
+        writeFileSync(
+          join(
+            managedRoot,
+            ".portable",
+            "generations",
+            candidate,
+            "runtime",
+            "native",
+            "unknown.exe",
+          ),
+          "unknown",
+        );
+        expect(inspect(layout, allowance).issues).toContain(
+          `portable managed install contains unknown entry: .portable/generations/${candidate}/runtime/native/unknown.exe`,
+        );
+        return Promise.resolve();
+      },
+    );
+  });
+
+  it("rejects malformed and cross-scope Windows inspection allowances", async () => {
+    const root = makePolicyAllowedRoot();
+    const managedRoot = join(root, "managed", "Keiko");
+    const stateDir = join(root, ".keiko-state");
+    const selected = await seedWindowsGenerationRoot(managedRoot);
+    const layout = validatePortableRoot("windows-x64", managedRoot).layout;
+    const activationId = "c".repeat(32);
+    const selectedRoot = `.portable/generations/${selected}`;
+    const base: PortableManagedInspectionAllowance = {
+      kind: "windows-generation-v1",
+      managedRoot,
+      activationId,
+      allowedResourceRoots: [selectedRoot],
+    };
+    const malformed = [
+      { ...base, kind: "windows-flat-v1" } as unknown as PortableManagedInspectionAllowance,
+      { ...base, managedRoot: join(root, "other", "Keiko") },
+      { ...base, activationId: "C".repeat(32) },
+      { ...base, allowedResourceRoots: [] },
+      { ...base, allowedResourceRoots: [selectedRoot, selectedRoot] },
+      { ...base, allowedResourceRoots: [selectedRoot, ".portable/generations/../outside"] },
+      {
+        ...base,
+        allowedResourceRoots: [selectedRoot, `.portable/generations/.incoming-${"d".repeat(32)}`],
+      },
+      { ...base, allowedResourceRoots: [`.portable/generations/${"e".repeat(64)}`] },
+    ] as readonly PortableManagedInspectionAllowance[];
+
+    await withPortableManagedMutation(
+      { target: "windows-x64", managedRoot, stateDir },
+      (_upgrade, inspect) => {
+        for (const allowance of malformed) expect(() => inspect(layout, allowance)).toThrow();
+        expect(() =>
+          inspect({ ...layout, installRoot: join(root, "other", "Keiko") }, base),
+        ).toThrow("portable inspection lock scope does not match the managed install");
+        return Promise.resolve();
+      },
+    );
+  });
+
+  it("revokes the inspection capability when its callback throws", async () => {
+    const root = makePolicyAllowedRoot();
+    const managedRoot = join(root, "managed", "Keiko");
+    const stateDir = join(root, ".keiko-state");
+    await seedWindowsGenerationRoot(managedRoot);
+    const layout = validatePortableRoot("windows-x64", managedRoot).layout;
+    let escaped: PortableManagedInspectionFn | undefined;
+
+    await expect(
+      withPortableManagedMutation(
+        { target: "windows-x64", managedRoot, stateDir },
+        (_upgrade, inspect) => {
+          escaped = inspect;
+          return Promise.reject(new Error("callback failed"));
+        },
+      ),
+    ).rejects.toThrow("callback failed");
+    const escapedInspection = escaped;
+    if (escapedInspection === undefined) {
+      throw new Error("inspection capability was not provided");
+    }
+    expect(() => escapedInspection(layout)).toThrow(
+      "portable inspection lock capability is no longer active",
+    );
+    await expect(
+      withPortableManagedMutation({ target: "windows-x64", managedRoot, stateDir }, () =>
+        Promise.resolve(),
+      ),
+    ).resolves.toBeUndefined();
   });
 
   it("reclaims a setup lock whose recorded owner is no longer running", async () => {

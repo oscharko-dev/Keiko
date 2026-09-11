@@ -42,21 +42,23 @@ Implementation status is distinct from documentation-spine coverage: the shipped
 Ready because their migrations landed and were accepted, while [component-template.md](component-template.md)
 records whether each family has full, partial, or worked-example coverage against the ten-section spine.
 
-| Component                      | Status     | Owner     | Since                           | Shipped by  | Board status |
-| ------------------------------ | ---------- | --------- | ------------------------------- | ----------- | ------------ |
-| Button / Field / Toggle / Tabs | Ready      | @core-ui  | v0.1                            | #1293/#1294 | Done         |
-| Messages & Feedback            | Ready      | @core-ui  | v0.2                            | #1294       | Done         |
-| Table & Data Grid              | Ready      | @data-ui  | v0.4                            | #1297       | Done         |
-| Inputs & Forms (extended)      | Ready      | @core-ui  | v0.4                            | #1298       | Done         |
-| Navigation set                 | Ready      | @core-ui  | v0.4                            | #1298       | Done         |
-| AI & Agent surfaces            | Ready      | @agent-ux | v0.4                            | #1296       | Done         |
-| Data Visualisation             | Ready      | @data-ui  | v0.4                            | #1297       | Done         |
-| Update experience window       | Draft      | @core-ui  | v0.2.11 candidate               | #1696       | In Progress  |
-| Coding Workbench               | Draft      | @agent-ux | v0.2.12 candidate               | #1990-#1994 | In Progress  |
-| Legacy 2-way theme toggle      | Deprecated | @core-ui  | migration target: theme-control | replaced    | Done         |
+| Component                       | Status     | Owner     | Since                            | Shipped by          | Board status        |
+| ------------------------------- | ---------- | --------- | -------------------------------- | ------------------- | ------------------- |
+| Button / Field / Toggle / Tabs  | Ready      | @core-ui  | v0.1                             | #1293/#1294         | Done                |
+| Messages & Feedback             | Ready      | @core-ui  | v0.2                             | #1294               | Done                |
+| Table & Data Grid               | Ready      | @data-ui  | v0.4                             | #1297               | Done                |
+| Inputs & Forms (extended)       | Ready      | @core-ui  | v0.4                             | #1298               | Done                |
+| Navigation set                  | Ready      | @core-ui  | v0.4                             | #1298               | Done                |
+| AI & Agent surfaces             | Ready      | @agent-ux | v0.4                             | #1296               | Done                |
+| Data Visualisation              | Ready      | @data-ui  | v0.4                             | #1297               | Done                |
+| Update experience window repair | Draft      | @core-ui  | Existing surface; current repair | #1696; repair #3405 | In Progress (#3405) |
+| Coding Workbench                | Draft      | @agent-ux | v0.2.12 candidate                | #1990-#1994         | In Progress         |
+| Legacy 2-way theme toggle       | Deprecated | @core-ui  | migration target: theme-control  | replaced            | Done                |
 
-**Draft** is a defined status, but no current component uses it — every shipped family is Ready, and the one
-retired family is Deprecated. Register status labels must agree with the **Keiko Product Delivery** board: a
+**Draft** applies to the in-progress rows above; it does not invalidate the previously accepted shipped
+families. The updater's #1696 issue closed on 2026-06-30. Its current Draft row tracks #3405's repair
+and fresh production-BFF/fidelity evidence, not an unmerged #1696 delivery. Register status labels
+must agree with the **Keiko Product Delivery** board: a
 component shown Ready here must not sit in a board state that contradicts shipped delivery, and vice versa.
 This is a Stop Condition — status labels must not conflict with delivery-board states. When the two disagree,
 reconcile before treating either as authoritative (the data-viz reconciliation above is the worked example).

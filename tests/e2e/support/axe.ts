@@ -3,7 +3,8 @@ import { createRequire } from "node:module";
 import type { Page } from "@playwright/test";
 
 // GEN-TEST-E2E-004 — shared real-browser axe-core runner. The a11y estate before this was one
-// coordinator-only axe suite (update-ui-1696, wired into no CI job) plus jsdom-only component axe.
+// governed updater's coordinator evidence (update-ui-1696; its real-BFF outage journey is CI-gated)
+// plus jsdom-only component axe.
 // Real-browser-only a11y failures (focus order, roving tabindex, live-region wiring, contrast in
 // computed styles) can ONLY be caught here, so this lifts the update-ui runner into a reusable
 // module the a11y smoke consumes. Uses the committed axe-core/axe.min.js (no network, no new dep).

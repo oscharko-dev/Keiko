@@ -128,6 +128,7 @@
     "check:package-surface:assembled": "npm run build && npm run prepare:bin && npm run build:ui && npm run prune:package-build-artifacts && npm run prune:package-native-optionals && npm run check:package-surface",
     "check:editor-bundle-size": "node scripts/editor-bundle-size.mjs",
     "check:editor-release-evidence": "node scripts/editor-release-evidence.mjs",
+    "check:update-ui-evidence": "node scripts/check-update-ui-evidence.mjs",
     "check:perf-evidence": "node scripts/perf-evidence-gate.mjs",
     "check:perf-evidence:editor": "node scripts/perf-evidence-gate.mjs --target editor",
     "check:perf-evidence:workspace": "node scripts/perf-evidence-gate.mjs --target workspace",

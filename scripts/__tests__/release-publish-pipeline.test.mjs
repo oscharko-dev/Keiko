@@ -38,7 +38,7 @@
 //      npm 401, because npm Trusted Publishing does not authorize `npm dist-tag add`.
 
 import { Buffer } from "node:buffer";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -105,6 +105,7 @@ const HEAD_SHA = "0123456789abcdef0123456789abcdef01234567";
 const DIGEST_B = "b".repeat(64);
 const DIGEST_C = "c".repeat(64);
 const NODE_VERSION = "24.0.0";
+const RELEASE_CREATED_AT = "2026-09-10T08:00:00.000Z";
 
 function digestFor(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -654,7 +655,7 @@ function ghStubBody() {
     '  if (argv[1] && argv[1].includes("/releases/tags/")) {',
     // The release-by-tag endpoint always reports both flags; the prepublished gate requires the
     // published stable shape, so the double states it the way the real API does.
-    "    writeFileSync(1, JSON.stringify({ id: 987654321, draft: state().releaseDraft === true, prerelease: state().releasePrerelease === true, assets: state().uploadedAssets || [] }));",
+    `    writeFileSync(1, JSON.stringify({ id: 987654321, created_at: ${JSON.stringify(RELEASE_CREATED_AT)}, draft: state().releaseDraft === true, prerelease: state().releasePrerelease === true, assets: state().uploadedAssets || [] }));`,
     "    process.exit(0);",
     "  }",
     '  process.stdout.write(JSON.stringify({ state: "APPROVED", user: { login: "release-owner" } }));',
@@ -1046,6 +1047,7 @@ function runPublish({
   qualificationEnv = {},
   extraArgs = [],
 }) {
+  const { privateKey, publicKey } = generateKeyPairSync("ed25519");
   const binDir = mkdtempSync(join(tmpdir(), "keiko-release-publish-stub-"));
   const portableDir = mkdtempSync(join(tmpdir(), "keiko-portable-assets-fixture-"));
   const logFile = join(binDir, "calls.log");
@@ -1090,6 +1092,9 @@ function runPublish({
     NODE_AUTH_TOKEN: "stub-token-never-sent",
     KEIKO_RELEASE_VERIFY_ATTEMPTS: "3",
     KEIKO_RELEASE_VERIFY_DELAY_MS: "0",
+    KEIKO_PORTABLE_RELEASE_SIGNING_KEY: privateKey.export({ format: "pem", type: "pkcs8" }),
+    KEIKO_PORTABLE_RELEASE_TEST_PUBLIC_KEY: publicKey.export({ format: "pem", type: "spki" }),
+    NODE_ENV: "test",
     ...qualificationEnv,
   };
   for (const [key, value] of Object.entries(qualificationEnv)) {
@@ -1250,7 +1255,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });
 
-    it("publishes a stable latest release whose downloads the evaluation lane already uploaded", () => {
+    it("refuses a stable latest release whose downloads lack Keiko release trust", () => {
       // The release-owner-scoped path for the first public release: the governed evaluation lane
       // publishes the four unsigned-but-sealed downloads onto the tag with the evidence that
       // binds them, and this run promotes the dist-tag without re-uploading anything. It must
@@ -1276,8 +1281,8 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         portableAssets: false,
       });
 
-      expect(lastRun.status).toBe(0);
-      expect(lastRun.stdout).toContain("match their evidence");
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("release-trust bundle");
       expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
       // And it leaves the release surface alone. That release already carries the Latest flag and
       // the customer-facing install notes the evaluation lane wrote — first-launch steps,
@@ -1285,7 +1290,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       // exactly the guidance a non-technical customer needs. This run owns npm, not that release.
       expect(lastRun.calls.some((l) => l.startsWith('gh ["release","edit"'))).toBe(false);
       expect(lastRun.calls.some((l) => l.startsWith('gh ["release","create"'))).toBe(false);
-      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(true);
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });
 
     it("refuses prepublished downloads that carry no evaluation evidence", () => {
@@ -1304,7 +1309,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       });
 
       expect(lastRun.status).toBe(1);
-      expect(lastRun.stderr).toContain(PORTABLE_EVALUATION_MANIFEST_ASSET_NAME);
+      expect(lastRun.stderr).toContain("release-trust bundle");
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });
 
@@ -1318,7 +1323,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       });
 
       expect(lastRun.status).toBe(1);
-      expect(lastRun.stderr).toContain("does not own the Latest badge");
+      expect(lastRun.stderr).toContain("release-trust bundle");
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });
 
@@ -1333,7 +1338,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       });
 
       expect(lastRun.status).toBe(1);
-      expect(lastRun.stderr).toContain("only the published stable release");
+      expect(lastRun.stderr).toContain("release-trust bundle");
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });
 
@@ -1348,11 +1353,11 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       });
 
       expect(lastRun.status).toBe(1);
-      expect(lastRun.stderr).toContain("downloaded portable asset bytes do not match");
+      expect(lastRun.stderr).toContain("release-trust bundle");
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });
 
-    it("finds the run's artifacts when gh nests them one directory deep", () => {
+    it("does not accept nested legacy run artifacts as release trust", () => {
       // `gh run download` places files directly in the target or one level deeper depending on how
       // the artifact was uploaded. Reading only the top level would refuse a perfectly good
       // release — the producer resolves them the same way.
@@ -1362,9 +1367,8 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         portableAssets: false,
       });
 
-      expect(lastRun.stderr).toBe("");
-      expect(lastRun.status).toBe(0);
-      expect(lastRun.stdout).toContain("match their evidence");
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("release-trust bundle");
     });
 
     it("refuses prepublished downloads that are not the bytes their workflow run produced", () => {
@@ -1379,7 +1383,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       });
 
       expect(lastRun.status).toBe(1);
-      expect(lastRun.stderr).toContain("not the bytes their workflow run produced");
+      expect(lastRun.stderr).toContain("release-trust bundle");
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });
 
@@ -1391,7 +1395,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       });
 
       expect(lastRun.status).toBe(1);
-      expect(lastRun.stderr).toContain("could not be read");
+      expect(lastRun.stderr).toContain("release-trust bundle");
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });
 
@@ -1408,7 +1412,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       });
 
       expect(lastRun.status).toBe(1);
-      expect(lastRun.stderr).toContain("must have concluded successfully");
+      expect(lastRun.stderr).toContain("release-trust bundle");
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
     });
 

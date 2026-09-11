@@ -53,6 +53,18 @@ const portableAssetsWorkflow = readFileSync(
   resolve(repoRoot, ".github/workflows/portable-assets.yml"),
   "utf8",
 );
+const secretScanningQueueWorkflow = readFileSync(
+  resolve(repoRoot, ".github/workflows/secret-scanning-queue.yml"),
+  "utf8",
+);
+const nightlyPerfEvidenceWorkflow = readFileSync(
+  resolve(repoRoot, ".github/workflows/nightly-perf-evidence.yml"),
+  "utf8",
+);
+const codeTaskRealBinaryWorkflow = readFileSync(
+  resolve(repoRoot, ".github/workflows/code-task-real-binary.yml"),
+  "utf8",
+);
 const htmlManualReleaseEvidence = readFileSync(
   resolve(repoRoot, "docs/qa/html-manual-retrieval-evaluation-evidence.md"),
   "utf8",
@@ -100,6 +112,7 @@ const REQUIRED_CI_COMMANDS = [
   "npm run test:coverage:ui",
   // Browser release proof.
   "npm run test:e2e:smoke",
+  "npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage",
   "npm run test:e2e:editor-debugging-2348",
   // Performance e2e evidence + freshness/budget gate (Step 07, GEN-TEST-E2E-001).
   "npm run test:e2e:workspace-perf",
@@ -120,6 +133,7 @@ const REQUIRED_CI_COMMANDS = [
   "npm run check:error-observability",
   // Editor bundle release evidence (Step 06, RB-3).
   "npm run check:editor-release-evidence",
+  "npm run check:update-ui-evidence",
   // Version-drift governance (Step 06, RB-15).
   "npm run check:version-consistency",
   // Dependency-placement hygiene (Step 11, GEN-SYNTH-COVERAGE-005 / GEN-PKG-DEPENDENCY-001/003/004):
@@ -160,6 +174,28 @@ const HTML_MANUAL_FIXTURE_IDS = [
 ];
 
 describe("CI test/gate wiring guard", () => {
+  it("runs the portable handoff protocol fixture suite on a genuine Windows host", () => {
+    const buildStep = ci.indexOf("      - name: Build packages for the Windows smokes");
+    const fixtureStep = ci.indexOf(
+      "      - name: Verify the Windows portable handoff protocol fixture",
+    );
+    const nextStep = ci.indexOf(
+      "      - name: Verify Git executable Windows reparse containment",
+      fixtureStep,
+    );
+    expect(buildStep).toBeGreaterThan(-1);
+    expect(fixtureStep).toBeGreaterThan(buildStep);
+    expect(nextStep).toBeGreaterThan(fixtureStep);
+    const fixtureGate = ci.slice(fixtureStep, nextStep);
+    expect(fixtureGate).toContain("if: runner.os == 'Windows'");
+    expect(fixtureGate).toContain(
+      "node node_modules/vitest/vitest.mjs run packages/keiko-server/src/update-portable-handoff-plan.test.ts",
+    );
+    expect(fixtureGate).toContain(
+      "packages/keiko-server/src/update-portable-handoff-receipts.test.ts",
+    );
+  });
+
   it("refreshes workspace evidence without replacing the immutable D12 comparison", () => {
     const performanceStep = ci.slice(
       ci.indexOf("      - name: Refresh workspace performance evidence"),
@@ -296,22 +332,22 @@ describe("CI test/gate wiring guard", () => {
       releaseWorkflow,
       portableAssetsWorkflow,
       mutationSecurityWorkflow,
+      secretScanningQueueWorkflow,
+      nightlyPerfEvidenceWorkflow,
+      codeTaskRealBinaryWorkflow,
     ].join("\n");
     const node24SetupCount = runtimeWorkflows.match(/node-version: "24\.18\.0"/gu)?.length ?? 0;
     const node26SetupCount = runtimeWorkflows.match(/node-version: "26\.8\.1"/gu)?.length ?? 0;
     const nodeSetupCount = node24SetupCount + node26SetupCount;
     const verificationCount =
       runtimeWorkflows.match(/node scripts\/check-runtime-toolchain\.mjs --exact/gu)?.length ?? 0;
-    // 17 -> 20 with the three coverage suite jobs Issue #2704 split out of `coverage-sonar`,
-    // then 20 -> 22 with the credential-free macOS qualification and protected sealing lanes,
-    // then 22 -> 23 with the diff-scoped semantic-duplication lane, 23 -> 24 when the secret scan
-    // adopted the governed runtime, then 24 -> 26 with the Linux assembly and clean-runner
-    // qualification lanes. The retired hosted performance policy no longer adds a lane.
-    // The load-bearing assertion is the pairing below: every Node lane, old or new, verifies the
-    // governed toolchain.
-    expect(node24SetupCount).toBe(26);
+    // This inventory covers every workflow that selects Node. Issue #3403 retired the six
+    // credential-bound Apple/Microsoft production-signing lanes; Issue #3451 adds three Linux
+    // staging/qualification lanes. The load-bearing pairing below proves every lane verifies the
+    // governed toolchain, while the exact counts make a removed or unreviewed new lane fail.
+    expect(node24SetupCount).toBe(23);
     expect(node26SetupCount).toBe(1);
-    expect(nodeSetupCount).toBe(27);
+    expect(nodeSetupCount).toBe(24);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
     expect(ci).toContain("NODE_26_COMPATIBILITY_RESULT");

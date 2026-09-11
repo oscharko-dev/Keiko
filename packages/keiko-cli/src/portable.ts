@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { arch as hostArch, homedir as defaultHomedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { loadServer } from "./lazy-modules.js";
 import { runLifecycleCli } from "./lifecycle.js";
 import {
   activateMacosPortableRuntime,
@@ -26,6 +27,8 @@ import {
   statusPortable,
   validatePortableRoot,
   withPortableManagedMutation,
+  type PortableManagedInspectionAllowance,
+  type PortableManagedInspectionFn,
   type PortableManagedUpgradeFn,
   type ValidatedPortableRoot,
 } from "./portable-install.js";
@@ -53,6 +56,34 @@ type LifecycleFn = (
   deps: { readonly cwd: string; readonly securityLogSink?: SecurityLogSink | undefined },
 ) => Promise<number>;
 
+type PortableNormalStartupRecoveryFn = (input: {
+  readonly stateDir: string;
+  readonly target: PortableTarget;
+  readonly expectedManagedRoot: string;
+  readonly securityLogSink?: SecurityLogSink | undefined;
+}) => Promise<PortableNormalStartupRecoveryResult>;
+
+interface PortableRecoveredLaunchDescriptor {
+  readonly sessionId: string;
+  readonly targetVersion: string;
+  readonly lockIdentity: string;
+  readonly activationId: string;
+  readonly planSha256: string;
+  readonly launchId: string;
+  readonly host: "127.0.0.1";
+  readonly port: number;
+  readonly expectedVersion: string;
+}
+
+type PortableNormalStartupRecoveryResult =
+  | { readonly status: "normal"; readonly inspectionAllowance?: PortableManagedInspectionAllowance }
+  | { readonly status: "recovery-required" }
+  | {
+      readonly status: "recovered";
+      readonly descriptor: PortableRecoveredLaunchDescriptor;
+      readonly inspectionAllowance?: PortableManagedInspectionAllowance;
+    };
+
 interface PortableCliOptions {
   readonly command: PortableCommand;
   readonly target: PortableTarget;
@@ -76,6 +107,9 @@ export interface PortableSetupDeps {
   readonly activateMacosRuntimeFn?: MacosRuntimeActivationFn | undefined;
   readonly notifyFailureFn?: PortableFailureNotifierFn | undefined;
   readonly securityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
+  readonly recoverNormalStartupFn?: PortableNormalStartupRecoveryFn | undefined;
+  readonly encodeRecoveredLaunchFn?:
+    ((descriptor: PortableRecoveredLaunchDescriptor) => string) | undefined;
 }
 
 interface PortableArgDeps {
@@ -90,6 +124,8 @@ interface PortableRuntimeDeps extends PortableArgDeps {
   readonly spawnFn: SpawnFn;
   readonly lifecycleFn: LifecycleFn;
   readonly activateMacosRuntimeFn: MacosRuntimeActivationFn;
+  readonly recoverNormalStartupFn: PortableNormalStartupRecoveryFn;
+  readonly encodeRecoveredLaunchFn: (descriptor: PortableRecoveredLaunchDescriptor) => string;
 }
 
 type PortableUpgradeDeps = Pick<
@@ -224,15 +260,42 @@ function finalizePortableOptions(
   };
 }
 
-async function launchManaged(
-  target: PortableTarget,
+interface LaunchManagedOptions {
+  readonly target: PortableTarget;
+  readonly layout: PortableLayout;
+  readonly io: CliIo;
+  readonly env: EnvSource;
+  readonly stateDir: string;
+  readonly securityLogSink?: SecurityLogSink | undefined;
+  readonly recovered?: {
+    readonly descriptor: PortableRecoveredLaunchDescriptor;
+    readonly encoded: string;
+  };
+}
+
+function managedLaunchOptions(
+  options: PortableCliOptions,
   layout: PortableLayout,
   io: CliIo,
   env: EnvSource,
-  stateDir: string,
+  recovered?: LaunchManagedOptions["recovered"],
+): LaunchManagedOptions {
+  return {
+    target: options.target,
+    layout,
+    io,
+    env,
+    stateDir: options.stateDir,
+    securityLogSink: options.securityLogSink,
+    ...(recovered === undefined ? {} : { recovered }),
+  };
+}
+
+async function launchManaged(
+  options: LaunchManagedOptions,
   deps: Pick<PortableRuntimeDeps, "activateMacosRuntimeFn" | "lifecycleFn">,
-  securityLogSink?: SecurityLogSink,
 ): Promise<number> {
+  const { target, layout, io, env, stateDir, securityLogSink, recovered } = options;
   if (target === "macos-arm64" || target === "macos-x64") {
     const activation = await deps.activateMacosRuntimeFn(layout, target);
     if (activation === "unavailable") {
@@ -245,7 +308,13 @@ async function launchManaged(
       );
     }
   }
-  return deps.lifecycleFn("start", ["--open", "--state-dir", stateDir], io, env, {
+  const args = ["--open", "--state-dir", stateDir];
+  if (recovered !== undefined) {
+    args.push("--host", recovered.descriptor.host, "--port", String(recovered.descriptor.port));
+  }
+  const launchEnv =
+    recovered === undefined ? env : { ...env, KEIKO_PORTABLE_RECOVERED_LAUNCH: recovered.encoded };
+  return deps.lifecycleFn("start", args, io, launchEnv, {
     cwd: layout.appRoot,
     securityLogSink,
   });
@@ -272,7 +341,7 @@ async function relaunchPreviousManaged(
   deps: Pick<PortableRuntimeDeps, "activateMacosRuntimeFn" | "lifecycleFn">,
   securityLogSink?: SecurityLogSink,
 ): Promise<number> {
-  await launchManaged(target, layout, io, env, stateDir, deps, securityLogSink);
+  await launchManaged({ target, layout, io, env, stateDir, securityLogSink }, deps);
   return 1;
 }
 
@@ -285,15 +354,7 @@ async function upgradeManagedFromClickedPackage(
   deps: PortableUpgradeDeps,
 ): Promise<number> {
   if (!portableSourceCanReplaceManaged(source, current)) {
-    return launchManaged(
-      options.target,
-      current.layout,
-      io,
-      env,
-      options.stateDir,
-      deps,
-      options.securityLogSink,
-    );
+    return launchManaged(managedLaunchOptions(options, current.layout, io, env), deps);
   }
   try {
     return await withPortableManagedMutation(options, (upgrade) =>
@@ -332,15 +393,7 @@ async function upgradeManagedWhileLocked(
       securityLogSink: options.securityLogSink,
     });
     io.out("Keiko portable upgrade installed from downloaded package.\n");
-    return await launchManaged(
-      options.target,
-      upgraded,
-      io,
-      env,
-      options.stateDir,
-      deps,
-      options.securityLogSink,
-    );
+    return await launchManaged(managedLaunchOptions(options, upgraded, io, env), deps);
   } catch (error) {
     io.err(
       `keiko portable launch: ${error instanceof Error ? error.message : "portable upgrade failed"}\n`,
@@ -386,15 +439,7 @@ async function setupAndLaunchManaged(
 ): Promise<number> {
   const setup = setupPortable({ ...options, env, home: options.home }, io, deps.now());
   if (setup.code !== 0 || setup.layout === undefined) return setup.code;
-  return await launchManaged(
-    options.target,
-    setup.layout,
-    io,
-    env,
-    options.stateDir,
-    deps,
-    options.securityLogSink,
-  );
+  return await launchManaged(managedLaunchOptions(options, setup.layout, io, env), deps);
 }
 
 function setupDownloadedPortable(
@@ -413,10 +458,24 @@ async function launchPortable(
   options: PortableCliOptions,
   io: CliIo,
   env: EnvSource,
-  deps: Pick<PortableRuntimeDeps, "activateMacosRuntimeFn" | "now" | "spawnFn" | "lifecycleFn">,
+  deps: Pick<
+    PortableRuntimeDeps,
+    | "activateMacosRuntimeFn"
+    | "now"
+    | "spawnFn"
+    | "lifecycleFn"
+    | "recoverNormalStartupFn"
+    | "encodeRecoveredLaunchFn"
+  >,
 ): Promise<number> {
   try {
-    const source = validatePortableRoot(options.target, options.portableRoot);
+    const recovered = await recoverBeforePortableLaunch(options, io, env, deps);
+    if (recovered !== undefined) return recovered;
+    const source = validatePortableRoot(
+      options.target,
+      options.portableRoot,
+      options.securityLogSink,
+    );
     if (sameRealPath(source.layout.installRoot, options.managedRoot)) {
       return await setupAndLaunchManaged(options, io, env, deps);
     }
@@ -444,6 +503,95 @@ async function launchPortable(
   }
 }
 
+async function recoverBeforePortableLaunch(
+  options: PortableCliOptions,
+  io: CliIo,
+  env: EnvSource,
+  deps: Pick<
+    PortableRuntimeDeps,
+    "activateMacosRuntimeFn" | "lifecycleFn" | "recoverNormalStartupFn" | "encodeRecoveredLaunchFn"
+  >,
+): Promise<number | undefined> {
+  const attestedRecovery = await withPortableManagedMutation(options, (_upgrade, inspect) =>
+    inspectNormalStartupRecovery(options, env, deps.recoverNormalStartupFn, inspect),
+  );
+  const { recovery } = attestedRecovery;
+  if (recovery.status === "recovery-required") {
+    throw new Error("portable update recovery is required before launch");
+  }
+  if (recovery.status === "normal") {
+    if (attestedRecovery.managed === undefined) return undefined;
+    return launchManaged(
+      managedLaunchOptions(options, attestedRecovery.managed.layout, io, env),
+      deps,
+    );
+  }
+  if (attestedRecovery.managed === undefined) {
+    throw new Error("recovered portable install could not be attested");
+  }
+  return launchManaged(
+    managedLaunchOptions(options, attestedRecovery.managed.layout, io, env, {
+      descriptor: recovery.descriptor,
+      encoded: deps.encodeRecoveredLaunchFn(recovery.descriptor),
+    }),
+    deps,
+  );
+}
+
+interface AttestedNormalStartupRecovery {
+  readonly recovery: PortableNormalStartupRecoveryResult;
+  readonly managed?: ValidatedPortableRoot | undefined;
+}
+
+async function inspectNormalStartupRecovery(
+  options: PortableCliOptions,
+  env: EnvSource,
+  recover: PortableNormalStartupRecoveryFn,
+  inspect: PortableManagedInspectionFn,
+): Promise<AttestedNormalStartupRecovery> {
+  const recovery = await recover({
+    stateDir: options.stateDir,
+    target: options.target,
+    expectedManagedRoot: options.managedRoot,
+    securityLogSink: options.securityLogSink,
+  });
+  if (recovery.status === "recovery-required") {
+    if (Object.hasOwn(recovery, "inspectionAllowance")) {
+      throw new Error("portable recovery-required result must not carry an inspection allowance");
+    }
+    return { recovery };
+  }
+  const allowance = recovery.inspectionAllowance;
+  if (recovery.status === "normal" && allowance === undefined) return { recovery };
+  const managed = attestedKnownManagedInstall(options, env);
+  if (managed === undefined) throw new Error("recovered portable install could not be attested");
+  const scan = inspect(managed.layout, allowance);
+  if (scan.issues.length > 0) throw new Error(scan.issues[0]);
+  return { recovery, managed };
+}
+
+async function defaultPortableRecovery(
+  input: Parameters<PortableNormalStartupRecoveryFn>[0],
+): Promise<PortableNormalStartupRecoveryResult> {
+  const server = (await loadServer()) as unknown as {
+    readonly reconcilePortableNormalStartup: PortableNormalStartupRecoveryFn;
+  };
+  return server.reconcilePortableNormalStartup(input);
+}
+
+function defaultRecoveredLaunchEncoding(descriptor: PortableRecoveredLaunchDescriptor): string {
+  return Buffer.from(JSON.stringify(descriptor), "utf8").toString("base64url");
+}
+
+function resolvedPortableRecoveryDeps(
+  deps: PortableSetupDeps,
+): Pick<PortableRuntimeDeps, "recoverNormalStartupFn" | "encodeRecoveredLaunchFn"> {
+  return {
+    recoverNormalStartupFn: deps.recoverNormalStartupFn ?? defaultPortableRecovery,
+    encodeRecoveredLaunchFn: deps.encodeRecoveredLaunchFn ?? defaultRecoveredLaunchEncoding,
+  };
+}
+
 function resolvedDeps(deps: PortableSetupDeps): PortableRuntimeDeps {
   return {
     cwd: deps.cwd ?? process.cwd(),
@@ -454,6 +602,7 @@ function resolvedDeps(deps: PortableSetupDeps): PortableRuntimeDeps {
     spawnFn: deps.spawnFn ?? spawn,
     lifecycleFn: deps.lifecycleFn ?? runLifecycleCli,
     activateMacosRuntimeFn: deps.activateMacosRuntimeFn ?? activateMacosPortableRuntime,
+    ...resolvedPortableRecoveryDeps(deps),
   };
 }
 
@@ -524,7 +673,7 @@ function emitPortableManagedRoot(
   options: PortableCliOptions,
   io: CliIo,
 ): void {
-  assertManagedRootAllowed(managedRoot, options.stateDir, options.target);
+  assertManagedRootAllowed(managedRoot, options.stateDir, options.target, options.securityLogSink);
   const hasControlCharacter = Array.from(managedRoot).some(
     (character): boolean => (character.codePointAt(0) ?? 0) <= 0x1f,
   );

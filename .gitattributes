@@ -1,1 +1,4 @@
 *.ts text diff
+native/portable-launcher/fixtures/*.hex text eol=lf
+packages/keiko-server/src/coding-runtime/windows-portable-authenticode-verifier.cs text eol=lf
+packages/keiko-server/src/coding-runtime/windowsPortableAuthenticodeVerifier.generated.ts text eol=lf

@@ -71,6 +71,14 @@
       "types": "./dist/fs-atomic-rename.d.ts",
       "import": "./dist/fs-atomic-rename.js"
     },
+    "./portable-tree-attestation": {
+      "types": "./dist/portable-tree-attestation.d.ts",
+      "import": "./dist/portable-tree-attestation.js"
+    },
+    "./portable-release-trust": {
+      "types": "./dist/portable-release-trust.d.ts",
+      "import": "./dist/portable-release-trust.js"
+    },
     "./macos-keychain": {
       "types": "./dist/macos-keychain.d.ts",
       "import": "./dist/macos-keychain.js"
@@ -78,6 +86,10 @@
     "./sqlite-corruption": {
       "types": "./dist/sqlite-corruption.d.ts",
       "import": "./dist/sqlite-corruption.js"
+    },
+    "./windows-local-volume": {
+      "types": "./dist/windows-local-volume.d.ts",
+      "import": "./dist/windows-local-volume.js"
     }
   },
   "scripts": {

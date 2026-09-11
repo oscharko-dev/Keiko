@@ -1138,6 +1138,8 @@ export const EN_MESSAGES = {
   "updates.primary.current": "No update is available. You can check again at any time.",
   "updates.primary.unavailable":
     "Update availability could not be verified. Check again when the registry is reachable.",
+  "updates.primary.claimUnavailable":
+    "Refresh the update check before installing. Keiko needs a new server-approved update claim.",
   "updates.primary.releaseUnavailable":
     "Keiko cannot verify the update download information right now. Keep using this version and check again later.",
   "updates.primary.portableSetupRequired":
@@ -1189,6 +1191,8 @@ export const EN_MESSAGES = {
   "updates.check.manualStillRequired":
     "Manual install is still pending. Follow the approved manual instructions, restart Keiko, then check again.",
   "updates.check.manualInstalled": "Update installed. Keiko is now running {version}.",
+  "updates.reconnecting":
+    "Reconnecting to the local Keiko backend. The last safe update progress is still shown.",
   "updates.action.runRemediation": "Run action",
   "updates.action.runDeferred": "Run now",
   "updates.action.defer": "Defer",

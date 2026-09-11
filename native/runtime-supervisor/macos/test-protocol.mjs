@@ -199,6 +199,9 @@ const codeAndLiteralsText = stripCCommentsPreservingLiterals(rawSource);
 assert.match(codeText, /KEIKO_MONITOR_ARM/u);
 assert.match(codeText, /KEIKO_MONITOR_STOP/u);
 assert.match(codeText, /KEIKO_MONITOR_ZERO_LIVE/u);
+assert.match(codeText, /KEIKO_MONITOR_PING/u);
+assert.match(codeAndLiteralsText, /strcmp\(argv\[1\], "--probe-monitor"\) == 0/u);
+assert.match(codeText, /reply\.kind == KEIKO_MONITOR_ACTIVE/u);
 // KEIKO-0261: fd 3 and fd 4 are the supervisor's control and response pipes. Closing both in the
 // child's spawn file actions is what keeps the supervised runtime off them — without it the
 // runtime could speak the control protocol to its own supervisor. The qualification fixture never

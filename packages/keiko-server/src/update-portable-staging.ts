@@ -1,21 +1,29 @@
+import { rmSync } from "node:fs";
+import { join } from "node:path";
 import type {
   UpdatePortableSidecarSummary,
   UpdatePortableStagingSummary,
   UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
 import { compareSemver } from "./update-preflight-registry.js";
-import { stageArchiveBytes } from "./update-portable-staging-archive.js";
+import {
+  assertPortableDiskHeadroom,
+  createPortableDownloadRoot,
+  stageArchiveFile,
+} from "./update-portable-staging-archive.js";
 import {
   archiveSizeLimit,
-  fetchPortableAssetBytes,
+  fetchPortableAssetToFile,
   resolvePortableStageAssets,
+  type PortableStageAssets,
 } from "./update-portable-staging-manifest.js";
 import {
   assertAbort,
   manifestArchiveSha,
   parseJsonRecord,
   portableStageSummary,
-  sha256Bytes,
+  PORTABLE_OPERATION_TIMEOUT_MS,
+  reportPortableProgress,
   stageIdFor,
   type GitHubAsset,
   type PortableUpdateStageInput,
@@ -34,26 +42,38 @@ export {
 
 function resolveTarget(input: PortableUpdateStageInput): UpdatePortableTarget {
   const portable = input.installMode.portable;
-  if (
-    input.installMode.installKind !== "portable-managed" ||
-    portable?.updateEligible !== true ||
-    portable.stable !== true
-  ) {
+  const candidate = input.candidate.portable;
+  if (!eligiblePortableInstall(input, portable, candidate)) {
     throw new PortableUpdateStagingError(
       "portable-preflight-ineligible",
       "portable install is not eligible",
     );
   }
-  if (
-    portable.packageVersion === undefined ||
-    compareSemver(input.targetVersion, portable.packageVersion) <= 0
-  ) {
+  if (compareSemver(input.targetVersion, portable.packageVersion) <= 0) {
     throw new PortableUpdateStagingError(
       "portable-preflight-ineligible",
       "portable target is not newer",
     );
   }
   return portable.target;
+}
+
+function eligiblePortableInstall(
+  input: PortableUpdateStageInput,
+  portable: PortableUpdateStageInput["installMode"]["portable"],
+  candidate: PortableUpdateStageInput["candidate"]["portable"],
+): portable is NonNullable<PortableUpdateStageInput["installMode"]["portable"]> & {
+  readonly packageVersion: string;
+} {
+  return (
+    input.installMode.installKind === "portable-managed" &&
+    portable?.updateEligible === true &&
+    portable.stable === true &&
+    typeof portable.packageVersion === "string" &&
+    input.candidate.targetVersion === input.targetVersion &&
+    input.candidate.currentVersion === portable.packageVersion &&
+    candidate?.target === portable.target
+  );
 }
 
 function manifestExpectedSha(text: string): string {
@@ -165,37 +185,35 @@ async function stagePortableUpdate(
   options: PortableUpdateStagerOptions,
   input: PortableUpdateStageInput,
 ): Promise<UpdatePortableStagingSummary> {
-  const target = resolveTarget(input);
-  const stageAssets = await resolvePortableStageAssets(options, input, target);
-  const { release, archive, manifest, sidecars } = stageAssets;
-  const archiveBytes = await fetchPortableAssetBytes(
-    options,
-    archive,
-    archiveSizeLimit(archive),
-    input.signal,
-  );
-  const sha256 = sha256Bytes(archiveBytes);
-  if (sha256 !== manifestExpectedSha(manifest.text)) {
-    throw new PortableUpdateStagingError(
-      "portable-verification-failed",
-      "portable archive hash mismatch",
-    );
+  const timeoutSignal = AbortSignal.timeout(PORTABLE_OPERATION_TIMEOUT_MS);
+  const signal =
+    input.signal === undefined ? timeoutSignal : AbortSignal.any([input.signal, timeoutSignal]);
+  const operationInput = { ...input, signal };
+  try {
+    return await runPortableUpdateStage(options, operationInput);
+  } catch (error) {
+    if (signal.aborted) {
+      if (input.signal?.aborted === true) {
+        throw new PortableUpdateStagingError("cancelled", "portable staging was cancelled");
+      }
+      throw new PortableUpdateStagingError(
+        "portable-staging-failed",
+        "portable staging deadline exceeded",
+      );
+    }
+    throw error;
   }
-  recordDownload(options, release.targetVersion, target, archive, sha256);
-  assertAbort(input.signal);
-  const stageId = stageIdFor(input.sessionId, release.targetVersion, sha256);
-  await stageArchiveBytes({
-    bytes: archiveBytes,
-    session: input,
-    target,
-    targetVersion: release.targetVersion,
-    stageId,
-    sidecars,
-    ...(options.platformVerifier === undefined
-      ? {}
-      : { platformVerifier: options.platformVerifier }),
-    ...(options.securityLogSink === undefined ? {} : { securityLogSink: options.securityLogSink }),
-  });
+}
+
+async function runPortableUpdateStage(
+  options: PortableUpdateStagerOptions,
+  input: PortableUpdateStageInput,
+): Promise<UpdatePortableStagingSummary> {
+  const target = resolveTarget(input);
+  assertPortableDiskHeadroom(input, target, options.availableDiskBytes);
+  const stageAssets = await resolvePortableStageAssets(options, input, target);
+  const { stageId, sha256 } = await stageCandidateArchive(options, input, target, stageAssets);
+  const { release, archive, manifest, sidecars } = stageAssets;
   const summary = portableStageSummary({
     stageId,
     release,
@@ -207,6 +225,56 @@ async function stagePortableUpdate(
   });
   recordStage(options, summary);
   return summary;
+}
+
+async function stageCandidateArchive(
+  options: PortableUpdateStagerOptions,
+  input: PortableUpdateStageInput,
+  target: UpdatePortableTarget,
+  stageAssets: PortableStageAssets,
+): Promise<{ readonly stageId: string; readonly sha256: string }> {
+  const { release, archive, manifest, sidecars, windowsGeneration } = stageAssets;
+  archiveSizeLimit(archive);
+  const downloadRoot = createPortableDownloadRoot(input, target);
+  const archivePath = join(downloadRoot, "archive.zip");
+  let sha256: string;
+  let stageId: string;
+  try {
+    sha256 = await fetchPortableAssetToFile(options, archive, archivePath, input);
+    if (sha256 !== manifestExpectedSha(manifest.text)) {
+      throw new PortableUpdateStagingError(
+        "portable-verification-failed",
+        "portable archive hash mismatch",
+      );
+    }
+    recordDownload(options, release.targetVersion, target, archive, sha256);
+    assertAbort(input.signal);
+    stageId = stageIdFor(input.sessionId, release.targetVersion, sha256);
+    await stageArchiveFile({
+      archivePath,
+      session: input,
+      target,
+      targetVersion: release.targetVersion,
+      stageId,
+      sidecars,
+      nativePlatformVerificationRequired: stageAssets.nativePlatformVerificationRequired,
+      ...(windowsGeneration === undefined ? {} : { windowsGeneration }),
+      ...(options.platformVerifier === undefined
+        ? {}
+        : { platformVerifier: options.platformVerifier }),
+      ...(options.securityLogSink === undefined
+        ? {}
+        : { securityLogSink: options.securityLogSink }),
+    });
+    reportPortableProgress(input, {
+      phase: "verifying",
+      completedBytes: archive.size,
+      totalBytes: archive.size,
+    });
+  } finally {
+    rmSync(downloadRoot, { recursive: true, force: true });
+  }
+  return { stageId, sha256 };
 }
 
 export function createPortableUpdateStager(

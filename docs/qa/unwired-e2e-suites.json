@@ -15,7 +15,6 @@
     "test:e2e:managed-language-closeout-2282",
     "test:e2e:memoriaviva-m1",
     "test:e2e:task-binding-446",
-    "test:e2e:update-ui-1696",
     "test:e2e:workspace-search-2090",
     "test:e2e:workspace-selection-2060"
   ],
@@ -73,7 +72,7 @@
     "test:e2e:smoke:firefox": "runs-per-pr",
     "test:e2e:smoke:webkit": "runs-per-pr",
     "test:e2e:task-binding-446": "unwired",
-    "test:e2e:update-ui-1696": "unwired",
+    "test:e2e:update-ui-1696": "runs-per-pr",
     "test:e2e:workspace-perf": "push-nonblocking",
     "test:e2e:workspace-search-2090": "unwired",
     "test:e2e:workspace-selection-2060": "unwired",

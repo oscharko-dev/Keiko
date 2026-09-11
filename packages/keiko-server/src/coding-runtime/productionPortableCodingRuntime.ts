@@ -1,6 +1,18 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { readFileSync, realpathSync, statSync } from "node:fs";
+import { assertWindowsLocalVolume } from "@oscharko-dev/keiko-security/windows-local-volume";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+  statSync,
+  type Stats,
+} from "node:fs";
 import { dirname, join } from "node:path";
 
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
@@ -37,12 +49,23 @@ import {
   windowsSignerIdentity,
   windowsSystemEnvironment,
 } from "./windowsPortableAuthenticode.js";
+import {
+  generationBindingMatchesPackageLayout,
+  parseWindowsGenerationBinding,
+  portablePackageLayout,
+  resolveWindowsGenerationLayout,
+  type PortablePackageLayout,
+} from "../update-portable-windows-generation.js";
 
 const ACTIVATION_PATH = ".portable/runtime-activation.json";
 const QUALIFICATION_RECEIPT_PATH = ".portable/runtime-qualification.json";
 const QUALIFICATION_SIGSTORE_BUNDLE_PATH = ".portable/runtime-qualification.sigstore.json";
 const DIGEST = /^[a-f0-9]{64}$/u;
 const MAX_ATTESTATION_BYTES = 65_536;
+const MAX_WINDOWS_SETUP_BYTES = 64 * 1024;
+const MAX_WINDOWS_LAUNCHER_BYTES = 64 * 1024 * 1024;
+const WINDOWS_IDENTITY_READ_CHUNK_BYTES = 64 * 1024;
+const WINDOWS_IDENTITY_READ_DEADLINE_MS = 5_000;
 const MACOS_SYSTEM_EXTENSION_IDENTIFIER = "com.oscharko.keiko.runtime-monitor.systemextension";
 const TARGETS = new Set<UpdatePortableTarget>([
   "linux-x64",
@@ -70,6 +93,7 @@ export interface QualifiedPortableOpenCodeRuntime {
 
 interface PortableRuntimeAttestationPort {
   readReceipt(input: {
+    readonly installRoot: string;
     readonly resourceRoot: string;
     readonly target: UpdatePortableTarget;
   }): unknown;
@@ -107,7 +131,8 @@ export interface PortableOpenCodeDiscoveryInput {
 }
 
 interface PortableRuntimeCandidate {
-  readonly root: string;
+  readonly installRoot: string;
+  readonly resourceRoot: string;
   readonly target: UpdatePortableTarget;
   readonly activation: Record<string, unknown>;
   readonly activationSha256: string;
@@ -117,6 +142,12 @@ interface PortableRuntimeCandidate {
   readonly runtimeComponents?: readonly RuntimeQualificationComponentDigest[];
   readonly sidecar: PortableSidecarRuntimeVerification;
   readonly platformAssurance: PortableRuntimeLane;
+}
+
+interface TrustedPortableRoots {
+  readonly installRoot: string;
+  readonly resourceRoot: string;
+  readonly packageLayout?: PortablePackageLayout | undefined;
 }
 
 interface BoundActivation {
@@ -165,16 +196,23 @@ function portableRuntimeCandidate(
 ): PortableRuntimeCandidate | undefined {
   const target = runtimeTarget(input.platform ?? process.platform, input.arch ?? process.arch);
   if (target === undefined) return undefined;
-  const root = trustedResourceRoot(input);
-  if (root === undefined || !setupMatches(root, target)) return undefined;
-  const bound = boundActivation(root, target);
+  const roots = trustedPortableRoots(input, target);
+  if (roots === undefined) return undefined;
+  const selectedRoots = setupBoundRoots(roots, target);
+  if (selectedRoots === undefined) return undefined;
+  const bound = boundActivation(selectedRoots.resourceRoot, target);
   if (bound === undefined) return undefined;
-  const platformAssurance = honouredLane(bound.activation, root, target, input);
+  const platformAssurance = honouredLane(bound.activation, selectedRoots, target, input);
   if (platformAssurance === undefined) return undefined;
-  const bindings = candidateRuntimeBindings(root, bound.activation, target, platformAssurance);
+  const bindings = candidateRuntimeBindings(
+    selectedRoots.resourceRoot,
+    bound.activation,
+    target,
+    platformAssurance,
+  );
   if (bindings === undefined) return undefined;
   return {
-    root,
+    ...selectedRoots,
     target,
     activation: bound.activation,
     activationSha256: sha256File(bound.activationPath),
@@ -212,7 +250,7 @@ function candidateRuntimeBindings(
  */
 function honouredLane(
   activation: Record<string, unknown>,
-  root: string,
+  roots: TrustedPortableRoots,
   target: UpdatePortableTarget,
   input: PortableOpenCodeDiscoveryInput,
 ): PortableRuntimeLane | undefined {
@@ -221,7 +259,7 @@ function honouredLane(
   if (target === "linux-x64" && declared !== "release-qualified") return undefined;
   if (
     declared === "evaluation-unqualified" &&
-    releaseSignedInstall(root, target, input.commandRunner)
+    releaseSignedInstall(roots.installRoot, roots.resourceRoot, target, input.commandRunner)
   ) {
     return undefined;
   }
@@ -241,7 +279,7 @@ export function portableInstallCarriesReleaseSignature(
   target: UpdatePortableTarget,
   commandRunner?: PortableRuntimeCommandRunner,
 ): boolean {
-  return releaseSignedInstall(root, target, commandRunner);
+  return releaseSignedInstall(root, root, target, commandRunner);
 }
 
 /**
@@ -262,15 +300,16 @@ export function portableInstallCarriesReleaseSignature(
  * thing this predicate may do is REFUSE the weaker lane.
  */
 function releaseSignedInstall(
-  root: string,
+  installRoot: string,
+  resourceRoot: string,
   target: UpdatePortableTarget,
   commandRunner: PortableRuntimeCommandRunner | undefined,
 ): boolean {
   // Linux has no platform code-signing seal equivalent to Authenticode or Developer ID. Its
-  // production artifact is admitted only through the OIDC-attested release/qualification lane;
-  // consequently an artifact may never self-declare the weaker evaluation lane on Linux.
+  // production runtime is admitted only through the OIDC-attested qualification lane, so Linux
+  // may never self-declare the weaker evaluation lane.
   if (target === "linux-x64") return true;
-  const signedCode = releaseSignedCodePath(root, target);
+  const signedCode = releaseSignedCodePath(installRoot, resourceRoot, target);
   // No signable code where a real install always has some: there is no release seal to downgrade
   // FROM, so this is not the attack this predicate guards. Discovery's own checks still apply.
   if (signedCode === undefined) return false;
@@ -297,11 +336,15 @@ function releaseSignedInstall(
 }
 
 /** The signed artifact for the target, or undefined when the install carries none. */
-function releaseSignedCodePath(root: string, target: UpdatePortableTarget): string | undefined {
+function releaseSignedCodePath(
+  installRoot: string,
+  resourceRoot: string,
+  target: UpdatePortableTarget,
+): string | undefined {
   try {
     return target === "windows-x64"
-      ? safeRealFile(join(root, "Keiko.exe"))
-      : macosRuntimeCodePaths(root).appRoot;
+      ? safeRealFile(join(installRoot, "Keiko.exe"))
+      : macosRuntimeCodePaths(resourceRoot).appRoot;
   } catch {
     return undefined;
   }
@@ -368,12 +411,18 @@ function qualifiedRuntime(
       : platformQualification(candidate, binding, port);
   if (qualification === undefined) return undefined;
   return {
-    installRoot: candidate.root,
+    // This legacy field is consumed as the immutable resource root by the backend and secure-read
+    // pipeline. Keep that contract while using candidate.installRoot for root-level authorities.
+    installRoot: candidate.resourceRoot,
     target: candidate.target,
     manifest: candidate.activation,
     sidecar: candidate.sidecar,
     qualification,
-    nativeHelperPath: helperPath(candidate.root, candidate.target, "keiko-runtime-supervisor"),
+    nativeHelperPath: helperPath(
+      candidate.resourceRoot,
+      candidate.target,
+      "keiko-runtime-supervisor",
+    ),
     platformAssurance: candidate.platformAssurance,
   };
 }
@@ -400,7 +449,8 @@ function platformQualification(
   port: PortableRuntimeAttestationPort | undefined,
 ): LongLivedRuntimeQualification | undefined {
   const receipt = (port ?? PLATFORM_ATTESTATION).readReceipt({
-    resourceRoot: candidate.root,
+    installRoot: candidate.installRoot,
+    resourceRoot: candidate.resourceRoot,
     target: candidate.target,
   });
   const result = qualificationFromReceipt(receipt, binding);
@@ -442,16 +492,24 @@ function evaluationQualification(
 
 const PLATFORM_ATTESTATION: PortableRuntimeAttestationPort = Object.freeze({
   readReceipt: ({
+    installRoot,
     resourceRoot,
     target,
   }: {
+    readonly installRoot: string;
     readonly resourceRoot: string;
     readonly target: UpdatePortableTarget;
-  }): unknown => readPlatformAttestation(resourceRoot, target),
+  }): unknown => readPlatformAttestation(installRoot, resourceRoot, target),
 });
 
-function readPlatformAttestation(resourceRoot: string, target: UpdatePortableTarget): unknown {
-  if (target === "windows-x64") return readWindowsAttestation(resourceRoot);
+function readPlatformAttestation(
+  installRoot: string,
+  resourceRoot: string,
+  target: UpdatePortableTarget,
+): unknown {
+  if (target === "windows-x64") {
+    return readWindowsAttestation(resourceRoot, runPortableRuntimeCommand, installRoot);
+  }
   if (target === "linux-x64") return readLinuxAttestation(resourceRoot);
   return readMacosAttestation(resourceRoot, target);
 }
@@ -479,11 +537,12 @@ function readBoundedFile(path: string): Buffer {
 export function readWindowsAttestation(
   resourceRoot: string,
   run: PortableRuntimeCommandRunner = runPortableRuntimeCommand,
+  installRoot: string = resourceRoot,
 ): unknown {
   const executable = safeRealFile(
     join(resourceRoot, "runtime", "native", "keiko-runtime-attestation.exe"),
   );
-  const launcher = safeRealFile(join(resourceRoot, "Keiko.exe"));
+  const launcher = safeRealFile(join(installRoot, "Keiko.exe"));
   verifyWindowsSignature(launcher, executable, run);
   const result = run(executable, ["--emit"], {
     env: windowsSystemEnvironment(),
@@ -614,14 +673,41 @@ function runPortableRuntimeCommand(
   });
 }
 
-function trustedResourceRoot(input: PortableOpenCodeDiscoveryInput): string | undefined {
-  const packageRoot = productionUpdateFacts(input.env).packageRoot;
-  const candidate =
-    input.installRoot ?? (packageRoot === undefined ? undefined : dirname(packageRoot));
-  if (candidate === undefined) return undefined;
+function trustedPortableRoots(
+  input: PortableOpenCodeDiscoveryInput,
+  target: UpdatePortableTarget,
+): TrustedPortableRoots | undefined {
+  const packageLayout =
+    input.installRoot === undefined
+      ? portablePackageLayout(target, productionUpdateFacts(input.env).packageRoot)
+      : undefined;
+  if (target === "windows-x64") {
+    const lexicalInstallRoot = input.installRoot ?? packageLayout?.installRoot;
+    if (lexicalInstallRoot === undefined) return undefined;
+    try {
+      // This must precede realpathSync: a canonical path is evidence, not locality authority.
+      assertWindowsLocalVolume(lexicalInstallRoot);
+    } catch {
+      return undefined;
+    }
+  }
+  return realPortableRoots(input.installRoot, packageLayout);
+}
+
+function realPortableRoots(
+  injectedRoot: string | undefined,
+  packageLayout: PortablePackageLayout | undefined,
+): TrustedPortableRoots | undefined {
+  const installCandidate = injectedRoot ?? packageLayout?.installRoot;
+  const resourceCandidate = injectedRoot ?? packageLayout?.resourceRoot;
+  if (installCandidate === undefined || resourceCandidate === undefined) return undefined;
   try {
-    const root = realpathSync(candidate);
-    return statSync(root).isDirectory() ? root : undefined;
+    const installRoot = realpathSync(installCandidate);
+    const resourceRoot = realpathSync(resourceCandidate);
+    if (![installRoot, resourceRoot].every((path) => statSync(path).isDirectory())) {
+      return undefined;
+    }
+    return { installRoot, resourceRoot, packageLayout };
   } catch (error) {
     if (isAbsentPathError(error)) return undefined;
     throw error;
@@ -643,9 +729,193 @@ function runtimeTarget(platform: NodeJS.Platform, arch: string): UpdatePortableT
   return undefined;
 }
 
-function setupMatches(root: string, target: UpdatePortableTarget): boolean {
-  const setup = readSetupMarker(join(root, ".portable", "setup-manifest.json"));
-  return setup?.platformTarget === target && setup.stable === true;
+function setupBoundRoots(
+  roots: TrustedPortableRoots,
+  target: UpdatePortableTarget,
+): TrustedPortableRoots | undefined {
+  const setupRoot = target === "windows-x64" ? roots.installRoot : roots.resourceRoot;
+  const setupPath = join(setupRoot, ".portable", "setup-manifest.json");
+  const setup = readSetupForTarget(setupPath, target);
+  if (setup?.platformTarget !== target || setup.stable !== true) return undefined;
+  if (target !== "windows-x64") return setup.schemaVersion === 1 ? roots : undefined;
+  if (setup.schemaVersion === 1) {
+    return roots.packageLayout?.kind === "windows-generation-v1" ? undefined : roots;
+  }
+  return windowsSetupBoundRoots(roots, setup);
+}
+
+function readSetupForTarget(
+  path: string,
+  target: UpdatePortableTarget,
+): Record<string, unknown> | undefined {
+  return target === "windows-x64" ? readWindowsSetupMarker(path) : readSetupMarker(path);
+}
+
+function windowsSetupBoundRoots(
+  roots: TrustedPortableRoots,
+  setup: Record<string, unknown>,
+): TrustedPortableRoots | undefined {
+  if (!windowsSetupIdentityValid(setup)) return undefined;
+  const binding = parseWindowsGenerationBinding(setup.windowsGeneration);
+  if (binding === undefined) return undefined;
+  if (
+    roots.packageLayout !== undefined &&
+    !generationBindingMatchesPackageLayout(binding, roots.packageLayout)
+  ) {
+    return undefined;
+  }
+  const generation = resolveWindowsGenerationLayout(roots.installRoot, binding);
+  const resourceRoot = existingRealDirectory(generation.resourceRoot);
+  if (resourceRoot === undefined) return undefined;
+  if (resourceRoot !== roots.resourceRoot && roots.packageLayout !== undefined) return undefined;
+  const packageManifest = readRecord(safeRealFile(join(resourceRoot, "app", "package.json")));
+  if (!windowsPackageMatchesSetup(packageManifest, setup)) return undefined;
+  if (!windowsLauncherMatchesBinding(generation.rootLauncherPath, binding.launcherSha256)) {
+    return undefined;
+  }
+  return { ...roots, resourceRoot };
+}
+
+function windowsSetupIdentityValid(setup: Record<string, unknown>): boolean {
+  const runtime = record(setup.runtime);
+  return [
+    setup.schemaVersion === 2,
+    setup.packageName === "@oscharko-dev/keiko",
+    typeof setup.packageVersion === "string",
+    setup.primaryLauncher === "Keiko.exe",
+    setup.bootstrapUpdateEligible === false,
+    runtime?.nodePlatform === "win32",
+    runtime?.nodeArchitecture === "x64",
+  ].every(Boolean);
+}
+
+function existingRealDirectory(path: string): string | undefined {
+  try {
+    return realpathSync(path);
+  } catch (error) {
+    if (isAbsentPathError(error)) return undefined;
+    throw error;
+  }
+}
+
+function windowsPackageMatchesSetup(
+  packageManifest: Record<string, unknown> | undefined,
+  setup: Record<string, unknown>,
+): boolean {
+  return [
+    packageManifest?.name === setup.packageName,
+    packageManifest?.version === setup.packageVersion,
+  ].every(Boolean);
+}
+
+function windowsLauncherMatchesBinding(path: string, expectedSha256: string): boolean {
+  return hashSecureWindowsFile(path, MAX_WINDOWS_LAUNCHER_BYTES) === expectedSha256;
+}
+
+function windowsFileIsUnsafe(stat: Stats, maxBytes: number): boolean {
+  return !stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.size > maxBytes;
+}
+
+function windowsFileIdentityChanged(before: Stats, after: Stats, total: number): boolean {
+  return [
+    windowsFileIsUnsafe(after, before.size),
+    after.dev !== before.dev,
+    after.ino !== before.ino,
+    after.size !== before.size,
+    after.mtimeMs !== before.mtimeMs,
+    after.ctimeMs !== before.ctimeMs,
+    total !== before.size,
+  ].some(Boolean);
+}
+
+function windowsNamedFileChanged(opened: Stats, named: Stats): boolean {
+  return [
+    windowsFileIsUnsafe(named, opened.size),
+    named.dev !== opened.dev,
+    named.ino !== opened.ino,
+    named.size !== opened.size,
+    named.mtimeMs !== opened.mtimeMs,
+    named.ctimeMs !== opened.ctimeMs,
+  ].some(Boolean);
+}
+
+function withSecureWindowsFile<T>(
+  path: string,
+  maxBytes: number,
+  read: (descriptor: number, deadline: number) => { readonly result: T; readonly total: number },
+): T {
+  const namedBefore = lstatSync(path);
+  if (windowsFileIsUnsafe(namedBefore, maxBytes)) {
+    throw new Error("portable Windows identity file is unsafe or oversized");
+  }
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const opened = fstatSync(descriptor);
+    if (windowsFileIsUnsafe(opened, maxBytes) || windowsNamedFileChanged(opened, namedBefore)) {
+      throw new Error("portable Windows identity path changed before it was read");
+    }
+    const { result, total } = read(descriptor, Date.now() + WINDOWS_IDENTITY_READ_DEADLINE_MS);
+    if (
+      windowsFileIdentityChanged(opened, fstatSync(descriptor), total) ||
+      windowsNamedFileChanged(opened, lstatSync(path))
+    ) {
+      throw new Error("portable Windows identity file changed while it was read");
+    }
+    return result;
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function readSecureWindowsFile(path: string, maxBytes: number): Buffer {
+  return withSecureWindowsFile(path, maxBytes, (descriptor, deadline) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for (;;) {
+      if (Date.now() > deadline) throw new Error("portable Windows identity read timed out");
+      const chunk = Buffer.allocUnsafe(
+        Math.min(WINDOWS_IDENTITY_READ_CHUNK_BYTES, maxBytes - total + 1),
+      );
+      const count = readSync(descriptor, chunk, 0, chunk.length, null);
+      if (count === 0) return { result: Buffer.concat(chunks, total), total };
+      total += count;
+      if (total > maxBytes) throw new Error("portable Windows identity file is oversized");
+      chunks.push(chunk.subarray(0, count));
+    }
+  });
+}
+
+function hashSecureWindowsFile(path: string, maxBytes: number): string {
+  return withSecureWindowsFile(path, maxBytes, (descriptor, deadline) => {
+    const hash = createHash("sha256");
+    const chunk = Buffer.allocUnsafe(WINDOWS_IDENTITY_READ_CHUNK_BYTES);
+    let total = 0;
+    for (;;) {
+      if (Date.now() > deadline) throw new Error("portable Windows identity read timed out");
+      const count = readSync(descriptor, chunk, 0, chunk.length, null);
+      if (count === 0) return { result: hash.digest("hex"), total };
+      total += count;
+      if (total > maxBytes) throw new Error("portable Windows identity file is oversized");
+      hash.update(chunk.subarray(0, count));
+    }
+  });
+}
+
+function readWindowsSetupMarker(path: string): Record<string, unknown> | undefined {
+  let raw: string;
+  try {
+    raw = new TextDecoder("utf-8", { fatal: true }).decode(
+      readSecureWindowsFile(path, MAX_WINDOWS_SETUP_BYTES),
+    );
+  } catch (error) {
+    if (isAbsentPathError(error)) return undefined;
+    throw error;
+  }
+  const parsed = record(JSON.parse(raw));
+  if (parsed === undefined) {
+    throw new Error("portable setup marker is present but is not a JSON object");
+  }
+  return parsed;
 }
 
 /**

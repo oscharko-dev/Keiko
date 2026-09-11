@@ -5,16 +5,18 @@ import { Buffer } from "node:buffer";
 import {
   existsSync,
   lstatSync,
+  mkdirSync,
   openSync,
   closeSync,
   readFileSync,
   readSync,
   readdirSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync,
 } from "node:fs";
-import { join, posix, resolve } from "node:path";
+import { dirname, join, posix, relative, resolve } from "node:path";
 import { URL } from "node:url";
 
 import {
@@ -22,15 +24,30 @@ import {
   PORTABLE_PAYLOAD_MAX_FILES as MAX_FILES,
   portablePayloadRelativePath as portablePath,
   validatePortableCandidateManifest,
+  WINDOWS_GENERATION_STAGING_RELATIVE_PATH,
+  WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION,
   WINDOWS_PORTABLE_SETUP_ASSET_NAME,
 } from "./portable-runtime.mjs";
-import { rebindExistingSignedArchive, rebindSignedPayload } from "./portable-signed-archive.mjs";
-import { createPortableZipAdapter } from "./stage-portable-runtime.mjs";
+import {
+  portableResourceRoot,
+  rebindExistingSignedArchive,
+  rebindSignedPayload,
+} from "./portable-signed-archive.mjs";
+import {
+  buildWindowsGenerationLauncher,
+  createPortableZipAdapter,
+  stageWindowsPortableRootFiles,
+} from "./stage-portable-runtime.mjs";
+import { validateWindowsRootSetupManifest } from "./build-windows-portable-setup.mjs";
 import {
   assertWindowsProductionVerificationInput,
   WindowsVerificationInputError,
 } from "./windows-portable-verification-input.mjs";
 import { sha256 } from "./lib/digest.mjs";
+import {
+  hashPortableHandoffTree,
+  PORTABLE_HANDOFF_TREE_HASH_SCHEMA,
+} from "../packages/keiko-server/src/update-portable-handoff-tree.ts";
 
 const MAX_PE_FILES = 4_096;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
@@ -39,6 +56,7 @@ const ARTIFACT_SIGNING_HOST_PATTERN =
   /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.codesigning\.azure\.net$/u;
 const WINDOWS_TARGET = "windows-x64";
 const RUNTIME_ATTESTATION_PATH = "runtime/native/keiko-runtime-attestation.exe";
+const GENERATION_HASH_TIMEOUT_MS = 5 * 60_000;
 
 export class BoundedWindowsSigningError extends Error {}
 
@@ -151,10 +169,8 @@ function inventoryPeFiles(rootPath) {
   return { schemaVersion: 1, target: WINDOWS_TARGET, files: state.peFiles };
 }
 
-export function inventoryWindowsPortablePeFiles(payloadRoot) {
-  const inventory = inventoryPeFiles(payloadRoot);
+function assertCoreWindowsPeInventory(inventory) {
   const paths = new Set(inventory.files.map((file) => file.relativePath.toLowerCase()));
-  if (!paths.has("keiko.exe")) fail("primary Keiko.exe is missing from the PE inventory");
   if (!paths.has("runtime/node/node.exe")) {
     fail("bundled Node executable is missing from the PE inventory");
   }
@@ -165,6 +181,17 @@ export function inventoryWindowsPortablePeFiles(payloadRoot) {
     fail("runtime supervisor is missing from the PE inventory");
   }
   return inventory;
+}
+
+export function inventoryWindowsPortableCorePeFiles(payloadRoot) {
+  return assertCoreWindowsPeInventory(inventoryPeFiles(payloadRoot));
+}
+
+export function inventoryWindowsPortablePeFiles(payloadRoot) {
+  const inventory = inventoryPeFiles(payloadRoot);
+  const paths = new Set(inventory.files.map((file) => file.relativePath.toLowerCase()));
+  if (!paths.has("keiko.exe")) fail("primary Keiko.exe is missing from the PE inventory");
+  return assertCoreWindowsPeInventory(inventory);
 }
 
 export function inventoryWindowsPortableStagePeFiles(stageRoot) {
@@ -184,7 +211,11 @@ export function inventoryAddsOnlySetupCompanion(expectedPayload, actualStage) {
 }
 
 export function readWindowsPortablePeInventory(path) {
-  const inventory = JSON.parse(readFileSync(path, "utf8"));
+  return parseWindowsPortablePeInventory(readFileSync(path));
+}
+
+function parseWindowsPortablePeInventory(bytes) {
+  const inventory = JSON.parse(bytes.toString("utf8"));
   assertInventoryDocument(inventory);
   const seen = new Set();
   for (const file of inventory.files) assertInventoryEntry(file, seen);
@@ -237,8 +268,8 @@ export function inventoryPathsMatch(expected, actual) {
   );
 }
 
-function catalogPathForFile(file) {
-  return `payload/Keiko/${file.relativePath}`;
+function catalogPathForFile(file, prefix) {
+  return `${prefix}/${file.relativePath}`;
 }
 
 export function inventoryAddsOnlyRuntimeAttestation(expected, actual) {
@@ -252,8 +283,8 @@ export function inventoryAddsOnlyRuntimeAttestation(expected, actual) {
   );
 }
 
-export function catalogForInventory(inventory) {
-  return `${inventory.files.map(catalogPathForFile).join("\n")}\n`;
+export function catalogForInventory(inventory, prefix = "payload/Keiko") {
+  return `${inventory.files.map((file) => catalogPathForFile(file, prefix)).join("\n")}\n`;
 }
 
 function parseArgs(argv) {
@@ -296,20 +327,30 @@ function inventoryCommand(options) {
   const stageRoot = resolve(required(options, "stage-root"));
   const inventoryPath = resolve(required(options, "inventory"));
   const catalogPath = resolve(required(options, "catalog"));
-  const inventory = inventoryWindowsPortablePeFiles(join(stageRoot, "payload", "Keiko"));
+  const payloadRoot = join(stageRoot, "payload", "Keiko");
+  if (!existsSync(payloadRoot) || !lstatSync(payloadRoot).isDirectory())
+    fail("payload root is missing");
   const manifestPath = join(stageRoot, "manifest", "portable-manifest.json");
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const resourceRoot = portableResourceRoot(stageRoot, WINDOWS_TARGET, manifest);
+  const inventory = inventoryWindowsPortableCorePeFiles(resourceRoot);
   const paths = new Set(inventory.files.map((entry) => entry.relativePath ?? entry.path ?? entry));
   assertWindowsManifestSidecarInventory(manifest, paths);
   writeFileSync(inventoryPath, `${JSON.stringify(inventory, null, 2)}\n`, { mode: 0o600 });
-  writeFileSync(catalogPath, catalogForInventory(inventory), { mode: 0o600 });
+  const catalogPrefix = relative(stageRoot, resourceRoot).replaceAll("\\", "/");
+  writeFileSync(catalogPath, catalogForInventory(inventory, catalogPrefix), { mode: 0o600 });
   console.log(`windows-portable-signing: inventoried ${String(inventory.files.length)} PE files`);
 }
 
 function verifyInventoryCommand(options) {
   const stageRoot = resolve(required(options, "stage-root"));
   const expected = readWindowsPortablePeInventory(required(options, "expected-inventory"));
-  const actual = inventoryWindowsPortablePeFiles(join(stageRoot, "payload", "Keiko"));
+  const manifest = JSON.parse(
+    readFileSync(join(stageRoot, "manifest", "portable-manifest.json"), "utf8"),
+  );
+  const actual = inventoryWindowsPortableCorePeFiles(
+    portableResourceRoot(stageRoot, WINDOWS_TARGET, manifest),
+  );
   if (!inventoriesMatch(expected, actual)) fail("verified PE inventory no longer matches payload");
 }
 
@@ -360,11 +401,7 @@ function windowsZipAdapter() {
   });
 }
 
-export async function rebindPortableSignedArchive(
-  stageRoot,
-  manifest,
-  archiveAdapter = windowsZipAdapter(),
-) {
+export async function rebindArchive(stageRoot, manifest, archiveAdapter = windowsZipAdapter()) {
   const payloadContainer = join(stageRoot, "payload");
   const archivePath = join(stageRoot, manifest.artifact.assetName);
   rebindSignedPayload(stageRoot, manifest, WINDOWS_TARGET);
@@ -431,6 +468,15 @@ function applyWindowsProductionState(manifest, input) {
   manifest.updateEligibility.requiredPredicates.platformSignatureLocallyVerified = true;
 }
 
+function authenticatedVerificationInventory(options, input) {
+  const path = resolve(required(options, "expected-inventory"));
+  const bytes = readFileSync(path);
+  if (sha256(bytes) !== input.peInventorySha256) {
+    fail("verification input does not bind the exact PE inventory document");
+  }
+  return parseWindowsPortablePeInventory(bytes);
+}
+
 function prepareQualifiedPayloadCommand(options) {
   const stageRoot = resolve(required(options, "stage-root"));
   verifyInventoryCommand(options);
@@ -440,6 +486,7 @@ function prepareQualifiedPayloadCommand(options) {
     resolve(required(options, "verification-input")),
     manifest,
   );
+  authenticatedVerificationInventory(options, input);
   applyWindowsProductionState(manifest, input);
   markNativeHelpersVerified(manifest);
   rebindSignedPayload(stageRoot, manifest, WINDOWS_TARGET);
@@ -461,7 +508,10 @@ export function bindRuntimeAttestation(stageRoot, manifest) {
   ) {
     fail("runtime attestation carrier is missing");
   }
-  const path = join(stageRoot, "payload", "Keiko", ...attestation.executablePath.split("/"));
+  const path = join(
+    portableResourceRoot(stageRoot, WINDOWS_TARGET, manifest),
+    ...attestation.executablePath.split("/"),
+  );
   const entry = lstatSync(path);
   if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
     fail("runtime attestation carrier is invalid");
@@ -516,20 +566,292 @@ function bindRuntimeAttestationSbom(stageRoot, manifest, attestation) {
   writeFileSync(path, `${JSON.stringify(sbom, null, 2)}\n`);
 }
 
-async function finalizeCommand(options) {
+function generationStagingRoot(stageRoot) {
+  return join(
+    stageRoot,
+    "payload",
+    "Keiko",
+    ...WINDOWS_GENERATION_STAGING_RELATIVE_PATH.split("/"),
+  );
+}
+
+function generationRoot(stageRoot, generationId) {
+  return join(stageRoot, "payload", "Keiko", ".portable", "generations", generationId);
+}
+
+function assertQualifiedActivationUnchanged(stageRoot, manifest) {
+  const path = join(
+    portableResourceRoot(stageRoot, WINDOWS_TARGET, manifest),
+    ...manifest.runtimeActivation.path.split("/"),
+  );
+  if (sha256(readFileSync(path)) !== manifest.runtimeActivation.sha256) {
+    fail("qualified runtime activation changed before generation closure");
+  }
+}
+
+function assertGenerationId(value) {
+  if (!SHA256_PATTERN.test(value)) fail("Windows generation ID is invalid");
+  return value;
+}
+
+function writeExclusive(path, value) {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, value, { encoding: "utf8", flag: "wx", mode: 0o600 });
+}
+
+function assertDirectoryEntry(path, label) {
+  const entry = lstatSync(path);
+  if (!entry.isDirectory() || entry.isSymbolicLink()) fail(`${label} is invalid`);
+}
+
+function assertRegularSingleLink(path, label) {
+  const entry = lstatSync(path);
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) fail(`${label} is invalid`);
+}
+
+function assertWindowsGenerationLayout(stageRoot, generationId) {
+  const payloadRoot = join(resolve(stageRoot), "payload", "Keiko");
+  const payloadEntries = readdirSync(payloadRoot).sort((left, right) =>
+    left.localeCompare(right, "en-US"),
+  );
+  const allowedPayloadEntries = new Set([".portable", "Keiko.exe", "support"]);
+  if (
+    !payloadEntries.includes(".portable") ||
+    !payloadEntries.includes("Keiko.exe") ||
+    payloadEntries.some((name) => !allowedPayloadEntries.has(name))
+  ) {
+    fail("complete Windows payload contains an unexpected flat-layout entry");
+  }
+  assertRegularSingleLink(join(payloadRoot, "Keiko.exe"), "primary Keiko.exe");
+  const portableRoot = join(payloadRoot, ".portable");
+  assertDirectoryEntry(portableRoot, "Windows portable metadata root");
+  const portableEntries = readdirSync(portableRoot).sort((left, right) =>
+    left.localeCompare(right, "en-US"),
+  );
+  const allowedPortableEntries = new Set(["generations", "setup-manifest.json"]);
+  if (
+    !portableEntries.includes("generations") ||
+    portableEntries.some((name) => !allowedPortableEntries.has(name))
+  ) {
+    fail("complete Windows portable metadata contains an unexpected entry");
+  }
+  const generationsRoot = join(portableRoot, "generations");
+  assertDirectoryEntry(generationsRoot, "Windows generations root");
+  if (readdirSync(generationsRoot).join("\0") !== generationId) {
+    fail("complete Windows payload must contain exactly its bound generation");
+  }
+  assertDirectoryEntry(generationRoot(stageRoot, generationId), "bound Windows generation");
+  if (portableEntries.includes("setup-manifest.json")) {
+    assertRegularSingleLink(join(portableRoot, "setup-manifest.json"), "Windows setup manifest");
+  }
+  if (payloadEntries.includes("support")) {
+    const supportRoot = join(payloadRoot, "support");
+    assertDirectoryEntry(supportRoot, "Windows support launcher root");
+    if (readdirSync(supportRoot).join("\0") !== "keiko-support.cmd") {
+      fail("Windows support launcher root contains an unexpected entry");
+    }
+    assertRegularSingleLink(join(supportRoot, "keiko-support.cmd"), "Windows support launcher");
+  }
+}
+
+export async function closeWindowsGenerationDirectory(
+  stageRoot,
+  { hashTree = hashPortableHandoffTree } = {},
+) {
+  const stagingRoot = generationStagingRoot(stageRoot);
+  const hashOptions = { deadline: Date.now() + GENERATION_HASH_TIMEOUT_MS };
+  const generationId = await hashTree(stagingRoot, hashOptions);
+  assertGenerationId(generationId);
+  const destination = generationRoot(stageRoot, generationId);
+  mkdirSync(dirname(destination), { recursive: true });
+  if (existsSync(destination)) fail("Windows generation destination already exists");
+  renameSync(stagingRoot, destination);
+  if ((await hashTree(destination, hashOptions)) !== generationId) {
+    fail("Windows generation changed after relocation");
+  }
+  return generationId;
+}
+
+export function inventoryWindowsPortableCompletePeFiles(stageRoot, generationId) {
+  const payloadRoot = join(resolve(stageRoot), "payload", "Keiko");
+  assertWindowsGenerationLayout(stageRoot, assertGenerationId(generationId));
+  const inventory = inventoryPeFiles(payloadRoot);
+  const prefix = `.portable/generations/${generationId}/`;
+  const paths = inventory.files.map((file) => file.relativePath);
+  if (!paths.includes("Keiko.exe")) fail("primary Keiko.exe is missing from the PE inventory");
+  if (paths.some((path) => path !== "Keiko.exe" && !path.startsWith(prefix))) {
+    fail("complete Windows PE inventory escapes the generation and root launcher");
+  }
+  return inventory;
+}
+
+export function completeInventoryMatchesGeneration(expected, actual, generationId, launcherSha256) {
+  const prefix = `.portable/generations/${generationId}/`;
+  if (actual.files.length !== expected.files.length + 1 || !SHA256_PATTERN.test(launcherSha256)) {
+    return false;
+  }
+  const actualByPath = new Map(actual.files.map((file) => [file.relativePath, file.sha256]));
+  return (
+    actualByPath.get("Keiko.exe") === launcherSha256 &&
+    expected.files.every(
+      (file) => actualByPath.get(`${prefix}${file.relativePath}`) === file.sha256,
+    )
+  );
+}
+
+async function closeGenerationCommand(options) {
   const stageRoot = resolve(required(options, "stage-root"));
   verifyInventoryCommand(options);
+  const manifestPath = join(stageRoot, "manifest", "portable-manifest.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+  const verificationInputPath = resolve(required(options, "verification-input"));
+  const input = assertWindowsProductionVerificationInput(verificationInputPath, manifest);
+  const expected = authenticatedVerificationInventory(options, input);
+  applyWindowsProductionState(manifest, input);
+  markNativeHelpersVerified(manifest);
+  bindRuntimeAttestation(stageRoot, manifest);
+  assertQualifiedActivationUnchanged(stageRoot, manifest);
+  if (
+    !inventoriesMatch(
+      expected,
+      inventoryWindowsPortableCorePeFiles(generationStagingRoot(stageRoot)),
+    )
+  ) {
+    fail("generation PE inventory changed during final binding");
+  }
+  const generationId = await closeWindowsGenerationDirectory(stageRoot);
+  buildWindowsGenerationLauncher(join(stageRoot, "payload", "Keiko", "Keiko.exe"), generationId);
+  writeExclusive(resolve(required(options, "launcher-catalog")), "payload/Keiko/Keiko.exe\n");
+  writeExclusive(resolve(required(options, "generation-output")), `${generationId}\n`);
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  console.log(`windows-portable-signing: closed generation ${generationId}`);
+}
+
+function completeInventoryCommand(options) {
+  const stageRoot = resolve(required(options, "stage-root"));
+  const generationId = assertGenerationId(required(options, "generation-id"));
+  const expected = readWindowsPortablePeInventory(required(options, "expected-inventory"));
+  const actual = inventoryWindowsPortableCompletePeFiles(stageRoot, generationId);
+  const manifest = JSON.parse(
+    readFileSync(join(stageRoot, "manifest", "portable-manifest.json"), "utf8"),
+  );
+  const launcherSha256 =
+    manifest.windowsGeneration?.launcherSha256 ?? required(options, "launcher-sha256");
+  if (!completeInventoryMatchesGeneration(expected, actual, generationId, launcherSha256)) {
+    fail("complete Windows PE inventory does not match the closed generation");
+  }
+  writeFileSync(resolve(required(options, "inventory")), `${JSON.stringify(actual, null, 2)}\n`, {
+    mode: 0o600,
+  });
+}
+
+export async function verifyClosedWindowsGeneration(stageRootValue, manifest) {
+  const stageRoot = resolve(stageRootValue);
+  const binding = manifest.windowsGeneration;
+  const resourceRoot = portableResourceRoot(stageRoot, WINDOWS_TARGET, manifest);
+  assertWindowsGenerationLayout(stageRoot, binding.treeSha256);
+  const digest = await hashPortableHandoffTree(resourceRoot, {
+    deadline: Date.now() + GENERATION_HASH_TIMEOUT_MS,
+  });
+  if (digest !== binding.treeSha256) fail("closed Windows generation digest mismatch");
+  const launcherPath = join(stageRoot, "payload", "Keiko", binding.launcherPath);
+  assertRegularSingleLink(launcherPath, "primary Keiko.exe");
+  if (sha256(readFileSync(launcherPath)) !== binding.launcherSha256) {
+    fail("root Windows launcher digest does not match the generation binding");
+  }
+  const setupManifestPath = join(stageRoot, "payload", "Keiko", ".portable", "setup-manifest.json");
+  assertRegularSingleLink(setupManifestPath, "Windows setup manifest");
+  let setupManifest;
+  try {
+    setupManifest = JSON.parse(readFileSync(setupManifestPath, "utf8"));
+    validateWindowsRootSetupManifest(setupManifest, manifest);
+  } catch {
+    fail("root Windows setup manifest does not match the generation binding");
+  }
+}
+
+async function verifyGenerationCommand(options) {
+  const stageRoot = resolve(required(options, "stage-root"));
+  const manifest = JSON.parse(
+    readFileSync(join(stageRoot, "manifest", "portable-manifest.json"), "utf8"),
+  );
+  await verifyClosedWindowsGeneration(stageRoot, manifest);
+}
+
+async function assertClosedGeneration(stageRoot, generationId) {
+  const root = generationRoot(stageRoot, generationId);
+  if (!existsSync(root) || existsSync(generationStagingRoot(stageRoot))) {
+    fail("closed Windows generation layout is invalid");
+  }
+  const digest = await hashPortableHandoffTree(root, {
+    deadline: Date.now() + GENERATION_HASH_TIMEOUT_MS,
+  });
+  if (digest !== generationId) fail("closed Windows generation digest mismatch");
+  return root;
+}
+
+function windowsGenerationBinding(generationId, launcherSha256) {
+  return {
+    schemaVersion: 1,
+    resourceRoot: `.portable/generations/${generationId}`,
+    treeHashSchema: PORTABLE_HANDOFF_TREE_HASH_SCHEMA,
+    treeSha256: generationId,
+    launcherPath: "Keiko.exe",
+    launcherSha256,
+  };
+}
+
+function bindWindowsGenerationManifest(stageRoot, manifest, generationId, inventory) {
+  const launcher = inventory.files.find((file) => file.relativePath === "Keiko.exe");
+  if (launcher === undefined) fail("signed root launcher is missing");
+  manifest.schemaVersion = WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION;
+  manifest.windowsGeneration = windowsGenerationBinding(generationId, launcher.sha256);
+  manifest.provenance.windowsGeneration = globalThis.structuredClone(manifest.windowsGeneration);
+  manifest.releaseImpact.reviewedBinding.windowsGeneration = globalThis.structuredClone(
+    manifest.windowsGeneration,
+  );
+  stageWindowsPortableRootFiles(join(stageRoot, "payload", "Keiko"), manifest.windowsGeneration);
+}
+
+async function archiveClosedWindowsStage(stageRoot, manifest) {
+  const archivePath = join(stageRoot, manifest.artifact.assetName);
+  rmSync(archivePath, { force: true });
+  windowsZipAdapter().create(join(stageRoot, "payload"), "Keiko", archivePath);
+  await rebindExistingSignedArchive(stageRoot, manifest, archivePath, WINDOWS_TARGET, {
+    payloadAlreadyRebound: true,
+  });
+}
+
+function assertFinalWindowsManifest(manifest) {
+  const failures = validatePortableCandidateManifest(manifest);
+  if (
+    failures.length > 0 ||
+    manifest.schemaVersion !== WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION ||
+    manifest.security.verificationStatus !== "verified-production" ||
+    manifest.updateEligibility.requiredPredicates.platformSignatureLocallyVerified !== true
+  ) {
+    fail("production manifest did not reach the verified state");
+  }
+}
+
+async function finalizeCommand(options) {
+  const stageRoot = resolve(required(options, "stage-root"));
   const manifestPath = join(stageRoot, "manifest", "portable-manifest.json");
   const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   if (manifest.artifact?.platformTarget !== WINDOWS_TARGET)
     fail("manifest target is not Windows x64");
   const verificationInputPath = resolve(required(options, "verification-input"));
   const input = assertWindowsProductionVerificationInput(verificationInputPath, manifest);
+  const expected = authenticatedVerificationInventory(options, input);
+  const generationId = assertGenerationId(required(options, "generation-id"));
+  await assertClosedGeneration(stageRoot, generationId);
+  const actual = inventoryWindowsPortableCompletePeFiles(stageRoot, generationId);
+  if (!inventoriesMatch(expected, actual)) fail("verified PE inventory no longer matches payload");
   applyWindowsProductionState(manifest, input);
   markNativeHelpersVerified(manifest);
-  bindRuntimeAttestation(stageRoot, manifest);
-  await rebindPortableSignedArchive(stageRoot, manifest);
-  manifest.runtimeActivation.trustAnchor = "authenticode-attestor";
+  bindWindowsGenerationManifest(stageRoot, manifest, generationId, actual);
+  await assertClosedGeneration(stageRoot, generationId);
+  await archiveClosedWindowsStage(stageRoot, manifest);
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
   run(
     process.execPath,
@@ -546,33 +868,30 @@ async function finalizeCommand(options) {
     { surfaceOutputOnFailure: true },
   );
   const finalManifest = JSON.parse(readFileSync(manifestPath, "utf8"));
-  const failures = validatePortableCandidateManifest(finalManifest);
-  if (
-    failures.length > 0 ||
-    finalManifest.security.verificationStatus !== "verified-production" ||
-    finalManifest.updateEligibility.requiredPredicates.platformSignatureLocallyVerified !== true
-  ) {
-    fail("production manifest did not reach the verified state");
-  }
+  assertFinalWindowsManifest(finalManifest);
   console.log("windows-portable-signing: verified production archive finalized");
 }
 
-export const rebindArchive = rebindPortableSignedArchive;
-
 export async function main(argv = process.argv.slice(2)) {
   const { command, options } = parseArgs(argv);
-  if (command === "validate-config") validateAzureArtifactSigningConfig(process.env);
-  else if (command === "inventory") inventoryCommand(options);
-  else if (command === "verify-inventory") verifyInventoryCommand(options);
-  else if (command === "compare-paths") comparePathsCommand(options);
-  else if (command === "compare-with-attestation") compareWithAttestationCommand(options);
-  else if (command === "verify-setup-scope") verifySetupScopeCommand(options);
-  else if (command === "prepare-qualified-payload") prepareQualifiedPayloadCommand(options);
-  else if (command === "finalize") await finalizeCommand(options);
-  else
-    fail(
-      "command must be validate-config, inventory, compare-paths, compare-with-attestation, verify-inventory, verify-setup-scope, prepare-qualified-payload, or finalize",
-    );
+  const syncCommands = new Map([
+    ["validate-config", () => validateAzureArtifactSigningConfig(process.env)],
+    ["inventory", inventoryCommand],
+    ["verify-inventory", verifyInventoryCommand],
+    ["compare-paths", comparePathsCommand],
+    ["compare-with-attestation", compareWithAttestationCommand],
+    ["inventory-complete", completeInventoryCommand],
+    ["verify-setup-scope", verifySetupScopeCommand],
+    ["prepare-qualified-payload", prepareQualifiedPayloadCommand],
+  ]);
+  const syncCommand = syncCommands.get(command);
+  if (syncCommand !== undefined) return syncCommand(options);
+  if (command === "close-generation") return closeGenerationCommand(options);
+  if (command === "verify-generation") return verifyGenerationCommand(options);
+  if (command === "finalize") return finalizeCommand(options);
+  fail(
+    "command must be validate-config, inventory, compare-paths, compare-with-attestation, close-generation, inventory-complete, verify-generation, verify-inventory, verify-setup-scope, prepare-qualified-payload, or finalize",
+  );
 }
 
 if (process.argv[1] !== undefined && resolve(process.argv[1]) === resolve(import.meta.filename)) {

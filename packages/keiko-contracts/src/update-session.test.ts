@@ -136,9 +136,17 @@ describe("update session portable contract", () => {
     expect(activation).not.toHaveProperty("launcherPath");
   });
 
-  it("keeps session start requests stable-only", () => {
-    expect(parseUpdateSessionStartRequest({ targetVersion: "0.2.14" }).ok).toBe(true);
-    expect(parseUpdateSessionStartRequest({ targetVersion: "0.2.14-beta.1" }).ok).toBe(false);
+  it("accepts only an opaque server-issued execution claim", () => {
+    const claim = {
+      candidateId: "candidate-1",
+      confirmationDigest: "a".repeat(64),
+      executionToken: "b".repeat(64),
+    };
+    expect(parseUpdateSessionStartRequest(claim)).toEqual({ ok: true, value: claim });
+    expect(parseUpdateSessionStartRequest({ targetVersion: "0.2.14" }).ok).toBe(false);
+    expect(
+      parseUpdateSessionStartRequest({ ...claim, executionToken: "caller-controlled" }).ok,
+    ).toBe(false);
   });
 });
 

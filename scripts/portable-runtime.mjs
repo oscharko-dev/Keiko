@@ -8,6 +8,10 @@ import {
 import { sha256 } from "./lib/digest.mjs";
 
 export const PORTABLE_MANIFEST_SCHEMA_VERSION = 1;
+export const WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION = 2;
+export const WINDOWS_GENERATION_BINDING_SCHEMA_VERSION = 1;
+export const WINDOWS_GENERATION_TREE_HASH_SCHEMA = "KHT1";
+export const WINDOWS_GENERATION_STAGING_RELATIVE_PATH = ".portable/generation-staging";
 export const WINDOWS_PORTABLE_SETUP_ASSET_NAME = "keiko-windows-x64-setup.exe";
 
 // Shared bounds for the platform-specific bounded payload-tree walkers (Windows PE and macOS
@@ -94,6 +98,7 @@ export const PORTABLE_MANIFEST_VALIDATION_CONTEXTS = Object.freeze([
   "evaluation",
   "candidate",
   "published",
+  "published-release-trust",
   "published-contract",
 ]);
 export const PORTABLE_VERIFICATION_REASON_CODES = Object.freeze([
@@ -183,6 +188,7 @@ function matchesAnyPattern(value, patterns) {
 const PRIVATE_PATH_PATTERN =
   /(?:^|[\s"'`])(?:\/Users\/|\/home\/|\/private\/|\/var\/folders\/|[A-Za-z]:\\Users\\|\\\\[^\\]+\\[^\\]+)/u;
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
+const WINDOWS_GENERATION_RESOURCE_ROOT_PATTERN = /^\.portable\/generations\/([a-f0-9]{64})$/u;
 const PLACEHOLDER_DIGEST_PATTERN = /^64-hex-[a-z0-9-]+$/u;
 const COMMIT_PATTERN = /^[a-f0-9]{40}$|^40-hex-[a-z0-9-]+$/u;
 const STRICT_COMMIT_PATTERN = /^[a-f0-9]{40}$/u;
@@ -308,7 +314,9 @@ function usesZeroReleaseIdentity(options) {
 // qualification gates and nothing else. Every digest, size, containment and provenance predicate
 // stays outside this Set and therefore stays mandatory on every lane.
 function requiresProductionVerification(options) {
-  return !new Set(["staging", "non-production", "evaluation"]).has(options.context);
+  return !new Set(["staging", "non-production", "evaluation", "published-release-trust"]).has(
+    options.context,
+  );
 }
 
 function push(failures, path, message) {
@@ -522,6 +530,90 @@ function validateProvenance(manifest, failures, options) {
   }
   relativePathAt(provenance, "provenanceStatementPath", "provenance", failures);
   digestAt(provenance, "provenanceStatementSha256", "provenance", failures, options);
+  validateWindowsGenerationCopies(manifest, provenance, "provenance", failures, options);
+}
+
+function validateWindowsGenerationCopies(manifest, container, path, failures, options) {
+  const isWindows = manifest.artifact?.platformTarget === "windows-x64";
+  const usesGenerationLayout = manifest.schemaVersion === WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION;
+  if (!isWindows || !usesGenerationLayout) {
+    if (container.windowsGeneration !== undefined) {
+      push(failures, `${path}.windowsGeneration`, "is supported only by Windows schema 2");
+    }
+    return;
+  }
+  const generation = validateWindowsGenerationBinding(
+    container.windowsGeneration,
+    `${path}.windowsGeneration`,
+    failures,
+    options,
+  );
+  if (!bindingValuesMatch(generation, manifest.windowsGeneration)) {
+    push(failures, `${path}.windowsGeneration`, "does not match manifest");
+  }
+}
+
+function validateWindowsGenerationBinding(value, path, failures, options) {
+  if (!isRecord(value)) {
+    push(failures, path, "must be an object");
+    return {};
+  }
+  exactKeysAt(
+    value,
+    [
+      "schemaVersion",
+      "resourceRoot",
+      "treeHashSchema",
+      "treeSha256",
+      "launcherPath",
+      "launcherSha256",
+    ],
+    path,
+    failures,
+  );
+  literalAt(value, "schemaVersion", WINDOWS_GENERATION_BINDING_SCHEMA_VERSION, path, failures);
+  const resourceRoot = stringAt(value, "resourceRoot", path, failures);
+  const resourceMatch = WINDOWS_GENERATION_RESOURCE_ROOT_PATTERN.exec(resourceRoot);
+  if (resourceMatch === null)
+    push(failures, `${path}.resourceRoot`, "must name one KHT1 generation");
+  literalAt(value, "treeHashSchema", WINDOWS_GENERATION_TREE_HASH_SCHEMA, path, failures);
+  const treeSha256 = digestAt(value, "treeSha256", path, failures, options);
+  if (resourceMatch?.[1] !== undefined && resourceMatch[1] !== treeSha256) {
+    push(failures, `${path}.resourceRoot`, "must end with treeSha256");
+  }
+  literalAt(value, "launcherPath", "Keiko.exe", path, failures);
+  digestAt(value, "launcherSha256", path, failures, options);
+  return value;
+}
+
+export function windowsGenerationBindingValidationFailures(
+  value,
+  { expected, path = "windowsGeneration" } = {},
+) {
+  const failures = [];
+  const binding = validateWindowsGenerationBinding(value, path, failures, {
+    allowPlaceholders: false,
+  });
+  if (expected !== undefined && !bindingValuesMatch(binding, expected)) {
+    push(failures, path, "does not match expected binding");
+  }
+  return failures;
+}
+
+function validateWindowsGeneration(manifest, failures, options) {
+  const isWindows = manifest.artifact?.platformTarget === "windows-x64";
+  if (manifest.schemaVersion === WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION && isWindows) {
+    validateWindowsGenerationBinding(
+      manifest.windowsGeneration,
+      "windowsGeneration",
+      failures,
+      options,
+    );
+    return;
+  }
+  if (manifest.windowsGeneration !== undefined) {
+    push(failures, "windowsGeneration", "is supported only by Windows schema 2");
+  }
 }
 
 function validateRuntime(manifest, failures, options) {
@@ -572,9 +664,11 @@ function validateRuntimeActivation(manifest, failures, options) {
  * the staging one (ADR-0163 D9).
  */
 function validateRuntimeActivationTrustAnchor(manifest, trustAnchor, failures, options) {
-  const preSigningAnchor = { staging: "unverified-staging", evaluation: "evaluation-unqualified" }[
-    options.context
-  ];
+  const preSigningAnchor = {
+    staging: "unverified-staging",
+    evaluation: "evaluation-unqualified",
+    "published-release-trust": "evaluation-unqualified",
+  }[options.context];
   if (preSigningAnchor !== undefined) {
     if (trustAnchor !== preSigningAnchor) {
       push(failures, "runtimeActivation.trustAnchor", `must be ${preSigningAnchor}`);
@@ -1542,7 +1636,9 @@ function validateLifecycleVerificationContext(policy, status, path, options, fai
 
 function lifecycleVerificationExpectation(context) {
   if (context === "staging") return { policy: "staging", status: "unverified-staging" };
-  if (context === "evaluation") return { policy: "evaluation", status: "evaluation-unqualified" };
+  if (new Set(["evaluation", "published-release-trust"]).has(context)) {
+    return { policy: "evaluation", status: "evaluation-unqualified" };
+  }
   return { policy: "production", status: "verified-production" };
 }
 
@@ -1747,11 +1843,18 @@ function validateReviewedBinding(manifest, binding, failures, options) {
     if (!bindingValuesMatch(binding[key], expected))
       push(failures, `releaseImpact.reviewedBinding.${key}`, "does not match manifest");
   }
+  validateWindowsGenerationCopies(
+    manifest,
+    binding,
+    "releaseImpact.reviewedBinding",
+    failures,
+    options,
+  );
   validatePublishedSetupAssetBinding(manifest, binding, failures, options);
 }
 
 function validatePublishedSetupAssetBinding(manifest, binding, failures, options) {
-  if (options.context !== "published") return;
+  if (!new Set(["published", "published-release-trust"]).has(options.context)) return;
   const path = "releaseImpact.reviewedBinding.setupAsset";
   if (manifest.artifact?.platformTarget !== "windows-x64") {
     if (binding.setupAsset !== undefined) push(failures, path, "is supported only for Windows x64");
@@ -1889,7 +1992,7 @@ function validateUpdateEligibility(manifest, failures, options) {
   if (!booleanAt(update, "eligibleAfterSetupOnly", "updateEligibility", failures))
     push(failures, "updateEligibility.eligibleAfterSetupOnly", "must be true");
   validateUpdatePredicates(manifest, update, failures, options);
-  validateManualOnlyWhen(update, failures);
+  validateManualOnlyWhen(update, failures, options);
 }
 
 function validateUpdatePredicates(manifest, update, failures, options) {
@@ -1921,15 +2024,23 @@ function validateUpdatePredicates(manifest, update, failures, options) {
   }
 }
 
-function validateManualOnlyWhen(update, failures) {
+function validateManualOnlyWhen(update, failures, options) {
   if (!Array.isArray(update.manualOnlyWhen) || update.manualOnlyWhen.length === 0) {
     push(failures, "updateEligibility.manualOnlyWhen", "must list manual-only blockers");
   } else if (
     update.manualOnlyWhen.some((entry) => typeof entry !== "string" || entry.length === 0)
   ) {
     push(failures, "updateEligibility.manualOnlyWhen", "must contain non-empty strings");
-  } else if (!update.manualOnlyWhen.includes("signature-or-notarization-cannot-be-verified")) {
-    push(failures, "updateEligibility.manualOnlyWhen", "must include signature blocker");
+  } else {
+    const predicates = update.requiredPredicates;
+    const releaseTrustRequired = isRecord(predicates) && predicates.releaseTrustRequired === true;
+    const blocker =
+      options.context === "published-release-trust" || releaseTrustRequired
+        ? "release-trust-cannot-be-verified"
+        : "signature-or-notarization-cannot-be-verified";
+    if (!update.manualOnlyWhen.includes(blocker)) {
+      push(failures, "updateEligibility.manualOnlyWhen", `must include ${blocker}`);
+    }
   }
 }
 
@@ -2069,7 +2180,7 @@ function normalizedValidationOptions(options) {
 }
 
 function validateApiIdentity(options, failures) {
-  if (options.context !== "published") return;
+  if (!new Set(["published", "published-release-trust"]).has(options.context)) return;
   if (
     !isRecord(options.apiIdentity) ||
     !Number.isSafeInteger(options.apiIdentity.releaseId) ||
@@ -2089,8 +2200,13 @@ export function validatePortableManifest(manifest, options = {}) {
     return ["validation.context: is unsupported"];
   }
   validateApiIdentity(normalized, failures);
-  if (manifest.schemaVersion !== PORTABLE_MANIFEST_SCHEMA_VERSION)
-    push(failures, "schemaVersion", "must be 1");
+  const windowsSchema = manifest.artifact?.platformTarget === "windows-x64";
+  if (
+    manifest.schemaVersion !== PORTABLE_MANIFEST_SCHEMA_VERSION &&
+    !(windowsSchema && manifest.schemaVersion === WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION)
+  ) {
+    push(failures, "schemaVersion", windowsSchema ? "must be 1 or 2" : "must be 1");
+  }
   validateProduct(manifest, failures);
   validateRelease(manifest, failures, normalized);
   validateArtifact(manifest, failures, normalized);
@@ -2099,6 +2215,7 @@ export function validatePortableManifest(manifest, options = {}) {
   validateRuntimeActivation(manifest, failures, normalized);
   validateRuntimeAttestation(manifest, failures, normalized);
   validateRuntimeQualification(manifest, failures, normalized);
+  validateWindowsGeneration(manifest, failures, normalized);
   validateSidecarRuntimes(manifest, failures, normalized);
   validateNativeHelpers(manifest, failures, normalized);
   validateNativeAddons(manifest, failures, normalized);
@@ -2136,6 +2253,22 @@ export function validatePortableEvaluationManifest(manifest, options = {}) {
   });
 }
 
+/** A stable-tag candidate is unsigned only until the protected publisher binds and signs it. */
+export function validatePortableReleaseTrustCandidateManifest(manifest, options = {}) {
+  const failures = validatePortableEvaluationManifest(manifest, options);
+  if (manifest?.updateEligibility?.requiredPredicates?.releaseTrustRequired !== true) {
+    push(
+      failures,
+      "updateEligibility.requiredPredicates.releaseTrustRequired",
+      "must be true for a stable release-trust candidate",
+    );
+  }
+  if (manifest?.releaseTrust !== undefined) {
+    push(failures, "releaseTrust", "must be absent before the protected publisher signs it");
+  }
+  return failures;
+}
+
 export function validatePortableCandidateManifest(manifest, options = {}) {
   return validatePortableManifest(manifest, {
     ...options,
@@ -2145,10 +2278,14 @@ export function validatePortableCandidateManifest(manifest, options = {}) {
 }
 
 export function validatePortablePublishedManifest(manifest, apiIdentity, options = {}) {
+  const context =
+    manifest?.security?.verificationPolicy === "evaluation" && isRecord(manifest?.releaseTrust)
+      ? "published-release-trust"
+      : "published";
   return validatePortableManifest(manifest, {
     ...options,
     apiIdentity,
-    context: "published",
+    context,
     requireNativeHelpers: true,
   });
 }

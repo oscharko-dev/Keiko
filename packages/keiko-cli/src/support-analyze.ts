@@ -62,12 +62,15 @@ const KNOWN_ENVELOPE_KEYS: ReadonlySet<string> = new Set([
   "category",
   "op",
   "correlationId",
+  "parentCorrelationId",
   "durationMs",
   "status",
   "errorKind",
   "frames",
   "causeChain",
 ]);
+
+type ServerLogStatus = number | string;
 
 export interface ServerLogLineView {
   readonly toolCatalog?: ToolCatalogLogEvidence;
@@ -78,9 +81,10 @@ export interface ServerLogLineView {
   readonly level?: string | undefined;
   readonly category: string;
   readonly op: string;
+  readonly parentCorrelationId?: string | undefined;
   readonly errorKind?: string | undefined;
   readonly durationMs?: number | undefined;
-  readonly status?: number | undefined;
+  readonly status?: ServerLogStatus | undefined;
   readonly frames?: readonly string[] | undefined;
   // Sibling of `frames`: `redactLogObject` special-cases both by name the same way (ADR-0173
   // §4.4), and `formatServerLogLine` flattens both onto the top level of the written JSON.
@@ -98,6 +102,12 @@ export interface LogTimeline {
   // Wave 6: the union of every `frames[]` entry seen across this timeline's lines, occurrence
   // order, capped at `MAX_TIMELINE_FRAMES`. Omitted (never `[]`) when no line carried frames.
   readonly frames?: readonly string[] | undefined;
+}
+
+export interface UpdateAttemptTimeline extends LogTimeline {
+  readonly candidateId: string;
+  readonly correlationIds: readonly string[];
+  readonly sessionId?: string | undefined;
 }
 
 // A process lifetime summarised across ALL its lines, not only the ones that carry a
@@ -133,6 +143,10 @@ export interface AnalyzeAllResult {
   // first-occurrence order — always present, empty when there are no parsed lines, the same
   // "real empty state, not a placeholder" convention `processes`/`timelines` already use.
   readonly clusters: readonly OpCluster[];
+  // Update execution begins on a candidate-scoped preflight correlation and continues on the
+  // originating HTTP request correlation. This projection joins only explicit candidate/session
+  // identity fields emitted by production; it never guesses from target version or timestamps.
+  readonly updateAttempts: readonly UpdateAttemptTimeline[];
 }
 
 export type SourceKind = "bundle" | "raw-log";
@@ -181,6 +195,12 @@ function optionalNumber(record: Record<string, unknown>, key: string): number | 
 
 function optionalStringArray(value: unknown): readonly string[] | undefined {
   return isStringArray(value) ? value : undefined;
+}
+
+function viewStatus(op: string, fields: Record<string, unknown>): number | string | undefined {
+  const numeric = optionalNumber(fields, "status");
+  if (numeric !== undefined) return numeric;
+  return op.startsWith("update.") ? optionalString(fields, "status") : undefined;
 }
 
 // `status` is reserved ONLY when it actually carries the envelope's own numeric HTTP-like status
@@ -242,6 +262,19 @@ function identityFields(identity: Identity): Pick<ServerLogLineView, "pid" | "in
   };
 }
 
+function parentCorrelationFields(
+  record: Record<string, unknown>,
+): Pick<ServerLogLineView, "parentCorrelationId"> {
+  const parentCorrelationId = optionalString(record, "parentCorrelationId");
+  return parentCorrelationId === undefined ? {} : { parentCorrelationId };
+}
+
+function toolCatalogViewFields(
+  toolCatalog: ToolCatalogLogEvidence | undefined,
+): Pick<ServerLogLineView, "toolCatalog"> {
+  return toolCatalog === undefined ? {} : { toolCatalog };
+}
+
 function buildView(
   ts: string,
   category: string,
@@ -259,7 +292,7 @@ function buildView(
   const level = optionalString(record, "level");
   const errorKind = optionalString(fields, "errorKind");
   const durationMs = optionalNumber(fields, "durationMs");
-  const status = optionalNumber(fields, "status");
+  const status = viewStatus(op, fields);
   const frames = optionalStringArray(fields.frames);
   const causeChain = optionalStringArray(fields.causeChain);
   const extra = toolCatalog === undefined ? extraFields(record) : undefined;
@@ -268,7 +301,8 @@ function buildView(
     category,
     op,
     ...identityFields(identity),
-    ...(toolCatalog === undefined ? {} : { toolCatalog }),
+    ...toolCatalogViewFields(toolCatalog),
+    ...parentCorrelationFields(record),
     ...(level === undefined ? {} : { level }),
     ...(errorKind === undefined ? {} : { errorKind }),
     ...(durationMs === undefined ? {} : { durationMs }),
@@ -345,6 +379,201 @@ function groupByCorrelationId(records: readonly ParsedLine[]): ReadonlyMap<strin
     }
   }
   return groups;
+}
+
+function updateIdentity(
+  view: ServerLogLineView,
+  key: "candidateId" | "sessionId",
+): string | undefined {
+  if (!view.op.startsWith("update.")) return undefined;
+  const value = view.extra?.[key];
+  return typeof value === "string" && value.length > 0 && value.length <= 256 ? value : undefined;
+}
+
+interface UpdateAttemptIndexes {
+  readonly candidateRecords: ReadonlyMap<string, readonly ParsedLine[]>;
+  readonly correlationRecords: ReadonlyMap<string, readonly ParsedLine[]>;
+  readonly childCorrelations: ReadonlyMap<string, readonly ChildCorrelation[]>;
+}
+
+interface ChildCorrelation {
+  readonly correlationId: string;
+  readonly fileIndex: number;
+}
+
+function appendIndexEntry(index: Map<string, ParsedLine[]>, key: string, record: ParsedLine): void {
+  const entries = index.get(key);
+  if (entries === undefined) {
+    index.set(key, [record]);
+  } else {
+    entries.push(record);
+  }
+}
+
+function appendChildCorrelation(
+  index: Map<string, ChildCorrelation[]>,
+  parentCorrelationId: string,
+  child: ChildCorrelation,
+): void {
+  const children = index.get(parentCorrelationId);
+  if (children === undefined) {
+    index.set(parentCorrelationId, [child]);
+  } else {
+    children.push(child);
+  }
+}
+
+function buildUpdateAttemptIndexes(records: readonly ParsedLine[]): UpdateAttemptIndexes {
+  const candidateRecords = new Map<string, ParsedLine[]>();
+  const correlationRecords = new Map<string, ParsedLine[]>();
+  const childCorrelations = new Map<string, ChildCorrelation[]>();
+  for (const record of records) {
+    const candidateId = updateIdentity(record.view, "candidateId");
+    if (candidateId !== undefined) appendIndexEntry(candidateRecords, candidateId, record);
+    if (record.correlationId !== undefined) {
+      appendIndexEntry(correlationRecords, record.correlationId, record);
+      if (record.view.parentCorrelationId !== undefined) {
+        appendChildCorrelation(childCorrelations, record.view.parentCorrelationId, {
+          correlationId: record.correlationId,
+          fileIndex: record.fileIndex,
+        });
+      }
+    }
+  }
+  return { candidateRecords, correlationRecords, childCorrelations };
+}
+
+interface PendingCorrelation extends ChildCorrelation {
+  readonly pass: number;
+}
+
+function comparePendingCorrelations(a: PendingCorrelation, b: PendingCorrelation): number {
+  return a.pass === b.pass ? a.fileIndex - b.fileIndex : a.pass - b.pass;
+}
+
+function pendingCorrelationAt(
+  queue: readonly PendingCorrelation[],
+  index: number,
+): PendingCorrelation {
+  const entry = queue.at(index);
+  if (entry === undefined) {
+    throw new Error("Update correlation priority queue invariant failed.");
+  }
+  return entry;
+}
+
+function addPendingCorrelation(queue: PendingCorrelation[], entry: PendingCorrelation): void {
+  queue.push(entry);
+  let index = queue.length - 1;
+  while (index > 0) {
+    const parentIndex = Math.floor((index - 1) / 2);
+    const parent = pendingCorrelationAt(queue, parentIndex);
+    if (comparePendingCorrelations(parent, entry) <= 0) break;
+    queue[index] = parent;
+    index = parentIndex;
+  }
+  queue[index] = entry;
+}
+
+function removePendingCorrelation(queue: PendingCorrelation[]): PendingCorrelation | undefined {
+  const first = queue[0];
+  const last = queue.pop();
+  if (first === undefined || last === undefined) return undefined;
+  if (queue.length === 0) return first;
+  let index = 0;
+  while (index * 2 + 1 < queue.length) {
+    const leftIndex = index * 2 + 1;
+    const rightIndex = leftIndex + 1;
+    const left = pendingCorrelationAt(queue, leftIndex);
+    const right = queue.at(rightIndex);
+    const childIndex =
+      right !== undefined && comparePendingCorrelations(right, left) < 0 ? rightIndex : leftIndex;
+    const child = pendingCorrelationAt(queue, childIndex);
+    if (comparePendingCorrelations(last, child) <= 0) break;
+    queue[index] = child;
+    index = childIndex;
+  }
+  queue[index] = last;
+  return first;
+}
+
+function reachableCorrelationIds(
+  roots: readonly ParsedLine[],
+  childCorrelations: ReadonlyMap<string, readonly ChildCorrelation[]>,
+): ReadonlySet<string> {
+  const correlationIds = new Set<string>();
+  const pending: string[] = [];
+  for (const root of roots) {
+    if (root.correlationId !== undefined && !correlationIds.has(root.correlationId)) {
+      correlationIds.add(root.correlationId);
+      pending.push(root.correlationId);
+    }
+  }
+  const queue: PendingCorrelation[] = [];
+  const bestPending = new Map<string, PendingCorrelation>();
+  const scheduleChildren = (
+    correlationId: string,
+    parent: PendingCorrelation | undefined,
+  ): void => {
+    for (const child of childCorrelations.get(correlationId) ?? []) {
+      if (correlationIds.has(child.correlationId)) continue;
+      const entry = {
+        ...child,
+        pass:
+          parent === undefined || child.fileIndex > parent.fileIndex
+            ? (parent?.pass ?? 1)
+            : parent.pass + 1,
+      };
+      const best = bestPending.get(entry.correlationId);
+      if (best === undefined || comparePendingCorrelations(entry, best) < 0) {
+        bestPending.set(entry.correlationId, entry);
+        addPendingCorrelation(queue, entry);
+      }
+    }
+  };
+  for (const correlationId of pending) scheduleChildren(correlationId, undefined);
+  let next = removePendingCorrelation(queue);
+  while (next !== undefined) {
+    if (bestPending.get(next.correlationId) === next) {
+      correlationIds.add(next.correlationId);
+      scheduleChildren(next.correlationId, next);
+    }
+    next = removePendingCorrelation(queue);
+  }
+  return correlationIds;
+}
+
+function orderedAttemptLines(
+  candidateRecords: readonly ParsedLine[],
+  correlationIds: ReadonlySet<string>,
+  correlationRecords: ReadonlyMap<string, readonly ParsedLine[]>,
+): readonly ParsedLine[] {
+  const linesByFileIndex = new Map<number, ParsedLine>();
+  for (const record of candidateRecords) linesByFileIndex.set(record.fileIndex, record);
+  for (const correlationId of correlationIds) {
+    for (const record of correlationRecords.get(correlationId) ?? []) {
+      linesByFileIndex.set(record.fileIndex, record);
+    }
+  }
+  return [...linesByFileIndex.values()].sort((a, b) => a.fileIndex - b.fileIndex);
+}
+
+function buildUpdateAttempts(records: readonly ParsedLine[]): readonly UpdateAttemptTimeline[] {
+  const { candidateRecords, correlationRecords, childCorrelations } =
+    buildUpdateAttemptIndexes(records);
+  return [...candidateRecords].map(([candidateId, roots]) => {
+    const correlationIds = reachableCorrelationIds(roots, childCorrelations);
+    const attemptLines = orderedAttemptLines(roots, correlationIds, correlationRecords);
+    const sessionId = attemptLines
+      .map((record) => updateIdentity(record.view, "sessionId"))
+      .find((value) => value !== undefined);
+    return {
+      ...buildTimeline(candidateId, attemptLines),
+      candidateId,
+      correlationIds: [...correlationIds],
+      ...(sessionId === undefined ? {} : { sessionId }),
+    };
+  });
 }
 
 function orZero(value: number | undefined): number {
@@ -605,7 +834,27 @@ export function analyzeLogText(
   const legacyLineCount = parsedLines.filter((parsed) => !parsed.hasFullIdentity).length;
   const warnings = buildWarnings(legacyLineCount);
   const clusters = buildOpClusters(parsedLines);
-  return { timelines, malformedLineCount, processes, legacyLineCount, warnings, clusters };
+  const updateAttempts = buildUpdateAttempts(parsedLines);
+  return {
+    timelines,
+    malformedLineCount,
+    processes,
+    legacyLineCount,
+    warnings,
+    clusters,
+    updateAttempts,
+  };
+}
+
+export function findUpdateAttempt(
+  result: AnalyzeAllResult,
+  candidateOrCorrelationId: string,
+): UpdateAttemptTimeline | undefined {
+  return result.updateAttempts.find(
+    (attempt) =>
+      attempt.candidateId === candidateOrCorrelationId ||
+      attempt.correlationIds.includes(candidateOrCorrelationId),
+  );
 }
 
 export function findTimeline(
@@ -830,7 +1079,7 @@ function buildHttpRequestSeed(lines: readonly ServerLogLineView[]): HttpRequestS
     routeTemplate: optionalString(extra, "routeTemplate"),
     queryParamNames: optionalStringArray(extra.queryParamNames),
     responseBytes: optionalNumber(extra, "responseBytes"),
-    status: requestLine?.status,
+    status: typeof requestLine?.status === "number" ? requestLine.status : undefined,
     durationMs: requestLine?.durationMs,
     aborted: optionalBoolean(extra, "aborted"),
     frameCount,

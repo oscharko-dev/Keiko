@@ -7,11 +7,14 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayEgressConfig } from "./deps.js";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { resolvePortableAsset } from "./update-preflight-portable-evidence.js";
 import {
   type GitHubAsset,
   type PortableRelease,
+  fetchWithPortableRetry,
   portableBlocker,
+  portableFetchFailureReason,
   requiredAssetName,
 } from "./update-preflight-portable-shared.js";
 import {
@@ -25,6 +28,7 @@ const RELEASE_OWNER = "oscharko-dev";
 const RELEASE_REPO = "keiko";
 const MAX_RELEASE_METADATA_BYTES = 256_000;
 const UPDATE_PREFLIGHT_TIMEOUT_MS = 8_000;
+const PORTABLE_RELEASE_DEADLINE_MS = 30_000;
 
 interface PortableReleaseMetadata extends PortableRelease {
   readonly release: UpdatePreflightReleaseSummary;
@@ -165,17 +169,41 @@ function malformedOutcome(): PortableGitHubReleaseOutcome {
 }
 
 async function fetchLatestRelease(deps: UiHandlerDeps): Promise<LatestReleaseFetch> {
-  const response = await gatewayFetch(githubLatestReleaseUrl(), {
-    method: "GET",
-    headers: { Accept: "application/vnd.github+json", "User-Agent": "Keiko" },
-    fetchImpl: deps.gatewayReadinessFetch,
-    timeoutMs: UPDATE_PREFLIGHT_TIMEOUT_MS,
-    maxResponseBytes: MAX_RELEASE_METADATA_BYTES,
-    egress: currentGatewayEgressConfig(deps),
-  });
-  if (!response.ok) return { status: "unavailable" };
+  const deadlineAt = Date.now() + PORTABLE_RELEASE_DEADLINE_MS;
+  const response = await fetchWithPortableRetry(
+    () =>
+      gatewayFetch(githubLatestReleaseUrl(), {
+        method: "GET",
+        headers: { Accept: "application/vnd.github+json", "User-Agent": "Keiko" },
+        fetchImpl: deps.gatewayReadinessFetch,
+        timeoutMs: Math.max(1, Math.min(UPDATE_PREFLIGHT_TIMEOUT_MS, deadlineAt - Date.now())),
+        maxResponseBytes: MAX_RELEASE_METADATA_BYTES,
+        egress: currentGatewayEgressConfig(deps),
+      }),
+    { deadlineAt },
+  );
+  if (!response.ok) {
+    await response.body?.cancel();
+    return { status: "unavailable" };
+  }
   const release = validateRelease(await readJsonCapped(response, MAX_RELEASE_METADATA_BYTES));
   return release === undefined ? { status: "malformed" } : { status: "ok", release };
+}
+
+function recordPortableFetchFailure(
+  deps: UiHandlerDeps,
+  error: unknown,
+  target: UpdatePortableTarget,
+  assetKind: "release-evidence" | "release-metadata",
+): void {
+  deps.activityLog?.write({
+    category: "diagnostic",
+    correlationId: UNKNOWN_CORRELATION_ID,
+    errorKind: "PORTABLE_FETCH_FAILURE",
+    level: "warn",
+    op: "update.portable-fetch.failed",
+    extra: { assetKind, reason: portableFetchFailureReason(error), target },
+  });
 }
 
 function notNeededOutcome(
@@ -202,13 +230,19 @@ export async function fetchPortableGitHubReleaseAssets(
   currentVersion: string,
   target: UpdatePortableTarget,
 ): Promise<PortableGitHubReleaseOutcome> {
+  let result: LatestReleaseFetch;
   try {
-    const result = await fetchLatestRelease(deps);
-    if (result.status === "unavailable") return unavailableOutcome();
-    if (result.status === "malformed") return malformedOutcome();
-    if (compareSemver(result.release.targetVersion, currentVersion) <= 0) {
-      return notNeededOutcome(result.release, target);
-    }
+    result = await fetchLatestRelease(deps);
+  } catch (error) {
+    recordPortableFetchFailure(deps, error, target, "release-metadata");
+    return unavailableOutcome();
+  }
+  if (result.status === "unavailable") return unavailableOutcome();
+  if (result.status === "malformed") return malformedOutcome();
+  if (compareSemver(result.release.targetVersion, currentVersion) <= 0) {
+    return notNeededOutcome(result.release, target);
+  }
+  try {
     const resolution = await resolvePortableAsset(deps, result.release, target);
     return {
       status: "live",
@@ -218,7 +252,8 @@ export async function fetchPortableGitHubReleaseAssets(
       blockers: resolution.blockers,
       warnings: resolution.warnings,
     };
-  } catch {
+  } catch (error) {
+    recordPortableFetchFailure(deps, error, target, "release-evidence");
     return unavailableOutcome();
   }
 }

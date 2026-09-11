@@ -12,6 +12,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createLiveCspSource,
+  createPortableHandoffShutdownTrigger,
   parseUiArgs,
   runUiCli,
   startProcessHeartbeat,
@@ -20,9 +21,15 @@ import {
   type UiCliDeps,
 } from "./ui.js";
 import { DEFAULT_UI_PORT, UI_HOST } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
-import { extractInlineScriptHashes } from "@oscharko-dev/keiko-server";
-import type { ServerLogEvent, ServerLogSink, UiHandlerDeps } from "@oscharko-dev/keiko-server";
+import { buildUiHandlerDeps, extractInlineScriptHashes } from "@oscharko-dev/keiko-server";
+import type {
+  BuildHandlerDepsOptions,
+  ServerLogEvent,
+  ServerLogSink,
+  UiHandlerDeps,
+} from "@oscharko-dev/keiko-server";
 import type { CliIo } from "./runner.js";
+import { peekShutdownRequest } from "./state-paths.js";
 
 function captureIo(): { io: CliIo; out: string[]; err: string[] } {
   const out: string[] = [];
@@ -345,6 +352,469 @@ describe("runUiCli", () => {
       expect(out.join("")).toContain("http://127.0.0.1:4399");
     } finally {
       closeHandlerDeps(handlerDeps);
+    }
+  });
+
+  it("lets a process-local harness replace only handler dependency composition", async () => {
+    const { io } = captureIo();
+    const cwd = await mkdtemp(join(REAL_TMPDIR, "keiko-ui-cli-handler-deps-"));
+    const stateDir = join(cwd, ".keiko");
+    let input: BuildHandlerDepsOptions | undefined;
+    let built: UiHandlerDeps | undefined;
+    let served: UiHandlerDeps | undefined;
+    try {
+      const code = await runUiCli(
+        ["--port", "4399"],
+        io,
+        {},
+        {
+          staticRoot,
+          hashesFile: join(staticRoot, "csp-hashes.json"),
+          cwd,
+          buildHandlerDeps: (options) => {
+            input = options;
+            built = buildUiHandlerDeps(options);
+            return built;
+          },
+          createServer: ({ handlerDeps }) => {
+            served = handlerDeps;
+            return fakeServer({});
+          },
+        },
+      );
+
+      expect(code).toBe(0);
+      expect(input).toMatchObject({
+        configPath: undefined,
+        evidenceDir: undefined,
+        uiDbPath: undefined,
+        initialProjectPath: cwd,
+        env: { KEIKO_STATE_DIR: stateDir },
+        updateStartupRecovery: undefined,
+      });
+      expect(typeof input?.portableHandoffShutdown).toBe("function");
+      expect(served).toBe(built);
+    } finally {
+      closeHandlerDeps(built);
+      await rm(cwd, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps readiness closed through pre-listen and opens only after post-listen recovery", async () => {
+    const { io, out } = captureIo();
+    const launchId = "a".repeat(32);
+    const phases: string[] = [];
+    const readinessDuringListen: boolean[] = [];
+    let handlerDeps: UiHandlerDeps | undefined;
+    const code = await runUiCli(
+      ["--port", "4399"],
+      io,
+      { KEIKO_UI_LAUNCH_ID: launchId },
+      {
+        staticRoot,
+        hashesFile: join(staticRoot, "csp-hashes.json"),
+        cwd: staticRoot,
+        updateStartupRecovery: {
+          reconcile: ({ phase, current }) => {
+            phases.push(phase);
+            expect(current).toMatchObject({
+              pid: process.pid,
+              launchId,
+              host: UI_HOST,
+              port: 4399,
+            });
+            return Promise.resolve({ status: "ready" as const });
+          },
+        },
+        createServer: ({ readiness, handlerDeps: createdHandlerDeps }) => {
+          handlerDeps = createdHandlerDeps;
+          return {
+            once(): Server {
+              return this as unknown as Server;
+            },
+            removeListener(): Server {
+              return this as unknown as Server;
+            },
+            listen(_port: number, _host: string, callback: () => void): Server {
+              readinessDuringListen.push(readiness?.() ?? true);
+              callback();
+              return this as unknown as Server;
+            },
+            address: () => ({ address: UI_HOST, family: "IPv4", port: 4399 }),
+          } as unknown as Server;
+        },
+      },
+    );
+    try {
+      expect(code).toBe(0);
+      expect(phases).toEqual(["pre-listen", "post-listen"]);
+      expect(readinessDuringListen).toEqual([false]);
+      expect(out.join("")).toContain("http://127.0.0.1:4399");
+    } finally {
+      closeHandlerDeps(handlerDeps);
+    }
+  });
+
+  it("refuses to listen when pre-listen recovery resolves as recovery-required", async () => {
+    const { io } = captureIo();
+    const createServer = vi.fn(() => fakeServer({}));
+    const sink = createRecordingSink();
+
+    await expect(
+      runUiCli(
+        ["--port", "4399"],
+        io,
+        { KEIKO_UI_LAUNCH_ID: "a".repeat(32) },
+        {
+          staticRoot,
+          hashesFile: join(staticRoot, "csp-hashes.json"),
+          cwd: staticRoot,
+          activityLog: sink,
+          updateStartupRecovery: {
+            reconcile: () =>
+              Promise.resolve({
+                status: "recovery-required" as const,
+                reason: "corrupt" as const,
+                sessionId: "session-1",
+              }),
+          },
+          createServer,
+        },
+      ),
+    ).rejects.toThrow("Portable update startup recovery is required before listening.");
+    expect(createServer).not.toHaveBeenCalled();
+    const event = sink.events.find(({ op }) => op === "process.fatal");
+    expect(event?.errorKind).toBe("PORTABLE_UPDATE_RECOVERY_CORRUPT");
+    expect(extraOf(event)).toMatchObject({
+      kind: "server-error",
+      recoveryReason: "corrupt",
+      sessionId: "session-1",
+    });
+  });
+
+  it("closes the listener when post-listen recovery resolves as recovery-required", async () => {
+    const { io } = captureIo();
+    const phases: string[] = [];
+    const sink = createRecordingSink();
+    const close = vi.fn((done: () => void) => {
+      done();
+    });
+
+    await expect(
+      runUiCli(
+        ["--port", "4399"],
+        io,
+        { KEIKO_UI_LAUNCH_ID: "a".repeat(32) },
+        {
+          staticRoot,
+          hashesFile: join(staticRoot, "csp-hashes.json"),
+          cwd: staticRoot,
+          activityLog: sink,
+          updateStartupRecovery: {
+            reconcile: ({ phase }) => {
+              phases.push(phase);
+              return Promise.resolve(
+                phase === "pre-listen"
+                  ? { status: "ready" as const }
+                  : {
+                      status: "recovery-required" as const,
+                      reason: "persistence-failed" as const,
+                    },
+              );
+            },
+          },
+          createServer: () =>
+            ({
+              once(): Server {
+                return this as unknown as Server;
+              },
+              removeListener(): Server {
+                return this as unknown as Server;
+              },
+              listen(_port: number, _host: string, callback: () => void): Server {
+                callback();
+                return this as unknown as Server;
+              },
+              address: () => ({ address: UI_HOST, family: "IPv4", port: 4399 }),
+              close,
+            }) as unknown as Server,
+        },
+      ),
+    ).rejects.toThrow("Portable update startup recovery failed after listening.");
+    expect(phases).toStrictEqual(["pre-listen", "post-listen"]);
+    expect(close).toHaveBeenCalledOnce();
+    const event = sink.events.find(({ op }) => op === "process.fatal");
+    expect(event?.errorKind).toBe("PORTABLE_UPDATE_RECOVERY_PERSISTENCE_FAILED");
+    expect(extraOf(event).recoveryReason).toBe("persistence-failed");
+  });
+
+  it("imports legacy audit evidence after post-listen recovery and before startup reporting", async () => {
+    const { io } = captureIo();
+    const order: string[] = [];
+    const sink: ServerLogSink = {
+      write: (event) => {
+        if (event.op === "process.started") order.push("process.started");
+      },
+    };
+    const importLegacyUpdateAuditSnapshot = vi.fn(() => {
+      order.push("legacy-import");
+      return { status: "deferred" as const, reason: "source-invalid" as const };
+    });
+
+    const code = await runUiCli(
+      ["--port", "4399"],
+      io,
+      { KEIKO_UI_LAUNCH_ID: "a".repeat(32) },
+      {
+        staticRoot,
+        hashesFile: join(staticRoot, "csp-hashes.json"),
+        cwd: staticRoot,
+        activityLog: sink,
+        importLegacyUpdateAuditSnapshot,
+        updateStartupRecovery: {
+          reconcile: ({ phase }) => {
+            order.push(phase);
+            return Promise.resolve({ status: "ready" as const });
+          },
+        },
+        createServer: () =>
+          ({
+            once(): Server {
+              return this as unknown as Server;
+            },
+            removeListener(): Server {
+              return this as unknown as Server;
+            },
+            listen(_port: number, _host: string, callback: () => void): Server {
+              order.push("listen");
+              callback();
+              return this as unknown as Server;
+            },
+            address: () => ({ address: UI_HOST, family: "IPv4", port: 4399 }),
+          }) as unknown as Server,
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(order).toStrictEqual([
+      "pre-listen",
+      "listen",
+      "post-listen",
+      "legacy-import",
+      "process.started",
+    ]);
+    expect(importLegacyUpdateAuditSnapshot).toHaveBeenCalledWith({
+      stateDir: join(staticRoot, ".keiko"),
+      level: "info",
+    });
+  });
+
+  it("reports a deferred legacy import without disclosing source data or stopping startup", async () => {
+    const { io, err } = captureIo();
+    const events: ServerLogEvent[] = [];
+    const sink: ServerLogSink = { write: (event) => events.push(event) };
+    const code = await runUiCli(
+      ["--port", "4399"],
+      io,
+      { KEIKO_UI_LAUNCH_ID: "a".repeat(32) },
+      {
+        staticRoot,
+        hashesFile: join(staticRoot, "csp-hashes.json"),
+        cwd: staticRoot,
+        activityLog: sink,
+        importLegacyUpdateAuditSnapshot: () =>
+          Promise.resolve({
+            status: "deferred" as const,
+            reason: "append-failed" as const,
+          }),
+        createServer: () =>
+          ({
+            once(): Server {
+              return this as unknown as Server;
+            },
+            removeListener(): Server {
+              return this as unknown as Server;
+            },
+            listen(_port: number, _host: string, callback: () => void): Server {
+              callback();
+              return this as unknown as Server;
+            },
+            address: () => ({ address: UI_HOST, family: "IPv4", port: 4399 }),
+          }) as unknown as Server,
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(events).toContainEqual({
+      level: "warn",
+      category: "diagnostic",
+      op: "update.runtime.legacy-import-deferred",
+      extra: { reason: "append-failed" },
+    });
+    expect(events.some((event) => event.op === "process.started")).toBe(true);
+    expect(err.join("")).toBe(
+      "keiko ui: legacy update audit persistence was deferred; retained source will be retried.\n",
+    );
+  });
+
+  it("does not warn when legacy import is intentionally filtered", async () => {
+    const { io, err } = captureIo();
+    const events: ServerLogEvent[] = [];
+    const code = await runUiCli(
+      ["--port", "4399"],
+      io,
+      { KEIKO_UI_LAUNCH_ID: "a".repeat(32), KEIKO_LOG_LEVEL: "warn" },
+      {
+        staticRoot,
+        hashesFile: join(staticRoot, "csp-hashes.json"),
+        cwd: staticRoot,
+        activityLog: { write: (event) => events.push(event) },
+        importLegacyUpdateAuditSnapshot: () => ({
+          status: "deferred" as const,
+          reason: "log-level-filtered" as const,
+        }),
+        createServer: () =>
+          ({
+            once(): Server {
+              return this as unknown as Server;
+            },
+            removeListener(): Server {
+              return this as unknown as Server;
+            },
+            listen(_port: number, _host: string, callback: () => void): Server {
+              callback();
+              return this as unknown as Server;
+            },
+            address: () => ({ address: UI_HOST, family: "IPv4", port: 4399 }),
+          }) as unknown as Server,
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(events.some((event) => event.op === "update.runtime.legacy-import-deferred")).toBe(
+      false,
+    );
+    expect(events.some((event) => event.op === "process.started")).toBe(true);
+    expect(err).toStrictEqual([]);
+  });
+
+  it("does not invoke legacy import when post-listen recovery fails", async () => {
+    const { io } = captureIo();
+    const importer = vi.fn(() => ({ status: "absent" as const }));
+    const close = vi.fn((done: () => void) => {
+      done();
+    });
+
+    await expect(
+      runUiCli(
+        ["--port", "4399"],
+        io,
+        { KEIKO_UI_LAUNCH_ID: "a".repeat(32) },
+        {
+          staticRoot,
+          hashesFile: join(staticRoot, "csp-hashes.json"),
+          cwd: staticRoot,
+          importLegacyUpdateAuditSnapshot: importer,
+          updateStartupRecovery: {
+            reconcile: ({ phase }) =>
+              phase === "pre-listen"
+                ? Promise.resolve({ status: "ready" as const })
+                : Promise.reject(new Error("post-listen recovery failed")),
+          },
+          createServer: () =>
+            ({
+              once(): Server {
+                return this as unknown as Server;
+              },
+              removeListener(): Server {
+                return this as unknown as Server;
+              },
+              listen(_port: number, _host: string, callback: () => void): Server {
+                callback();
+                return this as unknown as Server;
+              },
+              address: () => ({ address: UI_HOST, family: "IPv4", port: 4399 }),
+              close,
+            }) as unknown as Server,
+        },
+      ),
+    ).rejects.toThrow("post-listen recovery failed");
+    expect(importer).not.toHaveBeenCalled();
+  });
+
+  it("closes the listener when post-listen recovery rejects", async () => {
+    const { io } = captureIo();
+    const launchId = "a".repeat(32);
+    const readinessStates: boolean[] = [];
+    const close = vi.fn((done: () => void) => {
+      done();
+    });
+    await expect(
+      runUiCli(
+        ["--port", "4399"],
+        io,
+        { KEIKO_UI_LAUNCH_ID: launchId },
+        {
+          staticRoot,
+          hashesFile: join(staticRoot, "csp-hashes.json"),
+          cwd: staticRoot,
+          updateStartupRecovery: {
+            reconcile: ({ phase }) =>
+              phase === "pre-listen"
+                ? Promise.resolve({ status: "ready" as const })
+                : Promise.reject(new Error("attestation failed")),
+          },
+          createServer: ({ readiness }) =>
+            ({
+              once(): Server {
+                return this as unknown as Server;
+              },
+              removeListener(): Server {
+                return this as unknown as Server;
+              },
+              listen(_port: number, _host: string, callback: () => void): Server {
+                readinessStates.push(readiness?.() ?? true);
+                callback();
+                return this as unknown as Server;
+              },
+              address: () => ({ address: UI_HOST, family: "IPv4", port: 4399 }),
+              close,
+            }) as unknown as Server,
+        },
+      ),
+    ).rejects.toThrow("attestation failed");
+    expect(close).toHaveBeenCalledOnce();
+    expect(readinessStates).toEqual([false]);
+  });
+
+  it("writes an orderly shutdown request only for the exact accepted process identity", async () => {
+    const stateDir = await mkdtemp(join(REAL_TMPDIR, "keiko-handoff-shutdown-"));
+    const launchId = "a".repeat(32);
+    const trigger = createPortableHandoffShutdownTrigger({
+      stateDir,
+      pid: 4242,
+      launchId,
+    });
+    try {
+      await expect(
+        trigger({
+          sessionId: "session-1",
+          activationId: "b".repeat(32),
+          pid: 7,
+          launchId,
+        }),
+      ).rejects.toThrow(/identity/u);
+      expect(peekShutdownRequest(stateDir, 4242, launchId)).toBe(false);
+
+      await trigger({
+        sessionId: "session-1",
+        activationId: "b".repeat(32),
+        pid: 4242,
+        launchId,
+      });
+      expect(peekShutdownRequest(stateDir, 4242, launchId)).toBe(true);
+    } finally {
+      await rm(stateDir, { recursive: true, force: true });
     }
   });
 

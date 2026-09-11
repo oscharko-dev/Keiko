@@ -8,8 +8,12 @@ import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type {
   UpdateInstallMode,
   UpdateInstallPackageManager,
+  UpdateCandidateSnapshot,
   UpdatePortableActivationSummary,
   UpdatePortableStagingSummary,
+  UpdatePreflightReport,
+  UpdateReleaseImpactInput,
+  UpdateLifecyclePhase,
   UpdateRestartCommandPreview,
   UpdateSession,
   UpdateSessionFailureReason,
@@ -34,7 +38,6 @@ import {
   type PortableUpdateActivator,
 } from "./update-portable-activation.js";
 import {
-  createRestartVerificationSession,
   defaultDetectorFor,
   failureFromError,
   isTerminal,
@@ -50,11 +53,28 @@ import {
   UpdateSessionError,
 } from "./update-session-support.js";
 import type { UpdateSessionLock } from "./update-session-lock.js";
+import type {
+  UpdateCandidateAuthority,
+  UpdateCandidateRejection,
+} from "./update-candidate-authority.js";
+import {
+  digestUpdateCandidate,
+  updateCandidateRuntimeRejection,
+} from "./update-candidate-authority.js";
+import { initialUpdateLifecycle, transitionUpdateSession } from "./update-lifecycle.js";
+import type { UpdateLocalStateManager } from "./update-local-state.js";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import {
+  emitServerDiagnostic,
+  serverDiagnosticFromError,
+  type ServerDiagnosticSink,
+} from "./diagnostics-log.js";
 
 export { UpdateSessionError } from "./update-session-support.js";
 
 const RESTART_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
 const SIMPLE_SHELL_ARG = /^[A-Za-z0-9_./:@%+=,-]+$/u;
+const UPDATE_SESSION_LIFECYCLE_OP = "update.session.lifecycle";
 
 function validPort(value: string | undefined): value is string {
   if (value === undefined || !/^\d{1,5}$/u.test(value)) return false;
@@ -101,6 +121,15 @@ function assertRestartTargetMatches(
   );
 }
 
+function durableSession(session: UpdateSession): UpdateSession {
+  const bodyFree = { ...session };
+  delete bodyFree.logs;
+  delete bodyFree.installRoot;
+  delete bodyFree.commandPreview;
+  delete bodyFree.restartCommandPreview;
+  return bodyFree;
+}
+
 export interface UpdateSessionStartOutcome {
   readonly session: UpdateSession;
   readonly reused: boolean;
@@ -108,12 +137,23 @@ export interface UpdateSessionStartOutcome {
 
 export type UpdateCompletionGate = (session: UpdateSession) => boolean;
 
+export interface PortableHandoffShutdownRequest {
+  readonly sessionId: string;
+  readonly activationId: string;
+  readonly pid: number;
+  readonly launchId: string;
+}
+
 export interface UpdateSessionManager {
   readonly getStatus: () => UpdateSessionStatus;
-  readonly start: (input: UpdateSessionStartRequest) => UpdateSessionStartOutcome;
+  readonly start: (
+    input: UpdateSessionStartRequest,
+    freshReport?: UpdatePreflightReport,
+  ) => UpdateSessionStartOutcome;
   readonly retry: () => UpdateSessionStartOutcome;
   readonly cancel: () => UpdateSession;
   readonly verifyRestart: UpdateRestartVerifier;
+  readonly refreshDurableProjection?: (() => void) | undefined;
 }
 
 export interface UpdateSessionManagerOptions {
@@ -133,6 +173,27 @@ export interface UpdateSessionManagerOptions {
   readonly portableStager?: PortableUpdateStager | undefined;
   readonly portableActivator?: PortableUpdateActivator | undefined;
   readonly portableCompletionGate?: UpdateCompletionGate | undefined;
+  readonly onPortableHandoffAccepted?:
+    ((request: PortableHandoffShutdownRequest) => Promise<void>) | undefined;
+  readonly candidateAuthority?: UpdateCandidateAuthority | undefined;
+  readonly candidateGate?:
+    ((candidate: UpdateCandidateSnapshot, impact: UpdateReleaseImpactInput) => void) | undefined;
+  readonly localState?: UpdateLocalStateManager | undefined;
+  readonly activityLog?: SecurityLogSink | undefined;
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+}
+
+function candidateError(reason: UpdateCandidateRejection): UpdateSessionError {
+  let code = "UPDATE_CANDIDATE_INVALID";
+  let message = "The reviewed update candidate no longer matches this installation.";
+  if (reason === "expired") {
+    code = "UPDATE_CANDIDATE_EXPIRED";
+    message = "The reviewed update candidate expired. Run preflight again.";
+  } else if (reason === "replayed") {
+    code = "UPDATE_CANDIDATE_REPLAYED";
+    message = "The reviewed update candidate was already consumed.";
+  }
+  return new UpdateSessionError(code, message, 409);
 }
 
 class UpdateSessionManagerImpl implements UpdateSessionManager {
@@ -152,10 +213,22 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
   private readonly portableStager: PortableUpdateStager | undefined;
   private readonly portableActivator: PortableUpdateActivator | undefined;
   private readonly portableCompletionGate: UpdateCompletionGate | undefined;
+  private readonly onPortableHandoffAccepted:
+    ((request: PortableHandoffShutdownRequest) => Promise<void>) | undefined;
+  private readonly candidateAuthority: UpdateCandidateAuthority | undefined;
+  private readonly candidateGate:
+    ((candidate: UpdateCandidateSnapshot, impact: UpdateReleaseImpactInput) => void) | undefined;
+  private readonly localState: UpdateLocalStateManager | undefined;
+  private persistenceStatus: NonNullable<UpdateSessionStatus["persistence"]> = "missing";
+  private activeCandidate: UpdateCandidateSnapshot | undefined;
+  private readonly activityLog: SecurityLogSink | undefined;
+  private readonly diagnostics: ServerDiagnosticSink | undefined;
   private active: UpdateSession | undefined;
   private last: UpdateSession | undefined;
   private activeAbort:
     { readonly sessionId: string; readonly controller: AbortController } | undefined;
+  private statusInstallModeSnapshot:
+    { readonly sessionId: string; readonly installMode: UpdateInstallMode } | undefined;
 
   public constructor(options: UpdateSessionManagerOptions = {}) {
     this.env = options.processEnv ?? process.env;
@@ -175,53 +248,131 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     this.portableStager = options.portableStager;
     this.portableActivator = options.portableActivator;
     this.portableCompletionGate = options.portableCompletionGate;
+    this.onPortableHandoffAccepted = options.onPortableHandoffAccepted;
+    this.candidateAuthority = options.candidateAuthority;
+    this.candidateGate = options.candidateGate;
+    this.localState = options.localState;
+    this.activityLog = options.activityLog;
+    this.diagnostics = options.diagnostics;
+    this.restoreDurableState();
   }
 
-  public readonly getStatus = (): UpdateSessionStatus => ({
-    schemaVersion: UPDATE_SESSION_SCHEMA_VERSION,
-    installMode: this.detector(),
-    policy: resolveUpdateMutationPolicy(this.env),
-    ...(this.active === undefined ? {} : { activeSession: this.active }),
-    ...(this.last === undefined ? {} : { lastSession: this.last }),
-  });
+  public readonly getStatus = (): UpdateSessionStatus => {
+    const installMode = this.installModeForStatus();
+    return {
+      schemaVersion: UPDATE_SESSION_SCHEMA_VERSION,
+      installMode,
+      policy: resolveUpdateMutationPolicy(this.env),
+      persistence: this.persistenceStatus,
+      ...(this.active === undefined ? {} : { activeSession: this.active }),
+      ...(this.last === undefined ? {} : { lastSession: this.last }),
+    };
+  };
 
-  public readonly start = (input: UpdateSessionStartRequest): UpdateSessionStartOutcome => {
+  private installModeForStatus(): UpdateInstallMode {
+    const activeSessionId = this.active?.sessionId;
+    if (activeSessionId === undefined) {
+      this.statusInstallModeSnapshot = undefined;
+      return this.detector();
+    }
+    if (this.statusInstallModeSnapshot?.sessionId === activeSessionId) {
+      return this.statusInstallModeSnapshot.installMode;
+    }
+    const installMode = this.detector();
+    this.statusInstallModeSnapshot = { sessionId: activeSessionId, installMode };
+    return installMode;
+  }
+
+  private replaceActiveProjection(active: UpdateSession | undefined): void {
+    if (this.statusInstallModeSnapshot?.sessionId !== active?.sessionId) {
+      this.statusInstallModeSnapshot = undefined;
+    }
+    this.active = active;
+  }
+
+  public readonly refreshDurableProjection = (): void => {
+    if (this.localState === undefined) return;
+    const inspected = this.localState.inspectRuntimeState();
+    if (!("state" in inspected)) {
+      this.persistenceStatus = inspected.status;
+      return;
+    }
+    this.persistenceStatus = "ready";
+    this.replaceActiveProjection(inspected.state.activeSession);
+    this.activeCandidate = inspected.state.activeCandidate;
+    this.last = inspected.state.lastSession;
+  };
+
+  // Start keeps consume-before-mutate ordering visible as a single authority boundary.
+  // eslint-disable-next-line max-lines-per-function
+  public readonly start = (
+    input: UpdateSessionStartRequest,
+    freshReport?: UpdatePreflightReport,
+  ): UpdateSessionStartOutcome => {
+    const currentMode = this.detector();
+    const consumed = this.candidateAuthority?.consume(
+      input,
+      this.currentVersion(),
+      currentMode,
+      freshReport,
+    );
+    if (consumed === undefined) {
+      throw new UpdateSessionError(
+        "UPDATE_CANDIDATE_REQUIRED",
+        "Run update preflight and confirm its reviewed candidate before starting.",
+        409,
+      );
+    }
+    if (!consumed.ok) throw candidateError(consumed.reason);
+    this.candidateGate?.(consumed.snapshot, consumed.impact);
     const existing = this.active;
     if (existing !== undefined && !isTerminal(existing.phase)) {
-      if (existing.targetVersion === input.targetVersion)
-        return { session: existing, reused: true };
       throw new UpdateSessionError(
         "UPDATE_SESSION_ACTIVE",
         "Another update session is active.",
         409,
       );
     }
-    const mode = this.detector();
+    const mode = consumed.installMode;
     this.assertStartAllowed(mode);
-    const session = this.createSession(input.targetVersion, mode);
+    const session = this.createSession(consumed.snapshot, mode, input.requestId);
     this.acquireLock(session);
     this.active = session;
-    void this.execute(session.sessionId, mode).catch(() => undefined);
+    this.statusInstallModeSnapshot = { sessionId: session.sessionId, installMode: currentMode };
+    this.activeCandidate = consumed.snapshot;
+    try {
+      this.persistDurableState();
+    } catch {
+      this.active = undefined;
+      this.activeCandidate = undefined;
+      this.statusInstallModeSnapshot = undefined;
+      this.lock?.release(session.sessionId);
+      throw new UpdateSessionError(
+        "UPDATE_STATE_UNWRITABLE",
+        "Update lifecycle state could not be persisted safely.",
+        503,
+      );
+    }
+    this.emitSessionEvent(session, "started");
+    void this.execute(session.sessionId, mode, consumed.snapshot).catch((error: unknown) => {
+      const pending = this.active?.sessionId === session.sessionId ? this.active : undefined;
+      if (pending !== undefined && !isTerminal(pending.phase)) {
+        try {
+          this.settleFailure(pending, failureFromError(error));
+        } catch {
+          this.failWithoutPersistence(pending, failureFromError(error));
+        }
+      }
+    });
     return { session, reused: false };
   };
 
   public readonly retry = (): UpdateSessionStartOutcome => {
-    if (this.active !== undefined && !isTerminal(this.active.phase)) {
-      throw new UpdateSessionError(
-        "UPDATE_SESSION_ACTIVE",
-        "Another update session is active.",
-        409,
-      );
-    }
-    const last = this.last;
-    if (!last?.retryable) {
-      throw new UpdateSessionError(
-        "UPDATE_RETRY_UNAVAILABLE",
-        "No retryable update session exists.",
-        409,
-      );
-    }
-    return this.start({ targetVersion: last.targetVersion });
+    throw new UpdateSessionError(
+      "UPDATE_RETRY_REQUIRES_PREFLIGHT",
+      "Run preflight again and confirm a fresh candidate before retrying.",
+      409,
+    );
   };
 
   public readonly cancel = (): UpdateSession => {
@@ -229,38 +380,20 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     if (session === undefined) {
       throw new UpdateSessionError("UPDATE_SESSION_NOT_FOUND", "No update session is active.", 404);
     }
-    if (session.phase === "running") {
+    if (session.phase === "running" && session.lifecycle.cancellationCutoff === "not-reached") {
       if (this.activeAbort?.sessionId === session.sessionId) {
         this.activeAbort.controller.abort();
+        // The preparatory adapter owns the atomic prepared-WAL teardown. Keep the
+        // authoritative session byte-for-byte cancelable until that teardown CAS
+        // succeeds; otherwise the aggregate guard cannot distinguish a safe
+        // pre-ACK abort from a committed native handoff.
+        return session;
       }
       return this.replace(session, {
         cancelable: false,
         retryable: false,
         message: "Cancellation requested. Waiting for the update operation to stop.",
       });
-    }
-    // KEIKO-0637: extend cancel() to accept phase === "restart-required" as a documented exit.
-    // The package mutation has already completed successfully by the time we are in this phase
-    // (settleResult set restartRequired:true on exitCode===0); the only thing left is the
-    // out-of-band restart that would have flipped this to "succeeded". If that restart never
-    // happens (portable relaunch failed, user chose not to restart, or the launcher cannot
-    // provide a restartCommandPreview), the session would otherwise pin this.active forever and
-    // block every future `start`/`retry`. Allowing cancel() out of this phase clears the session
-    // slot without misreporting what happened -- the installed update remains on disk; only the
-    // session tracking is abandoned. The user-visible message states this explicitly so the
-    // caller cannot mistake it for an install rollback.
-    if (session.phase === "restart-required") {
-      return this.finish(
-        this.replace(session, {
-          phase: "cancelled",
-          failureReason: "cancelled",
-          cancelable: false,
-          retryable: false,
-          restartRequired: false,
-          message:
-            "Update tracking abandoned before restart verification. Restart Keiko manually to load the installed version.",
-        }),
-      );
     }
     if (session.phase !== "preparing") {
       throw new UpdateSessionError(
@@ -269,25 +402,53 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
         409,
       );
     }
-    return this.finish(
-      this.replace(session, {
-        phase: "cancelled",
-        failureReason: "cancelled",
-        cancelable: false,
-        retryable: false,
-        message: messageForFailure("cancelled"),
-      }),
-    );
+    return this.finishTransition(session, "cancelled", {
+      failureReason: "cancelled",
+      cancelable: false,
+      retryable: false,
+      message: messageForFailure("cancelled"),
+    });
   };
 
   public readonly verifyRestart: UpdateRestartVerifier = (targetVersion, canCompleteUpdate) => {
     const session = this.sessionForRestart(targetVersion);
-    return this.finish(
-      this.replace(
-        session,
-        restartVerificationPatch(session, this.currentVersion(), canCompleteUpdate),
-      ),
+    if (session.portableStage !== undefined) {
+      throw new UpdateSessionError(
+        "UPDATE_RESTART_NOT_PENDING",
+        "Portable updates are verified only by native startup recovery.",
+        409,
+      );
+    }
+    const initialPatch = restartVerificationPatch(
+      session,
+      this.currentVersion(),
+      canCompleteUpdate,
     );
+    if (session.lifecycle.phase === "remediation-required") {
+      if (initialPatch.phase === "succeeded") {
+        return this.finishTransition(session, "succeeded", initialPatch);
+      }
+      return this.transition(
+        session,
+        "remediation-required",
+        initialPatch,
+        session.lifecycle.progress,
+      );
+    }
+    const verifying =
+      session.lifecycle.phase === "verifying-relaunch"
+        ? session
+        : this.transition(session, "verifying-relaunch", {
+            message: "Verifying the relaunched update.",
+          });
+    const patch = initialPatch;
+    if (patch.phase === "succeeded") {
+      return this.finishTransition(verifying, "succeeded", patch);
+    }
+    if (patch.restartRequired === false) {
+      return this.transition(verifying, "remediation-required", patch);
+    }
+    return this.transition(verifying, "verifying-relaunch", patch, verifying.lifecycle.progress);
   };
 
   private assertStartAllowed(mode: UpdateInstallMode): void {
@@ -308,15 +469,27 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     }
   }
 
-  private createSession(targetVersion: string, mode: UpdateInstallMode): UpdateSession {
+  // eslint-disable-next-line max-lines-per-function
+  private createSession(
+    candidate: UpdateCandidateSnapshot,
+    mode: UpdateInstallMode,
+    requestId: string | undefined,
+  ): UpdateSession {
     const timestamp = nowIso(this.now);
+    const identity = {
+      candidateId: candidate.candidateId,
+      candidateDigest: digestUpdateCandidate(candidate),
+      correlationId: requestId ?? candidate.candidateId,
+    };
     if (mode.installKind === "portable-managed") {
       return {
         schemaVersion: UPDATE_SESSION_SCHEMA_VERSION,
         sessionId: this.idFactory(),
+        ...identity,
         packageName: PACKAGE_NAME,
-        targetVersion,
+        targetVersion: candidate.targetVersion,
         phase: "preparing",
+        lifecycle: initialUpdateLifecycle(),
         failureReason: "none",
         ...(mode.installRoot === undefined ? {} : { installRoot: mode.installRoot }),
         startedAt: timestamp,
@@ -332,13 +505,15 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     return {
       schemaVersion: UPDATE_SESSION_SCHEMA_VERSION,
       sessionId: this.idFactory(),
+      ...identity,
       packageName: PACKAGE_NAME,
-      targetVersion,
+      targetVersion: candidate.targetVersion,
       phase: "preparing",
+      lifecycle: initialUpdateLifecycle(),
       failureReason: "none",
       packageManager,
       installRoot: mode.installRoot,
-      commandPreview: buildUpdateCommand(packageManager, targetVersion),
+      commandPreview: buildUpdateCommand(packageManager, candidate.targetVersion),
       ...(restartPreview === undefined ? {} : { restartCommandPreview: restartPreview }),
       startedAt: timestamp,
       updatedAt: timestamp,
@@ -365,21 +540,6 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     if (this.last?.phase === "restart-required") {
       assertRestartTargetMatches(this.last, targetVersion);
       return this.last;
-    }
-    if (targetVersion !== undefined) {
-      if (this.detector().installKind !== "package-manager") {
-        throw new UpdateSessionError(
-          "UPDATE_RESTART_NOT_PENDING",
-          "No restart verification is pending.",
-          409,
-        );
-      }
-      return createRestartVerificationSession({
-        packageName: PACKAGE_NAME,
-        targetVersion,
-        sessionId: this.idFactory(),
-        now: this.now,
-      });
     }
     throw new UpdateSessionError(
       "UPDATE_RESTART_NOT_PENDING",
@@ -418,40 +578,330 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     const next: UpdateSession = { ...session, ...patch, updatedAt: nowIso(this.now) };
     if (this.active?.sessionId === session.sessionId) this.active = next;
     if (this.last?.sessionId === session.sessionId) this.last = next;
+    this.persistDurableState();
+    this.emitSessionEvent(next, "transition");
     return next;
   }
 
-  private finish(session: UpdateSession): UpdateSession {
-    this.last = session;
-    if (this.active?.sessionId === session.sessionId && isTerminal(session.phase)) {
-      this.active = undefined;
-    }
-    this.lock?.release(session.sessionId);
-    return session;
+  private transition(
+    session: UpdateSession,
+    phase: UpdateLifecyclePhase,
+    patch: Partial<UpdateSession> = {},
+    progress?: UpdateSession["lifecycle"]["progress"],
+  ): UpdateSession {
+    return this.replace(session, {
+      ...patch,
+      ...transitionUpdateSession(session, {
+        phase,
+        ...(progress === undefined ? {} : { progress }),
+      }),
+    });
   }
 
-  private async execute(sessionId: string, mode: UpdateInstallMode): Promise<void> {
+  private finishTransition(
+    session: UpdateSession,
+    phase: UpdateLifecyclePhase,
+    patch: Partial<UpdateSession> = {},
+    progress?: UpdateSession["lifecycle"]["progress"],
+  ): UpdateSession {
+    const next: UpdateSession = {
+      ...session,
+      ...patch,
+      ...transitionUpdateSession(session, {
+        phase,
+        ...(progress === undefined ? {} : { progress }),
+      }),
+      updatedAt: nowIso(this.now),
+    };
+    const previousActive = this.active;
+    const previousCandidate = this.activeCandidate;
+    const previousLast = this.last;
+    const previousStatusInstallMode = this.statusInstallModeSnapshot;
+    this.last = next;
+    if (this.active?.sessionId === session.sessionId && isTerminal(next.phase)) {
+      this.active = undefined;
+      this.activeCandidate = undefined;
+      this.statusInstallModeSnapshot = undefined;
+    }
+    try {
+      this.persistDurableState();
+    } catch (error) {
+      this.active = previousActive;
+      this.activeCandidate = previousCandidate;
+      this.last = previousLast;
+      this.statusInstallModeSnapshot = previousStatusInstallMode;
+      this.persistenceStatus = "unwritable";
+      this.emitSessionEvent(this.active ?? this.last ?? session, "persistence-failed");
+      throw error;
+    }
+    this.lock?.release(next.sessionId);
+    this.emitSessionEvent(next, "transition");
+    return next;
+  }
+
+  private restoreDurableState(): void {
+    if (this.localState === undefined) return;
+    const result = this.localState.inspectRuntimeState();
+    this.persistenceStatus = result.status === "ok" ? "ready" : result.status;
+    if (!("state" in result)) return;
+    this.replaceActiveProjection(result.state.activeSession);
+    this.activeCandidate = result.state.activeCandidate;
+    this.last = result.state.lastSession;
+    if (this.settleRestoredTerminalIfNeeded()) return;
+    if (this.active === undefined) {
+      try {
+        this.persistDurableState();
+      } catch {
+        this.persistenceStatus = "unwritable";
+      }
+      return;
+    }
+    const lifecycle = this.active.lifecycle;
+    if (lifecycle.cancellationCutoff === "not-reached") {
+      this.last = {
+        ...this.active,
+        phase: "failed",
+        lifecycle: { ...lifecycle, phase: "failed" },
+        failureReason: "spawn-error",
+        cancelable: false,
+        retryable: true,
+        restartRequired: false,
+        message: "The prior update was interrupted before mutation and must be checked again.",
+      };
+      this.active = undefined;
+      this.activeCandidate = undefined;
+      this.statusInstallModeSnapshot = undefined;
+    } else {
+      this.active = {
+        ...this.active,
+        phase: "restart-required",
+        lifecycle: { ...lifecycle, phase: "recovery-required" },
+        cancelable: false,
+        retryable: false,
+        restartRequired: true,
+        message: "The prior update requires startup recovery before another update can start.",
+      };
+    }
+    try {
+      this.persistDurableState("required", "interrupted");
+    } catch {
+      this.persistenceStatus = "unwritable";
+    }
+  }
+
+  private settleRestoredTerminalIfNeeded(): boolean {
+    if (this.active === undefined || !isTerminal(this.active.phase)) return false;
+    this.settleRestoredTerminal(this.active);
+    return true;
+  }
+
+  private settleRestoredTerminal(session: UpdateSession): void {
+    const previousCandidate = this.activeCandidate;
+    const previousLast = this.last;
+    this.last = session;
+    this.active = undefined;
+    this.activeCandidate = undefined;
+    this.statusInstallModeSnapshot = undefined;
+    try {
+      this.persistDurableState();
+    } catch {
+      this.active = session;
+      this.activeCandidate = previousCandidate;
+      this.last = previousLast;
+      this.persistenceStatus = "unwritable";
+      return;
+    }
+    this.lock?.release(session.sessionId);
+  }
+
+  private persistDurableState(
+    recoveryStatus?: "none" | "reconciling" | "required" | "settled",
+    recoveryReason?: "interrupted",
+  ): void {
+    if (this.localState === undefined) return;
+    const current = this.localState.readRuntimeState();
+    const recovery = this.durableRecovery(recoveryStatus, recoveryReason);
+    this.localState.writeRuntimeState(this.durableRuntimeState(current, recovery));
+    this.persistenceStatus = "ready";
+  }
+
+  private durableRecovery(
+    recoveryStatus: "none" | "reconciling" | "required" | "settled" | undefined,
+    recoveryReason: "interrupted" | undefined,
+  ): ReturnType<UpdateLocalStateManager["readRuntimeState"]>["recovery"] {
+    const status = recoveryStatus ?? this.derivedRecoveryStatus();
+    return {
+      status,
+      ...(this.active?.sessionId === undefined ? {} : { sessionId: this.active.sessionId }),
+      ...(status !== "required" ? {} : { reason: recoveryReason ?? ("interrupted" as const) }),
+      updatedAt: nowIso(this.now),
+    };
+  }
+
+  private derivedRecoveryStatus(): "none" | "reconciling" | "required" {
+    if (this.active?.lifecycle.phase === "recovery-required") return "required";
+    return this.active?.lifecycle.cancellationCutoff === "handoff-committed"
+      ? "reconciling"
+      : "none";
+  }
+
+  private durableRuntimeState(
+    current: ReturnType<UpdateLocalStateManager["readRuntimeState"]>,
+    recovery: ReturnType<UpdateLocalStateManager["readRuntimeState"]>["recovery"],
+  ): ReturnType<UpdateLocalStateManager["readRuntimeState"]> {
+    return {
+      ...current,
+      activeSession: this.active === undefined ? undefined : durableSession(this.active),
+      activeCandidate: this.activeCandidate,
+      ...(this.last === undefined ? {} : { lastSession: durableSession(this.last) }),
+      recovery,
+    };
+  }
+
+  private failWithoutPersistence(session: UpdateSession, reason: UpdateSessionFailureReason): void {
+    const persistenceFailureReported = this.persistenceStatus === "unwritable";
+    if (session.lifecycle.cancellationCutoff !== "not-reached") {
+      const recovery: UpdateSession = {
+        ...session,
+        phase: "restart-required",
+        lifecycle: {
+          ...session.lifecycle,
+          phase: "recovery-required",
+          cancellationCutoff: "handoff-committed",
+        },
+        failureReason: reason,
+        cancelable: false,
+        retryable: false,
+        restartRequired: true,
+        message: "The update outcome is uncertain and requires startup recovery.",
+        updatedAt: nowIso(this.now),
+      };
+      this.active = recovery;
+      this.persistenceStatus = "unwritable";
+      if (!persistenceFailureReported) this.emitSessionEvent(recovery, "persistence-failed");
+      return;
+    }
+    const lifecycle = { ...session.lifecycle, phase: "failed" as const };
+    this.last = {
+      ...session,
+      phase: "failed",
+      lifecycle,
+      failureReason: reason,
+      cancelable: false,
+      retryable: false,
+      restartRequired: false,
+      message: "The update failed and its lifecycle state could not be persisted.",
+      updatedAt: nowIso(this.now),
+    };
+    this.active = undefined;
+    this.activeCandidate = undefined;
+    this.statusInstallModeSnapshot = undefined;
+    this.persistenceStatus = "unwritable";
+    if (!persistenceFailureReported) this.emitSessionEvent(this.last, "persistence-failed");
+  }
+
+  private emitSessionEvent(
+    session: UpdateSession,
+    eventKind: "started" | "transition" | "persistence-failed",
+  ): void {
+    try {
+      this.activityLog?.write({
+        category: "diagnostic",
+        op: UPDATE_SESSION_LIFECYCLE_OP,
+        correlationId: session.correlationId,
+        extra: {
+          sessionId: session.sessionId,
+          candidateId: session.candidateId,
+          candidateDigest: session.candidateDigest,
+          targetVersion: session.targetVersion,
+          phase: session.lifecycle.phase,
+          cancellationCutoff: session.lifecycle.cancellationCutoff,
+          eventKind,
+          completedBytes: session.lifecycle.progress.completedBytes,
+          ...(session.lifecycle.progress.totalBytes === undefined
+            ? {}
+            : { totalBytes: session.lifecycle.progress.totalBytes }),
+          failureReason: session.failureReason,
+        },
+      });
+    } catch (error) {
+      emitServerDiagnostic(
+        this.diagnostics,
+        serverDiagnosticFromError({
+          correlationId: session.correlationId,
+          operation: "update.session.activity-log",
+          source: "update-session",
+          error,
+          redact: (): string => "A bounded update diagnostic failed.",
+        }),
+      );
+    }
+  }
+
+  private async execute(
+    sessionId: string,
+    mode: UpdateInstallMode,
+    candidate: UpdateCandidateSnapshot,
+  ): Promise<void> {
     await this.beforeExecute?.();
     const prepared = this.active?.sessionId === sessionId ? this.active : undefined;
     if (prepared === undefined || prepared.phase === "cancelled") return;
-    const running = this.replace(prepared, {
-      phase: "running",
-      cancelable: true,
-      message:
-        mode.installKind === "portable-managed"
-          ? "Portable update asset is downloading and staging."
-          : "Package-manager update is running.",
-    });
+    const runtimeRejection = this.runtimeCandidateRejection(candidate);
+    if (runtimeRejection !== undefined) {
+      this.rejectRuntimeCandidate(prepared, mode, runtimeRejection);
+      return;
+    }
+    const running = this.startExecution(prepared, mode);
     if (mode.installKind === "portable-managed") {
-      await this.invokePortableStager(running, mode);
+      await this.invokePortableStager(running, mode, candidate);
       return;
     }
     await this.invokeCommand(running, mode);
   }
 
+  private runtimeCandidateRejection(
+    candidate: UpdateCandidateSnapshot,
+  ): UpdateCandidateRejection | undefined {
+    try {
+      return updateCandidateRuntimeRejection(candidate, this.currentVersion(), this.detector());
+    } catch {
+      return "install-facts-changed";
+    }
+  }
+
+  private rejectRuntimeCandidate(
+    session: UpdateSession,
+    mode: UpdateInstallMode,
+    rejection: UpdateCandidateRejection,
+  ): void {
+    this.finishTransition(session, "failed", {
+      failureReason:
+        mode.installKind === "portable-managed"
+          ? "portable-preflight-ineligible"
+          : "unsupported-install-mode",
+      cancelable: false,
+      retryable: false,
+      restartRequired: false,
+      message:
+        rejection === "current-version-changed"
+          ? "The running version changed after review. Run update preflight again."
+          : "The installation changed after review. Run update preflight again.",
+    });
+  }
+
+  private startExecution(session: UpdateSession, mode: UpdateInstallMode): UpdateSession {
+    const portable = mode.installKind === "portable-managed";
+    return this.transition(session, portable ? "downloading" : "activating", {
+      message: portable
+        ? "Portable update asset is downloading and staging."
+        : "Package-manager update is running.",
+    });
+  }
+
   private async invokePortableStager(
     session: UpdateSession,
     mode: UpdateInstallMode,
+    candidate: UpdateCandidateSnapshot,
   ): Promise<void> {
     if (this.portableStager === undefined || this.portableActivator === undefined) {
       this.settleFailure(session, "portable-preflight-ineligible");
@@ -460,14 +910,15 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     const controller = new AbortController();
     this.activeAbort = { sessionId: session.sessionId, controller };
     try {
-      const runtimeFacts = this.facts();
-      const portableStage = await this.portableStager.stage({
-        sessionId: session.sessionId,
-        targetVersion: session.targetVersion,
-        installMode: mode,
-        runtimeFacts,
-        signal: controller.signal,
-      });
+      const { portableStage, runtimeFacts } = await this.stagePortableUpdate(
+        session,
+        mode,
+        candidate,
+        controller,
+        this.portableStager,
+      );
+      const staged = this.persistPortableStage(session.sessionId, portableStage);
+      if (staged === undefined) return;
       const portableActivation = await this.portableActivator.activate({
         sessionId: session.sessionId,
         targetVersion: session.targetVersion,
@@ -475,15 +926,180 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
         runtimeFacts,
         signal: controller.signal,
       });
-      this.settlePortableActivation(session, portableStage, portableActivation);
+      await this.settlePortableActivationResult(
+        staged.sessionId,
+        candidate,
+        portableStage,
+        portableActivation,
+      );
     } catch (error) {
       const reason = this.portableFailureReason(error);
-      this.settleFailure(session, reason);
+      this.settlePortableFailure(session.sessionId, reason);
     } finally {
       if (this.activeAbort.sessionId === session.sessionId) {
         this.activeAbort = undefined;
       }
     }
+  }
+
+  private async stagePortableUpdate(
+    session: UpdateSession,
+    mode: UpdateInstallMode,
+    candidate: UpdateCandidateSnapshot,
+    controller: AbortController,
+    stager: PortableUpdateStager,
+  ): Promise<{
+    readonly portableStage: UpdatePortableStagingSummary;
+    readonly runtimeFacts: UpdateRuntimeFacts;
+  }> {
+    const runtimeFacts = this.facts();
+    const portableStage = await stager.stage({
+      sessionId: session.sessionId,
+      targetVersion: session.targetVersion,
+      installMode: mode,
+      runtimeFacts,
+      candidate,
+      onProgress: (progress): void => {
+        this.updatePortableStageProgress(session.sessionId, controller, progress);
+      },
+      signal: controller.signal,
+    });
+    return { portableStage, runtimeFacts };
+  }
+
+  private updatePortableStageProgress(
+    sessionId: string,
+    controller: AbortController,
+    progress: UpdateSession["lifecycle"]["progress"] & { readonly phase: UpdateLifecyclePhase },
+  ): void {
+    const current = this.active?.sessionId === sessionId ? this.active : undefined;
+    if (current === undefined || controller.signal.aborted) return;
+    this.replace(current, {
+      ...transitionUpdateSession(current, { phase: progress.phase, progress }),
+    });
+  }
+
+  private persistPortableStage(
+    sessionId: string,
+    portableStage: UpdatePortableStagingSummary,
+  ): UpdateSession | undefined {
+    const current = this.active?.sessionId === sessionId ? this.active : undefined;
+    if (current === undefined) return undefined;
+    const patch = {
+      portableStage,
+      message: "Portable update is staged and preparing governed handoff authority.",
+    };
+    return current.lifecycle.phase === "staging"
+      ? this.replace(current, patch)
+      : this.transition(current, "staging", patch);
+  }
+
+  private async settlePortableActivationResult(
+    sessionId: string,
+    candidate: UpdateCandidateSnapshot,
+    portableStage: UpdatePortableStagingSummary,
+    result: Awaited<ReturnType<PortableUpdateActivator["activate"]>>,
+  ): Promise<void> {
+    const current = this.active?.sessionId === sessionId ? this.active : undefined;
+    if (current === undefined || isTerminal(current.phase)) return;
+    if (result.status === "handoff-pending") {
+      await this.settlePortableHandoffPending(sessionId, current, result.activationId);
+      return;
+    }
+    const activating = this.transition(current, "activating", {
+      message: "Portable update activation has started.",
+    });
+    this.settlePortableActivation(activating, candidate, portableStage, result);
+  }
+
+  private async settlePortableHandoffPending(
+    sessionId: string,
+    current: UpdateSession,
+    activationId: string,
+  ): Promise<void> {
+    if (
+      current.lifecycle.phase === "handoff-pending" ||
+      current.lifecycle.phase === "recovery-required"
+    ) {
+      return;
+    }
+    const pending = this.transition(current, "handoff-pending", {
+      message: `Portable update ${current.targetVersion} handoff ${activationId} was accepted and is awaiting restart verification.`,
+    });
+    const launchId = this.env.KEIKO_UI_LAUNCH_ID;
+    if (this.onPortableHandoffAccepted === undefined) return;
+    if (!/^[a-f0-9]{32}$/u.test(launchId ?? "")) {
+      this.requirePortableRecovery(sessionId, {
+        message: "The update handoff was accepted, but the current launch identity is invalid.",
+      });
+      return;
+    }
+    try {
+      await this.onPortableHandoffAccepted({
+        sessionId,
+        activationId,
+        pid: process.pid,
+        launchId: launchId ?? "",
+      });
+    } catch (error) {
+      this.recordPortableHandoffShutdownFailure(pending, error);
+      this.requirePortableRecovery(sessionId, {
+        message: "The update handoff was accepted, but orderly shutdown could not be requested.",
+      });
+    }
+  }
+
+  private recordPortableHandoffShutdownFailure(session: UpdateSession, error: unknown): void {
+    emitServerDiagnostic(
+      this.diagnostics,
+      serverDiagnosticFromError({
+        correlationId: session.correlationId,
+        operation: "update.session.portable-handoff-shutdown",
+        source: "update-session",
+        error,
+        redact: (): string => "The accepted portable update handoff could not request shutdown.",
+      }),
+    );
+  }
+
+  private requirePortableRecovery(sessionId: string, patch: Partial<UpdateSession> = {}): void {
+    const current = this.active?.sessionId === sessionId ? this.active : undefined;
+    if (current === undefined || isTerminal(current.phase)) return;
+    if (current.lifecycle.phase === "recovery-required") {
+      this.replace(current, { ...patch, cancelable: false, retryable: false });
+      return;
+    }
+    this.transition(current, "recovery-required", {
+      ...patch,
+      cancelable: false,
+      retryable: false,
+      restartRequired: true,
+    });
+  }
+
+  private settlePortableFailure(sessionId: string, reason: UpdateSessionFailureReason): void {
+    const current = this.active?.sessionId === sessionId ? this.active : undefined;
+    if (current === undefined || isTerminal(current.phase)) return;
+    const durableHandoffCommitted = ((): boolean => {
+      if (this.localState === undefined) return false;
+      try {
+        const durable = this.localState.readRuntimeState();
+        return (
+          durable.activeSession?.sessionId === sessionId &&
+          durable.activationWal?.coordinatorId !== undefined
+        );
+      } catch {
+        return true;
+      }
+    })();
+    if (current.lifecycle.cancellationCutoff !== "not-reached" || durableHandoffCommitted) {
+      this.requirePortableRecovery(sessionId, {
+        failureReason: reason,
+        message: "Portable update recovery must reconcile the committed handoff.",
+      });
+      return;
+    }
+    this.settleFailure(current, reason);
   }
 
   private portableFailureReason(error: unknown): UpdateSessionFailureReason {
@@ -492,11 +1108,36 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     return "portable-staging-failed";
   }
 
+  // Explicit comparisons bind success to the exact immutable candidate proof.
+  // eslint-disable-next-line complexity
   private settlePortableActivation(
     session: UpdateSession,
+    candidate: UpdateCandidateSnapshot,
     portableStage: UpdatePortableStagingSummary,
     portableActivation: UpdatePortableActivationSummary,
   ): void {
+    const expected = candidate.portable;
+    const stageMatchesCandidate =
+      expected !== undefined &&
+      portableStage.status === "staged" &&
+      portableStage.target === expected.target &&
+      portableStage.packageVersion === candidate.targetVersion &&
+      portableStage.releaseId === expected.releaseId &&
+      portableStage.assetId === expected.assetId &&
+      portableStage.assetName === expected.assetName &&
+      portableStage.sizeBytes === expected.sizeBytes &&
+      portableStage.sha256 === expected.sha256 &&
+      portableStage.manifestSha256 === expected.manifestSha256;
+    const activationProvesTarget =
+      portableActivation.status === "activated" &&
+      portableActivation.stageId === portableStage.stageId &&
+      portableActivation.target === expected?.target &&
+      portableActivation.packageVersion === candidate.targetVersion &&
+      portableActivation.versionVerified;
+    if (!stageMatchesCandidate || !activationProvesTarget) {
+      this.settleFailure(session, "portable-version-verification-failed");
+      return;
+    }
     const activated = this.replace(session, {
       failureReason: "none",
       cancelable: false,
@@ -506,14 +1147,14 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
       portableActivation,
     });
     const updateCanComplete = this.portableCompletionGate?.(activated) ?? true;
-    this.finish(
-      this.replace(activated, {
-        phase: "succeeded",
-        message: updateCanComplete
-          ? `Portable update ${session.targetVersion} is active and verified.`
-          : `Keiko is now running ${session.targetVersion}. Complete remaining follow-up action before affected workflows are fully ready.`,
-      }),
-    );
+    const verified = this.transition(activated, "verifying-relaunch", {
+      message: `Portable update ${session.targetVersion} activation proof is verified.`,
+    });
+    this.finishTransition(verified, "succeeded", {
+      message: updateCanComplete
+        ? `Portable update ${session.targetVersion} is active and verified.`
+        : `Keiko is now running ${session.targetVersion}. Complete remaining follow-up action before affected workflows are fully ready.`,
+    });
   }
 
   private async invokeCommand(session: UpdateSession, mode: UpdateInstallMode): Promise<void> {
@@ -568,8 +1209,7 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
 
   private settleResult(session: UpdateSession, result: CommandResult): void {
     if (result.exitCode === 0) {
-      this.replace(session, {
-        phase: "restart-required",
+      this.transition(session, "handoff-pending", {
         restartRequired: true,
         message: `Update installed. Restart Keiko to load ${session.targetVersion}.`,
         logs: logPreview(result, this.redactor),
@@ -585,14 +1225,12 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     reason: UpdateSessionFailureReason,
     result?: CommandResult,
   ): void {
-    const next = this.replace(session, {
-      phase: reason === "cancelled" ? "cancelled" : "failed",
+    this.finishTransition(session, reason === "cancelled" ? "cancelled" : "failed", {
       failureReason: reason,
       retryable: retryableFailure(reason),
       message: messageForFailure(reason),
       ...(result === undefined ? {} : { logs: logPreview(result, this.redactor) }),
     });
-    this.finish(next);
   }
 }
 

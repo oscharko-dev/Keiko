@@ -129,7 +129,15 @@ export type {
   RELEASE_IMPACT_SCHEMA_VERSION,
 } from "./release-impact.js";
 
-// ─── Update availability / preflight (Issue #1692) ─────────────────────────────
+// ─── Update availability / preflight (Issues #1692, #3405) ────────────────────
+export type {
+  UPDATE_CANDIDATE_SCHEMA_VERSION,
+  UpdateCandidateClaim,
+  UpdateCandidateInstallIdentity,
+  UpdateCandidatePortableIdentity,
+  UpdateCandidateReleaseIdentity,
+  UpdateCandidateSnapshot,
+} from "./update-candidate.js";
 export type {
   UpdatePreflightBlocker,
   UpdatePreflightBlockerCode,
@@ -164,11 +172,15 @@ export type {
 // ─── Governed update session runner (Issue #1693) ─────────────────────────────
 export type {
   UpdateCommandPreview,
+  UpdateCancellationCutoff,
   UpdateInstallMode,
   UpdateInstallModeKind,
   UpdateInstallModeStatus,
   UpdateInstallPackageManager,
   UpdateMutationPolicy,
+  UpdateLifecyclePhase,
+  UpdateLifecycleProgress,
+  UpdateLifecycleState,
   UpdatePortableActivationStatus,
   UpdatePortableActivationSummary,
   UpdatePortableAssetSummary,
@@ -201,7 +213,9 @@ export type {
   UpdateUnsupportedReason,
 } from "./update-session.js";
 export type {
+  UPDATE_CANCELLATION_CUTOFFS,
   UPDATE_INSTALL_MODE_KINDS,
+  UPDATE_LIFECYCLE_PHASES,
   parseUpdateRestartVerificationRequest,
   parseUpdateSessionStartRequest,
   UPDATE_INSTALL_MODE_STATUSES,
@@ -223,6 +237,8 @@ export type {
 
 // ─── Governed update local state and recovery (Issue #1694) ─────────────────────
 export type {
+  UpdateActivationWalCheckpoint,
+  UpdateActivationWalState,
   UpdateCompatibilityScan,
   UpdateHealthState,
   UpdateRecoverySnapshot,
@@ -232,16 +248,21 @@ export type {
   UpdateRemediationStatus,
   UpdateRuntimeAuditEvent,
   UpdateRuntimeEventType,
+  UpdateRuntimeRecoveryState,
+  UpdateRuntimeRecoveryStatus,
+  UpdateRuntimeStateReadResult,
   UpdateRuntimeWarningCode,
   UpdateRuntimeState,
   UpdateStateStore,
   UpdateStoreHealth,
 } from "./update-local-state.js";
 export type {
+  UPDATE_ACTIVATION_WAL_CHECKPOINTS,
   UPDATE_HEALTH_LABELS,
   UPDATE_HEALTH_STATES,
   UPDATE_LOCAL_STATE_SCHEMA_VERSION,
   UPDATE_REMEDIATION_STATUSES,
+  UPDATE_RUNTIME_RECOVERY_STATUSES,
   UPDATE_RUNTIME_EVENT_TYPES,
   UPDATE_RUNTIME_WARNING_CODES,
   UPDATE_STATE_STORES,

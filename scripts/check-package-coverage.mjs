@@ -239,6 +239,7 @@ export const PACKAGE_COVERAGE_EXCLUDE = [
   "**/test-fixtures.ts",
   "**/testing.ts",
   "**/*.config.ts",
+  "**/*.generated.*",
   "dist/**",
   "node_modules/**",
 ];

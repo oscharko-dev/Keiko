@@ -265,6 +265,44 @@ export const UPDATE_SESSION_PHASES: readonly UpdateSessionPhase[] = Object.freez
   "cancelled",
 ] as const satisfies readonly UpdateSessionPhase[]);
 
+export const UPDATE_LIFECYCLE_PHASES = [
+  "confirmed",
+  "preparing",
+  "downloading",
+  "verifying",
+  "staging",
+  "handoff-pending",
+  "activating",
+  "verifying-relaunch",
+  "cleanup-pending",
+  "remediation-required",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "recovery-required",
+] as const;
+
+export type UpdateLifecyclePhase = (typeof UPDATE_LIFECYCLE_PHASES)[number];
+
+export const UPDATE_CANCELLATION_CUTOFFS = [
+  "not-reached",
+  "mutation-started",
+  "handoff-committed",
+] as const;
+
+export type UpdateCancellationCutoff = (typeof UPDATE_CANCELLATION_CUTOFFS)[number];
+
+export interface UpdateLifecycleProgress {
+  readonly completedBytes: number;
+  readonly totalBytes?: number | undefined;
+}
+
+export interface UpdateLifecycleState {
+  readonly phase: UpdateLifecyclePhase;
+  readonly progress: UpdateLifecycleProgress;
+  readonly cancellationCutoff: UpdateCancellationCutoff;
+}
+
 export type UpdateSessionFailureReason =
   | "none"
   | "policy-disabled"
@@ -316,9 +354,13 @@ export interface UpdateSessionLogPreview {
 export interface UpdateSession {
   readonly schemaVersion: typeof UPDATE_SESSION_SCHEMA_VERSION;
   readonly sessionId: string;
+  readonly candidateId: string;
+  readonly candidateDigest: string;
+  readonly correlationId: string;
   readonly packageName: string;
   readonly targetVersion: string;
   readonly phase: UpdateSessionPhase;
+  readonly lifecycle: UpdateLifecycleState;
   readonly failureReason: UpdateSessionFailureReason;
   readonly packageManager?: UpdateInstallPackageManager | undefined;
   readonly installRoot?: string | undefined;
@@ -339,12 +381,16 @@ export interface UpdateSessionStatus {
   readonly schemaVersion: typeof UPDATE_SESSION_SCHEMA_VERSION;
   readonly installMode: UpdateInstallMode;
   readonly policy: UpdateMutationPolicy;
+  readonly persistence?:
+    "ready" | "missing" | "migrated" | "corrupt" | "incompatible" | "unwritable";
   readonly activeSession?: UpdateSession | undefined;
   readonly lastSession?: UpdateSession | undefined;
 }
 
 export interface UpdateSessionStartRequest {
-  readonly targetVersion: string;
+  readonly candidateId: string;
+  readonly confirmationDigest: string;
+  readonly executionToken: string;
   readonly requestId?: string | undefined;
 }
 
@@ -382,6 +428,9 @@ const TARGET_VERSION_PATTERN = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9._:-]+$/u;
 const MAX_TARGET_VERSION_LENGTH = 64;
 const MAX_REQUEST_ID_LENGTH = 128;
+const SHA256_PATTERN = /^[0-9a-f]{64}$/u;
+const TOKEN_PATTERN = /^[0-9a-f]{64}$/u;
+const CANDIDATE_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/u;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -409,26 +458,70 @@ function validRequestId(value: unknown): value is string {
   );
 }
 
+function parsedRequiredToken(
+  input: Record<string, unknown>,
+  key: "candidateId" | "confirmationDigest" | "executionToken",
+  pattern: RegExp,
+  error: string,
+  errors: string[],
+): string | undefined {
+  const value = input[key];
+  if (typeof value === "string" && pattern.test(value)) return value;
+  errors.push(error);
+  return undefined;
+}
+
+function unsupportedStartFields(input: Record<string, unknown>): string[] {
+  const allowed = new Set(["candidateId", "confirmationDigest", "executionToken", "requestId"]);
+  return Object.keys(input)
+    .filter((key) => !allowed.has(key))
+    .map((key) => `request contains unsupported field: ${key}`);
+}
+
 export function parseUpdateSessionStartRequest(input: unknown): UpdateSessionStartRequestParse {
-  const errors: string[] = [];
   if (!isRecord(input)) {
     return { ok: false, errors: ["request must be an object"] };
   }
-  const targetVersion = validTargetVersion(input.targetVersion) ? input.targetVersion : undefined;
+  const errors = unsupportedStartFields(input);
   const requestId = validRequestId(input.requestId) ? input.requestId : undefined;
-  if (targetVersion === undefined) {
-    errors.push("targetVersion must be a stable semver version");
-  }
+  const candidateId = parsedRequiredToken(
+    input,
+    "candidateId",
+    CANDIDATE_ID_PATTERN,
+    "candidateId must be a bounded token",
+    errors,
+  );
+  const confirmationDigest = parsedRequiredToken(
+    input,
+    "confirmationDigest",
+    SHA256_PATTERN,
+    "confirmationDigest must be a SHA-256 digest",
+    errors,
+  );
+  const executionToken = parsedRequiredToken(
+    input,
+    "executionToken",
+    TOKEN_PATTERN,
+    "executionToken must be a 256-bit token",
+    errors,
+  );
   if (input.requestId !== undefined && requestId === undefined) {
     errors.push(`requestId must be a token of 1-${String(MAX_REQUEST_ID_LENGTH)} characters`);
   }
-  if (errors.length > 0 || targetVersion === undefined) {
+  if (
+    errors.length > 0 ||
+    candidateId === undefined ||
+    confirmationDigest === undefined ||
+    executionToken === undefined
+  ) {
     return { ok: false, errors };
   }
   return {
     ok: true,
     value: {
-      targetVersion,
+      candidateId,
+      confirmationDigest,
+      executionToken,
       ...(requestId === undefined ? {} : { requestId }),
     },
   };

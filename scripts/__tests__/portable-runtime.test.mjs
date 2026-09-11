@@ -24,6 +24,7 @@ import {
   PORTABLE_VERIFICATION_POLICIES,
   PORTABLE_VERIFICATION_STATUSES,
   WINDOWS_PORTABLE_SETUP_ASSET_NAME,
+  createPortableVerificationChecks,
   findPortableMetadataRedactionFailures,
   isSafePortableRelativePath,
   portableVerificationSummaryForManifest,
@@ -34,14 +35,17 @@ import {
   validatePortableEvaluationManifest,
   validatePortableManifest,
   validatePortablePublishedManifest,
+  validatePortableReleaseTrustCandidateManifest,
   validatePortableStagingManifest,
   verifySha256File,
 } from "../portable-runtime.mjs";
 import {
   appSurfaceFailures,
   assemblePortableStage,
+  buildWindowsGenerationLauncher,
   isCrossDeviceError,
   moveStagedDirectory,
+  stageWindowsPortableRootFiles,
 } from "../stage-portable-runtime.mjs";
 import {
   assemblePortableReleaseAssets,
@@ -54,6 +58,7 @@ import {
   usearchRuntimeTargetKey,
 } from "../../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
 import { runtimeActivationManifest } from "../runtime-activation-manifest.mjs";
+import { validatePortableTargetRoot } from "../portable-launch-setup-stage.mjs";
 
 const DIGEST_A = "a".repeat(64);
 const DIGEST_B = "b".repeat(64);
@@ -77,6 +82,7 @@ const ROOT_RELEASE_TAG = `v${ROOT_PACKAGE_VERSION}`;
 const LIFECYCLE_EXPECTATIONS = new Map([
   ["staging", ["staging", "unverified-staging"]],
   ["evaluation", ["evaluation", "evaluation-unqualified"]],
+  ["published-release-trust", ["evaluation", "evaluation-unqualified"]],
   ["candidate", ["production", "verified-production"]],
   ["published", ["production", "verified-production"]],
   ["published-contract", ["production", "verified-production"]],
@@ -657,6 +663,15 @@ function syncReviewedBinding(candidate) {
       JSON.stringify(candidate.runtimeQualification),
     );
   }
+  if (candidate.windowsGeneration === undefined) {
+    delete candidate.provenance.windowsGeneration;
+    delete candidate.releaseImpact.reviewedBinding.windowsGeneration;
+  } else {
+    candidate.provenance.windowsGeneration = structuredClone(candidate.windowsGeneration);
+    candidate.releaseImpact.reviewedBinding.windowsGeneration = structuredClone(
+      candidate.windowsGeneration,
+    );
+  }
   candidate.updateEligibility.requiredPredicates.platformSignatureLocallyVerified =
     platformSignatureLocallyVerified(candidate);
 }
@@ -848,8 +863,9 @@ function writeAssemblerAttestationFixture(candidate, target, resourceRoot) {
   candidate.runtimeAttestation.sizeBytes = statSync(attestationPath).size;
 }
 
-function writeAssemblerSidecarFixture(candidate, target, resourceRoot, fixtureKind) {
-  addSidecarRuntime(candidate, target.platformTarget);
+function writeAssemblerSidecarFixture(candidate, target, resourceRoot, fixtureKind, evaluation) {
+  const overrides = evaluation ? { signing: evaluationSidecarSigning(target) } : {};
+  addSidecarRuntime(candidate, target.platformTarget, overrides);
   const sidecar = candidate.sidecarRuntimes[0];
   const sidecarRoot = join(resourceRoot, sidecar.payloadRootPath);
   const executablePath = join(resourceRoot, sidecar.executablePath);
@@ -914,23 +930,46 @@ function writeAssemblerQualificationFixture(candidate, target, resourceRoot) {
   candidate.runtimeQualification.sha256 = digestFor(qualificationBytes);
 }
 
-function writeAssemblerFixture(bundleRoot, largeArchive = false, unsafeSidecarKind) {
+function assemblerCandidate(target, evaluation) {
+  if (evaluation) {
+    const candidate = evaluationManifest(target.platformTarget);
+    candidate.updateEligibility.requiredPredicates.platformSignatureLocallyVerified = false;
+    candidate.updateEligibility.requiredPredicates.releaseTrustRequired = true;
+    candidate.updateEligibility.manualOnlyWhen = candidate.updateEligibility.manualOnlyWhen.map(
+      (reason) =>
+        reason === "signature-or-notarization-cannot-be-verified"
+          ? "release-trust-cannot-be-verified"
+          : reason,
+    );
+    return candidate;
+  }
+  const candidate = manifest();
+  setManifestTarget(candidate, target.platformTarget);
+  setVerificationState(candidate);
+  return candidate;
+}
+
+function assemblerArchiveSize(index, largeArchive) {
+  return largeArchive && index === 0 ? 17 * 1024 * 1024 : 1;
+}
+
+function writeAssemblerFixture(
+  bundleRoot,
+  largeArchive = false,
+  unsafeSidecarKind,
+  evaluation = false,
+) {
   const artifactsRoot = join(bundleRoot, "artifacts");
   for (const [index, target] of PORTABLE_TARGETS.entries()) {
     const stageRoot = join(artifactsRoot, `portable-stage-${target.platformTarget}`);
     mkdirSync(join(stageRoot, "manifest"), { recursive: true });
     mkdirSync(join(stageRoot, "evidence"), { recursive: true });
     const archivePath = join(stageRoot, target.assetName);
-    writeFileSync(
-      archivePath,
-      storedZipFixture(largeArchive && index === 0 ? 17 * 1024 * 1024 : 1),
-    );
+    writeFileSync(archivePath, storedZipFixture(assemblerArchiveSize(index, largeArchive)));
     if (target.platformTarget === "windows-x64") {
       writeFileSync(join(stageRoot, WINDOWS_PORTABLE_SETUP_ASSET_NAME), portableExecutable(42));
     }
-    const candidate = manifest();
-    setManifestTarget(candidate, target.platformTarget);
-    setVerificationState(candidate);
+    const candidate = assemblerCandidate(target, evaluation);
     candidate.release.releaseId = 0;
     candidate.artifact.assetId = 0;
     candidate.artifact.sizeBytes = statSync(archivePath).size;
@@ -948,7 +987,7 @@ function writeAssemblerFixture(bundleRoot, largeArchive = false, unsafeSidecarKi
     }
     writeAssemblerAttestationFixture(candidate, target, resourceRoot);
     const fixtureKind = index === 0 ? unsafeSidecarKind : undefined;
-    writeAssemblerSidecarFixture(candidate, target, resourceRoot, fixtureKind);
+    writeAssemblerSidecarFixture(candidate, target, resourceRoot, fixtureKind, evaluation);
     const activationPath = join(resourceRoot, ...candidate.runtimeActivation.path.split("/"));
     mkdirSync(dirname(activationPath), { recursive: true });
     const activationBytes = `${JSON.stringify(runtimeActivationManifest(candidate), null, 2)}\n`;
@@ -1044,12 +1083,15 @@ async function assembleStageForTest(
   dir,
   sidecarRuntimeSpecs = [],
   evaluation = false,
+  windowsGenerationProduction = false,
+  release = false,
 ) {
   return assemblePortableStage(
     {
       commitSha: COMMIT_SHA,
       dryRun: false,
       evaluation,
+      release,
       appleTeamId: target.startsWith("macos-") ? "AB12CD34EF" : undefined,
       nodeArchive: nodeArchive.path,
       nodeArchiveUrl: undefined,
@@ -1063,6 +1105,7 @@ async function assembleStageForTest(
       target,
       workflowRunAttempt: 1,
       workflowRunId: 123456789,
+      windowsGenerationProduction,
     },
     {
       buildPrimaryLauncher: writePrimaryLauncherFixture,
@@ -1352,16 +1395,9 @@ function evaluationSidecarSigning(target) {
 
 function evaluationManifest(platformTarget = "windows-x64") {
   const candidate = manifest();
+  setManifestTarget(candidate, platformTarget);
   setVerificationState(candidate, {
-    verificationChecks:
-      platformTarget === "windows-x64"
-        ? windowsVerificationChecks({ publisherChainVerified: false, timestampVerified: false })
-        : macVerificationChecks({
-            assessmentVerified: false,
-            developerIdVerified: false,
-            notarizationVerified: false,
-            stapleVerified: false,
-          }),
+    verificationChecks: createPortableVerificationChecks(platformTarget, false),
     verificationPolicy: "evaluation",
     verificationReasonCodes: ["evaluation-artifact", "evaluation-unsigned-allowed"],
     verificationStatus: "evaluation-unqualified",
@@ -1578,6 +1614,52 @@ describe("verifySha256File", () => {
 });
 
 describe("validatePortableManifest", () => {
+  it("accepts only the closed Windows generation binding in schema 2", () => {
+    const candidate = manifest();
+    const fixture = JSON.parse(
+      readFileSync("scripts/__tests__/fixtures/windows-generation-v2.json", "utf8"),
+    );
+    candidate.schemaVersion = fixture.schemaVersion;
+    candidate.windowsGeneration = fixture.windowsGeneration;
+    syncReviewedBinding(candidate);
+
+    expect(candidate.provenance.windowsGeneration).toEqual(fixture.provenance.windowsGeneration);
+    expect(candidate.releaseImpact.reviewedBinding.windowsGeneration).toEqual(
+      fixture.releaseImpact.reviewedBinding.windowsGeneration,
+    );
+    expect(fixture.setupManifest.windowsGeneration).toEqual(candidate.windowsGeneration);
+
+    expect(validatePortableManifest(candidate)).toEqual([]);
+
+    for (const mutate of [
+      (value) => {
+        value.windowsGeneration.resourceRoot = `.portable/generations/${DIGEST_C}`;
+      },
+      (value) => {
+        value.windowsGeneration.treeHashSchema = "KHA1";
+      },
+      (value) => {
+        value.windowsGeneration.launcherPath = "launcher.exe";
+      },
+      (value) => {
+        value.provenance.windowsGeneration.launcherSha256 = DIGEST_C;
+      },
+      (value) => {
+        value.releaseImpact.reviewedBinding.windowsGeneration.extra = true;
+      },
+    ]) {
+      const malformed = structuredClone(candidate);
+      mutate(malformed);
+      expect(validatePortableManifest(malformed).length).toBeGreaterThan(0);
+    }
+
+    const macos = structuredClone(candidate);
+    setManifestTarget(macos, "macos-arm64");
+    expect(validatePortableManifest(macos)).toContain("schemaVersion: must be 1");
+    const legacy = manifest();
+    expect(validatePortableManifest(legacy)).toEqual([]);
+  });
+
   it("requires a complete setup-asset binding for published Windows manifests", () => {
     const candidate = manifest();
     addSidecarRuntime(candidate, "windows-x64");
@@ -2370,6 +2452,15 @@ describe("assemblePortableReleaseAssets bounds", () => {
     });
   });
 
+  it("assembles evaluation helpers under the manifest-level trust policy", async () => {
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot, false, undefined, true);
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).resolves.toMatchObject({
+      schemaVersion: 1,
+    });
+  });
+
   it("records setup metadata from the copied companion bytes", async () => {
     const bundleRoot = tempDir();
     writeAssemblerFixture(bundleRoot);
@@ -2550,6 +2641,15 @@ describe("portable runtime package scripts", () => {
     // spawned directly — never looked up implicitly by a bare `run("rc", ...)` (#3075).
     expect(source).toContain('windowsToolFromPath(env.PATH, "rc.exe")');
     expect(source).toContain("windowsLauncherResourceSource()");
+  });
+
+  it("dispatches validated native update plans through the finite coordinator engine", () => {
+    const source = readFileSync("native/portable-launcher/keiko-portable-launcher.c", "utf8");
+
+    expect(source).toContain(
+      "int result = keiko_coordinator_execute_windows(coordinator) ? 0 : 74;",
+    );
+    expect(source).toContain("result = keiko_coordinator_execute_posix(&coordinator) ? 0 : 74;");
   });
 });
 
@@ -2945,6 +3045,31 @@ describe("verify-portable-runtime-signing", () => {
 const REPO_VERSION_IS_PRERELEASE = ROOT_PACKAGE_VERSION.includes("-");
 
 describe("stage-portable-runtime prerelease guard", () => {
+  it("builds and publishes only the closed Windows root contract", () => {
+    const dir = tempDir();
+    const fixture = JSON.parse(
+      readFileSync("scripts/__tests__/fixtures/windows-generation-v2.json", "utf8"),
+    );
+    const launcher = join(dir, "Keiko.exe");
+    let compiledGeneration;
+    buildWindowsGenerationLauncher(launcher, fixture.windowsGeneration.treeSha256, {
+      compile: (_target, destination, generationId) => {
+        compiledGeneration = generationId;
+        writeFileSync(destination, portableExecutable(7));
+      },
+    });
+    stageWindowsPortableRootFiles(dir, fixture.windowsGeneration);
+
+    expect(compiledGeneration).toBe(fixture.windowsGeneration.treeSha256);
+    expect(readFileSync(launcher)).toEqual(portableExecutable(7));
+    expect(
+      JSON.parse(readFileSync(join(dir, ".portable", "setup-manifest.json"), "utf8")),
+    ).toMatchObject(fixture.setupManifest);
+    expect(readFileSync(join(dir, "support", "keiko-support.cmd"), "utf8")).toContain(
+      '"%SCRIPT_DIR%..\\Keiko.exe" %*',
+    );
+  });
+
   it("fails closed when the release tag does not match a stable root package version", () => {
     const result = runStage([
       "--target",
@@ -3280,6 +3405,16 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
       [sidecarSpec],
       true,
     );
+    const release = await assembleStageForTest(
+      "windows-x64",
+      nodeArchive,
+      join(dir, "out-release"),
+      dir,
+      [sidecarSpec],
+      true,
+      false,
+      true,
+    );
 
     const plainSidecar = plain.manifest.sidecarRuntimes[0];
     const evaluationSidecar = evaluation.manifest.sidecarRuntimes[0];
@@ -3332,6 +3467,14 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
       "evaluation-unsigned-allowed",
     ]);
     expect(evaluation.manifest.runtimeActivation.trustAnchor).toBe("evaluation-unqualified");
+    expect(release.manifest.security).toEqual(evaluation.manifest.security);
+    expect(release.manifest.updateEligibility.requiredPredicates.releaseTrustRequired).toBe(true);
+    expect(release.manifest.updateEligibility.manualOnlyWhen).toContain(
+      "release-trust-cannot-be-verified",
+    );
+    expect(release.manifest.updateEligibility.manualOnlyWhen).not.toContain(
+      "signature-or-notarization-cannot-be-verified",
+    );
 
     // All FOUR writers move together, and the staging vocabulary appears nowhere in the evaluation
     // manifest or in the activation document the runtime reads at discovery.
@@ -3342,16 +3485,9 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
       "evaluation-unqualified",
     );
     expect(JSON.stringify(evaluation.manifest)).not.toContain("unverified-staging");
+    const evaluationRoot = join(dir, "out-evaluation", "windows-x64", "payload", "Keiko");
     const activation = readFileSync(
-      join(
-        dir,
-        "out-evaluation",
-        "windows-x64",
-        "payload",
-        "Keiko",
-        ".portable",
-        "runtime-activation.json",
-      ),
+      join(evaluationRoot, ".portable", "runtime-activation.json"),
       "utf8",
     );
     expect(activation).not.toContain("unverified-staging");
@@ -3359,9 +3495,27 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
 
     // The lane the producer emits is the lane the manifest validates against, and only that one.
     expect(validatePortableEvaluationManifest(evaluation.manifest)).toEqual([]);
+    expect(validatePortableEvaluationManifest(release.manifest)).toEqual([]);
+    expect(validatePortableReleaseTrustCandidateManifest(release.manifest)).toEqual([]);
+    expect(validatePortableReleaseTrustCandidateManifest(evaluation.manifest)).toContain(
+      "updateEligibility.requiredPredicates.releaseTrustRequired: must be true for a stable release-trust candidate",
+    );
     expect(validatePortableStagingManifest(evaluation.manifest)).not.toEqual([]);
     expect(validatePortableStagingManifest(plain.manifest)).toEqual([]);
     expect(validatePortableEvaluationManifest(plain.manifest)).not.toEqual([]);
+    expect(existsSync(join(evaluationRoot, "Keiko.exe"))).toBe(true);
+    expect(existsSync(join(evaluationRoot, ".portable", "setup-manifest.json"))).toBe(true);
+    expect(existsSync(join(evaluationRoot, "support", "keiko-support.cmd"))).toBe(true);
+    expect(existsSync(join(evaluationRoot, ".portable", "generation-staging"))).toBe(false);
+    expect(
+      validatePortableTargetRoot(join(dir, "out-evaluation", "windows-x64"), "windows-x64", {
+        context: "staging",
+      }),
+    ).toMatchObject({
+      primaryLauncher: "Keiko.exe",
+      signatureStatus: "evaluation-unqualified",
+      bundledRuntimePresent: true,
+    });
   }, 720_000);
 
   it("stages Windows resources with an extracted bundled Node runtime", async () => {
@@ -3370,14 +3524,18 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
     const sidecarSpec = createSidecarFixture(dir, "windows-x64");
     const outDir = join(dir, "out");
 
-    await assembleStageForTest("windows-x64", nodeArchive, outDir, dir, [sidecarSpec]);
+    await assembleStageForTest("windows-x64", nodeArchive, outDir, dir, [sidecarSpec], false, true);
 
-    const runtimeRoot = join(outDir, "windows-x64", "payload", "Keiko", "runtime", "node");
+    const payloadRoot = join(outDir, "windows-x64", "payload", "Keiko");
+    const generationRoot = join(payloadRoot, ".portable", "generation-staging");
+    const runtimeRoot = join(generationRoot, "runtime", "node");
     const sidecarRoot = join(
       outDir,
       "windows-x64",
       "payload",
       "Keiko",
+      ".portable",
+      "generation-staging",
       "runtime",
       "sidecars",
       "opencode-compatible",
@@ -3389,24 +3547,9 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
     // The macOS bundle seal must never touch a Windows stage: a seal hook invoked here would
     // conjure a phantom Keiko.app into the payload.
     expect(existsSync(join(outDir, "windows-x64", "payload", "Keiko", "Keiko.app"))).toBe(false);
-    expect(
-      JSON.parse(
-        readFileSync(
-          join(outDir, "windows-x64", "payload", "Keiko", ".portable", "setup-manifest.json"),
-          "utf8",
-        ),
-      ),
-    ).toMatchObject({
-      platformTarget: "windows-x64",
-      primaryLauncher: "Keiko.exe",
-      runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
-    });
-    const supportScript = readFileSync(
-      join(outDir, "windows-x64", "payload", "Keiko", "support", "keiko-support.cmd"),
-      "utf8",
-    );
-    expect(supportScript).toContain('set "SCRIPT_DIR=%~dp0"');
-    expect(supportScript).toContain('"%SCRIPT_DIR%..\\Keiko.exe" %*');
+    expect(existsSync(join(payloadRoot, "Keiko.exe"))).toBe(false);
+    expect(existsSync(join(payloadRoot, ".portable", "setup-manifest.json"))).toBe(false);
+    expect(existsSync(join(payloadRoot, "support"))).toBe(false);
     const manifestPath = join(outDir, "windows-x64", "manifest", "portable-manifest.json");
     const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
     expect(manifest.security.verificationChecks).toEqual({

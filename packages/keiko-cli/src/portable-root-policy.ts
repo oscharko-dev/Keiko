@@ -1,6 +1,8 @@
 import { existsSync, lstatSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve } from "node:path";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import { assertWindowsLocalVolume } from "@oscharko-dev/keiko-security/windows-local-volume";
 import type { PortableTarget } from "./portable-shared.js";
 
 const SYSTEM_MANAGED_PREFIXES = [
@@ -107,9 +109,14 @@ export function assertManagedRootAllowed(
   path: string,
   stateDir: string,
   target: PortableTarget,
+  securityLogSink?: SecurityLogSink,
 ): void {
   assertPathAllowed(path, target);
   assertNoSymlinkedAncestor(path);
+  // Check the lexical/original path before realpath can erase a mapped-share or reparse boundary.
+  if (target === "windows-x64") {
+    assertWindowsLocalVolume(nearestExistingAncestor(path), { securityLogSink });
+  }
   const resolvedPath = resolvedCandidatePath(path);
   assertPathAllowed(resolvedPath, target);
   const resolvedState = resolvedCandidatePath(stateDir);

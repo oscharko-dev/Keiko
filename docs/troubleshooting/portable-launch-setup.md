@@ -14,7 +14,7 @@ the system Node/npm requirement, but it cannot bypass local security policy.
 
 **Symptom**
 
-The user opens the signed Windows setup companion, or extracts the correct portable ZIP and opens
+The user opens the Windows setup companion, or extracts the correct portable ZIP and opens
 `Keiko`, `Keiko.exe`, or `Keiko.app`, but Keiko does not start. Windows SmartScreen or Defender may
 show a prompt. macOS may show a Gatekeeper, quarantine, signing, notarization, or "damaged app"
 prompt.
@@ -112,11 +112,12 @@ the selected location is not allowed or cannot be attested.
 
 **Root Cause**
 
-Keiko only promotes portable payloads into a dedicated user-owned managed install root. Setup fails
-closed when the selected path is inside `.keiko`, a customer repository, a temporary directory, a
-shared/network location, a symlinked path, an organization-managed root, a machine-wide location, or
-a location where the current user lacks permissions. This preserves update safety and keeps runtime
-state separate from the product payload.
+Keiko only promotes portable payloads into an attested target-specific managed install root.
+Windows uses its user-local root; macOS uses exactly `/Applications/Keiko.app` under the reviewed
+ownership and permission checks. Setup fails closed for `.keiko`, customer repositories, temporary
+or shared/network locations, symlinks, unattested organization-managed roots, other machine-wide
+locations, or insufficient permissions. This preserves update safety and keeps runtime state
+separate from the product payload.
 
 **Diagnostic Steps**
 
@@ -127,19 +128,19 @@ keiko portable status --target windows-x64 --portable-root <extracted-keiko-fold
 keiko repair --state-dir <state-root>
 ```
 
-The status is expected to be `managed` and `updateEligible: true` only after setup succeeds into an
-attested managed root. A `setup-failed` status indicates setup did not mutate an update-eligible
-install.
+A `managed` status establishes installation state, not candidate eligibility. One-click execution
+additionally requires current preflight, production signing continuity, and all other update gates.
+Evaluation artifacts remain manual-only even when setup succeeds. A `setup-failed` record must not
+be interpreted as permission to mutate a previously attested installation.
 
 **Resolution**
 
-- Ask the user to choose the default user-owned Keiko location unless there is a clear reason to
-  choose a custom user-owned folder.
-- Choose a location outside customer repositories, `.keiko`, temporary folders, shared/network
-  folders, and machine-wide application folders.
-- If the workstation is organization-managed and user-writable application folders are blocked, the
-  portable v1 self-managed path is not eligible; use an organization-approved deployment path when
-  that later epic exists.
+- Use the target's default managed location: `%LOCALAPPDATA%\Programs\Keiko` on Windows or exactly
+  `/Applications/Keiko.app` on macOS. Do not relocate the macOS app to bypass its approved root.
+- Keep customer repositories, `.keiko`, temporary folders, and shared/network folders separate.
+- If organization policy blocks the required location or approvals, ask the IT owner to resolve the
+  policy through its existing software process. Do not weaken ownership checks or imply that Keiko
+  provides an enterprise rollout feature.
 
 ---
 
@@ -158,6 +159,10 @@ managed install remains on the previous version or Keiko reopens the previous ve
 
 **Root Cause**
 
+Current evaluation releases require reviewed manual installation, and the repaired native coordinator
+still refuses update acceptance pending qualification. The automatic fallback described below is the
+qualified release contract, not evidence that a current release can replace an installation this way.
+
 The manual re-download fallback only replaces an already-attested managed install when the clicked
 package is valid, stable, newer than the managed install, and the current local Keiko server can be
 stopped before the file swap. It refuses older, equal, beta, malformed, wrong-platform, or
@@ -173,7 +178,9 @@ troubleshooting entries.
 
 **Resolution**
 
-- Prefer the in-app update button for ordinary users.
+- Prefer the in-app update button only when current preflight offers an eligible candidate.
+- Evaluation-to-production transition is manual-only; follow the target release's reviewed manual
+  installation instructions while preserving `.keiko` state. Do not relabel evaluation signatures.
 - If using the manual re-download fallback, use the newer stable ZIP for the same platform target.
 - Close stuck Keiko processes only through the normal OS application controls or organization
   support process; do not ask non-technical users to perform terminal cleanup.
@@ -199,13 +206,13 @@ extracted cleanly.
 
 **Root Cause**
 
-Windows `MoveFileEx` fails with `EPERM` or `EBUSY` while any handle is open on a file in the tree.
-A transient antivirus or EDR scan of a just-extracted `.exe`/`.dll`, the search indexer, or an
-Explorer preview is enough. POSIX `rename(2)` does not fail for an open destination, so the same
-swap succeeds on macOS and Linux. Keiko retries those two codes with bounded backoff and
-`chdir`s out of the managed tree before renaming it. Copy+delete is not used — it would lose the
-crash-safe atomic swap. `chdir` does not unmap `node.exe` loaded from the tree; a lock that
-outlasts the retry still fails closed.
+Windows rename can fail with `EPERM` or `EBUSY` when a file has an incompatible open handle or
+executable-image mapping. A scanner, indexer, or preview may cause transient contention, but the
+updater's own loaded `node.exe` is a different case: changing the working directory and retrying
+does not unmap it. The reviewed repair transfers durable ownership to a verified native coordinator
+outside the install tree, then proves old-process exit before promotion. Missing handoff proof must
+fail closed. A rename retry is not proof of process termination, and copy+delete is not a safe
+replacement for the atomic promotion contract.
 
 **Diagnostic Steps**
 
@@ -218,13 +225,50 @@ outlasts the retry still fails closed.
 
 **Resolution**
 
-- Re-run the same stable installer or in-app update; the retry is usually enough once the scan
-  finishes.
-- If the managed root is empty and `.keiko-previous-*` still holds the previous tree, restore is
-  `keiko portable repair` / reinstall — do not ask users to rename folders by hand as the normal
-  fix.
-- Do not tell users to disable antivirus as the normal fix. An organization allowlist for the
-  managed Keiko directory is the durable IT control when scanners hold extracted PEs for seconds.
+- Preserve the managed, staged, and previous trees and the update state until recovery ownership is
+  settled. A remaining previous tree is not permission to rename it over a running target.
+- Follow the displayed recovery/manual action or the release's reviewed reinstall instructions.
+  There is no `keiko portable repair` subcommand. Do not invent a repair command, delete lock/WAL
+  files, or ask users to rename installation folders as the normal fix.
+- Retry only after the current attempt is terminal and preflight offers a new eligible attempt.
+  If recovery remains required, collect canonical evidence and escalate through support.
+- Do not disable antivirus or create broad directory exclusions. An IT owner can investigate the
+  actual policy event without weakening the updater's trust checks.
+
+---
+
+## Update reconnects without a verified result
+
+**Symptom**
+
+The Update window disconnects during relaunch, reconnects with recovery required, or does not report
+the intended target version as verified.
+
+**Root Cause**
+
+An expected BFF outage is not a terminal outcome. Startup must reconcile the durable session and
+activation receipts and prove the exact target process, launch identity, port, and verified tree.
+Wrong/stale version, failed launch, persistence failure, and incomplete cleanup are not success.
+
+**Diagnostic Steps**
+
+Support operators should reconstruct the attempt from the canonical activity log:
+
+```bash
+keiko support analyze <state-root>/logs/server.log
+```
+
+Use explicit candidate/session and parent-correlation links to follow the attempt across relaunch.
+Missing evidence is a diagnostic gap, not permission to infer success from matching versions or
+nearby timestamps. Do not upload private handoff plans, runtime state, certificates, or raw command
+output as evidence.
+
+**Resolution**
+
+Allow the bounded reconnect to finish and follow the displayed action. Do not clear browser state,
+delete recovery files, kill an unrelated port owner, or force another update to manufacture a clean
+status. Once the target is verified, cleanup recovery must retain it rather than restore N−1. A
+persisting recovery result requires support review of the bounded activity timeline.
 
 ---
 
