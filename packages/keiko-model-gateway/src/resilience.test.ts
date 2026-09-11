@@ -326,6 +326,84 @@ describe("executeWithRetry", () => {
     });
   });
 
+  // CodeRabbit review, PR #3452: the retry inputs the tests above leave out. A rate limit without
+  // Retry-After takes the jittered backoff step; a rejection that is not an Error is wrapped and
+  // terminal; a delay exactly as long as what is left of the budget cannot run either.
+  it("takes the jittered backoff step for a rate limit without Retry-After", async () => {
+    const { clock, sleeps } = stubClock();
+    let calls = 0;
+    await expect(
+      executeWithRetry(
+        () => {
+          calls += 1;
+          return calls === 1
+            ? Promise.reject(new RateLimitError("slow down"))
+            : Promise.resolve("answer");
+        },
+        { maxRetries: 1, retryBaseDelayMs: 100 },
+        clock,
+        undefined,
+        () => 1,
+      ),
+    ).resolves.toBe("answer");
+    expect(calls).toBe(2);
+    expect(sleeps).toEqual([100]);
+  });
+
+  it("ends a call whose rejection is not an Error at once, as terminal", async () => {
+    const { clock, sleeps } = stubClock();
+    const events: ModelGatewayLogEvent[] = [];
+    let calls = 0;
+    await expect(
+      executeWithRetry(
+        () => {
+          calls += 1;
+          // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- the case under test
+          return Promise.reject("socket hang up");
+        },
+        RETRY_CONFIG,
+        clock,
+        undefined,
+        () => 1,
+        { sink: { write: (event): void => void events.push(event) } },
+      ),
+    ).rejects.toThrow("socket hang up");
+    expect(calls).toBe(1);
+    expect(sleeps).toEqual([]);
+    expect(events.find((event) => event.op === "gateway.retry.exhausted")?.extra).toMatchObject({
+      attempt: 1,
+      reason: "terminal",
+    });
+  });
+
+  it("ends the call at once when the next delay exactly equals the remaining budget", async () => {
+    const { clock, sleeps, advance } = stubClock();
+    const events: ModelGatewayLogEvent[] = [];
+    let calls = 0;
+    await expect(
+      executeWithRetry(
+        () => {
+          calls += 1;
+          advance(1_000);
+          return Promise.reject(new RateLimitError("slow down", 500));
+        },
+        { maxRetries: 1, retryBaseDelayMs: 100, attemptTimeoutMs: 1_000, timeoutMs: 1_500 },
+        clock,
+        undefined,
+        () => 1,
+        { sink: { write: (event): void => void events.push(event) } },
+      ),
+    ).rejects.toBeInstanceOf(RateLimitError);
+    expect(calls).toBe(1);
+    expect(sleeps).toEqual([]);
+    expect(events.find((event) => event.op === "gateway.retry.exhausted")?.extra).toMatchObject({
+      attempt: 1,
+      reason: "budget",
+      delayMs: 500,
+      remainingMs: 500,
+    });
+  });
+
   it("propagates cancellation while sleeping between retries", async () => {
     const controller = new AbortController();
     const clock: Clock = {

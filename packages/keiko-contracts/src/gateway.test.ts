@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  isToolCallingVerificationFresh,
   CONVERSATION_CAPABILITY_CONTRACT_VERSION,
   conversationDefaultRank,
   electConversationDefault,
@@ -111,13 +112,41 @@ describe("isCodingWorkbenchModel", () => {
     });
     const admitted = checkedAt + TOOL_CALLING_VERIFICATION_MAX_AGE_MS - 210_000;
     const later = checkedAt + TOOL_CALLING_VERIFICATION_MAX_AGE_MS + 3_732;
-    expect(isCodingWorkbenchModel(model, admitted)).toBe(true);
-    expect(isCodingWorkbenchModel(model, later)).toBe(false);
-    expect(codingWorkbenchModelEligibility(model, admitted)).toBe("eligible");
-    expect(codingWorkbenchModelEligibility(model, later)).toBe("tool-calling-unverified");
-    expect(codingWorkbenchModelEligibility(cap({ preferredUseCases: ["Chat"] }), admitted)).toBe(
-      "ineligible",
+    expect(codingWorkbenchModelEligibility(model, { nowMs: admitted })).toBe("eligible");
+    expect(codingWorkbenchModelEligibility(model, { nowMs: later })).toBe(
+      "tool-calling-unverified",
     );
+    expect(
+      codingWorkbenchModelEligibility(cap({ preferredUseCases: ["Chat"] }), { nowMs: admitted }),
+    ).toBe("ineligible");
+  });
+
+  // Coding run 25 (2026-09-11): the Coding Workbench builds its picker with
+  // `models.filter(isCodingWorkbenchModel)`. While the rule took an optional numeric instant,
+  // Array.filter handed it each element's index, so every model was judged as of the epoch and the
+  // picker offered none (F76).
+  it("keeps a model with a fresh proof when handed point-free to Array.filter", () => {
+    const fresh = cap({
+      preferredUseCases: ["Coding"],
+      toolCallingVerification: {
+        status: "verified",
+        checkedAt: new Date(Date.now() - 60_000).toISOString(),
+        probe: "gateway-tool-calling-v1",
+        configurationFingerprint: "test-fingerprint",
+      },
+    });
+    expect([fresh, fresh].filter(isCodingWorkbenchModel)).toEqual([fresh, fresh]);
+    expect([fresh].map((model) => codingWorkbenchModelEligibility(model))).toEqual(["eligible"]);
+  });
+
+  it("refuses point-free use of the instant-taking rules at compile time", () => {
+    const pointFree = (models: readonly ModelCapability[]): unknown => [
+      // @ts-expect-error F76: Array.map would hand the element index to the instant parameter.
+      models.map(codingWorkbenchModelEligibility),
+      // @ts-expect-error F76: the proof's own freshness rule takes its instant the same way.
+      models.map((model) => model.toolCallingVerification).filter(isToolCallingVerificationFresh),
+    ];
+    expect(pointFree([])).toEqual([[], []]);
   });
 });
 

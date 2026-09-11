@@ -70,6 +70,7 @@ import {
   type ServerDiagnosticSink,
 } from "./diagnostics-log.js";
 import type { WorkspaceReconciliationService } from "./task-workspace/types.js";
+import { currentOpenSseStreamCount } from "./sse-write.js";
 import type {
   WorkspaceInstance,
   WorkspaceReconciliationReport,
@@ -683,6 +684,8 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       activityLog: { write: (event: ServerLogEvent): void => void records.push(event) },
     });
 
+    // The module-level counter is whatever other suites left open; the line must carry exactly it.
+    const openStreamsAtTeardown = currentOpenSseStreamCount();
     await deps.dispose?.();
 
     const shutdown = records.filter((event) => event.op === "server.runtime.shutdown");
@@ -693,7 +696,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       extra: {
         state: "started",
         activeRunCount: 0,
-        openSseStreamCount: expect.any(Number) as unknown,
+        openSseStreamCount: openStreamsAtTeardown,
       },
     });
     expect(shutdown[1]).toMatchObject({
@@ -794,6 +797,9 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     }
 
     expect(caught).toBe(closeFailure);
+    // Every later step still ran although the first one threw: the shared node:sqlite handle, which
+    // the last step closes, is closed (CodeRabbit review, PR #3452).
+    expect(() => deps.store.listProjects()).toThrow();
     const shutdown = records.filter((event) => event.op === "server.runtime.shutdown");
     expect(shutdown).toHaveLength(2);
     expect(shutdown[1]).toMatchObject({
@@ -1030,7 +1036,20 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       expect(store.listProjects().some((project) => project.path === repositoryRoot)).toBe(
         registered,
       );
-      expect(events).toHaveLength(registered ? 1 : 0);
+      // A refusal is recorded too, never silent: it names why the repository stayed unregistered
+      // and so why its verification is refused (CodeRabbit review, PR #3452).
+      expect(events).toEqual([
+        registered
+          ? expect.objectContaining({ op: "task-workspace.repository.registered" })
+          : expect.objectContaining({
+              op: "task-workspace.repository.registration-refused",
+              level: "warn",
+              extra: {
+                repositoryId: instance.repositoryId,
+                reason: "ui-database-inside-repository",
+              },
+            }),
+      ]);
       // The worktree's own identity is registered either way: the repository decision never gates it.
       expect(store.listProjects().some((project) => project.path === managedRoot)).toBe(true);
     } finally {

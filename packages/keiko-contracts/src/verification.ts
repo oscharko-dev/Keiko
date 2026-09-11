@@ -89,7 +89,9 @@ export interface VerificationDependencySummary {
   readonly durationMs: number;
   // A short, redacted reason for a refused or failed bootstrap (e.g. "project npm config present").
   readonly detail?: string | undefined;
-  // The install's egress through the registry proxy (ADR-0043 D17); absent when npm never ran.
+  // The install's egress through the registry proxy (ADR-0043 D17): present whenever the proxy was
+  // started for the install, with zero counts when npm made no request through it (an install that
+  // ended before npm spawned); absent when no proxy was started (CodeRabbit review, PR #3452).
   readonly egress?: VerificationDependencyEgress | undefined;
 }
 

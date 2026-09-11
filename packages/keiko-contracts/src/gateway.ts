@@ -63,14 +63,19 @@ export const TOOL_CALLING_VERIFICATION_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 /**
  * Returns whether the proof itself is current. Callers that know the provider must additionally
  * compare its configuration fingerprint before relying on the capability.
+ *
+ * The instant is an object, never a bare number: a rule with an optional numeric trailing parameter
+ * that is handed point-free to `Array.filter` or `Array.map` receives each element's index as that
+ * instant. Coding run 25 (2026-09-11) found the Coding Workbench judging every model as of the
+ * epoch that way and offering none (F76); an object parameter makes such a call a type error.
  */
 export function isToolCallingVerificationFresh(
   verification: ToolCallingVerification | undefined,
-  now = Date.now(),
+  at?: { readonly nowMs: number },
 ): boolean {
   if (verification?.status !== "verified") return false;
   const checkedAt = Date.parse(verification.checkedAt);
-  const ageMs = now - checkedAt;
+  const ageMs = (at?.nowMs ?? Date.now()) - checkedAt;
   return Number.isFinite(checkedAt) && ageMs >= 0 && ageMs <= TOOL_CALLING_VERIFICATION_MAX_AGE_MS;
 }
 
@@ -304,13 +309,14 @@ const CODING_WORKBENCH_USE_CASES: ReadonlySet<string> = new Set([
  * Why a capability can or cannot power the Coding Workbench at `nowMs`. A model that qualifies in
  * every other respect but whose forced tool-call proof is missing or older than
  * `TOOL_CALLING_VERIFICATION_MAX_AGE_MS` is `tool-calling-unverified`: the remedy is a new probe,
- * not another model. `nowMs` lets an admitted run judge the proof as of its admission (F73).
+ * not another model. `at` lets an admitted run judge the proof as of its admission (F73); it is an
+ * object for the reason `isToolCallingVerificationFresh` states (F76).
  */
 export type CodingWorkbenchModelEligibility = "eligible" | "tool-calling-unverified" | "ineligible";
 
 export function codingWorkbenchModelEligibility(
   capability: ModelCapability,
-  nowMs = Date.now(),
+  at?: { readonly nowMs: number },
 ): CodingWorkbenchModelEligibility {
   const qualified =
     capability.kind === "chat" &&
@@ -320,14 +326,18 @@ export function codingWorkbenchModelEligibility(
       CODING_WORKBENCH_USE_CASES.has(normalizedCodingUseCase(value)),
     );
   if (!qualified) return "ineligible";
-  return isToolCallingVerificationFresh(capability.toolCallingVerification, nowMs)
+  return isToolCallingVerificationFresh(capability.toolCallingVerification, at)
     ? "eligible"
     : "tool-calling-unverified";
 }
 
-/** The single browser/server rule for models eligible to power the Coding Workbench. */
-export function isCodingWorkbenchModel(capability: ModelCapability, nowMs = Date.now()): boolean {
-  return codingWorkbenchModelEligibility(capability, nowMs) === "eligible";
+/**
+ * The single browser/server rule for models eligible to power the Coding Workbench, as of now. It
+ * takes the capability alone, so it is safe to hand to `Array.filter` (F76); a caller that must
+ * judge another instant uses `codingWorkbenchModelEligibility` with `{ nowMs }`.
+ */
+export function isCodingWorkbenchModel(capability: ModelCapability): boolean {
+  return codingWorkbenchModelEligibility(capability) === "eligible";
 }
 
 // ─── Completion / infilling capability helpers (Issue #1210, ADR-0042 D5) ──────

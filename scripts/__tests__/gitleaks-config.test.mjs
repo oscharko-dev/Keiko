@@ -24,21 +24,60 @@ const ALLOWLIST_KEYS = new Set([
 ]);
 const CRITERIA = new Set(["commits", "paths", "regexes", "stopwords"]);
 
-// The keys of every `[[allowlists]]` table. Array items sit on indented lines, so only a line that
-// starts with an identifier is an assignment.
+// The allowlist tables gitleaks v8.30.1 reads: the global `[[allowlists]]` and its deprecated
+// single-table form `[allowlist]`, and the same two forms under a rule.
+const ALLOWLIST_TABLES = new Set([
+  "allowlists",
+  "allowlist",
+  "rules.allowlists",
+  "rules.allowlist",
+]);
+
+// One TOML key: bare, "basic" or 'literal' (TOML 1.0, Keys). A quoted key is a key like any other,
+// so a reader of bare keys alone let `"commits" = [...]` through unseen (CodeRabbit review).
+const KEY = String.raw`(?:[A-Za-z0-9_-]+|"(?:[^"\\\n]|\\.)*"|'[^'\n]*')`;
+const KEY_PART = new RegExp(KEY, "gu");
+const HEADER = new RegExp(
+  String.raw`^\s*\[\[?\s*(${KEY}(?:\s*\.\s*${KEY})*)\s*\]\]?\s*(?:#.*)?$`,
+  "u",
+);
+const ASSIGNMENT = new RegExp(String.raw`^\s*(${KEY})\s*=\s*(.*)$`, "u");
+
+function unquote(token) {
+  if (token.startsWith('"')) return JSON.parse(token);
+  if (token.startsWith("'")) return token.slice(1, -1);
+  return token;
+}
+
+// A header's name with every dotted part unquoted: `[[ "rules" . allowlists ]]` is rules.allowlists.
+function tableName(header) {
+  return (header.match(KEY_PART) ?? []).map(unquote).join(".").toLowerCase();
+}
+
+// A TOML string value without its quotes or a trailing comment; anything else as written.
+function stringValue(raw) {
+  const quoted = /^("(?:[^"\\]|\\.)*"|'[^']*')/u.exec(raw.trim());
+  return quoted === null ? raw.trim() : unquote(quoted[1]);
+}
+
+// The keys of every allowlist table. A line inside a multi-line string is text, not an assignment.
 function allowlistTables(text) {
   const tables = [];
   let current;
+  let insideMultiline = false;
   for (const line of text.split("\n")) {
-    const header = /^\[\[?([^\]]+)\]\]?\s*$/u.exec(line);
+    const wasInside = insideMultiline;
+    if ((line.match(/'''|"""/gu) ?? []).length % 2 === 1) insideMultiline = !insideMultiline;
+    if (wasInside) continue;
+    const header = HEADER.exec(line);
     if (header !== null) {
-      current = line.startsWith("[[") && header[1] === "allowlists" ? new Map() : undefined;
+      current = ALLOWLIST_TABLES.has(tableName(header[1])) ? new Map() : undefined;
       if (current !== undefined) tables.push(current);
       continue;
     }
-    const assignment = /^([A-Za-z]\w*)\s*=\s*(.*)$/u.exec(line);
+    const assignment = ASSIGNMENT.exec(line);
     if (current !== undefined && assignment !== null) {
-      current.set(assignment[1].toLowerCase(), assignment[2].trim());
+      current.set(unquote(assignment[1]).toLowerCase(), assignment[2].trim());
     }
   }
   return tables;
@@ -54,12 +93,12 @@ function unknownAllowlistKeys(text) {
 // Every allowlist that combines criteria without `condition = "AND"`, named by its criteria.
 function orCombinedAllowlists(text) {
   return allowlistTables(text)
-    .map((table) => [...table.keys()].filter((key) => CRITERIA.has(key)))
-    .filter((criteria, index) => {
-      const table = allowlistTables(text)[index];
-      return criteria.length > 1 && table?.get("condition") !== '"AND"';
-    })
-    .map((criteria) => criteria.join(", "));
+    .map((table) => ({
+      criteria: [...table.keys()].filter((key) => CRITERIA.has(key)),
+      condition: table.has("condition") ? stringValue(table.get("condition")).toUpperCase() : "",
+    }))
+    .filter(({ criteria, condition }) => criteria.length > 1 && condition !== "AND")
+    .map(({ criteria }) => criteria.join(", "));
 }
 
 const repositoryConfig = readFileSync(new URL("../../.gitleaks.toml", import.meta.url), "utf8");
@@ -113,5 +152,41 @@ describe("the allowlist checks reject a weakened configuration", () => {
 
   it("reports an unknown key anywhere in an allowlist", () => {
     expect(unknownAllowlistKeys(`${scoped}\nregexTargets = "line"`)).toEqual(["regextargets"]);
+  });
+
+  // CodeRabbit review, PR #3452: gitleaks reads quoted and indented keys, spaced or quoted table
+  // headers and every allowlist table form; a check that does not is a way around it.
+  it("reads quoted keys as the keys they are", () => {
+    const quoted = [
+      "[[allowlists]]",
+      'condition = "OR"',
+      '"commits" = ["0000000000000000000000000000000000000000"]',
+      "'paths' = ['''fixtures/example\\.test\\.ts''']",
+    ].join("\n");
+    expect(orCombinedAllowlists(quoted)).toEqual(["commits, paths"]);
+    expect(unknownAllowlistKeys(`${quoted}\n"matchCondition" = "AND"`)).toEqual(["matchcondition"]);
+  });
+
+  it("reads indented keys under a spaced, quoted header", () => {
+    const spaced = scoped
+      .replace("[[allowlists]]", '[[ "allowlists" ]]')
+      .replace('condition = "AND"\n', "")
+      .replace("commits =", "  commits =");
+    expect(orCombinedAllowlists(spaced)).toEqual(["commits, paths"]);
+  });
+
+  it.each(["[allowlist]", "[[rules.allowlists]]", "[rules.allowlist]"])(
+    "checks the %s table form as well",
+    (header) => {
+      const other = scoped
+        .replace("[[allowlists]]", header)
+        .replace('condition = "AND"', 'condition = "OR"');
+      expect(orCombinedAllowlists(other)).toEqual(["commits, paths"]);
+    },
+  );
+
+  it("accepts AND in any TOML string form", () => {
+    const literal = scoped.replace('condition = "AND"', "condition = 'AND' # one commit, one path");
+    expect(orCombinedAllowlists(literal)).toEqual([]);
   });
 });

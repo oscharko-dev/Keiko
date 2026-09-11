@@ -82,6 +82,10 @@ capability: each sidecar call judges the proof as of the instant the capability 
 the capability store records. The capability's own expiry and revocation still bound the run's
 access. Until PR #3452 every call judged the proof as of the call, so coding run 24 (2026-09-11),
 admitted 3.5 minutes before its proof aged out, had every later call refused and could not recover.
+A rule that judges an instant other than now takes it as `{ nowMs }`, never as a bare number, and
+`isCodingWorkbenchModel` takes the capability alone: handed point-free to `Array.filter`, a numeric
+instant receives each element's index, and coding run 25 (2026-09-11) found the Coding Workbench
+judging every model as of the epoch and offering none (F76).
 
 ## Consequences
 

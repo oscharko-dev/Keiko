@@ -1782,7 +1782,7 @@ function rerankerBaseUrl(
 function rerankerTimeoutMs(block: Record<string, unknown>, env: EnvSource): number {
   const envValue = env.KEIKO_RERANKER_TIMEOUT_MS;
   if (envValue !== undefined && envValue.length > 0) {
-    return requirePositiveInt(Number(envValue), "KEIKO_RERANKER_TIMEOUT_MS");
+    return requireTimerDelayMs(Number(envValue), "KEIKO_RERANKER_TIMEOUT_MS");
   }
   return requireTimerDelayMs(block.timeoutMs ?? DEFAULT_TIMEOUT_MS, "reranker.timeoutMs");
 }
@@ -2013,7 +2013,7 @@ function hasCurrentToolCallingVerification(
   ) {
     return false;
   }
-  return isToolCallingVerificationFresh(verification, now);
+  return isToolCallingVerificationFresh(verification, { nowMs: now });
 }
 
 function verifiedToolCallingCapability(

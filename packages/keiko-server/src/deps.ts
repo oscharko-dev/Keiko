@@ -2398,6 +2398,16 @@ function ensureBoundRepositoryProject(input: {
   try {
     assertUiDbOutsideProject(input.uiDbPath, repositoryRoot);
   } catch {
+    // Recorded, never silent: an unregistered repository gets no script trust, so every
+    // verification in its task workspace is refused, and this line names why (CodeRabbit review,
+    // PR #3452). Body-free: the repository's id and a closed reason, never a path.
+    (input.activityLog ?? processServerLogSink()).write({
+      level: "warn",
+      category: "security",
+      op: "task-workspace.repository.registration-refused",
+      correlationId: input.correlationId ?? UNKNOWN_CORRELATION_ID,
+      extra: { repositoryId: input.instance.repositoryId, reason: "ui-database-inside-repository" },
+    });
     return;
   }
   input.uiStore.createProject(repositoryRoot, basename(repositoryRoot));
@@ -4874,34 +4884,76 @@ export async function disposeRuntimeServicesRecorded(
     : new Error("runtime-services-dispose-failed", { cause: failure });
 }
 
+// Every teardown step is attempted, whatever an earlier one did. A throwing step used to abandon
+// the rest -- the runtime composition, the LSP pool, the graph-owned registries and the shared
+// node:sqlite close with its WAL checkpoint (CodeRabbit review, PR #3452). The first failure is
+// rethrown once every step has run, so `disposeRuntimeServicesRecorded` still records a fault.
+async function runTeardownSteps(steps: readonly (() => void | Promise<void>)[]): Promise<void> {
+  let firstFailure: { readonly error: unknown } | undefined;
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      firstFailure ??= { error };
+    }
+  }
+  if (firstFailure !== undefined) throw firstFailure.error;
+}
+
 async function disposeRuntimeServices(
   args: UiHandlerDepsAssemblyArgs,
   services: UiHandlerRuntimeServices,
   atlassianRegistries: ReturnType<typeof atlassianConnectorRegistryFields>,
   codingAppSessionDenialWindows: CodingAppSessionDenialWindows,
 ): Promise<void> {
-  services.gitChangeSnapshotService.close();
-  services.runtimeComposition.dispose?.();
-  services.codingRuntimeControlPlane?.safeActivityProjection?.purgeAll("shutdown");
-  await shutdownHostLspPool();
-  await services.dapProduction?.dispose();
-  services.peripherals.disposeTrustLspBridge();
-  services.peripherals.debugActivationControl.dispose();
-  services.peripherals.workspaceWatchService.disposeAll();
-  // #2906 round 2: these graph-owned registries (atlassianConnectorRegistryFields, one
-  // instance per composed deps graph) were never disposed with the graph. A sync job started
-  // via startAtlassianSyncJob continues in a detached setImmediate closure that captures THIS
-  // graph's deps/registry and keeps mutating it after disposal, while a newly composed graph's
-  // OWN fresh registry has no record of that still-running job and could admit a duplicate for
-  // the same capsule (hasActiveRunForCapsule sees an empty registry). reset() aborts every
-  // active job's controller and drops pending approvals/activity before the bundle itself goes
-  // away, so nothing on this graph outlives it as observable state on the NEXT graph.
-  atlassianRegistries.atlassianActionApprovalRegistry?.reset();
-  atlassianRegistries.atlassianSyncJobRegistry?.reset();
-  // #2906 round 3: same rationale as the Atlassian registries above -- drop this graph's
-  // denial-window counters so nothing outlives it as observable state on the next graph.
-  codingAppSessionDenialWindows.reset();
-  args.bundle.dispose?.();
+  await runTeardownSteps([
+    (): void => {
+      services.gitChangeSnapshotService.close();
+    },
+    (): void => {
+      services.runtimeComposition.dispose?.();
+    },
+    (): void => {
+      services.codingRuntimeControlPlane?.safeActivityProjection?.purgeAll("shutdown");
+    },
+    async (): Promise<void> => {
+      await shutdownHostLspPool();
+    },
+    async (): Promise<void> => {
+      await services.dapProduction?.dispose();
+    },
+    (): void => {
+      services.peripherals.disposeTrustLspBridge();
+    },
+    (): void => {
+      services.peripherals.debugActivationControl.dispose();
+    },
+    (): void => {
+      services.peripherals.workspaceWatchService.disposeAll();
+    },
+    // #2906 round 2: these graph-owned registries (atlassianConnectorRegistryFields, one
+    // instance per composed deps graph) were never disposed with the graph. A sync job started
+    // via startAtlassianSyncJob continues in a detached setImmediate closure that captures THIS
+    // graph's deps/registry and keeps mutating it after disposal, while a newly composed graph's
+    // OWN fresh registry has no record of that still-running job and could admit a duplicate for
+    // the same capsule (hasActiveRunForCapsule sees an empty registry). reset() aborts every
+    // active job's controller and drops pending approvals/activity before the bundle itself goes
+    // away, so nothing on this graph outlives it as observable state on the NEXT graph.
+    (): void => {
+      atlassianRegistries.atlassianActionApprovalRegistry?.reset();
+    },
+    (): void => {
+      atlassianRegistries.atlassianSyncJobRegistry?.reset();
+    },
+    // #2906 round 3: same rationale as the Atlassian registries above -- drop this graph's
+    // denial-window counters so nothing outlives it as observable state on the next graph.
+    (): void => {
+      codingAppSessionDenialWindows.reset();
+    },
+    (): void => {
+      args.bundle.dispose?.();
+    },
+  ]);
 }
 
 function createUiHandlerDispose(

@@ -48,6 +48,7 @@ import { randomUUID } from "node:crypto";
 import { lstatSync, readdirSync, readFileSync } from "node:fs";
 import type { IncomingMessage } from "node:http";
 import { join } from "node:path";
+import { MAX_TIMER_DELAY_MS } from "../abort-race.js";
 import { STREAMING, type HandlerOutcome, type RouteContext, type RouteResult } from "../routes.js";
 import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -749,21 +750,23 @@ const DEFAULT_BUILD_DEADLINE_MS = 600_000;
 /** Default per-fetch request timeout in milliseconds (1 minute). */
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
-// Parses a positive-integer env var, returning the default when the value is absent or invalid.
-function readPositiveIntEnv(raw: string | undefined, defaultValue: number): number {
+// Parses a timer delay from an env var, returning the default when the value is absent or invalid.
+// A delay no timer can hold (more than 2^31 - 1 ms) is invalid too: setTimeout and
+// AbortSignal.timeout fire it at once (PR #3452 review of KEIKO_RERANKER_TIMEOUT_MS; the same class).
+function readTimerDelayEnv(raw: string | undefined, defaultValue: number): number {
   if (raw === undefined) return defaultValue;
   const value = Number(raw);
-  return Number.isInteger(value) && value > 0 ? value : defaultValue;
+  return Number.isInteger(value) && value > 0 && value <= MAX_TIMER_DELAY_MS ? value : defaultValue;
 }
 
 /** KEIKO_FIGMA_BUILD_DEADLINE_MS — total build deadline used by the coalesced promise race. */
-function figmaBuildDeadlineMsFromEnv(env: EnvSource): number {
-  return readPositiveIntEnv(env.KEIKO_FIGMA_BUILD_DEADLINE_MS, DEFAULT_BUILD_DEADLINE_MS);
+export function figmaBuildDeadlineMsFromEnv(env: EnvSource): number {
+  return readTimerDelayEnv(env.KEIKO_FIGMA_BUILD_DEADLINE_MS, DEFAULT_BUILD_DEADLINE_MS);
 }
 
 /** KEIKO_FIGMA_REQUEST_TIMEOUT_MS — per-fetch timeout threaded into the transport ports. */
-function figmaRequestTimeoutMsFromEnv(env: EnvSource): number {
-  return readPositiveIntEnv(env.KEIKO_FIGMA_REQUEST_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS);
+export function figmaRequestTimeoutMsFromEnv(env: EnvSource): number {
+  return readTimerDelayEnv(env.KEIKO_FIGMA_REQUEST_TIMEOUT_MS, DEFAULT_REQUEST_TIMEOUT_MS);
 }
 
 // F9 observability: a `FIGMA_INTERNAL` 500 is the catch-all for an UNEXPECTED build/persist failure;

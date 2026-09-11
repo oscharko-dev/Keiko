@@ -37,7 +37,6 @@ import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gatewa
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
   codingWorkbenchModelEligibility,
-  isCodingWorkbenchModel,
   isToolCallingVerificationFresh,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 const voiceCapabilityCache = new WeakMap<
@@ -227,6 +226,10 @@ function codingSidecarProjection(
   };
 }
 
+function eligibleAt(capability: ModelCapability, nowMs: number): boolean {
+  return codingWorkbenchModelEligibility(capability, { nowMs }) === "eligible";
+}
+
 function selectCodingSafeSidecarCapability(
   config: ConfiguredCapabilitySource,
   modelId: string | undefined,
@@ -234,11 +237,11 @@ function selectCodingSafeSidecarCapability(
 ): ModelCapability | undefined {
   if (modelId !== undefined) {
     const selected = listConfiguredCapabilities(config).find((item) => item.id === modelId);
-    return selected !== undefined && isCodingWorkbenchModel(selected, nowMs) ? selected : undefined;
+    return selected !== undefined && eligibleAt(selected, nowMs) ? selected : undefined;
   }
   let best: ModelCapability | undefined;
   for (const capability of listConfiguredCapabilities(config)) {
-    if (!isCodingWorkbenchModel(capability, nowMs)) {
+    if (!eligibleAt(capability, nowMs)) {
       continue;
     }
     if (best === undefined || COST_RANK[capability.costClass] < COST_RANK[best.costClass]) {
@@ -274,7 +277,7 @@ function unavailableReasonForSidecarConfig(
   if (
     targeted.some(
       (capability) =>
-        codingWorkbenchModelEligibility(capability, nowMs) === "tool-calling-unverified",
+        codingWorkbenchModelEligibility(capability, { nowMs }) === "tool-calling-unverified",
     )
   ) {
     return "tool-calling-unverified";

@@ -2201,7 +2201,7 @@
     {
       "op": "figma.snapshotBuild",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:790",
+      "site": "packages/keiko-server/src/qualityIntelligence/figmaSnapshotRoutes.ts:793",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -3262,7 +3262,7 @@
     {
       "op": "server.composition",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:4013",
+      "site": "packages/keiko-server/src/deps.ts:4023",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -3276,7 +3276,7 @@
     {
       "op": "server.runtime.shutdown",
       "category": "process",
-      "site": "packages/keiko-server/src/deps.ts:4841",
+      "site": "packages/keiko-server/src/deps.ts:4851",
       "package": "keiko-server"
     },
     {
@@ -3325,14 +3325,20 @@
     {
       "op": "task-workspace.reconcile.startup",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/deps.ts:2701",
+      "site": "packages/keiko-server/src/deps.ts:2711",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "task-workspace.repository.registered",
       "category": "security",
-      "site": "packages/keiko-server/src/deps.ts:2406",
+      "site": "packages/keiko-server/src/deps.ts:2416",
+      "package": "keiko-server"
+    },
+    {
+      "op": "task-workspace.repository.registration-refused",
+      "category": "security",
+      "site": "packages/keiko-server/src/deps.ts:2407",
       "package": "keiko-server"
     },
     {
@@ -4180,6 +4186,7 @@
     "task-workspace.lifecycle",
     "task-workspace.reconcile.startup",
     "task-workspace.repository.registered",
+    "task-workspace.repository.registration-refused",
     "tool-catalog.bind-ready",
     "tool-catalog.bind-unavailable",
     "tool-catalog.binding-failed",
