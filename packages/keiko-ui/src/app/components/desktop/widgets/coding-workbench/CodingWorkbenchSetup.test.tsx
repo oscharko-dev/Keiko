@@ -524,6 +524,55 @@ describe("CodingWorkbenchSetup", () => {
     expect(baseBranchMock).not.toHaveBeenCalled();
   });
 
+  // The same repository bound onto another base replaces the default it seeded (review on PR #3452):
+  // the earlier base must not stay settled for that path and reach the next bind.
+  it("takes a new bound base branch for the same repository", async () => {
+    const user = userEvent.setup();
+    const view = renderWorkbench(
+      boundWorkspaceApi("/repos/target", "master"),
+      liveState(),
+      "/srv/keiko",
+    );
+    await user.click(screen.getByRole("button", { name: "Start from a GitHub issue" }));
+    expect(screen.getByLabelText("Target branch")).toHaveValue("master");
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={boundWorkspaceApi("/repos/target", "release/2")}>
+        <CodingWorkbenchWindow selectedRoot="/srv/keiko" />
+      </ActiveWorkspaceProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target branch")).toHaveValue("release/2");
+    });
+    expect(baseBranchMock).not.toHaveBeenCalled();
+  });
+
+  // …but a branch the operator typed wins over every default, a new bound base included.
+  it("keeps a typed branch when the bound base branch changes", async () => {
+    const user = userEvent.setup();
+    const view = renderWorkbench(
+      boundWorkspaceApi("/repos/target", "master"),
+      liveState(),
+      "/srv/keiko",
+    );
+    await user.click(screen.getByRole("button", { name: "Start from a GitHub issue" }));
+    await user.clear(screen.getByLabelText("Target branch"));
+    await user.type(screen.getByLabelText("Target branch"), "feature/typed");
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={boundWorkspaceApi("/repos/target", "release/2")}>
+        <CodingWorkbenchWindow selectedRoot="/srv/keiko" />
+      </ActiveWorkspaceProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/target");
+    });
+    expect(screen.getByLabelText("Target branch")).toHaveValue("feature/typed");
+    expect(baseBranchMock).not.toHaveBeenCalled();
+  });
+
   // The seeded branch is the bound repository's, not a choice for another path the operator types.
   it("reads the branch of a different path typed after the issue-intake seed", async () => {
     const user = userEvent.setup();

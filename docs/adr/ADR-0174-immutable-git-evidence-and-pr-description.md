@@ -105,7 +105,9 @@ network fetch. Repository templates and human-authored text outside the managed 
 the application adapter and must remain byte-identical. The server-owned Checks section of a
 delivered pull request (ADR-0086 D9) is kept current by its own governed `pr-update`, never by
 description application: it replaces only the bytes inside its own frame, after re-reading the live
-body, so the managed region and every human-authored byte stay identical.
+body and confirming, on that same read, that the pull request is still the delivery's own, open and
+on the pushed commit, so the managed region and every human-authored byte stay identical and no
+other pull request is ever written.
 
 Description application, PR creation, mark-ready, CI readiness, human review and observed merge
 remain distinct governed operations under ADR-0086, ADR-0087, ADR-0137 and ADR-0138. A generated

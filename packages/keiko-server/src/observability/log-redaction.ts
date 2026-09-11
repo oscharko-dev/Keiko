@@ -78,6 +78,7 @@
 // `diagnosticSummary` fields; the same field name nested inside some unrelated object merely
 // happens to share it, carries no such promise, and takes the ordinary generic path instead.
 
+import { CLIENT_ERROR_CLASSES } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { DECLARED_ERROR_CLASS_SHAPE } from "./error-classification.js";
 import { redactRoutePath } from "./route-template.js";
 import { FRAME_SHAPE_PATTERN, PACKAGE_DIR_NAMES } from "./stack-frames.js";
@@ -658,7 +659,6 @@ const BODY_FREE_CLIENT_NOTE_PATTERNS: readonly RegExp[] = [
   // F29 (Coding Workbench run 28): every other code-owned note the browser sends, each with its
   // closed vocabulary. 53 of the 77 notes used to collapse to the shape marker.
   /^\[keiko\] (?:shared-event-source|relationship-activity|coding-workbench-runtime|run-events) sse stream error \(kind=sse-error, readyState=(?:0|1|2|unknown), reason=(?:connecting|closed|unknown)\)$/u,
-  /^\[keiko\] window body crashed: [a-z][a-z0-9-]{0,63}: (?:[A-Z]\w{0,63}|[a-z]{3,9})$/u,
   /^\[keiko\] journey action: (?:refresh|propose-ready) failed \(reason=[a-z][a-z0-9-]{0,40}\)$/u,
   /^\[keiko\] voice turn effect executed \(effect=[a-z][a-z0-9-]{0,40}\)$/u,
   /^\[keiko\] workbench description draft rejected: (?:proposal|snapshot|digest)-mismatch proposal [A-Za-z0-9][A-Za-z0-9._:-]{0,63} expected [0-9a-f]{12} actual [0-9a-f]{12}$/u,
@@ -668,12 +668,7 @@ const BODY_FREE_CLIENT_NOTE_PATTERNS: readonly RegExp[] = [
   /^workspace-state: (?:pull|put) failed (?:with status [1-5]\d{2}|\(network error\)); workspace changes persist locally until sync recovers$/u,
   /^workspace-clipboard: (?:copy|cut) captured=\d{1,6} skipped=\d{1,6} overflow=(?:\d{1,6}|true|false)$/u,
   /^desktop (?:window chunk|chat window chunk|editor widget chunk|files widget chunk|chat bind) #\d{1,9}: (?:started|settled after \d{1,9}ms)$/u,
-  /^shell-recovery: [a-z][a-z-]{0,31} layer (?:refused the reset \([a-z][a-z-]{0,31}\)|reset failed \((?:[A-Z]\w{0,63}|[a-z]{3,9})\))$/u,
-  // The editor's runtime notices (keiko-editor runtime-notice.ts and the two keiko-ui language
-  // loaders): a closed code, closed parameters, and an error only as its class name.
-  /^Keiko editor runtime notice: language-load-failed \(language=[a-z][a-z0-9.+#-]{0,39}, error=(?:[A-Z]\w{0,63}|[a-z]{3,9})\)$/u,
-  /^Keiko editor runtime notice: diff-language-load-failed \(count=\d{1,4}, error=(?:[A-Z]\w{0,63}|[a-z]{3,9})\)$/u,
-  /^Keiko editor runtime notice: (?:git-gutter-refresh|blame-read|theme-registration|diff-theme-registration)-failed \(error=(?:[A-Z]\w{0,63}|[a-z]{3,9})\)$/u,
+  /^shell-recovery: [a-z][a-z-]{0,31} layer refused the reset \([a-z][a-z-]{0,31}\)$/u,
 ];
 
 // Exact code-owned sentences without a variable part (F29).
@@ -720,22 +715,43 @@ const CLIENT_FAILURE_NOTE_PREFIXES: ReadonlySet<string> = new Set([
   "[keiko] task workspace bind activate failed",
   "[keiko] task workspace bind repair failed",
 ]);
-const CLIENT_ERROR_CLASS = /^(?:[A-Z]\w{0,63}|[a-z]{3,9})$/u;
 
+// The error class is always one of the closed vocabulary (`clientErrorClass`): a name the shape
+// alone would admit, such as a PascalCase word, can still carry content (review on PR #3452).
 function isClientFailureNote(value: string): boolean {
   const separator = value.lastIndexOf(": ");
   return (
     separator > 0 &&
     CLIENT_FAILURE_NOTE_PREFIXES.has(value.slice(0, separator)) &&
-    CLIENT_ERROR_CLASS.test(value.slice(separator + 2))
+    CLIENT_ERROR_CLASSES.has(value.slice(separator + 2))
   );
+}
+
+// Code-owned notes whose one free part is an error's class, captured as `errorClass`: the crashed
+// window body, a failed shell-recovery reset, and the editor's runtime notices (keiko-editor
+// runtime-notice.ts and the two keiko-ui language loaders), each a closed code with closed
+// parameters.
+const CLIENT_ERROR_CLASS_NOTE_PATTERNS: readonly RegExp[] = [
+  /^\[keiko\] window body crashed: [a-z][a-z0-9-]{0,63}: (?<errorClass>\w{1,64})$/u,
+  /^shell-recovery: [a-z][a-z-]{0,31} layer reset failed \((?<errorClass>\w{1,64})\)$/u,
+  /^Keiko editor runtime notice: language-load-failed \(language=[a-z][a-z0-9.+#-]{0,39}, error=(?<errorClass>\w{1,64})\)$/u,
+  /^Keiko editor runtime notice: diff-language-load-failed \(count=\d{1,4}, error=(?<errorClass>\w{1,64})\)$/u,
+  /^Keiko editor runtime notice: (?:git-gutter-refresh|blame-read|theme-registration|diff-theme-registration)-failed \(error=(?<errorClass>\w{1,64})\)$/u,
+];
+
+function isErrorClassNote(value: string): boolean {
+  return CLIENT_ERROR_CLASS_NOTE_PATTERNS.some((pattern) => {
+    const errorClass = pattern.exec(value)?.groups?.errorClass;
+    return errorClass !== undefined && CLIENT_ERROR_CLASSES.has(errorClass);
+  });
 }
 
 // The shell's keybinding-override refusal: a bounded list of `command=REASON_CODE` parts (F29).
 const SHORTCUT_REFUSAL_NOTE =
-  /^shell-shortcuts: refused persisted keybinding overrides \((.{1,1300})\); affected commands keep their default binding$/u;
+  /^shell-shortcuts: refused persisted keybinding overrides \((.+)\); affected commands keep their default binding$/u;
+// `more=N` counts the named refusals the producer folded to stay within the note bound.
 const SHORTCUT_REFUSAL_PART =
-  /^(?:[A-Za-z][\w.:-]{0,79}=[A-Z][A-Z0-9_]{0,39}|unknown-commands=\d{1,4}|setting=[A-Z][A-Z0-9_]{0,39})$/u;
+  /^(?:[A-Za-z][\w.:-]{0,79}=[A-Z][A-Z0-9_]{0,39}|unknown-commands=\d{1,4}|more=\d{1,4}|setting=[A-Z][A-Z0-9_]{0,39})$/u;
 
 function isShortcutRefusalNote(value: string): boolean {
   const parts = SHORTCUT_REFUSAL_NOTE.exec(value)?.[1]?.split(", ");
@@ -749,9 +765,13 @@ function isShortcutRefusalNote(value: string): boolean {
 // A note is admitted only in a code-owned shape, and even then never when it looks like a secret or
 // a personal identifier: the shapes carry class names and labels, which a hostile value could mimic.
 function isBodyFreeClientNote(value: string): boolean {
+  // An admitted note is written verbatim, so it is held to the bound of every other logged string
+  // before any shape is tried (review on PR #3452).
+  if (value.length > MAX_LOG_STRING_LENGTH) return false;
   const shaped =
     BODY_FREE_CLIENT_NOTES.has(value) ||
     isClientFailureNote(value) ||
+    isErrorClassNote(value) ||
     isShortcutRefusalNote(value) ||
     BODY_FREE_CLIENT_NOTE_PATTERNS.some((pattern) => pattern.test(value));
   return shaped && !looksLikeSecret(value) && !looksLikePersonalIdentifier(value);

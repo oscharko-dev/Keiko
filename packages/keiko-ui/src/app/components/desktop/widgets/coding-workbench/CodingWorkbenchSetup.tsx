@@ -440,6 +440,12 @@ interface TargetBranchState {
 // branch of a repository that is not being bound and overwrote a branch the operator had typed for
 // the one that is (#3381 review): with a typed path the field does not follow the switcher, so the
 // bind still targeted the typed path while the branch had silently become the other checkout's.
+// The repository and bound base branch the default was last armed for.
+interface ArmedDefault {
+  readonly root: string;
+  readonly baseBranch: string | undefined;
+}
+
 function useTargetBranchDefault(
   selectedRoot: string | undefined,
   repositoryPath: string,
@@ -452,13 +458,16 @@ function useTargetBranchDefault(
   // not follow (the operator typed a different path) leaves both the branch and the touched state
   // alone, and a path being typed is not settled — its own blur handler drives that lookup, so
   // this never fires a request per keystroke.
-  const armedRootRef = useRef<string | null>(null);
+  const armedRef = useRef<ArmedDefault | null>(null);
   useEffect(() => {
     const selected = selectedRoot ?? "";
     if (selected.trim() === "" || repositoryPath !== selected) return;
-    if (armedRootRef.current === selected) return;
-    armedRootRef.current = selected;
-    releaseOperatorChoice();
+    const armed = armedRef.current;
+    if (armed?.root === selected && armed.baseBranch === selectedBaseBranch) return;
+    armedRef.current = { root: selected, baseBranch: selectedBaseBranch };
+    // A new repository releases the branch typed for the previous one. The same repository bound
+    // onto another base keeps a typed branch, which `lookupFor` never overrides (review on PR #3452).
+    if (armed?.root !== selected) releaseOperatorChoice();
     // The bound workspace already names the base of its own repository (F81): no lookup.
     lookupFor(selected, selectedBaseBranch);
   }, [lookupFor, releaseOperatorChoice, repositoryPath, selectedBaseBranch, selectedRoot]);

@@ -8,6 +8,8 @@ import {
   isClientDiagnosticIngestRequest,
   isClientDiagnosticKind,
   isLinuxGatewayDiagnosticKind,
+  CLIENT_ERROR_CLASSES,
+  clientErrorClass,
 } from "./diagnostics.js";
 
 function validRequest(): Record<string, unknown> {
@@ -184,5 +186,34 @@ describe("isClientDiagnosticKind", () => {
   it("rejects a value outside the closed vocabulary", () => {
     expect(isClientDiagnosticKind("crash")).toBe(false);
     expect(isClientDiagnosticKind(1)).toBe(false);
+  });
+});
+
+// Review on PR #3452: the closed error-class vocabulary a client note may carry.
+describe("clientErrorClass", () => {
+  it("keeps a known error class and the type of a thrown non-Error", () => {
+    const api = new Error("x");
+    api.name = "ApiError";
+    expect(clientErrorClass(new TypeError("/Users/alice/.env could not be read"))).toBe(
+      "TypeError",
+    );
+    expect(clientErrorClass(api)).toBe("ApiError");
+    expect(clientErrorClass("token=sk-secret")).toBe("string");
+    expect(clientErrorClass(null)).toBe("object");
+    expect(clientErrorClass(undefined)).toBe("undefined");
+  });
+
+  it("reports any other error name as Error, so a name never carries content", () => {
+    const hostile = new Error("x");
+    hostile.name = "AliceSmithPassword";
+    const blank = new Error("x");
+    blank.name = "  ";
+    expect(clientErrorClass(hostile)).toBe("Error");
+    expect(clientErrorClass(blank)).toBe("Error");
+  });
+
+  // The activity log captures a class as `\w{1,64}` before it looks the name up.
+  it("holds only bounded word-shaped names", () => {
+    for (const name of CLIENT_ERROR_CLASSES) expect(name).toMatch(/^\w{1,64}$/u);
   });
 });

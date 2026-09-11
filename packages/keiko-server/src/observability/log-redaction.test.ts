@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { CLIENT_NOTE_MAX_LENGTH } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { DECLARED_ERROR_CLASS_SHAPE } from "./error-classification.js";
 import {
   DROPPED_DEPTH,
@@ -1175,14 +1176,15 @@ describe("code-owned client diagnostic notes (F29)", () => {
     "workspace-state: put failed (network error); workspace changes persist locally until sync recovers",
     "shell-recovery: workspace layer refused the reset (conflict)",
     "shell-recovery: user layer reset failed (TypeError)",
-    "shell-shortcuts: refused persisted keybinding overrides (editor.action.save=KEYBINDING_COLLISION, unknown-commands=2, setting=POLICY_LOCKED); affected commands keep their default binding",
+    "shell-shortcuts: refused persisted keybinding overrides (undo=KEYBINDING_COLLISION, unknown-commands=2); affected commands keep their default binding",
+    "shell-shortcuts: refused persisted keybinding overrides (undo=KEYBINDING_COLLISION, more=3); affected commands keep their default binding",
     "[keiko] queued editor selection handoff could not be restored after chat closure",
     "Keiko editor runtime notice: language-load-failed (language=typescript, error=TypeError)",
     "Keiko editor runtime notice: diff-language-load-failed (count=2, error=TypeError)",
     "Keiko editor runtime notice: git-gutter-refresh-failed (error=ApiError)",
     "Keiko editor runtime notice: blame-read-failed (error=string)",
     "Keiko editor runtime notice: theme-registration-failed (error=Error)",
-    "Keiko editor runtime notice: diff-theme-registration-failed (error=ThemeTokenError)",
+    "Keiko editor runtime notice: diff-theme-registration-failed (error=SyntaxError)",
     "Keiko editor runtime notice: host-edit-ignored (reason=read-only)",
     "Keiko editor runtime notice: model-ownership-changed",
     "git-client: stale generated commit draft cleared (repository-revision-changed)",
@@ -1238,8 +1240,35 @@ describe("code-owned client diagnostic notes (F29)", () => {
     "[keiko] voice turn effect executed (effect=Open Window)",
     "[keiko] task workspace bind verify failed: status=../../escape",
     "[keiko] coding workbench issue intake opened for customer@example.com",
+    // Review on PR #3452: an error class outside the closed vocabulary is content, whatever its shape.
+    "[keiko] app shell crashed: AliceSmithPassword",
+    "[keiko] window body crashed: coding-workbench: AliceSmithPassword",
+    "shell-recovery: user layer reset failed (AliceSmithPassword)",
+    "Keiko editor runtime notice: blame-read-failed (error=AliceSmithPassword)",
+    "Keiko editor runtime notice: language-load-failed (language=typescript, error=ThemeTokenError)",
+    "Keiko editor runtime notice: diff-language-load-failed (count=2, error=CustomerRecordError)",
+    // …and a note longer than the logged-string bound is not written verbatim, whatever its shape.
+    "shell-shortcuts: refused persisted keybinding overrides (editor.action.save=KEYBINDING_COLLISION, unknown-commands=2, setting=POLICY_LOCKED); affected commands keep their default binding",
   ])("refuses foreign content in a code-owned shape %s", (clientNote) => {
     expect(redactLogFields({ clientNote })?.clientNote).not.toBe(clientNote);
+  });
+
+  // Review on PR #3452: an admitted note is written verbatim, so the logged-string bound decides
+  // before any shape does; producers hold their notes to the same bound.
+  it("admits a note of exactly the logged-string bound and refuses one character more", () => {
+    const note = (commandId: string): string =>
+      `shell-shortcuts: refused persisted keybinding overrides (${commandId}=POLICY_LOCKED); affected commands keep their default binding`;
+    const commandId = (length: number): string =>
+      `${length % 2 === 0 ? "ee" : "e"}${".x".repeat(Math.floor((length - 1) / 2))}`;
+    const fill = MAX_LOG_STRING_LENGTH - note("").length;
+    const longest = note(commandId(fill));
+    const over = note(commandId(fill + 1));
+
+    expect(longest).toHaveLength(MAX_LOG_STRING_LENGTH);
+    expect(redactLogFields({ clientNote: longest })).toEqual({ clientNote: longest });
+    expect(over).toHaveLength(MAX_LOG_STRING_LENGTH + 1);
+    expect(redactLogFields({ clientNote: over })?.clientNote).not.toBe(over);
+    expect(CLIENT_NOTE_MAX_LENGTH).toBe(MAX_LOG_STRING_LENGTH);
   });
 
   it("refuses a failure note whose class name is shaped like a credential", () => {

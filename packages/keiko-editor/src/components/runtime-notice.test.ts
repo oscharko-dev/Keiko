@@ -14,12 +14,16 @@ describe("editor runtime notices (F29)", () => {
     );
   });
 
-  it("keeps a custom error class and falls back to Error for a blank name", () => {
-    const custom = new Error("missing --ed-background");
-    custom.name = "ThemeTokenError";
+  // Review on PR #3452: a name is text the error chose, so only the closed vocabulary survives.
+  it("keeps a known error class and reports any other name as Error", () => {
+    const known = new Error("missing --ed-background");
+    known.name = "SyntaxError";
+    const foreign = new Error("x");
+    foreign.name = "AliceSmithPassword";
     const blank = new Error("x");
     blank.name = "  ";
-    expect(runtimeErrorClass(custom)).toBe("ThemeTokenError");
+    expect(runtimeErrorClass(known)).toBe("SyntaxError");
+    expect(runtimeErrorClass(foreign)).toBe("Error");
     expect(runtimeErrorClass(blank)).toBe("Error");
   });
 

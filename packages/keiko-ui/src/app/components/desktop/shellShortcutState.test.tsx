@@ -19,6 +19,8 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 import { EDITOR_VERIFICATION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import { WORKSPACE_TRUST_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import { workspaceChordKey } from "@oscharko-dev/keiko-contracts/runtime/workspace-ui";
+import { CLIENT_NOTE_MAX_LENGTH } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import { EDITOR_M7_COMMAND_REGISTRY } from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
 
 import {
   readShellShortcutRefusalCount,
@@ -533,6 +535,23 @@ describe("shellShortcutState — a refusal is reported, not swallowed", () => {
     expect(message).toContain("undo=KEYBINDING_COLLISION");
     expect(message).toContain("unknown-commands=1");
     expect(message).not.toContain("attacker.injected");
+  });
+
+  // The activity log keeps a note verbatim only up to CLIENT_NOTE_MAX_LENGTH, so the refusals that
+  // do not fit are counted instead of costing the whole note (review on PR #3452).
+  it("folds the named refusals that do not fit the logged note into a count", () => {
+    const refusals = EDITOR_M7_COMMAND_REGISTRY.slice(0, 8).map((command) => ({
+      commandId: command.id,
+      reasonCode: "KEYBINDING_COLLISION" as const,
+    }));
+
+    const message = shellShortcutRefusalDiagnostic(refusals, "RESERVED_KEYBINDING") ?? "";
+
+    const shown = [...message.matchAll(/=KEYBINDING_COLLISION/gu)].length;
+    expect(message.length).toBeLessThanOrEqual(CLIENT_NOTE_MAX_LENGTH);
+    expect(shown).toBeLessThan(refusals.length);
+    expect(message).toContain(`more=${String(refusals.length - shown)}`);
+    expect(message).toContain("setting=RESERVED_KEYBINDING");
   });
 
   // A whole-setting refusal names no command: the record that caused it is never echoed back, so

@@ -37,7 +37,7 @@ import { clientErrorSummary } from "@/lib/client-error-summary";
 // languages the diff needed and the error's class name, never the error's message.
 export function diffLanguageLoadNotice(languageCount: number, error: unknown): string {
   const errorClass = clientErrorSummary(error);
-  return `diff-language-load-failed (count=${String(languageCount)}, error=${errorClass})`;
+  return `diff-language-load-failed (count=${String(languageCount)}, error=${errorClass})`; // i18n-exempt: console-only operator diagnostic, never rendered to the end user
 }
 
 export type EditorDiffSurfaceProps = Omit<KeikoDiffEditorProps, "loadState"> & {

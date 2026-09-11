@@ -199,10 +199,12 @@ commit to the same pull request (a CI repair), it recomposes the section for tha
 governed `pr-update` (ADR-0174 D4), under policy authority only: the mode must allow the
 `pull-request` delivery action without approval. It re-reads the live body, requires the pull
 request to be the delivery's own, open and on the pushed commit, replaces exactly the framed
-section, and writes only if the body is unchanged since that read. Every outcome is logged as
+section, and writes only if a second read immediately before the write still shows the delivery's
+own pull request with the body unchanged since the first read. Every outcome is logged as
 `git.draft-checks` with `phase: refresh`: refreshed, skipped with its reason (approval required, no
 body adapter, another pull request, the frame absent or ambiguous, nothing changed) or failed with
-its reason (the read failed, the body changed meanwhile, the update failed). When a refresh cannot
+its reason (the read failed, the body changed meanwhile, the pull request stopped being the
+delivery's own meanwhile, the update failed). When a refresh cannot
 run the section stays as it was: it names its own commit and states that later commits on the
 branch are not covered by it.
 

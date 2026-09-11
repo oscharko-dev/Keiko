@@ -21,6 +21,7 @@ import {
 } from "./draftDeliveryChecks.js";
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import { PR_DESCRIPTION_REGION_START } from "@oscharko-dev/keiko-contracts/runtime/pr-description-region";
+import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
 
 let fixture: DraftDeliveryFixture;
 beforeEach(async () => {
@@ -840,6 +841,85 @@ describe("draft delivery checks after a later push (#3452)", () => {
 
     expect(fixture.bodyUpdates).toEqual([]);
     expect(refreshLine()).toMatchObject({ extra: { state: "skipped", reason: "section-absent" } });
+  });
+
+  it.each<[string, (pr: GitPullRequestIdentity) => GitPullRequestIdentity]>([
+    ["a closed pull request", (pr): GitPullRequestIdentity => ({ ...pr, state: "closed" })],
+    [
+      "another pull request number",
+      (pr): GitPullRequestIdentity => ({ ...pr, number: pr.number + 1 }),
+    ],
+    [
+      "another pull request node",
+      (pr): GitPullRequestIdentity => ({ ...pr, externalId: `${pr.externalId}_other` }),
+    ],
+    ["another repository", (pr): GitPullRequestIdentity => ({ ...pr, repository: "someone/else" })],
+    [
+      "another head branch",
+      (pr): GitPullRequestIdentity => ({ ...pr, headRef: `${pr.headRef}-other` }),
+    ],
+    [
+      "another base branch",
+      (pr): GitPullRequestIdentity => ({ ...pr, baseRef: `${pr.baseRef}-other` }),
+    ],
+    [
+      "an earlier head commit",
+      (pr): GitPullRequestIdentity => ({ ...pr, headSha: "0".repeat(40) }),
+    ],
+  ])("never writes the section into %s", async (_case, divergent) => {
+    const service = authorized();
+    await created(service);
+    const before = fixture.prBody;
+    await fixture.recordLaterCommit();
+    evidenceFor("verification-2");
+    fixture.liveIdentity = divergent;
+
+    await execute(await service.proposePush(), service);
+
+    expect(fixture.bodyUpdates).toEqual([]);
+    expect(fixture.prBody).toBe(before);
+    expect(refreshLine()).toMatchObject({
+      extra: { state: "skipped", reason: "identity-mismatch" },
+    });
+  });
+
+  it("never writes into a pull request that stopped being the delivery's own after the read", async () => {
+    const service = authorized();
+    await created(service);
+    const before = fixture.prBody;
+    await fixture.recordLaterCommit();
+    evidenceFor("verification-2");
+    fixture.beforeBodyRead = (read): void => {
+      if (read === 2)
+        fixture.liveIdentity = (pr): GitPullRequestIdentity => ({ ...pr, state: "closed" });
+    };
+
+    await execute(await service.proposePush(), service);
+
+    expect(fixture.bodyReads).toBe(2);
+    expect(fixture.bodyUpdates).toEqual([]);
+    expect(fixture.prBody).toBe(before);
+    expect(refreshLine()).toMatchObject({
+      level: "warn",
+      errorKind: "conflict",
+      extra: { state: "failed", reason: "identity-changed" },
+    });
+  });
+
+  it("matches the repository name without regard to case", async () => {
+    const service = authorized();
+    await created(service);
+    await fixture.recordLaterCommit();
+    evidenceFor("verification-2");
+    fixture.liveIdentity = (pr): GitPullRequestIdentity => ({
+      ...pr,
+      repository: pr.repository.toUpperCase(),
+    });
+
+    await execute(await service.proposePush(), service);
+
+    expect(fixture.bodyUpdates).toHaveLength(1);
+    expect(refreshLine()).toMatchObject({ extra: { state: "refreshed" } });
   });
 
   it("keeps the push when the body cannot be read, and logs why", async () => {

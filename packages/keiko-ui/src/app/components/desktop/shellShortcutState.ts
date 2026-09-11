@@ -32,6 +32,7 @@ import type {
   EditorM7ReasonCode,
   WorkspaceKeyboardShortcutBinding,
 } from "@oscharko-dev/keiko-contracts";
+import { CLIENT_NOTE_MAX_LENGTH } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { EDITOR_M7_COMMAND_REGISTRY } from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
 import {
   detectKeyboardShortcutPlatform,
@@ -155,10 +156,27 @@ export function shellShortcutRefusalDiagnostic(
   const parts = named
     .map((refusal) => `${refusal.commandId}=${refusal.reasonCode}`)
     .sort((left, right) => left.localeCompare(right));
+  const tail: string[] = [];
   if (named.length < refusals.length) {
-    parts.push(`unknown-commands=${String(refusals.length - named.length)}`);
+    tail.push(`unknown-commands=${String(refusals.length - named.length)}`);
   }
-  if (settingRefusalReasonCode !== null) parts.push(`setting=${settingRefusalReasonCode}`);
+  if (settingRefusalReasonCode !== null) tail.push(`setting=${settingRefusalReasonCode}`);
+  return boundedRefusalNote(parts, tail);
+}
+
+// The activity log keeps a note verbatim only up to CLIENT_NOTE_MAX_LENGTH and redacts a longer one
+// whole, so the named refusals that do not fit are folded into a count (review on PR #3452).
+function boundedRefusalNote(named: readonly string[], tail: readonly string[]): string {
+  for (let kept = named.length; kept > 0; kept -= 1) {
+    const note = refusalNote(named.slice(0, kept), named.length - kept, tail);
+    if (note.length <= CLIENT_NOTE_MAX_LENGTH) return note;
+  }
+  return refusalNote([], named.length, tail);
+}
+
+function refusalNote(shown: readonly string[], omitted: number, tail: readonly string[]): string {
+  const parts =
+    omitted === 0 ? [...shown, ...tail] : [...shown, `more=${String(omitted)}`, ...tail];
   return `shell-shortcuts: refused persisted keybinding overrides (${parts.join(", ")}); affected commands keep their default binding`; // i18n-exempt: console-only operator diagnostic, never rendered to the end user
 }
 

@@ -65,6 +65,9 @@ export class DraftDeliveryFixture {
   public bodyReads = 0;
   public failBodyRead = false;
   public beforeBodyRead: ((read: number) => void) | undefined;
+  // Rewrites the identity the body read reports, so a test can hand the refresh a pull request that
+  // is no longer the delivery's own (owner review on PR #3452).
+  public liveIdentity: ((identity: GitPullRequestIdentity) => GitPullRequestIdentity) | undefined;
   public readonly bodyAdapter: GitPullRequestBodyAdapter;
   public readonly adapter: GitPullRequestInspectionAdapter;
 
@@ -281,7 +284,8 @@ export class DraftDeliveryFixture {
       readPullRequestBody: (): Promise<GitPrInspectionResult<GitPrBody>> => {
         this.bodyReads += 1;
         this.beforeBodyRead?.(this.bodyReads);
-        const identity = this.prs[0];
+        const pr = this.prs[0];
+        const identity = pr === undefined ? undefined : (this.liveIdentity?.(pr) ?? pr);
         return Promise.resolve(
           this.failBodyRead || identity === undefined
             ? { ok: false, reason: "invalid-response" }

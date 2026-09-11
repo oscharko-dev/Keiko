@@ -638,6 +638,25 @@ describe("executeWithRetry — backoff jitter (thundering-herd)", () => {
     expect(sleeps).toEqual([250, 500]);
   });
 
+  // Run 29's log showed `delayMs` with thirteen decimals: the jittered step reached the timer and
+  // the retry line as a fraction. Every step is a whole number of milliseconds.
+  it("sleeps a whole number of milliseconds for any randomness", async () => {
+    const { clock, sleeps } = stubClock();
+    let calls = 0;
+    await executeWithRetry(
+      () => {
+        calls += 1;
+        return calls < 3 ? Promise.reject(new TransportError("boom")) : Promise.resolve("ok");
+      },
+      { maxRetries: 3, retryBaseDelayMs: 1_000 },
+      clock,
+      undefined,
+      () => 0.123_456_789,
+    );
+    expect(sleeps).toEqual([562, 1_123]);
+    expect(sleeps.every((delay) => Number.isInteger(delay))).toBe(true);
+  });
+
   it("spreads concurrent retries: different randomness yields different delays", async () => {
     const run = async (random: () => number): Promise<number[]> => {
       const { clock, sleeps } = stubClock();

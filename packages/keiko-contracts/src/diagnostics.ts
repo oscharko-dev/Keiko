@@ -108,6 +108,73 @@ export interface ClientDiagnosticWorkspaceTrustBinding {
 // the browser's own promise, per this module's header.
 export const CLIENT_DIAGNOSTIC_MESSAGE_MAX_LENGTH = 200;
 
+// The longest client note the activity log keeps verbatim (keiko-server log-redaction.ts,
+// `MAX_LOG_STRING_LENGTH`). A longer note is redacted whole, so a producer that wants its note read
+// stays within it (review on PR #3452).
+export const CLIENT_NOTE_MAX_LENGTH = 160;
+
+// The only error classes a client note may name (review on PR #3452): the JavaScript built-ins, the
+// errors the browser platform raises, the classes Keiko's own browser code throws, and the `typeof`
+// of a thrown non-Error. A name is text the error chose, so any other name travels as "Error": a
+// hostile or accidental name can never carry content into the activity log.
+export const CLIENT_ERROR_CLASSES: ReadonlySet<string> = new Set([
+  "Error",
+  "AggregateError",
+  "EvalError",
+  "RangeError",
+  "ReferenceError",
+  "SyntaxError",
+  "TypeError",
+  "URIError",
+  "AbortError",
+  "ChunkLoadError",
+  "DataCloneError",
+  "InvalidStateError",
+  "NetworkError",
+  "NotAllowedError",
+  "NotFoundError",
+  "NotReadableError",
+  "NotSupportedError",
+  "OverconstrainedError",
+  "QuotaExceededError",
+  "SecurityError",
+  "TimeoutError",
+  "ApiError",
+  "ChatLookupFailure",
+  "DebugRequestError",
+  "DictationRecorderError",
+  "EditorModelOwnershipError",
+  "OverlappingPatchEditError",
+  "PollAbortError",
+  "RelationshipApiError",
+  "StreamingUnavailableError",
+  "TaskWorkspaceProvisionError",
+  "TaskWorkspaceRepairOperatorRequiredError",
+  "TaskWorkspaceRestoreVerificationError",
+  "VoiceControlError",
+  "VoiceLiveDictationControlError",
+  "VoiceRtcError",
+  "WorkspaceShortcutConflictError",
+  "WorkspaceShortcutReservedError",
+  "bigint",
+  "boolean",
+  "function",
+  "number",
+  "object",
+  "string",
+  "symbol",
+  "undefined",
+]);
+
+/**
+ * An error's class for a client note: its name when the closed vocabulary holds it, "Error" for
+ * any other Error, and `typeof` for a thrown non-Error. Never the message, never the stack.
+ */
+export function clientErrorClass(error: unknown): string {
+  if (error instanceof Error) return CLIENT_ERROR_CLASSES.has(error.name) ? error.name : "Error";
+  return typeof error;
+}
+
 const CORRELATION_ID_MAX_LENGTH = 128;
 const ISO_INSTANT_MAX_LENGTH = 40;
 

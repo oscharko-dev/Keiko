@@ -12,6 +12,7 @@ import {
   validGitPrBodyText,
   type GitPrBody,
   type GitPrExecResult,
+  type GitPrInspectionResult,
   type GitPrUpdateCommand,
   type GitPullRequestAdapter,
   type GitPullRequestBodyAdapter,
@@ -48,7 +49,13 @@ type SkipReason =
   | "section-absent"
   | "section-malformed"
   | "unchanged";
-type FailReason = "read-failed" | "body-invalid" | "body-changed" | "update-failed" | "internal";
+type FailReason =
+  | "read-failed"
+  | "body-invalid"
+  | "body-changed"
+  | "identity-changed"
+  | "update-failed"
+  | "internal";
 type RefreshOutcome =
   | { readonly state: "refreshed"; readonly checkRowCount: number }
   | { readonly state: "skipped"; readonly reason: SkipReason }
@@ -175,7 +182,10 @@ async function applyRefresh(
       snapshotReader: () =>
         readGitRawWorktreeSnapshot(runtimeGitReadDeps(context, options.execution ?? {})),
       beforeRemoteDispatch: () => context.stillAuthorized() && context.signal?.aborted !== true,
-      prAdapterFactory: () => sectionOnlyAdapter(command, adapter, live, progress),
+      prAdapterFactory: () =>
+        sectionOnlyAdapter(command, adapter, live, progress, (identity) =>
+          deliveredPullRequest(identity, input.pullRequest, record),
+        ),
     },
     context.correlationId,
   );
@@ -185,13 +195,15 @@ async function applyRefresh(
     : failed("update-failed");
 }
 
-// Writes the body alone, and only after re-reading it: a body that changed since it was read (a
-// human edit, a description application) is never overwritten.
+// Writes the body alone, and only after re-reading it: a pull request that stopped being the
+// delivery's own, or a body that changed since it was read (a human edit, a description
+// application), is never written (review on PR #3452).
 function sectionOnlyAdapter(
   expected: GitPrUpdateCommand,
   adapter: GitPullRequestBodyAdapter,
   live: GitPrBody,
   progress: Progress,
+  stillDelivered: (identity: GitPullRequestIdentity) => boolean,
 ): GitPullRequestAdapter {
   const target = { ownerAndRepo: expected.ownerAndRepo, prExternalId: expected.prExternalId };
   return {
@@ -202,19 +214,32 @@ function sectionOnlyAdapter(
       if (canonicalise({ kind: "pr-update", ...request }) !== canonicalise(expected))
         throw new TypeError("The Checks refresh request changed");
       const current = await adapter.readPullRequestBody(target);
-      if (
-        !current.ok ||
-        current.value.body !== live.body ||
-        current.value.updatedAt !== live.updatedAt
-      ) {
-        progress.refusal = current.ok ? "body-changed" : "read-failed";
-        throw new TypeError("The pull request body changed since it was read");
+      const refusal = rereadRefusal(current, live, stillDelivered);
+      if (refusal !== undefined) {
+        progress.refusal = refusal;
+        throw new TypeError("The pull request changed since it was read");
       }
       progress.dispatched = true;
       return adapter.updatePullRequestBody({ ...target, body: expected.body });
     },
   };
 }
+
+// The re-read immediately before the write must still pass the identity guard, and its body must be
+// byte-for-byte the one the section was spliced into.
+function rereadRefusal(
+  current: GitPrInspectionResult<GitPrBody>,
+  live: GitPrBody,
+  stillDelivered: (identity: GitPullRequestIdentity) => boolean,
+): FailReason | undefined {
+  if (!current.ok) return "read-failed";
+  if (!stillDelivered(current.value.identity)) return "identity-changed";
+  const unchanged = current.value.body === live.body && current.value.updatedAt === live.updatedAt;
+  return unchanged ? undefined : "body-changed";
+}
+
+// A pull request that changed under the refresh is a conflict, not a Keiko fault.
+const CONFLICT_REASONS: ReadonlySet<FailReason> = new Set(["body-changed", "identity-changed"]);
 
 function refreshFields(outcome: RefreshOutcome): Readonly<Record<string, unknown>> {
   if (outcome.state === "refreshed")
@@ -232,7 +257,7 @@ function logRefresh(input: DraftChecksRefreshInput, outcome: RefreshOutcome): vo
     ...(outcome.state === "failed"
       ? ({
           level: "warn",
-          errorKind: outcome.reason === "body-changed" ? "conflict" : "internal",
+          errorKind: CONFLICT_REASONS.has(outcome.reason) ? "conflict" : "internal",
         } as const)
       : {}),
     extra: {

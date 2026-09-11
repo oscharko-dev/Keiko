@@ -63,9 +63,10 @@ export interface RetryConfig {
 // Equal jitter over the capped exponential ladder: half the delay is fixed, half
 // is random, so concurrent callers hitting a recovering provider spread across
 // [0.5·d, d] instead of retrying in lockstep (thundering herd) while never
-// collapsing to a zero delay. Randomness is injected for deterministic tests.
+// collapsing to a zero delay. Randomness is injected for deterministic tests. The step is a whole
+// number of milliseconds: a timer cannot honour a fraction, and the retry line logs the sleep as is.
 function backoffDelayMs(attempt: number, base: number, random: () => number): number {
-  return maxBackoffDelayMs(attempt, base) * (0.5 + 0.5 * random());
+  return Math.round(maxBackoffDelayMs(attempt, base) * (0.5 + 0.5 * random()));
 }
 
 // The top of the jitter band for the sleep after failed attempt `attempt`.

@@ -141,6 +141,16 @@ describe("PR-description statement escaping (#3452)", () => {
     expect(markdownFor("###### Checks").split("\n")).toContain(`- ${sixEscapedMarkers} Checks`);
   });
 
+  it("escapes a heading marker behind leading whitespace", () => {
+    const lines = markdownFor("   ## Checks").split("\n");
+    expect(lines).toContain(String.raw`-    \#\# Checks`);
+    expect(lines.some((line) => /^\s*#{1,6}\s+Checks$/u.test(line))).toBe(false);
+  });
+
+  it("renders an empty statement as an empty list item", () => {
+    expect(markdownFor("").split("\n")).toContain("- ");
+  });
+
   it("keeps a number sign that cannot open a heading", () => {
     expect(markdownFor("#123 reference").split("\n")).toContain("- #123 reference");
     expect(markdownFor("####### seven").split("\n")).toContain("- ####### seven");

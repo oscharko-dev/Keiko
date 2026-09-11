@@ -53,7 +53,7 @@ import { clientErrorSummary } from "@/lib/client-error-summary";
 // F29: a code-owned runtime notice. The activity log admits exactly this shape, so the error travels
 // only as its class name, never its message.
 function languageLoadNotice(languageId: string, error: unknown): string {
-  return `language-load-failed (language=${languageId}, error=${clientErrorSummary(error)})`;
+  return `language-load-failed (language=${languageId}, error=${clientErrorSummary(error)})`; // i18n-exempt: console-only operator diagnostic, never rendered to the end user
 }
 
 export interface EditorSurfaceProps {
