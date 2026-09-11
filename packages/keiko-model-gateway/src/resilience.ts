@@ -246,7 +246,9 @@ function budgetExhaustedError(
 }
 
 export async function executeWithRetry<T>(
-  operation: (attemptTimeoutMs?: number) => Promise<T>,
+  // Each attempt gets its own bound and what is left of the call's budget, which a streamed read
+  // may spend while the provider keeps producing (ADR-0003).
+  operation: (attemptTimeoutMs?: number, remainingBudgetMs?: number) => Promise<T>,
   config: RetryConfig,
   clock: Clock,
   signal?: AbortSignal,
@@ -264,7 +266,7 @@ export async function executeWithRetry<T>(
       throw budgetExhaustedError(lastError, sink, logContext, attempt, elapsed());
     }
     try {
-      return await operation(attemptTimeoutFor(config, remaining));
+      return await operation(attemptTimeoutFor(config, remaining), remaining);
     } catch (error) {
       lastError = asError(error);
       const remainingMs = remainingBudgetMs(start, config.timeoutMs, clock);

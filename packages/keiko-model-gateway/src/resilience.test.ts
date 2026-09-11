@@ -737,3 +737,28 @@ describe("executeWithRetry — provider 5xx classification (buffered path)", () 
     expect(sleeps).toEqual([]);
   });
 });
+
+// A streamed read may spend what is left of the call's budget while the provider keeps producing
+// (ADR-0003), so every attempt is handed that remainder alongside its own bound.
+describe("executeWithRetry remaining budget", () => {
+  it("hands each attempt what is left of the call's budget", async () => {
+    const { clock } = stubClock();
+    const remaining: (number | undefined)[] = [];
+    let attempts = 0;
+    const result = await executeWithRetry(
+      (_attemptTimeoutMs, remainingBudgetMs) => {
+        remaining.push(remainingBudgetMs);
+        attempts += 1;
+        return attempts === 1 ? Promise.reject(new TransportError("down")) : Promise.resolve("ok");
+      },
+      { ...RETRY_CONFIG, timeoutMs: 10_000, attemptTimeoutMs: 1_000 },
+      clock,
+      undefined,
+      () => 1,
+    );
+    expect(result).toBe("ok");
+    expect(remaining[0]).toBe(10_000);
+    expect(remaining[1]).toBeLessThan(10_000);
+    expect(remaining[1]).toBeGreaterThan(0);
+  });
+});

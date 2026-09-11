@@ -9,6 +9,7 @@ import {
   ConfigInvalidError,
   ContextOverflowError,
   GatewayError,
+  TransportError,
   UnknownModelError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
@@ -45,6 +46,7 @@ import type {
   ModelProviderConfig,
   NormalizedResponse,
   ProviderAdapter,
+  StreamReadBounds,
   UsageMetadata,
 } from "./types.js";
 
@@ -193,6 +195,45 @@ interface BufferedChatAttempt {
   readonly originalRequest: GatewayCallRequest;
   readonly correlationId: string;
   readonly state: { request: GatewayCallRequest; attemptNumber: number };
+}
+
+// Whether a buffered call reads each attempt's answer over the provider's stream (ADR-0003): the
+// route's capability streams and the adapter can read a stream.
+function readsOverStream(route: RoutedCall, adapter: ProviderAdapter): boolean {
+  return route.capability.streaming && adapter.callStream !== undefined;
+}
+
+// The bounds of one attempt's streamed read: the attempt's `timeoutMs` bounds the provider's
+// silence and what is left of the call's budget bounds the read, so a long generation that keeps
+// producing is not cut off at `timeoutMs` and generated again (coding run 30).
+function streamedReadBounds(
+  attempt: BufferedChatAttempt,
+  silenceMs: number,
+  remainingBudgetMs: number | undefined,
+): StreamReadBounds | undefined {
+  if (!readsOverStream(attempt.route, attempt.adapter)) return undefined;
+  const budgetMs =
+    remainingBudgetMs !== undefined && Number.isFinite(remainingBudgetMs)
+      ? remainingBudgetMs
+      : providerRequestBudgetMs(attempt.route.provider);
+  return { silenceMs, budgetMs: Math.max(silenceMs, Math.floor(budgetMs)) };
+}
+
+// One attempt's answer: over the provider's stream when the attempt has read bounds, whole
+// otherwise.
+async function readAnswer(
+  adapter: ProviderAdapter,
+  request: GatewayCallRequest,
+  provider: ModelProviderConfig,
+  bounds: StreamReadBounds | undefined,
+): Promise<NormalizedResponse> {
+  if (bounds === undefined || adapter.callStream === undefined) {
+    return adapter.call(request, provider);
+  }
+  for await (const chunk of adapter.callStream(request, provider, bounds)) {
+    if (chunk.type === "done") return chunk.response;
+  }
+  throw new TransportError(`provider stream for '${provider.modelId}' ended without an answer`);
 }
 
 interface RepairPromptBudget {
@@ -374,11 +415,17 @@ export class Gateway {
       correlationId: ids.correlationId,
       state: { request, attemptNumber: 0 },
     };
-    this.logCallStarted(ids, route, false, request.reasoningEffort);
+    this.logCallStarted(
+      ids,
+      route,
+      false,
+      request.reasoningEffort,
+      readsOverStream(route, adapter),
+    );
     let result;
     try {
       result = await executeWithRetry(
-        (attemptTimeoutMs) => this.invokeBufferedAttempt(attempt, attemptTimeoutMs),
+        this.invokeBufferedAttempt.bind(this, attempt),
         providerRetryConfig(route.provider),
         this.clock,
         request.cancellationSignal,
@@ -407,8 +454,13 @@ export class Gateway {
   private async invokeBufferedAttempt(
     attempt: BufferedChatAttempt,
     attemptTimeoutMs: number | undefined,
+    remainingBudgetMs: number | undefined,
   ): Promise<NormalizedResponse> {
     attempt.state.attemptNumber += 1;
+    const provider = {
+      ...attempt.route.provider,
+      ...(attemptTimeoutMs === undefined ? {} : { timeoutMs: attemptTimeoutMs }),
+    };
     try {
       return await this.invoke(
         attempt.breaker,
@@ -416,10 +468,8 @@ export class Gateway {
         attempt.state.request,
         attempt.route.capability,
         attempt.correlationId,
-        {
-          ...attempt.route.provider,
-          ...(attemptTimeoutMs === undefined ? {} : { timeoutMs: attemptTimeoutMs }),
-        },
+        provider,
+        streamedReadBounds(attempt, provider.timeoutMs, remainingBudgetMs),
       );
     } catch (error) {
       if (attempt.state.attemptNumber <= attempt.route.provider.maxRetries) {
@@ -585,6 +635,7 @@ export class Gateway {
     route: RoutedCall,
     streaming: boolean,
     reasoningEffort: GatewayCallRequest["reasoningEffort"],
+    upstreamStreaming = false,
   ): void {
     if (!logLevelEnabled(this.log, "info")) return;
     this.log.write(
@@ -599,9 +650,12 @@ export class Gateway {
           costClass: route.capability.costClass,
           timeoutMs: route.provider.timeoutMs,
           maxRetries: route.provider.maxRetries,
-          // A buffered call's bound across all its attempts; a stream is one attempt, bounded by
-          // `timeoutMs` alone.
-          ...(streaming ? {} : { requestBudgetMs: providerRequestBudgetMs(route.provider) }),
+          // A buffered call's bound across all its attempts, and whether its attempts read the
+          // answer over the provider's stream, where `timeoutMs` bounds the provider's silence
+          // (ADR-0003); a stream is one attempt, bounded by `timeoutMs` alone.
+          ...(streaming
+            ? {}
+            : { requestBudgetMs: providerRequestBudgetMs(route.provider), upstreamStreaming }),
           ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
           streaming,
         },
@@ -803,12 +857,13 @@ export class Gateway {
     capability: ModelCapability,
     correlationId: string,
     provider: ModelProviderConfig,
+    bounds?: StreamReadBounds,
   ): Promise<NormalizedResponse> {
     breaker.assertAllowed(correlationId);
     const reservation = this.spendBudget?.reserve(capability, request, correlationId);
     let usage: UsageMetadata | undefined;
     try {
-      const response = await adapter.call(request, provider);
+      const response = await readAnswer(adapter, request, provider, bounds);
       usage = response.usage;
       breaker.recordSuccess(correlationId);
       return response;

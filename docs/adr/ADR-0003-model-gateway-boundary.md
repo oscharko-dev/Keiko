@@ -517,6 +517,21 @@ are composed: `AbortSignal.any([timeoutSignal, cancellationSignal])` (Node 22 bu
 composed signal is passed to `fetch(url, { signal })`. A signal abort triggered by timeout throws
 `TimeoutError`; triggered by cancellation throws `CancelledError`.
 
+**Reading a buffered answer over the stream.** A buffered call to a route whose capability streams
+(`streaming: true`, with an adapter that can read a stream) reads each attempt's answer over the
+provider's SSE stream instead of waiting for one body. The attempt's `timeoutMs` then bounds the
+provider's silence: before its response starts, until its first data event, and between two data
+events. What is left of the call's end-to-end budget bounds the whole read. A long generation that
+keeps producing is therefore never cut off at `timeoutMs` and generated again, and a silent
+provider still ends with a retryable `TimeoutError`. A keep-alive comment (a LiteLLM proxy's
+`: ping` while it waits for its upstream) is not a data event. An error frame inside the stream
+(`data: {"error": …}`, LiteLLM's `code` being the upstream HTTP status as a string) maps like the
+same HTTP failure. The streamed answer runs through the same normalization as a whole body, and an
+endpoint that answers a streamed request with `application/json` is read as that whole body.
+Coding run 30 (2026-09-11): two gpt-5.4 generations of 4.8k to 5.9k output tokens at 27 to 45
+tokens per second were cut off at 120 s and generated a second time; Azure answered both with
+HTTP 200.
+
 **Bounded retry.** On an error whose `retryable` flag is set, among them `TransportError`,
 `TimeoutError` and `RateLimitError`, the gateway retries up to `config.maxRetries` times. The
 backoff is `min(retryBaseDelayMs * 2^(attempt - 1), 30_000)` at the top of an equal-jitter band
@@ -535,8 +550,8 @@ the last error (`gateway.retry.exhausted` with `reason: "budget"`, the delay and
 budget) instead of sleeping the rest of it away. An attempt that starts with less than `timeoutMs`
 left, which only an earlier attempt overrunning its own timeout can cause, runs under what is left.
 A caller that builds its own deadline around a gateway call derives it from the same function; the
-coding sidecar route adds a grace so the gateway settles its own timeout first. A streamed call is
-never retried and stays bounded by one `timeoutMs`. Until PR #3452 (2026-09-11) the provider's
+coding sidecar route adds a grace so the gateway settles its own timeout first. A stream read without bounds (`chatStream`) is never retried and stays bounded by one
+`timeoutMs`, with `STREAM_IDLE_TIMEOUT_MS` (60 s) as the longest wait for its next data event. Until PR #3452 (2026-09-11) the provider's
 `timeoutMs` reached the retry loop as the budget of the whole call, so an attempt that hung to its
 timeout left no budget and a `TimeoutError` was never retried (coding run 23).
 

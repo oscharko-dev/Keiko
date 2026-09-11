@@ -1640,68 +1640,134 @@ function parseSseLine(rawLine: string): SseLineResult {
   return { kind: "value", value: JSON.parse(payload) as unknown };
 }
 
-// Reads a Server-Sent-Events response as a stream of parsed JSON `data:` payloads.
-// Incomplete lines are buffered across reads; `data: [DONE]` terminates; cumulative
-// bytes are capped exactly like readJsonCapped. A null body yields nothing.
-// Raised when an SSE stream produces no chunk within the idle window. Deliberately
-// a plain transport-layer error: the provider adapter maps it onto the typed,
-// secret-redacting TimeoutError of the gateway error taxonomy.
+// Raised when an SSE stream produces no data event within its silence bound. Deliberately a plain
+// transport-layer error: the provider adapter maps it onto the typed, secret-redacting TimeoutError
+// of the gateway error taxonomy.
 export class SseIdleTimeoutError extends Error {
+  readonly idleTimeoutMs: number;
   constructor(idleTimeoutMs: number) {
-    super(`SSE stream produced no chunk for ${String(idleTimeoutMs)}ms`);
+    super(`SSE stream produced no data event for ${String(idleTimeoutMs)}ms`);
     this.name = "SseIdleTimeoutError";
+    this.idleTimeoutMs = idleTimeoutMs;
   }
 }
 
-// Races one read against the idle window. On timeout the reader is CANCELLED
-// first — that settles the pending read and releases the underlying body — and
-// only then does the error surface, so a stalled provider stream can never leak
-// its fetch body past the throw.
+// What ends the wait for a read besides the read itself: the silence bound or the caller's signal.
 const IDLE_TIMEOUT_MARKER: unique symbol = Symbol("sse-idle-timeout");
+const ABORTED_MARKER: unique symbol = Symbol("sse-aborted");
+type ReadStop = typeof IDLE_TIMEOUT_MARKER | typeof ABORTED_MARKER;
 
-async function readWithIdleTimeout(
+// The deadline of a stream's next data event. Only a parsed `data:` payload meets it: a keep-alive
+// comment (LiteLLM's `: ping` while it waits for the upstream model) shows that the proxy is alive,
+// not that the model answers, so a stalled upstream behind a pinging proxy still ends at the bound
+// (provider stalls, coding run 30). The clock restarts when the consumer asks for the next event,
+// so time a slow consumer takes never counts as provider silence.
+interface DataDeadline {
+  readonly restart: () => void;
+  readonly dueInMs: () => number;
+}
+
+function dataDeadline(idleTimeoutMs: number): DataDeadline {
+  let due = Date.now() + idleTimeoutMs;
+  return {
+    restart: (): void => {
+      due = Date.now() + idleTimeoutMs;
+    },
+    dueInMs: (): number => Math.max(0, due - Date.now()),
+  };
+}
+
+// Races one read against the time left before the next data event is due and against the caller's
+// signal. A body built without the fetch signal (a proxy's, a test's) is bounded all the same.
+async function readWithin(
   reader: ReadableStreamDefaultReader<Uint8Array>,
-  idleTimeoutMs: number | undefined,
-): Promise<ReadableStreamReadResult<Uint8Array>> {
-  if (idleTimeoutMs === undefined) {
-    return reader.read();
-  }
+  dueInMs: number | undefined,
+  signal: AbortSignal | undefined,
+): Promise<ReadableStreamReadResult<Uint8Array> | ReadStop> {
+  if (dueInMs === undefined && signal === undefined) return reader.read();
+  if (signal?.aborted === true) return ABORTED_MARKER;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const idle = new Promise<typeof IDLE_TIMEOUT_MARKER>((resolveIdle) => {
-    timer = setTimeout(() => {
-      resolveIdle(IDLE_TIMEOUT_MARKER);
-    }, idleTimeoutMs);
+  let onAbort: (() => void) | undefined;
+  const stop = new Promise<ReadStop>((resolveStop) => {
+    if (dueInMs !== undefined) {
+      timer = setTimeout(() => {
+        resolveStop(IDLE_TIMEOUT_MARKER);
+      }, dueInMs);
+    }
+    if (signal !== undefined) {
+      onAbort = (): void => {
+        resolveStop(ABORTED_MARKER);
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+    }
   });
   try {
-    const result = await Promise.race([reader.read(), idle]);
-    if (result === IDLE_TIMEOUT_MARKER) {
-      // Cancelling settles the pending read and releases the underlying body,
-      // so a stalled provider stream can never leak its fetch body past the throw.
-      void reader.cancel().catch(() => undefined);
-      throw new SseIdleTimeoutError(idleTimeoutMs);
-    }
-    return result;
+    return await Promise.race([reader.read(), stop]);
   } finally {
     clearTimeout(timer);
+    if (onAbort !== undefined) signal?.removeEventListener("abort", onAbort);
   }
 }
 
+function abortReason(signal: AbortSignal | undefined): Error {
+  const reason: unknown = signal?.reason;
+  return reason instanceof Error ? reason : new DOMException("The read was aborted", "AbortError");
+}
+
+// One read of the stream, or the error that ended the wait. The reader is CANCELLED first: that
+// settles the pending read and releases the underlying body, so a stalled provider stream can never
+// leak its fetch body past the throw.
+async function nextRead(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  idleTimeoutMs: number | undefined,
+  deadline: DataDeadline | undefined,
+  signal: AbortSignal | undefined,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  const read = await readWithin(reader, deadline?.dueInMs(), signal);
+  if (read !== IDLE_TIMEOUT_MARKER && read !== ABORTED_MARKER) return read;
+  void reader.cancel().catch(() => undefined);
+  throw read === ABORTED_MARKER ? abortReason(signal) : new SseIdleTimeoutError(idleTimeoutMs ?? 0);
+}
+
+// The data payloads of complete SSE lines, up to `data: [DONE]`, which sets `ended.done`.
+function* dataPayloads(lines: readonly string[], ended: { done: boolean }): Generator {
+  for (const line of lines) {
+    const result = parseSseLine(line);
+    if (result.kind === "done") {
+      ended.done = true;
+      return;
+    }
+    if (result.kind === "value") yield result.value;
+  }
+}
+
+function dataDeadlineFor(idleTimeoutMs: number | undefined): DataDeadline | undefined {
+  return idleTimeoutMs === undefined ? undefined : dataDeadline(idleTimeoutMs);
+}
+
+// Reads a Server-Sent-Events response as a stream of parsed JSON `data:` payloads. Incomplete lines
+// are buffered across reads; `data: [DONE]` terminates; cumulative bytes are capped exactly like
+// readJsonCapped. A null body yields nothing. `idleTimeoutMs` bounds the wait for each data event;
+// `signal` ends the read the moment it aborts, with its reason.
 export async function* readSseStream(
   response: Response,
   maxBytes: number = MAX_RESPONSE_BYTES,
   idleTimeoutMs?: number,
+  signal?: AbortSignal,
 ): AsyncGenerator {
   if (response.body === null) {
     return;
   }
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
+  const deadline = dataDeadlineFor(idleTimeoutMs);
+  const ended = { done: false };
   let buffer = "";
   let total = 0;
   // Same loop shape as readJsonCapped: `done` drives the loop condition itself.
   let done = false;
   while (!done) {
-    const read = await readWithIdleTimeout(reader, idleTimeoutMs);
+    const read = await nextRead(reader, idleTimeoutMs, deadline, signal);
     done = read.done;
     const value = read.value;
     if (value === undefined) continue;
@@ -1713,12 +1779,11 @@ export async function* readSseStream(
     buffer += decoder.decode(value, { stream: true });
     const { lines, rest } = splitSseBuffer(buffer);
     buffer = rest;
-    for (const line of lines) {
-      const result = parseSseLine(line);
-      if (result.kind === "done") return;
-      if (result.kind === "value") yield result.value;
+    for (const payload of dataPayloads(lines, ended)) {
+      yield payload;
+      deadline?.restart();
     }
+    if (ended.done) return;
   }
-  const tail = parseSseLine(buffer + decoder.decode());
-  if (tail.kind === "value") yield tail.value;
+  yield* dataPayloads([buffer + decoder.decode()], ended);
 }
