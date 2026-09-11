@@ -51,7 +51,11 @@ describe("outputExcerpt — redaction (defence in depth)", () => {
   it("redacts a secret shape that spans into the retained tail of a truncated excerpt", () => {
     const token = "ghp_" + "B".repeat(36);
     const head = "H".repeat(200);
-    const result = outputExcerpt({ stdout: `${head}token=${token}`, stderr: "" }, 40);
+    // The limit (20) is smaller than the 40-char token, so the retained tail crosses the token's
+    // own boundary: an implementation that truncated BEFORE redacting would keep only a headless
+    // fragment of the token (no "ghp_" prefix), which the token-shape pattern can never match, so
+    // "[REDACTED]" would not appear. Only redact-then-truncate (the real order) passes this.
+    const result = outputExcerpt({ stdout: `${head}token=${token}`, stderr: "" }, 20);
     expect(result).not.toContain(token);
     expect(result).toContain("[REDACTED]");
   });

@@ -464,6 +464,26 @@ a manifest cannot redirect the install to a registry nobody configured. An unrea
 refuses too; a manifest without declarations, or a workspace without one, is `none` and nothing
 runs.
 
+Host network makes every source npm would contact part of that boundary (PR #3452 review: CWE-918,
+CWE-494). Before npm runs, the bootstrap checks every source it would be handed. Each specifier in
+`dependencies`, `devDependencies`, `optionalDependencies` and `peerDependencies`, and each
+`overrides` value, must resolve through the registry: a version, a range, a dist-tag, or an `npm:`
+alias of one. A URL, a Git remote or hosted shorthand, a path or a tarball refuses the bootstrap
+(`refused`, `unapproved-source`), and so does a `workspaces` pattern that leaves the workspace.
+Each entry of `package-lock.json`, `npm-shrinkwrap.json` and npm's hidden lockfile of the installed
+tree must be the workspace itself, a folder or link inside it, a package bundled in its parent's
+tarball, or a package fetched over HTTPS from the approved registry (`DEPENDENCY_APPROVED_REGISTRY`,
+npm's default `https://registry.npmjs.org/`, without credentials or another port) against a
+Subresource Integrity hash; anything else refuses the bootstrap, and a lockfile that is unreadable
+or older than version 2 refuses it as `lockfile-unreadable`. Holding the host to that one public
+registry excludes private, loopback and link-local destinations by construction. After npm exits,
+the tree it installed is held to the same rule through its hidden lockfile: an install that left
+none, or one naming another source, is `refused` and its steps are skipped. That last check exists
+because npm offers no destination allowlist. A registry package may itself declare a URL or Git
+dependency, and when no lockfile pins it npm fetches it during the install; the sandbox's network
+model is `inherit` or `none`, so that fetch cannot be prevented at this layer, but nothing it
+brought is ever run by the steps that follow.
+
 The outcome is part of the report (`VerificationReport.dependencies`: state, lockfile
 `present`/`created`/`absent`, npm's exit code, duration, a short redacted detail) and of the
 activity log (`editor.verification.dependencies`, the same fields), never the install's output.

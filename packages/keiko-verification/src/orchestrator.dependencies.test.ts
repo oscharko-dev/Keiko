@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ChildProcess } from "node:child_process";
@@ -12,7 +12,9 @@ import {
   type VerificationDeps,
   type VerificationStepOutput,
 } from "./orchestrator.js";
+import type { VerificationResult } from "./types.js";
 import { fakeMonitor, makeFakeChild, scriptChildClose } from "./_support.js";
+import { DEPENDENCY_APPROVED_REGISTRY } from "./dependencies.js";
 
 const roots: string[] = [];
 
@@ -73,6 +75,21 @@ function sequencedSpawn(outcomes: readonly ScriptCloseOptions[]): SequencedSpawn
   };
 }
 
+// npm's hidden lockfile as a successful install leaves it: one package, from the approved registry.
+function writeInstalledTree(root: string): void {
+  mkdirSync(join(root, "node_modules"), { recursive: true });
+  const entry = {
+    version: "1.3.0",
+    resolved: `${DEPENDENCY_APPROVED_REGISTRY}left-pad/-/left-pad-1.3.0.tgz`,
+    integrity: `sha512-${"A".repeat(86)}==`,
+  };
+  writeFileSync(
+    join(root, "node_modules", ".package-lock.json"),
+    JSON.stringify({ lockfileVersion: 3, packages: { "node_modules/left-pad": entry } }),
+    "utf8",
+  );
+}
+
 function testDeps(
   workspace: WorkspaceInfo,
   spawn: SpawnFn,
@@ -88,6 +105,17 @@ function testDeps(
   };
 }
 
+// Shared by the multi-step dependency-failure case below to keep that test's own cyclomatic
+// complexity within the repository's limit (each optional-chained field access is a branch).
+function expectSkippedForMissingDependencies(
+  result: VerificationResult | undefined,
+  kind: string,
+): void {
+  expect(result?.kind).toBe(kind);
+  expect(result?.status).toBe("skipped");
+  expect(result?.detail).toContain("dependencies unavailable");
+}
+
 describe("runVerification — dependency bootstrap integration (ADR-0043 D17)", () => {
   it("runs the dependency install before the first script step when dependencyBootstrap is 'auto'", async () => {
     const workspace = makeDependencyWorkspace({ test: "vitest run" });
@@ -101,9 +129,14 @@ describe("runVerification — dependency bootstrap integration (ADR-0043 D17)", 
       { stdout: "added 1 package\n", exitCode: 0 }, // the dependency install
       { stdout: "1 passed\n", exitCode: 0 }, // the plan's "test" step
     ]);
+    // npm leaves its hidden lockfile behind; the bootstrap reads the installed tree back from it.
+    const npm: SpawnFn = (command, args, options) => {
+      if (args[0] === "install") writeInstalledTree(workspace.root);
+      return spawn.fn(command, args, options);
+    };
     const report = await runVerification(
       plan,
-      testDeps(workspace, spawn.fn, { dependencyBootstrap: "auto" }),
+      testDeps(workspace, npm, { dependencyBootstrap: "auto" }),
     );
 
     expect(spawn.calls()).toHaveLength(2);
@@ -114,13 +147,16 @@ describe("runVerification — dependency bootstrap integration (ADR-0043 D17)", 
     expect(report.overallStatus).toBe("passed");
   });
 
-  it("skips every planned step and never spawns the script when the dependency install fails", async () => {
-    const workspace = makeDependencyWorkspace({ test: "vitest run" });
+  it("skips every planned step and never spawns a script when the dependency install fails", async () => {
+    // Two script kinds (SCRIPT_KINDS orders lint before test, as the later "forwards
+    // onStepOutput" test in this file also relies on) so this proves the skip applies to every
+    // planned step, not just a single one.
+    const workspace = makeDependencyWorkspace({ test: "vitest run", lint: "eslint ." });
     const catalog = {
-      scripts: { test: "vitest run" },
-      mapping: classifyScripts({ test: "vitest run" }),
+      scripts: { test: "vitest run", lint: "eslint ." },
+      mapping: classifyScripts({ test: "vitest run", lint: "eslint ." }),
     };
-    const plan = buildVerificationPlan(workspace, catalog, { only: ["test"] });
+    const plan = buildVerificationPlan(workspace, catalog, { only: ["test", "lint"] });
 
     const spawn = sequencedSpawn([{ stderr: "npm ERR! network failure\n", exitCode: 1 }]);
     const outputs: VerificationStepOutput[] = [];
@@ -130,10 +166,12 @@ describe("runVerification — dependency bootstrap integration (ADR-0043 D17)", 
     });
     const report = await runVerification(plan, deps);
 
-    expect(spawn.calls()).toHaveLength(1); // only the failed install; the script step never spawns
-    expect(report.results).toHaveLength(1);
-    expect(report.results[0]?.status).toBe("skipped");
-    expect(report.results[0]?.detail).toContain("dependencies unavailable");
+    // Only the failed install spawns a process; neither planned script step ever does.
+    expect(spawn.calls()).toHaveLength(1);
+    expect(spawn.calls()[0]?.args[0]).toBe("install");
+    expect(report.results).toHaveLength(2);
+    expectSkippedForMissingDependencies(report.results[0], "lint");
+    expectSkippedForMissingDependencies(report.results[1], "test");
     expect(report.overallStatus).toBe("failed");
     expect(report.dependencies?.state).toBe("failed");
     expect(outputs).toHaveLength(1);

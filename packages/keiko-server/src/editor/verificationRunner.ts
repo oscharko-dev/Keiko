@@ -366,6 +366,26 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     }
   };
 
+  // #3452 review: the agent path (executeAgentPlan) and the human path (executeAndReport) each
+  // built this same ExecuteVerificationArgs object by hand -- the `dependencyBootstrap: "auto"`
+  // literal and the rest of the shared fields lived in two places that could silently drift from
+  // each other. One helper now owns the shared shape; the agent path layers its own
+  // `onStepOutput` sink on top of it.
+  private buildExecuteArgs(
+    plan: VerificationPlan,
+    resolved: ResolvedVerificationWorkspace,
+    entry: InFlightRun,
+  ): ExecuteVerificationArgs {
+    return {
+      plan,
+      workspace: resolved.workspace,
+      signal: entry.controller.signal,
+      correlationId: entry.correlationId,
+      fs: resolved.access.fs,
+      dependencyBootstrap: "auto",
+    };
+  }
+
   // The agent path's execution: dependencies bootstrapped, and the orchestrator's redacted output
   // tails of non-passing steps collected (bounded) for the governed tool — never persisted.
   private async executeAgentPlan(
@@ -375,12 +395,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   ): Promise<VerificationRunOutcome> {
     const failureOutput: VerificationStepOutput[] = [];
     const { report } = await this.executePort({
-      plan,
-      workspace: resolved.workspace,
-      signal: entry.controller.signal,
-      correlationId: entry.correlationId,
-      fs: resolved.access.fs,
-      dependencyBootstrap: "auto",
+      ...this.buildExecuteArgs(plan, resolved, entry),
       onStepOutput: (output): void => {
         if (failureOutput.length < MAX_FAILURE_OUTPUTS) failureOutput.push(output);
       },
@@ -538,14 +553,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     startedAtMs: number,
   ): Promise<void> {
     try {
-      const { report } = await this.executePort({
-        plan,
-        workspace: resolved.workspace,
-        signal: entry.controller.signal,
-        correlationId: entry.correlationId,
-        fs: resolved.access.fs,
-        dependencyBootstrap: "auto",
-      });
+      const { report } = await this.executePort(this.buildExecuteArgs(plan, resolved, entry));
       this.recordDependencyBootstrap(entry.correlationId, report);
       this.emitStepCompletions(runId, report);
       // Fire-and-forget path (nothing awaits runPlan): an evidence-write failure must not become an

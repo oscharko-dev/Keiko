@@ -1058,6 +1058,52 @@ describe("VerificationRunnerManager — runToReport's dependency-bootstrap and s
 
     expect(events.some((event) => event.op === "editor.verification.dependencies")).toBe(false);
   });
+
+  // #3452 follow-up: `executeAndReport` (the human path behind `execute`/`runPlan`) built the
+  // SAME dependencyBootstrap request and recorded the same activity line by hand, alongside
+  // executeAgentPlan's copy above -- and only the agent path was ever driven through a test. Both
+  // call sites now build their orchestrator options from one shared helper (buildExecuteArgs); this
+  // proves the human path gets identical behaviour rather than merely trusting the refactor.
+  it('passes dependencyBootstrap "auto" to the execute port and writes the dependencies activity line for a human-triggered run', async () => {
+    const withDependencies: VerificationReport = {
+      ...report(["targeted-test"]),
+      dependencies: { state: "installed", lockfile: "created", exitCode: 0, durationMs: 4_200 },
+    };
+    let observedBootstrap: "off" | "auto" | undefined;
+    const port: VerificationExecutePort = (args) => {
+      observedBootstrap = args.dependencyBootstrap;
+      return Promise.resolve({
+        report: withDependencies,
+        probe: { available: true, backend: "test-backend" },
+      });
+    };
+    const events: ServerLogEvent[] = [];
+    const manager = makeManager({
+      execute: port,
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+    const { done } = collect(manager);
+
+    manager.execute(
+      input({
+        kinds: ["targeted-test"],
+        targetPath: "src/a.test.ts",
+        correlationId: "human-deps-present",
+      }),
+    );
+    await done;
+
+    expect(observedBootstrap).toBe("auto");
+    const dependencyLines = events.filter(
+      (event) => event.op === "editor.verification.dependencies",
+    );
+    expect(dependencyLines).toHaveLength(1);
+    expect(dependencyLines[0]).toMatchObject({
+      op: "editor.verification.dependencies",
+      correlationId: "human-deps-present",
+      extra: { state: "installed", lockfile: "created", exitCode: 0, durationMs: 4_200 },
+    });
+  });
 });
 
 describe("VerificationRunnerManager — catalog + edge cases", () => {

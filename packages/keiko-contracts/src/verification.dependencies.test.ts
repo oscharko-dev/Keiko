@@ -9,6 +9,7 @@ import {
   type VerificationLockfileState,
   type VerificationReport,
   type VerificationResult,
+  VERIFICATION_DETAIL_MAX_CHARS,
 } from "./verification.js";
 
 // Mirrors the guardedResult()/guardedReport() fixture shape in verification.test.ts (same package)
@@ -132,6 +133,26 @@ describe("isVerificationDependencySummary", () => {
   it("rejects an oversize detail", () => {
     expect(
       isVerificationDependencySummary({ ...dependencySummary(), detail: "x".repeat(2_000) }),
+    ).toBe(false);
+  });
+
+  it("rejects an empty detail string", () => {
+    expect(isVerificationDependencySummary(dependencySummary({ detail: "" }))).toBe(false);
+  });
+
+  it("accepts a detail exactly at the accepted maximum length", () => {
+    expect(
+      isVerificationDependencySummary(
+        dependencySummary({ detail: "x".repeat(VERIFICATION_DETAIL_MAX_CHARS) }),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects a detail one character longer than the accepted maximum", () => {
+    expect(
+      isVerificationDependencySummary(
+        dependencySummary({ detail: "x".repeat(VERIFICATION_DETAIL_MAX_CHARS + 1) }),
+      ),
     ).toBe(false);
   });
 });

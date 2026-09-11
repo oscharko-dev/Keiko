@@ -6,6 +6,7 @@ import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { DEPENDENCY_INSTALL_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import {
+  DEPENDENCY_APPROVED_REGISTRY,
   DEPENDENCY_INSTALL_ARGS,
   planDependencyBootstrap,
   runDependencyBootstrap,
@@ -50,6 +51,68 @@ function writeManifestText(root: string, content: string): void {
 
 function writeManifest(root: string, manifest: Readonly<Record<string, unknown>>): void {
   writeManifestText(root, JSON.stringify(manifest));
+}
+
+const REGISTRY_INTEGRITY = `sha512-${"A".repeat(86)}==`;
+
+function registryEntry(name: string): Readonly<Record<string, unknown>> {
+  return {
+    version: "1.3.0",
+    resolved: `${DEPENDENCY_APPROVED_REGISTRY}${name}/-/${name}-1.3.0.tgz`,
+    integrity: REGISTRY_INTEGRITY,
+  };
+}
+
+// The lockfile npm 7+ writes (version 3): the workspace's own folder plus what it installs.
+function lockfileText(packages: Readonly<Record<string, unknown>> = {}): string {
+  return JSON.stringify({ lockfileVersion: 3, packages: { "": {}, ...packages } });
+}
+
+function writeLockfile(root: string, packages?: Readonly<Record<string, unknown>>): void {
+  writeFileSync(join(root, "package-lock.json"), lockfileText(packages), "utf8");
+}
+
+// npm's hidden lockfile: the tree an install left behind, which the bootstrap reads back.
+function writeInstalledTree(
+  root: string,
+  packages: Readonly<Record<string, unknown>> = {
+    "node_modules/left-pad": registryEntry("left-pad"),
+  },
+): void {
+  mkdirSync(join(root, "node_modules"), { recursive: true });
+  writeFileSync(
+    join(root, "node_modules", ".package-lock.json"),
+    JSON.stringify({ lockfileVersion: 3, packages }),
+    "utf8",
+  );
+}
+
+function planFor(root: string): ReturnType<typeof planDependencyBootstrap> {
+  return planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs);
+}
+
+// Termination reaches a fake child through its process group on POSIX and through the child itself
+// on Windows. The group kill is stubbed, so the fake child's pid never signals a real process group
+// on the host.
+function recordTerminationSignals(): {
+  readonly sent: (child: {
+    readonly pid?: number | undefined;
+    readonly killed: readonly string[];
+  }) => readonly string[];
+  readonly restore: () => void;
+} {
+  const groupKill = vi.spyOn(process, "kill").mockImplementation(() => true);
+  return {
+    sent: (child) => [
+      ...groupKill.mock.calls.flatMap(([pid, signal]) =>
+        child.pid !== undefined && pid === -child.pid && typeof signal === "string" ? [signal] : [],
+      ),
+      ...child.killed,
+    ],
+    restore: (): void => {
+      groupKill.mockRestore();
+    },
+  };
 }
 
 function bootstrapDepsFor(
@@ -137,7 +200,7 @@ describe("planDependencyBootstrap", () => {
   it("reports lockfile 'present' in an install plan when a root lockfile already exists", () => {
     const root = tempRoot();
     writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
-    writeFileSync(join(root, "package-lock.json"), "{}", "utf8");
+    writeLockfile(root);
     expect(planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs)).toEqual({
       kind: "install",
       lockfile: "present",
@@ -147,9 +210,8 @@ describe("planDependencyBootstrap", () => {
   it("plans 'current' when the hidden installed-tree marker is newer than the manifest and lockfile", () => {
     const root = tempRoot();
     writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
-    writeFileSync(join(root, "package-lock.json"), "{}", "utf8");
-    mkdirSync(join(root, "node_modules"), { recursive: true });
-    writeFileSync(join(root, "node_modules", ".package-lock.json"), "{}", "utf8");
+    writeLockfile(root);
+    writeInstalledTree(root);
 
     const base = new Date("2024-01-01T00:00:00.000Z");
     const installedAt = new Date(base.getTime() + 60_000);
@@ -166,8 +228,7 @@ describe("planDependencyBootstrap", () => {
   it("plans 'install' when the manifest was modified after the installed-tree marker", () => {
     const root = tempRoot();
     writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
-    mkdirSync(join(root, "node_modules"), { recursive: true });
-    writeFileSync(join(root, "node_modules", ".package-lock.json"), "{}", "utf8");
+    writeInstalledTree(root);
 
     const installedAt = new Date("2024-01-01T00:00:00.000Z");
     const manifestTouchedAt = new Date(installedAt.getTime() + 60_000);
@@ -176,6 +237,205 @@ describe("planDependencyBootstrap", () => {
 
     expect(planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs)).toEqual({
       kind: "install",
+      lockfile: "absent",
+    });
+  });
+});
+
+// The install keeps host network, so every source npm would contact is checked before it runs
+// (CodeRabbit review, PR #3452: CWE-918 and CWE-494).
+describe("planDependencyBootstrap — dependency sources", () => {
+  it.each([
+    ["dependencies", "http://registry.internal.example/left-pad-1.3.0.tgz"],
+    ["dependencies", "https://example.com/left-pad-1.3.0.tgz"],
+    ["dependencies", "http://169.254.169.254/latest/meta-data"],
+    ["devDependencies", "git+ssh://git@github.com/owner/repo.git"],
+    ["devDependencies", "github:owner/repo"],
+    ["optionalDependencies", "owner/repo"],
+    ["peerDependencies", "git@github.com:owner/repo.git"],
+    ["dependencies", "file:../outside"],
+    ["dependencies", "./vendor/left-pad"],
+    ["dependencies", "."],
+    ["dependencies", "left-pad-1.3.0.tgz"],
+    ["dependencies", "npm:left-pad@github:owner/repo"],
+  ])(
+    "refuses a %s specifier %j that names a location instead of the registry",
+    (section, specifier) => {
+      const root = tempRoot();
+      writeManifest(root, {
+        devDependencies: { typescript: "^6.0.3" },
+        [section]: { probe: specifier },
+      });
+      expect(planFor(root)).toEqual({
+        kind: "refused",
+        reason: "unapproved-source",
+        lockfile: "absent",
+      });
+    },
+  );
+
+  it.each([
+    "1.3.0",
+    "^6.0.3",
+    "~1.2.3",
+    ">=1.0.0 <2.0.0 || 3.x",
+    "latest",
+    "*",
+    "",
+    "1.0.0-beta.1+build.5",
+    "npm:left-pad@^1.3.0",
+    "npm:@scope/left-pad@1.3.0",
+  ])("plans an install for the registry specifier %j", (specifier) => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { probe: specifier } });
+    expect(planFor(root)).toEqual({ kind: "install", lockfile: "absent" });
+  });
+
+  it.each([
+    [
+      "an override naming a tarball URL",
+      { overrides: { "left-pad": "http://registry.internal.example/x.tgz" } },
+    ],
+    [
+      "a nested override naming a Git remote",
+      { overrides: { react: { "left-pad": "github:owner/repo" } } },
+    ],
+    ["a workspace pattern leaving the workspace", { workspaces: ["../outside/*"] }],
+    ["an absolute workspace pattern", { workspaces: ["/srv/packages/*"] }],
+    [
+      "a workspaces field npm cannot read as patterns",
+      { workspaces: { packages: ["packages/*"] } },
+    ],
+  ])("refuses %s", (_label, fields) => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.3.0" }, ...fields });
+    expect(planFor(root)).toEqual({
+      kind: "refused",
+      reason: "unapproved-source",
+      lockfile: "absent",
+    });
+  });
+
+  it("plans an install for registry overrides, a dependency reference and contained workspaces", () => {
+    const root = tempRoot();
+    writeManifest(root, {
+      dependencies: { "left-pad": "1.3.0" },
+      overrides: { react: "18.3.1", "left-pad": { "is-number": "$left-pad" } },
+      workspaces: ["packages/*", "./tools/cli"],
+    });
+    expect(planFor(root)).toEqual({ kind: "install", lockfile: "absent" });
+  });
+
+  it("plans an install when every lockfile entry is the workspace, a link, a bundle or the registry", () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.3.0" }, workspaces: ["packages/*"] });
+    writeLockfile(root, {
+      "packages/app": { version: "1.0.0" },
+      "node_modules/app": { resolved: "packages/app", link: true },
+      "node_modules/left-pad": registryEntry("left-pad"),
+      "node_modules/left-pad/node_modules/bundled": { version: "1.0.0", inBundle: true },
+      "node_modules/unresolved": { version: "1.0.0", integrity: REGISTRY_INTEGRITY },
+    });
+    expect(planFor(root)).toEqual({ kind: "install", lockfile: "present" });
+  });
+
+  const registryUrl = `${DEPENDENCY_APPROVED_REGISTRY}left-pad/-/left-pad-1.3.0.tgz`;
+  it.each([
+    ["a cleartext URL", { resolved: registryUrl.replace("https:", "http:") }],
+    [
+      "another host",
+      { resolved: "https://registry.internal.example/left-pad/-/left-pad-1.3.0.tgz" },
+    ],
+    ["a user in the URL", { resolved: registryUrl.replace("https://", "https://operator@") }],
+    ["a non-default port", { resolved: registryUrl.replace(".org/", ".org:8443/") }],
+    ["a Git remote", { resolved: "git+ssh://git@github.com/owner/repo.git#0123abc" }],
+    ["no integrity", { integrity: undefined }],
+    ["a malformed integrity", { integrity: "md5-0123" }],
+  ])("refuses a lockfile entry with %s", (_label, override) => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.3.0" } });
+    writeLockfile(root, { "node_modules/left-pad": { ...registryEntry("left-pad"), ...override } });
+    expect(planFor(root)).toEqual({
+      kind: "refused",
+      reason: "unapproved-source",
+      lockfile: "present",
+    });
+  });
+
+  it.each([
+    [
+      "a link leaving the workspace",
+      { "node_modules/app": { resolved: "../outside", link: true } },
+    ],
+    [
+      "an install location leaving the workspace",
+      { "node_modules/../../outside": registryEntry("x") },
+    ],
+    ["a workspace folder with a source", { "packages/app": registryEntry("app") }],
+  ])("refuses a lockfile with %s", (_label, packages) => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.3.0" } });
+    writeLockfile(root, packages);
+    expect(planFor(root)).toEqual({
+      kind: "refused",
+      reason: "unapproved-source",
+      lockfile: "present",
+    });
+  });
+
+  it.each([
+    ["an empty object", "{}"],
+    ["a version-1 lockfile", JSON.stringify({ lockfileVersion: 1, dependencies: {} })],
+    ["malformed JSON", "{ not json"],
+    ["packages that are not an object", JSON.stringify({ lockfileVersion: 3, packages: [] })],
+  ])("refuses a lockfile that is %s as unreadable", (_label, text) => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.3.0" } });
+    writeFileSync(join(root, "package-lock.json"), text, "utf8");
+    expect(planFor(root)).toEqual({
+      kind: "refused",
+      reason: "lockfile-unreadable",
+      lockfile: "present",
+    });
+  });
+
+  it("checks npm-shrinkwrap.json as it checks package-lock.json", () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.3.0" } });
+    writeFileSync(
+      join(root, "npm-shrinkwrap.json"),
+      lockfileText({
+        "node_modules/left-pad": {
+          ...registryEntry("left-pad"),
+          resolved: "http://registry.internal.example/x.tgz",
+        },
+      }),
+      "utf8",
+    );
+    expect(planFor(root)).toEqual({
+      kind: "refused",
+      reason: "unapproved-source",
+      lockfile: "present",
+    });
+  });
+
+  it("refuses a current installed tree that names an unapproved source instead of running against it", () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.3.0" } });
+    writeInstalledTree(root, {
+      "node_modules/left-pad": {
+        ...registryEntry("left-pad"),
+        resolved: "http://registry.internal.example/x.tgz",
+      },
+    });
+    const base = new Date("2024-01-01T00:00:00.000Z");
+    const installedAt = new Date(base.getTime() + 60_000);
+    utimesSync(join(root, "package.json"), base, base);
+    utimesSync(join(root, "node_modules", ".package-lock.json"), installedAt, installedAt);
+
+    expect(planFor(root)).toEqual({
+      kind: "refused",
+      reason: "unapproved-source",
       lockfile: "absent",
     });
   });
@@ -242,6 +502,8 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
     const plan = planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs);
     expect(plan).toEqual({ kind: "install", lockfile: "absent" });
 
+    writeInstalledTree(root); // npm's hidden lockfile, as the (faked) install leaves it
+
     const rec = recordingSpawn();
     scriptChildClose(rec.child, { stdout: "added 1 package in 400ms\n", exitCode: 0 });
     const outcome = await runDependencyBootstrap(plan, bootstrapDepsFor(root, rec.fn));
@@ -266,8 +528,9 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
     writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
     const plan = planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs);
     expect(plan).toEqual({ kind: "install", lockfile: "absent" });
-    // Simulates npm having written the lockfile as a side effect of the (faked) install.
-    writeFileSync(join(root, "package-lock.json"), "{}", "utf8");
+    // Simulates npm having written both lockfiles as a side effect of the (faked) install.
+    writeLockfile(root, { "node_modules/left-pad": registryEntry("left-pad") });
+    writeInstalledTree(root);
 
     const rec = recordingSpawn();
     scriptChildClose(rec.child, { stdout: "added 1 package\n", exitCode: 0 });
@@ -275,6 +538,49 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
 
     expect(outcome.summary.state).toBe("installed");
     expect(outcome.summary.lockfile).toBe("created");
+  });
+
+  // A registry package may itself name a URL or Git source; npm fetches it and records it in the
+  // tree it installs. The fetch cannot be prevented, but no step ever runs against what it brought.
+  it("refuses an installed tree that names an unapproved source, so no step runs against it", async () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.3.0" } });
+    const plan = planFor(root);
+    expect(plan).toEqual({ kind: "install", lockfile: "absent" });
+    writeInstalledTree(root, {
+      "node_modules/left-pad": registryEntry("left-pad"),
+      "node_modules/left-pad/node_modules/inner": {
+        version: "1.0.0",
+        resolved: "http://registry.internal.example/inner-1.0.0.tgz",
+        integrity: REGISTRY_INTEGRITY,
+      },
+    });
+
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { stdout: "added 2 packages\n", exitCode: 0 });
+    const outcome = await runDependencyBootstrap(plan, bootstrapDepsFor(root, rec.fn));
+
+    expect(outcome.summary).toEqual({
+      state: "refused",
+      lockfile: "absent",
+      exitCode: 0,
+      durationMs: expect.any(Number) as number,
+      detail: expect.stringContaining("approved HTTPS registry") as string,
+    });
+    expect(outcome.excerpt).toBeUndefined();
+  });
+
+  it("refuses an install that left no installed-tree lockfile to check", async () => {
+    const root = tempRoot();
+    writeManifest(root, { dependencies: { "left-pad": "1.3.0" } });
+    const plan = planFor(root);
+
+    const rec = recordingSpawn();
+    scriptChildClose(rec.child, { stdout: "added 1 package\n", exitCode: 0 });
+    const outcome = await runDependencyBootstrap(plan, bootstrapDepsFor(root, rec.fn));
+
+    expect(outcome.summary.state).toBe("refused");
+    expect(outcome.summary.detail).toContain("lockfile");
   });
 
   it("maps a non-zero npm exit to failed, with a redacted excerpt of the captured output", async () => {
@@ -318,6 +624,7 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
   // .wallTimeMs (240s) of real time.
   it("settles an npm install that outlives its wall-time ceiling as timed-out", async () => {
     vi.useFakeTimers();
+    const signals = recordTerminationSignals();
     try {
       const root = tempRoot();
       writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
@@ -326,6 +633,7 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
       const rec = recordingSpawn(); // never closes on its own
       const pending = runDependencyBootstrap(plan, bootstrapDepsFor(root, rec.fn));
       await vi.advanceTimersByTimeAsync(DEPENDENCY_INSTALL_LIMITS.wallTimeMs);
+      expect(signals.sent(rec.child)).toContain("SIGTERM");
       // The ceiling's own SIGTERM does not make a stub child exit; emulate it dying afterwards,
       // mirroring keiko-tools/src/exec.test.ts's "times out and rejects" fake-child pattern.
       rec.child.emit("close", null, "SIGTERM");
@@ -335,6 +643,7 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
       // The boundary rejects on its own ceiling; the summary names that, not a generic failure.
       expect(outcome.summary.state).toBe("timed-out");
     } finally {
+      signals.restore();
       vi.useRealTimers();
     }
   });
@@ -345,17 +654,27 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
     writeManifest(root, { dependencies: { "left-pad": "1.0.0" } });
     const plan = planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs);
     const controller = new AbortController();
+    const signals = recordTerminationSignals();
+    try {
+      const rec = recordingSpawn(); // never closes on its own
+      const pending = runDependencyBootstrap(plan, {
+        ...bootstrapDepsFor(root, rec.fn),
+        signal: controller.signal,
+      });
+      controller.abort();
+      // The abort must reach the child before it closes: an implementation that ignored the signal
+      // would still read "cancelled" off the aborted signal once the child closed on its own
+      // (CodeRabbit review, PR #3452).
+      await vi.waitFor(() => {
+        expect(signals.sent(rec.child)).toContain("SIGTERM");
+      });
+      rec.child.emit("close", null, "SIGTERM");
+      const outcome = await pending;
 
-    const rec = recordingSpawn(); // never closes on its own
-    const pending = runDependencyBootstrap(plan, {
-      ...bootstrapDepsFor(root, rec.fn),
-      signal: controller.signal,
-    });
-    controller.abort();
-    rec.child.emit("close", null, "SIGTERM");
-    const outcome = await pending;
-
-    expect(outcome.summary.exitCode).toBeNull();
-    expect(outcome.summary.state).toBe("cancelled");
+      expect(outcome.summary.exitCode).toBeNull();
+      expect(outcome.summary.state).toBe("cancelled");
+    } finally {
+      signals.restore();
+    }
   });
 });
