@@ -37,6 +37,7 @@ binds it to those owners; it adds no parallel execution, policy, search or evide
 | Raw search/read coordinate computation | existing workspace owner | #3386 H1 |
 | Durable activity and diagnostics | existing server log/diagnostic ports | #3412 generator; #3413 runtime/analyzer |
 | Adapter projection semantics | catalog compiler | consumers materialize only the compiled result |
+| Approved-skill state and effects | existing server-approved skill catalog and governed skill handler; the catalog owns only the `keiko.skill.discover` descriptor and its projection | #3417 |
 
 The new pure package depends only on contracts and security. It cannot import I/O, providers,
 handlers, credentials, readiness, log sinks or policy evaluators. Server composition alone injects
@@ -545,10 +546,50 @@ never tolerated. The first entry recorded on PR #3452 was self-issued with agent
 no external evidence, and was withdrawn: the derived verification budget stays uncertified until the
 owner issues an entry that meets these rules.
 
+## Amendment — approved-skill discovery is a catalog descriptor over the approved skill catalog (PR #3452, 2026-09-11)
+
+Issue #3417 makes approved skills discoverable without moving skill state, bodies, credentials or
+execution authority into the catalog. The OpenCode profile registers one more descriptor,
+`keiko.skill.discover` (alias `keiko_skill_discover`): it takes no argument, reads the workspace,
+is idempotent and read-only, carries the sandbox default budget and names its own handler,
+`opencode-skill-discovery-port`. That descriptor and its projection are all the catalog owns. The
+server-approved skill catalog (`coding-runtime/skillCatalog.ts`) stays the one authority for skill
+state and the governed skill handler (`productionAuxiliaryPorts`) the one authority for effects; no
+second registry, index or policy path exists.
+
+- **Closed projection.** A discovery answers with `SkillDiscoveryResultV1` (keiko-contracts
+  `coding-skill-discovery`): per skill its pinned id, version, a SHA-256 of its canonical
+  definition, one closed category, a sorted, bounded set of capability ids the compiled catalog
+  holds, the profile range it is compatible with and a closed readiness state. There is no
+  free-form field, and the facade refuses a listing that leaves the contract.
+- **One readiness decision.** Discovery and invocation apply the same decision: enabled,
+  compatible with the bound profile, a mounted handler for the category, a live authority that
+  still allows the workspace read, and budget for the one delegated read, which the authority
+  answers without reserving it (`delegationFits`, `canChargeDelegatedRead`). The model sees only
+  the ready skills it may invoke now: implicit ones, or one the operator's turn requested.
+- **Atomic invalidation.** The skill catalog changes only by admitting a whole next set: one frozen
+  snapshot with one new revision and digest. Installing, removing, updating, disabling or revoking
+  a skill each invalidate the prior digest. A run is bound to the digest of its last discovery; an
+  invocation after the catalog changed is refused as `skill-discovery-stale` until the model
+  discovers again, every invocation re-checks readiness before its effect, and one whose entry was
+  replaced while its read ran is refused as `skill-changed`. The catalog holds one version per
+  skill and at most 32 skills, so a downgraded or confusable id cannot sit beside the approved one;
+  replay and cross-workspace protection stay with the dispatch identity, offer and workspace
+  revision described above.
+- **Availability.** Both skill tools are absent together (#3414-AC9) unless an approved skill is
+  enabled, compatible and handled for the run.
+- **Evidence.** Each discovery writes one `coding-runtime.skill-discovery` line: the run, the
+  catalog revision and digest, the approved and listed counts, the unavailable counts per closed
+  reason and the duration — never a skill body, path, prompt, argument, output or credential.
+
+The descriptor is a producer change; the owner-issued lineage entry that admits the final producer
+covers it.
+
 ## Version History
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.5 | 2026-09-11 | Approved-skill discovery: the catalog owns only the `keiko.skill.discover` descriptor over the server-approved skill catalog, with one readiness decision, atomic invalidation and a closed, body-free projection (#3417, PR #3452). |
 | 1.4 | 2026-09-11 | Lineage entries are owner-issued: receipts carry evidence refs bound to the integration PR at the entry's source commit, which must resolve, precede the checked commit and still hold the producer; the self-issued first entry was withdrawn. |
 | 1.3 | 2026-09-10 | Post-landing producer changes are admitted through an append-only lineage of owner-issued checkpoints with pinned verification and independent-review receipts; the H1 records keep their historical identity (PR #3452). |
 | 1.2 | 2026-09-10 | D4: the catalog ceilings also bound the arguments recorded in the sidecar's durable tool-part rows and derive the history response budget; a refused part row is named body-free in the reconciliation diagnostic (PR #3452). |

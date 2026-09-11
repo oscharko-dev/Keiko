@@ -233,12 +233,15 @@ describe("OpenCode launch profile", () => {
   it("denies an unavailable optional tool in both tools and permission (#3414-AC9)", () => {
     const config = createFixedOpenCodeConfig(
       CONTEXT_GEOMETRY,
-      new Set(["keiko_research_fetch", "keiko_skill"]),
+      new Set(["keiko_research_fetch", "keiko_skill_discover", "keiko_skill"]),
     );
     expect(config.tools.keiko_research_fetch).toBe(false);
     expect(config.tools.keiko_skill).toBe(false);
     expect(config.permission.keiko_research_fetch).toBe("deny");
     expect(config.permission.keiko_skill).toBe("deny");
+    // #3417: skill discovery is absent together with the skill it would list.
+    expect(config.tools.keiko_skill_discover).toBe(false);
+    expect(config.permission.keiko_skill_discover).toBe("deny");
     // A sibling optional tool with no unavailability entry stays available.
     expect(config.tools.keiko_child_agent).toBe(true);
     expect(config.permission.keiko_child_agent).toBe("allow");

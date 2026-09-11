@@ -297,6 +297,7 @@ describe("production CI repair accounting availability", () => {
       expect(run).not.toHaveBeenCalled();
       expect(budget?.chargePrompt(1)).toBe(false);
       expect(budget?.chargeDelegatedRead?.("child", "read")).toBe(false);
+      expect(budget?.canChargeDelegatedRead?.()).toBe(false);
       // #3384 B3-16: the fixture's "run-1"/"run-2" runIds are shorter than correlation.ts's
       // 8-character SAFE_CORRELATION_ID floor, so correlationIdOrUnknown downgrades them here
       // instead of writing the raw id -- proving this call site is now guarded rather than
@@ -376,6 +377,29 @@ describe("production CI repair accounting availability", () => {
     expect(budget?.admitTool(request)).toBeUndefined();
     expect(budget?.chargePrompt(1)).toBe(false);
     expect(budget?.chargeDelegatedRead?.("child", "read")).toBe(false);
+    expect(budget?.canChargeDelegatedRead?.()).toBe(false);
+  });
+  // #3417: the availability gate answers a delegated read's fit before the ledger does. A run whose
+  // snapshot has left a live state and never opened a pull request has no repair accounting at all,
+  // so only the gate stands between it and a yes.
+  it("answers no for a delegated read's fit once the run has left a live state", () => {
+    const test = fixture(false);
+    const current = test.snapshots.get(test.current.runId);
+    if (current === undefined) throw new Error("Missing run");
+    const { draftDelivery: _draft, ...withoutDelivery } = current;
+    const ended: CodingRuntimeSnapshot = { ...withoutDelivery, state: "succeeded" };
+    const snapshots = {
+      ...test.snapshots,
+      ciRepairBudget: test.ciRepairBudget,
+      get: (runId: string): CodingRuntimeSnapshot | undefined =>
+        runId === test.current.runId ? ended : test.snapshots.get(runId),
+    };
+    const budget = createProductionCiRepairBudget(
+      { ...test.deps, snapshots },
+      { ...test.verified, snapshots },
+      test.current,
+    );
+    expect(budget?.canChargeDelegatedRead?.()).toBe(false);
   });
   it("admits an exact technical-ready successor before draft adoption without resetting accounting", () => {
     const test = fixture(true, {

@@ -159,6 +159,63 @@ async function duplicateResults(
 }
 
 describe("CodingToolAuthorityPort", () => {
+  it("#3417: admits a skill discovery only under workspace-read", () => {
+    const request = {
+      action: "skill-discover",
+      actionId: "discover-1",
+      idempotencyKey: "discover-1",
+    } as const;
+    for (const [actionClasses, expected] of [
+      [["workspace-read"], true],
+      [["command-execution"], false],
+    ] as const) {
+      const envelope = restrictedEnvelope({ actionClasses });
+      const authority = {
+        revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+        resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+      };
+      const port = createCodingToolAuthorityPort(authority, runtimeContext);
+      expect(port.admit("capability", request).ok).toBe(expected);
+    }
+  });
+
+  it("#3417: answers a delegated read's fit from the authority, and no when it cannot answer", () => {
+    const envelope = fullyAuthorizedEnvelope as CodingWorkbenchRuntimeAuthorityEnvelope;
+    const delegationFits = vi.fn((_input: unknown) => true);
+    const base = {
+      revalidateCapabilityForMutation: vi.fn(() => ({ ok: true as const, envelope })),
+      resolveCapabilityForDelegation: vi.fn(() => ({ ok: true as const, envelope })),
+    };
+    const request = {
+      action: "skill",
+      skillId: "skl_a@1",
+      actionId: "skill-1",
+      idempotencyKey: "skill-1",
+    } as const;
+    const admitted = createCodingToolAuthorityPort(
+      { ...base, delegationFits },
+      runtimeContext,
+    ).admit("capability", request);
+    if (!admitted.ok) throw new Error("expected admission");
+
+    expect(admitted.mutationGuard.canChargeDelegatedRead?.()).toBe(true);
+    expect(delegationFits).toHaveBeenCalledWith(
+      expect.objectContaining({
+        capability: "capability",
+        usage: { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+      }),
+    );
+    delegationFits.mockReturnValue(false);
+    expect(admitted.mutationGuard.canChargeDelegatedRead?.()).toBe(false);
+
+    const unanswered = createCodingToolAuthorityPort(base, runtimeContext).admit(
+      "capability",
+      request,
+    );
+    if (!unanswered.ok) throw new Error("expected admission");
+    expect(unanswered.mutationGuard.canChargeDelegatedRead?.()).toBe(false);
+  });
+
   it.each([
     { actionClasses: ["workspace-read"] },
     { connectorScopes: ["source-control.write"] },

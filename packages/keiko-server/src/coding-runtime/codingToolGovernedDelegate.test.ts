@@ -11,6 +11,7 @@ import {
 } from "./codingToolGovernedDelegate.js";
 import type { CodingToolActionRequest } from "./codingToolIpc.js";
 import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
+import type { SkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts";
 
 function governedPort<
   Kind extends CodingToolActionRequest["action"],
@@ -52,6 +53,62 @@ const changeset = {
 };
 
 describe("CodingToolGovernedDelegate", () => {
+  it.each([
+    [true, true, true],
+    [true, false, false],
+    [false, true, false],
+  ] as const)(
+    "#3417: a delegated read fits only when the run authority (%s) and the repair budget (%s) both hold it",
+    async (authorityFits, budgetFits, expected) => {
+      const seen: boolean[] = [];
+      const ports: CodingToolGovernedPorts = {
+        ...governedPorts(),
+        skillAuthority: {
+          execute: (_request, _signal, guard) => {
+            seen.push(guard.canChargeDelegatedRead?.() === true);
+            return Promise.resolve({ status: "completed" as const });
+          },
+        },
+      };
+      const budget = {
+        admitTool: vi.fn(() => ({ check: (): boolean => true, settle: vi.fn() })),
+        canChargePrompt: vi.fn(() => true),
+        chargePrompt: vi.fn(() => true),
+        canChargeDelegatedRead: vi.fn(() => budgetFits),
+        observed: vi.fn(),
+      };
+      const delegate = createCodingToolGovernedDelegate(ports, budget);
+      await delegate.execute({ ...identity, action: "skill", skillId: "skl_a@1" }, undefined, {
+        check: () => true,
+        canChargeDelegatedRead: () => authorityFits,
+      });
+      expect(seen).toEqual([expected]);
+    },
+  );
+
+  it("#3417: returns a skill discovery's listing, and fails a discovery no port serves", async () => {
+    const skills = {
+      schemaVersion: 1,
+      catalogDigest: "a".repeat(64),
+      skills: [],
+    } as unknown as SkillDiscoveryResultV1;
+    const ports: CodingToolGovernedPorts = {
+      ...governedPorts(),
+      skillDiscovery: { execute: () => Promise.resolve({ status: "completed" as const, skills }) },
+    };
+    const request = { ...identity, action: "skill-discover" as const };
+    expect(
+      await createCodingToolGovernedDelegate(ports).execute(request, undefined, liveGuard),
+    ).toEqual({ outcome: "completed", skills });
+    expect(
+      await createCodingToolGovernedDelegate(governedPorts()).execute(
+        request,
+        undefined,
+        liveGuard,
+      ),
+    ).toEqual({ outcome: "failed" });
+  });
+
   it("does not call a handler when the cumulative repair budget rejects admitted work", async () => {
     const ports = governedPorts();
     const budget = {

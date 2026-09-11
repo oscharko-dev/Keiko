@@ -109,6 +109,48 @@ describe("CodingToolFacade", () => {
     );
   });
 
+  it("#3417: returns a discovery's closed listing and fails any that leaves the contract", async () => {
+    const listing = {
+      schemaVersion: 1,
+      catalogDigest: "a".repeat(64),
+      skills: [
+        {
+          skillId: "skl_repo-structure-summary@1",
+          version: "1",
+          sourceDigest: "b".repeat(64),
+          category: "repository-analysis",
+          capabilities: ["keiko.workspace.read"],
+          compatibility: { profile: "opencode", minVersion: 1, maxVersion: 1 },
+          readiness: { state: "ready" },
+        },
+      ],
+    };
+    const withSummary = {
+      ...listing,
+      skills: listing.skills.map((skill) => ({ ...skill, summary: "reads every file" })),
+    };
+    const cases: readonly (readonly [unknown, "listing" | "failed"])[] = [
+      [{ outcome: "completed", skills: listing }, "listing"],
+      [{ outcome: "completed", skills: withSummary }, "failed"],
+      [{ outcome: "completed" }, "failed"],
+    ];
+    for (const [delegated, expected] of cases) {
+      const ports = facade();
+      ports.delegate.execute = vi.fn(() => Promise.resolve(delegated));
+      const result = await createCodingToolFacade(ports).execute({
+        body: requestBody({ action: "skill-discover" }),
+        capability,
+      });
+      if (expected === "failed") expect(result).toMatchObject({ status: "failed" });
+      else
+        expect(result).toEqual({
+          status: "completed",
+          evidence: [{ kind: "governed-delegate", code: "completed" }],
+          skills: listing,
+        });
+    }
+  });
+
   it("passes the whole-file digest and window facts through instead of recomputing them (#2473)", async () => {
     const ports = facade();
     const wholeFileDigest = "b".repeat(64);

@@ -178,11 +178,16 @@ function logAuthorityDenial(
   });
 }
 
+// The authority surface this port reads. `delegationFits` answers a budget question without
+// reserving (#3417); an authority that cannot answer it answers no.
+type CodingToolAuthorityService = Pick<
+  CodingRuntimeAuthorityService,
+  "resolveCapabilityForDelegation" | "revalidateCapabilityForMutation"
+> &
+  Partial<Pick<CodingRuntimeAuthorityService, "delegationFits">>;
+
 export function createCodingToolAuthorityPort(
-  authority: Pick<
-    CodingRuntimeAuthorityService,
-    "resolveCapabilityForDelegation" | "revalidateCapabilityForMutation"
-  >,
+  authority: CodingToolAuthorityService,
   context: CodingToolAuthorityContextProvider,
   options: CodingToolAuthorityPortOptions = {},
 ): CodingToolAuthorityPort {
@@ -375,10 +380,7 @@ function approved(
 }
 
 function guarded(
-  authority: Pick<
-    CodingRuntimeAuthorityService,
-    "resolveCapabilityForDelegation" | "revalidateCapabilityForMutation"
-  >,
+  authority: CodingToolAuthorityService,
   context: CodingToolAuthorityContextProvider,
   capability: string,
   request: CodingToolActionRequest,
@@ -393,6 +395,7 @@ function guarded(
       revalidateEnvelope(authority, context, capability, request, approvalVerified)?.authority,
     chargeDelegatedRead: (delegationId: string, idempotencyKey: string): boolean =>
       chargeDelegatedRead(authority, context, capability, delegationId, idempotencyKey),
+    canChargeDelegatedRead: (): boolean => canChargeDelegatedRead(authority, context, capability),
     ...(binding === undefined ? {} : { binding }),
   };
   return {
@@ -574,6 +577,27 @@ function chargeDelegatedRead(
   }).ok;
 }
 
+// The question `chargeDelegatedRead` answers by charging, for one read, answered without the
+// charge (#3417).
+function canChargeDelegatedRead(
+  authority: Partial<Pick<CodingRuntimeAuthorityService, "delegationFits">>,
+  context: CodingToolAuthorityContextProvider,
+  capability: string,
+): boolean {
+  const trusted = context();
+  return (
+    authority.delegationFits?.({
+      capability,
+      adapterKind: trusted.adapterKind,
+      liveFacts: trusted.liveFacts,
+      usage: { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+      workspaceRoot: trusted.workspaceRoot,
+      deploymentCeiling: trusted.deploymentCeiling,
+      nowIso: trusted.nowIso,
+    }) === true
+  );
+}
+
 function actionAllowed(
   envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
   request: CodingToolActionRequest,
@@ -644,6 +668,7 @@ function additionalPolicyAllowed(
     case "egress":
       return internetPolicyAllowed(envelope, approvalVerified) && networkAllowed(envelope);
     case "skill":
+    case "skill-discover":
     case "child-agent":
       return true;
   }

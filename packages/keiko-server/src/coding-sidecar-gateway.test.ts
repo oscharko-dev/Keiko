@@ -517,6 +517,13 @@ const GIT_PUSH_SCHEMA = {
   type: "object",
   properties: {},
 } as const;
+// #3417: keiko_skill_discover takes no argument either, so the real binary projects it exactly like
+// the two zero-argument Git tools above.
+const SKILL_DISCOVER_SCHEMA = {
+  $schema: "https://json-schema.org/draft/2020-12/schema",
+  type: "object",
+  properties: {},
+} as const;
 const GIT_DIFF_SCHEMA = {
   type: "object",
   properties: {
@@ -610,6 +617,7 @@ const PINNED_MODEL_VISIBLE_TOOLS = [
   { name: "keiko_changeset_edit", parameters: CHANGESET_EDIT_SCHEMA },
   { name: "keiko_verification", parameters: VERIFICATION_PROJECTED_SCHEMA },
   { name: "keiko_research_fetch", parameters: RESEARCH_FETCH_SCHEMA },
+  { name: "keiko_skill_discover", parameters: SKILL_DISCOVER_SCHEMA },
   { name: "keiko_skill", parameters: SKILL_SCHEMA },
   { name: "keiko_child_agent", parameters: CHILD_AGENT_SCHEMA },
   { name: "keiko_git_status", parameters: GIT_STATUS_SCHEMA },
@@ -984,8 +992,8 @@ describe("coding-sidecar gateway", () => {
           runId: "run-real",
           unavailableOptionalTools: ["keiko_research_fetch"],
           unavailableOptionalToolCount: 1,
-          offeredOptionalTools: ["keiko_child_agent", "keiko_skill"],
-          offeredOptionalToolCount: 2,
+          offeredOptionalTools: ["keiko_child_agent", "keiko_skill", "keiko_skill_discover"],
+          offeredOptionalToolCount: 3,
         },
       });
       expect(availabilityEvents[1]).toMatchObject({
@@ -994,8 +1002,8 @@ describe("coding-sidecar gateway", () => {
           runId: "run-real",
           unavailableOptionalTools: ["keiko_child_agent"],
           unavailableOptionalToolCount: 1,
-          offeredOptionalTools: ["keiko_research_fetch", "keiko_skill"],
-          offeredOptionalToolCount: 2,
+          offeredOptionalTools: ["keiko_research_fetch", "keiko_skill", "keiko_skill_discover"],
+          offeredOptionalToolCount: 3,
         },
       });
       expect(availabilityEvents[0]?.extra?.handlerSetDigest).not.toBe(
@@ -1219,6 +1227,8 @@ describe("coding-sidecar gateway", () => {
       ["keiko_changeset_edit", "59902a2dd9af28ed8b97d1108215c6e88bbe0fba017a4756a99e833b9af48952"],
       ["keiko_verification", "bb319a7fcdf14fb30a612f9a98945c1e2a356aab2ca6924014d07cb930c580ef"],
       ["keiko_research_fetch", "8510b5132cc06c627c2b46c20df92c3fcca392f0d16a621b7006eb41d2bf02b5"],
+      // #3417: the same zero-argument projection as keiko_git_status and keiko_git_push.
+      ["keiko_skill_discover", "93ab7499dc3c616f8db8780fed0d9f69270803cda913882ad2ef3943db8d7225"],
       ["keiko_skill", "c3a50e828f78a32481ce662f8cd92e04dd6375af8df916f3c588b0628ff2de2d"],
       ["keiko_child_agent", "aa977e5c893cef8e1c7f6e5185836e039bb0a874e35c476d6a896a14441cb0ab"],
       // #3390 live-run evidence: digests recomputed against the real OpenCode 1.17.17
@@ -1856,6 +1866,14 @@ describe("coding-sidecar gateway", () => {
               required: ["target"],
               properties: { ...RESEARCH_FETCH_SCHEMA.properties },
               type: "object",
+            },
+          },
+          {
+            name: "keiko_skill_discover",
+            parameters: {
+              properties: {},
+              type: "object",
+              $schema: "https://json-schema.org/draft/2020-12/schema",
             },
           },
           {
@@ -4025,13 +4043,13 @@ describe("coding sidecar gateway rejection activity log", () => {
       extra: {
         reason: "tool-contract-drift",
         runId: "run-1",
-        expectedToolCount: 18,
+        expectedToolCount: 19,
         receivedToolCount: 2,
         unexpectedToolNames: [],
       },
     });
     const extra = sink.events[0]?.extra as { missingToolNames?: readonly string[] } | undefined;
-    expect(extra?.missingToolNames).toHaveLength(16);
+    expect(extra?.missingToolNames).toHaveLength(17);
     expect(JSON.stringify(sink.events)).not.toContain("private runtime content");
   });
 

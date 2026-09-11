@@ -273,6 +273,9 @@ const SKILL_SCHEMA = {
   required: ["skillId"],
 } as const;
 
+// #3417: discovery takes no argument; it lists the approved skills keiko_skill may run.
+const SKILL_DISCOVER_SCHEMA = { type: "object", properties: {}, required: [] } as const;
+
 const CHILD_AGENT_SCHEMA = {
   type: "object",
   properties: {
@@ -393,6 +396,7 @@ export const OPENCODE_MODEL_VISIBLE_TOOLS = [
   { name: "keiko_changeset_edit", parameters: CHANGESET_EDIT_SCHEMA },
   { name: "keiko_verification", parameters: VERIFICATION_SCHEMA },
   { name: "keiko_research_fetch", parameters: RESEARCH_FETCH_SCHEMA },
+  { name: "keiko_skill_discover", parameters: SKILL_DISCOVER_SCHEMA },
   { name: "keiko_skill", parameters: SKILL_SCHEMA },
   { name: "keiko_child_agent", parameters: CHILD_AGENT_SCHEMA },
   { name: "keiko_git_status", parameters: GIT_STATUS_SCHEMA },
@@ -458,6 +462,7 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
     action: "egress",
     arguments: { target: RESEARCH_FETCH_SCHEMA.properties.target },
   },
+  { name: "keiko_skill_discover", action: "skill-discover", arguments: {} },
   {
     name: "keiko_skill",
     action: "skill",

@@ -45,7 +45,7 @@ import {
   DEPENDENCY_INSTALL_LIMITS,
   VERIFICATION_TOOL_MAX_DURATION_MS,
 } from "@oscharko-dev/keiko-contracts/runtime/verification";
-import type { SkillCatalog } from "./skillCatalog.js";
+import { createServerApprovedSkillCatalog, type SkillCatalog } from "./skillCatalog.js";
 import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
 import type {
   VerifiedCommitProposal,
@@ -2276,12 +2276,7 @@ describe("deriveOptionalToolAvailability (#3414-AC9)", () => {
   const runId = "run-availability-1";
 
   function emptySkillCatalog(): SkillCatalog {
-    return {
-      has: () => false,
-      get: () => undefined,
-      list: () => [],
-      isImplicitAllowed: () => false,
-    };
+    return createServerApprovedSkillCatalog([]);
   }
 
   it("marks research and child-agent unavailable, and skill available from the server default catalog, when nothing else is wired", () => {
@@ -2350,25 +2345,51 @@ describe("deriveOptionalToolAvailability (#3414-AC9)", () => {
     expect(JSON.stringify(events)).not.toContain("private configuration failure");
   });
 
-  it("marks skill available only when the catalog actually lists an approved entry", () => {
+  // #3417: both skill tools are absent together unless an approved skill could actually run for
+  // this run: enabled, compatible with the bound profile, and of a category the port handles.
+  it("marks the skill tools available only when an approved skill could run", () => {
     const empty = deriveOptionalToolAvailability({
       authorityRef: { runId, envelopeDigest: DIGEST },
       skillCatalog: emptySkillCatalog(),
     });
     expect(empty.has("keiko_skill")).toBe(true);
+    expect(empty.has("keiko_skill_discover")).toBe(true);
+    for (const unready of [
+      { category: "public-research" as const, capabilities: ["keiko.research.fetch"] },
+      { enabled: false },
+      { compatibility: { profile: "opencode", minVersion: 2, maxVersion: 2 } },
+    ]) {
+      const unavailable = deriveOptionalToolAvailability({
+        authorityRef: { runId, envelopeDigest: DIGEST },
+        skillCatalog: createServerApprovedSkillCatalog([
+          {
+            skillId: "skl_demo@1",
+            implicitAllowed: false,
+            category: "repository-analysis",
+            capabilities: ["keiko.workspace.read"],
+            compatibility: { profile: "opencode", minVersion: 1, maxVersion: 1 },
+            ...unready,
+          },
+        ]),
+      });
+      expect(unavailable.has("keiko_skill")).toBe(true);
+      expect(unavailable.has("keiko_skill_discover")).toBe(true);
+    }
 
     const nonEmpty = deriveOptionalToolAvailability({
       authorityRef: { runId, envelopeDigest: DIGEST },
-      skillCatalog: {
-        has: () => true,
-        get: () => undefined,
-        list: () => [
-          { skillId: "skl_demo@1" as never, implicitAllowed: false, category: "public-research" },
-        ],
-        isImplicitAllowed: () => false,
-      },
+      skillCatalog: createServerApprovedSkillCatalog([
+        {
+          skillId: "skl_demo@1",
+          implicitAllowed: false,
+          category: "repository-analysis",
+          capabilities: ["keiko.workspace.read"],
+          compatibility: { profile: "opencode", minVersion: 1, maxVersion: 1 },
+        },
+      ]),
     });
     expect(nonEmpty.has("keiko_skill")).toBe(false);
+    expect(nonEmpty.has("keiko_skill_discover")).toBe(false);
   });
 
   it("marks child-agent available only when the configured model resolves through the factory", () => {

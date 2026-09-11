@@ -991,6 +991,47 @@ describe("CodingRuntimeAuthorityService", () => {
     });
   });
 
+  it("#3417: answers whether one more delegation fits without reserving budget or replay identity", () => {
+    const authority = service();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+    const probe = {
+      capability: minted.toolFacadeCapability,
+      adapterKind: "model-gateway-sidecar" as const,
+      liveFacts: facts(),
+      usage: { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+      workspaceRoot: ROOT,
+      deploymentCeiling: "autonomous-delivery" as const,
+      nowIso: NOW,
+    };
+
+    expect(authority.delegationFits(probe)).toBe(true);
+    expect(authority.delegationFits(probe)).toBe(true);
+    // The probe took no replay identity: the delegation it described is still admitted once.
+    expect(
+      authority.resolveCapabilityForDelegation({
+        ...probe,
+        delegationId: "probe-action-1",
+        idempotencyKey: "probe-key-1",
+      }),
+    ).toMatchObject({ ok: true });
+    // Ten tool calls on top of the one just charged exceed the envelope's ten.
+    expect(
+      authority.delegationFits({
+        ...probe,
+        usage: { toolCalls: 10, patchBytes: 0, promptTokens: 0 },
+      }),
+    ).toBe(false);
+    expect(
+      authority.delegationFits({
+        ...probe,
+        capability: "forged-capability-material-that-is-invalid",
+      }),
+    ).toBe(false);
+    expect(authority.pause(minted.authorityRef.runId, NOW)).toMatchObject({ ok: true });
+    expect(authority.delegationFits(probe)).toBe(false);
+  });
+
   it("authenticates the server-private capability before live-fact and replay admission", () => {
     const authority = service();
     const minted = mint(authority);

@@ -21,6 +21,7 @@ await runCodingRuntimeJourneyServer({
   fixtureLabel: "Real binary 2483",
   runtime: "production-discovery",
   proveRepositorySearch: true,
+  proveSkillDiscovery: true,
   includeQuestion: true,
   defaultPort: REAL_BINARY_DEFAULT_UI_PORT,
   originalContent: AUTHORITY_ORIGINAL_CONTENT,

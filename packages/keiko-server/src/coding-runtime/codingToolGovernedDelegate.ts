@@ -8,6 +8,7 @@ import type {
   AuxiliaryCapabilityOutcomeV1,
   VerifiedCommitResult,
   CodingRuntimeGitResult,
+  SkillDiscoveryResultV1,
 } from "@oscharko-dev/keiko-contracts";
 
 import type { CodingToolDelegatePort, CodingToolMutationGuard } from "./codingToolFacadePorts.js";
@@ -49,6 +50,7 @@ export type GovernedCodingToolResult =
       readonly ci?: CodingRuntimeCiResult;
       readonly search?: CodingRepositoryResult;
       readonly verification?: CodingToolVerificationResult;
+      readonly skills?: SkillDiscoveryResultV1 | undefined;
       /** Fresh server-only approval-store observation; the immutable domain receipt is unchanged. */
       readonly approvalDisposition?: "ready" | undefined;
     }
@@ -77,6 +79,7 @@ export interface CodingToolGovernedPorts {
   readonly connectorAuthority: GovernedCodingToolPort<"connector">;
   readonly egressAuthority: GovernedCodingToolPort<"egress">;
   readonly skillAuthority?: GovernedCodingToolPort<"skill"> | undefined;
+  readonly skillDiscovery?: GovernedCodingToolPort<"skill-discover"> | undefined;
   readonly childAgentAuthority?: GovernedCodingToolPort<"child-agent"> | undefined;
 }
 
@@ -143,6 +146,8 @@ function withRepairLease(
         chargeDelegatedRead: (delegationId, idempotencyKey): boolean =>
           guard.chargeDelegatedRead?.(delegationId, idempotencyKey) === true &&
           budget?.chargeDelegatedRead?.(delegationId, idempotencyKey) === true,
+        canChargeDelegatedRead: (): boolean =>
+          guard.canChargeDelegatedRead?.() === true && budget?.canChargeDelegatedRead?.() === true,
       };
 }
 function completionLive(
@@ -210,7 +215,8 @@ function gitOutcome(
   return (
     deliveryOutcome(action, result) ??
     searchOutcome(action, result) ??
-    verificationOutcome(action, result)
+    verificationOutcome(action, result) ??
+    skillsOutcome(action, result)
   );
 }
 
@@ -259,6 +265,15 @@ function searchOutcome(
     : undefined;
 }
 
+function skillsOutcome(
+  action: CodingToolActionRequest["action"],
+  result: Extract<GovernedCodingToolResult, { readonly status: "completed" }>,
+): unknown {
+  return action === "skill-discover" && result.skills !== undefined
+    ? { outcome: "completed", skills: result.skills }
+    : undefined;
+}
+
 // One exhaustive line per governed action class: the switch IS the routing table and the compiler
 // proves it total. A lookup object would need an `as never` cast to keep the per-action request
 // types, trading a proven narrowing for an unchecked one.
@@ -292,6 +307,8 @@ function dispatch(
       return ports.egressAuthority.execute(request, signal, mutationGuard);
     case "skill":
       return ports.skillAuthority?.execute(request, signal, mutationGuard) ?? failed();
+    case "skill-discover":
+      return ports.skillDiscovery?.execute(request, signal, mutationGuard) ?? failed();
     case "child-agent":
       return ports.childAgentAuthority?.execute(request, signal, mutationGuard) ?? failed();
   }

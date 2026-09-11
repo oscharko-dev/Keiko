@@ -1003,6 +1003,7 @@ type GeneratedToolAction =
   | "verification"
   | "egress"
   | "skill"
+  | "skill-discover"
   | "child-agent"
   | "git-status"
   | "git-diff"

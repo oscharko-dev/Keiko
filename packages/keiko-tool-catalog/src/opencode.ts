@@ -497,6 +497,24 @@ function skillSpec(): OpenCodeToolSpec {
   };
 }
 
+// #3417: the catalog owns only this discovery descriptor. The server-approved skill catalog stays
+// authoritative for skill state and the governed skill handler for effects.
+function skillDiscoverSpec(): OpenCodeToolSpec {
+  return {
+    canonicalId: "keiko.skill.discover",
+    alias: "keiko_skill_discover",
+    description:
+      "List the approved read-only skills this run may invoke now: each with the pinned skillId " +
+      "keiko_skill takes, its version, source digest, category, catalogued capabilities, " +
+      "compatible profile versions and readiness. Discover again after keiko_skill reports " +
+      "skill-discovery-stale.",
+    inputSchema: managedObjectSchema({}, []),
+    effects: ["workspace-read"],
+    idempotency: "read-only",
+    handlerId: "opencode-skill-discovery-port",
+  };
+}
+
 function childRunSpec(): OpenCodeToolSpec {
   return {
     canonicalId: "keiko.child.run",
@@ -722,6 +740,7 @@ export function opencodeRegistrationSet(): CatalogRegistrationSet {
       changesetEditSpec(),
       verificationSpec(),
       researchFetchSpec(),
+      skillDiscoverSpec(),
       skillSpec(),
       childRunSpec(),
       gitStatusSpec(),

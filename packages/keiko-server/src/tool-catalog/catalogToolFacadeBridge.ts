@@ -161,6 +161,8 @@ function catalogActionFor(request: CodingToolActionRequest): CatalogAction | und
       return { toolId: "keiko.research.fetch", arguments: { target: request.target } };
     case "skill":
       return { toolId: "keiko.skill.invoke", arguments: { skillId: request.skillId } };
+    case "skill-discover":
+      return { toolId: "keiko.skill.discover", arguments: {} };
     case "child-agent":
       return {
         toolId: "keiko.child.run",
@@ -270,6 +272,7 @@ function auxiliaryRepresentative(
     return { ...base, action: "egress", target: "https://example.invalid/" };
   if (canonicalId === "keiko.skill.invoke")
     return { ...base, action: "skill", skillId: "skl_fixture@1" };
+  if (canonicalId === "keiko.skill.discover") return { ...base, action: "skill-discover" };
   if (canonicalId === "keiko.child.run")
     return { ...base, action: "child-agent", objective: "inspect", maxToolCalls: 1 };
   return undefined;
@@ -328,6 +331,7 @@ function optionalUnavailable(
   return (
     (canonicalId === "keiko.research.fetch" && unavailable.has("keiko_research_fetch")) ||
     (canonicalId === "keiko.skill.invoke" && unavailable.has("keiko_skill")) ||
+    (canonicalId === "keiko.skill.discover" && unavailable.has("keiko_skill_discover")) ||
     (canonicalId === "keiko.child.run" && unavailable.has("keiko_child_agent"))
   );
 }

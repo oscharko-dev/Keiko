@@ -20,6 +20,7 @@ import type {
   VerificationKind,
   VerifiedCommitResult,
   CodingRuntimeGitResult,
+  SkillDiscoveryResultV1,
 } from "@oscharko-dev/keiko-contracts";
 import { isCodeTaskSkillId } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
 import {
@@ -52,6 +53,7 @@ export type CodingToolAction =
   | "connector"
   | "egress"
   | "skill"
+  | "skill-discover"
   | "child-agent";
 
 export interface CodingToolRequestIdentity {
@@ -174,6 +176,7 @@ export type CodingToolActionRequest =
     })
   | (CodingToolRequestIdentity & { readonly action: "egress"; readonly target: string })
   | (CodingToolRequestIdentity & { readonly action: "skill"; readonly skillId: string })
+  | (CodingToolRequestIdentity & { readonly action: "skill-discover" })
   | (CodingToolRequestIdentity & {
       readonly action: "child-agent";
       readonly objective: string;
@@ -196,6 +199,7 @@ const STATIC_REQUIRED_CLASSES: Readonly<
   connector: ["connector-access", "network-egress"],
   egress: ["network-egress"],
   skill: ["workspace-read"],
+  "skill-discover": ["workspace-read"],
   "child-agent": ["workspace-read"],
 };
 
@@ -249,6 +253,12 @@ export type CodingToolResult =
       readonly status: "completed";
       readonly evidence: readonly CodingToolEvidence[];
       readonly search: CodingRepositoryResult;
+    }
+  | {
+      readonly status: "completed";
+      readonly evidence: readonly CodingToolEvidence[];
+      /** #3417: the approved skills the model may invoke now, closed and body-free. */
+      readonly skills: SkillDiscoveryResultV1;
     }
   | {
       readonly status: "completed";
@@ -373,6 +383,8 @@ function requestFromRecord(value: Record<string, unknown>): CodingToolActionRequ
       return simpleNamedRequest(value, "target", "egress");
     case "skill":
       return skillRequest(value);
+    case "skill-discover":
+      return skillDiscoverRequest(value);
     case "child-agent":
       return childAgentRequest(value);
     default:
@@ -418,6 +430,14 @@ function skillRequest(value: Record<string, unknown>): CodingToolActionRequest |
     hasExactKeys(value, ["action", "actionId", "idempotencyKey", "skillId"]) &&
     isCodeTaskSkillId(value.skillId)
     ? { ...identity, action: "skill", skillId: value.skillId }
+    : undefined;
+}
+
+// #3417: discovery carries nothing but its identity; any argument is refused.
+function skillDiscoverRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
+  const identity = requestIdentity(value);
+  return identity !== undefined && hasExactKeys(value, ["action", "actionId", "idempotencyKey"])
+    ? { ...identity, action: "skill-discover" }
     : undefined;
 }
 

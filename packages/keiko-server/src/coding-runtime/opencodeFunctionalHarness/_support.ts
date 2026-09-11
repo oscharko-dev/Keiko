@@ -537,6 +537,7 @@ const FAKE_TOOL_ACTIONS: Readonly<
   keiko_changeset_edit: { action: "edit", arguments: ["changeset"] },
   keiko_verification: { action: "verification", arguments: ["verifierId"] },
   keiko_research_fetch: { action: "egress", arguments: ["target"] },
+  keiko_skill_discover: { action: "skill-discover", arguments: [] },
   keiko_skill: { action: "skill", arguments: ["skillId"] },
   keiko_child_agent: { action: "child-agent", arguments: ["objective", "maxToolCalls"] },
 };

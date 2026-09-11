@@ -123,6 +123,7 @@ const COVERED: readonly CodingToolActionRequest[] = [
   { ...identity, action: "verification", verifierId: "test" },
   { ...identity, action: "egress", target: "https://example.invalid" },
   { ...identity, action: "skill", skillId: "skill" },
+  { ...identity, action: "skill-discover" },
   { ...identity, action: "child-agent", objective: "inspect", maxToolCalls: 1 },
   { ...identity, action: "git", operation: "status" },
   { ...identity, action: "git", operation: "diff", scope: "working-tree", paths: [] },
@@ -148,6 +149,18 @@ const UNCOVERED: readonly CodingToolActionRequest[] = [
 ];
 
 describe("canonical catalog facade bridge", () => {
+  it("#3417: reports skill discovery unavailable together with the skill it lists", () => {
+    const ready = createCanonicalOpenCodeHandlerCoverage(new Set());
+    const hidden = createCanonicalOpenCodeHandlerCoverage(
+      new Set(["keiko_skill_discover", "keiko_skill"] as const),
+    );
+    expect(ready.readinessByToolId.get("keiko.skill.discover")).toBe("ready");
+    expect(hidden.readinessByToolId.get("keiko.skill.discover")).toBe("unavailable");
+    expect(hidden.readinessByToolId.get("keiko.skill.invoke")).toBe("unavailable");
+    expect(hidden.readinessByToolId.get("keiko.workspace.read")).toBe("ready");
+    expect(hidden.handlerSetDigest).not.toBe(ready.handlerSetDigest);
+  });
+
   it("binds every model-facing canonical action and leaves unsupported authority surfaces unbound", () => {
     const { bridge } = createBridge();
     for (const request of COVERED) expect(bridge.covers(request)).toBe(true);

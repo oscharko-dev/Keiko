@@ -155,6 +155,8 @@ export interface CodingRuntimeJourneyServerConfig {
   readonly holdAfterVerification?: boolean;
   /** Actual runtime search result must determine the model boundary's subsequent read. */
   readonly proveRepositorySearch?: boolean;
+  /** #3417: the runtime's own skill discovery must determine the skill the model invokes. */
+  readonly proveSkillDiscovery?: boolean;
   readonly defaultPort: number;
   readonly originalContent: string;
   readonly editedContent: string;
@@ -658,6 +660,18 @@ function journeyScript(config: CodingRuntimeJourneyServerConfig, stateDir: strin
             observeRepositorySearch: (proof): void => {
               writeFileSync(
                 join(stateDir, "h1-result-consumption.json"),
+                `${JSON.stringify(proof)}\n`,
+                { mode: 0o600 },
+              );
+            },
+          }
+        : {}),
+      ...(config.proveSkillDiscovery === true
+        ? {
+            proveSkillDiscovery: true,
+            observeSkillDiscovery: (proof): void => {
+              writeFileSync(
+                join(stateDir, "skill-discovery-consumption.json"),
                 `${JSON.stringify(proof)}\n`,
                 { mode: 0o600 },
               );

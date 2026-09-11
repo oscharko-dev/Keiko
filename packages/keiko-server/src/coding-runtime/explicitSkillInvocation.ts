@@ -6,6 +6,8 @@ import type { SkillCatalog } from "./skillCatalog.js";
 export interface ExplicitSkillInvocationTracker {
   readonly observeTurn: (text: string) => void;
   readonly consume: (skillId: string) => boolean;
+  /** Whether the current turn requested the skill, without consuming the request. */
+  readonly isPending: (skillId: string) => boolean;
   readonly clear: () => void;
 }
 
@@ -28,6 +30,7 @@ export function createExplicitSkillInvocationTracker(
       if (!isCodeTaskSkillId(skillId) || !pending.delete(skillId)) return false;
       return true;
     },
+    isPending: (skillId): boolean => isCodeTaskSkillId(skillId) && pending.has(skillId),
     clear: (): void => {
       pending.clear();
     },

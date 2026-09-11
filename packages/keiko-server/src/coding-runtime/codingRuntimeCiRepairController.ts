@@ -25,6 +25,8 @@ export interface CiRepairExecutionBudget {
   /** The existing gateway has accepted this prompt reservation; false prevents provider dispatch. */
   readonly chargePrompt: (promptTokens: number) => boolean;
   readonly chargeDelegatedRead?: (delegationId: string, idempotencyKey: string) => boolean;
+  /** Checks whether one delegated read fits without consuming the repair ledger (#3417). */
+  readonly canChargeDelegatedRead?: () => boolean;
   readonly observed: (snapshot: ReadinessSnapshot) => void;
   /** True only when a fresh CI observation is the supported next step for refused post-PR work. */
   readonly ciObservationRequired?: () => boolean;
@@ -210,6 +212,22 @@ export class CodingRuntimeCiRepairController implements CiRepairExecutionBudget 
         toolCalls: 1,
         promptTokens: 0,
       }) !== undefined
+    );
+  }
+  public canChargeDelegatedRead(): boolean {
+    const context = this.deps.context();
+    if (context === undefined) return true;
+    if (!context.stillAuthorized()) return false;
+    const result = this.accepted(context);
+    if (active(result.record) === undefined) return result.status !== "blocked";
+    return (
+      result.status !== "blocked" &&
+      result.record !== undefined &&
+      chargeFits(result.record, {
+        chargeId: "delegated-read-admission",
+        toolCalls: 1,
+        promptTokens: 0,
+      })
     );
   }
   public ciObservationRequired(): boolean {

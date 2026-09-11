@@ -779,6 +779,10 @@
       "types": "./dist/coding-repository-search.d.ts",
       "default": "./dist/coding-repository-search.js"
     },
+    "./runtime/coding-skill-discovery": {
+      "types": "./dist/coding-skill-discovery.d.ts",
+      "import": "./dist/coding-skill-discovery.js"
+    },
     "./runtime/coding-runtime-git": {
       "types": "./dist/coding-runtime-git.d.ts",
       "default": "./dist/coding-runtime-git.js"

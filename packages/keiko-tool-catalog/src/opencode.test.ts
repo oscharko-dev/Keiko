@@ -146,14 +146,31 @@ describe("opencode registration set", () => {
     });
   });
 
-  it("declares exactly sixteen governed tools with unique canonical identities and aliases", () => {
+  it("declares exactly seventeen governed tools with unique canonical identities and aliases", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
-    expect(projection.tools).toHaveLength(16);
+    expect(projection.tools).toHaveLength(17);
     const canonicalIds = projection.tools.map((tool) => tool.toolRef.canonicalId);
     const aliases = projection.tools.map((tool) => tool.alias);
-    expect(new Set(canonicalIds).size).toBe(16);
-    expect(new Set(aliases).size).toBe(16);
+    expect(new Set(canonicalIds).size).toBe(17);
+    expect(new Set(aliases).size).toBe(17);
+  });
+
+  // #3417: the catalog owns only the discovery descriptor; it reads, takes no argument, carries the
+  // default budget and names its own handler, apart from the invocation it points to.
+  it("declares skill discovery as a read-only, argument-free descriptor beside skill invocation", () => {
+    const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
+    const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
+    const discover = projection.tools.find((tool) => tool.alias === "keiko_skill_discover");
+    expect(discover?.toolRef.canonicalId).toBe("keiko.skill.discover");
+    expect(discover?.inputSchema).toMatchObject({ type: "object", properties: {} });
+    expect(discover?.bounds.maxDurationMs).toBe(DEFAULT_SANDBOX_POLICY.defaultTimeoutMs);
+    const entry = opencodeRegistrationSet().entries.find(
+      (candidate) => candidate.alias === "keiko_skill_discover",
+    );
+    expect(entry?.descriptor.effects).toEqual(["workspace-read"]);
+    expect(entry?.descriptor.idempotency).toBe("read-only");
+    expect(entry?.descriptor.handlerRequirement.id).toBe("opencode-skill-discovery-port");
   });
 
   it("keeps Git mutation, CI observation, and local skill effects distinct", () => {
@@ -232,8 +249,8 @@ describe("opencode registration set", () => {
   it("is the source coding-sidecar-gateway.ts derives its outgoing gateway advertisement from", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const definitions = gatewayToolDefinitions(catalog, OPENCODE_PROFILE);
-    expect(definitions).toHaveLength(16);
-    expect(new Set(definitions.map((tool) => tool.name)).size).toBe(16);
+    expect(definitions).toHaveLength(17);
+    expect(new Set(definitions.map((tool) => tool.name)).size).toBe(17);
     for (const tool of definitions) expect(tool.description.length).toBeGreaterThan(0);
   });
 

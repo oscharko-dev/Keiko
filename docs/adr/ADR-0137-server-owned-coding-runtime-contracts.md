@@ -86,6 +86,15 @@ project, branch, action/connector scope, budget, runtime source, or model source
 delegation replay, stop, and takeover fail closed. V1 permits exactly one active run per BFF; a
 concurrent start returns `active-run-conflict` deterministically.
 
+The same aggregate answers a budget question without spending: `delegationFits` says whether one
+more delegation of a given usage would still fit the run's budget, for the same capability, run and
+binding a delegation is admitted on, and reserves neither budget nor replay identity. Approved-skill
+discovery (#3417) lists only the skills the remaining budget can serve by asking it; a skill's own
+invocation still charges its one delegated read at the existing boundary. The server-approved skill
+catalog is the single authority for which skills a run may invoke: it changes only by admitting a
+whole next set as one snapshot with a new revision and digest, and a run's skill invocation is
+refused once the catalog it discovered is no longer the one in force.
+
 ### D3 — Runtime state and failures are closed
 
 The server-owned state vocabulary is exactly `unavailable`, `idle`, `starting`, `ready`, `running`,

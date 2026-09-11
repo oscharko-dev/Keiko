@@ -24,6 +24,7 @@ import {
   EDITOR_AGENT_FAILURE_CODES,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { validateAuxiliaryCapabilityOutcomeV1 } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
+import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
 import {
   isVerificationDependencySummary,
@@ -444,7 +445,8 @@ function projectDomainResult(
     projectRuntimeGit(request, value) ??
     projectVerifiedCommit(request, value) ??
     projectSearch(request, value) ??
-    projectVerification(request, value)
+    projectVerification(request, value) ??
+    projectSkillDiscovery(request, value)
   );
 }
 
@@ -459,6 +461,23 @@ function projectVerification(
     evidence: [{ kind: "governed-delegate", code: "completed" }],
     verification: value.verification,
   };
+}
+
+// #3417: a discovery answers with the contract's closed listing or not at all; anything else the
+// handler returned collapses to a failure rather than reaching the model.
+function projectSkillDiscovery(
+  request: CodingToolActionRequest,
+  value: Record<string, unknown>,
+): CodingToolResult | undefined {
+  if (request.action !== "skill-discover") return undefined;
+  const validated = validateSkillDiscoveryResultV1(value.skills);
+  return validated.ok
+    ? {
+        status: "completed",
+        evidence: [{ kind: "governed-delegate", code: "completed" }],
+        skills: validated.value,
+      }
+    : projected("failed");
 }
 
 function projectRuntimeGit(

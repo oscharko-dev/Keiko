@@ -27,6 +27,7 @@ const KEIKO_PRODUCER_TOOLS = [
   "keiko_changeset_edit",
   "keiko_verification",
   "keiko_research_fetch",
+  "keiko_skill_discover",
   "keiko_skill",
   "keiko_child_agent",
   "keiko_git_status",

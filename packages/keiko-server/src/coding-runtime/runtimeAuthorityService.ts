@@ -325,6 +325,12 @@ export type CodingRuntimeCapabilityRecheckInput = Omit<
   "delegationId" | "idempotencyKey" | "usage"
 >;
 
+/** A budget question for one delegation: its usage, without the identity a delegation reserves. */
+export type CodingRuntimeCapabilityBudgetInput = Omit<
+  CodingRuntimeCapabilityDelegationInput,
+  "delegationId" | "idempotencyKey"
+>;
+
 // ─── Description authority (#3399, epic #3384 correction 4) ──────────────────────────────────────
 //
 // Admits exactly two effects outside a running Code task: model egress of snapshot content through
@@ -919,6 +925,54 @@ export class CodingRuntimeAuthorityService {
       deploymentCeiling: input.deploymentCeiling,
       nowIso: input.nowIso,
     });
+  }
+
+  /**
+   * Whether one more delegation of `input.usage` would still fit the run's budget, for the same
+   * capability, run and binding `resolveCapabilityForDelegation` admits, answered without reserving
+   * budget or replay identity: discovery lists only the skills the remaining budget can serve
+   * (#3417).
+   */
+  public delegationFits(input: CodingRuntimeCapabilityBudgetInput): boolean {
+    const reference = this.delegationReference(input);
+    return (
+      reference !== undefined &&
+      this.registry.runtimeDelegationFits(
+        reference,
+        input.workspaceRoot,
+        input.deploymentCeiling,
+        input.usage,
+        input.nowIso,
+      )
+    );
+  }
+
+  // The run a tool-facade capability may delegate for, by the conditions
+  // `resolveCapabilityForDelegation` applies, or undefined.
+  private delegationReference(
+    input: CodingRuntimeCapabilityRecheckInput,
+  ): CodingRuntimeAuthorityRef | undefined {
+    const authenticated = this.capabilities.authenticate(
+      input.capability,
+      Date.parse(input.nowIso),
+    );
+    if (!authenticated.ok || authenticated.binding.audience !== "tool-facade") return undefined;
+    const reference = this.runningReference();
+    return reference !== undefined &&
+      capabilityMatchesDelegation(authenticated.binding, reference, input)
+      ? reference
+      : undefined;
+  }
+
+  // The active run's reference while it runs on its tree binding and is not being reaped.
+  private runningReference(): CodingRuntimeAuthorityRef | undefined {
+    const reference = this.activeAuthorityRef;
+    if (reference === undefined || this.reapPending?.runId === reference.runId) return undefined;
+    return this.runtimeState.state === "running" &&
+      this.activeTreeBindingId !== undefined &&
+      this.runtimeState.runId === reference.runId
+      ? reference
+      : undefined;
   }
 
   public revalidateCapabilityForMutation(

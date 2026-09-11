@@ -192,6 +192,27 @@ describe("coding tool IPC auxiliary requests", () => {
     ).toBeUndefined();
   });
 
+  it("#3417: admits a skill discovery that carries nothing but its identity", () => {
+    const body = {
+      action: "skill-discover",
+      actionId: "discover-1",
+      idempotencyKey: "discover-key",
+    };
+    const parsed = parseCodingToolRequest(JSON.stringify(body), 262_144);
+    expect(parsed).toEqual(body);
+    if (parsed === undefined) throw new Error("expected a discovery request");
+    expect(codingToolRequiredActionClasses(parsed)).toEqual(["workspace-read"]);
+    for (const extra of [
+      { skillId: "skl_repo-structure-summary@1" },
+      { category: "repository-analysis" },
+      { catalogDigest: "a".repeat(64) },
+    ]) {
+      expect(
+        parseCodingToolRequest(JSON.stringify({ ...body, ...extra }), 262_144),
+      ).toBeUndefined();
+    }
+  });
+
   it("clamps child input and rejects model-supplied authority", () => {
     const body = {
       action: "child-agent",

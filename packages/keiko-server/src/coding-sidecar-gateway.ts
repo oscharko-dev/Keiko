@@ -679,6 +679,7 @@ function toolRequestFields(
 
 const OPENCODE_OPTIONAL_TOOL_NAMES: ReadonlySet<string> = new Set<OpenCodeOptionalToolName>([
   "keiko_research_fetch",
+  "keiko_skill_discover",
   "keiko_skill",
   "keiko_child_agent",
 ]);

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import type { GatewayCallRequest, NormalizedResponse } from "@oscharko-dev/keiko-model-gateway";
@@ -17,7 +17,11 @@ import type {
   AuxiliaryResearchScopeV1,
   CodingWorkbenchAuthorityEnvelope,
 } from "@oscharko-dev/keiko-contracts";
-import { createServerApprovedSkillCatalog } from "./skillCatalog.js";
+import { createServerApprovedSkillCatalog, type SkillCatalog } from "./skillCatalog.js";
+import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
+import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
+import type { SkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts";
+import type { ExplicitSkillInvocationTracker } from "./explicitSkillInvocation.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 import { createExplicitSkillInvocationTracker } from "./explicitSkillInvocation.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -98,6 +102,9 @@ interface PortsOptions {
   readonly modelCall?: ((request: GatewayCallRequest) => Promise<NormalizedResponse>) | undefined;
   readonly resolveWorkspaceRootAccess?:
     ProductionAuxiliaryPortInput["resolveWorkspaceRootAccess"] | undefined;
+  readonly catalog?: SkillCatalog | undefined;
+  readonly explicitSkills?: ExplicitSkillInvocationTracker | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
 }
 
 function ports(
@@ -105,7 +112,7 @@ function ports(
   observed: string[] = [],
   options: PortsOptions = {},
 ): ReturnType<typeof createProductionAuxiliaryPorts> {
-  const catalog = createServerApprovedSkillCatalog();
+  const catalog = options.catalog ?? createServerApprovedSkillCatalog();
   return createProductionAuxiliaryPorts({
     authority: {
       state: () => ({
@@ -132,7 +139,7 @@ function ports(
     modelId,
     authorityExpiresAt: AUTHORITY_EXPIRES_AT,
     catalog,
-    explicitSkills: createExplicitSkillInvocationTracker(catalog),
+    explicitSkills: options.explicitSkills ?? createExplicitSkillInvocationTracker(catalog),
     modelPortFactory: (requested): ModelPort | undefined => {
       observed.push(requested);
       return {
@@ -146,7 +153,7 @@ function ports(
           Promise.resolve({ ok: true as const, text: '{"scripts":{"b":"1","a":"2"}}' })),
     },
     emit: options.emit ?? ((): void => undefined),
-    activityLog: { write: (): void => undefined },
+    activityLog: options.activityLog ?? { write: (): void => undefined },
     ...(options.researchGrantRegistry === undefined
       ? {}
       : { researchGrantRegistry: options.researchGrantRegistry }),
@@ -193,6 +200,7 @@ const LIVE_GUARD: CodingToolMutationGuard = {
   check: () => true,
   resolveParentAuthority: () => PARENT_AUTHORITY,
   chargeDelegatedRead: () => true,
+  canChargeDelegatedRead: () => true,
 };
 
 function skillAction(skillId: string): CodingToolActionOf<"skill"> {
@@ -268,7 +276,9 @@ describe("createProductionAuxiliaryPorts", () => {
 
     expect(result).toMatchObject({ status: "completed" });
     expect(readText).toHaveBeenCalledOnce();
-    expect(resolveWorkspaceRootAccess).toHaveBeenCalledTimes(2);
+    // #3417: once for the readiness decision the skill is admitted on, then before and after its
+    // read.
+    expect(resolveWorkspaceRootAccess).toHaveBeenCalledTimes(3);
   });
 
   it.each(["revoked", "replaced"] as const)(
@@ -280,7 +290,8 @@ describe("createProductionAuxiliaryPorts", () => {
       );
       const resolveWorkspaceRootAccess = vi.fn(() => {
         proofCount += 1;
-        if (proofCount === 1) {
+        // #3417: the readiness decision and the pre-read proof both still see the managed root.
+        if (proofCount <= 2) {
           return {
             kind: "managed-task" as const,
             canonicalRoot: "/workspace",
@@ -306,7 +317,7 @@ describe("createProductionAuxiliaryPorts", () => {
       );
 
       expect(readText).toHaveBeenCalledOnce();
-      expect(resolveWorkspaceRootAccess).toHaveBeenCalledTimes(2);
+      expect(resolveWorkspaceRootAccess).toHaveBeenCalledTimes(3);
       expect(JSON.stringify(result)).toContain("skill-source-unavailable");
       expect(JSON.stringify(result)).not.toContain("sentinel");
     },
@@ -519,5 +530,210 @@ describe("createProductionAuxiliaryPorts", () => {
     const result = await surface.childAgentAuthority?.execute(childAction(), undefined, exhausted);
 
     expect(result).toMatchObject({ status: "completed" });
+  });
+});
+
+// #3417: discovery lists what the approved catalog holds and the run may invoke now; invocation
+// re-checks the same readiness and the run's discovery binding before any effect.
+describe("approved skill discovery through the production ports (#3417)", () => {
+  const REPO = {
+    skillId: "skl_repo-structure-summary@1",
+    implicitAllowed: true,
+    category: "repository-analysis",
+    capabilities: ["keiko.workspace.read"],
+    compatibility: { profile: "opencode", minVersion: 1, maxVersion: 1 },
+  } as const;
+
+  function discoveryAction(): CodingToolActionOf<"skill-discover"> {
+    return {
+      action: "skill-discover",
+      actionId: "act-discover-1",
+      idempotencyKey: "idem-discover-1",
+    };
+  }
+
+  function listing(result: unknown): SkillDiscoveryResultV1 {
+    const skills = (result as { readonly skills?: unknown }).skills;
+    const validated = validateSkillDiscoveryResultV1(skills);
+    if (!validated.ok) throw new Error(validated.errors.join("; "));
+    return validated.value;
+  }
+
+  type ReadText = ProductionAuxiliaryPortInput["secureWorkspaceTextRead"]["readText"];
+
+  function readOk(): Mock<ReadText> {
+    return vi.fn<ReadText>(() =>
+      Promise.resolve({ ok: true as const, text: '{"scripts":{"a":"1"}}' }),
+    );
+  }
+
+  it("lists the ready skills the model may invoke and records one body-free line", async () => {
+    const events: ServerLogEvent[] = [];
+    const catalog = createServerApprovedSkillCatalog([
+      REPO,
+      { ...REPO, skillId: "skl_explicit-only@1", implicitAllowed: false },
+      {
+        ...REPO,
+        skillId: "skl_web-lookup@1",
+        category: "public-research",
+        capabilities: ["keiko.research.fetch"],
+      },
+    ]);
+    const surface = ports("gpt-coding-safe", [], {
+      catalog,
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+
+    const result = await surface.skillDiscovery.execute(discoveryAction(), undefined, LIVE_GUARD);
+
+    expect(result.status).toBe("completed");
+    const skills = listing(result);
+    expect(skills.catalogDigest).toBe(catalog.digest());
+    expect(skills.skills.map((skill) => [skill.skillId, skill.readiness])).toEqual([
+      ["skl_repo-structure-summary@1", { state: "ready" }],
+    ]);
+    expect(events).toEqual([
+      expect.objectContaining({
+        op: "coding-runtime.skill-discovery",
+        correlationId: "run-2387",
+        extra: {
+          runId: "run-2387",
+          catalogRevision: 1,
+          catalogDigest: catalog.digest(),
+          approvedCount: 3,
+          listedCount: 1,
+          unavailableByReason: { "handler-unavailable": 1 },
+        },
+      }),
+    ]);
+    expect(JSON.stringify(events)).not.toContain("skl_");
+  });
+
+  it("lists an explicit-only skill while the operator's turn requests it", async () => {
+    const catalog = createServerApprovedSkillCatalog([
+      { ...REPO, skillId: "skl_explicit-only@1", implicitAllowed: false },
+    ]);
+    const explicitSkills = createExplicitSkillInvocationTracker(catalog);
+    const surface = ports("gpt-coding-safe", [], { catalog, explicitSkills });
+
+    const before = await surface.skillDiscovery.execute(discoveryAction(), undefined, LIVE_GUARD);
+    explicitSkills.observeTurn("please run $skl_explicit-only@1 on this repository");
+    const requested = await surface.skillDiscovery.execute(
+      discoveryAction(),
+      undefined,
+      LIVE_GUARD,
+    );
+
+    expect(listing(before).skills).toEqual([]);
+    expect(listing(requested).skills.map((skill) => skill.skillId)).toEqual([
+      "skl_explicit-only@1",
+    ]);
+  });
+
+  it.each([
+    ["authority-denied", { ...LIVE_GUARD, resolveParentAuthority: (): undefined => undefined }],
+    ["budget-exhausted", { ...LIVE_GUARD, canChargeDelegatedRead: (): boolean => false }],
+  ] as const)("lists nothing while %s and counts it", async (reason, guard) => {
+    const events: ServerLogEvent[] = [];
+    const surface = ports("gpt-coding-safe", [], {
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+
+    const result = await surface.skillDiscovery.execute(discoveryAction(), undefined, guard);
+
+    expect(listing(result).skills).toEqual([]);
+    expect(events[0]?.extra).toMatchObject({
+      listedCount: 0,
+      unavailableByReason: { [reason]: 1 },
+    });
+  });
+
+  it("refuses an invocation after the catalog changed since discovery, until the model discovers again", async () => {
+    const readText = readOk();
+    const catalog = createServerApprovedSkillCatalog([REPO]);
+    const surface = ports("gpt-coding-safe", [], { catalog, readText });
+    await surface.skillDiscovery.execute(discoveryAction(), undefined, LIVE_GUARD);
+    catalog.replace([REPO, { ...REPO, skillId: "skl_other-summary@1" }]);
+
+    const stale = await surface.skillAuthority.execute(
+      skillAction("skl_repo-structure-summary@1"),
+      undefined,
+      LIVE_GUARD,
+    );
+    expect(stale).toMatchObject({
+      auxiliary: { status: "denied", reasonCode: "skill-discovery-stale" },
+    });
+    expect(readText).not.toHaveBeenCalled();
+
+    await surface.skillDiscovery.execute(discoveryAction(), undefined, LIVE_GUARD);
+    const current = await surface.skillAuthority.execute(
+      skillAction("skl_repo-structure-summary@1"),
+      undefined,
+      LIVE_GUARD,
+    );
+    expect(current).toMatchObject({ status: "completed", auxiliary: { status: "accepted" } });
+    expect(readText).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["a disabled skill", [{ ...REPO, enabled: false }], "skill-disabled"],
+    [
+      "an incompatible skill",
+      [{ ...REPO, compatibility: { profile: "opencode", minVersion: 2, maxVersion: 2 } }],
+      "skill-incompatible",
+    ],
+    ["a removed skill", [], "skill-not-approved"],
+    [
+      "a downgraded skill",
+      [{ ...REPO, skillId: "skl_repo-structure-summary@0" }],
+      "skill-not-approved",
+    ],
+  ] as const)("refuses %s before any effect", async (_label, next, reasonCode) => {
+    const readText = readOk();
+    const catalog = createServerApprovedSkillCatalog([REPO]);
+    const surface = ports("gpt-coding-safe", [], { catalog, readText });
+    catalog.replace(next);
+
+    const result = await surface.skillAuthority.execute(
+      skillAction("skl_repo-structure-summary@1"),
+      undefined,
+      LIVE_GUARD,
+    );
+
+    expect(result).toMatchObject({ auxiliary: { status: "denied", reasonCode } });
+    expect(readText).not.toHaveBeenCalled();
+  });
+
+  it("refuses an invocation the remaining budget cannot serve before any effect", async () => {
+    const readText = readOk();
+    const surface = ports("gpt-coding-safe", [], { readText });
+
+    const result = await surface.skillAuthority.execute(
+      skillAction("skl_repo-structure-summary@1"),
+      undefined,
+      { ...LIVE_GUARD, canChargeDelegatedRead: (): boolean => false },
+    );
+
+    expect(result).toMatchObject({
+      auxiliary: { status: "denied", reasonCode: "authority-budget-exceeded" },
+    });
+    expect(readText).not.toHaveBeenCalled();
+  });
+
+  it("refuses a skill whose catalog entry changed while its read ran", async () => {
+    const catalog = createServerApprovedSkillCatalog([REPO]);
+    const readText = vi.fn(() => {
+      catalog.replace([REPO]);
+      return Promise.resolve({ ok: true as const, text: '{"scripts":{"a":"1"}}' });
+    });
+    const surface = ports("gpt-coding-safe", [], { catalog, readText });
+
+    const result = await surface.skillAuthority.execute(
+      skillAction("skl_repo-structure-summary@1"),
+      undefined,
+      LIVE_GUARD,
+    );
+
+    expect(result).toMatchObject({ auxiliary: { status: "denied", reasonCode: "skill-changed" } });
   });
 });

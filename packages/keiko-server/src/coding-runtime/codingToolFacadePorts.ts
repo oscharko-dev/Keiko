@@ -23,6 +23,8 @@ export interface CodingToolMutationGuard {
   /** Charges one concrete read-only child call against the parent runtime budget. */
   readonly chargeDelegatedRead?:
     ((delegationId: string, idempotencyKey: string) => boolean) | undefined;
+  /** Whether one more delegated read would fit the parent runtime budget; charges nothing. */
+  readonly canChargeDelegatedRead?: (() => boolean) | undefined;
   readonly binding?: CodingToolProducerBinding | undefined;
 }
 

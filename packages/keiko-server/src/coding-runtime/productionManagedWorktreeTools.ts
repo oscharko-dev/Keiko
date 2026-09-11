@@ -85,7 +85,10 @@ import { processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import type { CodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
-import { createProductionAuxiliaryPorts } from "./productionAuxiliaryPorts.js";
+import {
+  createProductionAuxiliaryPorts,
+  PRODUCTION_SKILL_STATIC_FACTS,
+} from "./productionAuxiliaryPorts.js";
 import {
   createExplicitSkillInvocationTracker,
   type ExplicitSkillInvocationTracker,
@@ -93,6 +96,7 @@ import {
 import { createResearchEgressPort, type ResearchFetch } from "./researchEgressPort.js";
 import type { ResearchGrantRegistry } from "./researchGrantRegistry.js";
 import { createServerApprovedSkillCatalog, type SkillCatalog } from "./skillCatalog.js";
+import { staticSkillReadiness } from "./skillDiscovery.js";
 import {
   createCodingToolReadEditPorts,
   type CodingToolReadEditPortDeps,
@@ -308,10 +312,21 @@ export function deriveOptionalToolAvailability(
 ): ReadonlySet<OpenCodeOptionalToolName> {
   const unavailable = new Set<OpenCodeOptionalToolName>();
   if (!hasResearchApprovalHandler(input)) unavailable.add("keiko_research_fetch");
-  if ((input.skillCatalog ?? createServerApprovedSkillCatalog()).list().length === 0)
+  if (!hasAdvertisableSkill(input.skillCatalog ?? createServerApprovedSkillCatalog())) {
+    unavailable.add("keiko_skill_discover");
     unavailable.add("keiko_skill");
+  }
   if (!hasResolvableChildAgentModel(input)) unavailable.add("keiko_child_agent");
   return unavailable;
+}
+
+// The skill tools are advertised only while an approved skill could actually run for this run:
+// enabled, compatible with the bound catalog profile and handled (#3417). Authority and budget are
+// asked when a skill tool is called.
+function hasAdvertisableSkill(catalog: SkillCatalog): boolean {
+  return catalog
+    .list()
+    .some((entry) => staticSkillReadiness(entry, PRODUCTION_SKILL_STATIC_FACTS).state === "ready");
 }
 
 function hasResearchApprovalHandler(input: OptionalToolAvailabilityInput): boolean {

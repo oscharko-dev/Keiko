@@ -1115,6 +1115,25 @@ export type {
   validateAuxiliaryCapabilityRequestV1,
 } from "./code-task-auxiliary.js";
 
+// ─── Approved-skill discovery projection (Issue #3417, ADR-0175, ADR-0137) ─────────
+// The closed, body-free record discovery reports per approved skill; the server-approved skill
+// catalog stays authoritative for skill state and the governed skill handler for effects.
+export type {
+  SkillCategory,
+  SkillCompatibilityV1,
+  SkillDiscoveryEntryV1,
+  SkillDiscoveryResultV1,
+  SkillReadinessV1,
+  SkillUnavailableReason,
+} from "./coding-skill-discovery.js";
+export type {
+  SKILL_CATEGORIES,
+  SKILL_DISCOVERY_LIMITS,
+  SKILL_DISCOVERY_SCHEMA_VERSION,
+  SKILL_UNAVAILABLE_REASONS,
+  validateSkillDiscoveryResultV1,
+} from "./coding-skill-discovery.js";
+
 export type { FigmaCodegenFile, FigmaCodegenResponse } from "./figma-codegen.js";
 
 // ─── Atlassian connector contracts (Issue #2240, Epic #2238, ADR-0128) ─────────────
