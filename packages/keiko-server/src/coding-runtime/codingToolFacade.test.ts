@@ -151,6 +151,25 @@ describe("CodingToolFacade", () => {
     }
   });
 
+  // PR #3452 review: an empty listing is a valid answer, no approved skill being ready now, and the
+  // facade returns it as it is.
+  it("#3417: returns an empty discovery listing as it is", async () => {
+    const empty = { schemaVersion: 1, catalogDigest: "a".repeat(64), skills: [] };
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "completed", skills: empty }));
+
+    const result = await createCodingToolFacade(ports).execute({
+      body: requestBody({ action: "skill-discover" }),
+      capability,
+    });
+
+    expect(result).toEqual({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "completed" }],
+      skills: empty,
+    });
+  });
+
   it("passes the whole-file digest and window facts through instead of recomputing them (#2473)", async () => {
     const ports = facade();
     const wholeFileDigest = "b".repeat(64);

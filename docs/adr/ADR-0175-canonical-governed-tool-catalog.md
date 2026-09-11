@@ -582,8 +582,11 @@ second registry, index or policy path exists.
   catalog revision and digest, the approved and listed counts, the unavailable counts per closed
   reason and the duration — never a skill body, path, prompt, argument, output or credential.
 
-The descriptor is a producer change; the owner-issued lineage entry that admits the final producer
-covers it.
+The descriptor is a producer change, and no lineage entry admits it yet. The one entry issued in
+this pull request was withdrawn (1.4: the owner issues an entry, never the change it certifies),
+and the owner issues the next one once, for the final producer of PR #3452. Until then the
+producer-identity conformance cases and the catalog performance evidence stay red on that pull
+request, as its description states.
 
 ## Version History
 

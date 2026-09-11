@@ -720,6 +720,31 @@ describe("approved skill discovery through the production ports (#3417)", () => 
     expect(readText).not.toHaveBeenCalled();
   });
 
+  // PR #3452 review: the fit check and the real charge are two gates. A budget another call drained
+  // between them must still stop the read, through the charge itself.
+  it("refuses an invocation the real charge refuses although the fit check said it fits", async () => {
+    const readText = readOk();
+    const surface = ports("gpt-coding-safe", [], { readText });
+    const chargeDelegatedRead = vi.fn<NonNullable<CodingToolMutationGuard["chargeDelegatedRead"]>>(
+      () => false,
+    );
+
+    const result = await surface.skillAuthority.execute(
+      skillAction("skl_repo-structure-summary@1"),
+      undefined,
+      { ...LIVE_GUARD, canChargeDelegatedRead: (): boolean => true, chargeDelegatedRead },
+    );
+
+    expect(result).toMatchObject({
+      auxiliary: { status: "denied", reasonCode: "authority-budget-exceeded" },
+    });
+    expect(chargeDelegatedRead).toHaveBeenCalledExactlyOnceWith(
+      "act-skill-1:skill-read",
+      "idem-skill-1:skill-read",
+    );
+    expect(readText).not.toHaveBeenCalled();
+  });
+
   it("refuses a skill whose catalog entry changed while its read ran", async () => {
     const catalog = createServerApprovedSkillCatalog([REPO]);
     const readText = vi.fn(() => {

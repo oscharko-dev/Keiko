@@ -2,6 +2,7 @@ import {
   captureToolInvocationReceipt,
   type ToolInvocationReceipt,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
+import { MAX_TIMER_DELAY_MS } from "../abort-race.js";
 
 export const CODING_TOOL_INVOCATION_MAX_LIVE_PER_RUN = 8;
 export const CODING_TOOL_INVOCATION_MAX_BYTES_PER_ENTRY = 262_144;
@@ -347,8 +348,14 @@ function validStage(request: CodingToolInvocationStage): boolean {
   );
 }
 
+// A declared life has to fit a timer. Armed past 2^31 - 1 ms the expiry timer fires at once, finds
+// the entry not yet due and never comes back, so a claimed invocation outlived its deadline (PR
+// #3452 review). The delay the registry arms is the smaller of this life and what is left of the
+// authority, so bounding the life bounds every timer it arms.
 function validLife(value: number | undefined): boolean {
-  return value === undefined || (Number.isSafeInteger(value) && value > 0);
+  return (
+    value === undefined || (Number.isSafeInteger(value) && value > 0 && value <= MAX_TIMER_DELAY_MS)
+  );
 }
 
 function validExpiry(value: string): boolean {

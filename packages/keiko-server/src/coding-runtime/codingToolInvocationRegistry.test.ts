@@ -293,8 +293,14 @@ describe("CodingToolInvocationRegistry (Issue #2332)", () => {
       lifeMs: 3_600_000,
     });
     expect(registry.stage(capped)).toEqual({ kind: "staged" });
+    // Claimed just before the authority expires, and cut off the moment it does (PR #3452 review).
+    now = 419_999;
+    const claimed = registry.take(capped);
+    if (claimed.kind !== "ready") throw new Error("expected the capped invocation claimed");
+    expect(registry.inspect(capped)).toEqual({ kind: "in-flight" });
     now = 420_001;
-    expect(registry.take(capped)).toEqual({ kind: "expired" });
+    expect(registry.inspect(capped)).toEqual({ kind: "terminal" });
+    expect(claimed.signal.aborted).toBe(true);
   });
 
   it("refuses a declared life that is not a positive whole number of milliseconds", () => {
@@ -302,6 +308,28 @@ describe("CodingToolInvocationRegistry (Issue #2332)", () => {
     for (const lifeMs of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(registry.stage(stagedEdit({ lifeMs }))).toEqual({ kind: "invalid" });
     }
+  });
+
+  // PR #3452 review: a life past what a timer can hold would arm an expiry that fires at once and,
+  // finding the entry not yet due, never comes back. It is refused; the longest a timer holds is not.
+  it("admits a declared life up to what a timer can hold and refuses one past it", () => {
+    const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+    const authorityExpiresAt = new Date(3_000_000_000).toISOString();
+    const longest = stagedEdit({
+      actionId: "longest",
+      idempotencyKey: "longest",
+      authorityExpiresAt,
+      lifeMs: 2_147_483_647,
+    });
+    const past = stagedEdit({
+      actionId: "past",
+      idempotencyKey: "past",
+      authorityExpiresAt,
+      lifeMs: 2_147_483_648,
+    });
+
+    expect(registry.stage(longest)).toEqual({ kind: "staged" });
+    expect(registry.stage(past)).toEqual({ kind: "invalid" });
   });
 
   it("retains completed replay identities for the run lifetime without locking another run", () => {

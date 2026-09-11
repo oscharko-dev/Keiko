@@ -213,6 +213,28 @@ describe("coding tool IPC auxiliary requests", () => {
     }
   });
 
+  // PR #3452 review: a discovery request's identity is held to the bounds every action's is
+  // (requestIdentity): present, non-empty, and at most 512 UTF-8 bytes.
+  it("#3417: bounds a discovery request's identity like every action's", () => {
+    const body = {
+      action: "skill-discover",
+      actionId: "discover-1",
+      idempotencyKey: "discover-key",
+    };
+    const parse = (value: Readonly<Record<string, unknown>>): unknown =>
+      parseCodingToolRequest(JSON.stringify(value), 262_144);
+    for (const field of ["actionId", "idempotencyKey"] as const) {
+      const without = Object.fromEntries(Object.entries(body).filter(([key]) => key !== field));
+      expect(parse(without)).toBeUndefined();
+      for (const rejected of ["", "a".repeat(513), `${"é".repeat(256)}a`]) {
+        expect(parse({ ...body, [field]: rejected })).toBeUndefined();
+      }
+      for (const accepted of ["a".repeat(512), "é".repeat(256)]) {
+        expect(parse({ ...body, [field]: accepted })).toEqual({ ...body, [field]: accepted });
+      }
+    }
+  });
+
   it("clamps child input and rejects model-supplied authority", () => {
     const body = {
       action: "child-agent",

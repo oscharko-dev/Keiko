@@ -1015,6 +1015,13 @@ describe("CodingRuntimeAuthorityService", () => {
         idempotencyKey: "probe-key-1",
       }),
     ).toMatchObject({ ok: true });
+    // The exact boundary: nine calls on top of the one just charged still fit the ten.
+    expect(
+      authority.delegationFits({
+        ...probe,
+        usage: { toolCalls: 9, patchBytes: 0, promptTokens: 0 },
+      }),
+    ).toBe(true);
     // Ten tool calls on top of the one just charged exceed the envelope's ten.
     expect(
       authority.delegationFits({
@@ -1028,6 +1035,7 @@ describe("CodingRuntimeAuthorityService", () => {
         capability: "forged-capability-material-that-is-invalid",
       }),
     ).toBe(false);
+    expect(authority.delegationFits({ ...probe, capability: "" })).toBe(false);
     expect(authority.pause(minted.authorityRef.runId, NOW)).toMatchObject({ ok: true });
     expect(authority.delegationFits(probe)).toBe(false);
   });
