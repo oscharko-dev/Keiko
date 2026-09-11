@@ -1,13 +1,22 @@
-# Portable Production Signing Contract
+# Optional Native Platform Signing Contract
 
-This document is the authoritative, redacted operator contract for production signing and
-attestation of Keiko's four portable release assets. It implements ADR-0121 D7 and is consumed by
-issues #2200, #2201, #2202, and #3451. It does not replace the archive, manifest, or release-impact schema in the
+Status: optional defense-in-depth capability, not used by the stable release or updater gate.
+
+This document preserves the strict operator contract for optionally adding native platform
+signatures to Keiko's portable assets. Since the Epic #3403 amendment to ADR-0121 D7, stable
+publication and one-click updates instead use Keiko's platform-neutral Ed25519 manifest signature
+and must work when every provider described below is absent. Optional native verification must never
+be presented as successful unless every rule in this document passes. It does not replace the
+archive, manifest, or release-impact schema in the
 [Portable Runtime Artifact Contract](portable-runtime-artifact-contract.md).
+
+The Windows producer now has a frozen Phase A generation format for #3405/#3403. This contract
+describes its signing and verification order; it does not claim completed Windows consumer
+integration, N−1/N or cross-platform native qualification, or an approved signed release.
 
 ## Trust boundary
 
-Production signing is available only to native jobs attached to the protected GitHub environment
+Optional native signing is available only to native jobs attached to the protected GitHub environment
 `portable-release-signing`. Environment protection and workflow validation are independent controls;
 both must pass.
 
@@ -195,6 +204,18 @@ the ephemeral verifier input. The job then proves the verified file hashes are u
 ZIP, recalculates byte-derived archive, provenance, application-tree, sidecar-tree, reviewed-binding,
 and checksum fields, and invokes the existing production verifier. Upload occurs only after the final
 manifest is `verified-production` and the post-sign smoke test passes.
+
+The Windows generation sequence is fixed. The initial inventory is parsed and hashed against the
+exact staged bytes. The runtime attestation is added and signed before generation closure. The job
+then verifies that the qualified payload has not changed, hashes `.portable/generation-staging` with
+KHT1, renames it to `.portable/generations/<treeSha256>`, and rehashes the destination. It compiles
+the literal generation id into the root `Keiko.exe`, signs that launcher in a separate signing step,
+and verifies the complete PE inventory. Finalization rechecks the closed generation and complete
+inventory, binds the same six-field `windowsGeneration` object to the outer manifest, provenance, and
+reviewed binding, writes the root setup manifest from that binding, rechecks the closed generation,
+rebuilds the ZIP, and verifies the closed generation, root launcher, setup manifest, and final archive.
+No closed generation bytes are mutated after closure. The root launcher, setup companion, and outer
+manifest are outside the generation tree hash.
 
 RFC 3161 authority comes from the embedded Authenticode CMS, not `signtool /tw` or the presence of a
 timestamper certificate alone. Every Authenticode signer must have exactly one timestamp-token unsigned
@@ -408,6 +429,31 @@ independently verified `Keiko.exe` signer identity from the same qualified relea
 ephemeral same-release comparison, not a committed thumbprint, public-key, or subject pin, so it
 preserves the approved Azure leaf-rotation contract while rejecting a valid binary from another
 publisher.
+
+### Updater continuity is a cross-release comparison
+
+The updater must not apply the same-release leaf-equality check between installed N−1 and candidate
+N. Independently verify both releases under the Public Trust/code-signing policy, bind the exact
+reviewed subscriber identity-validation EKU, and permit legitimate short-lived leaf rotation. A
+generic locally installed root, matching subject text, or account/profile alias is not that proof.
+The runtime verifier restricts its accepted Windows public roots to the native `AuthRoot` store;
+it must not turn the general local `Root` store into a publisher allowlist.
+
+Within each individual release, launcher and executable-object consistency still uses the verified
+same-release signer. Cross-release continuity does not relax SHA-256, embedded RFC 3161 validation,
+timestamp-time chain checks, code-signing/TSA EKUs, manifest/provenance binding, or archive-tree
+verification. The timestamp parser must reject noncanonical DER as well as missing, legacy,
+duplicate, or mismatched tokens. Runtime PowerShell 5.1/.NET Framework verification must be proven
+on Windows; a portable parser test on macOS is not native Authenticode qualification.
+
+Evaluation-installed applications cannot establish this production continuity. The first transition
+to a production-signed build is a deliberate manual installation under that release's reviewed
+instructions, preserving Keiko runtime state. Do not enable one-click execution by relabeling an
+evaluation artifact, accepting an injected verification Boolean, or bypassing a platform warning.
+The first repaired release is not itself proof of N−1→N production operation: release qualification
+requires two immutable production-signed eligible releases and fresh native verification on Windows
+x64 and both macOS architectures. Until those artifacts and provider prerequisites exist, record
+the external qualification gap explicitly and keep production one-click claims disabled.
 
 The protected macOS production stage binds its reviewed `APPLE_TEAM_ID` into the packaged server
 module before signing. An unbound development or dispatch package cannot qualify the native runtime.

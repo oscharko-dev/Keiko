@@ -657,6 +657,46 @@ describe("portable assets stage helper", () => {
     expect(evaluation.filter((arg) => arg === "--evaluation-build")).toHaveLength(1);
     // The opt-in is additive: it changes nothing else the wrapper derives.
     expect(evaluation.filter((arg) => arg !== "--evaluation-build")).toEqual(plain);
+
+    const release = stageArgumentsForTarget(
+      { ...base, release: true },
+      approvals,
+      "a".repeat(40),
+      "0.2.14",
+      { runAttempt: 3, runId: 987654321 },
+    );
+    expect(release.filter((arg) => arg === "--release-build")).toHaveLength(1);
+    expect(release).not.toContain("--evaluation-build");
+
+    const production = stageArgumentsForTarget(
+      { ...base, windowsGenerationProduction: true },
+      approvals,
+      "a".repeat(40),
+      "0.2.14",
+      { runAttempt: 3, runId: 987654321 },
+    );
+    expect(production.filter((arg) => arg === "--windows-generation-production")).toHaveLength(1);
+    expect(plain).not.toContain("--windows-generation-production");
+  });
+
+  it("rejects generation staging outside its explicit production Windows lane before spawning", async () => {
+    const { runPortableAssetsStage } = await import("../run-portable-assets-stage.mjs");
+
+    expect(() => runPortableAssetsStage(["--target"])).toThrow("--target requires a value");
+    expect(() =>
+      runPortableAssetsStage(["--target", "macos-arm64", "--windows-generation-production"]),
+    ).toThrow("requires non-evaluation windows-x64 staging");
+    expect(() =>
+      runPortableAssetsStage([
+        "--target",
+        "windows-x64",
+        "--evaluation",
+        "--windows-generation-production",
+      ]),
+    ).toThrow("requires non-evaluation windows-x64 staging");
+    expect(() =>
+      runPortableAssetsStage(["--target", "windows-x64", "--unexpected", "value"]),
+    ).toThrow("unsupported argument --unexpected");
   });
 
   it("collects sidecar specs and derives approved stage arguments", async () => {

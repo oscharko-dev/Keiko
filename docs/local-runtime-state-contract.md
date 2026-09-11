@@ -1,10 +1,9 @@
 # Local Runtime State Contract
 
 This document enumerates the local paths, environment variables, and durable stores that Keiko
-intentionally reads or writes at `0.3.2`. It is a current-state contract, not a historical rollout
-or compatibility playbook. 0.3.2 completes the 0.3.1 publication with a repaired release pipeline
-and changes nothing this document describes: the durable paths, environment variables, and
-confidentiality controls below are unchanged from 0.3.0 through 0.3.1.
+intentionally reads or writes. It is a current-state contract, not a historical rollout or
+compatibility playbook. The updater section includes #3405's versioned durable session and
+native-handoff boundary; it does not assert that release qualification has completed.
 
 ## Principles
 
@@ -240,12 +239,42 @@ previous-version, local-only, content-free manifest with version pointers, affec
 remediation status, and aggregate artifact counts. They do not copy customer repository files,
 credential vaults, raw logs, prompts, model outputs, package-manager output, or private paths.
 
-Update remediation status is persisted in `updates/runtime-state.json` as content-free action state
-only: target version, affected store, remediation kind, status, bounded warning code, and timestamps.
+`updates/runtime-state.json` is the updater's single versioned semantic aggregate. Schema 2 adds a
+monotonic revision, active/last session, candidate snapshot without an execution token, bounded
+lifecycle/progress, recovery ownership, and the activation WAL to the existing stage/activation and
+remediation summaries. Updates use revision-checked durable replacement; stale writers cannot reset
+the aggregate or overwrite later activation checkpoints. Valid schema-1 summaries migrate through
+the owning reader; malformed or unsupported state does not become an empty successful update.
+Missing state is distinguishable from an initialized store, and missing state required by an active
+handoff must block recovery rather than authorize a fresh mutation.
+
+Remediation still records only target version, affected store, remediation kind, status, bounded
+warning code, and timestamps.
 Scope reporting uses counts (stores, artifacts, Local Knowledge capsules/documents/chunks/vectors),
 never raw document text, vector bytes, model output, package-manager output, credential material, or
 customer repository paths. Local Knowledge reindex remains a domain-specific action; generic repair
 does not hide or mutate Local Knowledge content.
+
+The activation-specific `updates/handoff/<activation-id>/` capsule is private local control data,
+not a customer evidence store. It may contain bounded verified copies of the current native launcher
+and supervisor, the fixed authenticated handoff plan, registration recovery data, and ordered
+mechanical receipts. Fixed local paths in that plan are a narrowly scoped execution requirement;
+they must not appear in API projections, support exports, activity logs, or release artifacts. The
+capsule is outside the active, staged, and previous install trees and is not a copy of the product
+payload. Reads and writes must enforce the reviewed file, link, size, identity, and retention limits.
+The server owns semantic state; native receipts cannot independently declare application success.
+A fixed post-listen acknowledgement may transport a successfully persisted semantic decision to the
+native coordinator, but is not another lifecycle journal. Missing acknowledgement is not proof that
+verification did not commit. Restoration uses the same ordered, plan-bound receipt authority and a
+distinct restored-process identity; only verified post-listen recovery may settle the failed attempt
+and clear its active authority. Every intermediate crash must remain recoverable from retained
+semantic and mechanical evidence, including a terminal result whose cleanup has not finished.
+
+New updater activity uses the existing canonical `logs/server.log` ports, with structured diagnostic
+failures and explicit attempt/parent-correlation links. A legacy audit journal is not an authority
+for new attempts. Never retain raw execution tokens, URLs, certificate material, command output,
+or private paths in canonical evidence. Uncertain post-handoff state retains recovery ownership;
+cleanup must never restore the previous installation after the new target has been verified.
 
 ## Limitations (honest threat model)
 

@@ -13,9 +13,6 @@
     }
   },
   "src/app/components/desktop/AppShell.tsx": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 4
-    },
     "complexity": {
       "count": 4
     },
@@ -622,10 +619,10 @@
   },
   "src/app/components/desktop/update/UpdateWindow.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
-      "count": 4
+      "count": 3
     },
     "complexity": {
-      "count": 8
+      "count": 6
     },
     "max-lines-per-function": {
       "count": 7

@@ -56,6 +56,8 @@ type LifecycleFlag = "--port" | "--host" | "--state-dir" | "--start-timeout" | "
 type LifecycleFlagSetter = (raw: RawLifecycleOptions, value: string) => void;
 
 const KEIKO_PROCESS_TITLE = "Keiko";
+const PORTABLE_RECOVERED_LAUNCH_ENV = "KEIKO_PORTABLE_RECOVERED_LAUNCH";
+const LAUNCH_ID = /^[a-f0-9]{32}$/u;
 const LIFECYCLE_FLAG_SETTERS: Readonly<Record<LifecycleFlag, LifecycleFlagSetter>> = {
   "--port": (raw, value) => {
     raw.portRaw = value;
@@ -73,6 +75,38 @@ const LIFECYCLE_FLAG_SETTERS: Readonly<Record<LifecycleFlag, LifecycleFlagSetter
     raw.stopTimeoutRaw = value;
   },
 };
+
+function decodeRecoveredLaunch(encoded: string): unknown {
+  if (encoded.length < 1 || encoded.length > 4096 || !/^[A-Za-z0-9_-]+$/u.test(encoded)) {
+    throw new TypeError("invalid recovered launch identity");
+  }
+  const bytes = Buffer.from(encoded, "base64url");
+  if (bytes.toString("base64url") !== encoded)
+    throw new TypeError("invalid recovered launch identity");
+  return JSON.parse(bytes.toString("utf8")) as unknown;
+}
+
+function recoveredLaunchId(encoded: string | undefined): string {
+  if (encoded === undefined) return randomBytes(16).toString("hex");
+  const decoded = decodeRecoveredLaunch(encoded);
+  if (typeof decoded !== "object" || decoded === null || Array.isArray(decoded)) {
+    throw new TypeError("invalid recovered launch identity");
+  }
+  const launchId = (decoded as Record<string, unknown>).launchId;
+  if (typeof launchId !== "string" || !LAUNCH_ID.test(launchId)) {
+    throw new TypeError("invalid recovered launch identity");
+  }
+  return launchId;
+}
+
+function launchIdForStart(env: EnvSource, io: CliIo): string | undefined {
+  try {
+    return recoveredLaunchId(env[PORTABLE_RECOVERED_LAUNCH_ENV]);
+  } catch {
+    io.err("keiko start: recovered portable launch identity is invalid.\n");
+    return undefined;
+  }
+}
 
 const USAGE = `Usage:
   keiko start [--port PORT] [--host 127.0.0.1|localhost] [--state-dir PATH] [--open]
@@ -777,7 +811,8 @@ async function cmdStart(
   if (!clearStaleShutdownRequest(options.stateDir, io)) return 1;
 
   const pairingSecret = resolveLauncherPairingSecret(env);
-  const launchId = randomBytes(16).toString("hex");
+  const launchId = launchIdForStart(env, io);
+  if (launchId === undefined) return 1;
   let spawned: { readonly child: ChildProcess; readonly logPath: string };
   try {
     spawned = spawnUiProcess(options, env, deps, cwd, pairingSecret, launchId);

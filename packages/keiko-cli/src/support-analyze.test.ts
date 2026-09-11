@@ -19,6 +19,7 @@ import {
   buildGatewayReplayScript,
   buildReproductionSeed,
   detectSourceKind,
+  findUpdateAttempt,
   findTimeline,
   hasIssueToPrJourneyOps,
   renderGatewayReplayScriptFixture,
@@ -110,6 +111,10 @@ const CONNECTED_CONTEXT_STARTED = "search.connected-context.started";
 const CONNECTED_CONTEXT_COMPLETED = "search.connected-context.completed";
 const WORKSPACE_ROOT_DENIED = "workspace.root.denied";
 const WATCH_AUTHORITY_REVOKED = "editor.workspace-watch.authority-revoked";
+const UPDATE_CANDIDATE_ISSUED = "update.candidate.issued";
+const UPDATE_CANDIDATE_CONSUMED = "update.candidate.consumed";
+const UPDATE_SESSION_LIFECYCLE = "update.session.lifecycle";
+const UPDATE_RUNTIME_EVENT = "update.runtime.event";
 
 const T0 = "2026-08-21T00:00:00.000Z";
 const T1 = "2026-08-21T00:00:01.000Z";
@@ -128,6 +133,277 @@ describe("detectSourceKind", () => {
   it("falls back to raw-log for an empty file or unparsable first line", () => {
     expect(detectSourceKind(undefined)).toBe("raw-log");
     expect(detectSourceKind("not json at all")).toBe("raw-log");
+  });
+});
+
+describe("analyzeLogText — governed update attempts", () => {
+  it("reconstructs one body-free attempt across request and background lineage", () => {
+    const candidateId = "candidate-3405-0123456789abcdef";
+    const requestId = "request-3405-0123456789abcdef";
+    const recoveryId = "recovery-3405-0123456789abcdef";
+    const sessionId = "session-3405-0123456789abcdef";
+    const serialized = serializedActivityLog("keiko-support-update-attempt-", (sink) => {
+      sink.write({
+        level: "info",
+        category: productionLogCategory(UPDATE_CANDIDATE_ISSUED),
+        op: UPDATE_CANDIDATE_ISSUED,
+        correlationId: candidateId,
+        extra: { candidateId, targetVersion: "0.3.18" },
+      });
+      sink.write({
+        level: "info",
+        category: productionLogCategory(UPDATE_CANDIDATE_CONSUMED),
+        op: UPDATE_CANDIDATE_CONSUMED,
+        correlationId: requestId,
+        extra: { candidateId, targetVersion: "0.3.18" },
+      });
+      sink.write({
+        level: "info",
+        category: productionLogCategory(UPDATE_SESSION_LIFECYCLE),
+        op: UPDATE_SESSION_LIFECYCLE,
+        correlationId: requestId,
+        extra: { candidateId, sessionId, phase: "preparing", eventKind: "started" },
+      });
+      sink.write({
+        level: "warn",
+        category: productionLogCategory(UPDATE_RUNTIME_EVENT),
+        op: UPDATE_RUNTIME_EVENT,
+        correlationId: recoveryId,
+        parentCorrelationId: requestId,
+        extra: { sessionId, type: "portable-relaunch-result", status: "recovery-required" },
+      });
+      sink.write({
+        level: "info",
+        category: productionLogCategory(UPDATE_RUNTIME_EVENT),
+        op: UPDATE_RUNTIME_EVENT,
+        correlationId: requestId,
+        extra: { sessionId, type: "remediation-completed", status: "completed" },
+      });
+    });
+
+    const result = analyzeLogText(serialized);
+    const attempt = findUpdateAttempt(result, recoveryId);
+
+    expect(attempt).toMatchObject({
+      candidateId,
+      sessionId,
+      correlationIds: [candidateId, requestId, recoveryId],
+    });
+    expect(attempt?.lines.map((entry) => entry.op)).toEqual([
+      UPDATE_CANDIDATE_ISSUED,
+      UPDATE_CANDIDATE_CONSUMED,
+      UPDATE_SESSION_LIFECYCLE,
+      UPDATE_RUNTIME_EVENT,
+      UPDATE_RUNTIME_EVENT,
+    ]);
+    expect(attempt?.lines[3]).toMatchObject({
+      parentCorrelationId: requestId,
+      status: "recovery-required",
+      extra: { type: "portable-relaunch-result" },
+    });
+    expect(serialized).not.toContain("executionToken");
+    expect(serialized).not.toContain("releaseNoteBullets");
+    expect(serialized).not.toContain("summary");
+  });
+
+  it("does not infer an attempt from version or timestamp proximity", () => {
+    const serialized = serializedActivityLog("keiko-support-update-unbound-", (sink) => {
+      sink.write({
+        level: "info",
+        category: "diagnostic",
+        op: "unrelated.update-like-event",
+        correlationId: "unbound-3405-0123456789abcdef",
+        extra: { candidateId: "not-production-update-op", targetVersion: "0.3.18" },
+      });
+    });
+
+    expect(analyzeLogText(serialized).updateAttempts).toEqual([]);
+  });
+
+  it("reconstructs a large corpus of distinct explicit candidates", () => {
+    const candidateCount = 1024;
+    const text = Array.from({ length: candidateCount }, (_, index) => {
+      const candidateId = `candidate-large-${String(index)}`;
+      return line({
+        ts: T0,
+        category: "diagnostic",
+        op: "update.candidate.issued",
+        correlationId: `request-large-${String(index)}`,
+        candidateId,
+      });
+    }).join("\n");
+
+    const attempts = analyzeLogText(text).updateAttempts;
+
+    expect(attempts).toHaveLength(candidateCount);
+    expect(attempts.map((attempt) => attempt.candidateId)).toEqual(
+      Array.from({ length: candidateCount }, (_, index) => `candidate-large-${String(index)}`),
+    );
+    expect(attempts[0]).toMatchObject({
+      correlationIds: ["request-large-0"],
+      lines: [{ op: "update.candidate.issued" }],
+    });
+    expect(attempts.at(-1)).toMatchObject({
+      correlationIds: [`request-large-${String(candidateCount - 1)}`],
+      lines: [{ op: "update.candidate.issued" }],
+    });
+  });
+
+  it("retains fixed-point correlation discovery order across a child, grandchild, and sibling", () => {
+    const candidateId = "candidate-discovery-order";
+    const attempt = findUpdateAttempt(
+      analyzeLogText(
+        [
+          line({
+            ts: T0,
+            category: "diagnostic",
+            op: "update.candidate.issued",
+            correlationId: "root-request",
+            candidateId,
+          }),
+          line({
+            ts: T0,
+            category: "diagnostic",
+            op: "update.runtime.event",
+            correlationId: "child",
+            parentCorrelationId: "root-request",
+          }),
+          line({
+            ts: T0,
+            category: "diagnostic",
+            op: "update.runtime.event",
+            correlationId: "grandchild",
+            parentCorrelationId: "child",
+          }),
+          line({
+            ts: T0,
+            category: "diagnostic",
+            op: "update.runtime.event",
+            correlationId: "sibling",
+            parentCorrelationId: "root-request",
+          }),
+        ].join("\n"),
+      ),
+      candidateId,
+    );
+
+    expect(attempt?.correlationIds).toEqual(["root-request", "child", "grandchild", "sibling"]);
+  });
+
+  it("reconstructs a large reverse-ordered descendant lineage", () => {
+    const descendantCount = 1024;
+    const candidateId = "candidate-reverse-lineage";
+    const descendantLines = Array.from({ length: descendantCount }, (_, offset) => {
+      const index = descendantCount - offset - 1;
+      return line({
+        ts: T0,
+        category: "diagnostic",
+        op: "update.runtime.event",
+        correlationId: `descendant-${String(index)}`,
+        parentCorrelationId: index === 0 ? "root-request" : `descendant-${String(index - 1)}`,
+        marker: `descendant-${String(index)}`,
+      });
+    });
+    const result = analyzeLogText(
+      [
+        line({
+          ts: T0,
+          category: "diagnostic",
+          op: "update.candidate.issued",
+          correlationId: "root-request",
+          candidateId,
+        }),
+        ...descendantLines,
+      ].join("\n"),
+    );
+    const attempt = findUpdateAttempt(result, candidateId);
+
+    expect(attempt?.correlationIds).toEqual([
+      "root-request",
+      ...Array.from({ length: descendantCount }, (_, index) => `descendant-${String(index)}`),
+    ]);
+    expect(attempt?.lines.map((entry) => entry.extra?.marker)).toEqual([
+      undefined,
+      ...Array.from(
+        { length: descendantCount },
+        (_, offset) => `descendant-${String(descendantCount - offset - 1)}`,
+      ),
+    ]);
+  });
+
+  it("deduplicates shared lineage, terminates cycles, and retains source line order", () => {
+    const candidateA = "candidate-shared-a";
+    const candidateB = "candidate-shared-b";
+    const result = analyzeLogText(
+      [
+        line({
+          ts: T0,
+          category: "diagnostic",
+          op: "update.candidate.issued",
+          correlationId: "request-a",
+          candidateId: candidateA,
+          marker: "candidate-a",
+        }),
+        line({
+          ts: T0,
+          category: "diagnostic",
+          op: "update.candidate.issued",
+          correlationId: "request-b",
+          candidateId: candidateB,
+          marker: "candidate-b",
+        }),
+        line({
+          ts: T0,
+          category: "diagnostic",
+          op: "update.runtime.event",
+          correlationId: "shared",
+          parentCorrelationId: "request-a",
+          marker: "shared-from-a",
+        }),
+        line({
+          ts: T0,
+          category: "diagnostic",
+          op: "update.runtime.event",
+          correlationId: "shared",
+          parentCorrelationId: "request-b",
+          marker: "shared-from-b",
+        }),
+        line({
+          ts: T0,
+          category: "diagnostic",
+          op: "update.runtime.event",
+          correlationId: "cycle",
+          parentCorrelationId: "shared",
+          marker: "cycle",
+        }),
+        line({
+          ts: T0,
+          category: "diagnostic",
+          op: "update.runtime.event",
+          correlationId: "shared",
+          parentCorrelationId: "cycle",
+          marker: "shared-from-cycle",
+        }),
+      ].join("\n"),
+    );
+
+    expect(result.updateAttempts.map((attempt) => attempt.candidateId)).toEqual([
+      candidateA,
+      candidateB,
+    ]);
+    for (const candidateId of [candidateA, candidateB]) {
+      const attempt = findUpdateAttempt(result, candidateId);
+      expect(attempt?.correlationIds).toEqual([
+        candidateId === candidateA ? "request-a" : "request-b",
+        "shared",
+        "cycle",
+      ]);
+      expect(attempt?.lines.map((entry) => entry.extra?.marker)).toEqual(
+        candidateId === candidateA
+          ? ["candidate-a", "shared-from-a", "shared-from-b", "cycle", "shared-from-cycle"]
+          : ["candidate-b", "shared-from-a", "shared-from-b", "cycle", "shared-from-cycle"],
+      );
+    }
   });
 });
 
@@ -1258,6 +1534,7 @@ describe("human-readable rendering", () => {
         legacyLineCount: 0,
         warnings: [],
         clusters: [],
+        updateAttempts: [],
       }),
     ).toBe("No correlated events found.\n");
   });

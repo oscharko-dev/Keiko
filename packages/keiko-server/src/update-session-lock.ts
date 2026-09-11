@@ -1,13 +1,18 @@
 import {
   chmodSync,
+  closeSync,
+  constants,
   existsSync,
+  fsyncSync,
   mkdirSync,
+  openSync,
   readFileSync,
   readdirSync,
   renameSync,
   statSync,
   unlinkSync,
   writeFileSync,
+  writeSync,
 } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { basename, dirname, join } from "node:path";
@@ -77,6 +82,24 @@ interface ResolvedFileUpdateSessionLockOptions {
   readonly rename: AtomicPublishRenameFn | undefined;
   readonly platform: NodeJS.Platform | undefined;
   readonly sleep: ((ms: number) => void) | undefined;
+}
+
+export interface UpdateSessionRecoveryOwnership {
+  readonly sessionId: string;
+  readonly targetVersion: string;
+  readonly lockIdentity: string;
+}
+
+export interface UpdateSessionRecoveryOwnershipOptions {
+  readonly pidAlive?: ((pid: number) => boolean) | undefined;
+  readonly processIdentity?: string | undefined;
+  readonly currentPid?: number | undefined;
+  readonly rename?: AtomicPublishRenameFn | undefined;
+}
+
+export interface UpdateSessionRecoveryLockInspection extends UpdateSessionRecoveryOwnership {
+  readonly ownerPid: number;
+  readonly childPid?: number | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -281,27 +304,62 @@ function boundLockRenameSink(
   return bound === undefined ? {} : { securityLogSink: bound };
 }
 
-function replaceJsonFile(
+function flushLockParent(path: string): void {
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(dirname(path), constants.O_RDONLY);
+    fsyncSync(descriptor);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    const unsupportedOnWindows =
+      process.platform === "win32" &&
+      ["EACCES", "EINVAL", "EISDIR", "ENOTSUP", "EPERM"].includes(code ?? "");
+    if (!unsupportedOnWindows) throw error;
+  } finally {
+    if (descriptor !== undefined) closeSync(descriptor);
+  }
+}
+
+function removeTemporaryLock(path: string): Error | undefined {
+  try {
+    unlinkSync(path);
+    return undefined;
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    return error instanceof Error ? error : new Error("temporary update lock cleanup failed");
+  }
+}
+
+function durableReplaceJsonFile(
   path: string,
   value: unknown,
   options: ResolvedFileUpdateSessionLockOptions,
   correlationId: string,
 ): void {
+  ensurePrivateParent(path);
   const temporaryPath = `${path}.${randomUUID()}.tmp`;
-  writeFileSync(temporaryPath, `${JSON.stringify(value)}\n`, {
-    flag: "wx",
-    mode: LOCK_FILE_MODE,
-  });
+  let fileDescriptor: number | undefined;
+  let failure: Error | undefined;
   try {
+    fileDescriptor = openSync(
+      temporaryPath,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
+      LOCK_FILE_MODE,
+    );
+    writeSync(fileDescriptor, `${JSON.stringify(value)}\n`, 0, "utf8");
+    fsyncSync(fileDescriptor);
+    closeSync(fileDescriptor);
+    fileDescriptor = undefined;
     publishLockRename(temporaryPath, path, options, correlationId);
+    flushLockParent(path);
   } catch (error) {
-    try {
-      unlinkSync(temporaryPath);
-    } catch {
-      // Best-effort cleanup; the original lock remains authoritative.
-    }
-    throw error;
+    failure = error instanceof Error ? error : new Error("durable update lock publication failed");
+  } finally {
+    if (fileDescriptor !== undefined) closeSync(fileDescriptor);
   }
+  const cleanupFailure = removeTemporaryLock(temporaryPath);
+  failure ??= cleanupFailure;
+  if (failure !== undefined) throw failure;
 }
 
 function reclaimableValidRecord(
@@ -446,6 +504,63 @@ function resolveLockOptions(
   };
 }
 
+function recoveryOwnerRecord(
+  record: UpdateSessionLockRecord,
+  options: ResolvedFileUpdateSessionLockOptions,
+  currentPid: number,
+): UpdateSessionLockRecord {
+  return {
+    sessionId: record.sessionId,
+    targetVersion: record.targetVersion,
+    startedAt: record.startedAt,
+    pid: currentPid,
+    ...(record.childPid === undefined ? {} : { childPid: record.childPid }),
+    processIdentity: options.processIdentity,
+  };
+}
+
+function restoreClaimedLock(claimedPath: string, lockPath: string): void {
+  try {
+    publishFileWithoutReplacement(claimedPath, lockPath);
+  } catch {
+    // Retaining the verified claim is fail-closed if canonical ownership cannot be restored.
+  }
+}
+
+function transferRecoveryOwnership(
+  lockPath: string,
+  inspection: LockInspection & { readonly status: "valid" },
+  options: ResolvedFileUpdateSessionLockOptions,
+  currentPid: number,
+): UpdateSessionRecoveryOwnership | undefined {
+  const claimedPath = claimInspectedLock(lockPath, inspection);
+  if (claimedPath === undefined) return undefined;
+  const next = recoveryOwnerRecord(inspection.record, options, currentPid);
+  try {
+    durableReplaceJsonFile(lockPath, next, options, inspection.record.sessionId);
+    const current = readLock(lockPath);
+    if (current === undefined || lockIdentity(current) !== lockIdentity(next)) {
+      throw new Error("update session lock recovery claim was not published");
+    }
+  } catch {
+    try {
+      const current = readLock(lockPath);
+      if (current !== undefined && lockIdentity(current) === lockIdentity(inspection.record)) {
+        removeOwnershipClaim(claimedPath);
+      }
+    } catch {
+      // An unreadable canonical result keeps the identity claim fail-closed.
+    }
+    return undefined;
+  }
+  removeOwnershipClaim(claimedPath);
+  return {
+    sessionId: next.sessionId,
+    targetVersion: next.targetVersion,
+    lockIdentity: lockIdentity(next),
+  };
+}
+
 function fileLockIsActive(
   lockPath: string,
   options: ResolvedFileUpdateSessionLockOptions,
@@ -493,7 +608,7 @@ function updateFileLockChildPid(
     const record = readLock(lockPath);
     if (record?.sessionId !== sessionId) return false;
     const identity = lockIdentity(record);
-    replaceJsonFile(
+    durableReplaceJsonFile(
       childPidPath(lockPath, sessionId),
       {
         sessionId,
@@ -669,4 +784,99 @@ export function createStateDirUpdateSessionLock(
   inputOptions: FileUpdateSessionLockOptions = {},
 ): UpdateSessionLock {
   return createFileUpdateSessionLock(updateSessionLockPath(stateDir), inputOptions);
+}
+
+export function claimStateDirUpdateSessionLockForRecovery(
+  stateDir: string,
+  expected: Pick<UpdateSessionRecoveryOwnership, "sessionId" | "targetVersion">,
+  inputOptions: UpdateSessionRecoveryOwnershipOptions = {},
+): UpdateSessionRecoveryOwnership | undefined {
+  const lockPath = updateSessionLockPath(stateDir);
+  const options = resolveLockOptions(inputOptions);
+  const inspection = inspectLock(lockPath);
+  if (
+    inspection.status !== "valid" ||
+    inspection.record.sessionId !== expected.sessionId ||
+    inspection.record.targetVersion !== expected.targetVersion ||
+    inspection.record.childPid === undefined ||
+    options.pidAlive(inspection.record.pid) ||
+    options.pidAlive(inspection.record.childPid)
+  ) {
+    return undefined;
+  }
+  return transferRecoveryOwnership(
+    lockPath,
+    inspection,
+    options,
+    inputOptions.currentPid ?? process.pid,
+  );
+}
+
+export function inspectStateDirUpdateSessionLockForRecovery(
+  stateDir: string,
+): UpdateSessionRecoveryLockInspection | undefined {
+  const inspection = inspectLock(updateSessionLockPath(stateDir));
+  if (inspection.status !== "valid") return undefined;
+  return {
+    sessionId: inspection.record.sessionId,
+    targetVersion: inspection.record.targetVersion,
+    lockIdentity: lockIdentity(inspection.record),
+    ownerPid: inspection.record.pid,
+    ...(inspection.record.childPid === undefined ? {} : { childPid: inspection.record.childPid }),
+  };
+}
+
+export function adoptStateDirUpdateSessionLockForRecovery(
+  stateDir: string,
+  expected: UpdateSessionRecoveryOwnership,
+  inputOptions: UpdateSessionRecoveryOwnershipOptions = {},
+): UpdateSessionRecoveryOwnership | undefined {
+  const lockPath = updateSessionLockPath(stateDir);
+  const options = resolveLockOptions(inputOptions);
+  const inspection = inspectLock(lockPath);
+  if (
+    inspection.status !== "valid" ||
+    inspection.record.sessionId !== expected.sessionId ||
+    inspection.record.targetVersion !== expected.targetVersion ||
+    lockIdentity(inspection.record) !== expected.lockIdentity
+  ) {
+    return undefined;
+  }
+  return transferRecoveryOwnership(
+    lockPath,
+    inspection,
+    options,
+    inputOptions.currentPid ?? process.pid,
+  );
+}
+
+export function releaseStateDirUpdateSessionLockForRecovery(
+  stateDir: string,
+  expected: UpdateSessionRecoveryOwnership,
+): boolean {
+  const lockPath = updateSessionLockPath(stateDir);
+  const inspection = inspectLock(lockPath);
+  if (
+    inspection.status !== "valid" ||
+    inspection.record.sessionId !== expected.sessionId ||
+    inspection.record.targetVersion !== expected.targetVersion ||
+    lockIdentity(inspection.record) !== expected.lockIdentity
+  ) {
+    return false;
+  }
+  const claimedPath = claimInspectedLock(lockPath, inspection);
+  if (claimedPath === undefined) return false;
+  try {
+    unlinkSync(lockPath);
+  } catch {
+    restoreClaimedLock(claimedPath, lockPath);
+    return false;
+  }
+  removeOwnershipClaim(claimedPath);
+  try {
+    removeChildPid(lockPath, expected.sessionId);
+  } catch {
+    // The canonical owner is gone; an identity-bound sidecar is inert.
+  }
+  return true;
 }

@@ -21,14 +21,32 @@ launcher_define="-DKEIKO_PORTABLE_TARGET=\"${target}\""
 launcher="$root/native/portable-launcher/keiko-portable-launcher.c"
 helper="$root/native/portable-launcher/macos-keychain-helper.c"
 launcher_test="$root/native/portable-launcher/keiko-portable-launcher.test.c"
+update_engine_test="$root/native/portable-launcher/keiko-portable-update-engine.test.c"
+handoff_protocol_test="$root/native/portable-launcher/keiko-portable-update-protocol.test.c"
+handoff_sha256_test="$root/native/portable-launcher/keiko-portable-sha256.test.c"
+handoff_tree_hash_test="$root/native/portable-launcher/keiko-portable-tree-hash.test.c"
 
-clang "${common[@]}" "$launcher_define" "$launcher" -o "$scratch/keiko-launcher"
-clang --analyze "${common[@]}" "$launcher_define" "$launcher" -o /dev/null
+clang "${common[@]}" -Wno-deprecated-declarations "$launcher_define" "$launcher" \
+  -o "$scratch/keiko-launcher"
+clang --analyze "${common[@]}" -Wno-deprecated-declarations "$launcher_define" "$launcher" \
+  -o /dev/null
 clang "${common[@]}" -Wno-deprecated-declarations -framework Security -framework CoreFoundation \
   "$helper" -o "$scratch/keychain-helper"
 clang --analyze "${common[@]}" -Wno-deprecated-declarations "$helper" -o /dev/null
-clang "${common[@]}" "$launcher_define" "$launcher_test" -o "$scratch/launcher-test"
+clang "${common[@]}" -Wno-deprecated-declarations "$launcher_define" "$launcher_test" \
+  -o "$scratch/launcher-test"
 "$scratch/launcher-test"
+clang "${common[@]}" "$update_engine_test" -o "$scratch/update-engine-test"
+"$scratch/update-engine-test"
+clang "${common[@]}" "$launcher_define" "$handoff_protocol_test" \
+  -o "$scratch/handoff-protocol-test"
+"$scratch/handoff-protocol-test"
+clang "${common[@]}" -Wno-deprecated-declarations "$handoff_sha256_test" \
+  -o "$scratch/handoff-sha256-test"
+"$scratch/handoff-sha256-test"
+clang "${common[@]}" -Wno-deprecated-declarations "$handoff_tree_hash_test" \
+  -o "$scratch/handoff-tree-hash-test"
+"$scratch/handoff-tree-hash-test"
 
 set +e
 "$scratch/keychain-helper" >/dev/null 2>&1

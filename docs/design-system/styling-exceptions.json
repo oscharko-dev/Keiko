@@ -73,7 +73,7 @@
     },
     {
       "source": "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css",
-      "globalSelectors": [".upd-action"],
+      "globalSelectors": [".upd-action", ".update-notice", ".window", ".workspace"],
       "unprefixedLocalClasses": [
         "failedAction",
         "failedCopy",

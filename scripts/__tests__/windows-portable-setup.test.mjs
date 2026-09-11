@@ -12,6 +12,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { URL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -19,6 +20,7 @@ import {
   assertBakedPayloadIdentity,
   buildWindowsPortableSetup,
   setupCatalogContent,
+  validateWindowsRootSetupManifest,
   validateWindowsSetupOutputPath,
   validateWindowsSetupStage,
   verifyWindowsPortableSetup,
@@ -29,6 +31,9 @@ import { buildSetupOverlayHeader } from "../lib/portable-setup-overlay.mjs";
 import { WINDOWS_PORTABLE_SETUP_ASSET_NAME } from "../portable-runtime.mjs";
 
 const roots = [];
+const windowsGenerationFixture = JSON.parse(
+  readFileSync(new URL("./fixtures/windows-generation-v2.json", import.meta.url), "utf8"),
+);
 
 function root() {
   const path = mkdtempSync(join(tmpdir(), "keiko-windows-setup-"));
@@ -126,6 +131,60 @@ async function expectSetupError(action, message) {
 }
 
 describe("windows portable setup companion", () => {
+  it("requires the root setup manifest to repeat the frozen schema 2 generation binding", () => {
+    const manifest = {
+      schemaVersion: 2,
+      product: { packageName: "@oscharko-dev/keiko", packageVersion: "0.3.17" },
+      release: { stable: true },
+      windowsGeneration: windowsGenerationFixture.windowsGeneration,
+    };
+    const setupManifest = {
+      ...windowsGenerationFixture.setupManifest,
+      packageName: manifest.product.packageName,
+      packageVersion: manifest.product.packageVersion,
+      stable: manifest.release.stable,
+      bootstrapUpdateEligible: false,
+      runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
+    };
+
+    expect(() => validateWindowsRootSetupManifest(setupManifest, manifest)).not.toThrow();
+    expect(() =>
+      validateWindowsRootSetupManifest(
+        {
+          ...setupManifest,
+          windowsGeneration: {
+            ...setupManifest.windowsGeneration,
+            launcherSha256: "c".repeat(64),
+          },
+        },
+        manifest,
+      ),
+    ).toThrow(/does not match expected binding/u);
+    expect(() =>
+      validateWindowsRootSetupManifest({ ...setupManifest, unsupported: true }, manifest),
+    ).toThrow(/canonical Windows package/u);
+  });
+
+  it("keeps a legacy flat schema 1 setup package valid for manual staging", () => {
+    const manifest = {
+      schemaVersion: 1,
+      product: { packageName: "@oscharko-dev/keiko", packageVersion: "0.3.17" },
+      release: { stable: true },
+    };
+    const setupManifest = {
+      schemaVersion: 1,
+      platformTarget: "windows-x64",
+      packageName: manifest.product.packageName,
+      packageVersion: manifest.product.packageVersion,
+      stable: true,
+      primaryLauncher: "Keiko.exe",
+      bootstrapUpdateEligible: false,
+      runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
+    };
+
+    expect(() => validateWindowsRootSetupManifest(setupManifest, manifest)).not.toThrow();
+  });
+
   it("keeps the setup output directly inside the canonical stage root", () => {
     const stageRoot = root();
     expect(() =>

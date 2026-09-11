@@ -757,6 +757,86 @@ static void test_capture_reports_the_shared_wait_result(void) {
   assert(output_len == 0);
 }
 
+static wchar_t *test_setup_rename_target = NULL;
+static int test_setup_step_calls = 0;
+
+static int test_local_setup_step(keiko_setup_buffers *buffers) {
+  test_setup_step_calls += 1;
+  assert(test_setup_rename_target != NULL);
+  assert(!MoveFileExW(
+      buffers->managed_root,
+      test_setup_rename_target,
+      MOVEFILE_WRITE_THROUGH
+  ));
+  return 1;
+}
+
+static void test_canonical_local_directory(
+    const wchar_t *path,
+    wchar_t output[KEIKO_PATH_CAP]
+) {
+  HANDLE directory = CreateFileW(
+      path,
+      FILE_READ_ATTRIBUTES,
+      FILE_SHARE_READ | FILE_SHARE_WRITE,
+      NULL,
+      OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT,
+      NULL
+  );
+  FILE_ATTRIBUTE_TAG_INFO tag;
+  assert(directory != INVALID_HANDLE_VALUE && directory != NULL);
+  assert(GetFileInformationByHandleEx(
+      directory,
+      FileAttributeTagInfo,
+      &tag,
+      sizeof(tag)
+  ));
+  assert((tag.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0);
+  assert((tag.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0);
+  assert(keiko_windows_local_volume_final_path(directory, output));
+  assert(CloseHandle(directory));
+}
+
+static void test_setup_requires_local_pinned_root(void) {
+  keiko_setup_buffers *buffers = keiko_allocate_buffers();
+  wchar_t *temporary = keiko_alloc_path();
+  wchar_t *original_root = keiko_alloc_path();
+  wchar_t *root = keiko_alloc_path();
+  wchar_t *renamed = keiko_alloc_path();
+  DWORD length;
+  assert(buffers != NULL && temporary != NULL && original_root != NULL && root != NULL &&
+         renamed != NULL);
+  length = GetTempPathW(KEIKO_PATH_CAP, temporary);
+  assert(length > 0 && length < KEIKO_PATH_CAP);
+  assert(GetTempFileNameW(temporary, L"kls", 0, original_root) != 0);
+  assert(DeleteFileW(original_root));
+  assert(CreateDirectoryW(original_root, NULL));
+  test_canonical_local_directory(original_root, root);
+  assert(_snwprintf_s(
+      renamed,
+      KEIKO_PATH_CAP,
+      _TRUNCATE,
+      L"%ls-renamed",
+      root
+  ) > 0);
+  assert(wcscpy_s(buffers->managed_root, KEIKO_PATH_CAP, root) == 0);
+  test_setup_rename_target = renamed;
+  test_setup_step_calls = 0;
+  assert(keiko_run_setup_step_on_local_volume_with(buffers, test_local_setup_step));
+  assert(test_setup_step_calls == 1);
+  assert(wcscpy_s(buffers->managed_root, KEIKO_PATH_CAP, L"\\\\server\\share\\Keiko") == 0);
+  assert(!keiko_run_setup_step_on_local_volume_with(buffers, test_local_setup_step));
+  assert(test_setup_step_calls == 1);
+  test_setup_rename_target = NULL;
+  assert(RemoveDirectoryW(root));
+  keiko_free_path(renamed);
+  keiko_free_path(root);
+  keiko_free_path(original_root);
+  keiko_free_path(temporary);
+  keiko_free_buffers(buffers);
+}
+
 int wmain(void) {
   keiko_setup_buffers *buffers = keiko_allocate_buffers();
   assert(buffers != NULL);
@@ -783,5 +863,6 @@ int wmain(void) {
   test_unconfirmed_job_reap_blocks_staging_cleanup();
   test_armed_job_reap_closes_job_and_blocks_staging_cleanup();
   test_capture_reports_the_shared_wait_result();
+  test_setup_requires_local_pinned_root();
   return 0;
 }

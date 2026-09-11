@@ -18,7 +18,6 @@ import type {
   UpdateSessionLogPreview,
   UpdateSessionPhase,
 } from "@oscharko-dev/keiko-contracts";
-import { UPDATE_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/update-session";
 import {
   detectUpdateInstallMode,
   productionUpdateFacts,
@@ -189,29 +188,6 @@ export function messageForFailure(reason: UpdateSessionFailureReason): string {
 
 export function isTerminal(phase: UpdateSessionPhase): boolean {
   return phase === "failed" || phase === "cancelled" || phase === "succeeded";
-}
-
-export function createRestartVerificationSession(input: {
-  readonly packageName: string;
-  readonly targetVersion: string;
-  readonly sessionId: string;
-  readonly now: () => number;
-}): UpdateSession {
-  const timestamp = nowIso(input.now);
-  return {
-    schemaVersion: UPDATE_SESSION_SCHEMA_VERSION,
-    sessionId: input.sessionId,
-    packageName: input.packageName,
-    targetVersion: input.targetVersion,
-    phase: "restart-required",
-    failureReason: "none",
-    startedAt: timestamp,
-    updatedAt: timestamp,
-    cancelable: false,
-    retryable: false,
-    restartRequired: true,
-    message: "Verifying the version running after restart.",
-  };
 }
 
 export function restartVerificationPatch(

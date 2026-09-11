@@ -1,4 +1,14 @@
-import { dirname, join, resolve, win32 } from "node:path";
+import { createHash } from "node:crypto";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync as nodeLstatSync,
+  openSync,
+  readSync,
+  type Stats,
+} from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import type {
   UpdateInstallMode,
   UpdateInstallModeKind,
@@ -7,6 +17,16 @@ import type {
   UpdatePortableTarget,
 } from "@oscharko-dev/keiko-contracts";
 import { UPDATE_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/update-session";
+import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import { assertWindowsLocalVolume } from "@oscharko-dev/keiko-security/windows-local-volume";
+import {
+  generationBindingMatchesPackageLayout,
+  parseWindowsGenerationBinding,
+  portablePackageLayout,
+  windowsGenerationBindingsEqual,
+  type PortablePackageLayout,
+  type WindowsGenerationBinding,
+} from "./update-portable-windows-generation.js";
 
 export type PortableManagementMode = "user-local" | "organization-managed" | "machine-managed";
 
@@ -19,29 +39,72 @@ export interface PortableUpdateRuntimeFacts {
 export interface PortableDetectorFs {
   readonly existsSync: (path: string) => boolean;
   readonly readFileSync: (path: string, encoding: "utf8") => string;
+  readonly readFileBytesSync?: ((path: string) => Uint8Array) | undefined;
+  readonly fileStatSync?:
+    | ((path: string) => {
+        readonly ctimeMs: number;
+        readonly dev: number;
+        readonly ino: number;
+        readonly isFile: () => boolean;
+        readonly isSymbolicLink: () => boolean;
+        readonly mtimeMs: number;
+        readonly nlink: number;
+        readonly size: number;
+      })
+    | undefined;
+  readonly realpathSync: (path: string) => string;
   readonly lstatSync: (path: string) => { isSymbolicLink: () => boolean };
 }
-
-type PathApi = Pick<typeof win32, "dirname" | "join" | "resolve">;
 
 type PortableReadResult =
   | { readonly status: "absent" }
   | { readonly status: "invalid" }
-  | { readonly status: "present"; readonly summary: UpdatePortableInstallSummary };
+  | {
+      readonly status: "present";
+      readonly raw: Record<string, unknown>;
+      readonly summary: UpdatePortableInstallSummary;
+    };
+
+interface PortableManifestSummary {
+  readonly binding?: WindowsGenerationBinding | undefined;
+  readonly bytes: string;
+  readonly layout: PortablePackageLayout;
+  readonly summary: UpdatePortableInstallSummary;
+}
+
+interface SelectedPortableManifest {
+  readonly bytes: string;
+  readonly layout: PortablePackageLayout;
+  readonly raw: Record<string, unknown>;
+  readonly target: UpdatePortableTarget;
+}
 
 const REGISTRATION_FILE = "portable-install-state.json";
-const SETUP_MANIFEST = "setup-manifest.json";
 const HEX_SHA256 = /^[a-f0-9]{64}$/u;
 const MAX_TOKEN_LENGTH = 128;
+const MAX_CONTROL_FILE_BYTES = 256 * 1024;
+const MAX_LAUNCHER_BYTES = 64 * 1024 * 1024;
+const FILE_READ_DEADLINE_MS = 5_000;
+const READ_CHUNK_BYTES = 64 * 1024;
+const WINDOWS_REGISTRATION_V2_KEYS = [
+  "schemaVersion",
+  "status",
+  "updateEligible",
+  "platformTarget",
+  "packageVersion",
+  "stable",
+  "managedRootLocator",
+  "setupManifestSha256",
+  "installRootIdentitySha256",
+  "launcherIdentitySha256",
+  "windowsGeneration",
+  "updatedAt",
+] as const;
 const PORTABLE_TARGETS: readonly UpdatePortableTarget[] = [
   "windows-x64",
   "macos-arm64",
   "macos-x64",
 ] as const;
-
-function pathApiFor(value: string): PathApi {
-  return value.includes("\\") || /^[a-z]:[\\/]/iu.test(value) ? win32 : { dirname, join, resolve };
-}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -71,9 +134,205 @@ function safeSha256(value: unknown): string | undefined {
   return typeof value === "string" && HEX_SHA256.test(value) ? value : undefined;
 }
 
+function hasExactKeys(record: Record<string, unknown>, expected: readonly string[]): boolean {
+  const actual = Object.keys(record).sort((left, right) => left.localeCompare(right, "en-US"));
+  const wanted = [...expected].sort((left, right) => left.localeCompare(right, "en-US"));
+  return actual.length === wanted.length && wanted.every((key, index) => actual[index] === key);
+}
+
+function sha256(value: string | Uint8Array): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function nodeFileIsUnsafe(stat: ReturnType<typeof fstatSync>, maxBytes: number): boolean {
+  return [!stat.isFile(), stat.nlink !== 1, stat.size < 0, stat.size > maxBytes].some(Boolean);
+}
+
+function nodeFileChanged(
+  before: ReturnType<typeof fstatSync>,
+  after: ReturnType<typeof fstatSync>,
+  pathAfter: Stats,
+  total: number,
+): boolean {
+  return [
+    !after.isFile(),
+    after.nlink !== 1,
+    after.dev !== before.dev,
+    after.ino !== before.ino,
+    after.size !== before.size,
+    after.mtimeMs !== before.mtimeMs,
+    after.ctimeMs !== before.ctimeMs,
+    !pathAfter.isFile(),
+    pathAfter.nlink !== 1,
+    pathAfter.dev !== before.dev,
+    pathAfter.ino !== before.ino,
+    pathAfter.size !== before.size,
+    pathAfter.mtimeMs !== before.mtimeMs,
+    pathAfter.ctimeMs !== before.ctimeMs,
+    pathAfter.isSymbolicLink(),
+    total !== before.size,
+  ].some(Boolean);
+}
+
+function readNodeChunks(
+  descriptor: number,
+  maxBytes: number,
+  deadline: number,
+): { readonly chunks: readonly Buffer[]; readonly total: number } {
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (;;) {
+    if (Date.now() > deadline) throw new Error("portable identity read deadline exceeded");
+    const chunk = Buffer.allocUnsafe(Math.min(READ_CHUNK_BYTES, maxBytes - total + 1));
+    const count = readSync(descriptor, chunk, 0, chunk.length, null);
+    if (count === 0) return { chunks, total };
+    total += count;
+    if (total > maxBytes) throw new Error("portable identity file is oversized");
+    chunks.push(chunk.subarray(0, count));
+  }
+}
+
+function readBoundedNodeFile(path: string, maxBytes: number): Uint8Array {
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const deadline = Date.now() + FILE_READ_DEADLINE_MS;
+  try {
+    const before = fstatSync(descriptor);
+    if (nodeFileIsUnsafe(before, maxBytes)) {
+      throw new Error("portable identity file is unsafe or oversized");
+    }
+    const { chunks, total } = readNodeChunks(descriptor, maxBytes, deadline);
+    const after = fstatSync(descriptor);
+    const pathAfter = nodeLstatSync(path);
+    if (nodeFileChanged(before, after, pathAfter, total)) {
+      throw new Error("portable identity file changed while it was read");
+    }
+    return Buffer.concat(chunks, total);
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function hashNodeChunks(
+  descriptor: number,
+  maxBytes: number,
+  deadline: number,
+): { readonly sha256: string; readonly total: number } {
+  const hash = createHash("sha256");
+  const chunk = Buffer.allocUnsafe(READ_CHUNK_BYTES);
+  let total = 0;
+  for (;;) {
+    if (Date.now() > deadline) throw new Error("portable identity read deadline exceeded");
+    const count = readSync(descriptor, chunk, 0, chunk.length, null);
+    if (count === 0) return { sha256: hash.digest("hex"), total };
+    total += count;
+    if (total > maxBytes) throw new Error("portable identity file is oversized");
+    hash.update(chunk.subarray(0, count));
+  }
+}
+
+function hashBoundedNodeFile(path: string, maxBytes: number): string {
+  const descriptor = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const deadline = Date.now() + FILE_READ_DEADLINE_MS;
+  try {
+    const before = fstatSync(descriptor);
+    if (nodeFileIsUnsafe(before, maxBytes)) {
+      throw new Error("portable identity file is unsafe or oversized");
+    }
+    const result = hashNodeChunks(descriptor, maxBytes, deadline);
+    if (nodeFileChanged(before, fstatSync(descriptor), nodeLstatSync(path), result.total)) {
+      throw new Error("portable identity file changed while it was read");
+    }
+    return result.sha256;
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+type InjectedFileStat = ReturnType<NonNullable<PortableDetectorFs["fileStatSync"]>>;
+
+function injectedFileChanged(before: InjectedFileStat, after: InjectedFileStat): boolean {
+  return [
+    !after.isFile(),
+    after.isSymbolicLink(),
+    after.nlink !== 1,
+    after.dev !== before.dev,
+    after.ino !== before.ino,
+    after.size !== before.size,
+    after.mtimeMs !== before.mtimeMs,
+    after.ctimeMs !== before.ctimeMs,
+  ].some(Boolean);
+}
+
+function injectedFileUnsafe(stat: InjectedFileStat | undefined, maxBytes: number): boolean {
+  if (stat === undefined) return true;
+  return [
+    !stat.isFile(),
+    stat.isSymbolicLink(),
+    stat.nlink !== 1,
+    stat.size < 0,
+    stat.size > maxBytes,
+  ].some(Boolean);
+}
+
+function injectedContentChanged(
+  before: InjectedFileStat,
+  after: InjectedFileStat | undefined,
+  byteLength: number,
+  maxBytes: number,
+): boolean {
+  if (after === undefined) return true;
+  return [
+    injectedFileChanged(before, after),
+    byteLength !== before.size,
+    byteLength > maxBytes,
+  ].some(Boolean);
+}
+
+function readBoundedFile(path: string, fs: PortableDetectorFs, maxBytes: number): Uint8Array {
+  if (fs.readFileBytesSync === undefined) return readBoundedNodeFile(path, maxBytes);
+  const stat = fs.fileStatSync?.(path);
+  if (stat === undefined) {
+    throw new Error("portable identity file is unsafe or oversized");
+  }
+  if (injectedFileUnsafe(stat, maxBytes)) {
+    throw new Error("portable identity file is unsafe or oversized");
+  }
+  const bytes = fs.readFileBytesSync(path);
+  const after = fs.fileStatSync?.(path);
+  if (injectedContentChanged(stat, after, bytes.byteLength, maxBytes)) {
+    throw new Error("portable identity file changed while it was read");
+  }
+  return bytes;
+}
+
+function readBoundedText(path: string, fs: PortableDetectorFs): string {
+  return new TextDecoder("utf-8", { fatal: true }).decode(
+    readBoundedFile(path, fs, MAX_CONTROL_FILE_BYTES),
+  );
+}
+
+function fileSha256(path: string, fs: PortableDetectorFs): string {
+  return fs.readFileBytesSync === undefined
+    ? hashBoundedNodeFile(path, MAX_LAUNCHER_BYTES)
+    : sha256(readBoundedFile(path, fs, MAX_LAUNCHER_BYTES));
+}
+
 function safeManagedRootKind(value: unknown): UpdatePortableManagedRootKind | undefined {
   if (!isRecord(value) || typeof value.kind !== "string") return undefined;
-  if (value.kind === "default" || value.kind === "home-relative" || value.kind === "absolute-local")
+  if (value.kind === "default" && hasExactKeys(value, ["kind"])) return value.kind;
+  return safeLocatedManagedRootKind(value);
+}
+
+function safeLocatedManagedRootKind(
+  value: Record<string, unknown>,
+): UpdatePortableManagedRootKind | undefined {
+  if (
+    (value.kind === "home-relative" || value.kind === "absolute-local") &&
+    hasExactKeys(value, ["kind", "path"]) &&
+    typeof value.path === "string" &&
+    value.path.length > 0 &&
+    value.path.length <= 1024
+  )
     return value.kind;
   return undefined;
 }
@@ -104,10 +363,14 @@ function registrationPath(stateDir: string, fs: PortableDetectorFs): string | un
 }
 
 function managedSummary(raw: Record<string, unknown>): UpdatePortableInstallSummary | undefined {
-  if (raw.status !== "managed" || raw.updateEligible !== true) return undefined;
+  if (raw.status !== "managed") return undefined;
   if (!isPortableTarget(raw.platformTarget) || typeof raw.stable !== "boolean") return undefined;
   const packageVersion = safeToken(raw.packageVersion);
   if (packageVersion === undefined) return undefined;
+  if (raw.schemaVersion === 1 && raw.platformTarget === "windows-x64") {
+    return legacyWindowsSummary(raw, packageVersion);
+  }
+  if (raw.updateEligible !== true) return undefined;
   return {
     status: "managed",
     target: raw.platformTarget,
@@ -118,6 +381,22 @@ function managedSummary(raw: Record<string, unknown>): UpdatePortableInstallSumm
     setupManifestSha256: safeSha256(raw.setupManifestSha256),
     installRootIdentitySha256: safeSha256(raw.installRootIdentitySha256),
     launcherIdentitySha256: safeSha256(raw.launcherIdentitySha256),
+  };
+}
+
+function legacyWindowsSummary(
+  raw: Record<string, unknown>,
+  packageVersion: string,
+): UpdatePortableInstallSummary | undefined {
+  if (typeof raw.updateEligible !== "boolean" || raw.windowsGeneration !== undefined) {
+    return undefined;
+  }
+  return {
+    status: "bootstrap",
+    target: "windows-x64",
+    updateEligible: false,
+    packageVersion,
+    stable: raw.stable === true,
   };
 }
 
@@ -141,8 +420,26 @@ function failedSetupSummary(
 function summaryFromRegistration(
   raw: Record<string, unknown>,
 ): UpdatePortableInstallSummary | undefined {
-  if (raw.schemaVersion !== 1) return undefined;
+  if (raw.schemaVersion !== 1 && raw.schemaVersion !== 2) return undefined;
+  if (raw.schemaVersion === 2 && !validWindowsRegistration(raw)) return undefined;
   return managedSummary(raw) ?? failedSetupSummary(raw);
+}
+
+function validWindowsRegistration(raw: Record<string, unknown>): boolean {
+  return [
+    hasExactKeys(raw, WINDOWS_REGISTRATION_V2_KEYS),
+    raw.status === "managed",
+    raw.updateEligible === true,
+    raw.platformTarget === "windows-x64",
+    raw.stable === true,
+    safeToken(raw.packageVersion) !== undefined,
+    safeToken(raw.updatedAt) !== undefined,
+    safeManagedRootKind(raw.managedRootLocator) !== undefined,
+    safeSha256(raw.setupManifestSha256) !== undefined,
+    safeSha256(raw.installRootIdentitySha256) !== undefined,
+    safeSha256(raw.launcherIdentitySha256) !== undefined,
+    parseWindowsGenerationBinding(raw.windowsGeneration) !== undefined,
+  ].every(Boolean);
 }
 
 function readPortableRegistration(
@@ -153,48 +450,145 @@ function readPortableRegistration(
   const path = registrationPath(stateDir, fs);
   if (path === undefined) return { status: "invalid" };
   if (!fs.existsSync(path)) return { status: "absent" };
-  const raw = parseJsonObject(fs.readFileSync(path, "utf8"));
+  const raw = parseJsonObject(readBoundedText(path, fs));
   if (raw === undefined) return { status: "invalid" };
   const summary = summaryFromRegistration(raw);
-  return summary === undefined ? { status: "invalid" } : { status: "present", summary };
-}
-
-function setupManifestPath(packageRoot: string): string {
-  const pathApi = pathApiFor(packageRoot);
-  return pathApi.join(pathApi.dirname(packageRoot), ".portable", SETUP_MANIFEST);
+  return summary === undefined ? { status: "invalid" } : { status: "present", raw, summary };
 }
 
 function bootstrapSummaryFromManifest(
   packageRoot: string | undefined,
   fs: PortableDetectorFs,
   packageName: string,
-): UpdatePortableInstallSummary | undefined {
-  if (packageRoot === undefined) return undefined;
-  const manifestPath = setupManifestPath(packageRoot);
-  if (!fs.existsSync(manifestPath)) return undefined;
-  const raw = parseJsonObject(fs.readFileSync(manifestPath, "utf8"));
-  if (raw?.schemaVersion !== 1 || raw.packageName !== packageName) return undefined;
-  if (!isPortableTarget(raw.platformTarget) || typeof raw.stable !== "boolean") return undefined;
+): PortableManifestSummary | undefined {
+  const selected = selectPortableManifest(packageRoot, fs);
+  if (selected === undefined) return undefined;
+  const { bytes, layout, raw, target } = selected;
   const packageVersion = safeToken(raw.packageVersion);
-  if (packageVersion === undefined) return undefined;
-  return {
+  if (
+    raw.packageName !== packageName ||
+    typeof raw.stable !== "boolean" ||
+    packageVersion === undefined
+  ) {
+    return undefined;
+  }
+  const summary: UpdatePortableInstallSummary = {
     status: "bootstrap",
-    target: raw.platformTarget,
+    target,
     updateEligible: false,
     packageVersion,
     stable: raw.stable,
   };
+  if (target !== "windows-x64") {
+    return raw.schemaVersion === 1 && raw.windowsGeneration === undefined
+      ? { bytes, layout, summary }
+      : undefined;
+  }
+  return windowsManifestSummary(selected, summary, packageName, fs);
+}
+
+function selectPortableManifest(
+  packageRoot: string | undefined,
+  fs: PortableDetectorFs,
+): SelectedPortableManifest | undefined {
+  const targetLayouts = PORTABLE_TARGETS.map((target) =>
+    portablePackageLayout(target, packageRoot),
+  );
+  for (const candidate of targetLayouts) {
+    if (candidate === undefined || !fs.existsSync(candidate.rootSetupManifestPath)) continue;
+    const bytes = readBoundedText(candidate.rootSetupManifestPath, fs);
+    const raw = parseJsonObject(bytes);
+    if (raw === undefined || !isPortableTarget(raw.platformTarget)) continue;
+    const resolvedLayout = portablePackageLayout(raw.platformTarget, packageRoot);
+    if (resolvedLayout?.kind === candidate.kind) {
+      return { bytes, layout: resolvedLayout, raw, target: raw.platformTarget };
+    }
+  }
+  return undefined;
+}
+
+function windowsManifestSummary(
+  selected: SelectedPortableManifest,
+  summary: UpdatePortableInstallSummary,
+  packageName: string,
+  fs: PortableDetectorFs,
+): PortableManifestSummary | undefined {
+  const { bytes, layout, raw } = selected;
+  if (raw.schemaVersion === 1) {
+    return legacyWindowsManifestSummary(selected, summary);
+  }
+  if (raw.schemaVersion !== 2) return undefined;
+  const binding = parseWindowsGenerationBinding(raw.windowsGeneration);
+  if (binding === undefined) return undefined;
+  const runtime = isRecord(raw.runtime) ? raw.runtime : undefined;
+  const manifestValid = [
+    generationBindingMatchesPackageLayout(binding, layout),
+    raw.primaryLauncher === "Keiko.exe",
+    raw.bootstrapUpdateEligible === false,
+    runtime?.nodePlatform === "win32",
+    runtime?.nodeArchitecture === "x64",
+  ].every(Boolean);
+  if (!manifestValid) return undefined;
+  const packageRecord = fs.existsSync(layout.packageJsonPath)
+    ? parseJsonObject(readBoundedText(layout.packageJsonPath, fs))
+    : undefined;
+  if (!packageIdentityMatches(packageRecord, packageName, summary.packageVersion)) return undefined;
+  return { binding, bytes, layout, summary };
+}
+
+function legacyWindowsManifestSummary(
+  selected: SelectedPortableManifest,
+  summary: UpdatePortableInstallSummary,
+): PortableManifestSummary | undefined {
+  return selected.layout.kind === "windows-flat-v1" && selected.raw.windowsGeneration === undefined
+    ? { bytes: selected.bytes, layout: selected.layout, summary }
+    : undefined;
+}
+
+function packageIdentityMatches(
+  record: Record<string, unknown> | undefined,
+  packageName: string,
+  packageVersion: string | undefined,
+): boolean {
+  return record?.name === packageName && record.version === packageVersion;
 }
 
 function registrationMatchesManifest(
-  registration: UpdatePortableInstallSummary,
-  manifest: UpdatePortableInstallSummary,
+  registration: PortableReadResult & { readonly status: "present" },
+  manifest: PortableManifestSummary,
+  fs: PortableDetectorFs,
 ): boolean {
-  return (
-    registration.target === manifest.target &&
-    registration.packageVersion === manifest.packageVersion &&
-    registration.stable === manifest.stable
-  );
+  const summaryMatches = [
+    registration.summary.target === manifest.summary.target,
+    registration.summary.packageVersion === manifest.summary.packageVersion,
+    registration.summary.stable === manifest.summary.stable,
+  ].every(Boolean);
+  if (!summaryMatches) return false;
+  if (manifest.binding === undefined) return registration.raw.windowsGeneration === undefined;
+
+  const registrationBinding = parseWindowsGenerationBinding(registration.raw.windowsGeneration);
+  if (
+    registration.raw.schemaVersion !== 2 ||
+    registrationBinding === undefined ||
+    !windowsGenerationBindingsEqual(registrationBinding, manifest.binding)
+  ) {
+    return false;
+  }
+  return windowsRegistrationDiskMatches(registration.raw, manifest, manifest.binding, fs);
+}
+
+function windowsRegistrationDiskMatches(
+  registration: Record<string, unknown>,
+  manifest: PortableManifestSummary,
+  binding: WindowsGenerationBinding,
+  fs: PortableDetectorFs,
+): boolean {
+  return [
+    registration.setupManifestSha256 === sha256(manifest.bytes),
+    registration.installRootIdentitySha256 === sha256(fs.realpathSync(manifest.layout.installRoot)),
+    registration.launcherIdentitySha256 === fileSha256(manifest.layout.rootLauncherPath, fs),
+    registration.launcherIdentitySha256 === binding.launcherSha256,
+  ].every(Boolean);
 }
 
 function normalizedPath(value: string | undefined): string {
@@ -310,18 +704,40 @@ export function detectPortableUpdateInstallMode(
   facts: PortableUpdateRuntimeFacts,
   fs: PortableDetectorFs,
   packageName: string,
+  securityLogSink?: SecurityLogSink,
 ): UpdateInstallMode | undefined {
   const manifestSummary = bootstrapSummaryFromManifest(facts.packageRoot, fs, packageName);
   const registration = readPortableRegistration(facts.stateDir, fs);
   if (manifestSummary === undefined) return undefined;
+  if (manifestSummary.summary.target === "windows-x64") {
+    try {
+      // Keep the original install-root spelling: canonicalization can hide mapped-share and
+      // reparse boundaries which D3 explicitly denies.
+      assertWindowsLocalVolume(manifestSummary.layout.installRoot, { securityLogSink });
+    } catch {
+      return portableUnsupportedMode(
+        packageName,
+        "portable-registration-invalid",
+        manifestSummary.summary,
+      );
+    }
+  }
   if (registration.status === "invalid") {
-    return portableUnsupportedMode(packageName, "portable-registration-invalid", manifestSummary);
+    return portableUnsupportedMode(
+      packageName,
+      "portable-registration-invalid",
+      manifestSummary.summary,
+    );
   }
   if (registration.status === "absent") {
-    return modeForPortableSummary(manifestSummary, facts, packageName);
+    return modeForPortableSummary(manifestSummary.summary, facts, packageName);
   }
-  if (!registrationMatchesManifest(registration.summary, manifestSummary)) {
-    return portableUnsupportedMode(packageName, "portable-registration-invalid", manifestSummary);
+  if (!registrationMatchesManifest(registration, manifestSummary, fs)) {
+    return portableUnsupportedMode(
+      packageName,
+      "portable-registration-invalid",
+      manifestSummary.summary,
+    );
   }
   return modeForPortableSummary(registration.summary, facts, packageName);
 }

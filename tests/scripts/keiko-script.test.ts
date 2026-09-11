@@ -418,7 +418,7 @@ describe("scripts/keiko.sh", () => {
               },
             });
           },
-          () => !existsSync(readyFile),
+          () => !existsSync(readyFile) || readFileSync(attemptCounterFile, "utf8").length === 0,
         );
 
         expect(start.status, `${start.stdout}\n${start.stderr}`).toBe(1);

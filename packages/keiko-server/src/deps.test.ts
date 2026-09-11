@@ -60,6 +60,7 @@ import {
   ensureManagedTaskWorkspaceIdentity,
   redactEvidenceString,
   reconcileTaskWorkspacesAtStartup,
+  updateCandidateGate,
   type UiHandlerDeps,
 } from "./deps.js";
 import {
@@ -97,6 +98,8 @@ import {
 } from "./observability/index.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { resolvePrDescriptionApplicationServiceForContext } from "./gitDelivery/prDescriptionRoutes.js";
+import { createUpdateRemediationManager } from "./update-remediation.js";
+import { createUpdateLocalStateManager } from "./update-local-state.js";
 
 const tmpDirs: string[] = [];
 
@@ -230,6 +233,89 @@ function operatorDapDocument(): Record<string, unknown> {
     },
   };
 }
+
+describe("portable updater startup recovery composition", () => {
+  it.each([
+    ["corrupt", "{broken"],
+    ["incompatible", JSON.stringify({ schemaVersion: 999 })],
+  ])("surfaces %s runtime state through the non-throwing recovery port", async (_kind, raw) => {
+    const stateDir = tmp("keiko-update-recovery-composition-");
+    mkdirSync(join(stateDir, "updates"), { recursive: true });
+    writeFileSync(join(stateDir, "updates", "runtime-state.json"), raw, "utf8");
+
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("keiko-update-recovery-evidence-"),
+      env: { KEIKO_STATE_DIR: stateDir },
+      store: createInMemoryUiStore(),
+    });
+    try {
+      const recovery = deps.updateStartupRecovery;
+      expect(recovery).toBeDefined();
+      await expect(
+        recovery?.reconcile({
+          phase: "pre-listen",
+          current: {
+            pid: process.pid,
+            launchId: "ab".repeat(16),
+            host: "127.0.0.1",
+            port: 1983,
+            version: "0.3.17",
+          },
+        }),
+      ).resolves.toMatchObject({ status: "recovery-required", reason: _kind });
+    } finally {
+      await deps.dispose?.();
+    }
+  });
+});
+
+describe("update candidate remediation gate", () => {
+  it("blocks an immutable candidate while migration review is required", () => {
+    const stateDir = tmp("keiko-update-candidate-gate-");
+    const remediation = createUpdateRemediationManager({
+      localState: createUpdateLocalStateManager({ stateDir }),
+    });
+    const gate = updateCandidateGate(remediation);
+
+    expect(() => {
+      gate(
+        {
+          schemaVersion: "1",
+          candidateId: "candidate-reviewed",
+          currentVersion: "0.3.17",
+          targetVersion: "0.3.18",
+          channel: "stable",
+          install: {
+            packageName: "@oscharko-dev/keiko",
+            installKind: "package-manager",
+            packageManager: "npm",
+            installIdentitySha256: "a".repeat(64),
+          },
+          release: { source: "github-release", tag: "v0.3.18" },
+          releaseImpactDigest: "b".repeat(64),
+          issuedAt: "2026-09-10T12:00:00.000Z",
+          expiresAt: "2026-09-10T12:10:00.000Z",
+        },
+        {
+          stateImpact: [
+            {
+              store: "config",
+              description: "Configuration migration requires review.",
+              remediation: "migration-required",
+              userActionRequired: true,
+            },
+          ],
+        },
+      );
+    }).toThrow(
+      expect.objectContaining({
+        code: "UPDATE_REMEDIATION_REQUIRED",
+        status: 409,
+      }),
+    );
+  });
+});
 
 function qualifiedOperatorDapDocument(): {
   readonly document: Record<string, unknown>;

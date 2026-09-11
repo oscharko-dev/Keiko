@@ -4,6 +4,7 @@ import {
   type UpdateReleaseImpactInput,
   type UpdateRemediationStatusReport,
   type UpdateSession,
+  type UpdateSessionStartRequest,
   type UpdateSessionStatus,
 } from "@oscharko-dev/keiko-contracts";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
@@ -140,24 +141,44 @@ async function createRuntime(env: EnvSource, deps: UpdateCliDeps): Promise<Updat
   const [server, evidence] = await Promise.all([loadServer(), loadEvidence()]);
   const handlerDeps = createHandlerDeps(env, deps.fetchImpl, server, evidence);
   const stateDir = resolveRuntimeStateDir(deps.cwd ?? process.cwd(), env);
-  const localState = server.createUpdateLocalStateManager({ stateDir });
-  const processEnv = processEnvFrom(env);
-  const service = server.createUpdatePreflightService();
-  return {
-    preflight: deps.preflight ?? bindPreflight(service, handlerDeps),
-    session:
-      deps.session ??
-      server.createUpdateSessionManager({
-        processEnv,
-        lock: server.createStateDirUpdateSessionLock(stateDir),
-        redactor: stringRedactor(env, server),
-      }),
-    remediation: deps.remediation ?? server.createUpdateRemediationManager({ localState }),
-    server,
-    close: (): void => {
+  let activityLog: ReturnType<ServerModule["createFileServerLogSink"]> | undefined;
+  const close = (): void => {
+    try {
       handlerDeps.store.close();
-    },
+    } finally {
+      activityLog?.close?.();
+    }
   };
+  try {
+    activityLog = server.createFileServerLogSink(stateDir);
+    const candidateAuthority = server.createUpdateCandidateAuthority({ activityLog });
+    const localState = server.createUpdateLocalStateManager({ stateDir, activityLog });
+    const processEnv = processEnvFrom(env);
+    const service = server.createUpdatePreflightService({ candidateAuthority });
+    return {
+      preflight: deps.preflight ?? bindPreflight(service, handlerDeps),
+      session:
+        deps.session ??
+        server.createUpdateSessionManager({
+          processEnv,
+          lock: server.createStateDirUpdateSessionLock(stateDir),
+          redactor: stringRedactor(env, server),
+          candidateAuthority,
+          localState,
+          activityLog,
+        }),
+      remediation: deps.remediation ?? server.createUpdateRemediationManager({ localState }),
+      server,
+      close,
+    };
+  } catch (error) {
+    try {
+      close();
+    } catch {
+      // Preserve the construction error; both owned resources received a close attempt.
+    }
+    throw error;
+  }
 }
 
 function primaryRemediation(
@@ -205,6 +226,18 @@ function parseSubcommand(args: readonly string[]): UpdateSubcommand | "help" | u
 function noUpdateApplyGuard(report: UpdatePreflightReport): string | undefined {
   if (!report.updateAvailable || report.targetVersion === undefined) return "No update available.";
   return undefined;
+}
+
+function candidateRequestForApply(
+  report: UpdatePreflightReport,
+): UpdateSessionStartRequest | undefined {
+  const candidate = report.candidate;
+  if (candidate === undefined || candidate.targetVersion !== report.targetVersion) return undefined;
+  return {
+    candidateId: candidate.candidateId,
+    confirmationDigest: candidate.confirmationDigest,
+    executionToken: candidate.executionToken,
+  };
 }
 
 function portableApplyFallback(): string {
@@ -336,12 +369,6 @@ function writeApplyGuard(io: CliIo, report: UpdatePreflightReport, guard: string
   else io.out(line);
 }
 
-function targetVersionForApply(report: UpdatePreflightReport, io: CliIo): string | undefined {
-  if (report.targetVersion !== undefined) return report.targetVersion;
-  io.err("keiko update apply: No target version was available.\n");
-  return undefined;
-}
-
 async function runStatus(runtime: UpdateRuntime, io: CliIo): Promise<number> {
   const report = await runtime.preflight.getStartupReport();
   const status = runtime.session.getStatus();
@@ -382,12 +409,17 @@ async function runApply(runtime: UpdateRuntime, io: CliIo, deps: UpdateCliDeps):
     writeApplyGuard(io, report, guard);
     return applyGuardExitCode(report);
   }
-  const targetVersion = targetVersionForApply(report, io);
-  if (targetVersion === undefined) {
+  const candidate = candidateRequestForApply(report);
+  if (candidate === undefined) {
+    io.err(
+      "keiko update apply: The fresh update check did not issue a usable server-approved candidate. Run `keiko update check` and retry.\n",
+    );
     return 1;
   }
-  const started = runtime.session.start({ targetVersion });
-  io.out(`Update session: ${started.reused ? "reused" : "started"} for ${targetVersion}\n`);
+  const started = runtime.session.start(candidate, report);
+  io.out(
+    `Update session: ${started.reused ? "reused" : "started"} for ${report.targetVersion ?? "the approved target"}\n`,
+  );
   const terminal = await waitForTerminalSession(
     runtime.session,
     started.session.sessionId,

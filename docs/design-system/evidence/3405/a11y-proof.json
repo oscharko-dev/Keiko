@@ -1,0 +1,92 @@
+{
+  "issue": 3405,
+  "epic": 3403,
+  "verdict": "PASS",
+  "tool": "axe-core 4.12.1",
+  "cssSha256": "a1866c44bf9be1a967cbf43e40be3c410668322157acdc0d4e2bc7db2645e7df",
+  "sourceSha256": {
+    "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.tsx": "3a9c9a489d7f87e2afc920fa1fa4dd412af7bbecd44900b52a8b2f4acb5acdc8",
+    "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx": "095cf18b86ecf3158d00020203985fa736a836ec09dbb1aa5d3473d9550f2f89",
+    "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css": "9ae951f2aa6c98beaa04b587364291776998ba000d0e33064bffc09962d51998",
+    "packages/keiko-ui/src/app/components/desktop/update/update-copy.ts": "5e34eb591f63aca2ce64fd43daba10de0e172d12014f055092b4a1a00830c2da",
+    "packages/keiko-ui/src/app/globals.css": "a1866c44bf9be1a967cbf43e40be3c410668322157acdc0d4e2bc7db2645e7df",
+    "packages/keiko-ui/src/lib/api.ts": "fe96d83e6fcf2e66265879422ea5f12d662bba402a722c35f03d3b890f3b3fe6",
+    "packages/keiko-ui/src/lib/i18n-messages.de.ts": "699f0191d2d1dcfffc9aa30a2ad67f8dc0a6f805e51a3f7c72034c14d2c6d6b2",
+    "packages/keiko-ui/src/lib/i18n-messages.en.ts": "d769fdae4b6e019ad23121d467d579f6f1ca27952a7970f5efc02b2686114d35"
+  },
+  "harnessProvenanceSha256": {
+    "tests/e2e/config/playwright.issue-1696-update-ui.config.ts": "1c2114f8a47145d76c1319fa23ccf67d250d5383d2e17c8a5111c0104c9a8a18",
+    "tests/e2e/fixtures/keiko.e2e.config.json": "9ccdb592af0021033cb26f4868ff263badff5dcc4d716bb4a2fbac54c6dd69f6",
+    "tests/e2e/support/evidence.ts": "54712c17afcf8c47de426c02c9983c5837fbd2e665f5beccc112d7ec312414fd",
+    "tests/e2e/support/update-bff-outage-3405.mjs": "9d1d90d6b2fbd2be060de8a827acad45e06f90ae28d226d0b7a7507f4538d735"
+  },
+  "wcagTags": [
+    "wcag2a",
+    "wcag2aa",
+    "wcag21a",
+    "wcag21aa",
+    "wcag22aa"
+  ],
+  "gate": "zero axe violations for WCAG 2.0/2.1/2.2 A and AA tags across update window modes, startup notice, and responsive manual path",
+  "captures": [
+    {
+      "file": "01-update-window-dark.png",
+      "violations": []
+    },
+    {
+      "file": "02-update-window-light.png",
+      "violations": []
+    },
+    {
+      "file": "03-update-window-dark-high-contrast.png",
+      "violations": []
+    },
+    {
+      "file": "04-update-window-light-high-contrast.png",
+      "violations": []
+    },
+    {
+      "file": "05-update-window-prefers-contrast.png",
+      "violations": []
+    },
+    {
+      "file": "06-update-window-forced-colors.png",
+      "violations": []
+    },
+    {
+      "file": "07-update-window-reduced-motion.png",
+      "violations": []
+    },
+    {
+      "file": "08-startup-notice-critical.png",
+      "violations": []
+    },
+    {
+      "file": "10-responsive-manual-path.png",
+      "violations": []
+    },
+    {
+      "file": "12-portable-managed-one-click.png",
+      "violations": []
+    },
+    {
+      "file": "13-reconnecting-state-mocked.png",
+      "violations": []
+    },
+    {
+      "file": "14-remediation-pending.png",
+      "violations": []
+    }
+  ],
+  "deterministicChecks": {
+    "titleFocus": true,
+    "criticalNoticeUsesAlert": true,
+    "progressHasNativeProgressElement": true,
+    "collapsedDetailsUseNativeDetails": true,
+    "criticalAndManualStatesAreNotColorOnly": true,
+    "keyboardReachableEntrypoints": true,
+    "englishAndGermanFocusAndLiveParity": true,
+    "responsiveManualPathReflowsAt320CssPixels": true,
+    "startupNoticeYieldsToOpenUpdateWindowAt320CssPixels": true
+  }
+}

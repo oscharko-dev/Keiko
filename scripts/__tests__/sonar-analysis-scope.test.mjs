@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import {
   SONAR_TEST_INCLUSION_PATTERNS,
@@ -25,6 +25,18 @@ import {
 } from "../sonar-analysis-scope.mjs";
 
 const scriptPath = resolve(import.meta.dirname, "..", "sonar-analysis-scope.mjs");
+let realRepositoryScopeCliResult;
+
+// The real CLI inventories the entire tracked repository. Keep that cold-start cost in fixture
+// setup, while bounding the synchronous child below the hook budget so a hung process fails closed.
+beforeAll(() => {
+  realRepositoryScopeCliResult = spawnSync(process.execPath, [scriptPath], {
+    cwd: resolve(import.meta.dirname, "..", ".."),
+    encoding: "utf8",
+    timeout: 55_000,
+  });
+}, 60_000);
+
 const localSonarGate = readFileSync(
   resolve(import.meta.dirname, "..", "..", "docker", "gates", "run-sonar.sh"),
   "utf8",
@@ -33,6 +45,7 @@ const repositorySonarProperties = readFileSync(
   resolve(import.meta.dirname, "..", "..", "sonar-project.properties"),
   "utf8",
 );
+const repositoryNativeEntries = readNativeScope(resolve(import.meta.dirname, "..", ".."));
 
 const nativeEntries = [
   {
@@ -304,6 +317,19 @@ describe("Sonar analysis scope", () => {
     );
   });
 
+  it("fails when a newly tracked native header has no compensating-quality inventory entry", () => {
+    const forgottenHeader = "native/portable-launcher/keiko-portable-new-surface.h";
+    const failures = analysisScopeFailures({
+      files: [...repositoryNativeEntries.map((entry) => entry.path), forgottenHeader],
+      nativeEntries: repositoryNativeEntries,
+      properties: validProperties,
+    });
+
+    expect(failures).toContain(
+      `native source has no compensating quality gate: ${forgottenHeader}`,
+    );
+  });
+
   it("fails when a manifest source is not also excluded from Linux Sonar analysis", () => {
     const failures = analysisScopeFailures({
       files: ["native/other/launcher.c"],
@@ -552,10 +578,7 @@ describe("Sonar analysis scope", () => {
   });
 
   it("executes the real repository scope CLI", () => {
-    const result = spawnSync(process.execPath, [scriptPath], {
-      cwd: resolve(import.meta.dirname, "..", ".."),
-      encoding: "utf8",
-    });
+    const result = realRepositoryScopeCliResult;
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("sonar-analysis-scope: PASS");
   });

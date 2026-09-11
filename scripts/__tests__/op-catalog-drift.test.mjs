@@ -20,6 +20,12 @@ import {
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CATALOG_PATH = join(repoRoot, "docs", "observability", "op-catalog.generated.json");
+let currentCatalog;
+
+function generateCurrentOpCatalog() {
+  currentCatalog ??= generateOpCatalog(repoRoot);
+  return currentCatalog;
+}
 
 function readCheckedInCatalog() {
   return JSON.parse(readFileSync(CATALOG_PATH, "utf8"));
@@ -44,14 +50,14 @@ function withFixturePackage(pkgName, fileContents, check) {
 
 describe("op catalog drift", () => {
   it("pins the separate future lifecycle contract without inventing runtime source sites", async () => {
-    const catalog = generateOpCatalog(repoRoot);
+    const catalog = generateCurrentOpCatalog();
     const bytes = readFileSync(join(repoRoot, TOOL_CATALOG_OPERATIONS_PATH), "utf8");
     expect(catalog.operationContracts).toEqual([TOOL_CATALOG_OPERATIONS_PATH]);
     expect(bytes).toBe(await toolCatalogOperationsBytes(repoRoot));
     expect(JSON.parse(bytes)).toEqual(generateToolCatalogOperations(repoRoot));
   });
   it("matches the checked-in file exactly, by value, in the same order", () => {
-    const regenerated = generateOpCatalog(repoRoot);
+    const regenerated = generateCurrentOpCatalog();
     const checkedIn = readCheckedInCatalog();
     expect(regenerated).toEqual(checkedIn);
   });
@@ -74,7 +80,7 @@ describe("op catalog drift", () => {
   // leaving the catalog internally self-consistent. Pin the incident's complete vocabulary at the
   // production generator boundary so regenerating the JSON cannot silently bless the same loss.
   it("retains every operation lost by the issue-to-PR catalog regression", () => {
-    const catalog = generateOpCatalog(repoRoot);
+    const catalog = generateCurrentOpCatalog();
     expect(catalog.operations).toEqual(
       expect.arrayContaining([
         "coding-runtime.description",
@@ -114,7 +120,7 @@ describe("op catalog drift", () => {
   // below resolved to "unknown" even though the runtime always stamps a deterministic category for
   // them. Driven through the real generator entry point, not a re-derivation of its category rules.
   it("attributes the deterministic category to an op:-only call site of a checked-in object-arg category function", () => {
-    const catalog = generateOpCatalog(repoRoot);
+    const catalog = generateCurrentOpCatalog();
     const byOp = (op) => catalog.entries.find((entry) => entry.op === op);
     expect(byOp("indexing.document.failed")?.category).toBe("indexing");
     expect(byOp("embedding.preflight.identity-rejected")?.category).toBe("embedding");
@@ -126,7 +132,7 @@ describe("op catalog drift", () => {
   // checked-in file" comparison above lenient) could leave every other test in this file green.
   describe("rejects a tampered copy of the checked-in catalog", () => {
     it("when one entry's op value is changed", () => {
-      const regenerated = generateOpCatalog(repoRoot);
+      const regenerated = generateCurrentOpCatalog();
       const tampered = structuredClone(readCheckedInCatalog());
       const first = tampered.entries[0];
       if (first === undefined) throw new Error("checked-in catalog has no entries to tamper with");
@@ -135,14 +141,14 @@ describe("op catalog drift", () => {
     });
 
     it("when one entry is removed", () => {
-      const regenerated = generateOpCatalog(repoRoot);
+      const regenerated = generateCurrentOpCatalog();
       const tampered = structuredClone(readCheckedInCatalog());
       tampered.entries.pop();
       expect(regenerated).not.toEqual(tampered);
     });
 
     it("when two entries are reordered", () => {
-      const regenerated = generateOpCatalog(repoRoot);
+      const regenerated = generateCurrentOpCatalog();
       const tampered = structuredClone(readCheckedInCatalog());
       const [first, second] = tampered.entries;
       if (first === undefined || second === undefined) {
@@ -508,7 +514,7 @@ describe("diagnostic operation projection rules", () => {
     );
   });
   it("includes the three current direct-sink owners and ignores unrelated record methods", () => {
-    const catalog = generateOpCatalog(repoRoot);
+    const catalog = generateCurrentOpCatalog();
     for (const operation of [
       "grounded.entailment",
       "coding-runtime.sse-fanout",
@@ -548,7 +554,7 @@ describe("diagnostic operation projection rules", () => {
     );
   });
   it("rejects a generated vocabulary or source-kind tamper", () => {
-    const generated = generateOpCatalog(repoRoot);
+    const generated = generateCurrentOpCatalog();
     const removed = structuredClone(generated);
     removed.operations.pop();
     expect(removed).not.toEqual(generated);

@@ -6,6 +6,7 @@ import {
 import type { UiHandlerDeps } from "./deps.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
 import { UpdateSessionError, type UpdateSessionManager } from "./update-session.js";
+import { resolveUpdatePreflightService } from "./update-preflight-routes.js";
 
 const MAX_UPDATE_SESSION_BODY_BYTES = 16_000;
 
@@ -33,23 +34,11 @@ function isRouteResult(value: RouteOrManager): value is RouteResult {
   return typeof (value as { status?: unknown }).status === "number";
 }
 
-function toRouteResult(error: UpdateSessionError): RouteResult {
-  return { status: error.status, body: errorBody(error.code, error.message) };
-}
-
-function assertStartRemediationAllowed(deps: UiHandlerDeps, targetVersion: string): void {
-  const remediation = deps.updateRemediation?.getStatus({ targetVersion });
-  if (
-    remediation?.overallStatus !== "manual-review-required" &&
-    remediation?.overallStatus !== "failed"
-  ) {
-    return;
-  }
-  throw new UpdateSessionError(
-    "UPDATE_REMEDIATION_REQUIRED",
-    "Required remediation must be reviewed before update execution.",
-    409,
-  );
+function toRouteResult(error: UpdateSessionError, correlationId?: string): RouteResult {
+  return {
+    status: error.status,
+    body: errorBody(error.code, error.message, correlationId),
+  };
 }
 
 function readBody(req: IncomingMessage): Promise<string> {
@@ -92,17 +81,20 @@ async function readJsonObject(req: IncomingMessage): Promise<Record<string, unkn
   return parsed as Record<string, unknown>;
 }
 
-async function runHandler(work: () => Promise<RouteResult> | RouteResult): Promise<RouteResult> {
+async function runHandler(
+  correlationId: string | undefined,
+  work: () => Promise<RouteResult> | RouteResult,
+): Promise<RouteResult> {
   try {
     return await work();
   } catch (error) {
     if (error instanceof BodyTooLargeError) {
       return {
         status: 413,
-        body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit."),
+        body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit.", correlationId),
       };
     }
-    if (error instanceof UpdateSessionError) return toRouteResult(error);
+    if (error instanceof UpdateSessionError) return toRouteResult(error, correlationId);
     throw error;
   }
 }
@@ -119,36 +111,43 @@ export async function handleCreateUpdateSession(
 ): Promise<RouteResult> {
   const guard = requireUpdateSession(deps);
   if (isRouteResult(guard)) return guard;
-  return runHandler(async () => {
+  return runHandler(ctx.correlationId, async () => {
     const parsed = parseUpdateSessionStartRequest(await readJsonObject(ctx.req));
     if (!parsed.ok) {
       throw new UpdateSessionError("BAD_REQUEST", parsed.errors.join("; "), 400);
     }
-    assertStartRemediationAllowed(deps, parsed.value.targetVersion);
-    const outcome = guard.start(parsed.value);
+    const preflight = resolveUpdatePreflightService(deps);
+    const freshReport = await preflight.runValidationCheck?.(deps);
+    const outcome = guard.start(
+      {
+        ...parsed.value,
+        ...(ctx.correlationId === undefined ? {} : { requestId: ctx.correlationId }),
+      },
+      freshReport,
+    );
     return { status: outcome.reused ? 200 : 202, body: outcome.session };
   });
 }
 
-export function handleRetryUpdateSession(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+export function handleRetryUpdateSession(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const guard = requireUpdateSession(deps);
   if (isRouteResult(guard)) return guard;
   try {
     const outcome = guard.retry();
     return { status: outcome.reused ? 200 : 202, body: outcome.session };
   } catch (error) {
-    if (error instanceof UpdateSessionError) return toRouteResult(error);
+    if (error instanceof UpdateSessionError) return toRouteResult(error, ctx.correlationId);
     throw error;
   }
 }
 
-export function handleCancelUpdateSession(_ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
+export function handleCancelUpdateSession(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
   const guard = requireUpdateSession(deps);
   if (isRouteResult(guard)) return guard;
   try {
     return { status: 200, body: guard.cancel() };
   } catch (error) {
-    if (error instanceof UpdateSessionError) return toRouteResult(error);
+    if (error instanceof UpdateSessionError) return toRouteResult(error, ctx.correlationId);
     throw error;
   }
 }
@@ -159,7 +158,7 @@ export async function handleVerifyUpdateRestart(
 ): Promise<RouteResult> {
   const guard = requireUpdateSession(deps);
   if (isRouteResult(guard)) return guard;
-  return runHandler(async () => {
+  return runHandler(ctx.correlationId, async () => {
     const parsed = parseUpdateRestartVerificationRequest(await readJsonObject(ctx.req));
     if (!parsed.ok) {
       throw new UpdateSessionError("BAD_REQUEST", parsed.errors.join("; "), 400);

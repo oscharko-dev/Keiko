@@ -1,13 +1,15 @@
 import type { ReleaseImpactRemediation, ReleaseImpactStateImpact } from "./release-impact.js";
 import type {
+  UpdateSession,
   UpdatePortableActivationSummary,
   UpdatePortableSidecarFailureCode,
   UpdatePortableSidecarVerificationStatus,
   UpdatePortableStagingSummary,
   UpdatePortableTarget,
 } from "./update-session.js";
+import type { UpdateCandidateSnapshot } from "./update-candidate.js";
 
-export const UPDATE_LOCAL_STATE_SCHEMA_VERSION = 1 as const;
+export const UPDATE_LOCAL_STATE_SCHEMA_VERSION = 2 as const;
 
 export const UPDATE_HEALTH_STATES = [
   "ready",
@@ -135,7 +137,13 @@ export interface UpdateRemediationActionState {
 
 export interface UpdateRuntimeState {
   readonly schemaVersion: typeof UPDATE_LOCAL_STATE_SCHEMA_VERSION;
+  readonly revision: number;
   readonly updatedAt: string;
+  readonly activeSession?: UpdateSession | undefined;
+  readonly activeCandidate?: UpdateCandidateSnapshot | undefined;
+  readonly lastSession?: UpdateSession | undefined;
+  readonly recovery: UpdateRuntimeRecoveryState;
+  readonly activationWal?: UpdateActivationWalState | undefined;
   readonly targetVersion?: string | undefined;
   readonly snapshotId?: string | undefined;
   readonly portableStage?: UpdatePortableStagingSummary | undefined;
@@ -144,11 +152,59 @@ export interface UpdateRuntimeState {
   readonly warnings: readonly UpdateRuntimeWarningCode[];
 }
 
+export const UPDATE_ACTIVATION_WAL_CHECKPOINTS = [
+  "prepared",
+  "old-exited",
+  "promoted",
+  "registered",
+  "new-started",
+  "restoring",
+  "restored-started",
+  "restored-verified",
+  "verified",
+  "cleanup-pending",
+  "complete",
+] as const;
+
+export type UpdateActivationWalCheckpoint = (typeof UPDATE_ACTIVATION_WAL_CHECKPOINTS)[number];
+
+export interface UpdateActivationWalState {
+  readonly activationId: string;
+  readonly planSha256: string;
+  readonly coordinatorSha256: string;
+  readonly intentRevision: number;
+  readonly checkpoint: UpdateActivationWalCheckpoint;
+  readonly receiptSequence: number;
+  readonly receiptSha256?: string | undefined;
+  readonly coordinatorId?: string | undefined;
+}
+
+export const UPDATE_RUNTIME_RECOVERY_STATUSES = [
+  "none",
+  "reconciling",
+  "required",
+  "settled",
+] as const;
+
+export type UpdateRuntimeRecoveryStatus = (typeof UPDATE_RUNTIME_RECOVERY_STATUSES)[number];
+
+export interface UpdateRuntimeRecoveryState {
+  readonly status: UpdateRuntimeRecoveryStatus;
+  readonly sessionId?: string | undefined;
+  readonly reason?: "interrupted" | "corrupt" | "incompatible" | "persistence-failed" | undefined;
+  readonly updatedAt: string;
+}
+
+export type UpdateRuntimeStateReadResult =
+  | { readonly status: "ok" | "migrated" | "missing"; readonly state: UpdateRuntimeState }
+  | { readonly status: "corrupt" | "incompatible" | "unwritable" };
+
 export interface UpdateRuntimeAuditEvent {
   readonly schemaVersion: typeof UPDATE_LOCAL_STATE_SCHEMA_VERSION;
   readonly eventId: string;
   readonly type: UpdateRuntimeEventType;
   readonly occurredAt: string;
+  readonly correlationId?: string | undefined;
   readonly targetVersion?: string | undefined;
   readonly snapshotId?: string | undefined;
   readonly portableStageId?: string | undefined;

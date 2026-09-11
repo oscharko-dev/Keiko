@@ -1,5 +1,17 @@
 import { createHash } from "node:crypto";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  truncateSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -46,6 +58,111 @@ describe("production portable OpenCode discovery", () => {
       qualification: { backend: "windows-job-object" },
     });
   });
+
+  it("discovers a Windows generation with root setup and launcher authorities", () => {
+    const fixture = windowsGenerationInstall();
+    const result = discoverQualifiedPortableOpenCode({
+      env: {},
+      installRoot: fixture.installRoot,
+      platform: "win32",
+      arch: "x64",
+      attestation: attestation(fixture.resourceRoot),
+    });
+
+    expect(result).toMatchObject({
+      installRoot: realpathSync(fixture.resourceRoot),
+      target: TARGET,
+      nativeHelperPath: join(
+        realpathSync(fixture.resourceRoot),
+        "runtime",
+        "native",
+        "keiko-runtime-supervisor.exe",
+      ),
+    });
+  });
+
+  it.each([
+    ["missing runtime", undefined],
+    ["null runtime", null],
+    ["array runtime", []],
+    ["wrong platform", { nodePlatform: "darwin", nodeArchitecture: "x64" }],
+    ["wrong architecture", { nodePlatform: "win32", nodeArchitecture: "arm64" }],
+  ] as const)("refuses a Windows generation with %s", (_label, runtime) => {
+    const fixture = windowsGenerationInstall();
+    const setup = JSON.parse(readFileSync(fixture.setupPath, "utf8")) as Record<string, unknown>;
+    setup.runtime = runtime;
+    writeFileSync(fixture.setupPath, JSON.stringify(setup));
+
+    expect(discoverWindowsGeneration(fixture)).toBeUndefined();
+  });
+
+  it.each(["setup", "launcher"] as const)(
+    "refuses an oversized sparse Windows %s identity file before reading its contents",
+    (identity) => {
+      const fixture = windowsGenerationInstall();
+      truncateSync(
+        identity === "setup" ? fixture.setupPath : join(fixture.installRoot, "Keiko.exe"),
+        identity === "setup" ? 64 * 1024 + 1 : 64 * 1024 * 1024 + 1,
+      );
+
+      expect(discoverWindowsGeneration(fixture)).toBeUndefined();
+    },
+  );
+
+  it.each([
+    ["setup", "symbolic"],
+    ["setup", "hard"],
+    ["launcher", "symbolic"],
+    ["launcher", "hard"],
+  ] as const)("refuses a Windows generation with a %s %s link", (identity, linkKind) => {
+    const fixture = windowsGenerationInstall();
+    const path = identity === "setup" ? fixture.setupPath : join(fixture.installRoot, "Keiko.exe");
+    const replacement = `${path}.linked`;
+    renameSync(path, replacement);
+    if (linkKind === "symbolic") {
+      symlinkSync(replacement, path);
+    } else {
+      linkSync(replacement, path);
+    }
+
+    expect(discoverWindowsGeneration(fixture)).toBeUndefined();
+    unlinkSync(path);
+  });
+
+  it.each(["setup-generation", "launcher", "package-version"] as const)(
+    "refuses a Windows generation with drifted %s binding",
+    (scenario) => {
+      const fixture = windowsGenerationInstall();
+      if (scenario === "setup-generation") {
+        const setup = JSON.parse(readFileSync(fixture.setupPath, "utf8")) as Record<
+          string,
+          unknown
+        >;
+        const generation = setup.windowsGeneration;
+        if (typeof generation !== "object" || generation === null || Array.isArray(generation)) {
+          throw new Error("generation fixture is malformed");
+        }
+        setup.windowsGeneration = { ...generation, launcherSha256: "f".repeat(64) };
+        writeFileSync(fixture.setupPath, JSON.stringify(setup));
+      } else if (scenario === "launcher") {
+        writeFileSync(join(fixture.installRoot, "Keiko.exe"), "replaced launcher");
+      } else {
+        writeFileSync(
+          join(fixture.resourceRoot, "app", "package.json"),
+          JSON.stringify({ name: "@oscharko-dev/keiko", version: "9.9.9" }),
+        );
+      }
+      expect(
+        discoverQualifiedPortableOpenCode({
+          env: {},
+          installRoot: fixture.installRoot,
+          platform: "win32",
+          arch: "x64",
+          attestation: attestation(fixture.resourceRoot),
+        }),
+      ).toBeUndefined();
+    },
+  );
 
   it.each(["stale-attestation", "sidecar-drift", "helper-drift", "unsupported-host"] as const)(
     "fails closed for %s",
@@ -683,6 +800,7 @@ function writeLinuxRuntimeFiles(
 ): void {
   const files = {
     ".portable/setup-manifest.json": JSON.stringify({
+      schemaVersion: 1,
       platformTarget: LINUX_TARGET,
       stable: true,
     }),
@@ -741,7 +859,7 @@ function portableInstall(lane: FixtureLane = "production"): string {
   writeFileSync(join(root, "runtime", "native", "keiko-secure-workspace-read.exe"), SECURE_READ);
   writeFileSync(
     join(root, ".portable", "setup-manifest.json"),
-    JSON.stringify({ platformTarget: TARGET, stable: true }),
+    JSON.stringify({ schemaVersion: 1, platformTarget: TARGET, stable: true }),
   );
   for (const [path, bytes] of Object.entries(sidecar.files)) {
     const destination = join(root, SIDECAR_ROOT, path);
@@ -753,6 +871,69 @@ function portableInstall(lane: FixtureLane = "production"): string {
     JSON.stringify(runtimeActivation(sidecar.runtime, lane)),
   );
   return root;
+}
+
+function windowsGenerationInstall(): {
+  readonly installRoot: string;
+  readonly resourceRoot: string;
+  readonly setupPath: string;
+} {
+  const installRoot = portableInstall();
+  const treeSha256 = "a".repeat(64);
+  const resourceRoot = join(installRoot, ".portable", "generations", treeSha256);
+  mkdirSync(resourceRoot, { recursive: true });
+  renameSync(join(installRoot, "runtime"), join(resourceRoot, "runtime"));
+  renameSync(
+    join(installRoot, ".portable", "runtime-activation.json"),
+    join(resourceRoot, ".portable-runtime-activation.json"),
+  );
+  mkdirSync(join(resourceRoot, ".portable"), { recursive: true });
+  renameSync(
+    join(resourceRoot, ".portable-runtime-activation.json"),
+    join(resourceRoot, ".portable", "runtime-activation.json"),
+  );
+  mkdirSync(join(resourceRoot, "app"), { recursive: true });
+  writeFileSync(
+    join(resourceRoot, "app", "package.json"),
+    JSON.stringify({ name: "@oscharko-dev/keiko", version: KEIKO_PRODUCT_VERSION }),
+  );
+  const launcher = "bounded signed launcher fixture";
+  writeFileSync(join(installRoot, "Keiko.exe"), launcher);
+  const setupPath = join(installRoot, ".portable", "setup-manifest.json");
+  writeFileSync(
+    setupPath,
+    JSON.stringify({
+      schemaVersion: 2,
+      platformTarget: TARGET,
+      packageName: "@oscharko-dev/keiko",
+      packageVersion: KEIKO_PRODUCT_VERSION,
+      stable: true,
+      primaryLauncher: "Keiko.exe",
+      bootstrapUpdateEligible: false,
+      runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
+      windowsGeneration: {
+        schemaVersion: 1,
+        resourceRoot: `.portable/generations/${treeSha256}`,
+        treeHashSchema: "KHT1",
+        treeSha256,
+        launcherPath: "Keiko.exe",
+        launcherSha256: sha256(launcher),
+      },
+    }),
+  );
+  return { installRoot, resourceRoot, setupPath };
+}
+
+function discoverWindowsGeneration(
+  fixture: ReturnType<typeof windowsGenerationInstall>,
+): ReturnType<typeof discoverQualifiedPortableOpenCode> {
+  return discoverQualifiedPortableOpenCode({
+    env: {},
+    installRoot: fixture.installRoot,
+    platform: "win32",
+    arch: "x64",
+    attestation: attestation(fixture.resourceRoot),
+  });
 }
 
 function sidecarFixture(lane: FixtureLane = "production"): {

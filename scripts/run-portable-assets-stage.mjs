@@ -21,30 +21,53 @@ function fail(message) {
 function parseArgs(argv) {
   const options = {
     evaluation: false,
+    release: false,
     outDir: join(repoRoot, ".portable-runtime", "staging"),
     payloadRoot: join(repoRoot, ".portable-sidecar-payloads"),
     target: "",
+    windowsGenerationProduction: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     const value = argv[index + 1];
-    // Bare flag, matched before the value guard below: every other argument consumes the next
+    // Bare flags are matched before the value guard below: every other argument consumes the next
     // token, so a value-less flag has to be handled first or it fails (or swallows a sibling).
-    if (arg === "--evaluation") {
-      options.evaluation = true;
-      continue;
-    }
+    if (applyBooleanOption(arg, options)) continue;
     if (value === undefined || value.startsWith("--")) fail(`${arg} requires a value`);
-    if (arg === "--target") options.target = value;
-    else if (arg === "--out-dir") options.outDir = resolve(value);
-    else if (arg === "--payload-root") options.payloadRoot = resolve(value);
-    else fail(`unsupported argument ${arg}`);
+    applyValueOption(arg, value, options);
     index += 1;
   }
+  validateOptions(options);
+  return options;
+}
+
+function validateOptions(options) {
   if (!PORTABLE_TARGET_NAMES.includes(options.target)) {
     fail(`--target must be one of ${PORTABLE_TARGET_NAMES.join(", ")}`);
   }
-  return options;
+  if (
+    options.windowsGenerationProduction &&
+    (options.target !== "windows-x64" || options.evaluation)
+  ) {
+    fail("--windows-generation-production requires non-evaluation windows-x64 staging");
+  }
+  if (options.evaluation && options.release)
+    fail("--evaluation and --release are mutually exclusive");
+}
+
+function applyBooleanOption(arg, options) {
+  if (arg === "--evaluation") options.evaluation = true;
+  else if (arg === "--release") options.release = true;
+  else if (arg === "--windows-generation-production") options.windowsGenerationProduction = true;
+  else return false;
+  return true;
+}
+
+function applyValueOption(arg, value, options) {
+  if (arg === "--target") options.target = value;
+  else if (arg === "--out-dir") options.outDir = resolve(value);
+  else if (arg === "--payload-root") options.payloadRoot = resolve(value);
+  else fail(`unsupported argument ${arg}`);
 }
 
 export function collectSidecarSpecPaths(payloadRoot, target) {
@@ -114,6 +137,8 @@ export function stageArgumentsForTarget(
   // Absent by default and present exactly once when the caller opted in; nothing else in this
   // wrapper — no environment variable, no approval file — can introduce it.
   if (options.evaluation === true) args.push("--evaluation-build");
+  if (options.release === true) args.push("--release-build");
+  if (options.windowsGenerationProduction === true) args.push("--windows-generation-production");
   return args;
 }
 
@@ -123,6 +148,12 @@ function workflowIdentity(env) {
   if (!Number.isSafeInteger(runId) || runId < 0) fail("GITHUB_RUN_ID is invalid");
   if (!Number.isSafeInteger(runAttempt) || runAttempt < 0) fail("GITHUB_RUN_ATTEMPT is invalid");
   return { runAttempt, runId };
+}
+
+function stageLane(options) {
+  if (options.release) return "release-trust-pending";
+  if (options.evaluation) return "evaluation-unqualified";
+  return "unverified-staging";
 }
 
 export function runPortableAssetsStage(argv, env = process.env) {
@@ -138,7 +169,7 @@ export function runPortableAssetsStage(argv, env = process.env) {
     env.APPLE_TEAM_ID,
   );
   const specCount = args.filter((arg) => arg === "--sidecar-runtime-spec").length;
-  const lane = options.evaluation === true ? "evaluation-unqualified" : "unverified-staging";
+  const lane = stageLane(options);
   console.log(
     `portable-assets-stage: staging ${options.target} (${lane}) with node ${approvals.node.version} and ${String(specCount)} sidecar spec(s)`,
   );

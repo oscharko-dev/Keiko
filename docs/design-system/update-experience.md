@@ -3,6 +3,10 @@
 Issue [#1696](https://github.com/oscharko-dev/Keiko/issues/1696) · Epic
 [#1687](https://github.com/oscharko-dev/Keiko/issues/1687) · Design System 0.4.0.
 
+Reliability repair: [#3405](https://github.com/oscharko-dev/Keiko/issues/3405), parent epic
+[#3403](https://github.com/oscharko-dev/Keiko/issues/3403). Current repair evidence and remaining
+qualification are tracked in the [repair ledger](../qa/built-in-updater-repair-3405.md).
+
 ## Overview
 
 The update experience is the governed package-update review surface: a Settings entry point, a
@@ -57,6 +61,8 @@ Supported state variants:
 - Critical update available.
 - Manual or blocked update path.
 - Preparing/running progress.
+- Expected relaunch outage and bounded reconnect, retaining the last server-projected progress.
+- Recovery required, with a specific manual or remediation action rather than inferred success.
 - Restart required.
 - Remediation pending/completed/deferred.
 - Failed, cancelled, and succeeded session outcomes.
@@ -84,7 +90,18 @@ Non-applicable by design: Hover, Active, Selected, Disabled, Error, and Empty fo
 Hover/active/disabled belong to child buttons. Failure is a session outcome panel with `role="alert"`,
 not the matrix's generic Error state.
 
-Evidence: [`evidence/1696/`](evidence/1696/README.md).
+Historical visual/fixture evidence: [`evidence/1696/`](evidence/1696/README.md). Its mocked updater
+responses do not prove native handoff, real BFF replacement, or #3405's repaired lifecycle. Fresh
+seven-mode, fidelity and axe evidence is now captured under [evidence/3405/](evidence/3405/README.md),
+with a passing real-BFF outage/reconnect test. The [repair ledger](../qa/built-in-updater-repair-3405.md)
+records the remaining independent-review, integrated-head and native qualification gates;
+the new evidence is not claimed by this documentation update.
+
+The repaired observation contract requires transient transport/read-timeout failures to retain the
+last safe progress and retry with bounded backoff. Typed terminal failures must expose an actionable
+error instead of retrying forever. A successful start response followed by an expected read outage
+must keep observing the accepted session. These branches remain under implementation and regression
+review; the historical screenshot set does not verify them.
 
 ## Accessibility
 
@@ -130,15 +147,16 @@ No new Tier-1 primitives, raw hex colors, or one-off `[data-theme="light"]` over
 
 ## Status & owner
 
-Status: **Draft while #1696 is in progress; Ready candidate on merge**. Owner: `@core-ui`. Since:
-`v0.2.11` candidate. Board status: `In Progress`.
-
-The register row in [governance.md](governance.md) stays Draft until #1696 merges because governance
-status must agree with the delivery board. The #1696 PR carries the Ready evidence and promotes the
-component on merge.
+Status: **#3405 repair and current evidence in progress**. Owner: `@core-ui`. The existing surface
+was delivered under #1696, which closed on 2026-06-30; that issue is not pending. The updater repair
+row in [governance.md](governance.md) remains Draft until current implementation and required evidence
+are accepted. This does not relabel historical mocked evidence as production qualification or claim
+that the repaired component is Ready merely because the original issue closed.
 
 ## Changelog
 
+- **#3405, in progress** — binds confirmation to a server-issued candidate, projects durable
+  lifecycle/cancellation/recovery, and requires real outage/reconnect and fresh accessibility evidence.
 - **v0.2.11 candidate** ([#1696](https://github.com/oscharko-dev/Keiko/issues/1696)) - adds Settings
   entry point, startup notification, reusable update window, update-session progress/outcome states,
   remediation action UI, product-copy review, and Playwright/axe design-system evidence.

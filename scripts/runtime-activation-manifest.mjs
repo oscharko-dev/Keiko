@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 export const RUNTIME_ACTIVATION_RELATIVE_PATH = ".portable/runtime-activation.json";
 export const RUNTIME_QUALIFICATION_SUITE = "runtime-tree-qualification-v1";
@@ -52,6 +52,7 @@ export function runtimeActivationManifest(manifest) {
 
 export function writeRuntimeActivationManifest(resourceRoot, manifest) {
   const path = join(resourceRoot, ...RUNTIME_ACTIVATION_RELATIVE_PATH.split("/"));
+  mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(runtimeActivationManifest(manifest), null, 2)}\n`, {
     mode: 0o644,
   });

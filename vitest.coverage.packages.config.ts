@@ -54,6 +54,9 @@ export default defineConfig({
         "**/test-fixtures.ts",
         "**/testing.ts",
         "**/*.config.ts",
+        // Sonar excludes generated assets from source analysis. Keep them out of its LCOV input
+        // too, otherwise a newly generated TypeScript asset creates an unresolvable source path.
+        "**/*.generated.*",
         "dist/**",
         "node_modules/**",
       ],

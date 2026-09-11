@@ -1,0 +1,55 @@
+{
+  "issue": 3405,
+  "epic": 3403,
+  "generatedAt": "2026-09-10T18:06:34.711Z",
+  "command": "npm run test:e2e:update-ui-1696",
+  "requiredCiCommand": "npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage",
+  "artifacts": [
+    "01-update-window-dark.png",
+    "02-update-window-light.png",
+    "03-update-window-dark-high-contrast.png",
+    "04-update-window-light-high-contrast.png",
+    "05-update-window-prefers-contrast.png",
+    "06-update-window-forced-colors.png",
+    "07-update-window-reduced-motion.png",
+    "08-startup-notice-critical.png",
+    "09-settings-entrypoint.png",
+    "10-responsive-manual-path.png",
+    "11-progress-state.png",
+    "12-portable-managed-one-click.png",
+    "13-reconnecting-state-mocked.png",
+    "14-remediation-pending.png",
+    "update-experience-fidelity-proof.json",
+    "a11y-proof.json",
+    "manifest.json"
+  ],
+  "routeLedger": {
+    "updatePreflightGets": 22,
+    "updatePreflightChecks": 0,
+    "sessionStarts": 2,
+    "remediationActions": 1
+  },
+  "sourceSha256": {
+    "packages/keiko-ui/src/app/components/desktop/update/UpdateStartupNotice.tsx": "3a9c9a489d7f87e2afc920fa1fa4dd412af7bbecd44900b52a8b2f4acb5acdc8",
+    "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.tsx": "095cf18b86ecf3158d00020203985fa736a836ec09dbb1aa5d3473d9550f2f89",
+    "packages/keiko-ui/src/app/components/desktop/update/UpdateWindow.module.css": "9ae951f2aa6c98beaa04b587364291776998ba000d0e33064bffc09962d51998",
+    "packages/keiko-ui/src/app/components/desktop/update/update-copy.ts": "5e34eb591f63aca2ce64fd43daba10de0e172d12014f055092b4a1a00830c2da",
+    "packages/keiko-ui/src/app/globals.css": "a1866c44bf9be1a967cbf43e40be3c410668322157acdc0d4e2bc7db2645e7df",
+    "packages/keiko-ui/src/lib/api.ts": "fe96d83e6fcf2e66265879422ea5f12d662bba402a722c35f03d3b890f3b3fe6",
+    "packages/keiko-ui/src/lib/i18n-messages.de.ts": "699f0191d2d1dcfffc9aa30a2ad67f8dc0a6f805e51a3f7c72034c14d2c6d6b2",
+    "packages/keiko-ui/src/lib/i18n-messages.en.ts": "d769fdae4b6e019ad23121d467d579f6f1ca27952a7970f5efc02b2686114d35"
+  },
+  "harnessProvenanceSha256": {
+    "tests/e2e/config/playwright.issue-1696-update-ui.config.ts": "1c2114f8a47145d76c1319fa23ccf67d250d5383d2e17c8a5111c0104c9a8a18",
+    "tests/e2e/fixtures/keiko.e2e.config.json": "9ccdb592af0021033cb26f4868ff263badff5dcc4d716bb4a2fbac54c6dd69f6",
+    "tests/e2e/support/evidence.ts": "54712c17afcf8c47de426c02c9983c5837fbd2e665f5beccc112d7ec312414fd",
+    "tests/e2e/support/update-bff-outage-3405.mjs": "9d1d90d6b2fbd2be060de8a827acad45e06f90ae28d226d0b7a7507f4538d735"
+  },
+  "notes": [
+    "Packaged CLI UI renders the real Settings panel, startup notice, WindowsRegistry, and UpdateWindow.",
+    "Only /api/update/* routes are mocked for screenshot and axe artifacts; the shell, registry, theme, i18n, and focus behavior are real.",
+    "Update window is transient and cannot be seeded directly through keiko.workspace.v4; evidence opens it from Settings/startup.",
+    "13-reconnecting-state-mocked.png is a deterministic transport-failure fixture and is not real-BFF evidence.",
+    "The separately required @real-bff-outage test proves accepted HTTP start, actual BFF stop/restart, reconnect, and durable recovery-required projection. It does not claim native N-1-to-N replacement or production update success."
+  ]
+}

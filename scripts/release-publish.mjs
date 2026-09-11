@@ -4,7 +4,6 @@ import { createHash } from "node:crypto";
 import {
   closeSync,
   copyFileSync,
-  fstatSync,
   chmodSync,
   existsSync,
   lstatSync,
@@ -24,12 +23,21 @@ import { basename, dirname, join, resolve } from "node:path";
 import { URL } from "node:url";
 
 import {
+  createPortableReleaseTrust,
+  KEIKO_PORTABLE_RELEASE_TRUSTED_KEYS,
+  PORTABLE_RELEASE_TRUST_MAX_LIFETIME_MS,
+  portableReleaseTrustKeyId,
+  verifyPortableReleaseTrust,
+} from "@oscharko-dev/keiko-security/portable-release-trust";
+
+import {
   findPortableMetadataRedactionFailures,
   PORTABLE_TARGET_NAMES,
   PORTABLE_TARGETS,
   portableVerificationSummaryForManifest,
   readPortableManifest,
   validatePortableCandidateManifest,
+  validatePortableReleaseTrustCandidateManifest,
   validatePortablePublishedManifest,
   WINDOWS_PORTABLE_SETUP_ASSET_NAME,
 } from "./portable-runtime.mjs";
@@ -40,17 +48,13 @@ import {
   normalizePortableSetupCompanion,
   portableSetupCompanionRecord,
 } from "./lib/portable-setup-companion.mjs";
-import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { PORTABLE_EVALUATION_MANIFEST_ASSET_NAME } from "./lib/portable-evaluation-manifest.mjs";
+import { provenancePublishArgs, releaseImpactChildEnv } from "./lib/npm-publish-preflight.mjs";
 import {
-  artifactDownloadOutcome,
-  provenancePublishArgs,
-  releaseImpactChildEnv,
-} from "./lib/npm-publish-preflight.mjs";
-import {
-  collectEvaluationArtifactDigests,
   jsonFromCommand,
-  portableReleaseGate,
+  portableAssetInputFailure,
+  portableDownloadAssetNames,
+  uploadedDownloadSetFailure,
 } from "./lib/portable-release-verification.mjs";
 import { sha256 } from "./lib/digest.mjs";
 import { readJsonFile } from "./lib/json.mjs";
@@ -197,97 +201,20 @@ function portableUploadEnabled(options) {
   return !options.skipGithubRelease && !options.dryRun;
 }
 
-// A stable `latest` release must offer the customer downloads — that requirement did not move.
-// What moved is WHERE it is answered. The old gate demanded a qualified asset MANIFEST as a
-// publish INPUT, which only the Developer-ID/Azure-signed production lane can produce; the release
-// owner scoped the first public release to the unsigned EVALUATION lane, so no stable `latest`
-// publish this project can currently produce was accepted. The requirement is now answered against
-// REALITY: before npm learns the dist-tag, the GitHub Release must carry all four downloads, and
-// downloads this run did not upload must be bound to evidence and re-fetched byte for byte.
-//
-// The decisions live in scripts/lib/portable-release-verification.mjs because THIS file only ever
-// runs as a spawned CLI — nothing defined here can be exercised in-process, so a gate written here
-// would be untestable by construction. What stays here is its process I/O.
-const portableGate = portableReleaseGate({
-  fail,
-  fetchAssetToFile: (url, destination) =>
-    commandResult(
-      "curl",
-      [
-        "--fail",
-        "--silent",
-        "--show-error",
-        "--location",
-        // Bounded so a stalled endpoint cannot hang the publish run indefinitely.
-        "--connect-timeout",
-        "10",
-        "--max-time",
-        "120",
-        "--output",
-        destination,
-        url,
-      ],
-      { env: networkEnvironment() },
-    ),
-  gh,
-  log: (message) => {
-    console.log(message);
-  },
-  setupAssetName: WINDOWS_PORTABLE_SETUP_ASSET_NAME,
-  snapshot: githubReleaseSnapshot,
-  collectRunArtifactDigests: (repository, runId, artifacts, relevantAssetNames) =>
-    collectEvaluationArtifactDigests(
-      { gh, fetchArtifactZip: fetchRunArtifactZip, hashFile: sha256FileSync },
-      repository,
-      runId,
-      artifacts,
-      relevantAssetNames,
-    ),
-  targets: PORTABLE_TARGETS,
-  verifyBytes: runPortableDownloadSmoke,
-});
+const portableDownloadNames = portableDownloadAssetNames(
+  PORTABLE_TARGETS,
+  WINDOWS_PORTABLE_SETUP_ASSET_NAME,
+);
 
-/**
- * Binary-safe by construction: the shared gh seam decodes stdout as utf8, which would corrupt a
- * zip stream, so this port spawns gh with buffer output, an explicit size ceiling, and writes
- * the bytes untouched. Downloading by immutable artifact id is what keeps a rerun of the
- * referenced workflow from substituting or blocking the recorded evidence (Codex finding on
- * #3054).
- */
-function fetchRunArtifactZip(artifactId, destination) {
-  // Streamed to the destination through a file descriptor: a staged runtime artifact is hundreds
-  // of megabytes, and capturing it in spawnSync's stdout buffer holds the whole archive in
-  // memory before a single byte lands on disk (Codex finding on #3055).
-  const fd = openSync(destination, "w", 0o600);
-  try {
-    const result = spawnSync(
-      resolveHostExecutable("gh"),
-      ["api", `repos/${githubRepository()}/actions/artifacts/${String(artifactId)}/zip`],
-      // Bounded twice: a stalled transfer must not block publication forever, and the landed
-      // bytes must respect the same archive ceiling every portable input honors.
-      { cwd: repoRoot, stdio: ["ignore", fd, "pipe"], env: process.env, timeout: 900_000 },
-    );
-    return artifactDownloadOutcome({
-      spawnError: result.error,
-      exitStatus: result.status,
-      landedBytes: fstatSync(fd).size,
-      maxBytes: maxPortableArchiveBytes,
-    });
-  } finally {
-    closeSync(fd);
-  }
-}
-
-function verifyPrepublishedStableRelease(rootManifest, options) {
-  if (!stableLatestRelease(rootManifest, options) || options.dryRun) return false;
-  const head = commandResult("git", ["rev-parse", "HEAD"]);
-  if (head.status !== 0) fail("could not resolve the commit being released.");
-  return portableGate.verifyPrepublished(
-    releaseTag(rootManifest.version),
-    githubRepository(),
-    portableAssetsWorkflowPath,
-    head.stdout.trim(),
+function assertUploadedPortableSetComplete(releaseInfo) {
+  const snapshot = githubReleaseSnapshot(releaseInfo);
+  const failure = uploadedDownloadSetFailure(
+    releaseInfo.tag,
+    snapshot.assets,
+    portableDownloadNames,
   );
+  if (failure !== undefined) fail(failure);
+  console.log(`release-publish: ${releaseInfo.tag} carries every portable download.`);
 }
 
 /**
@@ -644,7 +571,7 @@ function loadPortableAssets(rootManifest, options) {
   // announced downloads do not exist: still refused, for stable and prerelease alike.
   const stableLatest = stableLatestRelease(rootManifest, options);
   const live = !options.planOnly && !options.dryRun;
-  const inputFailure = portableGate.inputFailure({
+  const inputFailure = portableAssetInputFailure({
     suppliesManifest,
     skipGithubRelease: options.skipGithubRelease === true,
     stableLatest: stableLatest && live,
@@ -861,7 +788,11 @@ function validatePortableAssetFiles({
   if (basename(archivePath) !== target.assetName) {
     failures.push(`${target.platformTarget}.archivePath must be named ${target.assetName}.`);
   }
-  for (const failure of validatePortableCandidateManifest(manifest)) {
+  const manifestFailures =
+    manifest.security?.verificationPolicy === "evaluation"
+      ? validatePortableReleaseTrustCandidateManifest(manifest)
+      : validatePortableCandidateManifest(manifest);
+  for (const failure of manifestFailures) {
     failures.push(`${target.platformTarget}.${failure}`);
   }
   if (manifest.product?.packageVersion !== rootManifest.version) {
@@ -1212,8 +1143,8 @@ function printReleaseNotesPreview(notes) {
  * npm publishes. A COMPLETED `--public-release` leaves a published release carrying the
  * evaluation manifest; uploading qualified production assets over it would clobber only
  * same-named files and leave that evidence beside foreign bytes — a mixed-provenance surface.
- * Both belong to the evaluation lane: only the prepublished VERIFY path may touch such a tag.
- * An unreadable answer refuses: fail closed.
+ * Existing evaluation-owned tags must not be overwritten with a different trust model. A new
+ * release version and tag is required. An unreadable answer refuses: fail closed.
  */
 function refuseEvaluationOwnedRelease(existing, tag) {
   const view = jsonFromCommand(existing);
@@ -1422,8 +1353,13 @@ function githubReleaseSnapshot(releaseInfo) {
   const result = runGh(["api", `repos/${releaseInfo.repo}/releases/tags/${releaseInfo.tag}`]);
   try {
     const release = JSON.parse(result.stdout);
-    if (isRecord(release) && Number.isSafeInteger(release.id) && Array.isArray(release.assets)) {
-      return { assets: release.assets, id: release.id };
+    if (
+      isRecord(release) &&
+      Number.isSafeInteger(release.id) &&
+      Array.isArray(release.assets) &&
+      canonicalReleaseInstant(release.created_at) !== undefined
+    ) {
+      return { assets: release.assets, createdAt: release.created_at, id: release.id };
     }
   } catch {
     // Fall through to the fail-closed message below.
@@ -1434,17 +1370,26 @@ function githubReleaseSnapshot(releaseInfo) {
 function bindPortableAssetsToRemoteRelease(assets, releaseSnapshot) {
   const remoteByName = new Map(releaseSnapshot.assets.map((asset) => [asset.name, asset]));
   return assets.map((asset) =>
-    bindPortableAssetToRemoteRelease(asset, releaseSnapshot.id, remoteByName),
+    bindPortableAssetToRemoteRelease(
+      asset,
+      releaseSnapshot.id,
+      releaseSnapshot.createdAt,
+      remoteByName,
+    ),
   );
 }
 
-function bindPortableAssetToRemoteRelease(asset, releaseId, remoteByName) {
+function bindPortableAssetToRemoteRelease(asset, releaseId, releaseCreatedAt, remoteByName) {
   const remote = remoteByName.get(asset.archiveAssetName);
   if (!isRecord(remote) || !Number.isSafeInteger(remote.id) || remote.id <= 0) {
     fail(`${asset.archiveAssetName} must have a remote GitHub asset id before evidence upload.`);
   }
   const setupBinding = remoteSetupBinding(asset, remoteByName);
-  const manifest = boundPortableManifest(asset.manifest, releaseId, remote.id, setupBinding);
+  const manifest = signedPortableManifest(
+    boundPortableManifest(asset.manifest, releaseId, remote.id, setupBinding),
+    releaseId,
+    releaseCreatedAt,
+  );
   const failures = validatePortablePublishedManifest(manifest, {
     assetId: remote.id,
     releaseId,
@@ -1454,6 +1399,53 @@ function bindPortableAssetToRemoteRelease(asset, releaseId, remoteByName) {
     fail(`portable manifest binding failed:\n  - ${failures.join("\n  - ")}`);
   }
   return { ...asset, manifest };
+}
+
+function canonicalReleaseInstant(value) {
+  if (typeof value !== "string") return undefined;
+  const instant = new Date(value);
+  return Number.isFinite(instant.valueOf()) ? instant.toISOString() : undefined;
+}
+
+function portableReleaseSigningKey() {
+  const value = process.env.KEIKO_PORTABLE_RELEASE_SIGNING_KEY;
+  if (typeof value !== "string" || value.length === 0) {
+    fail("KEIKO_PORTABLE_RELEASE_SIGNING_KEY is required for portable release publication.");
+  }
+  return value;
+}
+
+function portableReleaseTrustedKeys() {
+  const testPublicKey = process.env.KEIKO_PORTABLE_RELEASE_TEST_PUBLIC_KEY;
+  if (
+    process.env.NODE_ENV === "test" &&
+    process.env.KEIKO_RELEASE_IMPACT_CATALOG_PATH !== undefined &&
+    typeof testPublicKey === "string" &&
+    testPublicKey.length > 0
+  ) {
+    return [{ keyId: portableReleaseTrustKeyId(testPublicKey), publicKeyPem: testPublicKey }];
+  }
+  return KEIKO_PORTABLE_RELEASE_TRUSTED_KEYS;
+}
+
+function signedPortableManifest(manifest, releaseId, releaseCreatedAt) {
+  const signedAt = canonicalReleaseInstant(releaseCreatedAt);
+  if (signedAt === undefined) fail("GitHub release creation time must be a canonical instant.");
+  const expiresAt = new Date(new Date(signedAt).valueOf() + PORTABLE_RELEASE_TRUST_MAX_LIFETIME_MS);
+  const signed = createPortableReleaseTrust(manifest, {
+    expiresAt: expiresAt.toISOString(),
+    metadataVersion: releaseId,
+    privateKeyPem: portableReleaseSigningKey(),
+    signedAt,
+  });
+  const verification = verifyPortableReleaseTrust(signed, {
+    now: new Date(signedAt),
+    trustedKeys: portableReleaseTrustedKeys(),
+  });
+  if (!verification.ok) {
+    fail(`portable release signing key is not trusted (${verification.reason}).`);
+  }
+  return signed;
 }
 
 function remoteSetupBinding(asset, remoteByName) {
@@ -1895,24 +1887,22 @@ try {
   runReleaseGates();
   stagedPackage = createStagedPublishPackage();
   rootPackage.packageDir = stagedPackage.packageDir;
-  // A stable `latest` release must be proven complete BEFORE npm learns the dist-tag. When this
-  // run has nothing to upload, that proof is taken from the release the governed evaluation lane
-  // already published, and it is taken FIRST — creating the release up front would leave a public,
-  // empty Latest release behind whenever the verification then failed, which also blocks the
-  // evaluation lane from recreating that tag (Codex finding on #3054).
+  // Stable publication is one transaction: this run uploads, API-binds and signs the exact
+  // three-target bundle before npm learns the latest dist-tag. A prepublished unsigned evaluation
+  // surface cannot satisfy the release-trust contract.
   const uploadsAssets = portableAssets.length > 0;
-  // A verified prepublished release is COMPLETE — the governed evaluation lane created it with the
-  // Latest flag and the customer-facing install notes (first-launch steps, checksums, provenance).
-  // Rewriting its body here with the generated catalog notes would replace exactly the guidance a
-  // non-technical customer needs. This run owns npm; that lane owns its release surface.
-  const prepublished = !uploadsAssets && verifyPrepublishedStableRelease(rootManifest, options);
+  if (stableLatestRelease(rootManifest, options) && !uploadsAssets) {
+    fail(
+      "stable latest is missing portable downloads: supply the portable release-trust bundle from the stable-tag workflow.",
+    );
+  }
   const releaseInfo =
     uploadsAssets && portableUploadEnabled(options)
       ? ensureGithubRelease(rootPackage, options, githubReleaseNotes)
       : undefined;
   if (releaseInfo !== undefined) {
     publishPortableReleaseAssets(options, portableAssets, releaseInfo);
-    portableGate.assertUploadedSetComplete(releaseInfo);
+    assertUploadedPortableSetComplete(releaseInfo);
   }
   for (const pkg of workspacePackages) {
     publishPackage(pkg, npmEnv, options, hasToken);
@@ -1925,9 +1915,7 @@ try {
     }
   }
   runRegistrySmoke(rootPackage, options, npmEnv);
-  // A prepublished release is already correct and already Latest; anything else still needs its
-  // GitHub Release created or refreshed after the registry smoke.
-  if (releaseInfo === undefined && !prepublished) {
+  if (releaseInfo === undefined) {
     const finalReleaseInfo = ensureGithubRelease(rootPackage, options, githubReleaseNotes);
     publishPortableReleaseAssets(options, portableAssets, finalReleaseInfo);
   }

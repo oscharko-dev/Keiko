@@ -115,6 +115,27 @@ describe("production portable runtime platform attestation", () => {
     });
   });
 
+  it("uses the install-root launcher with a generation-root attestor", () => {
+    const installRoot = mkdtempSync(join(tmpdir(), "keiko-portable-runtime-install-"));
+    roots.push(installRoot);
+    const resourceRoot = windowsFixture();
+    writeFileSync(join(installRoot, "Keiko.exe"), "signed root launcher");
+    rmSync(join(resourceRoot, "Keiko.exe"));
+    const runner = recordingRunner(
+      commandResult({ stdout: "A".repeat(40) }),
+      commandResult({ stdout: "A".repeat(40) }),
+      commandResult({ stdout: '{"result":"passed"}' }),
+    );
+
+    expect(readWindowsAttestation(resourceRoot, runner.run, installRoot)).toEqual({
+      result: "passed",
+    });
+    expect(runner.calls[0]?.args.at(-1)).toBe(realpathSync(join(installRoot, "Keiko.exe")));
+    expect(runner.calls[1]?.args.at(-1)).toBe(
+      realpathSync(join(resourceRoot, "runtime", "native", "keiko-runtime-attestation.exe")),
+    );
+  });
+
   it("fails closed for an invalid or differently signed Windows carrier", () => {
     const resourceRoot = windowsFixture();
     expect(() =>

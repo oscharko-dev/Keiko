@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -398,7 +406,26 @@ describe("portable secure-read smoke qualification", () => {
   function stageWithHelper(helperBody, options = {}) {
     const stageRoot = stageDir();
     const executable = writeHelperExecutable(stageRoot, helperBody, options);
-    writeManifest(stageRoot, stagingManifest(sha256OfFile(executable)));
+    const manifest = stagingManifest(sha256OfFile(executable));
+    if (options.generationLayout === true) {
+      const generation = {
+        schemaVersion: 1,
+        resourceRoot: `.portable/generations/${DIGEST_A}`,
+        treeHashSchema: "KHT1",
+        treeSha256: DIGEST_A,
+        launcherPath: "Keiko.exe",
+        launcherSha256: DIGEST_B,
+      };
+      const payloadRoot = join(stageRoot, "payload", "Keiko");
+      const generationRoot = join(payloadRoot, ...generation.resourceRoot.split("/"));
+      mkdirSync(generationRoot, { recursive: true });
+      renameSync(join(payloadRoot, "runtime"), join(generationRoot, "runtime"));
+      manifest.schemaVersion = 2;
+      manifest.windowsGeneration = generation;
+      manifest.provenance.windowsGeneration = structuredClone(generation);
+      manifest.releaseImpact.reviewedBinding.windowsGeneration = structuredClone(generation);
+    }
+    writeManifest(stageRoot, manifest);
     return stageRoot;
   }
 
@@ -431,6 +458,11 @@ describe("portable secure-read smoke qualification", () => {
 
   it("passes a faithful helper through the normal read and denied-name matrix", async () => {
     const stageRoot = stageWithHelper(FAITHFUL_HELPER);
+    await expect(smokePortableSecureRead(stageRoot, "windows-x64")).resolves.toBeUndefined();
+  });
+
+  it("resolves a schema 2 helper only from its bound Windows generation", async () => {
+    const stageRoot = stageWithHelper(FAITHFUL_HELPER, { generationLayout: true });
     await expect(smokePortableSecureRead(stageRoot, "windows-x64")).resolves.toBeUndefined();
   });
 

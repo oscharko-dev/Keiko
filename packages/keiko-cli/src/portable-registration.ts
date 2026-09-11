@@ -20,16 +20,18 @@ import {
   REGISTRATION_FILE,
   defaultManagedRoot,
   isPortableTarget,
+  parseWindowsGenerationBinding,
   type PortableLayout,
   type PortableTarget,
   type SetupManifest,
   type SetupStatus,
+  type WindowsGenerationBinding,
 } from "./portable-shared.js";
 import { STAGING_OWNERSHIP_MARKER } from "./state-paths.js";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
 interface SetupRegistrationBase {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 1 | 2;
   readonly status: SetupStatus;
   readonly updateEligible: boolean;
   readonly platformTarget: PortableTarget;
@@ -40,14 +42,16 @@ interface SetupRegistrationBase {
 
 export interface ManagedSetupRegistration extends SetupRegistrationBase {
   readonly status: "managed";
-  readonly updateEligible: true;
+  readonly updateEligible: boolean;
   readonly managedRootLocator?: ManagedRootLocator | undefined;
   readonly setupManifestSha256?: string | undefined;
   readonly installRootIdentitySha256?: string | undefined;
   readonly launcherIdentitySha256?: string | undefined;
+  readonly windowsGeneration?: WindowsGenerationBinding | undefined;
 }
 
 export interface FailedSetupRegistration extends SetupRegistrationBase {
+  readonly schemaVersion: 1;
   readonly status: "setup-failed";
   readonly updateEligible: false;
   readonly failureReason?: string | undefined;
@@ -55,6 +59,7 @@ export interface FailedSetupRegistration extends SetupRegistrationBase {
   readonly setupManifestSha256?: string | undefined;
   readonly installRootIdentitySha256?: string | undefined;
   readonly launcherIdentitySha256?: string | undefined;
+  readonly windowsGeneration?: WindowsGenerationBinding | undefined;
 }
 
 export type PortableInstallRegistration = ManagedSetupRegistration | FailedSetupRegistration;
@@ -65,6 +70,29 @@ export type ManagedRootLocator =
 
 const WINDOWS_DRIVE_ABSOLUTE_PATH = /^[A-Za-z]:[\\/]/;
 const SHA256_RE = /^[0-9a-f]{64}$/u;
+const STABLE_SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u;
+const WINDOWS_REGISTRATION_V2_KEYS = [
+  "schemaVersion",
+  "status",
+  "updateEligible",
+  "platformTarget",
+  "packageVersion",
+  "stable",
+  "managedRootLocator",
+  "setupManifestSha256",
+  "installRootIdentitySha256",
+  "launcherIdentitySha256",
+  "windowsGeneration",
+  "updatedAt",
+] as const;
+const WINDOWS_GENERATION_KEYS = [
+  "schemaVersion",
+  "resourceRoot",
+  "treeHashSchema",
+  "treeSha256",
+  "launcherPath",
+  "launcherSha256",
+] as const;
 
 const SETUP_FAILURE_REASON_PATTERNS = [
   [".keiko runtime state", "managed-root-state-conflict"],
@@ -220,10 +248,18 @@ function managedRegistration(input: {
   readonly now: Date;
 }): ManagedSetupRegistration {
   const realInstallRoot = realpathSync(input.layout.installRoot);
+  const windowsGeneration =
+    input.manifest.platformTarget === "windows-x64" && input.manifest.schemaVersion === 2
+      ? input.manifest.windowsGeneration
+      : undefined;
+  if (windowsGeneration !== undefined && !input.manifest.stable) {
+    throw new Error("portable Windows generation registration requires a stable package");
+  }
   return {
-    schemaVersion: 1,
+    schemaVersion: windowsGeneration === undefined ? 1 : 2,
     status: "managed",
-    updateEligible: true,
+    updateEligible:
+      input.manifest.platformTarget !== "windows-x64" || windowsGeneration !== undefined,
     platformTarget: input.manifest.platformTarget,
     packageVersion: input.manifest.packageVersion,
     stable: input.manifest.stable,
@@ -236,6 +272,7 @@ function managedRegistration(input: {
     setupManifestSha256: sha256File(input.layout.setupManifestPath),
     installRootIdentitySha256: sha256Text(realInstallRoot),
     launcherIdentitySha256: sha256File(input.layout.primaryLauncherPath),
+    ...(windowsGeneration === undefined ? {} : { windowsGeneration }),
     updatedAt: input.now.toISOString(),
   };
 }
@@ -272,6 +309,7 @@ function retainedInstallAttestation(registration: PortableInstallRegistration | 
       readonly setupManifestSha256: string;
       readonly installRootIdentitySha256: string;
       readonly launcherIdentitySha256: string;
+      readonly windowsGeneration?: WindowsGenerationBinding | undefined;
     }
   | undefined {
   if (registration === undefined) return undefined;
@@ -294,6 +332,9 @@ function retainedInstallAttestation(registration: PortableInstallRegistration | 
     setupManifestSha256: registration.setupManifestSha256,
     installRootIdentitySha256: registration.installRootIdentitySha256,
     launcherIdentitySha256: registration.launcherIdentitySha256,
+    ...(registration.windowsGeneration === undefined
+      ? {}
+      : { windowsGeneration: registration.windowsGeneration }),
   };
 }
 
@@ -376,14 +417,61 @@ export function readManagedRegistration(stateDir: string): ManagedSetupRegistrat
 }
 
 function isManagedRegistrationRecord(value: unknown): value is Record<string, unknown> {
-  if (!isRecord(value) || value.schemaVersion !== 1) return false;
-  if (value.status !== "managed" || value.updateEligible !== true) return false;
+  if (!hasManagedRegistrationBase(value)) return false;
+  if (value.schemaVersion === 2) return isWindowsManagedRegistrationV2(value);
+  return value.platformTarget === "windows-x64" || value.updateEligible === true;
+}
+
+function hasManagedRegistrationBase(value: unknown): value is Record<string, unknown> {
+  if (!isRecord(value) || (value.schemaVersion !== 1 && value.schemaVersion !== 2)) return false;
+  if (value.status !== "managed" || typeof value.updateEligible !== "boolean") return false;
   if (
     !isPortableTarget(typeof value.platformTarget === "string" ? value.platformTarget : undefined)
   ) {
     return false;
   }
-  return typeof value.packageVersion === "string" && typeof value.stable === "boolean";
+  if (typeof value.packageVersion !== "string" || typeof value.stable !== "boolean") return false;
+  return true;
+}
+
+function isWindowsManagedRegistrationV2(value: Record<string, unknown>): boolean {
+  if (!isEligibleWindowsRegistrationV2(value)) return false;
+  if (!hasExactKeys(value, WINDOWS_REGISTRATION_V2_KEYS)) return false;
+  try {
+    const generation = parseWindowsGenerationBinding(value.windowsGeneration);
+    return (
+      hasStrictWindowsRegistrationIdentity(value) &&
+      isCanonicalIsoTimestamp(value.updatedAt) &&
+      generation.launcherSha256 === value.launcherIdentitySha256
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isEligibleWindowsRegistrationV2(value: Record<string, unknown>): boolean {
+  return (
+    value.platformTarget === "windows-x64" &&
+    value.updateEligible === true &&
+    value.stable === true &&
+    typeof value.packageVersion === "string" &&
+    STABLE_SEMVER_RE.test(value.packageVersion)
+  );
+}
+
+function hasStrictWindowsRegistrationIdentity(value: Record<string, unknown>): boolean {
+  return (
+    isStrictManagedRootLocator(value.managedRootLocator) &&
+    parseSha256(value.setupManifestSha256) !== undefined &&
+    parseSha256(value.installRootIdentitySha256) !== undefined &&
+    parseSha256(value.launcherIdentitySha256) !== undefined
+  );
+}
+
+function isCanonicalIsoTimestamp(value: unknown): boolean {
+  if (typeof value !== "string") return false;
+  const time = Date.parse(value);
+  return Number.isFinite(time) && new Date(time).toISOString() === value;
 }
 
 function managedRegistrationFromRecord(raw: Record<string, unknown>): ManagedSetupRegistration {
@@ -395,9 +483,12 @@ function managedRegistrationFromRecord(raw: Record<string, unknown>): ManagedSet
     throw new Error("portable registration target is invalid");
   }
   return {
-    schemaVersion: 1,
+    schemaVersion: raw.schemaVersion === 2 ? 2 : 1,
     status: "managed",
-    updateEligible: true,
+    updateEligible:
+      raw.schemaVersion === 1 && platformTarget === "windows-x64"
+        ? false
+        : raw.updateEligible === true,
     platformTarget,
     packageVersion: String(raw.packageVersion),
     stable: raw.stable === true,
@@ -405,8 +496,21 @@ function managedRegistrationFromRecord(raw: Record<string, unknown>): ManagedSet
     setupManifestSha256: parseSha256(raw.setupManifestSha256),
     installRootIdentitySha256: parseSha256(raw.installRootIdentitySha256),
     launcherIdentitySha256: parseSha256(raw.launcherIdentitySha256),
+    ...(raw.schemaVersion === 2
+      ? { windowsGeneration: parseWindowsGenerationBinding(raw.windowsGeneration) }
+      : {}),
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : "",
   };
+}
+
+function hasExactKeys(record: Record<string, unknown>, expected: readonly string[]): boolean {
+  const actual = Object.keys(record).sort((left, right) => left.localeCompare(right, "en-US"));
+  return (
+    actual.length === expected.length &&
+    [...expected]
+      .sort((left, right) => left.localeCompare(right, "en-US"))
+      .every((key, i) => actual[i] === key)
+  );
 }
 
 function parseSha256(value: unknown): string | undefined {
@@ -426,6 +530,12 @@ function parseManagedRootLocator(value: unknown): ManagedRootLocator | undefined
     return { kind: "absolute-local", path };
   }
   return undefined;
+}
+
+function isStrictManagedRootLocator(value: unknown): boolean {
+  const locator = parseManagedRootLocator(value);
+  if (locator === undefined || !isRecord(value)) return false;
+  return hasExactKeys(value, locator.kind === "default" ? ["kind"] : ["kind", "path"]);
 }
 
 function parseManagedRootLocatorPath(value: unknown): string | undefined {
@@ -453,7 +563,18 @@ function isFailedRegistrationRecord(value: unknown): value is Record<string, unk
   ) {
     return false;
   }
-  return typeof value.packageVersion === "string" && typeof value.stable === "boolean";
+  if (typeof value.packageVersion !== "string" || typeof value.stable !== "boolean") return false;
+  return hasValidOptionalWindowsGeneration(value.windowsGeneration);
+}
+
+function hasValidOptionalWindowsGeneration(value: unknown): boolean {
+  if (value === undefined) return true;
+  try {
+    parseWindowsGenerationBinding(value);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function failedRegistrationFromRecord(raw: Record<string, unknown>): FailedSetupRegistration {
@@ -480,11 +601,25 @@ function failedRegistrationFromRecord(raw: Record<string, unknown>): FailedSetup
     setupManifestSha256: parseSha256(raw.setupManifestSha256),
     installRootIdentitySha256: parseSha256(raw.installRootIdentitySha256),
     launcherIdentitySha256: parseSha256(raw.launcherIdentitySha256),
+    ...(raw.windowsGeneration === undefined
+      ? {}
+      : { windowsGeneration: parseWindowsGenerationBinding(raw.windowsGeneration) }),
     updatedAt: typeof raw.updatedAt === "string" ? raw.updatedAt : "",
   };
 }
 
 export function registrationMatches(
+  registration: ManagedSetupRegistration,
+  layout: PortableLayout,
+  manifest: SetupManifest,
+): boolean {
+  return (
+    registrationIdentityMatches(registration, layout, manifest) &&
+    registrationGenerationMatches(registration, layout, manifest)
+  );
+}
+
+function registrationIdentityMatches(
   registration: ManagedSetupRegistration,
   layout: PortableLayout,
   manifest: SetupManifest,
@@ -498,4 +633,28 @@ export function registrationMatches(
       portableInstallRootIdentitySha256(layout.installRoot) &&
     registration.launcherIdentitySha256 === sha256File(layout.primaryLauncherPath)
   );
+}
+
+function registrationGenerationMatches(
+  registration: ManagedSetupRegistration,
+  layout: PortableLayout,
+  manifest: SetupManifest,
+): boolean {
+  if (manifest.platformTarget !== "windows-x64" || manifest.schemaVersion === 1) {
+    return registration.windowsGeneration === undefined;
+  }
+  const generation = registration.windowsGeneration;
+  if (registration.schemaVersion !== 2 || generation === undefined) return false;
+  return (
+    resolve(layout.resourceRoot) ===
+      resolve(layout.installRoot, ...manifest.windowsGeneration.resourceRoot.split("/")) &&
+    windowsGenerationBindingsMatch(generation, manifest.windowsGeneration)
+  );
+}
+
+function windowsGenerationBindingsMatch(
+  left: WindowsGenerationBinding,
+  right: WindowsGenerationBinding,
+): boolean {
+  return WINDOWS_GENERATION_KEYS.every((key) => left[key] === right[key]);
 }

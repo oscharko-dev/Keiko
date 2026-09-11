@@ -1,15 +1,10 @@
 name: Portable assets
 
-# Builds the portable customer artifact for every supported target from the
-# committed approved runtime inputs (portable-runtime-approvals.json), smoke
-# tests each staged artifact on its native platform, and publishes ONE
-# reviewed-candidate bundle artifact ("portable-release-assets") in exactly the
-# layout that the Release workflow consumes via portable_assets_run_id.
-#
-# Publishing remains a human decision: this workflow never uploads release
-# assets or publishes to npm. Manual runs remain unsigned staging; stable-tag
-# Windows and macOS artifacts are platform-signed, while Linux qualification is GitHub OIDC
-# attested; all production targets are verified in protected native jobs.
+# Builds and natively smokes the complete portable release on Linux, Windows, and both macOS
+# architectures. Every stable artifact receives the mandatory Ed25519 release signature after
+# GitHub assigns immutable release and asset IDs. Linux additionally carries an OIDC-attested
+# runtime-qualification receipt. Apple Developer ID and Microsoft Artifact Signing remain optional
+# defense in depth and are not release gates.
 
 on:
   push:
@@ -19,14 +14,8 @@ on:
     inputs:
       evaluation_build:
         description: >-
-          Stage an UNSIGNED evaluation runtime (verificationPolicy "evaluation"). The bundled
-          OpenCode sidecar runs without Apple/Microsoft code signing; every digest, size,
-          containment and provenance check stays mandatory. Never enters the reviewed
-          production bundle (assembled only from push-tag production jobs). Publishable through
-          scripts/release-portable-prerelease.mjs as an explicitly labeled beta PRERELEASE
-          (ADR-0163 D9), or — with the release owner's recorded approval — as the stable
-          public release via --public-release (ADR-0121 D1 records the evaluation signing
-          scope; the npm publisher re-verifies the published downloads before latest).
+          Stage an unsigned evaluation runtime for native smoke testing. This dispatch artifact is
+          never assembled into a stable release bundle.
         type: boolean
         default: false
         required: false
@@ -38,87 +27,9 @@ env:
   RELEASE_REQUIRED_CHECKS: '["ci","workflow hygiene","Analyze (actions)","Analyze (javascript-typescript)","Build, scan, SBOM, smoke","ui"]'
 
 jobs:
-  # The production signing lane must not start for a release the owner scoped to the EVALUATION
-  # lane (ADR-0163 D9 / ADR-0121 D1): its protected signing inputs are not provisioned there, so
-  # every evaluation-scoped stable tag used to leave a red run and a red signing deployment. The
-  # reviewed release-impact catalog at the tagged commit is the anchored source, through the
-  # EXPLICIT portableRuntimeArtifactContract.signingScope field — a tag with no entry or no
-  # declared scope stays PRODUCTION so the strict lane remains the default.
-  release-scope:
-    name: Resolve release signing scope
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    timeout-minutes: 5
-    outputs:
-      production: ${{ steps.scope.outputs.production }}
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-      - name: Decide from the reviewed catalog at the tagged commit
-        id: scope
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          production="$(jq -r --arg tag "$RELEASE_TAG" '
-            [.entries[] | select(.releaseTag == $tag)] | last |
-            if . == null then "true"
-            elif (.portableRuntimeArtifactContract.signingScope // "production") == "evaluation" then "false"
-            else "true" end' release-impact.catalog.json)"
-          echo "production=$production" >> "$GITHUB_OUTPUT"
-          echo "release-scope: $RELEASE_TAG production=$production"
-
-  production-signing-preflight:
-    name: Authorize production signing
-    needs: release-scope
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') && needs.release-scope.outputs.production == 'true' }}
-    runs-on: ubuntu-latest
-    permissions:
-      checks: read
-      contents: read
-      statuses: read
-    timeout-minutes: 35
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 0
-          ref: ${{ github.ref }}
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24.18.0"
-          package-manager-cache: false
-      - name: Verify governed Node.js and npm toolchain
-        run: node scripts/check-runtime-toolchain.mjs --exact
-      - name: Validate stable tag and immutable source commit
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-        run: |
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$GITHUB_SHA"
-          node <<'NODE'
-          const { version } = require("./package.json");
-          if (version.includes("-") || process.env.RELEASE_TAG !== `v${version}`) {
-            throw new Error("Production signing requires the exact stable package tag.");
-          }
-          NODE
-      - name: Validate reviewed release gates
-        run: |
-          npm run check:release-required-workflows
-          npm run check:portable-approvals
-      - name: Verify required checks for tagged SHA
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: RELEASE_SHA="$(git rev-parse HEAD)" node scripts/verify-release-required-checks.mjs
-
   stage:
-    name: Stage portable asset (${{ matrix.platform_target }})
-    # Portable v1 is stable-only by contract (stage-portable-runtime.mjs rejects prerelease
-    # root versions), so prerelease tags such as v0.2.15-beta.0 skip staging instead of
-    # failing; beta publishes ship without portable assets.
-    if: ${{ github.event_name == 'workflow_dispatch' }}
+    name: Stage and smoke portable asset (${{ matrix.platform_target }})
+    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')) }}
     strategy:
       fail-fast: false
       matrix:
@@ -131,11 +42,15 @@ jobs:
             runner: macos-15-intel
     runs-on: ${{ matrix.runner }}
     permissions:
+      checks: read
       contents: read
+      statuses: read
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -145,21 +60,40 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install dependencies
         run: npm ci --ignore-scripts
+      - name: Validate stable tag and governed release authority
+        if: ${{ github.event_name == 'push' }}
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$GITHUB_SHA"
+          node <<'NODE'
+          const { version } = require("./package.json");
+          if (version.includes("-") || process.env.RELEASE_TAG !== `v${version}`) {
+            throw new Error("Portable release staging requires the exact stable package tag.");
+          }
+          NODE
+          npm run check:release-required-workflows
+          npm run check:portable-approvals
+          RELEASE_SHA="$(git rev-parse HEAD)" node scripts/verify-release-required-checks.mjs
+      - name: Validate approved runtime inputs
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: npm run check:portable-approvals
       - name: Run executable secure-read adversarial harness
         run: node native/secure-workspace-read/test-protocol.mjs
-      - name: Validate approved runtime inputs
-        run: npm run check:portable-approvals
       - name: Provision the pinned USearch native addon
         run: npm run provision:usearch
       - name: Prepare approved sidecar payloads
         run: node scripts/prepare-approved-sidecar-payloads.mjs --target ${{ matrix.platform_target }}
-      # Two mutually exclusive steps rather than one interpolated command line: zizmor's
-      # template-injection rule (workflow hygiene) fires on `${{ inputs.* }}` inside `run:`.
-      - name: Stage portable runtime from approved inputs
-        if: ${{ !inputs.evaluation_build }}
+      - name: Stage stable unsigned runtime for Keiko release trust
+        if: ${{ github.event_name == 'push' }}
+        run: node scripts/run-portable-assets-stage.mjs --target ${{ matrix.platform_target }} --release
+      - name: Stage unsigned runtime for manual smoke
+        if: ${{ github.event_name == 'workflow_dispatch' && !inputs.evaluation_build }}
         run: node scripts/run-portable-assets-stage.mjs --target ${{ matrix.platform_target }}
-      - name: Stage UNSIGNED evaluation portable runtime from approved inputs
-        if: ${{ inputs.evaluation_build }}
+      - name: Stage unsigned evaluation runtime for manual smoke
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.evaluation_build }}
         run: node scripts/run-portable-assets-stage.mjs --target ${{ matrix.platform_target }} --evaluation
       - name: Functionally smoke the staged USearch addon
         run: node scripts/smoke-portable-usearch.mjs .portable-runtime/staging/${{ matrix.platform_target }} ${{ matrix.platform_target }}
@@ -173,301 +107,17 @@ jobs:
       - name: Upload staged target artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          # The evaluation bundle names itself so a downloaded ZIP can never be mistaken for the
-          # ordinary unsigned staging output.
-          name: portable-stage-${{ matrix.platform_target }}${{ inputs.evaluation_build && '-evaluation-unsigned' || '' }}
+          name: portable-stage-${{ matrix.platform_target }}${{ github.event_name == 'workflow_dispatch' && inputs.evaluation_build && '-evaluation-unsigned' || '' }}
           path: .portable-runtime/staging/${{ matrix.platform_target }}
           if-no-files-found: error
           retention-days: 30
 
-  stage-windows-production:
-    name: Stage and sign portable asset (windows-x64)
-    needs: production-signing-preflight
-    if: ${{ needs.production-signing-preflight.result == 'success' }}
-    runs-on: windows-latest
-    environment: portable-release-signing
-    permissions:
-      contents: read
-      id-token: write
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 0
-          ref: ${{ github.ref }}
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24.18.0"
-          package-manager-cache: false
-      - name: Verify governed Node.js and npm toolchain
-        run: node scripts/check-runtime-toolchain.mjs --exact
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
-      - name: Run executable secure-read adversarial harness
-        run: node native/secure-workspace-read/test-protocol.mjs
-      - name: Validate approved runtime inputs
-        run: npm run check:portable-approvals
-      - name: Provision the pinned USearch native addon
-        run: npm run provision:usearch
-      - name: Prepare approved sidecar payloads
-        run: node scripts/prepare-approved-sidecar-payloads.mjs --target windows-x64
-      - name: Stage portable runtime from approved inputs
-        run: node scripts/run-portable-assets-stage.mjs --target windows-x64
-      - name: Functionally smoke the unsigned USearch addon
-        run: node scripts/smoke-portable-usearch.mjs .portable-runtime/staging/windows-x64 windows-x64
-      - name: Smoke test the unsigned staged artifact
-        run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target windows-x64
-      - name: Functionally smoke the unsigned secure-read helper
-        run: npm run smoke:portable-secure-read -- .portable-runtime/staging/windows-x64 windows-x64 --load
-      - name: Validate protected Azure configuration
-        env:
-          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
-          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
-          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          AZURE_ARTIFACT_SIGNING_ENDPOINT: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
-          AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
-          AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
-          AZURE_ARTIFACT_SIGNING_IDENTITY_EKU: ${{ vars.AZURE_ARTIFACT_SIGNING_IDENTITY_EKU }}
-        run: node scripts/windows-portable-signing.mjs validate-config
-      - name: Inventory the bounded PE signing set
-        shell: pwsh
-        run: |
-          node scripts/windows-portable-signing.mjs inventory `
-            --stage-root .portable-runtime/staging/windows-x64 `
-            --inventory "$env:RUNNER_TEMP\windows-pe-before.json" `
-            --catalog .portable-runtime/staging/windows-x64/windows-signing-files.txt
-      - name: Authenticate to Azure with environment-bound OIDC
-        uses: Azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          audience: api://AzureADTokenExchange
-      - name: Sign the exact inventoried PE set
-        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
-        with:
-          endpoint: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
-          certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
-          files-catalog: .portable-runtime/staging/windows-x64/windows-signing-files.txt
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-          exclude-environment-credential: true
-          exclude-workload-identity-credential: true
-          exclude-managed-identity-credential: true
-          exclude-shared-token-cache-credential: true
-          exclude-visual-studio-credential: true
-          exclude-visual-studio-code-credential: true
-          exclude-azure-cli-credential: false
-          exclude-azure-powershell-credential: true
-          exclude-azure-developer-cli-credential: true
-          exclude-interactive-browser-credential: true
-          trace: false
-      - name: Clear Azure before runtime qualification
-        if: ${{ always() }}
-        shell: pwsh
-        run: |
-          az logout *> $null
-          if ($LASTEXITCODE -ne 0) { throw "windows-portable-signing: Azure session cleanup failed" }
-          az account clear *> $null
-          if ($LASTEXITCODE -ne 0) { throw "windows-portable-signing: Azure session cleanup failed" }
-      - name: Prove signing did not change the PE scope
-        shell: pwsh
-        run: |
-          node scripts/windows-portable-signing.mjs inventory `
-            --stage-root .portable-runtime/staging/windows-x64 `
-            --inventory "$env:RUNNER_TEMP\windows-pe-core-verified.json" `
-            --catalog "$env:RUNNER_TEMP\windows-pe-core-verified.txt"
-          node scripts/windows-portable-signing.mjs compare-paths `
-            --expected-inventory "$env:RUNNER_TEMP\windows-pe-before.json" `
-            --actual-inventory "$env:RUNNER_TEMP\windows-pe-core-verified.json"
-      - name: Verify the signed core Authenticode set
-        shell: pwsh
-        env:
-          EXPECTED_IDENTITY_EKU: ${{ vars.AZURE_ARTIFACT_SIGNING_IDENTITY_EKU }}
-        run: |
-          ./scripts/verify-windows-portable-signing.ps1 `
-            -StageRoot .portable-runtime/staging/windows-x64 `
-            -InventoryPath "$env:RUNNER_TEMP\windows-pe-core-verified.json" `
-            -VerificationInput "$env:RUNNER_TEMP\windows-core-verification-input.json" `
-            -ExpectedIdentityEku $env:EXPECTED_IDENTITY_EKU
-      - name: Bind and qualify the exact signed runtime payload
-        shell: pwsh
-        run: |
-          node scripts/windows-portable-signing.mjs prepare-qualified-payload `
-            --stage-root .portable-runtime/staging/windows-x64 `
-            --expected-inventory "$env:RUNNER_TEMP\windows-pe-core-verified.json" `
-            --verification-input "$env:RUNNER_TEMP\windows-core-verification-input.json"
-          node scripts/qualify-windows-runtime-release.mjs `
-            --stage-root .portable-runtime/staging/windows-x64 `
-            --expected-inventory "$env:RUNNER_TEMP\windows-pe-core-verified.json" `
-            --verification-input "$env:RUNNER_TEMP\windows-core-verification-input.json" `
-            --source-commit-sha "$env:GITHUB_SHA" `
-            --output "$env:RUNNER_TEMP\windows-runtime-qualification.json"
-      - name: Build the bounded runtime attestation carrier
-        shell: pwsh
-        run: |
-          node scripts/generate-windows-runtime-attestation.mjs `
-            --stage-root .portable-runtime/staging/windows-x64 `
-            --receipt "$env:RUNNER_TEMP\windows-runtime-qualification.json" `
-            --catalog .portable-runtime/staging/windows-x64/windows-attestation-signing-file.txt
-      - name: Re-authenticate to Azure for the attestation carrier
-        uses: Azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          audience: api://AzureADTokenExchange
-      - name: Sign the runtime attestation carrier
-        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
-        with:
-          endpoint: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
-          certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
-          files-catalog: .portable-runtime/staging/windows-x64/windows-attestation-signing-file.txt
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-          exclude-environment-credential: true
-          exclude-workload-identity-credential: true
-          exclude-managed-identity-credential: true
-          exclude-shared-token-cache-credential: true
-          exclude-visual-studio-credential: true
-          exclude-visual-studio-code-credential: true
-          exclude-azure-cli-credential: false
-          exclude-azure-powershell-credential: true
-          exclude-azure-developer-cli-credential: true
-          exclude-interactive-browser-credential: true
-          trace: false
-      - name: Clear the Azure CLI signing session
-        if: ${{ always() }}
-        shell: pwsh
-        run: |
-          az logout *> $null
-          if ($LASTEXITCODE -ne 0) { throw "windows-portable-signing: Azure session cleanup failed" }
-          az account clear *> $null
-          if ($LASTEXITCODE -ne 0) { throw "windows-portable-signing: Azure session cleanup failed" }
-      - name: Prove the attestor is the only added PE
-        shell: pwsh
-        run: |
-          node scripts/windows-portable-signing.mjs inventory `
-            --stage-root .portable-runtime/staging/windows-x64 `
-            --inventory "$env:RUNNER_TEMP\windows-pe-verified.json" `
-            --catalog "$env:RUNNER_TEMP\windows-pe-verified.txt"
-          node scripts/windows-portable-signing.mjs compare-with-attestation `
-            --expected-inventory "$env:RUNNER_TEMP\windows-pe-core-verified.json" `
-            --actual-inventory "$env:RUNNER_TEMP\windows-pe-verified.json"
-      - name: Verify the complete Authenticode chain, identity, and RFC3161 timestamp
-        shell: pwsh
-        env:
-          EXPECTED_IDENTITY_EKU: ${{ vars.AZURE_ARTIFACT_SIGNING_IDENTITY_EKU }}
-        run: |
-          ./scripts/verify-windows-portable-signing.ps1 `
-            -StageRoot .portable-runtime/staging/windows-x64 `
-            -InventoryPath "$env:RUNNER_TEMP\windows-pe-verified.json" `
-            -VerificationInput "$env:RUNNER_TEMP\windows-verification-input.json" `
-            -ExpectedIdentityEku $env:EXPECTED_IDENTITY_EKU
-      - name: Remove transient signing inventory
-        shell: pwsh
-        run: |
-          Remove-Item -LiteralPath .portable-runtime/staging/windows-x64/windows-signing-files.txt -Force
-          Remove-Item -LiteralPath .portable-runtime/staging/windows-x64/windows-attestation-signing-file.txt -Force
-      - name: Rebuild, bind, and verify the production archive
-        shell: pwsh
-        run: |
-          node scripts/windows-portable-signing.mjs finalize `
-            --stage-root .portable-runtime/staging/windows-x64 `
-            --expected-inventory "$env:RUNNER_TEMP\windows-pe-verified.json" `
-            --verification-input "$env:RUNNER_TEMP\windows-verification-input.json"
-      - name: Build the Windows setup companion
-        shell: pwsh
-        run: |
-          node scripts/build-windows-portable-setup.mjs `
-            --stage-root .portable-runtime/staging/windows-x64 `
-            --catalog .portable-runtime/staging/windows-x64/windows-setup-signing-file.txt
-      - name: Re-authenticate to Azure for the setup companion
-        uses: Azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3.0.0
-        with:
-          client-id: ${{ vars.AZURE_CLIENT_ID }}
-          tenant-id: ${{ vars.AZURE_TENANT_ID }}
-          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
-          audience: api://AzureADTokenExchange
-      - name: Sign the Windows setup companion
-        uses: Azure/artifact-signing-action@c7ab2a863ab5f9a846ddb8265964877ef296ee82 # v2.0.0
-        with:
-          endpoint: ${{ vars.AZURE_ARTIFACT_SIGNING_ENDPOINT }}
-          signing-account-name: ${{ vars.AZURE_ARTIFACT_SIGNING_ACCOUNT_NAME }}
-          certificate-profile-name: ${{ vars.AZURE_ARTIFACT_SIGNING_CERTIFICATE_PROFILE_NAME }}
-          files-catalog: .portable-runtime/staging/windows-x64/windows-setup-signing-file.txt
-          file-digest: SHA256
-          timestamp-rfc3161: http://timestamp.acs.microsoft.com
-          timestamp-digest: SHA256
-          exclude-environment-credential: true
-          exclude-workload-identity-credential: true
-          exclude-managed-identity-credential: true
-          exclude-shared-token-cache-credential: true
-          exclude-visual-studio-credential: true
-          exclude-visual-studio-code-credential: true
-          exclude-azure-cli-credential: false
-          exclude-azure-powershell-credential: true
-          exclude-azure-developer-cli-credential: true
-          exclude-interactive-browser-credential: true
-          trace: false
-      - name: Clear Azure after setup companion signing
-        if: ${{ always() }}
-        shell: pwsh
-        run: |
-          az logout *> $null
-          if ($LASTEXITCODE -ne 0) { throw "windows-portable-signing: Azure session cleanup failed" }
-          az account clear *> $null
-          if ($LASTEXITCODE -ne 0) { throw "windows-portable-signing: Azure session cleanup failed" }
-      - name: Verify the signed Windows setup companion
-        shell: pwsh
-        env:
-          EXPECTED_IDENTITY_EKU: ${{ vars.AZURE_ARTIFACT_SIGNING_IDENTITY_EKU }}
-        run: |
-          ./scripts/verify-windows-portable-setup-signing.ps1 `
-            -SetupPath .portable-runtime/staging/windows-x64/keiko-windows-x64-setup.exe `
-            -ExpectedIdentityEku $env:EXPECTED_IDENTITY_EKU
-          node scripts/build-windows-portable-setup.mjs `
-            --stage-root .portable-runtime/staging/windows-x64 `
-            --verify-only
-      - name: Prove the setup companion is the only added stage PE
-        shell: pwsh
-        run: |
-          node scripts/windows-portable-signing.mjs verify-setup-scope `
-            --stage-root .portable-runtime/staging/windows-x64 `
-            --expected-inventory "$env:RUNNER_TEMP\windows-pe-verified.json"
-      - name: Remove transient setup signing inventory
-        shell: pwsh
-        run: |
-          $catalog = ".portable-runtime/staging/windows-x64/windows-setup-signing-file.txt"
-          if (Test-Path -LiteralPath $catalog -PathType Leaf) {
-            Remove-Item -LiteralPath $catalog -Force -ErrorAction Stop
-          }
-      - name: Smoke test the verified production artifact
-        run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target windows-x64
-      - name: Functionally smoke the signed USearch addon
-        run: node scripts/smoke-portable-usearch.mjs .portable-runtime/staging/windows-x64 windows-x64
-      - name: Upload verified Windows target artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: portable-stage-windows-x64
-          path: .portable-runtime/staging/windows-x64
-          if-no-files-found: error
-          retention-days: 30
-
-  stage-linux-production:
-    name: Stage, qualify, and attest portable asset (linux-x64)
-    needs: production-signing-preflight
-    if: ${{ needs.production-signing-preflight.result == 'success' }}
+  stage-linux-manual:
+    name: Stage and smoke portable asset (linux-x64, manual)
+    if: ${{ github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
-    environment: portable-release-signing
     permissions:
       contents: read
-      id-token: write
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -493,13 +143,82 @@ jobs:
         run: npm run provision:usearch
       - name: Prepare approved sidecar payloads
         run: node scripts/prepare-approved-sidecar-payloads.mjs --target linux-x64
-      - name: Stage portable runtime from approved inputs
+      - name: Stage unsigned runtime for manual smoke
+        if: ${{ !inputs.evaluation_build }}
         run: node scripts/run-portable-assets-stage.mjs --target linux-x64
-      - name: Functionally smoke the unsigned USearch addon
+      - name: Stage unsigned evaluation runtime for manual smoke
+        if: ${{ inputs.evaluation_build }}
+        run: node scripts/run-portable-assets-stage.mjs --target linux-x64 --evaluation
+      - name: Functionally smoke the staged USearch addon
         run: node scripts/smoke-portable-usearch.mjs .portable-runtime/staging/linux-x64 linux-x64
-      - name: Smoke test the unsigned staged artifact
+      - name: Smoke test the staged artifact
         run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target linux-x64
       - name: Functionally smoke the unsigned secure-read helper
+        run: npm run smoke:portable-secure-read -- .portable-runtime/staging/linux-x64 linux-x64 --load
+      - name: Upload staged target artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: portable-stage-linux-x64${{ inputs.evaluation_build && '-evaluation-unsigned' || '' }}
+          path: .portable-runtime/staging/linux-x64
+          if-no-files-found: error
+          retention-days: 30
+
+  stage-linux-production:
+    name: Stage, qualify, and attest portable asset (linux-x64)
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    environment: portable-release-signing
+    permissions:
+      checks: read
+      contents: read
+      id-token: write
+      statuses: read
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0
+          ref: ${{ github.ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Validate stable tag and governed release authority
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-list -n 1 "$RELEASE_TAG")" = "$GITHUB_SHA"
+          node <<'NODE'
+          const { version } = require("./package.json");
+          if (version.includes("-") || process.env.RELEASE_TAG !== `v${version}`) {
+            throw new Error("Portable release staging requires the exact stable package tag.");
+          }
+          NODE
+          npm run check:release-required-workflows
+          npm run check:portable-approvals
+          RELEASE_SHA="$(git rev-parse HEAD)" node scripts/verify-release-required-checks.mjs
+      - name: Run executable secure-read adversarial harness
+        run: node native/secure-workspace-read/test-protocol.mjs
+      - name: Run Linux portable launcher native quality
+        run: ./scripts/check-linux-portable-launcher.sh
+      - name: Provision the pinned USearch native addon
+        run: npm run provision:usearch
+      - name: Prepare approved sidecar payloads
+        run: node scripts/prepare-approved-sidecar-payloads.mjs --target linux-x64
+      - name: Stage stable runtime for Keiko release trust
+        run: node scripts/run-portable-assets-stage.mjs --target linux-x64 --release
+      - name: Functionally smoke the staged USearch addon
+        run: node scripts/smoke-portable-usearch.mjs .portable-runtime/staging/linux-x64 linux-x64
+      - name: Smoke test the staged artifact
+        run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target linux-x64
+      - name: Functionally smoke the secure-read helper
         run: npm run smoke:portable-secure-read -- .portable-runtime/staging/linux-x64 linux-x64 --load
       - name: Bind the reviewed Linux production payload
         run: node scripts/linux-portable-signing.mjs prepare --stage-root .portable-runtime/staging/linux-x64
@@ -511,8 +230,6 @@ jobs:
         run: node scripts/linux-portable-signing.mjs finalize --stage-root .portable-runtime/staging/linux-x64 --source-commit-sha "$GITHUB_SHA"
       - name: Smoke test the verified production artifact
         run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target linux-x64
-      - name: Functionally requalify the secure-read helper
-        run: npm run smoke:portable-secure-read -- .portable-runtime/staging/linux-x64 linux-x64 --load
       - name: Run secure-read executable consistency harness
         run: node native/secure-workspace-read/test-protocol.mjs --binary .portable-runtime/staging/linux-x64/payload/Keiko/runtime/native/keiko-secure-workspace-read
       - name: Upload verified Linux target artifact
@@ -554,372 +271,15 @@ jobs:
         run: node scripts/linux-portable-signing.mjs verify --stage-root .portable-runtime/staging/linux-x64 --source-commit-sha "$GITHUB_SHA"
       - name: Re-run real namespace-gateway qualification against the sealed receipt
         run: node scripts/qualify-linux-runtime-release.mjs --stage-root .portable-runtime/staging/linux-x64 --source-commit-sha "$GITHUB_SHA" --test-report "$RUNNER_TEMP/linux-runtime-tests.json" --verify-only true
-      - name: Functionally requalify the signed secure-read helper
+      - name: Functionally requalify the secure-read helper
         run: npm run smoke:portable-secure-read -- .portable-runtime/staging/linux-x64 linux-x64 --load
-      - name: Run signed secure-read executable consistency harness
+      - name: Run secure-read executable consistency harness
         run: node native/secure-workspace-read/test-protocol.mjs --binary .portable-runtime/staging/linux-x64/payload/Keiko/runtime/native/keiko-secure-workspace-read
 
-  stage-macos-production:
-    name: Stage provisional signed macOS asset (${{ matrix.platform_target }})
-    needs: production-signing-preflight
-    if: ${{ needs.production-signing-preflight.result == 'success' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform_target: macos-arm64
-            runner: macos-15
-          - platform_target: macos-x64
-            runner: macos-15-intel
-    runs-on: ${{ matrix.runner }}
-    environment: portable-release-signing
-    permissions:
-      contents: read
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 0
-          ref: ${{ github.ref }}
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24.18.0"
-          package-manager-cache: false
-      - name: Verify governed Node.js and npm toolchain
-        run: node scripts/check-runtime-toolchain.mjs --exact
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
-      - name: Run executable secure-read adversarial harness
-        run: node native/secure-workspace-read/test-protocol.mjs
-      - name: Validate approved runtime inputs
-        run: npm run check:portable-approvals
-      - name: Provision the pinned USearch native addon
-        run: npm run provision:usearch
-      - name: Prepare approved sidecar payloads
-        run: node scripts/prepare-approved-sidecar-payloads.mjs --target ${{ matrix.platform_target }}
-      - name: Stage portable runtime from approved inputs
-        env:
-          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
-        run: node scripts/run-portable-assets-stage.mjs --target ${{ matrix.platform_target }}
-      - name: Functionally smoke the unsigned USearch addon
-        run: node scripts/smoke-portable-usearch.mjs .portable-runtime/staging/${{ matrix.platform_target }} ${{ matrix.platform_target }}
-      - name: Functionally smoke the unsigned secure-read helper
-        run: npm run smoke:portable-secure-read -- .portable-runtime/staging/${{ matrix.platform_target }} ${{ matrix.platform_target }} --load
-      - name: Validate protected Apple configuration
-        env:
-          APPLE_DEVELOPER_ID_IDENTITY: ${{ vars.APPLE_DEVELOPER_ID_IDENTITY }}
-          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
-          APPLE_NOTARY_KEY_ID: ${{ vars.APPLE_NOTARY_KEY_ID }}
-          APPLE_NOTARY_ISSUER_ID: ${{ vars.APPLE_NOTARY_ISSUER_ID }}
-          APPLE_DEVELOPER_ID_CERT_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12_BASE64 }}
-          APPLE_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
-          APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
-        run: node scripts/macos-portable-signing.mjs validate-config
-      - name: Inventory the bounded Mach-O signing set
-        run: node scripts/macos-portable-signing.mjs inventory --stage-root .portable-runtime/staging/${{ matrix.platform_target }} --target ${{ matrix.platform_target }} --inventory "$RUNNER_TEMP/macos-code-before.json"
-      - name: Prepare temporary Developer ID and notary credentials
-        env:
-          APPLE_DEVELOPER_ID_IDENTITY: ${{ vars.APPLE_DEVELOPER_ID_IDENTITY }}
-          APPLE_DEVELOPER_ID_CERT_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12_BASE64 }}
-          APPLE_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
-          APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
-        run: ./scripts/prepare-macos-portable-signing.sh ${{ matrix.platform_target }} "$RUNNER_TEMP/macos-native-result.json"
-      - name: Sign, notarize, staple, and verify the provisional native artifact
-        env:
-          APPLE_DEVELOPER_ID_IDENTITY: ${{ vars.APPLE_DEVELOPER_ID_IDENTITY }}
-          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
-          APPLE_NOTARY_KEY_ID: ${{ vars.APPLE_NOTARY_KEY_ID }}
-          APPLE_NOTARY_ISSUER_ID: ${{ vars.APPLE_NOTARY_ISSUER_ID }}
-        run: ./scripts/run-macos-portable-signing.sh provisional .portable-runtime/staging/${{ matrix.platform_target }} ${{ matrix.platform_target }} "$RUNNER_TEMP/macos-code-before.json" "$RUNNER_TEMP/macos-code-verified.json" "$RUNNER_TEMP/macos-native-result.json"
-      - name: Remove temporary Apple signing material
-        if: ${{ always() }}
-        run: ./scripts/cleanup-macos-portable-signing.sh ${{ matrix.platform_target }} "$RUNNER_TEMP/macos-native-result.json"
-      - name: Upload provisional macOS target artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: portable-provisional-${{ matrix.platform_target }}
-          path: .portable-runtime/staging/${{ matrix.platform_target }}
-          if-no-files-found: error
-          retention-days: 30
-
-  qualify-macos-runtime:
-    name: Qualify Endpoint Security runtime (${{ matrix.platform_target }})
-    needs: stage-macos-production
-    if: ${{ needs.stage-macos-production.result == 'success' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform_target: macos-arm64
-            runner_arch: ARM64
-          - platform_target: macos-x64
-            runner_arch: X64
-    runs-on: [self-hosted, macOS, "${{ matrix.runner_arch }}", keiko-endpoint-security]
-    permissions:
-      contents: read
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-          ref: ${{ github.ref }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24.18.0"
-          package-manager-cache: false
-      - name: Verify governed Node.js and npm toolchain
-        run: node scripts/check-runtime-toolchain.mjs --exact
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
-      - name: Download immutable provisional macOS artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: portable-provisional-${{ matrix.platform_target }}
-          path: .macos-qualification-stage/${{ matrix.platform_target }}
-      - name: Prove the qualification runner has no signing credential authority
-        run: node scripts/macos-native-policy.mjs credentials-cleared
-      - name: Snapshot the immutable provisional stage
-        run: node scripts/macos-runtime-qualification-transport.mjs snapshot --stage-root .macos-qualification-stage/${{ matrix.platform_target }} --output "$RUNNER_TEMP/macos-qualification-before.json"
-      - name: Qualify the exact runtime from an Applications copy
-        run: |
-          source_app=".macos-qualification-stage/${{ matrix.platform_target }}/payload/Keiko/Keiko.app"
-          execution_app="/Applications/KeikoQualification-${{ matrix.platform_target }}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.app"
-          /usr/bin/find /Applications -maxdepth 1 -type d -name "KeikoQualification-${{ matrix.platform_target }}-*.app" -prune -exec /bin/rm -rf -- {} +
-          test ! -e "$execution_app"
-          cleanup() { /bin/rm -rf -- "$execution_app"; }
-          trap cleanup EXIT
-          ditto "$source_app" "$execution_app"
-          node scripts/qualify-macos-runtime-release.mjs \
-            --stage-root .macos-qualification-stage/${{ matrix.platform_target }} \
-            --execution-app-root "$execution_app" \
-            --target ${{ matrix.platform_target }} \
-            --source-commit-sha "$GITHUB_SHA"
-      - name: Prove qualification added only the bounded receipt
-        run: node scripts/macos-runtime-qualification-transport.mjs verify --stage-root .macos-qualification-stage/${{ matrix.platform_target }} --snapshot "$RUNNER_TEMP/macos-qualification-before.json"
-      - name: Upload qualified macOS target artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: portable-qualified-${{ matrix.platform_target }}
-          path: .macos-qualification-stage/${{ matrix.platform_target }}
-          if-no-files-found: error
-          retention-days: 30
-
-  seal-macos-production:
-    name: Seal qualified macOS asset (${{ matrix.platform_target }})
-    needs: qualify-macos-runtime
-    if: ${{ needs.qualify-macos-runtime.result == 'success' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform_target: macos-arm64
-            runner: macos-15
-          - platform_target: macos-x64
-            runner: macos-15-intel
-    runs-on: ${{ matrix.runner }}
-    environment: portable-release-signing
-    permissions:
-      contents: read
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          fetch-depth: 0
-          ref: ${{ github.ref }}
-          persist-credentials: false
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24.18.0"
-          package-manager-cache: false
-      - name: Verify governed Node.js and npm toolchain
-        run: node scripts/check-runtime-toolchain.mjs --exact
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
-      - name: Download immutable qualified macOS artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: portable-qualified-${{ matrix.platform_target }}
-          path: .portable-runtime/staging/${{ matrix.platform_target }}
-      - name: Validate protected Apple configuration
-        env:
-          APPLE_DEVELOPER_ID_IDENTITY: ${{ vars.APPLE_DEVELOPER_ID_IDENTITY }}
-          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
-          APPLE_NOTARY_KEY_ID: ${{ vars.APPLE_NOTARY_KEY_ID }}
-          APPLE_NOTARY_ISSUER_ID: ${{ vars.APPLE_NOTARY_ISSUER_ID }}
-          APPLE_DEVELOPER_ID_CERT_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12_BASE64 }}
-          APPLE_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
-          APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
-        run: node scripts/macos-portable-signing.mjs validate-config
-      - name: Inventory the qualified Mach-O set
-        run: node scripts/macos-portable-signing.mjs inventory --stage-root .portable-runtime/staging/${{ matrix.platform_target }} --target ${{ matrix.platform_target }} --inventory "$RUNNER_TEMP/macos-code-qualified.json"
-      - name: Prepare temporary Developer ID and notary credentials
-        env:
-          APPLE_DEVELOPER_ID_IDENTITY: ${{ vars.APPLE_DEVELOPER_ID_IDENTITY }}
-          APPLE_DEVELOPER_ID_CERT_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_CERT_P12_BASE64 }}
-          APPLE_DEVELOPER_ID_CERT_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_CERT_PASSWORD }}
-          APPLE_NOTARY_KEY_P8_BASE64: ${{ secrets.APPLE_NOTARY_KEY_P8_BASE64 }}
-        run: ./scripts/prepare-macos-portable-signing.sh ${{ matrix.platform_target }} "$RUNNER_TEMP/macos-native-result.json"
-      - name: Seal, notarize, staple, and verify the qualified native artifact
-        env:
-          APPLE_DEVELOPER_ID_IDENTITY: ${{ vars.APPLE_DEVELOPER_ID_IDENTITY }}
-          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
-          APPLE_NOTARY_KEY_ID: ${{ vars.APPLE_NOTARY_KEY_ID }}
-          APPLE_NOTARY_ISSUER_ID: ${{ vars.APPLE_NOTARY_ISSUER_ID }}
-        run: ./scripts/run-macos-portable-signing.sh seal .portable-runtime/staging/${{ matrix.platform_target }} ${{ matrix.platform_target }} "$RUNNER_TEMP/macos-code-qualified.json" "$RUNNER_TEMP/macos-code-verified.json" "$RUNNER_TEMP/macos-native-result.json"
-      - name: Remove temporary Apple signing material
-        if: ${{ always() }}
-        run: ./scripts/cleanup-macos-portable-signing.sh ${{ matrix.platform_target }} "$RUNNER_TEMP/macos-native-result.json"
-      - name: Derive bounded verification input after credential cleanup
-        run: node scripts/macos-native-policy.mjs verification-input --stage-root .portable-runtime/staging/${{ matrix.platform_target }} --target ${{ matrix.platform_target }} --input "$RUNNER_TEMP/macos-native-result.json" --output "$RUNNER_TEMP/macos-verification-input.json"
-      - name: Bind and verify the production macOS archive
-        run: node scripts/macos-portable-signing.mjs finalize --stage-root .portable-runtime/staging/${{ matrix.platform_target }} --expected-inventory "$RUNNER_TEMP/macos-code-verified.json" --verification-input "$RUNNER_TEMP/macos-verification-input.json"
-      - name: Record canonical macOS finalizer success
-        run: node scripts/macos-native-policy.mjs finalizer-success --target ${{ matrix.platform_target }} --input "$RUNNER_TEMP/macos-native-result.json"
-      - name: Functionally smoke the signed USearch addon
-        run: node scripts/smoke-portable-usearch.mjs .portable-runtime/staging/${{ matrix.platform_target }} ${{ matrix.platform_target }}
-      - name: Upload verified macOS target artifact
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: portable-stage-${{ matrix.platform_target }}
-          path: .portable-runtime/staging/${{ matrix.platform_target }}
-          if-no-files-found: error
-          retention-days: 30
-
-  qualify-windows-production:
-    name: Fresh native qualification (windows-x64)
-    needs: stage-windows-production
-    if: ${{ needs.stage-windows-production.result == 'success' }}
-    runs-on: windows-latest
-    environment: portable-release-signing
-    permissions:
-      contents: read
-    timeout-minutes: 25
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-          ref: ${{ github.ref }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24.18.0"
-          package-manager-cache: false
-      - name: Verify governed Node.js and npm toolchain
-        run: node scripts/check-runtime-toolchain.mjs --exact
-      - name: Install dependencies
-        run: npm ci --ignore-scripts
-      - name: Download immutable verified Windows artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: portable-stage-windows-x64
-          path: .qualified-windows-stage/windows-x64
-      - name: Re-verify final Authenticode bytes on a fresh runner
-        shell: pwsh
-        env:
-          EXPECTED_IDENTITY_EKU: ${{ vars.AZURE_ARTIFACT_SIGNING_IDENTITY_EKU }}
-        run: ./scripts/verify-fresh-windows-portable-artifact.ps1 -ArtifactRoot .qualified-windows-stage/windows-x64 -ExpectedIdentityEku $env:EXPECTED_IDENTITY_EKU -ScratchRoot "$env:RUNNER_TEMP\keiko-windows-qualification"
-      - name: Re-verify signed Windows setup companion
-        shell: pwsh
-        env:
-          EXPECTED_IDENTITY_EKU: ${{ vars.AZURE_ARTIFACT_SIGNING_IDENTITY_EKU }}
-        run: |
-          ./scripts/verify-windows-portable-setup-signing.ps1 `
-            -SetupPath .qualified-windows-stage/windows-x64/keiko-windows-x64-setup.exe `
-            -ExpectedIdentityEku $env:EXPECTED_IDENTITY_EKU
-          node scripts/build-windows-portable-setup.mjs `
-            --stage-root .qualified-windows-stage/windows-x64 `
-            --verify-only
-      - name: Execute terminal payload smoke without credential or file-command authority
-        env:
-          GH_TOKEN: ""
-          GITHUB_ENV: ""
-          GITHUB_OUTPUT: ""
-          GITHUB_PATH: ""
-          GITHUB_STEP_SUMMARY: ""
-          GITHUB_TOKEN: ""
-          NODE_AUTH_TOKEN: ""
-        run: npm run smoke:portable-launch-setup -- --stage-root .qualified-windows-stage --stage-target windows-x64
-      - name: Functionally requalify the signed secure-read helper
-        run: npm run smoke:portable-secure-read -- .qualified-windows-stage/windows-x64 windows-x64 --load
-      - name: Run signed secure-read executable consistency harness
-        run: node native/secure-workspace-read/test-protocol.mjs --binary .qualified-windows-stage/windows-x64/payload/Keiko/runtime/native/keiko-secure-workspace-read.exe
-
-  qualify-macos-production:
-    name: Fresh native qualification (${{ matrix.platform_target }})
-    needs: seal-macos-production
-    if: ${{ needs.seal-macos-production.result == 'success' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform_target: macos-arm64
-            runner_arch: ARM64
-          - platform_target: macos-x64
-            runner_arch: X64
-    runs-on: [self-hosted, macOS, "${{ matrix.runner_arch }}", keiko-endpoint-security]
-    environment: portable-release-signing
-    permissions:
-      contents: read
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-          ref: ${{ github.ref }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24.18.0"
-          package-manager-cache: false
-      - name: Verify governed Node.js and npm toolchain
-        run: node scripts/check-runtime-toolchain.mjs --exact
-      - name: Download immutable verified macOS artifact
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
-        with:
-          name: portable-stage-${{ matrix.platform_target }}
-          path: .isolated-macos-artifact/${{ matrix.platform_target }}
-      - name: Validate and extract disposable smoke copy
-        run: node scripts/isolated-macos-production-smoke.mjs prepare --artifact-root .isolated-macos-artifact/${{ matrix.platform_target }} --target ${{ matrix.platform_target }} --runner-temp "$RUNNER_TEMP" --disposable-root "$RUNNER_TEMP/keiko-isolated-macos-smoke-${{ matrix.platform_target }}"
-      - name: Re-verify architecture, Developer ID, hardened runtime, timestamp, staple, and Gatekeeper
-        env:
-          APPLE_DEVELOPER_ID_IDENTITY: ${{ vars.APPLE_DEVELOPER_ID_IDENTITY }}
-          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
-        run: ./scripts/verify-fresh-macos-portable-artifact.sh ${{ matrix.platform_target }} "$RUNNER_TEMP/keiko-isolated-macos-smoke-${{ matrix.platform_target }}" "$RUNNER_TEMP/keiko-macos-qualification-${{ matrix.platform_target }}"
-      - name: Requalify the active Endpoint Security runtime supervisor
-        run: |
-          source_app=".isolated-macos-artifact/${{ matrix.platform_target }}/payload/Keiko/Keiko.app"
-          execution_app="/Applications/KeikoQualification-final-${{ matrix.platform_target }}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.app"
-          /usr/bin/find /Applications -maxdepth 1 -type d -name "KeikoQualification-final-${{ matrix.platform_target }}-*.app" -prune -exec /bin/rm -rf -- {} +
-          test ! -e "$execution_app"
-          cleanup() { /bin/rm -rf -- "$execution_app"; }
-          trap cleanup EXIT
-          ditto "$source_app" "$execution_app"
-          node scripts/qualify-macos-runtime-release.mjs \
-            --stage-root .isolated-macos-artifact/${{ matrix.platform_target }} \
-            --execution-app-root "$execution_app" \
-            --target ${{ matrix.platform_target }} \
-            --source-commit-sha "$GITHUB_SHA" \
-            --verify-only true
-      - name: Functionally requalify the signed secure-read helper
-        run: npm run smoke:portable-secure-read -- .isolated-macos-artifact/${{ matrix.platform_target }} ${{ matrix.platform_target }} --load
-      - name: Run signed secure-read executable consistency harness
-        run: node native/secure-workspace-read/test-protocol.mjs --binary .isolated-macos-artifact/${{ matrix.platform_target }}/payload/Keiko/Keiko.app/Contents/Resources/runtime/native/keiko-secure-workspace-read
-      - name: Execute bundled runtimes in isolated disposable copy
-        env:
-          APPLE_DEVELOPER_ID_IDENTITY: ""
-          APPLE_TEAM_ID: ""
-          GH_TOKEN: ""
-          GITHUB_ENV: ""
-          GITHUB_OUTPUT: ""
-          GITHUB_PATH: ""
-          GITHUB_STEP_SUMMARY: ""
-          GITHUB_TOKEN: ""
-          NODE_AUTH_TOKEN: ""
-        run: ./scripts/run-isolated-macos-payload-smoke.sh ${{ matrix.platform_target }} "$RUNNER_TEMP/keiko-isolated-macos-smoke-${{ matrix.platform_target }}"
-
   assemble:
-    name: Assemble reviewed portable asset bundle
-    needs: [production-signing-preflight, stage-windows-production, stage-linux-production, qualify-linux-production, stage-macos-production, qualify-macos-runtime, seal-macos-production, qualify-windows-production, qualify-macos-production]
-    if: ${{ always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') && needs.production-signing-preflight.result == 'success' && needs.stage-windows-production.result == 'success' && needs.stage-linux-production.result == 'success' && needs.qualify-linux-production.result == 'success' && needs.stage-macos-production.result == 'success' && needs.qualify-macos-runtime.result == 'success' && needs.seal-macos-production.result == 'success' && needs.qualify-windows-production.result == 'success' && needs.qualify-macos-production.result == 'success' }}
+    name: Assemble portable release-trust bundle
+    needs: [stage, stage-linux-production, qualify-linux-production]
+    if: ${{ always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') && needs.stage.result == 'success' && needs.stage-linux-production.result == 'success' && needs.qualify-linux-production.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       attestations: write
@@ -938,10 +298,6 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install dependencies
         run: npm ci --ignore-scripts
-      # Assemble into a NON-hidden directory: actions/upload-artifact does not descend into a
-      # dot-prefixed root path, so uploading `.portable-release-assets` finds zero files. The
-      # per-target stage uploads work because their path ends in a non-hidden leaf. The artifact
-      # NAME is unchanged, so the Release workflow (which downloads by name) is unaffected.
       - name: Download staged target artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -949,24 +305,12 @@ jobs:
           path: portable-release-assets/artifacts
       - name: Assemble and validate the release asset bundle
         run: node scripts/assemble-portable-release-assets.mjs --bundle-root portable-release-assets --commit-sha "$GITHUB_SHA" --release-tag "$GITHUB_REF_NAME" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --version "$(node -p 'require("./package.json").version')"
-      # Additive to, not a replacement for, the existing evidence/signing-verification.json and
-      # provenance.intoto.jsonl projections (ADR-0121 D8): these are independently verifiable via
-      # `gh attestation verify` / Sigstore, anchored to this exact workflow run and commit, and only
-      # ever run once the `if:` gate above has proven all four targets signed, notarized where
-      # required, and qualification-bound. actions/attest-build-provenance and actions/attest-sbom
-      # are both thin, deprecated-warning-free wrappers around actions/attest; using actions/attest
-      # directly avoids depending on the actions/attest-sbom wrapper, which is deprecated upstream.
       - name: Attest build provenance for portable release artifacts
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
           subject-path: |
             portable-release-assets/artifacts/*/keiko-*.zip
             portable-release-assets/artifacts/windows-x64/keiko-windows-x64-setup.exe
-      # The SBOM-attestation steps below bind each SBOM as the *predicate* of an attestation whose
-      # *subject* is the matching ZIP — that does not create an attestation whose subject is the
-      # SBOM file itself. Attest the SBOM documents' own build provenance too, so a consumer who
-      # only has the downloaded SBOM (for example a compliance review with no archive on hand) can
-      # still run `gh attestation verify <sbom-file>` directly instead of only via the archive.
       - name: Attest build provenance for portable SBOM documents
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
@@ -991,7 +335,7 @@ jobs:
         with:
           subject-path: portable-release-assets/artifacts/macos-x64/keiko-macos-x64.zip
           sbom-path: portable-release-assets/artifacts/macos-x64/evidence/sbom.cdx.json
-      - name: Upload reviewed-candidate bundle
+      - name: Upload release-trust candidate bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: portable-release-assets

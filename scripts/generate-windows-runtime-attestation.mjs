@@ -12,13 +12,14 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve, win32 } from "node:path";
+import { dirname, join, relative, resolve, win32 } from "node:path";
 import { tmpdir } from "node:os";
 
 import { buildCompilerEnvironment } from "./build-secure-workspace-read.mjs";
 import { resolveWindowsMsvcEnv } from "./lib/windows-msvc.mjs";
 import { RUNTIME_QUALIFICATION_SUITE } from "./runtime-activation-manifest.mjs";
 import { sha256File } from "./lib/digest.mjs";
+import { portableResourceRoot } from "./portable-signed-archive.mjs";
 
 const SHA256 = /^[a-f0-9]{64}$/u;
 const COMMIT = /^[a-f0-9]{40}$/u;
@@ -122,19 +123,27 @@ export function generateWindowsRuntimeAttestation(
   if (platform !== "win32") fail("generation requires Windows");
   const stageRoot = resolve(required(options, "stage-root"));
   const receipt = readReceipt(resolve(required(options, "receipt")));
-  const activation = join(stageRoot, "payload", "Keiko", ".portable", "runtime-activation.json");
+  const manifest = JSON.parse(
+    readFileSync(join(stageRoot, "manifest", "portable-manifest.json"), "utf8"),
+  );
+  const resourceRoot = portableResourceRoot(stageRoot, "windows-x64", manifest);
+  const activation = join(resourceRoot, ".portable", "runtime-activation.json");
   if (sha256File(activation) !== receipt.activationManifestSha256) {
     fail("qualification receipt activation binding is stale");
   }
-  const destination = join(stageRoot, "payload", "Keiko", ...EXECUTABLE_RELATIVE_PATH.split("/"));
+  const destination = join(resourceRoot, ...EXECUTABLE_RELATIVE_PATH.split("/"));
   mkdirSync(dirname(destination), { recursive: true });
   buildCarrierFn(destination, receipt);
   bindCarrierManifest(stageRoot, destination);
   writeFileSync(
     resolve(required(options, "catalog")),
-    `payload/Keiko/${EXECUTABLE_RELATIVE_PATH}\n`,
+    `${portableCatalogPrefix(stageRoot, resourceRoot)}/${EXECUTABLE_RELATIVE_PATH}\n`,
     { mode: 0o600 },
   );
+}
+
+function portableCatalogPrefix(stageRoot, resourceRoot) {
+  return relative(resolve(stageRoot), resourceRoot).replaceAll("\\", "/");
 }
 
 export function buildWindowsRuntimeAttestationCarrier(

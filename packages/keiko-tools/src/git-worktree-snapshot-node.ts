@@ -439,7 +439,6 @@ export async function ensureGitLazyFetchGuardSupported(
 
 async function runRead(ctx: ReadContext, argv: readonly string[]): Promise<string> {
   const result = await runReadResult(ctx, argv);
-  if (result.truncated) throw new GitWorktreeReadError("git inspection output was truncated");
   if (ctx.rejectRedactedMetadata === true && result.stdout.includes("[REDACTED]"))
     throw new GitWorktreeReadError("git metadata was redacted");
   return result.stdout;
@@ -475,6 +474,7 @@ async function runReadResult(ctx: ReadContext, argv: readonly string[]): Promise
   } catch {
     throw new GitWorktreeReadError(`git ${argv[0] ?? "?"} failed to run`);
   }
+  if (result.truncated) throw new GitWorktreeReadError("git inspection output was truncated");
   if (result.exitCode !== 0) {
     throw new GitWorktreeReadError(`git ${argv[0] ?? "?"} exited ${String(result.exitCode)}`);
   }

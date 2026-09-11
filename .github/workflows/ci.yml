@@ -17,6 +17,7 @@ on:
       - feat/epic-built-in-editor-2285-M11
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
+      - epic/updater-reliability
       - "release/**"
   pull_request:
     # Metadata is merge-relevant evidence: the review-suppression gate reads the PR title/body, and
@@ -38,6 +39,7 @@ on:
       - feat/epic-built-in-editor-2285-M11
       - feat/epic-memoria-viva-2538
       - epic/coding-workbench-opencode-codex
+      - epic/updater-reliability
       - "release/**"
   # ADR-0139 D7: every required workflow also validates merge-queue groups so a human can
   # enable GitHub's merge queue without agents re-racing a moving dev branch.
@@ -89,6 +91,7 @@ jobs:
             | refs/heads/feat/epic-built-in-editor-2285-M11: \
             | refs/heads/feat/epic-memoria-viva-2538: \
             | refs/heads/epic/coding-workbench-opencode-codex: \
+            | refs/heads/epic/updater-reliability: \
             | refs/heads/release/*: \
             | *:dev \
             | *:feat/dev \
@@ -104,6 +107,7 @@ jobs:
             | *:feat/epic-built-in-editor-2285-M11 \
             | *:feat/epic-memoria-viva-2538 \
             | *:epic/coding-workbench-opencode-codex \
+            | *:epic/updater-reliability \
             | *:release/*)
               echo "Protected or integration branch gate satisfied."
               ;;
@@ -418,6 +422,7 @@ jobs:
           npm run build:ui
           npm run check:editor-bundle-size -- --require-static-export
           npm run check:editor-release-evidence
+          npm run check:update-ui-evidence
       - name: Package surface and installable smoke
         timeout-minutes: 45
         run: |
@@ -1153,6 +1158,11 @@ jobs:
         if: runner.os == 'Windows'
         timeout-minutes: 20
         run: npm run build:packages
+      - name: Verify the Windows portable handoff protocol fixture
+        # KHP v3 uses Windows path semantics. Run the full plan suite on a genuine Windows host so
+        # its native-consumer golden bytes cannot remain covered only by a skipped cross-host case.
+        if: runner.os == 'Windows'
+        run: node node_modules/vitest/vitest.mjs run packages/keiko-server/src/update-portable-handoff-plan.test.ts packages/keiko-server/src/update-portable-handoff-receipts.test.ts
       - name: Verify Git executable Windows reparse containment
         # Direct execution is deliberate: Vitest exits zero when every selected test is skipped.
         # This smoke asserts the real host is Win32, creates a genuine directory junction, and calls
@@ -1358,6 +1368,12 @@ jobs:
       - name: Release smoke E2E
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run test:e2e:smoke
+      - name: Governed updater real-BFF outage E2E (#3405)
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        timeout-minutes: 10
+        run: |
+          npm run check:update-ui-evidence
+          npm run test:e2e:update-ui-1696 -- --grep @real-bff-outage
       # Same @smoke journeys on Gecko. Kept a SEPARATE step so a Firefox-only failure is
       # attributable at a glance instead of hiding inside the Chromium run's report.
       - name: Release smoke E2E (Firefox)

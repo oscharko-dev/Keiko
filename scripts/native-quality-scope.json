@@ -14,7 +14,131 @@
       "gates": ["compiler-warnings-as-errors", "native-static-analysis", "keychain-boundary"]
     },
     {
+      "path": "native/keiko-windows-local-volume.h",
+      "language": "c",
+      "platforms": ["windows"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "windows-local-volume-boundary"
+      ]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-generation-windows.h",
+      "language": "c",
+      "platforms": ["windows"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "launcher-behavior"]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-recovery-control-windows.h",
+      "language": "c",
+      "platforms": ["windows"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "portable-update-recovery-boundary"
+      ]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-recovery-control.h",
+      "language": "c",
+      "platforms": ["macos", "windows"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "portable-update-recovery-boundary"
+      ]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-sha256.h",
+      "language": "c",
+      "platforms": ["macos", "windows"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "portable-sha256-behavior"]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-tree-hash-windows.h",
+      "language": "c",
+      "platforms": ["windows"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "portable-tree-hash-behavior"
+      ]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-tree-hash.h",
+      "language": "c",
+      "platforms": ["macos", "windows"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "portable-tree-hash-behavior"
+      ]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-update-coordinator-windows.h",
+      "language": "c",
+      "platforms": ["windows"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "portable-update-coordinator-behavior"
+      ]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-update-coordinator.h",
+      "language": "c",
+      "platforms": ["macos", "windows"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "portable-update-coordinator-behavior"
+      ]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-update-engine.h",
+      "language": "c",
+      "platforms": ["macos", "windows"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "portable-update-coordinator-behavior"
+      ]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-update-protocol.h",
+      "language": "c",
+      "platforms": ["macos", "windows"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "portable-update-protocol-behavior"
+      ]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-update-windows-mechanics.h",
+      "language": "c",
+      "platforms": ["windows"],
+      "gates": [
+        "compiler-warnings-as-errors",
+        "native-static-analysis",
+        "portable-update-coordinator-behavior"
+      ]
+    },
+    {
+      "path": "native/portable-launcher/keiko-portable-windows-atomic-replace.h",
+      "language": "c",
+      "platforms": ["windows"],
+      "gates": ["compiler-warnings-as-errors", "native-static-analysis", "windows-cutover-boundary"]
+    },
+    {
       "path": "scripts/windows-portable-rfc3161.cs",
+      "language": "csharp",
+      "platforms": ["windows"],
+      "gates": ["dotnet-analyzers", "compiler-warnings-as-errors", "rfc3161-fixtures"]
+    },
+    {
+      "path": "packages/keiko-server/src/coding-runtime/windows-portable-authenticode-verifier.cs",
       "language": "csharp",
       "platforms": ["windows"],
       "gates": ["dotnet-analyzers", "compiler-warnings-as-errors", "rfc3161-fixtures"]

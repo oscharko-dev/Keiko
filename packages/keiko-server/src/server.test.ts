@@ -150,6 +150,25 @@ describe("GET /api/health", () => {
     expect(JSON.parse(res.text)).toEqual({ status: "ok", version: SDK_VERSION });
     expect(res.headers.get("cache-control")).toBe("no-store");
   });
+
+  it("returns 503 for health, API, and static traffic until startup recovery opens readiness", async () => {
+    await closeServer();
+    let ready = false;
+    server = createUiServer({
+      staticRoot,
+      csp: buildCspHeader([]),
+      port,
+      readiness: () => ready,
+    });
+    await new Promise<void>((resolve) => server.listen(port, UI_HOST, resolve));
+
+    await expect(fetchRaw("/api/health")).resolves.toMatchObject({ status: 503 });
+    await expect(fetchRaw("/api/config")).resolves.toMatchObject({ status: 503 });
+    await expect(fetchRaw("/")).resolves.toMatchObject({ status: 503 });
+
+    ready = true;
+    await expect(fetchRaw("/api/health")).resolves.toMatchObject({ status: 200 });
+  });
 });
 
 describe("Coding runtime lifecycle transport guards", () => {
