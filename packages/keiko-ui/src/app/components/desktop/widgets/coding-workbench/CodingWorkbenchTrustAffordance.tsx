@@ -252,7 +252,11 @@ function useWorktreeScriptTrust(
             if (!controller.signal.aborted) setState({ root, decision: scriptTrustOf(catalog) });
           })
           .catch(() => {
-            if (!controller.signal.aborted) setState({ root, decision: undefined });
+            if (controller.signal.aborted) return;
+            reportClientDiagnostic(
+              "[keiko] coding workbench worktree script trust catalog read failed",
+            );
+            setState({ root, decision: undefined });
           });
       },
       immediate || runRevision === undefined ? 0 : WORKTREE_TRUST_SETTLE_MS,

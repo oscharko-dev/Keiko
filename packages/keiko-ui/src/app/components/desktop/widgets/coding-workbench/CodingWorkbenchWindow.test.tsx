@@ -2940,13 +2940,23 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
 
     expect(trustStatusMock).not.toHaveBeenCalledWith(WORKSPACE_B.repositoryRoot);
     expect(trustMutateMock).toHaveBeenCalledExactlyOnceWith(WORKSPACE_A.repositoryRoot, "grant");
-    expect(diagnostic).toHaveBeenLastCalledWith("[keiko] coding workbench repository trust bound", {
-      correlationId: "run-correlation-0001",
-      workspaceTrustBinding: {
-        repositoryId: WORKSPACE_A.repositoryId,
-        workspaceId: WORKSPACE_A.id,
+    // The run's trust binding is judged on its own diagnostics: the LAST binding line names A and no
+    // binding line ever names B. Diagnostics about other surfaces (a worktree catalog read this
+    // fixture leaves unanswered) are not this pin's subject and may follow it.
+    const bindingLines = diagnostic.mock.calls.filter(
+      ([note]) => note === "[keiko] coding workbench repository trust bound",
+    );
+    expect(bindingLines.at(-1)).toEqual([
+      "[keiko] coding workbench repository trust bound",
+      {
+        correlationId: "run-correlation-0001",
+        workspaceTrustBinding: {
+          repositoryId: WORKSPACE_A.repositoryId,
+          workspaceId: WORKSPACE_A.id,
+        },
       },
-    });
+    ]);
+    expect(JSON.stringify(bindingLines)).not.toContain(WORKSPACE_B.id);
   });
 
   it("surfaces the workspace mismatch instead of leaving the inert panels unexplained", async () => {

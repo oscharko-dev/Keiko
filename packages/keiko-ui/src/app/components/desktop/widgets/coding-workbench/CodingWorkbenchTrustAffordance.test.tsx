@@ -345,6 +345,50 @@ describe("CodingWorkbenchTrustAffordance", () => {
     expect(await screen.findByRole("button", { name: ALLOW })).toBeEnabled();
   });
 
+  // CodeRabbit (PR #3452): a non-abort catalog-read failure in useWorktreeScriptTrust cleared the
+  // decision with no diagnostic at all. The note is a fixed, body-free string like the others in
+  // this folder -- never the worktree root or the error's own text.
+  it("reports a body-free diagnostic when the worktree script-trust catalog read fails for a reason other than abort", async () => {
+    fetchStatus.mockResolvedValue(status("/repo-a", "trusted"));
+    fetchCatalog.mockRejectedValue(new Error("catalog store unavailable at /private/worktree-a"));
+    render(<CodingWorkbenchTrustAffordance binding={binding()} />);
+    diagnostic.mockClear();
+
+    await waitFor(() => expect(diagnostic).toHaveBeenCalledTimes(1));
+    expect(diagnostic).toHaveBeenCalledExactlyOnceWith(
+      "[keiko] coding workbench worktree script trust catalog read failed",
+    );
+  });
+
+  it("reports nothing when the worktree script-trust catalog read is aborted", async () => {
+    fetchStatus.mockResolvedValue(status("/repo-a", "trusted"));
+    fetchCatalog.mockImplementationOnce(
+      (_root: string, signal: AbortSignal): Promise<EditorVerificationCatalog> =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+          });
+        }),
+    );
+    fetchCatalog.mockResolvedValue(catalog("/worktree-b", "trusted"));
+    const view = render(
+      <CodingWorkbenchTrustAffordance binding={binding("/repo-a", "/worktree-a")} />,
+    );
+    await waitFor(() =>
+      expect(fetchCatalog).toHaveBeenCalledWith("/worktree-a", expect.anything()),
+    );
+    diagnostic.mockClear();
+
+    view.rerender(<CodingWorkbenchTrustAffordance binding={binding("/repo-a", "/worktree-b")} />);
+    await waitFor(() =>
+      expect(fetchCatalog).toHaveBeenCalledWith("/worktree-b", expect.anything()),
+    );
+
+    expect(diagnostic).not.toHaveBeenCalledWith(
+      "[keiko] coding workbench worktree script trust catalog read failed",
+    );
+  });
+
   it("reads no worktree decision while the binding names no worktree", async () => {
     fetchStatus.mockResolvedValue(status("/repo-a", "trusted"));
     const { container } = render(

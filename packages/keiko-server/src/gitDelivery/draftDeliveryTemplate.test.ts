@@ -462,6 +462,23 @@ describe("related-issue line, bound and logged count", () => {
     ]);
   });
 
+  it("accepts exactly DRAFT_DELIVERY_RELATED_ISSUES_MAX unique related issues, none equal to the bound issue", async () => {
+    const f = await fixture();
+    const relatedIssueNumbers = Array.from(
+      { length: DRAFT_DELIVERY_RELATED_ISSUES_MAX },
+      (_, index) => index + 100,
+    );
+    const result = resolveDraftDeliveryTemplate({ ...f.input, relatedIssueNumbers });
+    expect(result.status).toBe("ready");
+    expect(f.log).toMatchObject([
+      {
+        op: "git.draft-template",
+        correlationId,
+        extra: { state: "ready", relatedIssueCount: DRAFT_DELIVERY_RELATED_ISSUES_MAX },
+      },
+    ]);
+  });
+
   it("rejects more related issues than DRAFT_DELIVERY_RELATED_ISSUES_MAX", async () => {
     const f = await fixture();
     const relatedIssueNumbers = Array.from(

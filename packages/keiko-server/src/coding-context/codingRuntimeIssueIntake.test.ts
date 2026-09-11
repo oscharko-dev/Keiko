@@ -236,6 +236,7 @@ describe("production coding-runtime issue-context attachment (epic #3384 correct
 
 // Zero-coverage finding on PR #3452: the linked-issue parser, resolver and skip-logging had no
 // tests at all. `#42` is the bound issue throughout `fixture()`'s repository.
+
 describe("linkedIssueNumbers (the bound issue's same-repository #n references)", () => {
   it("includes a plain #n reference", () => {
     expect(linkedIssueNumbers("See #12 for the missing piece.", 1)).toEqual([12]);
@@ -259,6 +260,28 @@ describe("linkedIssueNumbers (the bound issue's same-repository #n references)",
     const result = linkedIssueNumbers(body, 0);
     expect(result).toHaveLength(MAX_LINKED_ISSUES);
     expect(result).toEqual(numbers.slice(0, MAX_LINKED_ISSUES));
+  });
+
+  // CodeRabbit (PR #3452): the parser had no empty-body or malformed-reference cases. Each must
+  // yield no issue number AND start no resolution work -- proven by asserting the GitHub reader
+  // mock behind `resolvedLinkedIssueNumbers` is never called.
+  it.each([
+    ["an empty body", ""],
+    ["a bare hash with no digits", "#"],
+    ["a zero-numbered reference", "#0"],
+    ["a reference far beyond any issue number the parser accepts", "#12345678901234567890"],
+  ])("finds no linked issue number and starts no resolution work for %s", async (_label, body) => {
+    expect(linkedIssueNumbers(body, 42)).toEqual([]);
+    const f = fixture();
+    const numbers = await resolvedLinkedIssueNumbers(f.deps, {
+      repositoryRoot: root,
+      body,
+      boundIssue: 42,
+      correlationId: "run-malformed",
+      runId: "run-malformed",
+    });
+    expect(numbers).toEqual([]);
+    expect(f.readJson).not.toHaveBeenCalled();
   });
 });
 

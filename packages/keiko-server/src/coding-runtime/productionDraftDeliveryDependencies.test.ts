@@ -15,7 +15,10 @@ import { resolveGitHubIssue } from "../coding-context/githubIssueResolution.js";
 import { resolvedLinkedIssueNumbers } from "../coding-context/codingRuntimeIssueIntake.js";
 import { describeError } from "../diagnostics-log.js";
 import { githubIssueReaderRepositoryId } from "../coding-context/githubIssueReaderAuthorization.js";
-import type { DraftDeliveryRunContext } from "../gitDelivery/draftDeliveryTypes.js";
+import type {
+  DraftDeliveryDependencies,
+  DraftDeliveryRunContext,
+} from "../gitDelivery/draftDeliveryTypes.js";
 import { resolveProjectWorkspace } from "../gitDelivery/execution.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import { createInMemoryUiStore } from "../store/index.js";
@@ -152,7 +155,9 @@ interface Fixture {
   context: DraftDeliveryRunContext;
   abort: AbortController;
   stillAuthorized: Mock<() => boolean>;
-  factory: NonNullable<ReturnType<typeof createProductionDraftDeliveryDependencies>>;
+  factory: DraftDeliveryDependencies & {
+    resolveRelatedIssues: NonNullable<DraftDeliveryDependencies["resolveRelatedIssues"]>;
+  };
 }
 async function fixture(): Promise<Fixture> {
   const { scratch, root } = repository();
@@ -257,6 +262,8 @@ async function fixture(): Promise<Fixture> {
   };
   const factory = createProductionDraftDeliveryDependencies(deps, snapshots);
   if (factory === undefined) throw new Error("Fixture production factory required");
+  const { resolveRelatedIssues } = factory;
+  if (resolveRelatedIssues === undefined) throw new Error("Fixture resolveRelatedIssues required");
   events.length = 0;
   readJson.mockClear();
   return {
@@ -272,7 +279,7 @@ async function fixture(): Promise<Fixture> {
     context,
     abort,
     stillAuthorized,
-    factory,
+    factory: { ...factory, resolveRelatedIssues },
   };
 }
 
