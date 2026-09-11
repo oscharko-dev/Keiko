@@ -35,3 +35,13 @@ regexTarget = "line"
 regexes = [
   '''"packages/keiko-ui/src/lib/api\.ts": "[0-9a-f]{64}"''',
 ]
+
+[[allowlists]]
+description = "PR #3452: the idempotency-key fixture `idempotencyKey: \"idempotency-1\"` in one immutable history commit; the key name ends in `Key` and the value's entropy (3.55) crosses the generic-api-key threshold. It is the same test literal `dev` already marks `gitleaks:allow` (editor-agent.test.ts). Scoped to that one commit and file; every other commit is scanned unchanged."
+matchCondition = "AND"
+commits = [
+  "848912506201742a833edefef77ee1012b19df44",
+]
+paths = [
+  '''packages/keiko-server/src/coding-runtime/codingToolFacade\.dependencyFailure\.test\.ts''',
+]
