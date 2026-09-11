@@ -672,8 +672,61 @@ describe("CodingToolFacade", () => {
       evidence: [{ kind: "governed-delegate", code: "VERIFICATION_NOT_RUN" }],
       reasonCode: "VERIFICATION_NOT_RUN",
       detail:
-        "No verification step ran: typecheck (no such script in package.json), test (dependencies did not install).",
-      guidance: expect.stringContaining("No verification step ran") as unknown as string,
+        "These verification steps did not run: typecheck (no such script in package.json), test (dependencies did not install).",
+      guidance: expect.stringContaining("Not every verification step ran") as unknown as string,
+    });
+  });
+
+  // PR #3452 review: every closed reason reaches the model in its own words; a cancelled or denied
+  // step is never called skipped.
+  it("words every reason a verification step did not run", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "failed",
+        reasonCode: "VERIFICATION_NOT_RUN",
+        notRun: [
+          { kind: "typecheck", reason: "script-missing" },
+          { kind: "test", reason: "dependencies-unavailable" },
+          { kind: "lint", reason: "denied" },
+          { kind: "build", reason: "cancelled" },
+          { kind: "targeted-test", reason: "skipped" },
+        ],
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "verification", verifierId: "unit" }),
+        capability,
+      }),
+    ).resolves.toMatchObject({
+      reasonCode: "VERIFICATION_NOT_RUN",
+      detail:
+        "These verification steps did not run: typecheck (no such script in package.json), test (dependencies did not install), lint (denied by policy), build (cancelled), targeted-test (skipped).",
+    });
+  });
+
+  // An empty not-run list names no step, so the facade forwards no detail; the guidance still stands
+  // (PR #3452 review).
+  it("forwards no detail for an empty not-run list", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "failed", reasonCode: "VERIFICATION_NOT_RUN", notRun: [] }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "verification", verifierId: "unit" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "VERIFICATION_NOT_RUN" }],
+      reasonCode: "VERIFICATION_NOT_RUN",
+      guidance: expect.stringContaining("Not every verification step ran") as unknown as string,
     });
   });
 
@@ -1007,13 +1060,13 @@ describe("CodingToolFacade", () => {
       reasonCode: code,
       evidence: [{ kind: "governed-delegate", code }],
       // Two refusals carry guidance: the trust refusal is the operator's decision to change, not the
-      // model's (ADR-0147 D3, 2026-09-10), and a run where no step ran tells the model what that
-      // means for its next step (F74). Every other code stays bare.
+      // model's (ADR-0147 D3, 2026-09-10), and a run that left a step unexecuted tells the model
+      // what that means for its next step (F74). Every other code stays bare.
       ...(code === "WORKSPACE_TRUST_REQUIRED"
         ? { guidance: expect.stringContaining("Only the operator can allow them") as unknown }
         : {}),
       ...(code === "VERIFICATION_NOT_RUN"
-        ? { guidance: expect.stringContaining("No verification step ran") as unknown }
+        ? { guidance: expect.stringContaining("Not every verification step ran") as unknown }
         : {}),
     });
   });

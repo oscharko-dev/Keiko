@@ -1189,7 +1189,7 @@ describe("production managed worktree tools", () => {
     ).resolves.toMatchObject({
       status: "failed",
       reasonCode: "VERIFICATION_NOT_RUN",
-      detail: "No verification step ran: typecheck (no such script in package.json).",
+      detail: "These verification steps did not run: typecheck (no such script in package.json).",
     });
     expect(log).toContainEqual(
       expect.objectContaining({
@@ -1198,6 +1198,107 @@ describe("production managed worktree tools", () => {
       }),
     );
   });
+
+  // PR #3452 review: the orchestrator lets a run-level cancellation win in the overall status, but
+  // a step that already ran to a red end decides what the model is told; it is never "not run".
+  it.each([
+    ["failed", "VERIFICATION_FAILED"],
+    ["timed-out", "VERIFICATION_TIMED_OUT"],
+    ["resource-exceeded", "VERIFICATION_RESOURCE_EXCEEDED"],
+  ] as const)(
+    "reports a step that ran to %s in a cancelled run as that outcome, not as not run",
+    async (stepStatus, reasonCode) => {
+      const log: ServerLogEvent[] = [];
+      const facade = verificationFacade({
+        runToReport: () => Promise.resolve(cancelledAfterRed(stepStatus)),
+        records: [],
+        log,
+      });
+
+      await expect(
+        executeVerification(facade, "verification-cancelled-red"),
+      ).resolves.toMatchObject({ status: "failed", reasonCode });
+      expect(log.filter((event) => event.op === "coding-runtime.verification")).toEqual([]);
+    },
+  );
+
+  it("keeps the failure a cancelled run had already found, with its locations", async () => {
+    const facade = verificationFacade({
+      runToReport: () => Promise.resolve(cancelledAfterRed("failed")),
+      records: [],
+    });
+
+    await expect(
+      executeVerification(facade, "verification-cancelled-failure"),
+    ).resolves.toMatchObject({
+      status: "failed",
+      reasonCode: "VERIFICATION_FAILED",
+      verificationFailure: {
+        summary: "test failed; 1 structured failure location",
+        locations: [
+          {
+            file: "ci/numerical-stability.test.js",
+            line: 19,
+            column: 5,
+            message: "expected the stable average to remain finite",
+          },
+        ],
+      },
+    });
+  });
+
+  // Every closed reason for a step that never ran, named to the model and in the activity log
+  // (PR #3452 review).
+  it.each([
+    ["denied", "denied", "denied", undefined],
+    ["cancelled", "cancelled", "cancelled", undefined],
+    [
+      "dependencies-unavailable",
+      "skipped",
+      "skipped",
+      "dependencies unavailable: bootstrap failed",
+    ],
+    ["script-missing", "skipped", "skipped", "no typecheck script detected in package.json"],
+    ["skipped", "skipped", "skipped", "not selected for this verifier"],
+  ] as const)(
+    "names a step that never ran with the closed reason %s",
+    async (reason, overallStatus, stepStatus, detail) => {
+      const log: ServerLogEvent[] = [];
+      const [template] = failedVerificationReport().results;
+      if (template === undefined) throw new TypeError("fixture result missing");
+      const facade = verificationFacade({
+        runToReport: () =>
+          Promise.resolve({
+            ...verificationReport(overallStatus),
+            results: [
+              {
+                ...template,
+                kind: "typecheck",
+                scriptName: undefined,
+                status: stepStatus,
+                exitCode: null,
+                durationMs: 0,
+                outputSummary: "",
+                locations: undefined,
+                ...(detail === undefined ? {} : { detail }),
+              },
+            ],
+          }),
+        records: [],
+        log,
+      });
+
+      await expect(
+        executeVerification(facade, `verification-not-run-${reason}`),
+      ).resolves.toMatchObject({ status: "failed", reasonCode: "VERIFICATION_NOT_RUN" });
+      expect(log).toContainEqual(
+        expect.objectContaining({
+          op: "coding-runtime.verification",
+          extra: { state: "not-run", stepCount: 1, steps: [`typecheck:${reason}`] },
+        }),
+      );
+    },
+  );
 
   it("reports a passed run as completed", async () => {
     const facade = verificationFacade({
@@ -2385,6 +2486,47 @@ function verificationReport(overallStatus: VerificationStatus): VerificationRepo
       "resource-exceeded": 0,
     },
   };
+}
+
+// A run whose first step ran to a red end and whose second step was then cancelled: the orchestrator
+// reports it as cancelled, its run-level flag winning (PR #3452 review).
+function cancelledAfterRed(
+  stepStatus: "failed" | "timed-out" | "resource-exceeded",
+): VerificationReport {
+  const failed = failedVerificationReport();
+  const [template] = failed.results;
+  if (template === undefined) throw new TypeError("fixture result missing");
+  return {
+    ...failed,
+    overallStatus: "cancelled",
+    results: [
+      { ...template, status: stepStatus },
+      {
+        ...template,
+        kind: "lint",
+        scriptName: "lint",
+        args: ["run", "lint"],
+        status: "cancelled",
+        exitCode: null,
+        locations: undefined,
+      },
+    ],
+  };
+}
+
+function executeVerification(
+  facade: ReturnType<typeof verificationFacade>,
+  actionId: string,
+): ReturnType<ReturnType<typeof verificationFacade>["execute"]> {
+  return facade.execute({
+    capability: "opaque-capability",
+    body: JSON.stringify({
+      action: "verification",
+      actionId,
+      idempotencyKey: `${actionId}-key`,
+      verifierId: "test",
+    }),
+  });
 }
 
 function failedVerificationReport(): VerificationReport {

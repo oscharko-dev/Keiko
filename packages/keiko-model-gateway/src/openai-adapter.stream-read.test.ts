@@ -331,11 +331,50 @@ describe("OpenAiAdapter.callStream with read bounds: the answer matches a whole 
   it.each([
     ["a streamed refusal", [data({ choices: [{ index: 0, delta: { refusal: "I can't." } }] })]],
     ["a content filter", [delta("partial"), finish("content_filter")]],
-  ])("refuses %s like a whole body", async (_case, lines) => {
-    const reading = answerOf(
-      adapterWith(() => Promise.resolve(sse([...lines, DONE]))).callStream(REQUEST, CONFIG, BOUNDS),
+  ])("refuses %s like a whole body, and logs the read as failed", async (_case, lines) => {
+    const log = recorder();
+    const failure: unknown = await answerOf(
+      adapterWith(() => Promise.resolve(sse([...lines, DONE])), log.sink).callStream(
+        REQUEST,
+        CONFIG,
+        BOUNDS,
+      ),
+    ).catch((thrown: unknown) => thrown);
+
+    expect(failure).toBeInstanceOf(ModelRefusalError);
+    const reads = log.events.filter((event) => event.op === "chat.response.streamed");
+    expect(reads).toHaveLength(1);
+    expect(reads[0]).toMatchObject({
+      level: "warn",
+      errorKind: logErrorKind(failure),
+      extra: { outcome: "failed" },
+    });
+  });
+
+  // PR #3452 review: normalization can refuse a whole body as well, and the read is then a failed
+  // one, never a whole-body success.
+  it("logs a whole body that normalization refuses as a failed read", async () => {
+    const log = recorder();
+    const refused = new Response(
+      JSON.stringify({
+        choices: [
+          { message: { role: "assistant", content: "partial" }, finish_reason: "content_filter" },
+        ],
+      }),
+      { headers: { "content-type": "application/json" } },
     );
-    await expect(reading).rejects.toBeInstanceOf(ModelRefusalError);
+    const failure: unknown = await answerOf(
+      adapterWith(() => Promise.resolve(refused), log.sink).callStream(REQUEST, CONFIG, BOUNDS),
+    ).catch((thrown: unknown) => thrown);
+
+    expect(failure).toBeInstanceOf(ModelRefusalError);
+    const reads = log.events.filter((event) => event.op === "chat.response.streamed");
+    expect(reads).toHaveLength(1);
+    expect(reads[0]).toMatchObject({
+      level: "warn",
+      errorKind: logErrorKind(failure),
+      extra: { outcome: "failed", dataEvents: 0 },
+    });
   });
 
   it("reads a whole body that answers a streamed request", async () => {

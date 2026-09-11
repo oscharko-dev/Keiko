@@ -994,15 +994,7 @@ export class OpenAiAdapter implements ProviderAdapter {
       this.logStreamRead(read, report, streamReadOutcome(error), error);
       throw error;
     }
-    this.logStreamRead(read, report, "completed");
-    const answer = this.finishedResponse(
-      streamedPayload(acc),
-      read.request,
-      read.config,
-      read.secrets,
-      read.bindCalls,
-      read.start,
-    );
+    const answer = this.settledAnswer(read, report, "completed", streamedPayload(acc));
     yield { type: "done", response: answer };
   }
 
@@ -1011,18 +1003,43 @@ export class OpenAiAdapter implements ProviderAdapter {
     read: StreamRead,
   ): AsyncGenerator<GatewayStreamChunk> {
     const report = newStreamReport();
-    const payload = await this.readBody(response, read.config, read.secrets, read.signal);
-    this.logStreamRead(read, report, "whole-body");
-    const answer = this.finishedResponse(
-      payload,
-      read.request,
-      read.config,
-      read.secrets,
-      read.bindCalls,
-      read.start,
-    );
+    let payload: unknown;
+    try {
+      payload = await this.readBody(response, read.config, read.secrets, read.signal);
+    } catch (error) {
+      this.logStreamRead(read, report, streamReadOutcome(error), error);
+      throw error;
+    }
+    const answer = this.settledAnswer(read, report, "whole-body", payload);
     if (answer.content.length > 0) yield { type: "delta", token: answer.content };
     yield { type: "done", response: answer };
+  }
+
+  // The answer a read settled on, logged as settled only once it is one: normalization can still
+  // refuse it (a refusal, a content filter, an empty answer, a catalog bind failure), and a refused
+  // answer is a failed read with its error kind, never a completed one (PR #3452 review).
+  private settledAnswer(
+    read: StreamRead,
+    report: StreamReport,
+    outcome: "completed" | "whole-body",
+    payload: unknown,
+  ): NormalizedResponse {
+    let answer: NormalizedResponse;
+    try {
+      answer = this.finishedResponse(
+        payload,
+        read.request,
+        read.config,
+        read.secrets,
+        read.bindCalls,
+        read.start,
+      );
+    } catch (error) {
+      this.logStreamRead(read, report, streamReadOutcome(error), error);
+      throw error;
+    }
+    this.logStreamRead(read, report, outcome);
+    return answer;
   }
 
   // The one normalization every answer goes through, read whole or over the stream: refusal and

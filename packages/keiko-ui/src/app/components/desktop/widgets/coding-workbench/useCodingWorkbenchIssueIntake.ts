@@ -8,6 +8,7 @@ import type {
 import { previewCodingWorkbenchIssue, type GitHubIssuePreviewResponseWire } from "@/lib/api";
 import { codingWorkbenchIssueFailure } from "@/lib/coding-workbench-issue-errors";
 import { correlationIdOf } from "@/lib/client-error-summary";
+import { UNKNOWN_REPOSITORY_ERROR_CODE } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
 export interface AcceptedWorkbenchIssue {
@@ -38,14 +39,13 @@ type IssueIntakeState =
     };
 
 const READ_TRANSIENT_FAILURE_CODE = "CODING_WORKBENCH_ISSUE_READ_TRANSIENT_FAILURE";
-// The route refuses a repository the workbench has not opened yet with this free error code (F63):
-// it names what the operator must do first instead of the generic "unknown" copy.
-const UNKNOWN_REPOSITORY_CODE = "UNKNOWN_REPOSITORY";
 
 function issueFailure(error: unknown): IssueIntakeFailure {
   if (typeof error !== "object" || error === null || !("code" in error)) return "unknown";
   if (error.code === READ_TRANSIENT_FAILURE_CODE) return "read-transient-failure";
-  if (error.code === UNKNOWN_REPOSITORY_CODE) return "unknown-repository";
+  // The routes refuse a repository the workbench has not opened yet (F63): name what the operator
+  // must do first instead of the generic "unknown" copy.
+  if (error.code === UNKNOWN_REPOSITORY_ERROR_CODE) return "unknown-repository";
   return codingWorkbenchIssueFailure(error.code) ?? "unknown";
 }
 

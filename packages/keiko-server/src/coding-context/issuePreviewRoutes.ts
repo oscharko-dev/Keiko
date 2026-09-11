@@ -21,6 +21,7 @@ import type {
   CodingWorkbenchIssuePreviewResponseWire,
 } from "@oscharko-dev/keiko-contracts";
 import { parseCodingWorkbenchIssuePreviewRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { UNKNOWN_REPOSITORY_ERROR_CODE } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
@@ -161,7 +162,7 @@ function unknownRepository(correlationId: string | undefined): RouteResult {
   return {
     status: 409,
     body: errorBody(
-      "UNKNOWN_REPOSITORY",
+      UNKNOWN_REPOSITORY_ERROR_CODE,
       "Open the repository before previewing an issue for it.",
       correlationId,
     ),

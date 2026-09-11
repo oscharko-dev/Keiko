@@ -1220,15 +1220,31 @@ function verificationOutcome(
     : verificationPortRefusal(input, "verification-authority-revoked", refusal);
 }
 
+// The red ends a step that ran can reach, in the order the model is told about them: a failure
+// first (it carries locations and an output tail), then a wall-clock timeout, then a resource ceiling.
+const EXECUTED_RED_STATUSES = ["failed", "timed-out", "resource-exceeded"] as const;
+
+// What the model is told a finished, non-passing run was. The orchestrator lets a run-level
+// cancellation win in the overall status, so a report whose first step ran and failed and whose
+// second was cancelled is `cancelled`; but a step that ran to a red end is what the model can act
+// on, and reporting it as not run named a real failure "skipped" and dropped its locations
+// (PR #3452 review). The not-run path is left to runs in which no step went red.
+function modelFacingStatus(report: VerificationReport): Exclude<VerificationStatus, "passed"> {
+  const overall = report.overallStatus as Exclude<VerificationStatus, "passed">;
+  if (VERIFICATION_OUTCOME_REASON_CODES[overall] !== "VERIFICATION_NOT_RUN") return overall;
+  const executedRed = EXECUTED_RED_STATUSES.find((status) =>
+    report.results.some((result) => result.status === status),
+  );
+  return executedRed ?? overall;
+}
+
 function failedVerificationOutcome(
   input: ProductionManagedWorktreeToolInput,
   attempt: Extract<VerificationAttempt, { readonly outcome: "completed" }>,
 ): VerificationPortResult {
   const { report } = attempt;
-  const reasonCode =
-    VERIFICATION_OUTCOME_REASON_CODES[
-      report.overallStatus as Exclude<VerificationStatus, "passed">
-    ];
+  const status = modelFacingStatus(report);
+  const reasonCode = VERIFICATION_OUTCOME_REASON_CODES[status];
   const verificationFailure = modelVerificationFailure(report, attempt.failureOutput);
   const notRun = reasonCode === "VERIFICATION_NOT_RUN" ? notRunSteps(report) : undefined;
   if (notRun !== undefined) recordVerificationNotRun(input, notRun);
@@ -1246,9 +1262,18 @@ function failedVerificationOutcome(
 // dependency install that never completed, a policy denial or a cancellation.
 const NOT_RUN_STEP_LIMIT = 5;
 
+// The statuses of a step that never ran. A step that ran to a red end never enters the not-run
+// list, whatever the report's overall status says (PR #3452 review): modelFacingStatus already
+// keeps such a report off the not-run path, and this list does not rely on it.
+const NOT_RUN_STATUSES: ReadonlySet<VerificationStatus> = new Set([
+  "skipped",
+  "denied",
+  "cancelled",
+]);
+
 function notRunSteps(report: VerificationReport): readonly VerificationNotRunStep[] {
   return report.results
-    .filter((result) => result.status !== "passed")
+    .filter((result) => NOT_RUN_STATUSES.has(result.status))
     .slice(0, NOT_RUN_STEP_LIMIT)
     .map((result) => ({ kind: result.kind, reason: notRunReason(result) }));
 }
@@ -1288,7 +1313,7 @@ function modelVerificationFailure(
   report: VerificationReport,
   failureOutput: readonly VerificationStepOutput[] = [],
 ): CodingToolVerificationFailure | undefined {
-  if (report.overallStatus !== "failed") return undefined;
+  if (modelFacingStatus(report) !== "failed") return undefined;
   const dependencies = report.dependencies;
   if (
     dependencies !== undefined &&

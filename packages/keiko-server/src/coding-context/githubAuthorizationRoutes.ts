@@ -1,7 +1,10 @@
 import type { IncomingMessage } from "node:http";
 
 import type { GitHubIssueReaderAuthorizationWire } from "@oscharko-dev/keiko-contracts";
-import { parseUpdateGitHubIssueReaderAuthorizationWire } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
+import {
+  parseUpdateGitHubIssueReaderAuthorizationWire,
+  UNKNOWN_REPOSITORY_ERROR_CODE,
+} from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 
 import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -112,7 +115,7 @@ function unknownRepository(ctx: RouteContext, verb: string): RouteResult {
   return {
     status: 409,
     body: errorBody(
-      "UNKNOWN_REPOSITORY",
+      UNKNOWN_REPOSITORY_ERROR_CODE,
       `Open the repository before ${verb} its GitHub issue access.`,
       ctx.correlationId,
     ),

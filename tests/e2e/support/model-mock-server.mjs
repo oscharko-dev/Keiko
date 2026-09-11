@@ -163,6 +163,9 @@ function prDescriptionCandidate(rawRequest) {
 }
 
 function bufferedCompletion(res, rawRequest) {
+  const content = completionContent(rawRequest);
+  // The same usage whichever way the answer travels: the count of the deltas it would stream.
+  const completionTokens = streamTokens(content).length;
   const body = {
     id: "chatcmpl-e2e",
     object: "chat.completion",
@@ -171,14 +174,14 @@ function bufferedCompletion(res, rawRequest) {
     choices: [
       {
         index: 0,
-        message: { role: "assistant", content: completionContent(rawRequest) },
+        message: { role: "assistant", content },
         finish_reason: "stop",
       },
     ],
     usage: {
       prompt_tokens: 8,
-      completion_tokens: REPLY_TOKENS.length,
-      total_tokens: 8 + REPLY_TOKENS.length,
+      completion_tokens: completionTokens,
+      total_tokens: 8 + completionTokens,
     },
   };
   res.writeHead(200, { "content-type": "application/json; charset=utf-8" });

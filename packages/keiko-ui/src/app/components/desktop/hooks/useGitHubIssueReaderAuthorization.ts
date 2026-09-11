@@ -21,6 +21,7 @@ import {
   fetchGitHubIssueReaderAuthorization,
   updateGitHubIssueReaderAuthorization,
 } from "@/lib/api";
+import { UNKNOWN_REPOSITORY_ERROR_CODE } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
 
@@ -67,7 +68,11 @@ function isConflict(error: unknown): boolean {
 }
 
 function isUnknownRepository(error: unknown): boolean {
-  return error instanceof ApiError && error.status === 409 && error.code === "UNKNOWN_REPOSITORY";
+  return (
+    error instanceof ApiError &&
+    error.status === 409 &&
+    error.code === UNKNOWN_REPOSITORY_ERROR_CODE
+  );
 }
 
 function projected(wire: GitHubIssueReaderAuthorizationWire): GrantState {

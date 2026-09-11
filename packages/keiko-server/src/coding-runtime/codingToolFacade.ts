@@ -587,9 +587,10 @@ const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string,
     WORKSPACE_TRUST_REQUIRED:
       "Package scripts in this workspace may not run yet: either the repository's scripts were never allowed, or this run changed package.json and the operator has to allow the rewritten scripts. Only the operator can allow them, in the Coding Workbench header. Report this blocker, do not retry verification until it has been allowed, and never run the scripts another way.",
     // F74 (Coding Workbench run 24): a verifier with nothing to run answered a bare code, and the
-    // model picked another verifier at once without knowing why.
+    // model picked another verifier at once without knowing why. A run cancelled after a passing
+    // step still checked something, so the guidance claims no more than the named steps (PR #3452).
     VERIFICATION_NOT_RUN:
-      "No verification step ran, so nothing was checked. A missing script means package.json defines no script for that verifier: choose a verifier the repository defines, or add the script as part of your change. Dependencies that did not install, a policy denial or a cancellation are blockers to report. Do not retry the same verifier unchanged.",
+      "Not every verification step ran; where the detail names a step, it says why. A missing script means package.json defines no script for that verifier: choose a verifier the repository defines, or add the script as part of your change. Dependencies that did not install, a policy denial or a cancellation are blockers to report. Do not retry the same verifier unchanged.",
   },
   git: {
     "git-proposal-unknown":
@@ -638,7 +639,7 @@ function verificationNotRunDetail(
   const steps = Array.isArray(notRun) ? notRun.filter(isNotRunStep).slice(0, 5) : [];
   if (steps.length === 0) return {};
   const named = steps.map((step) => `${step.kind} (${NOT_RUN_WORDS[step.reason]})`);
-  return { detail: `No verification step ran: ${named.join(", ")}.` };
+  return { detail: `These verification steps did not run: ${named.join(", ")}.` };
 }
 
 // A stage proposal the runtime Git service blocks at admission is a complete Git result, not a
