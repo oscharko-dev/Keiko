@@ -527,15 +527,18 @@ following error types are never retried: `AuthenticationError`, `ModelRefusalErr
 `UnknownModelError`.
 
 **End-to-end budget.** A buffered call as a whole is bounded by `providerRequestBudgetMs(provider)`
-(`resilience.ts`): `(maxRetries + 1) × timeoutMs` plus the top of the backoff band before each
-retry, the longest the retry loop can legitimately take. A backoff sleep is clipped to the remaining
-budget, so a `retryAfterMs` longer than its backoff step shortens the last attempt instead of
-extending the call. A caller that builds its own deadline around a gateway call derives it from the
-same function; the coding sidecar route adds a grace so the gateway settles its own timeout first.
-A streamed call is never retried and stays bounded by one `timeoutMs`. Until PR #3452
-(2026-09-11) the provider's `timeoutMs` reached the retry loop as the budget of the whole call, so
-an attempt that hung to its timeout left no budget and a `TimeoutError` was never retried (coding
-run 23).
+(`resilience.ts`): `(maxRetries + 1) × timeoutMs` plus 30 s before each retry, the longest sleep the
+loop honours (the backoff cap and the cap on a provider's `retryAfterMs` are both 30 s), so a
+rate-limited provider keeps all its configured attempts and the cool-down it asked for. A retry
+whose delay does not fit what is left of the budget could never run, so the call ends at once with
+the last error (`gateway.retry.exhausted` with `reason: "budget"`, the delay and the remaining
+budget) instead of sleeping the rest of it away. An attempt that starts with less than `timeoutMs`
+left, which only an earlier attempt overrunning its own timeout can cause, runs under what is left.
+A caller that builds its own deadline around a gateway call derives it from the same function; the
+coding sidecar route adds a grace so the gateway settles its own timeout first. A streamed call is
+never retried and stays bounded by one `timeoutMs`. Until PR #3452 (2026-09-11) the provider's
+`timeoutMs` reached the retry loop as the budget of the whole call, so an attempt that hung to its
+timeout left no budget and a `TimeoutError` was never retried (coding run 23).
 
 **Circuit breaker.** One `CircuitBreaker` instance per `(modelId, baseUrl)` pair, keyed in a `Map`.
 States:

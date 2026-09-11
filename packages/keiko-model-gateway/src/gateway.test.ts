@@ -288,9 +288,9 @@ describe("Gateway.chat", () => {
 
   // The invariant this pin has always guarded, restated on the budget the gateway now derives
   // (`providerRequestBudgetMs`) instead of the per-attempt `timeoutMs` it used to reuse: a retry
-  // attempt runs under the REMAINING end-to-end budget, never a fresh one that outlives it. A
-  // Retry-After longer than the backoff step eats into the last attempt, which is clipped to what
-  // is left rather than outliving the budget every caller deadline is built on.
+  // attempt runs under the REMAINING end-to-end budget, never a fresh one that outlives it. The
+  // budget holds a full attempt and the longest cool-down for every retry, so only an attempt that
+  // overran its own timeout leaves less than that; the retry after it is clipped to what is left.
   it("passes the remaining end-to-end timeout budget to retry attempts", async () => {
     const seenTimeouts: number[] = [];
     let current = 0;
@@ -307,17 +307,17 @@ describe("Gateway.chat", () => {
       adapter: fakeAdapter((_request, cfg) => {
         calls += 1;
         seenTimeouts.push(cfg.timeoutMs);
-        current += calls === 1 ? 700 : 0;
+        current += calls === 1 ? 31_500 : 0; // an adapter that overran its own timeout
         return calls === 1
-          ? Promise.reject(new RateLimitError("slow down", 1000))
+          ? Promise.reject(new RateLimitError("slow down", 100))
           : Promise.resolve(okResponse("example-chat-model"));
       }),
       clock,
       random: (): number => 1,
     });
     await gateway.chat(REQUEST);
-    // 700 ms in the first attempt and the 1 000 ms Retry-After leave the rest of the budget.
-    expect(seenTimeouts).toEqual([1000, providerRequestBudgetMs(route) - 700 - 1000]);
+    // 31 500 ms in the first attempt and the 100 ms Retry-After leave the rest of the budget.
+    expect(seenTimeouts).toEqual([1000, providerRequestBudgetMs(route) - 31_500 - 100]);
   });
 
   it("opens the circuit after repeated failures and then blocks without calling the adapter", async () => {

@@ -15,6 +15,7 @@ import {
   providerRetryConfig,
 } from "./resilience.js";
 import { createScriptedGatewayClock } from "./replay.js";
+import type { ModelGatewayLogEvent } from "./observability.js";
 import type { Clock } from "./types.js";
 
 // Wraps the shared createScriptedGatewayClock (replay.ts) with the extra instrumentation these
@@ -228,6 +229,65 @@ describe("executeWithRetry", () => {
     expect(seen).toEqual([1_000, 300]);
   });
 
+  // A provider's Retry-After is honoured, capped at 30 s, and the budget reserves exactly that much
+  // before every retry, so a rate-limited provider keeps all its configured attempts and the
+  // cool-down it asked for. The budget used to reserve only the backoff step: a 30 s Retry-After
+  // spent the rest of it on one clipped sleep and no retry ever ran (PR #3452 review).
+  it("keeps every configured attempt of a provider that asks for the longest cool-down", async () => {
+    const { clock, sleeps, advance } = stubClock();
+    const provider = { timeoutMs: 2_000, maxRetries: 2, retryBaseDelayMs: 200 };
+    let calls = 0;
+    await expect(
+      executeWithRetry(
+        () => {
+          calls += 1;
+          advance(100);
+          return Promise.reject(new RateLimitError("slow down", 30_000));
+        },
+        providerRetryConfig(provider),
+        clock,
+      ),
+    ).rejects.toBeInstanceOf(RateLimitError);
+    expect(calls).toBe(3);
+    expect(sleeps).toEqual([30_000, 30_000]);
+  });
+
+  // A retry whose delay does not fit what is left of the budget can never run: the call ends at
+  // once with the last error, named for the budget, instead of sleeping the rest of it away first.
+  it("ends the call at once when the next delay does not fit the remaining budget", async () => {
+    const { clock, sleeps, advance } = stubClock();
+    const events: ModelGatewayLogEvent[] = [];
+    let calls = 0;
+    await expect(
+      executeWithRetry(
+        () => {
+          calls += 1;
+          advance(999);
+          return Promise.reject(new RateLimitError("slow down", 5_000));
+        },
+        { maxRetries: 1, retryBaseDelayMs: 100, attemptTimeoutMs: 1_000, timeoutMs: 1_500 },
+        clock,
+        undefined,
+        Math.random,
+        {
+          sink: {
+            write: (event): void => {
+              events.push(event);
+            },
+          },
+        },
+      ),
+    ).rejects.toBeInstanceOf(RateLimitError);
+    expect(calls).toBe(1);
+    expect(sleeps).toEqual([]);
+    expect(events.find((event) => event.op === "gateway.retry.exhausted")?.extra).toMatchObject({
+      attempt: 1,
+      reason: "budget",
+      delayMs: 5_000,
+      remainingMs: 501,
+    });
+  });
+
   it("propagates cancellation while sleeping between retries", async () => {
     const controller = new AbortController();
     const clock: Clock = {
@@ -254,7 +314,7 @@ describe("providerRequestBudgetMs", () => {
   // The budget has to hold the worst case the loop can take: every attempt hanging to its timeout
   // and every backoff at the top of its jitter band. Proven by running that case through the loop
   // itself, so the derivation cannot drift from the loop it bounds.
-  it("covers every attempt hanging to its timeout with the widest backoff between them", async () => {
+  it("covers every attempt hanging to its timeout and every retry waiting the longest it may", async () => {
     const { clock, sleeps, advance } = stubClock();
     const provider = { timeoutMs: 1_000, maxRetries: 4, retryBaseDelayMs: 10_000 };
     const start = clock.now();
@@ -264,17 +324,17 @@ describe("providerRequestBudgetMs", () => {
         (attemptTimeoutMs) => {
           seen.push(attemptTimeoutMs);
           advance(attemptTimeoutMs ?? 0);
-          return Promise.reject(new TimeoutError("timed out"));
+          // A provider that answers only at the deadline, and then asks for the longest cool-down.
+          return Promise.reject(new RateLimitError("slow down", 30_000));
         },
         providerRetryConfig(provider),
         clock,
         undefined,
         () => 1,
       ),
-    ).rejects.toBeInstanceOf(TimeoutError);
+    ).rejects.toBeInstanceOf(RateLimitError);
     expect(seen).toEqual([1_000, 1_000, 1_000, 1_000, 1_000]);
-    // The ladder doubles from 10 s and is capped at 30 s.
-    expect(sleeps).toEqual([10_000, 20_000, 30_000, 30_000]);
+    expect(sleeps).toEqual([30_000, 30_000, 30_000, 30_000]);
     expect(clock.now() - start).toBe(providerRequestBudgetMs(provider));
   });
 

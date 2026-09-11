@@ -296,6 +296,8 @@ describe("Gateway.chat — activity log", () => {
       reasoningEffort: "medium",
       streaming: true,
     });
+    // A stream is one attempt: it carries no retry budget, only its `timeoutMs`.
+    expect(started.extra).not.toHaveProperty("requestBudgetMs");
     expect(ops(log.events)).not.toContain("gateway.chat.started");
   });
 
