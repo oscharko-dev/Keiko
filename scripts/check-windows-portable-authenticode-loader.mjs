@@ -32,12 +32,18 @@ function encodedPowerShell(script) {
 }
 
 function assertContainedRegularFile(candidate, root, expectedName, label) {
-  if (!isAbsolute(candidate) || !isAbsolute(root) || basename(candidate) !== expectedName) {
+  const expectedPath = resolve(root, expectedName);
+  if (
+    !isAbsolute(candidate) ||
+    !isAbsolute(root) ||
+    basename(candidate) !== expectedName ||
+    resolve(candidate) !== expectedPath
+  ) {
     throw new Error(`${label} path is not an approved absolute executable path`);
   }
   const rootReal = realpathSync(root);
-  const stat = lstatSync(candidate);
-  const candidateReal = realpathSync(candidate);
+  const stat = lstatSync(expectedPath);
+  const candidateReal = realpathSync(expectedPath);
   const contained = relative(rootReal, candidateReal);
   if (
     stat.isSymbolicLink() ||

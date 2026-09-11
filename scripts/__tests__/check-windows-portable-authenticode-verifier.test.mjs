@@ -1,10 +1,49 @@
 import { Buffer } from "node:buffer";
-import { describe, expect, it } from "vitest";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 
 import {
   COMMITTED_VERIFIER_ASSET,
   assertCommittedVerifierAsset,
+  resolveTrustedVerifierToolchain,
 } from "../check-windows-portable-authenticode-verifier.mjs";
+
+const roots = [];
+
+function trustedToolchainFixture() {
+  const root = mkdtempSync(join(tmpdir(), "keiko-verifier-cli-test-"));
+  roots.push(root);
+  const programFiles = join(root, "Program Files (x86)");
+  const compilerPath = join(
+    programFiles,
+    "Microsoft Visual Studio",
+    "2022",
+    "Enterprise",
+    "MSBuild",
+    "Current",
+    "Bin",
+    "Roslyn",
+    "csc.exe",
+  );
+  const referenceDirectory = join(
+    programFiles,
+    "Reference Assemblies",
+    "Microsoft",
+    "Framework",
+    ".NETFramework",
+    "v4.8.1",
+  );
+  mkdirSync(join(compilerPath, ".."), { recursive: true });
+  mkdirSync(referenceDirectory, { recursive: true });
+  writeFileSync(compilerPath, "reviewed compiler");
+  return { compilerPath, environment: { "ProgramFiles(x86)": programFiles }, referenceDirectory };
+}
+
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true });
+});
 
 describe("committed Windows portable Authenticode verifier asset", () => {
   it("binds the canonical source and exact assembly bytes to SHA-256", () => {
@@ -53,6 +92,35 @@ describe("committed Windows portable Authenticode verifier asset", () => {
         },
       }),
     ).toThrow(/System.Core.dll pin/u);
+  });
+
+  it("accepts only canonical toolchain paths inside the approved Windows system roots", () => {
+    const fixture = trustedToolchainFixture();
+    expect(resolveTrustedVerifierToolchain(fixture, fixture.environment)).toEqual({
+      compilerPath: realpathSync(fixture.compilerPath),
+      referenceDirectory: realpathSync(fixture.referenceDirectory),
+    });
+    expect(() =>
+      resolveTrustedVerifierToolchain(
+        { ...fixture, compilerPath: join(fixture.compilerPath, "..", "..", "other.exe") },
+        fixture.environment,
+      ),
+    ).toThrow(/approved Visual Studio toolchain layout/u);
+    expect(() =>
+      resolveTrustedVerifierToolchain(
+        {
+          ...fixture,
+          compilerPath: join(fixture.environment["ProgramFiles(x86)"], "..", "attacker", "csc.exe"),
+        },
+        fixture.environment,
+      ),
+    ).toThrow(/approved system root/u);
+    expect(() =>
+      resolveTrustedVerifierToolchain(
+        { ...fixture, referenceDirectory: join(fixture.referenceDirectory, "..") },
+        fixture.environment,
+      ),
+    ).toThrow(/approved .NET Framework 4.8.1 path/u);
   });
 
   it.each([

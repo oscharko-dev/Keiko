@@ -1,6 +1,6 @@
 import { Buffer } from "node:buffer";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import {
@@ -23,6 +23,65 @@ import {
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
+const VISUAL_STUDIO_DIRECTORY = "Microsoft Visual Studio";
+const COMPILER_SUFFIX = join("MSBuild", "Current", "Bin", "Roslyn", "csc.exe");
+const FRAMEWORK_REFERENCE_SUFFIX = join(
+  "Reference Assemblies",
+  "Microsoft",
+  "Framework",
+  ".NETFramework",
+  "v4.8.1",
+);
+
+function assertContainedPath(root, candidate, label) {
+  const contained = relative(root, candidate);
+  if (
+    contained === "" ||
+    contained === ".." ||
+    contained.startsWith(`..${sep}`) ||
+    isAbsolute(contained)
+  ) {
+    throw new Error(`${label} path escapes its approved system root`);
+  }
+  return contained;
+}
+
+function trustedCompilerPath(candidate, visualStudioRoot) {
+  const lexicalCandidate = resolve(candidate);
+  const lexicalRelative = assertContainedPath(visualStudioRoot, lexicalCandidate, "C# compiler");
+  if (!lexicalRelative.endsWith(`${sep}${COMPILER_SUFFIX}`)) {
+    throw new Error("C# compiler path is outside the approved Visual Studio toolchain layout");
+  }
+  const canonicalRoot = realpathSync(visualStudioRoot);
+  const canonicalCandidate = realpathSync(lexicalCandidate);
+  assertContainedPath(canonicalRoot, canonicalCandidate, "C# compiler");
+  if (!lstatSync(canonicalCandidate).isFile()) {
+    throw new Error("C# compiler path is not a regular file");
+  }
+  return canonicalCandidate;
+}
+
+export function resolveTrustedVerifierToolchain(options, environment = process.env) {
+  const programFiles = environment["ProgramFiles(x86)"];
+  if (programFiles === undefined || !isAbsolute(programFiles)) {
+    throw new Error("ProgramFiles(x86) is required for the Windows verifier check");
+  }
+  const programFilesRoot = resolve(programFiles);
+  const visualStudioRoot = resolve(programFilesRoot, VISUAL_STUDIO_DIRECTORY);
+  const expectedReferences = resolve(programFilesRoot, FRAMEWORK_REFERENCE_SUFFIX);
+  if (resolve(options.referenceDirectory) !== expectedReferences) {
+    throw new Error("framework references path is not the approved .NET Framework 4.8.1 path");
+  }
+  const canonicalReferences = realpathSync(expectedReferences);
+  assertContainedPath(realpathSync(programFilesRoot), canonicalReferences, "framework references");
+  if (!lstatSync(canonicalReferences).isDirectory()) {
+    throw new Error("framework references path is not a directory");
+  }
+  return {
+    compilerPath: trustedCompilerPath(options.compilerPath, visualStudioRoot),
+    referenceDirectory: canonicalReferences,
+  };
+}
 
 function assertSourceBinding(asset) {
   if (
@@ -159,7 +218,8 @@ function parseArguments(argv) {
 }
 
 export function executeCheckCli(argv = process.argv) {
-  checkWindowsPortableAuthenticodeVerifier(parseArguments(argv));
+  const options = resolveTrustedVerifierToolchain(parseArguments(argv));
+  checkWindowsPortableAuthenticodeVerifier(options);
   process.stdout.write("windows-portable-authenticode-verifier: PASS\n");
 }
 
