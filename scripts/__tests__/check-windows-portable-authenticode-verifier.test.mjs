@@ -15,7 +15,8 @@ const roots = [];
 function trustedToolchainFixture() {
   const root = mkdtempSync(join(tmpdir(), "keiko-verifier-cli-test-"));
   roots.push(root);
-  const programFiles = join(root, "Program Files (x86)");
+  const programFiles = join(root, "Program Files");
+  const programFilesX86 = join(root, "Program Files (x86)");
   const compilerPath = join(
     programFiles,
     "Microsoft Visual Studio",
@@ -28,7 +29,7 @@ function trustedToolchainFixture() {
     "csc.exe",
   );
   const referenceDirectory = join(
-    programFiles,
+    programFilesX86,
     "Reference Assemblies",
     "Microsoft",
     "Framework",
@@ -38,7 +39,11 @@ function trustedToolchainFixture() {
   mkdirSync(join(compilerPath, ".."), { recursive: true });
   mkdirSync(referenceDirectory, { recursive: true });
   writeFileSync(compilerPath, "reviewed compiler");
-  return { compilerPath, environment: { "ProgramFiles(x86)": programFiles }, referenceDirectory };
+  return {
+    compilerPath,
+    environment: { ProgramFiles: programFiles, "ProgramFiles(x86)": programFilesX86 },
+    referenceDirectory,
+  };
 }
 
 afterEach(() => {
@@ -110,7 +115,7 @@ describe("committed Windows portable Authenticode verifier asset", () => {
       resolveTrustedVerifierToolchain(
         {
           ...fixture,
-          compilerPath: join(fixture.environment["ProgramFiles(x86)"], "..", "attacker", "csc.exe"),
+          compilerPath: join(fixture.environment.ProgramFiles, "..", "attacker", "csc.exe"),
         },
         fixture.environment,
       ),

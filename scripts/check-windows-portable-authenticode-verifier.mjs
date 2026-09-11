@@ -62,18 +62,31 @@ function trustedCompilerPath(candidate, visualStudioRoot) {
 }
 
 export function resolveTrustedVerifierToolchain(options, environment = process.env) {
-  const programFiles = environment["ProgramFiles(x86)"];
-  if (programFiles === undefined || !isAbsolute(programFiles)) {
-    throw new Error("ProgramFiles(x86) is required for the Windows verifier check");
+  const programFiles = environment.ProgramFiles;
+  const programFilesX86 = environment["ProgramFiles(x86)"];
+  if (
+    programFiles === undefined ||
+    !isAbsolute(programFiles) ||
+    programFilesX86 === undefined ||
+    !isAbsolute(programFilesX86)
+  ) {
+    throw new Error(
+      "ProgramFiles and ProgramFiles(x86) are required for the Windows verifier check",
+    );
   }
   const programFilesRoot = resolve(programFiles);
+  const programFilesX86Root = resolve(programFilesX86);
   const visualStudioRoot = resolve(programFilesRoot, VISUAL_STUDIO_DIRECTORY);
-  const expectedReferences = resolve(programFilesRoot, FRAMEWORK_REFERENCE_SUFFIX);
+  const expectedReferences = resolve(programFilesX86Root, FRAMEWORK_REFERENCE_SUFFIX);
   if (resolve(options.referenceDirectory) !== expectedReferences) {
     throw new Error("framework references path is not the approved .NET Framework 4.8.1 path");
   }
   const canonicalReferences = realpathSync(expectedReferences);
-  assertContainedPath(realpathSync(programFilesRoot), canonicalReferences, "framework references");
+  assertContainedPath(
+    realpathSync(programFilesX86Root),
+    canonicalReferences,
+    "framework references",
+  );
   if (!lstatSync(canonicalReferences).isDirectory()) {
     throw new Error("framework references path is not a directory");
   }
