@@ -715,7 +715,7 @@ describe("KeikoCodeEditor — controlled editing", () => {
     await flushMount();
     expect(captured.editor?.executeEdits).not.toHaveBeenCalled();
     expect(onContentChange).not.toHaveBeenCalled();
-    expect(onRuntimeError).toHaveBeenCalledWith("host edit request ignored: buffer is read-only");
+    expect(onRuntimeError).toHaveBeenCalledWith("host-edit-ignored (reason=read-only)");
   });
 
   it("applies a host edit request that arrives before Monaco finishes mounting (KEIKO-0033)", async () => {

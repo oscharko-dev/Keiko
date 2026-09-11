@@ -54,7 +54,7 @@ import { configuredRepoSemanticSearchProviderLeaseFor } from "./grounded-repo-se
 import { createEntailmentStage } from "./grounded-entailment-stage.js";
 import type { EntailmentStageFactory } from "./grounded-qa-hybrid.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
-import { evidenceRetentionDiagnosticObserver } from "./diagnostics-log.js";
+import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { assertUsableAssistantContent } from "./assistant-response.js";
 import { splitExplorationBudgets } from "./grounded-multi-source-budget.js";
 import {
@@ -858,10 +858,7 @@ function persistPerSourceEvidence(
         env: ctx.deps.env,
         additionalSecrets: currentRedactionSecrets(ctx.deps),
         costClassResolver: resolveCostClass,
-        onRetentionDeleted: evidenceRetentionDiagnosticObserver(
-          ctx.deps.diagnostics,
-          "grounded-qa-multi-source",
-        ),
+        onRetentionDeleted: evidenceRetentionObserver("grounded-qa-multi-source"),
       },
     );
     firstRunId ??= runId;

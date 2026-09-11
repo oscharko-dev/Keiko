@@ -192,15 +192,15 @@ describe("diagnostic records on the activity log", () => {
     defaultServerDiagnosticSink.record({
       correlationId: "req-000001",
       timestamp: "2026-08-21T00:00:00.000Z",
-      operation: "evidence.retention",
+      operation: "evidence.persist",
       source: "server.diagnostic",
-      errorClass: "EvidenceRetention",
-      message: "Evidence retention deleted manifests.",
+      errorClass: "Error",
+      message: "Audit or evidence persistence failed.",
       occurrenceCount: 3,
     });
     const line = readActivityLine(stateDir);
 
-    expect(line).toMatchObject({ op: "evidence.retention", occurrenceCount: 3 });
+    expect(line).toMatchObject({ op: "evidence.persist", occurrenceCount: 3 });
     expect(Object.keys(line)).not.toContain("code");
     expect(Object.keys(line)).not.toContain("gatewayRequestId");
     expect(Object.keys(line)).not.toContain("promptTokens");

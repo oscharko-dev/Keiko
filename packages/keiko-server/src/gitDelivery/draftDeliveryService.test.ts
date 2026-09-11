@@ -14,7 +14,11 @@ import {
   resolveDraftDeliveryTemplate,
   DRAFT_DELIVERY_RELATED_ISSUES_MAX,
 } from "./draftDeliveryTemplate.js";
-import { readDraftDeliveryChecks } from "./draftDeliveryChecks.js";
+import {
+  readDraftDeliveryChecks,
+  CHECKS_SECTION_END,
+  CHECKS_SECTION_START,
+} from "./draftDeliveryChecks.js";
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import { PR_DESCRIPTION_REGION_START } from "@oscharko-dev/keiko-contracts/runtime/pr-description-region";
 
@@ -710,6 +714,148 @@ describe("draft delivery checks (F57)", () => {
     expect(fixture.events.find((event) => event.op === "git.draft-checks")).toMatchObject({
       level: "warn",
       extra: { state: "unavailable", reason: "evidence-missing" },
+    });
+  });
+});
+
+// Owner review on PR #3452: the Checks section is composed when the pull request is created, and a
+// later verified commit pushed to the same pull request (a CI repair) must not leave it describing
+// the earlier commit.
+describe("draft delivery checks after a later push (#3452)", () => {
+  const title = "feat: bounded change";
+  function authorized(): DraftDeliveryController {
+    return new DraftDeliveryController({
+      ...fixture.options,
+      policyAllowsWithoutApproval: () => true,
+    });
+  }
+  function evidenceFor(evidenceId: string): void {
+    const committed = fixture.snapshots.get(fixture.context.runId)?.verifiedCommitResult
+      ?.committedTreeDigest;
+    if (committed === undefined) throw new Error("fixture receipt must carry the committed tree");
+    fixture.evidence.set(
+      evidenceId,
+      JSON.stringify({
+        checks: {
+          records: [
+            {
+              startedAtMs: 1,
+              stagedTreeDigest: committed,
+              steps: [{ kind: "build", status: "passed", exitCode: 0, durationMs: 5 }],
+            },
+          ],
+          omitted: 0,
+        },
+      }),
+    );
+  }
+  async function created(service: DraftDeliveryController): Promise<void> {
+    await execute(await service.proposePush(), service);
+    await execute(await service.proposePullRequest(title), service);
+  }
+  function refreshLine(): (typeof fixture.events)[number] | undefined {
+    return fixture.events.find(
+      (event) => event.op === "git.draft-checks" && event.extra?.phase === "refresh",
+    );
+  }
+  function outsideSection(body: string): string {
+    const start = body.indexOf(CHECKS_SECTION_START);
+    return `${body.slice(0, start)}${body.slice(body.indexOf(CHECKS_SECTION_END))}`;
+  }
+
+  it("recomposes the section for the later commit and keeps every other byte", async () => {
+    const service = authorized();
+    evidenceFor("verification-1");
+    await created(service);
+    const before = fixture.prBody;
+    const first = fixture.git(["rev-parse", "HEAD"]);
+    const head = await fixture.recordLaterCommit();
+    evidenceFor("verification-2");
+
+    await execute(await service.proposePush(), service);
+
+    expect(fixture.bodyUpdates).toHaveLength(1);
+    expect(fixture.prBody).toContain(`Evidence for commit ${head.slice(0, 12)}: verification-2`);
+    expect(fixture.prBody).not.toContain(`Evidence for commit ${first.slice(0, 12)}`);
+    expect(outsideSection(fixture.prBody)).toBe(outsideSection(before));
+    expect(refreshLine()).toMatchObject({
+      extra: {
+        state: "refreshed",
+        prNumber: 17,
+        headSha: head,
+        checkRowCount: 1,
+        authority: "policy-authorized",
+      },
+    });
+  });
+
+  it("does nothing for the first push, before a pull request exists", async () => {
+    const service = authorized();
+    await execute(await service.proposePush(), service);
+    expect(refreshLine()).toBeUndefined();
+    expect(fixture.bodyReads).toBe(0);
+  });
+
+  it("leaves the section as it was while delivery needs an operator's approval", async () => {
+    await created(fixture.service);
+    const before = fixture.prBody;
+    await fixture.recordLaterCommit();
+
+    await execute(await fixture.service.proposePush());
+
+    expect(fixture.bodyUpdates).toEqual([]);
+    expect(fixture.prBody).toBe(before);
+    expect(refreshLine()).toMatchObject({
+      extra: { state: "skipped", reason: "approval-required" },
+    });
+  });
+
+  it("never overwrites a body that changed after it was read", async () => {
+    const service = authorized();
+    await created(service);
+    await fixture.recordLaterCommit();
+    evidenceFor("verification-2");
+    fixture.beforeBodyRead = (read): void => {
+      if (read === 2) fixture.prBody = `${fixture.prBody}\n\nA reviewer's note.`;
+    };
+
+    await execute(await service.proposePush(), service);
+
+    expect(fixture.bodyUpdates).toEqual([]);
+    expect(fixture.prBody).toContain("A reviewer's note.");
+    expect(refreshLine()).toMatchObject({
+      level: "warn",
+      errorKind: "conflict",
+      extra: { state: "failed", reason: "body-changed" },
+    });
+  });
+
+  it("leaves a body without the section's frame alone", async () => {
+    const service = authorized();
+    await created(service);
+    fixture.prBody = "Closes #1\n\n## Checks\n\nWritten by hand.";
+    await fixture.recordLaterCommit();
+
+    await execute(await service.proposePush(), service);
+
+    expect(fixture.bodyUpdates).toEqual([]);
+    expect(refreshLine()).toMatchObject({ extra: { state: "skipped", reason: "section-absent" } });
+  });
+
+  it("keeps the push when the body cannot be read, and logs why", async () => {
+    const service = authorized();
+    await created(service);
+    await fixture.recordLaterCommit();
+    fixture.failBodyRead = true;
+
+    const result = await execute(await service.proposePush(), service);
+
+    expect(result).toMatchObject({ status: "recorded", record: { phase: "pushed" } });
+    expect(fixture.bodyUpdates).toEqual([]);
+    expect(refreshLine()).toMatchObject({
+      level: "warn",
+      errorKind: "internal",
+      extra: { state: "failed", reason: "read-failed" },
     });
   });
 });

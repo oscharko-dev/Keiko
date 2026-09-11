@@ -427,10 +427,13 @@ with the global count/age/byte limits by unioning their delete sets; an explicit
 therefore still governs regulated evidence. The default selects independent bounded counts for
 both recognised partitions, while byte and age caps remain available as explicit alternatives.
 `applyRetention` returns the number of manifests it deleted. Server-owned persistence paths observe
-that count and emit one content-free diagnostic containing only the fixed operation/source labels
-and the numeric deletion count. Retention remains best-effort for chat compaction, but a deletion is
-never operationally silent; manifest bodies, run identifiers, paths, and policy values never enter
-the diagnostic.
+that count and write one body-free activity line (`evidence.retention`, category `process`, level
+`info`) carrying only the fixed source label and the numeric deletion count, under one correlation
+id per observer. Retention is designed behaviour, not a failure, so it is not a diagnostic: the
+diagnostic sink writes at error level, and routing every sweep through it made a routine deletion
+read as a fault in the activity log (F82, Coding Workbench run 28). Retention remains best-effort
+for chat compaction, but a deletion is never operationally silent; manifest bodies, run
+identifiers, paths, and policy values never enter the line.
 
 ```typescript
 export interface RetentionPolicy {

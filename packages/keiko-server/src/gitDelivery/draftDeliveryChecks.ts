@@ -240,6 +240,42 @@ function evidenceLine(checks: Extract<DraftDeliveryChecks, { status: "listed" }>
   return `Evidence for commit ${checks.headSha.slice(0, 12)}: ${checks.evidenceId}. Later commits on this branch are not covered here.`;
 }
 
+// The section's own frame. The template composes the section inside it, and a later refresh replaces
+// exactly what lies between the two markers and nothing else (owner review on PR #3452). HTML
+// comments do not render, so the frame is invisible on the pull request.
+export const CHECKS_SECTION_START = "<!-- keiko:checks:v1:start -->";
+export const CHECKS_SECTION_END = "<!-- keiko:checks:v1:end -->";
+
+/** Also catches malformed or future markers: only this frame may emit the namespace. */
+export function containsDraftChecksMarker(value: string): boolean {
+  return /keiko\s*:\s*checks/iu.test(value);
+}
+
+export function frameDraftChecksSection(markdown: string): string {
+  if (containsDraftChecksMarker(markdown)) throw new TypeError("Nested Checks section marker");
+  return `${CHECKS_SECTION_START}\n${markdown}\n${CHECKS_SECTION_END}`;
+}
+
+export type DraftChecksSplice =
+  | { readonly status: "replaced"; readonly body: string }
+  | { readonly status: "absent" | "malformed" | "unchanged" };
+
+function occurrences(text: string, marker: string): number {
+  return text.split(marker).length - 1;
+}
+
+/** Replaces exactly the one framed section and keeps every other byte; anything else is refused. */
+export function spliceDraftChecksSection(body: string, framed: string): DraftChecksSplice {
+  const starts = occurrences(body, CHECKS_SECTION_START);
+  const ends = occurrences(body, CHECKS_SECTION_END);
+  if (starts === 0 && ends === 0) return { status: "absent" };
+  const start = body.indexOf(CHECKS_SECTION_START);
+  const end = body.indexOf(CHECKS_SECTION_END);
+  if (starts !== 1 || ends !== 1 || end < start) return { status: "malformed" };
+  const next = `${body.slice(0, start)}${framed}${body.slice(end + CHECKS_SECTION_END.length)}`;
+  return next === body ? { status: "unchanged" } : { status: "replaced", body: next };
+}
+
 export interface RenderedDraftDeliveryChecks {
   readonly markdown: string;
   readonly rowCount: number;

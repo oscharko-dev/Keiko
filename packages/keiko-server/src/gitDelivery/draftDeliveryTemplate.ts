@@ -26,7 +26,12 @@ import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import { MAX_LINKED_ISSUES } from "../coding-context/codingRuntimeIssueIntake.js";
-import { renderDraftDeliveryChecks, type DraftDeliveryChecks } from "./draftDeliveryChecks.js";
+import {
+  renderDraftDeliveryChecks,
+  type DraftDeliveryChecks,
+  containsDraftChecksMarker,
+  frameDraftChecksSection,
+} from "./draftDeliveryChecks.js";
 
 // Three fixed GitHub default locations, no recursive enumeration or model-selected template.
 // One sentinel entry makes discovery overflow explicit instead of selecting an arbitrary prefix.
@@ -90,7 +95,8 @@ class TemplateResolutionError extends Error {
 }
 
 function validateAuthoredMetadata(text: string): void {
-  if (containsPrDescriptionMarker(text)) throw new TemplateResolutionError("managed-region-marker");
+  if (containsPrDescriptionMarker(text) || containsDraftChecksMarker(text))
+    throw new TemplateResolutionError("managed-region-marker");
   if (hasIssueClosingDirective(text)) throw new TemplateResolutionError("issue-directive");
 }
 
@@ -220,7 +226,10 @@ function renderedChecks(input: DraftDeliveryTemplateInput): {
 } {
   if (input.verificationChecks === undefined) return { section: "" };
   const rendered = renderDraftDeliveryChecks(input.verificationChecks);
-  return { section: `${rendered.markdown}\n\n`, rowCount: rendered.rowCount };
+  return {
+    section: `${frameDraftChecksSection(rendered.markdown)}\n\n`,
+    rowCount: rendered.rowCount,
+  };
 }
 
 function compose(

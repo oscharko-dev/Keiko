@@ -92,7 +92,7 @@ import {
 } from "./local-knowledge-grounded-qa.js";
 import { buildStoredPreviewCitations } from "./local-knowledge-preview-authority.js";
 import { GROUNDED_SYSTEM_PROMPT } from "./grounded-prompt.js";
-import { evidenceRetentionDiagnosticObserver } from "./diagnostics-log.js";
+import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import {
   normalizeGroundedAnswerPayload,
   type GroundedAnswerPayload,
@@ -1299,10 +1299,7 @@ function persistFolderEvidence(
         env: ctx.deps.env,
         additionalSecrets: currentRedactionSecrets(ctx.deps),
         costClassResolver: resolveCostClass,
-        onRetentionDeleted: evidenceRetentionDiagnosticObserver(
-          ctx.deps.diagnostics,
-          "grounded-qa-hybrid",
-        ),
+        onRetentionDeleted: evidenceRetentionObserver("grounded-qa-hybrid"),
       },
     );
     firstRunId ??= runId;

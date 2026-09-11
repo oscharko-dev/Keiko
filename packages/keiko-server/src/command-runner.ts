@@ -46,10 +46,8 @@ import {
   buildCommandRunEvidenceEntry,
 } from "./command-runner-evidence.js";
 import type { Project, UiStore } from "./store/index.js";
-import {
-  evidenceRetentionDiagnosticObserver,
-  type ServerDiagnosticSink,
-} from "./diagnostics-log.js";
+import { type ServerDiagnosticSink } from "./diagnostics-log.js";
+import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
 import type { ServerLogSink } from "./observability/server-log.js";
 import type { WorkspaceRootAccess } from "./task-workspace/workspace-root-access.js";
@@ -618,7 +616,7 @@ class CommandRunnerManagerImpl implements CommandRunnerManager {
         evidence,
         this.redactor,
         DEFAULT_RETENTION,
-        evidenceRetentionDiagnosticObserver(this.diagnostics, "command-runner"),
+        evidenceRetentionObserver("command-runner"),
       );
     } catch {
       throw new CommandRunnerError(

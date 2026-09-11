@@ -3287,10 +3287,10 @@ function EditorRuntimeWidget({
   }, [externalSaveRequest, file, onExternalSaveComplete, persist]);
 
   const onRuntimeError = useCallback((message: string): void => {
-    // A non-fatal theme-registration failure (e.g. the editor design tokens are not present on this
-    // surface). The editor still renders with Monaco's base theme; surface it for diagnostics rather
-    // than swallowing a system-boundary signal. Routed through the one client sink so the console
-    // access stays in a single reviewable place (0.3.0 audit, #2802).
+    // A non-fatal editor runtime notice: a code-owned sentence such as a theme-registration or a
+    // language-load failure (keiko-editor runtime-notice.ts, EditorSurface, EditorDiffSurface). The
+    // editor keeps working; the notice goes through the one client sink (0.3.0 audit, #2802), whose
+    // server side admits exactly these closed shapes (F29).
     reportClientDiagnostic(`Keiko editor runtime notice: ${message}`);
   }, []);
 

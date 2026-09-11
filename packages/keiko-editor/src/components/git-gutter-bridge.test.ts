@@ -315,8 +315,10 @@ describe("registerEditorGitGutter", () => {
     bridge.refresh();
     bridge.dispose();
     await flush();
-    expect(onError).toHaveBeenNthCalledWith(1, "diff unavailable");
-    expect(onError).toHaveBeenNthCalledWith(2, "Git gutter refresh failed");
+    // F29: the notice names the failure and the error's class, never the error's own text.
+    expect(onError).toHaveBeenNthCalledWith(1, "git-gutter-refresh-failed (error=Error)");
+    expect(onError).toHaveBeenNthCalledWith(2, "git-gutter-refresh-failed (error=string)");
+    expect(JSON.stringify(onError.mock.calls)).not.toMatch(/diff unavailable|opaque/u);
     expect(onError).toHaveBeenCalledTimes(2);
   });
 

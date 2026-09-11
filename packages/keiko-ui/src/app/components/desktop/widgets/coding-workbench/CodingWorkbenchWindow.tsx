@@ -433,6 +433,18 @@ function workbenchRepositoryRoot(
   return runBoundRoot ?? activeWorkspace.activeBinding?.activeRoot ?? selectedRoot ?? null;
 }
 
+// The bound task workspace's base branch when the setup card is seeded with its repository, so issue
+// intake after a bind starts from the workspace the operator already chose (F81, run 28).
+function boundBaseBranch(
+  activeWorkspace: WorkbenchWorkspaceApi,
+  repositoryRoot: string | null,
+): string | undefined {
+  const instance = activeWorkspace.activeInstance;
+  return instance !== null && instance.repositoryRoot === repositoryRoot
+    ? instance.baseBranch
+    : undefined;
+}
+
 type WorkbenchWorkspaceApi = UseCodingWorkbenchRuntimeInput["workspace"];
 
 /** The live active root, or null when the read failed — one definition, so the surfaces that
@@ -954,7 +966,8 @@ function WorkbenchColumns({
     return (
       <div className={styles.emptySession}>
         <CodingWorkbenchSetup
-          selectedRoot={selectedRoot ?? activeWorkspace.activeInstance?.repositoryRoot}
+          selectedRoot={repositoryRoot ?? undefined}
+          selectedBaseBranch={boundBaseBranch(activeWorkspace, repositoryRoot)}
           refreshWorkspace={async (): Promise<boolean> => {
             const refreshed = await activeWorkspace.refresh();
             if (refreshed) setIssueSetup(false);

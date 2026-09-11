@@ -16,6 +16,7 @@ import type { EditorLanguageId, EditorPosition, EditorRange } from "../index.js"
 import { registerKeikoEditorTheme, resolveEditorThemeTokensFromDom } from "../index.js";
 import type { EditorThemeVariant, MonacoThemeRegistrar } from "../monaco/theme.js";
 import { buildSaveActionDescriptor } from "./keybindings.js";
+import { runtimeFailureNotice } from "./runtime-notice.js";
 import {
   buildAskKeikoAboutSelectionActionDescriptor,
   buildAskKeikoAboutSelectionRunHandler,
@@ -590,8 +591,7 @@ export function reapplyEditorTheme(args: {
     const tokens = resolveEditorThemeTokensFromDom(args.container);
     registerKeikoEditorTheme(args.monaco.editor, args.themeVariant, tokens);
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Editor theme registration failed";
-    args.onThemeError?.(message);
+    args.onThemeError?.(runtimeFailureNotice("theme-registration-failed", error));
   }
 }
 

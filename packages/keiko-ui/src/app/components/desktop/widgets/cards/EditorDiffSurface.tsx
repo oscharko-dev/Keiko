@@ -31,6 +31,14 @@ import {
   ensureMonacoLanguages,
   ensureMonacoRuntime,
 } from "./editorMonacoRuntime";
+import { clientErrorSummary } from "@/lib/client-error-summary";
+
+// F29: a code-owned runtime notice. The activity log admits exactly this shape, so it names how many
+// languages the diff needed and the error's class name, never the error's message.
+export function diffLanguageLoadNotice(languageCount: number, error: unknown): string {
+  const errorClass = clientErrorSummary(error);
+  return `diff-language-load-failed (count=${String(languageCount)}, error=${errorClass})`;
+}
 
 export type EditorDiffSurfaceProps = Omit<KeikoDiffEditorProps, "loadState"> & {
   readonly loadState: KeikoEditorLoadState;
@@ -124,8 +132,7 @@ export default function EditorDiffSurface(props: EditorDiffSurfaceProps): ReactE
     setLanguagesReady(false);
     void ensureMonacoLanguages(languages)
       .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        onRuntimeError?.(`Failed to load Monaco diff language: ${message}`);
+        onRuntimeError?.(diffLanguageLoadNotice(languages.length, error));
       })
       .finally(() => {
         if (!cancelled) {

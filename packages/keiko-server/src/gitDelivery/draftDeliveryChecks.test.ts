@@ -12,6 +12,11 @@ import {
   readDraftDeliveryChecks,
   renderDraftDeliveryChecks,
   type DraftDeliveryChecks,
+  CHECKS_SECTION_END,
+  CHECKS_SECTION_START,
+  containsDraftChecksMarker,
+  frameDraftChecksSection,
+  spliceDraftChecksSection,
 } from "./draftDeliveryChecks.js";
 import type { VerificationCheckRecord } from "./verificationChecks.js";
 
@@ -327,5 +332,46 @@ describe("rendering the Checks section (F57)", () => {
     expect(containsPrDescriptionMarker(markdown)).toBe(false);
     expect(hasIssueClosingDirective(markdown)).toBe(false);
     expect(rowCount).toBe(kinds.length * statuses.length);
+  });
+});
+
+// Owner review on PR #3452: a later refresh replaces exactly the framed section.
+describe("the Checks section frame", () => {
+  const framed = frameDraftChecksSection("## Checks\n\nnew");
+  function body(section: string): string {
+    return `Closes #1\n\n${section}\n\nAfter the section.`;
+  }
+
+  it("frames the section in markers that do not render, and refuses a nested marker", () => {
+    expect(framed).toBe(`${CHECKS_SECTION_START}\n## Checks\n\nnew\n${CHECKS_SECTION_END}`);
+    expect(() => frameDraftChecksSection(CHECKS_SECTION_END)).toThrow(TypeError);
+  });
+
+  it("replaces exactly the framed section and keeps every other byte", () => {
+    const old = frameDraftChecksSection("## Checks\n\nold");
+    expect(spliceDraftChecksSection(body(old), framed)).toEqual({
+      status: "replaced",
+      body: body(framed),
+    });
+  });
+
+  it("reports a body without the frame as absent, and an identical section as unchanged", () => {
+    expect(spliceDraftChecksSection("Closes #1\n\n## Checks", framed)).toEqual({
+      status: "absent",
+    });
+    expect(spliceDraftChecksSection(body(framed), framed)).toEqual({ status: "unchanged" });
+  });
+
+  it.each([
+    ["a second start", `${CHECKS_SECTION_START}\n${frameDraftChecksSection("x")}`],
+    ["an end before its start", `${CHECKS_SECTION_END}\n${CHECKS_SECTION_START}`],
+    ["a start without an end", CHECKS_SECTION_START],
+  ])("refuses %s as malformed", (_case, section) => {
+    expect(spliceDraftChecksSection(body(section), framed)).toEqual({ status: "malformed" });
+  });
+
+  it("recognises the namespace in any spacing or case", () => {
+    expect(containsDraftChecksMarker("<!-- KEIKO : Checks:v9:end -->")).toBe(true);
+    expect(containsDraftChecksMarker("## Checks")).toBe(false);
   });
 });

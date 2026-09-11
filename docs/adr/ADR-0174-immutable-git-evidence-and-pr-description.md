@@ -102,7 +102,10 @@ closing keywords, template structure or branding. The trusted renderer appends t
 `by Keiko`; a logo is optional and requires a validated immutable HTTPS asset plus server-established
 public availability. Missing, private or unrenderable assets produce the text fallback without a
 network fetch. Repository templates and human-authored text outside the managed region belong to
-the application adapter and must remain byte-identical.
+the application adapter and must remain byte-identical. The server-owned Checks section of a
+delivered pull request (ADR-0086 D9) is kept current by its own governed `pr-update`, never by
+description application: it replaces only the bytes inside its own frame, after re-reading the live
+body, so the managed region and every human-authored byte stay identical.
 
 Description application, PR creation, mark-ready, CI readiness, human review and observed merge
 remain distinct governed operations under ADR-0086, ADR-0087, ADR-0137 and ADR-0138. A generated

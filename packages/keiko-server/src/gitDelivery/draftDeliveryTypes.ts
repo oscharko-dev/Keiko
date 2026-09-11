@@ -8,6 +8,7 @@ import type {
   GitPullRequestInspectionAdapter,
   GitPushCommand,
   GitPrCreateCommand,
+  GitPullRequestBodyAdapter,
 } from "@oscharko-dev/keiko-tools";
 import type {
   CodingRuntimeDeliveryResult,
@@ -68,6 +69,13 @@ export interface DraftDeliveryDependencies {
   ) => GitPullRequestInspectionAdapter | undefined;
   readonly publishSeams: (context: DraftDeliveryRunContext) => GitDeliveryPublishSeams;
   readonly pullRequestSeams: (context: DraftDeliveryRunContext) => GitDeliveryPullRequestSeams;
+  /**
+   * Reads and replaces the delivered pull request's body for the Checks refresh after a later push
+   * (draftDeliveryChecksRefresh.ts). Absent in compositions without a pull request provider.
+   */
+  readonly bodyAdapter?: (
+    context: DraftDeliveryRunContext,
+  ) => GitPullRequestBodyAdapter | undefined;
 }
 
 export interface DraftDeliveryServiceOptions extends DraftDeliveryDependencies {

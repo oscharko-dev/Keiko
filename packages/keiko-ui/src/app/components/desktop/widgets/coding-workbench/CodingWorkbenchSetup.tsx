@@ -100,6 +100,9 @@ export interface CodingWorkbenchSetupProps {
   // The Workbench-wide selected folder/repository is a convenience default only. It does not become
   // execution authority until this explicit provision → verify → activate action succeeds.
   readonly selectedRoot: string | undefined;
+  // The bound task workspace's base branch when `selectedRoot` is its repository (issue intake after
+  // a bind, F81): the branch field starts from it without a lookup, since the operator chose it.
+  readonly selectedBaseBranch?: string | undefined;
   // ActiveWorkspaceApi.refresh from the shared context — re-reads the active binding after the
   // workbench-initiated bind so every bound surface flips to the new workspace atomically.
   readonly refreshWorkspace: () => Promise<boolean>;
@@ -440,6 +443,7 @@ interface TargetBranchState {
 function useTargetBranchDefault(
   selectedRoot: string | undefined,
   repositoryPath: string,
+  selectedBaseBranch: string | undefined,
 ): TargetBranchState {
   const lookup = useBranchLookup();
   const { lookupFor, releaseOperatorChoice } = lookup;
@@ -455,8 +459,9 @@ function useTargetBranchDefault(
     if (armedRootRef.current === selected) return;
     armedRootRef.current = selected;
     releaseOperatorChoice();
-    lookupFor(selected);
-  }, [lookupFor, releaseOperatorChoice, repositoryPath, selectedRoot]);
+    // The bound workspace already names the base of its own repository (F81): no lookup.
+    lookupFor(selected, selectedBaseBranch);
+  }, [lookupFor, releaseOperatorChoice, repositoryPath, selectedBaseBranch, selectedRoot]);
   return {
     targetBranch: lookup.targetBranch,
     settled: !lookup.resolving && authoritativeFor(lookup.authority, repositoryPath.trim()),
@@ -470,10 +475,23 @@ interface BranchLookup {
   readonly targetBranch: string;
   readonly authority: BranchAuthority;
   readonly resolving: boolean;
-  readonly lookupFor: (root: string) => void;
+  // Settles the field's default for a path: from a request, or at once from a branch the bound
+  // workspace already names for it (F81).
+  readonly lookupFor: (root: string, known?: string) => void;
   readonly chooseTargetBranch: (value: string) => void;
   // Drops the operator's claim so the next selection may derive its own default again.
   readonly releaseOperatorChoice: () => void;
+}
+
+// A lookup that lands after unmount must not write into a surface that no longer exists: unmounting
+// supersedes every lookup still in flight.
+function useSupersededOnUnmount(sequence: { current: number }): void {
+  useEffect(
+    () => (): void => {
+      sequence.current += 1;
+    },
+    [sequence],
+  );
 }
 
 // The branch value together with the evidence of where it came from. Nothing here knows about the
@@ -500,10 +518,14 @@ function useBranchLookup(): BranchLookup {
     setTargetBranch(branch ?? DEFAULT_TARGET_BRANCH);
   }, []);
   const lookupFor = useCallback(
-    (root: string): void => {
+    (root: string, known?: string): void => {
       const trimmed = root.trim();
       if (trimmed === "" || touchedRef.current) return;
       const seq = (lookupSeqRef.current += 1);
+      if (known !== undefined) {
+        settleLookup(seq, trimmed, known);
+        return;
+      }
       setAuthority({ kind: "none" });
       setResolving(true);
       void readBaseBranch(trimmed).then((branch) => {
@@ -512,13 +534,7 @@ function useBranchLookup(): BranchLookup {
     },
     [settleLookup],
   );
-  // A lookup that lands after unmount must not write into a surface that no longer exists.
-  useEffect(
-    () => (): void => {
-      lookupSeqRef.current += 1;
-    },
-    [],
-  );
+  useSupersededOnUnmount(lookupSeqRef);
   const chooseTargetBranch = useCallback((value: string): void => {
     touchedRef.current = true;
     setAuthority({ kind: "operator" });
@@ -756,6 +772,7 @@ function setupInputsUnavailable(
 
 export function CodingWorkbenchSetup({
   selectedRoot,
+  selectedBaseBranch,
   refreshWorkspace,
   runtimePosture,
   acceptedIssue = null,
@@ -763,7 +780,7 @@ export function CodingWorkbenchSetup({
   onOpenGit,
 }: CodingWorkbenchSetupProps): ReactNode {
   const [repositoryPath, setRepositoryPath] = useRepositoryPathDefault(selectedRoot);
-  const branch = useTargetBranchDefault(selectedRoot, repositoryPath);
+  const branch = useTargetBranchDefault(selectedRoot, repositoryPath, selectedBaseBranch);
   const intake = useCodingWorkbenchIssueIntake(repositoryPath);
   const issue = acceptedIssue?.repositoryPath === repositoryPath.trim() ? acceptedIssue : null;
   const unresolvedIssue = intake.issueRef.trim() !== "" && issue === null;

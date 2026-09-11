@@ -13,6 +13,8 @@ import {
   type GitPrExecResult,
   type GitPublishExecResult,
   type GitPublishExecRequest,
+  type GitPrBody,
+  type GitPullRequestBodyAdapter,
 } from "@oscharko-dev/keiko-tools";
 import { gitCommitMessageDigest } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { createCodingRuntimeSnapshotStore } from "../coding-runtime/codingRuntimeSnapshotStore.js";
@@ -56,6 +58,14 @@ export class DraftDeliveryFixture {
   public targetReason: "issue-drift" | "remote-drift" | "provider-failed" | undefined;
   public asyncBeforeTarget: (() => Promise<void>) | undefined;
   public createBody = "";
+  // The pull request body the refresh reads and writes (owner review on PR #3452).
+  public prBody = "";
+  public readonly prBodyUpdatedAt = "2026-09-05T00:00:00.000Z";
+  public readonly bodyUpdates: string[] = [];
+  public bodyReads = 0;
+  public failBodyRead = false;
+  public beforeBodyRead: ((read: number) => void) | undefined;
+  public readonly bodyAdapter: GitPullRequestBodyAdapter;
   public readonly adapter: GitPullRequestInspectionAdapter;
 
   public constructor() {
@@ -66,6 +76,7 @@ export class DraftDeliveryFixture {
     this.context = this.makeContext();
     this.createSnapshot();
     this.adapter = this.makeAdapter();
+    this.bodyAdapter = this.makeBodyAdapter();
     this.options = this.makeOptions();
     this.service = new DraftDeliveryController(this.options);
   }
@@ -160,7 +171,11 @@ export class DraftDeliveryFixture {
       issueBinding: this.issue,
     });
   }
-  public async recordVerifiedCommit(proposalId = "commit-1"): Promise<void> {
+  public async recordVerifiedCommit(
+    proposalId = "commit-1",
+    evidenceId = "verification-1",
+    message = "feat: bounded change",
+  ): Promise<void> {
     const facts = await readVerifiedCommitFacts(this.context, this.options.execution ?? {});
     this.snapshots.recordVerifiedCommit({
       schemaVersion: "1",
@@ -176,12 +191,20 @@ export class DraftDeliveryFixture {
       stagedTreeDigest: facts.stagedTreeDigest,
       committedTreeDigest: facts.stagedTreeDigest,
       headSha: facts.headSha,
-      verificationEvidenceId: "verification-1",
-      messageDigest: gitCommitMessageDigest("feat: bounded change"),
+      verificationEvidenceId: evidenceId,
+      messageDigest: gitCommitMessageDigest(message),
       status: "succeeded",
       reason: "completed",
       recordedAt: new Date(this.now).toISOString(),
     });
+  }
+  /** A later verified commit on the task branch, as a CI repair records it. */
+  public async recordLaterCommit(): Promise<string> {
+    writeFileSync(join(this.root, "code.js"), "export const value = 3;\n");
+    this.git(["add", "code.js"]);
+    this.git(["commit", "-qm", "fix: repair the failing check"]);
+    await this.recordVerifiedCommit("commit-2", "verification-2", "fix: repair the failing check");
+    return this.git(["rev-parse", "HEAD"]);
   }
   private remoteHead(branch: string): string | undefined {
     const value = this.git(
@@ -236,6 +259,7 @@ export class DraftDeliveryFixture {
         )
           throw new Error("effect without durable intent");
         this.createBody = request.body;
+        this.prBody = request.body;
         const identity = this.identity();
         this.prs = [identity];
         return Promise.resolve(
@@ -249,6 +273,25 @@ export class DraftDeliveryFixture {
                 createdPrIdentity: identity,
               },
         );
+      },
+    };
+  }
+  private makeBodyAdapter(): GitPullRequestBodyAdapter {
+    return {
+      readPullRequestBody: (): Promise<GitPrInspectionResult<GitPrBody>> => {
+        this.bodyReads += 1;
+        this.beforeBodyRead?.(this.bodyReads);
+        const identity = this.prs[0];
+        return Promise.resolve(
+          this.failBodyRead || identity === undefined
+            ? { ok: false, reason: "invalid-response" }
+            : { ok: true, value: { identity, body: this.prBody, updatedAt: this.prBodyUpdatedAt } },
+        );
+      },
+      updatePullRequestBody: (request): Promise<GitPrExecResult> => {
+        this.bodyUpdates.push(request.body);
+        this.prBody = request.body;
+        return Promise.resolve({ schemaVersion: "1", outcome: "succeeded", durationMs: 1 });
       },
     };
   }
@@ -292,6 +335,7 @@ export class DraftDeliveryFixture {
           : { ok: false, reason: this.targetReason };
       },
       inspectionAdapter: () => this.adapter,
+      bodyAdapter: () => this.bodyAdapter,
       pullRequestSeams: () => ({ ...shared, prAdapterFactory: () => this.adapter }),
       publishSeams: () => ({
         ...shared,

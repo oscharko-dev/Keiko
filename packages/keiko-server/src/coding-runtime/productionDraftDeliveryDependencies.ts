@@ -55,6 +55,17 @@ function snapshotIsDeliverable(state: string): boolean {
 
 type TargetFailure = Extract<DraftDeliveryTargetResolution, { ok: false }>;
 
+// One live-gated provider adapter serves the inspection reads and the Checks refresh's body reads and
+// writes (owner review on PR #3452).
+function livePullRequestAdapter(
+  factory: DraftDeliveryFactory,
+  context: Parameters<DraftDeliveryDependencies["inspectionAdapter"]>[0],
+): ReturnType<typeof createNodeGitPullRequestAdapter> | undefined {
+  return factory.live(context)
+    ? createNodeGitPullRequestAdapter(factory.adapterDeps(context))
+    : undefined;
+}
+
 /** Reuses the accepted run, managed workspace, checkout grant and existing Git delivery adapters. */
 export function createProductionDraftDeliveryDependencies(
   deps: DraftDeliveryCompositionDeps,
@@ -64,6 +75,10 @@ export function createProductionDraftDeliveryDependencies(
   if (verified === undefined || snapshots === undefined || deps.workspaceLifecycle === undefined)
     return undefined;
   const factory = new DraftDeliveryFactory(deps, snapshots);
+  const pullRequestAdapter = (
+    context: Parameters<DraftDeliveryDependencies["inspectionAdapter"]>[0],
+  ): ReturnType<typeof createNodeGitPullRequestAdapter> | undefined =>
+    livePullRequestAdapter(factory, context);
   return {
     snapshots,
     mutationDeps: verified.mutationDeps,
@@ -72,10 +87,8 @@ export function createProductionDraftDeliveryDependencies(
     resolveRelatedIssues: (context) => factory.resolveRelatedIssues(context),
     ciReader: (context) => factory.ciReader(context),
     journeyReader: (context) => factory.journeyReader(context),
-    inspectionAdapter: (context) =>
-      factory.live(context)
-        ? createNodeGitPullRequestAdapter(factory.adapterDeps(context))
-        : undefined,
+    inspectionAdapter: pullRequestAdapter,
+    bodyAdapter: pullRequestAdapter,
     publishSeams: (context) => ({
       activityLog: factory.log,
       beforeRemoteDispatch: () => factory.live(context),

@@ -7,7 +7,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkspaceBinding } from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceBinding, WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchRuntimeActions } from "@/lib/useCodingWorkbenchRuntime";
 import {
   createInitialCodingWorkbenchRuntimeState,
@@ -104,6 +104,45 @@ function workspaceApi(overrides: Partial<ActiveWorkspaceApi> = {}): ActiveWorksp
     provision: vi.fn(() => Promise.resolve(true)),
     ...overrides,
   };
+}
+
+// A workspace bound to `repositoryRoot` on `baseBranch`, as after the Workbench's own bind.
+function boundWorkspaceApi(repositoryRoot: string, baseBranch: string): ActiveWorkspaceApi {
+  const at = "2026-09-11T08:19:00.000Z";
+  const instance: WorkspaceInstance = {
+    schemaVersion: "1",
+    workspaceId: "ws-bound",
+    taskId: codingWorkbenchSetupTaskId(baseBranch),
+    repositoryId: "repository-bound",
+    repositoryRoot,
+    baseBranch,
+    taskBranch: "keiko/bound",
+    managedWorktreePath: "/worktrees/bound",
+    gitdirIdentity: "gitdir-bound",
+    lifecycleState: "active",
+    health: "healthy",
+    lock: null,
+    createdAt: at,
+    updatedAt: at,
+    driftMarkers: [],
+    recoveryHints: [],
+    auditCorrelationId: "correlation-bound",
+  };
+  const binding: WorkspaceBinding = {
+    schemaVersion: "1",
+    workspaceId: instance.workspaceId,
+    taskId: instance.taskId,
+    activeRoot: instance.managedWorktreePath,
+    boundSurfaces: ["git-delivery"],
+    gitDeliveryRoot: instance.managedWorktreePath,
+    editorProjectRoot: instance.managedWorktreePath,
+  };
+  return workspaceApi({
+    instances: [instance],
+    activeBinding: binding,
+    activeInstance: instance,
+    activeRoot: instance.managedWorktreePath,
+  });
 }
 
 function liveState(
@@ -469,6 +508,37 @@ describe("CodingWorkbenchSetup", () => {
       expect(screen.getByLabelText("Target branch")).toHaveValue("dev");
     });
     expect(baseBranchMock).toHaveBeenCalledWith("/repos/selected");
+  });
+
+  // F81 (run 28): issue intake after a bind reopened this card seeded with the server's workspace
+  // root and looked up that path's branch. It starts from the bound workspace instead: its
+  // repository and the base branch the operator bound, with no lookup for a path nobody chose.
+  it("starts issue intake from the bound repository and its base branch without a lookup", async () => {
+    const user = userEvent.setup();
+    renderWorkbench(boundWorkspaceApi("/repos/target", "master"), liveState(), "/srv/keiko");
+
+    await user.click(screen.getByRole("button", { name: "Start from a GitHub issue" }));
+
+    expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/target");
+    expect(screen.getByLabelText("Target branch")).toHaveValue("master");
+    expect(baseBranchMock).not.toHaveBeenCalled();
+  });
+
+  // The seeded branch is the bound repository's, not a choice for another path the operator types.
+  it("reads the branch of a different path typed after the issue-intake seed", async () => {
+    const user = userEvent.setup();
+    baseBranchMock.mockResolvedValue("trunk");
+    renderWorkbench(boundWorkspaceApi("/repos/target", "master"), liveState(), "/srv/keiko");
+    await user.click(screen.getByRole("button", { name: "Start from a GitHub issue" }));
+
+    await user.clear(screen.getByLabelText("Repository path"));
+    await user.type(screen.getByLabelText("Repository path"), "/repos/other");
+    await user.tab();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target branch")).toHaveValue("trunk");
+    });
+    expect(baseBranchMock).toHaveBeenCalledWith("/repos/other");
   });
 
   // A branch typed for one repository is not a choice for the next: a new workbench-wide selection

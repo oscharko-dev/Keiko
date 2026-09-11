@@ -523,6 +523,13 @@ request":
   (reusing the editor's inline-completion limiter, 60 s window) that logs one
   `client.diagnostic.rate-limited` line per window carrying the count of further drops it
   suppressed, and answers `204` whether a report was kept or dropped.
+  A note survives that redaction only in a code-owned shape (F29, Coding Workbench run 28, where 53
+  of the 77 notes the browser sends had collapsed to the shape marker): an exact sentence, or a
+  template whose every variable has a closed vocabulary. An error travels as its class name, a
+  count as digits, a status as a closed label, and the editor's runtime notices as closed codes
+  (`keiko-editor` `runtime-notice.ts`; the two language loaders in `keiko-ui`). Anything else,
+  including a code-owned template filled with foreign text, still collapses to the shape marker,
+  so the browser can never widen what the log admits.
   A valid original request correlation takes precedence. Reports without one, including reports
   whose supplied id fails validation, use the validated ingest request correlation; internal
   callers without either use `UNKNOWN_CORRELATION_ID`. Rate-limit notices use the ingest request

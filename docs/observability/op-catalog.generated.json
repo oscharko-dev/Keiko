@@ -998,7 +998,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/diagnostics-log.ts:316",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:314",
       "package": "keiko-server"
     },
     {
@@ -1305,7 +1305,7 @@
     {
       "op": "chat.compaction.evidence",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-compaction-evidence.ts:89",
+      "site": "packages/keiko-server/src/chat-compaction-evidence.ts:83",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -2193,9 +2193,8 @@
     },
     {
       "op": "evidence.retention",
-      "category": "diagnostic",
-      "site": "packages/keiko-server/src/diagnostics-log.ts:687",
-      "sourceKind": "diagnostic-operation",
+      "category": "process",
+      "site": "packages/keiko-server/src/evidence-retention-log.ts:37",
       "package": "keiko-server"
     },
     {
@@ -2531,6 +2530,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "git.draft-checks",
+      "category": "process",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryChecksRefresh.ts:230",
+      "package": "keiko-server"
+    },
+    {
       "op": "git.draft-delivery",
       "category": "process",
       "site": "packages/keiko-server/src/gitDelivery/draftDeliveryLedger.ts:169",
@@ -2569,19 +2574,19 @@
     {
       "op": "git.draft-push.preparation",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:484",
+      "site": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:497",
       "package": "keiko-server"
     },
     {
       "op": "git.draft-related-issues",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:443",
+      "site": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:456",
       "package": "keiko-server"
     },
     {
       "op": "git.draft-related-issues",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:460",
+      "site": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:473",
       "package": "keiko-server"
     },
     {
@@ -2599,19 +2604,19 @@
     {
       "op": "git.draft-target.resolved",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:610",
+      "site": "packages/keiko-server/src/coding-runtime/productionDraftDeliveryDependencies.ts:623",
       "package": "keiko-server"
     },
     {
       "op": "git.draft-template",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryTemplate.ts:269",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryTemplate.ts:278",
       "package": "keiko-server"
     },
     {
       "op": "git.draft-template",
       "category": "process",
-      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryTemplate.ts:287",
+      "site": "packages/keiko-server/src/gitDelivery/draftDeliveryTemplate.ts:296",
       "package": "keiko-server"
     },
     {
@@ -2806,7 +2811,7 @@
     {
       "op": "grounded.memory",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/grounded-qa.ts:2354",
+      "site": "packages/keiko-server/src/grounded-qa.ts:2348",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

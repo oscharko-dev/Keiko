@@ -18,7 +18,12 @@ import {
   DRAFT_DELIVERY_TEMPLATE_DIRECTORY_MAX_ENTRIES,
   DRAFT_DELIVERY_RELATED_ISSUES_MAX,
 } from "./draftDeliveryTemplate.js";
-import { renderDraftDeliveryChecks, type DraftDeliveryChecks } from "./draftDeliveryChecks.js";
+import {
+  renderDraftDeliveryChecks,
+  type DraftDeliveryChecks,
+  CHECKS_SECTION_START,
+  frameDraftChecksSection,
+} from "./draftDeliveryChecks.js";
 
 // Secret-shaped fixture assembled at runtime: the validator must refuse this exact shape, but the
 // source tree must not carry a literal that secret scanners flag as a credential.
@@ -182,21 +187,23 @@ describe("issue-bound default pull request template composition", () => {
     });
   });
 
-  it.each([PR_DESCRIPTION_REGION_START, "<!-- KEIKO : PR-DESCRIPTION:v999:end -->"])(
-    "refuses preexisting or malformed managed markers: %s",
-    async (marker) => {
-      const f = await fixture();
-      await f.write("pull_request_template.md", marker);
-      expect(resolveDraftDeliveryTemplate(f.input)).toEqual({
-        status: "blocked",
-        reason: "managed-region-marker",
-      });
-      expect(resolveDraftDeliveryTemplate({ ...f.input, title: marker })).toEqual({
-        status: "blocked",
-        reason: "managed-region-marker",
-      });
-    },
-  );
+  it.each([
+    PR_DESCRIPTION_REGION_START,
+    "<!-- KEIKO : PR-DESCRIPTION:v999:end -->",
+    CHECKS_SECTION_START,
+    "<!-- keiko : Checks:v9:end -->",
+  ])("refuses preexisting or malformed managed markers: %s", async (marker) => {
+    const f = await fixture();
+    await f.write("pull_request_template.md", marker);
+    expect(resolveDraftDeliveryTemplate(f.input)).toEqual({
+      status: "blocked",
+      reason: "managed-region-marker",
+    });
+    expect(resolveDraftDeliveryTemplate({ ...f.input, title: marker })).toEqual({
+      status: "blocked",
+      reason: "managed-region-marker",
+    });
+  });
 
   it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER, Number.NaN])(
     "refuses invalid frozen issue number %s",
@@ -549,7 +556,7 @@ describe("verification checks section (F57)", () => {
       }),
     ).toMatchObject({
       status: "ready",
-      body: `Closes #42\n\nRelated issues: #7\n\n${section.markdown}\n\n${framePrDescriptionRegion("")}`,
+      body: `Closes #42\n\nRelated issues: #7\n\n${frameDraftChecksSection(section.markdown)}\n\n${framePrDescriptionRegion("")}`,
       checkRowCount: section.rowCount,
     });
     expect(f.log.at(-1)).toMatchObject({

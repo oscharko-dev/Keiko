@@ -655,7 +655,107 @@ const BODY_FREE_CLIENT_NOTE_PATTERNS: readonly RegExp[] = [
   // "clone"/"open" mode, never browser-authored text); without this it matched no pattern above
   // and collapsed to the generic shape marker, losing which dialog mode was handed off.
   /^\[keiko\] git repository dialog handoff: (?:clone|open)$/u,
+  // F29 (Coding Workbench run 28): every other code-owned note the browser sends, each with its
+  // closed vocabulary. 53 of the 77 notes used to collapse to the shape marker.
+  /^\[keiko\] (?:shared-event-source|relationship-activity|coding-workbench-runtime|run-events) sse stream error \(kind=sse-error, readyState=(?:0|1|2|unknown), reason=(?:connecting|closed|unknown)\)$/u,
+  /^\[keiko\] window body crashed: [a-z][a-z0-9-]{0,63}: (?:[A-Z]\w{0,63}|[a-z]{3,9})$/u,
+  /^\[keiko\] journey action: (?:refresh|propose-ready) failed \(reason=[a-z][a-z0-9-]{0,40}\)$/u,
+  /^\[keiko\] voice turn effect executed \(effect=[a-z][a-z0-9-]{0,40}\)$/u,
+  /^\[keiko\] workbench description draft rejected: (?:proposal|snapshot|digest)-mismatch proposal [A-Za-z0-9][A-Za-z0-9._:-]{0,63} expected [0-9a-f]{12} actual [0-9a-f]{12}$/u,
+  /^\[keiko\] task workspace bind (?:verify|restore-verify) failed: status=[a-z][a-z-]{0,31}$/u,
+  /^workspace-state: (?:persisted (?:window|connection) scan limit exceeded|local persistence (?:shape invalid|parse failed)) \(keiko\.[a-z][a-z0-9.]{0,40}\)$/u,
+  /^workspace-state: keepalive body \d{1,9}B over budget; retrying without keepalive$/u,
+  /^workspace-state: (?:pull|put) failed (?:with status [1-5]\d{2}|\(network error\)); workspace changes persist locally until sync recovers$/u,
+  /^workspace-clipboard: (?:copy|cut) captured=\d{1,6} skipped=\d{1,6} overflow=(?:\d{1,6}|true|false)$/u,
+  /^desktop (?:window chunk|chat window chunk|editor widget chunk|files widget chunk|chat bind) #\d{1,9}: (?:started|settled after \d{1,9}ms)$/u,
+  /^shell-recovery: [a-z][a-z-]{0,31} layer (?:refused the reset \([a-z][a-z-]{0,31}\)|reset failed \((?:[A-Z]\w{0,63}|[a-z]{3,9})\))$/u,
+  // The editor's runtime notices (keiko-editor runtime-notice.ts and the two keiko-ui language
+  // loaders): a closed code, closed parameters, and an error only as its class name.
+  /^Keiko editor runtime notice: language-load-failed \(language=[a-z][a-z0-9.+#-]{0,39}, error=(?:[A-Z]\w{0,63}|[a-z]{3,9})\)$/u,
+  /^Keiko editor runtime notice: diff-language-load-failed \(count=\d{1,4}, error=(?:[A-Z]\w{0,63}|[a-z]{3,9})\)$/u,
+  /^Keiko editor runtime notice: (?:git-gutter-refresh|blame-read|theme-registration|diff-theme-registration)-failed \(error=(?:[A-Z]\w{0,63}|[a-z]{3,9})\)$/u,
 ];
+
+// Exact code-owned sentences without a variable part (F29).
+const BODY_FREE_CLIENT_NOTES: ReadonlySet<string> = new Set([
+  "[keiko] git-change description response settled",
+  "[keiko] workspace connection unbind callback failed",
+  "[keiko] queued editor selection handoff could not be restored after chat closure",
+  "[keiko] workbench description draft review failed",
+  "[keiko] coding workbench workspace refresh did not settle",
+  "[keiko] coding workbench repository trust bound",
+  "[keiko] coding workbench worktree script trust catalog read failed",
+  "[keiko] coding workbench worktree trust grant refused",
+  "[keiko] coding workbench issue selection released after terminal run",
+  "[keiko] coding workbench issue intake opened",
+  "[keiko] journey initial refresh failed",
+  "[keiko] memory correction predecessor response rejected (kind=invalid-response)",
+  "git-client: stale generated commit draft cleared (repository-revision-changed)",
+  "git-client: commit draft cleared (repository-selection-changed)",
+  "Keiko editor runtime notice: host-edit-ignored (reason=read-only)",
+  "Keiko editor runtime notice: model-ownership-changed",
+]);
+
+// Code-owned failure notes whose one variable part is the error's class (`clientErrorSummary`:
+// an Error's name, or `typeof` for a thrown non-Error), never its message (F29).
+const CLIENT_FAILURE_NOTE_PREFIXES: ReadonlySet<string> = new Set([
+  "[keiko] atlassian-connectors route crashed",
+  "[keiko] app shell crashed",
+  "[keiko] local-knowledge capsule route crashed",
+  "[keiko] unhandled promise rejection",
+  "[keiko] task workspace inventory refresh failed",
+  "[keiko] coding workbench workspace refresh failed",
+  "[keiko] coding workbench bind sequence rejected",
+  "[keiko] coding workbench base branch lookup failed",
+  "[keiko] coding workbench pairing discovery failed",
+  "[keiko] coding app-session stream cancel-on-stall failed",
+  "[keiko] bff error enrichment failed",
+  "[keiko] approval review channel refresh failed",
+  "[keiko] research channel refresh failed",
+  "[keiko] github issue reader grant read",
+  "[keiko] github issue reader grant write",
+  "[keiko] github issue reader grant conflict",
+  "[keiko] task workspace bind provision failed",
+  "[keiko] task workspace bind verify failed",
+  "[keiko] task workspace bind activate failed",
+  "[keiko] task workspace bind repair failed",
+]);
+const CLIENT_ERROR_CLASS = /^(?:[A-Z]\w{0,63}|[a-z]{3,9})$/u;
+
+function isClientFailureNote(value: string): boolean {
+  const separator = value.lastIndexOf(": ");
+  return (
+    separator > 0 &&
+    CLIENT_FAILURE_NOTE_PREFIXES.has(value.slice(0, separator)) &&
+    CLIENT_ERROR_CLASS.test(value.slice(separator + 2))
+  );
+}
+
+// The shell's keybinding-override refusal: a bounded list of `command=REASON_CODE` parts (F29).
+const SHORTCUT_REFUSAL_NOTE =
+  /^shell-shortcuts: refused persisted keybinding overrides \((.{1,1300})\); affected commands keep their default binding$/u;
+const SHORTCUT_REFUSAL_PART =
+  /^(?:[A-Za-z][\w.:-]{0,79}=[A-Z][A-Z0-9_]{0,39}|unknown-commands=\d{1,4}|setting=[A-Z][A-Z0-9_]{0,39})$/u;
+
+function isShortcutRefusalNote(value: string): boolean {
+  const parts = SHORTCUT_REFUSAL_NOTE.exec(value)?.[1]?.split(", ");
+  return (
+    parts !== undefined &&
+    parts.length <= 16 &&
+    parts.every((part) => SHORTCUT_REFUSAL_PART.test(part))
+  );
+}
+
+// A note is admitted only in a code-owned shape, and even then never when it looks like a secret or
+// a personal identifier: the shapes carry class names and labels, which a hostile value could mimic.
+function isBodyFreeClientNote(value: string): boolean {
+  const shaped =
+    BODY_FREE_CLIENT_NOTES.has(value) ||
+    isClientFailureNote(value) ||
+    isShortcutRefusalNote(value) ||
+    BODY_FREE_CLIENT_NOTE_PATTERNS.some((pattern) => pattern.test(value));
+  return shaped && !looksLikeSecret(value) && !looksLikePersonalIdentifier(value);
+}
 
 // Mirrors `redactGuardedArrayField`'s depth/name gate for the scalar hatch. `undefined` means
 // "not this field" (wrong depth, wrong name, or a non-string value under this name — which cannot
@@ -668,11 +768,7 @@ function redactGuardedScalarField(
 ): string | undefined {
   if (depth !== MAX_LOG_FIELD_DEPTH || typeof fieldValue !== "string") return undefined;
   if (name === "diagnosticSummary") return redactProseAllowedValue(fieldValue);
-  if (
-    name === "clientNote" &&
-    BODY_FREE_CLIENT_NOTE_PATTERNS.some((pattern) => pattern.test(fieldValue))
-  )
-    return fieldValue;
+  if (name === "clientNote" && isBodyFreeClientNote(fieldValue)) return fieldValue;
   return undefined;
 }
 

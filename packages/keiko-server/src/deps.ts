@@ -113,12 +113,12 @@ import {
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
   defaultServerDiagnosticSink,
   describeError,
-  evidenceRetentionDiagnosticObserver,
   emitServerDiagnostic,
   serverDiagnosticFromError,
   type ServerDiagnosticSink,
   type ServerDiagnosticSummary,
 } from "./diagnostics-log.js";
+import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
 import { currentOpenSseStreamCount, markServerShuttingDown } from "./sse-write.js";
@@ -2077,7 +2077,7 @@ function buildBrowserManager(options: {
         options.evidenceStore,
         (value): string => redactEvidenceString(options.redactor, value),
         DEFAULT_RETENTION,
-        evidenceRetentionDiagnosticObserver(options.diagnostics, "browser-capture"),
+        evidenceRetentionObserver("browser-capture"),
       ).location,
     costClassResolver: resolveCostClass,
     sideFileWriter: (basename, bytes, runId) =>

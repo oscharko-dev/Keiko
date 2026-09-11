@@ -48,6 +48,13 @@ import {
 } from "./editorMonacoRuntime";
 import conflictStyles from "./EditorConflicts.module.css";
 import styles from "./EditorGitHunkPeek.module.css";
+import { clientErrorSummary } from "@/lib/client-error-summary";
+
+// F29: a code-owned runtime notice. The activity log admits exactly this shape, so the error travels
+// only as its class name, never its message.
+function languageLoadNotice(languageId: string, error: unknown): string {
+  return `language-load-failed (language=${languageId}, error=${clientErrorSummary(error)})`;
+}
 
 export interface EditorSurfaceProps {
   readonly buffer: EditorBuffer;
@@ -181,8 +188,7 @@ function EditorSurface(props: EditorSurfaceProps): ReactElement {
     setLanguageReady(false);
     void ensureMonacoLanguage(languageId)
       .catch((error: unknown) => {
-        const message = error instanceof Error ? error.message : String(error);
-        onRuntimeError?.(`Failed to load Monaco language '${languageId}': ${message}`);
+        onRuntimeError?.(languageLoadNotice(languageId, error));
       })
       .finally(() => {
         if (!cancelled) {

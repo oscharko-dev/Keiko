@@ -57,10 +57,10 @@ import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-acces
 import type { ServerLogSink } from "../observability/index.js";
 import {
   describeError,
-  evidenceRetentionDiagnosticObserver,
   emitServerDiagnostic,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
+import { evidenceRetentionObserver } from "../evidence-retention-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 
@@ -790,7 +790,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         entry,
         this.redactor,
         DEFAULT_RETENTION,
-        evidenceRetentionDiagnosticObserver(this.diagnostics, "editor-verification-run"),
+        evidenceRetentionObserver("editor-verification-run"),
       );
     } catch {
       throw new VerificationRunnerError(
@@ -824,7 +824,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         evidence,
         this.redactor,
         DEFAULT_RETENTION,
-        evidenceRetentionDiagnosticObserver(this.diagnostics, "editor-verification-run"),
+        evidenceRetentionObserver("editor-verification-run"),
       );
     } catch {
       throw new VerificationRunnerError(

@@ -39,6 +39,9 @@ export interface KeikoDiffEditorProps {
   readonly onOpenFile?: ((uri: string) => void) | undefined;
   /** Host-owned: run verification against the previewed patch. */
   readonly onRunVerification?: (() => void) | undefined;
-  /** Reports a non-fatal runtime error (e.g. theme-token resolution failed). */
+  /**
+   * Reports a non-fatal runtime notice as a code-owned sentence (runtime-notice.ts): a closed code,
+   * and an error only as its class name, never its message (F29).
+   */
   readonly onRuntimeError?: ((message: string) => void) | undefined;
 }

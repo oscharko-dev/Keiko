@@ -246,7 +246,7 @@ describe("useEditorHandlers — host edit request (KEIKO-0032, KEIKO-0033)", () 
       },
     );
 
-    expect(onRuntimeError).toHaveBeenCalledWith("host edit request ignored: buffer is read-only");
+    expect(onRuntimeError).toHaveBeenCalledWith("host-edit-ignored (reason=read-only)");
     expect(onContentChange).not.toHaveBeenCalled();
 
     // Flip to writable with the SAME request id: already marked handled, so nothing re-applies.

@@ -193,6 +193,19 @@ path, repository or model text, and names the commit and the evidence it came fr
 read the section says so instead of listing anything. Like the closing line it lies outside the
 managed region, so a later managed-region replacement preserves it (ADR-0174 D4).
 
+The section sits in its own frame (`<!-- keiko:checks:v1:start -->` … `<!-- keiko:checks:v1:end -->`),
+which an authored template or title may not carry. When the delivery later pushes a new verified
+commit to the same pull request (a CI repair), it recomposes the section for that commit as its own
+governed `pr-update` (ADR-0174 D4), under policy authority only: the mode must allow the
+`pull-request` delivery action without approval. It re-reads the live body, requires the pull
+request to be the delivery's own, open and on the pushed commit, replaces exactly the framed
+section, and writes only if the body is unchanged since that read. Every outcome is logged as
+`git.draft-checks` with `phase: refresh`: refreshed, skipped with its reason (approval required, no
+body adapter, another pull request, the frame absent or ambiguous, nothing changed) or failed with
+its reason (the read failed, the body changed meanwhile, the update failed). When a refresh cannot
+run the section stays as it was: it names its own commit and states that later commits on the
+branch are not covered by it.
+
 The owning runtime snapshot schema retains a bounded `DraftDeliveryRecord` alongside the verified
 commit, with an independent compare-and-swap revision and explicit push/PR/recovery phases.
 It binds the run, authority and workspace digests, frozen issue, origin, exact base/head,

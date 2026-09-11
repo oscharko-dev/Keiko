@@ -7,7 +7,6 @@ import {
   defaultServerDiagnosticSink,
   describeError,
   emitServerDiagnostic,
-  evidenceRetentionDiagnosticObserver,
   serverDiagnosticFromError,
   type ServerDiagnosticRecord,
 } from "./diagnostics-log.js";
@@ -699,37 +698,6 @@ describe("serverDiagnosticFromError forwards frames and causeChain (ADR-0173 D3)
     });
     expect(record.frames).toBeUndefined();
     expect(record.causeChain).toBeUndefined();
-  });
-});
-
-// ADR-0173 D5 / g12: `evidenceRetentionDiagnosticObserver`'s bound callback used to mint a fresh
-// `randomUUID()` on EVERY `onRetentionDeleted` firing, so two deletions reported by the same
-// retention sweep (the same observer registration) looked like unrelated operations. Fails before
-// the fix — two firings from one observer would carry two different random UUIDs.
-describe("evidenceRetentionDiagnosticObserver correlation id (ADR-0173 D5 / g12)", () => {
-  it("shares one correlation id across every firing of the same observer", () => {
-    const records: ServerDiagnosticRecord[] = [];
-    const observe = evidenceRetentionDiagnosticObserver(
-      { record: (record) => records.push(record) },
-      "unit-test-source",
-    );
-
-    observe(2);
-    observe(5);
-
-    expect(records).toHaveLength(2);
-    expect(records[0]?.correlationId).toBeDefined();
-    expect(records[0]?.correlationId).toBe(records[1]?.correlationId);
-  });
-
-  it("mints a distinct id for each separate observer registration", () => {
-    const records: ServerDiagnosticRecord[] = [];
-    const sink = { record: (record: ServerDiagnosticRecord): number => records.push(record) };
-    evidenceRetentionDiagnosticObserver(sink, "unit-test-source-a")(1);
-    evidenceRetentionDiagnosticObserver(sink, "unit-test-source-b")(1);
-
-    expect(records).toHaveLength(2);
-    expect(records[0]?.correlationId).not.toBe(records[1]?.correlationId);
   });
 });
 

@@ -2,6 +2,7 @@ import type { GitEditorDiffHunk } from "@oscharko-dev/keiko-contracts";
 
 import type { MonacoDisposable, MonacoRange } from "./completion-bridge.js";
 import { GIT_GUTTER_GLYPH_MARGIN_LANE } from "./glyph-margin-lanes.js";
+import { runtimeFailureNotice } from "./runtime-notice.js";
 
 export type EditorGitGutterLayer = "staged" | "unstaged";
 
@@ -230,8 +231,7 @@ function makeGitGutterRefresh(
       })
       .catch((error: unknown) => {
         if (state.disposed || request !== state.sequence || isAbortError(error)) return;
-        const message = error instanceof Error ? error.message : "Git gutter refresh failed";
-        args.onError?.(message);
+        args.onError?.(runtimeFailureNotice("git-gutter-refresh-failed", error));
       });
   };
 }
