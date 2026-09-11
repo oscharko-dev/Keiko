@@ -196,8 +196,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 // A timer armed with more than 2^31 - 1 ms fires at once (setTimeout, AbortSignal.timeout), so a
-// larger request timeout would abort every call the moment it starts.
-const MAX_TIMER_DELAY_MS = 2_147_483_647;
+// larger request timeout would abort every call the moment it starts. A delay the gateway derives
+// instead of reading it from its config is held to the same ceiling where it is derived.
+export const MAX_TIMER_DELAY_MS = 2_147_483_647;
 
 function requireTimerDelayMs(value: unknown, path: string): number {
   const delayMs = requirePositiveInt(value, path);

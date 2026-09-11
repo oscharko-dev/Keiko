@@ -555,7 +555,7 @@ the last error (`gateway.retry.exhausted` with `reason: "budget"`, the delay and
 budget) instead of sleeping the rest of it away. An attempt that starts with less than `timeoutMs`
 left, which only an earlier attempt overrunning its own timeout can cause, runs under what is left.
 A caller that builds its own deadline around a gateway call derives it from the same function; the
-coding sidecar route adds a grace so the gateway settles its own timeout first. A stream read without bounds (`chatStream`) is never retried and stays bounded by one
+coding sidecar route adds a grace so the gateway settles its own timeout first. The budget never exceeds 2^31 − 1 ms (`MAX_TIMER_DELAY_MS`, `config.ts`): config validation holds each of its terms to that timer ceiling but not their sum, and a deadline armed past the ceiling fires at once, so the derivation clamps the sum, and the adapter's read deadline and the coding sidecar route clamp whatever bound they are handed (PR #3452 review). A stream read without bounds (`chatStream`) is never retried and stays bounded by one
 `timeoutMs`, with `STREAM_IDLE_TIMEOUT_MS` (60 s) as the longest wait for its next data event. Until PR #3452 (2026-09-11) the provider's
 `timeoutMs` reached the retry loop as the budget of the whole call, so an attempt that hung to its
 timeout left no budget and a `TimeoutError` was never retried (coding run 23).

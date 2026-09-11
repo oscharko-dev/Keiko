@@ -9,6 +9,7 @@ import {
   ProviderError,
   RateLimitError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
+import { MAX_TIMER_DELAY_MS } from "./config.js";
 import {
   logErrorKind,
   logLevelEnabled,
@@ -311,7 +312,11 @@ type ProviderRetryPolicy = Pick<
 // the loop as the budget of the WHOLE call, an attempt that hung spent it, and the retry a
 // `TimeoutError` is declared retryable for never ran (coding run 23, 2026-09-11).
 export function providerRequestBudgetMs(provider: ProviderRetryPolicy): number {
-  return (provider.maxRetries + 1) * provider.timeoutMs + provider.maxRetries * MAX_BACKOFF_MS;
+  const budgetMs =
+    (provider.maxRetries + 1) * provider.timeoutMs + provider.maxRetries * MAX_BACKOFF_MS;
+  // Config validation holds each term to the timer ceiling, never their sum: past it, every
+  // deadline armed from this budget would fire the moment it is set (PR #3452 review).
+  return Math.min(budgetMs, MAX_TIMER_DELAY_MS);
 }
 
 // The retry configuration a provider's settings stand for: `timeoutMs` bounds each attempt, and

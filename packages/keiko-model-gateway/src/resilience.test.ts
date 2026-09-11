@@ -14,6 +14,7 @@ import {
   providerRequestBudgetMs,
   providerRetryConfig,
 } from "./resilience.js";
+import { MAX_TIMER_DELAY_MS } from "./config.js";
 import { createScriptedGatewayClock } from "./replay.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import type { Clock } from "./types.js";
@@ -458,6 +459,18 @@ describe("providerRequestBudgetMs", () => {
     expect(
       providerRequestBudgetMs({ timeoutMs: 120_000, maxRetries: 0, retryBaseDelayMs: 500 }),
     ).toBe(120_000);
+  });
+
+  // Config validation holds each term to the timer ceiling, never their sum: past it, every
+  // deadline armed from the budget would fire the moment it is set (PR #3452 review).
+  it("stays inside what a timer can hold when the attempts together would pass it", () => {
+    expect(
+      providerRequestBudgetMs({
+        timeoutMs: MAX_TIMER_DELAY_MS,
+        maxRetries: 1,
+        retryBaseDelayMs: 500,
+      }),
+    ).toBe(MAX_TIMER_DELAY_MS);
   });
 });
 

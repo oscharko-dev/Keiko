@@ -18,7 +18,12 @@ import {
   TransportError,
   type GatewayEgressErrorCode,
 } from "@oscharko-dev/keiko-security/errors/gateway";
-import { apiKeyHeaderValue, DEFAULT_API_KEY_HEADER_NAME, trimTrailingSlash } from "./config.js";
+import {
+  apiKeyHeaderValue,
+  DEFAULT_API_KEY_HEADER_NAME,
+  MAX_TIMER_DELAY_MS,
+  trimTrailingSlash,
+} from "./config.js";
 import {
   gatewayFetch,
   OutboundHttpEgressError,
@@ -187,9 +192,14 @@ function timedAbort(
   message: string,
 ): { readonly signal: AbortSignal; readonly dispose: () => void } {
   const controller = new AbortController();
-  const timer = setTimeout(() => {
-    controller.abort(new DOMException(message, "TimeoutError"));
-  }, ms);
+  // Past the timer ceiling a timer fires at once and would end the read the moment it starts; no
+  // caller's bound may do that (PR #3452 review).
+  const timer = setTimeout(
+    () => {
+      controller.abort(new DOMException(message, "TimeoutError"));
+    },
+    Math.min(ms, MAX_TIMER_DELAY_MS),
+  );
   return {
     signal: controller.signal,
     dispose: (): void => {

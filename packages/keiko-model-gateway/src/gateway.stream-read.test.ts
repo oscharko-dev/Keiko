@@ -4,6 +4,7 @@
 // `timeoutMs` and generated a second time.
 import { describe, expect, it, vi } from "vitest";
 import { TimeoutError } from "@oscharko-dev/keiko-security/errors/gateway";
+import { MAX_TIMER_DELAY_MS } from "./config.js";
 import { Gateway } from "./gateway.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import { createScriptedGatewayClock } from "./replay.js";
@@ -180,5 +181,28 @@ describe("Gateway.chat reads over the provider's stream (provider stalls, coding
     await gateway.chat(REQUEST);
 
     expect(call).toHaveBeenCalledOnce();
+  });
+
+  // Config validation holds each term of the budget to the timer ceiling, never their sum: a read
+  // bounded past it would end the moment it starts (PR #3452 review).
+  it("bounds the read inside what a timer can hold when the budget would pass it", async () => {
+    const fake = streamingFake();
+    const log = recorder();
+    const longest: ModelProviderConfig = {
+      ...PROVIDER,
+      timeoutMs: MAX_TIMER_DELAY_MS,
+      maxRetries: 1,
+    };
+    const gateway = new Gateway(
+      { ...config(true), providers: [longest] },
+      { adapter: fake.adapter, clock: createScriptedGatewayClock(), log },
+    );
+
+    await gateway.chat(REQUEST);
+
+    expect(fake.bounds).toEqual([{ silenceMs: MAX_TIMER_DELAY_MS, budgetMs: MAX_TIMER_DELAY_MS }]);
+    expect(log.events.find((event) => event.op === "gateway.chat.started")).toMatchObject({
+      extra: { requestBudgetMs: MAX_TIMER_DELAY_MS, upstreamStreaming: true },
+    });
   });
 });

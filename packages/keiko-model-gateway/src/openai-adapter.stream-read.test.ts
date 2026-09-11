@@ -238,6 +238,27 @@ describe("OpenAiAdapter.callStream with read bounds: silence and budget", () => 
     expect(provider.cancelled()).toBe(true);
   });
 
+  // Past the timer ceiling a timer fires at once: a budget that large must not end a live read
+  // the moment it starts (PR #3452 review).
+  it("holds a budget past what a timer can hold to the longest one it can", async () => {
+    vi.useFakeTimers();
+    const provider = drivenStream();
+    const bounds: StreamReadBounds = { silenceMs: 1_000, budgetMs: 2 ** 32 };
+    const reading = answerOf(
+      adapterWith(() => Promise.resolve(provider.response)).callStream(REQUEST, CONFIG, bounds),
+    );
+    const answered = expect(reading).resolves.toMatchObject({
+      content: "ok",
+      finishReason: "stop",
+    });
+    provider.push(delta("ok"));
+    await vi.advanceTimersByTimeAsync(10);
+    provider.push(finish("stop"));
+    provider.push(DONE);
+    provider.end();
+    await answered;
+  });
+
   it("says in its dispatch line which bounds the read runs under", async () => {
     const log = recorder();
     await answerOf(

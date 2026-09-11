@@ -504,13 +504,13 @@
     {
       "op": "chat.request.dispatch",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:1156",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:1166",
       "package": "keiko-model-gateway"
     },
     {
       "op": "chat.response.streamed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:1084",
+      "site": "packages/keiko-model-gateway/src/openai-adapter.ts:1094",
       "package": "keiko-model-gateway"
     },
     {
@@ -660,25 +660,25 @@
     {
       "op": "gateway.circuit.closed",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/resilience.ts:518",
+      "site": "packages/keiko-model-gateway/src/resilience.ts:523",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.circuit.half-open",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/resilience.ts:432",
+      "site": "packages/keiko-model-gateway/src/resilience.ts:437",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.circuit.opened",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/resilience.ts:498",
+      "site": "packages/keiko-model-gateway/src/resilience.ts:503",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.circuit.rejected",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/resilience.ts:392",
+      "site": "packages/keiko-model-gateway/src/resilience.ts:397",
       "package": "keiko-model-gateway"
     },
     {
@@ -696,19 +696,19 @@
     {
       "op": "gateway.retry.budget-exhausted",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/resilience.ts:239",
+      "site": "packages/keiko-model-gateway/src/resilience.ts:240",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.retry.exhausted",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/resilience.ts:276",
+      "site": "packages/keiko-model-gateway/src/resilience.ts:277",
       "package": "keiko-model-gateway"
     },
     {
       "op": "gateway.retry.scheduled",
       "category": "gateway",
-      "site": "packages/keiko-model-gateway/src/resilience.ts:286",
+      "site": "packages/keiko-model-gateway/src/resilience.ts:287",
       "package": "keiko-model-gateway"
     },
     {

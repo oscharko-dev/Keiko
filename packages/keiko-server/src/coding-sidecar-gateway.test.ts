@@ -2277,7 +2277,9 @@ describe("coding-sidecar gateway", () => {
       vast.modelId,
     );
     expect(deadline).toBe(MAX_TIMER_DELAY_MS);
-    expect(providerRequestBudgetMs(vast)).toBeGreaterThan(deadline);
+    // The budget itself stops at the ceiling, so the grace the route adds would pass it: the
+    // route's own clamp still has to hold.
+    expect(providerRequestBudgetMs(vast)).toBe(MAX_TIMER_DELAY_MS);
   });
 
   it("bounds an unconfigured model like a default provider that never retries", () => {
