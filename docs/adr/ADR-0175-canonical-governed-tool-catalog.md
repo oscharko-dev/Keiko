@@ -516,14 +516,21 @@ before it, and every receipt bound to its entry. A producer changed again withou
 edited after pinning fails `stale receipt`. Without a lineage file the check reports exactly the
 historical mismatch it always did.
 
-First entry: the verification tool's settlement budget derived from the verification
-orchestrator's enforced limits (`VERIFICATION_TOOL_MAX_DURATION_MS`, ADR-0043 D17) and the
-verification tool's description naming the commit-proof blocking paths (Coding Workbench runs 13–19).
+An entry is issued by the owner, never by the change it certifies (review finding on PR #3452,
+2026-09-11). Each receipt must carry an `evidenceRef` in the H1 receipts' form, bound to the entry's
+integration PR at its own source commit: the required checks for the verification receipt, the review
+threads for the review receipt. The source commit must resolve to a real commit and tree, must be an
+ancestor of the commit being checked, and the last entry's source commit must still hold the producer
+source (`packages/keiko-tool-catalog/src` unchanged since it). An unresolvable commit fails; it is
+never tolerated. The first entry recorded on PR #3452 was self-issued with agent-written receipts and
+no external evidence, and was withdrawn: the derived verification budget stays uncertified until the
+owner issues an entry that meets these rules.
 
 ## Version History
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.4 | 2026-09-11 | Lineage entries are owner-issued: receipts carry evidence refs bound to the integration PR at the entry's source commit, which must resolve, precede the checked commit and still hold the producer; the self-issued first entry was withdrawn. |
 | 1.3 | 2026-09-10 | Post-landing producer changes are admitted through an append-only lineage of owner-issued checkpoints with pinned verification and independent-review receipts; the H1 records keep their historical identity (PR #3452). |
 | 1.2 | 2026-09-10 | D4: the catalog ceilings also bound the arguments recorded in the sidecar's durable tool-part rows and derive the history response budget; a refused part row is named body-free in the reconciliation diagnostic (PR #3452). |
 | 1.1 | 2026-09-09 | Record the completed #3394 squash-delivery semantics: final signed source and dev-reachable merge are distinct identities with equal complete Git trees; pin exact-schema required-check and review-settlement receipts and the refreshed owned-source closure (#3414, #3415). |

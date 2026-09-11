@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -10,8 +11,10 @@ import {
 
 // ADR-0175 amendment (PR #3452): a producer change after the H1 landing is admitted only through an
 // append-only lineage of owner-issued checkpoints that starts at the durable record's identity, with
-// SHA-256-pinned verification and independent-review receipts per entry. These fixtures are
-// hermetic: the current producer identity is injected, so no real catalog is compiled.
+// SHA-256-pinned receipts per entry whose evidence refs point at the integration PR's checks and
+// review threads at the entry's source commit, which must be a real commit before the checked one.
+// The fixtures are hermetic: the producer identity and the Git facts are injected, except in the one
+// case that proves the default Git facts fail closed.
 
 const roots = [];
 afterEach(() => {
@@ -25,6 +28,11 @@ const FIRST = { catalogRevision: "c".repeat(64), projectionDigest: "d".repeat(64
 const SECOND = { catalogRevision: "e".repeat(64), projectionDigest: "f".repeat(64) };
 const SOURCE = "1".repeat(40);
 const HANDLERS = "9".repeat(64);
+const TRUSTED_COMMITS = {
+  resolves: () => true,
+  isAncestorOfHead: () => true,
+  producerUnchangedSince: () => true,
+};
 
 function fixtureRoot() {
   const root = mkdtempSync(join(tmpdir(), "keiko-producer-lineage-"));
@@ -49,6 +57,7 @@ function verificationReceipt(sequence, identity, overrides = {}) {
     testFiles: 4,
     testCount: 40,
     result: "passed",
+    evidenceRef: `github:oscharko-dev/Keiko#pull/3452/checks@${SOURCE}`,
     ...overrides,
   };
 }
@@ -64,6 +73,7 @@ function reviewReceipt(sequence, identity, overrides = {}) {
     handlerSetDigest: HANDLERS,
     reviewer: "independent-agent",
     criteria: [{ label: "budget-derived-from-enforced-limits", result: "verified" }],
+    evidenceRef: `github:oscharko-dev/Keiko#pull/3452/review-threads@${SOURCE}`,
     ...overrides,
   };
 }
@@ -101,8 +111,11 @@ function writeLineage(root, entries, overrides = {}) {
   );
 }
 
-function failuresWith(root, current) {
-  return producerLineageFailures(root, RECORD, { identity: () => Promise.resolve(current) });
+function failuresWith(root, current, commits = TRUSTED_COMMITS) {
+  return producerLineageFailures(root, RECORD, {
+    identity: () => Promise.resolve(current),
+    commits,
+  });
 }
 
 describe("tool-catalog producer lineage", () => {
@@ -213,6 +226,73 @@ describe("tool-catalog producer lineage", () => {
       }),
     ).toEqual([
       "H1 handoff evidence identity mismatch: durable record's profile cannot be compiled by the current producer",
+    ]);
+  });
+
+  // Review finding on PR #3452: a lineage entry could name a commit that does not exist, one outside
+  // the checked history, or one that no longer holds the producer, and its receipts carried no
+  // external evidence. Each of these is now refused.
+  it("refuses a source commit that does not resolve, never tolerating it", async () => {
+    const root = fixtureRoot();
+    writeLineage(root, [entry(root, 1, RECORD_IDENTITY, FIRST)]);
+    expect(await failuresWith(root, FIRST, { ...TRUSTED_COMMITS, resolves: () => false })).toEqual([
+      "tool-catalog producer lineage entry 1 sourceCommit is not a resolvable Git commit",
+    ]);
+  });
+
+  it("refuses a source commit that does not precede the consuming commit", async () => {
+    const root = fixtureRoot();
+    writeLineage(root, [entry(root, 1, RECORD_IDENTITY, FIRST)]);
+    expect(
+      await failuresWith(root, FIRST, { ...TRUSTED_COMMITS, isAncestorOfHead: () => false }),
+    ).toEqual([
+      "tool-catalog producer lineage entry 1 sourceCommit is not an ancestor of the consuming commit",
+    ]);
+  });
+
+  it("refuses a producer changed after the last entry's source commit", async () => {
+    const root = fixtureRoot();
+    writeLineage(root, [entry(root, 1, RECORD_IDENTITY, FIRST)]);
+    expect(
+      await failuresWith(root, FIRST, { ...TRUSTED_COMMITS, producerUnchangedSince: () => false }),
+    ).toEqual([
+      "tool-catalog producer lineage stale: the producer source changed after the last entry's sourceCommit",
+    ]);
+  });
+
+  it("refuses receipts without external evidence or with evidence for another commit", async () => {
+    const root = fixtureRoot();
+    writeLineage(root, [
+      entry(root, 1, RECORD_IDENTITY, FIRST, {
+        verification: { evidenceRef: undefined },
+        review: {
+          evidenceRef: `github:oscharko-dev/Keiko#pull/3452/review-threads@${"2".repeat(40)}`,
+        },
+      }),
+    ]);
+    expect(await failuresWith(root, FIRST)).toEqual([
+      "tool-catalog producer lineage entry 1 verification receipt does not bind it",
+      "tool-catalog producer lineage entry 1 review receipt does not bind it",
+    ]);
+  });
+
+  it("fails closed through real Git when a source commit does not exist", async () => {
+    const root = fixtureRoot();
+    const git = (args) =>
+      execFileSync("git", args, {
+        cwd: root,
+        encoding: "utf8",
+        env: { PATH: process.env.PATH, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
+      });
+    git(["init", "-q"]);
+    write(root, "README.md", "fixture\n");
+    git(["add", "README.md"]);
+    git(["-c", "user.name=Keiko", "-c", "user.email=keiko@example.test", "commit", "-qm", "base"]);
+    writeLineage(root, [entry(root, 1, RECORD_IDENTITY, FIRST)]);
+    expect(
+      await producerLineageFailures(root, RECORD, { identity: () => Promise.resolve(FIRST) }),
+    ).toEqual([
+      "tool-catalog producer lineage entry 1 sourceCommit is not a resolvable Git commit",
     ]);
   });
 });

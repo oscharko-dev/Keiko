@@ -130,7 +130,7 @@ pins GitHub's source-head required checks and review-thread settlement.
 Producer changes require fresh verification and review evidence. After the H1 landing, that evidence
 is an entry of the append-only producer lineage (`docs/architecture/tool-catalog-producer-lineage.v1.json`,
 ADR-0175 amendment of 2026-09-10): the entry continues the previous identity, names the new one, and
-pins a passing managed verification and an independent audit receipt; the H1 records themselves are
+pins receipts whose evidence refs point at the integration PR's required checks and settled review threads at the entry's own source commit, and it is issued by the owner, never by the change it certifies; the H1 records themselves are
 never rewritten. Durable provenance survives,
 is independently revalidated by #3415, and is not a projection-digest input. Final required-check
 and actual GitHub merge evidence are now recorded because they exist; no separate dev PR or merge
