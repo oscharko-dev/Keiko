@@ -88,6 +88,9 @@ export interface ServerDiagnosticRecord {
   // Removes the reconstruction ambiguity a bare `GATEWAY_PROVIDER_ERROR`/`GATEWAY_RATE_LIMIT`
   // `errorClass` leaves behind (which of 429/500/502/503/529 actually happened).
   readonly httpStatus?: number | undefined;
+  // The deadline a request was admitted under, when that deadline (not a fault) ended it: the tool
+  // bridge's own request deadline (PR #3452, F44). A duration only, never content.
+  readonly deadlineMs?: number | undefined;
   // The provider-supplied retry delay a `RateLimitError` carried (ADR-0173 D5 g26), same
   // `providerErrorDetail` derivation. A count only — never content.
   readonly retryAfterMs?: number | undefined;
@@ -252,6 +255,7 @@ function diagnosticActivityLogFields(record: ServerDiagnosticRecord): Record<str
   addBoundedField(fields, "gatewayRequestId", record.gatewayRequestId);
   addBoundedField(fields, "httpStatus", record.httpStatus);
   addBoundedField(fields, "retryAfterMs", record.retryAfterMs);
+  addBoundedField(fields, "deadlineMs", record.deadlineMs);
   addBoundedField(fields, "occurrenceCount", record.occurrenceCount);
   addBoundedField(fields, "frameBytes", record.frameBytes);
   addBoundedField(fields, "retainedModelCount", record.retainedModelCount);
@@ -433,6 +437,8 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "prepare-bridge-close",
   "prepare-run-root-remove",
   "tool-facade-failed",
+  // The sidecar tool bridge's own request deadline stopped a call (PR #3452, F44).
+  "tool-bridge-deadline",
   // KfQ 3954841973: a coding-runtime backend process (plus its HTTP/SSE client and tool bridge)
   // that was already spawned when launch failed later (lease-broker unavailable, launch-shape
   // validation) is disposed on the failure path -- mirrors opencodeRuntimeComposition.ts's

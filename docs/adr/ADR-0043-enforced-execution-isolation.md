@@ -521,13 +521,16 @@ bootstrap's redacted output tail reaches the coding model through the orchestrat
 
 Two bounds follow from this decision rather than being chosen next to it. The governed
 verification tool is settled by the tool catalog at
-`VERIFICATION_TOOL_MAX_DURATION_MS` (keiko-contracts), derived as the install ceiling plus the one
-step a governed call runs (it names exactly one verifier) at its own wall-time ceiling plus one
-settlement grace — the sandbox default of 30 s
-never fit a real install-then-build sequence — and the sidecar tool bridge and the generated plugin
-client each outlive that settlement by the contract's grace, so the facade's answer (the report, or
-the catalog's own timeout) always reaches the sidecar. The governed-invocation registry's 30 s TTL is
-untouched: it bounds staged edits, not verification.
+`VERIFICATION_TOOL_MAX_DURATION_MS` (keiko-contracts), derived as the contract's one human-decision
+wait for a package-script trust grant plus the install ceiling plus the one step a governed call
+runs (it names exactly one verifier) at its own wall-time ceiling plus one settlement grace — the
+sandbox default of 30 s never fit a real install-then-build sequence — and the governed-invocation
+registry, the sidecar tool bridge and the generated plugin client each outlive that settlement by
+the contract's grace, so the facade's answer (the report, or the catalog's own timeout) always
+reaches the sidecar. The registry used to hold every invocation for a fixed 30 s whatever its
+budget, which cancelled a longer verification before it could report (PR #3452); it now holds a
+catalog invocation for its descriptor's budget plus that grace, and keeps 30 s only for staged edits
+and cursors, which declare no budget.
 
 D13 still holds: no D1–D10 denial is relaxed for any step that executes code. The bootstrap is a new,
 narrower kind of command — network I/O by a trusted host tool over declarations, with execution of

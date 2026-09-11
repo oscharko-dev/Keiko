@@ -150,6 +150,21 @@ generation (a ~6k-token changeset call took 49 s), the response's calls bound ag
 (2026-09-10). A response later than the deadline has already been aborted, so the deadline-derived
 lifetime refuses nothing legitimate and admits nothing stale; the bridge logs the offer's remaining
 lifetime at projection time so an expiry is reconstructable from the activity log alone.
+An offer bounds admission, not the call it admitted: an invocation admitted under a live offer keeps
+it through its own settlement, bounded by its descriptor's budget, the live authority, the workspace
+revision and its handler's readiness, so an effect that starts after a long step or a human decision
+is never refused merely because the offer that admitted it has since expired. Checking the facade's
+30 s targeted offer against the clock refused every verification that ran longer (PR #3452).
+A tool that waits in place for a human decision (the stage, commit, push and pull-request proposals
+waiting for their approval, and the verification tool waiting for a package-script trust grant)
+declares that wait in its settlement budget: its own work budget, the contract's one human-decision
+wait (keiko-contracts `GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS`) and the settlement grace. Every layer
+such a call crosses derives its bound from that one declaration and outlives the layer before it:
+the governed-invocation registry holds the call for the budget plus one grace, the sidecar tool
+bridge admits it for the same, and the generated plugin client waits one grace and a margin longer;
+a bridge deadline that stops a call leaves a `coding-runtime.tool-bridge` diagnostic naming the
+deadline. A fixed 30 s default in the registry, the catalog and the bridge cut a waiting approval
+off long before its own five-minute ceiling (F43/F44, PR #3452).
 An approval-required action is eligible only when the current mode/envelope permits that action
 and a valid approval channel can complete the existing approval protocol; listing is not approval.
 All three ADR-0138 modes preserve monotonic authority and mode-independent hard denials.
@@ -270,7 +285,11 @@ a failure after an uncertain effect cannot authorize retry and uses `effect-outc
 The #3413 implementation reuses `CodingToolInvocationRegistry` for invocation payloads and bounded
 cursor entries. Cursor identities occupy a reserved namespace that ordinary dispatch rejects;
 issuing one never evicts an approved invocation. Both share the existing eight live entries per run,
-30-second maximum lifetime, 2 MiB aggregate capacity and run revocation/zeroization. A server-only
+2 MiB aggregate capacity and run revocation/zeroization. A cursor lives at most 30 seconds; an
+invocation lives as long as the catalog may take to settle it (its descriptor's budget plus one
+settlement grace, still capped by the authority's expiry), because one fixed 30-second life
+cancelled the verification tool and every proposal waiting for an approval long before their own
+budgets ended (PR #3452). A server-only
 `dispatchPage` consumes the cursor and repeats current schema, workspace, compatibility, authority
 and budget admission; the model receives only the opaque token. Handler output may contain only a
 cursor minted by that invocation, and discarded/failed output invalidates its unpublished cursor.

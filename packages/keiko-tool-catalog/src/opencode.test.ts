@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { CanonicalToolId } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import {
+  DEFAULT_SANDBOX_POLICY,
+  GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   DEFAULT_VERIFICATION_LIMITS,
   VERIFICATION_TOOL_MAX_DURATION_MS,
@@ -11,6 +14,14 @@ import { compileToolProjection, gatewayToolDefinitions } from "./projection.js";
 import { matchesCatalogSchema } from "./schema.js";
 
 const OPENCODE_PROFILE = { id: "opencode", version: 1 } as const;
+
+// The proposal tools that wait in place for the operator's approval (F44).
+const APPROVAL_WAITING_TOOL_IDS: ReadonlySet<string> = new Set([
+  "keiko.git.stage",
+  "keiko.git.commit",
+  "keiko.git.push",
+  "keiko.git.pullrequest",
+]);
 
 const GIT_DELIVERY_CANONICAL_IDS = [
   "keiko.git.status",
@@ -82,10 +93,12 @@ describe("opencode registration set", () => {
   // The catalog settles every governed tool call at its descriptor's `bounds.maxDurationMs`, and
   // every managed tool inherited the sandbox default of 30 s — which no real test or build run
   // fits, so the first verification a Coding Workbench run actually executed would have been cut
-  // off as an opaque timeout before it could report (2026-09-10). The verification tool declares
-  // the budget its own enforced limits need; the others keep the default, so a reader who widened
-  // it for everything would fail here too.
-  it("gives the verification tool the budget its own limits need and no other tool more", () => {
+  // off as an opaque timeout before it could report (2026-09-10). The same default cut off the four
+  // proposal tools while they waited up to five minutes for the operator's approval (F44). The
+  // verification tool declares the budget its own enforced limits need, the proposal tools their
+  // wait on top of their own work; the others keep the default, so a reader who widened it for
+  // everything would fail here too.
+  it("gives the verification and the proposal tools the budget their work needs and no other tool more", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
     const byId = new Map(projection.tools.map((tool) => [tool.toolRef.canonicalId, tool]));
@@ -94,8 +107,13 @@ describe("opencode registration set", () => {
     expect(VERIFICATION_TOOL_MAX_DURATION_MS).toBeGreaterThan(
       DEFAULT_VERIFICATION_LIMITS.wallTimeMs,
     );
+    for (const id of APPROVAL_WAITING_TOOL_IDS) {
+      expect(byId.get(id as CanonicalToolId)?.bounds.maxDurationMs).toBe(
+        GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+      );
+    }
     for (const [id, tool] of byId) {
-      if (id === "keiko.verification.run") continue;
+      if (id === "keiko.verification.run" || APPROVAL_WAITING_TOOL_IDS.has(id)) continue;
       expect(tool.bounds.maxDurationMs).toBe(DEFAULT_SANDBOX_POLICY.defaultTimeoutMs);
     }
   });

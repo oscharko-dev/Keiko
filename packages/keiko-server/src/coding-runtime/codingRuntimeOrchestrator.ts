@@ -19,6 +19,7 @@ import type {
   CodingWorkbenchIssueBinding,
 } from "@oscharko-dev/keiko-contracts";
 import { isLegalCodingWorkbenchRuntimeTransition } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { isDeliveredDraftDeliveryPhase } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import {
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
@@ -591,8 +592,12 @@ const TERMINAL_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
  * clamped here, before the instant becomes the challenge expiry, the operator-visible deadline on
  * the approval card, and the TTL of the minted approval authority. All three derive from this one
  * clamped instant, so the card can never display a deadline the server does not enforce.
+ *
+ * It is the contract's one human-decision wait, so the catalog budget, the tool bridge deadline and
+ * the plugin client timeout of every tool that waits for an approval derive from the same value
+ * (keiko-contracts GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS, PR #3452).
  */
-export const MAX_APPROVAL_CHALLENGE_TTL_MS = 5 * 60 * 1_000;
+export const MAX_APPROVAL_CHALLENGE_TTL_MS = GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS;
 export const MAX_QUEUED_APPROVALS_PER_RUN = 64;
 
 const DIGEST = (value: string): string => createHash("sha256").update(value).digest("hex");

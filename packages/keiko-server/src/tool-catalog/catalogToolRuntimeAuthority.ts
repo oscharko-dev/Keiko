@@ -150,10 +150,16 @@ export function sameRef(
 export function catalogDispatchContext(state: CatalogBindingState): CatalogTrustedContext {
   return Object.freeze({ ...state.options.context() });
 }
+// `admittedAt` is the instant the invocation was admitted: an offer bounds admission, not the call
+// it admitted. The live authority, the workspace revision, compatibility and the handler's
+// readiness are rechecked against now on every revalidation; the offer's expiry only against the
+// admission, so an effect that starts after a long step or a human decision is never refused merely
+// because the offer that admitted it has since expired (PR #3452, F43/F44).
 export function revalidateCatalogContext(
   state: CatalogBindingState,
   expected: CatalogTrustedContext,
   handler: CatalogBoundHandler,
+  admittedAt: number,
 ): CatalogTrustedContext {
   const current = catalogDispatchContext(state);
   const offered = state.offerContext;
@@ -180,7 +186,7 @@ export function revalidateCatalogContext(
     "authority-expired",
   );
   requireDispatch(
-    Date.parse(state.latestOffer?.expiresAt ?? "") > state.options.now(),
+    Date.parse(state.latestOffer?.expiresAt ?? "") > admittedAt,
     "invalid",
     "unoffered-tool",
   );

@@ -39,7 +39,10 @@
 // `keiko.file.read`'s `path` in legacy.ts stays pattern-free; that is a separate, still-open case.
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import {
+  DEFAULT_SANDBOX_POLICY,
+  GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { VERIFICATION_TOOL_MAX_DURATION_MS } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { CODING_REPOSITORY_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
@@ -189,7 +192,9 @@ interface OpenCodeToolSpec {
   /**
    * The tool's own settlement budget when the sandbox default does not fit the work it performs.
    * Absent means the sandbox default; a tool that runs the workspace's own scripts declares the
-   * budget those scripts are actually allowed (verification: `VERIFICATION_TOOL_MAX_DURATION_MS`).
+   * budget those scripts are actually allowed (verification: `VERIFICATION_TOOL_MAX_DURATION_MS`),
+   * and a tool that waits in place for a human decision declares that wait on top of its own work
+   * (the four proposal tools: `GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS`).
    */
   readonly maxDurationMs?: number;
 }
@@ -589,6 +594,8 @@ function gitStageSpec(): OpenCodeToolSpec {
     effects: ["workspace-write"],
     idempotency: "server-key-required",
     handlerId: "opencode-git-stage-port",
+    // It waits in place for the operator's approval of its proposal (F44).
+    maxDurationMs: GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
   };
 }
 
@@ -608,6 +615,8 @@ function gitCommitSpec(): OpenCodeToolSpec {
     effects: ["delivery-substrate"],
     idempotency: "server-key-required",
     handlerId: "opencode-git-commit-port",
+    // It waits in place for the operator's approval of its proposal (F44).
+    maxDurationMs: GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
   };
 }
 
@@ -621,6 +630,8 @@ function gitPushSpec(): OpenCodeToolSpec {
     effects: ["delivery-substrate", "network-egress"],
     idempotency: "server-key-required",
     handlerId: "opencode-git-push-port",
+    // It waits in place for the operator's approval of its proposal (F44).
+    maxDurationMs: GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
   };
 }
 
@@ -636,6 +647,8 @@ function gitPullRequestSpec(): OpenCodeToolSpec {
     effects: ["delivery-substrate", "network-egress"],
     idempotency: "server-key-required",
     handlerId: "opencode-git-pull-request-port",
+    // It waits in place for the operator's approval of its proposal (F44).
+    maxDurationMs: GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
   };
 }
 

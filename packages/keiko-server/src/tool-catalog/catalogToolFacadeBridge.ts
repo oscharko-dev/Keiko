@@ -175,6 +175,20 @@ function catalogActionFor(request: CodingToolActionRequest): CatalogAction | und
   }
 }
 
+/**
+ * The catalog settlement budget of the tool a facade request dispatches to, or undefined for a
+ * request no catalog tool serves. The sidecar tool bridge's deadline is derived from this one
+ * declaration (PR #3452, F43/F44).
+ */
+export function openCodeCatalogSettlementBudgetMs(
+  request: CodingToolActionRequest,
+): number | undefined {
+  const toolId = catalogActionFor(request)?.toolId;
+  return toolId === undefined
+    ? undefined
+    : OPENCODE_DESCRIPTOR_BY_ID.get(toolId)?.bounds.maxDurationMs;
+}
+
 function gitCatalogAction(
   request: Extract<CodingToolActionRequest, { readonly action: "git" }>,
 ): CatalogAction | undefined {

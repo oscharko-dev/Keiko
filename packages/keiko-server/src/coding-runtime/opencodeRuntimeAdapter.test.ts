@@ -5,9 +5,15 @@ import { describe, expect, it, vi } from "vitest";
 import type { CodingSafeActivitySignal } from "./codingSafeActivityProjection.js";
 import { OPENCODE_PINNED_BUILT_IN_TOOLS } from "./opencodeToolSchemas.js";
 import { parseOpenCodeHistory } from "./opencodeProtocol.js";
+import { opencodeRegistrationSet } from "@oscharko-dev/keiko-tool-catalog";
 import {
-  OPEN_CODE_VERIFICATION_TOOL_CLIENT_TIMEOUT_MS,
+  DEFAULT_SANDBOX_POLICY,
+  GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+  GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/tools";
+import {
   createGeneratedOpenCodeBundle,
+  openCodeToolClientTimeoutMs,
 } from "./opencodeRuntimeAdapter.js";
 import { CODING_TOOL_MAX_BODY_BYTES, parseCodingToolRequest } from "./codingToolIpc.js";
 import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
@@ -628,16 +634,8 @@ describe("OpenCode runtime adapter readiness", () => {
     expect(Object.keys(bundle.toolSources).sort()).toEqual([...KEIKO_PRODUCER_TOOLS].sort());
     expect(JSON.stringify(bundle.toolSources)).not.toMatch(/\b(?:import|require)\b/u);
     expect(JSON.stringify(bundle.toolSources)).not.toContain(SECRET);
-    const approvalWaitTools = new Set([
-      "keiko_git_stage",
-      "keiko_git_commit",
-      "keiko_git_push",
-      "keiko_pull_request",
-    ]);
     for (const [name, source] of Object.entries(bundle.toolSources)) {
-      expect(source).toContain(
-        `const TIMEOUT_MS = ${String(expectedClientTimeoutMs(name, approvalWaitTools))};`,
-      );
+      expect(source).toContain(`const TIMEOUT_MS = ${String(expectedClientTimeoutMs(name))};`);
       expect(source).toContain('redirect: "manual"');
       expect(source).toContain("signal:");
       expect(source).toMatch(/timeout|AbortController/u);
@@ -1777,10 +1775,37 @@ describe("keiko_repository_search generated tool dispatch", () => {
   });
 });
 
-// The generated plugin client outlives the server-side bound of each tool: the verification tool is
-// settled at the contract-derived verification budget, the proposal tools wait for an operator
-// decision, every other tool uses the default governed ceiling.
-function expectedClientTimeoutMs(name: string, approvalWaitTools: ReadonlySet<string>): number {
-  if (name === "keiko_verification") return OPEN_CODE_VERIFICATION_TOOL_CLIENT_TIMEOUT_MS;
-  return approvalWaitTools.has(name) ? 305_000 : 35_000;
+// The generated plugin client outlives the server-side bound of each tool, read from the tool's own
+// catalog descriptor rather than a list restated here: the verification tool is settled at the
+// contract-derived verification budget, the four proposal tools at their wait for the operator's
+// approval, every other tool at the sandbox default (PR #3452, F44).
+function catalogBudgetMs(alias: string): number {
+  const entry = opencodeRegistrationSet().entries.find((candidate) => candidate.alias === alias);
+  if (entry === undefined) throw new TypeError(`catalog entry missing for ${alias}`);
+  return entry.descriptor.bounds.maxDurationMs;
+}
+
+// PR #3452 (F44): each proposal tool waits for the operator's approval inside its own call, so its
+// client must outlive the whole wait and the bridge's deadline for it; a client sized to the wait
+// alone, or the 35 s default, answered `timeout` while the operator was still deciding.
+describe("the generated client timeout of a tool that waits for an approval", () => {
+  it("outlives the approval wait and the bridge deadline for every proposal tool", () => {
+    for (const alias of [
+      "keiko_git_stage",
+      "keiko_git_commit",
+      "keiko_git_push",
+      "keiko_pull_request",
+    ]) {
+      const budgetMs = catalogBudgetMs(alias);
+      expect(budgetMs).toBe(GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS);
+      expect(openCodeToolClientTimeoutMs(budgetMs)).toBeGreaterThan(
+        budgetMs + GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
+      );
+    }
+    expect(openCodeToolClientTimeoutMs(DEFAULT_SANDBOX_POLICY.defaultTimeoutMs)).toBe(35_000);
+  });
+});
+
+function expectedClientTimeoutMs(name: string): number {
+  return openCodeToolClientTimeoutMs(catalogBudgetMs(name));
 }

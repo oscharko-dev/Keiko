@@ -4,7 +4,11 @@
 // `| undefined` because exactOptionalPropertyTypes is on. Every shape is plain JSON-serializable
 // so the #10 audit ledger can persist a VerificationReport without ad-hoc parsing.
 
-import type { NetworkPolicy } from "./tools.js";
+import {
+  GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS,
+  GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
+  type NetworkPolicy,
+} from "./tools.js";
 
 // ─── Verification kinds & status ─────────────────────────────────────────────────
 
@@ -95,33 +99,31 @@ export interface VerificationDependencySummary {
   readonly egress?: VerificationDependencyEgress | undefined;
 }
 
-// ─── The governed verification tool's settlement budget ────────────────────────────
-// Derived from the orchestrator's own enforced limits, never chosen. One governed call names exactly
-// one verifier (`keiko_verification` takes one `verifierId`; the coding facade asks the runner for that
-// one kind), so it may install dependencies and then run that one step, each up to its own wall-time
-// ceiling. The tool catalog settles the verification tool at this budget (`keiko.verification.run`),
-// the sidecar tool bridge and the generated plugin client both outlive it by their own grace, so a
-// real build or test run reports its result instead of an opaque timeout (Coding Workbench runs
-// 13–15).
-export const VERIFICATION_TOOL_STEPS_PER_CALL = 1;
-export const VERIFICATION_SETTLEMENT_GRACE_MS = 15_000;
-export const VERIFICATION_TOOL_MAX_DURATION_MS =
-  DEPENDENCY_INSTALL_LIMITS.wallTimeMs +
-  VERIFICATION_TOOL_STEPS_PER_CALL * DEFAULT_VERIFICATION_LIMITS.wallTimeMs +
-  VERIFICATION_SETTLEMENT_GRACE_MS;
-
 // ─── The governed verification tool's wait for a human decision ────────────────────
 // How long the governed verification tool may wait in place for a decision only a local human can
 // make (an ADR-0147 package-script trust grant) before it hands the model the truthful refusal
-// instead. It lives in the contract because two layers must agree on it: the server-side tool that
-// waits, and the tool-catalog budget the verification tool is eventually settled at.
-//
-// It must stay strictly below every ceiling a governed verification call is settled at, or the
-// caller receives an opaque `timeout`/`cancelled` instead of the tool's own closed refusal — the
-// one string that tells the model what a person has to do. The binding ceiling is the
-// governed-invocation registry's 30 s TTL (the catalog budget above is far larger); the server pins
-// this constant against it.
-export const VERIFICATION_TOOL_OPERATOR_DECISION_GRACE_MS = 25_000;
+// instead. It is the contract's one human-decision wait (`GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS`),
+// the same a stage, commit, push or pull-request proposal waits for its approval. A 25 s window,
+// sized to fit inside a governed-invocation life that was then a fixed 30 s, closed before an
+// operator could notice the decision at all (PR #3452, F43). The wait is part of the settlement
+// budget below, on top of the install and the step, so it never eats a build's own time.
+export const VERIFICATION_TOOL_OPERATOR_DECISION_WAIT_MS = GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS;
+
+// ─── The governed verification tool's settlement budget ────────────────────────────
+// Derived from the orchestrator's own enforced limits, never chosen. One governed call names exactly
+// one verifier (`keiko_verification` takes one `verifierId`; the coding facade asks the runner for that
+// one kind), so it may wait once for a package-script trust grant, install dependencies and then
+// run that one step, each up to its own ceiling. The tool catalog settles the verification tool at
+// this budget (`keiko.verification.run`); the governed-invocation registry, the sidecar tool bridge
+// and the generated plugin client each outlive it by their own grace, so a real build or test run
+// reports its result instead of an opaque timeout (Coding Workbench runs 13–15).
+export const VERIFICATION_TOOL_STEPS_PER_CALL = 1;
+export const VERIFICATION_SETTLEMENT_GRACE_MS = GOVERNED_TOOL_SETTLEMENT_GRACE_MS;
+export const VERIFICATION_TOOL_MAX_DURATION_MS =
+  VERIFICATION_TOOL_OPERATOR_DECISION_WAIT_MS +
+  DEPENDENCY_INSTALL_LIMITS.wallTimeMs +
+  VERIFICATION_TOOL_STEPS_PER_CALL * DEFAULT_VERIFICATION_LIMITS.wallTimeMs +
+  VERIFICATION_SETTLEMENT_GRACE_MS;
 
 // ─── Structured failure locations (Issue #2210, ADR-0126 D3) ─────────────────────
 // Bounds a later, best-effort parser (Issue #2211) may attach to VerificationResult.locations.

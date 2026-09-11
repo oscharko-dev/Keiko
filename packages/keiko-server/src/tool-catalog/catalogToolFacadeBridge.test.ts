@@ -436,6 +436,60 @@ describe("canonical catalog facade bridge", () => {
     });
   });
 
+  // PR #3452 (F43/F44): an offer bounds admission, not the call it admitted. The facade's targeted
+  // offer lives 30 s, and a verification whose effect guard ran later was refused as `unoffered-tool`.
+  it("keeps an admitted call's effect guard valid after the offer that admitted it expired", async () => {
+    let now = 0;
+    const { bridge, log } = createBridge({
+      context: () => ({ ...context, now }),
+      elapsedNow: () => now,
+    });
+    const verification: CodingToolActionRequest = {
+      ...identity,
+      action: "verification",
+      verifierId: "test",
+    };
+    let guardAfterExpiry: boolean | undefined;
+    const result = await bridge.execute(verification, facadeInput(), (_signal, mutationGuard) => {
+      now = 60_000;
+      guardAfterExpiry = mutationGuard.check();
+      return Promise.resolve({
+        status: "completed" as const,
+        evidence: [{ kind: "governed-delegate" as const, code: "completed" as const }],
+      });
+    });
+
+    expect(guardAfterExpiry).toBe(true);
+    expect(result).toMatchObject({ status: "completed" });
+    expect(
+      log.events.find((event) => event.op === "tool-catalog.invocation-settled")?.extra,
+    ).toMatchObject({ status: "completed" });
+  });
+
+  // The live authority still bounds the effect: past its expiry the guard refuses it.
+  it("still refuses an admitted call's effect once the live authority expired", async () => {
+    let now = 0;
+    const { bridge } = createBridge({
+      context: () => ({ ...context, authorityExpiresAt: new Date(10_000).toISOString(), now }),
+      elapsedNow: () => now,
+    });
+    let guardAfterExpiry: boolean | undefined;
+    await bridge.execute(
+      { ...identity, action: "verification", verifierId: "test" },
+      facadeInput(),
+      (_signal, mutationGuard) => {
+        now = 60_000;
+        guardAfterExpiry = mutationGuard.check();
+        return Promise.resolve({
+          status: "completed" as const,
+          evidence: [{ kind: "governed-delegate" as const, code: "completed" as const }],
+        });
+      },
+    );
+
+    expect(guardAfterExpiry).toBe(false);
+  });
+
   it("preserves an authoritative catalog timeout in the model-facing IPC result", async () => {
     vi.useFakeTimers();
     let now = 0;

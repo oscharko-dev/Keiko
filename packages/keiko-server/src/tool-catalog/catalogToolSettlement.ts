@@ -14,6 +14,7 @@ import {
   captureToolInvocationReceipt,
   type ToolInvocationReceipt,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
+import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import type { CodingToolMutationGuard } from "../coding-runtime/codingToolFacadePorts.js";
 import { errorKindOf } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
@@ -73,6 +74,10 @@ export class CatalogInvocation {
       this.resolve = resolve;
     });
   }
+  /** The instant this invocation was admitted, against which its offer's expiry is checked. */
+  public get admittedAt(): number {
+    return this.startedAt;
+  }
   public get settled(): boolean {
     return this.finishing || this.outcome !== undefined;
   }
@@ -80,9 +85,15 @@ export class CatalogInvocation {
     this.claimed = true;
     this.watch(signal);
   }
+  /** The catalog's settlement budget for this call: its descriptor's, or the sandbox default. */
+  public get settlementBudgetMs(): number {
+    return this.handler?.descriptor.bounds.maxDurationMs ?? DEFAULT_SANDBOX_POLICY.defaultTimeoutMs;
+  }
   public arm(): void {
-    const duration = this.handler?.descriptor.bounds.maxDurationMs ?? 30_000;
-    this.deadlineAt = Math.min(Date.parse(this.context.deadlineAt), this.startedAt + duration);
+    this.deadlineAt = Math.min(
+      Date.parse(this.context.deadlineAt),
+      this.startedAt + this.settlementBudgetMs,
+    );
     requireDispatch(Number.isSafeInteger(this.deadlineAt), "invalid", "recovery-required");
     this.watch(this.context.signal);
     this.timer = setTimeout(

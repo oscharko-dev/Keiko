@@ -29,7 +29,7 @@ import type {
 import {
   isVerificationFailureLocation,
   VERIFICATION_DEPENDENCY_FAILURE_STATES,
-  VERIFICATION_TOOL_OPERATOR_DECISION_GRACE_MS,
+  VERIFICATION_TOOL_OPERATOR_DECISION_WAIT_MS,
 } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import type { VerificationStepOutput } from "@oscharko-dev/keiko-verification";
@@ -764,6 +764,7 @@ function recordProposalApprovalWait(
       proposalId,
       state: "approval-wait-settled",
       reason: outcome,
+      waitCeilingMs: MAX_APPROVAL_CHALLENGE_TTL_MS,
     },
   });
 }
@@ -1108,21 +1109,24 @@ async function runVerificationAttempt(
 const SCRIPT_TRUST_POLL_MS = 500;
 
 /**
- * How long the tool waits: the share of a governed verification call that the contract reserves
- * for a human decision. A wait that ran to the five-minute approval ceiling would be settled
- * before it returned — by the governed-invocation registry's TTL and by the catalog descriptor's
- * duration bound, both 30 s today — as an opaque cancellation, and the model would lose the one
- * string that tells it what a person has to do. The co-located test pins this constant below the
- * registry's ceiling.
+ * How long the tool waits: the contract's one human-decision wait, the same a stage, commit, push
+ * or pull-request proposal waits for its approval (VERIFICATION_TOOL_OPERATOR_DECISION_WAIT_MS).
+ * The verification tool's catalog budget carries this wait on top of its install and step ceilings,
+ * and the governed-invocation registry, the tool bridge and the plugin client each outlive that
+ * budget, so a wait that runs to its end still answers with the tool's own closed refusal — the one
+ * string that tells the model what a person has to do — rather than an opaque cancellation. A 25 s
+ * window, sized to fit inside a governed-invocation life that was then a fixed 30 s, closed before
+ * an operator could notice the decision (PR #3452, F43). The co-located test pins the wait and the
+ * retry it enables inside the verification budget.
  *
- * This bounds the GRACE WINDOW, not the decision: an operator watching the Workbench sees the
- * notice the moment the run reports itself paused and can allow the scripts inside it, and the run
- * then continues with no interruption at all. A decision that does not arrive in the window is not
+ * This bounds the WAIT, not the decision: an operator watching the Workbench sees the notice the
+ * moment the run reports itself paused and can allow the scripts inside it, and the run then
+ * continues with no interruption at all. A decision that does not arrive in the window is not
  * lost — the run stays paused naming it, and the model is handed the truthful refusal instead of a
  * silent success. A decision that outlives a single tool call is a separate mechanism this does not
  * claim to provide.
  */
-export const SCRIPT_TRUST_WAIT_CEILING_MS = VERIFICATION_TOOL_OPERATOR_DECISION_GRACE_MS;
+export const SCRIPT_TRUST_WAIT_CEILING_MS = VERIFICATION_TOOL_OPERATOR_DECISION_WAIT_MS;
 
 type ScriptTrustWaitOutcome = "granted" | "cancelled" | "expired" | "unavailable";
 
@@ -1170,9 +1174,9 @@ async function settleWorkspaceScriptTrust(
   const { requestOperatorDecision } = input;
   const scriptTrustFor = input.verificationRunner.scriptTrustFor;
   if (requestOperatorDecision === undefined || scriptTrustFor === undefined) return false;
-  // What is LEFT of the grace window once the first attempt has spent its share: the invocation's
-  // own ceilings run from admission, so a wait that always took the full window after a slow
-  // first attempt would be settled by them first as an opaque cancellation.
+  // What is LEFT of the wait once the first attempt has spent its share: the verification budget
+  // carries one wait from admission, so a wait that always took the full window after a slow first
+  // attempt would leave the retry it enables no room inside that budget.
   const ceilingMs = Math.max(0, SCRIPT_TRUST_WAIT_CEILING_MS - (Date.now() - enteredAtMs));
   requestOperatorDecision("workspace-script-trust");
   const outcome = await waitForWorkspaceScriptTrust(

@@ -56,6 +56,7 @@ describe("diagnostic records on the activity log", () => {
       parentCorrelationId: "job-parent-1f2e3d",
       httpStatus: 503,
       retryAfterMs: 2_000,
+      deadlineMs: 360_000,
       notes: "JaneDoe1985",
     } as ServerDiagnosticRecord & { readonly notes: string };
 
@@ -81,6 +82,7 @@ describe("diagnostic records on the activity log", () => {
       parentCorrelationId: "job-parent-1f2e3d",
       httpStatus: 503,
       retryAfterMs: 2_000,
+      deadlineMs: 360_000,
     });
 
     // Nothing else. Not the undeclared field, not the whole record under a `record` key, and not

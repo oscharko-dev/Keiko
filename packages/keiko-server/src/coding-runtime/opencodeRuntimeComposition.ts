@@ -1,8 +1,8 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import {
-  VERIFICATION_SETTLEMENT_GRACE_MS,
-  VERIFICATION_TOOL_MAX_DURATION_MS,
-} from "@oscharko-dev/keiko-contracts/runtime/verification";
+  DEFAULT_SANDBOX_POLICY,
+  GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/tools";
 import {
   chmodSync,
   existsSync,
@@ -78,6 +78,7 @@ import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import type { RuntimeProcessSupervisor } from "./runtimeProcessSupervisor.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeToolSchemas.js";
 import { CodingRuntimeQuestionAnswerRejectedError } from "./codingRuntimeQuestionPort.js";
+import { openCodeCatalogSettlementBudgetMs } from "../tool-catalog/catalogToolFacadeBridge.js";
 
 const PINNED_RAW_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
 const DIGEST = /^[a-f0-9]{64}$/u;
@@ -1381,6 +1382,8 @@ interface ToolBridgeLimits {
 
 interface AdmittedToolRequest {
   readonly controller: AbortController;
+  // The deadline this request was admitted under, named by the diagnostic its expiry leaves.
+  readonly deadlineMs: number;
   release(): void;
 }
 
@@ -1392,32 +1395,28 @@ interface ToolBridgeAdmissionGate {
 
 const DEFAULT_TOOL_BRIDGE_DEADLINE_MS = 30_000;
 const MAX_TOOL_BRIDGE_DEADLINE_MS = 60_000;
-// The one action whose settlement budget is derived from the verification orchestrator's own
-// enforced limits rather than the sandbox default (keiko-contracts VERIFICATION_TOOL_MAX_DURATION_MS,
-// the catalog settles `keiko.verification.run` at it): the bridge outlives that settlement by the
-// contract's grace, so the facade's answer — the report, or the catalog's own timeout — always
-// reaches the sidecar instead of a bridge-side abort racing it.
-const VERIFICATION_TOOL_BRIDGE_DEADLINE_MS =
-  VERIFICATION_TOOL_MAX_DURATION_MS + VERIFICATION_SETTLEMENT_GRACE_MS;
-
-// The deadline a request is admitted under, read from its own declared action; an unreadable body
-// gets the configured default and is refused by the facade's parser afterwards as before.
-function requestDeadlineFor(limits: ToolBridgeLimits, body: string | undefined): number {
-  return body !== undefined && declaredAction(body) === "verification"
-    ? VERIFICATION_TOOL_BRIDGE_DEADLINE_MS
-    : limits.requestDeadlineMs;
+/**
+ * The deadline the tool bridge admits a request under. A tool the catalog settles beyond the
+ * sandbox default (the verification tool at its derived work budget, the four proposal tools at the
+ * wait for the operator's approval on top of their own work) is admitted one settlement grace past
+ * that budget, read from the catalog descriptor of the tool the request dispatches to, so the
+ * facade's answer (the result, or the catalog's own timeout) always reaches the sidecar instead of a
+ * bridge-side abort racing it. Every other request, and a body the facade's parser refuses, gets the
+ * configured default; the facade refuses the latter afterwards as before. A deadline read from the
+ * verification action alone cut every waiting approval off at 30 s (PR #3452, F44).
+ */
+export function toolBridgeRequestDeadlineMs(
+  configuredDeadlineMs: number,
+  body: string | undefined,
+): number {
+  const request =
+    body === undefined ? undefined : parseCodingToolRequest(body, CODING_TOOL_MAX_BODY_BYTES);
+  const budgetMs = request === undefined ? undefined : openCodeCatalogSettlementBudgetMs(request);
+  return budgetMs !== undefined && budgetMs > DEFAULT_SANDBOX_POLICY.defaultTimeoutMs
+    ? budgetMs + GOVERNED_TOOL_SETTLEMENT_GRACE_MS
+    : configuredDeadlineMs;
 }
 
-function declaredAction(body: string): unknown {
-  try {
-    const parsed: unknown = JSON.parse(body);
-    return typeof parsed === "object" && parsed !== null && "action" in parsed
-      ? parsed.action
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
 const MAX_TOOL_BRIDGE_IN_FLIGHT = 64;
 const DEADLINE_ABORT = "tool-bridge-deadline";
 const DISCONNECT_ABORT = "tool-bridge-disconnect";
@@ -1487,7 +1486,9 @@ function handleDirectToolRequest(
   if (preflight.outcome === "rejected") {
     return Promise.resolve({ status: preflight.status, body: preflight.body });
   }
-  const admission = gate.admit(requestDeadlineFor(gate.limits, input.body));
+  const admission = gate.admit(
+    toolBridgeRequestDeadlineMs(gate.limits.requestDeadlineMs, input.body),
+  );
   if (admission === undefined) return Promise.resolve({ status: 429, body: "" });
   const detachExternalAbort = bindExternalAbort(input.signal, admission);
   return executeToolRequest(deps, input.headers, input.body, admission).finally(
@@ -1534,6 +1535,7 @@ function createToolBridgeAdmissionGate(limits: ToolBridgeLimits): ToolBridgeAdmi
       let released = false;
       return {
         controller,
+        deadlineMs: requestDeadlineMs,
         release: (): void => {
           if (released) return;
           released = true;
@@ -1622,19 +1624,42 @@ async function executeToolRequest(
   try {
     const result = await raceAbort(work, admission.controller.signal);
     const reason = abortReason(admission.controller.signal);
-    if (reason !== undefined) {
-      settleSafeTool(settleTool, actionId, "cancelled");
-      return reason === DEADLINE_ABORT ? { status: 408, body: "" } : { status: 502, body: "" };
-    }
+    if (reason !== undefined) return abortedToolResponse(deps, actionId, admission, reason);
     return responseForToolResult(result, settleTool, actionId);
   } catch (error) {
     const reason = abortReason(admission.controller.signal);
     // A cancellation is an expected outcome, not a facade fault, so only a genuine failure is
     // surfaced to the operator.
-    if (reason === undefined) emitFacadeFailureDiagnostic(diagnostics, actionId, error);
-    settleSafeTool(settleTool, actionId, reason === undefined ? "failed" : "cancelled");
-    return reason === DEADLINE_ABORT ? { status: 408, body: "" } : { status: 502, body: "" };
+    if (reason !== undefined) return abortedToolResponse(deps, actionId, admission, reason);
+    emitFacadeFailureDiagnostic(diagnostics, actionId, error);
+    settleSafeTool(settleTool, actionId, "failed");
+    return { status: 502, body: "" };
   }
+}
+
+// A request the bridge itself stopped. Its own deadline leaves a diagnostic naming the deadline the
+// request was admitted under, so a call cut off here is told apart in the log from one its caller
+// dropped or the catalog timed out; a 30 s bridge deadline once cut waiting approvals off without a
+// line of its own (PR #3452, F44).
+function abortedToolResponse(
+  deps: ToolBridgeExecutionDeps,
+  actionId: string | undefined,
+  admission: AdmittedToolRequest,
+  reason: string,
+): { readonly status: number; readonly body: string } {
+  settleSafeTool(deps.settleTool, actionId, "cancelled");
+  if (reason !== DEADLINE_ABORT) return { status: 502, body: "" };
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: actionCorrelationId(actionId),
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.tool-bridge",
+    source: "opencode-runtime-composition.request-deadline",
+    errorClass: "TimeoutError",
+    message: "tool-bridge-deadline",
+    httpStatus: 408,
+    deadlineMs: admission.deadlineMs,
+  });
+  return { status: 408, body: "" };
 }
 
 function responseForToolResult(

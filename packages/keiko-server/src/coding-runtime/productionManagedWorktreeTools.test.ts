@@ -39,7 +39,12 @@ import {
   type ProductionManagedWorktreeToolInput,
 } from "./productionManagedWorktreeTools.js";
 import { dependencyBootstrapFailureSummary } from "./codingToolIpc.js";
-import { CODING_TOOL_INVOCATION_MAX_TTL_MS } from "./codingToolInvocationRegistry.js";
+import { MAX_APPROVAL_CHALLENGE_TTL_MS } from "./codingRuntimeOrchestrator.js";
+import {
+  DEFAULT_VERIFICATION_LIMITS,
+  DEPENDENCY_INSTALL_LIMITS,
+  VERIFICATION_TOOL_MAX_DURATION_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/verification";
 import type { SkillCatalog } from "./skillCatalog.js";
 import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
 import type {
@@ -215,6 +220,7 @@ describe("production managed worktree tools", () => {
             proposalId: "stage-3384",
             state: "approval-wait-settled",
             reason: "approved",
+            waitCeilingMs: MAX_APPROVAL_CHALLENGE_TTL_MS,
           },
         }),
       );
@@ -2653,11 +2659,11 @@ describe("verification waiting on the operator's package-script trust decision",
     });
   });
 
-  // Owner review, PR #3452: the registry's and the catalog's ceilings run from admission, the
-  // wait's clock used to start only after the first attempt had failed — so a slow first attempt
-  // pushed the wait past the invocation's own ceiling and the model got an opaque cancellation. The
-  // wait is now measured from the handler's entry: with 10 s spent before the refusal, it ends at
-  // 25 s from entry with the tool's own refusal, and the log records the 15 s it actually waited.
+  // Owner review, PR #3452: the invocation's ceilings run from admission, the wait's clock used to
+  // start only after the first attempt had failed — so a slow first attempt pushed the wait past the
+  // invocation's own ceiling and the model got an opaque cancellation. The wait is measured from the
+  // handler's entry: with 10 s spent before the refusal, it ends one wait from entry with the tool's
+  // own refusal, and the log records the ceiling less the 10 s the first attempt spent.
   it("measures the grace window from the handler's entry, not from the refusal", async () => {
     vi.useFakeTimers();
     const runToReport = vi.fn(() =>
@@ -2685,7 +2691,7 @@ describe("verification waiting on the operator's package-script trust decision",
     void pending.then(() => {
       settled = true;
     });
-    await vi.advanceTimersByTimeAsync(24_000);
+    await vi.advanceTimersByTimeAsync(SCRIPT_TRUST_WAIT_CEILING_MS - 1_000);
     expect(settled).toBe(false);
     await vi.advanceTimersByTimeAsync(1_600);
     expect(settled).toBe(true);
@@ -2694,7 +2700,11 @@ describe("verification waiting on the operator's package-script trust decision",
       reasonCode: "WORKSPACE_TRUST_REQUIRED",
     });
     expect(log.find((event) => event.op === "coding-runtime.operator-decision")).toMatchObject({
-      extra: { state: "settled", reason: "expired", waitCeilingMs: 15_000 },
+      extra: {
+        state: "settled",
+        reason: "expired",
+        waitCeilingMs: SCRIPT_TRUST_WAIT_CEILING_MS - 10_000,
+      },
     });
   });
 
@@ -2757,12 +2767,63 @@ describe("verification waiting on the operator's package-script trust decision",
     expect(runToReport).toHaveBeenCalledTimes(1);
   });
 
-  // The load-bearing relation between the wait and the governed invocation's own ceiling. A wait
-  // allowed to run to that ceiling is settled as an opaque cancellation before the tool can answer
-  // — proven on this fixture: at a 30 s wait the call returned `cancelled`, at 29 s the refusal.
+  // The load-bearing relation between the wait and the ceilings the governed verification call is
+  // settled at. A wait allowed to run to a ceiling is settled as an opaque cancellation before the
+  // tool can answer — proven on this fixture while the registry's fixed 30 s life was that ceiling:
+  // at a 30 s wait the call returned `cancelled`, at 29 s the refusal. The wait and the retry it
+  // enables (the install and the one step) now fit inside the verification budget, which the
+  // registry, the bridge and the plugin client each outlive; the tests beside this one walk a whole
+  // wait, a run past the registry's default life and a run past the whole budget through the real
+  // registry and catalog.
   it("settles its wait strictly inside the governed invocation's life", () => {
     expect(SCRIPT_TRUST_WAIT_CEILING_MS).toBeGreaterThan(0);
-    expect(SCRIPT_TRUST_WAIT_CEILING_MS).toBeLessThan(CODING_TOOL_INVOCATION_MAX_TTL_MS);
+    expect(SCRIPT_TRUST_WAIT_CEILING_MS).toBe(MAX_APPROVAL_CHALLENGE_TTL_MS);
+    expect(
+      SCRIPT_TRUST_WAIT_CEILING_MS +
+        DEPENDENCY_INSTALL_LIMITS.wallTimeMs +
+        DEFAULT_VERIFICATION_LIMITS.wallTimeMs,
+    ).toBeLessThan(VERIFICATION_TOOL_MAX_DURATION_MS);
+  });
+
+  // PR #3452 (F43/F44): the governed-invocation registry held every catalog call for a fixed 30 s
+  // and then cancelled it, whatever budget the catalog had settled the tool at, so a real
+  // install-then-test run was cut off as `cancelled` long before its own budget ended.
+  it("lets a verification run longer than the registry's default life report its result", async () => {
+    vi.useFakeTimers();
+    const facade = verificationFacade({
+      runToReport: () =>
+        new Promise((resolve) => {
+          setTimeout(() => {
+            resolve(verificationReport("passed"));
+          }, 60_000);
+        }),
+      records: [],
+    });
+
+    const pending = facade.execute(verificationCall("verification-long-run"));
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await expect(pending).resolves.toMatchObject({ status: "completed" });
+  });
+
+  // The registry holds the call one grace past the catalog's budget, so a run that outlasts even
+  // that budget is answered by the catalog's own timeout, never by the registry's cancellation.
+  it("answers a run past the whole verification budget with the catalog's timeout", async () => {
+    vi.useFakeTimers();
+    const facade = verificationFacade({
+      runToReport: (_input, signal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            reject(new Error("aborted"));
+          });
+        }),
+      records: [],
+    });
+
+    const pending = facade.execute(verificationCall("verification-over-budget"));
+    await vi.advanceTimersByTimeAsync(VERIFICATION_TOOL_MAX_DURATION_MS + 1_000);
+
+    await expect(pending).resolves.toMatchObject({ status: "timeout" });
   });
 
   // The wait itself, in isolation: an unresolvable workspace is not a verdict a human can change,
