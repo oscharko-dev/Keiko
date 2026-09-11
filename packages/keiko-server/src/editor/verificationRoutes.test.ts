@@ -319,7 +319,7 @@ describe("openVerificationSseStream (AC6)", () => {
     );
   });
 
-  it("destroys the socket exactly once on backpressure (res.write returns false)", () => {
+  it("destroys once and signals when the ready frame itself is refused", () => {
     const fake = makeFakeSseRes();
     const manager = new FakeManager();
     const signals: SseBackpressureSignal[] = [];
@@ -332,6 +332,37 @@ describe("openVerificationSseStream (AC6)", () => {
         signals.push(signal);
       },
     );
+
+    expect(fake.writes).toHaveLength(1);
+    expect(fake.destroyCount).toBe(1);
+    expect(signals).toHaveLength(1);
+    expect(signals[0]?.accepted).toBe(false);
+    // The refusal aborted the stream before any event: nothing further is written or destroyed.
+    manager.emitExternal({
+      schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
+      kind: "run-cancelled",
+      runId: "r",
+    });
+    expect(fake.writes).toHaveLength(1);
+    expect(fake.destroyCount).toBe(1);
+  });
+
+  it("destroys the socket exactly once on backpressure (res.write returns false)", () => {
+    const fake = makeFakeSseRes();
+    const manager = new FakeManager();
+    const signals: SseBackpressureSignal[] = [];
+    openVerificationSseStream(
+      fake.res,
+      manager,
+      (value) => value,
+      (signal) => {
+        signals.push(signal);
+      },
+    );
+    // The client took the ready frame and goes slow only once events flow, so the first EVENT frame
+    // is the refused one. A refused ready frame has its own case.
+    expect(fake.writes).toHaveLength(1);
+    fake.writeReturns = false;
     manager.emitExternal({
       schemaVersion: EDITOR_VERIFICATION_SCHEMA_VERSION,
       kind: "run-cancelled",
@@ -340,6 +371,8 @@ describe("openVerificationSseStream (AC6)", () => {
     expect(fake.destroyCount).toBe(1);
     expect(signals).toHaveLength(1);
     expect(signals[0]?.accepted).toBe(false);
+    expect(fake.writes).toHaveLength(2);
+    expect(fake.writes[1]).toContain("event: verification:run-cancelled");
     // A second event produces no further work (the abort unsubscribed).
     const writesAfter = fake.writes.length;
     manager.emitExternal({

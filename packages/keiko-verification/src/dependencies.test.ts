@@ -631,7 +631,13 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
       const plan = planDependencyBootstrap(workspaceAt(root), nodeWorkspaceFs);
 
       const rec = recordingSpawn(); // never closes on its own
-      const pending = runDependencyBootstrap(plan, bootstrapDepsFor(root, rec.fn));
+      const terminations: unknown[] = [];
+      const pending = runDependencyBootstrap(plan, {
+        ...bootstrapDepsFor(root, rec.fn),
+        onTerminated: (evidence) => {
+          terminations.push(evidence);
+        },
+      });
       await vi.advanceTimersByTimeAsync(DEPENDENCY_INSTALL_LIMITS.wallTimeMs);
       expect(signals.sent(rec.child)).toContain("SIGTERM");
       // The ceiling's own SIGTERM does not make a stub child exit; emulate it dying afterwards,
@@ -642,6 +648,9 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
       expect(outcome.summary.exitCode).toBeNull();
       // The boundary rejects on its own ceiling; the summary names that, not a generic failure.
       expect(outcome.summary.state).toBe("timed-out");
+      // The ceiling's kill reaches the termination evidence seam every governed step reports
+      // through: exactly one decision, attributed to the wall-time ceiling.
+      expect(terminations).toEqual([expect.objectContaining({ reason: "timeout" })]);
     } finally {
       signals.restore();
       vi.useRealTimers();
@@ -657,9 +666,13 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
     const signals = recordTerminationSignals();
     try {
       const rec = recordingSpawn(); // never closes on its own
+      const terminations: unknown[] = [];
       const pending = runDependencyBootstrap(plan, {
         ...bootstrapDepsFor(root, rec.fn),
         signal: controller.signal,
+        onTerminated: (evidence) => {
+          terminations.push(evidence);
+        },
       });
       controller.abort();
       // The abort must reach the child before it closes: an implementation that ignored the signal
@@ -673,6 +686,7 @@ describe("runDependencyBootstrap — install exec outcomes", () => {
 
       expect(outcome.summary.exitCode).toBeNull();
       expect(outcome.summary.state).toBe("cancelled");
+      expect(terminations).toEqual([expect.objectContaining({ reason: "abort" })]);
     } finally {
       signals.restore();
     }

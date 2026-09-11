@@ -127,9 +127,17 @@ evidenced, the orchestrator dispatches a fixed, server-authored continuation int
 instead of settling — at most `DELIVERY_CONTINUATION_MAX` (2) times per run, each logged as
 `coding-runtime.run.delivery-continued`. The continuation restates only the accepted task's
 delivery goal; every effect still goes through the governed tools and nothing widens authority. A
-refused dispatch (`delivery-continuation-refused`), an exhausted budget, a failed or cancelled
-turn, and every supervised or ask run settle exactly as above, and the `delivery-unevidenced` line
-names how many continuations the run had.
+continuation the orchestrator does not send — `coding-runtime.run.delivery-continuation-refused`
+with `reason` `dispatch-threw` (with its `errorKind`), `dispatch-refused`, or
+`evidence-unreadable` — an exhausted budget, a failed or cancelled turn, and every supervised or ask
+run settle exactly as above, and the `delivery-unevidenced` line names how many continuations the
+run had. Two outcomes fail safe instead of guessing. Delivery evidence that cannot be read when the
+run settles is logged as `coding-runtime.run.delivery-evidence-unreadable` (with its `errorKind`)
+and settles the run `recovery-required` rather than `completed` or `delivery-not-evidenced`,
+because neither can be established. A continuation whose run an operator stopped or took over while
+the dispatch was in flight is abandoned with `reason` `run-superseded`: the run keeps the outcome
+the operator's action decided (a stop settles `cancelled`), and the continuation count is
+discarded with the run.
 
 The runtime adapter port accepts only the opaque authority reference, immutable execution binding,
 and closed runtime/model sources. Launch paths, argv, environment, endpoint, and credentials are
