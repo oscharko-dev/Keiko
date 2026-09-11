@@ -5,16 +5,16 @@ import { connect } from "node:net";
 import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
 import {
-  existsSync,
   mkdirSync,
   readdirSync,
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   watch,
   writeFileSync,
 } from "node:fs";
-import { dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { clearTimeout, setTimeout } from "node:timers";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath, URL } from "node:url";
@@ -35,8 +35,6 @@ const bffScript = join(repoRoot, "scripts", "dev-bff.mjs");
 const nextBin = requireFromUi.resolve("next/dist/bin/next");
 const nextLockPath = join(uiDir, ".next", "lock");
 const children = new Map();
-// Children the runner stops on purpose, respawned without counting as a crash (F71).
-const intendedRestarts = new Set();
 const maxRestarts = Number(process.env.KEIKO_DEV_MAX_RESTARTS ?? "3");
 const restartDelayMs = Number(process.env.KEIKO_DEV_RESTART_DELAY_MS ?? "500");
 const restartStabilityMs = Number(process.env.KEIKO_DEV_RESTART_STABILITY_MS ?? "300000");
@@ -214,7 +212,88 @@ export function createRestartBudget(maximumRestarts, stabilityMs, schedule = set
   };
 }
 
+// F71: the runner's children, the ones it stops on purpose, and what an exit means. A child stopped
+// on purpose (the BFF after its code changed) respawns at once and is not a crash; any other exit
+// of a running child is one, counted against the restart budget, and the runner decides from that
+// verdict whether to respawn after a delay or give up.
+export function createChildSupervisor(hooks) {
+  const state = { hooks, children: hooks.children ?? new Map(), intendedRestarts: new Set() };
+  return {
+    children: state.children,
+    spawn(label, command, args, options) {
+      const child = (hooks.spawnProcess ?? spawn)(command, args, {
+        ...options,
+        stdio: "inherit",
+        env: { ...process.env, ...options.env },
+      });
+      state.children.set(label, child);
+      hooks.restartBudget.recordStableRestart(label);
+      hooks.onSpawn?.(label, child);
+      superviseChild(state, label, child);
+      return child;
+    },
+    // Stops a running child on purpose, once for a burst of requests. A child that is not running,
+    // or is already stopping, is left alone: its next start loads the new code anyway.
+    restartOnPurpose(label) {
+      const child = state.children.get(label);
+      if (hooks.isShuttingDown() || child === undefined || state.intendedRestarts.has(label)) {
+        return false;
+      }
+      state.intendedRestarts.add(label);
+      child.kill("SIGTERM");
+      return true;
+    },
+  };
+}
+
+function superviseChild({ hooks, children, intendedRestarts }, label, child) {
+  const crashed = () => {
+    hooks.onCrash(label, hooks.restartBudget.recordExit(label));
+  };
+  child.on("exit", (code, signal) => {
+    if (children.get(label) !== child) return;
+    children.delete(label);
+    hooks.onExit?.(label, code, signal);
+    if (hooks.isShuttingDown()) return;
+    if (intendedRestarts.delete(label)) {
+      hooks.respawn(label);
+      return;
+    }
+    hooks.onUnexpectedExit?.(label);
+    crashed();
+  });
+  child.on("error", (error) => {
+    hooks.onError?.(label, error);
+    if (!hooks.isShuttingDown()) crashed();
+  });
+}
+
 const restartBudget = createRestartBudget(maxRestarts, restartStabilityMs);
+const supervisor = createChildSupervisor({
+  children,
+  restartBudget,
+  isShuttingDown: () => shuttingDown,
+  onSpawn: () => {
+    writeState();
+  },
+  onExit: (label, code, signal) => {
+    publicReady = false;
+    if (label === "bff") microphoneAllowance.revoke();
+    writeState({ ready: false, lastExit: { label, code, signal } });
+  },
+  onUnexpectedExit: (label) => {
+    console.error(`[dev] ${label} exited unexpectedly.`);
+    if (label === "next" && nextBundler === "turbopack" && nextBundlerPreference === "auto") {
+      nextBundler = "webpack";
+      console.error("[dev] Turbopack dev server exited; falling back to webpack dev server.");
+    }
+  },
+  onError: (label, error) => {
+    console.error(`[dev] ${label} failed: ${error.message}`);
+  },
+  respawn: restartChildAfterDelay,
+  onCrash: restartChild,
+});
 
 /**
  * Checks whether the given TCP port is free by attempting a connection.
@@ -396,8 +475,9 @@ export function writeState(extra = {}, stateFile = pidFile) {
   );
 }
 
-function restartChild(label) {
-  const { allowed, count } = restartBudget.recordExit(label);
+// A crash the supervisor counted arrives with its verdict; the Next preflight's own retry is counted
+// here.
+function restartChild(label, { allowed, count } = restartBudget.recordExit(label)) {
   if (!allowed) {
     console.error(
       `[dev] ${label} exceeded restart limit (${String(maxRestarts)}) within the ` +
@@ -470,45 +550,6 @@ async function restartNextChild() {
       console.error(`[dev] Next.js respawn preflight failed: ${String(error)}`);
     },
   });
-}
-
-function spawnChild(label, command, args, options) {
-  const child = spawn(command, args, {
-    ...options,
-    stdio: "inherit",
-    env: {
-      ...process.env,
-      ...options.env,
-    },
-  });
-  children.set(label, child);
-  restartBudget.recordStableRestart(label);
-  writeState();
-  child.on("exit", (code, signal) => {
-    if (children.get(label) !== child) return;
-    children.delete(label);
-    publicReady = false;
-    if (label === "bff") microphoneAllowance.revoke();
-    writeState({ ready: false, lastExit: { label, code, signal } });
-    if (shuttingDown) return;
-    if (intendedRestarts.delete(label)) {
-      // The BFF's code changed: an intended restart respawns at once and is not a crash, so it is
-      // not counted against the restart budget (F71).
-      restartChildAfterDelay(label);
-      return;
-    }
-    console.error(`[dev] ${label} exited unexpectedly.`);
-    if (label === "next" && nextBundler === "turbopack" && nextBundlerPreference === "auto") {
-      nextBundler = "webpack";
-      console.error("[dev] Turbopack dev server exited; falling back to webpack dev server.");
-    }
-    restartChild(label);
-  });
-  child.on("error", (error) => {
-    console.error(`[dev] ${label} failed: ${error.message}`);
-    if (!shuttingDown) restartChild(label);
-  });
-  return child;
 }
 
 async function fetchOk(url, validate = async () => true) {
@@ -594,7 +635,7 @@ async function waitForPublicReadiness() {
 }
 
 function startBff() {
-  spawnChild("bff", process.execPath, bffProcessArgs(bffScript), {
+  supervisor.spawn("bff", process.execPath, bffProcessArgs(bffScript), {
     cwd: repoRoot,
     env: bffChildEnv(bffPort, publicPort, stateDir),
   });
@@ -611,13 +652,10 @@ function startBffCodeWatch() {
 // as soon as it exited. A BFF that is not running, or already restarting, is left alone: its next
 // start loads the new code anyway.
 function restartBffForCodeChange(changed) {
-  const child = children.get("bff");
-  if (shuttingDown || child === undefined || intendedRestarts.has("bff")) return;
+  if (!supervisor.restartOnPurpose("bff")) return;
   console.error(
     `[dev] bff code changed (${String(changed.length)} file(s)); restarting the bff ...`,
   );
-  intendedRestarts.add("bff");
-  child.kill("SIGTERM");
 }
 
 // The packaged CLI exports the public loopback port to the server; the dev lane mirrors it so
@@ -683,9 +721,38 @@ export function createContentDigestTracker(readDigest = fileDigest) {
   };
 }
 
+// A recursive watcher names a file relative to its root. Only a non-empty name that resolves inside
+// that root can be a file the BFF loads; anything else is dropped before it reaches the tracker
+// (PR #3452 review).
 function watchedFile(root, name) {
   if (!root.recursive) return root.path;
-  return name === null ? undefined : join(root.path, String(name));
+  const text = name === null || name === undefined ? "" : String(name);
+  if (text.length === 0 || text.includes("\0")) return undefined;
+  const file = join(root.path, text);
+  const inside = relative(root.path, file);
+  if (inside === "" || inside === ".." || inside.startsWith(`..${sep}`)) return undefined;
+  return isAbsolute(inside) ? undefined : file;
+}
+
+// A directory's inode, or undefined when it is absent: tells a directory that appeared or was
+// replaced from one that was only written into.
+function directoryIdentity(path) {
+  try {
+    return statSync(path).ino;
+  } catch {
+    return undefined;
+  }
+}
+
+function codeFilesUnder(path) {
+  try {
+    return readdirSync(path, { recursive: true })
+      .map((name) => join(path, String(name)))
+      .filter(isBffCodePath);
+  } catch {
+    // An absent directory holds no code yet.
+    return [];
+  }
 }
 
 /**
@@ -700,6 +767,8 @@ export function createBffCodeWatch({
   watchImpl = watch,
   schedule = setTimeout,
   cancel = clearTimeout,
+  identify = directoryIdentity,
+  listCode = codeFilesUnder,
 }) {
   const pending = new Set();
   let timer;
@@ -709,14 +778,14 @@ export function createBffCodeWatch({
     pending.clear();
     if (changed.length > 0) onChange(changed);
   };
-  const watchers = roots.map((root) =>
-    watchImpl(root.path, { recursive: root.recursive, persistent: false }, (_event, name) => {
-      const file = watchedFile(root, name);
-      if (file === undefined || !isBffCodePath(file)) return;
-      pending.add(file);
-      if (timer !== undefined) cancel(timer);
-      timer = schedule(flush, debounceMs);
-    }),
+  const note = (files) => {
+    if (files.length === 0) return;
+    for (const file of files) pending.add(file);
+    if (timer !== undefined) cancel(timer);
+    timer = schedule(flush, debounceMs);
+  };
+  const watchers = roots.flatMap((root) =>
+    watchCodeRoot(root, { watchImpl, identify, listCode, note }),
   );
   return {
     close() {
@@ -726,13 +795,46 @@ export function createBffCodeWatch({
   };
 }
 
-// What the BFF loads from this checkout: every built package, and its own two scripts.
+// A package's output directory can appear after the watch started (a runner started before the
+// first build) or be replaced while it runs (a clean rebuild). Its parent reports either, and the
+// watch on the directory itself is re-armed then, with the code in it counted as changed.
+function watchCodeRoot(root, { watchImpl, identify, listCode, note }) {
+  const listener = (_event, name) => {
+    const file = watchedFile(root, name);
+    if (file !== undefined && isBffCodePath(file)) note([file]);
+  };
+  if (!root.recursive) {
+    return [watchImpl(root.path, { recursive: false, persistent: false }, listener)];
+  }
+  const arm = (identity) =>
+    identity === undefined
+      ? undefined
+      : watchImpl(root.path, { recursive: true, persistent: false }, listener);
+  let identity = identify(root.path);
+  let inner = arm(identity);
+  const parent = watchImpl(
+    dirname(root.path),
+    { recursive: false, persistent: false },
+    (_event, name) => {
+      if (name === null || String(name) !== basename(root.path)) return;
+      const next = identify(root.path);
+      if (next === identity) return;
+      identity = next;
+      inner?.close();
+      inner = arm(next);
+      note(listCode(root.path));
+    },
+  );
+  return [parent, { close: () => inner?.close() }];
+}
+
+// What the BFF loads from this checkout: every package's build output, whether or not it exists yet,
+// and the BFF's own two scripts.
 function bffCodeRoots(root) {
   const packages = join(root, "packages");
   const dists = readdirSync(packages, { withFileTypes: true })
     .filter((entry) => entry.isDirectory())
-    .map((entry) => join(packages, entry.name, "dist"))
-    .filter((dist) => existsSync(dist));
+    .map((entry) => join(packages, entry.name, "dist"));
   return [
     ...dists.map((path) => ({ path, recursive: true })),
     { path: join(root, "scripts", "dev-bff.mjs"), recursive: false },
@@ -741,13 +843,7 @@ function bffCodeRoots(root) {
 }
 
 function bffCodeFiles(roots) {
-  return roots.flatMap((root) =>
-    root.recursive
-      ? readdirSync(root.path, { recursive: true })
-          .map((name) => join(root.path, String(name)))
-          .filter(isBffCodePath)
-      : [root.path],
-  );
+  return roots.flatMap((root) => (root.recursive ? codeFilesUnder(root.path) : [root.path]));
 }
 
 export function packageBuildWatchArgs() {
@@ -755,7 +851,7 @@ export function packageBuildWatchArgs() {
 }
 
 function startPackageBuildWatch() {
-  spawnChild("packages", process.execPath, packageBuildWatchArgs(), {
+  supervisor.spawn("packages", process.execPath, packageBuildWatchArgs(), {
     cwd: repoRoot,
     env: {},
   });
@@ -774,7 +870,7 @@ function nextArgs() {
 }
 
 function startNext() {
-  spawnChild("next", process.execPath, nextArgs(), {
+  supervisor.spawn("next", process.execPath, nextArgs(), {
     cwd: uiDir,
     env: {
       PORT: String(nextPort),

@@ -48,7 +48,11 @@ export interface CodingAppSessionChannel {
   readonly pair: (attestation: unknown) => CodingAppSessionPairResult;
   readonly snapshot: (cookieToken: string | undefined) => CodingAppSessionChannelSnapshot;
   readonly rotate: (cookieToken: string | undefined) => CodingAppSessionRotateResult;
-  readonly signOut: (cookieToken: string | undefined) => void;
+  /**
+   * Revoke the session behind a presented cookie: true when one was revoked, false for an absent,
+   * invalid, revoked or expired presentation, which leaves nothing to revoke.
+   */
+  readonly signOut: (cookieToken: string | undefined) => boolean;
   readonly sessionCount: () => number;
   /**
    * Verify a presented cookie token into its live session, or `undefined` for every invalid,
@@ -361,9 +365,11 @@ export function createCodingAppSessionChannel(
         ? { rotated: false }
         : { rotated: true, cookieToken: mint.cookieToken };
     },
-    signOut: (cookieToken: string | undefined): void => {
+    signOut: (cookieToken: string | undefined): boolean => {
       const session = registry.verify(cookieToken);
-      if (session !== undefined) registry.revoke(session.sessionId);
+      if (session === undefined) return false;
+      registry.revoke(session.sessionId);
+      return true;
     },
     sessionCount: (): number => registry.sessionCount(),
     verifySession: (cookieToken: string | undefined): AppSession | undefined =>

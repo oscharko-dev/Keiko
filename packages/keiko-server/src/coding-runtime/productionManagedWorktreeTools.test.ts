@@ -1250,19 +1250,26 @@ describe("production managed worktree tools", () => {
   // Every closed reason for a step that never ran, named to the model and in the activity log
   // (PR #3452 review).
   it.each([
-    ["denied", "denied", "denied", undefined],
-    ["cancelled", "cancelled", "cancelled", undefined],
+    ["denied", "denied", "denied", undefined, "denied by policy"],
+    ["cancelled", "cancelled", "cancelled", undefined, "cancelled"],
     [
       "dependencies-unavailable",
       "skipped",
       "skipped",
       "dependencies unavailable: bootstrap failed",
+      "dependencies did not install",
     ],
-    ["script-missing", "skipped", "skipped", "no typecheck script detected in package.json"],
-    ["skipped", "skipped", "skipped", "not selected for this verifier"],
+    [
+      "script-missing",
+      "skipped",
+      "skipped",
+      "no typecheck script detected in package.json",
+      "no such script in package.json",
+    ],
+    ["skipped", "skipped", "skipped", "not selected for this verifier", "skipped"],
   ] as const)(
     "names a step that never ran with the closed reason %s",
-    async (reason, overallStatus, stepStatus, detail) => {
+    async (reason, overallStatus, stepStatus, detail, word) => {
       const log: ServerLogEvent[] = [];
       const [template] = failedVerificationReport().results;
       if (template === undefined) throw new TypeError("fixture result missing");
@@ -1290,7 +1297,11 @@ describe("production managed worktree tools", () => {
 
       await expect(
         executeVerification(facade, `verification-not-run-${reason}`),
-      ).resolves.toMatchObject({ status: "failed", reasonCode: "VERIFICATION_NOT_RUN" });
+      ).resolves.toMatchObject({
+        status: "failed",
+        reasonCode: "VERIFICATION_NOT_RUN",
+        detail: `These verification steps did not run: typecheck (${word}).`,
+      });
       expect(log).toContainEqual(
         expect.objectContaining({
           op: "coding-runtime.verification",

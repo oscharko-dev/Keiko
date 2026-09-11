@@ -165,7 +165,7 @@ function testAppSessionChannel(paired: boolean): CodingAppSessionChannel {
     pair: () => ({ paired: false }),
     snapshot: () => contentFreeCodingAppSessionChannelSnapshot(),
     rotate: () => ({ rotated: false }),
-    signOut: () => undefined,
+    signOut: () => false,
     sessionCount: () => (paired ? 1 : 0),
     verifySession: () => (paired ? TEST_APP_SESSION : undefined),
     subscribe: () => ({

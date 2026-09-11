@@ -204,13 +204,34 @@ describe("app-session lifecycle lines (F65)", () => {
     const { channel, cookie } = pairedChannel();
     const { deps: logDeps, events } = logged(channel);
 
-    handleCodingAppSessionRotate(ctx(cookie), logDeps);
-    handleCodingAppSessionSignOut(ctx(cookie), logDeps);
+    const issued = handleCodingAppSessionRotate(ctx(cookie), logDeps).headers?.["Set-Cookie"];
+    // The rotation invalidated the paired cookie, so the sign-out presents the one it issued.
+    handleCodingAppSessionSignOut(ctx(String(issued).split(";")[0] ?? ""), logDeps);
 
     expect(events.map((event) => event.op)).toEqual([
       "coding-app-session.rotated",
       "coding-app-session.signed-out",
     ]);
+  });
+
+  // PR #3452 review: the log never shows a sign-out that did not happen. An absent or unknown
+  // cookie, a repeated sign-out from a stale tab and an unconfigured channel revoke nothing.
+  it("logs a sign-out only when it revoked a session", () => {
+    const { channel, cookie } = pairedChannel();
+    const { deps: logDeps, events } = logged(channel);
+
+    handleCodingAppSessionSignOut(ctx(), logDeps);
+    handleCodingAppSessionSignOut(ctx(`${APP_SESSION_COOKIE_NAME}=sess_unknown.token`), logDeps);
+    handleCodingAppSessionSignOut(ctx(cookie), logDeps);
+    handleCodingAppSessionSignOut(ctx(cookie), logDeps);
+    const unconfigured = createBufferedServerLogSink();
+    handleCodingAppSessionSignOut(ctx(cookie), {
+      activityLog: unconfigured,
+    } as unknown as UiHandlerDeps);
+
+    expect(events.map((event) => event.op)).toEqual(["coding-app-session.signed-out"]);
+    expect(unconfigured.events).toEqual([]);
+    expect(channel.sessionCount()).toBe(0);
   });
 });
 

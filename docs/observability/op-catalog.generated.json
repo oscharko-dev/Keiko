@@ -1393,7 +1393,7 @@
     {
       "op": "coding-app-session.channel.subscribe",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-app-session/sessionChannel.ts:165",
+      "site": "packages/keiko-server/src/coding-app-session/sessionChannel.ts:169",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -1419,7 +1419,7 @@
     {
       "op": "coding-app-session.signed-out",
       "category": "http",
-      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:330",
+      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:333",
       "package": "keiko-server"
     },
     {

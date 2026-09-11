@@ -213,6 +213,9 @@ function useSelectedDiff(input: {
 }): void {
   const { client, epoch, root, setState, state } = input;
   const path = state.selectedPath;
+  // A re-pair keeps the snapshot ready and the selection, so the selected diff reads again on the
+  // redemption count itself (F65, PR #3452 review).
+  const redemptions = useCodingAppSessionRedemptions();
   useEffect(() => {
     if (state.status !== "ready" || root === null || path === null) return undefined;
     let cancelled = false;
@@ -240,7 +243,7 @@ function useSelectedDiff(input: {
     return () => {
       cancelled = true;
     };
-  }, [client, epoch, path, root, setState, state.status]);
+  }, [client, epoch, path, redemptions, root, setState, state.status]);
 }
 
 /** The minimal shape the run-root lock needs. Any hook whose input carries these fields —

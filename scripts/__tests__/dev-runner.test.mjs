@@ -9,6 +9,7 @@
 
 import { createServer } from "node:net";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
+import { once } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -22,6 +23,7 @@ import {
   bffCodeWatchEnabled,
   bffProcessArgs,
   createBffCodeWatch,
+  createChildSupervisor,
   createContentDigestTracker,
   isBffCodePath,
   canonicalLocalhostRedirectLocation,
@@ -504,7 +506,7 @@ describe("createContentDigestTracker", () => {
 });
 
 describe("createBffCodeWatch", () => {
-  function harness(contents) {
+  function harness(contents, identities = new Map([["/repo/packages/a/dist", 1]])) {
     const listeners = new Map();
     const watchImpl = vi.fn((path, _options, listener) => {
       listeners.set(path, listener);
@@ -528,11 +530,13 @@ describe("createBffCodeWatch", () => {
       watchImpl,
       schedule,
       cancel,
+      identify: (path) => identities.get(path),
+      listCode: (path) => [...contents.keys()].filter((file) => file.startsWith(`${path}/`)),
     });
     const runTimers = () => {
       for (const callback of timers.splice(0)) callback?.();
     };
-    return { handle, listeners, onChange, runTimers, watchImpl };
+    return { handle, identities, listeners, onChange, runTimers, watchImpl };
   }
 
   it("restarts nothing for a content-identical write or a file the BFF does not load", () => {
@@ -583,6 +587,86 @@ describe("createBffCodeWatch", () => {
 
     expect(onChange).not.toHaveBeenCalled();
     for (const result of watchImpl.mock.results) expect(result.value.close).toHaveBeenCalled();
+  });
+
+  // PR #3452 review: a recursive watcher's name is relative to its root; an empty, malformed or
+  // traversal-like one names nothing the BFF loads and never reaches the tracker.
+  it.each([
+    ["an empty name", ""],
+    ["a missing name", null],
+    ["a name with a NUL byte", "index\0.js"],
+    ["a traversal-like name", "../../../outside.js"],
+    ["a name that leaves its root for a sibling", "../dist-other/index.js"],
+  ])("drops %s from a recursive watcher", (_label, name) => {
+    const contents = new Map([
+      ["/repo/packages/a/dist/index.js", "v1"],
+      ["/repo/outside.js", "o1"],
+      ["/repo/packages/a/dist-other/index.js", "x1"],
+    ]);
+    const { listeners, onChange, runTimers } = harness(contents);
+    contents.set("/repo/outside.js", "o2");
+    contents.set("/repo/packages/a/dist-other/index.js", "x2");
+
+    listeners.get("/repo/packages/a/dist")("change", name);
+    runTimers();
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  // The single-file branch watches exactly its own file and ignores the reported name by design.
+  it("names its own file for a single-file watcher whatever name it reports", () => {
+    const contents = new Map([["/repo/scripts/dev-bff.mjs", "b1"]]);
+    const { listeners, onChange, runTimers } = harness(contents);
+    contents.set("/repo/scripts/dev-bff.mjs", "b2");
+
+    listeners.get("/repo/scripts/dev-bff.mjs")("change", "../../../elsewhere.js");
+    runTimers();
+
+    expect(onChange).toHaveBeenCalledWith(["/repo/scripts/dev-bff.mjs"]);
+  });
+
+  // PR #3452 review: a runner started before the first build, or a clean rebuild while it runs,
+  // leaves a package output directory that was absent, or has been replaced, since the watch began.
+  it("watches a package output directory that appears after the watch started", () => {
+    const contents = new Map([["/repo/scripts/dev-bff.mjs", "b1"]]);
+    const { identities, listeners, onChange, runTimers, watchImpl } = harness(contents, new Map());
+    expect(listeners.has("/repo/packages/a/dist")).toBe(false);
+
+    contents.set("/repo/packages/a/dist/index.js", "v1");
+    identities.set("/repo/packages/a/dist", 7);
+    listeners.get("/repo/packages/a")("rename", "dist");
+    runTimers();
+
+    expect(watchImpl).toHaveBeenCalledWith(
+      "/repo/packages/a/dist",
+      { recursive: true, persistent: false },
+      expect.any(Function),
+    );
+    expect(onChange).toHaveBeenCalledWith(["/repo/packages/a/dist/index.js"]);
+    contents.set("/repo/packages/a/dist/index.js", "v2");
+    listeners.get("/repo/packages/a/dist")("change", "index.js");
+    runTimers();
+    expect(onChange).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-arms the watch on a replaced output directory and ignores its parent's other entries", () => {
+    const contents = new Map([["/repo/packages/a/dist/index.js", "v1"]]);
+    const { identities, listeners, onChange, runTimers, watchImpl } = harness(contents);
+    const first = watchImpl.mock.results[0].value;
+
+    listeners.get("/repo/packages/a")("change", "src");
+    listeners.get("/repo/packages/a")("change", "dist");
+    runTimers();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(first.close).not.toHaveBeenCalled();
+
+    identities.set("/repo/packages/a/dist", 2);
+    contents.set("/repo/packages/a/dist/index.js", "v2");
+    listeners.get("/repo/packages/a")("rename", "dist");
+    runTimers();
+
+    expect(first.close).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledWith(["/repo/packages/a/dist/index.js"]);
   });
 });
 
@@ -704,6 +788,62 @@ describe("restart supervision", () => {
 
     expect(result).toEqual({ retried: false, started: true });
     await vi.waitFor(() => expect(reportError).toHaveBeenCalledWith(readinessFailure));
+  });
+});
+
+// F71 (PR #3452 review): the claim the fix rests on, driven through real child processes. A child
+// the runner stops on purpose respawns at once and leaves the restart budget untouched; the same
+// child exiting on its own is a crash and is counted.
+describe("child supervision", () => {
+  const idleChild = ["-e", "setInterval(() => {}, 1_000)"];
+
+  function supervised() {
+    const budget = createRestartBudget(3, 60_000);
+    const respawned = [];
+    const crashes = [];
+    const exits = [];
+    const supervisor = createChildSupervisor({
+      restartBudget: budget,
+      isShuttingDown: () => false,
+      onExit: (label, _code, signal) => exits.push({ label, signal }),
+      respawn: (label) => respawned.push(label),
+      onCrash: (label, verdict) => crashes.push({ label, ...verdict }),
+    });
+    return { budget, respawned, crashes, exits, supervisor };
+  }
+
+  it("respawns a child stopped on purpose without counting it against the restart budget", async () => {
+    const { budget, respawned, crashes, exits, supervisor } = supervised();
+    const child = supervisor.spawn("bff", process.execPath, idleChild, {});
+    await once(child, "spawn");
+
+    expect(supervisor.restartOnPurpose("bff")).toBe(true);
+    // A burst of code changes stops the child once.
+    expect(supervisor.restartOnPurpose("bff")).toBe(false);
+    await vi.waitFor(() => expect(respawned).toEqual(["bff"]), { timeout: 10_000 });
+
+    expect(exits).toEqual([{ label: "bff", signal: "SIGTERM" }]);
+    expect(crashes).toEqual([]);
+    expect(supervisor.children.has("bff")).toBe(false);
+    // The budget never saw that exit: the next real crash is the first one it counts.
+    expect(budget.recordExit("bff")).toEqual({ allowed: true, count: 1 });
+  });
+
+  it("counts an unexpected exit of the same child against the restart budget", async () => {
+    const { respawned, crashes, supervisor } = supervised();
+    const child = supervisor.spawn("bff", process.execPath, idleChild, {});
+    await once(child, "spawn");
+
+    child.kill("SIGKILL");
+    await vi.waitFor(() => expect(crashes).toEqual([{ label: "bff", allowed: true, count: 1 }]), {
+      timeout: 10_000,
+    });
+    expect(respawned).toEqual([]);
+  });
+
+  it("leaves a child that is not running alone", () => {
+    const { supervisor } = supervised();
+    expect(supervisor.restartOnPurpose("bff")).toBe(false);
   });
 });
 

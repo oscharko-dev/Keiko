@@ -323,13 +323,17 @@ export function handleCodingAppSessionRotate(ctx: RouteContext, deps: UiHandlerD
 
 /** POST /sign-out — revoke the presented session and clear the cookie. */
 export function handleCodingAppSessionSignOut(ctx: RouteContext, deps: UiHandlerDeps): RouteResult {
-  deps.codingAppSessionChannel?.signOut(readSessionCookie(ctx.req));
-  appSessionActivity(deps).write({
-    level: "info",
-    category: "http",
-    op: "coding-app-session.signed-out",
-    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-  });
+  // Only a sign-out that revoked a session is logged, as only a rotation that rotated one is: an
+  // absent or unknown cookie, or a repeated sign-out from a stale tab, revoked nothing, and the
+  // response is the same either way (PR #3452 review).
+  if (deps.codingAppSessionChannel?.signOut(readSessionCookie(ctx.req)) === true) {
+    appSessionActivity(deps).write({
+      level: "info",
+      category: "http",
+      op: "coding-app-session.signed-out",
+      correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    });
+  }
   return ackResult({ "Set-Cookie": clearSessionCookies(requestIsSecure(ctx.req)) });
 }
 

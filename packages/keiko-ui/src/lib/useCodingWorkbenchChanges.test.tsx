@@ -415,13 +415,14 @@ const REPAIR_SEAMS: CodingAppSessionPairingSeams = {
 };
 
 describe("useCodingWorkbenchChanges after a re-pair without a page load (F65)", () => {
-  it("reads the run's status and history again", async () => {
+  it("reads the run's status, history and selected diff again", async () => {
     vi.useRealTimers();
     const stub = client();
     renderHook(() => useCodingWorkbenchChanges({ ...baseInput(), client: stub }));
-    await waitFor(() => expect(stub.getStatus).toHaveBeenCalled());
+    await waitFor(() => expect(stub.getDiff).toHaveBeenCalled());
     const statusReads = stub.getStatus.mock.calls.length;
     const historyReads = stub.getHistory.mock.calls.length;
+    const diffReads = stub.getDiff.mock.calls.length;
 
     await act(async () => {
       await redeemCodingAppSessionPairingNavigation(REPAIR_SEAMS);
@@ -429,5 +430,7 @@ describe("useCodingWorkbenchChanges after a re-pair without a page load (F65)", 
 
     await waitFor(() => expect(stub.getStatus.mock.calls.length).toBeGreaterThan(statusReads));
     expect(stub.getHistory.mock.calls.length).toBeGreaterThan(historyReads);
+    // The selection and the ready snapshot survive the reload; the diff is read again all the same.
+    await waitFor(() => expect(stub.getDiff.mock.calls.length).toBeGreaterThan(diffReads));
   });
 });
