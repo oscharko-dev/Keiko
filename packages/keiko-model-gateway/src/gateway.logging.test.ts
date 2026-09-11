@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import { TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { Gateway } from "./gateway.js";
 import type { ModelGatewayLogEvent, ModelGatewayLogSink } from "./observability.js";
+import { providerRequestBudgetMs } from "./resilience.js";
 import type {
   Clock,
   GatewayConfig,
@@ -245,6 +246,7 @@ describe("Gateway.chat — activity log", () => {
       endpoint: "https://provider.example",
       timeoutMs: 30_000,
       maxRetries: 0,
+      requestBudgetMs: providerRequestBudgetMs(provider()),
       reasoningEffort: "high",
       streaming: false,
     });

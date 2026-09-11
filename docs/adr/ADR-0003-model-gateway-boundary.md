@@ -276,7 +276,7 @@ export interface ModelProviderConfig {
   readonly modelId: string;
   readonly baseUrl: string;
   readonly apiKey: string;               // Read from env/config; never logged
-  readonly timeoutMs: number;            // Default: 30_000
+  readonly timeoutMs: number;            // One attempt; default: 30_000
   readonly maxRetries: number;           // Default: 3
   readonly retryBaseDelayMs: number;     // Initial backoff; doubles each attempt; default: 500
 }
@@ -510,18 +510,32 @@ Precedence order (highest wins):
 
 ### Resilience primitives
 
-**Timeout.** Each call creates a timeout signal via `AbortSignal.timeout(config.timeoutMs)`. If the
-caller also supplies a `cancellationSignal`, the two are composed:
-`AbortSignal.any([timeoutSignal, cancellationSignal])` (Node 22 built-in). The composed signal is
-passed to `fetch(url, { signal })`. A signal abort triggered by timeout throws `TimeoutError`;
-triggered by cancellation throws `CancelledError`.
+**Timeout.** Each attempt creates its own timeout signal via `AbortSignal.timeout()`.
+`config.timeoutMs` bounds one attempt, and the attempt runs under the smaller of it and what is left
+of the call's end-to-end budget (below). If the caller also supplies a `cancellationSignal`, the two
+are composed: `AbortSignal.any([timeoutSignal, cancellationSignal])` (Node 22 built-in). The
+composed signal is passed to `fetch(url, { signal })`. A signal abort triggered by timeout throws
+`TimeoutError`; triggered by cancellation throws `CancelledError`.
 
-**Bounded retry.** On `TransportError`, `TimeoutError`, or `RateLimitError` (when `retryAfterMs` is
-null or zero), the gateway retries up to `config.maxRetries` times with exponential backoff:
-`delay = min(retryBaseDelayMs * 2^(attempt - 1), 30_000)`. The delay uses `clock.sleep()`. The
+**Bounded retry.** On an error whose `retryable` flag is set, among them `TransportError`,
+`TimeoutError` and `RateLimitError`, the gateway retries up to `config.maxRetries` times. The
+backoff is `min(retryBaseDelayMs * 2^(attempt - 1), 30_000)` at the top of an equal-jitter band
+(each sleep lies between half of it and all of it); a `RateLimitError` that carries `retryAfterMs`
+waits exactly that long instead, capped at 30 s. The delay uses `clock.sleep()`. The
 following error types are never retried: `AuthenticationError`, `ModelRefusalError`,
 `ContextOverflowError`, `CancelledError`, `CircuitOpenError`, `ConfigInvalidError`,
 `UnknownModelError`.
+
+**End-to-end budget.** A buffered call as a whole is bounded by `providerRequestBudgetMs(provider)`
+(`resilience.ts`): `(maxRetries + 1) × timeoutMs` plus the top of the backoff band before each
+retry, the longest the retry loop can legitimately take. A backoff sleep is clipped to the remaining
+budget, so a `retryAfterMs` longer than its backoff step shortens the last attempt instead of
+extending the call. A caller that builds its own deadline around a gateway call derives it from the
+same function; the coding sidecar route adds a grace so the gateway settles its own timeout first.
+A streamed call is never retried and stays bounded by one `timeoutMs`. Until PR #3452
+(2026-09-11) the provider's `timeoutMs` reached the retry loop as the budget of the whole call, so
+an attempt that hung to its timeout left no budget and a `TimeoutError` was never retried (coding
+run 23).
 
 **Circuit breaker.** One `CircuitBreaker` instance per `(modelId, baseUrl)` pair, keyed in a `Map`.
 States:

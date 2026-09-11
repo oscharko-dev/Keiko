@@ -626,10 +626,11 @@ const OPENCODE_GATEWAY_PROFILE = { id: "opencode", version: 1 } as const;
  * came back to an EXPIRED offer, the bridge classified the bind failure as a malformed tool call
  * (`expired-compatibility` → `invalid-arguments`), the chat failed non-retryably, the OpenCode turn
  * failed and the run ended `runtime-failed` with no workspace change (2026-09-10). The honest bound
- * is the request deadline the gateway itself enforces (coding-sidecar-gateway.ts
- * `requestDeadlineMs`, the provider's `timeoutMs`) plus the settlement time the bridge needs to
- * bind the response after the fetch completes — a response later than the deadline has already
- * been aborted, so nothing legitimate is refused and nothing stale is admitted.
+ * is the request deadline the route itself enforces (coding-sidecar-gateway.ts
+ * `codingSidecarGatewayRequestDeadlineMs`: the provider's whole retry budget plus the route's
+ * grace) plus the settlement time the bridge needs to bind the response after the fetch completes
+ * — a response later than the deadline has already been aborted, so nothing legitimate is refused
+ * and nothing stale is admitted.
  */
 export const OPENCODE_GATEWAY_OFFER_SETTLEMENT_GRACE_MS = 5_000;
 

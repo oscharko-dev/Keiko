@@ -8,7 +8,12 @@ import {
   TimeoutError,
   TransportError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
-import { CircuitBreaker, executeWithRetry } from "./resilience.js";
+import {
+  CircuitBreaker,
+  executeWithRetry,
+  providerRequestBudgetMs,
+  providerRetryConfig,
+} from "./resilience.js";
 import { createScriptedGatewayClock } from "./replay.js";
 import type { Clock } from "./types.js";
 
@@ -177,6 +182,52 @@ describe("executeWithRetry", () => {
     expect(sleeps).toEqual([]);
   });
 
+  // Run 23 (2026-09-11): a provider's `timeoutMs` was the budget of the WHOLE call, so an attempt
+  // that hung to its timeout spent it and the retry the loop exists for could never start. Each
+  // attempt now runs under its own `attemptTimeoutMs` (ADR-0003), inside the end-to-end budget.
+  it("retries an attempt that hung to its own timeout with a fresh attempt timeout", async () => {
+    const { clock, sleeps, advance } = stubClock();
+    const seen: (number | undefined)[] = [];
+    const result = await executeWithRetry(
+      (attemptTimeoutMs) => {
+        seen.push(attemptTimeoutMs);
+        if (seen.length === 1) {
+          advance(attemptTimeoutMs ?? 0);
+          return Promise.reject(new TimeoutError("timed out"));
+        }
+        return Promise.resolve("answered");
+      },
+      { maxRetries: 2, retryBaseDelayMs: 500, attemptTimeoutMs: 1_000, timeoutMs: 5_000 },
+      clock,
+      undefined,
+      () => 1,
+    );
+    expect(result).toBe("answered");
+    expect(seen).toEqual([1_000, 1_000]);
+    expect(sleeps).toEqual([500]);
+  });
+
+  it("clips an attempt to what is left of the end-to-end budget", async () => {
+    const { clock, advance } = stubClock();
+    const seen: (number | undefined)[] = [];
+    await executeWithRetry(
+      (attemptTimeoutMs) => {
+        seen.push(attemptTimeoutMs);
+        if (seen.length === 1) {
+          advance(1_000);
+          return Promise.reject(new TransportError("reset"));
+        }
+        return Promise.resolve("answered");
+      },
+      { maxRetries: 1, retryBaseDelayMs: 500, attemptTimeoutMs: 1_000, timeoutMs: 1_800 },
+      clock,
+      undefined,
+      () => 1,
+    );
+    // 1 000 ms in the first attempt and 500 ms asleep leave 300 ms of the 1 800 ms budget.
+    expect(seen).toEqual([1_000, 300]);
+  });
+
   it("propagates cancellation while sleeping between retries", async () => {
     const controller = new AbortController();
     const clock: Clock = {
@@ -196,6 +247,41 @@ describe("executeWithRetry", () => {
         controller.signal,
       ),
     ).rejects.toBeInstanceOf(CancelledError);
+  });
+});
+
+describe("providerRequestBudgetMs", () => {
+  // The budget has to hold the worst case the loop can take: every attempt hanging to its timeout
+  // and every backoff at the top of its jitter band. Proven by running that case through the loop
+  // itself, so the derivation cannot drift from the loop it bounds.
+  it("covers every attempt hanging to its timeout with the widest backoff between them", async () => {
+    const { clock, sleeps, advance } = stubClock();
+    const provider = { timeoutMs: 1_000, maxRetries: 4, retryBaseDelayMs: 10_000 };
+    const start = clock.now();
+    const seen: (number | undefined)[] = [];
+    await expect(
+      executeWithRetry(
+        (attemptTimeoutMs) => {
+          seen.push(attemptTimeoutMs);
+          advance(attemptTimeoutMs ?? 0);
+          return Promise.reject(new TimeoutError("timed out"));
+        },
+        providerRetryConfig(provider),
+        clock,
+        undefined,
+        () => 1,
+      ),
+    ).rejects.toBeInstanceOf(TimeoutError);
+    expect(seen).toEqual([1_000, 1_000, 1_000, 1_000, 1_000]);
+    // The ladder doubles from 10 s and is capped at 30 s.
+    expect(sleeps).toEqual([10_000, 20_000, 30_000, 30_000]);
+    expect(clock.now() - start).toBe(providerRequestBudgetMs(provider));
+  });
+
+  it("is a single attempt for a provider that never retries", () => {
+    expect(
+      providerRequestBudgetMs({ timeoutMs: 120_000, maxRetries: 0, retryBaseDelayMs: 500 }),
+    ).toBe(120_000);
   });
 });
 

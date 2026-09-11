@@ -98,6 +98,8 @@ export interface ModelProviderConfig {
   readonly apiVersion?: string | undefined;
   readonly realtimeAuthMode?: RealtimeAuthMode | undefined;
   readonly outputTokenParameter?: OutputTokenParameter | undefined;
+  // Bounds ONE attempt. The whole buffered call is bounded by the budget `providerRequestBudgetMs`
+  // (resilience.ts) derives from this, `maxRetries` and `retryBaseDelayMs`.
   readonly timeoutMs: number;
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;

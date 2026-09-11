@@ -27,7 +27,13 @@ import {
 import { OpenAiAdapter, ResponseRedactionError } from "./openai-adapter.js";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
-import { CircuitBreaker, executeWithRetry, systemClock } from "./resilience.js";
+import {
+  CircuitBreaker,
+  executeWithRetry,
+  providerRequestBudgetMs,
+  providerRetryConfig,
+  systemClock,
+} from "./resilience.js";
 import { assertValidGatewaySamplingParameters } from "./types.js";
 import type {
   Clock,
@@ -373,7 +379,7 @@ export class Gateway {
     try {
       result = await executeWithRetry(
         (attemptTimeoutMs) => this.invokeBufferedAttempt(attempt, attemptTimeoutMs),
-        route.provider,
+        providerRetryConfig(route.provider),
         this.clock,
         request.cancellationSignal,
         this.random,
@@ -593,6 +599,9 @@ export class Gateway {
           costClass: route.capability.costClass,
           timeoutMs: route.provider.timeoutMs,
           maxRetries: route.provider.maxRetries,
+          // A buffered call's bound across all its attempts; a stream is one attempt, bounded by
+          // `timeoutMs` alone.
+          ...(streaming ? {} : { requestBudgetMs: providerRequestBudgetMs(route.provider) }),
           ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
           streaming,
         },

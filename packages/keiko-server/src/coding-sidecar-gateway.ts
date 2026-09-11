@@ -16,6 +16,7 @@ import {
   countGatewayPromptTokens,
   type ModelTokenAccounting,
 } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
+import { providerRequestBudgetMs } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import type {
   CodingWorkbenchModelSource,
   CodingWorkbenchSidecarGatewayRunMetadata,
@@ -1432,8 +1433,22 @@ interface GatewayRequestCancellation {
   readonly dispose: () => void;
 }
 
-function requestDeadlineMs(config: GatewayConfig, modelId: string): number {
-  return config.providers.find((provider) => provider.modelId === modelId)?.timeoutMs ?? 30_000;
+// The route's deadline is a backstop BEHIND the gateway's own end-to-end budget, never the budget
+// itself. It used to be the provider's per-attempt `timeoutMs`: the first attempt that hung spent
+// it, and this deadline, armed before the gateway started its own clock, aborted the retry the
+// gateway had just scheduled, so a provider timeout surfaced as a cancellation nobody had asked
+// for and failed the run (coding run 23, 2026-09-11). The grace lets the gateway settle its own
+// timeout or exhausted-retry error first.
+const GATEWAY_ROUTE_DEADLINE_GRACE_MS = 1_000;
+
+export function codingSidecarGatewayRequestDeadlineMs(
+  config: GatewayConfig,
+  modelId: string,
+): number {
+  const provider = config.providers.find((candidate) => candidate.modelId === modelId);
+  // An unconfigured model is refused before any provider call; 30 s only bounds that refusal.
+  const budget = provider === undefined ? 30_000 : providerRequestBudgetMs(provider);
+  return budget + GATEWAY_ROUTE_DEADLINE_GRACE_MS;
 }
 
 function gatewayRequestCancellation(
@@ -1449,7 +1464,7 @@ function gatewayRequestCancellation(
   };
   ctx.req.once("aborted", abortClient);
   ctx.res.once("close", abortClient);
-  const deadline = AbortSignal.timeout(requestDeadlineMs(config, modelId));
+  const deadline = AbortSignal.timeout(codingSidecarGatewayRequestDeadlineMs(config, modelId));
   const runSignal = cancellationRegistry(deps)?.signalFor(runId);
   const signals = [client.signal, deadline, runSignal].filter(
     (signal): signal is AbortSignal => signal !== undefined,
@@ -2306,7 +2321,7 @@ function executeBudgetedGatewayChat(
       ctx.correlationId,
     ),
     offerLifetimeMs: opencodeGatewayOfferLifetimeMs(
-      requestDeadlineMs(binding.config, profile.modelAlias),
+      codingSidecarGatewayRequestDeadlineMs(binding.config, profile.modelAlias),
     ),
   });
 }

@@ -14,11 +14,13 @@ import {
   type ModelProviderConfig,
   type NormalizedResponse,
 } from "@oscharko-dev/keiko-model-gateway";
+import { providerRequestBudgetMs } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
 import {
   _classifyBadRequestReasonForTests,
+  codingSidecarGatewayRequestDeadlineMs,
   createOpenCodeGatewayReadinessRegistry,
   handleCodingSidecarGatewayChatCompletions,
   handleCodingSidecarGatewayProfile,
@@ -896,11 +898,15 @@ describe("coding-sidecar gateway", () => {
       const projected = sink.events.find((event) => event.op === "gateway.tool-catalog.projected");
       expect(projected).toBeDefined();
       const remaining = projected?.extra?.offerRemainingMs;
-      // The fixture provider's timeoutMs is 30 s; the offer must still be bindable past that
-      // deadline by the settlement grace, minus the milliseconds between mint and projection.
+      // The offer must still be bindable past the route's own deadline for the model by the
+      // settlement grace, minus the milliseconds between mint and projection.
+      const deadline = codingSidecarGatewayRequestDeadlineMs(
+        configValue(provider(), capability()),
+        provider().modelId,
+      );
       expect(typeof remaining).toBe("number");
-      expect(remaining as number).toBeGreaterThan(30_000);
-      expect(remaining as number).toBeLessThanOrEqual(opencodeGatewayOfferLifetimeMs(30_000));
+      expect(remaining as number).toBeGreaterThan(deadline);
+      expect(remaining as number).toBeLessThanOrEqual(opencodeGatewayOfferLifetimeMs(deadline));
     } finally {
       vi.unstubAllGlobals();
       resetGatewayInstanceCacheForTests();
@@ -2228,6 +2234,87 @@ describe("coding-sidecar gateway", () => {
     }
   });
 
+  // The route deadline is a backstop behind the gateway's own end-to-end budget. It used to be the
+  // provider's per-attempt `timeoutMs` and cancelled the retry of a hung attempt (run 23).
+  it("sets the route deadline behind the provider's whole retry budget", () => {
+    for (const value of [
+      provider(),
+      provider({ timeoutMs: 120_000, maxRetries: 2 }),
+      provider({ maxRetries: 0 }),
+    ]) {
+      expect(
+        codingSidecarGatewayRequestDeadlineMs(configValue(value, capability()), value.modelId),
+      ).toBeGreaterThan(providerRequestBudgetMs(value));
+    }
+  });
+
+  it("bounds an unconfigured model like a default provider that never retries", () => {
+    const unconfigured = configValue(provider(), capability());
+    const defaultProvider = provider({
+      modelId: "unconfigured-model",
+      timeoutMs: 30_000,
+      maxRetries: 0,
+    });
+    expect(codingSidecarGatewayRequestDeadlineMs(unconfigured, "unconfigured-model")).toBe(
+      codingSidecarGatewayRequestDeadlineMs(
+        configValue(defaultProvider, capability()),
+        "unconfigured-model",
+      ),
+    );
+  });
+
+  // Run 23 (2026-09-11), end to end through the route and the real gateway: the first attempt hangs
+  // until its own timeout, and the call must be retried instead of ending GATEWAY_CANCELLED.
+  it("lets the gateway retry an attempt that hung to its timeout instead of cancelling the call", async () => {
+    resetGatewayInstanceCacheForTests();
+    let calls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn((_url: unknown, init?: RequestInit): Promise<Response> => {
+        calls += 1;
+        const signal = init?.signal;
+        if (calls === 1 && signal != null) {
+          // A provider that never answers: only the attempt's own timeout ends this call.
+          return new Promise((_resolve, reject) => {
+            signal.addEventListener(
+              "abort",
+              () => {
+                reject(signal.reason instanceof Error ? signal.reason : new Error("aborted"));
+              },
+              { once: true },
+            );
+          });
+        }
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({ choices: [{ finish_reason: "stop", message: { content: "ok" } }] }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+        );
+      }),
+    );
+    const deps = {
+      ...runtimeGatewayDeps(() => ({ ok: true, binding: { runId: "run-hung-attempt" } })),
+      config: configValue(provider({ timeoutMs: 50, retryBaseDelayMs: 1 }), capability()),
+    } as UiHandlerDeps;
+    try {
+      const result = await handleCodingSidecarGatewayChatCompletions(
+        authenticatedContext({
+          model: "coding",
+          messages: [{ role: "user", content: "continue" }],
+          tools: modelVisibleTools(),
+        }),
+        deps,
+      );
+      assertRouteResult(result);
+      expect(result.status).toBe(200);
+      expect(calls).toBe(2);
+    } finally {
+      vi.unstubAllGlobals();
+      resetGatewayInstanceCacheForTests();
+    }
+  });
+
   it("passes the sidecar deadline through to an in-flight provider call", async () => {
     let seenSignal: AbortSignal | undefined;
     let observeAbort: (() => void) | undefined;
@@ -2253,7 +2340,8 @@ describe("coding-sidecar gateway", () => {
         () => ({ ok: true, binding: { runId: "run-deadline" } }),
         () => chat,
       ),
-      config: configValue(provider({ timeoutMs: 10 }), capability()),
+      // No retries: the route deadline is one 10 ms attempt plus the route's grace.
+      config: configValue(provider({ timeoutMs: 10, maxRetries: 0 }), capability()),
     } as UiHandlerDeps;
 
     const result = await handleCodingSidecarGatewayChatCompletions(

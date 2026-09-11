@@ -2,11 +2,14 @@ import { describe, expect, it } from "vitest";
 import { Gateway } from "./gateway.js";
 import { ResponseRedactionError } from "./openai-adapter.js";
 import { createScriptedGatewayClock } from "./replay.js";
+import { providerRequestBudgetMs } from "./resilience.js";
 import {
   CancelledError,
   CircuitOpenError,
   ERROR_CODES,
   GatewayEgressError,
+  RateLimitError,
+  TimeoutError,
   TransportError,
   UnknownModelError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
@@ -249,7 +252,10 @@ describe("Gateway.chat", () => {
     expect(gateway.circuitStatus("example-chat-model").state).toBe("closed");
   });
 
-  it("passes the remaining end-to-end timeout budget to retry attempts", async () => {
+  // Run 23 (2026-09-11): the provider's `timeoutMs` bounded the WHOLE call, so an attempt that
+  // hung to its timeout left no budget, and the retry ADR-0003 promises a `TimeoutError` could
+  // never start. Each attempt now runs under its own `timeoutMs`, inside the derived budget.
+  it("retries an attempt that hung to its timeout with a fresh per-attempt timeout", async () => {
     const seenTimeouts: number[] = [];
     // Bespoke on purpose: the adapter mock below advances `current` directly (simulating the
     // provider call's own latency), which createScriptedGatewayClock has no external handle to do
@@ -267,16 +273,51 @@ describe("Gateway.chat", () => {
       adapter: fakeAdapter((_request, cfg) => {
         calls += 1;
         seenTimeouts.push(cfg.timeoutMs);
+        if (calls === 1) {
+          current += cfg.timeoutMs; // the provider never answered; the attempt's timeout fired
+          return Promise.reject(new TimeoutError("provider did not answer"));
+        }
+        return Promise.resolve(okResponse("example-chat-model"));
+      }),
+      clock,
+      random: (): number => 1,
+    });
+    await expect(gateway.chat(REQUEST)).resolves.toMatchObject({ content: "answer" });
+    expect(seenTimeouts).toEqual([1000, 1000]);
+  });
+
+  // The invariant this pin has always guarded, restated on the budget the gateway now derives
+  // (`providerRequestBudgetMs`) instead of the per-attempt `timeoutMs` it used to reuse: a retry
+  // attempt runs under the REMAINING end-to-end budget, never a fresh one that outlives it. A
+  // Retry-After longer than the backoff step eats into the last attempt, which is clipped to what
+  // is left rather than outliving the budget every caller deadline is built on.
+  it("passes the remaining end-to-end timeout budget to retry attempts", async () => {
+    const seenTimeouts: number[] = [];
+    let current = 0;
+    const clock: Clock = {
+      now: (): number => current,
+      sleep: (ms): Promise<void> => {
+        current += ms;
+        return Promise.resolve();
+      },
+    };
+    let calls = 0;
+    const route = provider({ timeoutMs: 1000, maxRetries: 1, retryBaseDelayMs: 100 });
+    const gateway = new Gateway(config([route]), {
+      adapter: fakeAdapter((_request, cfg) => {
+        calls += 1;
+        seenTimeouts.push(cfg.timeoutMs);
         current += calls === 1 ? 700 : 0;
         return calls === 1
-          ? Promise.reject(new TransportError("transient"))
+          ? Promise.reject(new RateLimitError("slow down", 1000))
           : Promise.resolve(okResponse("example-chat-model"));
       }),
       clock,
-      random: (): number => 1, // top of the jitter band keeps the backoff at exactly 100ms
+      random: (): number => 1,
     });
     await gateway.chat(REQUEST);
-    expect(seenTimeouts).toEqual([1000, 200]);
+    // 700 ms in the first attempt and the 1 000 ms Retry-After leave the rest of the budget.
+    expect(seenTimeouts).toEqual([1000, providerRequestBudgetMs(route) - 700 - 1000]);
   });
 
   it("opens the circuit after repeated failures and then blocks without calling the adapter", async () => {
