@@ -1,10 +1,41 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { checkWindowsPortableAuthenticodeLoader } from "../check-windows-portable-authenticode-loader.mjs";
+import {
+  assertContainedRegularFile,
+  checkWindowsPortableAuthenticodeLoader,
+} from "../check-windows-portable-authenticode-loader.mjs";
 
 const RUNTIME = "packages/keiko-server/dist/coding-runtime/windowsPortableAuthenticode.js";
+const roots = [];
+
+afterEach(() => {
+  for (const root of roots.splice(0)) rmSync(root, { force: true, recursive: true });
+});
 
 describe("Windows Authenticode restricted-token loader check", () => {
+  it("accepts only the named regular helper inside its approved temporary root", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-loader-path-test-"));
+    roots.push(root);
+    const nested = join(root, "native-quality", "restricted-loader.exe");
+    mkdirSync(join(nested, ".."), { recursive: true });
+    writeFileSync(nested, "helper");
+
+    expect(assertContainedRegularFile(nested, root, "restricted-loader.exe", "helper")).toBe(
+      realpathSync(nested),
+    );
+    expect(() =>
+      assertContainedRegularFile(
+        join(root, "..", "restricted-loader.exe"),
+        root,
+        "restricted-loader.exe",
+        "helper",
+      ),
+    ).toThrow(/approved absolute executable path/u);
+  });
+
   it("passes the exact asset and requires both corrupt inputs to be denied", async () => {
     const run = vi
       .fn()

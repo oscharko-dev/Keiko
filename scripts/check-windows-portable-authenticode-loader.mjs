@@ -31,30 +31,36 @@ function encodedPowerShell(script) {
   return Buffer.from(script, "utf16le").toString("base64");
 }
 
-function assertContainedRegularFile(candidate, root, expectedName, label) {
-  const expectedPath = resolve(root, expectedName);
+export function assertContainedRegularFile(candidate, root, expectedName, label) {
+  const rootPath = resolve(root);
+  const candidatePath = resolve(candidate);
+  if (!hasApprovedPathShape(candidate, root, expectedName)) {
+    throw new Error(`${label} path is not an approved absolute executable path`);
+  }
+  const lexicalContainment = relative(rootPath, candidatePath);
   if (
-    !isAbsolute(candidate) ||
-    !isAbsolute(root) ||
-    basename(candidate) !== expectedName ||
-    resolve(candidate) !== expectedPath
+    lexicalContainment === ".." ||
+    lexicalContainment.startsWith(`..${sep}`) ||
+    isAbsolute(lexicalContainment)
   ) {
     throw new Error(`${label} path is not an approved absolute executable path`);
   }
-  const rootReal = realpathSync(root);
-  const stat = lstatSync(expectedPath);
-  const candidateReal = realpathSync(expectedPath);
-  const contained = relative(rootReal, candidateReal);
-  if (
-    stat.isSymbolicLink() ||
-    !stat.isFile() ||
-    contained === ".." ||
-    contained.startsWith(`..${sep}`) ||
-    isAbsolute(contained)
-  ) {
+  const rootReal = realpathSync(rootPath);
+  const stat = lstatSync(candidatePath);
+  const candidateReal = realpathSync(candidatePath);
+  if (stat.isSymbolicLink() || !stat.isFile() || escapesRoot(rootReal, candidateReal)) {
     throw new Error(`${label} path escapes its approved root`);
   }
   return candidateReal;
+}
+
+function hasApprovedPathShape(candidate, root, expectedName) {
+  return isAbsolute(candidate) && isAbsolute(root) && basename(candidate) === expectedName;
+}
+
+function escapesRoot(root, candidate) {
+  const contained = relative(root, candidate);
+  return contained === ".." || contained.startsWith(`..${sep}`) || isAbsolute(contained);
 }
 
 function trustedLoaderContext(helperPath, env) {
