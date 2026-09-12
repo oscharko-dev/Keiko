@@ -434,10 +434,10 @@ new digests/evidence/signing status, and ship through the normal reviewed releas
 payload is an inseparable child of that whole-product release: it has no independent promotion,
 self-update, downgrade, rollback, or recovery channel.
 
-OpenCode `1.17.17` is pinned to tag commit
-`474abdd7ee60f4b67476cfcef7e5311beff4a824`. Its HTTP/SSE adapter compatibility is bound to the raw
+OpenCode `1.18.30` is pinned to tag commit
+`3104c1428ec91f809e5ab86631300de41eb6952e`. Its HTTP/SSE adapter compatibility is bound to the raw
 bytes of `packages/sdk/openapi.json` at that commit, SHA-256
-`7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de`. The digest input is
+`00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3`. The digest input is
 `upstream-raw-bytes`; canonicalized or reformatted JSON is not interchangeable. Codex is absent
 from approved payloads and support claims until separate human redistribution and subscription-auth
 approval is recorded. Pending or missing approval fails closed as `redistribution-unapproved` and
@@ -583,9 +583,9 @@ required contract vocabulary.
         "owner": "anomalyco",
         "repository": "opencode",
         "name": "opencode",
-        "version": "1.17.17",
-        "tag": "v1.17.17",
-        "commit": "474abdd7ee60f4b67476cfcef7e5311beff4a824"
+        "version": "1.18.30",
+        "tag": "v1.18.30",
+        "commit": "3104c1428ec91f809e5ab86631300de41eb6952e"
       },
       "adapterCompatibility": {
         "adapterName": "keiko-coding-sidecar",
@@ -594,8 +594,8 @@ required contract vocabulary.
       },
       "protocolSchema": {
         "path": "packages/sdk/openapi.json",
-        "url": "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/sdk/openapi.json",
-        "sha256": "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de",
+        "url": "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/packages/sdk/openapi.json",
+        "sha256": "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3",
         "hashAlgorithm": "sha256",
         "hashEncoding": "lowercase-hex",
         "digestInput": "upstream-raw-bytes",
@@ -613,17 +613,17 @@ required contract vocabulary.
       },
       "license": {
         "spdxId": "MIT",
-        "url": "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/LICENSE",
+        "url": "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/LICENSE",
         "sha256": "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b"
       },
       "archive": {
         "platformTarget": "windows-x64",
-        "url": "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode-windows-x64.zip",
-        "sizeBytes": 69576819,
-        "sha256": "0a7fd7730a8efb00c69bce86fabcc0c24668371d821e99078a90dc78b71b4b85"
+        "url": "https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-windows-x64.zip",
+        "sizeBytes": 60686185,
+        "sha256": "c8c0e0d05ac3dac544a0edfad8de9eb244bf46c6c7a131c38619d40fcf31bd1f"
       },
       "executableTreeAlgorithm": "keiko-directory-tree-sha256-v1",
-      "executableTreeSha256": "081a514d31cf00426400e26fb713273ffab91d23c110fa9bac469ad254f3336b",
+      "executableTreeSha256": "9dee50ce74fb7156a11a3543847386eba2084b94e09434fc0a1648ce7ed11493",
       "executableSha256": "64-hex-opencode-executable-digest",
       "platformTarget": "windows-x64",
       "payloadRootPath": "runtime/sidecars/opencode-compatible",
@@ -811,9 +811,9 @@ required contract vocabulary.
             "owner": "anomalyco",
             "repository": "opencode",
             "name": "opencode",
-            "version": "1.17.17",
-            "tag": "v1.17.17",
-            "commit": "474abdd7ee60f4b67476cfcef7e5311beff4a824"
+            "version": "1.18.30",
+            "tag": "v1.18.30",
+            "commit": "3104c1428ec91f809e5ab86631300de41eb6952e"
           },
           "adapterCompatibility": {
             "adapterName": "keiko-coding-sidecar",
@@ -822,8 +822,8 @@ required contract vocabulary.
           },
           "protocolSchema": {
             "path": "packages/sdk/openapi.json",
-            "url": "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/sdk/openapi.json",
-            "sha256": "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de",
+            "url": "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/packages/sdk/openapi.json",
+            "sha256": "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3",
             "hashAlgorithm": "sha256",
             "hashEncoding": "lowercase-hex",
             "digestInput": "upstream-raw-bytes",
@@ -841,17 +841,17 @@ required contract vocabulary.
           },
           "license": {
             "spdxId": "MIT",
-            "url": "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/LICENSE",
+            "url": "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/LICENSE",
             "sha256": "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b"
           },
           "archive": {
             "platformTarget": "windows-x64",
-            "url": "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode-windows-x64.zip",
-            "sizeBytes": 69576819,
-            "sha256": "0a7fd7730a8efb00c69bce86fabcc0c24668371d821e99078a90dc78b71b4b85"
+            "url": "https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-windows-x64.zip",
+            "sizeBytes": 60686185,
+            "sha256": "c8c0e0d05ac3dac544a0edfad8de9eb244bf46c6c7a131c38619d40fcf31bd1f"
           },
           "executableTreeAlgorithm": "keiko-directory-tree-sha256-v1",
-          "executableTreeSha256": "081a514d31cf00426400e26fb713273ffab91d23c110fa9bac469ad254f3336b",
+          "executableTreeSha256": "9dee50ce74fb7156a11a3543847386eba2084b94e09434fc0a1648ce7ed11493",
           "executableSha256": "64-hex-opencode-executable-digest",
           "platformTarget": "windows-x64",
           "payloadRootPath": "runtime/sidecars/opencode-compatible",
@@ -941,8 +941,8 @@ Validation rules:
 - `sidecarRuntimes[]` remains optional only for legacy manifest parsing. Newly produced staging,
   candidate, and published manifests require exactly one entry named `opencode-compatible` at the
   exact payload root `runtime/sidecars/opencode-compatible`.
-- OpenCode entries are exact-key bound to repository `anomalyco/opencode`, version `1.17.17`, tag
-  `v1.17.17`, commit `474abdd7ee60f4b67476cfcef7e5311beff4a824`, and HTTP/SSE transport.
+- OpenCode entries are exact-key bound to repository `anomalyco/opencode`, version `1.18.30`, tag
+  `v1.18.30`, commit `3104c1428ec91f809e5ab86631300de41eb6952e`, and HTTP/SSE transport.
 - OpenCode protocol compatibility is the raw-byte SHA-256 of commit-addressed
   `packages/sdk/openapi.json`; `hashAlgorithm`, `hashEncoding`, and `digestInput` must be `sha256`,
   `lowercase-hex`, and `upstream-raw-bytes` respectively.

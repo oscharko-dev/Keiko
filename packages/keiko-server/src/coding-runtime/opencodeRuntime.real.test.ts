@@ -68,7 +68,7 @@ const RUN_ID = "run-2254";
 const TREE_BINDING_ID = "f".repeat(64);
 const MODEL_CAPABILITY = "m".repeat(43);
 const TOOL_CAPABILITY = "t".repeat(43);
-const PROTOCOL_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
+const PROTOCOL_SCHEMA_SHA256 = "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3";
 const PROTOCOL_HANDSHAKE_DIGEST =
   "e1db492f2ac661f2b44da6ef3d7e58ed34856621a2c58de4610640e1291266f6";
 const PROTOCOL_HANDSHAKE_ALGORITHM = "keiko-opencode-protocol-surface-v1" as const;
@@ -364,7 +364,7 @@ function realPortableRuntime(testRoot: string): {
       name: "opencode-compatible",
       kind: "coding-runtime",
       upstreamName: "opencode",
-      upstreamVersion: "1.17.17",
+      upstreamVersion: "1.18.30",
       adapterName: "keiko-coding-sidecar",
       adapterVersion: "1",
       protocolVersion: "http-sse",
@@ -554,7 +554,7 @@ async function createGatewayHarness(
         providerCalls += 1;
         return script(request, callIndex);
       },
-    // The real v1.17.17 child issues streaming chats; without this scripted stream factory the
+    // The real v1.18.30 child issues streaming chats; without this scripted stream factory the
     // gateway falls back to the default provider path and every post-handshake turn dies.
     codingSidecarGatewayChatStreamFactory:
       (): ((request: GatewayRequest) => AsyncIterable<GatewayStreamChunk>) =>
@@ -1250,7 +1250,7 @@ describe("[functional-only] real staged OpenCode runtime", () => {
   );
 
   it.skipIf(!FUNCTIONAL_ENABLED)(
-    "starts and reaps the explicit staged v1.17.17 binary without native qualification claims",
+    "starts and reaps the explicit staged v1.18.30 binary without native qualification claims",
     // eslint-disable-next-line complexity -- the real question and abort lifecycle keeps all gates visible.
     async () => {
       const root = mkdtempSync(join(tmpdir(), "keiko-opencode-functional-"));

@@ -88,7 +88,7 @@ describe("OpenCode launch profile", () => {
     expect(digest(first.config)).not.toBe(digest(JSON.stringify(legacyShape)));
   });
 
-  it("emits the pinned v1.17.17 model/provider and exact model-visible tool configuration", () => {
+  it("emits the pinned v1.18.30 model/provider and exact model-visible tool configuration", () => {
     const profile = buildOpenCodeLaunchProfile({
       executable: "/managed/opencode",
       stateRoot: "/private/run",
@@ -144,7 +144,7 @@ describe("OpenCode launch profile", () => {
   });
 
   it("documents every model-visible tool and the built-in prohibition in the agent prompt", () => {
-    // The v1.17.17 child resolves the unknown model id "coding" to its built-in-tool default
+    // The v1.18.30 child resolves the unknown model id "coding" to its built-in-tool default
     // prompt; the agent.build.prompt override is what live models actually receive, so every
     // projected tool must be taught there and the removed built-ins must be named as absent.
     for (const tool of OPENCODE_MODEL_VISIBLE_TOOL_NAMES) {
@@ -203,7 +203,7 @@ describe("OpenCode launch profile", () => {
     expect(config.tool_output).toEqual({ max_bytes: CODING_TOOL_MAX_BODY_BYTES });
   });
 
-  it("keeps wildcard denial before exact governed allows through v1.17.17 tools migration", () => {
+  it("keeps wildcard denial before exact governed allows through v1.18.30 tools migration", () => {
     const profile = buildOpenCodeLaunchProfile({
       executable: "/managed/opencode",
       stateRoot: "/private/run",

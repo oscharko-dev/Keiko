@@ -12,7 +12,7 @@ metadata. The conformance gate compares this wire output with the existing legac
 until that consumer migrates. No H1 search, research, skill, or child-agent handler is advertised.
 
 The five dialects implement a deliberately closed JSON Schema core. Unsupported keywords are
-rejected. The OpenCode 1.17.17 input projection additionally requires all declared arguments and
+rejected. The OpenCode 1.18.30 input projection additionally requires all declared arguments and
 can omit `additionalProperties` only when its explicit source value is `true`, which preserves
 the keyword's default semantics. Closed objects or schema-valued additional properties cannot
 survive that runtime's removal of the keyword and are rejected. Binding owners remain responsible

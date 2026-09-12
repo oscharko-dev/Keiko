@@ -238,11 +238,11 @@ describe("opencode registration set", () => {
     expect(projection.tools.map((tool) => tool.alias)).not.toContain("todowrite");
   });
 
-  it("pins the managed-runtime dialect: opencode 1.17.17, every projected schema all-required and additionalProperties stripped", () => {
+  it("pins the managed-runtime dialect: opencode 1.18.30, every projected schema all-required and additionalProperties stripped", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
     expect(projection.adapterDialect).toEqual({ id: "managed-runtime-json-schema", version: 1 });
-    expect(projection.adapterRuntime).toEqual({ id: "opencode", version: "1.17.17" });
+    expect(projection.adapterRuntime).toEqual({ id: "opencode", version: "1.18.30" });
     for (const tool of projection.tools) assertManagedShape(tool.inputSchema);
   });
 

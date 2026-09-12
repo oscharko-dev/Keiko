@@ -22,7 +22,7 @@ import {
 } from "./codingToolIpc.js";
 import { proposalIdPattern } from "../gitDelivery/proposalId.js";
 
-export const OPENCODE_PINNED_VERSION = "1.17.17";
+export const OPENCODE_PINNED_VERSION = "1.18.30";
 export const OPENCODE_GOVERNED_ACTION_PERMISSION = "keiko_governed_action";
 
 /**
@@ -238,7 +238,7 @@ const VERIFICATION_PROJECTED_SCHEMA = {
 } as const;
 
 /**
- * Exact v1.17.17 built-in `todowrite` projection (#2480). Status/priority are deliberately plain
+ * Exact v1.18.30 built-in `todowrite` projection (#2480). Status/priority are deliberately plain
  * strings upstream; Keiko enforces the closed status vocabulary at the safe-activity normalizer,
  * never here, or the gateway digest comparison would reject the child's declared contract.
  */
@@ -584,7 +584,7 @@ function isEmptyParameterSourceSchema(schema: Readonly<Record<string, unknown>>)
 }
 
 /**
- * Gateway requests contain OpenCode's v1.17.17 projection of a tool's schema, not the generated
+ * Gateway requests contain OpenCode's v1.18.30 projection of a tool's schema, not the generated
  * source schema: it strips the unsupported `additionalProperties` keyword from
  * `keiko_verification` (`VERIFICATION_PROJECTED_SCHEMA`), and, for a zero-argument tool such as
  * `keiko_git_status`/`keiko_git_push`, drops the empty `required: []` array and adds a `$schema`
@@ -602,7 +602,7 @@ export function projectedGatewaySchema(
     : parameters;
 }
 
-/** Gateway requests contain OpenCode's v1.17.17 projection, not the generated source schema. */
+/** Gateway requests contain OpenCode's v1.18.30 projection, not the generated source schema. */
 const EXPECTED_GATEWAY_SCHEMA_DIGESTS: ReadonlyMap<string, string> = new Map(
   OPENCODE_MODEL_VISIBLE_TOOLS.map(({ name, parameters }) => [
     name,
@@ -658,7 +658,7 @@ export function opencodeGatewayOfferLifetimeMs(requestDeadlineMs: number): numbe
  * model-visible tool list and passes a call to one of their aliases straight through to the
  * sidecar, unbound (#3414 follow-up). This catalog is never used to validate incoming sidecar
  * requests, which stays `hasExactOpenCodeVisibleToolContract` above, pinned to the real OpenCode
- * 1.17.17 runtime's own generated tool source.
+ * 1.18.30 runtime's own generated tool source.
  */
 const OPENCODE_GATEWAY_CATALOG = createKeikoToolCatalog([opencodeRegistrationSet()]);
 

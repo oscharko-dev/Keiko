@@ -727,7 +727,7 @@ function validQualificationManifest(): CodeTaskQualificationManifestV1 {
       childIssue: 3390,
       sourceCommitSha: COMMIT_SHA,
       sourceTreeSha: TREE_SHA,
-      runtimeIdentity: "opencode-1.17.17",
+      runtimeIdentity: "opencode-1.18.30",
       modelIdentity: "gateway-profile:coding-issue-journey",
       fixtureRevision: "controlled-fixture-rev-1",
       rubricDigest: RUBRIC_DIGEST,

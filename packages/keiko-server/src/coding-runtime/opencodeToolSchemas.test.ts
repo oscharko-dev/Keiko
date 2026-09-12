@@ -84,11 +84,11 @@ describe("OpenCode visible tool contract", () => {
     for (const consumer of consumers) {
       const source = readFileSync(consumer, "utf8");
       expect(source).toContain("OPENCODE_PINNED_VERSION");
-      expect(source).not.toContain('"1.17.17"');
+      expect(source).not.toContain('"1.18.30"');
     }
   });
 
-  it("accepts only the pinned v1.17.17 verification projection", () => {
+  it("accepts only the pinned v1.18.30 verification projection", () => {
     expect(hasExactOpenCodeVisibleToolContract(projectedTools())).toBe(true);
   });
 
@@ -262,7 +262,7 @@ describe("createOpenCodeGatewayToolCatalogAdvertisement", () => {
   // #3386/#3387/#3388 Git/CI tools under their canonical identities" test pins that registration),
   // so this stays one exact-equality invariant rather than a two-source partition: every
   // model-visible tool is either a catalog-projected tool or one of its two native extensions.
-  it("names all nineteen OpenCode 1.17.17 model-visible tools once native extensions are included", () => {
+  it("names all nineteen OpenCode 1.18.30 model-visible tools once native extensions are included", () => {
     const advertisement = createOpenCodeGatewayToolCatalogAdvertisement(
       0,
       undefined,
@@ -504,7 +504,7 @@ describe("deriveGatewayCatalogReadiness", () => {
   });
 });
 
-// #3390: a real OpenCode 1.17.17 run on macOS with the pinned binary refused every chat
+// #3390: a real OpenCode 1.17.17 run on macOS with the then-pinned binary refused every chat
 // completion with 403 CODING_GATEWAY_TOOL_CONTRACT_DRIFT because OpenCode projects an
 // empty-parameter tool's schema differently from every other tool: for `keiko_git_status` and
 // `keiko_git_push` (source `{"type":"object","properties":{},"required":[]}`) the real binary

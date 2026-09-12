@@ -21,7 +21,7 @@
 //
 // This set is intentionally NOT the source for
 // packages/keiko-server/src/coding-runtime/opencodeToolSchemas.ts's `OPENCODE_MODEL_VISIBLE_TOOLS`/
-// `OPENCODE_TOOL_SOURCE_DEFINITIONS`: those pin what the real, pinned OpenCode 1.17.17 runtime
+// `OPENCODE_TOOL_SOURCE_DEFINITIONS`: those pin what the real, pinned OpenCode 1.18.30 runtime
 // itself generates and enforces BEFORE a call ever reaches Keiko (owned by the concurrently-worked
 // opencodeRuntimeAdapter.ts) and must keep matching that generated adapter source exactly, pattern
 // keyword included, or the sidecar-gateway's incoming exact-set trust check
@@ -66,7 +66,7 @@ const OPENCODE_READ_MAX_WINDOW_LINES = 5_000;
 
 const OPENCODE_PROFILE = { id: "opencode", version: 1 } as const;
 const OPENCODE_DIALECT = { id: "managed-runtime-json-schema", version: 1 } as const;
-const OPENCODE_RUNTIME = { id: "opencode", version: "1.17.17" } as const;
+const OPENCODE_RUNTIME = { id: "opencode", version: "1.18.30" } as const;
 
 export interface OpenCodeNativeExtensionDefinition {
   readonly alias: "question" | "todowrite";
@@ -75,7 +75,7 @@ export interface OpenCodeNativeExtensionDefinition {
   readonly inputSchema: CatalogJsonObject;
 }
 
-// Exact v1.17.17 built-in `question` wire schema (pinned digest input; byte-identical to the
+// Exact v1.18.30 built-in `question` wire schema (pinned digest input; byte-identical to the
 // projection packages/keiko-server/src/coding-runtime/opencodeToolSchemas.ts pins for the
 // INCOMING sidecar trust check -- see this file's header comment for why this is the one source).
 const QUESTION_EXTENSION_SCHEMA: CatalogJsonObject = {
@@ -111,7 +111,7 @@ const QUESTION_EXTENSION_SCHEMA: CatalogJsonObject = {
   type: "object",
 };
 
-// Exact v1.17.17 built-in `todowrite` wire schema (#2480); byte-identical to its source schema.
+// Exact v1.18.30 built-in `todowrite` wire schema (#2480); byte-identical to its source schema.
 const TODO_WRITE_EXTENSION_SCHEMA: CatalogJsonObject = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
   type: "object",

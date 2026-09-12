@@ -20,7 +20,7 @@ import {
   validateOpenCodeHealth,
 } from "./opencodeProtocol.js";
 
-describe("OpenCode v1.17.17 protocol boundary", () => {
+describe("OpenCode v1.18.30 protocol boundary", () => {
   it("enforces the exact 64 KiB SSE cap per complete frame, not a bounded batch", () => {
     const frame = boundedSseFrame(32 * 1024);
 
@@ -46,11 +46,11 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
   });
 
   it("fails closed on health schema drift", () => {
-    expect(validateOpenCodeHealth({ healthy: true, version: "1.17.17" })).toEqual({
+    expect(validateOpenCodeHealth({ healthy: true, version: "1.18.30" })).toEqual({
       ok: true,
-      value: { healthy: true, version: "1.17.17" },
+      value: { healthy: true, version: "1.18.30" },
     });
-    expect(validateOpenCodeHealth({ healthy: true, version: "1.17.17", extra: true })).toEqual({
+    expect(validateOpenCodeHealth({ healthy: true, version: "1.18.30", extra: true })).toEqual({
       ok: false,
       reason: "schema-invalid",
     });
@@ -224,7 +224,7 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
       },
     };
     expect(parseOpenCodeSse(frame(updated))).toEqual(trigger("evt_updated"));
-    // The real v1.17.17 wraps session-scoped frames with routing keys.
+    // The real v1.18.30 wraps session-scoped frames with routing keys.
     expect(
       parseOpenCodeSse(
         `data: ${JSON.stringify({ directory: "/w", project: "global", payload: updated })}\n\n`,
@@ -348,7 +348,7 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
     });
   });
 
-  // #2475 first-contact regression: OpenCode 1.17.17 reports `path: ""` for a session whose
+  // #2475 first-contact regression: OpenCode 1.18.30 reports `path: ""` for a session whose
   // working directory is the project root (every git-worktree task workspace). The pinned
   // projection must admit the empty string while still rejecting an absent or non-string path.
   it("admits the real child's empty session path and stays closed for absent or invalid paths", () => {
@@ -395,7 +395,7 @@ describe("OpenCode v1.17.17 protocol boundary", () => {
   });
 
   // A full assistant response routinely exceeds the uniform 4096-character per-string bound. The
-  // real v1.17.17 persists it as ONE durable text part; rejecting it would throw the whole history
+  // real v1.18.30 persists it as ONE durable text part; rejecting it would throw the whole history
   // pull (opencode-history-invalid) and collapse the session's reconciliation. Text stays capped by
   // the 64 KiB part byte budget; every other field keeps the tight bound.
   it("admits a long assistant text part while keeping the byte cap and the tight non-text bound", () => {
@@ -1505,7 +1505,7 @@ function sessionData(extra: Record<string, unknown> = {}): Record<string, unknow
       title: "private title",
       agent: "build",
       model: { id: "coding", providerID: "keiko-runtime", variant: "default" },
-      version: "1.17.17",
+      version: "1.18.30",
       time: { created: 1, updated: 2 },
       ...extra,
     },

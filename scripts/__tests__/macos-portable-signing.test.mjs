@@ -248,9 +248,9 @@ function macManifest(executableBytes, licenseBytes) {
   sidecar.platformTarget = "macos-arm64";
   sidecar.archive = {
     platformTarget: "macos-arm64",
-    url: "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode-darwin-arm64.zip",
-    sizeBytes: 55159915,
-    sha256: "cec03cf8b1119053d583e9afa14a987ca4ffa9dcd76cb79a7cd66774de6411f7",
+    url: "https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-darwin-arm64.zip",
+    sizeBytes: 46240880,
+    sha256: "a5e43d6887386efc7d68ce49ae28e3bbdfdee3dfd1d7169b612c3ce67e53b1e8",
   };
   sidecar.executablePath = "runtime/sidecars/opencode-compatible/bin/opencode";
   sidecar.executableSha256 = sha256(executableBytes);
@@ -259,7 +259,7 @@ function macManifest(executableBytes, licenseBytes) {
     .digest("hex");
   sidecar.license = {
     spdxId: "MIT",
-    url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/LICENSE",
+    url: "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/LICENSE",
     sha256: sha256(licenseBytes),
   };
   sidecar.licenseEvidence.sha256 = sidecar.license.sha256;

@@ -436,7 +436,7 @@ function readinessPorts(failAt?: ReadinessPhase): {
             if (!failed("authenticated-health")) return Promise.resolve({ status: 500 });
             return Promise.resolve(
               failed("authenticated-health-version")
-                ? { status: 200, version: "1.17.17" }
+                ? { status: 200, version: "1.18.30" }
                 : { status: 200, version: "wrong-version" },
             );
           }

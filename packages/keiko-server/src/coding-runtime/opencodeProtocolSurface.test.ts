@@ -103,7 +103,7 @@ function document(): Record<string, unknown> {
   };
 }
 
-describe("OpenCode v1.17.17 protocol-surface projection", () => {
+describe("OpenCode v1.18.30 protocol-surface projection", () => {
   it("projects only settled methods and transitive references into the pinned canonical digest", async () => {
     const surface = await protocolSurfaceModule();
     const baseline = surface.projectOpenCodeProtocolSurface(document());

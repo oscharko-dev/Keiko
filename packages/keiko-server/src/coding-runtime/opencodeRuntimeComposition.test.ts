@@ -57,9 +57,9 @@ const TOOL_CAPABILITY = "t".repeat(43);
 // `toolFacadeUrl` from in production, fixed here since this suite never binds a real BFF port.
 const TOOL_FACADE_ORIGIN = "http://127.0.0.1:4391/api/coding-sidecar/tool";
 const FIXTURE_RUN_ID = "run-2254";
-const OPENCODE_VERSION = "1.17.17";
+const OPENCODE_VERSION = "1.18.30";
 const FIXED_SESSION_TITLE = "Keiko governed runtime";
-const OPENCODE_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
+const OPENCODE_SCHEMA_SHA256 = "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3";
 const OPENAPI = {
   openapi: "3.1.0",
   paths: {

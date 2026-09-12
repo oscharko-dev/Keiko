@@ -43,7 +43,7 @@ import { resolveHostExecutable } from "./lib/host-executable.mjs";
 const repoRoot = resolve(import.meta.dirname, "..");
 const MAX_DISTINCT_CONNECTIONS = 4_096;
 const MAX_ACTIVITY_LOG_BYTES = 32 * 1_024 * 1_024;
-const REAL_BINARY_VERSION = "1.17.17";
+const REAL_BINARY_VERSION = "1.18.30";
 const EVIDENCE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
 const QUALIFICATION_RECEIPTS_DIR_ENV = "KEIKO_CODE_TASK_QUALIFICATION_RECEIPTS_DIR";
 const GEOMETRY_CREDENTIAL_PLACEHOLDER = "qualification-metadata-only";

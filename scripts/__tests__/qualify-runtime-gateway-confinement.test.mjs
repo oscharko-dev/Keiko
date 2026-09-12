@@ -57,7 +57,7 @@ function passingInput() {
     testReportBytes: Buffer.from("test-report"),
     realBinaryReport: {
       sourceHead: SOURCE,
-      runtime: { name: "opencode-compatible", version: "1.17.17", target: "macos-arm64" },
+      runtime: { name: "opencode-compatible", version: "1.18.30", target: "macos-arm64" },
       journey: { exitCode: 0 },
       activityLog: { status: "retained", sha256: sha256(activityBytes) },
       managedCatalog: { correlationId: CORRELATION, binding },
@@ -74,7 +74,7 @@ function passingInput() {
     correlationId: CORRELATION,
     approvedRuntime: {
       name: "opencode-compatible",
-      version: "1.17.17",
+      version: "1.18.30",
       target: "macos-arm64",
     },
   };
@@ -113,7 +113,7 @@ describe("runtime gateway confinement qualification evidence", () => {
         correlationId: CORRELATION,
         approvedRuntime: {
           name: "opencode-compatible",
-          version: "1.17.17",
+          version: "1.18.30",
           target: "macos-arm64",
         },
       }),

@@ -80,7 +80,7 @@ import { OPENCODE_PINNED_VERSION } from "./opencodeToolSchemas.js";
 import { CodingRuntimeQuestionAnswerRejectedError } from "./codingRuntimeQuestionPort.js";
 import { openCodeCatalogSettlementBudgetMs } from "../tool-catalog/catalogToolFacadeBridge.js";
 
-const PINNED_RAW_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
+const PINNED_RAW_SCHEMA_SHA256 = "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3";
 const DIGEST = /^[a-f0-9]{64}$/u;
 const ABORT_SETTLEMENT_TIMEOUT_MS = 30_000;
 const INITIAL_TURN_BASELINE_STABILIZATION_MS = 500;

@@ -851,7 +851,7 @@ describe("coding-sidecar gateway", () => {
       );
       // The forwarded set is the seven catalog-representable tools plus the two native
       // extensions (question/todowrite), merged by the model-gateway bridge (#3414 follow-up) --
-      // canonically the full pinned OpenCode 1.17.17 model-visible set.
+      // canonically the full pinned OpenCode 1.18.30 model-visible set.
       const expectedParametersByName = new Map<string, unknown>([
         ...advertisement.projection.tools.map((tool): [string, unknown] => [
           tool.alias,
@@ -1208,7 +1208,7 @@ describe("coding-sidecar gateway", () => {
     expect(GIT_EXECUTE_SCHEMA.properties.proposalId.pattern).toBe(proposalIdPattern());
   });
 
-  it("accepts exactly the pinned OpenCode v1.17.17 visible schemas by canonical digest", async () => {
+  it("accepts exactly the pinned OpenCode v1.18.30 visible schemas by canonical digest", async () => {
     expect(
       PINNED_MODEL_VISIBLE_TOOLS.map((tool) => [tool.name, schemaDigest(tool.parameters)]),
     ).toEqual([

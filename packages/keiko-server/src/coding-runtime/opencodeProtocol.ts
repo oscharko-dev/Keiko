@@ -20,7 +20,7 @@ import {
   OPENCODE_TOOL_SOURCE_DEFINITIONS,
 } from "./opencodeToolSchemas.js";
 
-/** The only OpenCode HTTP surface admitted by the v1.17.17 adapter. */
+/** The only OpenCode HTTP surface admitted by the v1.18.30 adapter. */
 export const OPENCODE_APPROVED_ENDPOINTS = Object.freeze([
   "GET /global/health",
   "GET /global/event",
@@ -592,7 +592,7 @@ function normalizedGlobalEvent(
 }
 
 /**
- * OpenCode 1.17.17's custom-tool `context.ask` emits the reviewed legacy permission event without
+ * OpenCode 1.18.30's custom-tool `context.ask` emits the reviewed legacy permission event without
  * the newer outer event id. The permission request itself still carries the stable `per…` id.
  * Admit only that exact legacy shape and derive a content-free transport identity from it; every
  * other id-less live event remains rejected.
@@ -910,7 +910,7 @@ function sessionUpdated(data: Record<string, unknown>, aggregateId: string): boo
     info.id === aggregateId &&
     id(info.id, "ses_") &&
     [info.slug, info.projectID, info.directory, info.title, info.version].every(nonEmpty) &&
-    // The pinned 1.17.17 child reports `path: ""` when the session's working directory is the
+    // The pinned 1.18.30 child reports `path: ""` when the session's working directory is the
     // project root — every git-worktree task workspace. Present-but-empty is the real contract;
     // absence stays rejected (#2475).
     boundedString(info.path) &&

@@ -30,7 +30,7 @@ export function assertCatalogDialect(dialect: CatalogVersionRef, runtime: Catalo
   requireCatalog(dialect.version === 1 && DIALECT_IDS.has(dialect.id), "unsupported-dialect");
   if (dialect.id === "managed-runtime-json-schema") {
     requireCatalog(
-      runtime.id === "opencode" && runtime.version === "1.17.17",
+      runtime.id === "opencode" && runtime.version === "1.18.30",
       "unsupported-dialect",
     );
   } else {

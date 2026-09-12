@@ -219,7 +219,7 @@ function releaseQualifiedNativeRuntime(root: string): QualifiedPortableOpenCodeR
         name: "opencode-compatible",
         kind: "coding-runtime",
         upstreamName: "opencode",
-        upstreamVersion: "1.17.17",
+        upstreamVersion: "1.18.30",
         adapterName: "keiko-coding-sidecar",
         adapterVersion: "1",
         protocolVersion: "coding-sidecar-v1",

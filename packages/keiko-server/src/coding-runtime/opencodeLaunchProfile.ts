@@ -54,11 +54,11 @@ const OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS = 30 * 60_000;
 export const OPENCODE_GOVERNED_COMPACTION_PROMPT = `Preserve the exact accepted coding task and enough verified state to continue it correctly. Retain acceptance criteria, constraints, current plan, relevant files and symbols, completed edits, observed failing-before evidence, later verification results, unresolved failures, and immediate next actions. Distinguish verified facts from assumptions. Never report an unrun check as passed, weaken or remove regression coverage, redo a completed failing-before step solely because of compaction, or lose the current user task.`;
 
 /**
- * Replaces the pinned child's model-family default system prompt (v1.17.17 resolves the unknown
+ * Replaces the pinned child's model-family default system prompt (v1.18.30 resolves the unknown
  * model id "coding" to its built-in-tool coding prompt). That default teaches bash/grep/glob/edit
  * workflows and "fewer than 4 lines" text answers while this config removes every built-in tool,
  * which live models followed into text-only turns that never reached a keiko_* tool (#2680
- * follow-up). The v1.17.17 child uses `agent.build.prompt` verbatim INSTEAD of that default and
+ * follow-up). The v1.18.30 child uses `agent.build.prompt` verbatim INSTEAD of that default and
  * still appends its environment block after it. Every OPENCODE_MODEL_VISIBLE_TOOL_NAMES entry
  * must stay documented here; the launch-profile test enforces that coupling.
  */
@@ -185,7 +185,7 @@ function fixedOpenCodeProvider(
       },
       options: {
         baseURL: "{env:KEIKO_MODEL_GATEWAY_URL}",
-        // The pinned v1.17.17 child defaults provider chunks to 10 seconds. Coding turns can
+        // The pinned v1.18.30 child defaults provider chunks to 10 seconds. Coding turns can
         // legitimately reason longer while Keiko's gateway still enforces its shorter provider
         // deadline; align the child watchdog with the outer hard turn/authority ceiling.
         chunkTimeout: OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS,
