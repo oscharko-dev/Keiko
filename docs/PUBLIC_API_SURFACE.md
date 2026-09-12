@@ -1,4 +1,4 @@
-# Public API surface — 0.3.17 baseline
+# Public API surface — 1.0.0 baseline
 
 This document summarizes the current approved customer-facing surface for
 `@oscharko-dev/keiko`. It is current-state only: the heading names the product version whose surface
@@ -76,6 +76,10 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
 ## Stability notes
 
 - Removing a root-barrel export or renaming a CLI flag is a breaking change.
+- 1.0.0 (2026-09-12): the first stable major. The customer-facing surface is unchanged from
+  0.3.17 — no root-barrel export, CLI flag, or package entry point was added, removed, or
+  renamed by the bump itself. What changes is the promise around that surface: `1.x` is now the
+  supported line (see SECURITY.md), so a breaking change to it requires a new major release.
 - 0.3.17 (2026-09-10, PR #3452): the root barrel gains `boundWorkspaceFs` from
   `@oscharko-dev/keiko-workspace` — the filesystem port a consumer should resolve paths through for a
   `WorkspaceInfo` (the owned-root port the managed-worktree prover bound to it, else the caller's

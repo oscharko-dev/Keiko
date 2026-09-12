@@ -1,4 +1,5 @@
 import type { ToolDescriptor } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import {
   createToolRef,
   createToolDescriptor,
@@ -46,10 +47,13 @@ export function profile(
     toolRefs: [{ toolRef: descriptor.toolRef, alias }],
     nativeExtensions: [],
     adapterDialect: { id: dialect, version: 1 },
+    // Derived from the one product version, never a hand-copied literal: assertCatalogDialect
+    // compares it against NATIVE_TOOL_CATALOG_RUNTIME, so a copied string would reject every
+    // fixture on the next version bump (b3-25, the residue a 1.0.0 bump exposed).
     adapterRuntime:
       dialect === "managed-runtime-json-schema"
         ? { id: "opencode", version: "1.18.30" }
-        : { id: "keiko", version: "0.3.17" },
+        : { id: "keiko", version: KEIKO_PRODUCT_VERSION },
     compatibility: [],
   };
 }

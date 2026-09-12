@@ -68,6 +68,7 @@ function alignedSeams(overrides = {}) {
     runGh: ghFor({ deploymentRef: "v0.3.15", latestReleaseTag: "v0.3.15" }),
     runGit: gitTags(["v0.3.14", "v0.3.15"]),
     runNpm: npmDistTags("0.3.15"),
+    readReleaseLine: () => undefined,
     ...overrides,
   };
 }
@@ -161,12 +162,35 @@ describe("checkReleaseAlignment", () => {
     expect(result.aligned).toBe(false);
     expect(result.failures).toContain(
       "checkout version 0.3.17 diverges from npm latest 0.3.15 " +
-        "(must equal it or be exactly one patch/minor release ahead).",
+        "(must equal it, be exactly one patch/minor release ahead, or be the major release its " +
+        "line declares).",
     );
   });
 
   it("fails when the checkout is a major version ahead of npm latest", () => {
     const result = checkReleaseAlignment(alignedSeams({ checkoutVersion: "1.0.0" }));
+    expect(result.aligned).toBe(false);
+    expect(result.failures.some((failure) => failure.includes("diverges from npm latest"))).toBe(
+      true,
+    );
+  });
+
+  // The counterpart to the pin above: the incident this gate exists for was a SILENT divergence,
+  // and an announced major line is the opposite of silent. `release.yml`'s RELEASE_BASE_BRANCH is
+  // that announcement, and check:release-required-workflows already pins portable-assets.yml to
+  // the same value, so one declaration governs both lanes.
+  it("passes when the major step is the release line the repository declares", () => {
+    const result = checkReleaseAlignment(
+      alignedSeams({ checkoutVersion: "1.0.0", readReleaseLine: () => "1.0" }),
+    );
+    expect(result.aligned).toBe(true);
+    expect(result.failures).toEqual([]);
+  });
+
+  it("still fails a declared line that does not match the checkout's own major", () => {
+    const result = checkReleaseAlignment(
+      alignedSeams({ checkoutVersion: "2.0.0", readReleaseLine: () => "1.0" }),
+    );
     expect(result.aligned).toBe(false);
     expect(result.failures.some((failure) => failure.includes("diverges from npm latest"))).toBe(
       true,
@@ -259,7 +283,8 @@ describe("checkReleaseAlignment", () => {
     expect(result.rows[0]).toEqual({ source: "checkout version", value: undefined });
     expect(result.failures).toContain(
       "checkout version undefined diverges from npm latest 0.3.15 " +
-        "(must equal it or be exactly one patch/minor release ahead).",
+        "(must equal it, be exactly one patch/minor release ahead, or be the major release its " +
+        "line declares).",
     );
   });
 
@@ -271,7 +296,8 @@ describe("checkReleaseAlignment", () => {
     expect(result.rows).toContainEqual({ source: "npm latest dist-tag", value: "canary" });
     expect(result.failures).toContain(
       "checkout version 0.3.15 diverges from npm latest canary " +
-        "(must equal it or be exactly one patch/minor release ahead).",
+        "(must equal it, be exactly one patch/minor release ahead, or be the major release its " +
+        "line declares).",
     );
   });
 

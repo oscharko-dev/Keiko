@@ -18,13 +18,36 @@
 // second implementation of the same rule.
 
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { parse as parseYaml } from "yaml";
 
 import { isMainModule } from "./lib/is-main-module.mjs";
 import { readJsonFile } from "./lib/json.mjs";
 import { resolveGithubRepository } from "./lib/github-repository.mjs";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
+
+const RELEASE_WORKFLOW_PATH = ".github/workflows/release.yml";
+const RELEASE_LINE = /^release\/(\d+\.\d+)$/u;
+const moduleRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+// The release line the repository DECLARES, read from the one place a new line has to be opened
+// anyway: `RELEASE_BASE_BRANCH` in the release workflow. check:release-required-workflows already
+// pins release.yml and portable-assets.yml to the same value, so this is a single declaration, not
+// a fourth opinion. Unreadable or unexpected shape yields undefined, which keeps a major step
+// failing closed exactly as before.
+export function declaredReleaseLine(root = moduleRoot) {
+  try {
+    const workflow = parseYaml(readFileSync(resolve(root, RELEASE_WORKFLOW_PATH), "utf8"), {
+      maxAliasCount: 0,
+    });
+    return RELEASE_LINE.exec(String(workflow?.env?.RELEASE_BASE_BRANCH ?? ""))?.[1];
+  } catch {
+    return undefined;
+  }
+}
 
 const NPM_PUBLISH_ENVIRONMENT = "npm-publish";
 const UNREADABLE = "UNREADABLE";
@@ -54,11 +77,25 @@ function isExactlyOneStepAhead(checkout, latest) {
   return patchBump || minorBump;
 }
 
-function checkoutDiverges(checkoutVersion, latestVersion) {
+// A major release is not drift when the repository has declared that line. The 0.3.12-0.3.15
+// incident this gate exists for was SILENT divergence; an announced major is the opposite of
+// silent. An UNDECLARED major still fails, which is the half that must never be lost.
+function isDeclaredMajorStep(checkout, latest, declaredLine) {
+  return (
+    declaredLine !== undefined &&
+    checkout.major === latest.major + 1 &&
+    checkout.minor === 0 &&
+    checkout.patch === 0 &&
+    declaredLine === `${String(checkout.major)}.${String(checkout.minor)}`
+  );
+}
+
+function checkoutDiverges(checkoutVersion, latestVersion, declaredLine) {
   const checkout = parseVersion(checkoutVersion);
   const latest = parseVersion(latestVersion);
   if (checkout === undefined || latest === undefined) return true;
   if (sameVersion(checkout, latest)) return false;
+  if (isDeclaredMajorStep(checkout, latest, declaredLine)) return false;
   return !isExactlyOneStepAhead(checkout, latest);
 }
 
@@ -202,6 +239,7 @@ export function checkReleaseAlignment({
   runGh,
   runGit,
   runNpm,
+  readReleaseLine = declaredReleaseLine,
 }) {
   const rows = [{ source: "checkout version", value: checkoutVersion }];
 
@@ -217,10 +255,11 @@ export function checkReleaseAlignment({
     newestTag,
     tags,
   });
-  if (latest !== undefined && checkoutDiverges(checkoutVersion, latest)) {
+  if (latest !== undefined && checkoutDiverges(checkoutVersion, latest, readReleaseLine())) {
     failures.push(
       `checkout version ${checkoutVersion} diverges from npm latest ${latest} ` +
-        "(must equal it or be exactly one patch/minor release ahead).",
+        "(must equal it, be exactly one patch/minor release ahead, or be the major release its " +
+        "line declares).",
     );
   }
 

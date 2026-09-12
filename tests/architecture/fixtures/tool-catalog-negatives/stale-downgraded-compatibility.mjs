@@ -9,13 +9,14 @@
 //       (downgraded-safety) bound must be rejected even though the transform is otherwise a
 //       byte-identical identity transform.
 import { composedProductionCatalog, descriptorDeclaration } from "./_shared.mjs";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 
 export const ATTACK_CLASS = "stale-downgraded-compatibility";
 export const EXPECTED_REASONS = Object.freeze({
   stale: "expired-compatibility",
   downgraded: "invalid-compatibility",
 });
-const ADAPTER = Object.freeze({ id: "keiko", version: "0.3.17" });
+const ADAPTER = Object.freeze({ id: "keiko", version: KEIKO_PRODUCT_VERSION });
 const PROFILE_REF = Object.freeze({ id: "legacy-native", version: 1 });
 
 export function attemptStale(producer) {
