@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
+import { gzipSync } from "node:zlib";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -19,7 +20,10 @@ import {
   sidecarSpecDocument,
   validateProtocolSchemaBytes,
 } from "../prepare-approved-sidecar-payloads.mjs";
-import { updatePortableRuntimeApprovals } from "../update-portable-runtime-approvals.mjs";
+import {
+  updatedOpencodeRuntime,
+  updatePortableRuntimeApprovals,
+} from "../update-portable-runtime-approvals.mjs";
 import { hashDirectoryTree } from "../portable-runtime.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -55,6 +59,28 @@ function crc32(buffer) {
     crc = CRC_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
   }
   return (crc ^ 0xffffffff) >>> 0;
+}
+
+function gzippedTar(entries) {
+  const blocks = [];
+  for (const [name, content] of entries) {
+    const header = Buffer.alloc(512);
+    header.write(name, 0, "utf8");
+    header.write("000644 \0", 100, "utf8");
+    header.write("000000 \0", 108, "utf8");
+    header.write("000000 \0", 116, "utf8");
+    header.write(`${content.length.toString(8).padStart(11, "0")} `, 124, "utf8");
+    header.write("00000000000 ", 136, "utf8");
+    header.write("0", 156, "utf8");
+    header.write("ustar\0" + "00", 257, "utf8");
+    header.write("        ", 148, "utf8");
+    let sum = 0;
+    for (const byte of header) sum += byte;
+    header.write(`${sum.toString(8).padStart(6, "0")}\0 `, 148, "utf8");
+    blocks.push(header, content, Buffer.alloc((512 - (content.length % 512)) % 512));
+  }
+  blocks.push(Buffer.alloc(1024));
+  return gzipSync(Buffer.concat(blocks));
 }
 
 function storeOnlyZip(entries) {
@@ -117,14 +143,14 @@ function schemaV2Fixture() {
     owner: "anomalyco",
     repository: "opencode",
     name: "opencode",
-    version: "1.17.17",
-    tag: "v1.17.17",
-    commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
+    version: "1.18.30",
+    tag: "v1.18.30",
+    commit: "3104c1428ec91f809e5ab86631300de41eb6952e",
   };
   runtime.protocolSchema = {
     path: "packages/sdk/openapi.json",
-    url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/sdk/openapi.json",
-    sha256: "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de",
+    url: "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/packages/sdk/openapi.json",
+    sha256: "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3",
     hashAlgorithm: "sha256",
     hashEncoding: "lowercase-hex",
     digestInput: "upstream-raw-bytes",
@@ -179,7 +205,7 @@ describe("portable runtime approvals validation", () => {
     const approvals = validatePortableRuntimeApprovals(schemaV2Fixture());
     const runtime = approvals.sidecarRuntimes[0];
     expect(approvals.schemaVersion).toBe(2);
-    expect(runtime.upstream.commit).toBe("474abdd7ee60f4b67476cfcef7e5311beff4a824");
+    expect(runtime.upstream.commit).toBe("3104c1428ec91f809e5ab86631300de41eb6952e");
     expect(runtime.protocolSchema.digestInput).toBe("upstream-raw-bytes");
     expect(runtime.releaseApproval.redistribution.status).toBe("approved");
     expect(runtime.releaseApproval.subscriptionAuth.status).toBe("not-applicable");
@@ -782,7 +808,7 @@ describe("update portable runtime approvals", () => {
         },
         fakeRepoRoot,
       ),
-    ).rejects.toThrow(/only the independently approved OpenCode version 1\.17\.17/u);
+    ).rejects.toThrow(/only the independently approved OpenCode version 1\.18\.30/u);
     expect(fetchCalled).toBe(false);
   });
 
@@ -791,7 +817,7 @@ describe("update portable runtime approvals", () => {
   // bytes are unchanged and a lie when they are not. These two cases pin both halves: unchanged
   // bytes still carry the tree pin forward, changed bytes fail closed here instead of at tag time.
   const OPENCODE_ARCHIVES = new Map([
-    ["opencode-linux-x64.tar.gz", Buffer.from("l1")],
+    ["opencode-linux-x64.tar.gz", gzippedTar([["opencode", Buffer.from("l1")]])],
     ["opencode-darwin-arm64.zip", storeOnlyZip([["opencode", Buffer.from("m1")]])],
     ["opencode-darwin-x64.zip", storeOnlyZip([["opencode", Buffer.from("m2")]])],
     ["opencode-windows-x64.zip", storeOnlyZip([["opencode.exe", Buffer.from("w1")]])],
@@ -849,12 +875,12 @@ describe("update portable runtime approvals", () => {
       });
     };
     const summary = await updatePortableRuntimeApprovals(
-      ["--node-version", "23.1.0", "--opencode-version", "1.17.17"],
+      ["--node-version", "23.1.0", "--opencode-version", "1.18.30"],
       { fetchFn },
       fakeRepoRoot,
     );
     expect(summary.nodeVersion).toBe("23.1.0");
-    expect(summary.opencodeVersion).toBe("1.17.17");
+    expect(summary.opencodeVersion).toBe("1.18.30");
     const updated = loadPortableRuntimeApprovals(fakeRepoRoot);
     expect(updated.node.archives["windows-x64"].sha256).toBe("1".repeat(64));
     expect(updated.sidecarRuntimes[0].archives["windows-x64"].sha256).toBe(
@@ -871,7 +897,7 @@ describe("update portable runtime approvals", () => {
   });
 
   it("fails closed when the OpenCode archive bytes changed under an unchanged version", async () => {
-    // Same approved version 1.17.17, so the version-provenance guard does not short-circuit first;
+    // Same approved version 1.18.30, so the version-provenance guard does not short-circuit first;
     // the archive contents differ from what is pinned. Before KEIKO-0157 this wrote a file pairing
     // the NEW sha256 with the OLD executableTreeSha256 and reported success — check:portable-
     // approvals validates JSON shape only, so review saw a clean diff and the mismatch surfaced at
@@ -921,7 +947,7 @@ describe("update portable runtime approvals", () => {
     const before = readFileSync(join(fakeRepoRoot, "portable-runtime-approvals.json"), "utf8");
     await expect(
       updatePortableRuntimeApprovals(
-        ["--node-version", "23.1.0", "--opencode-version", "1.17.17"],
+        ["--node-version", "23.1.0", "--opencode-version", "1.18.30"],
         { fetchFn },
         fakeRepoRoot,
       ),
@@ -930,5 +956,85 @@ describe("update portable runtime approvals", () => {
     expect(readFileSync(join(fakeRepoRoot, "portable-runtime-approvals.json"), "utf8")).toBe(
       before,
     );
+  });
+
+  // A version LIFT is the opposite question from the drift case above: the bytes are SUPPOSED to
+  // differ, so carrying the reviewed tree digest forward would describe the outgoing release. Both
+  // digests must be re-derived from the new bytes, and every commit-bound fact -- tag, commit and
+  // the protocol-schema pin -- must move with them. Asserted through the producer's own functions,
+  // never a second copy of their formulas.
+  it("regenerates both archive digests and every commit-bound fact on a version lift", async () => {
+    const existing = schemaV2Fixture().sidecarRuntimes[0];
+    existing.upstream = { ...existing.upstream, version: "1.17.17", tag: "v1.17.17" };
+    const schemaBytes = Buffer.from('{"openapi":"3.1.0"}');
+    const license = Buffer.from("MIT License\n");
+    const fetchFn = (url) => {
+      const text = String(url);
+      const name = text.split("/").pop() ?? "";
+      const body = text.endsWith("openapi.json")
+        ? schemaBytes
+        : text.endsWith("LICENSE")
+          ? license
+          : OPENCODE_ARCHIVES.get(name);
+      if (body === undefined) return Promise.reject(new Error(`unexpected url ${text}`));
+      return Promise.resolve({
+        ok: true,
+        status: 200,
+        url: text,
+        body: (async function* streamBody() {
+          yield body;
+        })(),
+        arrayBuffer: () => Promise.reject(new Error("response buffering is forbidden")),
+      });
+    };
+
+    const lifted = await updatedOpencodeRuntime(existing, "1.18.30", { fetchFn });
+
+    expect(lifted.upstream).toEqual({
+      owner: "anomalyco",
+      repository: "opencode",
+      name: "opencode",
+      version: "1.18.30",
+      tag: "v1.18.30",
+      commit: "3104c1428ec91f809e5ab86631300de41eb6952e",
+    });
+    expect(lifted.protocolSchema.url).toBe(
+      "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/packages/sdk/openapi.json",
+    );
+    expect(lifted.protocolSchema.sha256).toBe(sha256Hex(schemaBytes));
+    expect(lifted.license.url).toBe(
+      "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/LICENSE",
+    );
+
+    for (const target of Object.keys(lifted.archives)) {
+      const archive = lifted.archives[target];
+      const payload = OPENCODE_ARCHIVES.get(ARCHIVE_NAME_BY_TARGET[target]);
+      expect(archive.url).toBe(
+        `https://github.com/anomalyco/opencode/releases/download/v1.18.30/${ARCHIVE_NAME_BY_TARGET[target]}`,
+      );
+      expect(archive.sha256).toBe(sha256Hex(payload));
+      expect(archive.sizeBytes).toBe(payload.byteLength);
+      // Neither digest may survive the lift: the fixture pins them to "a"/"b" repeated.
+      expect(archive.executableTreeSha256).not.toBe("a".repeat(64));
+      expect(archive.sbomSha256).not.toBe("b".repeat(64));
+
+      // Derive the expectation by extracting independently and calling the producer, so a change to
+      // either formula fails here instead of moving both sides together.
+      const work = tempRoot();
+      const archivePath = join(work, ARCHIVE_NAME_BY_TARGET[target]);
+      writeFileSync(archivePath, payload);
+      const sourceRoot = join(work, "payload");
+      const executablePath = join(sourceRoot, "bin", archive.executableName);
+      extractApprovedExecutable(archivePath, archive.executableName, executablePath);
+      expect(archive.executableTreeSha256).toBe(hashDirectoryTree(sourceRoot));
+      expect(archive.sbomSha256).toBe(
+        sha256Hex(
+          Buffer.from(
+            `${JSON.stringify(sidecarSbomDocument(lifted, target, sha256Hex(readFileSync(executablePath))), null, 2)}\n`,
+            "utf8",
+          ),
+        ),
+      );
+    }
   });
 });

@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 
@@ -7,13 +8,22 @@ import {
   PORTABLE_RUNTIME_APPROVALS_FILE,
   validatePortableRuntimeApprovals,
 } from "./portable-runtime-approvals.mjs";
-import { PORTABLE_TARGET_NAMES, portableTargetByName } from "./portable-runtime.mjs";
+import {
+  hashDirectoryTree,
+  PORTABLE_TARGET_NAMES,
+  portableTargetByName,
+} from "./portable-runtime.mjs";
+import {
+  extractApprovedExecutable,
+  sidecarSbomDocument,
+  SPEC_EXECUTABLE_DIR,
+} from "./prepare-approved-sidecar-payloads.mjs";
 import { sha256 } from "./lib/digest.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const DOWNLOAD_TIMEOUT_MS = 300_000;
-const APPROVED_OPENCODE_VERSION = "1.17.17";
-const APPROVED_OPENCODE_COMMIT = "474abdd7ee60f4b67476cfcef7e5311beff4a824";
+const APPROVED_OPENCODE_VERSION = "1.18.30";
+const APPROVED_OPENCODE_COMMIT = "3104c1428ec91f809e5ab86631300de41eb6952e";
 const ARCHIVE_MAX_BYTES = 512 * 1024 * 1024;
 const TEXT_MAX_BYTES = 16 * 1024 * 1024;
 const NODE_HOSTS = Object.freeze(["nodejs.org", "dist.nodejs.org"]);
@@ -110,13 +120,35 @@ async function approvedNodeSection(version, deps) {
   return { version, archives };
 }
 
-async function approvedOpencodeArchives(version, existingArchives, deps) {
-  const archives = {};
+function downloadedArchiveEntry(target, url, payload) {
+  return {
+    url,
+    sha256: sha256(payload),
+    sizeBytes: payload.byteLength,
+    executableName: target === "windows-x64" ? "opencode.exe" : "opencode",
+  };
+}
+
+async function downloadOpencodeArchives(version, deps) {
+  const downloads = {};
   for (const target of PORTABLE_TARGET_NAMES) {
     const name = portableTargetByName(target).sidecarArchiveName;
     const url = `${OPENCODE_RELEASE_BASE}/v${version}/${name}`;
     const payload = await fetchBuffer(url, ARCHIVE_MAX_BYTES, RELEASE_HOSTS, deps);
-    const digest = sha256(payload);
+    downloads[target] = { name, payload, entry: downloadedArchiveEntry(target, url, payload) };
+  }
+  return downloads;
+}
+
+// A refresh of the SAME approved version must find the SAME bytes. Changed bytes under an unchanged
+// tag mean the upstream release moved under us, which is a supply-chain event and not something an
+// updater may absorb -- so this path still carries the reviewed tree digest forward and fails closed
+// on drift. The version lift below is a different question and takes the regenerating path instead.
+function carriedForwardArchives(downloads, existingArchives) {
+  const archives = {};
+  for (const target of PORTABLE_TARGET_NAMES) {
+    const { entry } = downloads[target];
+    const digest = entry.sha256;
     const previous = existingArchives[target];
     // KEIKO-0157: executableTreeSha256 is a digest of the EXTRACTED executable tree, and this
     // script has no extractor — it can only carry the previous value forward. That is correct
@@ -135,15 +167,59 @@ async function approvedOpencodeArchives(version, existingArchives, deps) {
       );
     }
     archives[target] = {
-      url,
-      sha256: digest,
-      sizeBytes: payload.byteLength,
-      executableName: target === "windows-x64" ? "opencode.exe" : "opencode",
+      ...entry,
       executableTreeSha256: previous.executableTreeSha256,
       sbomSha256: previous.sbomSha256,
     };
   }
   return archives;
+}
+
+/**
+ * A version lift changes the archive bytes by definition, so neither the executable-tree digest nor
+ * the SBOM digest of the previous release describes it. Derive both from the downloaded bytes with
+ * the SAME functions `prepare-approved-sidecar-payloads.mjs` verifies them with, against a runtime
+ * that ALREADY carries the new upstream and archive facts -- an SBOM built from the outgoing runtime
+ * would name the old tag and the old archive digest while claiming to describe the new executable.
+ */
+function regeneratedArchiveEvidence(runtime, target, archiveName, payload) {
+  const workRoot = mkdtempSync(join(tmpdir(), "keiko-approvals-extract-"));
+  try {
+    const archivePath = join(workRoot, archiveName);
+    writeFileSync(archivePath, payload);
+    const sourceRoot = join(workRoot, "payload");
+    const { executableName } = runtime.archives[target];
+    const executablePath = join(sourceRoot, SPEC_EXECUTABLE_DIR, executableName);
+    extractApprovedExecutable(archivePath, executableName, executablePath);
+    const executableSha256 = sha256(readFileSync(executablePath));
+    const sbom = `${JSON.stringify(sidecarSbomDocument(runtime, target, executableSha256), null, 2)}\n`;
+    return {
+      executableTreeSha256: hashDirectoryTree(sourceRoot),
+      sbomSha256: sha256(Buffer.from(sbom, "utf8")),
+    };
+  } finally {
+    rmSync(workRoot, { recursive: true, force: true });
+  }
+}
+
+function regeneratedArchives(downloads, liftedRuntime) {
+  const archives = {};
+  for (const target of PORTABLE_TARGET_NAMES) {
+    const { name, payload } = downloads[target];
+    archives[target] = {
+      ...liftedRuntime.archives[target],
+      ...regeneratedArchiveEvidence(liftedRuntime, target, name, payload),
+    };
+  }
+  return archives;
+}
+
+// The protocol schema is pinned by commit, so a lift must re-read it at the new commit. Its path
+// comes from the entry being replaced rather than a second literal, so the two cannot diverge.
+async function approvedOpencodeProtocolSchema(existing, deps) {
+  const url = `${OPENCODE_LICENSE_BASE}/${APPROVED_OPENCODE_COMMIT}/${existing.path}`;
+  const payload = await fetchBuffer(url, TEXT_MAX_BYTES, RAW_HOSTS, deps);
+  return { ...existing, url, sha256: sha256(payload) };
 }
 
 async function approvedOpencodeLicense(deps) {
@@ -152,13 +228,33 @@ async function approvedOpencodeLicense(deps) {
   return { spdxId: "MIT", url, sha256: sha256(payload) };
 }
 
-function updatedOpencodeRuntime(existing, version, archives, license) {
+function liftedOpencodeRuntime(existing, version, entries, license, protocolSchema) {
   return {
     ...existing,
-    upstream: { ...existing.upstream, version },
+    upstream: {
+      ...existing.upstream,
+      version,
+      tag: `v${version}`,
+      commit: APPROVED_OPENCODE_COMMIT,
+    },
+    protocolSchema,
     license,
-    archives,
+    archives: entries,
   };
+}
+
+export async function updatedOpencodeRuntime(existing, version, deps) {
+  const downloads = await downloadOpencodeArchives(version, deps);
+  const license = await approvedOpencodeLicense(deps);
+  if (version === existing.upstream.version) {
+    return { ...existing, license, archives: carriedForwardArchives(downloads, existing.archives) };
+  }
+  const entries = Object.fromEntries(
+    PORTABLE_TARGET_NAMES.map((target) => [target, downloads[target].entry]),
+  );
+  const protocolSchema = await approvedOpencodeProtocolSchema(existing.protocolSchema, deps);
+  const lifted = liftedOpencodeRuntime(existing, version, entries, license, protocolSchema);
+  return { ...lifted, archives: regeneratedArchives(downloads, lifted) };
 }
 
 export async function updatePortableRuntimeApprovals(
@@ -185,15 +281,10 @@ export async function updatePortableRuntimeApprovals(
       (runtime) => runtime.name === "opencode-compatible",
     );
     if (index < 0) fail("approvals file has no opencode-compatible sidecar runtime entry");
-    approvals.sidecarRuntimes[index] = updatedOpencodeRuntime(
+    approvals.sidecarRuntimes[index] = await updatedOpencodeRuntime(
       approvals.sidecarRuntimes[index],
       options.opencodeVersion,
-      await approvedOpencodeArchives(
-        options.opencodeVersion,
-        approvals.sidecarRuntimes[index].archives,
-        deps,
-      ),
-      await approvedOpencodeLicense(deps),
+      deps,
     );
   }
   const validated = validatePortableRuntimeApprovals(approvals);
