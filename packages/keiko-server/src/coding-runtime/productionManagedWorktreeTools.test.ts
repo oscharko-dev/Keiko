@@ -2292,6 +2292,60 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     expect(JSON.stringify(failure)).not.toContain("parseConfig");
   });
 
+  // PR #3452 review: an index can answer with paths this result cannot attribute to any hit (stale or
+  // unknown). The delivered order is then fully lexical, and saying "hybrid" would misreport it.
+  it("discloses a lexical order when the index places no hit", async () => {
+    const bound = semanticSlot({
+      search: (): IndexMatches => Promise.resolve([{ scopePath: "src/gone.ts", score: 0.9 }]),
+    });
+    const search = await searchWith(twoMatchingFiles(), bound.slot);
+
+    expect(search.provenance).toMatchObject({
+      ranking: "lexical",
+      rerankedHits: 0,
+      fallbackReason: "pod-no-fresh-candidates",
+    });
+    expect(search.hits.map((hit) => hit.path)).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(bound.closed()).toBe(1);
+  });
+
+  // A cancelled request is terminal (ADR-0175): no fallback order, no published result, no failure
+  // evidence -- the abort is the caller's own decision, not a defect of the index.
+  // PR #3452 review: an abort is the caller's own decision, not a defect of the index. The governed
+  // facade discards a cancelled call's payload either way, so the observable difference is the
+  // EVIDENCE: without the guard below, a cancelled request files a warn line and an operator
+  // diagnostic for a failure that never happened.
+  it("files no failure evidence when the index query is cancelled mid-flight", async () => {
+    const controller = new AbortController();
+    const events: ServerLogEvent[] = [];
+    const records: { readonly operation: string }[] = [];
+    const bound = semanticSlot({
+      search: (): IndexMatches => {
+        controller.abort();
+        return Promise.reject(new Error("index unreachable"));
+      },
+    });
+    const facade = searchFacade({
+      resolveWorkspaceRootAccess: accessFor(twoMatchingFiles()),
+      repositorySemanticSearch: bound.slot,
+      activityLog: { write: (event): void => void events.push(event) },
+      diagnostics: { record: (record): void => void records.push(record) },
+    });
+
+    const result = await facade.execute({
+      capability: "opaque-capability",
+      body: searchBody(),
+      signal: controller.signal,
+    });
+
+    expect(result).toMatchObject({ status: "cancelled" });
+    expect(events.filter((event) => event.op === "coding-runtime.repository-rerank")).toHaveLength(
+      0,
+    );
+    expect(records).toHaveLength(0);
+    expect(bound.closed()).toBe(1);
+  });
+
   it("reorders the hits the index placed and discloses which index answered", async () => {
     const bound = semanticSlot({
       search: () => Promise.resolve([{ scopePath: "src/b.ts", score: 0.9 }]),

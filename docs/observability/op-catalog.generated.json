@@ -1681,7 +1681,7 @@
     {
       "op": "coding-runtime.operator-decision",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1428",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1446",
       "package": "keiko-server"
     },
     {
@@ -1741,13 +1741,13 @@
     {
       "op": "coding-runtime.repository-rerank",
       "category": "gateway",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1066",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1080",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.repository-rerank",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1080",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1094",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -1957,19 +1957,19 @@
     {
       "op": "coding-runtime.verification",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1529",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1547",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.verification",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1681",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1699",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.verification",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1728",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1746",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

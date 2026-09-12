@@ -318,7 +318,9 @@ function readSpec(): OpenCodeToolSpec {
 // restated, so a limit change there cannot silently diverge from the schema shown to the model.
 // This is a search-only tool: `keiko_workspace_discover` remains path-only discovery and
 // `keiko_workspace_read` remains the bounded-range read handoff a hit's `path`/`startLine`/
-// `endLine` feeds into -- no semantic reranking and no read-kind request is ever projected here.
+// `endLine` feeds into, and no read-kind request is ever projected here. The #3416 semantic rerank
+// reorders the handler's hits ABOVE the server port and projects nothing of its own, so neither this
+// spec nor the projection digest moves with it.
 function repositorySearchSpec(): OpenCodeToolSpec {
   return {
     canonicalId: "keiko.repo.search",

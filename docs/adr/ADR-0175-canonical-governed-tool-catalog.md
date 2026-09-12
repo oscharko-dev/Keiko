@@ -602,6 +602,14 @@ index, no provider, no fresh candidate, a failed index query, no authority or bu
 deterministic lexical order with that reason attached, never an error. Whole-request cancellation
 and timeout stay terminal and perform no fallback and no further model call.
 
+Two of those disclosures are structural, and the contract refuses a record that breaks either. A
+ranking other than `lexical` must name the index it read -- a record saying in one breath that an
+index answered and that none was read is a self-contradiction, so a lease that cannot name its index
+discloses the stated lexical order instead of an index the operator could not identify. And an order
+the index placed no hit into is lexical whatever the index returned: a provider answering with stale
+or unknown coordinates leaves the handler's own order in place, and naming a rerank there would
+misstate what the operator is reading.
+
 The operator sees the same projection through the run's authenticated app-session channel
 (`GET /runs/:runId/skills`, ADR-0141), with the readiness the catalog can tell on its own; nothing
 of a skill's body, path, prompt, argument or output reaches either surface.
@@ -616,6 +624,7 @@ request, as its description states.
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.6 | 2026-09-12 | Semantic reranking of the governed repository search runs above the handler on the evidence lane's redacted excerpts, moves neither the catalog revision nor the projection digest, and discloses a body-free provenance whose non-lexical rankings must name their index and whose unplaced orders stay lexical; whole-request cancellation is terminal (#3416, PR #3452). |
 | 1.5 | 2026-09-11 | Approved-skill discovery: the catalog owns only the `keiko.skill.discover` descriptor over the server-approved skill catalog, with one readiness decision, atomic invalidation and a closed, body-free projection (#3417, PR #3452). |
 | 1.4 | 2026-09-11 | Lineage entries are owner-issued: receipts carry evidence refs bound to the integration PR at the entry's source commit, which must resolve, precede the checked commit and still hold the producer; the self-issued first entry was withdrawn. |
 | 1.3 | 2026-09-10 | Post-landing producer changes are admitted through an append-only lineage of owner-issued checkpoints with pinned verification and independent-review receipts; the H1 records keep their historical identity (PR #3452). |

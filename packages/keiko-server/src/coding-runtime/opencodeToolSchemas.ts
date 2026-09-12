@@ -72,7 +72,8 @@ const WORKSPACE_READ_SCHEMA = {
 // `keiko_repository_search`. Bounds are read back from the handler's own `CODING_REPOSITORY_LIMITS`
 // (packages/keiko-contracts/src/coding-repository-search.ts), never restated. Search-only: a hit's
 // path/startLine/endLine feeds keiko_workspace_read for the bounded-range read handoff; there is no
-// read kind here and no semantic reranking.
+// read kind here. The #3416 rerank changes nothing that is projected: it reorders the handler's hits
+// above the port, so this schema, the descriptor and the projection digest are untouched by it.
 const REPOSITORY_SEARCH_SCHEMA = {
   type: "object",
   properties: {

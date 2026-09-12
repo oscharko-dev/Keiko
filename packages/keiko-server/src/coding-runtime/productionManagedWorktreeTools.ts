@@ -1025,28 +1025,42 @@ interface RerankOutcome {
   readonly provenance: CodingRepositorySearchProvenance;
 }
 
+// A cancelled request is terminal (ADR-0175): it performs no fallback. The governed facade discards
+// a cancelled call's payload on its own, so what this marker changes is the EVIDENCE -- an abort is
+// the caller's decision, and must not be filed as an index failure the operator has to chase.
+const RERANK_CANCELLED = "cancelled" as const;
+
 async function rerankOutcome(
   resolve: RepositorySemanticSearchResolver,
   repositoryRoot: string,
   request: CodingRepositorySearchRequest,
   hits: readonly CodingRepositoryHit[],
   signal: AbortSignal | undefined,
-): Promise<RerankOutcome> {
+): Promise<RerankOutcome | typeof RERANK_CANCELLED> {
   const lease = resolve(repositoryRoot, signal);
   try {
     if (lease.provider === undefined) {
       return { hits, provenance: lexicalProvenance(hits, "provider-absent") };
     }
     const ranked = await rankedByIndex(lease, request, hits, signal);
+    if (signal?.aborted === true) return RERANK_CANCELLED;
     if (ranked.length === 0) {
       return { hits, provenance: lexicalProvenance(hits, "pod-no-fresh-candidates") };
     }
     const ordered = rerankedOrder(hits, ranked);
+    const identity = lease.indexIdentityDigest;
+    // Two orders that are lexical in fact and must say so: the index placed nothing this result can
+    // attribute to it (only stale or unknown paths came back), and an index that cannot name itself
+    // -- a "hybrid" record without an identity would claim an index the operator cannot identify.
+    if (ordered.placed === 0 || identity === undefined) {
+      const reason = ordered.placed === 0 ? "pod-no-fresh-candidates" : "pod-unavailable";
+      return { hits, provenance: lexicalProvenance(hits, reason) };
+    }
     return {
       hits: ordered.hits,
       provenance: {
         ranking: "hybrid",
-        indexIdentityDigest: lease.indexIdentityDigest ?? null,
+        indexIdentityDigest: identity,
         indexFreshness: "fresh",
         rerankedHits: ordered.placed,
         lexicalHits: hits.length - ordered.placed,
@@ -1106,7 +1120,10 @@ async function rerankedSearch(
     resolve === undefined || root === undefined
       ? { hits: result.hits, provenance: lexicalProvenance(result.hits, "capability-not-offered") }
       : await rerankOutcome(resolve, root, requested, result.hits, signal).catch(
-          (error: unknown): RerankOutcome => {
+          (error: unknown): RerankOutcome | typeof RERANK_CANCELLED => {
+            // An abort is not a defect and leaves no failure evidence: it is the caller's own
+            // decision, and the request ends terminally rather than in a lexical fallback.
+            if (signal?.aborted === true) return RERANK_CANCELLED;
             recordRerankFailure(input, error);
             return {
               hits: result.hits,
@@ -1114,6 +1131,7 @@ async function rerankedSearch(
             };
           },
         );
+  if (outcome === RERANK_CANCELLED) return { ok: false, reason: "cancelled" };
   logRerank(input, outcome.provenance);
   return { ...result, hits: outcome.hits, provenance: outcome.provenance };
 }

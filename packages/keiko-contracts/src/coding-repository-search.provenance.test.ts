@@ -79,8 +79,20 @@ describe("coding repository search provenance (#3416)", () => {
     expect(isCodingRepositorySearchProvenance(hybrid({ lexicalHits: 51 }))).toBe(false);
   });
 
-  it("refuses an unknown key and a foreign prototype", () => {
+  // A rerank that placed hits while naming no index claims both that an index answered and that none
+  // was read; a resolver whose lease carries no digest can reach exactly that state.
+  it("refuses a non-lexical order that names no index", () => {
+    expect(
+      isCodingRepositorySearchProvenance(
+        hybrid({ indexIdentityDigest: null, indexFreshness: "absent" }),
+      ),
+    ).toBe(false);
+    expect(isCodingRepositorySearchProvenance(hybrid({ indexIdentityDigest: null }))).toBe(false);
+  });
+
+  it("refuses an unknown key, an empty record and a foreign prototype", () => {
     expect(isCodingRepositorySearchProvenance({ ...hybrid(), scores: [0.9] })).toBe(false);
+    expect(isCodingRepositorySearchProvenance({})).toBe(false);
     expect(isCodingRepositorySearchProvenance(Object.create(hybrid()) as unknown)).toBe(false);
     expect(isCodingRepositorySearchProvenance(undefined)).toBe(false);
   });

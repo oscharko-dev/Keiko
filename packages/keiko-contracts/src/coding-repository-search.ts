@@ -312,12 +312,14 @@ function provenanceCountsValid(value: Record<string, unknown>): boolean {
   return hitCount(value.rerankedHits) && hitCount(value.lexicalHits);
 }
 
-// The two ways a disclosure can contradict itself: a lexical order that claims reranked hits, and a
-// stated fallback reason beside a rerank that did happen. Either one makes the record unreadable to
-// the operator it exists for, so it is refused rather than reported.
+// The three ways a disclosure can contradict itself: a lexical order that claims reranked hits, a
+// stated fallback reason beside a rerank that did happen, and a non-lexical order that names no
+// index -- which would say in one breath that an index answered and that none was read (PR #3452
+// review). Each makes the record unreadable to the operator it exists for, so it is refused rather
+// than reported.
 function provenanceConsistent(value: Record<string, unknown>, declared: boolean): boolean {
   if (value.ranking === "lexical") return value.rerankedHits === 0;
-  return !declared;
+  return !declared && typeof value.indexIdentityDigest === "string";
 }
 
 /**
