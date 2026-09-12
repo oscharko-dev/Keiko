@@ -131,9 +131,9 @@ describe("ConnectionsLayer per-chat activity", () => {
       </>,
     );
 
-    await waitFor((): void =>
-      expect(document.querySelector("#conn-path-c-a")).toHaveAttribute("data-active", "true"),
-    );
+    await waitFor((): void => {
+      expect(document.querySelector("#conn-path-c-a")).toHaveAttribute("data-active", "true");
+    });
     expect(document.querySelector("#conn-path-c-b")).not.toHaveAttribute("data-active");
   });
 
@@ -185,9 +185,9 @@ describe("ConnectionsLayer per-chat activity", () => {
       </>,
     );
 
-    await waitFor((): void =>
-      expect(document.querySelector("#conn-path-c-1")).toHaveAttribute("data-active", "true"),
-    );
+    await waitFor((): void => {
+      expect(document.querySelector("#conn-path-c-1")).toHaveAttribute("data-active", "true");
+    });
     expect(document.querySelector("#conn-path-c-1")).toHaveAttribute("data-intensity", "heavy");
   });
 
@@ -211,9 +211,9 @@ describe("ConnectionsLayer per-chat activity", () => {
       </>,
     );
 
-    await waitFor((): void =>
-      expect(document.querySelector("#conn-path-c-1")).not.toHaveAttribute("data-active"),
-    );
+    await waitFor((): void => {
+      expect(document.querySelector("#conn-path-c-1")).not.toHaveAttribute("data-active");
+    });
     expect(document.querySelector("#conn-path-c-1")).not.toHaveAttribute("data-intensity");
   });
 });
