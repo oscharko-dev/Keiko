@@ -912,6 +912,31 @@ describe("GitClientWindow — repository list", () => {
     expect(screen.queryByRole("button", { name: /alpha/ })).not.toBeInTheDocument();
   });
 
+  // PR #3452 review: the guard covers BOTH callbacks, so the rejection half needs its own proof — a
+  // promise settles once. Without it, removing the guard from the error path would let an older
+  // FAILURE clear the newer repository list and post a stale error, with every test still green.
+  it("ignores a stale rejection that a newer request already replaced", async () => {
+    let rejectOlder!: (reason: Error) => void;
+    const older = new Promise<{ projects: readonly ProjectWithAvailability[] }>((_res, rej) => {
+      rejectOlder = rej;
+    });
+    const first = makeClient({ listRepositories: vi.fn(() => older) });
+    const { rerender } = render(<GitClientWindow client={first} />);
+
+    const second = makeClient({ listRepositories: vi.fn(async () => ({ projects: [REPO_B] })) });
+    rerender(<GitClientWindow client={second} />);
+    await screen.findByRole("button", { name: /beta/ });
+
+    await act(async () => {
+      rejectOlder(new Error("stale listing failure"));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("button", { name: /beta/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /alpha/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("stale listing failure")).not.toBeInTheDocument();
+  });
+
   it("shows the error message when listRepositories rejects", async () => {
     const client = makeClient({
       listRepositories: vi.fn(async () => {
