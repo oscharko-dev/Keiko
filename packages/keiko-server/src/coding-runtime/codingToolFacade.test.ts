@@ -700,7 +700,7 @@ describe("CodingToolFacade", () => {
       status: "failed",
       evidence: [{ kind: "governed-delegate", code: "WORKSPACE_TRUST_REQUIRED" }],
       reasonCode: "WORKSPACE_TRUST_REQUIRED",
-      guidance: expect.stringContaining("Only the operator can allow them") as unknown as string,
+      guidance: expect.stringContaining("Only the operator can allow them") as string,
     });
   });
 
@@ -734,7 +734,7 @@ describe("CodingToolFacade", () => {
       reasonCode: "VERIFICATION_NOT_RUN",
       detail:
         "These verification steps did not run: typecheck (no such script in package.json), test (dependencies did not install).",
-      guidance: expect.stringContaining("Not every verification step ran") as unknown as string,
+      guidance: expect.stringContaining("Not every verification step ran") as string,
     });
   });
 
@@ -787,7 +787,7 @@ describe("CodingToolFacade", () => {
       status: "failed",
       evidence: [{ kind: "governed-delegate", code: "VERIFICATION_NOT_RUN" }],
       reasonCode: "VERIFICATION_NOT_RUN",
-      guidance: expect.stringContaining("Not every verification step ran") as unknown as string,
+      guidance: expect.stringContaining("Not every verification step ran") as string,
     });
   });
 
@@ -826,7 +826,7 @@ describe("CodingToolFacade", () => {
         reason: "selection-unreviewed",
         pathCount: 1,
       },
-      guidance: expect.stringContaining("keiko_git_status") as unknown as string,
+      guidance: expect.stringContaining("keiko_git_status") as string,
     });
   });
 
@@ -883,7 +883,7 @@ describe("CodingToolFacade", () => {
       status: "failed",
       evidence: [{ kind: "governed-delegate", code: reasonCode }],
       reasonCode,
-      guidance: expect.stringContaining(coaching) as unknown as string,
+      guidance: expect.stringContaining(coaching) as string,
     });
   });
 
@@ -907,9 +907,7 @@ describe("CodingToolFacade", () => {
       status: "failed",
       evidence: [{ kind: "governed-delegate", code: "INVALID_EDITS" }],
       detail: "context mismatch at original line 12",
-      guidance: expect.stringContaining(
-        "does not apply to the file as it is now",
-      ) as unknown as string,
+      guidance: expect.stringContaining("does not apply to the file as it is now") as string,
     });
   });
 

@@ -11,11 +11,11 @@
 // is *measurable* rather than silent — run it manually with `npm run bench:prompt-enhancer
 // --workspace @oscharko-dev/keiko-contracts` before/after a change to prompt-enhancer-analyzer.ts's
 // scan logic. It is not wired into any CI lane or npm test/typecheck/lint run (vitest's own
-// `include` glob never matches `*.bench.ts`, and `vitest bench` does not run under `vitest run`),
+// `include` glob never matches `*.bench.ts`, and they are plain `test()` bodies that only report timings),
 // so a slowdown will not surface on its own without that manual step. It asserts nothing — `vitest
 // bench` reports timings, it does not pass/fail on them.
 
-import { bench, describe } from "vitest";
+import { describe, test } from "vitest";
 import type { PromptEnhancementRequest } from "./index.js";
 import { analyzePrompt } from "./prompt-enhancer-analyzer.js";
 import {
@@ -60,7 +60,11 @@ const request: PromptEnhancementRequest = {
 };
 
 describe("analyzePrompt bench (KEIKO-1028, #3340)", () => {
-  bench("100,000-char adversarial near-miss input (PROMPT_ANALYSIS_MAX_SCAN_CHARS ceiling)", () => {
-    analyzePrompt(request);
+  test("100,000-char adversarial near-miss input (PROMPT_ANALYSIS_MAX_SCAN_CHARS ceiling)", ({
+    bench,
+  }) => {
+    bench("analyzePrompt at the scan ceiling", () => {
+      analyzePrompt(request);
+    });
   });
 });
