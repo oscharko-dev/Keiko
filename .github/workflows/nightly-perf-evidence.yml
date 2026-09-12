@@ -48,6 +48,12 @@ jobs:
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - run: npm ci --ignore-scripts
+      # The coding-runtime evidence harness imports a validator from the BUILT contracts package
+      # (`@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api`), so without this the
+      # step below dies on ERR_MODULE_NOT_FOUND before it checks anything -- and the lane then files
+      # its generic "evidence drift" issue for a missing build (#3453). `mutation-security.yml`
+      # already builds here for the same reason; this lane simply never did.
+      - run: npm run build:packages
       # The full source-freshness contract: recorded digests against the current tree, plus every
       # budget re-derived from the committed samples. All deterministic, all hashes and arithmetic —
       # nothing here measures, so the runner's hardware cannot change the answer.

@@ -17,6 +17,7 @@ const visualRegression = readFileSync(
 );
 const ciWorkflow = parse(ci, { maxAliasCount: 0 });
 const mutationWorkflow = parse(mutation, { maxAliasCount: 0 });
+const nightlyPerfEvidenceWorkflow = parse(nightlyPerfEvidence, { maxAliasCount: 0 });
 const mutationScope = readFileSync(resolve(root, "scripts/check-mutation-scope.mjs"), "utf8");
 const localSonar = readFileSync(resolve(root, "docker/gates/run-sonar.sh"), "utf8");
 const localSonarCompose = readFileSync(resolve(root, "docker/gates/sonar-compose.yml"), "utf8");
@@ -137,6 +138,23 @@ describe("dev quality workflows", () => {
     expect(nightlyPerfEvidence).toContain("performance-evidence-drift:");
     expect(nightlyPerfEvidence).toContain("d12-drift:");
     expect(nightlyPerfEvidence).toContain("Performance evidence versus");
+  });
+
+  // #3453: the native coding-runtime evidence harness imports a validator from the BUILT contracts
+  // package, and this lane installed with `--ignore-scripts` and never built. The step died on
+  // ERR_MODULE_NOT_FOUND before checking anything, and the lane filed its generic "evidence drift"
+  // issue for what was actually a missing build -- three nights running. Order is the assertion:
+  // a build that ran after the check would be just as useless as none.
+  it("builds the packages its evidence harness imports before checking them", () => {
+    const steps = nightlyPerfEvidenceWorkflow.jobs["detect-drift"].steps;
+    const installAt = steps.findIndex((step) => step.run === "npm ci --ignore-scripts");
+    const buildAt = steps.findIndex((step) => step.run === "npm run build:packages");
+    const codingDriftAt = steps.findIndex((step) => step.id === "coding-drift");
+
+    expect(installAt).toBeGreaterThanOrEqual(0);
+    expect(codingDriftAt).toBeGreaterThanOrEqual(0);
+    expect(buildAt).toBeGreaterThan(installAt);
+    expect(codingDriftAt).toBeGreaterThan(buildAt);
   });
 
   it("does not represent migration-era design equivalence evidence as a standing gate", () => {
