@@ -41,20 +41,6 @@ regexes = [
 ]
 
 [[allowlists]]
-description = "PR #3452: the idempotency-key fixture `idempotencyKey: \"idempotency-1\"` in one immutable history commit; the key name ends in `Key` and the value's entropy (3.55) crosses the generic-api-key threshold. It is the same test literal `dev` already marks `gitleaks:allow` (editor-agent.test.ts). Scoped to that one line of that file in that commit; every other commit is scanned unchanged."
-condition = "AND"
-commits = [
-  "848912506201742a833edefef77ee1012b19df44",
-]
-paths = [
-  '''packages/keiko-server/src/coding-runtime/codingToolFacade\.dependencyFailure\.test\.ts''',
-]
-regexTarget = "line"
-regexes = [
-  '''idempotencyKey: "idempotency-1"''',
-]
-
-[[allowlists]]
 description = "PR #3452: the synthetic key fixture the stream-read test copied from openai-adapter.test.ts (#855, on dev before every scanned range) in one immutable history commit. The generic-api-key rule reads `token-\", \"1234567890abcd` as a key whose value has entropy 3.81, above the rule's 3.5. No real credential was involved; the file uses a literal the rule cannot read as a key afterwards, and `dev` branch protection forbids rewriting the commit. Scoped to that one line of that file in that commit; every other commit is scanned unchanged."
 condition = "AND"
 commits = [
