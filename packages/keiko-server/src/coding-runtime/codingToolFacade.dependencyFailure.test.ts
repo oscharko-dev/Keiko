@@ -58,7 +58,7 @@ function executeWith(verificationFailure: unknown): Promise<unknown> {
   return createCodingToolFacade(portsFailingWith(verificationFailure)).execute({
     body: JSON.stringify({
       actionId: "action-1",
-      idempotencyKey: "idempotency-1",
+      idempotencyKey: "idempotency-1", // gitleaks:allow — test fixture, not a real key
       action: "verification",
       verifierId: "test",
     }),
