@@ -138,6 +138,30 @@ describe("external quality integration configuration", () => {
     );
   });
 
+  it("counts commented Gitleaks invocations symmetrically, so a comment cannot mask a live invocation", () => {
+    // The two counters cannot be balanced against each other: the redacted pattern extends the scan
+    // pattern, so every redacted match is also a scan match and `redactedScans <= scans` always
+    // holds. A commented invocation adds one to BOTH counters; a live unredacted call adds one to
+    // `scans` alone and breaks the equality the guard requires. This pins the decoy a reviewer of
+    // #3463 expected to slip through: a commented redacted call next to a live unredacted one.
+    // `replace` with a string pattern is first-occurrence on purpose -- exactly ONE live call loses
+    // the flag, which is the case a `replaceAll` probe cannot produce.
+    const decoy = sources.ciWorkflow
+      .replace('"${RUNNER_TEMP}/gitleaks" git --redact=100 ', '"${RUNNER_TEMP}/gitleaks" git ')
+      .concat(
+        '\n        # "${RUNNER_TEMP}/gitleaks" git --redact=100 --no-banner --timeout=120 .\n',
+      );
+    expect(findings({ ciWorkflow: decoy })).toContain("Gitleaks output must remain fully redacted");
+    // The same comment on an otherwise untouched workflow is inert: counted on both sides, it
+    // neither raises a finding nor suppresses one.
+    const commentOnly = sources.ciWorkflow.concat(
+      '\n        # "${RUNNER_TEMP}/gitleaks" git --redact=100 --no-banner --timeout=120 .\n',
+    );
+    expect(findings({ ciWorkflow: commentOnly })).not.toContain(
+      "Gitleaks output must remain fully redacted",
+    );
+  });
+
   it("returns testable, redacted CLI outcomes", () => {
     const log = vi.fn();
     const error = vi.fn();
