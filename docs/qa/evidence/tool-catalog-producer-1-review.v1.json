@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "status": "accepted",
+  "reviewKind": "independent-source-and-evidence-audit",
+  "sequence": 1,
+  "sourceCommit": "0f23317f810b6e9a459bb3f2d5dacdb1e2afc4ea",
+  "catalogRevision": "fd9e603b1b7dc740b53524faee86233b63f8591ae6c5413a17792deab68ce329",
+  "projectionDigest": "4684a4db5df09d1255865474a68e07b81aced651d0a88fb7502008f9d400d1c0",
+  "handlerSetDigest": "4eeec97482beafb9e09c1e3b45d1a8005de3bc3e79937b9f5f1dcf65b57a471d",
+  "reviewer": "coderabbitai",
+  "criteria": [
+    {
+      "label": "cancellation-propagated-before-lexical-fallback",
+      "result": "verified"
+    },
+    {
+      "label": "lexical-provenance-when-index-places-no-hit",
+      "result": "verified"
+    },
+    {
+      "label": "index-identity-required-for-non-lexical-ranking",
+      "result": "verified"
+    },
+    {
+      "label": "empty-record-rejected-by-provenance-validator",
+      "result": "verified"
+    },
+    {
+      "label": "rerank-failure-leaves-body-free-diagnostic-evidence",
+      "result": "verified"
+    },
+    {
+      "label": "adr-0175-text-matches-the-repository-at-this-head",
+      "result": "verified"
+    }
+  ],
+  "evidenceRef": "github:oscharko-dev/Keiko#pull/3452/review-threads@0f23317f810b6e9a459bb3f2d5dacdb1e2afc4ea"
+}

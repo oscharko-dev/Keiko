@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 1,
+  "profile": {
+    "id": "opencode",
+    "version": 1
+  },
+  "entries": [
+    {
+      "sequence": 1,
+      "predecessor": {
+        "catalogRevision": "713b56bb6f032cb64aae480fe7de9b07aece4b05a1e4cd645e620aae27721f4b",
+        "projectionDigest": "201df77730101f5fc1c1d16fe297314d25193f8c5463dc329e6bd5c4b0eaa8ae"
+      },
+      "catalogRevision": "fd9e603b1b7dc740b53524faee86233b63f8591ae6c5413a17792deab68ce329",
+      "projectionDigest": "4684a4db5df09d1255865474a68e07b81aced651d0a88fb7502008f9d400d1c0",
+      "handlerSetDigest": "4eeec97482beafb9e09c1e3b45d1a8005de3bc3e79937b9f5f1dcf65b57a471d",
+      "sourceCommit": "0f23317f810b6e9a459bb3f2d5dacdb1e2afc4ea",
+      "integrationPr": 3452,
+      "reason": "semantic-repository-search-reranking-and-approved-skill-discovery",
+      "verificationRef": "docs/qa/evidence/tool-catalog-producer-1-verification.v1.json#sha256=18e2807ddad1f5cef361208d591cb82fb24f31a54faf96144b8f29201e3989d9",
+      "reviewRef": "docs/qa/evidence/tool-catalog-producer-1-review.v1.json#sha256=73be54db13089cbe2ec1e78d3c16e5fd4a4a55ace1b6103f5ace511e79745e5e"
+    }
+  ]
+}
