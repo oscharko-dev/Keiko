@@ -39,12 +39,12 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { cpus, totalmem } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 import { performance } from "node:perf_hooks";
 import { pathToFileURL } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { isMainModule } from "./lib/is-main-module.mjs";
-import { hashHelperSourceTree } from "./stage-dev-coding-runtime.mjs";
+import { listFilesSorted } from "./stage-dev-coding-runtime.mjs";
 import {
   canonicalD12ArtifactBytes,
   computeD12NearestRankPercentile,
@@ -78,7 +78,7 @@ const TOOL_CATALOG_PERFORMANCE_CLASS = "functional-performance-reference-contain
 const TOOL_CATALOG_PERFORMANCE_METRICS = ["coldCompileMs", "lookupBatchMs"];
 const LEGACY_PERFORMANCE_CASE_ID = "legacy-native-6-tool";
 const SYNTHETIC_PERFORMANCE_CASE_ID = `synthetic-${String(TOOL_CATALOG_SYNTHETIC_TOOL_COUNT)}-tool`;
-const TOOL_CATALOG_REFERENCE_IMAGE =
+export const TOOL_CATALOG_REFERENCE_IMAGE =
   "node:24.18.0-bookworm@sha256:5711a0d445a1af54af9589066c646df387d1831a608226f4cd694fc59e745059";
 const TOOL_CATALOG_RULER_PATHS = [
   "scripts/check-perf-evidence.mjs",
@@ -318,9 +318,42 @@ export async function measureToolCatalogPerformanceInFreshProcess(root = process
   return JSON.parse(output);
 }
 
+// What this measurement actually depends on: the producer code that compiles a catalog. Tests and
+// fixtures ship with that source but cannot change a single comparison the ruler counts, and the
+// whole-directory digest this replaced invalidated the evidence for any one of them -- 13 of the
+// producer's 32 files -- forcing a container re-measure to land an edit no measurement could see.
+// Nothing is loosened: a real producer edit still moves this digest, `measurementHarnessSha256`
+// still binds the ruler, and `currentIdentityDefects` still pins each measured case's tool count,
+// `catalogRevision` and `projectionDigest` against the live producer.
+function isShippedProducerSource(relativePath) {
+  return (
+    !relativePath.endsWith(".test.ts") &&
+    !relativePath.includes("__fixtures__/") &&
+    !relativePath.includes("__tests__/")
+  );
+}
+
+// Mirrors `hashHelperSourceTree`'s framing (path\0digest\0, code-unit order) over the shipped
+// subset. That helper stays untouched: it is the dev-lane manifest's own digest and is duplicated
+// in devLanePortableCodingRuntime.ts, so narrowing it there would move an unrelated contract.
+export function producerShippedSourceSha256(root = process.cwd()) {
+  const base = join(root, "packages/keiko-tool-catalog/src");
+  const hash = createHash("sha256");
+  for (const file of listFilesSorted(base)) {
+    const rel = relative(base, file).split(sep).join("/");
+    if (!isShippedProducerSource(rel)) continue;
+    hash
+      .update(rel)
+      .update("\0")
+      .update(createHash("sha256").update(readFileSync(file)).digest("hex"))
+      .update("\0");
+  }
+  return hash.digest("hex");
+}
+
 export function toolCatalogPerformanceSubject(root = process.cwd()) {
   return {
-    sourceTreeSha256: hashHelperSourceTree(join(root, "packages/keiko-tool-catalog/src")),
+    sourceTreeSha256: producerShippedSourceSha256(root),
     lockfileSha256: createHash("sha256")
       .update(readFileSync(join(root, "package-lock.json")))
       .digest("hex"),

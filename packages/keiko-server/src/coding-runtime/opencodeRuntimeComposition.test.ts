@@ -1855,6 +1855,17 @@ describe("private OpenCode tool bridge", () => {
       }),
       GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
     ],
+    [
+      "changeset edit",
+      longBudgetBody({
+        action: "edit",
+        changeset: {
+          patch: "--- a/a.ts\n+++ b/a.ts\n@@ -1 +1 @@\n-old\n+new\n",
+          files: [{ file: "a.ts", expectedContentHash: "c".repeat(64) }],
+        },
+      }),
+      GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+    ],
   ] as const;
   const activityRecorder = (): {
     readonly safeActivity: FixtureSafeActivity;

@@ -43,8 +43,11 @@ import {
   toolCatalogPerformanceBudgets,
   TOOL_CATALOG_OVERFLOW_TOOL_COUNT,
   TOOL_CATALOG_SYNTHETIC_TOOL_COUNT,
+  producerShippedSourceSha256,
+  TOOL_CATALOG_REFERENCE_IMAGE,
   validateToolCatalogPerformanceSamples,
 } from "../check-tool-catalog-performance.mjs";
+import { regenerateArguments } from "../regenerate-tool-catalog-perf-evidence.mjs";
 import * as sharedNegativeFixture from "../../tests/architecture/fixtures/tool-catalog-negatives/_shared.mjs";
 
 const ROOT = process.cwd();
@@ -223,6 +226,46 @@ describe("compiler measurements reuse the existing sample and percentile convent
   // shared 15s default on GitHub's slower/shared runners. Bounded by real OPERATION counts, never
   // a wall-clock threshold (see check-tool-catalog-performance.mjs's own header comment) -- only
   // the harness's own budget for how long that bounded real work may take before vitest gives up.
+  // The measurement counts comparisons inside the producer's compiler. A test or fixture file ships
+  // in the same directory but cannot move a single one of them, and the whole-directory digest this
+  // replaced invalidated the committed evidence for any of the producer's 13 test/fixture files --
+  // demanding a container re-measure for an edit no measured case can observe. A real producer edit
+  // still moves it, which is the half that must never be lost.
+  // The supported re-measure must run the image the gate attests, and must attest it to the child
+  // through the env var the gate checks. A wrapper that drifted from either would write evidence
+  // the gate then rejects -- the exact dead end this script exists to remove.
+  it("runs the reference measurement in the image the gate attests", () => {
+    const args = regenerateArguments("/repo-root");
+    expect(args).toContain(TOOL_CATALOG_REFERENCE_IMAGE);
+    expect(args).toContain(`KEIKO_TOOL_CATALOG_REFERENCE_IMAGE=${TOOL_CATALOG_REFERENCE_IMAGE}`);
+    expect(args.slice(-2)).toEqual([
+      "scripts/check-tool-catalog-performance.mjs",
+      "--write-reference",
+    ]);
+    expect(args).toContain("/repo-root:/repo");
+  });
+
+  it("binds the performance subject to shipped producer source, not to its tests", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-catalog-subject-"));
+    try {
+      const src = join(root, "packages", "keiko-tool-catalog", "src");
+      mkdirSync(join(src, "__fixtures__"), { recursive: true });
+      writeFileSync(join(src, "projection.ts"), "export const compile = 1;\n");
+      writeFileSync(join(src, "projection.test.ts"), "it('one', () => {});\n");
+      writeFileSync(join(src, "__fixtures__", "catalog.ts"), "export const fixture = 1;\n");
+      const baseline = producerShippedSourceSha256(root);
+
+      writeFileSync(join(src, "projection.test.ts"), "it('two', () => {});\n");
+      writeFileSync(join(src, "__fixtures__", "catalog.ts"), "export const fixture = 2;\n");
+      expect(producerShippedSourceSha256(root)).toBe(baseline);
+
+      writeFileSync(join(src, "projection.ts"), "export const compile = 2;\n");
+      expect(producerShippedSourceSha256(root)).not.toBe(baseline);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("measures real fixture work per case with a deterministic clock and rejects incomplete work", async () => {
     let now = 0;
     const evidence = await measureToolCatalogPerformance(ROOT, () => ++now);
