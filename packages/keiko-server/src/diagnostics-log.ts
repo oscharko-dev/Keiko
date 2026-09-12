@@ -446,6 +446,11 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   // swallowing that would leave the same class of leak with no diagnostic and no retry hook.
   "coding-runtime-backend-disposal-failed",
   "coding-runtime-operator-decision-event-rejected",
+  // #3416: the governed repository rerank threw -- an embedding-provider timeout, a corrupted index,
+  // a bug in the ranking path. The one fallback reason that is a real failure rather than a clean
+  // absence of capability, so it carries an error class, frames and a cause chain; the search itself
+  // still answers in its deterministic lexical order.
+  "repository-rerank-failed",
   "sidecar-gateway-evidence-aggregation-failed",
   "coding-sidecar-gateway-profile-unavailable",
   "coding-sidecar-gateway-tool-contract-rejected",

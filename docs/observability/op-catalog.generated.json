@@ -1681,7 +1681,7 @@
     {
       "op": "coding-runtime.operator-decision",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1395",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1428",
       "package": "keiko-server"
     },
     {
@@ -1736,6 +1736,19 @@
       "op": "coding-runtime.repository-rerank",
       "category": "gateway",
       "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1005",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.repository-rerank",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1066",
+      "package": "keiko-server"
+    },
+    {
+      "op": "coding-runtime.repository-rerank",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1080",
+      "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
@@ -1944,19 +1957,19 @@
     {
       "op": "coding-runtime.verification",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1496",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1529",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.verification",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1648",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1681",
       "package": "keiko-server"
     },
     {
       "op": "coding-runtime.verification",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1695",
+      "site": "packages/keiko-server/src/coding-runtime/productionManagedWorktreeTools.ts:1728",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },

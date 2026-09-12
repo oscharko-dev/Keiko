@@ -2078,6 +2078,7 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     readonly repositorySemanticSearch?: {
       readonly current: RepositorySemanticSearchResolver | undefined;
     };
+    readonly diagnostics?: ProductionManagedWorktreeToolInput["diagnostics"];
   }): ReturnType<typeof createProductionManagedWorktreeToolFacade> {
     return createProductionManagedWorktreeToolFacade({
       authority: {
@@ -2115,6 +2116,7 @@ describe("H1 repository search mounted into production composition (#3386)", () 
       ...(input.repositorySemanticSearch === undefined
         ? {}
         : { repositorySemanticSearch: input.repositorySemanticSearch }),
+      ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
     });
   }
 
@@ -2254,6 +2256,40 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     });
     expect(result.hits.map((hit) => hit.path)).toEqual(["src/a.ts", "src/b.ts"]);
     expect(bound.closed()).toBe(1);
+  });
+
+  // PR #3452 review (owner): `pod-query-failed` is the only fallback reason that means a THROWN
+  // failure rather than a clean absence of capability. Reporting it like the benign ones left an
+  // operator unable to tell a broken index from an unconfigured one, so the evidence is asserted
+  // here -- and it stays body-free.
+  it("records the failure's evidence when the index query throws", async () => {
+    const events: ServerLogEvent[] = [];
+    const records: { readonly operation: string }[] = [];
+    const bound = semanticSlot({
+      search: (): IndexMatches => Promise.reject(new Error("index unreachable")),
+    });
+    const facade = searchFacade({
+      resolveWorkspaceRootAccess: accessFor(twoMatchingFiles()),
+      repositorySemanticSearch: bound.slot,
+      activityLog: { write: (event): void => void events.push(event) },
+      diagnostics: { record: (record): void => void records.push(record) },
+    });
+
+    const result = await facade.execute({ capability: "opaque-capability", body: searchBody() });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      search: { provenance: { ranking: "lexical", fallbackReason: "pod-query-failed" } },
+    });
+    const failure = events.find(
+      (event) => event.op === "coding-runtime.repository-rerank" && event.level === "warn",
+    );
+    expect(failure?.errorKind).toBeDefined();
+    expect(failure?.extra).toMatchObject({ reason: "pod-query-failed" });
+    expect(Array.isArray((failure?.extra as { frames?: unknown }).frames)).toBe(true);
+    expect(records.map((record) => record.operation)).toContain("coding-runtime.repository-rerank");
+    expect(JSON.stringify(failure)).not.toContain("index unreachable");
+    expect(JSON.stringify(failure)).not.toContain("parseConfig");
   });
 
   it("reorders the hits the index placed and discloses which index answered", async () => {

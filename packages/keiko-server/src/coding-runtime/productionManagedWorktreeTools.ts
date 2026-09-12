@@ -1057,10 +1057,40 @@ async function rerankOutcome(
   }
 }
 
+function recordRerankFailure(input: ProductionManagedWorktreeToolInput, error: unknown): void {
+  const correlationId = isValidCorrelationId(input.authorityRef.runId)
+    ? input.authorityRef.runId
+    : UNKNOWN_CORRELATION_ID;
+  (input.activityLog ?? processServerLogSink()).write({
+    category: "gateway",
+    op: "coding-runtime.repository-rerank",
+    correlationId,
+    level: "warn",
+    errorKind: contentFreeErrorClass(error),
+    extra: {
+      runId: input.authorityRef.runId,
+      reason: "pod-query-failed",
+      frames: keikoStackFrames(error),
+      causeChain: causeChain(error),
+    },
+  });
+  emitServerDiagnostic(input.diagnostics, {
+    correlationId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.repository-rerank",
+    source: "production-managed-worktree-tools.repository-rerank",
+    errorClass: contentFreeErrorClass(error),
+    message: "repository-rerank-failed",
+  });
+}
+
 /**
  * Reorders a completed lexical search by the repository index, or says why it did not. A refusal is
  * never an error here: the deterministic lexical result the handler produced is returned unchanged,
- * with the reason attached, so the model and the operator read the same disclosure.
+ * with the reason attached, so the model and the operator read the same disclosure. The ONE reason
+ * that is a thrown failure rather than a clean absence -- `pod-query-failed` -- also leaves the
+ * structured evidence this file gives every operational failure, so an operator can tell a broken
+ * index from an unconfigured one.
  */
 async function rerankedSearch(
   input: ProductionManagedWorktreeToolInput,
@@ -1076,10 +1106,13 @@ async function rerankedSearch(
     resolve === undefined || root === undefined
       ? { hits: result.hits, provenance: lexicalProvenance(result.hits, "capability-not-offered") }
       : await rerankOutcome(resolve, root, requested, result.hits, signal).catch(
-          (): RerankOutcome => ({
-            hits: result.hits,
-            provenance: lexicalProvenance(result.hits, "pod-query-failed"),
-          }),
+          (error: unknown): RerankOutcome => {
+            recordRerankFailure(input, error);
+            return {
+              hits: result.hits,
+              provenance: lexicalProvenance(result.hits, "pod-query-failed"),
+            };
+          },
         );
   logRerank(input, outcome.provenance);
   return { ...result, hits: outcome.hits, provenance: outcome.provenance };
