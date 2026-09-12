@@ -165,6 +165,18 @@ function validatePackage(packageJson) {
   return checks.filter(([actual, expected]) => actual !== expected).map(([, , finding]) => finding);
 }
 
+// A full-line YAML comment is not executed, so it must not count as a Gitleaks invocation. Counting
+// the raw source let a workflow with NO live scan but one commented redacted command reach
+// `scans === redactedScans === 1`, which satisfied the zero-scan guard and the redaction guard at
+// once while no secret scan ran at all (#3463 review). Only a leading `#` can carry a whole
+// commented-out command; a `#` inside a shell string is left alone, so no live command is dropped.
+function executableWorkflowSource(source) {
+  return source
+    .split("\n")
+    .filter((line) => !/^\s*#/u.test(line))
+    .join("\n");
+}
+
 function validateCiWorkflow(source) {
   const checks = [
     [
@@ -192,9 +204,10 @@ function validateCiWorkflow(source) {
   // redacted only while there was exactly one call. The secret scan now runs two (the branch
   // history and the squash equivalent), so an unredacted second call would satisfy a contains
   // check while leaking in its own output. Every invocation must carry the flag.
-  const scans = source.match(/\$\{RUNNER_TEMP\}\/gitleaks" git /gu)?.length ?? 0;
+  const executable = executableWorkflowSource(source);
+  const scans = executable.match(/\$\{RUNNER_TEMP\}\/gitleaks" git /gu)?.length ?? 0;
   const redactedScans =
-    source.match(/\$\{RUNNER_TEMP\}\/gitleaks" git --redact=100 /gu)?.length ?? 0;
+    executable.match(/\$\{RUNNER_TEMP\}\/gitleaks" git --redact=100 /gu)?.length ?? 0;
   if (scans === 0 || redactedScans !== scans) {
     problems.push("Gitleaks output must remain fully redacted");
   }
