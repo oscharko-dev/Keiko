@@ -815,6 +815,16 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=3072
         run: npm run test:coverage:packages:merge
+      - name: Discard the shard blobs now that the merged coverage exists
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        # The blobs are vitest's intermediate shard state, fully consumed by the merge above:
+        # `coverage/packages/lcov.info` is what every later step reads. Leaving them in the
+        # workspace puts ~12MB JSON files inside `sonar.sources=.`, and the scanner's
+        # "is bigger than 20MB" WARN fails `check-sonar-analysis-log.mjs --require-full-analysis`
+        # closed (PR #3452). Removing them keeps the approved analysis scope untouched -- widening
+        # `sonar.exclusions` would move a reviewed scope pin to hide a file that simply has no
+        # business being there once the merge has run.
+        run: rm -rf .vitest
       - name: Coverage quality gates
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run check:coverage:quality

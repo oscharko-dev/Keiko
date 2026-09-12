@@ -207,6 +207,7 @@ tests/memory-eval/scorecard.json
 # Vitest blob reports produced by a sharded coverage run and consumed by `--mergeReports`
 # (scripts test:coverage:packages:shard / :merge). Intermediate measurement evidence, never committed.
 .vitest-reports/
+.vitest/
 
 # .NET restore/build scratch for the Windows RFC3161 analyzer project. The committed
 # packages.lock.json beside the csproj is the pin; obj/ and bin/ are generated.
