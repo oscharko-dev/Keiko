@@ -172,7 +172,6 @@ function validateCiWorkflow(source) {
       "required ci must rerun when pull-request metadata changes",
     ],
     ['GITLEAKS_VERSION: "8.30.1"', "Gitleaks must remain pinned to the reviewed OSS release"],
-    ["--redact=100", "Gitleaks output must remain fully redacted"],
     [
       'npm run check:semantic-duplication -- --changed-since "$QUALITY_BASE_SHA"',
       "required ci must run diff-scoped semantic duplication",
@@ -189,6 +188,16 @@ function validateCiWorkflow(source) {
     ],
   ];
   const problems = checks.flatMap(([expected, finding]) => missingText(source, expected, finding));
+  // Counted, not merely present: `--redact=100` appearing SOMEWHERE proved every Gitleaks call was
+  // redacted only while there was exactly one call. The secret scan now runs two (the branch
+  // history and the squash equivalent), so an unredacted second call would satisfy a contains
+  // check while leaking in its own output. Every invocation must carry the flag.
+  const scans = source.match(/\$\{RUNNER_TEMP\}\/gitleaks" git /gu)?.length ?? 0;
+  const redactedScans =
+    source.match(/\$\{RUNNER_TEMP\}\/gitleaks" git --redact=100 /gu)?.length ?? 0;
+  if (scans === 0 || redactedScans !== scans) {
+    problems.push("Gitleaks output must remain fully redacted");
+  }
   const resolverCalls =
     source.match(/node scripts\/resolve-quality-range\.mjs >> "\$GITHUB_OUTPUT"/gu)?.length ?? 0;
   if (resolverCalls !== 2) {
