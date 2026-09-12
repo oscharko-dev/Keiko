@@ -712,8 +712,30 @@ const LINEAGE_REVIEW_FIELDS = Object.freeze([
   "handlerSetDigest",
   "reviewer",
   "criteria",
+  "reviewThreads",
   "evidenceRef",
 ]);
+// CodeRabbit's CWE-345 note (3984717984), confirmed live by the owner on this PR: a receipt that
+// only had to carry a non-empty `reviewer` string let a criterion be attributed to a reviewer who
+// never published it, and nothing here caught it. Resolving `evidenceRef` against GitHub at check
+// time is not available -- no gate in this repository reaches the network, and the sandboxed lanes
+// have none -- so this binds the claim the way the H1 landing receipt already binds its own review
+// evidence: countable, internally consistent settlement figures that a fabricated receipt cannot
+// satisfy while still matching the entry it certifies.
+const LINEAGE_REVIEW_THREAD_FIELDS = Object.freeze(["attributed", "resolved", "unresolved"]);
+
+// Each criterion must correspond to one attributed, resolved thread: fewer threads than criteria
+// means at least one criterion has no thread behind it, and an unresolved thread means the audit it
+// claims to record has not settled.
+function validLineageReviewThreads(value, criteria) {
+  return (
+    hasExactFields(value, LINEAGE_REVIEW_THREAD_FIELDS) &&
+    isPositiveInteger(value.attributed) &&
+    value.attributed >= criteria.length &&
+    value.resolved === value.attributed &&
+    value.unresolved === 0
+  );
+}
 const LINEAGE_REASON = /^[a-z]+(?:-[a-z]+){0,8}$/u;
 
 async function compiledProducerIdentity(root, profile) {
@@ -849,6 +871,7 @@ function validLineageReviewReceipt(receipt, entry) {
     Array.isArray(receipt.criteria) &&
     receipt.criteria.length > 0 &&
     receipt.criteria.every(validReviewCriterion) &&
+    validLineageReviewThreads(receipt.reviewThreads, receipt.criteria) &&
     receipt.evidenceRef === lineageEvidenceRef(entry, "review-threads")
   );
 }

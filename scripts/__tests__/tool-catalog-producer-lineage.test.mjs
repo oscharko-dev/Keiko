@@ -73,6 +73,7 @@ function reviewReceipt(sequence, identity, overrides = {}) {
     handlerSetDigest: HANDLERS,
     reviewer: "independent-agent",
     criteria: [{ label: "budget-derived-from-enforced-limits", result: "verified" }],
+    reviewThreads: { attributed: 1, resolved: 1, unresolved: 0 },
     evidenceRef: `github:oscharko-dev/Keiko#pull/3452/review-threads@${SOURCE}`,
     ...overrides,
   };
@@ -272,6 +273,47 @@ describe("tool-catalog producer lineage", () => {
     ]);
     expect(await failuresWith(root, FIRST)).toEqual([
       "tool-catalog producer lineage entry 1 verification receipt does not bind it",
+      "tool-catalog producer lineage entry 1 review receipt does not bind it",
+    ]);
+  });
+
+  // CWE-345 (CodeRabbit 3984717984, demonstrated live by the owner on PR #3452): a receipt used to
+  // need only a non-empty `reviewer`, so a criterion could name a reviewer who never published it
+  // and the gate accepted it. The receipt now has to carry settlement figures its own criteria fit.
+  it("refuses a review receipt whose criteria outnumber the threads attributed to the reviewer", async () => {
+    const root = fixtureRoot();
+    writeLineage(root, [
+      entry(root, 1, RECORD_IDENTITY, FIRST, {
+        review: {
+          criteria: [
+            { label: "one-the-reviewer-published", result: "verified" },
+            { label: "one-the-reviewer-never-published", result: "verified" },
+          ],
+          reviewThreads: { attributed: 1, resolved: 1, unresolved: 0 },
+        },
+      }),
+    ]);
+    expect(await failuresWith(root, FIRST)).toEqual([
+      "tool-catalog producer lineage entry 1 review receipt does not bind it",
+    ]);
+  });
+
+  it("refuses a review receipt with an unsettled or absent thread count", async () => {
+    const unsettled = fixtureRoot();
+    writeLineage(unsettled, [
+      entry(unsettled, 1, RECORD_IDENTITY, FIRST, {
+        review: { reviewThreads: { attributed: 2, resolved: 1, unresolved: 1 } },
+      }),
+    ]);
+    expect(await failuresWith(unsettled, FIRST)).toEqual([
+      "tool-catalog producer lineage entry 1 review receipt does not bind it",
+    ]);
+
+    const absent = fixtureRoot();
+    writeLineage(absent, [
+      entry(absent, 1, RECORD_IDENTITY, FIRST, { review: { reviewThreads: undefined } }),
+    ]);
+    expect(await failuresWith(absent, FIRST)).toEqual([
       "tool-catalog producer lineage entry 1 review receipt does not bind it",
     ]);
   });
