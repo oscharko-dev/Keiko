@@ -713,7 +713,9 @@ describe("keiko-contracts package surface", () => {
     // Issue #1392: the lifecycle-failure taxonomy is exported alongside the conflict taxonomy.
     expect([...mod.EDITOR_AGENT_FAILURE_CODES].sort()).toEqual([
       "CANCELLED",
+      "DUPLICATE_ACTION",
       "LIMIT_EXCEEDED",
+      "MUTATION_IN_FLIGHT",
       "PROVIDER_UNAVAILABLE",
       "QUEUE_FULL",
       "TIMED_OUT",

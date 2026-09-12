@@ -374,20 +374,6 @@ function actionTimeoutMs(state: RegistryState, action: EditorAgentAction): numbe
     : state.actionTimeoutMs;
 }
 
-function rejectedQueueOutcome(action: EditorAgentAction, message: string): EditorAgentQueueOutcome {
-  return {
-    kind: "rejected",
-    result: {
-      schemaVersion: EDITOR_AGENT_SCHEMA_VERSION,
-      actionId: action.actionId,
-      sessionId: action.sessionId,
-      ...resultRootAttribution(action),
-      status: "failed",
-      message,
-    },
-  };
-}
-
 function queueActionImpl(
   state: RegistryState,
   action: EditorAgentAction,
@@ -426,15 +412,23 @@ function queueRejection(
   inner: ReadonlyMap<string, PendingAction> | undefined,
 ): EditorAgentQueueOutcome | undefined {
   if (inner?.get(action.actionId) !== undefined)
-    return rejectedQueueOutcome(
-      action,
-      "An action with this id is already in flight for this session.",
-    );
+    return {
+      kind: "rejected",
+      result: lifecycleFailure(
+        action,
+        "DUPLICATE_ACTION",
+        "An action with this id is already in flight for this session.",
+      ),
+    };
   if (isMutatingEditorAgentAction(action.type) && hasPendingMutation(inner))
-    return rejectedQueueOutcome(
-      action,
-      "A mutating editor action is already awaiting a terminal result.",
-    );
+    return {
+      kind: "rejected",
+      result: lifecycleFailure(
+        action,
+        "MUTATION_IN_FLIGHT",
+        "A mutating editor action is already awaiting a terminal result.",
+      ),
+    };
   if ((inner?.size ?? 0) < state.maxQueuedPerSession) return undefined;
   return {
     kind: "rejected",

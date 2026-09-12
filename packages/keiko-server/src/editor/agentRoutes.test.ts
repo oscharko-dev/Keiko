@@ -3597,7 +3597,12 @@ describe("editor agent routes — Issue #1392 liveness and queue lifecycle", () 
     );
     expect(second.status).toBe(409);
     expect(actionResultStatus(second.body)).toBe("failed");
-    expect(actionFailureCode(second.body)).toBeUndefined();
+    // Still 409 and still not backpressure -- the invariant this case was written for. The cause
+    // is now NAMED as well: a code-free lifecycle failure reached the coding runtime as
+    // `undefined`, which the activity log recorded as `unclassified`, so the model read a
+    // duplicate as a policy denial and retried the same edit blind.
+    expect(actionFailureCode(second.body)).not.toBe("QUEUE_FULL");
+    expect(actionFailureCode(second.body)).toBe("DUPLICATE_ACTION");
   });
 
   it("rejects a second mutation while allowing a nonmutating action to queue", async () => {
