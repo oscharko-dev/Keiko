@@ -86,6 +86,7 @@
   "ignoreStatic": true,
   "timeoutMS": 30000,
   "timeoutFactor": 2.5,
+  "dryRunTimeoutMinutes": 20,
   "concurrency": 16,
   "tempDirName": ".stryker-tmp"
 }

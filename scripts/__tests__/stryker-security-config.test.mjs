@@ -37,6 +37,19 @@ describe("security mutation Stryker configuration", () => {
     expect(config.concurrency).toBe(16);
   });
 
+  // Stryker's default dry-run budget is five minutes, and the covered matrix outgrew it: the
+  // scheduled lane died at exactly 5:01 with "Initial test run timed out!" on six consecutive days
+  // (2026-09-07..09-12), BEFORE a single mutant ran -- so the issue it filed reported a "mutation
+  // score regression" that never existed. Measured on 16 cores the dry run needs 3m20s for 9160
+  // tests; a hosted four-core runner is several times slower, so the budget must clear that by a
+  // wide margin. The job's own `timeout-minutes` still bounds a genuine hang.
+  it("gives the initial dry run a budget its own test matrix can meet", async () => {
+    const config = await loadSecurityMutationConfig();
+
+    expect(config.dryRunTimeoutMinutes).toBeGreaterThan(5);
+    expect(config.dryRunTimeoutMinutes).toBe(20);
+  });
+
   it("keeps the OpenCode functional pipeline out of the mutation dry-run", async () => {
     const config = await loadSecurityMutationConfig();
     const codingRuntimePattern =
