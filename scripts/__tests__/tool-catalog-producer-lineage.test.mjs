@@ -1,10 +1,12 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import {
+  H1_PRODUCER_CHECKPOINT_PATH,
   producerLineageFailures,
   TOOL_CATALOG_PRODUCER_LINEAGE_PATH,
 } from "../check-tool-catalog-conformance.mjs";
@@ -336,5 +338,22 @@ describe("tool-catalog producer lineage", () => {
     ).toEqual([
       "tool-catalog producer lineage entry 1 sourceCommit is not a resolvable Git commit",
     ]);
+  });
+
+  it("binds the lineage receipts this repository actually commits, not only fixtures", async () => {
+    const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const record = JSON.parse(readFileSync(join(repoRoot, H1_PRODUCER_CHECKPOINT_PATH), "utf8"));
+    const lineage = JSON.parse(
+      readFileSync(join(repoRoot, TOOL_CATALOG_PRODUCER_LINEAGE_PATH), "utf8"),
+    );
+    const last = lineage.entries.at(-1);
+    const failures = await producerLineageFailures(repoRoot, record, {
+      identity: () =>
+        Promise.resolve({
+          catalogRevision: last.catalogRevision,
+          projectionDigest: last.projectionDigest,
+        }),
+    });
+    expect(failures).toEqual([]);
   });
 });

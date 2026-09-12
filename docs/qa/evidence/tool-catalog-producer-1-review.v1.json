@@ -26,5 +26,10 @@
       "result": "verified"
     }
   ],
+  "reviewThreads": {
+    "attributed": 4,
+    "resolved": 4,
+    "unresolved": 0
+  },
   "evidenceRef": "github:oscharko-dev/Keiko#pull/3452/review-threads@0f23317f810b6e9a459bb3f2d5dacdb1e2afc4ea"
 }
