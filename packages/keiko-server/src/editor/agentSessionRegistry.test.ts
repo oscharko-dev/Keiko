@@ -541,11 +541,29 @@ describe("editor agent session registry", () => {
     const rejected = registry.queueAction(second, second);
     expect(rejected.kind).toBe("rejected");
     expect(rejected.result.status).toBe("failed");
-    // No QUEUE_FULL code — it is a duplicate, not backpressure.
-    expect(rejected.result.failure).toBeUndefined();
+    // Still not backpressure -- the original invariant. It is now NAMED as well: a code-free
+    // lifecycle failure reached the coding runtime as `undefined` and the activity log recorded
+    // it as `unclassified`, so the model could not tell a duplicate from a policy denial.
+    expect(rejected.result.failure?.code).not.toBe("QUEUE_FULL");
+    expect(rejected.result.failure?.code).toBe("DUPLICATE_ACTION");
     // The first action keeps exactly one armed timer; it is not superseded.
     expect(registry.pendingCount("session-1")).toBe(1);
     expect(scheduler.pending()).toBe(1);
+  });
+
+  it("names a mutating action that arrives while another awaits its terminal result", () => {
+    const scheduler = fakeScheduler();
+    const registry = createEditorAgentRegistry(scheduler);
+    const first = action({ actionId: "edit-1", idempotencyKey: "k1", type: "applyChangeset" });
+    const second = action({ actionId: "edit-2", idempotencyKey: "k2", type: "applyChangeset" });
+    expect(registry.queueAction(first, first).kind).toBe("queued");
+
+    const rejected = registry.queueAction(second, second);
+    expect(rejected.kind).toBe("rejected");
+    expect(rejected.result.status).toBe("failed");
+    // Not backpressure and not a duplicate id: its own named cause.
+    expect(rejected.result.failure?.code).toBe("MUTATION_IN_FLIGHT");
+    expect(registry.pendingCount("session-1")).toBe(1);
   });
 
   it("bounds the session registry, evicting the oldest idle session", () => {

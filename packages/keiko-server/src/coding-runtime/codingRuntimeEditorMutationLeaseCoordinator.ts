@@ -237,6 +237,7 @@ export function createCodingRuntimeEditorMutationLeaseCoordinator(
       waitForIdle(records, idleWaiters, outcome, signal, disposed),
     waitForMutation: (request, signal): Promise<CodingRuntimeMutationOutcome> =>
       waitForMutation(
+        deps,
         records,
         idleWaiters,
         outcome,
@@ -374,6 +375,7 @@ function revokeRun(
 }
 
 function waitForMutation(
+  deps: CodingRuntimeEditorMutationLeaseCoordinatorDeps,
   records: Map<string, LeaseRecord>,
   idleWaiters: Set<IdleWaiter>,
   outcome: MutationOutcome,
@@ -382,13 +384,13 @@ function waitForMutation(
 ): Promise<CodingRuntimeMutationOutcome> {
   if (record === undefined) return Promise.resolve("failed");
   if (signal.aborted) {
-    cancelUnclaimedMutation(records, idleWaiters, outcome, record);
+    cancelUnclaimedMutation(deps, records, idleWaiters, outcome, record);
     return Promise.resolve("cancelled");
   }
   return new Promise((resolve) => {
     const onAbort = (): void => {
       record.waiters.delete(onComplete);
-      cancelUnclaimedMutation(records, idleWaiters, outcome, record);
+      cancelUnclaimedMutation(deps, records, idleWaiters, outcome, record);
       resolve("cancelled");
     };
     const onComplete = (result: CodingRuntimeMutationOutcome): void => {
@@ -400,7 +402,13 @@ function waitForMutation(
   });
 }
 
+// Settling the lease is not enough: the editor action for this run may ALREADY sit in the agent
+// registry's bounded queue, where only a browser result or the review timeout removes it. Leaving it
+// there blocks every later mutating action for the session with `MUTATION_IN_FLIGHT` until that
+// timeout elapses -- a cancelled edit silently costing the run its remaining edits. `revokeRun` has
+// always evicted the run's queued actions; this path must do the same.
 function cancelUnclaimedMutation(
+  deps: CodingRuntimeEditorMutationLeaseCoordinatorDeps,
   records: Map<string, LeaseRecord>,
   idleWaiters: Set<IdleWaiter>,
   outcome: MutationOutcome,
@@ -410,6 +418,7 @@ function cancelUnclaimedMutation(
   records.delete(record.key);
   settleMutation(record, "cancelled");
   settleIfIdle(records, idleWaiters, outcome);
+  deps.cancelPendingByAuthorityRun(record.authorityRef.runId);
 }
 
 function settleMutation(record: LeaseRecord, outcome: CodingRuntimeMutationOutcome): void {

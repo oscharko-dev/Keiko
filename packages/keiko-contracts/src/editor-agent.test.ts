@@ -1901,6 +1901,8 @@ describe("failure-code taxonomy (Issue #1392)", () => {
       "PROVIDER_UNAVAILABLE",
       "UNSUPPORTED_OPERATION",
       "LIMIT_EXCEEDED",
+      "DUPLICATE_ACTION",
+      "MUTATION_IN_FLIGHT",
     ]);
     for (const code of EDITOR_AGENT_FAILURE_CODES) {
       expect(isEditorAgentFailureCode(code)).toBe(true);

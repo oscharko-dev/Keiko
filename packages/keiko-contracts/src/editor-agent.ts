@@ -501,13 +501,17 @@ export const EDITOR_AGENT_CONFLICT_CODES: readonly EditorAgentConflictCode[] = [
 //   - PROVIDER_UNAVAILABLE  the current workspace/provider state cannot serve the language.
 //   - UNSUPPORTED_OPERATION the active provider did not negotiate the requested operation.
 //   - LIMIT_EXCEEDED        the bounded request or response exceeded a language-service limit.
+//   - DUPLICATE_ACTION      a second action reused an actionId already in flight for the session.
+//   - MUTATION_IN_FLIGHT    a mutating action arrived while another awaits its terminal result.
 export type EditorAgentFailureCode =
   | "TIMED_OUT"
   | "QUEUE_FULL"
   | "CANCELLED"
   | "PROVIDER_UNAVAILABLE"
   | "UNSUPPORTED_OPERATION"
-  | "LIMIT_EXCEEDED";
+  | "LIMIT_EXCEEDED"
+  | "DUPLICATE_ACTION"
+  | "MUTATION_IN_FLIGHT";
 
 export const EDITOR_AGENT_FAILURE_CODES: readonly EditorAgentFailureCode[] = [
   "TIMED_OUT",
@@ -516,6 +520,8 @@ export const EDITOR_AGENT_FAILURE_CODES: readonly EditorAgentFailureCode[] = [
   "PROVIDER_UNAVAILABLE",
   "UNSUPPORTED_OPERATION",
   "LIMIT_EXCEEDED",
+  "DUPLICATE_ACTION",
+  "MUTATION_IN_FLIGHT",
 ] as const;
 
 export interface EditorAgentActionFailure {

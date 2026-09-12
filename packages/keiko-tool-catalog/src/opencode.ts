@@ -194,7 +194,7 @@ interface OpenCodeToolSpec {
    * Absent means the sandbox default; a tool that runs the workspace's own scripts declares the
    * budget those scripts are actually allowed (verification: `VERIFICATION_TOOL_MAX_DURATION_MS`),
    * and a tool that waits in place for a human decision declares that wait on top of its own work
-   * (the four proposal tools: `GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS`).
+   * (the four proposal tools and the changeset edit: `GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS`).
    */
   readonly maxDurationMs?: number;
 }
@@ -418,6 +418,12 @@ function changesetEditSpec(): OpenCodeToolSpec {
     effects: ["workspace-write"],
     idempotency: "server-key-required",
     handlerId: "opencode-changeset-edit-port",
+    // It waits in place for the operator's decision on the exact diff (F44). ADR-0125 D1 classes a
+    // workspace-contained write as high risk, so every mode below full access parks this call in
+    // the changeset review panel -- the same wait the four proposal tools declare, and the reason
+    // the sandbox default cut EVERY governed edit off at 30 s while the operator was still looking
+    // at the diff. Missed when F44 swept the proposal tools.
+    maxDurationMs: GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
   };
 }
 

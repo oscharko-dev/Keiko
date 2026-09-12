@@ -15,12 +15,16 @@ import { matchesCatalogSchema } from "./schema.js";
 
 const OPENCODE_PROFILE = { id: "opencode", version: 1 } as const;
 
-// The proposal tools that wait in place for the operator's approval (F44).
+// The tools that wait in place for a local human decision (F44): the four proposal tools, and the
+// changeset edit, whose diff the operator confirms in the review panel under every mode below full
+// access (ADR-0125 D1). The edit tool was missed when F44 swept the others, so it kept the sandbox
+// default and every governed edit was cut off at 30 s mid-decision.
 const APPROVAL_WAITING_TOOL_IDS: ReadonlySet<string> = new Set([
   "keiko.git.stage",
   "keiko.git.commit",
   "keiko.git.push",
   "keiko.git.pullrequest",
+  "keiko.changeset.edit",
 ]);
 
 const GIT_DELIVERY_CANONICAL_IDS = [

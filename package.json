@@ -71,6 +71,7 @@
     "perf:evidence:regen": "node scripts/regenerate-d12-evidence.mjs",
     "perf:evidence:regen:workspace": "node scripts/regenerate-d12-evidence.mjs --workspace",
     "perf:evidence:regen:container": "node scripts/regenerate-d12-evidence.mjs --container",
+    "perf:evidence:regen:tool-catalog": "node scripts/regenerate-tool-catalog-perf-evidence.mjs",
     "test:e2e:workspace-search-2090": "playwright test --config tests/e2e/config/playwright.issue-2090-workspace-search.config.ts --project=chromium",
     "test:e2e:editor-fidelity-1295": "playwright test --config tests/e2e/config/playwright.issue-1295-editor-fidelity.config.ts --project=chromium",
     "test:e2e:editor-fidelity-1296": "playwright test --config tests/e2e/config/playwright.issue-1296-editor-agent.config.ts --project=chromium",

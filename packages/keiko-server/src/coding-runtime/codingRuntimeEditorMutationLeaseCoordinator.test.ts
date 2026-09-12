@@ -135,6 +135,43 @@ describe("coding-runtime editor mutation lease coordinator (Issue #2332)", () =>
     },
   );
 
+  it("evicts the run's queued editor action when an UNCLAIMED mutation is cancelled", async () => {
+    const cancelPendingByAuthorityRun = vi.fn((): number => 1);
+    const coordinator = createCodingRuntimeEditorMutationLeaseCoordinator({
+      invocationRegistry: createCodingToolInvocationRegistry(),
+      cancelPendingByAuthorityRun,
+    });
+    const controller = new AbortController();
+    coordinator.register(registration(() => !controller.signal.aborted));
+    const result = coordinator.waitForMutation(request(), controller.signal);
+    controller.abort();
+    await expect(result).resolves.toBe("cancelled");
+    // Settling the lease alone left the already-queued action in the agent registry, where it held
+    // the session's only mutation slot until the 30-minute review timeout and refused every later
+    // edit with MUTATION_IN_FLIGHT -- one cancelled edit costing the run all its remaining edits.
+    expect(cancelPendingByAuthorityRun).toHaveBeenCalledWith(RUN_ID);
+    coordinator.dispose();
+  });
+
+  it("leaves the run's queued actions alone when a CLAIMED effect's waiter aborts", async () => {
+    const cancelPendingByAuthorityRun = vi.fn((): number => 0);
+    const coordinator = createCodingRuntimeEditorMutationLeaseCoordinator({
+      invocationRegistry: createCodingToolInvocationRegistry(),
+      cancelPendingByAuthorityRun,
+    });
+    coordinator.register(registration());
+    const controller = new AbortController();
+    const result = coordinator.waitForMutation(request(), controller.signal);
+    expect(coordinator.lease.claim(request())).toBe(true);
+    controller.abort();
+    await expect(result).resolves.toBe("cancelled");
+    // The counter-pin: a claimed effect is already authorised and may still settle successfully.
+    // Evicting its queued action here would destroy a write the runtime committed to.
+    expect(cancelPendingByAuthorityRun).not.toHaveBeenCalled();
+    expect(coordinator.lease.complete(request(), true)).toBe(true);
+    coordinator.dispose();
+  });
+
   it("does not consume or discard a claimed effect when only its waiter aborts", async () => {
     const coordinator = createCodingRuntimeEditorMutationLeaseCoordinator({
       invocationRegistry: createCodingToolInvocationRegistry(),

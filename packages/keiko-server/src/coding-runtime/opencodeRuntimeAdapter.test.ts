@@ -1796,6 +1796,9 @@ describe("the generated client timeout of a tool that waits for an approval", ()
       "keiko_git_commit",
       "keiko_git_push",
       "keiko_pull_request",
+      // The changeset edit waits on the operator's decision in the review panel exactly as the
+      // proposal tools wait on an approval, so its client must outlive that wait too.
+      "keiko_changeset_edit",
     ]) {
       const budgetMs = catalogBudgetMs(alias);
       expect(budgetMs).toBe(GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS);

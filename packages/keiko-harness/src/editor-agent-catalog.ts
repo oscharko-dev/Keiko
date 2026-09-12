@@ -252,6 +252,8 @@ const EDITOR_FAILURE_DISPOSITIONS: Readonly<
   PROVIDER_UNAVAILABLE: { status: "failed", reason: "handler-unavailable" },
   UNSUPPORTED_OPERATION: { status: "invalid", reason: "unsupported-capability" },
   LIMIT_EXCEEDED: { status: "denied", reason: "budget-exhausted" },
+  DUPLICATE_ACTION: { status: "invalid", reason: "invalid-arguments" },
+  MUTATION_IN_FLIGHT: { status: "busy", reason: "capacity-exhausted" },
 };
 
 const EDITOR_CONFLICT_DISPOSITIONS: Readonly<
