@@ -2,7 +2,12 @@ import { ContextOverflowError } from "@oscharko-dev/keiko-security/errors/gatewa
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { describe, expect, it, vi } from "vitest";
 import { openCodeGatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
-import { Gateway, type GatewayCallRequest, type GatewaySpendReservation } from "./gateway.js";
+import {
+  Gateway,
+  schemaMismatchGuidance,
+  type GatewayCallRequest,
+  type GatewaySpendReservation,
+} from "./gateway.js";
 import type { ModelGatewayLogEvent } from "./observability.js";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 import { createGatewayToolCatalogBridge } from "./toolCatalogBridge.js";
@@ -174,6 +179,14 @@ describe("Gateway bounded tool-schema repair", () => {
     expect(serializedRepair).toContain("call-actual-1");
     expect(serializedRepair).toContain("keiko_changeset_edit");
     expect(serializedRepair).toContain("rejected before execution");
+    // Run 7 (2026-09-10): the correction names the declared properties that failed, in the
+    // schema's vocabulary, so the model can fix the call instead of repeating it; the arguments
+    // themselves are never quoted back.
+    // (`files` is a string, `selectedFiles` is empty against minItems 1; the producer's `patch`
+    // schema bounds only the length, so the secret string passes it.)
+    expect(serializedRepair).toContain(
+      "Properties whose value does not match the schema: changeset.files, changeset.selectedFiles.",
+    );
     expect(serializedRepair).not.toContain(INVALID_ARGUMENT_SECRET);
     expect(events.find((event) => event.op === "gateway.tool-catalog.repair")).toMatchObject({
       correlationId: "correlation-1",
@@ -182,8 +195,67 @@ describe("Gateway bounded tool-schema repair", () => {
         reason: "invalid-shape",
         toolCallId: "call-actual-1",
         offeredAlias: "keiko_changeset_edit",
+        missingRequiredCount: 0,
+        invalidPathCount: 2,
+        unexpectedPropertyCount: 0,
         correctionMessageCount: 1,
         effectStarted: false,
+      },
+    });
+    expect(JSON.stringify(events)).not.toContain(INVALID_ARGUMENT_SECRET);
+  });
+
+  // Run 7 (2026-09-10): gpt-5.4 omitted the properties the managed-runtime dialect declares required
+  // (`caseSensitive`, `includeGlobs`, `excludeGlobs`) three times in a row; a correction that only
+  // said "match the schema" never told it which ones. The correction now lists them and states the
+  // dialect's rule; the rejected line carries the same names for the operator.
+  it("names the missing required properties and the dialect rule in the correction", async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const events: ModelGatewayLogEvent[] = [];
+    let providerCalls = 0;
+    const gateway = new Gateway(config(), {
+      clock: clock(),
+      random: (): number => 1,
+      fetchImpl: (_url, init): Promise<Response> => {
+        bodies.push(parsedProviderBody(init));
+        providerCalls += 1;
+        return Promise.resolve(
+          providerCalls === 1
+            ? providerResponse("call-search-1", "keiko_repository_search", {
+                mode: "literal",
+                query: INVALID_ARGUMENT_SECRET,
+                maxResults: 5,
+              })
+            : successfulResponse(),
+        );
+      },
+      log: { write: (event): void => void events.push(event) },
+    });
+
+    await expect(gateway.chat(request())).resolves.toMatchObject({ content: "corrected" });
+
+    const serializedRepair = JSON.stringify(bodies[1]);
+    expect(serializedRepair).toContain(
+      "Missing required properties: caseSensitive, excludeGlobs, includeGlobs. Every property the schema declares is required; pass an explicit value such as false or [] when a property does not apply.",
+    );
+    expect(serializedRepair).not.toContain(INVALID_ARGUMENT_SECRET);
+    expect(events.find((event) => event.op === "gateway.tool-catalog.rejected")).toMatchObject({
+      extra: {
+        catalogReason: "invalid-shape",
+        canonicalToolId: "keiko.repo.search",
+        missingRequired: ["caseSensitive", "excludeGlobs", "includeGlobs"],
+        missingRequiredCount: 3,
+        invalidPathCount: 0,
+        unexpectedPropertyCount: 0,
+        droppedPathCount: 0,
+      },
+    });
+    expect(events.find((event) => event.op === "gateway.tool-catalog.repair")).toMatchObject({
+      extra: {
+        missingRequiredCount: 3,
+        invalidPathCount: 0,
+        unexpectedPropertyCount: 0,
+        droppedPathCount: 0,
       },
     });
     expect(JSON.stringify(events)).not.toContain(INVALID_ARGUMENT_SECRET);
@@ -319,5 +391,39 @@ describe("Gateway bounded tool-schema repair", () => {
         effectStarted: false,
       },
     });
+  });
+});
+
+// PR #3452 review: the account lists distinct paths, capped and sorted, and counts what the cap left
+// out. No offered tool declares more than sixteen distinct schema paths, so the "not listed" sentence
+// cannot be reached through a provider round trip and is pinned directly, for both branches.
+describe("schemaMismatchGuidance", () => {
+  const repair = (
+    droppedPathCount: number,
+  ): NonNullable<Parameters<typeof schemaMismatchGuidance>[0]> => ({
+    toolCallId: "call-1",
+    offeredAlias: "keiko_changeset_edit",
+    shape: {
+      missingRequired: [],
+      invalidPaths: ["changeset.patch"],
+      unexpectedPropertyCount: 0,
+      droppedPathCount,
+    },
+  });
+
+  it("names how many distinct mismatching properties the capped account left out", () => {
+    expect(schemaMismatchGuidance(repair(3))).toBe(
+      " Properties whose value does not match the schema: changeset.patch. 3 further mismatching properties are not listed; check every remaining property against the schema.",
+    );
+    expect(schemaMismatchGuidance(repair(1))).toContain(
+      "1 further mismatching property is not listed",
+    );
+  });
+
+  it("says nothing about unlisted properties while the account is complete", () => {
+    expect(schemaMismatchGuidance(repair(0))).toBe(
+      " Properties whose value does not match the schema: changeset.patch.",
+    );
+    expect(schemaMismatchGuidance(undefined)).toBe("");
   });
 });

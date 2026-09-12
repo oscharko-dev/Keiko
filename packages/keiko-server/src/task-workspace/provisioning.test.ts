@@ -1056,6 +1056,45 @@ describe("pre-write rejections (AC2)", () => {
   });
 });
 
+// The settled provision failure line used to carry only `errorKind`: the classified cause the
+// operation-local tracker then suppressed on the rethrow path was lost for good, so a bind that
+// failed after `git worktree add` had succeeded (a refused identity registration, 2026-09-10) left
+// `PROVISIONING_FAILED` in the log and nothing an agent could reconstruct the cause from (ADR-0173,
+// AGENTS.md §8). The line now carries the failure's own content-free cause chain and Keiko frames.
+describe("settled failure trace", () => {
+  it("carries the classified cause chain on the persisted provision failure line, body-free", async () => {
+    const activityLog = createBufferedServerLogSink();
+    const service = makeService(
+      undefined,
+      (): void => {
+        throw new Error("identity registration exploded: /Users/someone/secret-project");
+      },
+      activityLog,
+    );
+
+    await rejectsWithCode(
+      () =>
+        service.provision({
+          repositoryRequestPath: repoRoot,
+          taskId: "trace-task",
+          baseBranch: "main",
+          requestedBy: "operator",
+          correlationId: "provision-trace-1",
+        }),
+      "PROVISIONING_FAILED",
+    );
+
+    const failed = activityLog.events.find(
+      (event) => event.errorKind === "PROVISIONING_FAILED" && event.extra?.outcome === "failed",
+    );
+    expect(failed).toBeDefined();
+    expect(failed?.correlationId).toBe("provision-trace-1");
+    expect(failed?.extra?.causeChain).toEqual([expect.stringMatching(/^Error/u)]);
+    expect(activityLog.lines().join("\n")).not.toContain("identity registration exploded");
+    expect(activityLog.lines().join("\n")).not.toContain("secret-project");
+  });
+});
+
 describe("early rejection activity logging", () => {
   it("logs an invalid provision request without exposing its free-form task identity", async () => {
     const activityLog = createBufferedServerLogSink();
@@ -1809,6 +1848,12 @@ describe("activate", () => {
       errorKind: "POINTER_DRIFT",
       extra: { operation: "activate", outcome: "retry-required" },
     });
+    // The one line this path leaves carries the classified error's Keiko frames, like every other
+    // settled failure line (review of PR #3452): the rethrow path's second, trace-carrying line is
+    // suppressed once `errorCode` is recorded, so without this the drift left no frames at all.
+    const frames = lastActivityLogEvent(activityLog).extra?.frames;
+    expect(Array.isArray(frames) && frames.length > 0).toBe(true);
+    expect(String(frames)).toContain("task-workspace/provisioning");
   });
 
   it("rejects activation of an unknown workspace", async () => {

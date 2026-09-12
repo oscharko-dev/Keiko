@@ -123,6 +123,30 @@ const MINT_FAILURE_ERROR_KIND: Readonly<Record<RuntimeAuthorityMintFailureReason
   "capability-issuance-refused": "CodingRuntimeAuthorityCapabilityFailure",
 };
 
+/**
+ * The closed conditions a tool-path capability recheck can be refused for, and the error class each
+ * clusters under in `keiko support analyze --clusters` — the same shape `MINT_FAILURE_ERROR_KIND`
+ * gives a refused mint (owner review, 2026-09-10). `registry-refused` carries the registry's own
+ * reason as a separate field so the class stays closed while the reason stays visible.
+ */
+type RevalidationRefusalCondition =
+  | "state-not-admissible"
+  | "tree-binding-missing"
+  | "run-mismatch"
+  | "delegation-mismatch"
+  | "audience-mismatch"
+  | "capability-invalid"
+  | "registry-refused";
+const REVALIDATION_REFUSAL_ERROR_KIND: Readonly<Record<RevalidationRefusalCondition, string>> = {
+  "state-not-admissible": "CodingRuntimeAuthorityStateRefusal",
+  "tree-binding-missing": "CodingRuntimeAuthorityBindingFailure",
+  "run-mismatch": "CodingRuntimeAuthorityBindingFailure",
+  "delegation-mismatch": "CodingRuntimeAuthorityDelegationFailure",
+  "audience-mismatch": "CodingRuntimeAuthorityCapabilityFailure",
+  "capability-invalid": "CodingRuntimeAuthorityCapabilityFailure",
+  "registry-refused": "CodingRuntimeAuthorityRegistrationFailure",
+};
+
 function deliveryScopeGranted(mode: CodingWorkbenchMode): boolean {
   return codingWorkbenchPolicyEffectFor(mode, "delivery", "medium") !== "denied";
 }
@@ -299,6 +323,12 @@ export interface CodingRuntimeCapabilityDelegationInput {
 export type CodingRuntimeCapabilityRecheckInput = Omit<
   CodingRuntimeCapabilityDelegationInput,
   "delegationId" | "idempotencyKey" | "usage"
+>;
+
+/** A budget question for one delegation: its usage, without the identity a delegation reserves. */
+export type CodingRuntimeCapabilityBudgetInput = Omit<
+  CodingRuntimeCapabilityDelegationInput,
+  "delegationId" | "idempotencyKey"
 >;
 
 // ─── Description authority (#3399, epic #3384 correction 4) ──────────────────────────────────────
@@ -897,6 +927,54 @@ export class CodingRuntimeAuthorityService {
     });
   }
 
+  /**
+   * Whether one more delegation of `input.usage` would still fit the run's budget, for the same
+   * capability, run and binding `resolveCapabilityForDelegation` admits, answered without reserving
+   * budget or replay identity: discovery lists only the skills the remaining budget can serve
+   * (#3417).
+   */
+  public delegationFits(input: CodingRuntimeCapabilityBudgetInput): boolean {
+    const reference = this.delegationReference(input);
+    return (
+      reference !== undefined &&
+      this.registry.runtimeDelegationFits(
+        reference,
+        input.workspaceRoot,
+        input.deploymentCeiling,
+        input.usage,
+        input.nowIso,
+      )
+    );
+  }
+
+  // The run a tool-facade capability may delegate for, by the conditions
+  // `resolveCapabilityForDelegation` applies, or undefined.
+  private delegationReference(
+    input: CodingRuntimeCapabilityRecheckInput,
+  ): CodingRuntimeAuthorityRef | undefined {
+    const authenticated = this.capabilities.authenticate(
+      input.capability,
+      Date.parse(input.nowIso),
+    );
+    if (!authenticated.ok || authenticated.binding.audience !== "tool-facade") return undefined;
+    const reference = this.runningReference();
+    return reference !== undefined &&
+      capabilityMatchesDelegation(authenticated.binding, reference, input)
+      ? reference
+      : undefined;
+  }
+
+  // The active run's reference while it runs on its tree binding and is not being reaped.
+  private runningReference(): CodingRuntimeAuthorityRef | undefined {
+    const reference = this.activeAuthorityRef;
+    if (reference === undefined || this.reapPending?.runId === reference.runId) return undefined;
+    return this.runtimeState.state === "running" &&
+      this.activeTreeBindingId !== undefined &&
+      this.runtimeState.runId === reference.runId
+      ? reference
+      : undefined;
+  }
+
   public revalidateCapabilityForMutation(
     input: CodingRuntimeCapabilityRecheckInput,
   ): CodingRuntimeResolution {
@@ -927,20 +1005,23 @@ export class CodingRuntimeAuthorityService {
       Date.parse(input.nowIso),
     );
     if (!authenticated.ok || authenticated.binding.audience !== "tool-facade") {
+      this.recordRevalidationRefused(
+        admissibleStates,
+        authenticated.ok ? "audience-mismatch" : "capability-invalid",
+      );
       return authenticated.ok
         ? capabilityFailure("invalid")
         : capabilityFailure(authenticated.reason);
     }
     const reference = this.activeAuthorityRef;
-    if (
-      !admissibleStates.has(this.runtimeState.state) ||
-      this.activeTreeBindingId === undefined ||
-      this.runtimeState.runId !== reference?.runId ||
-      !capabilityMatchesDelegation(authenticated.binding, reference, input)
-    ) {
+    const condition = this.revalidationRefusalCondition(admissibleStates, reference, (ref) =>
+      capabilityMatchesDelegation(authenticated.binding, ref, input),
+    );
+    if (condition !== undefined || reference === undefined) {
+      this.recordRevalidationRefused(admissibleStates, condition ?? "run-mismatch");
       return { ok: false, reason: "authority-resolution-failed" };
     }
-    return this.restrictResolution(
+    const resolution = this.restrictResolution(
       this.registry.revalidateRuntime(
         reference,
         input.liveFacts,
@@ -949,6 +1030,50 @@ export class CodingRuntimeAuthorityService {
         input.nowIso,
       ),
     );
+    if (!resolution.ok)
+      this.recordRevalidationRefused(admissibleStates, "registry-refused", resolution.reason);
+    return resolution;
+  }
+
+  /** The first structural condition a recheck fails, in the order the gate has always applied. */
+  private revalidationRefusalCondition(
+    admissibleStates: ReadonlySet<CodingWorkbenchRuntimeStateName>,
+    reference: CodingRuntimeAuthorityRef | undefined,
+    delegationMatches: (reference: CodingRuntimeAuthorityRef) => boolean,
+  ): RevalidationRefusalCondition | undefined {
+    if (!admissibleStates.has(this.runtimeState.state)) return "state-not-admissible";
+    if (this.activeTreeBindingId === undefined) return "tree-binding-missing";
+    if (reference === undefined || this.runtimeState.runId !== reference.runId) {
+      return "run-mismatch";
+    }
+    return delegationMatches(reference) ? undefined : "delegation-mismatch";
+  }
+
+  /**
+   * Every refusal of a capability recheck used to leave the log empty: the caller's guard collapsed
+   * it into a boolean and the model saw `verification-authority-revoked` for reasons as different
+   * as a paused run, a revoked tree binding and drifted live facts (run 12, 2026-09-10). One line
+   * per refusal names the condition, the admissible states the check asked for and the state the
+   * run was actually in — identifiers and closed words, never envelope content.
+   */
+  private recordRevalidationRefused(
+    admissibleStates: ReadonlySet<CodingWorkbenchRuntimeStateName>,
+    condition: RevalidationRefusalCondition,
+    registryReason?: string,
+  ): void {
+    (this.activityLog ?? processServerLogSink()).write({
+      category: "security",
+      op: "coding-runtime.authority.revalidation-refused",
+      correlationId: this.runtimeState.runId ?? UNKNOWN_CORRELATION_ID,
+      level: "warn",
+      errorKind: REVALIDATION_REFUSAL_ERROR_KIND[condition],
+      extra: {
+        condition,
+        runtimeState: this.runtimeState.state,
+        admissibleStates: [...admissibleStates],
+        ...(registryReason === undefined ? {} : { registryReason }),
+      },
+    });
   }
 
   // KEIKO-0737: the combined revoke(runId, nowIso) was only ever exercised by its own unit test

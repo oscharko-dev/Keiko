@@ -546,9 +546,13 @@ jobs:
         with:
           name: coverage-blob-packages-${{ matrix.shard }}
           # Vitest names a sharded blob `blob-<index>-<count>.json`, so the three uploads merge into
-          # one directory without collision. `.vitest-reports` is a dot directory and
-          # upload-artifact skips those unless told otherwise.
-          path: .vitest-reports/
+          # one directory without collision. That per-shard name is exactly what an explicit
+          # `--outputFile.blob` destroys: a set output path wins verbatim, so all three shards write
+          # the one same file and `merge-multiple` keeps only the last of them -- two thirds of the
+          # measurement, silently. The shard script therefore passes no output path and this follows
+          # the reporter default, which vitest 5 moved to `.vitest/blob` (PR #3452). `.vitest` is a
+          # dot directory and upload-artifact skips those unless told otherwise.
+          path: .vitest/blob/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
@@ -763,9 +767,11 @@ jobs:
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          # The blob reporter's own default directory, so `test:coverage:packages:shard` followed
-          # by `test:coverage:packages:merge` composes locally too, with no artifact relocation.
-          path: .vitest-reports
+          # The reporter default directory the shard script writes to, so that script followed by
+          # `test:coverage:packages:merge` composes locally too, with no artifact relocation. Named
+          # rather than pinned through `--outputFile.blob`: an explicit output path would collapse
+          # the three per-shard blob names into one.
+          path: .vitest/blob
           pattern: coverage-blob-packages-*
           merge-multiple: true
       - name: Download keiko-ui coverage evidence
@@ -789,7 +795,7 @@ jobs:
         run: |
           set -euo pipefail
           expected=3
-          actual=$(find .vitest-reports -maxdepth 1 -name 'blob-*.json' -type f | wc -l | tr -d ' ')
+          actual=$(find .vitest/blob -maxdepth 1 -name 'blob-*.json' -type f | wc -l | tr -d ' ')
           if [ "$actual" -ne "$expected" ]; then
             echo "Expected $expected package coverage shard blobs, found $actual."
             echo "A merge over a partial shard set would under-report every per-file floor."
@@ -809,6 +815,16 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=3072
         run: npm run test:coverage:packages:merge
+      - name: Discard the shard blobs now that the merged coverage exists
+        if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
+        # The blobs are vitest's intermediate shard state, fully consumed by the merge above:
+        # `coverage/packages/lcov.info` is what every later step reads. Leaving them in the
+        # workspace puts ~12MB JSON files inside `sonar.sources=.`, and the scanner's
+        # "is bigger than 20MB" WARN fails `check-sonar-analysis-log.mjs --require-full-analysis`
+        # closed (PR #3452). Removing them keeps the approved analysis scope untouched -- widening
+        # `sonar.exclusions` would move a reviewed scope pin to hide a file that simply has no
+        # business being there once the merge has run.
+        run: rm -rf .vitest
       - name: Coverage quality gates
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run check:coverage:quality

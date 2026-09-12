@@ -33,6 +33,30 @@ export function assertDraftAuthority(context: DraftDeliveryRunContext): void {
     throw new DraftDeliveryFailure("authority-denied");
 }
 
+// Which of the four identity facts a refused delivery actually failed on. One `remote-drift` code
+// still reaches the model — the four are one class to it — but the condition is on the run's own
+// activity line, because "remote drift" alone was not reconstructible from the log (Coding
+// Workbench run 17, 2026-09-10).
+type DraftRepositoryDrift =
+  | "target-repository-mismatch"
+  | "workspace-repository-mismatch"
+  | "base-ref-mismatch"
+  | "head-equals-base";
+
+function draftRepositoryDrift(
+  target: string,
+  context: DraftDeliveryRunContext,
+): DraftRepositoryDrift | undefined {
+  if (codingWorkbenchRemoteDigest(target) !== context.issueBinding.remoteDigest) {
+    return "target-repository-mismatch";
+  }
+  if (context.repositoryDigest !== context.issueBinding.remoteDigest) {
+    return "workspace-repository-mismatch";
+  }
+  if (context.baseRef !== context.issueBinding.defaultBaseRef) return "base-ref-mismatch";
+  return context.headRef === context.baseRef ? "head-equals-base" : undefined;
+}
+
 export async function resolveDraftRepository(
   options: DraftDeliveryDependencies,
   context: DraftDeliveryRunContext,
@@ -41,13 +65,17 @@ export async function resolveDraftRepository(
   const target = await options.resolveTarget(context);
   assertDraftAuthority(context);
   if (!target.ok) throw new DraftDeliveryFailure(target.reason);
-  if (
-    codingWorkbenchRemoteDigest(target.repository) !== context.issueBinding.remoteDigest ||
-    context.repositoryDigest !== context.issueBinding.remoteDigest ||
-    context.baseRef !== context.issueBinding.defaultBaseRef ||
-    context.headRef === context.baseRef
-  )
+  const drift = draftRepositoryDrift(target.repository, context);
+  if (drift !== undefined) {
+    (options.execution?.activityLog ?? processServerLogSink()).write({
+      category: "security",
+      level: "warn",
+      op: "git.draft-delivery.repository-drift",
+      correlationId: context.correlationId,
+      extra: { runId: context.runId, condition: drift },
+    });
     throw new DraftDeliveryFailure("remote-drift");
+  }
   return target.repository.toLowerCase();
 }
 

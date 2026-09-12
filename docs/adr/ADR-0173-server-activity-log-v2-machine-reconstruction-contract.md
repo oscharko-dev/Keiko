@@ -511,6 +511,11 @@ request":
   type and byte count of an accepted request body; the six ad hoc body readers that predated
   `readBoundedRequestBody` were consolidated onto it so the line — and the 413 path — have one
   owner.
+- **Every composition writes the per-request line.** `createUiServer` writes the one `http`/`request`
+  line per request through the sink it is given and, when none is given, through the process
+  activity log (file-backed wherever the process has a state directory, silent in a unit test that
+  sets none), never a null sink. The dev lane's BFF passed no sink, so no request ever reached its
+  `server.log` and a failed browser request left no server-side trace (F84, Coding Workbench run 30).
 - **Diagnostic `operation` labels never carry a raw request path.** `diagnosticLabel` reduces a
   path-bearing operation label through the same route reducer the activity log uses and degrades to
   the fixed `server.operation` fallback when the path cannot be templated; the two git diff handlers
@@ -523,6 +528,21 @@ request":
   (reusing the editor's inline-completion limiter, 60 s window) that logs one
   `client.diagnostic.rate-limited` line per window carrying the count of further drops it
   suppressed, and answers `204` whether a report was kept or dropped.
+  A note survives that redaction only in a code-owned shape (F29, Coding Workbench run 28, where 53
+  of the 77 notes the browser sends had collapsed to the shape marker): an exact sentence, or a
+  template whose every variable has a closed vocabulary. An error travels as its class name, a
+  count as digits, a status as a closed label, and the editor's runtime notices as closed codes
+  (`keiko-editor` `runtime-notice.ts`; the two language loaders in `keiko-ui`). The class name is
+  itself closed: a name is text the error chose, so only the vocabulary `keiko-contracts` owns
+  (`CLIENT_ERROR_CLASSES`: the JavaScript built-ins, the browser platform's errors, Keiko's own
+  browser error classes and the `typeof` of a thrown non-Error) survives, and every producer
+  reports any other name as `Error`. A note is admitted only within the logged-string bound
+  (`MAX_LOG_STRING_LENGTH`, which producers read as `CLIENT_NOTE_MAX_LENGTH`), and a producer
+  whose parts would not fit folds them into a count (review on PR #3452). Anything else, including a code-owned template filled with foreign text, takes the generic
+  redaction every logged string takes: an over-long value, a secret, a personal identifier, a
+  structured payload, prose and an unknown path each become their marker, and only a value none of
+  those checks flags survives as sent (an empty note, or a short code-like one), so the browser can
+  never widen what the log admits.
   A valid original request correlation takes precedence. Reports without one, including reports
   whose supplied id fails validation, use the validated ingest request correlation; internal
   callers without either use `UNKNOWN_CORRELATION_ID`. Rate-limit notices use the ingest request

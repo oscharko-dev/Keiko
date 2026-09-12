@@ -3,6 +3,7 @@
 // real createUiServer. Every test injects an in-memory UiStore so the FS is never touched.
 
 import { EventEmitter } from "node:events";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
   mkdtempSync,
   mkdirSync,
@@ -63,6 +64,7 @@ import {
   createServerLogger,
   resetServerLogger,
   setServerLogger,
+  type ServerLogEvent,
 } from "./observability/index.js";
 
 // One persisted assistant turn whose grounded answer carries an `indexLifecycle` block — the only
@@ -539,7 +541,11 @@ describe("POST /api/projects", () => {
 
   it("records the explicit folder selection as the exact root trust grant", async () => {
     writeFileSync(join(projDir, "package.json"), JSON.stringify({ name: "selected-root" }));
-    const workspaceScriptTrust = createWorkspaceScriptTrustService({ store });
+    const trustLines: ServerLogEvent[] = [];
+    const workspaceScriptTrust = createWorkspaceScriptTrustService({
+      store,
+      activityLog: { write: (event: ServerLogEvent): void => void trustLines.push(event) },
+    });
     await restartWithDeps({ workspaceScriptTrust });
 
     const res = await fetch(url("/api/projects"), {
@@ -554,6 +560,12 @@ describe("POST /api/projects", () => {
       trust: "trusted",
       reason: "human-grant",
     });
+    // The most common grant path (adding a project through the UI) carries the request's own
+    // minted correlation id, never the fallback: its grant line joins the request that caused it.
+    const granted = trustLines.filter((line) => line.op === "workspace-script-trust.granted");
+    expect(granted).toHaveLength(1);
+    expect(granted[0]?.correlationId).not.toBe(UNKNOWN_CORRELATION_ID);
+    expect(granted[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
   });
 
   it("creates a project, returns 201 with availability", async () => {

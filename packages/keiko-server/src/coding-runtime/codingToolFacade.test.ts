@@ -20,6 +20,7 @@ import type {
 } from "./codingToolFacadePorts.js";
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
 import type { CodingToolActionRequest } from "./codingToolIpc.js";
+import { VERIFIED_COMMIT_BLOCKING_PATHS_MAX } from "../gitDelivery/verifiedCommitTypes.js";
 
 const capability = "capability-1-opaque-runtime-secret";
 const deliveryFixtures: DraftDeliveryFixture[] = [];
@@ -106,6 +107,67 @@ describe("CodingToolFacade", () => {
     expect(ports.authority.admit).toHaveBeenCalledBefore(
       ports.delegate.execute as ReturnType<typeof vi.fn>,
     );
+  });
+
+  it("#3417: returns a discovery's closed listing and fails any that leaves the contract", async () => {
+    const listing = {
+      schemaVersion: 1,
+      catalogDigest: "a".repeat(64),
+      skills: [
+        {
+          skillId: "skl_repo-structure-summary@1",
+          version: "1",
+          sourceDigest: "b".repeat(64),
+          category: "repository-analysis",
+          capabilities: ["keiko.workspace.read"],
+          compatibility: { profile: "opencode", minVersion: 1, maxVersion: 1 },
+          readiness: { state: "ready" },
+        },
+      ],
+    };
+    const withSummary = {
+      ...listing,
+      skills: listing.skills.map((skill) => ({ ...skill, summary: "reads every file" })),
+    };
+    const cases: readonly (readonly [unknown, "listing" | "failed"])[] = [
+      [{ outcome: "completed", skills: listing }, "listing"],
+      [{ outcome: "completed", skills: withSummary }, "failed"],
+      [{ outcome: "completed" }, "failed"],
+    ];
+    for (const [delegated, expected] of cases) {
+      const ports = facade();
+      ports.delegate.execute = vi.fn(() => Promise.resolve(delegated));
+      const result = await createCodingToolFacade(ports).execute({
+        body: requestBody({ action: "skill-discover" }),
+        capability,
+      });
+      if (expected === "failed") expect(result).toMatchObject({ status: "failed" });
+      else
+        expect(result).toEqual({
+          status: "completed",
+          evidence: [{ kind: "governed-delegate", code: "completed" }],
+          skills: listing,
+        });
+    }
+  });
+
+  // PR #3452 review: an empty listing is a valid answer, no approved skill being ready now, and the
+  // facade returns it as it is.
+  it("#3417: returns an empty discovery listing as it is", async () => {
+    const empty = { schemaVersion: 1, catalogDigest: "a".repeat(64), skills: [] };
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "completed", skills: empty }));
+
+    const result = await createCodingToolFacade(ports).execute({
+      body: requestBody({ action: "skill-discover" }),
+      capability,
+    });
+
+    expect(result).toEqual({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "completed" }],
+      skills: empty,
+    });
   });
 
   it("passes the whole-file digest and window facts through instead of recomputing them (#2473)", async () => {
@@ -618,6 +680,213 @@ describe("CodingToolFacade", () => {
     });
   });
 
+  // ADR-0147 D3 (Coding Workbench run 8, 2026-09-10): a verification the runner refused for want of
+  // package-script trust is the operator's decision, not the model's. The fixed guidance says so and
+  // names the one place it can change, so the model reports the blocker instead of retrying the
+  // verifier or routing around it.
+  it("tells the model that a trust-refused verification is the operator's decision", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "failed", reasonCode: "WORKSPACE_TRUST_REQUIRED" }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "verification", verifierId: "unit" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "WORKSPACE_TRUST_REQUIRED" }],
+      reasonCode: "WORKSPACE_TRUST_REQUIRED",
+      guidance: expect.stringContaining("Only the operator can allow them") as string,
+    });
+  });
+
+  // F74 (Coding Workbench run 24): a verifier with nothing to run answered a bare code, so the model
+  // picked another verifier at once without knowing why. The steps that did not run are named with
+  // their closed reasons, and a step the facade cannot recognise is not forwarded.
+  it("tells the model which verification steps did not run and why", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "failed",
+        reasonCode: "VERIFICATION_NOT_RUN",
+        notRun: [
+          { kind: "typecheck", reason: "script-missing" },
+          { kind: "test", reason: "dependencies-unavailable" },
+          { kind: "../../etc", reason: "script-missing" },
+          { kind: "lint", reason: "made-up" },
+        ],
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "verification", verifierId: "unit" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "VERIFICATION_NOT_RUN" }],
+      reasonCode: "VERIFICATION_NOT_RUN",
+      detail:
+        "These verification steps did not run: typecheck (no such script in package.json), test (dependencies did not install).",
+      guidance: expect.stringContaining("Not every verification step ran") as string,
+    });
+  });
+
+  // PR #3452 review: every closed reason reaches the model in its own words; a cancelled or denied
+  // step is never called skipped.
+  it("words every reason a verification step did not run", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "failed",
+        reasonCode: "VERIFICATION_NOT_RUN",
+        notRun: [
+          { kind: "typecheck", reason: "script-missing" },
+          { kind: "test", reason: "dependencies-unavailable" },
+          { kind: "lint", reason: "denied" },
+          { kind: "build", reason: "cancelled" },
+          { kind: "targeted-test", reason: "skipped" },
+        ],
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "verification", verifierId: "unit" }),
+        capability,
+      }),
+    ).resolves.toMatchObject({
+      reasonCode: "VERIFICATION_NOT_RUN",
+      detail:
+        "These verification steps did not run: typecheck (no such script in package.json), test (dependencies did not install), lint (denied by policy), build (cancelled), targeted-test (skipped).",
+    });
+  });
+
+  // An empty not-run list names no step, so the facade forwards no detail; the guidance still stands
+  // (PR #3452 review).
+  it("forwards no detail for an empty not-run list", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "failed", reasonCode: "VERIFICATION_NOT_RUN", notRun: [] }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "verification", verifierId: "unit" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: "VERIFICATION_NOT_RUN" }],
+      reasonCode: "VERIFICATION_NOT_RUN",
+      guidance: expect.stringContaining("Not every verification step ran") as string,
+    });
+  });
+
+  // Coding Workbench run 13 (2026-09-10): a stage proposal the runtime Git service blocks is a
+  // completed Git result, not a failure — but its closed reason alone left the model guessing. The
+  // admission reasons carry the one recovery the model can perform itself.
+  it("tells the model how to recover from a blocked stage proposal", async () => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({
+        outcome: "completed",
+        evidence: [],
+        git: {
+          kind: "stage",
+          proposalId: "stage-13",
+          status: "blocked",
+          reason: "selection-unreviewed",
+          pathCount: 1,
+        },
+      }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "git", operation: "stage", phase: "propose", paths: ["src"] }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "completed" }],
+      git: {
+        kind: "stage",
+        proposalId: "stage-13",
+        status: "blocked",
+        reason: "selection-unreviewed",
+        pathCount: 1,
+      },
+      guidance: expect.stringContaining("keiko_git_status") as string,
+    });
+  });
+
+  it("keeps a ready stage proposal free of guidance", async () => {
+    const ports = facade();
+    const git = {
+      kind: "stage",
+      proposalId: "stage-14",
+      status: "ready",
+      reason: "none",
+      pathCount: 2,
+    };
+    ports.delegate.execute = vi.fn(() =>
+      Promise.resolve({ outcome: "completed", evidence: [], git }),
+    );
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({
+          action: "git",
+          operation: "stage",
+          phase: "propose",
+          paths: ["a.js", "b.js"],
+        }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "completed" }],
+      git,
+    });
+  });
+
+  it.each([
+    ["git-proposal-unknown", "Propose the change again"],
+    ["git-execution-failed", "keiko_git_status"],
+  ])("forwards a %s Git refusal with its recovery guidance", async (reasonCode, coaching) => {
+    const ports = facade();
+    ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "failed", reasonCode }));
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({
+          action: "git",
+          operation: "stage",
+          phase: "execute",
+          proposalId: "stage-15",
+        }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "failed",
+      evidence: [{ kind: "governed-delegate", code: reasonCode }],
+      reasonCode,
+      guidance: expect.stringContaining(coaching) as string,
+    });
+  });
+
   // #3390: a structural refusal carries the route's sentence and a fixed recovery instruction, so
   // the model repairs the patch instead of resending it. The sentence is admitted only as one
   // bounded printable-ASCII line, and only for the structural codes.
@@ -638,9 +907,7 @@ describe("CodingToolFacade", () => {
       status: "failed",
       evidence: [{ kind: "governed-delegate", code: "INVALID_EDITS" }],
       detail: "context mismatch at original line 12",
-      guidance: expect.stringContaining(
-        "does not apply to the file as it is now",
-      ) as unknown as string,
+      guidance: expect.stringContaining("does not apply to the file as it is now") as string,
     });
   });
 
@@ -851,6 +1118,15 @@ describe("CodingToolFacade", () => {
       status: "failed",
       reasonCode: code,
       evidence: [{ kind: "governed-delegate", code }],
+      // Two refusals carry guidance: the trust refusal is the operator's decision to change, not the
+      // model's (ADR-0147 D3, 2026-09-10), and a run that left a step unexecuted tells the model
+      // what that means for its next step (F74). Every other code stays bare.
+      ...(code === "WORKSPACE_TRUST_REQUIRED"
+        ? { guidance: expect.stringContaining("Only the operator can allow them") as unknown }
+        : {}),
+      ...(code === "VERIFICATION_NOT_RUN"
+        ? { guidance: expect.stringContaining("Not every verification step ran") as unknown }
+        : {}),
     });
   });
 
@@ -959,6 +1235,93 @@ describe("CodingToolFacade", () => {
       evidence: [{ kind: "governed-delegate", code: "completed" }],
     });
   });
+
+  // isVerifiedCommitBlockingPaths/isBlockingPathList: bounded, workspace-relative, exact-keyed.
+  const validBlocking = {
+    unstagedCount: 1,
+    untrackedCount: 1,
+    unstaged: ["src/a.ts"],
+    untracked: ["src/b.ts"],
+  };
+  function candidateNotStagedVerification(
+    blocking: Readonly<Record<string, unknown>>,
+  ): Readonly<Record<string, unknown>> {
+    return {
+      commitProof: "unavailable",
+      reasonCode: "candidate-not-staged",
+      nextAction: "stage-then-verify",
+      blocking,
+    };
+  }
+
+  it("accepts a candidate-not-staged verification proof with a well-formed blocking payload", async () => {
+    const ports = facade();
+    const verification = candidateNotStagedVerification(validBlocking);
+    ports.delegate.execute = vi.fn(() => Promise.resolve({ outcome: "completed", verification }));
+    const subject = createCodingToolFacade(ports);
+
+    await expect(
+      subject.execute({
+        body: requestBody({ action: "verification", verifierId: "unit" }),
+        capability,
+      }),
+    ).resolves.toEqual({
+      status: "completed",
+      evidence: [{ kind: "governed-delegate", code: "completed" }],
+      verification,
+    });
+  });
+
+  it.each([
+    ["an absolute unstaged path", { ...validBlocking, unstaged: ["/etc/passwd"] }],
+    [
+      "an untracked path escaping the workspace with ..",
+      { ...validBlocking, untracked: ["../secrets.env"] },
+    ],
+    // The canonical root-relative identifier contract (isRootRelativeFileIdentifier), not a
+    // POSIX-only approximation of it: Windows drive, rooted and backslash forms are foreign too.
+    ["a drive-absolute unstaged path", { ...validBlocking, unstaged: [String.raw`C:\repo\file`] }],
+    ["a drive-relative untracked path", { ...validBlocking, untracked: ["C:file"] }],
+    ["a backslash-rooted unstaged path", { ...validBlocking, unstaged: [String.raw`\repo\file`] }],
+    [
+      "a backslash traversal in an untracked path",
+      { ...validBlocking, untracked: [String.raw`..\file`] },
+    ],
+    ["a NUL byte in an unstaged path", { ...validBlocking, unstaged: ["src/a\u0000.ts"] }],
+    [
+      `more than ${String(VERIFIED_COMMIT_BLOCKING_PATHS_MAX)} unstaged paths`,
+      {
+        ...validBlocking,
+        unstagedCount: VERIFIED_COMMIT_BLOCKING_PATHS_MAX + 1,
+        unstaged: Array.from(
+          { length: VERIFIED_COMMIT_BLOCKING_PATHS_MAX + 1 },
+          (_, index) => `src/file-${String(index)}.ts`,
+        ),
+      },
+    ],
+  ])(
+    "strips a candidate-not-staged verification proof whose blocking payload has %s",
+    async (_label, blocking) => {
+      const ports = facade();
+      ports.delegate.execute = vi.fn(() =>
+        Promise.resolve({
+          outcome: "completed",
+          verification: candidateNotStagedVerification(blocking),
+        }),
+      );
+      const subject = createCodingToolFacade(ports);
+
+      await expect(
+        subject.execute({
+          body: requestBody({ action: "verification", verifierId: "unit" }),
+          capability,
+        }),
+      ).resolves.toEqual({
+        status: "completed",
+        evidence: [{ kind: "governed-delegate", code: "completed" }],
+      });
+    },
+  );
 
   // The other half of sourcing the runner vocabulary: the exclusion is a decision, not an accident.
   // A route-only code has no meaning for a tool call, so it collapses to the bare status instead of

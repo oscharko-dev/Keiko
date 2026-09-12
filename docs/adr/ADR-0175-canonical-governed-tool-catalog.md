@@ -37,6 +37,7 @@ binds it to those owners; it adds no parallel execution, policy, search or evide
 | Raw search/read coordinate computation | existing workspace owner | #3386 H1 |
 | Durable activity and diagnostics | existing server log/diagnostic ports | #3412 generator; #3413 runtime/analyzer |
 | Adapter projection semantics | catalog compiler | consumers materialize only the compiled result |
+| Approved-skill state and effects | existing server-approved skill catalog and governed skill handler; the catalog owns only the `keiko.skill.discover` descriptor and its projection | #3417 |
 
 The new pure package depends only on contracts and security. It cannot import I/O, providers,
 handlers, credentials, readiness, log sinks or policy evaluators. Server composition alone injects
@@ -141,6 +142,30 @@ not reactivate expired aliases or replay uncertain effects.
 ### D4 — Offer, dispatch and bounded data
 
 `offer = profile intent ∩ representable ∩ bound-and-ready ∩ live-authority-eligible ∩ budgeted`.
+
+An offer minted for one model request lives exactly as long as that request can: its expiry is the
+request deadline the gateway enforces for the model (the provider's `timeoutMs`) plus the bridge's
+settlement grace, never a fixed constant. A fixed 30 s offer expired under a legitimately long
+generation (a ~6k-token changeset call took 49 s), the response's calls bound against a dead offer as
+`expired-compatibility`, and the run failed as if the model had emitted a malformed call
+(2026-09-10). A response later than the deadline has already been aborted, so the deadline-derived
+lifetime refuses nothing legitimate and admits nothing stale; the bridge logs the offer's remaining
+lifetime at projection time so an expiry is reconstructable from the activity log alone.
+An offer bounds admission, not the call it admitted: an invocation admitted under a live offer keeps
+it through its own settlement, bounded by its descriptor's budget, the live authority, the workspace
+revision and its handler's readiness, so an effect that starts after a long step or a human decision
+is never refused merely because the offer that admitted it has since expired. Checking the facade's
+30 s targeted offer against the clock refused every verification that ran longer (PR #3452).
+A tool that waits in place for a human decision (the stage, commit, push and pull-request proposals
+waiting for their approval, and the verification tool waiting for a package-script trust grant)
+declares that wait in its settlement budget: its own work budget, the contract's one human-decision
+wait (keiko-contracts `GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS`) and the settlement grace. Every layer
+such a call crosses derives its bound from that one declaration and outlives the layer before it:
+the governed-invocation registry holds the call for the budget plus one grace, the sidecar tool
+bridge admits it for the same, and the generated plugin client waits one grace and a margin longer;
+a bridge deadline that stops a call leaves a `coding-runtime.tool-bridge` diagnostic naming the
+deadline. A fixed 30 s default in the registry, the catalog and the bridge cut a waiting approval
+off long before its own five-minute ceiling (F43/F44, PR #3452).
 An approval-required action is eligible only when the current mode/envelope permits that action
 and a valid approval channel can complete the existing approval protocol; listing is not approval.
 All three ADR-0138 modes preserve monotonic authority and mode-independent hard denials.
@@ -153,7 +178,11 @@ An incomplete shared effect floor cannot substitute for that conservative advert
 
 Before every dispatch, validate the exact offer/tool/version/projection and untrusted arguments,
 then recheck current authority, root/revision, readiness, cancellation/deadline, budget and
-idempotency. No model/browser/adapter field may override composition-owned fields. A revoked or
+idempotency. An argument rejection carries the schema's own account of the mismatch — the missing
+required properties and the invalid properties as schema paths, undeclared properties as a count,
+never the arguments — on the rejection line and in the one bounded correction the model receives;
+a correction that only asked the model to "match the schema" let the same omission exhaust the
+retry budget (2026-09-10). No model/browser/adapter field may override composition-owned fields. A revoked or
 unoffered call cannot reserve an effect. The binder invokes existing handlers in process through
 ports, not loopback HTTP. Missing/wrong handlers fail closed before advertising; loss after offer
 returns `failed / handler-unavailable` or `handler-mismatch` without effect.
@@ -163,6 +192,17 @@ handler/profile may tighten them; neither model nor adapter may enlarge them. #2
 performance and #3415 calibrates narrower catalog-specific thresholds. JSON object depth is root=1;
 width is keys per object, byte bounds count UTF-8 serialization, and integer metrics are finite,
 nonnegative safe integers. Input and output limits apply before parsing/allocation where possible.
+
+The ceilings also bound the sidecar's durable record of a call. OpenCode persists each governed
+call's arguments in its `message.part.updated.1` rows (`state.input` on every status, the raw
+argument text `state.raw` while pending), and the fail-closed history gate that admits those rows
+re-applies `TOOL_CATALOG_LIMITS` to them rather than its 4096-character metadata bound: a body the
+catalog admitted cannot be refused by the record of its own dispatch. The per-pull history response
+budget is derived from the same ceilings (the ordinary metadata rows plus eight catch-up calls of
+three argument-bearing rows each). A 19 KiB `keiko_changeset_edit` patch — inside the 64 KiB patch
+contract — was refused by the metadata bound on 2026-09-10 and the run ended `runtime-failed` on its
+first edit, with a diagnostic naming only the digest of the event type; the refused part's closed
+labels (type, tool, status, byte size, refusing gate) now travel in that diagnostic's `code`.
 
 Repository search v1 is local lexical/literal/safe-regex/symbol search through the workspace owner.
 It caps query characters at 200, hits at 50, scanned files at 2,000, file bytes at 512 KiB, time at
@@ -246,7 +286,11 @@ a failure after an uncertain effect cannot authorize retry and uses `effect-outc
 The #3413 implementation reuses `CodingToolInvocationRegistry` for invocation payloads and bounded
 cursor entries. Cursor identities occupy a reserved namespace that ordinary dispatch rejects;
 issuing one never evicts an approved invocation. Both share the existing eight live entries per run,
-30-second maximum lifetime, 2 MiB aggregate capacity and run revocation/zeroization. A server-only
+2 MiB aggregate capacity and run revocation/zeroization. A cursor lives at most 30 seconds; an
+invocation lives as long as the catalog may take to settle it (its descriptor's budget plus one
+settlement grace, still capped by the authority's expiry), because one fixed 30-second life
+cancelled the verification tool and every proposal waiting for an approval long before their own
+budgets ended (PR #3452). A server-only
 `dispatchPage` consumes the cursor and repeats current schema, workspace, compatibility, authority
 and budget admission; the model receives only the opaque token. Handler output may contain only a
 cursor minted by that invocation, and discarded/failed output invalidates its unpublished cursor.
@@ -468,9 +512,122 @@ fails the architecture consistency gate. Runtime conformance, performance and li
 remain #3415/#3390 delivery criteria. This imposes explicit migration work but prevents silent
 schema drift, false readiness and competing authority systems.
 
+## Amendment — post-landing producer changes carry their own owner-issued checkpoint (PR #3452, 2026-09-10)
+
+The durable H1 records (`h1-provenance.v1.json`, `h1-producer-checkpoint.v1.json`) certify the
+producer identity that landed with #3394. Their identity check compared that historical identity to
+the CURRENT producer, so every later producer change — however well verified and reviewed — could
+only be admitted by rewriting a historical record. Producer changes still require fresh verification
+and review evidence (this ADR, D3); that evidence now has a durable place that does not rewrite
+history.
+
+`docs/architecture/tool-catalog-producer-lineage.v1.json` is an append-only lineage of owner-issued
+producer checkpoints. Each entry names the identity it replaces (`predecessor`), the identity it
+introduces (`catalogRevision`, `projectionDigest`, `handlerSetDigest`), the source commit and
+integration PR that carry the change, a closed `reason`, and two SHA-256-pinned receipts under
+`docs/qa/evidence/tool-catalog-producer-<sequence>-{verification,review}.v1.json`: a passing
+deterministic managed verification of the producer at that source commit, and an independent
+source-and-evidence audit that accepts every stated criterion. `producerLineageFailures`
+(check-tool-catalog-conformance.mjs) is the one identity check for both H1 records: the recompiled
+current producer must equal the record's identity, or be the last identity of a lineage whose first
+entry continues exactly that identity, with consecutive sequences, each entry continuing the one
+before it, and every receipt bound to its entry. A producer changed again without a new entry fails
+`lineage stale`; an entry that does not continue the record fails `lineage broken`; a receipt
+edited after pinning fails `stale receipt`. Without a lineage file the check reports exactly the
+historical mismatch it always did.
+
+An entry is issued by the owner, never by the change it certifies (review finding on PR #3452,
+2026-09-11). Each receipt must carry an `evidenceRef` in the H1 receipts' form, bound to the entry's
+integration PR at its own source commit: the required checks for the verification receipt, the review
+threads for the review receipt. The source commit must resolve to a real commit and tree, must be an
+ancestor of the commit being checked, and the last entry's source commit must still hold the producer
+source (`packages/keiko-tool-catalog/src` unchanged since it). An unresolvable commit fails; it is
+never tolerated. The first entry recorded on PR #3452 was self-issued with agent-written receipts and
+no external evidence, and was withdrawn: the derived verification budget stays uncertified until the
+owner issues an entry that meets these rules.
+
+## Amendment — approved-skill discovery is a catalog descriptor over the approved skill catalog (PR #3452, 2026-09-11)
+
+Issue #3417 makes approved skills discoverable without moving skill state, bodies, credentials or
+execution authority into the catalog. The OpenCode profile registers one more descriptor,
+`keiko.skill.discover` (alias `keiko_skill_discover`): it takes no argument, reads the workspace,
+is idempotent and read-only, carries the sandbox default budget and names its own handler,
+`opencode-skill-discovery-port`. That descriptor and its projection are all the catalog owns. The
+server-approved skill catalog (`coding-runtime/skillCatalog.ts`) stays the one authority for skill
+state and the governed skill handler (`productionAuxiliaryPorts`) the one authority for effects; no
+second registry, index or policy path exists.
+
+- **Closed projection.** A discovery answers with `SkillDiscoveryResultV1` (keiko-contracts
+  `coding-skill-discovery`): per skill its pinned id, version, a SHA-256 of its canonical
+  definition, one closed category, a sorted, bounded set of capability ids the compiled catalog
+  holds, the profile range it is compatible with and a closed readiness state. There is no
+  free-form field, and the facade refuses a listing that leaves the contract.
+- **One readiness decision.** Discovery and invocation apply the same decision: enabled,
+  compatible with the bound profile, a mounted handler for the category, a live authority that
+  still allows the workspace read, and budget for the one delegated read, which the authority
+  answers without reserving it (`delegationFits`, `canChargeDelegatedRead`). The model sees only
+  the ready skills it may invoke now: implicit ones, or one the operator's turn requested.
+- **Atomic invalidation.** The skill catalog changes only by admitting a whole next set: one frozen
+  snapshot with one new revision and digest. Installing, removing, updating, disabling or revoking
+  a skill each invalidate the prior digest. A run is bound to the digest of its last discovery; an
+  invocation after the catalog changed is refused as `skill-discovery-stale` until the model
+  discovers again, every invocation re-checks readiness before its effect, and one whose entry was
+  replaced while its read ran is refused as `skill-changed`. The catalog holds one version per
+  skill and at most 32 skills, so a downgraded or confusable id cannot sit beside the approved one;
+  replay and cross-workspace protection stay with the dispatch identity, offer and workspace
+  revision described above.
+- **Availability.** Both skill tools are absent together (#3414-AC9) unless an approved skill is
+  enabled, compatible and handled for the run.
+- **Evidence.** Each discovery writes one `coding-runtime.skill-discovery` line: the run, the
+  catalog revision and digest, the approved and listed counts, the unavailable counts per closed
+  reason and the duration — never a skill body, path, prompt, argument, output or credential.
+
+## Semantic reranking of the governed repository search (Issue #3416)
+
+`keiko.repo.search@1` answers lexically and may then be REORDERED by the repository index the
+operator already built. The rerank is a property of the governed port, not a new tool and not a new
+mode: the model-visible descriptor, its input schema and the shared result schema are untouched, so
+the catalog revision and the projection digest do not move.
+
+It happens above the handler, never inside it. The handler owns the editor lane -- raw bytes, real
+line and column coordinates -- and `repoSearch.ts` refuses to open a semantic session on that lane
+by design (ADR-0165): file text reaching an embedding provider is an evidence-lane egress path. What
+the index is handed here is the hits' already-redacted excerpts, the same text the result hands the
+model, and only the operator's query is embedded; the repository's own content was embedded when the
+operator indexed the pod.
+
+The result discloses which order it is: a ranking, the index identity, its freshness, the hits placed
+and left, and one bounded reason when no rerank happened. A rerank that cannot happen -- no bound
+index, no provider, no fresh candidate, a failed index query, no authority or budget -- returns the
+deterministic lexical order with that reason attached, never an error. Whole-request cancellation
+and timeout stay terminal and perform no fallback and no further model call.
+
+Two of those disclosures are structural, and the contract refuses a record that breaks either. A
+ranking other than `lexical` must name the index it read -- a record saying in one breath that an
+index answered and that none was read is a self-contradiction, so a lease that cannot name its index
+discloses the stated lexical order instead of an index the operator could not identify. And an order
+the index placed no hit into is lexical whatever the index returned: a provider answering with stale
+or unknown coordinates leaves the handler's own order in place, and naming a rerank there would
+misstate what the operator is reading.
+
+The operator sees the same projection through the run's authenticated app-session channel
+(`GET /runs/:runId/skills`, ADR-0141), with the readiness the catalog can tell on its own; nothing
+of a skill's body, path, prompt, argument or output reaches either surface.
+
+The descriptor is a producer change, and no lineage entry admits it yet. The one entry issued in
+this pull request was withdrawn (1.4: the owner issues an entry, never the change it certifies),
+and the owner issues the next one once, for the final producer of PR #3452. Until then the
+producer-identity conformance cases and the catalog performance evidence stay red on that pull
+request, as its description states.
+
 ## Version History
 
 | Version | Date | Change |
 | --- | --- | --- |
+| 1.6 | 2026-09-12 | Semantic reranking of the governed repository search runs above the handler on the evidence lane's redacted excerpts, moves neither the catalog revision nor the projection digest, and discloses a body-free provenance whose non-lexical rankings must name their index and whose unplaced orders stay lexical; whole-request cancellation is terminal (#3416, PR #3452). |
+| 1.5 | 2026-09-11 | Approved-skill discovery: the catalog owns only the `keiko.skill.discover` descriptor over the server-approved skill catalog, with one readiness decision, atomic invalidation and a closed, body-free projection (#3417, PR #3452). |
+| 1.4 | 2026-09-11 | Lineage entries are owner-issued: receipts carry evidence refs bound to the integration PR at the entry's source commit, which must resolve, precede the checked commit and still hold the producer; the self-issued first entry was withdrawn. |
+| 1.3 | 2026-09-10 | Post-landing producer changes are admitted through an append-only lineage of owner-issued checkpoints with pinned verification and independent-review receipts; the H1 records keep their historical identity (PR #3452). |
+| 1.2 | 2026-09-10 | D4: the catalog ceilings also bound the arguments recorded in the sidecar's durable tool-part rows and derive the history response budget; a refused part row is named body-free in the reconciliation diagnostic (PR #3452). |
 | 1.1 | 2026-09-09 | Record the completed #3394 squash-delivery semantics: final signed source and dev-reachable merge are distinct identities with equal complete Git trees; pin exact-schema required-check and review-settlement receipts and the refreshed owned-source closure (#3414, #3415). |
 | 1.0 | 2026-09-04 | Accept the governed-tool ownership, pure package boundary, version/digest/result/state/evidence contract and workspace-only coding raw-coordinate lane (#3411); implementation belongs to the named delivery owners. Consolidate delivery into owner-selected PR #3394 with reviewed producer checkpoints instead of dedicated dev merges. |

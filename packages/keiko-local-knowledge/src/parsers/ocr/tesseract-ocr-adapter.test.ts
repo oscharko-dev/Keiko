@@ -137,6 +137,27 @@ describe("resolveOcrRuntimeFromEnv", () => {
     );
   });
 
+  // PR #3452 review (the reranker timeout's class): a timer armed past 2^31 - 1 ms fires at once.
+  it.each([
+    [String(2 ** 31), 30_000],
+    [String(2 ** 31 - 1), 2 ** 31 - 1],
+  ])("runs an env timeout of %s ms as %d ms", async (raw, expected) => {
+    const runner = vi.fn<TesseractCommandRunner>(() =>
+      Promise.resolve({ ok: true, stdout: Buffer.from("env text", "utf8") }),
+    );
+    const resolved = resolveOcrRuntimeFromEnv(
+      {
+        [LOCAL_KNOWLEDGE_OCR_ENGINE_ENV]: "tesseract",
+        [LOCAL_KNOWLEDGE_OCR_TIMEOUT_MS_ENV]: raw,
+      },
+      { runner },
+    );
+
+    await resolved.adapter.ocrPage({ bytes: new Uint8Array([9]), pageNumber: 1 });
+
+    expect(runner).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: expected }));
+  });
+
   it("fails closed for an unsupported configured engine", async () => {
     const resolved = resolveOcrRuntimeFromEnv({ [LOCAL_KNOWLEDGE_OCR_ENGINE_ENV]: "remote" });
     const result = await resolved.adapter.ocrPage({ bytes: new Uint8Array([1]), pageNumber: 1 });

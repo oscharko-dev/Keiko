@@ -168,6 +168,15 @@ describe("CI repair accounting around admitted model work", () => {
     expect(test.controller.chargePrompt(3)).toBe(false);
     expect(test.controller.chargeDelegatedRead("child-1", "read-1")).toBe(false);
   });
+  it("#3417: answers whether a delegated read fits without charging the repair ledger", () => {
+    const test = fixture({ maxToolCalls: 2, maxPromptTokens: 10 });
+    expect(test.controller.admitTool(verify("verify-1"))?.check()).toBe(true);
+    expect(test.controller.canChargeDelegatedRead()).toBe(true);
+    expect(test.controller.canChargeDelegatedRead()).toBe(true);
+    expect(test.store.read(test.context).record).toMatchObject({ toolCalls: 1 });
+    expect(test.controller.chargeDelegatedRead("child-1", "read-1")).toBe(true);
+    expect(test.controller.canChargeDelegatedRead()).toBe(false);
+  });
   it("settles a started attempt if readiness invalidation fails before the first effect", () => {
     const test = fixture();
     vi.spyOn(test.readiness, "invalidate").mockReturnValue(false);
@@ -325,6 +334,7 @@ describe("CI repair accounting around admitted model work", () => {
     // needs both.
     const authenticateCapability = (): RuntimeCapabilityResolution => ({
       ok: true,
+      issuedAtMs: 0,
       binding: {
         runId: "run-1",
         workspaceRootDigest: "a".repeat(64),
@@ -352,6 +362,7 @@ describe("CI repair accounting around admitted model work", () => {
     const authority = {
       authenticateCapability: (): RuntimeCapabilityResolution => ({
         ok: true,
+        issuedAtMs: 0,
         binding: {
           runId: "run-1",
           workspaceRootDigest: "a".repeat(64),

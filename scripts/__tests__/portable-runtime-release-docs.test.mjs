@@ -71,9 +71,9 @@ describe("portable runtime release documentation", () => {
     expect(releaseDocs).toContain("http-sse");
     expect(releaseDocs).toContain("upstream-raw-bytes");
     expect(releaseDocs).toContain(
-      "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de",
+      "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3",
     );
-    expect(releaseDocs).toContain("474abdd7ee60f4b67476cfcef7e5311beff4a824");
+    expect(releaseDocs).toContain("3104c1428ec91f809e5ab86631300de41eb6952e");
   });
 
   it("distinguishes immutable upstream evidence from signed shipped evidence", () => {

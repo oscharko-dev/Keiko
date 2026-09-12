@@ -6,7 +6,11 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 
 import type { EditorRuntimeStatus, KeikoEditorLoadState } from "@oscharko-dev/keiko-editor";
-import { buildWorkspaceReplacePatchModel, resolveLoadState } from "./EditorDiffSurface";
+import {
+  buildWorkspaceReplacePatchModel,
+  diffLanguageLoadNotice,
+  resolveLoadState,
+} from "./EditorDiffSurface";
 
 // `EditorDiffSurface.tsx` imports `./editorMonacoRuntime` for its side-effecting, browser-only Monaco
 // bootstrap (real `monaco-editor` value imports, documented as reachable only via a client-only
@@ -225,5 +229,17 @@ describe("resolveLoadState", () => {
     const state = resolveLoadState(supportedRuntime, true, hostError);
 
     expect(state).toBe(hostError);
+  });
+});
+
+// F29: the notice is code-owned, because the activity log admits exactly this shape.
+describe("diffLanguageLoadNotice", () => {
+  it("names the language count and the error class, never the error's message", () => {
+    expect(diffLanguageLoadNotice(2, new TypeError("/Users/alice/.env unreadable"))).toBe(
+      "diff-language-load-failed (count=2, error=TypeError)",
+    );
+    expect(diffLanguageLoadNotice(1, "opaque")).toBe(
+      "diff-language-load-failed (count=1, error=string)",
+    );
   });
 });

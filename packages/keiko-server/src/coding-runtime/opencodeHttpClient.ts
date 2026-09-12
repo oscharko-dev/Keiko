@@ -1,6 +1,7 @@
 // KEIKO-0695: hoisted from the very last line of the file up to the top-of-file import block.
 import { CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 import {
+  OPENCODE_HISTORY_RESPONSE_MAX_BYTES,
   createOpenCodeSseDecoder,
   parseOpenCodeJson,
   type OpenCodeSseMessage,
@@ -466,7 +467,8 @@ function promptParts(
   readonly text: string;
   readonly synthetic?: true;
 }[] {
-  // Pinned OpenCode v1.17.17 TextPartInput accepts synthetic while retaining text for the model.
+  // OpenCode v1.17.17 TextPartInput accepts synthetic while retaining text for the model; the
+  // approved pin is now v1.18.30 and this shape has not been re-observed against it (#3452).
   return initialContext === undefined
     ? [{ type: "text", text }]
     : [
@@ -656,6 +658,9 @@ async function history(
   requestOptions: OpenCodeHttpRequestOptions,
 ): Promise<readonly Record<string, unknown>[]> {
   if (!validCheckpoints(checkpoints)) throw new Error("opencode-history-invalid");
+  // The history pull is the one response that carries governed tool arguments (every durable part
+  // row of a call), so its budget is derived from the catalog ceilings rather than the ordinary
+  // 1 MiB object cap -- see OPENCODE_HISTORY_RESPONSE_MAX_BYTES for the derivation.
   return jsonArray({
     options,
     endpoint,
@@ -664,6 +669,7 @@ async function history(
     path: "/sync/history",
     body: checkpoints,
     requestOptions,
+    maxResponseBytes: OPENCODE_HISTORY_RESPONSE_MAX_BYTES,
   });
 }
 

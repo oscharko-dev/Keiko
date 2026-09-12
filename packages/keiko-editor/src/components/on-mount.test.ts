@@ -374,7 +374,9 @@ describe("wireEditorOnMount", () => {
     const fakes = buildFakes();
     const onThemeError = vi.fn();
     expect(() => wire(fakes, { onThemeError })).not.toThrow();
-    expect(onThemeError).toHaveBeenCalled();
+    expect(onThemeError).toHaveBeenCalledWith(
+      expect.stringMatching(/^theme-registration-failed \(error=[A-Z][A-Za-z0-9_]*\)$/u),
+    );
   });
 
   it("disposes the action, subscriptions, and the keydown backstop on teardown", () => {

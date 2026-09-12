@@ -21,6 +21,24 @@ and `manifestDigest` are excluded from the equality check that governs re-author
 recorded as provenance but change on ordinary focus/reorder within the same workspace and were the
 false-positive drivers ADR-0155 removed.
 
+Amended on 2026-09-10 (Coding Workbench run 8, PR #3452) so that D3 admits a managed task
+worktree's package scripts under an explicit human grant recorded for the worktree root itself once
+its `package.json` no longer matches the repository's trust basis — the repository's grant cannot
+clear that drift, and until this amendment nothing could — and so that every script-trust refusal
+names its reason in one closed vocabulary on the run's own activity line. Derived records never serve
+as that alternative basis; revoking the repository still stops every worktree that only inherited its
+grant.
+
+Amended again on 2026-09-10 (owner decision, Coding Workbench run 14, PR #3452) so that D3 admits,
+in `autonomous-delivery` only, the manifest a governed effect of the live run itself left behind
+under the operator's standing repository grant: the mode's promise is file and verification work
+inside the validated Authority Envelope without per-action approval (ADR-0129, ADR-0138), the
+scripts still execute only under the enforced, fail-closed egress isolation of ADR-0043, and the
+pull request carries the manifest diff to review before anything persists. Asking a human to approve
+each byte of a manifest the run was authorized to write added friction without containment — run 14
+paused twice within 22 seconds for the same manifest and delivered nothing. The two modes that ask
+before risky work keep asking.
+
 The independent architecture, security, and contract-test reviews required by Issue #2520 were
 completed before implementation. The maintainer clarified on
 [Issue #2520](https://github.com/oscharko-dev/Keiko/issues/2520#issuecomment-5012022731) that
@@ -200,12 +218,54 @@ A package-script consumer projects `trusted` only when canonical trust is truste
 binding dimension and current trust-basis digest matches. Every other cell projects to today's
 `CommandTaskTrustState = "approval-required"`. A digest/root mismatch immediately persists a
 restricted invalidation at a newer revision. Restoring the old `package.json` bytes therefore does
-not resurrect the prior grant; a new explicit grant is required. A managed task worktree is a
-registered project row but never a package-script trust basis of its own: its script decision is
-resolved from the repository it was bound from, and holds only while the worktree's `package.json`
-is byte-identical to that repository's — the same trust-basis digest this decision already binds
-(PR #3381). The existing command, verification, and debug decider seams remain the only consumer
-path until #2521 migrates their implementation.
+not resurrect the prior grant; a new explicit grant is required. Binding a repository into a managed
+task workspace registers BOTH roots as projects — the worktree and the repository it was bound from —
+because a root that is not registered cannot be a trust subject at all: script trust is resolved only
+for a registered root, and the trust surfaces list registered roots. That registration is never a
+grant; the repository stays restricted until the operator decides, and choosing a folder remains the
+only path that grants on selection. A repository that CONTAINS the managed worktree is left
+unregistered, because that root also contains the UI database. A managed task worktree is a
+registered project row whose script decision is resolved from the repository it was bound from, and
+that inherited decision holds only while the worktree's `package.json` is byte-identical to that
+repository's — the same trust-basis digest this decision already binds (PR #3381). Once a governed
+run has rewritten that manifest, or while the repository holds no grant, the only remaining basis is
+an explicit human grant recorded for the worktree root itself, bound to the worktree's current bytes
+(`WorkspaceScriptTrustService.holdsHumanGrantForRoot`, asked by the one shared `decideScriptTrust`
+rule the verification runner, the command runner and the agent verification route all use). A
+record merely derived from the repository never serves as that alternative — it inherits the
+repository's grant and stops with it — and the Coding Workbench offers the worktree grant as one
+explicit operator action only once the runner's own decision for the worktree is approval-required
+(2026-09-10, run 8). In `autonomous-delivery` — and in no other mode — one further basis exists under
+the repository's standing grant: the worktree's current `package.json` is exactly the one the run's
+own last governed effect (an edit or a vetted command) left behind, recorded by
+`WorkspaceScriptTrustService.admitRunManifest` after every completed effect and consulted by the same
+`decideScriptTrust` rule as `run-manifest`. The operator's authority for this basis is the mode
+itself: `autonomous-delivery` authorizes the run to edit the workspace, including its manifest, and
+to verify it without per-action approval (ADR-0129, ADR-0138 D4), while the containment that makes
+this safe is not the grant but the execution boundary — the verification runner executes package
+scripts only under ADR-0043's enforced, fail-closed egress isolation, and the pull request carries the
+manifest diff to review before anything persists. The admission is held in memory only, keyed by the
+worktree's canonical root, bound to the exact manifest bytes (the same trust-basis fact), expires
+with the run's authority and is revoked with the run; a manifest changed by anything else since — the
+operator's editor, another process — no longer matches and is the same `worktree-manifest-drift` as
+before. A repository nobody trusted admits no run manifest (`repository-not-trusted` stands), an
+explicit worktree grant takes precedence, and `governed-assist` and `supervised-coding` never use this
+basis: they ask before risky work by definition. Every admission and revocation leaves a body-free
+line (`workspace-script-trust.run-manifest-admitted` with the manifest digest,
+`workspace-script-trust.run-manifest-revoked` with the count), and the runner's selection line names
+the basis the scripts ran under (`trustBasis`). Every refusal names its reason in the closed
+vocabulary `root-not-trusted`, `repository-not-trusted`, `worktree-manifest-drift`,
+`decision-failed` on the run's own activity line (`editor.verification.execute`,
+`state: "refused"`, `trustRefusal`). Its canonical root is
+resolved by containment in the Keiko-owned managed root
+(`<stateDir>/ui/task-workspaces`), never through the user-workspace root rules: those deny every
+path below the state directory's `.keiko` segment, and applying them to the worktree refused every
+grant, status read and repository-derived trust for it — binding a trusted repository failed
+`PROVISIONING_FAILED` on a default installation until the script-trust service was composed with the
+managed root (2026-09-10). Containment admits only a REGISTERED project below the configured managed
+root; an unconfigured service and a denied root outside that root keep failing closed. The existing
+command, verification, and debug decider seams remain the only consumer path until #2521 migrates
+their implementation.
 
 Every durable trust or effect resolution also compares the manifest row's server-private
 filesystem-object digest with a fresh inspection. The public V1 identity remains necessary for

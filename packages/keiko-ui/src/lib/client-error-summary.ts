@@ -12,19 +12,18 @@
 // closed identifiers the call site already knows are safe. A caller that has a closed reason code
 // should pass that code in its own static message rather than relying on this summary.
 
+import { clientErrorClass } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+
 /**
- * The error's class name, and nothing else from the object.
+ * The error's class name from the closed vocabulary the activity log admits (`clientErrorClass`),
+ * and nothing else from the object: any other name travels as "Error", a thrown non-Error as its
+ * type.
  *
  * Deliberately not the message: `error.message` is attacker- and environment-influenced text.
  * Deliberately not the stack: it carries absolute paths.
  */
 export function clientErrorSummary(error: unknown): string {
-  if (error instanceof Error) {
-    const name = error.name.trim();
-    return name.length > 0 ? name : "Error";
-  }
-  // A thrown non-Error still has a useful shape without quoting its content.
-  return typeof error;
+  return clientErrorClass(error);
 }
 
 function hasStringCorrelationId(value: unknown): value is { correlationId: string } {

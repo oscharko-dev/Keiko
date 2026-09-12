@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { DatabaseSync, type StatementSync } from "node:sqlite";
-import type { CodingWorkbenchIssueBinding } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchIssueBinding,
+  CodingWorkbenchOperatorDecision,
+} from "@oscharko-dev/keiko-contracts";
 import { CODING_WORKBENCH_RUNTIME_FAILURE_CODES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { CODING_WORKBENCH_OPERATOR_DECISIONS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { restoreV13SchemaFixture } from "../store/legacySchemaTestFixture.js";
 import { MIGRATIONS, runMigrations, SCHEMA_VERSION } from "../store/schema.js";
 import {
@@ -62,6 +66,49 @@ const ISSUE_COLUMNS = [
   "issue_binding_digest",
 ] as const;
 
+// A V29-shaped row, written directly. `createCodingRuntimeSnapshotStore` prepares its statements
+// against the HEAD column set, so it cannot be constructed against an older schema at all — the
+// assertion at the end of this test states exactly that. Only the NOT NULL columns are given; every
+// later column this test cares about is set by the UPDATE that follows.
+function seedV29Row(db: DatabaseSync): void {
+  const s = snapshot();
+  db.prepare(
+    `INSERT INTO coding_runtime_snapshots (
+       run_id, schema_version, state, revision, requested_mode, runtime_source, model_source,
+       created_at, updated_at, task_digest, workspace_digest, operator_digest, authority_digest,
+       binding_digest, provenance_digest, tool_call_count, patch_byte_count, model_request_count,
+       issue_repository_id, issue_remote_digest, issue_number, issue_id_digest,
+       issue_default_base_ref, issue_content_revision_digest, issue_binding_digest
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    s.runId,
+    s.schemaVersion,
+    s.state,
+    s.revision,
+    s.requestedMode,
+    s.runtimeSource,
+    s.modelSource,
+    s.createdAt,
+    s.updatedAt,
+    s.taskDigest,
+    s.workspaceDigest,
+    s.operatorDigest,
+    s.authorityDigest,
+    s.bindingDigest,
+    s.provenanceDigest,
+    s.toolCallCount,
+    s.patchByteCount,
+    s.modelRequestCount,
+    ISSUE_BINDING.repositoryId,
+    ISSUE_BINDING.remoteDigest,
+    ISSUE_BINDING.issueNumber,
+    ISSUE_BINDING.issueIdDigest,
+    ISSUE_BINDING.defaultBaseRef,
+    ISSUE_BINDING.contentRevisionDigest,
+    ISSUE_BINDING.bindingDigest,
+  );
+}
+
 function columnNames(db: DatabaseSync): readonly string[] {
   return (
     db.prepare("PRAGMA table_info(coding_runtime_snapshots)").all() as { name: string }[]
@@ -76,14 +123,23 @@ describe("CodingRuntimeSnapshotStore", () => {
       migration.apply?.(db);
     }
     db.exec("PRAGMA user_version = 29");
-    createCodingRuntimeSnapshotStore(db).create({ ...snapshot(), issueBinding: ISSUE_BINDING });
+    seedV29Row(db);
     db.exec(`UPDATE coding_runtime_snapshots SET
       verified_commit_result = '{}', draft_delivery_record = '{}',
       draft_delivery_source_receipt = '{}', last_successful_verified_commit = '{}',
       ci_readiness_record = '{}', ci_observation_revision = 7`);
+    // The columns THIS schema version has, read from the database rather than restated: what the
+    // pin protects is that no later migration drops one or rewrites its value. Comparing whole rows
+    // instead would also fail on a migration that only ADDS a column, which is not the regression
+    // this test exists for and which V34 legitimately does.
+    const v29Columns = columnNames(db);
     const before = db.prepare("SELECT * FROM coding_runtime_snapshots").get();
     runMigrations(db);
-    expect(db.prepare("SELECT * FROM coding_runtime_snapshots").get()).toEqual(before);
+    const after = db.prepare("SELECT * FROM coding_runtime_snapshots").get();
+    for (const column of v29Columns) {
+      expect({ [column]: after?.[column] }).toEqual({ [column]: before?.[column] });
+    }
+    expect(columnNames(db)).toEqual(expect.arrayContaining([...v29Columns]));
     expect(() => {
       db.exec(`UPDATE coding_runtime_snapshots
       SET failure_code = 'issue-context-unavailable'`);
@@ -369,6 +425,140 @@ describe("CodingRuntimeSnapshotStore fail-closed validation", () => {
     expect(s.get("run-1")).toBeDefined();
     s.deletePruned([]);
     expect(s.get("run-1")).toBeDefined();
+  });
+});
+
+describe("pauseReason persistence (schema v34)", () => {
+  // Owner review, PR #3452: `markNonterminalRecoveryRequired` writes `state` by raw SQL and used to
+  // leave `pause_reason` behind, so a run paused for an operator decision when the process restarted
+  // became a row `assertSnapshot` refuses on the very next read — which is `startupReconcileNow`'s
+  // own `listRecentActive`, so the BFF would not have come up. The restart path must clear the
+  // reason like every other state change, and every later read of the row must work.
+  it("clears pauseReason when a restart marks a paused run recovery-required", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const s = createCodingRuntimeSnapshotStore(db);
+    s.create(snapshot());
+    s.transition("run-1", { state: "running", revision: 1, updatedAt: at });
+    s.transition("run-1", {
+      state: "paused",
+      revision: 2,
+      updatedAt: at,
+      pauseReason: "workspace-script-trust",
+    });
+
+    expect(s.markNonterminalRecoveryRequired("2026-07-13T10:00:01.000Z")).toEqual(["run-1"]);
+
+    expect(() => s.listRecentActive(1)).not.toThrow();
+    expect(s.get("run-1")).toMatchObject({ state: "recovery-required" });
+    expect(s.get("run-1")?.pauseReason).toBeUndefined();
+    const row = db
+      .prepare("SELECT pause_reason FROM coding_runtime_snapshots WHERE run_id = ?")
+      .get("run-1") as { pause_reason: string | null };
+    expect(row.pause_reason).toBeNull();
+    expect(() => s.acknowledgeRecovery("run-1", "2026-07-13T10:00:02.000Z")).not.toThrow();
+    db.close();
+  });
+
+  // A `running` -> `paused` transition is the only legal path into `paused` from this fixture's
+  // initial `starting` state (mirrors "persists the paused state through a running round-trip"
+  // above). `pauseReason` must round-trip through both the in-memory snapshot and the persisted
+  // `pause_reason` column, not only the object the store happens to keep around.
+  it("round-trips a pauseReason through a running -> paused transition, including the persisted column", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const s = createCodingRuntimeSnapshotStore(db);
+    s.create(snapshot());
+    s.transition("run-1", { state: "running", revision: 1, updatedAt: at });
+    const paused = s.transition("run-1", {
+      state: "paused",
+      revision: 2,
+      updatedAt: at,
+      pauseReason: "workspace-script-trust",
+    });
+
+    expect(paused.pauseReason).toBe("workspace-script-trust");
+    expect(s.get("run-1")?.pauseReason).toBe("workspace-script-trust");
+    const row = db
+      .prepare("SELECT pause_reason FROM coding_runtime_snapshots WHERE run_id = ?")
+      .get("run-1") as { pause_reason: string | null };
+    expect(row.pause_reason).toBe("workspace-script-trust");
+    db.close();
+  });
+
+  // The pin that matters most: `transition()` WRITES `pauseReason: transition.pauseReason` rather
+  // than merging it in, so a later transition that omits the field must clear a previously set
+  // reason instead of letting `...current` carry it forward into every later state forever.
+  it("clears pauseReason when a paused run transitions away from paused", () => {
+    const db = new DatabaseSync(":memory:");
+    runMigrations(db);
+    const s = createCodingRuntimeSnapshotStore(db);
+    s.create(snapshot());
+    s.transition("run-1", { state: "running", revision: 1, updatedAt: at });
+    s.transition("run-1", {
+      state: "paused",
+      revision: 2,
+      updatedAt: at,
+      pauseReason: "workspace-script-trust",
+    });
+
+    const resumed = s.transition("run-1", { state: "running", revision: 3, updatedAt: at });
+
+    expect(resumed.pauseReason).toBeUndefined();
+    expect(s.get("run-1")?.pauseReason).toBeUndefined();
+    const row = db
+      .prepare("SELECT pause_reason FROM coding_runtime_snapshots WHERE run_id = ?")
+      .get("run-1") as { pause_reason: string | null };
+    expect(row.pause_reason).toBeNull();
+    db.close();
+  });
+
+  it("rejects a pauseReason on a transition to a non-paused state", () => {
+    const s = store();
+    s.create(snapshot());
+
+    expect(() =>
+      s.transition("run-1", {
+        state: "running",
+        revision: 1,
+        updatedAt: at,
+        pauseReason: "workspace-script-trust",
+      }),
+    ).toThrow("pauseReason is only valid while paused");
+  });
+
+  // Same shape as "round-trips every CODING_WORKBENCH_RUNTIME_FAILURE_CODES literal as a terminal
+  // failure_code" above: the vocabulary is derived from the contract constant, never restated, so a
+  // future-widened vocabulary is covered by this test without an edit here.
+  it("round-trips every CODING_WORKBENCH_OPERATOR_DECISIONS literal as a pauseReason while paused", () => {
+    for (const pauseReason of CODING_WORKBENCH_OPERATOR_DECISIONS) {
+      const s = store();
+      s.create(snapshot());
+      s.transition("run-1", { state: "running", revision: 1, updatedAt: at });
+      const paused = s.transition("run-1", {
+        state: "paused",
+        revision: 2,
+        updatedAt: at,
+        pauseReason,
+      });
+      expect(paused.pauseReason).toBe(pauseReason);
+      expect(s.get("run-1")?.pauseReason).toBe(pauseReason);
+    }
+  });
+
+  it("rejects a pauseReason outside the closed CODING_WORKBENCH_OPERATOR_DECISIONS vocabulary", () => {
+    const s = store();
+    s.create(snapshot());
+    s.transition("run-1", { state: "running", revision: 1, updatedAt: at });
+
+    expect(() =>
+      s.transition("run-1", {
+        state: "paused",
+        revision: 2,
+        updatedAt: at,
+        pauseReason: "not-a-real-operator-decision" as CodingWorkbenchOperatorDecision,
+      }),
+    ).toThrow("invalid pauseReason");
   });
 });
 

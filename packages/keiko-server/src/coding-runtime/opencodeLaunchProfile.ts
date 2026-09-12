@@ -44,8 +44,9 @@ export interface OpenCodeLaunchProfileInput {
   readonly unavailableOptionalTools?: ReadonlySet<OpenCodeOptionalToolName> | undefined;
 }
 
-/** The three optional tools #3414-AC9 requires to be absent, never merely denied, when unready. */
-export type OpenCodeOptionalToolName = "keiko_research_fetch" | "keiko_skill" | "keiko_child_agent";
+/** The optional tools #3414-AC9 requires to be absent, never merely denied, when unready. */
+export type OpenCodeOptionalToolName =
+  "keiko_research_fetch" | "keiko_skill_discover" | "keiko_skill" | "keiko_child_agent";
 export const OPENCODE_RUNTIME_MODEL_ALIAS = "coding";
 export const OPENCODE_RUNTIME_READINESS_PROMPT = "Keiko runtime readiness handshake.";
 const OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS = 30 * 60_000;
@@ -53,11 +54,11 @@ const OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS = 30 * 60_000;
 export const OPENCODE_GOVERNED_COMPACTION_PROMPT = `Preserve the exact accepted coding task and enough verified state to continue it correctly. Retain acceptance criteria, constraints, current plan, relevant files and symbols, completed edits, observed failing-before evidence, later verification results, unresolved failures, and immediate next actions. Distinguish verified facts from assumptions. Never report an unrun check as passed, weaken or remove regression coverage, redo a completed failing-before step solely because of compaction, or lose the current user task.`;
 
 /**
- * Replaces the pinned child's model-family default system prompt (v1.17.17 resolves the unknown
+ * Replaces the pinned child's model-family default system prompt (v1.18.30 resolves the unknown
  * model id "coding" to its built-in-tool coding prompt). That default teaches bash/grep/glob/edit
  * workflows and "fewer than 4 lines" text answers while this config removes every built-in tool,
  * which live models followed into text-only turns that never reached a keiko_* tool (#2680
- * follow-up). The v1.17.17 child uses `agent.build.prompt` verbatim INSTEAD of that default and
+ * follow-up). The v1.18.30 child uses `agent.build.prompt` verbatim INSTEAD of that default and
  * still appends its environment block after it. Every OPENCODE_MODEL_VISIBLE_TOOL_NAMES entry
  * must stay documented here; the launch-profile test enforces that coupling.
  */
@@ -70,7 +71,7 @@ Governed workflow, in order:
 4. Edit: keiko_changeset_edit is the only way to change files. Submit one strict unified diff covering every listed file and bind each file to the expectedContentHash digest returned by its most recent keiko_workspace_read. On a digest mismatch, re-read the file and rebuild the patch instead of retrying it unchanged.
 5. Verify: keiko_verification runs exactly one vetted verifier — test, targeted-test, typecheck, lint, or build. Verify after your edits and repair failures until verification passes; never report success without it. Preserve existing regression expectations and required CI checks. If targeted-test has no configured runnable steps, use the configured full test verifier; an unavailable verifier is not a failing regression. Passing tests on unstaged files do not yet supply commit proof: execute staging, verify that staged candidate, then propose the commit.
 
-Additional governed capabilities: keiko_research_fetch (one exact public https URL), keiko_skill (one approved read-only skill), and keiko_child_agent (one bounded read-only child agent) may be granted for some tasks; a denied result is a policy decision, not a transient error. Use question only when you are blocked on a decision that belongs to the operator.
+Additional governed capabilities: keiko_research_fetch (one exact public https URL), keiko_skill_discover (lists the approved read-only skills this run may invoke now), keiko_skill (runs one of them by the skillId keiko_skill_discover lists), and keiko_child_agent (one bounded read-only child agent) may be granted for some tasks; a denied result is a policy decision, not a transient error. Use question only when you are blocked on a decision that belongs to the operator.
 
 Delivering your work, when granted: keiko_git_status and keiko_git_diff read the current Git state; keiko_git_stage proposes staging paths. keiko_git_commit proposes a commit message, keiko_git_push proposes pushing the last verified commit, and keiko_pull_request proposes a draft pull request title -- each of these three only PROPOSES, returning a proposalId; you never commit, push or open a pull request directly. When keiko_git_commit is blocked by the message policy, its result carries a violations array of exact codes (for example missing-conventional-prefix or subject-too-long); read it and fix the message yourself, then call keiko_git_commit again -- never ask the operator which commit format to use. Follow each proposal's actual disposition: proposal tools wait for any required operator decision. If the result carries approvalDisposition: "ready", approval has ALREADY been granted even if its immutable receipt still says approval-required. Continue immediately; do not stop or ask for the same approval again. When the stage status is ready or approvalDisposition is ready, call keiko_git_execute with its matching kind (stage, commit, push or pull-request) and proposalId without asking a redundant question. Only a proposal without a ready disposition that still requires approval must wait for the operator's own approval channel before execution. Creating or approving a proposal does not execute it. A denied result authorizes no effect; do not retry a denial blindly or widen authority. keiko_ci_status observes the run's CI readiness (set forceFresh to bypass the cached snapshot) -- use it after a push or pull-request to decide whether to keep repairing before handing off.
 
@@ -184,7 +185,7 @@ function fixedOpenCodeProvider(
       },
       options: {
         baseURL: "{env:KEIKO_MODEL_GATEWAY_URL}",
-        // The pinned v1.17.17 child defaults provider chunks to 10 seconds. Coding turns can
+        // The pinned v1.18.30 child defaults provider chunks to 10 seconds. Coding turns can
         // legitimately reason longer while Keiko's gateway still enforces its shorter provider
         // deadline; align the child watchdog with the outer hard turn/authority ceiling.
         chunkTimeout: OPENCODE_PROVIDER_CHUNK_TIMEOUT_MS,

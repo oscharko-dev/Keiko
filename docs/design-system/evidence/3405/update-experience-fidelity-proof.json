@@ -10,8 +10,8 @@
     "packages/keiko-ui/src/app/components/desktop/update/update-copy.ts": "5e34eb591f63aca2ce64fd43daba10de0e172d12014f055092b4a1a00830c2da",
     "packages/keiko-ui/src/app/globals.css": "a1866c44bf9be1a967cbf43e40be3c410668322157acdc0d4e2bc7db2645e7df",
     "packages/keiko-ui/src/lib/api.ts": "fe96d83e6fcf2e66265879422ea5f12d662bba402a722c35f03d3b890f3b3fe6",
-    "packages/keiko-ui/src/lib/i18n-messages.de.ts": "699f0191d2d1dcfffc9aa30a2ad67f8dc0a6f805e51a3f7c72034c14d2c6d6b2",
-    "packages/keiko-ui/src/lib/i18n-messages.en.ts": "d769fdae4b6e019ad23121d467d579f6f1ca27952a7970f5efc02b2686114d35"
+    "packages/keiko-ui/src/lib/i18n-messages.de.ts": "1dc94ca78b2c617947470bd9a6064f62a91462e4e2fb73b50b156ab976890f21",
+    "packages/keiko-ui/src/lib/i18n-messages.en.ts": "63cbd1c846f20f3959bdc8f9cfa84654afd4d4f90322a679bbc6c77a37e3736d"
   },
   "harnessProvenanceSha256": {
     "tests/e2e/config/playwright.issue-1696-update-ui.config.ts": "1c2114f8a47145d76c1319fa23ccf67d250d5383d2e17c8a5111c0104c9a8a18",
@@ -22,7 +22,7 @@
   "harness": "tests/e2e/config/playwright.issue-1696-update-ui.config.ts",
   "route": "/",
   "appPath": "packaged-cli-ui",
-  "generatedAt": "2026-09-10T18:06:34.711Z",
+  "generatedAt": "2026-09-11T06:58:33.734Z",
   "visualFixtureScope": "All screenshot captures use deterministic /api/update/* fixtures. They prove rendered UI behavior only, never native handoff, real package replacement, or production-BFF update success.",
   "captures": [
     {

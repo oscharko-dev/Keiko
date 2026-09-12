@@ -1,12 +1,16 @@
 # Gitleaks configuration for the `Secret scan` CI job (`gitleaks git --log-opts=<base>..<head>`).
 #
-# The scan stays fail-closed with the default rule set. The single allowlist below is scoped to two
-# immutable historical commits on the epic #3384 integration branch whose diffs carried
-# secret-SHAPED test fixtures (a synthetic `api_key=` title the PR-template validator must refuse
-# and a synthetic private-key block the search redaction lane must strip). No real credential was
-# involved; the fixtures were rewritten to be assembled at runtime so later commits carry no
-# literal, and `dev` branch protection forbids rewriting the two commits. Every other commit is
-# scanned unchanged.
+# The scan stays fail-closed with the default rule set. Each allowlist below exempts secret-SHAPED
+# test fixtures or evidence values only, and combines its criteria with `condition = "AND"`: the
+# gitleaks default is OR, which suppresses each criterion on its own (every finding in a listed
+# commit, and every finding in a listed file in every later commit). gitleaks drops an unknown key
+# silently, so `scripts/__tests__/gitleaks-config.test.mjs` pins the key vocabulary.
+#
+# The two epic #3384 history commits carried a synthetic `api_key=` title the PR-template
+# validator must refuse and a synthetic private-key block the search redaction lane must strip. No
+# real credential was involved; the fixtures were rewritten to be assembled at runtime so later
+# commits carry no literal, and `dev` branch protection forbids rewriting the two commits. Every
+# other commit is scanned unchanged.
 
 title = "Keiko secret scan"
 
@@ -15,7 +19,7 @@ useDefault = true
 
 [[allowlists]]
 description = "Epic #3384: synthetic secret-shaped test fixtures in two immutable history commits (draftDeliveryTemplate.test.ts, codingRepositorySearch.test.ts); rewritten at runtime afterwards"
-matchCondition = "AND"
+condition = "AND"
 commits = [
   "93a328952b5507fd63cd7c542ec730f0b1828b6d",
   "1fbd1173f3db50faf1988ad0e17a72b00e5f0273",
@@ -27,11 +31,39 @@ paths = [
 
 [[allowlists]]
 description = "Epic #3384: design-system evidence proofs pin the SHA-256 of `packages/keiko-ui/src/lib/api.ts`; the key name ends in `api` and the value is a 64-hex digest, which the generic-api-key rule mistakes for a credential. Scoped to the tracked evidence proof files and to 64-hex values only; a real key never matches this shape."
-matchCondition = "AND"
+condition = "AND"
 paths = [
   '''docs/design-system/evidence/[^/]+/(journey|visual)-proof\.json''',
 ]
 regexTarget = "line"
 regexes = [
   '''"packages/keiko-ui/src/lib/api\.ts": "[0-9a-f]{64}"''',
+]
+
+[[allowlists]]
+description = "PR #3452: the idempotency-key fixture `idempotencyKey: \"idempotency-1\"` in one immutable history commit; the key name ends in `Key` and the value's entropy (3.55) crosses the generic-api-key threshold. It is the same test literal `dev` already marks `gitleaks:allow` (editor-agent.test.ts). Scoped to that one line of that file in that commit; every other commit is scanned unchanged."
+condition = "AND"
+commits = [
+  "848912506201742a833edefef77ee1012b19df44",
+]
+paths = [
+  '''packages/keiko-server/src/coding-runtime/codingToolFacade\.dependencyFailure\.test\.ts''',
+]
+regexTarget = "line"
+regexes = [
+  '''idempotencyKey: "idempotency-1"''',
+]
+
+[[allowlists]]
+description = "PR #3452: the synthetic key fixture the stream-read test copied from openai-adapter.test.ts (#855, on dev before every scanned range) in one immutable history commit. The generic-api-key rule reads `token-\", \"1234567890abcd` as a key whose value has entropy 3.81, above the rule's 3.5. No real credential was involved; the file uses a literal the rule cannot read as a key afterwards, and `dev` branch protection forbids rewriting the commit. Scoped to that one line of that file in that commit; every other commit is scanned unchanged."
+condition = "AND"
+commits = [
+  "aed6c73e1b4b952101ec2887bcaa5334940f6efd",
+]
+paths = [
+  '''packages/keiko-model-gateway/src/openai-adapter\.stream-read\.test\.ts''',
+]
+regexTarget = "line"
+regexes = [
+  '''apiKey: \["example-test-token-", "1234567890abcd"\]\.join\(""\),''',
 ]

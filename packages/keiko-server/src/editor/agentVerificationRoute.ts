@@ -49,7 +49,7 @@ import {
 } from "./agentAuthorityRegistry.js";
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
-import { worktreeSharesRepositoryTrustBasis } from "./verificationRunner.js";
+import { decideScriptTrust } from "./verificationRunner.js";
 import type { VerificationRunInput, VerificationRunnerManager } from "./verificationRunner.js";
 import { errorBody, type RouteContext, type RouteResult } from "../routes.js";
 import { readJsonObject } from "../files.js";
@@ -60,7 +60,10 @@ import {
   resolveEditorAgentActionRoot,
   type EditorAgentRootBoundaryReason,
 } from "./agentRootBoundary.js";
-import { workspaceRootAccessOrUndefined } from "../task-workspace/workspace-root-access.js";
+import {
+  workspaceRootAccessOrUndefined,
+  type WorkspaceRootAccess,
+} from "../task-workspace/workspace-root-access.js";
 import { correlationIdOrUnknown, isValidCorrelationId } from "../correlation.js";
 import { emitServerDiagnostic, type ServerDiagnosticSink } from "../diagnostics-log.js";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
@@ -169,18 +172,28 @@ type VerificationTrustDeps = Pick<
 // docked-agent entry point) stayed denied (cursor review, PR #3381).
 //
 // Standing script trust belongs to the repository the worktree was bound from, and applies to the
-// worktree only while the worktree's own `package.json` is that same fact — asked of
-// `worktreeSharesRepositoryTrustBasis` (verificationRunner.ts, ADR-0147 D3) rather than restated
-// here, so this route and the runner cannot disagree about one grant.
+// worktree only while the worktree's own `package.json` is that same fact; once a governed run has
+// rewritten it, only an explicit human grant recorded for the worktree root itself admits the
+// scripts (ADR-0147 D3). Both are asked of `decideScriptTrust` (verificationRunner.ts) rather than
+// restated here, so this route and the runner cannot disagree about one grant.
 function verificationWorkspaceTrust(
   deps: VerificationTrustDeps,
   workspaceRoot: string,
   correlationId: string | undefined,
 ): WorkspaceTrustLevel {
+  const trust = deps.workspaceScriptTrust;
+  if (trust === undefined) return "restricted";
   try {
-    const trustRoot = verificationTrustRoot(deps, workspaceRoot, correlationId);
-    if (trustRoot === undefined) return "restricted";
-    return deps.workspaceScriptTrust?.trustLevelForRoot(trustRoot) === "trusted"
+    const access = verificationTrustAccess(deps, workspaceRoot, correlationId);
+    const standingRoot = access.kind === "managed-task" ? access.repositoryRoot : workspaceRoot;
+    return decideScriptTrust({
+      access,
+      repositoryFs: nodeWorkspaceFs,
+      standingTrust: (): boolean => trust.trustLevelForRoot(standingRoot) === "trusted",
+      worktreeHumanGrant: (): boolean => trust.holdsHumanGrantForRoot(access.canonicalRoot),
+      // The editor agent is not a governed run: no run authority ever admits a manifest here.
+      runAdmittedManifest: (): boolean => false,
+    }).trusted
       ? "trusted"
       : "restricted";
   } catch {
@@ -195,21 +208,19 @@ function verificationWorkspaceTrust(
 // request's timeline instead of UNKNOWN_CORRELATION_ID. Without it the policy answered
 // `workspace-restricted` and returned before `runAndRespond` could emit its correlated refusal, so
 // the denial that decided the request was unjoinable to it (CodeRabbit, PR #3381).
-function verificationTrustRoot(
+function verificationTrustAccess(
   deps: Pick<UiHandlerDeps, "workspaceRootAccessResolver">,
   workspaceRoot: string,
   correlationId: string | undefined,
-): string | undefined {
-  const access = workspaceRootAccessOrUndefined(
-    deps.workspaceRootAccessResolver?.(workspaceRoot, correlationId),
+): WorkspaceRootAccess {
+  // A root the resolver does not answer for is decided as the ordinary root it names — exactly what
+  // this route did before managed access existed; `decideScriptTrust` then asks that root's own
+  // standing grant and nothing else.
+  return (
+    workspaceRootAccessOrUndefined(
+      deps.workspaceRootAccessResolver?.(workspaceRoot, correlationId),
+    ) ?? { kind: "ordinary", canonicalRoot: workspaceRoot, fs: nodeWorkspaceFs }
   );
-  if (access?.kind !== "managed-task") return workspaceRoot;
-  // `WorkspaceRootAccess`'s `managed-task` branch REQUIRES `repositoryRoot`, so there is no
-  // "managed worktree that names no repository" case to fall back from: the only question left is
-  // whether the repository's standing grant still covers this worktree's own manifest (ADR-0147 D3).
-  return worktreeSharesRepositoryTrustBasis(access, access.repositoryRoot, nodeWorkspaceFs)
-    ? access.repositoryRoot
-    : undefined;
 }
 
 // classify → (resolve envelope) → compose, in the exact order decideActionPolicy uses. "execution" is
@@ -358,7 +369,9 @@ async function runAndRespond(
       projectId: snapshot.workspaceRoot,
       correlationId,
     };
-    const report = await runner.runToReport(input, lifecycle.signal);
+    // The agent route answers with the redacted report only; the orchestrator's output tails travel
+    // exclusively to the governed coding tool (ADR-0126 D3) and are dropped here.
+    const { report } = await runner.runToReport(input, lifecycle.signal);
     return {
       status: 200,
       body: { result: { outcome: "completed", report: toRedactedVerificationReport(report) } },

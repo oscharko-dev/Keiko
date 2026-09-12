@@ -53,7 +53,7 @@ binding; generic tasks retain their existing behavior. Bounded issue text enters
 model turn through the existing context-pack builder and never enters the durable projections.
 The orchestrator keeps the human task intent unchanged and carries labelled untrusted context in a
 separate server-only `initialContext` dispatch field. Explicit-skill tracking observes only the
-human text. The pinned OpenCode 1.17.17 prompt transport sends context as a separate `synthetic: true`
+human text. The pinned OpenCode 1.18.30 prompt transport sends context as a separate `synthetic: true`
 text part: it reaches the model but the existing safe-activity projection omits its user-message echo.
 The combined prompt retains the existing byte ceiling. The Codex control port currently accepts
 only text, so its adapter composes the same labelled context after explicit-skill tracking; it never
@@ -86,13 +86,67 @@ project, branch, action/connector scope, budget, runtime source, or model source
 delegation replay, stop, and takeover fail closed. V1 permits exactly one active run per BFF; a
 concurrent start returns `active-run-conflict` deterministically.
 
+The same aggregate answers a budget question without spending: `delegationFits` says whether one
+more delegation of a given usage would still fit the run's budget, for the same capability, run and
+binding a delegation is admitted on, and reserves neither budget nor replay identity. Approved-skill
+discovery (#3417) lists only the skills the remaining budget can serve by asking it; a skill's own
+invocation still charges its one delegated read at the existing boundary. The server-approved skill
+catalog is the single authority for which skills a run may invoke: it changes only by admitting a
+whole next set as one snapshot with a new revision and digest, and a run's skill invocation is
+refused once the catalog it discovered is no longer the one in force.
+
 ### D3 — Runtime state and failures are closed
 
 The server-owned state vocabulary is exactly `unavailable`, `idle`, `starting`, `ready`, `running`,
-`awaiting-approval`, `stopping`, `succeeded`, `failed`, `cancelled`, `taken-over`, and
+`paused`, `awaiting-approval`, `stopping`, `succeeded`, `failed`, `cancelled`, `taken-over`, and
 `recovery-required`. Legal transitions are an explicit total table; unknown states and implicit
 self-transitions fail closed. Failure codes distinguish authority resolution, expiry, replay,
 revocation, concurrency, and each drift axis without carrying raw process or model content.
+
+**A paused run says what it is waiting for.** `paused` covers two different situations and the
+operator has to be able to tell them apart, so the snapshot carries an optional `pauseReason` from a
+closed vocabulary. Absent means an operator paused the run from the Workbench, which is what
+`paused` meant before. A value names a decision only a local human can make, which a governed tool
+has met and is waiting in place for; the run returns to `running` when that wait settles, either
+way, because the tool then retries the effect or hands the model its refusal.
+
+Such a decision is deliberately NOT an Authority Envelope approval and does not enter the
+`awaiting-approval` plane. The first member, `workspace-script-trust`, is the ADR-0147 D3
+package-script grant: a hard, mode-independent boundary recorded as a durable workspace record, not
+a one-use action authority. Routing it through the approval plane would mint the wrong artifact and,
+in `governed-assist`, collapse that mode's separate per-command approval into a workspace trust
+grant. The wait a governed tool may hold for such a decision is bounded by the governed tool
+invocation's own lifetime, so the tool always answers with its own closed refusal rather than an
+opaque expiry; a decision that outlives a single tool call leaves the run to report a truthful
+failure rather than a silent success.
+
+**An issue-bound run may not report a delivery it cannot evidence.** A run accepted for a GitHub
+issue is the product's delivery flow. It settles `succeeded` only when durable server-owned evidence
+says something was delivered — a successful verified-commit receipt, or a draft delivery record in a
+phase that means an artifact exists. The record of an ATTEMPT is not evidence: a commit proposal
+refused for want of verification, a push still awaiting approval, and a delivery in recovery all
+persist records while delivering nothing. Without evidence the run settles `failed` with
+`delivery-not-evidenced`. Ad-hoc runs are exempt, because one legitimately ends with no commit and
+inferring delivery intent from free text would turn honest successes into false failures.
+
+**Under Full access, a run that stops one step short is given a bounded continuation first**
+(PR #3452, 2026-09-11). In `autonomous-delivery` the operator's accepted Authority Envelope
+authorizes delivery without a per-action approval (D4). When an issue-bound run's model ends a turn normally while no delivery is
+evidenced, the orchestrator dispatches a fixed, server-authored continuation into the live session
+instead of settling — at most `DELIVERY_CONTINUATION_MAX` (2) times per run, each logged as
+`coding-runtime.run.delivery-continued`. The continuation restates only the accepted task's
+delivery goal; every effect still goes through the governed tools and nothing widens authority. A
+continuation the orchestrator does not send — `coding-runtime.run.delivery-continuation-refused`
+with `reason` `dispatch-threw` (with its `errorKind`), `dispatch-refused`, or
+`evidence-unreadable` — an exhausted budget, a failed or cancelled turn, and every supervised or ask
+run settle exactly as above, and the `delivery-unevidenced` line names how many continuations the
+run had. Two outcomes fail safe instead of guessing. Delivery evidence that cannot be read when the
+run settles is logged as `coding-runtime.run.delivery-evidence-unreadable` (with its `errorKind`)
+and settles the run `recovery-required` rather than `completed` or `delivery-not-evidenced`,
+because neither can be established. A continuation whose run an operator stopped or took over while
+the dispatch was in flight is abandoned with `reason` `run-superseded`: the run keeps the outcome
+the operator's action decided (a stop settles `cancelled`), and the continuation count is
+discarded with the run.
 
 The runtime adapter port accepts only the opaque authority reference, immutable execution binding,
 and closed runtime/model sources. Launch paths, argv, environment, endpoint, and credentials are
@@ -114,9 +168,14 @@ Content-bearing live prompt, response, diff, and diagnostic events are transient
 access-controlled. Durable operational events and evidence are a separate content-free projection;
 they carry only ids, digests, counts, booleans, closed states/codes, and safe labels.
 
-Commit, push, pull-request create/update, merge, and Authority Envelope widening each require their
-own action-bound, one-use human approval in addition to runtime authority. No mode, connector scope,
-or earlier start confirmation pre-approves those delivery actions.
+Delivery approval, one rule for D3 and D4. In `governed-assist` and `supervised-coding`, commit,
+push and pull-request create/update each require their own action-bound, one-use human approval in
+addition to runtime authority; no connector scope or earlier start confirmation pre-approves them.
+`autonomous-delivery` is the one mode whose accepted Authority Envelope authorizes those three
+actions inside the envelope without a per-action approval (ADR-0129 Full access, ADR-0138 D2): the
+policy decides `allowed`, every effect still runs through the governed delivery tools, and D3's
+delivery-truth rule decides whether the run delivered. Merge and Authority Envelope widening
+require their own human approval in every mode (ADR-0087).
 
 ### D5 — Process-tree ownership and platform qualification are fail-closed invariants
 

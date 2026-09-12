@@ -335,9 +335,9 @@ describe("SearchPanel", () => {
       target: { value: "[" },
     });
 
-    await waitFor((): void =>
-      expect(screen.getByRole("status")).toHaveTextContent("regular expression is not valid"),
-    );
+    await waitFor((): void => {
+      expect(screen.getByRole("status")).toHaveTextContent("regular expression is not valid");
+    });
     expect(fetchWorkspaceSearchMock).not.toHaveBeenCalled();
   });
 

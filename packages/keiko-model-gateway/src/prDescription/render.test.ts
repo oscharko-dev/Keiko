@@ -115,3 +115,44 @@ describe("PR-description footer branding, threaded from GatewayConfig (#3398)", 
     expect(artifact.markdown).not.toContain(invalid);
   });
 });
+
+// Review on PR #3452: a statement is list-item text, so a leading `#` run must never open a heading
+// in the description, and so can never forge a section such as the server-owned `## Checks`.
+describe("PR-description statement escaping (#3452)", () => {
+  function markdownFor(text: string): string {
+    const evidenceId = "e".repeat(64);
+    return buildPrDescriptionArtifact({
+      ...baseInput(),
+      candidate: {
+        summary: [{ text: "Bound change summary", evidenceIds: [evidenceId] }],
+        keyChanges: [{ text, evidenceIds: [evidenceId] }],
+        risks: [],
+        reviewerFocus: [],
+      },
+    }).markdown;
+  }
+
+  it("escapes a leading heading marker so a statement never opens a section", () => {
+    const markdown = markdownFor("## Checks");
+    expect(markdown.split("\n")).toContain(String.raw`- \#\# Checks`);
+    expect(markdown).not.toMatch(/^#{1,6}\s+Checks$/mu);
+    expect(markdownFor("# Checks").split("\n")).toContain(String.raw`- \# Checks`);
+    const sixEscapedMarkers = String.raw`\#`.repeat(6);
+    expect(markdownFor("###### Checks").split("\n")).toContain(`- ${sixEscapedMarkers} Checks`);
+  });
+
+  it("escapes a heading marker behind leading whitespace", () => {
+    const lines = markdownFor("   ## Checks").split("\n");
+    expect(lines).toContain(String.raw`-    \#\# Checks`);
+    expect(lines.some((line) => /^\s*#{1,6}\s+Checks$/u.test(line))).toBe(false);
+  });
+
+  it("renders an empty statement as an empty list item", () => {
+    expect(markdownFor("").split("\n")).toContain("- ");
+  });
+
+  it("keeps a number sign that cannot open a heading", () => {
+    expect(markdownFor("#123 reference").split("\n")).toContain("- #123 reference");
+    expect(markdownFor("####### seven").split("\n")).toContain("- ####### seven");
+  });
+});

@@ -5,7 +5,7 @@ import type {
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
 import { catalogArray, catalogObject, catalogString, copyCatalogJson } from "./json.js";
-import { requireCatalog } from "./errors.js";
+import { requireCatalog, type CatalogSchemaMismatch } from "./errors.js";
 
 const TYPES = new Set(["object", "array", "string", "number", "integer", "boolean", "null"]);
 const COMMON_KEYS = new Set(["type", "description", "enum", "const"]);
@@ -153,39 +153,112 @@ function withinNumericBounds(
   return (typeof min !== "number" || value >= min) && (typeof max !== "number" || value <= max);
 }
 
-function objectMatches(schema: CatalogJsonObject, value: CatalogJsonObject): boolean {
+const MAX_MISMATCH_PATHS = 16;
+
+// Distinct schema paths, never one entry per offending value: an array walk names every item under
+// the same `…[]…` path, so twenty malformed items are one path here, and a distinct violation
+// reached later in the walk is never crowded out of the account (PR #3452 review). The sets are
+// bounded by the compiled schema's own shape — paths name declared properties and `[]`/`*` nodes —
+// not by the payload.
+interface MismatchCollector {
+  readonly missingRequired: Set<string>;
+  readonly invalidPaths: Set<string>;
+  unexpectedPropertyCount: number;
+}
+
+function joinSchemaPath(path: string, key: string): string {
+  return path === "" ? key : `${path}.${key}`;
+}
+
+function noteInvalid(out: MismatchCollector, path: string): false {
+  out.invalidPaths.add(path === "" ? "$" : path);
+  return false;
+}
+
+function noteMissing(out: MismatchCollector, path: string): void {
+  out.missingRequired.add(path);
+}
+
+// The cap applies to the SORTED distinct set, so which paths are listed is deterministic, and what
+// it drops is counted rather than lost.
+function cappedPaths(paths: ReadonlySet<string>): {
+  readonly listed: readonly string[];
+  readonly dropped: number;
+} {
+  const sorted = [...paths].sort(compareStrings);
+  return {
+    listed: Object.freeze(sorted.slice(0, MAX_MISMATCH_PATHS)),
+    dropped: Math.max(0, sorted.length - MAX_MISMATCH_PATHS),
+  };
+}
+
+function collectObjectMismatch(
+  schema: CatalogJsonObject,
+  value: CatalogJsonObject,
+  path: string,
+  out: MismatchCollector,
+): boolean {
   const properties = catalogObject(schema.properties);
-  if (!catalogArray(schema.required).every((key) => Object.hasOwn(value, catalogString(key))))
-    return false;
-  return Object.entries(value).every(([key, child]) => {
+  let matched = true;
+  for (const key of catalogArray(schema.required).map(catalogString)) {
+    if (Object.hasOwn(value, key)) continue;
+    noteMissing(out, joinSchemaPath(path, key));
+    matched = false;
+  }
+  for (const [key, child] of Object.entries(value)) {
     const property = properties[key];
-    if (property !== undefined) return schemaMatches(catalogObject(property), child);
-    return (
-      schema.additionalProperties === true ||
-      (schema.additionalProperties !== false &&
-        schemaMatches(catalogObject(schema.additionalProperties), child))
-    );
-  });
+    if (property !== undefined) {
+      matched =
+        collectMismatch(catalogObject(property), child, joinSchemaPath(path, key), out) && matched;
+    } else if (schema.additionalProperties === false) {
+      out.unexpectedPropertyCount += 1;
+      matched = false;
+    } else if (schema.additionalProperties !== true) {
+      const additional = catalogObject(schema.additionalProperties);
+      matched = collectMismatch(additional, child, joinSchemaPath(path, "*"), out) && matched;
+    }
+  }
+  return matched;
 }
 
-function arrayMatches(schema: CatalogJsonObject, value: CatalogJsonValue): boolean {
-  return (
-    Array.isArray(value) &&
-    withinNumericBounds(schema, value.length, "minItems", "maxItems") &&
-    value.every((child) => schemaMatches(catalogObject(schema.items), child as CatalogJsonValue))
-  );
+function collectArrayMismatch(
+  schema: CatalogJsonObject,
+  value: CatalogJsonValue,
+  path: string,
+  out: MismatchCollector,
+): boolean {
+  if (!Array.isArray(value) || !withinNumericBounds(schema, value.length, "minItems", "maxItems")) {
+    return noteInvalid(out, path);
+  }
+  const items = catalogObject(schema.items);
+  let matched = true;
+  for (const child of value) {
+    matched = collectMismatch(items, child as CatalogJsonValue, `${path}[]`, out) && matched;
+  }
+  return matched;
 }
 
-function typeMatches(schema: CatalogJsonObject, value: CatalogJsonValue): boolean {
+function collectTypedMismatch(
+  schema: CatalogJsonObject,
+  value: CatalogJsonValue,
+  path: string,
+  out: MismatchCollector,
+): boolean {
   const type = catalogString(schema.type);
-  if (type === "object")
-    return (
-      typeof value === "object" &&
-      value !== null &&
-      !Array.isArray(value) &&
-      objectMatches(schema, value as CatalogJsonObject)
-    );
-  if (type === "array") return arrayMatches(schema, value);
+  if (type === "object") {
+    return typeof value === "object" && value !== null && !Array.isArray(value)
+      ? collectObjectMismatch(schema, value as CatalogJsonObject, path, out)
+      : noteInvalid(out, path);
+  }
+  if (type === "array") return collectArrayMismatch(schema, value, path, out);
+  return scalarWithinSchema(schema, type, value) ? true : noteInvalid(out, path);
+}
+
+function scalarWithinSchema(
+  schema: CatalogJsonObject,
+  type: string,
+  value: CatalogJsonValue,
+): boolean {
   if (!scalarMatches(type, value)) return false;
   if (typeof value === "string") return stringMatches(schema, value);
   if (typeof value === "number") return withinNumericBounds(schema, value, "minimum", "maximum");
@@ -202,16 +275,54 @@ function stringMatches(schema: CatalogJsonObject, value: string): boolean {
   return pattern === undefined || new RegExp(catalogString(pattern)).test(value);
 }
 
-function schemaMatches(schema: CatalogJsonObject, value: CatalogJsonValue): boolean {
-  if (!typeMatches(schema, value)) return false;
+// One walk serves the boolean match and the body-free mismatch account: a second, parallel matcher
+// could accept what the account reports (or the reverse) and neither pin would notice.
+function collectMismatch(
+  schema: CatalogJsonObject,
+  value: CatalogJsonValue,
+  path: string,
+  out: MismatchCollector,
+): boolean {
+  if (!collectTypedMismatch(schema, value, path, out)) return false;
   const identity = canonicalise(value);
-  if (schema.const !== undefined && identity !== canonicalise(schema.const)) return false;
-  return (
-    schema.enum === undefined ||
-    catalogArray(schema.enum).some((item) => canonicalise(item) === identity)
-  );
+  if (schema.const !== undefined && identity !== canonicalise(schema.const)) {
+    return noteInvalid(out, path);
+  }
+  if (
+    schema.enum !== undefined &&
+    !catalogArray(schema.enum).some((item) => canonicalise(item) === identity)
+  ) {
+    return noteInvalid(out, path);
+  }
+  return true;
+}
+
+/**
+ * Why `value` fails `schema`, in the schema's own vocabulary, or `undefined` when it matches. Paths
+ * name declared properties (`changeset.files[].file`), never the value; a property the schema does
+ * not declare is counted, not named. Both lists hold distinct paths, sorted and capped at
+ * MAX_MISMATCH_PATHS entries; `droppedPathCount` says how many distinct paths the caps left out.
+ */
+export function describeCatalogSchemaMismatch(
+  schema: CatalogJsonObject,
+  value: CatalogJsonValue,
+): CatalogSchemaMismatch | undefined {
+  const out: MismatchCollector = {
+    missingRequired: new Set<string>(),
+    invalidPaths: new Set<string>(),
+    unexpectedPropertyCount: 0,
+  };
+  if (collectMismatch(schema, value, "", out)) return undefined;
+  const missing = cappedPaths(out.missingRequired);
+  const invalid = cappedPaths(out.invalidPaths);
+  return Object.freeze({
+    missingRequired: missing.listed,
+    invalidPaths: invalid.listed,
+    unexpectedPropertyCount: out.unexpectedPropertyCount,
+    droppedPathCount: missing.dropped + invalid.dropped,
+  });
 }
 
 export function matchesCatalogSchema(schema: CatalogJsonObject, value: CatalogJsonValue): boolean {
-  return schemaMatches(schema, value);
+  return describeCatalogSchemaMismatch(schema, value) === undefined;
 }

@@ -16,7 +16,14 @@ import {
   resolveDraftDeliveryTemplate,
   DRAFT_DELIVERY_TEMPLATE_MAX_BYTES,
   DRAFT_DELIVERY_TEMPLATE_DIRECTORY_MAX_ENTRIES,
+  DRAFT_DELIVERY_RELATED_ISSUES_MAX,
 } from "./draftDeliveryTemplate.js";
+import {
+  renderDraftDeliveryChecks,
+  type DraftDeliveryChecks,
+  CHECKS_SECTION_START,
+  frameDraftChecksSection,
+} from "./draftDeliveryChecks.js";
 
 // Secret-shaped fixture assembled at runtime: the validator must refuse this exact shape, but the
 // source tree must not carry a literal that secret scanners flag as a credential.
@@ -180,21 +187,23 @@ describe("issue-bound default pull request template composition", () => {
     });
   });
 
-  it.each([PR_DESCRIPTION_REGION_START, "<!-- KEIKO : PR-DESCRIPTION:v999:end -->"])(
-    "refuses preexisting or malformed managed markers: %s",
-    async (marker) => {
-      const f = await fixture();
-      await f.write("pull_request_template.md", marker);
-      expect(resolveDraftDeliveryTemplate(f.input)).toEqual({
-        status: "blocked",
-        reason: "managed-region-marker",
-      });
-      expect(resolveDraftDeliveryTemplate({ ...f.input, title: marker })).toEqual({
-        status: "blocked",
-        reason: "managed-region-marker",
-      });
-    },
-  );
+  it.each([
+    PR_DESCRIPTION_REGION_START,
+    "<!-- KEIKO : PR-DESCRIPTION:v999:end -->",
+    CHECKS_SECTION_START,
+    "<!-- keiko : Checks:v9:end -->",
+  ])("refuses preexisting or malformed managed markers: %s", async (marker) => {
+    const f = await fixture();
+    await f.write("pull_request_template.md", marker);
+    expect(resolveDraftDeliveryTemplate(f.input)).toEqual({
+      status: "blocked",
+      reason: "managed-region-marker",
+    });
+    expect(resolveDraftDeliveryTemplate({ ...f.input, title: marker })).toEqual({
+      status: "blocked",
+      reason: "managed-region-marker",
+    });
+  });
 
   it.each([0, -1, 1.5, Number.MAX_SAFE_INTEGER, Number.NaN])(
     "refuses invalid frozen issue number %s",
@@ -426,5 +435,150 @@ describe("bounded governed template reads", () => {
       expect(encoded).not.toContain(forbidden);
     expect(encoded).toContain("3387-template-fixture");
     expect(encoded).toContain("bodyDigest");
+  });
+});
+
+// Zero-coverage finding on PR #3452: the related-issues bound, its validation, its rendered line
+// and its logged count had no tests at all.
+describe("related-issue line, bound and logged count", () => {
+  it("renders the related-issues line in order and no other issues text", async () => {
+    const f = await fixture();
+    const result = resolveDraftDeliveryTemplate({ ...f.input, relatedIssueNumbers: [2, 3] });
+    expect(result).toMatchObject({
+      status: "ready",
+      body: `Closes #42\n\nRelated issues: #2, #3\n\n${framePrDescriptionRegion("")}`,
+    });
+  });
+
+  it("renders no related-issues line for an empty list and logs a zero count", async () => {
+    const f = await fixture();
+    const result = resolveDraftDeliveryTemplate({ ...f.input, relatedIssueNumbers: [] });
+    expect(result).toMatchObject({
+      status: "ready",
+      body: `Closes #42\n\n${framePrDescriptionRegion("")}`,
+    });
+    expect(f.log).toMatchObject([
+      { op: "git.draft-template", correlationId, extra: { state: "ready", relatedIssueCount: 0 } },
+    ]);
+  });
+
+  it("logs the related-issue count on the emitted git.draft-template line", async () => {
+    const f = await fixture();
+    resolveDraftDeliveryTemplate({ ...f.input, relatedIssueNumbers: [2, 3, 4] });
+    expect(f.log).toMatchObject([
+      { op: "git.draft-template", correlationId, extra: { state: "ready", relatedIssueCount: 3 } },
+    ]);
+  });
+
+  it("accepts exactly DRAFT_DELIVERY_RELATED_ISSUES_MAX unique related issues, none equal to the bound issue", async () => {
+    const f = await fixture();
+    const relatedIssueNumbers = Array.from(
+      { length: DRAFT_DELIVERY_RELATED_ISSUES_MAX },
+      (_, index) => index + 100,
+    );
+    const result = resolveDraftDeliveryTemplate({ ...f.input, relatedIssueNumbers });
+    expect(result.status).toBe("ready");
+    expect(f.log).toMatchObject([
+      {
+        op: "git.draft-template",
+        correlationId,
+        extra: { state: "ready", relatedIssueCount: DRAFT_DELIVERY_RELATED_ISSUES_MAX },
+      },
+    ]);
+  });
+
+  it("rejects more related issues than DRAFT_DELIVERY_RELATED_ISSUES_MAX", async () => {
+    const f = await fixture();
+    const relatedIssueNumbers = Array.from(
+      { length: DRAFT_DELIVERY_RELATED_ISSUES_MAX + 1 },
+      (_, index) => index + 100,
+    );
+    expect(resolveDraftDeliveryTemplate({ ...f.input, relatedIssueNumbers })).toEqual({
+      status: "blocked",
+      reason: "invalid-issue-binding",
+    });
+  });
+
+  it("rejects a duplicate related issue number", async () => {
+    const f = await fixture();
+    expect(resolveDraftDeliveryTemplate({ ...f.input, relatedIssueNumbers: [7, 7] })).toEqual({
+      status: "blocked",
+      reason: "invalid-issue-binding",
+    });
+  });
+
+  it("rejects a related issue number that self-references the bound issue", async () => {
+    const f = await fixture();
+    expect(resolveDraftDeliveryTemplate({ ...f.input, relatedIssueNumbers: [42] })).toEqual({
+      status: "blocked",
+      reason: "invalid-issue-binding",
+    });
+  });
+
+  it.each([0, -1, 1.5, Number.NaN])(
+    "rejects a non-positive or non-integer related issue number: %s",
+    async (invalid) => {
+      const f = await fixture();
+      expect(resolveDraftDeliveryTemplate({ ...f.input, relatedIssueNumbers: [invalid] })).toEqual({
+        status: "blocked",
+        reason: "invalid-issue-binding",
+      });
+    },
+  );
+});
+
+// F57 (runs 19–28): the server-owned body's "Checks" section and its logged shape.
+describe("verification checks section (F57)", () => {
+  const checks: DraftDeliveryChecks = {
+    status: "listed",
+    evidenceId: "verification-1",
+    headSha: "6".repeat(40),
+    committedTreeDigest: "c".repeat(64),
+    history: {
+      records: [
+        {
+          startedAtMs: 1,
+          stagedTreeDigest: "c".repeat(64),
+          steps: [{ kind: "build", status: "passed", exitCode: 0, durationMs: 867 }],
+        },
+      ],
+      omitted: 0,
+    },
+  };
+  it("places the section after the related-issue line and before the managed region", async () => {
+    const f = await fixture();
+    const section = renderDraftDeliveryChecks(checks);
+    expect(
+      resolveDraftDeliveryTemplate({
+        ...f.input,
+        relatedIssueNumbers: [7],
+        verificationChecks: checks,
+      }),
+    ).toMatchObject({
+      status: "ready",
+      body: `Closes #42\n\nRelated issues: #7\n\n${frameDraftChecksSection(section.markdown)}\n\n${framePrDescriptionRegion("")}`,
+      checkRowCount: section.rowCount,
+    });
+    expect(f.log.at(-1)).toMatchObject({
+      op: "git.draft-template",
+      extra: { state: "ready", checksState: "listed", checkRowCount: 1 },
+    });
+  });
+  it("carries the unavailable statement, logged as such, when the evidence could not be read", async () => {
+    const f = await fixture();
+    const result = resolveDraftDeliveryTemplate({
+      ...f.input,
+      verificationChecks: { status: "unavailable", reason: "evidence-invalid" },
+    });
+    expect(result.status === "ready" ? result.body : "").toContain(
+      "Keiko could not read its verification evidence for this commit",
+    );
+    expect(result).toMatchObject({ status: "ready", checkRowCount: 0 });
+    expect(f.log.at(-1)).toMatchObject({ extra: { checksState: "unavailable", checkRowCount: 0 } });
+  });
+  it("logs an absent section for a composition without a verified-commit context", async () => {
+    const f = await fixture();
+    expect(resolveDraftDeliveryTemplate(f.input)).not.toHaveProperty("checkRowCount");
+    expect(f.log.at(-1)).toMatchObject({ extra: { checksState: "absent", checkRowCount: 0 } });
   });
 });

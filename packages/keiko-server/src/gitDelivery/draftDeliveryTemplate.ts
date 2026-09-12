@@ -25,6 +25,13 @@ import {
 import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/server-log.js";
+import { MAX_LINKED_ISSUES } from "../coding-context/codingRuntimeIssueIntake.js";
+import {
+  renderDraftDeliveryChecks,
+  type DraftDeliveryChecks,
+  containsDraftChecksMarker,
+  frameDraftChecksSection,
+} from "./draftDeliveryChecks.js";
 
 // Three fixed GitHub default locations, no recursive enumeration or model-selected template.
 // One sentinel entry makes discovery overflow explicit instead of selecting an arbitrary prefix.
@@ -55,6 +62,8 @@ export type DraftDeliveryTemplateResult =
       readonly bodyDigest: string;
       readonly templateBytes: number;
       readonly templateDigest?: string;
+      /** Rows of the rendered "Checks" section; absent when the input carried no checks. */
+      readonly checkRowCount?: number;
     }
   | { readonly status: "blocked"; readonly reason: DraftDeliveryTemplateFailure };
 
@@ -62,6 +71,16 @@ export interface DraftDeliveryTemplateInput {
   readonly workspace: WorkspaceInfo;
   /** Accepted server-owned binding, never an issue number supplied by authored metadata. */
   readonly issueBinding: CodingWorkbenchIssueBinding;
+  /**
+   * Same-repository issues the bound issue references and the authorized reader resolved (an epic's
+   * children). Rendered as a non-closing "Related issues" line: the bound issue alone is closed.
+   */
+  readonly relatedIssueNumbers?: readonly number[];
+  /**
+   * The run's verification history for the "Checks" section (ADR-0086 D9). Absent in compositions
+   * without a verified-commit context, which then carry no such section.
+   */
+  readonly verificationChecks?: DraftDeliveryChecks;
   readonly title: string;
   readonly correlationId: string;
   readonly fs?: WorkspaceFs;
@@ -76,13 +95,44 @@ class TemplateResolutionError extends Error {
 }
 
 function validateAuthoredMetadata(text: string): void {
-  if (containsPrDescriptionMarker(text)) throw new TemplateResolutionError("managed-region-marker");
+  if (containsPrDescriptionMarker(text) || containsDraftChecksMarker(text))
+    throw new TemplateResolutionError("managed-region-marker");
   if (hasIssueClosingDirective(text)) throw new TemplateResolutionError("issue-directive");
+}
+
+// Single source of truth for the bound: the intake's `MAX_LINKED_ISSUES` (the epic-children read at
+// `coding-context/codingRuntimeIssueIntake.ts`) and this template's related-issue line share the
+// exact same number, so the two can never drift apart (zero-test-coverage finding on PR #3452).
+export const DRAFT_DELIVERY_RELATED_ISSUES_MAX = MAX_LINKED_ISSUES;
+
+function validRelatedIssues(input: DraftDeliveryTemplateInput): boolean {
+  const related = input.relatedIssueNumbers ?? [];
+  return (
+    related.length <= DRAFT_DELIVERY_RELATED_ISSUES_MAX &&
+    new Set(related).size === related.length &&
+    related.every(
+      (issueNumber) =>
+        Number.isSafeInteger(issueNumber) &&
+        issueNumber > 0 &&
+        issueNumber !== input.issueBinding.issueNumber,
+    )
+  );
+}
+
+function issueReference(issueNumber: number): string {
+  return `#${String(issueNumber)}`;
+}
+
+function relatedIssuesLine(input: DraftDeliveryTemplateInput): string {
+  const related = input.relatedIssueNumbers ?? [];
+  if (related.length === 0) return "";
+  return `Related issues: ${related.map(issueReference).join(", ")}\n\n`;
 }
 
 function validateInput(input: DraftDeliveryTemplateInput): void {
   if (!validateCodingWorkbenchIssueBinding(input.issueBinding).ok)
     throw new TemplateResolutionError("invalid-issue-binding");
+  if (!validRelatedIssues(input)) throw new TemplateResolutionError("invalid-issue-binding");
   const title = input.title;
   if (
     title.trim().length === 0 ||
@@ -170,6 +220,18 @@ function readTemplate(input: DraftDeliveryTemplateInput, fs: WorkspaceFs, path: 
   return read.text;
 }
 
+function renderedChecks(input: DraftDeliveryTemplateInput): {
+  readonly section: string;
+  readonly rowCount?: number;
+} {
+  if (input.verificationChecks === undefined) return { section: "" };
+  const rendered = renderDraftDeliveryChecks(input.verificationChecks);
+  return {
+    section: `${frameDraftChecksSection(rendered.markdown)}\n\n`,
+    rowCount: rendered.rowCount,
+  };
+}
+
 function compose(
   input: DraftDeliveryTemplateInput,
 ): Extract<DraftDeliveryTemplateResult, { status: "ready" }> {
@@ -180,7 +242,8 @@ function compose(
   if (resolveDefaultPath(fs, input.workspace.root) !== path)
     throw new TemplateResolutionError("template-unreadable");
   const prefix = template.length === 0 ? "" : `${template}\n\n`;
-  const body = `${prefix}Closes #${String(input.issueBinding.issueNumber)}\n\n${framePrDescriptionRegion("")}`;
+  const checks = renderedChecks(input);
+  const body = `${prefix}Closes #${String(input.issueBinding.issueNumber)}\n\n${relatedIssuesLine(input)}${checks.section}${framePrDescriptionRegion("")}`;
   return {
     status: "ready",
     title: input.title,
@@ -189,6 +252,7 @@ function compose(
     bodyDigest: sha256Hex(body),
     templateBytes: Buffer.byteLength(template, "utf8"),
     ...(path === undefined ? {} : { templateDigest: sha256Hex(template) }),
+    ...(checks.rowCount === undefined ? {} : { checkRowCount: checks.rowCount }),
   };
 }
 
@@ -219,6 +283,9 @@ export function resolveDraftDeliveryTemplate(
         bodyDigest: result.bodyDigest,
         templateBytes: result.templateBytes,
         templateDigest: result.templateDigest,
+        relatedIssueCount: input.relatedIssueNumbers?.length ?? 0,
+        checksState: input.verificationChecks?.status ?? "absent",
+        checkRowCount: result.checkRowCount ?? 0,
       },
     });
     return result;

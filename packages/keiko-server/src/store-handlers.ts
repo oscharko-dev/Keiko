@@ -418,7 +418,7 @@ export async function handleCreateProject(
     // project remains registered but restricted, preserving the legacy injectable test seam without
     // inventing browser-side authority.
     try {
-      deps.workspaceScriptTrust?.grant(project.path);
+      deps.workspaceScriptTrust?.grant(project.path, ctx.correlationId);
     } catch (error) {
       const correlationId = reportProjectTrustGrantFailure(
         deps,

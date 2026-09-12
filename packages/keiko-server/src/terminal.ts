@@ -56,10 +56,8 @@ import {
 import { TerminalToolError } from "./terminal-errors.js";
 import { DEFAULT_RETENTION, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { Project, UiStore } from "./store/index.js";
-import {
-  evidenceRetentionDiagnosticObserver,
-  type ServerDiagnosticSink,
-} from "./diagnostics-log.js";
+import { type ServerDiagnosticSink } from "./diagnostics-log.js";
+import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
 import type { ServerLogSink } from "./observability/server-log.js";
 import {
@@ -1022,7 +1020,7 @@ class TerminalExecutionManagerImpl implements TerminalExecutionManager {
         entry,
         this.redactor,
         DEFAULT_RETENTION,
-        evidenceRetentionDiagnosticObserver(this.diagnostics, "terminal-execution"),
+        evidenceRetentionObserver("terminal-execution"),
       );
     } catch {
       throw new TerminalToolError(

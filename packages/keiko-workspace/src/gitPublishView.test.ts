@@ -14,14 +14,31 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { withGitPublishView as publishView, type GitPublishView } from "./gitPublishView.js";
 import { isWithinWorkspace } from "./paths.js";
+import type { WorkspaceInfo } from "./types.js";
 
+// An ordinary (not Keiko-owned) root: the publish view resolves it through the plain port, exactly
+// as before managed worktrees were routed through their own bound port (run 18, 2026-09-10).
 function withGitPublishView<T>(
   root: string,
   commit: string,
   privateRoot: string,
   publish: (view: GitPublishView) => Promise<T>,
 ): Promise<T> {
-  return publishView(root, commit, publish, privateRoot);
+  return publishView(ordinaryWorkspace(root), commit, publish, privateRoot);
+}
+
+function ordinaryWorkspace(workspaceRoot: string): WorkspaceInfo {
+  return {
+    root: workspaceRoot,
+    selectedRoot: workspaceRoot,
+    name: undefined,
+    version: undefined,
+    testFramework: "unknown",
+    sourceDirs: [],
+    testDirs: [],
+    languages: [],
+    ignoreLines: [],
+  };
 }
 
 let root: string;

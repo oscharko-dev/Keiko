@@ -6,7 +6,7 @@ import { request } from "node:http";
 import type { AddressInfo } from "node:net";
 import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { gunzipSync } from "node:zlib";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   GatewayConfig,
   GatewayRequest,
@@ -28,6 +28,11 @@ import {
   type RequestLogContext,
 } from "./server.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
+import {
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+} from "./observability/server-logger.js";
 import { buildCspHeader } from "./csp.js";
 import { resetWorkspaceStateForTests } from "./workspace-state-handlers.js";
 import type { EditorHotExitStore } from "./editor/hotExitStore.js";
@@ -1270,6 +1275,38 @@ describe("activity log: http-request line enrichment (Wave 5, w5-http-request-en
 
     expect(event.status).toBe(404);
     expect(event.extra?.routeTemplate).toBe("/api/{id}");
+  });
+
+  // F84 (Coding Workbench run 30): the dev lane composed its server without a sink, and the null-sink
+  // default dropped every request line, so a failed browser request left no server-side trace.
+  it("writes the request line through the process activity log when no sink is passed", async () => {
+    const lines: ServerLogEvent[] = [];
+    setServerLogger(
+      createServerLogger({
+        sink: {
+          write: (event): void => {
+            lines.push(event);
+          },
+        },
+        level: "debug",
+      }),
+    );
+    try {
+      await closeServer();
+      server = createUiServer({ staticRoot, csp: buildCspHeader([]), port });
+      await new Promise<void>((res) => server.listen(port, UI_HOST, res));
+      await fetchRaw("/api/this-route-does-not-exist");
+
+      await vi.waitFor(() => {
+        expect(lines.some((line) => line.category === "http" && line.op === "request")).toBe(true);
+      });
+      expect(lines.find((line) => line.op === "request")).toMatchObject({
+        category: "http",
+        status: 404,
+      });
+    } finally {
+      resetServerLogger();
+    }
   });
 
   it("collects distinct query-parameter NAMES only, sorted, and never a value", async () => {

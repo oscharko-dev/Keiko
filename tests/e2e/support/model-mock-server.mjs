@@ -12,7 +12,10 @@
 //
 // It speaks just enough of the OpenAI Chat Completions contract that keiko-model-gateway's
 // openai-adapter accepts it: streaming emits `choices[0].delta.content` chunks + a final
-// finish_reason/usage chunk + `data: [DONE]`; the buffered path returns a single completion.
+// finish_reason/usage chunk + `data: [DONE]`; the buffered path returns a single completion. Both
+// carry the same request-selected answer, as a real provider's would: the gateway reads a buffered
+// call over the stream whenever the route can stream (ADR-0003), so an answer that depended on
+// `stream` would test the transport instead of the product.
 
 import { createServer } from "node:http";
 
@@ -33,6 +36,8 @@ const GROUNDING_PARITY_REPLY =
   "repositoryParityStatus is defined in the repository fixture [src/repository-parity.ts:2].";
 const REPLY_TOKENS = [REPLY_MARKER, " deterministic", " provider", " pong", " 4242."];
 const REPLY_TEXT = REPLY_TOKENS.join("");
+// Code points per streamed delta of any answer other than the reply.
+const STREAM_SLICE_LENGTH = 16;
 
 function readBody(req) {
   return new Promise((resolve) => {
@@ -60,7 +65,20 @@ function chunkFrame(delta, finishReason) {
   return `data: ${JSON.stringify(payload)}\n\n`;
 }
 
-function streamCompletion(res) {
+// The answer as the deltas a provider streams: the reply keeps its fixed tokens, and any other
+// answer arrives in fixed slices of code points, so the reader must reassemble it exactly.
+function streamTokens(content) {
+  if (content === REPLY_TEXT) return REPLY_TOKENS;
+  const points = Array.from(content);
+  const tokens = [];
+  for (let index = 0; index < points.length; index += STREAM_SLICE_LENGTH) {
+    tokens.push(points.slice(index, index + STREAM_SLICE_LENGTH).join(""));
+  }
+  return tokens;
+}
+
+function streamCompletion(res, rawRequest) {
+  const tokens = streamTokens(completionContent(rawRequest));
   res.writeHead(200, {
     "content-type": "text/event-stream; charset=utf-8",
     "cache-control": "no-cache",
@@ -68,7 +86,7 @@ function streamCompletion(res) {
   });
   // Role announcement chunk, then one content delta per token (proves streaming, not one blob).
   res.write(chunkFrame({ role: "assistant", content: "" }));
-  for (const token of REPLY_TOKENS) {
+  for (const token of tokens) {
     res.write(chunkFrame({ content: token }));
   }
   // Terminal chunk: finish_reason + usage (adapter requests stream_options.include_usage).
@@ -80,8 +98,8 @@ function streamCompletion(res) {
     choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
     usage: {
       prompt_tokens: 8,
-      completion_tokens: REPLY_TOKENS.length,
-      total_tokens: 8 + REPLY_TOKENS.length,
+      completion_tokens: tokens.length,
+      total_tokens: 8 + tokens.length,
     },
   };
   res.write(`data: ${JSON.stringify(usageFrame)}\n\n`);
@@ -89,7 +107,7 @@ function streamCompletion(res) {
   res.end();
 }
 
-function bufferedContent(rawRequest) {
+function completionContent(rawRequest) {
   const description = prDescriptionCandidate(rawRequest);
   if (description !== undefined) return description;
   if (
@@ -145,6 +163,9 @@ function prDescriptionCandidate(rawRequest) {
 }
 
 function bufferedCompletion(res, rawRequest) {
+  const content = completionContent(rawRequest);
+  // The same usage whichever way the answer travels: the count of the deltas it would stream.
+  const completionTokens = streamTokens(content).length;
   const body = {
     id: "chatcmpl-e2e",
     object: "chat.completion",
@@ -153,14 +174,14 @@ function bufferedCompletion(res, rawRequest) {
     choices: [
       {
         index: 0,
-        message: { role: "assistant", content: bufferedContent(rawRequest) },
+        message: { role: "assistant", content },
         finish_reason: "stop",
       },
     ],
     usage: {
       prompt_tokens: 8,
-      completion_tokens: REPLY_TOKENS.length,
-      total_tokens: 8 + REPLY_TOKENS.length,
+      completion_tokens: completionTokens,
+      total_tokens: 8 + completionTokens,
     },
   };
   res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
@@ -241,7 +262,7 @@ const server = createServer((req, res) => {
         // Malformed body → fall back to the buffered (non-stream) completion.
       }
       if (wantsStream) {
-        streamCompletion(res);
+        streamCompletion(res, raw);
       } else {
         bufferedCompletion(res, raw);
       }

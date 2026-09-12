@@ -1,8 +1,12 @@
 import { describe, expect, it } from "vitest";
+import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "./tools.js";
 import {
   DEFAULT_VERIFICATION_LIMITS,
   VERIFICATION_FAILURE_MESSAGE_MAX_CHARS,
   VERIFICATION_MAX_FAILURE_LOCATIONS,
+  VERIFICATION_SETTLEMENT_GRACE_MS,
+  VERIFICATION_TOOL_MAX_DURATION_MS,
+  VERIFICATION_TOOL_OPERATOR_DECISION_WAIT_MS,
   countMatchesStatus,
   isVerificationFailureLocation,
   isVerificationReport,
@@ -253,5 +257,18 @@ describe("countMatchesStatus (KEIKO-0159, shared with editor-agent-verification.
     expect(countMatchesStatus(1, "failed", items)).toBe(true);
     expect(countMatchesStatus(0, "skipped", items)).toBe(true);
     expect(countMatchesStatus(0, "cancelled", items)).toBe(true);
+  });
+});
+
+// PR #3452 (F43): the verification tool's budget carries the whole human-decision wait on top of its
+// install and step ceilings, so a package-script trust decision never eats a build's own time and
+// the retry it enables still fits.
+describe("the governed verification tool's settlement budget", () => {
+  it("adds the whole package-script trust wait and a grace to its install and step ceilings", () => {
+    expect(VERIFICATION_TOOL_OPERATOR_DECISION_WAIT_MS).toBe(GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS);
+    // Literal pins (PR #3452 review): the five-minute wait, the four-minute install, one two-minute
+    // step and the grace. A budget that lost its grace, or kept only slack, changes the total.
+    expect(VERIFICATION_SETTLEMENT_GRACE_MS).toBe(15_000);
+    expect(VERIFICATION_TOOL_MAX_DURATION_MS).toBe(675_000);
   });
 });

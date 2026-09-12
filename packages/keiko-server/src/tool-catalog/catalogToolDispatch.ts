@@ -3,6 +3,7 @@
 import { Buffer } from "node:buffer";
 import { catalogJsonBytes } from "@oscharko-dev/keiko-tool-catalog";
 import { canonicalise } from "@oscharko-dev/keiko-security/hashing";
+import { GOVERNED_TOOL_SETTLEMENT_GRACE_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
 import type { CodingToolActionRequest } from "../coding-runtime/codingToolIpc.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
@@ -55,6 +56,9 @@ function claimInvocation(
     digest,
     payload,
     authorityExpiresAt: context.authorityExpiresAt,
+    // Held until the catalog has settled the call: its descriptor's budget plus one grace, so the
+    // catalog's own timeout always answers first (F43/F44, PR #3452).
+    lifeMs: invocation.settlementBudgetMs + GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
   });
   if (staged.kind !== "staged") payload.fill(0);
   if (staged.kind === "replayed") {
@@ -91,7 +95,12 @@ function revalidateReplay(invocation: CatalogInvocation, request: BoundToolInvoc
 }
 function currentContext(invocation: CatalogInvocation): ReturnType<typeof catalogDispatchContext> {
   requireDispatch(invocation.handler !== undefined, "failed", "handler-unavailable");
-  return revalidateCatalogContext(invocation.state, invocation.context, invocation.handler);
+  return revalidateCatalogContext(
+    invocation.state,
+    invocation.context,
+    invocation.handler,
+    invocation.admittedAt,
+  );
 }
 function handlerContext(
   invocation: CatalogInvocation,

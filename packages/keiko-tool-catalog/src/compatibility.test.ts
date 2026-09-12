@@ -113,7 +113,7 @@ describe("explicit finite compatibility", () => {
     { ownerIssue: 0 },
     { removalIssue: undefined },
     { profile: { id: "other", version: 1 } },
-    { adapter: { id: "opencode", version: "1.17.17" } },
+    { adapter: { id: "opencode", version: "1.18.30" } },
   ])("rejects stale, missing, unscoped or unsupported compatibility %j", (change) => {
     const { previous, input, to } = transition();
     const compatibility = [{ ...input.compatibility[0], ...change }];

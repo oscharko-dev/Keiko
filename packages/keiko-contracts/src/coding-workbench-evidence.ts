@@ -87,6 +87,12 @@ const REDACTED_SECRET_TOKEN = "redacted-credential";
 // out on purpose.
 export const APPROVED_EVIDENCE_SEGMENTS = new Set<string>([
   "approval",
+  // `operator-decision` runtime events (a governed tool waiting on a decision only a local human
+  // can make) carry ids shaped `event-operator-decision-<n>`; without this segment the contract
+  // rejected them as evidence text and the run was never told it was waiting (run 11, 2026-09-10).
+  "decision",
+  "script",
+  "trust",
   // Runtime Git stage labels carry only a closed operation name and decimal proposal id.
   "stage",
   "git",

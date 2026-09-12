@@ -38,6 +38,8 @@ const runtimeHookMock = vi.hoisted(() => vi.fn());
 const questionsHookMock = vi.hoisted(() => vi.fn());
 const activityHookMock = vi.hoisted(() => vi.fn());
 const researchHookMock = vi.hoisted(() => vi.fn());
+// #3417: the approved-skills channel has a hook of its own; every suite here stays hermetic through it.
+const skillsHookMock = vi.hoisted(() => vi.fn());
 const approvalReviewHookMock = vi.hoisted(() => vi.fn());
 const autonomyHookMock = vi.hoisted(() => vi.fn());
 const editorBridgeHookMock = vi.hoisted(() => vi.fn());
@@ -62,6 +64,12 @@ const prUpdateExecuteMock = vi.hoisted(() => vi.fn());
 // pre-existing assertion in this file is unaffected. The dedicated suite further down overrides it.
 const trustStatusMock = vi.hoisted(() => vi.fn());
 const trustMutateMock = vi.hoisted(() => vi.fn());
+// The affordance also reads the verification runner's own decision for the run's worktree through
+// the shared catalog client (ADR-0147 D3, 2026-09-10). Unreadable here — the suites in this file
+// exercise the repository-restricted branch and every other surface, never the worktree drift one.
+const verificationCatalogMock = vi.hoisted(() =>
+  vi.fn(() => Promise.reject(new Error("verification catalog rejected"))),
+);
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -96,6 +104,10 @@ vi.mock("@/lib/useCodingWorkbenchResearch", () => ({
   useCodingWorkbenchResearch: researchHookMock,
 }));
 
+vi.mock("@/lib/useCodingWorkbenchSkills", () => ({
+  useCodingWorkbenchSkills: skillsHookMock,
+}));
+
 vi.mock("@/lib/useCodingWorkbenchApprovalReview", () => ({
   useCodingWorkbenchApprovalReview: approvalReviewHookMock,
 }));
@@ -108,6 +120,7 @@ vi.mock("@/lib/workspace-trust-api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/workspace-trust-api")>()),
   fetchWorkspaceTrustStatus: trustStatusMock,
   mutateWorkspaceTrust: trustMutateMock,
+  fetchVerificationCatalog: verificationCatalogMock,
 }));
 
 vi.mock("@/lib/useCodingWorkbenchEditorBridge", () => ({
@@ -365,6 +378,7 @@ beforeEach(() => {
   activityHookMock.mockReturnValue(IDLE_ACTIVITY);
   approvalReviewHookMock.mockReturnValue({ status: "idle", review: null, retry: vi.fn() });
   researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null, retry: vi.fn() });
+  skillsHookMock.mockReturnValue({ status: "idle", skills: null, retry: vi.fn() });
   editorBridgeHookMock.mockReset();
   editorBridgeHookMock.mockReturnValue({
     pendingReview: null,
@@ -2168,6 +2182,34 @@ describe("CodingWorkbenchWindow", () => {
     expect(liveActions.takeover).toHaveBeenCalledOnce();
   });
 
+  // A run paused FOR the operator's package-script decision offers no Resume and no resume-mode
+  // selector: both read the same `operatorResumeAvailable` predicate, so the header can never say
+  // "Resume autonomy" about a run that is waiting for the trust action instead (CodeRabbit review,
+  // 2026-09-10).
+  it("hides the resume-mode selector while the run is paused for an operator decision", () => {
+    const pausedForDecision = liveState({
+      canStart: false,
+      run: {
+        status: "ready",
+        error: null,
+        value: snapshot({
+          state: "paused",
+          pauseReason: "workspace-script-trust",
+          runId: "run-1",
+          requestedMode: "autonomous-delivery",
+          effectiveMode: "autonomous-delivery",
+        }),
+      },
+    });
+    runtimeHookMock.mockReturnValue({ state: pausedForDecision, actions: actions() });
+    render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+
+    expect(screen.queryByRole("combobox", { name: "Resume autonomy" })).not.toBeInTheDocument();
+    // The composer's own resume control stays rendered but offers nothing: disabled, exactly as it
+    // is for every state the operator cannot resume from.
+    expect(screen.getByRole("button", { name: "Resume run" })).toBeDisabled();
+  });
+
   it("resumes a full-access run with the explicitly selected supervised mode", async () => {
     const user = userEvent.setup();
     const liveActions = actions();
@@ -2905,13 +2947,23 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
 
     expect(trustStatusMock).not.toHaveBeenCalledWith(WORKSPACE_B.repositoryRoot);
     expect(trustMutateMock).toHaveBeenCalledExactlyOnceWith(WORKSPACE_A.repositoryRoot, "grant");
-    expect(diagnostic).toHaveBeenLastCalledWith("[keiko] coding workbench repository trust bound", {
-      correlationId: "run-correlation-0001",
-      workspaceTrustBinding: {
-        repositoryId: WORKSPACE_A.repositoryId,
-        workspaceId: WORKSPACE_A.id,
+    // The run's trust binding is judged on its own diagnostics: the LAST binding line names A and no
+    // binding line ever names B. Diagnostics about other surfaces (a worktree catalog read this
+    // fixture leaves unanswered) are not this pin's subject and may follow it.
+    const bindingLines = diagnostic.mock.calls.filter(
+      ([note]) => note === "[keiko] coding workbench repository trust bound",
+    );
+    expect(bindingLines.at(-1)).toEqual([
+      "[keiko] coding workbench repository trust bound",
+      {
+        correlationId: "run-correlation-0001",
+        workspaceTrustBinding: {
+          repositoryId: WORKSPACE_A.repositoryId,
+          workspaceId: WORKSPACE_A.id,
+        },
       },
-    });
+    ]);
+    expect(JSON.stringify(bindingLines)).not.toContain(WORKSPACE_B.id);
   });
 
   it("surfaces the workspace mismatch instead of leaving the inert panels unexplained", async () => {
@@ -3179,5 +3231,51 @@ describe("CodingWorkbenchWindow #3389 mark-ready propose control", () => {
     expect(mergeExecuteMock).not.toHaveBeenCalled();
     expect(prUpdateExecuteMock).not.toHaveBeenCalled();
     expect(screen.queryByRole("button", { name: /merge|close issue/iu })).not.toBeInTheDocument();
+  });
+});
+
+// PR #3452 review: the skills channel distinguishes a ready EMPTY listing from a channel it could
+// not read. Passing only the listing collapsed both into "render nothing" and made the hook's retry
+// unreachable — the operator had no way back from a transient failure.
+describe("CodingWorkbenchWindow approved-skills channel state (#3417)", () => {
+  it("shows the unreadable channel and reaches the hook's retry", async () => {
+    const retry = vi.fn();
+    skillsHookMock.mockReturnValue({ status: "unavailable", skills: null, retry });
+    renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({ state: "running", runId: "run-1" }),
+        },
+        events: [event(1)],
+      }),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/keiko-checkout", "/repos/keiko-checkout"),
+    );
+
+    await userEvent.click(await screen.findByRole("button", { name: "Try again" }));
+
+    expect(retry).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a ready empty listing silent", () => {
+    skillsHookMock.mockReturnValue({ status: "ready", skills: null, retry: vi.fn() });
+    renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({ state: "running", runId: "run-1" }),
+        },
+        events: [event(1)],
+      }),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/keiko-checkout", "/repos/keiko-checkout"),
+    );
+
+    expect(screen.queryByRole("button", { name: "Try again" })).not.toBeInTheDocument();
   });
 });

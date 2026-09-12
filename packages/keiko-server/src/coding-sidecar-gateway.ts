@@ -16,6 +16,8 @@ import {
   countGatewayPromptTokens,
   type ModelTokenAccounting,
 } from "@oscharko-dev/keiko-model-gateway/internal/prompt-token-accounting";
+import { providerRequestBudgetMs } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
+import { MAX_TIMER_DELAY_MS } from "./abort-race.js";
 import type {
   CodingWorkbenchModelSource,
   CodingWorkbenchSidecarGatewayRunMetadata,
@@ -41,6 +43,7 @@ import {
 } from "./coding-runtime/opencodeLaunchProfile.js";
 import {
   createOpenCodeGatewayToolCatalogAdvertisement,
+  opencodeGatewayOfferLifetimeMs,
   hasExactOpenCodeVisibleToolContract,
   OPENCODE_MODEL_VISIBLE_TOOL_NAMES,
   type OpenCodeGatewayHandlerCoverage,
@@ -646,26 +649,37 @@ function isMatchingModelAlias(
  * `runtimeGatewayAdmissionResponse` already applies to the incoming sidecar request below, so the
  * advertisement and the admission gate are provably the same source (ADR-0175 D1/D4).
  */
+/** The per-request facts the tool-catalog advertisement is minted from. */
+interface GatewayToolCatalogOffer {
+  readonly coverage: OpenCodeGatewayHandlerCoverage | undefined;
+  readonly offerLifetimeMs: number;
+}
+
 function toolCatalogFor(
   tools: readonly ToolDefinition[] | undefined,
-  coverage: OpenCodeGatewayHandlerCoverage | undefined,
+  offer: GatewayToolCatalogOffer,
 ): GatewayCallRequest["toolCatalog"] {
   return isExactManagedToolSet(tools)
-    ? createOpenCodeGatewayToolCatalogAdvertisement(Date.now(), coverage)
+    ? createOpenCodeGatewayToolCatalogAdvertisement(
+        Date.now(),
+        offer.coverage,
+        offer.offerLifetimeMs,
+      )
     : undefined;
 }
 
 function toolRequestFields(
   parsed: CodingSidecarGatewayChatCompletionRequest,
-  coverage: OpenCodeGatewayHandlerCoverage | undefined,
+  offer: GatewayToolCatalogOffer,
 ): Pick<GatewayCallRequest, "toolCatalog"> {
-  const toolCatalog = toolCatalogFor(parsed.tools, coverage);
+  const toolCatalog = toolCatalogFor(parsed.tools, offer);
   if (toolCatalog !== undefined) return { toolCatalog };
   return {};
 }
 
 const OPENCODE_OPTIONAL_TOOL_NAMES: ReadonlySet<string> = new Set<OpenCodeOptionalToolName>([
   "keiko_research_fetch",
+  "keiko_skill_discover",
   "keiko_skill",
   "keiko_child_agent",
 ]);
@@ -721,12 +735,12 @@ function buildChatRequest(
   maxOutputTokens: number,
   correlationId: string | undefined,
   reasoningEffort: ModelReasoningEffort | undefined,
-  toolCatalogCoverage: OpenCodeGatewayHandlerCoverage | undefined,
+  toolCatalogOffer: GatewayToolCatalogOffer,
 ): GatewayCallRequest {
   return {
     modelId: modelAlias,
     messages: parsed.messages,
-    ...toolRequestFields(parsed, toolCatalogCoverage),
+    ...toolRequestFields(parsed, toolCatalogOffer),
     ...(parsed.temperature === undefined ? {} : { temperature: parsed.temperature }),
     ...(parsed.top_p === undefined ? {} : { topP: parsed.top_p }),
     cancellationSignal,
@@ -819,6 +833,7 @@ function currentModelSource(deps: UiHandlerDeps): CodingWorkbenchModelSource {
 function resolveGatewayProfile(
   deps: UiHandlerDeps,
   selectedModelId?: string,
+  verificationAtMs?: number,
 ): ResolvedGatewayProfile {
   const config = currentGatewayConfig(deps);
   const gateway = config === undefined ? undefined : currentGateway(deps);
@@ -832,6 +847,9 @@ function resolveGatewayProfile(
     // its own live error, while the projection is what a surface is allowed to CLAIM.
     gatewayVerification: currentGatewayVerification(deps),
     ...(selectedModelId === undefined ? {} : { modelId: selectedModelId }),
+    // An admitted run's calls judge the tool-calling proof as of its admission (F73); the profile
+    // projection and every new run judge it now.
+    ...(verificationAtMs === undefined ? {} : { verificationAtMs }),
   });
   return { config, gateway, modelSource, result };
 }
@@ -1097,26 +1115,43 @@ function runtimeCapabilityAuthenticator(
   return deps.runtimeCapabilityAuthenticator;
 }
 
-function authenticatedRuntimeBinding(value: unknown):
-  | {
-      readonly runId: string;
-      readonly adapterKind?: RuntimeAdapterKind | undefined;
-      readonly modelProfileId?: string | undefined;
-      readonly reasoningEffort?: ModelReasoningEffort | undefined;
-    }
-  | undefined {
+interface AuthenticatedRuntimeBinding {
+  readonly runId: string;
+  readonly adapterKind?: RuntimeAdapterKind | undefined;
+  readonly modelProfileId?: string | undefined;
+  readonly reasoningEffort?: ModelReasoningEffort | undefined;
+  // When the run was admitted (its capability issued): a sidecar call judges the model's
+  // tool-calling proof as of this instant, so a proof that ages out mid-run cannot strand the run
+  // (coding run 24, F73).
+  readonly admittedAtMs?: number | undefined;
+}
+
+function authenticatedRuntimeBinding(value: unknown): AuthenticatedRuntimeBinding | undefined {
   if (!isRecord(value) || value.ok !== true || !isRecord(value.binding)) return undefined;
   if (typeof value.binding.runId !== "string" || value.binding.runId.length === 0) return undefined;
-  const adapterKind = runtimeAdapterKind(value.binding.adapterKind);
-  const effort = value.binding.reasoningEffort;
   return {
     runId: value.binding.runId,
+    ...optionalBindingFields(value.binding),
+    ...(isAdmissionInstant(value.issuedAtMs) ? { admittedAtMs: value.issuedAtMs } : {}),
+  };
+}
+
+function optionalBindingFields(
+  binding: Readonly<Record<string, unknown>>,
+): Omit<AuthenticatedRuntimeBinding, "runId" | "admittedAtMs"> {
+  const adapterKind = runtimeAdapterKind(binding.adapterKind);
+  const effort = binding.reasoningEffort;
+  return {
     ...(adapterKind === undefined ? {} : { adapterKind }),
-    ...(typeof value.binding.modelProfileId === "string"
-      ? { modelProfileId: value.binding.modelProfileId }
+    ...(typeof binding.modelProfileId === "string"
+      ? { modelProfileId: binding.modelProfileId }
       : {}),
     ...(isModelReasoningEffort(effort) ? { reasoningEffort: effort } : {}),
   };
+}
+
+function isAdmissionInstant(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
 
 function runtimeAdapterKind(value: unknown): RuntimeAdapterKind | undefined {
@@ -1274,6 +1309,19 @@ interface AuthenticatedGatewayRequest {
   readonly adapterKind?: RuntimeAdapterKind | undefined;
   readonly modelProfileId?: string | undefined;
   readonly reasoningEffort?: ModelReasoningEffort | undefined;
+  readonly admittedAtMs?: number | undefined;
+}
+
+// The optional facts a runtime capability carries onto the authenticated request.
+function runtimeBindingFields(
+  binding: AuthenticatedRuntimeBinding,
+): Omit<AuthenticatedGatewayRequest, "runtimeAuthenticated" | "runId" | "capability"> {
+  return {
+    ...(binding.adapterKind === undefined ? {} : { adapterKind: binding.adapterKind }),
+    ...(binding.modelProfileId === undefined ? {} : { modelProfileId: binding.modelProfileId }),
+    ...(binding.reasoningEffort === undefined ? {} : { reasoningEffort: binding.reasoningEffort }),
+    ...(binding.admittedAtMs === undefined ? {} : { admittedAtMs: binding.admittedAtMs }),
+  };
 }
 
 function authenticateGatewayRequest(
@@ -1312,10 +1360,21 @@ function authenticateGatewayRequest(
       gatewayReadinessRegistry(deps) !== undefined,
     runId: binding.runId,
     capability,
-    ...(binding.adapterKind === undefined ? {} : { adapterKind: binding.adapterKind }),
-    ...(binding.modelProfileId === undefined ? {} : { modelProfileId: binding.modelProfileId }),
-    ...(binding.reasoningEffort === undefined ? {} : { reasoningEffort: binding.reasoningEffort }),
+    ...runtimeBindingFields(binding),
   };
+}
+
+// The profile an authenticated request is served under: its run's model, with the tool-calling proof
+// judged as of the run's admission (F73).
+function resolveAuthenticatedGatewayProfile(
+  deps: UiHandlerDeps,
+  authentication: AuthenticatedGatewayRequest,
+): ResolvedGatewayProfile {
+  return resolveGatewayProfile(
+    deps,
+    gatewayProfileModelIdForAuthentication(authentication),
+    authentication.admittedAtMs,
+  );
 }
 
 function gatewayProfileModelIdForAuthentication(
@@ -1421,8 +1480,24 @@ interface GatewayRequestCancellation {
   readonly dispose: () => void;
 }
 
-function requestDeadlineMs(config: GatewayConfig, modelId: string): number {
-  return config.providers.find((provider) => provider.modelId === modelId)?.timeoutMs ?? 30_000;
+// The route's deadline is a backstop BEHIND the gateway's own end-to-end budget, never the budget
+// itself. It used to be the provider's per-attempt `timeoutMs`: the first attempt that hung spent
+// it, and this deadline, armed before the gateway started its own clock, aborted the retry the
+// gateway had just scheduled, so a provider timeout surfaced as a cancellation nobody had asked
+// for and failed the run (coding run 23, 2026-09-11). The grace lets the gateway settle its own
+// timeout or exhausted-retry error first.
+const GATEWAY_ROUTE_DEADLINE_GRACE_MS = 1_000;
+
+export function codingSidecarGatewayRequestDeadlineMs(
+  config: GatewayConfig,
+  modelId: string,
+): number {
+  const provider = config.providers.find((candidate) => candidate.modelId === modelId);
+  // An unconfigured model is refused before any provider call; 30 s only bounds that refusal.
+  const budget = provider === undefined ? 30_000 : providerRequestBudgetMs(provider);
+  // Armed with AbortSignal.timeout, which fires at once past 2^31 - 1 ms: an absurd budget must not
+  // turn the backstop into an immediate abort.
+  return Math.min(budget + GATEWAY_ROUTE_DEADLINE_GRACE_MS, MAX_TIMER_DELAY_MS);
 }
 
 function gatewayRequestCancellation(
@@ -1438,7 +1513,7 @@ function gatewayRequestCancellation(
   };
   ctx.req.once("aborted", abortClient);
   ctx.res.once("close", abortClient);
-  const deadline = AbortSignal.timeout(requestDeadlineMs(config, modelId));
+  const deadline = AbortSignal.timeout(codingSidecarGatewayRequestDeadlineMs(config, modelId));
   const runSignal = cancellationRegistry(deps)?.signalFor(runId);
   const signals = [client.signal, deadline, runSignal].filter(
     (signal): signal is AbortSignal => signal !== undefined,
@@ -1459,6 +1534,10 @@ interface GatewayChatDelivery {
   readonly reasoningEffort?: ModelReasoningEffort | undefined;
   readonly promptTokenReservation: PromptTokenReservation;
   readonly toolCatalogCoverage: OpenCodeGatewayHandlerCoverage | undefined;
+  // How long the per-request tool-catalog offer stays bindable: the request deadline the gateway
+  // enforces for this model plus the bridge's settlement grace (`opencodeGatewayOfferLifetimeMs`),
+  // so a legitimately long generation never comes back to an expired offer.
+  readonly offerLifetimeMs: number;
 }
 
 interface PinnedGatewayBinding {
@@ -1489,7 +1568,7 @@ function requestForGatewayDelivery(
     delivery.maxOutputTokens,
     ctx.correlationId,
     delivery.reasoningEffort,
-    delivery.toolCatalogCoverage,
+    { coverage: delivery.toolCatalogCoverage, offerLifetimeMs: delivery.offerLifetimeMs },
   );
 }
 
@@ -2193,10 +2272,7 @@ async function runHandleCodingSidecarGatewayChatCompletions(
 ): Promise<RouteResult | typeof STREAMING> {
   const authentication = authenticateGatewayRequest(ctx, deps);
   if (isRouteResult(authentication)) return authentication;
-  const resolved = resolveGatewayProfile(
-    deps,
-    gatewayProfileModelIdForAuthentication(authentication),
-  );
+  const resolved = resolveAuthenticatedGatewayProfile(deps, authentication);
   if (!isAvailableGatewayProfile(resolved))
     return unavailableGatewayProfile(ctx, deps, resolved, authentication);
   const validated = await readValidatedChatRequest(ctx, resolved, authentication);
@@ -2289,6 +2365,9 @@ function executeBudgetedGatewayChat(
       deps,
       authentication.runId,
       ctx.correlationId,
+    ),
+    offerLifetimeMs: opencodeGatewayOfferLifetimeMs(
+      codingSidecarGatewayRequestDeadlineMs(binding.config, profile.modelAlias),
     ),
   });
 }

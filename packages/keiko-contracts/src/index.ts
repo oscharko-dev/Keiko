@@ -859,6 +859,7 @@ export type {
   CodingWorkbenchApprovalRisk,
   CodingWorkbenchAuthorityEnvelope,
   CodingWorkbenchAuxiliaryStatus,
+  CodingWorkbenchOperatorDecision,
   CodingWorkbenchBudget,
   CodingWorkbenchBranchConstraints,
   CodingWorkbenchCommandPolicy,
@@ -900,6 +901,7 @@ export type {
   CODING_WORKBENCH_ACTION_CLASSES,
   CODING_WORKBENCH_APPROVAL_RISKS,
   CODING_WORKBENCH_AUXILIARY_STATUSES,
+  CODING_WORKBENCH_OPERATOR_DECISIONS,
   CODING_WORKBENCH_COMMAND_POLICY_MODES,
   CODING_WORKBENCH_CONNECTOR_SCOPES,
   CODING_WORKBENCH_GATES,
@@ -1112,6 +1114,34 @@ export type {
   validateAuxiliaryCapabilityOutcomeV1,
   validateAuxiliaryCapabilityRequestV1,
 } from "./code-task-auxiliary.js";
+
+// ─── Approved-skill discovery projection (Issue #3417, ADR-0175, ADR-0137) ─────────
+// The closed, body-free record discovery reports per approved skill; the server-approved skill
+// catalog stays authoritative for skill state and the governed skill handler for effects.
+export type {
+  SkillCategory,
+  SkillCompatibilityV1,
+  SkillDiscoveryEntryV1,
+  SkillDiscoveryResultV1,
+  SkillReadinessV1,
+  SkillUnavailableReason,
+} from "./coding-skill-discovery.js";
+// Type-only, like every other name this barrel carries (`runtime-surface.test.ts`): the runtime
+// values themselves -- the vocabulary, the bounds, the schema version, the validators and the
+// unpaired projection -- are imported from
+// `@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery`, never through this entrypoint.
+export type {
+  CODING_WORKBENCH_RUNTIME_SKILLS_SESSION_STATES,
+  CodingWorkbenchRuntimeSkillsChannelPayload,
+  CodingWorkbenchRuntimeSkillsSession,
+  SKILL_CATEGORIES,
+  SKILL_DISCOVERY_LIMITS,
+  SKILL_DISCOVERY_SCHEMA_VERSION,
+  SKILL_UNAVAILABLE_REASONS,
+  unpairedCodingWorkbenchRuntimeSkillsChannelPayload,
+  validateCodingWorkbenchRuntimeSkillsChannelPayload,
+  validateSkillDiscoveryResultV1,
+} from "./coding-skill-discovery.js";
 
 export type { FigmaCodegenFile, FigmaCodegenResponse } from "./figma-codegen.js";
 
@@ -2278,13 +2308,18 @@ export type {
   VerificationResult,
   VerificationFailureLocation,
   VerificationReport,
+  VerificationDependencyState,
+  VerificationDependencySummary,
+  VerificationLockfileState,
   ScriptCatalog,
   ScriptMapping,
 } from "./verification.js";
 export type {
   DEFAULT_VERIFICATION_LIMITS,
+  DEPENDENCY_INSTALL_LIMITS,
   VERIFICATION_FAILURE_MESSAGE_MAX_CHARS,
   VERIFICATION_MAX_FAILURE_LOCATIONS,
+  VERIFICATION_TOOL_MAX_DURATION_MS,
 } from "./verification.js";
 
 // ─── Editor verification run/event envelope (Issue #2210, Epic #2092, ADR-0126) ──

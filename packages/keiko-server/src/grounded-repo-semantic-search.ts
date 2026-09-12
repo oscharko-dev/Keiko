@@ -1,4 +1,5 @@
 import { isAbsolute, relative, resolve } from "node:path";
+import { createHash } from "node:crypto";
 
 import {
   type KnowledgeCapsule,
@@ -78,6 +79,13 @@ type RepositoryPodResolution =
   | { readonly kind: "ready"; readonly pod: ResolvedRepositoryPod };
 
 export interface ConfiguredRepoSemanticSearchOptions {
+  /**
+   * Called once with the identity of the pod that answered, when one resolved. The same observation
+   * idiom as `observePodRetrieval` below, and the only way a caller learns WHICH index it read
+   * without resolving the pod a second time (#3416).
+   */
+  readonly observePodIdentity?:
+    ((identity: { readonly capsuleId: string; readonly sourceId: string }) => void) | undefined;
   readonly fs?: WorkspaceFs | undefined;
   readonly maxCandidates?: number | undefined;
   readonly repositoryPod?: RepositoryPodSemanticSearchContext | undefined;
@@ -101,6 +109,8 @@ export interface RepositoryPodSemanticSearchContext {
 
 export interface ConfiguredRepoSemanticSearchProviderLease {
   readonly provider: SemanticSearchProvider | undefined;
+  /** 64-hex identity of the pod this lease opened; absent when none resolved (#3416). */
+  readonly indexIdentityDigest?: string | undefined;
   close(): void;
 }
 
@@ -616,6 +626,19 @@ async function semanticSearch(
   }
 }
 
+// Reports the resolved pod's identity to a caller that asked for it, and returns the resolution
+// unchanged. Never resolves anything itself: the identity a caller discloses must be the identity
+// the search actually used.
+function observedPodIdentity(
+  resolution: RepositoryPodResolution,
+  observe: ConfiguredRepoSemanticSearchOptions["observePodIdentity"],
+): RepositoryPodResolution {
+  if (resolution.kind === "ready") {
+    observe?.({ capsuleId: resolution.pod.capsule.id, sourceId: resolution.pod.source.id });
+  }
+  return resolution;
+}
+
 export function configuredRepoSemanticSearchProviderFor(
   deps: UiHandlerDeps,
   signal: AbortSignal | undefined,
@@ -635,7 +658,10 @@ export function configuredRepoSemanticSearchProviderFor(
       Math.min(MAX_SEMANTIC_CANDIDATES, options.maxCandidates ?? MAX_SEMANTIC_CANDIDATES),
     ),
     localKnowledgeEmbeddingAdapter: localKnowledgeEmbeddingAdapterForProvider(deps, provider),
-    repositoryPod: resolveRepositoryPod(options.repositoryPod, fs, provider.modelId),
+    repositoryPod: observedPodIdentity(
+      resolveRepositoryPod(options.repositoryPod, fs, provider.modelId),
+      options.observePodIdentity,
+    ),
     ...(options.observePodRetrieval === undefined
       ? {}
       : { observePodRetrieval: options.observePodRetrieval }),
@@ -668,15 +694,22 @@ export function configuredRepoSemanticSearchProviderLeaseFor(
         }),
       ),
     };
+    let indexIdentityDigest: string | undefined;
     const provider = configuredRepoSemanticSearchProviderFor(deps, signal, {
       repositoryPod: {
         store: opened.store,
         repositoryRoot,
         vectorIndex: podVectorIndex,
       },
+      observePodIdentity: (identity): void => {
+        indexIdentityDigest = createHash("sha256")
+          .update(`${identity.capsuleId}\n${identity.sourceId}`)
+          .digest("hex");
+      },
     });
     return {
       provider,
+      ...(indexIdentityDigest === undefined ? {} : { indexIdentityDigest }),
       close: (): void => {
         opened.close();
       },

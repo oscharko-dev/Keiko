@@ -467,6 +467,9 @@ describe("gateway bridge trust and compatibility boundaries", () => {
     expect(events.every((event) => event.correlationId === "correlation-1")).toBe(true);
     expect(JSON.stringify(events)).not.toContain("raw-body");
     expect(JSON.stringify(events)).not.toContain("src/example.ts");
+    // The projection line names how long the offer stays bindable (the fixture mints NOW + 30 s), so
+    // an `expired-compatibility` rejection is reconstructable next to the fetch duration.
+    expect(events[0]).toMatchObject({ extra: { offerRemainingMs: 30_000 } });
     expect(events.at(-1)).toMatchObject({
       errorKind: "validation",
       extra: {
@@ -476,6 +479,14 @@ describe("gateway bridge trust and compatibility boundaries", () => {
         catalogReason: "invalid-shape",
         canonicalToolId: "keiko.file.read",
         contractVersion: 1,
+        // The schema's account of the mismatch (run 7, 2026-09-10): the undeclared property is
+        // counted, never named -- its name is model text.
+        missingRequired: [],
+        missingRequiredCount: 0,
+        invalidPaths: [],
+        invalidPathCount: 0,
+        unexpectedPropertyCount: 1,
+        droppedPathCount: 0,
       },
     });
   });

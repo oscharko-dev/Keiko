@@ -1,4 +1,4 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   GitChangedFile,
@@ -12,8 +12,14 @@ import {
   type CodingWorkbenchChangesClient,
   type UseCodingWorkbenchChangesInput,
 } from "./useCodingWorkbenchChanges";
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import {
+  redeemCodingAppSessionPairingNavigation,
+  type CodingAppSessionPairingSeams,
+} from "./coding-app-session-client";
 
-vi.mock("./coding-app-session-client", () => ({
+vi.mock("./coding-app-session-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./coding-app-session-client")>()),
   codingAppSessionPairingSettled: () => Promise.resolve(true),
 }));
 
@@ -392,5 +398,39 @@ describe("useCodingWorkbenchChanges", () => {
     // The next successful diff fetch recovers.
     expect(view.result.current.diffStatus).toBe("ready");
     expect(view.result.current.diff?.files[0]?.path).toBe("src/file-000.ts");
+  });
+});
+
+// A launcher re-pair that arrives without a page load (F65): a fragment, and a pair endpoint that
+// acknowledges it.
+const REPAIR_SEAMS: CodingAppSessionPairingSeams = {
+  readFragment: (): string =>
+    encodeCodingAppSessionPairingFragment({
+      requestId: "req_re-pair",
+      issuedAtMs: 1,
+      claim: "e".repeat(64),
+    }),
+  stripFragment: (): void => undefined,
+  postPairing: (): Promise<unknown> => Promise.resolve({ schemaVersion: "1" }),
+};
+
+describe("useCodingWorkbenchChanges after a re-pair without a page load (F65)", () => {
+  it("reads the run's status, history and selected diff again", async () => {
+    vi.useRealTimers();
+    const stub = client();
+    renderHook(() => useCodingWorkbenchChanges({ ...baseInput(), client: stub }));
+    await waitFor(() => expect(stub.getDiff).toHaveBeenCalled());
+    const statusReads = stub.getStatus.mock.calls.length;
+    const historyReads = stub.getHistory.mock.calls.length;
+    const diffReads = stub.getDiff.mock.calls.length;
+
+    await act(async () => {
+      await redeemCodingAppSessionPairingNavigation(REPAIR_SEAMS);
+    });
+
+    await waitFor(() => expect(stub.getStatus.mock.calls.length).toBeGreaterThan(statusReads));
+    expect(stub.getHistory.mock.calls.length).toBeGreaterThan(historyReads);
+    // The selection and the ready snapshot survive the reload; the diff is read again all the same.
+    await waitFor(() => expect(stub.getDiff.mock.calls.length).toBeGreaterThan(diffReads));
   });
 });

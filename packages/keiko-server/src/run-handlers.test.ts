@@ -5,13 +5,14 @@
 // default, SSE replay+ready+live framing+terminal close, cancel, GET projection, the apply gate
 // (409 when not appliable), and that NO secret-shaped string appears in ANY response body.
 
+import { EventEmitter } from "node:events";
 import { cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import type { Server } from "node:http";
+import type { IncomingMessage, Server, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UI_HOST } from "./server.js";
 import { buildCspHeader } from "./csp.js";
@@ -24,6 +25,15 @@ import {
   type UiHandlerDeps,
 } from "./index.js";
 import { createInMemoryUiStore } from "./store/index.js";
+import { handleAllRunEvents, handleRunEvents } from "./run-handlers.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+  type BufferedServerLogSink,
+  type ServerLogEvent,
+} from "./observability/index.js";
 import {
   createInMemoryEvidenceStore,
   listEvidence,
@@ -155,7 +165,7 @@ function testAppSessionChannel(paired: boolean): CodingAppSessionChannel {
     pair: () => ({ paired: false }),
     snapshot: () => contentFreeCodingAppSessionChannelSnapshot(),
     rotate: () => ({ rotated: false }),
-    signOut: () => undefined,
+    signOut: () => false,
     sessionCount: () => (paired ? 1 : 0),
     verifySession: () => (paired ? TEST_APP_SESSION : undefined),
     subscribe: () => ({
@@ -1540,5 +1550,144 @@ describe("apply threads the run's own id into its verification egress probe", ()
     } finally {
       consoleError.mockRestore();
     }
+  });
+});
+
+// #3452 audit finding sse.ts:108: `handleAllRunEvents` and `handleRunEvents` (via `openSseStream`)
+// are two of the five openers that wrote the ready frame bare before this fix. Each now threads the
+// request's own `ctx.correlationId` into `writeReadyMessage`, so a stream that closes right after
+// its ready frame — never reaching a real event or a heartbeat tick — still produces the terminal
+// `sse.stream.closed` line the customer log needs to reconstruct it (AGENTS.md §8 Rule 1). Mirrors
+// how editor/agentRoutes.test.ts's "editor-agent bridge stream evidence" captures server log lines.
+describe("run-event SSE openers evidence a ready-then-close stream (#3452 audit finding sse.ts:108)", () => {
+  afterEach(() => {
+    resetServerLogger();
+  });
+
+  // A minimal fake SSE connection: an EventEmitter-backed res/req pair. `closeRes` fires the one
+  // event every real ServerResponse reaches exactly once, whether the client disconnected, the
+  // server ended it, or (as here) the test closes it deliberately right after the ready frame.
+  function fakeSseConnection(): {
+    req: IncomingMessage;
+    res: ServerResponse;
+    closeRes: () => void;
+  } {
+    const resEvents = new EventEmitter();
+    const res = {
+      writeHead(): ServerResponse {
+        return res as unknown as ServerResponse;
+      },
+      write(): boolean {
+        return true;
+      },
+      end(): ServerResponse {
+        return res as unknown as ServerResponse;
+      },
+      destroy(): void {
+        // Not inspected by these tests: nothing here reaches the backpressure-kill path.
+      },
+      on(event: string, listener: (...args: unknown[]) => void): ServerResponse {
+        resEvents.on(event, listener);
+        return res as unknown as ServerResponse;
+      },
+    };
+    const reqEvents = new EventEmitter();
+    const req = {
+      headers: {},
+      on(event: string, listener: (...args: unknown[]) => void): IncomingMessage {
+        reqEvents.on(event, listener);
+        return req as unknown as IncomingMessage;
+      },
+    };
+    return {
+      req: req as unknown as IncomingMessage,
+      res: res as unknown as ServerResponse,
+      closeRes: (): void => {
+        resEvents.emit("close");
+      },
+    };
+  }
+
+  function closedLines(sink: BufferedServerLogSink): readonly ServerLogEvent[] {
+    return sink.events.filter((event) => event.op === "sse.stream.closed");
+  }
+
+  function minimalDeps(registry: ReturnType<typeof createRunRegistry>): UiHandlerDeps {
+    return {
+      config: undefined,
+      configPresent: false,
+      evidenceStore: createInMemoryEvidenceStore(),
+      env: {},
+      redactor: buildRedactor({}),
+      registry,
+      store: createInMemoryUiStore(),
+      modelPortFactory: (): ModelPort => ({
+        call: (): Promise<NormalizedResponse> => Promise.reject(new Error("unused in this test")),
+      }),
+    };
+  }
+
+  it("handleAllRunEvents: closing right after the ready frame writes one sse.stream.closed line under the request's correlation id", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const { req, res, closeRes } = fakeSseConnection();
+
+    handleAllRunEvents(
+      {
+        req,
+        res,
+        params: {},
+        url: new URL("http://127.0.0.1/api/runs/events"),
+        correlationId: "corr-all-run-events-1",
+      },
+      minimalDeps(createRunRegistry()),
+    );
+    closeRes();
+
+    const closed = closedLines(sink);
+    expect(closed).toHaveLength(1);
+    expect(closed[0]).toMatchObject({
+      category: "http",
+      op: "sse.stream.closed",
+      correlationId: "corr-all-run-events-1",
+    });
+    const frameCount = (closed[0]?.extra as { frameCount?: number } | undefined)?.frameCount ?? 0;
+    expect(frameCount).toBeGreaterThanOrEqual(1);
+  });
+
+  it("handleRunEvents: closing right after the ready frame writes one sse.stream.closed line under the request's correlation id", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const { req, res, closeRes } = fakeSseConnection();
+    const registry = createRunRegistry();
+    registry.register({
+      runId: "run-ready-close-1",
+      fingerprint: "fp-run-ready-close-1",
+      modelId: "example-chat-model",
+      sink: new QueueEventSink(),
+      cancel: (): void => undefined,
+    });
+
+    handleRunEvents(
+      {
+        req,
+        res,
+        params: { runId: "run-ready-close-1" },
+        url: new URL("http://127.0.0.1/api/runs/run-ready-close-1/events"),
+        correlationId: "corr-run-events-1",
+      },
+      minimalDeps(registry),
+    );
+    closeRes();
+
+    const closed = closedLines(sink);
+    expect(closed).toHaveLength(1);
+    expect(closed[0]).toMatchObject({
+      category: "http",
+      op: "sse.stream.closed",
+      correlationId: "corr-run-events-1",
+    });
+    const frameCount = (closed[0]?.extra as { frameCount?: number } | undefined)?.frameCount ?? 0;
+    expect(frameCount).toBeGreaterThanOrEqual(1);
   });
 });

@@ -219,9 +219,9 @@ function sidecarRuntime(
       owner: "anomalyco",
       repository: "opencode",
       name: "opencode",
-      version: "1.17.17",
-      tag: "v1.17.17",
-      commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
+      version: "1.18.30",
+      tag: "v1.18.30",
+      commit: "3104c1428ec91f809e5ab86631300de41eb6952e",
     },
     adapterCompatibility: {
       adapterName: "keiko-coding-sidecar",
@@ -230,7 +230,7 @@ function sidecarRuntime(
     },
     protocolSchema: {
       path: "packages/sdk/openapi.json",
-      sha256: "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de",
+      sha256: "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3",
       hashAlgorithm: "sha256",
       hashEncoding: "lowercase-hex",
       digestInput: "upstream-raw-bytes",
@@ -239,7 +239,7 @@ function sidecarRuntime(
     releaseApproval: { redistribution: { status: "approved" } },
     archive: {
       platformTarget: TARGET,
-      sha256: "0a7fd7730a8efb00c69bce86fabcc0c24668371d821e99078a90dc78b71b4b85",
+      sha256: "c8c0e0d05ac3dac544a0edfad8de9eb244bf46c6c7a131c38619d40fcf31bd1f",
     },
     executableTreeAlgorithm: "keiko-directory-tree-sha256-v1",
     executableTreeSha256: "f".repeat(64),
@@ -1009,7 +1009,7 @@ describe("portable update staging", () => {
 
     expect(summary.sidecarRuntimes?.[0]).toMatchObject({
       name: "opencode-compatible",
-      upstreamVersion: "1.17.17",
+      upstreamVersion: "1.18.30",
       payloadSha256: sidecarPayloadSha256(files),
       payloadSha256Prefix: sidecarPayloadSha256(files).slice(0, 12),
       status: "verified",

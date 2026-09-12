@@ -283,6 +283,21 @@ export class EditorAgentAuthorityRegistry {
     return drift === undefined ? { ok: true, envelope } : { ok: false, reason: drift };
   }
 
+  /**
+   * Whether a runtime delegation of `usage` would still fit the retained budget: the budget answer
+   * `resolveRuntime` would give, without reserving budget or replay identity (#3417).
+   */
+  public runtimeDelegationFits(
+    reference: EditorAgentGovernedAuthorityReference,
+    workspaceRoot: string,
+    deploymentCeiling: CodingWorkbenchMode,
+    usage: CodingWorkbenchRuntimeDelegationUsage,
+    nowIso: string,
+  ): boolean {
+    const resolved = this.resolveRuntimeRecord(reference, workspaceRoot, deploymentCeiling, nowIso);
+    return resolved.ok && usageFits(resolved.record, usage);
+  }
+
   /** Atomically charges one model request against the retained runtime prompt budget. */
   public reserveRuntimePromptTokens(
     reference: EditorAgentGovernedAuthorityReference,
@@ -632,23 +647,27 @@ function admitRuntimeDelegation(
   return { ok: true, envelope: record.runtimeEnvelope };
 }
 
+// Whether `usage` fits on top of what the record already booked: the one budget rule the
+// reservation and the non-reserving fit check (#3417) both apply.
+function usageFits(record: AuthorityRecord, usage: CodingWorkbenchRuntimeDelegationUsage): boolean {
+  return (
+    [usage.toolCalls, usage.patchBytes, usage.promptTokens].every(validUsageCount) &&
+    record.usage.toolCalls + usage.toolCalls <= record.envelope.budget.maxToolCalls &&
+    record.usage.patchBytes + usage.patchBytes <= record.envelope.budget.maxPatchBytes &&
+    record.usage.promptTokens + usage.promptTokens <= record.envelope.budget.maxPromptTokens
+  );
+}
+
 function reserveUsage(
   record: AuthorityRecord,
   usage: CodingWorkbenchRuntimeDelegationUsage,
 ): boolean {
-  if (![usage.toolCalls, usage.patchBytes, usage.promptTokens].every(validUsageCount)) return false;
-  const next = {
+  if (!usageFits(record, usage)) return false;
+  Object.assign(record.usage, {
     toolCalls: record.usage.toolCalls + usage.toolCalls,
     patchBytes: record.usage.patchBytes + usage.patchBytes,
     promptTokens: record.usage.promptTokens + usage.promptTokens,
-  };
-  if (
-    next.toolCalls > record.envelope.budget.maxToolCalls ||
-    next.patchBytes > record.envelope.budget.maxPatchBytes ||
-    next.promptTokens > record.envelope.budget.maxPromptTokens
-  )
-    return false;
-  Object.assign(record.usage, next);
+  });
   return true;
 }
 

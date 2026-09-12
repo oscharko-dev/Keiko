@@ -233,7 +233,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
   private entry: ProjectionEntry | undefined;
   private subscriberRunId: string | undefined;
   private expiryTimer: ReturnType<typeof setTimeout> | undefined;
-  private lastEmittedDropCount = 0;
+  private faultDropCount = 0;
 
   public constructor(options: CodingSafeActivityProjectionOptions) {
     this.now = options.now ?? Date.now;
@@ -262,7 +262,7 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     if (this.subscribers.size > 0) this.subscriberRunId = input.runId;
     if (!validOpenInput(input, expiresAtMs, now)) this.expireCurrent();
     else {
-      this.lastEmittedDropCount = 0;
+      this.faultDropCount = 0;
       this.scheduleExpiry(this.entry);
       this.notify();
     }
@@ -497,9 +497,17 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
       correlationId: correlationIdOrUnknown(runId),
       extra: { event: "dropped", reason, occurrenceCount: next },
     });
-    for (let milestone = 1; milestone <= next; milestone *= 2) {
-      if (milestone <= previous || milestone <= this.lastEmittedDropCount) continue;
-      this.lastEmittedDropCount = milestone;
+    // A capacity drop is the feed's DESIGNED truncation: a long agent turn keeps its newest
+    // messages within the contract bounds. The activity line above records it; an error-level
+    // diagnostic for it read as a fault in every long run (F49, Coding Workbench run 24).
+    if (reason === "capacity-rejected") return;
+    // Fault drops keep their own count, so the feed's truncation neither delays nor inflates the
+    // diagnostic of a real fault (F49). The count only grows, so each milestone is reported once,
+    // even when a capacity drop is rolled back.
+    const before = this.faultDropCount;
+    this.faultDropCount += next - previous;
+    for (let milestone = 1; milestone <= this.faultDropCount; milestone *= 2) {
+      if (milestone <= before) continue;
       emitDropDiagnostic(this.diagnostics, this.now, runId, reason, milestone);
     }
   }
@@ -1053,13 +1061,14 @@ function capacityDropForApplication(
 // the bounded count for a drop already has its own dedicated field (`occurrenceCount`), so nothing
 // about the drop/purge is lost by keeping `message` a closed-vocabulary lookup instead of a
 // template literal.
-const SAFE_ACTIVITY_DROP_SUMMARY: Readonly<
-  Record<CodingSafeActivityDropReason, ServerDiagnosticSummary>
-> = {
+// A capacity drop is designed truncation and has no diagnostic (F49); every other drop reason is a
+// fault an operator must see.
+type FaultDropReason = Exclude<CodingSafeActivityDropReason, "capacity-rejected">;
+
+const SAFE_ACTIVITY_DROP_SUMMARY: Readonly<Record<FaultDropReason, ServerDiagnosticSummary>> = {
   "validation-rejected": "safe-activity-dropped-validation-rejected",
   "redactor-collapsed": "safe-activity-dropped-redactor-collapsed",
   "projection-rejected": "safe-activity-dropped-projection-rejected",
-  "capacity-rejected": "safe-activity-dropped-capacity-rejected",
   "subscriber-rejected": "safe-activity-dropped-subscriber-rejected",
 };
 
@@ -1077,7 +1086,7 @@ function emitDropDiagnostic(
   sink: ServerDiagnosticSink | undefined,
   now: () => number,
   runId: string,
-  reason: CodingSafeActivityDropReason,
+  reason: FaultDropReason,
   count: number,
 ): void {
   emitServerDiagnostic(sink, {

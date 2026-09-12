@@ -32,6 +32,10 @@ export const WORKBENCH_DESCRIPTION_REASON_STATES = {
   generated: "current",
   "partial-generated": "partial",
   "fallback-generated": "fallback",
+  // F56 (Coding Workbench run 24): the model answered, but its description was refused as unsafe or
+  // invalid output, so the deterministic fallback stood in. "fallback-generated" said the model was
+  // unavailable, which it was not.
+  "fallback-output-refused": "fallback",
   "stale-snapshot": "stale",
   // #3390: the retained proposal lapsed while the change it describes did NOT move. Reporting that
   // as `stale-snapshot` told the operator something untrue -- the head was unchanged -- and left

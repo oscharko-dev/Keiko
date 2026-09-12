@@ -289,13 +289,19 @@ describe("GET /api/terminal/directories", () => {
       );
 
       expect(res.status).toBe(403);
-      expect(sink.events).toHaveLength(1);
+      // F84: the server's own request line follows the denial on the same correlation, and neither
+      // line carries the path, raw or encoded.
+      await vi.waitFor(() => {
+        expect(sink.events).toHaveLength(2);
+      });
       expect(sink.events[0]).toMatchObject({
         op: "workspace.root.denied",
         correlationId,
         errorKind: "WORKSPACE_PATH_DENIED",
       });
+      expect(sink.events[1]).toMatchObject({ category: "http", correlationId, status: 403 });
       expect(JSON.stringify(sink.events)).not.toContain(fixture);
+      expect(JSON.stringify(sink.events)).not.toContain(encodeURIComponent(fixture));
     } finally {
       resetServerLogger();
       await rm(fixture, { recursive: true, force: true });
@@ -450,13 +456,21 @@ describe("GET /api/terminal/directories — managed root, no authority resolver 
       resetServerLogger();
     }
 
-    expect(sink.events).toHaveLength(1);
+    // F84: the server's own request line follows the denial on the same correlation, and neither
+    // line carries the path, raw or encoded.
+    expect(sink.events).toHaveLength(2);
     expect(sink.events[0]).toMatchObject({
       op: "workspace.root.denied",
       correlationId: "terminal-managed-correlation-0001",
       extra: { decision: "denied", reason: "managed-authority-unavailable" },
     });
+    expect(sink.events[1]).toMatchObject({
+      category: "http",
+      correlationId: "terminal-managed-correlation-0001",
+      status: 403,
+    });
     expect(JSON.stringify(sink.events)).not.toContain(managedRoot);
+    expect(JSON.stringify(sink.events)).not.toContain(encodeURIComponent(managedRoot));
   });
 
   it("still serves an ordinary registered root outside the managed root", async () => {

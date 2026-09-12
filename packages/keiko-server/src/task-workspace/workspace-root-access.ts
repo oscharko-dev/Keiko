@@ -1,7 +1,10 @@
 import { isAbsolute, relative, resolve } from "node:path";
 import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
-import { workspaceFsWithOwnedRootAuthority } from "@oscharko-dev/keiko-workspace/internal/owned-root-mint";
+import {
+  workspaceFsWithOwnedRootAuthority,
+  workspaceInfoWithOwnedRootAuthority,
+} from "@oscharko-dev/keiko-workspace/internal/owned-root-mint";
 import { containsPath } from "@oscharko-dev/keiko-git";
 import type { WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "../deps.js";
@@ -454,7 +457,13 @@ export function resolveManagedTaskWorkspaceRoot(
   logging?: WorkspaceRootAccessDenialLogging,
 ): WorkspaceInfo | undefined {
   const access = resolveManagedWorkspaceRootAccess(deps, root, logging);
-  return access === undefined ? undefined : workspaceInfo(access.canonicalRoot);
+  if (access === undefined) return undefined;
+  // The WorkspaceInfo travels alone into every git lane's deps, whose spawn boundary resolves its
+  // cwd through the user-workspace root rules — which deny the state directory's `.keiko` segment
+  // this worktree lives below. Binding the port the prover just minted lets that boundary resolve
+  // through the root's own authority (keiko-tools `workspaceFsOf`); without it every git command in
+  // a managed worktree was refused before spawn on a default installation (2026-09-10).
+  return workspaceInfoWithOwnedRootAuthority(workspaceInfo(access.canonicalRoot), access.fs);
 }
 
 /**

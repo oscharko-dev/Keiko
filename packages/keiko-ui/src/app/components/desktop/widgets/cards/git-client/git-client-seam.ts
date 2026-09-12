@@ -50,6 +50,7 @@ import {
   type GitDeliveryCommitPreviewResponse,
   type GitDeliveryMutationResponse,
 } from "@/lib/api";
+import { codingAppSessionPairingSettled } from "@/lib/coding-app-session-client";
 import { notifyGitRepositoryStateInvalidated } from "../git-repository-state-events";
 
 // The outcome of any Git mutation. Push execute adds the publish-rejection / recovery fields; they
@@ -112,18 +113,31 @@ export interface GitClientSeam {
   readonly mergeExecute: typeof fetchGitDeliveryMergeExecute;
 }
 
+// A Git read may name a managed task-workspace root, which the BFF answers only for a paired browser
+// (ADR-0141). Like every protected read, each one waits for this window's pairing attempt to settle
+// first, so a Git window opened with the launcher link cannot race its own redemption into the
+// unpaired projection (PR #3452 review).
+function afterPairing<Args extends readonly unknown[], Result>(
+  read: (...args: Args) => Promise<Result>,
+): (...args: Args) => Promise<Result> {
+  return async (...args: Args): Promise<Result> => {
+    await codingAppSessionPairingSettled();
+    return read(...args);
+  };
+}
+
 export const DEFAULT_GIT_CLIENT: GitClientSeam = {
-  listRepositories: fetchProjects,
+  listRepositories: afterPairing(fetchProjects),
   registerRepository: createProject,
   reconnectRepository: reconnectProject,
   cloneRepository: fetchCloneRepository,
-  listBranches: fetchGitBranches,
-  getSummary: fetchGitSummary,
-  getHistory: fetchGitHistory,
-  getRemotes: fetchGitRemotes,
-  getStatus: fetchGitStatus,
-  getDiff: fetchGitDiff,
-  getStructuredDiff: fetchGitStructuredDiff,
+  listBranches: afterPairing(fetchGitBranches),
+  getSummary: afterPairing(fetchGitSummary),
+  getHistory: afterPairing(fetchGitHistory),
+  getRemotes: afterPairing(fetchGitRemotes),
+  getStatus: afterPairing(fetchGitStatus),
+  getDiff: afterPairing(fetchGitDiff),
+  getStructuredDiff: afterPairing(fetchGitStructuredDiff),
   branchCreate: fetchGitDeliveryLocalBranchCreate,
   branchSwitch: fetchGitDeliveryLocalBranchSwitch,
   stage: fetchGitDeliveryStage,

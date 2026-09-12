@@ -8,12 +8,17 @@ import type {
   WorkspaceRootDescriptor,
 } from "@oscharko-dev/keiko-contracts";
 import { editorAgentRootBindingDenyReason } from "@oscharko-dev/keiko-contracts/runtime/editor-agent-governance";
-import { isContainedAgentPath } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import {
+  EDITOR_AGENT_NAVIGATION_DOCUMENT_MAX_BYTES,
+  isContainedAgentPath,
+} from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { validateWorkspaceManifest } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 import {
   containedRealPathInfo,
   isWithinWorkspace,
   type WorkspaceFs,
+  detectWorkspaceAt,
+  readWorkspaceFile,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { UiStore, WorkspaceManifestRecordRow } from "../store/index.js";
@@ -392,4 +397,32 @@ export function editorAgentPathBoundaryReason(
     }
   }
   return null;
+}
+
+/**
+ * The document text a server-resolved editor operation (`navigateSymbol`) needs when the client did
+ * not send the buffer, read through the port the root's own authority resolved. This read detected
+ * the workspace through the plain node port, so for a managed task worktree — below the state
+ * directory's always-denied `.keiko` segment — it threw before reading anything and every such
+ * navigation failed with the generic server-resolved error (review of PR #3452; the same defect
+ * class PR #3381 repaired for the patch route's pre-image read). A refused port is a refusal, never
+ * a fallback to the plain port: the boundary above already recorded why.
+ */
+export function serverResolvedDocumentText(
+  deps: EditorAgentContainmentDeps | undefined,
+  workspaceRoot: string,
+  path: string,
+  text: string | undefined,
+  correlationId?: string,
+): string {
+  if (text !== undefined) return text;
+  const port = resolveEditorAgentContainmentPort(deps, workspaceRoot, correlationId);
+  if (!port.ok) throw new Error(`editor agent root binding refused: ${port.reason}`);
+  const workspace = detectWorkspaceAt(workspaceRoot, port.fs);
+  return readWorkspaceFile(
+    workspace,
+    path,
+    { maxBytes: EDITOR_AGENT_NAVIGATION_DOCUMENT_MAX_BYTES },
+    port.fs,
+  ).text;
 }

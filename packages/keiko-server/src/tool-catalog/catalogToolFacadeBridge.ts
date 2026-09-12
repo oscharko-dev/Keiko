@@ -14,7 +14,7 @@ import type {
 import type { CodingToolAuthorityPreview } from "../coding-runtime/codingToolAuthorityPort.js";
 import type { CodingToolInvocationRegistry } from "../coding-runtime/codingToolInvocationRegistry.js";
 import {
-  createOpenCodeGatewayToolCatalogAdvertisement,
+  openCodeGatewayCatalogProjection,
   isOpenCodeVerificationId,
   type OpenCodeGatewayHandlerCoverage,
 } from "../coding-runtime/opencodeToolSchemas.js";
@@ -42,7 +42,9 @@ import type {
 } from "./catalogToolPorts.js";
 import { CatalogDispatchFault } from "./catalogToolRuntimeAuthority.js";
 
-const OPENCODE_CATALOG_ADVERTISEMENT = createOpenCodeGatewayToolCatalogAdvertisement(0);
+// Descriptor lookup only: the facade never binds a gateway offer, so it reads the catalog and its
+// compiled projection directly instead of minting a request offer.
+const OPENCODE_CATALOG_ADVERTISEMENT = openCodeGatewayCatalogProjection();
 const OPENCODE_CATALOG_DESCRIPTORS = OPENCODE_CATALOG_ADVERTISEMENT.projection.tools.flatMap(
   (tool) => {
     const descriptor = lookupCatalogTool(OPENCODE_CATALOG_ADVERTISEMENT.catalog, tool.toolRef);
@@ -159,6 +161,8 @@ function catalogActionFor(request: CodingToolActionRequest): CatalogAction | und
       return { toolId: "keiko.research.fetch", arguments: { target: request.target } };
     case "skill":
       return { toolId: "keiko.skill.invoke", arguments: { skillId: request.skillId } };
+    case "skill-discover":
+      return { toolId: "keiko.skill.discover", arguments: {} };
     case "child-agent":
       return {
         toolId: "keiko.child.run",
@@ -171,6 +175,20 @@ function catalogActionFor(request: CodingToolActionRequest): CatalogAction | und
     default:
       return undefined;
   }
+}
+
+/**
+ * The catalog settlement budget of the tool a facade request dispatches to, or undefined for a
+ * request no catalog tool serves. The sidecar tool bridge's deadline is derived from this one
+ * declaration (PR #3452, F43/F44).
+ */
+export function openCodeCatalogSettlementBudgetMs(
+  request: CodingToolActionRequest,
+): number | undefined {
+  const toolId = catalogActionFor(request)?.toolId;
+  return toolId === undefined
+    ? undefined
+    : OPENCODE_DESCRIPTOR_BY_ID.get(toolId)?.bounds.maxDurationMs;
 }
 
 function gitCatalogAction(
@@ -254,6 +272,7 @@ function auxiliaryRepresentative(
     return { ...base, action: "egress", target: "https://example.invalid/" };
   if (canonicalId === "keiko.skill.invoke")
     return { ...base, action: "skill", skillId: "skl_fixture@1" };
+  if (canonicalId === "keiko.skill.discover") return { ...base, action: "skill-discover" };
   if (canonicalId === "keiko.child.run")
     return { ...base, action: "child-agent", objective: "inspect", maxToolCalls: 1 };
   return undefined;
@@ -312,6 +331,7 @@ function optionalUnavailable(
   return (
     (canonicalId === "keiko.research.fetch" && unavailable.has("keiko_research_fetch")) ||
     (canonicalId === "keiko.skill.invoke" && unavailable.has("keiko_skill")) ||
+    (canonicalId === "keiko.skill.discover" && unavailable.has("keiko_skill_discover")) ||
     (canonicalId === "keiko.child.run" && unavailable.has("keiko_child_agent"))
   );
 }
@@ -461,7 +481,7 @@ function expiredResult(request: CodingToolActionRequest): CodingToolResult {
 }
 
 function emitExpiredBinding(
-  advertisement: ReturnType<typeof createOpenCodeGatewayToolCatalogAdvertisement>,
+  advertisement: ReturnType<typeof openCodeGatewayCatalogProjection>,
   context: CanonicalCatalogContext,
   logPort: CatalogLifecycleLogPort,
 ): void {

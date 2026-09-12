@@ -294,6 +294,15 @@
     }
   },
   {
+    "name": "keiko_skill_discover",
+    "description": "List the approved read-only skills this run may invoke now: each with the pinned skillId keiko_skill takes, its version, source digest, category, catalogued capabilities, compatible profile versions and readiness. Discover again after keiko_skill reports skill-discovery-stale.",
+    "parameters": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "type": "object",
+      "properties": {}
+    }
+  },
+  {
     "name": "keiko_verification",
     "description": "Run one named verification gate (test, typecheck, lint or build). Ordinary working-tree tests use an empty targetPath and may pass without commit proof; targeted-test requires one workspace-relative test path. For a commit, execute a ready stage proposal, or an approval-required stage proposal after approval, then rerun verification and proceed only when the result reports verification: { commitProof: \"recorded\" }. A candidate-not-staged result with nextAction stage-then-verify requires staging and another verification run.",
     "parameters": {

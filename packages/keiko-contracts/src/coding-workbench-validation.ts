@@ -12,6 +12,7 @@ import {
   CODING_WORKBENCH_CONTENT_TRUST_VALUES,
   CODING_WORKBENCH_GATES,
   CODING_WORKBENCH_MODEL_SOURCES,
+  CODING_WORKBENCH_OPERATOR_DECISIONS,
   CODING_WORKBENCH_MODES,
   CODING_WORKBENCH_MODE_POLICIES,
   CODING_WORKBENCH_NETWORK_MODES,
@@ -707,6 +708,7 @@ const CODING_WORKBENCH_RUNTIME_EVENT_ALLOWED_KEYS_BY_KIND: Readonly<
     "failureSummary",
     "retryable",
   ),
+  "operator-decision": runtimeEventAllowedKeys("operatorDecision", "auxiliaryOutcome"),
   "failure-redacted": runtimeEventAllowedKeys("failureCode", "failureSummary", "retryable"),
 } as const satisfies Readonly<Record<CodingWorkbenchRuntimeEventKind, readonly string[]>>);
 
@@ -1209,6 +1211,29 @@ function validateSkillInvokedEventFields(value: Record<string, unknown>, errors:
   requireAuxiliaryOutcome(value, errors);
 }
 
+// The decision being asked of the human is REQUIRED: an event that cannot name it would pause a run
+// without saying what the operator has to decide, which is the failure this event exists to prevent.
+// `auxiliaryOutcome` stays optional and carries the phase: absent means the decision is open and a
+// governed tool is waiting on it, present means it settled.
+function validateOperatorDecisionEventFields(
+  value: Record<string, unknown>,
+  errors: string[],
+): void {
+  validateRequiredEnumField(
+    value,
+    "operatorDecision",
+    CODING_WORKBENCH_OPERATOR_DECISIONS,
+    "event",
+    errors,
+  );
+  if (
+    value.auxiliaryOutcome !== undefined &&
+    !isOneOf(value.auxiliaryOutcome, CODING_WORKBENCH_AUXILIARY_STATUSES)
+  ) {
+    errors.push("event.auxiliaryOutcome is invalid");
+  }
+}
+
 function validateChildRunStartedEventFields(
   value: Record<string, unknown>,
   errors: string[],
@@ -1244,6 +1269,7 @@ const CODING_WORKBENCH_RUNTIME_EVENT_REQUIRED_FIELD_VALIDATORS: Readonly<
   "skill-invoked": validateSkillInvokedEventFields,
   "child-run-started": validateChildRunStartedEventFields,
   "child-run-completed": validateChildRunCompletedEventFields,
+  "operator-decision": validateOperatorDecisionEventFields,
   "failure-redacted": validateFailureRedactedEventFields,
 } as const);
 

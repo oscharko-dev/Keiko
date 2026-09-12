@@ -8,12 +8,25 @@
 
 import { dirname, isAbsolute, resolve, win32 } from "node:path";
 import { forwardWorkspaceFs, type WorkspaceFs } from "./fs.js";
-import { ownedWorkspaceRootAuthority } from "./ownedRootLookup.js";
+import { ownedRootWorkspaceFs, ownedWorkspaceRootAuthority } from "./ownedRootLookup.js";
 import { preserveOwnedRootAuthority } from "./ownedRootPreserve.js";
 import { isDenied } from "./ignore.js";
 import { isWithinWorkspace } from "./paths.js";
 import { PathDeniedError, PathEscapeError } from "./errors.js";
 import { StructuralExecutionStoppedError } from "./structuralExecution.js";
+import type { WorkspaceInfo } from "./types.js";
+
+/**
+ * The filesystem port a consumer should resolve paths through for this workspace: the owned-root
+ * port the prover bound to a Keiko-owned root's WorkspaceInfo, or `fallback` for an ordinary root.
+ * A managed task worktree lives below the state directory's always-denied `.keiko` segment; a lane
+ * that resolves its cwd through `fallback` re-admits that root under the user-workspace rules and
+ * refuses it before anything runs. This gives such a lane the port the root's own authority
+ * resolved, without every intermediate signature having to carry it.
+ */
+export function boundWorkspaceFs(workspace: WorkspaceInfo, fallback: WorkspaceFs): WorkspaceFs {
+  return ownedRootWorkspaceFs(workspace) ?? fallback;
+}
 
 const DENIED_WORKSPACE_ROOT_REQUEST = "[denied-workspace-root]";
 

@@ -5,10 +5,12 @@
 // never report a stat "match" the caller can safely skip re-reading content for.
 
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PathDeniedError } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { workspaceFsWithOwnedRootAuthority } from "@oscharko-dev/keiko-workspace/internal/owned-root-mint";
 import { afterEach, describe, expect, it } from "vitest";
 import { makeWorkspace } from "./_support.js";
 import {
@@ -207,5 +209,67 @@ describe("readGitIndexWriteTimeNs", () => {
     const root = tempRepoRoot();
     writeFileSync(join(root, ".git"), "not a real pointer\n", "utf8");
     expect(readGitIndexWriteTimeNs(root)).toBeUndefined();
+  });
+});
+
+// A managed task worktree lives below the state directory's always-denied `.keiko` segment. Both
+// helpers resolved containment through the plain node port with a bare root, so the raw status
+// reader behind every verification and commit-facts read threw PathDeniedError inside such a
+// worktree (run 5, 2026-09-10: `coding-runtime.verification` with frames into this module). They
+// now take the port the prover bound to the root; the plain port keeps refusing.
+describe("a root below an always-denied segment", () => {
+  const dirs: string[] = [];
+  function deniedRoot(): string {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-index-stat-denied-")));
+    dirs.push(base);
+    const root = join(base, ".keiko", "ui", "task-workspaces", "repo_1", "ws_1");
+    mkdirSync(root, { recursive: true });
+    return root;
+  }
+  function statOf(root: string, path: string): GitIndexStat {
+    const stat = nodeWorkspaceFs.stat(join(root, path));
+    if (stat.mtimeNs === undefined || stat.ctimeNs === undefined) {
+      throw new Error("test-fixture-no-nanosecond-stat");
+    }
+    return { ctimeNs: stat.ctimeNs, mtimeNs: stat.mtimeNs, size: stat.size };
+  }
+
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("refuses the stat comparison through the plain port and admits it through the owned-root port", () => {
+    const root = deniedRoot();
+    writeFileSync(join(root, "settled.ts"), "settled content", "utf8");
+    const expected = statOf(root, "settled.ts");
+    expect(() => indexStatMatches(root, "settled.ts", expected)).toThrow(PathDeniedError);
+    const fs = workspaceFsWithOwnedRootAuthority(nodeWorkspaceFs, root);
+    expect(indexStatMatches(root, "settled.ts", expected, undefined, fs)).toBe(true);
+    expect(
+      indexStatMatches(root, "settled.ts", { ...expected, size: expected.size + 1 }, undefined, fs),
+    ).toBe(false);
+  });
+
+  it("reads the index write time through the owned-root port where the plain port yields nothing", () => {
+    const root = deniedRoot();
+    const git = (args: readonly string[]): void => {
+      execFileSync("git", [...args], {
+        cwd: root,
+        stdio: "pipe",
+        env: {
+          PATH: process.env.PATH ?? "",
+          GIT_CONFIG_NOSYSTEM: "1",
+          GIT_CONFIG_GLOBAL: "/dev/null",
+        },
+      });
+    };
+    git(["init", "-q", "-b", "main"]);
+    writeFileSync(join(root, "a.txt"), "v1\n", "utf8");
+    git(["add", "a.txt"]);
+    // The plain port's refusal is swallowed into "no write time": the racy-clean guard silently
+    // disarms for the very worktrees the coding runtime edits most.
+    expect(readGitIndexWriteTimeNs(root)).toBeUndefined();
+    const fs = workspaceFsWithOwnedRootAuthority(nodeWorkspaceFs, root);
+    expect(readGitIndexWriteTimeNs(root, fs)).toMatch(/^\d+$/u);
   });
 });

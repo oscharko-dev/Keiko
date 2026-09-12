@@ -4,9 +4,9 @@ import type {
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
 import { verifyToolDescriptor } from "./descriptor.js";
-import { requireCatalog } from "./errors.js";
+import { ToolCatalogError } from "./errors.js";
 import { copyCatalogJson } from "./json.js";
-import { matchesCatalogSchema } from "./schema.js";
+import { describeCatalogSchemaMismatch } from "./schema.js";
 
 /** Validate and capture arguments before any asynchronous runtime admission or handler work. */
 export function validateToolArguments(
@@ -15,6 +15,10 @@ export function validateToolArguments(
 ): CatalogJsonValue {
   const verified = verifyToolDescriptor(descriptor);
   const captured = copyCatalogJson(value, verified.bounds.maxArgumentBytes);
-  requireCatalog(matchesCatalogSchema(verified.inputSchema, captured), "invalid-shape");
+  // The mismatch account rides on the error so the rejecting layer can name the declared property
+  // that was missing or invalid -- in its log and in the model's one correction -- without quoting
+  // the arguments.
+  const mismatch = describeCatalogSchemaMismatch(verified.inputSchema, captured);
+  if (mismatch !== undefined) throw new ToolCatalogError("invalid-shape", mismatch);
   return deepFreeze(captured);
 }

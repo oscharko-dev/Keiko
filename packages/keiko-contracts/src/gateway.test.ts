@@ -5,6 +5,7 @@
 
 import { describe, expect, it } from "vitest";
 import {
+  isToolCallingVerificationFresh,
   CONVERSATION_CAPABILITY_CONTRACT_VERSION,
   conversationDefaultRank,
   electConversationDefault,
@@ -17,8 +18,10 @@ import {
   isAsYouTypeCompletionModel,
   isConfiguredVoiceProvider,
   isConversationEligibleModel,
+  codingWorkbenchModelEligibility,
   isCodingWorkbenchModel,
   isVoiceCapability,
+  TOOL_CALLING_VERIFICATION_MAX_AGE_MS,
   listVoicePersonas,
   MODEL_COST_RANK,
   modelSupportsInfilling,
@@ -91,6 +94,59 @@ describe("isCodingWorkbenchModel", () => {
     expect(isCodingWorkbenchModel(cap({ ...coding, kind: "embedding" }))).toBe(false);
     expect(isCodingWorkbenchModel(cap({ ...coding, toolCalling: false }))).toBe(false);
     expect(isCodingWorkbenchModel(cap({ ...coding, workflowEligible: false }))).toBe(false);
+  });
+
+  // A forced tool-call proof expires 24 h after its probe. Coding run 24 (2026-09-11) was admitted
+  // with a proof 3.5 min short of that age and lost its model mid-run (F73), so eligibility is
+  // judged as of an instant the caller names, and a stale proof has a name of its own.
+  it("judges the tool-calling proof as of the instant it is asked for", () => {
+    const checkedAt = Date.parse("2026-09-10T04:30:32.744Z");
+    const model = cap({
+      preferredUseCases: ["Coding"],
+      toolCallingVerification: {
+        status: "verified",
+        checkedAt: new Date(checkedAt).toISOString(),
+        probe: "gateway-tool-calling-v1",
+        configurationFingerprint: "test-fingerprint",
+      },
+    });
+    const admitted = checkedAt + TOOL_CALLING_VERIFICATION_MAX_AGE_MS - 210_000;
+    const later = checkedAt + TOOL_CALLING_VERIFICATION_MAX_AGE_MS + 3_732;
+    expect(codingWorkbenchModelEligibility(model, { nowMs: admitted })).toBe("eligible");
+    expect(codingWorkbenchModelEligibility(model, { nowMs: later })).toBe(
+      "tool-calling-unverified",
+    );
+    expect(
+      codingWorkbenchModelEligibility(cap({ preferredUseCases: ["Chat"] }), { nowMs: admitted }),
+    ).toBe("ineligible");
+  });
+
+  // Coding run 25 (2026-09-11): the Coding Workbench builds its picker with
+  // `models.filter(isCodingWorkbenchModel)`. While the rule took an optional numeric instant,
+  // Array.filter handed it each element's index, so every model was judged as of the epoch and the
+  // picker offered none (F76).
+  it("keeps a model with a fresh proof when handed point-free to Array.filter", () => {
+    const fresh = cap({
+      preferredUseCases: ["Coding"],
+      toolCallingVerification: {
+        status: "verified",
+        checkedAt: new Date(Date.now() - 60_000).toISOString(),
+        probe: "gateway-tool-calling-v1",
+        configurationFingerprint: "test-fingerprint",
+      },
+    });
+    expect([fresh, fresh].filter(isCodingWorkbenchModel)).toEqual([fresh, fresh]);
+    expect([fresh].map((model) => codingWorkbenchModelEligibility(model))).toEqual(["eligible"]);
+  });
+
+  it("refuses point-free use of the instant-taking rules at compile time", () => {
+    const pointFree = (models: readonly ModelCapability[]): unknown => [
+      // @ts-expect-error F76: Array.map would hand the element index to the instant parameter.
+      models.map(codingWorkbenchModelEligibility),
+      // @ts-expect-error F76: the proof's own freshness rule takes its instant the same way.
+      models.map((model) => model.toolCallingVerification).filter(isToolCallingVerificationFresh),
+    ];
+    expect(pointFree([])).toEqual([[], []]);
   });
 });
 

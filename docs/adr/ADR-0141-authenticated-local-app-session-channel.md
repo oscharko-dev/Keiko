@@ -142,6 +142,14 @@ It is not backpressure. The writer separately handles a false write result and a
 exception, including the initial reset, live snapshot and heartbeat. Closure must not turn a
 successful terminal write into an error or allow a previously queued snapshot to reopen the
 stream. Existing stream counters and correlated activity-log events record genuine write errors.
+The routes log the session's lifecycle body-free (PR #3452, F65): a pairing that issued a session
+(`coding-app-session.paired`), a rotation, a sign-out that revoked a session, each fetch stream's
+opening, live or content-free, and a live stream's close with how long it stayed open. A denied
+pairing or rotation writes no line of its own and stays in the rate-limited aggregate diagnostic
+(KEIKO-0838); a sign-out that revoked nothing (no session behind the cookie, or a repeated sign-out)
+writes none either, so the log never shows a sign-out that did not happen. A
+pairing fragment that arrives by same-document navigation (after a lane restart, say) is redeemed
+like a boot fragment, and every session read in the window runs again after it.
 
 ### D7 — The CI pairing fake mints read authority and is therefore production-unreachable by construction
 
@@ -290,6 +298,18 @@ The general status handler still consumes its request context to enforce an exac
 transport contract: any query parameter is rejected. It does not session-branch the snapshot,
 because doing so would create two general status projections and weaken D3/D6; the stronger
 owner-layer invariant is that neither projection can represent model-selected research content.
+
+## Approved-skill channel (Issue #3417)
+
+The approved skills of a run are catalog state, not model-selected content, but they name what the
+run may do next, so they ride the same authenticated channel rather than the general projection:
+`GET /runs/:runId/skills` answers the paired operator with the closed, body-free record discovery
+reports the model — the pinned `id@version`, the source digest, one closed category, the catalogued
+capability ids, the compatibility range and the readiness the catalog itself can tell. The live
+authority and the remaining budget are facts of one invocation, not of the catalog, so they stay out
+of this view and can never be spent by looking. An unpaired read returns the single
+`{ session: "unpaired" }` projection before run resolution, independent of run, catalog or skill
+existence, and `CodingWorkbenchRuntimeSnapshot` carries none of it.
 
 ## Consequences
 

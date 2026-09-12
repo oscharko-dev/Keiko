@@ -30,6 +30,8 @@ import {
   type CodingRuntimeLaunchResolver,
   type WorkbenchDescriptionDispatchOutcome,
   type WorkbenchDescriptionDispatcher,
+  DELIVERY_CONTINUATION_INTENT,
+  DELIVERY_CONTINUATION_MAX,
 } from "./codingRuntimeOrchestrator.js";
 import type { CodingRuntimeDescriptionJobStore } from "./codingRuntimeDescriptionJobStore.js";
 import type { VerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
@@ -45,12 +47,18 @@ import { createPendingResearchApprovals } from "./researchApprovalIssuance.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
-import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
+import {
+  errorKindOf,
+  type ServerLogEvent,
+  type ServerLogSink,
+} from "../observability/server-log.js";
 import type {
   AuxiliaryResearchScopeV1,
   CodingWorkbenchIssueBinding,
   CodingWorkbenchIssueBindingFailure,
+  SkillDiscoveryResultV1,
 } from "@oscharko-dev/keiko-contracts";
+import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import { CODING_WORKBENCH_ISSUE_BINDING_FAILURES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import {
   draftDeliveryLineageRecord,
@@ -107,6 +115,29 @@ function orderedRows(rows: Map<string, CodingRuntimeSnapshot>): CodingRuntimeSna
       right.updatedAt.localeCompare(left.updatedAt) || left.runId.localeCompare(right.runId),
   );
 }
+
+// #3417: the operator's view of the approved skills, as the composed runtime host answers it.
+// Derived through the contract's own validator, never restated here: the branded skill ids and
+// digests are the producer's, so a fixture cannot drift away from the shape the host answers.
+const APPROVED_SKILLS: SkillDiscoveryResultV1 = (() => {
+  const validated = validateSkillDiscoveryResultV1({
+    schemaVersion: 1,
+    catalogDigest: "a".repeat(64),
+    skills: [
+      {
+        skillId: "skl_repo-structure-summary@1",
+        version: "1",
+        sourceDigest: "b".repeat(64),
+        category: "repository-analysis",
+        capabilities: ["keiko.workspace.read"],
+        compatibility: { profile: "opencode", minVersion: 1, maxVersion: 1 },
+        readiness: { state: "ready" },
+      },
+    ],
+  });
+  if (!validated.ok) throw new Error(`fixture is not a listing: ${validated.errors.join(", ")}`);
+  return validated.value;
+})();
 
 function fixture(
   activityProjection?: CodingSafeActivityProjection,
@@ -169,7 +200,15 @@ function fixture(
       )
         ? change.updatedAt
         : undefined;
-      const next = { ...current, ...change, terminalAt } as CodingRuntimeSnapshot;
+      // `pauseReason` is WRITTEN, never merged — the production store does the same, so that
+      // leaving `paused` drops the reason from the row itself. A fixture that let the spread of
+      // `current` win could not detect a stale reason outliving its wait (AGENTS.md §7).
+      const next = {
+        ...current,
+        ...change,
+        pauseReason: change.pauseReason,
+        terminalAt,
+      } as CodingRuntimeSnapshot;
       rows.set(id, next);
       return next;
     },
@@ -338,6 +377,7 @@ function fixture(
       serverPrincipal: () => "server",
       researchGrants,
       pendingResearchApprovals,
+      approvedSkills: () => APPROVED_SKILLS,
       ...(diagnostics ? { diagnostics } : {}),
       ...(activityLog ? { activityLog } : {}),
       ...(issueIntake ? { issueIntake } : {}),
@@ -477,6 +517,33 @@ function verificationPermission(requestId: string, expiresAt = "2026-01-01T00:01
   };
 }
 
+// The event that carries a started run from `ready` into `running`, which is the only state an
+// outstanding operator decision can pause.
+function taskSubmitted() {
+  return {
+    schemaVersion: "1" as const,
+    eventId: "event-task-submitted",
+    runId: "run-1",
+    occurredAt: "2026-01-01T00:00:00.000Z",
+    kind: "task-submitted" as const,
+  };
+}
+
+function operatorDecisionEvent(
+  outcome?: "accepted" | "stopped" | "limit-reached" | "unavailable",
+  decision: "workspace-script-trust" = "workspace-script-trust",
+) {
+  return {
+    schemaVersion: "1" as const,
+    eventId: `event-operator-decision-${outcome ?? "open"}`,
+    runId: "run-1",
+    occurredAt: "2026-01-01T00:00:00.000Z",
+    kind: "operator-decision" as const,
+    operatorDecision: decision,
+    ...(outcome === undefined ? {} : { auxiliaryOutcome: outcome }),
+  };
+}
+
 const ACTIVE_REPOSITORY_ROOT = mkdtempSync(
   join(realpathSync(tmpdir()), "keiko-orchestrator-issue-"),
 );
@@ -512,6 +579,7 @@ const ISSUE_PREVIEW = {
 const ISSUE_ATTACHMENT = {
   issueNumber: 3385,
   itemCount: 1,
+  linkedIssueCount: 0,
   byteCount: 96,
   text: `[untrusted issue context] ${ISSUE_TITLE}\n${ISSUE_BODY}`,
 };
@@ -580,6 +648,77 @@ function historicalVerifiedCommit(run: CodingRuntimeSnapshot): VerifiedCommitRes
     issueBindingDigest: ISSUE_BINDING.bindingDigest,
     headSha: "2".repeat(40),
   };
+}
+
+type DeliveryEvidenceKind =
+  | "none"
+  | "verified-commit"
+  | "draft-delivery"
+  | "verification-failed-commit"
+  | "proposed-draft"
+  | "recovery-draft";
+
+/**
+ * Puts a run into the state each evidence case describes. A SUCCESSFUL commit lands in the store's
+ * last-successful projection as well as on the row, because that projection — not the row — is what
+ * the delivery-truth rule reads; an unsuccessful one lands only on the row, which is exactly the
+ * shape `verifiedCommitService.persist` leaves behind for a refused proposal.
+ */
+function seedDeliveryEvidence(
+  rows: Map<string, CodingRuntimeSnapshot>,
+  verifiedCommits: Map<string, VerifiedCommitResult>,
+  run: CodingRuntimeSnapshot,
+  kind: DeliveryEvidenceKind,
+): void {
+  if (kind === "verified-commit") {
+    const receipt = historicalVerifiedCommit(run);
+    verifiedCommits.set(run.runId, receipt);
+    rows.set(run.runId, { ...run, verifiedCommitResult: receipt });
+    return;
+  }
+  if (kind === "verification-failed-commit") {
+    // A refused proposal committed nothing, so the contract requires both commit facts to be
+    // ABSENT — which is precisely why presence of the record says nothing about delivery.
+    const {
+      headSha: _headSha,
+      committedTreeDigest: _tree,
+      ...refused
+    } = historicalVerifiedCommit(run);
+    rows.set(run.runId, {
+      ...run,
+      verifiedCommitResult: {
+        ...refused,
+        status: "verification-failed",
+        reason: "verification-missing",
+      },
+    });
+    return;
+  }
+  if (kind === "draft-delivery") {
+    rows.set(run.runId, { ...run, draftDelivery: historicalDraft(run) });
+    return;
+  }
+  if (kind === "proposed-draft") {
+    rows.set(run.runId, {
+      ...run,
+      draftDelivery: {
+        ...historicalDraft(run),
+        phase: "push-proposed",
+        reason: "approval-required",
+      },
+    });
+    return;
+  }
+  if (kind === "recovery-draft") {
+    rows.set(run.runId, {
+      ...run,
+      draftDelivery: {
+        ...historicalDraft(run),
+        phase: "recovery-required",
+        reason: "provider-failed",
+      },
+    });
+  }
 }
 
 function persistHistoricalDraft(
@@ -698,6 +837,575 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(serialized).not.toContain(start.taskIntent);
     expect(serialized).not.toContain("/workspace");
     expect(serialized).not.toContain("/bin/runtime");
+  });
+
+  // Run 9 (2026-09-10): a server shutdown ends the live run through the same stop path an operator
+  // uses, so the settled evidence was identical and a customer log could not tell the two apart —
+  // the only record of the shutdown lived in the dev runner's console, which no customer has. The
+  // cause is now named on the RUN's own correlation id, immediately before its terminal line.
+  it("names the server shutdown as the cause when it ends a live run", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start(start);
+
+    await f.orchestrator.shutdown();
+
+    const shutdown = captured.records.find(
+      (candidate) => candidate.op === "coding-runtime.run.shutdown",
+    );
+    expect(shutdown).toMatchObject({
+      level: "warn",
+      category: "process",
+      extra: { runId: "run-1", reason: "server-shutdown", outcome: "ended" },
+    });
+    // Same correlation id as the run's terminal line, so one `--correlation-id <run>` timeline holds
+    // the ending and its cause. The cause is written AFTER the attempt on purpose: written before,
+    // it asserted an ending the orchestrator had not performed (owner review, PR #3452).
+    const settledIndex = captured.records.findIndex(
+      (candidate) => candidate.op === "coding-runtime.run.settled",
+    );
+    expect(settledIndex).toBeGreaterThanOrEqual(0);
+    expect(shutdown?.correlationId).toBe(captured.records[settledIndex]?.correlationId);
+    expect(JSON.stringify(captured.records)).not.toContain(start.taskIntent);
+  });
+
+  // Owner review, PR #3452: the cause line used to be written BEFORE the attempt, so a shutdown that
+  // could not end the run left behind a cause for an ending that never happened — and the
+  // troubleshooting entry tells the operator to read that line as confirmation of the outcome. A run
+  // in `recovery-required` is exactly that case: `end()` refuses outright, with no transition and no
+  // terminal line.
+  it("reports a refused shutdown as refused instead of asserting an ending", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start(start);
+    // Drive the live run into recovery-required, the state `end()` declines to end.
+    f.eventHub.publish.mockImplementation(() => ({ ok: false }));
+    await f.orchestrator.ingest({
+      schemaVersion: "1",
+      eventId: "run-1-task-submitted",
+      runId: "run-1",
+      occurredAt: "2026-01-01T00:00:00.000Z",
+      kind: "task-submitted",
+    });
+    expect(f.orchestrator.snapshot().state).toBe("recovery-required");
+    // Entering recovery-required already wrote its own settled line; the shutdown must not add one.
+    const settledBefore = captured.records.filter(
+      (candidate) => candidate.op === "coding-runtime.run.settled",
+    ).length;
+
+    const result = await f.orchestrator.shutdown();
+
+    expect(result.ok).toBe(false);
+    const shutdown = captured.records.find(
+      (candidate) => candidate.op === "coding-runtime.run.shutdown",
+    );
+    expect(shutdown).toMatchObject({
+      extra: { runId: "run-1", reason: "server-shutdown", outcome: "refused" },
+    });
+    // The shutdown ended nothing, so it wrote no new terminal line — and the cause line says so
+    // instead of asserting an ending that never happened.
+    expect(
+      captured.records.filter((candidate) => candidate.op === "coding-runtime.run.settled"),
+    ).toHaveLength(settledBefore);
+    expect(f.orchestrator.snapshot().state).toBe("recovery-required");
+  });
+
+  // An idle server shutting down has no run to name, and must not invent one.
+  it("emits no run shutdown line when nothing is running", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+
+    await f.orchestrator.shutdown();
+
+    expect(
+      captured.records.some((candidate) => candidate.op === "coding-runtime.run.shutdown"),
+    ).toBe(false);
+  });
+
+  // Run 10 of the Workbench engagement (2026-09-10): an issue-bound run whose verification was
+  // refused wrote files, stopped, and settled `succeeded` — with nothing verified, committed, pushed
+  // or delivered. "The model stopped emitting tool calls" is not delivery, and the operator saw
+  // green. An issue-bound run now needs durable delivery evidence to claim success.
+  //
+  // Owner review, same PR: the first version of this rule read field PRESENCE, which re-admitted the
+  // very bug it closes. A `verifiedCommitResult` is persisted for EVERY proposal outcome — a first
+  // commit proposal rejected `verification-failed` because nothing had been verified yet leaves one
+  // behind — and a `draftDelivery` record exists from the moment a push is PROPOSED. Both are proof
+  // that delivery was attempted and did not complete, so both are pinned here as NOT evidence.
+  it.each([
+    ["no delivery evidence at all", "none", "failed", "delivery-not-evidenced"],
+    ["a verified commit receipt", "verified-commit", "succeeded", undefined],
+    ["a draft delivery record", "draft-delivery", "succeeded", undefined],
+    ["a refused commit proposal", "verification-failed-commit", "failed", "delivery-not-evidenced"],
+    ["a push still awaiting approval", "proposed-draft", "failed", "delivery-not-evidenced"],
+    ["a delivery in recovery", "recovery-draft", "failed", "delivery-not-evidenced"],
+  ] as const)(
+    "settles an issue-bound run that reported success with %s",
+    async (_label, evidenceKind, expectedState, expectedFailureCode) => {
+      const captured = captureActivityLog();
+      const verifiedCommits = new Map<string, VerifiedCommitResult>();
+      const f = fixture(
+        undefined,
+        undefined,
+        [],
+        undefined,
+        captured.activityLog,
+        issueIntake(),
+        undefined,
+        verifiedCommits,
+      );
+      let resolveCompletion: ((outcome: "succeeded") => void) | undefined;
+      const completion = new Promise<"succeeded">((resolve) => {
+        resolveCompletion = resolve;
+      });
+      f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: true, completion });
+      await f.orchestrator.start({ ...start, issueRef: ISSUE_REF });
+      const row = f.rows.get("run-1");
+      if (row === undefined) throw new Error("expected the started run row");
+      seedDeliveryEvidence(f.rows, verifiedCommits, row, evidenceKind);
+
+      resolveCompletion?.("succeeded");
+
+      await vi.waitFor(() => {
+        expect(f.orchestrator.getSnapshot("run-1")?.state).toBe(expectedState);
+      });
+      expect(f.orchestrator.getSnapshot("run-1")?.failureCode).toBe(expectedFailureCode);
+      const unevidenced = captured.records.find(
+        (candidate) => candidate.op === "coding-runtime.run.delivery-unevidenced",
+      );
+      if (expectedState === "failed") {
+        expect(unevidenced).toMatchObject({
+          level: "warn",
+          extra: {
+            runId: "run-1",
+            hasVerifiedCommit: false,
+            hasDraftDelivery: false,
+            reportedOutcome: "succeeded",
+          },
+        });
+      } else {
+        expect(unevidenced).toBeUndefined();
+      }
+    },
+  );
+
+  // F66 (Coding Workbench run 22, 2026-09-11): under Full access the operator authorized the run to
+  // deliver without per-action approval, and run 22's model ended a turn one step short — build
+  // verification passed, its own result named stage-then-verify — so the run settled
+  // delivery-not-evidenced at once. Such a run now gets at most DELIVERY_CONTINUATION_MAX bounded,
+  // server-authored continuations before the delivery-truth rule above settles it.
+  function fullAccessLaunch(): ReturnType<CodingRuntimeLaunchResolver["resolve"]> {
+    return {
+      taskRef: "task-1",
+      treeBindingId: "tree",
+      adapterKind: "codex-cli",
+      runtimeSource: "codex-cli-adapter",
+      modelSource: "keiko-model-gateway",
+      effectiveMode: "autonomous-delivery",
+      executablePath: "/bin/runtime",
+      managedRoot: "/managed",
+      gatewayUrl: "http://127.0.0.1",
+      modelProfileId: "profile",
+      args: [],
+      inheritedEnvAllowlist: [],
+      shutdownTimeoutMs: 1,
+      startTimeoutMs: 1,
+    };
+  }
+
+  async function startFullAccessIssueRun(turns: number): Promise<{
+    readonly f: ReturnType<typeof fixture>;
+    readonly captured: ReturnType<typeof captureActivityLog>;
+    readonly verifiedCommits: Map<string, VerifiedCommitResult>;
+    readonly finish: readonly ((outcome: "failed" | "succeeded") => void)[];
+  }> {
+    const captured = captureActivityLog();
+    const verifiedCommits = new Map<string, VerifiedCommitResult>();
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      captured.activityLog,
+      issueIntake(),
+      undefined,
+      verifiedCommits,
+    );
+    f.launchResolver.resolve.mockReturnValueOnce(fullAccessLaunch());
+    const finish: ((outcome: "failed" | "succeeded") => void)[] = [];
+    for (let turn = 0; turn < turns; turn += 1) {
+      const completion = new Promise<"failed" | "succeeded">((resolve) => {
+        finish.push(resolve);
+      });
+      f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: true, completion });
+    }
+    await f.orchestrator.start({
+      ...start,
+      requestedMode: "autonomous-delivery",
+      issueRef: ISSUE_REF,
+    });
+    return { f, captured, verifiedCommits, finish };
+  }
+
+  function linesWithOp(
+    captured: ReturnType<typeof captureActivityLog>,
+    op: string,
+  ): readonly ServerLogEvent[] {
+    return captured.records.filter((candidate) => candidate.op === op);
+  }
+
+  it("continues an issue-bound Full access run that stopped short, then settles on its delivery", async () => {
+    const { f, captured, verifiedCommits, finish } = await startFullAccessIssueRun(2);
+
+    finish[0]?.("succeeded");
+
+    await vi.waitFor(() => {
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+    });
+    expect(f.taskDispatcher.dispatch.mock.calls[1]?.[0]).toMatchObject({
+      runId: "run-1",
+      requestId: "delivery-continuation-1",
+      taskIntent: DELIVERY_CONTINUATION_INTENT,
+    });
+    expect(linesWithOp(captured, "coding-runtime.run.delivery-continued")).toEqual([
+      expect.objectContaining({
+        level: "info",
+        extra: expect.objectContaining({
+          runId: "run-1",
+          attempt: 1,
+          max: DELIVERY_CONTINUATION_MAX,
+        }) as unknown,
+      }),
+    ]);
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("running");
+    expect(f.manager.stop).not.toHaveBeenCalled();
+
+    const row = f.rows.get("run-1");
+    if (row === undefined) throw new Error("expected the running row");
+    seedDeliveryEvidence(f.rows, verifiedCommits, row, "verified-commit");
+    finish[1]?.("succeeded");
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    expect(linesWithOp(captured, "coding-runtime.run.delivery-unevidenced")).toEqual([]);
+  });
+
+  it("settles delivery-not-evidenced once the continuation budget is spent, naming it", async () => {
+    const { f, captured, finish } = await startFullAccessIssueRun(DELIVERY_CONTINUATION_MAX + 1);
+
+    for (let turn = 0; turn <= DELIVERY_CONTINUATION_MAX; turn += 1) {
+      await vi.waitFor(() => {
+        expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(turn + 1);
+      });
+      finish[turn]?.("succeeded");
+    }
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+    expect(f.orchestrator.getSnapshot("run-1")?.failureCode).toBe("delivery-not-evidenced");
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(DELIVERY_CONTINUATION_MAX + 1);
+    expect(
+      linesWithOp(captured, "coding-runtime.run.delivery-continued").map(
+        (line) => (line.extra as { readonly attempt?: number } | undefined)?.attempt,
+      ),
+    ).toEqual([1, 2]);
+    expect(linesWithOp(captured, "coding-runtime.run.delivery-unevidenced")).toEqual([
+      expect.objectContaining({
+        extra: expect.objectContaining({ continuations: DELIVERY_CONTINUATION_MAX }) as unknown,
+      }),
+    ]);
+  });
+
+  it("settles at once when the continuation dispatch is refused", async () => {
+    const { f, captured, finish } = await startFullAccessIssueRun(1);
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: false });
+
+    finish[0]?.("succeeded");
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+    expect(f.orchestrator.getSnapshot("run-1")?.failureCode).toBe("delivery-not-evidenced");
+    expect(linesWithOp(captured, "coding-runtime.run.delivery-continuation-refused")).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        extra: expect.objectContaining({ attempt: 1, reason: "dispatch-refused" }) as unknown,
+      }),
+    ]);
+    expect(linesWithOp(captured, "coding-runtime.run.delivery-unevidenced")).toEqual([
+      expect.objectContaining({
+        extra: expect.objectContaining({ continuations: 0 }) as unknown,
+      }),
+    ]);
+  });
+
+  it("never continues a turn that failed", async () => {
+    const { f, captured, finish } = await startFullAccessIssueRun(1);
+
+    finish[0]?.("failed");
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(linesWithOp(captured, "coding-runtime.run.delivery-continued")).toEqual([]);
+  });
+
+  // Owner review, PR #3452: the evidence reader throws on an oversized, malformed or foreign commit
+  // record. That throw used to escape settlement BEFORE the runtime was stopped, leaving it running
+  // with no recovery transition. It is now an answer: no continuation, the runtime stopped, and the
+  // run asks for recovery instead of guessing its outcome.
+  it("stops the runtime and asks for recovery when the delivery evidence record is unreadable", async () => {
+    const { f, captured, verifiedCommits, finish } = await startFullAccessIssueRun(1);
+    const unreadable = new Error("verified-commit record does not bind this runtime");
+    vi.spyOn(verifiedCommits, "get").mockImplementation(() => {
+      throw unreadable;
+    });
+
+    finish[0]?.("succeeded");
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("recovery-required");
+    });
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(1);
+    expect(f.manager.stop).toHaveBeenCalled();
+    expect(linesWithOp(captured, "coding-runtime.run.delivery-continuation-refused")).toEqual([
+      expect.objectContaining({
+        errorKind: errorKindOf(unreadable),
+        extra: expect.objectContaining({ attempt: 1, reason: "evidence-unreadable" }) as unknown,
+      }),
+    ]);
+    expect(linesWithOp(captured, "coding-runtime.run.delivery-evidence-unreadable")).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        errorKind: errorKindOf(unreadable),
+        extra: expect.objectContaining({ runId: "run-1" }) as unknown,
+      }),
+    ]);
+  });
+
+  it("names the failure kind when the continuation dispatch throws", async () => {
+    const { f, captured, finish } = await startFullAccessIssueRun(1);
+    const thrown = new Error("sidecar went away");
+    f.taskDispatcher.dispatch.mockRejectedValueOnce(thrown);
+
+    finish[0]?.("succeeded");
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("failed");
+    });
+    expect(linesWithOp(captured, "coding-runtime.run.delivery-continuation-refused")).toEqual([
+      expect.objectContaining({
+        errorKind: errorKindOf(thrown),
+        extra: expect.objectContaining({ attempt: 1, reason: "dispatch-threw" }) as unknown,
+      }),
+    ]);
+  });
+
+  // Owner review, PR #3452: a stop or takeover is not serialized with settlement, so it can land
+  // while the continuation is being dispatched. The continuation is then abandoned: nothing is
+  // recorded against the superseded revision and the operator's stop owns the run's outcome.
+  it("abandons a continuation the operator stopped while it was being dispatched", async () => {
+    const { f, captured, finish } = await startFullAccessIssueRun(1);
+    let releaseDispatch:
+      ((result: Awaited<ReturnType<typeof f.taskDispatcher.dispatch>>) => void) | undefined;
+    f.taskDispatcher.dispatch.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseDispatch = resolve;
+        }),
+    );
+
+    finish[0]?.("succeeded");
+    await vi.waitFor(() => {
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+    });
+    await f.orchestrator.stop("run-1", { requestId: "run-1" });
+    releaseDispatch?.({ ok: true, completion: new Promise<"succeeded">(() => undefined) });
+
+    await vi.waitFor(() => {
+      expect(linesWithOp(captured, "coding-runtime.run.delivery-continuation-refused")).toEqual([
+        expect.objectContaining({
+          extra: expect.objectContaining({ attempt: 1, reason: "run-superseded" }) as unknown,
+        }),
+      ]);
+    });
+    expect(linesWithOp(captured, "coding-runtime.run.delivery-continued")).toEqual([]);
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("cancelled");
+  });
+
+  // CodeRabbit review, PR #3452: the continuation count was cleared only on the task-settlement
+  // path, so a continued run that was stopped, taken over or moved to recovery kept its entry.
+  it("forgets a run's continuation count when the run settles by another path", async () => {
+    const { f, finish } = await startFullAccessIssueRun(2);
+    finish[0]?.("succeeded");
+    await vi.waitFor(() => {
+      expect(f.taskDispatcher.dispatch).toHaveBeenCalledTimes(2);
+    });
+    const continuations = (
+      f.orchestrator as unknown as { readonly deliveryContinuations: ReadonlyMap<string, number> }
+    ).deliveryContinuations;
+    await vi.waitFor(() => {
+      expect(continuations.get("run-1")).toBe(1);
+    });
+
+    await f.orchestrator.stop("run-1", { requestId: "run-1" });
+
+    expect(continuations.has("run-1")).toBe(false);
+  });
+
+  // Run 10's other half: the verification tool was refused for want of ADR-0147 package-script
+  // trust and nothing told the operator a decision was waiting for them. A governed tool that meets
+  // such a decision now waits in place and the run says so — `paused`, naming the decision — and
+  // returns to `running` the moment the wait settles, whichever way it settled: the tool then either
+  // retries the effect or hands the model its refusal, and in neither case is a person still holding
+  // the run up.
+  it("pauses a running run for an outstanding operator decision and resumes it when it settles", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest(taskSubmitted());
+
+    await f.orchestrator.ingest(operatorDecisionEvent());
+    expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+      state: "paused",
+      pauseReason: "workspace-script-trust",
+    });
+
+    await f.orchestrator.ingest(operatorDecisionEvent("accepted"));
+    const resumed = f.orchestrator.getSnapshot("run-1");
+    expect(resumed?.state).toBe("running");
+    expect(resumed?.pauseReason).toBeUndefined();
+    // The ROW, not only the projection: the projection hides a reason on any non-paused state, so
+    // asserting it alone would pass over a stale reason left behind in durable truth.
+    expect(f.rows.get("run-1")?.pauseReason).toBeUndefined();
+
+    const lines = captured.records.filter(
+      (candidate) => candidate.op === "coding-runtime.run.operator-decision",
+    );
+    expect(lines.map((line) => line.extra?.state)).toEqual(["waiting", "settled"]);
+    expect(lines[0]?.extra).toMatchObject({ runId: "run-1", decision: "workspace-script-trust" });
+    expect(lines[1]?.extra).toMatchObject({ outcome: "accepted" });
+    // Each line records the snapshot that BEGAN or ENDED the wait, i.e. the post-transition state
+    // and revision the store now holds — not the snapshot the event arrived on (CodeRabbit review,
+    // 2026-09-10: the waiting line used to say `running` at the old revision).
+    expect(lines[0]?.extra).toMatchObject({ runState: "paused" });
+    expect(lines[1]?.extra).toMatchObject({ runState: "running" });
+    const finalRevision = f.orchestrator.getSnapshot("run-1")?.revision;
+    if (finalRevision === undefined) throw new Error("run snapshot missing");
+    expect(lines.map((line) => line.extra?.revision)).toEqual([finalRevision - 1, finalRevision]);
+  });
+
+  // A refused decision ends the wait exactly as an accepted one does. The DIFFERENCE is what the
+  // waiting tool returns to the model, not whether the run is still held.
+  it.each(["stopped", "limit-reached", "unavailable"] as const)(
+    "returns a decision-paused run to running when the wait settles %s",
+    async (outcome) => {
+      const f = fixture();
+      await f.orchestrator.start(start);
+      await f.orchestrator.ingest(taskSubmitted());
+      await f.orchestrator.ingest(operatorDecisionEvent());
+
+      await f.orchestrator.ingest(operatorDecisionEvent(outcome));
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("running");
+    },
+  );
+
+  // The operator's Resume is not the exit here: the tool is waiting on the DECISION, and a run
+  // returned to `running` behind its back would leave that decision arriving at a run no longer
+  // recorded as waiting for it.
+  it("refuses an operator resume while a run waits on a decision", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest(taskSubmitted());
+    await f.orchestrator.ingest(operatorDecisionEvent());
+
+    const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
+    expect(resumed).toMatchObject({ ok: false, failureCode: "invalid-intent" });
+    expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+      state: "paused",
+      pauseReason: "workspace-script-trust",
+    });
+  });
+
+  // An operator's own pause carries no reason, and must keep resuming the way it always has —
+  // otherwise the new field would silently disable the Resume control for every manual pause.
+  it("leaves an operator-initiated pause resumable and reasonless", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest(taskSubmitted());
+
+    await f.orchestrator.pause("run-1", { requestId: "run-1" });
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("paused");
+    expect(f.orchestrator.getSnapshot("run-1")?.pauseReason).toBeUndefined();
+    const resumed = await f.orchestrator.resume("run-1", { requestId: "run-1" });
+    expect(resumed.ok).toBe(true);
+  });
+
+  // Run 11 (2026-09-10): a runtime event for a run other than the live one was refused with
+  // `invalid-intent` and nothing else — the producer's ask vanished without a line. The refusal now
+  // names the event kind, both run ids and why, so a customer log shows the ask that never landed.
+  it("records a runtime event it refuses for naming a run other than the live one", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest(taskSubmitted());
+
+    const refused = await f.orchestrator.ingest({
+      ...operatorDecisionEvent(),
+      runId: "run-foreign",
+    });
+    expect(refused).toMatchObject({ ok: false, failureCode: "invalid-intent" });
+    expect(
+      captured.records.find((candidate) => candidate.op === "coding-runtime.event.dropped"),
+    ).toMatchObject({
+      level: "warn",
+      extra: {
+        eventKind: "operator-decision",
+        eventRunId: "run-foreign",
+        liveRunId: "run-1",
+        reason: "run-mismatch",
+      },
+    });
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("running");
+  });
+
+  // A settle that does not match the decision the run is actually waiting on must not release it:
+  // the wait belongs to one tool call, and releasing it on a foreign settle would resume a run whose
+  // blocker is still in place. Recorded rather than silently dropped, so the log shows the mismatch.
+  it("records a settle that does not match the outstanding decision without resuming", async () => {
+    const captured = captureActivityLog();
+    const f = fixture(undefined, undefined, [], undefined, captured.activityLog);
+    await f.orchestrator.start(start);
+    await f.orchestrator.ingest(taskSubmitted());
+
+    await f.orchestrator.ingest(operatorDecisionEvent("accepted"));
+    expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("running");
+    const line = captured.records.find(
+      (candidate) => candidate.op === "coding-runtime.run.operator-decision",
+    );
+    expect(line).toMatchObject({ level: "warn", extra: { state: "not-admissible" } });
+  });
+
+  // An ad-hoc task legitimately ends with no commit: inferring delivery intent from free text would
+  // turn honest successes into false failures, so the rule binds the issue-bound flow only.
+  it("leaves a run with no issue binding to its reported success", async () => {
+    const f = fixture();
+    let resolveCompletion: ((outcome: "succeeded") => void) | undefined;
+    const completion = new Promise<"succeeded">((resolve) => {
+      resolveCompletion = resolve;
+    });
+    f.taskDispatcher.dispatch.mockResolvedValueOnce({ ok: true, completion });
+    await f.orchestrator.start(start);
+
+    resolveCompletion?.("succeeded");
+
+    await vi.waitFor(() => {
+      expect(f.orchestrator.getSnapshot("run-1")?.state).toBe("succeeded");
+    });
+    expect(f.orchestrator.getSnapshot("run-1")?.failureCode).toBeUndefined();
   });
 
   it("reaps the managed runtime and settles a completed task exactly once", async () => {
@@ -1025,7 +1733,11 @@ describe("CodingRuntimeOrchestrator", () => {
       throw new CodingRuntimeLaunchRejectedError("adapter-profile-mismatch");
     });
 
-    expect(await f.orchestrator.start(start)).toEqual({ ok: false, failureCode: "source-drift" });
+    expect(await f.orchestrator.start(start)).toEqual({
+      ok: false,
+      failureCode: "source-drift",
+      runId: "run-1",
+    });
     expect(captured.records).toContainEqual(
       expect.objectContaining({
         operation: "coding-runtime.start",
@@ -1045,6 +1757,7 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(await f.orchestrator.start(start)).toEqual({
       ok: false,
       failureCode: "authority-resolution-failed",
+      runId: "run-1",
     });
     expect(captured.records).toContainEqual(
       expect.objectContaining({
@@ -1063,6 +1776,7 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(await f.orchestrator.start(start)).toEqual({
       ok: false,
       failureCode: "authority-resolution-failed",
+      runId: "run-1",
     });
   });
 
@@ -1850,6 +2564,7 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(await f.orchestrator.retry("run-1", { ...start, requestId: "request-2" })).toEqual({
       ok: false,
       failureCode: "authority-resolution-failed",
+      runId: "run-2",
     });
 
     expect(f.orchestrator.snapshot()).toMatchObject({
@@ -2590,24 +3305,69 @@ describe("pause and resume (#2386 adversarial-review regressions)", () => {
     expect(f.manager.resume).toHaveBeenLastCalledWith("run-1", "governed-assist");
   });
 
-  it("dispatches the UI follow-up while the run remains paused", async () => {
+  // Coding Workbench run 16 (2026-09-10) relocated this pin. It used to assert that a follow-up is
+  // dispatched as a task replacement INTO the pause while the run stays paused. The runtime admits
+  // tool calls only while running, so the replacement's first call was refused
+  // `state-not-admissible`, the turn failed and the run ended `failed` — the pinned shape was the
+  // defect. The invariant it protected stands: an operator admission reaches a paused run. The
+  // operator's follow-up is their decision to continue with that instruction, so the run resumes
+  // through the one resume path (manager resumed in the active mode) and the replacement is
+  // dispatched against the resumed revision.
+  it("resumes a paused run before dispatching the operator's follow-up as its next task", async () => {
     const f = await runningFixture();
     const paused = await f.orchestrator.pause("run-1", { requestId: "run-1" });
 
     const followUp = await f.orchestrator.submitFollowUp("run-1", {
       requestId: "follow-up-paused",
       expectedRevision: successfulSnapshot(paused).revision,
-      taskIntent: "continue while operator control stays paused",
+      taskIntent: "continue with this instruction",
     });
 
-    expect(successfulSnapshot(followUp)).toMatchObject({ state: "paused", revision: 6 });
+    expect(f.manager.resume).toHaveBeenCalledOnce();
+    expect(successfulSnapshot(followUp)).toMatchObject({
+      state: "running",
+      revision: successfulSnapshot(paused).revision + 2,
+    });
     expect(f.taskDispatcher.replace).toHaveBeenLastCalledWith({
       runId: "run-1",
       requestId: "follow-up-paused",
-      expectedRevision: successfulSnapshot(paused).revision,
-      taskIntent: "continue while operator control stays paused",
+      expectedRevision: successfulSnapshot(paused).revision + 1,
+      taskIntent: "continue with this instruction",
     });
+  });
+
+  // #3452: the follow-up's own resume path (above) must not reopen the ONE exit a decision-paused
+  // run keeps for the operator's decision (see "refuses an operator resume while a run waits on a
+  // decision" earlier in this file). resumePausedForFollowUp refuses whenever `pauseReason` is set,
+  // so the follow-up gets the SAME invalid-intent failure the coordinator returns for any other
+  // resume refusal, dispatches nothing, and never touches the manager.
+  it("refuses a follow-up into a run paused for an operator decision, dispatching nothing and resuming nothing", async () => {
+    const f = await runningFixture();
+    const paused = await f.orchestrator.ingest(operatorDecisionEvent());
+    expect(successfulSnapshot(paused)).toMatchObject({
+      state: "paused",
+      pauseReason: "workspace-script-trust",
+    });
+    // The initial turn `runningFixture()` dispatched to reach "running" already called these; clear
+    // them so the assertions below are about the follow-up attempt alone.
+    f.manager.resume.mockClear();
+    f.taskDispatcher.dispatch.mockClear();
+    f.taskDispatcher.replace.mockClear();
+
+    const followUp = await f.orchestrator.submitFollowUp("run-1", {
+      requestId: "follow-up-decision-paused",
+      expectedRevision: successfulSnapshot(paused).revision,
+      taskIntent: "continue with this instruction",
+    });
+
+    expect(followUp).toMatchObject({ ok: false, failureCode: "invalid-intent" });
+    expect(f.taskDispatcher.dispatch).not.toHaveBeenCalled();
+    expect(f.taskDispatcher.replace).not.toHaveBeenCalled();
     expect(f.manager.resume).not.toHaveBeenCalled();
+    expect(f.orchestrator.getSnapshot("run-1")).toMatchObject({
+      state: "paused",
+      pauseReason: "workspace-script-trust",
+    });
   });
 
   it.each([60_000, 60_001])(
@@ -3065,7 +3825,7 @@ describe("issue-bound runs (#3385)", () => {
 
     const result = await f.orchestrator.start({ ...start, issueRef: ISSUE_REF });
 
-    expect(result).toEqual({ ok: false, failureCode: "invalid-intent" });
+    expect(result).toEqual({ ok: false, failureCode: "invalid-intent", runId: "run-1" });
     expect(f.rows.size).toBe(0);
     expect(f.launchResolver.resolve).not.toHaveBeenCalled();
     expect(f.manager.start).not.toHaveBeenCalled();
@@ -3126,7 +3886,13 @@ describe("issue-bound runs (#3385)", () => {
       category: "process",
       op: "coding-runtime.run.issue-context-attached",
       correlationId: "run-1",
-      extra: { runId: "run-1", issueNumber: 3385, itemCount: 1, byteCount: 96 },
+      extra: {
+        runId: "run-1",
+        issueNumber: 3385,
+        itemCount: 1,
+        linkedIssueCount: 0,
+        byteCount: 96,
+      },
     });
     // Transient: the issue's text reaches the model turn and nothing else.
     const persisted = JSON.stringify([...f.rows.values()]);
@@ -3172,6 +3938,7 @@ describe("issue-bound runs (#3385)", () => {
       expect(result).toEqual({
         ok: false,
         failureCode: expectedRefusalCode(failure),
+        runId: "run-1",
         issueBindingFailure: failure,
       });
       expect(f.rows.size).toBe(0);
@@ -3202,6 +3969,7 @@ describe("issue-bound runs (#3385)", () => {
     expect(result).toEqual({
       ok: false,
       failureCode: "invalid-intent",
+      runId: "run-1",
       issueBindingFailure: "issue-unavailable",
     });
     expect(f.rows.size).toBe(0);
@@ -3229,6 +3997,7 @@ describe("issue-bound runs (#3385)", () => {
     expect(result).toEqual({
       ok: false,
       failureCode: "invalid-intent",
+      runId: "run-1",
       issueBindingFailure: "repository-mismatch",
     });
     expect(f.rows.size).toBe(0);
@@ -3254,6 +4023,7 @@ describe("issue-bound runs (#3385)", () => {
     expect(await f.orchestrator.start({ ...start, issueRef: ISSUE_REF })).toEqual({
       ok: false,
       failureCode: "invalid-intent",
+      runId: "run-1",
       issueBindingFailure: "repository-mismatch",
     });
     expect(f.rows.size).toBe(0);
@@ -3273,6 +4043,7 @@ describe("issue-bound runs (#3385)", () => {
     expect(await f.orchestrator.start({ ...start, issueRef: ISSUE_REF })).toEqual({
       ok: false,
       failureCode: "invalid-intent",
+      runId: "run-1",
       issueBindingFailure: "invalid-reference",
     });
     expect(f.rows.size).toBe(0);
@@ -3292,6 +4063,7 @@ describe("issue-bound runs (#3385)", () => {
       expect(result).toEqual({
         ok: false,
         failureCode: expectedRefusalCode(failure),
+        runId: "run-1",
         issueBindingFailure: failure,
       });
       expect(f.rows.size).toBe(0);
@@ -3389,6 +4161,7 @@ describe("issue-bound runs (#3385)", () => {
     expect(result).toEqual({
       ok: false,
       failureCode: "invalid-intent",
+      runId: "run-2",
       issueBindingFailure: "issue-unavailable",
     });
     expect(f.rows.has("run-2")).toBe(false);
@@ -3487,6 +4260,7 @@ describe("issue-bound runs (#3385)", () => {
     expect(result).toEqual({
       ok: false,
       failureCode: "issue-context-unavailable",
+      runId: "run-2",
       issueBindingFailure: "issue-unavailable",
     });
     expect(f.rows.has("run-2")).toBe(false);
@@ -4203,5 +4977,22 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
         reason: "interrupted",
       });
     });
+  });
+});
+
+// #3417: the approved skills the operator is shown belong to the run they are watching, and the
+// general snapshot stays unable to carry them.
+describe("CodingRuntimeOrchestrator approved skills (#3417)", () => {
+  it("projects the approved skills of the current run only, never onto the snapshot", async () => {
+    const f = fixture();
+    await f.orchestrator.start(start);
+
+    expect(f.orchestrator.approvedSkills("run-1")).toEqual(APPROVED_SKILLS);
+    expect(f.orchestrator.approvedSkills("run-2")).toBeUndefined();
+    // A route parameter is operator input: an empty or traversal-shaped id answers nothing, so a
+    // later lookup change cannot hand the current run's skills to a malformed route.
+    expect(f.orchestrator.approvedSkills("")).toBeUndefined();
+    expect(f.orchestrator.approvedSkills("../run-1")).toBeUndefined();
+    expect(JSON.stringify(f.orchestrator.snapshot())).not.toContain("skl_repo-structure-summary");
   });
 });

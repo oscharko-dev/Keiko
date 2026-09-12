@@ -34,6 +34,10 @@ export interface GitWorktreeSnapshot {
   readonly stagedFileCount: number;
   readonly unstagedFileCount: number;
   readonly untrackedFileCount: number;
+  // Paths the workspace deny list keeps outside the governed content surface (`.idea/**`, `.env`,
+  // ...): excluded from the three counts above and never read. Present only from the raw reader
+  // (git-raw-worktree-node.ts), whose consumers record the count body-free.
+  readonly deniedPathCount?: number | undefined;
   // True when the current branch tracks a remote-tracking branch.
   readonly hasUpstream: boolean;
   // Commits the current branch is ahead of / behind its upstream. 0 when there is no upstream or the

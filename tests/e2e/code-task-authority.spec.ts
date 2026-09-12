@@ -418,7 +418,10 @@ async function proveLiveActivityTimeline(
   runId: string,
 ): Promise<void> {
   await awaitRequiredQuestion(page);
-  if (realBinaryJourney) await proveRepositorySearchConsumption(timeline);
+  if (realBinaryJourney) {
+    await proveRepositorySearchConsumption(timeline);
+    await proveSkillDiscoveryConsumption(timeline);
+  }
   await expect(timeline.getByRole("region", { name: "Runtime questions" })).toBeVisible();
   await expect(timeline.getByText(FUNCTIONAL_PLAN_STEP_READ, { exact: true })).toBeVisible();
   const completedRead = timeline
@@ -467,6 +470,32 @@ async function proveRepositorySearchConsumption(timeline: Locator): Promise<void
     await expect(succeeded).toHaveCount(1);
     await expect(succeeded).toBeVisible();
   }
+}
+
+// #3417: the real binary discovered the approved skills through production composition and
+// invoked the one skill the runtime's own listing named; the timeline carries both governed calls
+// and the audited skill invocation.
+async function proveSkillDiscoveryConsumption(timeline: Locator): Promise<void> {
+  const path = join(stateDir, "skill-discovery-consumption.json");
+  await expect.poll(() => existsSync(path)).toBe(true);
+  const proof: unknown = JSON.parse(readFileSync(path, "utf8"));
+  expect(proof).toMatchObject({
+    schemaVersion: 1,
+    toolCallId: "skill-real-binary-discovery",
+    listedCount: 1,
+    skillIdDigest: createHash("sha256").update("skl_repo-structure-summary@1").digest("hex"),
+    invokedSkillDerivedFromResult: true,
+  });
+  for (const tool of ["keiko_skill_discover", "keiko_skill"]) {
+    // Matched on the card's exact label, so `keiko_skill` cannot also match
+    // `keiko_skill_discover`. A `hasText` regular expression cannot do it: the text engine reads a
+    // pattern with the repository's mandatory `u` flag as literal text and matches nothing.
+    const succeeded = timeline
+      .locator('[data-tool-state="succeeded"]')
+      .filter({ has: timeline.page().getByText(`Tool activity: ${tool}`, { exact: true }) });
+    await expect(succeeded).toHaveCount(1);
+  }
+  await expect(timeline.getByText("Skill invoked", { exact: true }).first()).toBeVisible();
 }
 
 async function settleRealBinaryRun(page: Page, runId: string): Promise<void> {

@@ -5,6 +5,7 @@ import type {
   CodingWorkbenchIssueBinding,
   CodingWorkbenchModelSource,
   CodingWorkbenchMode,
+  CodingWorkbenchOperatorDecision,
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimeResult,
   CodingWorkbenchRuntimeSource,
@@ -14,6 +15,7 @@ import {
   CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
   validateCodingWorkbenchIssueBinding,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { CODING_WORKBENCH_OPERATOR_DECISIONS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
   isVerifiedCommitResult,
   type VerifiedCommitResult,
@@ -53,6 +55,7 @@ type SnapshotSqlValue = string | number | null;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
 const DIGEST = /^[a-f0-9]{64}$/;
 const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+const PAUSE_REASONS = new Set<CodingWorkbenchOperatorDecision>(CODING_WORKBENCH_OPERATOR_DECISIONS);
 const STATES = new Set<CodingWorkbenchRuntimeStateName>([
   "starting",
   "ready",
@@ -95,6 +98,12 @@ export interface CodingRuntimeSnapshot {
   readonly runtimeSource: CodingWorkbenchRuntimeSource;
   readonly modelSource: CodingWorkbenchModelSource;
   readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+  /**
+   * Why a `paused` run is paused, when a governed tool asked for a decision only a local human can
+   * make. Durable so a BFF restart cannot leave the operator looking at a paused run with nothing
+   * saying what it waits for. Absent on every other state and on an operator-initiated pause.
+   */
+  readonly pauseReason?: CodingWorkbenchOperatorDecision | undefined;
   readonly createdAt: string;
   readonly updatedAt: string;
   readonly terminalAt?: string | undefined;
@@ -124,6 +133,8 @@ export interface CodingRuntimeSnapshotTransition {
   readonly revision: number;
   readonly updatedAt: string;
   readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+  // Written on every transition, so leaving a paused run always clears the reason it was paused for.
+  readonly pauseReason?: CodingWorkbenchOperatorDecision | undefined;
   readonly terminalAt?: string | undefined;
   readonly toolCallCount?: number | undefined;
   readonly patchByteCount?: number | undefined;
@@ -200,6 +211,7 @@ interface Row {
   readonly runtime_source: CodingWorkbenchRuntimeSource;
   readonly model_source: CodingWorkbenchModelSource;
   readonly failure_code: CodingWorkbenchRuntimeFailureCode | null;
+  readonly pause_reason: CodingWorkbenchOperatorDecision | null;
   readonly created_at: string;
   readonly updated_at: string;
   readonly terminal_at: string | null;
@@ -235,7 +247,7 @@ interface Row {
 }
 
 const COLUMNS =
-  "run_id, schema_version, state, revision, requested_mode, runtime_source, model_source, failure_code, created_at, updated_at, terminal_at, recovery_acknowledged_at, predecessor_run_id, task_digest, workspace_digest, operator_digest, authority_digest, binding_digest, provenance_digest, tool_call_count, patch_byte_count, model_request_count, recovery_handle, result_status, exit_code, stdout_byte_count, stdout_line_count, stdout_sha256, stdout_truncated, stderr_byte_count, stderr_line_count, stderr_sha256, stderr_truncated, issue_repository_id, issue_remote_digest, issue_number, issue_id_digest, issue_default_base_ref, issue_content_revision_digest, issue_binding_digest, verified_commit_result, draft_delivery_record, draft_delivery_source_receipt";
+  "run_id, schema_version, state, revision, requested_mode, runtime_source, model_source, failure_code, pause_reason, created_at, updated_at, terminal_at, recovery_acknowledged_at, predecessor_run_id, task_digest, workspace_digest, operator_digest, authority_digest, binding_digest, provenance_digest, tool_call_count, patch_byte_count, model_request_count, recovery_handle, result_status, exit_code, stdout_byte_count, stdout_line_count, stdout_sha256, stdout_truncated, stderr_byte_count, stderr_line_count, stderr_sha256, stderr_truncated, issue_repository_id, issue_remote_digest, issue_number, issue_id_digest, issue_default_base_ref, issue_content_revision_digest, issue_binding_digest, verified_commit_result, draft_delivery_record, draft_delivery_source_receipt";
 
 // Prepared statements must remain co-located with the closed store operations they support.
 // eslint-disable-next-line max-lines-per-function
@@ -249,10 +261,10 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
     `SELECT ${readColumns} FROM coding_runtime_snapshots ORDER BY updated_at DESC, run_id LIMIT ?`,
   );
   const insert = db.prepare(
-    `INSERT INTO coding_runtime_snapshots (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO coding_runtime_snapshots (${COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const update = db.prepare(
-    `UPDATE coding_runtime_snapshots SET state=?, revision=?, updated_at=?, failure_code=?, terminal_at=?, tool_call_count=?, patch_byte_count=?, model_request_count=?, recovery_handle=?, result_status=?, exit_code=?, stdout_byte_count=?, stdout_line_count=?, stdout_sha256=?, stdout_truncated=?, stderr_byte_count=?, stderr_line_count=?, stderr_sha256=?, stderr_truncated=? WHERE run_id=?`,
+    `UPDATE coding_runtime_snapshots SET state=?, revision=?, updated_at=?, failure_code=?, pause_reason=?, terminal_at=?, tool_call_count=?, patch_byte_count=?, model_request_count=?, recovery_handle=?, result_status=?, exit_code=?, stdout_byte_count=?, stdout_line_count=?, stdout_sha256=?, stdout_truncated=?, stderr_byte_count=?, stderr_line_count=?, stderr_sha256=?, stderr_truncated=? WHERE run_id=?`,
   );
   // Acknowledgement is itself an observable lifecycle event on the row (the operator's attestation
   // that ADR-0137 D5 reconciliation may treat the predecessor as reaped), so it advances `revision`
@@ -328,6 +340,9 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
         ...current,
         ...transition,
         failureCode: transition.failureCode,
+        // Written, never merged: a run leaving `paused` must lose the reason it was paused for,
+        // which a spread of `current` would otherwise carry into every later state.
+        pauseReason: transition.pauseReason,
         terminalAt: SETTLED.has(transition.state)
           ? (transition.terminalAt ?? transition.updatedAt)
           : undefined,
@@ -343,6 +358,7 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
         next.revision,
         next.updatedAt,
         next.failureCode ?? null,
+        next.pauseReason ?? null,
         next.terminalAt ?? null,
         next.toolCallCount,
         next.patchByteCount,
@@ -378,7 +394,11 @@ export function createCodingRuntimeSnapshotStore(db: DatabaseSync): CodingRuntim
       db.exec("BEGIN");
       try {
         const statement = db.prepare(
-          "UPDATE coding_runtime_snapshots SET state='recovery-required', failure_code='recovery-required', revision=?, updated_at=? WHERE run_id=?",
+          // `pause_reason` is cleared here as on every other state change: a run paused for an
+          // operator decision that the process restart interrupts must not keep naming a wait
+          // nobody is holding — and `assertSnapshot` would otherwise refuse the row on the very
+          // next read, which is `startupReconcileNow`'s own `listRecentActive` (owner review).
+          "UPDATE coding_runtime_snapshots SET state='recovery-required', failure_code='recovery-required', pause_reason=NULL, revision=?, updated_at=? WHERE run_id=?",
         );
         for (const row of active) statement.run(row.revision + 1, updatedAt, row.run_id);
         db.exec("COMMIT");
@@ -465,6 +485,7 @@ function map(row: Row | undefined): CodingRuntimeSnapshot | undefined {
     patchByteCount: row.patch_byte_count,
     modelRequestCount: row.model_request_count,
     ...(row.failure_code ? { failureCode: row.failure_code } : {}),
+    ...(row.pause_reason ? { pauseReason: row.pause_reason } : {}),
     ...(row.terminal_at ? { terminalAt: row.terminal_at } : {}),
     ...(row.recovery_acknowledged_at
       ? { recoveryAcknowledgedAt: row.recovery_acknowledged_at }
@@ -599,6 +620,7 @@ function values(v: CodingRuntimeSnapshot): readonly SnapshotSqlValue[] {
     v.runtimeSource,
     v.modelSource,
     v.failureCode ?? null,
+    v.pauseReason ?? null,
     v.createdAt,
     v.updatedAt,
     v.terminalAt ?? null,
@@ -671,6 +693,16 @@ function assertSnapshot(v: CodingRuntimeSnapshot): void {
   assertIssueBinding(v.issueBinding);
   assertOptionalVerifiedCommit(v);
   assertOptionalDraftDelivery(v);
+  assertPauseReason(v);
+}
+
+// A pause reason on any other state would describe a wait the run is not in, and the row would then
+// outlive the decision it names. Fails closed here rather than being silently dropped on write, so
+// a caller that forgets to clear it is a defect the store reports instead of absorbing.
+function assertPauseReason(v: CodingRuntimeSnapshot): void {
+  if (v.pauseReason === undefined) return;
+  if (!PAUSE_REASONS.has(v.pauseReason)) throw new Error("invalid pauseReason");
+  if (v.state !== "paused") throw new Error("pauseReason is only valid while paused");
 }
 
 function assertOptionalDraftDelivery(snapshot: CodingRuntimeSnapshot): void {

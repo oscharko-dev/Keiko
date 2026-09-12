@@ -340,6 +340,52 @@ describe("localizeMatchLine (GEN-AI-GROUNDING-006, RB-4)", () => {
   });
 });
 
+// #3416: a caller that reranks must be able to disclose WHICH index answered, without resolving the
+// pod a second time — a second resolution could name a different pod than the one that searched.
+describe("configuredRepoSemanticSearchProviderFor pod identity (#3416)", () => {
+  it("reports the identity of the pod that answered", async () => {
+    const files = { "src/auth.ts": "// refresh token\nexport const auth = 1;\n" };
+    const embeddingRequest = vi.fn(async (request: OpenAIEmbeddingRequest) =>
+      Promise.resolve({
+        ok: true as const,
+        value: { vector: vectorFor(request.input), modelId: request.modelId },
+      }),
+    );
+    const deps = depsWith(config(true), embeddingRequest);
+    const fs2 = testFs(files);
+    const pod = await seedRepositoryPod(deps, fs2, Object.keys(files));
+    const seen: { readonly capsuleId: string; readonly sourceId: string }[] = [];
+
+    const provider = configuredRepoSemanticSearchProviderFor(deps, undefined, {
+      fs: fs2,
+      repositoryPod: { store: pod.store, repositoryRoot: ROOT },
+      observePodIdentity: (identity): void => void seen.push(identity),
+    });
+
+    expect(provider).toBeDefined();
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.capsuleId.length).toBeGreaterThan(0);
+    expect(seen[0]?.sourceId.length).toBeGreaterThan(0);
+  });
+
+  it("reports no identity when no pod resolves", () => {
+    const embeddingRequest = vi.fn(async (request: OpenAIEmbeddingRequest) =>
+      Promise.resolve({
+        ok: true as const,
+        value: { vector: vectorFor(request.input), modelId: request.modelId },
+      }),
+    );
+    const deps = depsWith(config(true), embeddingRequest);
+    const seen: unknown[] = [];
+
+    configuredRepoSemanticSearchProviderFor(deps, undefined, {
+      observePodIdentity: (identity): void => void seen.push(identity),
+    });
+
+    expect(seen).toHaveLength(0);
+  });
+});
+
 describe("configuredRepoSemanticSearchProviderFor", () => {
   it("returns undefined when no embedding-capable provider is configured", () => {
     const deps = depsWith(config(false), () =>

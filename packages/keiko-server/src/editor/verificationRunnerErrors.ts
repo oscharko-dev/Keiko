@@ -51,3 +51,33 @@ export class VerificationRunnerError extends CodedHttpError {
     this.code = code;
   }
 }
+
+// ADR-0147 D3 — WHY a package-script decision refused, as a closed vocabulary. The refusal used to
+// reach the activity log and the model as the bare code WORKSPACE_TRUST_REQUIRED, so a governed run
+// whose own edit to `package.json` had moved the worktree away from its repository's trust basis was
+// indistinguishable from a repository nobody had ever trusted; the operator was then told to grant
+// the repository, which cannot clear a drifted worktree (Coding Workbench run 8, 2026-09-10).
+export const SCRIPT_TRUST_REFUSALS = [
+  // An ordinary root with no current grant of its own.
+  "root-not-trusted",
+  // A managed worktree whose repository has no current grant, and no explicit grant of its own.
+  "repository-not-trusted",
+  // A managed worktree whose repository IS trusted, but whose own `package.json` no longer matches
+  // the repository's trust basis — and which carries no explicit human grant for its rewritten bytes.
+  "worktree-manifest-drift",
+  // The decision itself failed (an unreadable manifest, a decider that threw): fail closed.
+  "decision-failed",
+] as const;
+export type ScriptTrustRefusal = (typeof SCRIPT_TRUST_REFUSALS)[number];
+
+export class WorkspaceTrustRequiredError extends VerificationRunnerError {
+  public readonly trustRefusal: ScriptTrustRefusal;
+
+  public constructor(trustRefusal: ScriptTrustRefusal) {
+    super(
+      "WORKSPACE_TRUST_REQUIRED",
+      "Repository package scripts require server-side workspace trust before execution.",
+    );
+    this.trustRefusal = trustRefusal;
+  }
+}

@@ -28,6 +28,7 @@ import {
   buildVerificationPlan,
   detectScripts,
   planDirectTargetedTests,
+  type VerificationStepOutput,
 } from "@oscharko-dev/keiko-verification";
 import {
   detectWorkspaceAt,
@@ -46,16 +47,20 @@ import {
   type ExecuteVerificationArgs,
   type ExecuteVerificationResult,
 } from "./verificationExecution.js";
-import { VerificationRunnerError } from "./verificationRunnerErrors.js";
+import {
+  VerificationRunnerError,
+  WorkspaceTrustRequiredError,
+  type ScriptTrustRefusal,
+} from "./verificationRunnerErrors.js";
 import type { Project, UiStore } from "../store/index.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import type { ServerLogSink } from "../observability/index.js";
 import {
   describeError,
-  evidenceRetentionDiagnosticObserver,
   emitServerDiagnostic,
   type ServerDiagnosticSink,
 } from "../diagnostics-log.js";
+import { evidenceRetentionObserver } from "../evidence-retention-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 
@@ -88,6 +93,21 @@ export interface VerificationRunStart {
   readonly run: EditorVerificationRun;
 }
 
+/**
+ * What the agent path hands back: the persisted, body-free report plus the orchestrator's redacted
+ * output tails of the steps that did not pass (ADR-0126 D3). The tails travel only in memory to the
+ * governed verification tool, which forwards them to the coding model; they are never persisted
+ * and never logged (Coding Workbench run 15, 2026-09-10: without them the model saw "build failed;
+ * 0 structured failure locations" seven times and could not repair anything).
+ */
+export interface VerificationRunOutcome {
+  readonly report: VerificationReport;
+  readonly failureOutput: readonly VerificationStepOutput[];
+}
+
+// At most this many step outputs are retained per run — one per planned step plus the bootstrap.
+const MAX_FAILURE_OUTPUTS = 8;
+
 export type EditorVerificationCatalogDiscovery = Omit<EditorVerificationCatalog, "workspaceTrust">;
 
 export type VerificationRunnerEventEmitter = (event: EditorVerificationEvent) => void;
@@ -109,8 +129,20 @@ export interface VerificationRunnerManager {
   readonly runToReport: (
     input: VerificationRunInput,
     signal: AbortSignal,
-  ) => Promise<VerificationReport>;
+  ) => Promise<VerificationRunOutcome>;
   readonly abort: (runId: string) => boolean;
+  /**
+   * The runner's OWN package-script trust decision for a project, as a pure query: it resolves the
+   * workspace and applies `decideScriptTrust`, and it neither executes a step nor writes an
+   * activity line. A caller that has just been refused `WORKSPACE_TRUST_REQUIRED` polls this to
+   * learn when the operator's decision has landed; re-deriving the ADR-0147 D3 rule at that call
+   * site would be a second implementation of the one rule this method exists to keep single.
+   *
+   * A workspace that cannot be resolved at all is `undefined` — not `false`: "no decision" and
+   * "decided against" are different answers, and a caller waiting for a human must not read an
+   * unreadable workspace as a pending decision that could still arrive.
+   */
+  readonly scriptTrustFor: (projectId: string) => ScriptTrustDecision | undefined;
   readonly subscribe: (listener: VerificationRunnerEventEmitter) => () => void;
   readonly inFlightCount: () => number;
 }
@@ -120,6 +152,18 @@ export interface VerificationRunnerManagerOptions {
   readonly fs?: WorkspaceFs | undefined;
   readonly isWorkspaceTrustedForPackageScripts?:
     VerificationRunnerWorkspaceTrustDecider | undefined;
+  // ADR-0147 D3 — the managed worktree root's OWN explicit human grant, asked only once the
+  // repository's standing grant stops covering the worktree (its `package.json` rewritten by the
+  // governed run, or no repository grant at all). Defaults fail closed, so a composition that wires
+  // no decider can never admit a drifted worktree.
+  readonly isWorktreeTrustedByHumanGrant?: ((canonicalRoot: string) => boolean) | undefined;
+  /**
+   * ADR-0147 D3, autonomous-delivery amendment: whether the managed worktree's current manifest is
+   * exactly the one a governed effect of its live autonomous run left behind
+   * (`WorkspaceScriptTrustService.holdsRunAdmissionForRoot`). Asked only after the repository's
+   * grant stopped covering the worktree and no explicit worktree grant exists.
+   */
+  readonly isWorktreeManifestRunAdmitted?: ((canonicalRoot: string) => boolean) | undefined;
   readonly now?: (() => number) | undefined;
   // Injectable execution port; tests supply a deterministic report/probe without spawning.
   readonly execute?: VerificationExecutePort | undefined;
@@ -172,16 +216,11 @@ interface ResolvedVerificationWorkspace {
   // facts would never match its repository's grant).
   readonly trustProjectId: string;
   readonly trustWorkspace: WorkspaceInfo;
-  // The repository root the root that will actually run scripts must STILL match — the roots, not
-  // the boolean they compare to. The grant is bound to exact manifest bytes (ADR-0147 D3), so a
-  // comparison taken once at resolution time and reused at the effect boundary would accept a
+  // The repository a managed worktree must STILL match is read from `access` on every ask
+  // (`decideScriptTrust`), never as a boolean taken once at resolution time: the grant is bound to
+  // exact manifest bytes (ADR-0147 D3), so a comparison reused at the effect boundary would accept a
   // `package.json` replaced between the two checks and spawn a script no human approved (P1,
-  // PR #3381 review). `trustedForScripts` therefore re-derives the comparison from these roots on
-  // every ask, so the at-effect answer is read from the filesystem in the same synchronous step
-  // that admits the run. `undefined` for an ordinary root, which is its own basis and has nothing to
-  // compare against; a managed access always names one (`WorkspaceRootAccess`'s `managed-task`
-  // branch REQUIRES `repositoryRoot`).
-  readonly trustBasisRepositoryRoot: string | undefined;
+  // PR #3381 review).
 }
 
 interface PreparedVerificationRun {
@@ -193,6 +232,8 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private readonly store: UiStore;
   private readonly fs: WorkspaceFs;
   private readonly isTrusted: VerificationRunnerWorkspaceTrustDecider;
+  private readonly worktreeHumanGrant: (canonicalRoot: string) => boolean;
+  private readonly runAdmittedManifest: (canonicalRoot: string) => boolean;
   private readonly now: () => number;
   private readonly executePort: VerificationExecutePort;
   private readonly maxConcurrentRuns: number;
@@ -208,6 +249,8 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     this.store = opts.store;
     this.fs = opts.fs ?? nodeWorkspaceFs;
     this.isTrusted = opts.isWorkspaceTrustedForPackageScripts ?? ((): boolean => false);
+    this.worktreeHumanGrant = opts.isWorktreeTrustedByHumanGrant ?? ((): boolean => false);
+    this.runAdmittedManifest = opts.isWorktreeManifestRunAdmitted ?? ((): boolean => false);
     this.now = opts.now ?? Date.now;
     this.executePort = opts.execute ?? executeVerificationEnforced;
     this.maxConcurrentRuns = opts.maxConcurrentRuns ?? DEFAULT_MAX_CONCURRENT_RUNS;
@@ -281,7 +324,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   public readonly runToReport = async (
     input: VerificationRunInput,
     signal: AbortSignal,
-  ): Promise<VerificationReport> => {
+  ): Promise<VerificationRunOutcome> => {
     const { resolved, plan } = this.prepare(input);
     const { workspace } = resolved;
     const runId = randomUUID();
@@ -302,20 +345,15 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     this.emitRunStarted(runId, input, startedAtMs);
     this.emitStepsStarted(runId, plan);
     try {
-      const { report } = await this.executePort({
-        plan,
-        workspace,
-        signal: controller.signal,
-        correlationId: entry.correlationId,
-        fs: resolved.access.fs,
-      });
+      const { report, failureOutput } = await this.executeAgentPlan(plan, resolved, entry);
+      this.recordDependencyBootstrap(entry.correlationId, report);
       this.emitStepCompletions(runId, report);
       // Awaited path (the agent's HTTP request awaits this promise): an evidence-write failure is
       // surfaced both as the terminal SSE event AND a thrown error, so the caller receives a real
       // failure instead of a redacted report the ledger has no record of.
       this.persistAndEmitTerminalOrThrow(runId, workspace.root, report, startedAtMs, entry);
       this.recordRunnerCompletion(workspace, entry.correlationId, report);
-      return report;
+      return { report, failureOutput };
     } catch (error) {
       this.recordRunnerFailure(workspace, entry.correlationId, error);
       if (!(error instanceof VerificationRunnerError && error.code === "EVIDENCE_WRITE_FAILED")) {
@@ -328,13 +366,50 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     }
   };
 
+  // #3452 review: the agent path (executeAgentPlan) and the human path (executeAndReport) each
+  // built this same ExecuteVerificationArgs object by hand -- the `dependencyBootstrap: "auto"`
+  // literal and the rest of the shared fields lived in two places that could silently drift from
+  // each other. One helper now owns the shared shape; the agent path layers its own
+  // `onStepOutput` sink on top of it.
+  private buildExecuteArgs(
+    plan: VerificationPlan,
+    resolved: ResolvedVerificationWorkspace,
+    entry: InFlightRun,
+  ): ExecuteVerificationArgs {
+    return {
+      plan,
+      workspace: resolved.workspace,
+      signal: entry.controller.signal,
+      correlationId: entry.correlationId,
+      fs: resolved.access.fs,
+      dependencyBootstrap: "auto",
+    };
+  }
+
+  // The agent path's execution: dependencies bootstrapped, and the orchestrator's redacted output
+  // tails of non-passing steps collected (bounded) for the governed tool — never persisted.
+  private async executeAgentPlan(
+    plan: VerificationPlan,
+    resolved: ResolvedVerificationWorkspace,
+    entry: InFlightRun,
+  ): Promise<VerificationRunOutcome> {
+    const failureOutput: VerificationStepOutput[] = [];
+    const { report } = await this.executePort({
+      ...this.buildExecuteArgs(plan, resolved, entry),
+      onStepOutput: (output): void => {
+        if (failureOutput.length < MAX_FAILURE_OUTPUTS) failureOutput.push(output);
+      },
+    });
+    return { report, failureOutput };
+  }
+
   private prepare(input: VerificationRunInput): PreparedVerificationRun {
     let workspace: WorkspaceInfo | undefined;
     try {
       const resolved = this.resolveWorkspace(input.projectId, input.correlationId);
       workspace = resolved.workspace;
-      const plan = this.buildPlan(resolved, input);
-      this.recordRunnerSelection(workspace, input.correlationId, plan.steps.length);
+      const { plan, trustBasis } = this.buildPlan(resolved, input);
+      this.recordRunnerSelection(workspace, input.correlationId, plan.steps.length, trustBasis);
       this.assertRunnable(plan);
       this.assertWorkspaceTrustAtEffect(resolved, input);
       return { resolved, plan };
@@ -375,19 +450,21 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     this.emitTerminalOnce(runId, entry, report);
   }
 
+  // Returns the trust basis the script steps run under next to the plan, so the selection line can
+  // say which basis admitted the scripts (repository, worktree grant, or the run's own manifest).
   private buildPlan(
     resolved: ResolvedVerificationWorkspace,
     input: VerificationRunInput,
-  ): VerificationPlan {
+  ): { readonly plan: VerificationPlan; readonly trustBasis: ScriptTrustBasis | undefined } {
     const { workspace } = resolved;
     const fs = resolved.access.fs;
     const scriptKinds = input.kinds.filter(isScriptBackedKind);
-    this.assertWorkspaceTrustForScriptKinds(resolved, scriptKinds);
+    const trustBasis = this.assertWorkspaceTrustForScriptKinds(resolved, scriptKinds);
     const steps = [
       ...this.scriptSteps(workspace, scriptKinds, fs),
       ...this.targetedSteps(workspace, input, fs),
     ];
-    return { workspaceRoot: workspace.root, steps };
+    return { plan: { workspaceRoot: workspace.root, steps }, trustBasis };
   }
 
   private assertWorkspaceTrustAtEffect(
@@ -400,12 +477,11 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   private assertWorkspaceTrustForScriptKinds(
     resolved: ResolvedVerificationWorkspace,
     scriptKinds: readonly VerificationKind[],
-  ): void {
-    if (scriptKinds.length === 0 || this.trustedForScripts(resolved)) return;
-    throw new VerificationRunnerError(
-      "WORKSPACE_TRUST_REQUIRED",
-      "Repository package scripts require server-side workspace trust before execution.",
-    );
+  ): ScriptTrustBasis | undefined {
+    if (scriptKinds.length === 0) return undefined;
+    const decision = this.scriptTrust(resolved);
+    if (decision.trusted) return decision.basis;
+    throw new WorkspaceTrustRequiredError(decision.refusal);
   }
 
   private scriptSteps(
@@ -477,13 +553,8 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     startedAtMs: number,
   ): Promise<void> {
     try {
-      const { report } = await this.executePort({
-        plan,
-        workspace: resolved.workspace,
-        signal: entry.controller.signal,
-        correlationId: entry.correlationId,
-        fs: resolved.access.fs,
-      });
+      const { report } = await this.executePort(this.buildExecuteArgs(plan, resolved, entry));
+      this.recordDependencyBootstrap(entry.correlationId, report);
       this.emitStepCompletions(runId, report);
       // Fire-and-forget path (nothing awaits runPlan): an evidence-write failure must not become an
       // unhandled rejection, so it is caught and surfaced as the terminal event itself rather than
@@ -508,12 +579,45 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
     workspace: WorkspaceInfo,
     correlationId: string | undefined,
     stepCount: number,
+    trustBasis: ScriptTrustBasis | undefined,
   ): void {
     this.activityLog.write({
       category: "process",
       op: "editor.verification.execute",
       correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-      extra: { state: "selected", runnerId: workspace.testFramework, stepCount },
+      extra: {
+        state: "selected",
+        runnerId: workspace.testFramework,
+        stepCount,
+        ...(trustBasis === undefined ? {} : { trustBasis }),
+      },
+    });
+  }
+
+  // ADR-0043 D17: the dependency bootstrap's own body-free line — its state, whether a lockfile
+  // was present or created, npm's exit code, the duration and the install's registry egress counts
+  // — so a report whose steps were all skipped can be read back to the install that left them
+  // without their dependencies.
+  private recordDependencyBootstrap(correlationId: string, report: VerificationReport): void {
+    const dependencies = report.dependencies;
+    if (dependencies === undefined) return;
+    this.activityLog.write({
+      category: "process",
+      op: "editor.verification.dependencies",
+      correlationId,
+      extra: {
+        state: dependencies.state,
+        lockfile: dependencies.lockfile,
+        exitCode: dependencies.exitCode,
+        durationMs: dependencies.durationMs,
+        // Tunnels the install opened to the approved registry, and destinations it was refused.
+        ...(dependencies.egress === undefined
+          ? {}
+          : {
+              egressAllowed: dependencies.egress.allowed,
+              egressRefused: dependencies.egress.refused,
+            }),
+      },
     });
   }
 
@@ -559,6 +663,12 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         state: "refused",
         runnerId: workspace?.testFramework ?? "unknown",
         reason,
+        // WHY script trust refused (ADR-0147 D3 vocabulary). Without it a worktree whose manifest
+        // the run itself rewrote read exactly like a repository nobody had trusted (run 8,
+        // 2026-09-10), and the operator was pointed at the wrong grant.
+        ...(error instanceof WorkspaceTrustRequiredError
+          ? { trustRefusal: error.trustRefusal }
+          : {}),
         ...(detail.frames === undefined ? {} : { frames: detail.frames }),
         ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
       },
@@ -680,7 +790,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         entry,
         this.redactor,
         DEFAULT_RETENTION,
-        evidenceRetentionDiagnosticObserver(this.diagnostics, "editor-verification-run"),
+        evidenceRetentionObserver("editor-verification-run"),
       );
     } catch {
       throw new VerificationRunnerError(
@@ -714,7 +824,7 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         evidence,
         this.redactor,
         DEFAULT_RETENTION,
-        evidenceRetentionDiagnosticObserver(this.diagnostics, "editor-verification-run"),
+        evidenceRetentionObserver("editor-verification-run"),
       );
     } catch {
       throw new VerificationRunnerError(
@@ -736,26 +846,31 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
   }
 
   private trustedForScripts(resolved: ResolvedVerificationWorkspace): boolean {
-    try {
-      return (
-        this.trustBasisMatchesNow(resolved) &&
-        this.isTrusted(resolved.trustProjectId, resolved.trustWorkspace)
-      );
-    } catch {
-      return false;
-    }
+    return this.scriptTrust(resolved).trusted;
   }
 
   // Re-derived from the filesystem on EVERY ask — plan time, at-effect, and catalog projection —
-  // never cached on the resolved workspace. See `ResolvedVerificationWorkspace.trustBasisRepositoryRoot`.
-  private trustBasisMatchesNow(resolved: ResolvedVerificationWorkspace): boolean {
-    const repositoryRoot = resolved.trustBasisRepositoryRoot;
-    // An ORDINARY root is its own trust basis and has nothing to compare against — and it is now the
-    // only kind that reaches this branch, because `WorkspaceRootAccess`'s `managed-task` member
-    // REQUIRES `repositoryRoot`. The previous fail-closed answer for "a managed access naming no
-    // repository" (CodeRabbit, PR #3381) guarded a configuration the type no longer admits.
-    if (repositoryRoot === undefined) return true;
-    return worktreeSharesRepositoryTrustBasis(resolved.access, repositoryRoot, this.fs);
+  // never cached on the resolved workspace (see `ResolvedVerificationWorkspace`).
+  scriptTrustFor = (projectId: string): ScriptTrustDecision | undefined => {
+    try {
+      return this.scriptTrust(this.resolveWorkspace(projectId));
+    } catch {
+      // Resolution failing closed is not a trust verdict. Swallowing it here is deliberate and
+      // narrow: `prepare` still surfaces the same failure through the runner's structured error
+      // path the moment verification is actually attempted, so nothing is lost from the log.
+      return undefined;
+    }
+  };
+
+  private scriptTrust(resolved: ResolvedVerificationWorkspace): ScriptTrustDecision {
+    return decideScriptTrust({
+      access: resolved.access,
+      repositoryFs: this.fs,
+      standingTrust: (): boolean =>
+        this.isTrusted(resolved.trustProjectId, resolved.trustWorkspace),
+      worktreeHumanGrant: (): boolean => this.worktreeHumanGrant(resolved.access.canonicalRoot),
+      runAdmittedManifest: (): boolean => this.runAdmittedManifest(resolved.access.canonicalRoot),
+    });
   }
 
   private resolveWorkspace(
@@ -791,8 +906,6 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
         workspace,
         trustProjectId: projectId,
         trustWorkspace: workspace,
-        // An ordinary root is its own basis, so there is nothing to compare against.
-        trustBasisRepositoryRoot: undefined,
       };
     }
     return {
@@ -802,7 +915,6 @@ class VerificationRunnerManagerImpl implements VerificationRunnerManager {
       trustWorkspace: detectWorkspaceAt(repositoryRoot, this.fs, {
         scanSourceFilesForLanguages: false,
       }),
-      trustBasisRepositoryRoot: repositoryRoot,
     };
   }
 
@@ -879,6 +991,80 @@ export function worktreeSharesRepositoryTrustBasis(
     );
   } catch {
     return false;
+  }
+}
+
+export type ScriptTrustBasis = "own-root" | "repository" | "worktree-human-grant" | "run-manifest";
+
+export type ScriptTrustDecision =
+  | { readonly trusted: true; readonly basis: ScriptTrustBasis }
+  | { readonly trusted: false; readonly refusal: ScriptTrustRefusal };
+
+export interface ScriptTrustDecisionInput {
+  readonly access: WorkspaceRootAccess;
+  // The port the REPOSITORY's manifest is read through (the worktree's is read through `access.fs`).
+  readonly repositoryFs: WorkspaceFs;
+  // The standing grant of the root that owns the decision: the root itself, or for a managed
+  // worktree the repository it was bound from.
+  readonly standingTrust: () => boolean;
+  // The managed worktree root's own explicit human grant for its current manifest bytes
+  // (`WorkspaceScriptTrustService.holdsHumanGrantForRoot`). Asked only after the repository's
+  // grant stopped covering the worktree, so a byte-identical worktree never touches its own record.
+  readonly worktreeHumanGrant: () => boolean;
+  // ADR-0147 D3, autonomous-delivery amendment (owner decision, 2026-09-10): whether the worktree's
+  // current manifest is exactly the one a governed effect of its live autonomous run left behind
+  // (`WorkspaceScriptTrustService.holdsRunAdmissionForRoot`). Asked last, and only under the
+  // repository's standing grant: the operator's repository trust is the human decision this basis
+  // extends, and a run is never admitted to a repository nobody trusted.
+  readonly runAdmittedManifest: () => boolean;
+}
+
+/**
+ * The ONE package-script trust rule (ADR-0147 D3), asked by the verification runner, the command
+ * runner and the agent verification route so no two consumers can disagree about one grant:
+ *
+ *  - an ordinary root runs scripts under its own standing grant;
+ *  - a managed task worktree runs them under its REPOSITORY's grant while its own `package.json` is
+ *    byte-identical to the repository's (`worktreeSharesRepositoryTrustBasis`);
+ *  - once a governed run has rewritten that manifest — or the repository was never granted — the
+ *    remaining bases are an explicit human grant recorded for the worktree root itself, bound to
+ *    the rewritten bytes, or — under the repository's standing grant only — the run's OWN manifest:
+ *    in `autonomous-delivery` the operator authorized the run to edit the workspace and verify it
+ *    without per-action approval, so a manifest the run's last governed effect left behind is
+ *    admitted for that run (`run-manifest`), its scripts still running only under the verification
+ *    runner's enforced egress isolation (ADR-0043). A record merely DERIVED from the repository
+ *    never serves here, so revoking the repository still stops every worktree that only inherited
+ *    its grant — and every run admission with it.
+ *
+ * Every refusal names why, in the closed `ScriptTrustRefusal` vocabulary; any failure of the
+ * decision itself fails closed as `decision-failed`.
+ */
+export function decideScriptTrust(input: ScriptTrustDecisionInput): ScriptTrustDecision {
+  try {
+    const standing = input.standingTrust();
+    if (input.access.kind !== "managed-task") {
+      return standing
+        ? { trusted: true, basis: "own-root" }
+        : { trusted: false, refusal: "root-not-trusted" };
+    }
+    if (
+      standing &&
+      worktreeSharesRepositoryTrustBasis(
+        input.access,
+        input.access.repositoryRoot,
+        input.repositoryFs,
+      )
+    ) {
+      return { trusted: true, basis: "repository" };
+    }
+    if (input.worktreeHumanGrant()) return { trusted: true, basis: "worktree-human-grant" };
+    if (standing && input.runAdmittedManifest()) return { trusted: true, basis: "run-manifest" };
+    return {
+      trusted: false,
+      refusal: standing ? "worktree-manifest-drift" : "repository-not-trusted",
+    };
+  } catch {
+    return { trusted: false, refusal: "decision-failed" };
   }
 }
 

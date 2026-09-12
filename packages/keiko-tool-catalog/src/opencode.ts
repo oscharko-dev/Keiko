@@ -21,7 +21,7 @@
 //
 // This set is intentionally NOT the source for
 // packages/keiko-server/src/coding-runtime/opencodeToolSchemas.ts's `OPENCODE_MODEL_VISIBLE_TOOLS`/
-// `OPENCODE_TOOL_SOURCE_DEFINITIONS`: those pin what the real, pinned OpenCode 1.17.17 runtime
+// `OPENCODE_TOOL_SOURCE_DEFINITIONS`: those pin what the real, pinned OpenCode 1.18.30 runtime
 // itself generates and enforces BEFORE a call ever reaches Keiko (owned by the concurrently-worked
 // opencodeRuntimeAdapter.ts) and must keep matching that generated adapter source exactly, pattern
 // keyword included, or the sidecar-gateway's incoming exact-set trust check
@@ -39,7 +39,11 @@
 // `keiko.file.read`'s `path` in legacy.ts stays pattern-free; that is a separate, still-open case.
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
-import { DEFAULT_SANDBOX_POLICY } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import {
+  DEFAULT_SANDBOX_POLICY,
+  GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/tools";
+import { VERIFICATION_TOOL_MAX_DURATION_MS } from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { CODING_REPOSITORY_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
@@ -62,7 +66,7 @@ const OPENCODE_READ_MAX_WINDOW_LINES = 5_000;
 
 const OPENCODE_PROFILE = { id: "opencode", version: 1 } as const;
 const OPENCODE_DIALECT = { id: "managed-runtime-json-schema", version: 1 } as const;
-const OPENCODE_RUNTIME = { id: "opencode", version: "1.17.17" } as const;
+const OPENCODE_RUNTIME = { id: "opencode", version: "1.18.30" } as const;
 
 export interface OpenCodeNativeExtensionDefinition {
   readonly alias: "question" | "todowrite";
@@ -71,7 +75,7 @@ export interface OpenCodeNativeExtensionDefinition {
   readonly inputSchema: CatalogJsonObject;
 }
 
-// Exact v1.17.17 built-in `question` wire schema (pinned digest input; byte-identical to the
+// Exact v1.18.30 built-in `question` wire schema (pinned digest input; byte-identical to the
 // projection packages/keiko-server/src/coding-runtime/opencodeToolSchemas.ts pins for the
 // INCOMING sidecar trust check -- see this file's header comment for why this is the one source).
 const QUESTION_EXTENSION_SCHEMA: CatalogJsonObject = {
@@ -107,7 +111,7 @@ const QUESTION_EXTENSION_SCHEMA: CatalogJsonObject = {
   type: "object",
 };
 
-// Exact v1.17.17 built-in `todowrite` wire schema (#2480); byte-identical to its source schema.
+// Exact v1.18.30 built-in `todowrite` wire schema (#2480); byte-identical to its source schema.
 const TODO_WRITE_EXTENSION_SCHEMA: CatalogJsonObject = {
   $schema: "https://json-schema.org/draft/2020-12/schema",
   type: "object",
@@ -185,6 +189,14 @@ interface OpenCodeToolSpec {
   readonly effects: readonly CatalogEffect[];
   readonly idempotency: CatalogIdempotency;
   readonly handlerId: string;
+  /**
+   * The tool's own settlement budget when the sandbox default does not fit the work it performs.
+   * Absent means the sandbox default; a tool that runs the workspace's own scripts declares the
+   * budget those scripts are actually allowed (verification: `VERIFICATION_TOOL_MAX_DURATION_MS`),
+   * and a tool that waits in place for a human decision declares that wait on top of its own work
+   * (the four proposal tools: `GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS`).
+   */
+  readonly maxDurationMs?: number;
 }
 
 const OPENCODE_RESULT_SCHEMA: CatalogJsonObject = {
@@ -237,7 +249,7 @@ function entryFor(spec: OpenCodeToolSpec): CatalogSetEntry {
         maxArgumentBytes: TOOL_CATALOG_LIMITS.maxArgumentBytes,
         maxResultBytes: TOOL_CATALOG_LIMITS.maxResultBytes,
         maxResultCount: 1,
-        maxDurationMs: DEFAULT_SANDBOX_POLICY.defaultTimeoutMs,
+        maxDurationMs: spec.maxDurationMs ?? DEFAULT_SANDBOX_POLICY.defaultTimeoutMs,
       },
       idempotency: spec.idempotency,
       cancellation: "before-effect",
@@ -306,7 +318,9 @@ function readSpec(): OpenCodeToolSpec {
 // restated, so a limit change there cannot silently diverge from the schema shown to the model.
 // This is a search-only tool: `keiko_workspace_discover` remains path-only discovery and
 // `keiko_workspace_read` remains the bounded-range read handoff a hit's `path`/`startLine`/
-// `endLine` feeds into -- no semantic reranking and no read-kind request is ever projected here.
+// `endLine` feeds into, and no read-kind request is ever projected here. The #3416 semantic rerank
+// reorders the handler's hits ABOVE the server port and projects nothing of its own, so neither this
+// spec nor the projection digest moves with it.
 function repositorySearchSpec(): OpenCodeToolSpec {
   return {
     canonicalId: "keiko.repo.search",
@@ -417,8 +431,10 @@ function verificationSpec(): OpenCodeToolSpec {
       "one workspace-relative test path. For a commit, execute a ready stage proposal, or an " +
       "approval-required stage proposal after approval, then rerun verification and proceed only " +
       'when the result reports verification: { commitProof: "recorded" }. A ' +
-      "candidate-not-staged result with nextAction stage-then-verify requires staging and another " +
-      "verification run.",
+      "candidate-not-staged result with nextAction stage-then-verify names, under blocking, the " +
+      "unstaged and untracked paths that keep the proof from forming (a lockfile the dependency " +
+      "install created, build output no .gitignore covers): stage exactly those paths, or ignore " +
+      "them deliberately, then run the verification again.",
     inputSchema: managedObjectSchema(
       {
         verifierId: {
@@ -439,6 +455,7 @@ function verificationSpec(): OpenCodeToolSpec {
     effects: ["verification"],
     idempotency: "server-key-required",
     handlerId: "opencode-verification-port",
+    maxDurationMs: VERIFICATION_TOOL_MAX_DURATION_MS,
   };
 }
 
@@ -479,6 +496,24 @@ function skillSpec(): OpenCodeToolSpec {
     effects: ["workspace-read"],
     idempotency: "server-key-required",
     handlerId: "opencode-skill-port",
+  };
+}
+
+// #3417: the catalog owns only this discovery descriptor. The server-approved skill catalog stays
+// authoritative for skill state and the governed skill handler for effects.
+function skillDiscoverSpec(): OpenCodeToolSpec {
+  return {
+    canonicalId: "keiko.skill.discover",
+    alias: "keiko_skill_discover",
+    description:
+      "List the approved read-only skills this run may invoke now: each with the pinned skillId " +
+      "keiko_skill takes, its version, source digest, category, catalogued capabilities, " +
+      "compatible profile versions and readiness. Discover again after keiko_skill reports " +
+      "skill-discovery-stale.",
+    inputSchema: managedObjectSchema({}, []),
+    effects: ["workspace-read"],
+    idempotency: "read-only",
+    handlerId: "opencode-skill-discovery-port",
   };
 }
 
@@ -579,6 +614,8 @@ function gitStageSpec(): OpenCodeToolSpec {
     effects: ["workspace-write"],
     idempotency: "server-key-required",
     handlerId: "opencode-git-stage-port",
+    // It waits in place for the operator's approval of its proposal (F44).
+    maxDurationMs: GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
   };
 }
 
@@ -598,6 +635,8 @@ function gitCommitSpec(): OpenCodeToolSpec {
     effects: ["delivery-substrate"],
     idempotency: "server-key-required",
     handlerId: "opencode-git-commit-port",
+    // It waits in place for the operator's approval of its proposal (F44).
+    maxDurationMs: GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
   };
 }
 
@@ -611,6 +650,8 @@ function gitPushSpec(): OpenCodeToolSpec {
     effects: ["delivery-substrate", "network-egress"],
     idempotency: "server-key-required",
     handlerId: "opencode-git-push-port",
+    // It waits in place for the operator's approval of its proposal (F44).
+    maxDurationMs: GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
   };
 }
 
@@ -626,6 +667,8 @@ function gitPullRequestSpec(): OpenCodeToolSpec {
     effects: ["delivery-substrate", "network-egress"],
     idempotency: "server-key-required",
     handlerId: "opencode-git-pull-request-port",
+    // It waits in place for the operator's approval of its proposal (F44).
+    maxDurationMs: GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
   };
 }
 
@@ -699,6 +742,7 @@ export function opencodeRegistrationSet(): CatalogRegistrationSet {
       changesetEditSpec(),
       verificationSpec(),
       researchFetchSpec(),
+      skillDiscoverSpec(),
       skillSpec(),
       childRunSpec(),
       gitStatusSpec(),

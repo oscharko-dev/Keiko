@@ -588,6 +588,10 @@ describe("bounded coding safe-activity projection", () => {
       correlationId: RUN_ID,
       extra: { event: "dropped", reason: "capacity-rejected", occurrenceCount: 1 },
     });
+    // F49: designed truncation is recorded by that line alone, never as an error diagnostic.
+    expect(
+      records.filter((record) => record.code === "CODING_SAFE_ACTIVITY_EVENT_DROPPED"),
+    ).toEqual([]);
     expect(projection.ingest(RUN_ID, text("msg_new", "Newest progress."))).toBe(true);
     expect(projection.ingest(RUN_ID, text("msg_old", "Late old text."))).toBe(false);
     expect(
@@ -647,7 +651,43 @@ describe("bounded coding safe-activity projection", () => {
         correlationId: RUN_ID,
       }),
     );
+    // Only the two late signals are faults, counted on their own: the capacity drop before them
+    // neither delays nor inflates the first one (F49).
+    expect(records.map(({ occurrenceCount }) => occurrenceCount)).toEqual([1, 2]);
+    expect(records[0]).toMatchObject({ message: "safe-activity-dropped-projection-rejected" });
     expect(JSON.stringify(activityLog.events)).not.toMatch(/Old progress|Newest progress/u);
+  });
+
+  it("reports the first fault drop at once however many capacity drops preceded it", () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const projection = createCodingSafeActivityProjection({
+      now: () => 1_721_323_200_000,
+      limits: { maxMessagesPerTurn: 3 },
+      diagnostics: { record: (record) => void records.push(record) },
+    });
+    projection.open({
+      runId: RUN_ID,
+      workspaceId: WORKSPACE_ID,
+      authorityExpiresAt: "2026-07-18T18:00:00.000Z",
+      workspaceIsCurrent: () => true,
+    });
+    projection.ingest(RUN_ID, message("msg_user", "user"));
+    for (let index = 0; index < 8; index += 1) {
+      projection.ingest(RUN_ID, message(`msg_${String(index)}`, "assistant", "msg_user"));
+    }
+    expect(projection.currentContent()?.feed.droppedEventCount).toBe(6);
+    expect(records).toEqual([]);
+
+    expect(projection.ingest(RUN_ID, text("msg_0", "Late text."))).toBe(false);
+
+    expect(projection.currentContent()?.feed.droppedEventCount).toBe(7);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      code: "CODING_SAFE_ACTIVITY_EVENT_DROPPED",
+      message: "safe-activity-dropped-projection-rejected",
+      occurrenceCount: 1,
+      correlationId: RUN_ID,
+    });
   });
 
   it("fails closed for invalid opening authority, unmatched signals, and throwing workspace checks", () => {

@@ -11,6 +11,7 @@ import type {
   CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
   CodingWorkbenchRuntimeResearchChannelPayload,
   CodingWorkbenchRuntimeResearchRevokeRequest,
+  CodingWorkbenchRuntimeSkillsChannelPayload,
   CodingWorkbenchRuntimeResumeRequest,
   CodingWorkbenchRuntimeRetryRequest,
   CodingWorkbenchRuntimeSnapshot,
@@ -27,6 +28,7 @@ import {
   validateCodingWorkbenchRuntimeSnapshot,
   validateCodingWorkbenchRuntimeSseEvent,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-api";
+import { validateCodingWorkbenchRuntimeSkillsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import { validateCodingWorkbenchRuntimeResearchChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research";
 import {
   isWorkbenchDescriptionDraftReview,
@@ -120,6 +122,13 @@ function researchChannelValidator(
   value: unknown,
 ): CodingWorkbenchRuntimeResearchChannelPayload {
   return validated(path, value, validateCodingWorkbenchRuntimeResearchChannelPayload);
+}
+
+function skillsChannelValidator(
+  path: string,
+  value: unknown,
+): CodingWorkbenchRuntimeSkillsChannelPayload {
+  return validated(path, value, validateCodingWorkbenchRuntimeSkillsChannelPayload);
 }
 
 function approvalReviewChannelValidator(
@@ -322,6 +331,22 @@ export function getCodingWorkbenchRuntimeResearch(
     runPath(runId, "/research"),
     { cache: "no-store", ...(signal ? { signal } : {}) },
     { validator: researchChannelValidator },
+  );
+}
+
+/**
+ * Read the approved skills of a run over the authenticated app-session channel (#3417): every
+ * approved skill with the readiness the catalog can tell. The record is closed and body-free, and an
+ * unpaired browser receives the constant re-pair projection instead.
+ */
+export function getCodingWorkbenchRuntimeSkills(
+  runId: string,
+  signal?: AbortSignal,
+): Promise<CodingWorkbenchRuntimeSkillsChannelPayload> {
+  return bffFetchJson(
+    runPath(runId, "/skills"),
+    { cache: "no-store", ...(signal ? { signal } : {}) },
+    { validator: skillsChannelValidator },
   );
 }
 

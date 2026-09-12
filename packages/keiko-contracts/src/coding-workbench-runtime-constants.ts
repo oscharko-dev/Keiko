@@ -85,7 +85,13 @@ export type CodingWorkbenchRuntimeFailureCode =
   // resolution). Distinct from "authority-resolution-failed" so the coordinator can tell a runtime
   // rejection of the answer's shape apart from a real authority failure, and the Workbench can show
   // an actionable "pick one of the listed options" message instead of a generic authority error.
-  | "question-answer-rejected";
+  | "question-answer-rejected"
+  // Run 10 of the Coding Workbench engagement (2026-09-10): a run started from an accepted issue
+  // stopped after its verification was refused and settled `succeeded` although it had verified,
+  // committed, pushed and delivered nothing. "The model stopped emitting tool calls" is not
+  // delivery, and reporting it as success is a false claim the operator sees as green. An
+  // issue-bound run that ends with no durable delivery evidence settles under this code instead.
+  | "delivery-not-evidenced";
 
 export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRuntimeFailureCode[] =
   Object.freeze([
@@ -110,4 +116,5 @@ export const CODING_WORKBENCH_RUNTIME_FAILURE_CODES: readonly CodingWorkbenchRun
     "replay-cap-exhausted",
     "issue-context-unavailable",
     "question-answer-rejected",
+    "delivery-not-evidenced",
   ] as const);

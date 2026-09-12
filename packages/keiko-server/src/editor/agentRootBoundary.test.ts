@@ -46,7 +46,7 @@ import {
 import { editorAgentRegistry } from "./agentSessionRegistry.js";
 import { handleEditorAgentProducerTurn } from "./agentProducerRoute.js";
 import { handleEditorAgentVerificationRun } from "./agentVerificationRoute.js";
-import type { VerificationRunnerManager } from "./verificationRunner.js";
+import type { ScriptTrustDecision, VerificationRunnerManager } from "./verificationRunner.js";
 import {
   editorAgentPathBoundaryReason,
   editorAgentRootContainmentReason,
@@ -298,6 +298,7 @@ const deniedVerificationRunner: VerificationRunnerManager = {
   },
   inFlightCount: (): number => 0,
   subscribe: (): (() => void) => (): void => undefined,
+  scriptTrustFor: (): ScriptTrustDecision => ({ trusted: true, basis: "repository" }),
   runToReport: (): never => {
     throw new Error("a denied verification must never reach the runner");
   },

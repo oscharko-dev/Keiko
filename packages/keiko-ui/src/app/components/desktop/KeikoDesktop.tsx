@@ -4,7 +4,7 @@ import { useEffect, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { CODING_APP_SESSION_PAIRING_FRAGMENT_PREFIX } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import {
-  redeemCodingAppSessionPairingFragment,
+  redeemCodingAppSessionPairingNavigation,
   redeemCodingAppSessionPairingOnBoot,
 } from "@/lib/coding-app-session-client";
 import { AppShell } from "./AppShell";
@@ -39,7 +39,9 @@ export function KeikoDesktop(): ReactNode {
     // whose child effect runs first and hits the still-native call, hence its explicit replace.
     const onHashChange = (): void => {
       if (!pairingFragmentPresent()) return;
-      void redeemCodingAppSessionPairingFragment();
+      // A re-pair after a lane restart arrives this way; its redemption re-runs every read that
+      // depends on the session, the app-session channel included (F65).
+      void redeemCodingAppSessionPairingNavigation();
     };
     window.addEventListener("hashchange", onHashChange);
     return (): void => {

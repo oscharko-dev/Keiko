@@ -105,6 +105,12 @@ export interface WorkspaceLifecycleLogInput {
   // `outcome` itself, but only when `outcome` is failure-classified — a plain success never invents an
   // `errorKind` out of nothing.
   readonly errorCode?: string | undefined;
+  // The failure itself, when the caller has it in scope. The settled failure line is the ONLY line a
+  // classified provisioning failure leaves — the rethrow path's operation-local tracker suppresses
+  // the second, trace-carrying diagnostic — so the content-free cause chain and dist-anchored Keiko
+  // frames (ADR-0173) must travel on this line or the cause is lost for good: a bind that failed
+  // after `git worktree add` had succeeded logged `PROVISIONING_FAILED` and nothing else.
+  readonly error?: unknown;
   // The classified drift marker when the outcome is a drift verdict, so the log can tell a migration
   // (`identity-schema-retired`), a platform limitation (`identity-unsupported`), a readable pointer
   // proving a different identity (`gitdir-mismatch`) and a missing or corrupt pointer
@@ -126,6 +132,7 @@ export interface RecordWorkspaceLifecycleInput {
   readonly record: WorkspaceLifecycleEvidenceRecord;
   readonly redactString: (input: string) => string;
   readonly errorCode?: string | undefined;
+  readonly error?: unknown;
   readonly driftMarker?: TaskWorkspaceDriftMarker | undefined;
 }
 
@@ -166,6 +173,7 @@ export function logWorkspaceLifecycle(
       attempt: input.attempt,
       worktreeCount: input.worktreeCount,
       ...(input.driftMarker === undefined ? {} : { driftMarker: input.driftMarker }),
+      ...(input.error === undefined ? {} : errorTrace(input.error)),
     },
   });
 }
@@ -222,6 +230,7 @@ export function recordWorkspaceLifecycle(
     durationMs: record.durationMs,
     worktreeCount: record.worktreeCount,
     errorCode: input.errorCode,
+    error: input.error,
     driftMarker: input.driftMarker,
   });
 }

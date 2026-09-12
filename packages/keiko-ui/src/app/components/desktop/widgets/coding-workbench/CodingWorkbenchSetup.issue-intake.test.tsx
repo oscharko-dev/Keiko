@@ -568,6 +568,9 @@ describe("CodingWorkbenchSetup issue intake (#3385)", () => {
         bindingDigest: "1".repeat(64),
       },
     });
+    // The path the operator typed now survives this release (#3452 F52), so this case states its own
+    // precondition instead of inheriting an empty field from a card that used to discard it.
+    await user.clear(screen.getByLabelText("Repository path"));
     await user.type(screen.getByLabelText("Repository path"), REPOSITORY_PATH);
     await user.clear(issueField());
     await user.type(issueField(), "#43");

@@ -56,6 +56,7 @@ export { isWithinWorkspace, resolveWithinWorkspace } from "./paths.js";
 
 export {
   assertContainedRealPath,
+  boundWorkspaceFs,
   containedRealPathInfo,
   resolveExistingAllowedWorkspaceRealRoot,
 } from "./realpath.js";

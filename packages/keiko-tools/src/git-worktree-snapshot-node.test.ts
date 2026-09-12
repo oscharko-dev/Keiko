@@ -9,7 +9,12 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { gitEnv } from "@oscharko-dev/keiko-git";
-import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { PathDeniedError, type WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import {
+  workspaceFsWithOwnedRootAuthority,
+  workspaceInfoWithOwnedRootAuthority,
+} from "@oscharko-dev/keiko-workspace/internal/owned-root-mint";
 import { recordingSpawn } from "./_support.js";
 import { nodeSpawnFn, type SpawnFn } from "./exec.js";
 import {
@@ -720,5 +725,75 @@ describe("effective push destination inspection", () => {
         "origin",
       ),
     ).rejects.toThrow("truncated");
+  });
+});
+
+// A managed task worktree lives below `.keiko`; the lazy-fetch guard's probes used to swallow the
+// spawn boundary's refusal of that root as "cannot rule out a promisor remote", then swallow the
+// version probe's identical refusal as "unsupported", and the caller saw a
+// GitLazyFetchGuardUnsupportedError naming a guard that was never involved (2026-09-10, every run
+// start on a default installation). The boundary refusal is the finding and surfaces as itself; the
+// read succeeds once the WorkspaceInfo carries the owned-root port the prover bound to it.
+describe("a workspace root below an always-denied segment", () => {
+  function deniedRepository(): { readonly base: string; readonly root: string } {
+    const base = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-read-denied-")));
+    const root = join(base, ".keiko", "ui", "task-workspaces", "repo_1", "ws_1");
+    mkdirSync(root, { recursive: true });
+    const run = (args: readonly string[]): void => {
+      execFileSync("git", [...args], { cwd: root, stdio: "pipe", env: gitEnv(process.env) });
+    };
+    run(["init", "-q", "-b", "main"]);
+    run(["config", "user.email", "test@keiko.example"]);
+    run(["config", "user.name", "Keiko Test"]);
+    run(["config", "commit.gpgsign", "false"]);
+    writeFileSync(join(root, "a.txt"), "v1\n", "utf8");
+    run(["add", "a.txt"]);
+    run(["commit", "-qm", "base"]);
+    return { base, root };
+  }
+
+  it("surfaces the boundary refusal itself instead of relabelling it as a lazy-fetch guard verdict", async () => {
+    const fixture = deniedRepository();
+    try {
+      await expect(
+        readGitWorktreeSnapshot({ ...deps(), workspace: workspaceInfo(fixture.root) }),
+      ).rejects.toBeInstanceOf(PathDeniedError);
+    } finally {
+      rmSync(fixture.base, { recursive: true, force: true });
+    }
+  });
+
+  it("reads the worktree once its WorkspaceInfo carries the owned-root authority", async () => {
+    const fixture = deniedRepository();
+    try {
+      const workspace = workspaceInfoWithOwnedRootAuthority(
+        workspaceInfo(fixture.root),
+        workspaceFsWithOwnedRootAuthority(nodeWorkspaceFs, fixture.root),
+      );
+      const snapshot = await readGitWorktreeSnapshot({ ...deps(), workspace });
+      expect(snapshot.currentBranchName).toBe("main");
+      expect(snapshot.headSha).toMatch(/^[a-f0-9]{40}$/u);
+    } finally {
+      rmSync(fixture.base, { recursive: true, force: true });
+    }
+  });
+
+  // Review of PR #3452: the reader's `fs` reached only the raw reader's filesystem helpers; the
+  // spawn-based reads rebuilt their RunCommandDeps without it, so an explicit port was silently
+  // dropped there. The plain WorkspaceInfo carries no binding here on purpose: only the explicit
+  // port can admit the root.
+  it("honours an explicit port for the spawn-based reads, not only the bound WorkspaceInfo", async () => {
+    const fixture = deniedRepository();
+    try {
+      const snapshot = await readGitWorktreeSnapshot({
+        ...deps(),
+        workspace: workspaceInfo(fixture.root),
+        fs: workspaceFsWithOwnedRootAuthority(nodeWorkspaceFs, fixture.root),
+      });
+      expect(snapshot.currentBranchName).toBe("main");
+      expect(snapshot.headSha).toMatch(/^[a-f0-9]{40}$/u);
+    } finally {
+      rmSync(fixture.base, { recursive: true, force: true });
+    }
   });
 });

@@ -247,6 +247,7 @@ export type CodingWorkbenchRuntimeEventKind =
   | "skill-invoked"
   | "child-run-started"
   | "child-run-completed"
+  | "operator-decision"
   | "failure-redacted";
 
 export const CODING_WORKBENCH_RUNTIME_EVENT_KINDS: readonly CodingWorkbenchRuntimeEventKind[] =
@@ -264,6 +265,7 @@ export const CODING_WORKBENCH_RUNTIME_EVENT_KINDS: readonly CodingWorkbenchRunti
     "skill-invoked",
     "child-run-started",
     "child-run-completed",
+    "operator-decision",
     "failure-redacted",
   ] as const satisfies readonly CodingWorkbenchRuntimeEventKind[]);
 
@@ -281,6 +283,22 @@ export const CODING_WORKBENCH_AUXILIARY_STATUSES: readonly CodingWorkbenchAuxili
     "limit-reached",
     "stopped",
   ] as const satisfies readonly CodingWorkbenchAuxiliaryStatus[]);
+
+// A decision only a local human can make, which is NOT an Authority Envelope approval. A governed
+// tool that meets one of these stops in place and the run reports itself `paused` naming this
+// value, so the operator sees a run waiting on them rather than a run that quietly gave up.
+//
+// `workspace-script-trust` is the ADR-0147 package-script grant. It is deliberately outside the
+// approval plane: trust is a hard, mode-independent boundary (an untrusted script may not run in
+// `autonomous-delivery` either), and a trust grant is a durable workspace record, not a one-use
+// action authority. Modelling it as a `command-execution` permission would both mint the wrong
+// artifact and collapse `governed-assist`'s separate per-command approval into it.
+export type CodingWorkbenchOperatorDecision = "workspace-script-trust";
+
+export const CODING_WORKBENCH_OPERATOR_DECISIONS: readonly CodingWorkbenchOperatorDecision[] =
+  Object.freeze([
+    "workspace-script-trust",
+  ] as const satisfies readonly CodingWorkbenchOperatorDecision[]);
 
 // #2637: the trust classification of tool-result content handed to a Code task's model. Web page
 // text fetched by governed research egress is `untrusted` — third-party data that carries no
@@ -508,7 +526,10 @@ export type CodingWorkbenchSidecarGatewayUnavailableReason =
   // Appended (epic #3384, #3390 closeout): the profile is otherwise configured and probed, but
   // `runMetadata.maxPromptTokens` sits below `CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS`
   // — a run minted against it would fail its very first gateway call.
-  | "model-context-window-insufficient";
+  | "model-context-window-insufficient"
+  // Appended (PR #3452, F73): the coding model qualifies in every other respect, but its forced
+  // tool-call proof is missing or older than 24 h. The remedy is a new probe, not another model.
+  | "tool-calling-unverified";
 
 /**
  * The floor `runMetadata.maxPromptTokens` must clear before a coding run is allowed to look
@@ -655,6 +676,10 @@ export interface CodingWorkbenchRuntimeEvent {
   readonly skillInvocation?: "explicit" | "implicit" | undefined;
   readonly childRunId?: string | undefined;
   readonly childResultCount?: number | undefined;
+  // `operator-decision` events only. Absent `auxiliaryOutcome` means the decision is OPEN and the
+  // tool is waiting in place; a present one means it settled (`accepted` = the human decided in
+  // favour, and the waiting tool proceeds).
+  readonly operatorDecision?: CodingWorkbenchOperatorDecision | undefined;
   readonly failureCode?: string | undefined;
   readonly failureSummary?: string | undefined;
   readonly retryable?: boolean | undefined;

@@ -33,12 +33,20 @@ import {
 } from "./verifiedCommitFacts.js";
 import { reconcileVerifiedCommit } from "./verifiedCommitRecovery.js";
 import { commitVerificationReportPassed } from "./verifiedCommitVerification.js";
+import {
+  appendVerificationCheck,
+  EMPTY_VERIFICATION_CHECK_HISTORY,
+  verificationCheckRecord,
+  type VerificationCheckHistory,
+} from "./verificationChecks.js";
 import type {
+  VerificationTicketOutcome,
   VerifiedCommitFacts,
   VerifiedCommitProposal,
   VerifiedCommitRunContext,
   VerifiedCommitService,
   VerifiedCommitServiceOptions,
+  VerifiedCommitBlockingPaths,
 } from "./verifiedCommitTypes.js";
 
 const TTL_MS = 5 * 60 * 1000;
@@ -179,6 +187,10 @@ class VerifiedCommitController implements VerifiedCommitService {
   private generation = 0;
   private tickets = new WeakMap<object, VerificationTicket>();
   private proof: VerificationProof | undefined;
+  // The run's verification history for the pull request's check list (F57). Keyed by run so a new
+  // run starts empty, and kept across invalidate(), which every new verification calls.
+  private checks:
+    { readonly runId: string; readonly history: VerificationCheckHistory } | undefined;
   private readonly proposals = new Map<string, VerifiedCommitProposal>();
   private executing = false;
   private executionLeases = new WeakMap<
@@ -204,18 +216,26 @@ class VerifiedCommitController implements VerifiedCommitService {
     return readVerifiedCommitFacts(context, this.options.execution ?? {});
   }
 
-  public async beginVerification(): Promise<object | undefined> {
+  public async beginVerification(): Promise<VerificationTicketOutcome> {
+    // An unclean read always carries its paths; the empty set only types the impossible absence.
     this.invalidate();
     const context = this.context();
-    if (context === undefined) return undefined;
+    if (context === undefined) return { kind: "unavailable" };
     const facts = await this.facts(context);
     if (!facts.clean) {
-      this.log(context, "verification-unavailable", { reason: "candidate-not-staged" });
-      return undefined;
+      // Named, not merely counted, for the model: the blocking paths travel on the tool result,
+      // only their counts on this line (run 16, 2026-09-10).
+      const blocking = facts.blocking ?? NO_BLOCKING_PATHS;
+      this.log(context, "verification-unavailable", {
+        reason: "candidate-not-staged",
+        unstagedCount: blocking.unstagedCount,
+        untrackedCount: blocking.untrackedCount,
+      });
+      return { kind: "refused", reason: "candidate-not-staged", blocking };
     }
     const ticket = {};
     this.tickets.set(ticket, { context, facts, startedAtMs: this.now() });
-    return ticket;
+    return { kind: "ticket", ticket };
   }
 
   private verificationGuardLive(
@@ -247,16 +267,49 @@ class VerifiedCommitController implements VerifiedCommitService {
     }
     if (!this.verificationGuardLive(context, guard)) return false;
     const passed = verificationPassed(before, after, report, this.now());
-    const evidenceId = this.recordVerificationEvidence(context, before.facts, report);
+    const history = this.recordCheck(context.runId, report, before.facts.stagedTreeDigest);
+    const evidenceId = this.recordVerificationEvidence(context, before.facts, report, history);
     this.proof = { ...before, passed, evidenceId };
-    this.log(context, "verification", { passed, verificationEvidenceId: evidenceId });
+    this.log(context, "verification", {
+      passed,
+      verificationEvidenceId: evidenceId,
+      checkCount: history.records.length,
+    });
     return passed;
+  }
+
+  public observeVerification(report: VerificationReport): void {
+    const context = this.context();
+    if (context === undefined) return;
+    const history = this.recordCheck(context.runId, report);
+    // The history is what the pull request's check list reads, so an addition on the unstaged path
+    // leaves a line just as the proof path's does (review on PR #3452).
+    this.log(context, "verification-observed", {
+      checkCount: history.records.length,
+      omittedCount: history.omitted,
+    });
+  }
+
+  private recordCheck(
+    runId: string,
+    report: VerificationReport,
+    stagedTreeDigest?: string,
+  ): VerificationCheckHistory {
+    const previous =
+      this.checks?.runId === runId ? this.checks.history : EMPTY_VERIFICATION_CHECK_HISTORY;
+    const history = appendVerificationCheck(
+      previous,
+      verificationCheckRecord(report, stagedTreeDigest),
+    );
+    this.checks = { runId, history };
+    return history;
   }
 
   private recordVerificationEvidence(
     context: VerifiedCommitRunContext,
     facts: VerifiedCommitFacts,
     report: VerificationReport,
+    history: VerificationCheckHistory,
   ): string {
     const evidence = {
       schemaVersion: "1",
@@ -275,6 +328,8 @@ class VerifiedCommitController implements VerifiedCommitService {
         outputDigest: sha256Hex(result.outputSummary),
         commandDigest: sha256Hex(canonicalise([result.command, result.args])),
       })),
+      // The run's verification history up to this proof, for the pull request's check list (F57).
+      checks: history,
     };
     const evidenceId = `verification-${sha256Hex(canonicalise(evidence)).slice(0, 40)}`;
     this.options.mutationDeps.evidenceStore.put(evidenceId, JSON.stringify(evidence));
@@ -581,7 +636,10 @@ class VerifiedCommitController implements VerifiedCommitService {
       )
     )
       return result;
-    this.log(context, "result", {
+    // The marker is the write-ahead, not an outcome: logged as a "result" it showed every
+    // successful commit as recovery-required first (coding runs 26 and 27, F80). The terminal result
+    // follows from `record()`; reconcile() reads the persisted marker, never this line.
+    this.log(context, "write-ahead", {
       state: "recovery-required",
       reason: "execution-uncertain",
       proposalId: binding.proposalId,
@@ -758,6 +816,13 @@ class VerifiedCommitController implements VerifiedCommitService {
     return recovered;
   }
 }
+
+const NO_BLOCKING_PATHS: VerifiedCommitBlockingPaths = Object.freeze({
+  unstagedCount: 0,
+  untrackedCount: 0,
+  unstaged: [],
+  untracked: [],
+});
 
 export function createVerifiedCommitService(
   options: VerifiedCommitServiceOptions,

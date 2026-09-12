@@ -4,7 +4,11 @@
 // `| undefined` because exactOptionalPropertyTypes is on. Every shape is plain JSON-serializable
 // so the #10 audit ledger can persist a VerificationReport without ad-hoc parsing.
 
-import type { NetworkPolicy } from "./tools.js";
+import {
+  GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS,
+  GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
+  type NetworkPolicy,
+} from "./tools.js";
 
 // ─── Verification kinds & status ─────────────────────────────────────────────────
 
@@ -48,6 +52,78 @@ export const DEFAULT_VERIFICATION_LIMITS: VerificationResourceLimits = {
   maxMemoryBytes: undefined,
   network: "none",
 } as const;
+
+// ─── Dependency bootstrap (ADR-0043 D17) ───────────────────────────────────────────
+// A plan's package scripts run against the workspace's installed dependencies, and a managed task
+// worktree is a clean checkout without them (Coding Workbench run 15, 2026-09-10: every build step
+// failed within 200 ms on a missing binary, and the model had no governed way to install anything).
+// The orchestrator installs the manifest's declared dependencies before the first script step when
+// the installed tree is not current. The install runs the trusted host `npm` with lifecycle scripts
+// disabled — it executes no package or project code — so it is the one verification command that
+// keeps host network; the code it fetches runs only inside the sandboxed steps that follow.
+export const DEPENDENCY_INSTALL_LIMITS: VerificationResourceLimits = {
+  wallTimeMs: 240_000,
+  maxOutputBytes: 1_048_576,
+  maxMemoryBytes: undefined,
+  network: "inherit",
+} as const;
+
+export type VerificationDependencyState =
+  "none" | "current" | "installed" | "refused" | "failed" | "timed-out" | "cancelled";
+
+export type VerificationLockfileState = "present" | "created" | "absent";
+
+// The bootstrap outcomes after which no script step can be trusted to run; the report is "failed".
+export const VERIFICATION_DEPENDENCY_FAILURE_STATES: ReadonlySet<VerificationDependencyState> =
+  new Set<VerificationDependencyState>(["refused", "failed", "timed-out"]);
+
+/** The dependency install's network use: counts only, never a destination or a byte. */
+export interface VerificationDependencyEgress {
+  // Tunnels opened to the approved registry.
+  readonly allowed: number;
+  // Requests refused for naming any other destination.
+  readonly refused: number;
+}
+
+/** Body-free record of the dependency bootstrap on a report: never output, never a path. */
+export interface VerificationDependencySummary {
+  readonly state: VerificationDependencyState;
+  readonly lockfile: VerificationLockfileState;
+  readonly exitCode: number | null;
+  readonly durationMs: number;
+  // A short, redacted reason for a refused or failed bootstrap (e.g. "project npm config present").
+  readonly detail?: string | undefined;
+  // The install's egress through the registry proxy (ADR-0043 D17): present whenever the proxy was
+  // started for the install, with zero counts when npm made no request through it (an install that
+  // ended before npm spawned); absent when no proxy was started (CodeRabbit review, PR #3452).
+  readonly egress?: VerificationDependencyEgress | undefined;
+}
+
+// ─── The governed verification tool's wait for a human decision ────────────────────
+// How long the governed verification tool may wait in place for a decision only a local human can
+// make (an ADR-0147 package-script trust grant) before it hands the model the truthful refusal
+// instead. It is the contract's one human-decision wait (`GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS`),
+// the same a stage, commit, push or pull-request proposal waits for its approval. A 25 s window,
+// sized to fit inside a governed-invocation life that was then a fixed 30 s, closed before an
+// operator could notice the decision at all (PR #3452, F43). The wait is part of the settlement
+// budget below, on top of the install and the step, so it never eats a build's own time.
+export const VERIFICATION_TOOL_OPERATOR_DECISION_WAIT_MS = GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS;
+
+// ─── The governed verification tool's settlement budget ────────────────────────────
+// Derived from the orchestrator's own enforced limits, never chosen. One governed call names exactly
+// one verifier (`keiko_verification` takes one `verifierId`; the coding facade asks the runner for that
+// one kind), so it may wait once for a package-script trust grant, install dependencies and then
+// run that one step, each up to its own ceiling. The tool catalog settles the verification tool at
+// this budget (`keiko.verification.run`); the governed-invocation registry, the sidecar tool bridge
+// and the generated plugin client each outlive it by their own grace, so a real build or test run
+// reports its result instead of an opaque timeout (Coding Workbench runs 13–15).
+export const VERIFICATION_TOOL_STEPS_PER_CALL = 1;
+export const VERIFICATION_SETTLEMENT_GRACE_MS = GOVERNED_TOOL_SETTLEMENT_GRACE_MS;
+export const VERIFICATION_TOOL_MAX_DURATION_MS =
+  VERIFICATION_TOOL_OPERATOR_DECISION_WAIT_MS +
+  DEPENDENCY_INSTALL_LIMITS.wallTimeMs +
+  VERIFICATION_TOOL_STEPS_PER_CALL * DEFAULT_VERIFICATION_LIMITS.wallTimeMs +
+  VERIFICATION_SETTLEMENT_GRACE_MS;
 
 // ─── Structured failure locations (Issue #2210, ADR-0126 D3) ─────────────────────
 // Bounds a later, best-effort parser (Issue #2211) may attach to VerificationResult.locations.
@@ -119,6 +195,9 @@ export interface VerificationReport {
   readonly startedAtMs: number;
   readonly durationMs: number;
   readonly counts: Readonly<Record<VerificationStatus, number>>;
+  // Present when the orchestrator decided about the workspace's dependencies before the steps
+  // (ADR-0043 D17); absent for plans that ran no script step or for callers that left it off.
+  readonly dependencies?: VerificationDependencySummary | undefined;
 }
 
 // ─── Deep wire guards ─────────────────────────────────────────────────────────────
@@ -157,7 +236,12 @@ const VERIFICATION_PATH_MAX_BYTES = 4_096;
 const VERIFICATION_COMMAND_MAX_CHARS = 256;
 const VERIFICATION_ARGUMENT_MAX_CHARS = 4_096;
 const VERIFICATION_OUTPUT_SUMMARY_MAX_CHARS = 1_024;
-const VERIFICATION_DETAIL_MAX_CHARS = 1_024;
+export const VERIFICATION_DETAIL_MAX_CHARS = 1_024;
+// The longest redacted output tail handed to the caller that repairs a failed step or install (the
+// coding model behind the governed verification tool, ADR-0126 D3). keiko-verification cuts the tail
+// to this many characters behind one ellipsis, and the coding facade admits exactly that shape, so the
+// bound is the contract between the two rather than either side's own number.
+export const VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS = 4096;
 const VERIFICATION_NOTE_MAX_CHARS = 1_024;
 const VERIFICATION_RULE_ID_MAX_CHARS = 128;
 const VERIFICATION_SIGNAL_MAX_CHARS = 128;
@@ -395,13 +479,84 @@ function isStatusCounts(
 export function matchesOverallStatus(
   overallStatus: VerificationStatus,
   items: readonly { readonly status: VerificationStatus }[],
+  dependencies?: VerificationDependencySummary,
 ): boolean {
   if (overallStatus === "cancelled") return true;
   if (items.some((item) => item.status === "cancelled")) {
     return false;
   }
+  // A bootstrap that left the steps without their dependencies fails the report whatever the steps
+  // (all skipped) would otherwise say (ADR-0043 D17).
+  if (
+    dependencies !== undefined &&
+    VERIFICATION_DEPENDENCY_FAILURE_STATES.has(dependencies.state)
+  ) {
+    return overallStatus === "failed";
+  }
   const allOk = items.every((item) => item.status === "passed" || item.status === "skipped");
   return overallStatus === (allOk ? "passed" : "failed");
+}
+
+const VERIFICATION_DEPENDENCY_STATES: readonly VerificationDependencyState[] = [
+  "none",
+  "current",
+  "installed",
+  "refused",
+  "failed",
+  "timed-out",
+  "cancelled",
+];
+const VERIFICATION_DEPENDENCY_STATE_SET: ReadonlySet<string> = new Set(
+  VERIFICATION_DEPENDENCY_STATES,
+);
+const VERIFICATION_LOCKFILE_STATE_SET: ReadonlySet<string> = new Set<VerificationLockfileState>([
+  "present",
+  "created",
+  "absent",
+]);
+
+function hasDependencySummaryStates(value: Readonly<Record<string, unknown>>): boolean {
+  return (
+    typeof value.state === "string" &&
+    VERIFICATION_DEPENDENCY_STATE_SET.has(value.state) &&
+    typeof value.lockfile === "string" &&
+    VERIFICATION_LOCKFILE_STATE_SET.has(value.lockfile)
+  );
+}
+
+function hasDependencySummaryExecution(value: Readonly<Record<string, unknown>>): boolean {
+  if (value.exitCode !== null && !isIntegerWithin(value.exitCode, 0, 255)) return false;
+  if (!isFiniteNonNegative(value.durationMs)) return false;
+  return value.detail === undefined || isBoundedText(value.detail, VERIFICATION_DETAIL_MAX_CHARS);
+}
+
+function isVerificationDependencyEgress(value: unknown): value is VerificationDependencyEgress {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["allowed", "refused"]) &&
+    isIntegerWithin(value.allowed, 0, Number.MAX_SAFE_INTEGER) &&
+    isIntegerWithin(value.refused, 0, Number.MAX_SAFE_INTEGER)
+  );
+}
+
+export function isVerificationDependencySummary(
+  value: unknown,
+): value is VerificationDependencySummary {
+  return (
+    isRecord(value) &&
+    hasOnlyKeys(value, ["state", "lockfile", "exitCode", "durationMs", "detail", "egress"]) &&
+    hasDependencySummaryStates(value) &&
+    hasDependencySummaryExecution(value) &&
+    (value.egress === undefined || isVerificationDependencyEgress(value.egress))
+  );
+}
+
+// An absent summary is valid (a report without a bootstrap); a present one must be well formed.
+function reportDependenciesOf(
+  value: Readonly<Record<string, unknown>>,
+): VerificationDependencySummary | undefined | false {
+  if (value.dependencies === undefined) return undefined;
+  return isVerificationDependencySummary(value.dependencies) ? value.dependencies : false;
 }
 
 export function isVerificationReport(value: unknown): value is VerificationReport {
@@ -409,6 +564,7 @@ export function isVerificationReport(value: unknown): value is VerificationRepor
   if (!isDenseArray(value.results, VERIFICATION_MAX_REPORT_RESULTS, isVerificationResult)) {
     return false;
   }
+  const dependencies = reportDependenciesOf(value);
   return (
     hasOnlyKeys(value, [
       "workspaceRoot",
@@ -417,10 +573,12 @@ export function isVerificationReport(value: unknown): value is VerificationRepor
       "startedAtMs",
       "durationMs",
       "counts",
+      "dependencies",
     ]) &&
+    dependencies !== false &&
     isBoundedWorkspacePath(value.workspaceRoot) &&
     isVerificationStatusValue(value.overallStatus) &&
-    matchesOverallStatus(value.overallStatus, value.results) &&
+    matchesOverallStatus(value.overallStatus, value.results, dependencies) &&
     isFiniteNonNegative(value.startedAtMs) &&
     isFiniteNonNegative(value.durationMs) &&
     isStatusCounts(value.counts, value.results)

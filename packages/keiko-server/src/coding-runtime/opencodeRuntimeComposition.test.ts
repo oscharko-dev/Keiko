@@ -17,6 +17,17 @@ import { PassThrough } from "node:stream";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
+import { EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import { TOOL_CATALOG_LIMITS } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  DEFAULT_VERIFICATION_LIMITS,
+  VERIFICATION_TOOL_MAX_DURATION_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/verification";
+import {
+  DEFAULT_SANDBOX_POLICY,
+  GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/tools";
+
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
 import {
@@ -34,7 +45,9 @@ import {
   OPEN_CODE_PINNED_PROTOCOL_SURFACE_SHA256,
   projectOpenCodeProtocolSurface,
 } from "./opencodeProtocolSurface.js";
+import { OPENCODE_HISTORY_RESPONSE_MAX_BYTES } from "./opencodeProtocol.js";
 import { CODING_TOOL_MAX_BODY_BYTES } from "./codingToolIpc.js";
+import { openCodeToolClientTimeoutMs } from "./opencodeRuntimeAdapter.js";
 
 const dirs: string[] = [];
 const MODEL_CAPABILITY = "m".repeat(43);
@@ -44,9 +57,9 @@ const TOOL_CAPABILITY = "t".repeat(43);
 // `toolFacadeUrl` from in production, fixed here since this suite never binds a real BFF port.
 const TOOL_FACADE_ORIGIN = "http://127.0.0.1:4391/api/coding-sidecar/tool";
 const FIXTURE_RUN_ID = "run-2254";
-const OPENCODE_VERSION = "1.17.17";
+const OPENCODE_VERSION = "1.18.30";
 const FIXED_SESSION_TITLE = "Keiko governed runtime";
-const OPENCODE_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
+const OPENCODE_SCHEMA_SHA256 = "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3";
 const OPENAPI = {
   openapi: "3.1.0",
   paths: {
@@ -249,6 +262,10 @@ interface TestQuestionRequest {
 }
 
 interface OpenCodeRuntimeCompositionModule {
+  readonly toolBridgeRequestDeadlineMs: (
+    configuredDeadlineMs: number,
+    body: string | undefined,
+  ) => number;
   createOpenCodeRuntimeComposition(input: {
     readonly portable: {
       readonly verification: PortableSidecarRuntimeVerification & {
@@ -781,6 +798,40 @@ async function startBridgeFixture(
 
 function completedTurnHistory(): readonly Readonly<Record<string, unknown>>[] {
   return turnHistory("stop");
+}
+
+function changesetArguments(patch: string): Readonly<Record<string, unknown>> {
+  return {
+    changeset: {
+      patch,
+      files: [{ file: "src/App.tsx", expectedContentHash: "a".repeat(64) }],
+    },
+  };
+}
+
+function editPartRow(
+  sequence: number,
+  state: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+  return {
+    id: `evt_edit_${String(sequence)}`,
+    aggregate_id: "ses_tool",
+    seq: sequence,
+    type: "message.part.updated.1",
+    data: {
+      sessionID: "ses_tool",
+      part: {
+        id: `prt_edit_${String(sequence)}`,
+        sessionID: "ses_tool",
+        messageID: "msg_assistant",
+        type: "tool",
+        callID: "call_edit",
+        tool: "keiko_changeset_edit",
+        state,
+      },
+      time: sequence,
+    },
+  };
 }
 
 function failedTurnHistory(): readonly Readonly<Record<string, unknown>>[] {
@@ -1758,6 +1809,53 @@ describe("private OpenCode tool bridge", () => {
       idempotencyKey: `idempotency-${callId}`,
       relativePath: "src/index.ts",
     });
+  // Valid requests for the tools the catalog settles beyond the sandbox default, exactly as the
+  // facade's own parser accepts them (a body it refuses is admitted under the default instead),
+  // each with the budget the catalog declares for it.
+  const longBudgetBody = (fields: Readonly<Record<string, unknown>>): string =>
+    JSON.stringify({ actionId: "tool:call_long", idempotencyKey: "idempotency-long", ...fields });
+  const LONG_BUDGET_REQUESTS = [
+    [
+      "verification",
+      longBudgetBody({ action: "verification", verifierId: "test", targetPath: "" }),
+      VERIFICATION_TOOL_MAX_DURATION_MS,
+    ],
+    [
+      "git stage proposal",
+      longBudgetBody({
+        action: "git",
+        operation: "stage",
+        phase: "propose",
+        paths: ["src/index.ts"],
+      }),
+      GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+    ],
+    [
+      "commit proposal",
+      longBudgetBody({
+        action: "delivery",
+        intent: "commit",
+        phase: "propose",
+        message: "Add the landing page",
+      }),
+      GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+    ],
+    [
+      "push proposal",
+      longBudgetBody({ action: "delivery", intent: "push", phase: "propose" }),
+      GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+    ],
+    [
+      "pull-request proposal",
+      longBudgetBody({
+        action: "delivery",
+        intent: "pull-request",
+        phase: "propose",
+        title: "Add the landing page",
+      }),
+      GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+    ],
+  ] as const;
   const activityRecorder = (): {
     readonly safeActivity: FixtureSafeActivity;
     readonly settlements: Parameters<FixtureSafeActivity["settleTool"]>[0][];
@@ -1954,6 +2052,159 @@ describe("private OpenCode tool bridge", () => {
     );
     expect(JSON.stringify(records)).not.toContain(sentinel);
     expect(JSON.stringify(records)).not.toContain(sentinelKey);
+    await fixture.stop();
+  });
+
+  // Run 2026-09-10: the model's first `keiko_changeset_edit` call (a 19 KiB unified diff, inside the
+  // 64 KiB patch contract) left durable rows whose arguments exceeded the 4096-character metadata
+  // bound; the pull threw and the run ended `runtime-failed` on its first edit. The rows a governed
+  // edit legitimately leaves -- pending with the raw argument text, running, settled -- now
+  // reconcile, and nothing of the patch reaches the diagnostics. The start phase pulls history more
+  // than once, so the fixture answers every pull with a fresh response.
+  it("reconciles a governed edit whose argument rows fill the patch contract", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const patch = "x".repeat(EDITOR_AGENT_CHANGESET_MAX_PATCH_BYTES);
+    const input = changesetArguments(patch);
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+        historyResponseFactory: (): Promise<Response> =>
+          Promise.resolve(
+            new Response(
+              JSON.stringify([
+                ...completedTurnHistory(),
+                editPartRow(3, { status: "pending", input, raw: JSON.stringify(input) }),
+                editPartRow(4, {
+                  status: "running",
+                  input,
+                  title: "Edit",
+                  metadata: {},
+                  time: { start: 1 },
+                }),
+                editPartRow(5, {
+                  status: "error",
+                  input,
+                  error: "INVALID_EDITS",
+                  time: { start: 1, end: 2 },
+                }),
+              ]),
+              { headers: { "content-type": "application/json" } },
+            ),
+          ),
+      },
+    );
+
+    expect(records.filter((record) => record.errorClass === "OpenCodeHistoryFailure")).toEqual([]);
+    expect(JSON.stringify(records)).not.toContain("xxxxx");
+    await fixture.stop();
+  });
+
+  it("records a body-free structural diagnostic for a refused history part shape", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const sentinel = "SENTINEL_PRIVATE_ARGUMENT_BODY";
+    const input = changesetArguments(sentinel);
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+        historyResponse: Promise.resolve(
+          new Response(
+            JSON.stringify([
+              ...completedTurnHistory(),
+              editPartRow(3, {
+                status: "pending",
+                input,
+                raw: `${sentinel}${"x".repeat(TOOL_CATALOG_LIMITS.maxArgumentBytes)}`,
+              }),
+            ]),
+            { headers: { "content-type": "application/json" } },
+          ),
+        ),
+        expectedStart: {
+          ok: false,
+          failureCode: "protocol-schema-mismatch",
+          retryable: false,
+        },
+      },
+    );
+
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      correlationId: FIXTURE_RUN_ID,
+      operation: "coding-runtime.handshake",
+      source: "opencode.history",
+      errorClass: "OpenCodeHistoryFailure",
+      message: "runtime-handshake-failed",
+    });
+    expect(records[0]?.code).toMatch(
+      /^stage=sse-history-reconciliation:reason=event-unknown:eventSha256=[a-f0-9]{16}:part=tool:tool=keiko_changeset_edit:status=pending:partBytes=[1-9][0-9]*:gate=argument-bound$/u,
+    );
+    expect(JSON.stringify(records)).not.toContain(sentinel);
+    await fixture.stop();
+  });
+
+  // Before 2026-09-10 a pull that failed before any row was parsed -- refused, oversized, not a JSON
+  // array -- reached the lifecycle failure with no line of its own. The closed reason and, for an
+  // oversized pull, the budget it exceeded now travel in `code`; the response never does.
+  it("records the closed transport reason when the history pull itself fails", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    let cancellations = 0;
+    const fixture = await startBridgeFixture(
+      { execute: vi.fn(() => Promise.resolve(completed)) },
+      undefined,
+      {
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+        historyResponse: Promise.resolve(
+          new Response(
+            new ReadableStream<Uint8Array>(
+              {
+                cancel(): void {
+                  cancellations += 1;
+                },
+              },
+              { highWaterMark: 0 },
+            ),
+            {
+              headers: {
+                "content-length": String(OPENCODE_HISTORY_RESPONSE_MAX_BYTES + 1),
+                "content-type": "application/json",
+              },
+            },
+          ),
+        ),
+        expectedStart: {
+          ok: false,
+          failureCode: "protocol-schema-mismatch",
+          retryable: false,
+        },
+      },
+    );
+
+    expect(cancellations).toBe(1);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      correlationId: FIXTURE_RUN_ID,
+      operation: "coding-runtime.handshake",
+      source: "opencode.history",
+      errorClass: "OpenCodeHistoryFailure",
+      message: "runtime-handshake-failed",
+      code: `stage=sse-history-reconciliation:reason=transport-oversized:responseBudgetBytes=${String(OPENCODE_HISTORY_RESPONSE_MAX_BYTES)}`,
+    });
     await fixture.stop();
   });
 
@@ -2301,10 +2552,18 @@ describe("private OpenCode tool bridge", () => {
       }) as CodingToolFacade["execute"],
     };
     const activity = activityRecorder();
+    const records: ServerDiagnosticRecord[] = [];
     const fixture = await startBridgeFixture(
       facade,
       { requestDeadlineMs: 30, maxInFlight: 1 },
-      { safeActivity: activity.safeActivity },
+      {
+        safeActivity: activity.safeActivity,
+        diagnostics: {
+          record: (record): void => {
+            records.push(record);
+          },
+        },
+      },
     );
     const handled = fixture.runtime.toolBridge.handle({
       method: "POST",
@@ -2321,8 +2580,142 @@ describe("private OpenCode tool bridge", () => {
       expect(activity.settlements).toEqual([
         expect.objectContaining({ actionId: "tool:call_timeout", state: "cancelled" }),
       ]);
+      // The bridge's own deadline names itself, the configured default for an ordinary tool.
+      expect(records).toEqual([
+        expect.objectContaining({ message: "tool-bridge-deadline", deadlineMs: 30 }),
+      ]);
     } finally {
       await fixture.stop();
     }
+  });
+
+  // #3452 (F44): the deadline a request is admitted under is read from the catalog budget of the
+  // tool it dispatches to (toolBridgeRequestDeadlineMs), pinned here through the public handle()
+  // surface for every tool the catalog settles beyond the sandbox default. The verification budget
+  // is on the order of eleven minutes and an approval's near six, so fake timers step through them
+  // without ever really waiting; the deadline's expiry leaves a diagnostic that names it.
+  it.each(LONG_BUDGET_REQUESTS)(
+    "keeps a %s admitted past the configured default deadline and stops it at its own",
+    async (_label, body, budgetMs) => {
+      const facade: CodingToolFacade = {
+        execute: vi.fn((input: Parameters<CodingToolFacade["execute"]>[0]) => {
+          const { signal } = input;
+          return new Promise((resolve) => {
+            signal?.addEventListener(
+              "abort",
+              () => {
+                resolve(completed);
+              },
+              { once: true },
+            );
+          });
+        }) as CodingToolFacade["execute"],
+      };
+      const records: ServerDiagnosticRecord[] = [];
+      // A small configured default: were the request bound to it (a regression), it would already
+      // be settled long before the first `advanceTimersByTimeAsync` ends.
+      const fixture = await startBridgeFixture(
+        facade,
+        { requestDeadlineMs: 30, maxInFlight: 1 },
+        {
+          diagnostics: {
+            record: (record): void => {
+              records.push(record);
+            },
+          },
+        },
+      );
+      try {
+        vi.useFakeTimers();
+        const { toolBridgeRequestDeadlineMs } = await compositionModule();
+        const deadlineMs = toolBridgeRequestDeadlineMs(30, body);
+        // The bridge outlives the catalog's own settlement of the tool, so the facade answers first.
+        expect(deadlineMs).toBeGreaterThan(budgetMs);
+        let settled = false;
+        const handled = fixture.runtime.toolBridge
+          .handle({ method: "POST", headers: new Headers(authorized), body })
+          .then((response) => {
+            settled = true;
+            return response;
+          });
+
+        await vi.advanceTimersByTimeAsync(deadlineMs - 1);
+        expect(settled).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(1);
+        await expect(handled).resolves.toMatchObject({ status: 408 });
+        expect(records).toEqual([
+          expect.objectContaining({
+            operation: "coding-runtime.tool-bridge",
+            source: "opencode-runtime-composition.request-deadline",
+            message: "tool-bridge-deadline",
+            httpStatus: 408,
+            deadlineMs,
+          }),
+        ]);
+      } finally {
+        vi.useRealTimers();
+        await fixture.stop();
+      }
+    },
+  );
+
+  it("aborts a body without a recognized verification action at the configured default deadline", async () => {
+    const facade: CodingToolFacade = {
+      execute: vi.fn((input: Parameters<CodingToolFacade["execute"]>[0]) => {
+        const { signal } = input;
+        return new Promise((resolve) => {
+          signal?.addEventListener(
+            "abort",
+            () => {
+              resolve(completed);
+            },
+            { once: true },
+          );
+        });
+      }) as CodingToolFacade["execute"],
+    };
+    const fixture = await startBridgeFixture(facade, { requestDeadlineMs: 30, maxInFlight: 1 });
+    try {
+      vi.useFakeTimers();
+      // Valid JSON so it is admitted past preflight and reaches the facade, but declaredAction()
+      // finds no "action" key at all -- requestDeadlineFor() must fall through to the configured
+      // default rather than the verification budget.
+      const handled = fixture.runtime.toolBridge.handle({
+        method: "POST",
+        headers: new Headers(authorized),
+        body: '{"unrelated":true}',
+      });
+      await vi.advanceTimersByTimeAsync(30);
+      await expect(handled).resolves.toMatchObject({ status: 408 });
+    } finally {
+      vi.useRealTimers();
+      await fixture.stop();
+    }
+  });
+
+  // The budgets the tool bridge chain relies on staying strictly ordered for every tool the catalog
+  // settles beyond the sandbox default, so the sidecar always receives the server's own answer (the
+  // result or the catalog's timeout) instead of racing a client- or bridge-side abort of its own.
+  // Each bound is read from the layer that owns it: the catalog budget from the contract, the
+  // bridge deadline from the bridge, the client timeout from the plugin generator.
+  it.each(LONG_BUDGET_REQUESTS)(
+    "orders the plugin client timeout above the bridge deadline above the catalog budget for a %s",
+    async (_label, body, budgetMs) => {
+      const { toolBridgeRequestDeadlineMs } = await compositionModule();
+      const bridgeDeadlineMs = toolBridgeRequestDeadlineMs(
+        DEFAULT_SANDBOX_POLICY.defaultTimeoutMs,
+        body,
+      );
+      expect(openCodeToolClientTimeoutMs(budgetMs)).toBeGreaterThan(bridgeDeadlineMs);
+      expect(bridgeDeadlineMs).toBeGreaterThan(budgetMs);
+      expect(budgetMs).toBeGreaterThan(DEFAULT_SANDBOX_POLICY.defaultTimeoutMs);
+    },
+  );
+
+  it("orders the verification budget above the default wall time", () => {
+    expect(VERIFICATION_TOOL_MAX_DURATION_MS).toBeGreaterThan(
+      DEFAULT_VERIFICATION_LIMITS.wallTimeMs,
+    );
   });
 });

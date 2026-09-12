@@ -181,6 +181,33 @@ source of an automatic closing reference. The issue-bound default base comes fro
 workspace provision; branch-name inference and model text cannot select it. Existing generic
 policy and metadata behavior remain available.
 
+Below the closing and related-issue lines the server-owned body carries one more trusted section,
+`## Checks` (F57, Coding Workbench runs 19–28): the run's governed verification history, rendered
+deterministically. Every completed `keiko_verification` call, staged or not, is kept as closed
+vocabulary and numbers — each step's kind, status, exit code and duration, a dependency install
+when one ran, and whether it ran on the working tree, an earlier staged change or the committed
+change — and frozen into the commit proof's evidence record, which the receipt of the delivered
+commit binds (resolved through the run's successful HEAD lineage, never merely its latest
+result). The section is read back from that record only: it holds no command, argument, output,
+path, repository or model text, and names the commit and the evidence it came from. When the record cannot be
+read the section says so instead of listing anything. Like the closing line it lies outside the
+managed region, so a later managed-region replacement preserves it (ADR-0174 D4).
+
+The section sits in its own frame (`<!-- keiko:checks:v1:start -->` … `<!-- keiko:checks:v1:end -->`),
+which an authored template or title may not carry. When the delivery later pushes a new verified
+commit to the same pull request (a CI repair), it recomposes the section for that commit as its own
+governed `pr-update` (ADR-0174 D4), under policy authority only: the mode must allow the
+`pull-request` delivery action without approval. It re-reads the live body, requires the pull
+request to be the delivery's own, open and on the pushed commit, replaces exactly the framed
+section, and writes only if a second read immediately before the write still shows the delivery's
+own pull request with the body unchanged since the first read. Every outcome is logged as
+`git.draft-checks` with `phase: refresh`: refreshed, skipped with its reason (approval required, no
+body adapter, another pull request, the frame absent or ambiguous, nothing changed) or failed with
+its reason (the read failed, the body changed meanwhile, the pull request stopped being the
+delivery's own meanwhile, the update failed). When a refresh cannot
+run the section stays as it was: it names its own commit and states that later commits on the
+branch are not covered by it.
+
 The owning runtime snapshot schema retains a bounded `DraftDeliveryRecord` alongside the verified
 commit, with an independent compare-and-swap revision and explicit push/PR/recovery phases.
 It binds the run, authority and workspace digests, frozen issue, origin, exact base/head,

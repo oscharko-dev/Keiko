@@ -22,7 +22,7 @@ import {
 } from "./codingToolIpc.js";
 import { proposalIdPattern } from "../gitDelivery/proposalId.js";
 
-export const OPENCODE_PINNED_VERSION = "1.17.17";
+export const OPENCODE_PINNED_VERSION = "1.18.30";
 export const OPENCODE_GOVERNED_ACTION_PERMISSION = "keiko_governed_action";
 
 /**
@@ -72,7 +72,8 @@ const WORKSPACE_READ_SCHEMA = {
 // `keiko_repository_search`. Bounds are read back from the handler's own `CODING_REPOSITORY_LIMITS`
 // (packages/keiko-contracts/src/coding-repository-search.ts), never restated. Search-only: a hit's
 // path/startLine/endLine feeds keiko_workspace_read for the bounded-range read handoff; there is no
-// read kind here and no semantic reranking.
+// read kind here. The #3416 rerank changes nothing that is projected: it reorders the handler's hits
+// above the port, so this schema, the descriptor and the projection digest are untouched by it.
 const REPOSITORY_SEARCH_SCHEMA = {
   type: "object",
   properties: {
@@ -237,7 +238,7 @@ const VERIFICATION_PROJECTED_SCHEMA = {
 } as const;
 
 /**
- * Exact v1.17.17 built-in `todowrite` projection (#2480). Status/priority are deliberately plain
+ * Exact v1.18.30 built-in `todowrite` projection (#2480). Status/priority are deliberately plain
  * strings upstream; Keiko enforces the closed status vocabulary at the safe-activity normalizer,
  * never here, or the gateway digest comparison would reject the child's declared contract.
  */
@@ -272,6 +273,9 @@ const SKILL_SCHEMA = {
   },
   required: ["skillId"],
 } as const;
+
+// #3417: discovery takes no argument; it lists the approved skills keiko_skill may run.
+const SKILL_DISCOVER_SCHEMA = { type: "object", properties: {}, required: [] } as const;
 
 const CHILD_AGENT_SCHEMA = {
   type: "object",
@@ -393,6 +397,7 @@ export const OPENCODE_MODEL_VISIBLE_TOOLS = [
   { name: "keiko_changeset_edit", parameters: CHANGESET_EDIT_SCHEMA },
   { name: "keiko_verification", parameters: VERIFICATION_SCHEMA },
   { name: "keiko_research_fetch", parameters: RESEARCH_FETCH_SCHEMA },
+  { name: "keiko_skill_discover", parameters: SKILL_DISCOVER_SCHEMA },
   { name: "keiko_skill", parameters: SKILL_SCHEMA },
   { name: "keiko_child_agent", parameters: CHILD_AGENT_SCHEMA },
   { name: "keiko_git_status", parameters: GIT_STATUS_SCHEMA },
@@ -458,6 +463,7 @@ export const OPENCODE_TOOL_SOURCE_DEFINITIONS = [
     action: "egress",
     arguments: { target: RESEARCH_FETCH_SCHEMA.properties.target },
   },
+  { name: "keiko_skill_discover", action: "skill-discover", arguments: {} },
   {
     name: "keiko_skill",
     action: "skill",
@@ -578,7 +584,7 @@ function isEmptyParameterSourceSchema(schema: Readonly<Record<string, unknown>>)
 }
 
 /**
- * Gateway requests contain OpenCode's v1.17.17 projection of a tool's schema, not the generated
+ * Gateway requests contain OpenCode's v1.18.30 projection of a tool's schema, not the generated
  * source schema: it strips the unsupported `additionalProperties` keyword from
  * `keiko_verification` (`VERIFICATION_PROJECTED_SCHEMA`), and, for a zero-argument tool such as
  * `keiko_git_status`/`keiko_git_push`, drops the empty `required: []` array and adds a `$schema`
@@ -596,7 +602,7 @@ export function projectedGatewaySchema(
     : parameters;
 }
 
-/** Gateway requests contain OpenCode's v1.17.17 projection, not the generated source schema. */
+/** Gateway requests contain OpenCode's v1.18.30 projection, not the generated source schema. */
 const EXPECTED_GATEWAY_SCHEMA_DIGESTS: ReadonlyMap<string, string> = new Map(
   OPENCODE_MODEL_VISIBLE_TOOLS.map(({ name, parameters }) => [
     name,
@@ -619,7 +625,27 @@ export function hasExactOpenCodeVisibleToolContract(
 }
 
 const OPENCODE_GATEWAY_PROFILE = { id: "opencode", version: 1 } as const;
-const OPENCODE_GATEWAY_OFFER_LIFETIME_MS = 30_000;
+
+/**
+ * The gateway offer must outlive the whole chat request it is minted for. It used to be a fixed
+ * 30 s: a turn whose generation ran longer — a ~6k-token `keiko_changeset_edit` call took 49 s —
+ * came back to an EXPIRED offer, the bridge classified the bind failure as a malformed tool call
+ * (`expired-compatibility` → `invalid-arguments`), the chat failed non-retryably, the OpenCode turn
+ * failed and the run ended `runtime-failed` with no workspace change (2026-09-10). The honest bound
+ * is the request deadline the route itself enforces (coding-sidecar-gateway.ts
+ * `codingSidecarGatewayRequestDeadlineMs`: the provider's whole retry budget plus the route's
+ * grace) plus the settlement time the bridge needs to bind the response after the fetch completes
+ * — a response later than the deadline has already been aborted, so nothing legitimate is refused
+ * and nothing stale is admitted.
+ */
+export const OPENCODE_GATEWAY_OFFER_SETTLEMENT_GRACE_MS = 5_000;
+
+export function opencodeGatewayOfferLifetimeMs(requestDeadlineMs: number): number {
+  if (!Number.isFinite(requestDeadlineMs) || requestDeadlineMs <= 0) {
+    throw new RangeError("the gateway request deadline must be a positive number of milliseconds");
+  }
+  return Math.trunc(requestDeadlineMs) + OPENCODE_GATEWAY_OFFER_SETTLEMENT_GRACE_MS;
+}
 
 /**
  * The catalog used to build the sidecar gateway's OUTGOING `toolCatalog` advertisement (the
@@ -632,7 +658,7 @@ const OPENCODE_GATEWAY_OFFER_LIFETIME_MS = 30_000;
  * model-visible tool list and passes a call to one of their aliases straight through to the
  * sidecar, unbound (#3414 follow-up). This catalog is never used to validate incoming sidecar
  * requests, which stays `hasExactOpenCodeVisibleToolContract` above, pinned to the real OpenCode
- * 1.17.17 runtime's own generated tool source.
+ * 1.18.30 runtime's own generated tool source.
  */
 const OPENCODE_GATEWAY_CATALOG = createKeikoToolCatalog([opencodeRegistrationSet()]);
 
@@ -741,11 +767,32 @@ function realCoverageOffer(
   };
 }
 
+/**
+ * The catalog and its compiled OpenCode projection, without an offer. A consumer that only needs
+ * the descriptors (the canonical facade bridge's descriptor lookup) reads this instead of minting
+ * a request offer it will never bind.
+ */
+export function openCodeGatewayCatalogProjection(): Pick<
+  GatewayToolCatalogAdvertisement,
+  "catalog" | "projection"
+> {
+  return {
+    catalog: OPENCODE_GATEWAY_CATALOG,
+    projection: compileToolProjection(OPENCODE_GATEWAY_CATALOG, OPENCODE_GATEWAY_PROFILE),
+  };
+}
+
 export function createOpenCodeGatewayToolCatalogAdvertisement(
   now: number,
-  handlerCoverage?: OpenCodeGatewayHandlerCoverage,
+  handlerCoverage: OpenCodeGatewayHandlerCoverage | undefined,
+  // Always derived from the request deadline by `opencodeGatewayOfferLifetimeMs`; explicit so no
+  // caller can fall back to a fixed lifetime shorter than the request it advertises for.
+  offerLifetimeMs: number,
 ): GatewayToolCatalogAdvertisement {
-  const projection = compileToolProjection(OPENCODE_GATEWAY_CATALOG, OPENCODE_GATEWAY_PROFILE);
+  if (!Number.isFinite(offerLifetimeMs) || offerLifetimeMs <= 0) {
+    throw new RangeError("the gateway offer lifetime must be a positive number of milliseconds");
+  }
+  const { projection } = openCodeGatewayCatalogProjection();
   const offer =
     handlerCoverage === undefined
       ? structuralOnlyOffer(projection)
@@ -764,7 +811,7 @@ export function createOpenCodeGatewayToolCatalogAdvertisement(
       },
       offerId: `opencode-gateway-${randomUUID()}`,
       toolRefs: offer.toolRefs,
-      expiresAt: new Date(now + OPENCODE_GATEWAY_OFFER_LIFETIME_MS).toISOString(),
+      expiresAt: new Date(now + offerLifetimeMs).toISOString(),
     },
   };
 }

@@ -6,8 +6,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ServerResponse } from "node:http";
 import { mockResponse } from "./_support.js";
 import {
-  sseBackpressureReporter,
+  currentOpenSseStreamCount,
+  markServerShuttingDown,
   markSseStreamServerErrored,
+  resetServerShuttingDownForTests,
+  sseBackpressureReporter,
   writeOrDestroy,
   type SseBackpressureSignal,
 } from "./sse-write.js";
@@ -146,6 +149,7 @@ describe("sse.stream.closed terminal line", () => {
 
   afterEach(() => {
     resetServerLogger();
+    resetServerShuttingDownForTests();
   });
 
   it("counts every frame written through writeOrDestroy and reports reason=completed on a real stream end", async () => {
@@ -181,6 +185,51 @@ describe("sse.stream.closed terminal line", () => {
     await closed;
 
     expect(sink.events[0]?.extra).toMatchObject({ reason: "client-disconnected" });
+  });
+
+  // Run 9 (2026-09-10): a dev-lane BFF restart closed every live stream at once, and the log showed
+  // one `backpressure-killed` plus two `client-disconnected` next to a cancelled run — three symptoms
+  // of a shutdown nobody could see from the log. The shutdown is the cause and says so, and the live
+  // stream count is what the shutdown line reports.
+  it("reports reason=server-shutdown for streams the shutdown tears down, and counts live streams", () => {
+    const sink = captureServerLog();
+    const before = currentOpenSseStreamCount();
+    const killed = listenableFakeRes(false);
+    const disconnected = listenableFakeRes(true);
+    const controller = new AbortController();
+
+    writeOrDestroy(killed.res, "event: a\ndata: {}\n\n", controller, undefined, "corr-kill");
+    writeOrDestroy(disconnected.res, "event: a\ndata: {}\n\n", controller, undefined, "corr-open");
+    expect(currentOpenSseStreamCount()).toBe(before + 2);
+
+    markServerShuttingDown();
+    killed.fireClose();
+    disconnected.fireClose();
+
+    expect(sink.events.map((event) => event.extra?.reason)).toEqual([
+      "server-shutdown",
+      "server-shutdown",
+    ]);
+    expect(currentOpenSseStreamCount()).toBe(before);
+  });
+
+  // A stream the producer had already ended finished on its own terms, even though its `close` event
+  // arrives after the shutdown began — which is the PRODUCTION order: dispose marks the shutdown
+  // first, then connections are torn down. Marking the shutdown after the close event (as this test
+  // first did) never entered the branch at all, so `!res.writableEnded` could have been deleted with
+  // the test still green (owner review, PR #3452).
+  it("keeps reason=completed for a stream that ended before the shutdown tore it down", async () => {
+    const sink = captureServerLog();
+    const { res } = mockResponse();
+    const controller = new AbortController();
+
+    writeOrDestroy(res, "event: a\ndata: {}\n\n", controller);
+    markServerShuttingDown();
+    const closed = new Promise<void>((resolve) => res.once("close", resolve));
+    res.end();
+    await closed;
+
+    expect(sink.events[0]?.extra).toMatchObject({ reason: "completed" });
   });
 
   it("reports reason=backpressure-killed and threads the supplied correlation id", () => {

@@ -112,14 +112,16 @@ import type { ChatTurnSerializer } from "./chat-turn-serializer.js";
 import {
   DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
   defaultServerDiagnosticSink,
-  evidenceRetentionDiagnosticObserver,
+  describeError,
   emitServerDiagnostic,
   serverDiagnosticFromError,
   type ServerDiagnosticSink,
   type ServerDiagnosticSummary,
 } from "./diagnostics-log.js";
+import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
+import { currentOpenSseStreamCount, markServerShuttingDown } from "./sse-write.js";
 import type { ServerLogSink } from "./observability/index.js";
 import { recordWorkspaceRootDenial } from "./workspace-root-denial-log.js";
 import type { CodexSubscriptionProfileCoordinator } from "./coding-codex-subscription.js";
@@ -351,6 +353,7 @@ import {
   type CodingRuntimeHost,
   type CodingRuntimeToolFacadeBridge,
 } from "./coding-runtime/codingRuntimeControlPlane.js";
+import { configuredRepoSemanticSearchProviderLeaseFor } from "./grounded-repo-semantic-search.js";
 import { createProductionCodingRuntimeIssueIntake } from "./coding-context/codingRuntimeIssueIntake.js";
 import {
   createProductionCodingRuntimeHost,
@@ -1042,6 +1045,10 @@ export interface BuildHandlerDepsOptions {
   readonly localGitMutationEnv?: EnvSource | undefined;
   readonly conversationAttachmentStore?: ConversationAttachmentStore | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  // Activity-log port for the composition's own lifecycle evidence (the shutdown bracket in
+  // `createUiHandlerDispose`). Production omits it and the process sink is used; a test injects a
+  // recorder to assert the emitted lines (AGENTS.md §8).
+  readonly activityLog?: ServerLogSink | undefined;
   // Optional deployment replacement for the default memory category denylist. Production leaves
   // this unset unless an operator supplies a reviewed, ReDoS-safe policy at composition time.
   readonly memoryDeniedCategoryMatchers?:
@@ -1850,6 +1857,10 @@ function buildCommandRunner(options: {
     ),
     isWorkspaceTrustedForPackageScripts: (projectId, workspace): boolean =>
       options.workspaceScriptTrust.isTrusted(projectId, workspace),
+    isWorktreeTrustedByHumanGrant: (canonicalRoot): boolean =>
+      options.workspaceScriptTrust.holdsHumanGrantForRoot(canonicalRoot),
+    isWorktreeManifestRunAdmitted: (canonicalRoot): boolean =>
+      options.workspaceScriptTrust.holdsRunAdmissionForRoot(canonicalRoot),
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);
       return typeof redacted === "string" ? redacted : value;
@@ -1881,6 +1892,10 @@ function buildVerificationRunner(options: {
     ),
     isWorkspaceTrustedForPackageScripts: (projectId, workspace): boolean =>
       options.workspaceScriptTrust.isTrusted(projectId, workspace),
+    isWorktreeTrustedByHumanGrant: (canonicalRoot): boolean =>
+      options.workspaceScriptTrust.holdsHumanGrantForRoot(canonicalRoot),
+    isWorktreeManifestRunAdmitted: (canonicalRoot): boolean =>
+      options.workspaceScriptTrust.holdsRunAdmissionForRoot(canonicalRoot),
     redactor: (value: string): string => {
       const redacted = options.liveRedactor(value);
       return typeof redacted === "string" ? redacted : value;
@@ -2063,7 +2078,7 @@ function buildBrowserManager(options: {
         options.evidenceStore,
         (value): string => redactEvidenceString(options.redactor, value),
         DEFAULT_RETENTION,
-        evidenceRetentionDiagnosticObserver(options.diagnostics, "browser-capture"),
+        evidenceRetentionObserver("browser-capture"),
       ).location,
     costClassResolver: resolveCostClass,
     sideFileWriter: (basename, bytes, runId) =>
@@ -2302,9 +2317,19 @@ function managedWorkspaceRootRef(uiStore: UiStore, managedRoot: string): string 
 }
 
 /**
- * Registers the server-owned Project/Manifest identity for one managed worktree and, when the
- * repository's standing grant currently covers it, derives the worktree's own script-trust record
- * from it.
+ * Registers the server-owned Project/Manifest identity for one managed worktree AND for the
+ * repository it was bound from, and — when the repository's standing grant currently covers the
+ * worktree — derives the worktree's own script-trust record from it.
+ *
+ * The repository registration is what makes it a trust SUBJECT: script trust is only ever resolved
+ * for a REGISTERED root (`registeredProjectPathForRoot`), and the Workspace Trust panel lists
+ * registered roots. A repository the operator bound through the Coding Workbench but never opened
+ * as a project was therefore permanently `restricted` with no surface able to offer the grant, so
+ * every verification inside its task workspace was refused and the only exit was to open the same
+ * folder again through the workspace picker (fresh-installation run, 2026-09-10). Registration is
+ * NOT a grant: no trust record is written here, the repository stays restricted until the operator
+ * grants it, and `POST /api/projects` (choosing a folder) remains the only path that grants on
+ * selection.
  *
  * The derivation used to run for an explicit provision ONLY (an `initializeTrust` flag). That flag
  * was a proxy for the two guards below, and it stranded every worktree whose repository was not yet
@@ -2324,7 +2349,13 @@ export function ensureManagedTaskWorkspaceIdentity(input: {
   readonly uiStore: UiStore;
   readonly workspaceScriptTrust: WorkspaceScriptTrustService;
   readonly instance: WorkspaceInstance;
+  /** The provisioning request's own correlation id, so the registration joins that timeline. */
+  readonly correlationId?: string | undefined;
+  /** The UI database path, so the repository registration asks the canonical containment rule. */
+  readonly uiDbPath?: string | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
 }): void {
+  ensureBoundRepositoryProject(input);
   const projectRegistered = input.uiStore
     .listProjects()
     .some((project) => project.path === input.instance.managedWorktreePath);
@@ -2348,10 +2379,52 @@ export function ensureManagedTaskWorkspaceIdentity(input: {
   );
 }
 
+// Registration only, never a grant — see `ensureManagedTaskWorkspaceIdentity`. Body-free evidence:
+// the repository's own id, and whether this call created the row; never a path.
+function ensureBoundRepositoryProject(input: {
+  readonly uiStore: UiStore;
+  readonly instance: WorkspaceInstance;
+  readonly correlationId?: string | undefined;
+  readonly uiDbPath?: string | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
+}): void {
+  const { repositoryRoot } = input.instance;
+  if (input.uiStore.listProjects().some((project) => project.path === repositoryRoot)) return;
+  // The SAME containment rule every other project-registration site asks (`store/paths.ts`, used by
+  // `handleCreateProject`, `gitRepositoryRoutes` and `seedInitialProject`): a project must not expose
+  // the UI database, and a project inside the database's own directory is refused. Asked rather than
+  // approximated, so this path cannot drift from the invariant it protects (PR #3452 review); a
+  // refusal leaves the root unregistered, which is exactly the behaviour that stood before this
+  // repair.
+  try {
+    assertUiDbOutsideProject(input.uiDbPath, repositoryRoot);
+  } catch {
+    // Recorded, never silent: an unregistered repository gets no script trust, so every
+    // verification in its task workspace is refused, and this line names why (CodeRabbit review,
+    // PR #3452). Body-free: the repository's id and a closed reason, never a path.
+    (input.activityLog ?? processServerLogSink()).write({
+      level: "warn",
+      category: "security",
+      op: "task-workspace.repository.registration-refused",
+      correlationId: input.correlationId ?? UNKNOWN_CORRELATION_ID,
+      extra: { repositoryId: input.instance.repositoryId, reason: "ui-database-inside-repository" },
+    });
+    return;
+  }
+  input.uiStore.createProject(repositoryRoot, basename(repositoryRoot));
+  (input.activityLog ?? processServerLogSink()).write({
+    category: "security",
+    op: "task-workspace.repository.registered",
+    correlationId: input.correlationId ?? UNKNOWN_CORRELATION_ID,
+    extra: { repositoryId: input.instance.repositoryId, granted: false },
+  });
+}
+
 function withManagedWorkspaceIdentity(
   provisioning: WorkspaceProvisioningService,
   uiStore: UiStore,
   workspaceScriptTrust: WorkspaceScriptTrustService,
+  uiDbPath: string | undefined,
 ): WorkspaceProvisioningService {
   return {
     provision: async (request): ReturnType<WorkspaceProvisioningService["provision"]> => {
@@ -2360,6 +2433,8 @@ function withManagedWorkspaceIdentity(
         uiStore,
         workspaceScriptTrust,
         instance: result.instance,
+        ...(uiDbPath === undefined ? {} : { uiDbPath }),
+        ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
       });
       return result;
     },
@@ -2369,6 +2444,8 @@ function withManagedWorkspaceIdentity(
         uiStore,
         workspaceScriptTrust,
         instance: result.instance,
+        ...(uiDbPath === undefined ? {} : { uiDbPath }),
+        ...(request.correlationId === undefined ? {} : { correlationId: request.correlationId }),
       });
       return result;
     },
@@ -2376,7 +2453,12 @@ function withManagedWorkspaceIdentity(
       provisioning.getInstance(workspaceId),
     ensureIdentity: (instance): void => {
       provisioning.ensureIdentity?.(instance);
-      ensureManagedTaskWorkspaceIdentity({ uiStore, workspaceScriptTrust, instance });
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore,
+        workspaceScriptTrust,
+        instance,
+        ...(uiDbPath === undefined ? {} : { uiDbPath }),
+      });
     },
     // Forwarded, not re-implemented: this wrapper adds Project/Manifest identity around an INJECTED
     // provisioning service, and it owns no store or mutex of its own. A wrapper that silently
@@ -2409,6 +2491,7 @@ function buildWorkspaceProvisioning(
       options.workspaceProvisioning,
       uiStore,
       workspaceScriptTrust,
+      args.resolvedUiDbPath,
     );
   }
   if (instanceStore === undefined) return undefined;
@@ -2420,8 +2503,14 @@ function buildWorkspaceProvisioning(
     redactString: args.redactString,
     now: () => Date.now(),
     newId: randomUUID,
-    ensureManagedWorkspaceIdentity: (instance): void => {
-      ensureManagedTaskWorkspaceIdentity({ uiStore, workspaceScriptTrust, instance });
+    ensureManagedWorkspaceIdentity: (instance, correlationId): void => {
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore,
+        workspaceScriptTrust,
+        instance,
+        uiDbPath: args.resolvedUiDbPath,
+        ...(correlationId === undefined ? {} : { correlationId }),
+      });
     },
     mutex: args.mutex,
   });
@@ -3618,8 +3707,18 @@ function composePersistenceTaskWorkspaceServices(
   readonly workspaceScriptTrust: WorkspaceScriptTrustService;
   readonly services: TaskWorkspaceServices;
 } {
+  // The managed root is handed to script trust so a managed task worktree — a registered project
+  // below `<stateDir>/ui/task-workspaces`, i.e. below the `.keiko` segment the user-workspace root
+  // rules deny — resolves as its own workspace root. Without it every grant, status read and
+  // repository-derived trust for a worktree failed closed, and binding a trusted repository ended
+  // in PROVISIONING_FAILED on a default installation.
   const workspaceScriptTrust =
-    options.workspaceScriptTrust ?? createWorkspaceScriptTrustService({ store: persistence.store });
+    options.workspaceScriptTrust ??
+    createWorkspaceScriptTrustService({
+      store: persistence.store,
+      managedRoot: resolveManagedWorktreeRoot(resolvedUiDbPath),
+      activityLog: options.activityLog ?? processServerLogSink(),
+    });
   const services = composeTaskWorkspaceServices({
     options,
     workspaceInstanceStore: persistence.workspaceInstanceStore,
@@ -4152,6 +4251,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     prDescriptionGeneration,
     deps,
   );
+  attachRepositorySemanticSearch(services.codingRuntimeControlPlane, deps);
   return deps;
 }
 
@@ -4285,6 +4385,20 @@ function buildUiCodingRuntimeControlPlane(
 // (an injected UiStore without one, mirroring `codingRuntimeSnapshotStore`'s own contract) leaves
 // the feature unattached — the orchestrator already treats an absent `description` as "not yet
 // wired", never a crash.
+// #3416: binds the repository semantic index the governed coding search may rerank with. Bound here
+// and not in the runtime composition for the same reason the verified-head notifier is: the lease is
+// derived from the assembled deps graph, which does not exist when the resolver is composed. A
+// composition without a knowledge store binds a lease that opens no provider, and the search stays
+// lexical and says so.
+function attachRepositorySemanticSearch(
+  codingRuntimeControlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
+  deps: UiHandlerDeps,
+): void {
+  codingRuntimeControlPlane?.attachRepositorySemanticSearch?.((repositoryRoot, signal) =>
+    configuredRepoSemanticSearchProviderLeaseFor(deps, signal, repositoryRoot),
+  );
+}
+
 function attachWorkbenchDescriptionSupport(
   args: UiHandlerDepsAssemblyArgs,
   codingRuntimeControlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
@@ -4731,6 +4845,152 @@ function buildCodingContextPortsDependency(
     : { codingContextGitHubPort: args.options.codingContextGitHubPort };
 }
 
+/**
+ * The shutdown's own evidence (AGENTS.md §8). A customer only ever has the activity log: when this
+ * process goes away — an app quit, a service restart, an updater, the dev runner's own reload — the
+ * log used to show only the SHAPES that leaves behind (SSE streams closing, an aborted gateway
+ * fetch, a run settling as `cancelled`) and nothing saying a shutdown had begun. Reconstructing run
+ * 9's cancellation needed the dev runner's console, which no customer has (2026-09-10). These two
+ * lines bracket the teardown under one minted correlation id, name what was still live when it
+ * began, and are the join key for the terminal lines that follow.
+ */
+function recordRuntimeShutdown(
+  activityLog: ServerLogSink,
+  correlationId: string,
+  state: "started" | "completed",
+  extra: Readonly<Record<string, unknown>>,
+): void {
+  activityLog.write({
+    // A faulted cleanup makes the completion line a warning even when the teardown itself ended.
+    level: state === "started" || extra.cleanup === "faulted" ? "warn" : "info",
+    category: "process",
+    op: "server.runtime.shutdown",
+    correlationId,
+    extra: { state, ...extra },
+  });
+}
+
+// Everything the teardown itself tears down, in the order the graph requires. Extracted so the
+// dispose closure stays the shutdown's EVIDENCE bracket and nothing more.
+// The completion line is written whatever the cleanup does (CodeRabbit review, 2026-09-10): a
+// rejecting `disposeRuntimeServices` used to leave only the `started` line behind, and its error
+// replaced the orchestrator's own. The cleanup's disposition rides on the line; its error is
+// rethrown only when nothing else was already failing, so the original error survives.
+export async function disposeRuntimeServicesRecorded(
+  dispose: () => Promise<void>,
+  record: (cleanup: Readonly<Record<string, unknown>>) => void,
+  alreadyFailing: boolean,
+): Promise<void> {
+  let failure: unknown;
+  let cleanup: Readonly<Record<string, unknown>> = { cleanup: "completed" };
+  try {
+    await dispose();
+  } catch (error) {
+    failure = error;
+    // The whole body-free description (class, code, dist-anchored frames, cause chain): while an
+    // earlier failure propagates, this line is the only evidence of why the cleanup itself failed
+    // (owner review, PR #3452).
+    cleanup = { cleanup: "faulted", ...teardownFaultDescription(error) };
+  } finally {
+    record(cleanup);
+  }
+  if (failure === undefined || alreadyFailing) return;
+  throw failure instanceof Error
+    ? failure
+    : new Error("runtime-services-dispose-failed", { cause: failure });
+}
+
+// Two or more teardown steps failed: every failure is kept, in step order, the first one leading.
+export class TeardownFaults extends AggregateError {
+  public override readonly name = "TeardownFaults";
+}
+
+// A teardown that failed in several steps is described by its first failure, with the count and
+// every failed step's class in step order, so no fault is dropped from the completion line (owner
+// review, PR #3452). A single failure keeps its full description, as before.
+function teardownFaultDescription(error: unknown): Readonly<Record<string, unknown>> {
+  const failures: readonly unknown[] = error instanceof TeardownFaults ? error.errors : [error];
+  return {
+    ...describeError(failures[0]),
+    failedStepCount: failures.length,
+    failedStepErrorClasses: failures.map((failure) => describeError(failure).errorClass),
+  };
+}
+
+// Every teardown step is attempted, whatever an earlier one did. A throwing step used to abandon
+// the rest -- the runtime composition, the LSP pool, the graph-owned registries and the shared
+// node:sqlite close with its WAL checkpoint (CodeRabbit review, PR #3452). Once every step has run,
+// a single failure is rethrown as it is and several as one `TeardownFaults`, so
+// `disposeRuntimeServicesRecorded` records the fault and every failed step (owner review).
+async function runTeardownSteps(steps: readonly (() => void | Promise<void>)[]): Promise<void> {
+  const failures: unknown[] = [];
+  for (const step of steps) {
+    try {
+      await step();
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new TeardownFaults(failures, "runtime-teardown-faulted");
+}
+
+async function disposeRuntimeServices(
+  args: UiHandlerDepsAssemblyArgs,
+  services: UiHandlerRuntimeServices,
+  atlassianRegistries: ReturnType<typeof atlassianConnectorRegistryFields>,
+  codingAppSessionDenialWindows: CodingAppSessionDenialWindows,
+): Promise<void> {
+  await runTeardownSteps([
+    (): void => {
+      services.gitChangeSnapshotService.close();
+    },
+    (): void => {
+      services.runtimeComposition.dispose?.();
+    },
+    (): void => {
+      services.codingRuntimeControlPlane?.safeActivityProjection?.purgeAll("shutdown");
+    },
+    async (): Promise<void> => {
+      await shutdownHostLspPool();
+    },
+    async (): Promise<void> => {
+      await services.dapProduction?.dispose();
+    },
+    (): void => {
+      services.peripherals.disposeTrustLspBridge();
+    },
+    (): void => {
+      services.peripherals.debugActivationControl.dispose();
+    },
+    (): void => {
+      services.peripherals.workspaceWatchService.disposeAll();
+    },
+    // #2906 round 2: these graph-owned registries (atlassianConnectorRegistryFields, one
+    // instance per composed deps graph) were never disposed with the graph. A sync job started
+    // via startAtlassianSyncJob continues in a detached setImmediate closure that captures THIS
+    // graph's deps/registry and keeps mutating it after disposal, while a newly composed graph's
+    // OWN fresh registry has no record of that still-running job and could admit a duplicate for
+    // the same capsule (hasActiveRunForCapsule sees an empty registry). reset() aborts every
+    // active job's controller and drops pending approvals/activity before the bundle itself goes
+    // away, so nothing on this graph outlives it as observable state on the NEXT graph.
+    (): void => {
+      atlassianRegistries.atlassianActionApprovalRegistry?.reset();
+    },
+    (): void => {
+      atlassianRegistries.atlassianSyncJobRegistry?.reset();
+    },
+    // #2906 round 3: same rationale as the Atlassian registries above -- drop this graph's
+    // denial-window counters so nothing outlives it as observable state on the next graph.
+    (): void => {
+      codingAppSessionDenialWindows.reset();
+    },
+    (): void => {
+      args.bundle.dispose?.();
+    },
+  ]);
+}
+
 function createUiHandlerDispose(
   args: UiHandlerDepsAssemblyArgs,
   services: UiHandlerRuntimeServices,
@@ -4738,31 +4998,51 @@ function createUiHandlerDispose(
   codingAppSessionDenialWindows: CodingAppSessionDenialWindows,
 ): UiHandlerDeps["dispose"] {
   return async (): Promise<void> => {
+    const activityLog = args.options.activityLog ?? processServerLogSink();
+    const correlationId = randomUUID();
+    const startedAtMs = Date.now();
+    const openSseStreamCount = currentOpenSseStreamCount();
+    const activeRunCount =
+      services.codingRuntimeControlPlane?.orchestrator.hasLiveRun() === true ? 1 : 0;
+    markServerShuttingDown();
+    recordRuntimeShutdown(activityLog, correlationId, "started", {
+      openSseStreamCount,
+      activeRunCount,
+    });
+    // What the teardown achieved for the live run, not merely "the call did not throw". A refused
+    // shutdown resolves normally with `{ok: false}` (a run in `recovery-required`, for one), and
+    // recording that as a clean stop told the one artifact a customer site has the opposite of what
+    // happened (owner review, PR #3452). "not-applicable" is its own answer: no control plane means
+    // there was nothing to stop, which is not the same as stopping cleanly.
+    let runtimeShutdown: "not-applicable" | "ended" | "refused" | "faulted" = "not-applicable";
     try {
-      await services.codingRuntimeControlPlane?.orchestrator.shutdown();
+      const orchestrator = services.codingRuntimeControlPlane?.orchestrator;
+      if (orchestrator !== undefined) {
+        runtimeShutdown = (await orchestrator.shutdown()).ok ? "ended" : "refused";
+      }
+    } catch (error) {
+      runtimeShutdown = "faulted";
+      throw error;
     } finally {
-      services.gitChangeSnapshotService.close();
-      services.runtimeComposition.dispose?.();
-      services.codingRuntimeControlPlane?.safeActivityProjection?.purgeAll("shutdown");
-      await shutdownHostLspPool();
-      await services.dapProduction?.dispose();
-      services.peripherals.disposeTrustLspBridge();
-      services.peripherals.debugActivationControl.dispose();
-      services.peripherals.workspaceWatchService.disposeAll();
-      // #2906 round 2: these graph-owned registries (atlassianConnectorRegistryFields, one
-      // instance per composed deps graph) were never disposed with the graph. A sync job started
-      // via startAtlassianSyncJob continues in a detached setImmediate closure that captures THIS
-      // graph's deps/registry and keeps mutating it after disposal, while a newly composed graph's
-      // OWN fresh registry has no record of that still-running job and could admit a duplicate for
-      // the same capsule (hasActiveRunForCapsule sees an empty registry). reset() aborts every
-      // active job's controller and drops pending approvals/activity before the bundle itself goes
-      // away, so nothing on this graph outlives it as observable state on the NEXT graph.
-      atlassianRegistries.atlassianActionApprovalRegistry?.reset();
-      atlassianRegistries.atlassianSyncJobRegistry?.reset();
-      // #2906 round 3: same rationale as the Atlassian registries above -- drop this graph's
-      // denial-window counters so nothing outlives it as observable state on the next graph.
-      codingAppSessionDenialWindows.reset();
-      args.bundle.dispose?.();
+      await disposeRuntimeServicesRecorded(
+        () =>
+          disposeRuntimeServices(
+            args,
+            services,
+            atlassianRegistries,
+            codingAppSessionDenialWindows,
+          ),
+        (cleanup) => {
+          recordRuntimeShutdown(activityLog, correlationId, "completed", {
+            durationMs: Date.now() - startedAtMs,
+            openSseStreamCount,
+            activeRunCount,
+            runtimeShutdown,
+            ...cleanup,
+          });
+        },
+        runtimeShutdown === "faulted",
+      );
     }
   };
 }
@@ -5128,6 +5408,9 @@ function qualifiedRuntimeResolver(
     ...input.ports,
     commandRunner: input.commandRunner,
     verificationRunner: input.verificationRunner,
+    // ADR-0147 D3, autonomous-delivery amendment: the same server-owned trust service the runners
+    // decide on, so a run's own manifest edits are admitted and revoked through one record.
+    workspaceScriptTrust: args.bundle.workspaceScriptTrust,
     ...(verifiedCommit === undefined ? {} : { verifiedCommit }),
     ...(draftDelivery === undefined ? {} : { draftDelivery }),
     runtimeMutationLeaseBroker: input.runtimeMutationLeaseBroker,

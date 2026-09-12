@@ -26,7 +26,7 @@ function input() {
       nodeVersion: "24.18.0",
       npmVersion: "11.16.0",
       gitVersion: "2.50.1",
-      runtimeVersion: "1.17.17",
+      runtimeVersion: "1.18.30",
       payloadSha256: "f".repeat(64),
       secureReadSha256: "1".repeat(64),
     },

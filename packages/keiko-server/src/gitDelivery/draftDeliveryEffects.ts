@@ -29,6 +29,7 @@ import { executeGovernedPublish } from "./pushExecution.js";
 import { executeGovernedPullRequest } from "./prExecution.js";
 import { runtimeGitReadDeps } from "./runtimeGitRead.js";
 import { basePinnedPrPolicyPacks } from "./basePinnedPrPolicy.js";
+import { refreshDraftChecksSection } from "./draftDeliveryChecksRefresh.js";
 
 interface EffectContext {
   readonly options: DraftDeliveryServiceOptions;
@@ -134,7 +135,7 @@ async function push(effect: EffectContext): Promise<DraftDeliveryRecord> {
   const remote = await readDraftRemoteState(options, context, record.binding);
   assertKnownDraftIdentity(record, remote);
   if (remote.headSha !== record.binding.headSha) throw new DraftDeliveryFailure("remote-drift");
-  return advanceDraft(
+  const pushed = advanceDraft(
     options,
     context,
     record,
@@ -142,6 +143,16 @@ async function push(effect: EffectContext): Promise<DraftDeliveryRecord> {
     "completed",
     retainedRemoteIdentity(record, remote.pullRequest),
   );
+  // A later verified commit reached a pull request that already exists: its Checks section is
+  // recomposed for that commit (owner review on PR #3452). Best effort: the push stands either way.
+  if (remote.pullRequest !== undefined)
+    await refreshDraftChecksSection({
+      options,
+      context,
+      record: pushed,
+      pullRequest: remote.pullRequest,
+    });
+  return pushed;
 }
 async function createPullRequest(effect: EffectContext): Promise<DraftDeliveryRecord> {
   const { options, context, record, proposal } = effect;

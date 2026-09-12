@@ -57,7 +57,6 @@ import {
   EDITOR_AGENT_DIAGNOSTICS_MAX_ITEMS,
   EDITOR_AGENT_SESSION_ID_MAX_BYTES,
   EDITOR_AGENT_SNAPSHOT_TEXT_MAX_BYTES,
-  EDITOR_AGENT_NAVIGATION_DOCUMENT_MAX_BYTES,
   editorAgentWritePreconditionError,
   isContainedAgentPath,
   isEditorAgentAction,
@@ -101,16 +100,14 @@ import {
   type WorkspaceWriter,
 } from "@oscharko-dev/keiko-tools";
 import {
-  detectWorkspaceAt,
   isDenied,
-  readWorkspaceFile,
   type WorkspaceFs,
   type WorkspaceInfo,
   containedRealPathInfo,
 } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { workspaceRootAccessOrUndefined } from "../task-workspace/workspace-root-access.js";
-import { isValidCorrelationId } from "../correlation.js";
+import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import {
   errorBody,
   STREAMING,
@@ -118,7 +115,8 @@ import {
   type RouteContext,
   type RouteResult,
 } from "../routes.js";
-import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "../sse.js";
+import { readyMessage, SSE_HEADERS, startSseHeartbeat } from "../sse.js";
+import { writeOrDestroy } from "../sse-write.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import { readJsonObject } from "../files.js";
 import { handleGitStatus, handleGitStructuredDiff, handleGitBlame } from "../gitRoutes.js";
@@ -149,6 +147,7 @@ import {
   resolveEditorAgentContainmentPort,
   resolveEditorAgentSessionRoot,
   type EditorAgentRootBoundaryReason,
+  serverResolvedDocumentText,
 } from "./agentRootBoundary.js";
 
 type EditorAgentRouteDeps = Pick<
@@ -1467,21 +1466,6 @@ function actionAbortSignal(ctx: RouteContext): AbortSignal {
   return controller.signal;
 }
 
-function serverResolvedDocumentText(
-  snapshot: EditorAgentSessionSnapshot,
-  path: string,
-  text: string | undefined,
-): string {
-  if (text !== undefined) return text;
-  const workspace = detectWorkspaceAt(snapshot.workspaceRoot, nodeWorkspaceFs);
-  return readWorkspaceFile(
-    workspace,
-    path,
-    { maxBytes: EDITOR_AGENT_NAVIGATION_DOCUMENT_MAX_BYTES },
-    nodeWorkspaceFs,
-  ).text;
-}
-
 function optionalTargetPath(path: string | null | undefined): readonly string[] {
   return path === null || path === undefined ? [] : [path];
 }
@@ -2484,7 +2468,13 @@ async function runNavigateSymbolAction(
         document: {
           path: request.document.path,
           languageId: request.document.languageId,
-          text: serverResolvedDocumentText(snapshot, request.document.path, request.document.text),
+          text: serverResolvedDocumentText(
+            deps,
+            snapshot.workspaceRoot,
+            request.document.path,
+            request.document.text,
+            actionCorrelationId(action),
+          ),
         },
         position: request.position,
         ...(request.range === undefined ? {} : { range: request.range }),
@@ -3912,19 +3902,31 @@ function openAgentSseStream(
   bridgeStreamId: string | undefined,
 ): HandlerOutcome {
   const res: ServerResponse = ctx.res;
+  // Every frame goes through the shared recording path (sse-write.ts) under the request's
+  // correlation id, so the stream counts its frames and bytes and closes with its terminal
+  // `sse.stream.closed` line; a request without an id records the sanctioned fallback rather than
+  // no id at all (AGENTS.md §8). A bridge that stops draining is aborted and destroyed, which also
+  // marks that line `backpressure-killed`.
+  const correlationId = ctx.correlationId ?? UNKNOWN_CORRELATION_ID;
+  const controller = new AbortController();
   const subscriber = (event: EditorAgentEvent): void => {
+    if (controller.signal.aborted) return;
     const frame = `id: ${event.eventId}\nevent: editor-agent:${event.type}\ndata: ${JSON.stringify(event)}\n\n`;
-    if (!res.write(frame)) res.destroy();
+    writeOrDestroy(res, frame, controller, undefined, correlationId);
   };
   const dispose = connectEditorAgentSessions(connections, bridgeStreamId, subscriber);
   if (dispose === undefined) return asHandlerOutcome(bridgeCapabilityError());
   res.writeHead(200, SSE_HEADERS);
   startSseHeartbeat(res);
-  res.write(readyMessage());
+  // Refused, the ready frame aborts the controller and destroys the stream like any event frame.
+  writeOrDestroy(res, readyMessage(), controller, undefined, correlationId);
   ctx.req.on("close", () => {
     res.end();
   });
-  res.on("close", dispose);
+  res.on("close", () => {
+    controller.abort();
+    dispose();
+  });
   return asHandlerOutcome(STREAMING);
 }
 

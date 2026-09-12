@@ -66,10 +66,10 @@ function removePidFile() {
   rmSync(pidFile, { force: true });
 }
 
-// KEIKO-0734: even after every tracked pid has exited, an orphaned `dev-bff.mjs` child (spawned
-// via `node --watch`) can keep the BFF port bound long enough for the next `npm run dev:start`
-// to collide. Report "stopped cleanly" only when the tracked ports are also released. Shared
-// probePortFree keeps this and dev-start.mjs's checkPortAvailable in lockstep.
+// KEIKO-0734: even after every tracked pid has exited, an orphaned `dev-bff.mjs` process (one
+// still in its graceful shutdown) can keep the BFF port bound long enough for the next
+// `npm run dev:start` to collide. Report "stopped cleanly" only when the tracked ports are also
+// released. Shared probePortFree keeps this and dev-start.mjs's checkPortAvailable in lockstep.
 export function checkPortReleased(port) {
   if (typeof port !== "number" || !Number.isInteger(port) || port <= 0 || port > 65_535) {
     return Promise.resolve(true);

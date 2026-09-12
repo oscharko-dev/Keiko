@@ -624,42 +624,77 @@ describe("EditorAgentAuthorityRegistry.reserveForConnector", () => {
   });
 });
 
+function runtimeEnvelope(
+  over: Partial<CodingWorkbenchAuthorityEnvelope> = {},
+): CodingWorkbenchRuntimeAuthorityEnvelope {
+  const authority = envelope({ taskRefs: ["task-1"], ...over });
+  return {
+    schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
+    authority,
+    binding: {
+      taskId: "task-1",
+      projectId: "project-1",
+      projectDigest: "a".repeat(64),
+      workspaceId: authority.workspace.workspaceId,
+      workspaceRootDigest: authority.workspace.rootDigest,
+      branchRef: authority.branch.headRef,
+      branchHeadDigest: "b".repeat(64),
+    },
+    intentDigest: "c".repeat(64),
+    nonceDigest: "d".repeat(64),
+    issuedAt: NOW,
+  };
+}
+
+function registeredRuntime(over: Partial<CodingWorkbenchAuthorityEnvelope> = {}): {
+  registry: EditorAgentAuthorityRegistry;
+  reference: { runId: string; envelopeDigest: string };
+} {
+  const registry = new EditorAgentAuthorityRegistry();
+  const runtime = runtimeEnvelope(over);
+  const registration = registry.registerRuntime(runtime, "autonomous-delivery", NOW);
+  if (!registration.ok) throw new Error("runtime registration failed: " + registration.reason);
+  return { registry, reference: registration.authorityRef };
+}
+
+describe("EditorAgentAuthorityRegistry.runtimeDelegationFits (#3417)", () => {
+  const read = { toolCalls: 1, patchBytes: 0, promptTokens: 0 } as const;
+
+  it("answers whether one more delegation fits the retained budget, reserving nothing", () => {
+    const { registry, reference } = registeredRuntime({
+      budget: { maxRuntimeMs: 60_000, maxToolCalls: 1, maxPromptTokens: 100, maxPatchBytes: 1 },
+    });
+    expect(registry.runtimeDelegationFits(reference, ROOT, "autonomous-delivery", read, NOW)).toBe(
+      true,
+    );
+    // Asking reserved nothing: the one call the budget holds is still there for a real charge.
+    expect(registry.runtimeDelegationFits(reference, ROOT, "autonomous-delivery", read, NOW)).toBe(
+      true,
+    );
+    expect(registry.reserveForConnector(reference, ROOT, "autonomous-delivery", NOW)).toMatchObject(
+      { ok: true },
+    );
+    expect(registry.runtimeDelegationFits(reference, ROOT, "autonomous-delivery", read, NOW)).toBe(
+      false,
+    );
+  });
+
+  it("answers no for malformed usage and for a revoked record", () => {
+    const { registry, reference } = registeredRuntime();
+    const malformed = { toolCalls: -1, patchBytes: 0, promptTokens: 0 };
+    expect(
+      registry.runtimeDelegationFits(reference, ROOT, "autonomous-delivery", malformed, NOW),
+    ).toBe(false);
+    registry.revoke(reference);
+    expect(registry.runtimeDelegationFits(reference, ROOT, "autonomous-delivery", read, NOW)).toBe(
+      false,
+    );
+  });
+});
+
 // ─── live-journey-readiness-2: prompt-token reservation reconciliation ──────────
 
 describe("EditorAgentAuthorityRegistry.settleRuntimePromptTokens", () => {
-  function runtimeEnvelope(
-    over: Partial<CodingWorkbenchAuthorityEnvelope> = {},
-  ): CodingWorkbenchRuntimeAuthorityEnvelope {
-    const authority = envelope({ taskRefs: ["task-1"], ...over });
-    return {
-      schemaVersion: CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION,
-      authority,
-      binding: {
-        taskId: "task-1",
-        projectId: "project-1",
-        projectDigest: "a".repeat(64),
-        workspaceId: authority.workspace.workspaceId,
-        workspaceRootDigest: authority.workspace.rootDigest,
-        branchRef: authority.branch.headRef,
-        branchHeadDigest: "b".repeat(64),
-      },
-      intentDigest: "c".repeat(64),
-      nonceDigest: "d".repeat(64),
-      issuedAt: NOW,
-    };
-  }
-
-  function registeredRuntime(over: Partial<CodingWorkbenchAuthorityEnvelope> = {}): {
-    registry: EditorAgentAuthorityRegistry;
-    reference: { runId: string; envelopeDigest: string };
-  } {
-    const registry = new EditorAgentAuthorityRegistry();
-    const runtime = runtimeEnvelope(over);
-    const registration = registry.registerRuntime(runtime, "autonomous-delivery", NOW);
-    if (!registration.ok) throw new Error("runtime registration failed: " + registration.reason);
-    return { registry, reference: registration.authorityRef };
-  }
-
   it("replaces the booked estimate with the provider's real usage instead of stacking both", () => {
     const { registry, reference } = registeredRuntime({
       budget: { maxRuntimeMs: 60_000, maxToolCalls: 20, maxPromptTokens: 1_000, maxPatchBytes: 1 },

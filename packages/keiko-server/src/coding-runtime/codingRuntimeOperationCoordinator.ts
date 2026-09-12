@@ -36,6 +36,15 @@ interface RuntimeOperationCoordinatorDeps {
     current: CodingRuntimeSnapshot,
   ) => Extract<CodingRuntimeOrchestratorResult, { readonly ok: true }>["snapshot"];
   readonly taskDispatcher: CodingRuntimeTaskDispatcher;
+  /**
+   * Returns a paused run to running before a follow-up replaces its task. The runtime admits tool
+   * calls only while running, so a replacement dispatched into a pause failed its first call and
+   * the turn's failure ended the run (Coding Workbench run 16, 2026-09-10). A pause held for an
+   * operator decision is refused here: the decision resumes that run, not a follow-up.
+   */
+  readonly resumePaused: (
+    current: CodingRuntimeSnapshot,
+  ) => Promise<CodingRuntimeOrchestratorResult>;
   readonly settleTask: (runId: string, outcome: CodingRuntimeTaskOutcome) => void;
   readonly questionPort: CodingRuntimeQuestionPort;
   readonly manager: CodingRuntimeManager;
@@ -44,7 +53,9 @@ interface RuntimeOperationCoordinatorDeps {
 
 interface RuntimeOperationReservation {
   readonly requestId: string;
-  readonly commit: () => void;
+  // Records the requestId as spent at the revision the operation applied at: the admission revision
+  // unless the operation itself moved the run first (a follow-up into a pause resumes it).
+  readonly commit: (appliedRevision?: number) => void;
   readonly release: () => void;
 }
 
@@ -150,9 +161,13 @@ export class CodingRuntimeOperationCoordinator {
             : "invalid-intent",
         );
       }
+      const refusedResume = await this.resumeForFollowUp(operation);
+      if (refusedResume !== undefined) return refusedResume;
+      const live = this.deps.current() ?? operation.current;
       const dispatched = await this.dispatchFollowUp(
         runId,
         operation,
+        live,
         operation.value.taskIntent,
         correlationId,
       );
@@ -162,19 +177,37 @@ export class CodingRuntimeOperationCoordinator {
         return failure("authority-resolution-failed");
       }
       settleGenerationReservation(dispatched.generation, true);
-      operation.reservation.commit();
+      // Committed at the revision the replacement was dispatched against, not the one it was
+      // admitted at: a resume moved the run N -> N+1 before this advance to N+2, and a record kept at
+      // N would already be evicted by the next admission, dispatching the same requestId twice
+      // (CodeRabbit review, PR #3452).
+      operation.reservation.commit(live.revision);
       this.observeTaskCompletion(
         runId,
         dispatched.result.completion,
         reservedGeneration(dispatched.generation),
       );
-      return this.deps.advanceRevision(operation.current, "task-submitted");
+      return this.deps.advanceRevision(live, "task-submitted");
     });
+  }
+
+  // A follow-up into a pause is the operator's own "continue with this": the run resumes first, and
+  // the replacement is dispatched against the resumed revision. A refused resume releases the
+  // reservation and is the follow-up's answer.
+  private async resumeForFollowUp(
+    operation: Extract<PreparedRuntimeOperation, { readonly ok: true }>,
+  ): Promise<CodingRuntimeOrchestratorResult | undefined> {
+    if (operation.current.state !== "paused") return undefined;
+    const resumed = await this.deps.resumePaused(operation.current);
+    if (resumed.ok) return undefined;
+    operation.reservation.release();
+    return resumed;
   }
 
   private async dispatchFollowUp(
     runId: string,
     operation: Extract<PreparedRuntimeOperation, { readonly ok: true }>,
+    live: CodingRuntimeSnapshot,
     taskIntent: string,
     correlationId?: string,
   ): Promise<FollowUpDispatchOutcome> {
@@ -188,7 +221,7 @@ export class CodingRuntimeOperationCoordinator {
       const result = await dispatch({
         runId,
         requestId: operation.value.requestId,
-        expectedRevision: operation.current.revision,
+        expectedRevision: live.revision,
         taskIntent,
         ...(correlationId === undefined ? {} : { correlationId }),
       });
@@ -353,6 +386,15 @@ export class CodingRuntimeOperationCoordinator {
     this.replay.clear(runId);
     this.taskGenerations.delete(runId);
     this.pendingTaskGenerations.delete(runId);
+  }
+
+  /**
+   * F66: a delivery continuation the orchestrator dispatched while settling a finished turn. Its
+   * completion settles through the same generation bookkeeping as any other task, so the turn it
+   * replaces can never settle a second time.
+   */
+  public observeContinuation(runId: string, completion: Promise<CodingRuntimeTaskOutcome>): void {
+    this.observeTaskCompletion(runId, completion);
   }
 
   private observeTaskCompletion(
@@ -638,9 +680,9 @@ class RuntimeOperationReplayCoordinator {
     };
     const reservation: RuntimeOperationReservation = {
       requestId,
-      commit: (): void => {
+      commit: (appliedRevision = liveRevision): void => {
         if (!active) return;
-        committed.set(requestId, liveRevision);
+        committed.set(requestId, appliedRevision);
         this.committed.set(runId, committed);
         release();
       },

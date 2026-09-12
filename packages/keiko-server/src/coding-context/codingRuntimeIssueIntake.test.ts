@@ -21,7 +21,12 @@ import type { CodingWorkbenchPolicyEffect } from "@oscharko-dev/keiko-contracts"
 import type { ServerLogEvent } from "../observability/index.js";
 import { createInMemoryUiStore } from "../store/index.js";
 import { deriveRepositoryId } from "../task-workspace/naming.js";
-import { createProductionCodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
+import {
+  createProductionCodingRuntimeIssueIntake,
+  linkedIssueNumbers,
+  MAX_LINKED_ISSUES,
+  resolvedLinkedIssueNumbers,
+} from "./codingRuntimeIssueIntake.js";
 import type { GitHubIssueResolutionDeps } from "./githubIssueResolution.js";
 
 // Forces the shared mode/resource/risk matrix to answer `denied` for one test only, so the
@@ -226,5 +231,112 @@ describe("production coding-runtime issue-context attachment (epic #3384 correct
     const serialized = JSON.stringify(line);
     expect(serialized).not.toContain("malicious title");
     expect(serialized).not.toContain("hostile suffix");
+  });
+});
+
+// Zero-coverage finding on PR #3452: the linked-issue parser, resolver and skip-logging had no
+// tests at all. `#42` is the bound issue throughout `fixture()`'s repository.
+
+describe("linkedIssueNumbers (the bound issue's same-repository #n references)", () => {
+  it("includes a plain #n reference", () => {
+    expect(linkedIssueNumbers("See #12 for the missing piece.", 1)).toEqual([12]);
+  });
+
+  it("excludes another repository's #n and a heading's ##n while keeping a bare reference", () => {
+    expect(linkedIssueNumbers("owner/repo#12 ##34 but #56 counts", 1)).toEqual([56]);
+  });
+
+  it("excludes a self-reference to the bound issue", () => {
+    expect(linkedIssueNumbers("Closes #42 and relates to #7", 42)).toEqual([7]);
+  });
+
+  it("collapses duplicate references to one number", () => {
+    expect(linkedIssueNumbers("#7 again, #7, and once more #7", 1)).toEqual([7]);
+  });
+
+  it("stops at MAX_LINKED_ISSUES, dropping references past the bound", () => {
+    const numbers = Array.from({ length: MAX_LINKED_ISSUES + 1 }, (_, index) => index + 1);
+    const body = numbers.map((issueNumber) => `#${String(issueNumber)}`).join(" ");
+    const result = linkedIssueNumbers(body, 0);
+    expect(result).toHaveLength(MAX_LINKED_ISSUES);
+    expect(result).toEqual(numbers.slice(0, MAX_LINKED_ISSUES));
+  });
+
+  // CodeRabbit (PR #3452): the parser had no empty-body or malformed-reference cases. Each must
+  // yield no issue number AND start no resolution work -- proven by asserting the GitHub reader
+  // mock behind `resolvedLinkedIssueNumbers` is never called.
+  it.each([
+    ["an empty body", ""],
+    ["a bare hash with no digits", "#"],
+    ["a zero-numbered reference", "#0"],
+    ["a reference far beyond any issue number the parser accepts", "#12345678901234567890"],
+  ])("finds no linked issue number and starts no resolution work for %s", async (_label, body) => {
+    expect(linkedIssueNumbers(body, 42)).toEqual([]);
+    const f = fixture();
+    const numbers = await resolvedLinkedIssueNumbers(f.deps, {
+      repositoryRoot: root,
+      body,
+      boundIssue: 42,
+      correlationId: "run-malformed",
+      runId: "run-malformed",
+    });
+    expect(numbers).toEqual([]);
+    expect(f.readJson).not.toHaveBeenCalled();
+  });
+});
+
+// A per-issue-number GitHub answer, so one reference can be made to fail independently of the
+// others instead of every reference sharing the single fixed object `fixture()` returns for #42.
+function multiIssueReadJson(options: {
+  readonly boundIssueNumber: number;
+  readonly boundBody: string;
+  readonly failFor: ReadonlySet<number>;
+}): Mock<(argv: readonly string[]) => Promise<unknown>> {
+  return vi.fn((argv: readonly string[]): Promise<unknown> => {
+    const path = argv[1] ?? "";
+    if (path.includes("comments?")) return Promise.resolve([]);
+    const match = /\/issues\/(\d+)$/u.exec(path);
+    const issueNumber = match?.[1] === undefined ? options.boundIssueNumber : Number(match[1]);
+    if (options.failFor.has(issueNumber))
+      return Promise.reject(new Error(`fixture: issue ${String(issueNumber)} unavailable`));
+    return Promise.resolve({
+      id: String(issueNumber),
+      nodeId: `I_${String(issueNumber)}`,
+      state: "open",
+      isPullRequest: false,
+      title:
+        issueNumber === options.boundIssueNumber ? "Epic" : `Linked issue ${String(issueNumber)}`,
+      body: issueNumber === options.boundIssueNumber ? options.boundBody : "",
+      url: `https://github.com/owner/repo/issues/${String(issueNumber)}`,
+    });
+  });
+}
+
+describe("resolvedLinkedIssueNumbers (epic children resolved through the authorized reader)", () => {
+  it("resolves a reference that reads successfully and skips + logs one that fails, under its own op", async () => {
+    const f = fixture();
+    const readJson = multiIssueReadJson({
+      boundIssueNumber: 42,
+      boundBody: "See #43 and #44",
+      failFor: new Set([44]),
+    });
+    const deps: GitHubIssueResolutionDeps = { ...f.deps, codingContextGitHubPort: { readJson } };
+    const numbers = await resolvedLinkedIssueNumbers(deps, {
+      repositoryRoot: root,
+      body: "See #43 and #44",
+      boundIssue: 42,
+      correlationId: "run-linked",
+      runId: "run-linked",
+    });
+    expect(numbers).toEqual([43]);
+
+    const skip = f.logged.find((event) => event.op === "coding-context.linked-issue-skipped");
+    expect(skip).toBeDefined();
+    expect(skip?.correlationId).toBe("run-linked");
+    expect(skip?.extra?.runId).toBe("run-linked");
+    expect(skip?.extra?.issueNumber).toBe(44);
+    expect(skip?.extra?.failure).toBe("issue-unavailable");
+    // Body-free: never the issue title or body text.
+    expect(JSON.stringify(skip)).not.toContain("Epic");
   });
 });

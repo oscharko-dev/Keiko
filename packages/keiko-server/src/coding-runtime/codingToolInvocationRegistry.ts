@@ -2,11 +2,20 @@ import {
   captureToolInvocationReceipt,
   type ToolInvocationReceipt,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
+import { MAX_TIMER_DELAY_MS } from "../abort-race.js";
 
 export const CODING_TOOL_INVOCATION_MAX_LIVE_PER_RUN = 8;
 export const CODING_TOOL_INVOCATION_MAX_BYTES_PER_ENTRY = 262_144;
 export const CODING_TOOL_INVOCATION_MAX_AGGREGATE_BYTES = 2 * 1024 * 1024;
-const MAX_TTL_MS = 30_000;
+/**
+ * The life of an invocation whose dispatcher declares none (a staged edit, a catalog cursor), from
+ * staging until it is settled; its abort controller fires at this point. A catalog dispatch
+ * declares the life its tool needs instead (`lifeMs`: the descriptor's settlement budget plus one
+ * grace), so a tool the catalog settles later — the verification tool, a proposal that waits for
+ * the operator's approval — is never cut off here first as an opaque cancellation. One fixed 30 s
+ * life for every invocation silently overrode those budgets (PR #3452, F43/F44).
+ */
+export const CODING_TOOL_INVOCATION_DEFAULT_TTL_MS = 30_000;
 const MAX_IDENTITIES = 2_048;
 const MAX_REVOKED_RUNS = 2_048;
 
@@ -17,6 +26,11 @@ export interface CodingToolInvocationStage {
   readonly digest: string;
   readonly authorityExpiresAt: string;
   readonly payload: Buffer;
+  /**
+   * How long the dispatcher may hold this invocation, from staging until it is settled; absent
+   * means `CODING_TOOL_INVOCATION_DEFAULT_TTL_MS`. Still capped by `authorityExpiresAt`.
+   */
+  readonly lifeMs?: number | undefined;
 }
 
 export type CodingToolInvocationStageResult =
@@ -205,7 +219,7 @@ class InvocationRegistry implements CodingToolInvocationRegistry {
 
   private add(request: CodingToolInvocationStage): void {
     const key = identity(request);
-    const expiresAt = expiryFor(request.authorityExpiresAt, this.now());
+    const expiresAt = expiryFor(request, this.now());
     const timer = setTimeout(
       () => {
         this.expireKey(key);
@@ -329,7 +343,18 @@ function validStage(request: CodingToolInvocationStage): boolean {
     nonEmpty(request.idempotencyKey) &&
     /^[a-f0-9]{64}$/u.test(request.digest) &&
     request.payload.length <= CODING_TOOL_INVOCATION_MAX_BYTES_PER_ENTRY &&
-    validExpiry(request.authorityExpiresAt)
+    validExpiry(request.authorityExpiresAt) &&
+    validLife(request.lifeMs)
+  );
+}
+
+// A declared life has to fit a timer. Armed past 2^31 - 1 ms the expiry timer fires at once, finds
+// the entry not yet due and never comes back, so a claimed invocation outlived its deadline (PR
+// #3452 review). The delay the registry arms is the smaller of this life and what is left of the
+// authority, so bounding the life bounds every timer it arms.
+function validLife(value: number | undefined): boolean {
+  return (
+    value === undefined || (Number.isSafeInteger(value) && value > 0 && value <= MAX_TIMER_DELAY_MS)
   );
 }
 
@@ -341,8 +366,11 @@ function nonEmpty(value: string): boolean {
   return value.length > 0 && value.length <= 512;
 }
 
-function expiryFor(authorityExpiresAt: string, now: number): number {
-  return Math.min(Date.parse(authorityExpiresAt), now + MAX_TTL_MS);
+function expiryFor(request: CodingToolInvocationStage, now: number): number {
+  return Math.min(
+    Date.parse(request.authorityExpiresAt),
+    now + (request.lifeMs ?? CODING_TOOL_INVOCATION_DEFAULT_TTL_MS),
+  );
 }
 
 function identity(request: InvocationIdentity): string {

@@ -7,7 +7,10 @@ import type {
   CodingWorkbenchRuntimeResearchGrant,
 } from "@oscharko-dev/keiko-contracts";
 
-import { codingAppSessionPairingSettled } from "./coding-app-session-client";
+import {
+  codingAppSessionPairingSettled,
+  useCodingAppSessionRedemptions,
+} from "./coding-app-session-client";
 import { getCodingWorkbenchRuntimeResearch } from "./coding-workbench-runtime-api";
 import { reportClientDiagnostic } from "./client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
@@ -66,6 +69,8 @@ export function useCodingWorkbenchResearch(
   // below to re-run — including its `setScoped(...LOADING)` — on demand.
   const [epoch, setEpoch] = useState(0);
   const retry = useCallback((): void => setEpoch((value) => value + 1), []);
+  // A re-pair without a page load reads the research channel again (F65).
+  const redemptions = useCodingAppSessionRedemptions();
 
   useEffect(() => {
     if (runId === undefined) {
@@ -74,7 +79,7 @@ export function useCodingWorkbenchResearch(
     }
     setScoped(scopeResearchState(runId, revision, permissionRequestId, LOADING));
     return startResearchSync({ runId, revision, permissionRequestId }, setScoped);
-  }, [runId, revision, permissionRequestId, epoch]);
+  }, [runId, revision, permissionRequestId, epoch, redemptions]);
 
   const value = sameResearchInput(scoped, input) ? scoped.value : inputState(input);
   return { ...value, retry };

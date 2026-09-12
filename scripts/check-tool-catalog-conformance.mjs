@@ -591,7 +591,7 @@ export async function checkH1ProducerCheckpoint(
   { checkpointPath = H1_PRODUCER_CHECKPOINT_PATH } = {},
   {
     execute = execFileSync,
-    identityFailures = realProducerIdentityFailures,
+    identityFailures = producerLineageFailures,
     ownedPaths = H1_OWNED_SOURCE_PATHS,
   } = {},
 ) {
@@ -663,6 +663,369 @@ export async function realProducerIdentityFailures(root, record) {
       "H1 handoff evidence identity mismatch: durable record's profile cannot be compiled by the current producer",
     ];
   }
+}
+
+// ADR-0175 amendment (PR #3452, 2026-09-10): a producer change after the H1 landing is admitted by
+// an append-only lineage of owner-issued producer checkpoints. Each entry binds the identity it
+// introduces to the identity it replaced and to SHA-256-pinned verification and independent-review
+// receipts; the durable H1 records keep their historical identity untouched. The current producer
+// must equal a record's identity, or be the last identity of a lineage that starts at that record —
+// so a producer change without its own checkpoint still fails, now with the reason it failed.
+export const TOOL_CATALOG_PRODUCER_LINEAGE_PATH =
+  "docs/architecture/tool-catalog-producer-lineage.v1.json";
+const LINEAGE_FIELDS = Object.freeze(["schemaVersion", "profile", "entries"]);
+const LINEAGE_ENTRY_FIELDS = Object.freeze([
+  "sequence",
+  "predecessor",
+  "catalogRevision",
+  "projectionDigest",
+  "handlerSetDigest",
+  "sourceCommit",
+  "integrationPr",
+  "reason",
+  "verificationRef",
+  "reviewRef",
+]);
+const LINEAGE_IDENTITY_FIELDS = Object.freeze(["catalogRevision", "projectionDigest"]);
+const LINEAGE_VERIFICATION_FIELDS = Object.freeze([
+  "schemaVersion",
+  "status",
+  "verificationKind",
+  "sequence",
+  "sourceCommit",
+  "catalogRevision",
+  "projectionDigest",
+  "command",
+  "testFiles",
+  "testCount",
+  "result",
+  "evidenceRef",
+]);
+const LINEAGE_REVIEW_FIELDS = Object.freeze([
+  "schemaVersion",
+  "status",
+  "reviewKind",
+  "sequence",
+  "sourceCommit",
+  "catalogRevision",
+  "projectionDigest",
+  "handlerSetDigest",
+  "reviewer",
+  "criteria",
+  "reviewThreads",
+  "evidenceRef",
+]);
+// CodeRabbit's CWE-345 note (3984717984), confirmed live by the owner on this PR: a receipt that
+// only had to carry a non-empty `reviewer` string let a criterion be attributed to a reviewer who
+// never published it, and nothing here caught it. Resolving `evidenceRef` against GitHub at check
+// time is not available -- no gate in this repository reaches the network, and the sandboxed lanes
+// have none -- so this binds the claim the way the H1 landing receipt already binds its own review
+// evidence: countable, internally consistent settlement figures that a fabricated receipt cannot
+// satisfy while still matching the entry it certifies.
+const LINEAGE_REVIEW_THREAD_FIELDS = Object.freeze(["attributed", "resolved", "unresolved"]);
+
+// Each criterion must correspond to one attributed, resolved thread: fewer threads than criteria
+// means at least one criterion has no thread behind it, and an unresolved thread means the audit it
+// claims to record has not settled.
+function validLineageReviewThreads(value, criteria) {
+  return (
+    hasExactFields(value, LINEAGE_REVIEW_THREAD_FIELDS) &&
+    isPositiveInteger(value.attributed) &&
+    value.attributed >= criteria.length &&
+    value.resolved === value.attributed &&
+    value.unresolved === 0
+  );
+}
+const LINEAGE_REASON = /^[a-z]+(?:-[a-z]+){0,8}$/u;
+
+async function compiledProducerIdentity(root, profile) {
+  const producer = await loadToolCatalogProducer(root);
+  const catalog =
+    profile.id === "opencode"
+      ? producer.createKeikoToolCatalog([producer.opencodeRegistrationSet()])
+      : producer.createInitialToolCatalog();
+  const projection = producer.compileToolProjection(catalog, profile);
+  return {
+    catalogRevision: projection.catalogRevision,
+    projectionDigest: projection.projectionDigest,
+  };
+}
+
+function sameProducerIdentity(a, b) {
+  return a.catalogRevision === b.catalogRevision && a.projectionDigest === b.projectionDigest;
+}
+
+function recordIdentityMismatch(current, record) {
+  const failures = [];
+  if (current.catalogRevision !== record.catalogRevision)
+    failures.push(
+      "H1 handoff evidence identity mismatch: catalogRevision does not match the current producer",
+    );
+  if (current.projectionDigest !== record.projectionDigest)
+    failures.push(
+      "H1 handoff evidence identity mismatch: projectionDigest does not match the current producer",
+    );
+  return failures;
+}
+
+function readProducerLineage(root, lineagePath) {
+  try {
+    return { lineage: JSON.parse(readFileSync(join(root, lineagePath), "utf8")) };
+  } catch (error) {
+    if (error?.code === "ENOENT") return { lineage: undefined };
+    return { failures: ["tool-catalog producer lineage malformed: not valid JSON"] };
+  }
+}
+
+function pinnedLineageReceipt(root, ref, sequence, kind) {
+  const path = `docs/qa/evidence/tool-catalog-producer-${String(sequence)}-${kind}.v1.json`;
+  const prefix = `${path}#sha256=`;
+  if (typeof ref !== "string" || !ref.startsWith(prefix) || !HEX_64.test(ref.slice(prefix.length)))
+    return {
+      failure: `tool-catalog producer lineage entry ${String(sequence)} has an invalid ${kind} reference`,
+    };
+  try {
+    const bytes = readFileSync(join(root, path), "utf8");
+    if (sha256Hex(bytes) !== ref.slice(prefix.length))
+      return {
+        failure: `tool-catalog producer lineage entry ${String(sequence)} has a stale ${kind} receipt`,
+      };
+    return { receipt: JSON.parse(bytes) };
+  } catch {
+    return {
+      failure: `tool-catalog producer lineage entry ${String(sequence)} has a missing or malformed ${kind} receipt`,
+    };
+  }
+}
+
+function validLineageIdentity(value) {
+  return (
+    hasExactFields(value, LINEAGE_IDENTITY_FIELDS) &&
+    HEX_64.test(value.catalogRevision) &&
+    HEX_64.test(value.projectionDigest)
+  );
+}
+
+function validLineageEntryShape(entry, index) {
+  return (
+    hasExactFields(entry, LINEAGE_ENTRY_FIELDS) &&
+    entry.sequence === index + 1 &&
+    validLineageIdentity(entry.predecessor) &&
+    HEX_64.test(entry.catalogRevision) &&
+    HEX_64.test(entry.projectionDigest) &&
+    HEX_64.test(entry.handlerSetDigest) &&
+    HEX_40.test(entry.sourceCommit) &&
+    isPositiveInteger(entry.integrationPr) &&
+    typeof entry.reason === "string" &&
+    LINEAGE_REASON.test(entry.reason)
+  );
+}
+
+// The externally checkable evidence a lineage receipt must point at, in the same form and with the
+// same binding as the H1 landing receipts: the integration PR's required checks and its review
+// threads, pinned at the entry's own source commit. A receipt without it is a self-assertion.
+function lineageEvidenceRef(entry, kind) {
+  return `github:${H1_INTEGRATION_REPOSITORY}#pull/${String(entry.integrationPr)}/${kind}@${entry.sourceCommit}`;
+}
+
+function receiptBindsEntry(receipt, entry) {
+  return (
+    receipt.schemaVersion === 1 &&
+    receipt.sequence === entry.sequence &&
+    receipt.sourceCommit === entry.sourceCommit &&
+    receipt.catalogRevision === entry.catalogRevision &&
+    receipt.projectionDigest === entry.projectionDigest
+  );
+}
+
+function validLineageVerificationReceipt(receipt, entry) {
+  return (
+    hasExactFields(receipt, LINEAGE_VERIFICATION_FIELDS) &&
+    receiptBindsEntry(receipt, entry) &&
+    receipt.status === "verified" &&
+    receipt.verificationKind === "deterministic-production-managed" &&
+    isNonEmptyString(receipt.command) &&
+    isPositiveInteger(receipt.testFiles) &&
+    isPositiveInteger(receipt.testCount) &&
+    receipt.result === "passed" &&
+    receipt.evidenceRef === lineageEvidenceRef(entry, "checks")
+  );
+}
+
+function validReviewCriterion(criterion) {
+  return (
+    hasExactFields(criterion, ["label", "result"]) &&
+    isNonEmptyString(criterion.label) &&
+    criterion.result === "verified"
+  );
+}
+
+// The findings half of a review receipt: at least one verified criterion, and every criterion
+// attributed to a thread the reviewer actually settled (CWE-345 binding, validLineageReviewThreads).
+function validLineageReviewFindings(receipt) {
+  return (
+    Array.isArray(receipt.criteria) &&
+    receipt.criteria.length > 0 &&
+    receipt.criteria.every(validReviewCriterion) &&
+    validLineageReviewThreads(receipt.reviewThreads, receipt.criteria)
+  );
+}
+
+function validLineageReviewReceipt(receipt, entry) {
+  return (
+    hasExactFields(receipt, LINEAGE_REVIEW_FIELDS) &&
+    receiptBindsEntry(receipt, entry) &&
+    receipt.status === "accepted" &&
+    receipt.reviewKind === "independent-source-and-evidence-audit" &&
+    receipt.handlerSetDigest === entry.handlerSetDigest &&
+    isNonEmptyString(receipt.reviewer) &&
+    validLineageReviewFindings(receipt) &&
+    receipt.evidenceRef === lineageEvidenceRef(entry, "review-threads")
+  );
+}
+
+function lineageReceiptFailures(root, entry) {
+  const failures = [];
+  const verification = pinnedLineageReceipt(
+    root,
+    entry.verificationRef,
+    entry.sequence,
+    "verification",
+  );
+  if (verification.failure !== undefined) failures.push(verification.failure);
+  else if (!validLineageVerificationReceipt(verification.receipt, entry))
+    failures.push(
+      `tool-catalog producer lineage entry ${String(entry.sequence)} verification receipt does not bind it`,
+    );
+  const review = pinnedLineageReceipt(root, entry.reviewRef, entry.sequence, "review");
+  if (review.failure !== undefined) failures.push(review.failure);
+  else if (!validLineageReviewReceipt(review.receipt, entry))
+    failures.push(
+      `tool-catalog producer lineage entry ${String(entry.sequence)} review receipt does not bind it`,
+    );
+  return failures;
+}
+
+// The producer's own source. A lineage entry certifies the producer AT its source commit, so the
+// last entry is only valid while this tree is unchanged since that commit.
+const TOOL_CATALOG_PRODUCER_SOURCE_DIR = "packages/keiko-tool-catalog/src";
+
+/** Real Git facts about a lineage entry's source commit; injectable so the rules stay testable. */
+export function gitLineageCommitFacts(root, execute = execFileSync) {
+  const git = resolveHostExecutable("git");
+  const succeeds = (args) => {
+    try {
+      execute(git, args, { cwd: root, encoding: "utf8", stdio: "ignore" });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  return {
+    resolves: (commit) => resolveCommitTreeId(commit, root, execute) !== null,
+    isAncestorOfHead: (commit) => succeeds(["merge-base", "--is-ancestor", commit, "HEAD"]),
+    producerUnchangedSince: (commit) =>
+      succeeds(["diff", "--quiet", commit, "HEAD", "--", TOOL_CATALOG_PRODUCER_SOURCE_DIR]),
+  };
+}
+
+// A source commit that does not resolve, does not precede the commit being checked, or (for the last
+// entry) no longer holds the producer being checked cannot certify it. Fails closed: an unresolvable
+// commit is a failure, never tolerated.
+function lineageCommitFailures(entry, commits, isLast) {
+  const label = `tool-catalog producer lineage entry ${String(entry.sequence)}`;
+  if (!commits.resolves(entry.sourceCommit))
+    return [`${label} sourceCommit is not a resolvable Git commit`];
+  const failures = [];
+  if (!commits.isAncestorOfHead(entry.sourceCommit))
+    failures.push(`${label} sourceCommit is not an ancestor of the consuming commit`);
+  if (isLast && !commits.producerUnchangedSince(entry.sourceCommit))
+    failures.push(
+      "tool-catalog producer lineage stale: the producer source changed after the last entry's sourceCommit",
+    );
+  return failures;
+}
+
+function lineageEntryFailures(root, entry, index, previous, chain) {
+  if (!validLineageEntryShape(entry, index))
+    return [`tool-catalog producer lineage entry ${String(index + 1)} malformed`];
+  return [
+    ...(sameProducerIdentity(entry.predecessor, previous)
+      ? []
+      : [
+          `tool-catalog producer lineage broken: entry ${String(entry.sequence)} does not continue the identity before it`,
+        ]),
+    ...lineageCommitFailures(entry, chain.commits, index === chain.lastIndex),
+    ...lineageReceiptFailures(root, entry),
+  ];
+}
+
+function producerLineageChainFailures(root, lineage, record, current, commits) {
+  if (
+    !hasExactFields(lineage, LINEAGE_FIELDS) ||
+    lineage.schemaVersion !== 1 ||
+    !Array.isArray(lineage.entries) ||
+    lineage.entries.length === 0
+  )
+    return ["tool-catalog producer lineage malformed: unexpected shape"];
+  if (
+    !isCatalogProfileRef(lineage.profile) ||
+    lineage.profile.id !== record.profile.id ||
+    lineage.profile.version !== record.profile.version
+  )
+    return ["tool-catalog producer lineage profile does not match the record"];
+  const failures = [];
+  let previous = record;
+  const chain = { commits, lastIndex: lineage.entries.length - 1 };
+  lineage.entries.forEach((entry, index) => {
+    failures.push(...lineageEntryFailures(root, entry, index, previous, chain));
+    previous = entry;
+  });
+  if (failures.length === 0 && !sameProducerIdentity(previous, current))
+    failures.push(
+      "tool-catalog producer lineage stale: the current producer is not the lineage's last identity",
+    );
+  return failures;
+}
+
+/**
+ * The current producer against a durable H1 record: equal, or reachable through the whole
+ * owner-issued lineage. Without a lineage file a mismatch reports exactly what it always did.
+ */
+function lineageCommitFactsFor(root, options) {
+  return options.commits ?? gitLineageCommitFacts(root);
+}
+
+async function currentProducerIdentity(root, record, identity) {
+  try {
+    return { current: await identity(root, record.profile) };
+  } catch {
+    return {
+      failures: [
+        "H1 handoff evidence identity mismatch: durable record's profile cannot be compiled by the current producer",
+      ],
+    };
+  }
+}
+
+export async function producerLineageFailures(root, record, options = {}) {
+  if (typeof record.profile?.id !== "string") return [];
+  const { lineagePath = TOOL_CATALOG_PRODUCER_LINEAGE_PATH, identity = compiledProducerIdentity } =
+    options;
+  const compiled = await currentProducerIdentity(root, record, identity);
+  if (compiled.failures !== undefined) return compiled.failures;
+  const current = compiled.current;
+  if (sameProducerIdentity(current, record)) return [];
+  const read = readProducerLineage(root, lineagePath);
+  if (read.failures !== undefined) return read.failures;
+  if (read.lineage === undefined) return recordIdentityMismatch(current, record);
+  return producerLineageChainFailures(
+    root,
+    read.lineage,
+    record,
+    current,
+    lineageCommitFactsFor(root, options),
+  );
 }
 
 // Resolves a caller-declared commit against real Git, never trusting the string alone: the commit
@@ -818,7 +1181,7 @@ export async function checkH1HandoffEvidence(
   landingPins,
   {
     execute = execFileSync,
-    identityFailures = realProducerIdentityFailures,
+    identityFailures = producerLineageFailures,
     receiptFailures = landingReceiptFailures,
     sourceHeadFailures = realSourceHeadFailures,
     provenancePath = H1_PROVENANCE_PATH,

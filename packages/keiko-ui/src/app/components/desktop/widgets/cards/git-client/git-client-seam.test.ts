@@ -32,6 +32,7 @@ import {
   fetchGitRemotes,
   fetchGitSummary,
   fetchGitStatus,
+  fetchGitStructuredDiff,
   fetchProjects,
   proposeCommit,
   proposeGitDeliverySync,
@@ -55,10 +56,70 @@ import {
 
 // ─── DEFAULT_GIT_CLIENT wiring ────────────────────────────────────────────────
 
-describe("DEFAULT_GIT_CLIENT — wires correct api functions", () => {
-  it("listRepositories is fetchProjects", () => {
-    expect(DEFAULT_GIT_CLIENT.listRepositories).toBe(fetchProjects);
+// The window's pairing attempt, held open by a case until it settles it.
+const pairing = vi.hoisted(() => ({ settled: Promise.resolve(true) }));
+vi.mock("@/lib/coding-app-session-client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/coding-app-session-client")>()),
+  codingAppSessionPairingSettled: (): Promise<boolean> => pairing.settled,
+}));
+vi.mock("@/lib/api", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/api")>();
+  const read = (): Promise<undefined> => Promise.resolve(undefined);
+  return {
+    ...actual,
+    fetchProjects: vi.fn(read),
+    fetchGitBranches: vi.fn(read),
+    fetchGitStatus: vi.fn(read),
+    fetchGitSummary: vi.fn(read),
+    fetchGitHistory: vi.fn(read),
+    fetchGitRemotes: vi.fn(read),
+    fetchGitDiff: vi.fn(read),
+    fetchGitStructuredDiff: vi.fn(read),
+  };
+});
+
+function pendingPairing(): { readonly settle: (paired: boolean) => void } {
+  let settle = (_paired: boolean): void => undefined;
+  pairing.settled = new Promise<boolean>((resolve) => {
+    settle = resolve;
   });
+  return { settle: (paired): void => settle(paired) };
+}
+
+describe("DEFAULT_GIT_CLIENT — wires correct api functions", () => {
+  // A Git read may name a managed task-workspace root, which the BFF answers only for a paired
+  // browser (ADR-0141): each read waits for the window's pairing attempt to settle, then reaches its
+  // BFF function with the caller's arguments (PR #3452 review).
+  it.each([
+    ["listRepositories", fetchProjects, []],
+    ["listBranches", fetchGitBranches, ["/repo"]],
+    ["getStatus", fetchGitStatus, ["/repo", { includeIgnored: true }]],
+    ["getSummary", fetchGitSummary, ["/repo"]],
+    ["getHistory", fetchGitHistory, [{ root: "/repo", limit: 20, skip: 0 }]],
+    ["getRemotes", fetchGitRemotes, ["/repo"]],
+    ["getDiff", fetchGitDiff, [{ root: "/repo", path: "src/a.ts" }]],
+    [
+      "getStructuredDiff",
+      fetchGitStructuredDiff,
+      [{ root: "/repo", path: "src/a.ts", scope: "unstaged" }],
+    ],
+  ] as const)(
+    "%s reaches its BFF function once the pairing has settled",
+    async (method, read, args) => {
+      vi.mocked(read).mockClear();
+      const attempt = pendingPairing();
+      const call = (
+        DEFAULT_GIT_CLIENT[method] as unknown as (...input: readonly unknown[]) => Promise<unknown>
+      )(...args);
+      await Promise.resolve();
+      expect(read).not.toHaveBeenCalled();
+
+      attempt.settle(true);
+      await call;
+
+      expect(read).toHaveBeenCalledWith(...args);
+    },
+  );
 
   it("registerRepository is createProject", () => {
     expect(DEFAULT_GIT_CLIENT.registerRepository).toBe(createProject);
@@ -70,30 +131,6 @@ describe("DEFAULT_GIT_CLIENT — wires correct api functions", () => {
 
   it("cloneRepository is cloneRepository (fetchCloneRepository)", () => {
     expect(DEFAULT_GIT_CLIENT.cloneRepository).toBe(fetchCloneRepository);
-  });
-
-  it("listBranches is fetchGitBranches", () => {
-    expect(DEFAULT_GIT_CLIENT.listBranches).toBe(fetchGitBranches);
-  });
-
-  it("getStatus is fetchGitStatus", () => {
-    expect(DEFAULT_GIT_CLIENT.getStatus).toBe(fetchGitStatus);
-  });
-
-  it("getSummary is fetchGitSummary", () => {
-    expect(DEFAULT_GIT_CLIENT.getSummary).toBe(fetchGitSummary);
-  });
-
-  it("getHistory is fetchGitHistory", () => {
-    expect(DEFAULT_GIT_CLIENT.getHistory).toBe(fetchGitHistory);
-  });
-
-  it("getRemotes is fetchGitRemotes", () => {
-    expect(DEFAULT_GIT_CLIENT.getRemotes).toBe(fetchGitRemotes);
-  });
-
-  it("getDiff is fetchGitDiff", () => {
-    expect(DEFAULT_GIT_CLIENT.getDiff).toBe(fetchGitDiff);
   });
 
   it("branchCreate is fetchGitDeliveryLocalBranchCreate", () => {

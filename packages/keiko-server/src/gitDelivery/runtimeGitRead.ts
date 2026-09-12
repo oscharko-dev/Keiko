@@ -11,6 +11,8 @@ import {
   GIT_EDITOR_DIFF_MAX_FILES,
 } from "@oscharko-dev/keiko-contracts/runtime/git-editor";
 import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
+import { boundWorkspaceFs, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
+import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { readGitStageFile } from "@oscharko-dev/keiko-workspace/internal/git-index";
 import {
   readGitRevision,
@@ -22,9 +24,77 @@ import {
   readGitBlobText,
 } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { parseGitEditorUnifiedDiff } from "../gitDiffParser.js";
-import { gitDeliveryTerminationHandler, type GitDeliveryExecutionSeams } from "./execution.js";
+import {
+  lineChangeCounts,
+  lineDiffSide,
+  searchLineChanges,
+  unifiedDiffHunks,
+  type LineChangeBlock,
+  type LineDiffSide,
+} from "./lineDiff.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import {
+  gitDeliveryTerminationHandler,
+  type GitDeliveryExecutionSeams,
+  type GitDeliveryTerminationLogSeam,
+} from "./execution.js";
 import type { VerifiedCommitRunContext } from "./verifiedCommitTypes.js";
 import { runtimeGitPaths } from "../coding-runtime/codingRuntimeGitIpc.js";
+/**
+ * The port a run's filesystem reads resolve containment through: the owned-root port the managed
+ * prover bound to the run's WorkspaceInfo, else the plain node port. A managed task worktree below
+ * the always-denied `.keiko` segment is admitted only through that binding (2026-09-10).
+ */
+export function runtimeWorkspaceFs(
+  context: Pick<VerifiedCommitRunContext, "workspace">,
+): WorkspaceFs {
+  return boundWorkspaceFs(context.workspace, nodeWorkspaceFs);
+}
+/**
+ * A raw status read that skipped deny-listed paths (`.idea/**`, `.env`, ...) leaves the count in the
+ * activity log, so a status or commit-facts read whose listing omits them is reconstructable from
+ * the log alone (AGENTS.md §8). Before 2026-09-10 such a path failed the whole read instead.
+ */
+export function logDeniedPathExclusion(
+  seams: GitDeliveryTerminationLogSeam,
+  correlationId: string | undefined,
+  deniedPathCount: number | undefined,
+): void {
+  if (deniedPathCount === undefined || deniedPathCount === 0) return;
+  (seams.activityLog ?? processServerLogSink()).write({
+    category: "security",
+    op: "git.raw-status.denied-paths-excluded",
+    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+    extra: { deniedPathCount },
+  });
+}
+/** Where a diff search that stopped at a bound is recorded, and under which operation. */
+interface DiffSearchLog {
+  readonly seams: GitDeliveryTerminationLogSeam;
+  readonly correlationId: string | undefined;
+}
+/**
+ * A diff search that stopped at a bound shows its region as one replaced block: correct, never
+ * minimal. The line names the bound and the sides' line counts, so a whole-file hunk in the editor or
+ * a whole-file count in a stage review is reconstructable from the log alone (AGENTS.md §8).
+ */
+function searchLoggedLineChanges(
+  log: DiffSearchLog,
+  before: LineDiffSide,
+  after: LineDiffSide,
+): readonly LineChangeBlock[] {
+  const search = searchLineChanges(before, after);
+  if (search.bound !== undefined) {
+    (log.seams.activityLog ?? processServerLogSink()).write({
+      category: "process",
+      op: "git.runtime-diff.search-bounded",
+      correlationId: log.correlationId ?? UNKNOWN_CORRELATION_ID,
+      extra: { bound: search.bound, oldLines: before.lines.length, newLines: after.lines.length },
+    });
+  }
+  return search.blocks;
+}
 export function runtimeGitReadDeps(
   context: VerifiedCommitRunContext,
   execution: GitDeliveryExecutionSeams,
@@ -40,6 +110,7 @@ export async function runtimeGitStatus(
   execution: GitDeliveryExecutionSeams,
 ): Promise<CodingRuntimeGitStatus> {
   const raw = await readGitRawChanges(runtimeGitReadDeps(context, execution));
+  logDeniedPathExclusion(execution, context.correlationId, raw.deniedPathCount);
   return {
     kind: "status",
     headSha: raw.headSha,
@@ -60,30 +131,24 @@ interface DiffSides {
   readonly oldMode: string;
   readonly newMode: string;
 }
-function textLines(text: string): readonly string[] {
-  return text === "" ? [] : text.replace(/\n$/u, "").split("\n");
-}
-function rawPatch(sides: DiffSides): string {
-  const before = textLines(sides.before);
-  const after = textLines(sides.after);
+// The patch the editor's diff parser reads: Git's own headers for the change, then the hunks of the
+// in-process line diff of the two raw sides, so a one-line edit is one hunk inside its context and
+// not a whole-file replacement (CodeRabbit review, PR #3452; lineDiff.ts says why not `git diff`).
+function unifiedPatch(sides: DiffSides, log: DiffSearchLog): string {
   const a = JSON.stringify(`a/${sides.path}`);
   const b = JSON.stringify(`b/${sides.path}`);
   const headers = patchHeaders(sides, a, b);
-  if (sides.before === sides.after) return `${headers.join("\n")}\n`;
+  const before = lineDiffSide(sides.before);
+  const after = lineDiffSide(sides.after);
+  const hunks = unifiedDiffHunks(before, after, searchLoggedLineChanges(log, before, after));
+  if (hunks.length === 0) return `${headers.join("\n")}\n`;
   return [
     ...headers,
     `--- ${sides.added ? "/dev/null" : a}`,
     `+++ ${sides.deleted ? "/dev/null" : b}`,
-    `@@ -${String(before.length === 0 ? 0 : 1)},${String(before.length)} +${String(after.length === 0 ? 0 : 1)},${String(after.length)} @@`,
-    ...patchLines(sides.before, "-"),
-    ...patchLines(sides.after, "+"),
+    ...hunks,
     "",
   ].join("\n");
-}
-function patchLines(text: string, prefix: string): readonly string[] {
-  const lines = textLines(text).map((line) => `${prefix}${line}`);
-  if (text.length > 0 && !text.endsWith("\n")) lines.push(String.raw`\ No newline at end of file`);
-  return lines;
 }
 function patchHeaders(sides: DiffSides, a: string, b: string): readonly string[] {
   return [
@@ -95,7 +160,11 @@ function patchHeaders(sides: DiffSides, a: string, b: string): readonly string[]
       : []),
   ];
 }
-function diffFile(sides: DiffSides, scope: GitEditorDiffScope): GitEditorDiffFile | undefined {
+function diffFile(
+  sides: DiffSides,
+  scope: GitEditorDiffScope,
+  log: DiffSearchLog,
+): GitEditorDiffFile | undefined {
   if ((sides.added && sides.deleted) || sides.same) return undefined;
   if (sides.binary)
     return {
@@ -108,7 +177,7 @@ function diffFile(sides: DiffSides, scope: GitEditorDiffScope): GitEditorDiffFil
       removedLines: 0,
       truncated: false,
     };
-  return parseGitEditorUnifiedDiff(rawPatch(sides), {
+  return parseGitEditorUnifiedDiff(unifiedPatch(sides, log), {
     scope,
     selectedRootPrefix: "",
     processTruncated: false,
@@ -177,7 +246,9 @@ async function workingSide(
   path: string,
   hashLength: number,
 ): Promise<FileSide> {
-  const file = await readGitStageFile(context.workspace.root, path);
+  const file = await readGitStageFile(context.workspace.root, path, {
+    fs: runtimeWorkspaceFs(context),
+  });
   return {
     objectId: file.mode === "0" ? "" : gitBlobObjectId(file.bytes, hashLength),
     mode: file.mode,
@@ -232,7 +303,10 @@ async function readSelectedDiffFiles(
   for (const path of paths) {
     if (!context.stillAuthorized() || context.signal?.aborted === true)
       throw new Error("git-runtime-authority-denied");
-    const file = diffFile(await readSides(context, execution, path, scope), scope);
+    const file = diffFile(await readSides(context, execution, path, scope), scope, {
+      seams: execution,
+      correlationId: context.correlationId,
+    });
     if (file === undefined) continue;
     truncated ||= file.truncated;
     totalBytes += Buffer.byteLength(JSON.stringify(file));
@@ -245,6 +319,76 @@ async function readSelectedDiffFiles(
   return { files, totalBytes, truncated };
 }
 
+/** One requested stage path as Git's own change list sees it: pending, or fully staged already. */
+export interface StageSelectionChange {
+  readonly path: string;
+  readonly pending: boolean;
+}
+
+/** The operator-facing counts a stage proposal's review carries for an admitted selection. */
+export interface StageSelectionReview {
+  readonly fileCount: number;
+  readonly addedLines: number;
+  readonly deletedLines: number;
+}
+
+/**
+ * Admits a stage selection against Git's own change list, or refuses it whole.
+ *
+ * `propose()` used to reuse the model-facing `runtimeGitDiff` for this and refuse the selection
+ * whenever that reader had truncated — but the reader's byte budget bounds a RESPONSE, not a
+ * selection: eight ordinary files whose rendered hunks exceeded it were refused as unreviewable, and
+ * the run stopped one step after a green verification (Coding Workbench run 13, 2026-09-10). A path
+ * is admitted only when the change list names it exactly — as a pending change, or as a fully staged
+ * one whose no-op the binding keeps by exact path — so directories, unchanged and absent paths,
+ * conflicts, and paths a truncated scan never reached are never admitted, and nothing the scan
+ * observed is refused for its size.
+ */
+export async function admitStageSelection(
+  context: VerifiedCommitRunContext,
+  execution: GitDeliveryExecutionSeams,
+  paths: readonly string[],
+): Promise<readonly StageSelectionChange[] | undefined> {
+  const raw = await readGitRawChanges(runtimeGitReadDeps(context, execution));
+  logDeniedPathExclusion(execution, context.correlationId, raw.deniedPathCount);
+  const changes = new Map(raw.changes.map((change) => [change.path, change]));
+  const admitted: StageSelectionChange[] = [];
+  for (const path of paths) {
+    const change = changes.get(path);
+    if (change === undefined || change.conflicted) return undefined;
+    admitted.push({ path, pending: change.unstaged || change.untracked });
+  }
+  return admitted;
+}
+
+/**
+ * Line counts for an admitted selection: the changed lines of each pending path's two sides, from
+ * the same line diff the diff reader renders but never limited by its response budget. A one-line
+ * edit counts 1/1, not every line of both sides (CodeRabbit review, PR #3452). A fully staged path
+ * contributes nothing: there is no index-to-worktree change left to count.
+ */
+export async function reviewStageSelection(
+  context: VerifiedCommitRunContext,
+  execution: GitDeliveryExecutionSeams,
+  selection: readonly StageSelectionChange[],
+): Promise<StageSelectionReview> {
+  let addedLines = 0;
+  let deletedLines = 0;
+  for (const change of selection.filter((entry) => entry.pending)) {
+    if (!context.stillAuthorized() || context.signal?.aborted === true)
+      throw new Error("git-runtime-authority-denied");
+    const sides = await readSides(context, execution, change.path, "unstaged");
+    if (sides.binary || sides.same) continue;
+    const before = lineDiffSide(sides.before);
+    const after = lineDiffSide(sides.after);
+    const log = { seams: execution, correlationId: context.correlationId };
+    const counts = lineChangeCounts(before, after, searchLoggedLineChanges(log, before, after));
+    addedLines += counts.added;
+    deletedLines += counts.deleted;
+  }
+  return { fileCount: selection.length, addedLines, deletedLines };
+}
+
 export async function runtimeGitDiff(
   context: VerifiedCommitRunContext,
   execution: GitDeliveryExecutionSeams,
@@ -254,6 +398,7 @@ export async function runtimeGitDiff(
   if (!runtimeGitPaths(paths)) throw new Error("git-runtime-paths-invalid");
   const deps = runtimeGitReadDeps(context, execution);
   const raw = await readGitRawChanges(deps);
+  logDeniedPathExclusion(execution, context.correlationId, raw.deniedPathCount);
   const expanded = expandDiffPaths(paths, raw.changes, scope);
   const selection = await readSelectedDiffFiles(
     context,

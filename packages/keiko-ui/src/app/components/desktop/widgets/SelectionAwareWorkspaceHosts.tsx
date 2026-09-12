@@ -18,16 +18,14 @@ import {
   type ChatWindowRuntimeTarget,
 } from "../windows/chatWindowActivity";
 import { sharedFetchChats, useChatSession, type ChatSessionApi } from "../hooks/useChatSession";
-import { useWorkspaceManifest, type WorkspaceManifestView } from "../hooks/useWorkspaceManifest";
+import { useWorkspaceManifest } from "../hooks/useWorkspaceManifest";
 import type { WindowRenderContext } from "../windows/WindowsRegistry";
 import { CHAT_TITLE_IS_DEFAULT_CFG_KEY } from "../windows/connectionUtils";
 import type { EditorWidgetProps, EditorWidgetWorkspacePatch } from "./cards/EditorWidget";
-import {
-  ManagedTaskWorkspaceUnavailable,
-  type ManagedTaskWorkspaceAccess,
-} from "./cards/ManagedTaskWorkspaceUnavailable";
+import { ManagedTaskWorkspaceUnavailable } from "./cards/ManagedTaskWorkspaceUnavailable";
 import { MultiRootFilesWidget } from "./cards/MultiRootFilesWidget";
 import { gitObjectId } from "./gitObjectId";
+import { managedTaskWorkspaceAccess } from "./ManagedTaskWorkspaceGate";
 import { MultiRootEditorHost } from "./MultiRootEditorHost";
 import { useEditorAgentTranslate, type EditorAgentMessageKey } from "./cards/editor-agent-i18n";
 import {
@@ -73,24 +71,6 @@ function str(cfg: Record<string, unknown>, key: string): string | undefined {
 function bool(cfg: Record<string, unknown>, key: string): boolean | undefined {
   const value = cfg[key];
   return typeof value === "boolean" ? value : undefined;
-}
-
-// One predicate for "this window targets the bound managed task-workspace root and the paired
-// read authority is not confirmed" — shared by the editor AND Files hosts (release-audit F-08) so
-// the two surfaces can never disagree about when the managed root is presentable. The managed
-// root lives under the deny-listed state area and is readable only through a launcher-paired app
-// session (ADR-0141); when authority is missing the host renders the paired-session note instead
-// of the raw denials.
-function managedTaskWorkspaceAccess(
-  ctx: WindowRenderContext,
-  targetRoot: string | undefined,
-  workspace: Pick<WorkspaceManifestView, "pathReadAuthority">,
-): ManagedTaskWorkspaceAccess | null {
-  return ctx.activeBinding !== null &&
-    targetRoot === ctx.activeBinding.activeRoot &&
-    workspace.pathReadAuthority !== "available"
-    ? workspace.pathReadAuthority
-    : null;
 }
 
 function num(cfg: Record<string, unknown>, key: string): number | undefined {

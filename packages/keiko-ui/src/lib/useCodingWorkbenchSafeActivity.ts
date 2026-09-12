@@ -16,7 +16,10 @@ import type {
   CodingWorkbenchRuntimeStateName,
 } from "@oscharko-dev/keiko-contracts";
 
-import { codingAppSessionPairingSettled } from "./coding-app-session-client";
+import {
+  codingAppSessionPairingSettled,
+  useCodingAppSessionRedemptions,
+} from "./coding-app-session-client";
 import {
   getCodingAppSessionChannelSnapshot,
   streamCodingAppSessionChannelSnapshots,
@@ -127,6 +130,8 @@ interface ActivityConnectionInput {
 function useActivityConnection(input: ActivityConnectionInput): void {
   const { batch, epoch, runId, runStateRef, setState } = input;
   const { cancel, enqueue, flush } = batch;
+  // A re-pair without a page load reopens the channel (F65).
+  const redemptions = useCodingAppSessionRedemptions();
   useEffect(() => {
     cancel();
     if (runId === undefined) {
@@ -148,7 +153,7 @@ function useActivityConnection(input: ActivityConnectionInput): void {
       controller.abort();
       cancel();
     };
-  }, [cancel, enqueue, epoch, flush, runId, runStateRef, setState]);
+  }, [cancel, enqueue, epoch, flush, redemptions, runId, runStateRef, setState]);
 }
 
 async function connectActivity(

@@ -1,4 +1,5 @@
 import { parseDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
+import type { VerifiedCommitBlockingPaths } from "../gitDelivery/verifiedCommitTypes.js";
 import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import type { CodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
 import { parseRuntimeGitRequest, type RuntimeGitRequest } from "./codingRuntimeGitIpc.js";
@@ -13,9 +14,13 @@ import type {
   AuxiliaryCapabilityOutcomeV1,
   CodingWorkbenchRuntimeAuthorityEnvelope,
   EditorAgentChangeset,
+  VerificationDependencyState,
+  VerificationDependencySummary,
   VerificationFailureLocation,
+  VerificationKind,
   VerifiedCommitResult,
   CodingRuntimeGitResult,
+  SkillDiscoveryResultV1,
 } from "@oscharko-dev/keiko-contracts";
 import { isCodeTaskSkillId } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
 import {
@@ -48,6 +53,7 @@ export type CodingToolAction =
   | "connector"
   | "egress"
   | "skill"
+  | "skill-discover"
   | "child-agent";
 
 export interface CodingToolRequestIdentity {
@@ -66,6 +72,12 @@ export type CodingToolVerificationResult =
       readonly commitProof: "unavailable";
       readonly reasonCode: "candidate-not-staged" | "candidate-drift";
       readonly nextAction: "stage-then-verify" | "verify-again";
+      /**
+       * For `candidate-not-staged`: the unstaged and untracked workspace-relative paths that keep
+       * the proof from forming, bounded, with exact counts — what `stage-then-verify` has to stage
+       * (Coding Workbench run 16, 2026-09-10). Model-facing only.
+       */
+      readonly blocking?: VerifiedCommitBlockingPaths | undefined;
     };
 
 /** Bounded, model-only diagnostics for a verifier that executed and failed. */
@@ -73,6 +85,33 @@ export interface CodingToolVerificationFailure {
   readonly summary: string;
   readonly locations: readonly VerificationFailureLocation[];
   readonly truncated: boolean;
+  /**
+   * The redacted, bounded tail of the failed step's output (ADR-0126 D3): what the model needs to
+   * repair a failure the location parser cannot read — a missing binary, a bundler error, npm's own
+   * diagnostics. Model-facing only; the persisted report and the activity log never carry it.
+   */
+  readonly excerpt?: string | undefined;
+  /** The dependency bootstrap's body-free summary when it, not a step, failed the run. */
+  readonly dependencies?: VerificationDependencySummary | undefined;
+}
+
+/** Why a verification step did not run (F74): a closed reason the model can act on. */
+export type VerificationNotRunReason =
+  "script-missing" | "dependencies-unavailable" | "denied" | "cancelled" | "skipped";
+
+/** One step of a verification that never executed, and why (F74). Model-facing and body-free. */
+export interface VerificationNotRunStep {
+  readonly kind: VerificationKind;
+  readonly reason: VerificationNotRunReason;
+}
+
+/**
+ * The one summary a failed dependency bootstrap carries: its closed state, never its free-text
+ * detail, which rides in `dependencies.detail` under the contract's own bound. The producer and the
+ * facade's admission both read it from here, so the two cannot drift apart again (#3452).
+ */
+export function dependencyBootstrapFailureSummary(state: VerificationDependencyState): string {
+  return `dependency installation ${state}; no verification step ran`;
 }
 
 export type CodingToolActionRequest =
@@ -137,6 +176,7 @@ export type CodingToolActionRequest =
     })
   | (CodingToolRequestIdentity & { readonly action: "egress"; readonly target: string })
   | (CodingToolRequestIdentity & { readonly action: "skill"; readonly skillId: string })
+  | (CodingToolRequestIdentity & { readonly action: "skill-discover" })
   | (CodingToolRequestIdentity & {
       readonly action: "child-agent";
       readonly objective: string;
@@ -159,6 +199,7 @@ const STATIC_REQUIRED_CLASSES: Readonly<
   connector: ["connector-access", "network-egress"],
   egress: ["network-egress"],
   skill: ["workspace-read"],
+  "skill-discover": ["workspace-read"],
   "child-agent": ["workspace-read"],
 };
 
@@ -198,6 +239,8 @@ export type CodingToolResult =
       readonly status: "completed";
       readonly evidence: readonly CodingToolEvidence[];
       readonly git: CodingRuntimeGitResult;
+      /** The fixed recovery instruction for a stage proposal blocked at admission; absent otherwise. */
+      readonly guidance?: string | undefined;
     }
   | {
       readonly status: "completed";
@@ -210,6 +253,12 @@ export type CodingToolResult =
       readonly status: "completed";
       readonly evidence: readonly CodingToolEvidence[];
       readonly search: CodingRepositoryResult;
+    }
+  | {
+      readonly status: "completed";
+      readonly evidence: readonly CodingToolEvidence[];
+      /** #3417: the approved skills the model may invoke now, closed and body-free. */
+      readonly skills: SkillDiscoveryResultV1;
     }
   | {
       readonly status: "completed";
@@ -334,6 +383,8 @@ function requestFromRecord(value: Record<string, unknown>): CodingToolActionRequ
       return simpleNamedRequest(value, "target", "egress");
     case "skill":
       return skillRequest(value);
+    case "skill-discover":
+      return skillDiscoverRequest(value);
     case "child-agent":
       return childAgentRequest(value);
     default:
@@ -379,6 +430,14 @@ function skillRequest(value: Record<string, unknown>): CodingToolActionRequest |
     hasExactKeys(value, ["action", "actionId", "idempotencyKey", "skillId"]) &&
     isCodeTaskSkillId(value.skillId)
     ? { ...identity, action: "skill", skillId: value.skillId }
+    : undefined;
+}
+
+// #3417: discovery carries nothing but its identity; any argument is refused.
+function skillDiscoverRequest(value: Record<string, unknown>): CodingToolActionRequest | undefined {
+  const identity = requestIdentity(value);
+  return identity !== undefined && hasExactKeys(value, ["action", "actionId", "idempotencyKey"])
+    ? { ...identity, action: "skill-discover" }
     : undefined;
 }
 

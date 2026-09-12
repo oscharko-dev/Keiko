@@ -9,6 +9,7 @@ import {
   ProviderError,
   RateLimitError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
+import { MAX_TIMER_DELAY_MS } from "./config.js";
 import {
   logErrorKind,
   logLevelEnabled,
@@ -19,7 +20,13 @@ import {
   type ModelGatewayLogLevel,
   type ModelGatewayLogSink,
 } from "./observability.js";
-import type { CircuitBreakerConfig, CircuitBreakerStatus, CircuitState, Clock } from "./types.js";
+import type {
+  CircuitBreakerConfig,
+  CircuitBreakerStatus,
+  CircuitState,
+  Clock,
+  ModelProviderConfig,
+} from "./types.js";
 
 const MAX_BACKOFF_MS = 30_000;
 
@@ -46,59 +53,70 @@ export const systemClock: Clock = {
 export interface RetryConfig {
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;
+  // The end-to-end budget of the whole call: every attempt and every backoff sleep together.
   readonly timeoutMs?: number | undefined;
+  // The bound of ONE attempt (ADR-0003). An attempt runs under the smaller of this and what is
+  // left of `timeoutMs`, so an attempt that hangs ends in time for its retry and no attempt
+  // outlives the end-to-end budget.
+  readonly attemptTimeoutMs?: number | undefined;
 }
 
 // Equal jitter over the capped exponential ladder: half the delay is fixed, half
 // is random, so concurrent callers hitting a recovering provider spread across
 // [0.5·d, d] instead of retrying in lockstep (thundering herd) while never
-// collapsing to a zero delay. Randomness is injected for deterministic tests.
+// collapsing to a zero delay. Randomness is injected for deterministic tests. The step is a whole
+// number of milliseconds: a timer cannot honour a fraction, and the retry line logs the sleep as is.
 function backoffDelayMs(attempt: number, base: number, random: () => number): number {
-  const capped = Math.min(base * 2 ** (attempt - 1), MAX_BACKOFF_MS);
-  return capped * (0.5 + 0.5 * random());
+  return Math.round(maxBackoffDelayMs(attempt, base) * (0.5 + 0.5 * random()));
+}
+
+// The top of the jitter band for the sleep after failed attempt `attempt`.
+function maxBackoffDelayMs(attempt: number, base: number): number {
+  return Math.min(base * 2 ** (attempt - 1), MAX_BACKOFF_MS);
+}
+
+// Only a GatewayError that declares itself retryable is retried; anything else is terminal.
+function isRetryableError(error: Error): boolean {
+  return error instanceof GatewayError && error.retryable;
 }
 
 // A RateLimitError with an explicit retryAfterMs is honoured VERBATIM (the server
-// told us when to come back — jitter would only delay recovery); otherwise the
-// error's own `retryable` flag decides. Non-GatewayErrors are never retried.
-function retryDelayMs(
-  error: unknown,
-  attempt: number,
-  base: number,
-  random: () => number,
-): number | null {
-  if (!(error instanceof GatewayError) || !error.retryable) {
-    return null;
-  }
+// told us when to come back — jitter would only delay recovery), capped at 30 s;
+// every other retryable error takes the jittered backoff step.
+function retryDelayMs(error: Error, attempt: number, base: number, random: () => number): number {
   if (error instanceof RateLimitError && error.retryAfterMs !== null && error.retryAfterMs > 0) {
     return Math.min(error.retryAfterMs, MAX_BACKOFF_MS);
   }
   return backoffDelayMs(attempt, base, random);
 }
 
-// Resolves the next backoff sleep for a failed attempt, bounded by the remaining
-// end-to-end budget — or null when the error is terminal, retries are exhausted,
-// or no budget remains (the caller then rethrows the last error).
-function boundedRetrySleepMs(
+// What the loop does after a failed attempt: sleep and retry, or stop and say why. A retry whose
+// delay does not fit what is left of the budget could never run, so the call ends at once instead
+// of sleeping the rest of the budget away first (PR #3452 review).
+type RetryStop =
+  | { readonly stop: "terminal" | "max-retries" }
+  | { readonly stop: "budget"; readonly delayMs: number; readonly remainingMs: number };
+type RetryDecision = { readonly sleepMs: number } | RetryStop;
+
+function retryDecision(
   lastError: Error,
   attempt: number,
   config: RetryConfig,
-  clock: Clock,
-  start: number,
+  remainingMs: number,
   random: () => number,
-): number | null {
-  const delay =
-    attempt <= config.maxRetries
-      ? retryDelayMs(lastError, attempt, config.retryBaseDelayMs, random)
-      : null;
-  if (delay === null) {
-    return null;
-  }
-  const remaining = remainingBudgetMs(start, config.timeoutMs, clock);
-  if (remaining <= 0) {
-    return null;
-  }
-  return Math.min(delay, remaining);
+): RetryDecision {
+  if (!isRetryableError(lastError)) return { stop: "terminal" };
+  if (attempt > config.maxRetries) return { stop: "max-retries" };
+  const delayMs = retryDelayMs(lastError, attempt, config.retryBaseDelayMs, random);
+  if (delayMs >= remainingMs) return { stop: "budget", delayMs, remainingMs };
+  return { sleepMs: delayMs };
+}
+
+// Why the loop stopped retrying, on its exhausted line; a budget stop carries both numbers.
+function retryStopDetail(decision: RetryStop): Readonly<Record<string, unknown>> {
+  return decision.stop === "budget"
+    ? { reason: "budget", delayMs: decision.delayMs, remainingMs: decision.remainingMs }
+    : { reason: decision.stop };
 }
 
 function assertNotAborted(signal?: AbortSignal): void {
@@ -112,6 +130,13 @@ function remainingBudgetMs(start: number, timeoutMs: number | undefined, clock: 
     return Number.POSITIVE_INFINITY;
   }
   return Math.max(0, timeoutMs - (clock.now() - start));
+}
+
+// What one attempt runs under: its own bound, clipped to what is left of the end-to-end budget.
+// Undefined when neither is set, so an unbounded caller stays unbounded.
+function attemptTimeoutFor(config: RetryConfig, remainingMs: number): number | undefined {
+  const bound = Math.min(remainingMs, config.attemptTimeoutMs ?? Number.POSITIVE_INFINITY);
+  return Number.isFinite(bound) ? Math.max(1, Math.floor(bound)) : undefined;
 }
 
 function asError(error: unknown): Error {
@@ -222,7 +247,9 @@ function budgetExhaustedError(
 }
 
 export async function executeWithRetry<T>(
-  operation: (attemptTimeoutMs?: number) => Promise<T>,
+  // Each attempt gets its own bound and what is left of the call's budget, which a streamed read
+  // may spend while the provider keeps producing (ADR-0003).
+  operation: (attemptTimeoutMs?: number, remainingBudgetMs?: number) => Promise<T>,
   config: RetryConfig,
   clock: Clock,
   signal?: AbortSignal,
@@ -235,22 +262,22 @@ export async function executeWithRetry<T>(
   const start = clock.now();
   for (let attempt = 1; attempt <= config.maxRetries + 1; attempt += 1) {
     assertNotAborted(signal);
-    const attemptBudget = remainingBudgetMs(start, config.timeoutMs, clock);
-    if (attemptBudget <= 0) {
+    const remaining = remainingBudgetMs(start, config.timeoutMs, clock);
+    if (remaining <= 0) {
       throw budgetExhaustedError(lastError, sink, logContext, attempt, elapsed());
     }
     try {
-      return await operation(
-        Number.isFinite(attemptBudget) ? Math.max(1, Math.floor(attemptBudget)) : undefined,
-      );
+      return await operation(attemptTimeoutFor(config, remaining), remaining);
     } catch (error) {
       lastError = asError(error);
-      const sleepMs = boundedRetrySleepMs(lastError, attempt, config, clock, start, random);
-      if (sleepMs === null) {
+      const remainingMs = remainingBudgetMs(start, config.timeoutMs, clock);
+      const decision = retryDecision(lastError, attempt, config, remainingMs, random);
+      if (!("sleepMs" in decision)) {
         sink.write(
           retryEvent(logContext, "warn", "gateway.retry.exhausted", elapsed(), lastError, {
             attempt,
             maxRetries: config.maxRetries,
+            ...retryStopDetail(decision),
             ...providerErrorDetail(lastError),
           }),
         );
@@ -260,14 +287,47 @@ export async function executeWithRetry<T>(
         retryEvent(logContext, "warn", "gateway.retry.scheduled", elapsed(), lastError, {
           attempt,
           maxRetries: config.maxRetries,
-          delayMs: sleepMs,
+          delayMs: decision.sleepMs,
           ...providerErrorDetail(lastError),
         }),
       );
-      await sleepWithCancellation(clock, sleepMs, signal);
+      await sleepWithCancellation(clock, decision.sleepMs, signal);
     }
   }
   throw lastError ?? new CancelledError("request timeout budget exhausted after retries");
+}
+
+// The provider settings a retry policy is made of.
+type ProviderRetryPolicy = Pick<
+  ModelProviderConfig,
+  "timeoutMs" | "maxRetries" | "retryBaseDelayMs"
+>;
+
+// The end-to-end budget of one buffered call to `provider`: every attempt its full `timeoutMs`
+// (ADR-0003), and before every retry the longest sleep the loop honours. The backoff cap and the
+// cap on a provider's Retry-After are both MAX_BACKOFF_MS, so a rate-limited provider keeps all its
+// configured attempts and the cool-down it asked for. The one derivation: the gateway's retry loop
+// and every deadline a caller builds around a gateway call (the coding sidecar route) take it from
+// here, so the two cannot drift apart again. They had: the provider's `timeoutMs` was passed to
+// the loop as the budget of the WHOLE call, an attempt that hung spent it, and the retry a
+// `TimeoutError` is declared retryable for never ran (coding run 23, 2026-09-11).
+export function providerRequestBudgetMs(provider: ProviderRetryPolicy): number {
+  const budgetMs =
+    (provider.maxRetries + 1) * provider.timeoutMs + provider.maxRetries * MAX_BACKOFF_MS;
+  // Config validation holds each term to the timer ceiling, never their sum: past it, every
+  // deadline armed from this budget would fire the moment it is set (PR #3452 review).
+  return Math.min(budgetMs, MAX_TIMER_DELAY_MS);
+}
+
+// The retry configuration a provider's settings stand for: `timeoutMs` bounds each attempt, and
+// the budget derived from it bounds the call.
+export function providerRetryConfig(provider: ProviderRetryPolicy): RetryConfig {
+  return {
+    maxRetries: provider.maxRetries,
+    retryBaseDelayMs: provider.retryBaseDelayMs,
+    attemptTimeoutMs: provider.timeoutMs,
+    timeoutMs: providerRequestBudgetMs(provider),
+  };
 }
 
 export class CircuitBreaker {

@@ -161,15 +161,31 @@ describe("Coding Workbench translations", () => {
     expect(de).not.toBe(en);
   });
 
-  // #3390 wave: the trust affordance's three strings — restated in both catalogs, not copied
-  // verbatim from one to the other.
+  // #3390 wave: the trust affordance's strings — restated in both catalogs, not copied verbatim
+  // from one to the other. The drift notice (ADR-0147 D3, 2026-09-10) and the run-waiting notice
+  // (the pauseReason "workspace-script-trust" branch, 2026-09-10) join them.
   it.each([
     "codingWorkbench.trust.restrictedNotice",
+    "codingWorkbench.trust.driftNotice",
+    "codingWorkbench.trust.runWaitingNotice",
     "codingWorkbench.trust.allow",
     "codingWorkbench.trust.allowing",
   ] as const)("localizes %s in both catalogs", (key) => {
     const en = translateCodingWorkbench("en", key);
     const de = translateCodingWorkbench("de", key);
+    expect(en.length).toBeGreaterThan(0);
+    expect(de.length).toBeGreaterThan(0);
+    expect(de).not.toBe(en);
+  });
+
+  // #3390 wave: the workbench's own event-label catalog (`codingWorkbench.event.${eventKind}`,
+  // read by codingWorkbenchLabels.ts) restates a distinct string for the operator-decision runtime
+  // event kind — separate from the desktop-shell activity-bus label
+  // ("activity.event.operatorDecision" in i18n-messages.en.ts / .de.ts, covered where that catalog
+  // is tested).
+  it("localizes codingWorkbench.event.operator-decision in both catalogs", () => {
+    const en = translateCodingWorkbench("en", "codingWorkbench.event.operator-decision");
+    const de = translateCodingWorkbench("de", "codingWorkbench.event.operator-decision");
     expect(en.length).toBeGreaterThan(0);
     expect(de.length).toBeGreaterThan(0);
     expect(de).not.toBe(en);

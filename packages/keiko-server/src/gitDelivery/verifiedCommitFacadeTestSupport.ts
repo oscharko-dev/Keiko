@@ -135,7 +135,9 @@ function fixtureFacade(
     approvalProofVerifier: bridge,
     verifiedCommitService: input.service,
     ...fixtureGitOptions(input, onEvent),
-    verificationRunner: { runToReport: () => Promise.resolve(input.report()) },
+    verificationRunner: {
+      runToReport: () => Promise.resolve({ report: input.report(), failureOutput: [] }),
+    },
     onRuntimeEvent: onEvent,
     requestCommitApproval: (id) => {
       requestVerifiedCommitApproval(input.service, id, onEvent);

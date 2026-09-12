@@ -3,6 +3,9 @@ import {
   copyNetworkGatewayPolicy,
   DEFAULT_COMMAND_RULES,
   DEFAULT_SANDBOX_POLICY,
+  GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+  GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS,
+  GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
   isValidNetworkGatewayPolicy,
   type NetworkGatewayPolicy,
   type SandboxPolicy,
@@ -129,5 +132,17 @@ describe("NetworkPolicy — gateway shape is excluded from SandboxPolicy.network
     // "inherited" (unconfined) network — a fail-open widening of a trust boundary.
     const widened: SandboxPolicy = { ...DEFAULT_SANDBOX_POLICY, network: gateway };
     expect(widened.network).toBe(gateway);
+  });
+});
+
+// PR #3452 (F43/F44): a tool that waits in place for a human decision is settled beyond its own work
+// budget by the whole wait and one grace, so the catalog can never cut the decision off.
+describe("the budget of a governed tool that waits for a human decision", () => {
+  // Literal pins (PR #3452 review): an expectation derived from the formula would move with it.
+  it("adds the whole human decision wait and a grace to the tool's own work budget", () => {
+    expect(DEFAULT_SANDBOX_POLICY.defaultTimeoutMs).toBe(30_000);
+    expect(GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS).toBe(300_000);
+    expect(GOVERNED_TOOL_SETTLEMENT_GRACE_MS).toBe(15_000);
+    expect(GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS).toBe(345_000);
   });
 });

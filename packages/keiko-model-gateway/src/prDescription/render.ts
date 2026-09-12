@@ -128,11 +128,22 @@ function bullets(
   return candidate[key].map(({ text }) => `- ${escapeMarkdownText(text)}`).join("\n");
 }
 
+// A statement renders as a list item, and a leading `#` run there is an ATX heading in GFM: a model
+// could imitate a server-owned section such as `## Checks` (review on PR #3452). Statements are
+// single-line (control characters are refused), so the leading run is the only heading position.
+const LEADING_HEADING_MARKER = /^(\s*)(#{1,6})(?=\s|$)/u;
+const ESCAPED_HEADING_MARKER = String.raw`\#`;
+
 function escapeMarkdownText(text: string): string {
   return text
     .replaceAll("\\", String.raw`\\`)
     .replaceAll("*", String.raw`\*`)
-    .replaceAll("_", String.raw`\_`);
+    .replaceAll("_", String.raw`\_`)
+    .replace(
+      LEADING_HEADING_MARKER,
+      (_marker: string, space: string, hashes: string) =>
+        `${space}${ESCAPED_HEADING_MARKER.repeat(hashes.length)}`,
+    );
 }
 
 function countSummary(snapshot: GitChangeSnapshot, language: PrDescriptionLanguage): string {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { CLIENT_NOTE_MAX_LENGTH } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { DECLARED_ERROR_CLASS_SHAPE } from "./error-classification.js";
 import {
   DROPPED_DEPTH,
@@ -1142,6 +1143,152 @@ describe("epic #3384 — pr-mark-ready and pr-description.chat.turn field names 
     });
     expect(redactLogFields({ prExternalId: GITHUB_PAT })).not.toEqual({
       prExternalId: GITHUB_PAT,
+    });
+  });
+});
+
+// F29 (Coding Workbench run 28): 53 of the 77 notes the browser sends collapsed to the shape marker,
+// so a customer log said that the UI complained, never about what (ADR-0173 D13). Every one of them
+// is admitted in its code-owned shape; the old free-text editor notice is not.
+describe("code-owned client diagnostic notes (F29)", () => {
+  it.each([
+    "[keiko] atlassian-connectors route crashed: TypeError",
+    "[keiko] app shell crashed: TypeError",
+    "[keiko] local-knowledge capsule route crashed: string",
+    "[keiko] window body crashed: coding-workbench: TypeError",
+    "[keiko] git-change description response settled",
+    "workspace-clipboard: copy captured=3 skipped=0 overflow=0",
+    "workspace-clipboard: cut captured=1 skipped=2 overflow=true",
+    "[keiko] task workspace inventory refresh failed: ApiError",
+    "[keiko] github issue reader grant read: ApiError",
+    "[keiko] github issue reader grant conflict: object",
+    "[keiko] voice turn effect executed (effect=open-window)",
+    "[keiko] unhandled promise rejection: TypeError",
+    "desktop window chunk #1: started",
+    "desktop editor widget chunk #12: settled after 90ms",
+    "workspace-state: persisted window scan limit exceeded (keiko.workspace.v4)",
+    "workspace-state: persisted connection scan limit exceeded (keiko.conns.v1)",
+    "workspace-state: local persistence shape invalid (keiko.workspace.v4)",
+    "workspace-state: local persistence parse failed (keiko.conns.v1)",
+    "workspace-state: keepalive body 70000B over budget; retrying without keepalive",
+    "[keiko] workspace connection unbind callback failed",
+    "workspace-state: pull failed with status 503; workspace changes persist locally until sync recovers",
+    "workspace-state: put failed (network error); workspace changes persist locally until sync recovers",
+    "shell-recovery: workspace layer refused the reset (conflict)",
+    "shell-recovery: user layer reset failed (TypeError)",
+    "shell-shortcuts: refused persisted keybinding overrides (undo=KEYBINDING_COLLISION, unknown-commands=2); affected commands keep their default binding",
+    "shell-shortcuts: refused persisted keybinding overrides (undo=KEYBINDING_COLLISION, more=3); affected commands keep their default binding",
+    "[keiko] queued editor selection handoff could not be restored after chat closure",
+    "Keiko editor runtime notice: language-load-failed (language=typescript, error=TypeError)",
+    "Keiko editor runtime notice: diff-language-load-failed (count=2, error=TypeError)",
+    "Keiko editor runtime notice: git-gutter-refresh-failed (error=ApiError)",
+    "Keiko editor runtime notice: blame-read-failed (error=string)",
+    "Keiko editor runtime notice: theme-registration-failed (error=Error)",
+    "Keiko editor runtime notice: diff-theme-registration-failed (error=SyntaxError)",
+    "Keiko editor runtime notice: host-edit-ignored (reason=read-only)",
+    "Keiko editor runtime notice: model-ownership-changed",
+    "git-client: stale generated commit draft cleared (repository-revision-changed)",
+    "git-client: commit draft cleared (repository-selection-changed)",
+    "[keiko] shared-event-source sse stream error (kind=sse-error, readyState=0, reason=connecting)",
+    "[keiko] relationship-activity sse stream error (kind=sse-error, readyState=2, reason=closed)",
+    "[keiko] coding-workbench-runtime sse stream error (kind=sse-error, readyState=0, reason=connecting)",
+    "[keiko] run-events sse stream error (kind=sse-error, readyState=unknown, reason=unknown)",
+    "[keiko] workbench description draft rejected: digest-mismatch proposal pr-desc-1 expected 0123456789ab actual abcdef012345",
+    "[keiko] workbench description draft review failed",
+    "[keiko] coding workbench workspace refresh did not settle",
+    "[keiko] coding workbench workspace refresh failed: ApiError",
+    "[keiko] coding workbench bind sequence rejected: ApiError",
+    "[keiko] coding workbench base branch lookup failed: ApiError",
+    "[keiko] coding workbench repository trust bound",
+    "[keiko] coding workbench worktree script trust catalog read failed",
+    "[keiko] coding workbench worktree trust grant refused",
+    "[keiko] journey initial refresh failed",
+    "[keiko] coding workbench issue selection released after terminal run",
+    "[keiko] coding workbench issue intake opened",
+    "[keiko] journey action: refresh failed (reason=provider-failed)",
+    "[keiko] memory correction predecessor response rejected (kind=invalid-response)",
+    "[keiko] coding app-session stream cancel-on-stall failed: TypeError",
+    "[keiko] coding workbench pairing discovery failed: ApiError",
+    "[keiko] bff error enrichment failed: TypeError",
+    "[keiko] approval review channel refresh failed: ApiError",
+    "[keiko] research channel refresh failed: ApiError",
+    "[keiko] task workspace bind provision failed: ApiError",
+    "[keiko] task workspace bind verify failed: status=missing-report-entry",
+    "[keiko] task workspace bind restore-verify failed: status=drifted",
+  ])("preserves the code-owned note %s", (clientNote) => {
+    expect(redactLogFields({ clientNote })).toEqual({ clientNote });
+  });
+
+  it.each([
+    "[keiko] app shell crashed: /private/customer.txt",
+    "[keiko] app shell crashed: token=fixture-secret",
+    "[keiko] app shell crashed: Type Error with prose",
+    "[keiko] app shell crashed",
+    "[keiko] window body crashed: ../../etc: TypeError",
+    "[keiko] some other route crashed: TypeError",
+    "[keiko] run-events sse stream error (kind=sse-error, readyState=0, reason=/private/path)",
+    "workspace-state: local persistence parse failed (/Users/customer/secret)",
+    "workspace-state: pull failed with status 503; token=fixture-secret",
+    "desktop window chunk #1: started\nprivate",
+    "shell-shortcuts: refused persisted keybinding overrides (/private/path=POLICY_LOCKED); affected commands keep their default binding",
+    "Keiko editor runtime notice: Failed to load Monaco language 'typescript': boom",
+    "Keiko editor runtime notice: host edit request ignored: buffer is read-only",
+    "Keiko editor runtime notice: blame-read-failed (error=/Users/alice/.ssh/id_rsa)",
+    "Keiko editor runtime notice: theme-registration-failed (error=Error) missing --ed-background",
+    "Keiko editor runtime notice: diff-language-load-failed (count=2, error=TypeError, path=/repo)",
+    "Keiko editor runtime notice: model-ownership-changed for /Users/alice/project",
+    "[keiko] voice turn effect executed (effect=Open Window)",
+    "[keiko] task workspace bind verify failed: status=../../escape",
+    "[keiko] coding workbench issue intake opened for customer@example.com",
+    // Review on PR #3452: an error class outside the closed vocabulary is content, whatever its shape.
+    "[keiko] app shell crashed: AliceSmithPassword",
+    "[keiko] window body crashed: coding-workbench: AliceSmithPassword",
+    "shell-recovery: user layer reset failed (AliceSmithPassword)",
+    "Keiko editor runtime notice: blame-read-failed (error=AliceSmithPassword)",
+    "Keiko editor runtime notice: language-load-failed (language=typescript, error=ThemeTokenError)",
+    "Keiko editor runtime notice: diff-language-load-failed (count=2, error=CustomerRecordError)",
+    // …and a note longer than the logged-string bound is not written verbatim, whatever its shape.
+    "shell-shortcuts: refused persisted keybinding overrides (editor.action.save=KEYBINDING_COLLISION, unknown-commands=2, setting=POLICY_LOCKED); affected commands keep their default binding",
+  ])("refuses foreign content in a code-owned shape %s", (clientNote) => {
+    expect(redactLogFields({ clientNote })?.clientNote).not.toBe(clientNote);
+  });
+
+  // Review on PR #3452: an admitted note is written verbatim, so the logged-string bound decides
+  // before any shape does; producers hold their notes to the same bound.
+  it("admits a note of exactly the logged-string bound and refuses one character more", () => {
+    const note = (commandId: string): string =>
+      `shell-shortcuts: refused persisted keybinding overrides (${commandId}=POLICY_LOCKED); affected commands keep their default binding`;
+    const commandId = (length: number): string =>
+      `${length % 2 === 0 ? "ee" : "e"}${".x".repeat(Math.floor((length - 1) / 2))}`;
+    const fill = MAX_LOG_STRING_LENGTH - note("").length;
+    const longest = note(commandId(fill));
+    const over = note(commandId(fill + 1));
+
+    expect(longest).toHaveLength(MAX_LOG_STRING_LENGTH);
+    expect(redactLogFields({ clientNote: longest })).toEqual({ clientNote: longest });
+    expect(over).toHaveLength(MAX_LOG_STRING_LENGTH + 1);
+    expect(redactLogFields({ clientNote: over })?.clientNote).not.toBe(over);
+    expect(CLIENT_NOTE_MAX_LENGTH).toBe(MAX_LOG_STRING_LENGTH);
+  });
+
+  // Review on PR #3452, empty input: an empty or blank note is not a code-owned shape, so it takes the
+  // generic path every other note does, which replaces secrets, personal data and unsafe shapes and
+  // keeps a value that carries nothing (client-diagnostics-routes.test.ts keeps "boundary caught
+  // TypeError" the same way). An empty string has no body to remove, so it reaches the log as sent.
+  it.each(["", " "])("keeps an empty or blank note (%j) body-free as sent", (clientNote) => {
+    expect(redactLogFields({ clientNote })).toEqual({ clientNote });
+  });
+
+  it("refuses a failure note whose class name is shaped like a credential", () => {
+    const clientNote = `[keiko] app shell crashed: ${["AKIA", "IOSFODNN7EXAMPLE"].join("")}`;
+    expect(redactLogFields({ clientNote })?.clientNote).not.toBe(clientNote);
+  });
+
+  it("does not extend the admission to other fields or to a nested client note", () => {
+    const note = "[keiko] coding workbench issue intake opened";
+    expect(redactLogFields({ label: note, nested: { clientNote: note } })).toEqual({
+      label: REDACTED_SHAPE,
+      nested: { clientNote: REDACTED_SHAPE },
     });
   });
 });

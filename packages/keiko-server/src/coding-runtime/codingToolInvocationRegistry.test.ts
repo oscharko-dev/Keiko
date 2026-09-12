@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
+  CODING_TOOL_INVOCATION_DEFAULT_TTL_MS,
   CODING_TOOL_INVOCATION_MAX_AGGREGATE_BYTES,
   CODING_TOOL_INVOCATION_MAX_BYTES_PER_ENTRY,
   CODING_TOOL_INVOCATION_MAX_LIVE_PER_RUN,
@@ -18,6 +19,7 @@ interface StagedEditRequest {
   readonly digest: string;
   readonly authorityExpiresAt: string;
   readonly payload: Buffer;
+  readonly lifeMs?: number | undefined;
 }
 
 function stagedEdit(overrides: Partial<StagedEditRequest> = {}): StagedEditRequest {
@@ -263,6 +265,71 @@ describe("CodingToolInvocationRegistry (Issue #2332)", () => {
     expect(taken.signal.aborted).toBe(true);
     expect([...taken.payload]).toEqual(Array.from({ length: taken.payload.length }, () => 0));
     expect(registry.settle(request)).toBe(false);
+  });
+
+  // PR #3452 (F43/F44): a catalog dispatch declares how long its tool may take to settle. One fixed
+  // 30 s life cancelled the verification tool and every proposal waiting for the operator's
+  // approval long before the budgets the catalog had settled them at.
+  it("holds a claimed invocation for the life its dispatcher declares, still capped by authority expiry", () => {
+    let now = 0;
+    const registry = createCodingToolInvocationRegistry({ now: () => now });
+    const request = stagedEdit({ lifeMs: 345_000 });
+    expect(registry.stage(request)).toEqual({ kind: "staged" });
+    const taken = registry.take(request);
+    if (taken.kind !== "ready") throw new Error("expected claimed invocation");
+
+    now = CODING_TOOL_INVOCATION_DEFAULT_TTL_MS + 1;
+    expect(registry.inspect(request)).toEqual({ kind: "in-flight" });
+    expect(taken.signal.aborted).toBe(false);
+
+    now = 345_001;
+    expect(registry.inspect(request)).toEqual({ kind: "terminal" });
+    expect(taken.signal.aborted).toBe(true);
+
+    const capped = stagedEdit({
+      actionId: "capped",
+      idempotencyKey: "capped",
+      authorityExpiresAt: "1970-01-01T00:07:00.000Z",
+      lifeMs: 3_600_000,
+    });
+    expect(registry.stage(capped)).toEqual({ kind: "staged" });
+    // Claimed just before the authority expires, and cut off the moment it does (PR #3452 review).
+    now = 419_999;
+    const claimed = registry.take(capped);
+    if (claimed.kind !== "ready") throw new Error("expected the capped invocation claimed");
+    expect(registry.inspect(capped)).toEqual({ kind: "in-flight" });
+    now = 420_001;
+    expect(registry.inspect(capped)).toEqual({ kind: "terminal" });
+    expect(claimed.signal.aborted).toBe(true);
+  });
+
+  it("refuses a declared life that is not a positive whole number of milliseconds", () => {
+    const registry = createCodingToolInvocationRegistry();
+    for (const lifeMs of [0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(registry.stage(stagedEdit({ lifeMs }))).toEqual({ kind: "invalid" });
+    }
+  });
+
+  // PR #3452 review: a life past what a timer can hold would arm an expiry that fires at once and,
+  // finding the entry not yet due, never comes back. It is refused; the longest a timer holds is not.
+  it("admits a declared life up to what a timer can hold and refuses one past it", () => {
+    const registry = createCodingToolInvocationRegistry({ now: () => 0 });
+    const authorityExpiresAt = new Date(3_000_000_000).toISOString();
+    const longest = stagedEdit({
+      actionId: "longest",
+      idempotencyKey: "longest",
+      authorityExpiresAt,
+      lifeMs: 2_147_483_647,
+    });
+    const past = stagedEdit({
+      actionId: "past",
+      idempotencyKey: "past",
+      authorityExpiresAt,
+      lifeMs: 2_147_483_648,
+    });
+
+    expect(registry.stage(longest)).toEqual({ kind: "staged" });
+    expect(registry.stage(past)).toEqual({ kind: "invalid" });
   });
 
   it("retains completed replay identities for the run lifetime without locking another run", () => {

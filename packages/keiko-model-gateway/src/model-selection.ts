@@ -36,7 +36,7 @@ import type {
 import { UNVERIFIED_GATEWAY } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import {
-  isCodingWorkbenchModel,
+  codingWorkbenchModelEligibility,
   isToolCallingVerificationFresh,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 const voiceCapabilityCache = new WeakMap<
@@ -78,6 +78,12 @@ export interface ResolveCodingSafeSidecarGatewayProfileOptions {
   readonly gatewayVerification?: GatewayVerificationState | undefined;
   /** Concrete provider model selected for this run. Omitted keeps deterministic default election. */
   readonly modelId?: string | undefined;
+  /**
+   * The instant the model's tool-calling proof is judged at. An admitted run passes its admission
+   * (capability issuance) so a proof that ages out mid-run does not strand it (F73); omitted means
+   * now, which is what every new run is held to.
+   */
+  readonly verificationAtMs?: number | undefined;
 }
 
 function matches(capability: ModelCapability, query: ModelSelectionQuery): boolean {
@@ -220,17 +226,22 @@ function codingSidecarProjection(
   };
 }
 
+function eligibleAt(capability: ModelCapability, nowMs: number): boolean {
+  return codingWorkbenchModelEligibility(capability, { nowMs }) === "eligible";
+}
+
 function selectCodingSafeSidecarCapability(
   config: ConfiguredCapabilitySource,
-  modelId?: string,
+  modelId: string | undefined,
+  nowMs: number,
 ): ModelCapability | undefined {
   if (modelId !== undefined) {
     const selected = listConfiguredCapabilities(config).find((item) => item.id === modelId);
-    return selected !== undefined && isCodingWorkbenchModel(selected) ? selected : undefined;
+    return selected !== undefined && eligibleAt(selected, nowMs) ? selected : undefined;
   }
   let best: ModelCapability | undefined;
   for (const capability of listConfiguredCapabilities(config)) {
-    if (!isCodingWorkbenchModel(capability)) {
+    if (!eligibleAt(capability, nowMs)) {
       continue;
     }
     if (best === undefined || COST_RANK[capability.costClass] < COST_RANK[best.costClass]) {
@@ -255,8 +266,22 @@ function hasCredential(provider: ModelProviderConfig): boolean {
 // the same configuration.
 function unavailableReasonForSidecarConfig(
   config: GatewayConfig,
+  modelId: string | undefined,
+  nowMs: number,
 ): CodingWorkbenchSidecarGatewayUnavailableReason {
   const capabilities = listConfiguredCapabilities(config);
+  // F73: a coding model whose only gap is an aged-out tool-calling proof is named for that, never
+  // "non-coding-capable"; the operator's remedy is a new probe, not a different model.
+  const targeted =
+    modelId === undefined ? capabilities : capabilities.filter((item) => item.id === modelId);
+  if (
+    targeted.some(
+      (capability) =>
+        codingWorkbenchModelEligibility(capability, { nowMs }) === "tool-calling-unverified",
+    )
+  ) {
+    return "tool-calling-unverified";
+  }
   const chatCapabilities = capabilities.filter((capability) => capability.kind === "chat");
   if (
     chatCapabilities.some((capability) => capability.toolCalling && capability.workflowEligible)
@@ -278,6 +303,11 @@ function unavailableReasonForSidecarConfig(
   return "no-tool-calling";
 }
 
+// The instant a model's tool-calling proof is judged at: an admitted run's admission, else now.
+function verificationInstant(options: ResolveCodingSafeSidecarGatewayProfileOptions): number {
+  return options.verificationAtMs ?? Date.now();
+}
+
 export function resolveCodingSafeSidecarGatewayProfile(
   config: GatewayConfig | undefined,
   options: ResolveCodingSafeSidecarGatewayProfileOptions = {},
@@ -291,9 +321,12 @@ export function resolveCodingSafeSidecarGatewayProfile(
   if (config === undefined || config.providers.length === 0) {
     return codingSidecarUnavailable("missing-config");
   }
-  const selected = selectCodingSafeSidecarCapability(config, options.modelId);
+  const verificationAtMs = verificationInstant(options);
+  const selected = selectCodingSafeSidecarCapability(config, options.modelId, verificationAtMs);
   if (selected === undefined) {
-    return codingSidecarUnavailable(unavailableReasonForSidecarConfig(config));
+    return codingSidecarUnavailable(
+      unavailableReasonForSidecarConfig(config, options.modelId, verificationAtMs),
+    );
   }
   const provider = providerFor(config, selected.id);
   if (provider === undefined) {

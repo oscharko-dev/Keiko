@@ -4,6 +4,8 @@ import { isGitObjectId } from "@oscharko-dev/keiko-contracts/runtime/git-reposit
 import { nodeWorkspaceFs } from "./fs.js";
 import { resolveGitdir } from "./gitHistory.js";
 import { isWithinWorkspace } from "./paths.js";
+import { boundWorkspaceFs } from "./realpath.js";
+import type { WorkspaceInfo } from "./types.js";
 
 export interface GitPublishView {
   readonly gitDirectory: string;
@@ -107,15 +109,25 @@ function directoryIdentity(path: string): () => boolean {
   };
 }
 
-/** Private effect metadata reuses the authorized Git object store, never live remote configuration. */
+/**
+ * Private effect metadata reuses the authorized Git object store, never live remote configuration.
+ *
+ * The workspace's gitdir is resolved through the port its own authority bound to it
+ * (`boundWorkspaceFs`): a managed task worktree lives below the state directory's always-denied
+ * `.keiko` segment, and resolving it through the plain user-workspace port refused the root, so
+ * every push from a managed worktree failed `git-publish-metadata-unavailable` before it began
+ * (Coding Workbench run 18, 2026-09-10). The shared object store and the linked worktree's own
+ * metadata live in the source repository's `.git`, which the ordinary port reads as before.
+ */
 export async function withGitPublishView<T>(
-  workspaceRoot: string,
+  workspace: WorkspaceInfo,
   commit: string,
   publish: (view: GitPublishView) => Promise<T>,
   privateRoot: string,
 ): Promise<T> {
   if (!isGitObjectId(commit)) throw new TypeError("git-publish-commit-invalid");
-  const git = await resolveGitdir(nodeWorkspaceFs, workspaceRoot);
+  const workspaceRoot = workspace.root;
+  const git = await resolveGitdir(boundWorkspaceFs(workspace, nodeWorkspaceFs), workspaceRoot);
   if (git === undefined) throw new Error("git-publish-metadata-unavailable");
   const checkGit = directoryIdentity(git.path);
   const common = commonDirectory(git.path);

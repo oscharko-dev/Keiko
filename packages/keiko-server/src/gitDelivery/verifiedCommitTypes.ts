@@ -37,6 +37,8 @@ export interface VerifiedCommitFacts {
   readonly stagedTreeDigest: string;
   readonly repositoryDigest: string;
   readonly clean: boolean;
+  /** An unclean candidate's blocking paths, from the same raw read as every other fact here. */
+  readonly blocking?: VerifiedCommitBlockingPaths | undefined;
 }
 
 export interface VerifiedCommitProposal {
@@ -71,14 +73,46 @@ export interface VerifiedCommitServiceOptions {
   ) => Promise<boolean | GitCommitMessageValidation>;
 }
 
+/**
+ * What keeps a commit proof from forming: the candidate must equal the working tree, so every
+ * unstaged and every untracked file blocks it. The paths are workspace-relative and bounded; they
+ * exist for the actor that has to stage them (the coding model, Coding Workbench run 16,
+ * 2026-09-10: the dependency install had created package-lock.json, the model had staged every
+ * file it knew and read seven "candidate-not-staged" answers without a path to act on). Counts go
+ * to the activity log; the paths never do.
+ */
+export interface VerifiedCommitBlockingPaths {
+  readonly unstagedCount: number;
+  readonly untrackedCount: number;
+  readonly unstaged: readonly string[];
+  readonly untracked: readonly string[];
+}
+
+export const VERIFIED_COMMIT_BLOCKING_PATHS_MAX = 8;
+
+export type VerificationTicketOutcome =
+  /** The server-held identity; it cannot be reconstructed from serialized values. */
+  | { readonly kind: "ticket"; readonly ticket: object }
+  | {
+      readonly kind: "refused";
+      readonly reason: "candidate-not-staged";
+      readonly blocking: VerifiedCommitBlockingPaths;
+    }
+  /** No live run context (authority revoked or run gone); the liveness check names it. */
+  | { readonly kind: "unavailable" };
+
 export interface VerifiedCommitService {
-  /** The returned identity is server-held and cannot be reconstructed from serialized values. */
-  beginVerification(): Promise<object | undefined>;
+  beginVerification(): Promise<VerificationTicketOutcome>;
   completeVerification(
     ticket: object,
     report: VerificationReport,
     guard?: { readonly check: () => boolean; readonly signal?: AbortSignal | undefined },
   ): Promise<boolean>;
+  /**
+   * Keeps a completed verification that could not become a commit proof (the work was not fully
+   * staged) in the run's verification history, for the pull request's check list (F57).
+   */
+  observeVerification(report: VerificationReport): void;
   propose(message: string): Promise<VerifiedCommitResult | undefined>;
   approve(proposalId: string): Promise<GitDeliveryApprovalClaim | undefined>;
   /** Synchronous human-decision surface; execution still rechecks every live candidate fact. */

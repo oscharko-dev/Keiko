@@ -12,8 +12,9 @@
 // ./workspaceTrust/canonicalTrustIdentity.ts; the row persistence lives in the UiStore.
 
 import { createHash } from "node:crypto";
+import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { realpathSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { CodedHttpError, httpStatusFor } from "@oscharko-dev/keiko-contracts/runtime/http-error";
 import {
   projectCommandTaskTrustState,
@@ -44,6 +45,9 @@ import type {
   WorkspaceTrustRecordRow,
   WorkspaceTrustRecordRowInput,
 } from "./store/index.js";
+import { isManagedTargetContained } from "./task-workspace/managed-root.js";
+import type { ServerLogSink } from "./observability/server-log.js";
+import { processServerLogSink } from "./process-log-sink.js";
 import { inspectWorkspaceRootIdentity } from "./workspace-root-identity.js";
 import {
   deriveWorkspaceRootRef,
@@ -90,16 +94,54 @@ export interface WorkspaceScriptTrustSnapshot {
   readonly trusted: boolean;
 }
 
+/** Why `admitRunManifest` recorded nothing — the closed vocabulary of its evidence line. */
+export type WorkspaceRunManifestAdmissionRefusal =
+  "authority-expired" | "root-unresolvable" | "root-unregistered" | "manifest-unreadable";
+
+/** What `admitRunManifest` recorded: the basis outcome and, for a real manifest, its digest. */
+export interface WorkspaceRunManifestAdmission {
+  readonly basis: "known" | "absent";
+  readonly manifestDigest?: WorkspaceTrustBasisDigest | undefined;
+}
+
 export interface WorkspaceScriptTrustService {
-  readonly grant: (projectId: string) => WorkspaceScriptTrustSnapshot;
+  readonly grant: (projectId: string, correlationId?: string) => WorkspaceScriptTrustSnapshot;
   readonly deriveFromTrustedRoot: (
     projectId: string,
     trustedProjectId: string,
   ) => WorkspaceScriptTrustSnapshot;
-  readonly revoke: (projectId: string) => WorkspaceScriptTrustSnapshot;
+  readonly revoke: (projectId: string, correlationId?: string) => WorkspaceScriptTrustSnapshot;
   readonly status: (projectId: string) => WorkspaceTrustStatus;
   readonly isTrusted: (projectId: string, workspace: WorkspaceInfo) => boolean;
   readonly trustLevelForRoot: (root: string) => WorkspaceTrustLevel;
+  // ADR-0147 D3 — true only while the root's durable record is the operator's OWN grant for the
+  // root's current manifest bytes. A record derived from a trusted repository never answers true:
+  // it inherits that repository's grant and has to stop with it. This is the one alternative basis
+  // `decideScriptTrust` (editor/verificationRunner.ts) accepts for a managed worktree whose
+  // `package.json` a governed run rewrote away from the repository's trust basis.
+  readonly holdsHumanGrantForRoot: (root: string) => boolean;
+  /**
+   * ADR-0147 D3, autonomous-delivery amendment (owner decision, 2026-09-10): records the registered
+   * worktree's CURRENT package-script basis as one a governed effect of the live run left behind, so
+   * that the repository's standing grant covers it for that run. Returns what was recorded, or
+   * `undefined` when the root is not a registered project or its manifest basis cannot be read —
+   * nothing is admitted then. The admission is held in memory only: it lives and dies with the run
+   * (`revokeRunAdmissions`) and expires with the run's authority.
+   */
+  readonly admitRunManifest: (
+    root: string,
+    runId: string,
+    expiresAt: string,
+  ) => WorkspaceRunManifestAdmission | undefined;
+  /**
+   * True while the root's current package-script basis is exactly the one its live run's last
+   * governed effect left behind (`admitRunManifest`). A manifest changed by anything else since —
+   * another process, the operator's editor — no longer matches and the caller falls back to the
+   * refusal it always gave.
+   */
+  readonly holdsRunAdmissionForRoot: (root: string) => boolean;
+  /** Drops every admission the run holds and returns how many there were. */
+  readonly revokeRunAdmissions: (runId: string) => number;
   readonly recomputeForRoots?: (roots: readonly string[]) => readonly WorkspaceTrustLevel[];
   // #2628 — additive listener registration so composition-time consumers (buildPeripherals
   // wires managed-LSP restriction propagation this way) receive every persisted restriction
@@ -112,6 +154,27 @@ export interface WorkspaceScriptTrustServiceOptions {
   readonly store: UiStore;
   readonly fs?: WorkspaceFs | undefined;
   readonly onRestricted?: ((canonicalRoot: string) => void) | undefined;
+  /**
+   * The Keiko-owned managed task-worktree root (`<stateDir>/ui/task-workspaces`). A registered
+   * project below it is a managed task worktree: `git worktree add` made its root the checkout root
+   * by construction, so its workspace root is resolved by managed containment and never through the
+   * user-workspace root rules — which deny every path below the state directory's `.keiko` segment
+   * and therefore refused every managed worktree on a default installation (grant, revoke, status
+   * and the repository-derived trust a provision records all failed closed, and binding a trusted
+   * repository ended in PROVISIONING_FAILED). Absent, no root is admitted by containment: an
+   * unconfigured service keeps refusing a denied root whatever its shape.
+   */
+  readonly managedRoot?: string | undefined;
+  /** Body-free activity-log sink for the run-manifest admission lines; defaults to the process log. */
+  readonly activityLog?: ServerLogSink | undefined;
+  /** Clock for admission expiry; production uses `Date.now`. */
+  readonly now?: (() => number) | undefined;
+}
+
+interface RunManifestAdmission {
+  readonly runId: string;
+  readonly basis: WorkspaceFact<WorkspaceTrustBasisDigest>;
+  readonly expiresAtMs: number;
 }
 
 function realPathOrThrow(fs: WorkspaceFs, path: string, message: string): string {
@@ -268,6 +331,32 @@ function requireCurrentObjectIdentity(context: CurrentTrustContext): WorkspaceTr
   );
 }
 
+// The workspace a registered project root resolves to. A managed task worktree (a registered project
+// below the configured managed root) IS its own workspace root: `git worktree add` made that
+// directory the checkout root, and the managed-root prover (workspace-root-access.ts) re-proves its
+// identity before any consumer acts on it — so it is not re-admitted through `detectWorkspaceAt`'s
+// user-workspace root rules, which refuse the state directory's `.keiko` segment. Every other root
+// keeps the marker detection and admission it had. (The editor-agent boundary and the verification
+// runner reach the same worktree through that prover's owned-root port; PR #3452's review found
+// one editor-agent read that still detected through the plain port, repaired in the same change.)
+function projectWorkspaceAt(
+  canonicalProjectRoot: string,
+  fs: WorkspaceFs,
+  managedRoot: string | undefined,
+): WorkspaceInfo {
+  // Strictly below the managed root: the root itself is the parent of every worktree and never a
+  // checkout of its own, so it keeps the user-workspace admission (and is refused like any other
+  // `.keiko` path) even when someone registers it as a project.
+  if (
+    managedRoot !== undefined &&
+    resolve(canonicalProjectRoot) !== resolve(managedRoot) &&
+    isManagedTargetContained(managedRoot, canonicalProjectRoot)
+  ) {
+    return workspaceInfoForRoot(canonicalProjectRoot);
+  }
+  return detectWorkspaceAt(canonicalProjectRoot, fs);
+}
+
 // Preserves the pre-#2521 canonicalization and single-root assertion exactly: the project must be
 // registered, both the project root and the resolved workspace root are realpath-canonicalized, and
 // the workspace root must equal the project root. Richer multi-root resolution lands additively with
@@ -277,6 +366,7 @@ function resolveCanonicalRoot(
   fs: WorkspaceFs,
   projectId: string,
   suppliedWorkspace?: WorkspaceInfo,
+  managedRoot?: string,
 ): string {
   // A registered project path is normalized but never realpath'd, while a manifest's canonicalRoot
   // is `realpath.native`. Matching on the string alone therefore answered PROJECT_NOT_FOUND for the
@@ -299,7 +389,7 @@ function resolveCanonicalRoot(
     project.path,
     "Project root path could not be resolved.",
   );
-  const detected = suppliedWorkspace ?? detectWorkspaceAt(canonicalProjectRoot, fs);
+  const detected = suppliedWorkspace ?? projectWorkspaceAt(canonicalProjectRoot, fs, managedRoot);
   const canonicalWorkspaceRoot = realPathOrThrow(
     fs,
     detected.root,
@@ -500,14 +590,23 @@ function invalidatedTrustedRecord(
 class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
   private readonly store: UiStore;
   private readonly fs: WorkspaceFs;
+  private readonly managedRoot: string | undefined;
   // #2628 — restriction listeners are held as a set so both the options.onRestricted seat
   // (kept for callers that construct the service directly) and subscribeOnRestricted callers
   // deliver the same notification without either path silently dropping the other.
   private readonly restrictionListeners = new Set<(canonicalRoot: string) => void>();
+  // Run-scoped, in-memory: the package-script basis a live autonomous run's last governed effect
+  // left behind, keyed by the worktree's canonical root. Never persisted — a restart ends the run.
+  private readonly runAdmissions = new Map<string, RunManifestAdmission>();
+  private readonly activityLog: ServerLogSink;
+  private readonly now: () => number;
 
   public constructor(options: WorkspaceScriptTrustServiceOptions) {
     this.store = options.store;
     this.fs = options.fs ?? nodeWorkspaceFs;
+    this.managedRoot = options.managedRoot;
+    this.activityLog = options.activityLog ?? processServerLogSink();
+    this.now = options.now ?? Date.now;
     if (options.onRestricted !== undefined) {
       this.restrictionListeners.add(options.onRestricted);
     }
@@ -515,6 +614,12 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
 
   private notifyRestricted(canonicalRoot: string): void {
     for (const listener of this.restrictionListeners) listener(canonicalRoot);
+  }
+
+  // The one canonical-root resolution every decision path uses, so the managed-root admission
+  // above cannot be applied on one path and forgotten on another.
+  private canonicalRootOf(projectId: string, workspace?: WorkspaceInfo): string {
+    return resolveCanonicalRoot(this.store, this.fs, projectId, workspace, this.managedRoot);
   }
 
   private isTrustedForBasis(
@@ -552,8 +657,46 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     return projectedTrusted;
   }
 
-  public readonly grant = (projectId: string): WorkspaceScriptTrustSnapshot => {
-    const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId);
+  // F64 (PR #3452): a human grant or revoke is the decision every later verification of the root
+  // rests on, and it used to leave no line at all, so a customer log could not show why a run's
+  // verification was, or was not, admitted. Body-free: the basis outcome, the manifest's digest and
+  // the record revision, never a path or project id.
+  private recordHumanDecision(
+    decision: "granted" | "revoked",
+    basis: WorkspaceFact<WorkspaceTrustBasisDigest>,
+    revision: number,
+    correlationId: string | undefined,
+  ): void {
+    const joined = correlationId ?? UNKNOWN_CORRELATION_ID;
+    const extra = {
+      basis: basis.outcome,
+      ...(basis.outcome === "known" ? { manifestDigest: basis.value } : {}),
+      revision,
+    };
+    // Two literal `op` sites, never a computed one: the generated op catalog can only enumerate a
+    // literal, and a computed op would enter it as `<dynamic>`, hiding a rename from its drift check.
+    if (decision === "granted") {
+      this.activityLog.write({
+        category: "security",
+        op: "workspace-script-trust.granted",
+        correlationId: joined,
+        extra,
+      });
+      return;
+    }
+    this.activityLog.write({
+      category: "security",
+      op: "workspace-script-trust.revoked",
+      correlationId: joined,
+      extra,
+    });
+  }
+
+  public readonly grant = (
+    projectId: string,
+    correlationId?: string,
+  ): WorkspaceScriptTrustSnapshot => {
+    const canonicalRoot = this.canonicalRootOf(projectId);
     const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
     // `absent` is a complete, knowable basis: the root has no package scripts, so there is nothing
     // for the package-script consumer to execute and nothing about it left uncertain. `unavailable`
@@ -567,13 +710,9 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     const binding = requireCurrentObjectIdentity(
       currentTrustContext(this.store, canonicalRoot, basis),
     );
-    persistRecord(
-      this.store,
-      binding,
-      "trusted",
-      "human-grant",
-      nextRevision(this.store, binding.rootRef),
-    );
+    const revision = nextRevision(this.store, binding.rootRef);
+    persistRecord(this.store, binding, "trusted", "human-grant", revision);
+    this.recordHumanDecision("granted", basis, revision, correlationId);
     return { trusted: true };
   };
 
@@ -581,10 +720,10 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     projectId: string,
     trustedProjectId: string,
   ): WorkspaceScriptTrustSnapshot => {
-    const trustedRoot = resolveCanonicalRoot(this.store, this.fs, trustedProjectId);
+    const trustedRoot = this.canonicalRootOf(trustedProjectId);
     const trustedBasis = resolveTrustBasisFact(this.fs, trustedRoot);
     if (!this.isTrustedForBasis(trustedRoot, trustedBasis)) return { trusted: false };
-    const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId);
+    const canonicalRoot = this.canonicalRootOf(projectId);
     const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
     if (!trustBasisFactsMatch(trustedBasis, basis)) return { trusted: false };
     const binding = requireCurrentObjectIdentity(
@@ -604,25 +743,24 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     return { trusted: true };
   };
 
-  public readonly revoke = (projectId: string): WorkspaceScriptTrustSnapshot => {
-    const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId);
+  public readonly revoke = (
+    projectId: string,
+    correlationId?: string,
+  ): WorkspaceScriptTrustSnapshot => {
+    const canonicalRoot = this.canonicalRootOf(projectId);
     const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
     const binding = requireCurrentObjectIdentity(
       currentTrustContext(this.store, canonicalRoot, basis),
     );
-    persistRecord(
-      this.store,
-      binding,
-      "restricted",
-      "human-revocation",
-      nextRevision(this.store, binding.rootRef),
-    );
+    const revision = nextRevision(this.store, binding.rootRef);
+    persistRecord(this.store, binding, "restricted", "human-revocation", revision);
+    this.recordHumanDecision("revoked", basis, revision, correlationId);
     this.notifyRestricted(canonicalRoot);
     return { trusted: false };
   };
 
   public readonly status = (projectId: string): WorkspaceTrustStatus => {
-    const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId);
+    const canonicalRoot = this.canonicalRootOf(projectId);
     const workspace = workspaceInfoForRoot(canonicalRoot);
     const trusted = this.isTrusted(projectId, workspace);
     let binding: WorkspaceTrustBinding;
@@ -650,7 +788,7 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
 
   public readonly isTrusted = (projectId: string, workspace: WorkspaceInfo): boolean => {
     try {
-      const canonicalRoot = resolveCanonicalRoot(this.store, this.fs, projectId, workspace);
+      const canonicalRoot = this.canonicalRootOf(projectId, workspace);
       const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
       return this.isTrustedForBasis(canonicalRoot, basis);
     } catch {
@@ -672,6 +810,135 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
     }
   };
 
+  public readonly holdsHumanGrantForRoot = (root: string): boolean => {
+    try {
+      const projectPath = registeredProjectPathForRoot(this.store, this.fs, root);
+      const canonicalRoot = realPathOrUndefined(this.fs, root);
+      if (projectPath === undefined || canonicalRoot === undefined) return false;
+      const workspace = workspaceInfoForRoot(canonicalRoot);
+      // The full fail-closed decision first — every binding dimension and the current basis digest
+      // — so a stale human grant invalidates exactly as it does on every other decision path.
+      if (!this.isTrusted(projectPath, workspace)) return false;
+      const decisionRoot = this.canonicalRootOf(projectPath, workspace);
+      const context = currentTrustContext(
+        this.store,
+        decisionRoot,
+        resolveTrustBasisFact(this.fs, decisionRoot),
+      );
+      const assessment = readAssessment(this.store, context.binding.rootRef);
+      return assessment.outcome === "known" && assessment.value.reason === "human-grant";
+    } catch {
+      return false;
+    }
+  };
+
+  // The same registered-root resolution `holdsHumanGrantForRoot` uses, so an admission recorded for
+  // a root and the later lookup for the same root can never disagree about its key.
+  private registeredCanonicalRoot(root: string): string | undefined {
+    const projectPath = registeredProjectPathForRoot(this.store, this.fs, root);
+    const canonicalRoot = realPathOrUndefined(this.fs, root);
+    if (projectPath === undefined || canonicalRoot === undefined) return undefined;
+    return this.canonicalRootOf(projectPath, workspaceInfoForRoot(canonicalRoot));
+  }
+
+  public readonly admitRunManifest = (
+    root: string,
+    runId: string,
+    expiresAt: string,
+  ): WorkspaceRunManifestAdmission | undefined => {
+    const candidate = this.runAdmissionCandidate(root, expiresAt);
+    if ("refusal" in candidate) {
+      // A refused admission is why the NEXT verification of this worktree may pause for a human
+      // decision although the run is autonomous — it must be reconstructible from the log.
+      this.activityLog.write({
+        category: "security",
+        op: "workspace-script-trust.run-manifest-not-admitted",
+        correlationId: runId,
+        extra: { reason: candidate.refusal },
+      });
+      return undefined;
+    }
+    const { canonicalRoot, basis, expiresAtMs } = candidate;
+    this.runAdmissions.set(canonicalRoot, { runId, basis, expiresAtMs });
+    const admission: WorkspaceRunManifestAdmission =
+      basis.outcome === "known"
+        ? { basis: "known", manifestDigest: basis.value }
+        : { basis: "absent" };
+    this.activityLog.write({
+      category: "security",
+      op: "workspace-script-trust.run-manifest-admitted",
+      correlationId: runId,
+      extra: { ...admission, expiresAt },
+    });
+    return admission;
+  };
+
+  // The preconditions of an admission, each refusal in one closed vocabulary: the authority must
+  // still be live, the root must be a registered project whose canonical root resolves, and the
+  // manifest must be readable. `absent` is a real basis (no package scripts at all, ADR-0147 D9);
+  // `unknown`/`unavailable` is an unreadable manifest and admits nothing.
+  private runAdmissionCandidate(
+    root: string,
+    expiresAt: string,
+  ):
+    | {
+        readonly canonicalRoot: string;
+        readonly basis: WorkspaceFact<WorkspaceTrustBasisDigest>;
+        readonly expiresAtMs: number;
+      }
+    | { readonly refusal: WorkspaceRunManifestAdmissionRefusal } {
+    const expiresAtMs = Date.parse(expiresAt);
+    if (!Number.isFinite(expiresAtMs) || expiresAtMs <= this.now()) {
+      return { refusal: "authority-expired" };
+    }
+    let canonicalRoot: string | undefined;
+    try {
+      canonicalRoot = this.registeredCanonicalRoot(root);
+    } catch {
+      return { refusal: "root-unresolvable" };
+    }
+    if (canonicalRoot === undefined) return { refusal: "root-unregistered" };
+    const basis = resolveTrustBasisFact(this.fs, canonicalRoot);
+    if (basis.outcome !== "known" && basis.outcome !== "absent") {
+      return { refusal: "manifest-unreadable" };
+    }
+    return { canonicalRoot, basis, expiresAtMs };
+  }
+
+  public readonly holdsRunAdmissionForRoot = (root: string): boolean => {
+    try {
+      const canonicalRoot = this.registeredCanonicalRoot(root);
+      if (canonicalRoot === undefined) return false;
+      const admission = this.runAdmissions.get(canonicalRoot);
+      if (admission === undefined) return false;
+      if (admission.expiresAtMs <= this.now()) {
+        this.runAdmissions.delete(canonicalRoot);
+        return false;
+      }
+      return trustBasisFactsMatch(admission.basis, resolveTrustBasisFact(this.fs, canonicalRoot));
+    } catch {
+      return false;
+    }
+  };
+
+  public readonly revokeRunAdmissions = (runId: string): number => {
+    let revoked = 0;
+    for (const [canonicalRoot, admission] of this.runAdmissions) {
+      if (admission.runId !== runId) continue;
+      this.runAdmissions.delete(canonicalRoot);
+      revoked += 1;
+    }
+    if (revoked > 0) {
+      this.activityLog.write({
+        category: "security",
+        op: "workspace-script-trust.run-manifest-revoked",
+        correlationId: runId,
+        extra: { count: revoked },
+      });
+    }
+    return revoked;
+  };
+
   /**
    * The one identity every restriction notification is emitted under. #2628 contracted listeners
    * to receive the CANONICAL root because the managed-LSP process pool is keyed on it, but
@@ -687,7 +954,7 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
    */
   private notificationRootFor(root: string): string | undefined {
     try {
-      return resolveCanonicalRoot(this.store, this.fs, root);
+      return this.canonicalRootOf(root);
     } catch {
       return undefined;
     }

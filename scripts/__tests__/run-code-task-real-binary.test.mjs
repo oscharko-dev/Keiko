@@ -474,7 +474,7 @@ describe("#2483 real-binary observation helpers", () => {
       sourceCommitSha: SOURCE_HEAD,
       platformTarget: "macos-arm64",
       result: "passed",
-      runtime: { name: "opencode-compatible", version: "1.17.17" },
+      runtime: { name: "opencode-compatible", version: "1.18.30" },
       run: {
         correlationId: MANAGED_CATALOG.correlationId,
         activityLogSha256: ACTIVITY_LOG.sha256,
@@ -832,7 +832,7 @@ describe("#2483 real-binary observation helpers", () => {
       issue: 2483,
       sourceHead: SOURCE_HEAD,
       evidenceClass: "functional-not-platform-qualified",
-      runtime: { name: "opencode-compatible", version: "1.17.17", target: "macos-arm64" },
+      runtime: { name: "opencode-compatible", version: "1.18.30", target: "macos-arm64" },
       journey: {
         exitCode: 0,
         wallClockMs: 41_128,

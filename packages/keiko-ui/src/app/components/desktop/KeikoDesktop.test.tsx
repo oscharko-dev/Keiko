@@ -1,8 +1,11 @@
 import type { ReactNode } from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, renderHook, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
-import { redeemCodingAppSessionPairingOnBoot } from "@/lib/coding-app-session-client";
+import {
+  redeemCodingAppSessionPairingOnBoot,
+  useCodingAppSessionRedemptions,
+} from "@/lib/coding-app-session-client";
 import { KeikoDesktop } from "./KeikoDesktop";
 
 const replace = vi.fn();
@@ -143,6 +146,31 @@ describe("KeikoDesktop", () => {
       expect(path).toBe(PAIR_PATH);
       expect(init.method).toBe("POST");
       expect(replace).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // F65: after a lane restart the operator re-pairs through a fragment-only launcher link in the tab
+  // that shows the app; every read that depends on the session must run again.
+  it("re-runs the session reads after a same-document re-pair (F65)", async () => {
+    const fetchMock = vi.fn(() =>
+      Promise.resolve(new Response(JSON.stringify({ schemaVersion: "1" }), { status: 200 })),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      const redemptions = renderHook(() => useCodingAppSessionRedemptions());
+      const before = redemptions.result.current;
+      render(<KeikoDesktop />);
+      await waitFor(() => {
+        expect(redeemCodingAppSessionPairingOnBoot).toHaveBeenCalled();
+      });
+
+      navigateSameDocument(PAIRING_FRAGMENT);
+
+      await waitFor(() => {
+        expect(redemptions.result.current).toBe(before + 1);
+      });
     } finally {
       vi.unstubAllGlobals();
     }

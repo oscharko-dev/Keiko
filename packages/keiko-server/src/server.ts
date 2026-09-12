@@ -23,7 +23,6 @@ import {
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import {
   MAX_LOG_STRING_LENGTH,
-  nullServerLogSink,
   redactRoutePath,
   type ServerLogSink,
 } from "./observability/server-log.js";
@@ -34,6 +33,7 @@ import { createVoiceControlPlane } from "./voice-realtime.js";
 import { createVoiceLiveDictationPlane } from "./voice-live-dictation.js";
 import { createRunRegistry } from "./runs.js";
 import { createInMemoryUiStore } from "./store/index.js";
+import { processServerLogSink } from "./process-log-sink.js";
 
 // Canonical values live in the contracts leaf (GEN-PERF-CLI-001) so the CLI can
 // read them without loading this module graph; imported and re-exported here so
@@ -77,9 +77,12 @@ export interface UiServerDeps {
   readonly handlerDeps?: UiHandlerDeps | undefined;
   /** Test-only override for the bounded live-dictation initial-frame deadline. */
   readonly liveDictationInitialFrameTimeoutMs?: number | undefined;
-  // Structured activity log sink. When present, every incoming HTTP request writes one line
-  // (method, path, status, duration, correlation id) into a plain-text JSON log the operator
-  // can read. Absent by default so unit tests stay hermetic; the CLI wires the file-backed sink.
+  // Structured activity log sink: every incoming HTTP request writes one line (method, path,
+  // status, duration, correlation id) into the JSON activity log the operator reads. Absent, the
+  // server writes through the process activity log, which is file-backed wherever the process has
+  // a state directory and silent in a unit test that sets none; never a null sink, so a composition
+  // that passes no sink can no longer drop every request line (F84, Coding Workbench run 30: the
+  // dev lane's BFF passed none). The CLI wires its file-backed sink explicitly.
   readonly activityLog?: ServerLogSink | undefined;
   // Closed while startup recovery validates this exact listener and active tree. The gate covers
   // health, API, static, and upgrade traffic; the CLI opens it only after in-process post-listen
@@ -565,7 +568,7 @@ export function createUiServer(deps: UiServerDeps): Server {
     handlerDeps,
     deps.liveDictationInitialFrameTimeoutMs,
   );
-  const activityLog: ServerLogSink = deps.activityLog ?? nullServerLogSink();
+  const activityLog: ServerLogSink = deps.activityLog ?? processServerLogSink();
   const server = createServer((req, res) => {
     const correlationId = resolveCorrelationId(req);
     res.setHeader(CORRELATION_RESPONSE_HEADER, correlationId);

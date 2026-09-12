@@ -21,6 +21,7 @@ import {
 import { createCodingAppSessionChannel, type CodingAppSessionChannel } from "./sessionChannel.js";
 import { APP_SESSION_COOKIE_NAME } from "./sessionCookie.js";
 import { createSessionRegistry } from "./sessionRegistry.js";
+import { createBufferedServerLogSink, type ServerLogEvent } from "../observability/server-log.js";
 
 const CANARY = { kind: "probe", body: "handler-canary" } as const;
 
@@ -147,6 +148,90 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
       deps(),
     );
     expect(writes[0]).toContain('"content":null');
+  });
+});
+
+describe("app-session lifecycle lines (F65)", () => {
+  function logged(channel: CodingAppSessionChannel): {
+    readonly deps: UiHandlerDeps;
+    readonly events: readonly ServerLogEvent[];
+  } {
+    const activityLog = createBufferedServerLogSink();
+    return {
+      deps: { codingAppSessionChannel: channel, activityLog } as unknown as UiHandlerDeps,
+      events: activityLog.events,
+    };
+  }
+
+  function pairingRequest(body: unknown): RouteContext {
+    const req = Object.assign(Readable.from([Buffer.from(JSON.stringify(body))]), {
+      headers: {},
+      socket: {},
+    });
+    return { ...ctx(), correlationId: "pair-correlation", req: req as unknown as IncomingMessage };
+  }
+
+  it("logs a pairing that issued a session, correlated and body-free", async () => {
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+      contentSource: createStaticContentSource(CANARY),
+    });
+    const { deps: logDeps, events } = logged(channel);
+
+    await handleCodingAppSessionPair(pairingRequest(fakePairingRequestBody()), logDeps);
+
+    expect(events).toEqual([
+      {
+        level: "info",
+        category: "http",
+        op: "coding-app-session.paired",
+        correlationId: "pair-correlation",
+      },
+    ]);
+  });
+
+  it("writes no line of its own for a denied pairing; denials stay aggregated (KEIKO-0838)", async () => {
+    const { channel } = pairedChannel();
+    const { deps: logDeps, events } = logged(channel);
+
+    await handleCodingAppSessionPair(pairingRequest({ requestId: "forged" }), logDeps);
+
+    expect(events).toEqual([]);
+  });
+
+  it("logs a rotation and a sign-out", () => {
+    const { channel, cookie } = pairedChannel();
+    const { deps: logDeps, events } = logged(channel);
+
+    const issued = handleCodingAppSessionRotate(ctx(cookie), logDeps).headers?.["Set-Cookie"];
+    // The rotation invalidated the paired cookie, so the sign-out presents the one it issued.
+    handleCodingAppSessionSignOut(ctx(String(issued).split(";")[0] ?? ""), logDeps);
+
+    expect(events.map((event) => event.op)).toEqual([
+      "coding-app-session.rotated",
+      "coding-app-session.signed-out",
+    ]);
+  });
+
+  // PR #3452 review: the log never shows a sign-out that did not happen. An absent or unknown
+  // cookie, a repeated sign-out from a stale tab and an unconfigured channel revoke nothing.
+  it("logs a sign-out only when it revoked a session", () => {
+    const { channel, cookie } = pairedChannel();
+    const { deps: logDeps, events } = logged(channel);
+
+    handleCodingAppSessionSignOut(ctx(), logDeps);
+    handleCodingAppSessionSignOut(ctx(`${APP_SESSION_COOKIE_NAME}=sess_unknown.token`), logDeps);
+    handleCodingAppSessionSignOut(ctx(cookie), logDeps);
+    handleCodingAppSessionSignOut(ctx(cookie), logDeps);
+    const unconfigured = createBufferedServerLogSink();
+    handleCodingAppSessionSignOut(ctx(cookie), {
+      activityLog: unconfigured,
+    } as unknown as UiHandlerDeps);
+
+    expect(events.map((event) => event.op)).toEqual(["coding-app-session.signed-out"]);
+    expect(unconfigured.events).toEqual([]);
+    expect(channel.sessionCount()).toBe(0);
   });
 });
 

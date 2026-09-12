@@ -1302,9 +1302,9 @@ function sidecarRuntimeFor(platformTarget, overrides = {}) {
       owner: "anomalyco",
       repository: "opencode",
       name: "opencode",
-      version: "1.17.17",
-      tag: "v1.17.17",
-      commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
+      version: "1.18.30",
+      tag: "v1.18.30",
+      commit: "3104c1428ec91f809e5ab86631300de41eb6952e",
     },
     adapterCompatibility: {
       adapterName: "keiko-coding-sidecar",
@@ -1313,7 +1313,7 @@ function sidecarRuntimeFor(platformTarget, overrides = {}) {
     },
     protocolSchema: {
       path: "packages/sdk/openapi.json",
-      url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/sdk/openapi.json",
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/packages/sdk/openapi.json",
       sha256: DIGEST_A,
       hashAlgorithm: "sha256",
       hashEncoding: "lowercase-hex",
@@ -1332,12 +1332,12 @@ function sidecarRuntimeFor(platformTarget, overrides = {}) {
     },
     license: {
       spdxId: "MIT",
-      url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/LICENSE",
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/LICENSE",
       sha256: DIGEST_F,
     },
     archive: {
       platformTarget,
-      url: "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode.zip",
+      url: "https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode.zip",
       sizeBytes: 123456,
       sha256: DIGEST_B,
     },
@@ -1460,7 +1460,7 @@ function sidecarFixtureSpec(platformTarget, sourceRoot, executablePath, override
   const licenseSha256 = digestBuffer(readFileSync(join(sourceRoot, "LICENSE.txt")));
   const archive = {
     platformTarget,
-    url: "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode-fixture.zip",
+    url: "https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-fixture.zip",
     sizeBytes: 123456,
     sha256: DIGEST_B,
   };
@@ -1469,14 +1469,14 @@ function sidecarFixtureSpec(platformTarget, sourceRoot, executablePath, override
     `${JSON.stringify({
       bomFormat: "CycloneDX",
       metadata: {
-        component: { type: "application", name: "opencode-compatible", version: "1.17.17" },
+        component: { type: "application", name: "opencode-compatible", version: "1.18.30" },
       },
       components: [
         {
           type: "application",
           name: "opencode",
-          version: "1.17.17",
-          purl: "pkg:github/anomalyco/opencode@v1.17.17",
+          version: "1.18.30",
+          purl: "pkg:github/anomalyco/opencode@v1.18.30",
           licenses: [{ license: { id: "MIT" } }],
           hashes: [{ alg: "SHA-256", content: executableSha256 }],
           externalReferences: [
@@ -1498,9 +1498,9 @@ function sidecarFixtureSpec(platformTarget, sourceRoot, executablePath, override
       owner: "anomalyco",
       repository: "opencode",
       name: "opencode",
-      version: "1.17.17",
-      tag: "v1.17.17",
-      commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
+      version: "1.18.30",
+      tag: "v1.18.30",
+      commit: "3104c1428ec91f809e5ab86631300de41eb6952e",
     },
     adapterCompatibility: {
       adapterName: "keiko-coding-sidecar",
@@ -1509,7 +1509,7 @@ function sidecarFixtureSpec(platformTarget, sourceRoot, executablePath, override
     },
     protocolSchema: {
       path: "packages/sdk/openapi.json",
-      url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/sdk/openapi.json",
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/packages/sdk/openapi.json",
       sha256: DIGEST_A,
       hashAlgorithm: "sha256",
       hashEncoding: "lowercase-hex",
@@ -1528,7 +1528,7 @@ function sidecarFixtureSpec(platformTarget, sourceRoot, executablePath, override
     },
     license: {
       spdxId: "MIT",
-      url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/LICENSE",
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/LICENSE",
       sha256: licenseSha256,
     },
     archive,
@@ -3181,8 +3181,8 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
       upstream: {
         owner: "anomalyco",
         repository: "opencode",
-        version: "1.17.17",
-        commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
+        version: "1.18.30",
+        commit: "3104c1428ec91f809e5ab86631300de41eb6952e",
       },
       protocolSchema: {
         hashAlgorithm: "sha256",

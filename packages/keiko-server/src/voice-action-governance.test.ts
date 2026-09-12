@@ -472,7 +472,7 @@ function pairedRouteAppSessionChannel(): CodingAppSessionChannel {
     pair: () => ({ paired: false }),
     snapshot: () => contentFreeCodingAppSessionChannelSnapshot(),
     rotate: () => ({ rotated: false }),
-    signOut: () => undefined,
+    signOut: () => false,
     sessionCount: () => 1,
     verifySession: (cookieToken) =>
       cookieToken === ROUTE_APP_SESSION_COOKIE_TOKEN ? ROUTE_APP_SESSION : undefined,

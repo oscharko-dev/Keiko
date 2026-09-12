@@ -7,6 +7,10 @@
 import { redact } from "@oscharko-dev/keiko-security";
 import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-contracts";
 import {
+  VERIFICATION_DEPENDENCY_FAILURE_STATES,
+  type VerificationDependencySummary,
+} from "@oscharko-dev/keiko-contracts/runtime/verification";
+import {
   DEFAULT_COMMAND_RULES,
   DEFAULT_SANDBOX_POLICY,
   runCommand,
@@ -21,11 +25,19 @@ import { nodeSpawnFn } from "@oscharko-dev/keiko-tools/internal/exec";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import type { WorkspaceFs, WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { classifyOutcome, type AbortReason } from "./classify.js";
+import {
+  planDependencyBootstrap,
+  runDependencyBootstrap,
+  type DependencyBootstrapDeps,
+  type DependencyBootstrapOutcome,
+} from "./dependencies.js";
 import { classifyScripts } from "./detect.js";
+import { outputExcerpt } from "./excerpt.js";
 import { extractFailureLocations } from "./failure-location.js";
 import { buildAppliedLimits, type BreachedDimension } from "./limits.js";
 import { nodeResourceMonitor, type ResourceMonitor } from "./monitor.js";
 import type {
+  VerificationKind,
   VerificationPlan,
   VerificationReport,
   VerificationResourceLimits,
@@ -70,6 +82,21 @@ export interface VerificationDeps {
   // keiko-tools exec.ts): wired once by the composing server so a timed-out or aborted step's
   // Windows tree-kill disposition is reconstructable (PR #3354 review, comment 3887021650).
   readonly onTerminated?: ((evidence: CommandTerminationEvidence) => void) | undefined;
+  // ADR-0043 D17: "auto" installs the manifest's declared dependencies before the first script step
+  // when the installed tree is not current (dependencies.ts). Default "off" keeps every SDK caller's
+  // behaviour unchanged; the server's verification runner turns it on.
+  readonly dependencyBootstrap?: "off" | "auto" | undefined;
+  // The bounded, redacted output of a step that did not pass (and of a failed dependency
+  // bootstrap), handed over as it happens and never written into the report: the report is
+  // persisted as body-free evidence, while the caller may forward the excerpt to the actor that
+  // has to repair the failure (the coding model, ADR-0126 D3).
+  readonly onStepOutput?: ((output: VerificationStepOutput) => void) | undefined;
+}
+
+export interface VerificationStepOutput {
+  readonly step: VerificationKind | "dependencies";
+  readonly scriptName: string | undefined;
+  readonly excerpt: string;
 }
 
 // Verification runs deterministic repository gates selected by Keiko, not arbitrary model-issued
@@ -481,9 +508,18 @@ function detailFor(status: VerificationStatus, run: StepRun): string | undefined
 function overallStatus(
   results: readonly VerificationResult[],
   cancelled: boolean,
+  dependencies: VerificationDependencySummary | undefined,
 ): VerificationStatus {
-  if (cancelled) {
+  if (cancelled || dependencies?.state === "cancelled") {
     return "cancelled";
+  }
+  // A bootstrap that left the steps without their dependencies fails the report whatever the
+  // (all skipped) steps would otherwise say (ADR-0043 D17); the same rule the wire guard applies.
+  if (
+    dependencies !== undefined &&
+    VERIFICATION_DEPENDENCY_FAILURE_STATES.has(dependencies.state)
+  ) {
+    return "failed";
   }
   // Array.prototype.every is vacuously true on an empty array: without this guard, a plan with
   // zero steps would report "passed" — the worst possible answer to "nothing ran" for a gate whose
@@ -521,15 +557,96 @@ function finishReport(
   cancelled: boolean,
   startedAtMs: number,
   now: () => number,
+  dependencies?: VerificationDependencySummary,
 ): VerificationReport {
   return {
     workspaceRoot,
     results,
-    overallStatus: overallStatus(results, cancelled),
+    overallStatus: overallStatus(results, cancelled, dependencies),
     startedAtMs,
     durationMs: now() - startedAtMs,
     counts: countByStatus(results),
+    ...(dependencies === undefined ? {} : { dependencies }),
   };
+}
+
+// Whether the bootstrap left the workspace fit for its script steps.
+function dependenciesReady(outcome: DependencyBootstrapOutcome | undefined): boolean {
+  return (
+    outcome === undefined ||
+    outcome.summary.state === "none" ||
+    outcome.summary.state === "current" ||
+    outcome.summary.state === "installed"
+  );
+}
+
+// ADR-0043 D17: decide about, and if needed install, the workspace's dependencies before the first
+// script step. Nothing is done for a plan without a runnable step, or when the caller left the
+// bootstrap off; a bootstrap that did not succeed hands its redacted output tail to the caller's
+// seam exactly like a failed step does.
+async function bootstrapDependencies(
+  plan: VerificationPlan,
+  deps: VerificationDeps,
+  baseSpawn: SpawnFn,
+): Promise<DependencyBootstrapOutcome | undefined> {
+  if (plan.steps.every((step) => step.skipReason !== undefined)) return undefined;
+  const fs = deps.fs ?? nodeWorkspaceFs;
+  const bootstrapPlan = planDependencyBootstrap(deps.workspace, fs);
+  if (bootstrapPlan.kind === "none") return undefined;
+  const outcome = await runDependencyBootstrap(bootstrapPlan, bootstrapDeps(deps, fs, baseSpawn));
+  if (outcome.excerpt !== undefined) {
+    deps.onStepOutput?.({ step: "dependencies", scriptName: undefined, excerpt: outcome.excerpt });
+  }
+  return outcome;
+}
+
+function bootstrapDeps(
+  deps: VerificationDeps,
+  fs: WorkspaceFs,
+  baseSpawn: SpawnFn,
+): DependencyBootstrapDeps {
+  return {
+    workspace: deps.workspace,
+    fs,
+    spawn: baseSpawn,
+    processEnv: deps.processEnv ?? process.env,
+    now: deps.now ?? Date.now,
+    ...(deps.signal === undefined ? {} : { signal: deps.signal }),
+    ...(deps.resolveExecutable === undefined ? {} : { resolveExecutable: deps.resolveExecutable }),
+    ...(deps.onTerminated === undefined ? {} : { onTerminated: deps.onTerminated }),
+    ...(deps.sandboxAvailability === undefined
+      ? {}
+      : { sandboxAvailability: deps.sandboxAvailability }),
+    ...(deps.platform === undefined ? {} : { platform: deps.platform }),
+  };
+}
+
+// Every planned step, unexecuted, when the bootstrap left the workspace without its dependencies.
+function dependenciesUnavailableResults(
+  plan: VerificationPlan,
+  outcome: DependencyBootstrapOutcome,
+): readonly VerificationResult[] {
+  return plan.steps.map((step) =>
+    skippedResult({
+      ...step,
+      skipReason: step.skipReason ?? `dependencies unavailable: bootstrap ${outcome.summary.state}`,
+    }),
+  );
+}
+
+// Forwards a non-passing step's redacted output tail to the caller's seam (ADR-0126 D3).
+function reportStepOutput(
+  deps: VerificationDeps,
+  step: VerificationStep,
+  run: StepRun,
+  result: VerificationResult,
+): void {
+  if (result.status === "passed" || result.status === "skipped" || run.result === undefined) return;
+  deps.onStepOutput?.({
+    step: step.kind,
+    scriptName: step.scriptName,
+    excerpt: outputExcerpt(run.result),
+  });
 }
 
 function rootMismatchReport(
@@ -605,12 +722,9 @@ async function runPlanSteps(
       );
       continue;
     }
-    const result = toResult(
-      step,
-      await runStep(step, deps, baseSpawn, monitor, resolution.network),
-      deps.workspace.root,
-      processTreeMemoryEnforced,
-    );
+    const run = await runStep(step, deps, baseSpawn, monitor, resolution.network);
+    const result = toResult(step, run, deps.workspace.root, processTreeMemoryEnforced);
+    reportStepOutput(deps, step, run, result);
     results.push(result);
     cancelled ||= result.status === "cancelled";
   }
@@ -627,11 +741,22 @@ export async function runVerification(
   if (plan.workspaceRoot !== workspaceRoot) {
     return rootMismatchReport(plan, workspaceRoot, startedAtMs, now);
   }
+  const baseSpawn = deps.spawn ?? nodeSpawnFn;
+  // Awaited only when enabled: the default path keeps the exact scheduling it always had, so a
+  // caller that aborts or advances timers right after starting a run sees no extra tick.
+  const bootstrap =
+    (deps.dependencyBootstrap ?? "off") === "auto"
+      ? await bootstrapDependencies(plan, deps, baseSpawn)
+      : undefined;
+  if (bootstrap !== undefined && !dependenciesReady(bootstrap)) {
+    const results = dependenciesUnavailableResults(plan, bootstrap);
+    return finishReport(workspaceRoot, results, false, startedAtMs, now, bootstrap.summary);
+  }
   const { results, cancelled } = await runPlanSteps(
     plan,
     deps,
-    deps.spawn ?? nodeSpawnFn,
+    baseSpawn,
     deps.monitor ?? nodeResourceMonitor,
   );
-  return finishReport(workspaceRoot, results, cancelled, startedAtMs, now);
+  return finishReport(workspaceRoot, results, cancelled, startedAtMs, now, bootstrap?.summary);
 }

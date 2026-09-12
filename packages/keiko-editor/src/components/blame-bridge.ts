@@ -2,6 +2,7 @@ import type { GitEditorBlameLine, GitEditorBlameResponse } from "@oscharko-dev/k
 
 import type { MonacoDisposable, MonacoRange } from "./completion-bridge.js";
 import { BLAME_GLYPH_MARGIN_LANE } from "./glyph-margin-lanes.js";
+import { runtimeFailureNotice } from "./runtime-notice.js";
 
 export interface EditorBlameLabels {
   readonly toggle: string;
@@ -186,7 +187,7 @@ function requestBlame(state: BlameState, args: RegisterEditorBlameArgs, request:
     })
     .catch((error: unknown) => {
       if (state.disposed || !state.enabled || request !== state.sequence) return;
-      args.onError?.(error instanceof Error ? error.message : "Blame read failed");
+      args.onError?.(runtimeFailureNotice("blame-read-failed", error));
     });
 }
 

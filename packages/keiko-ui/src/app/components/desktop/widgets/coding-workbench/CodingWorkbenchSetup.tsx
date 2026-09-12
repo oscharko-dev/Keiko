@@ -82,6 +82,7 @@ type SetupErrorReason =
   | "missing-repository"
   | "unsafe-path"
   | "lock-contention"
+  | "provisioning-failed"
   | "unavailable"
   | "repair-required"
   | "operator-required"
@@ -99,6 +100,9 @@ export interface CodingWorkbenchSetupProps {
   // The Workbench-wide selected folder/repository is a convenience default only. It does not become
   // execution authority until this explicit provision → verify → activate action succeeds.
   readonly selectedRoot: string | undefined;
+  // The bound task workspace's base branch when `selectedRoot` is its repository (issue intake after
+  // a bind, F81): the branch field starts from it without a lookup, since the operator chose it.
+  readonly selectedBaseBranch?: string | undefined;
   // ActiveWorkspaceApi.refresh from the shared context — re-reads the active binding after the
   // workbench-initiated bind so every bound surface flips to the new workspace atomically.
   readonly refreshWorkspace: () => Promise<boolean>;
@@ -112,6 +116,12 @@ export interface CodingWorkbenchSetupProps {
   readonly acceptedIssue: AcceptedWorkbenchIssue | null | undefined;
   readonly onAcceptedIssue: ((issue: AcceptedWorkbenchIssue | null) => void) | undefined;
   readonly onOpenGit: (() => void) | undefined;
+  // The typed repository path lives in the PARENT (#3452 F52). This card is unmounted the moment a
+  // binding or a run workspace arrives -- a sub-second flip on a fresh load -- and a card-owned
+  // draft goes with it, so the operator watched what they were typing replaced by the selection
+  // default on remount. `null` means "nothing typed yet; seed from `selectedRoot`".
+  readonly repositoryPathDraft: string | null;
+  readonly onRepositoryPathDraftChange: (value: string) => void;
 }
 
 // "pending" is a real state, not a stand-in for "verified": before the first readiness read
@@ -158,6 +168,11 @@ const REASON_BY_CODE: Readonly<Partial<Record<string, SetupErrorReason>>> = {
   MISSING_REPOSITORY: "missing-repository",
   UNSAFE_PATH: "unsafe-path",
   LOCK_CONTENTION: "lock-contention",
+  // The server accepted the repository path and target branch and then could not create the managed
+  // worktree (or its identity) itself — the generic "review the repository path and target branch"
+  // sentence sent the operator after two inputs that were fine (2026-09-10, a trusted repository's
+  // bind that failed inside script-trust derivation). The cause lives in the activity log.
+  PROVISIONING_FAILED: "provisioning-failed",
   WORKSPACE_PROVISIONING_UNAVAILABLE: "unavailable",
 };
 
@@ -431,9 +446,16 @@ interface TargetBranchState {
 // branch of a repository that is not being bound and overwrote a branch the operator had typed for
 // the one that is (#3381 review): with a typed path the field does not follow the switcher, so the
 // bind still targeted the typed path while the branch had silently become the other checkout's.
+// The repository and bound base branch the default was last armed for.
+interface ArmedDefault {
+  readonly root: string;
+  readonly baseBranch: string | undefined;
+}
+
 function useTargetBranchDefault(
   selectedRoot: string | undefined,
   repositoryPath: string,
+  selectedBaseBranch: string | undefined,
 ): TargetBranchState {
   const lookup = useBranchLookup();
   const { lookupFor, releaseOperatorChoice } = lookup;
@@ -442,15 +464,19 @@ function useTargetBranchDefault(
   // not follow (the operator typed a different path) leaves both the branch and the touched state
   // alone, and a path being typed is not settled — its own blur handler drives that lookup, so
   // this never fires a request per keystroke.
-  const armedRootRef = useRef<string | null>(null);
+  const armedRef = useRef<ArmedDefault | null>(null);
   useEffect(() => {
     const selected = selectedRoot ?? "";
     if (selected.trim() === "" || repositoryPath !== selected) return;
-    if (armedRootRef.current === selected) return;
-    armedRootRef.current = selected;
-    releaseOperatorChoice();
-    lookupFor(selected);
-  }, [lookupFor, releaseOperatorChoice, repositoryPath, selectedRoot]);
+    const armed = armedRef.current;
+    if (armed?.root === selected && armed.baseBranch === selectedBaseBranch) return;
+    armedRef.current = { root: selected, baseBranch: selectedBaseBranch };
+    // A new repository releases the branch typed for the previous one. The same repository bound
+    // onto another base keeps a typed branch, which `lookupFor` never overrides (review on PR #3452).
+    if (armed?.root !== selected) releaseOperatorChoice();
+    // The bound workspace already names the base of its own repository (F81): no lookup.
+    lookupFor(selected, selectedBaseBranch);
+  }, [lookupFor, releaseOperatorChoice, repositoryPath, selectedBaseBranch, selectedRoot]);
   return {
     targetBranch: lookup.targetBranch,
     settled: !lookup.resolving && authoritativeFor(lookup.authority, repositoryPath.trim()),
@@ -464,10 +490,23 @@ interface BranchLookup {
   readonly targetBranch: string;
   readonly authority: BranchAuthority;
   readonly resolving: boolean;
-  readonly lookupFor: (root: string) => void;
+  // Settles the field's default for a path: from a request, or at once from a branch the bound
+  // workspace already names for it (F81).
+  readonly lookupFor: (root: string, known?: string) => void;
   readonly chooseTargetBranch: (value: string) => void;
   // Drops the operator's claim so the next selection may derive its own default again.
   readonly releaseOperatorChoice: () => void;
+}
+
+// A lookup that lands after unmount must not write into a surface that no longer exists: unmounting
+// supersedes every lookup still in flight.
+function useSupersededOnUnmount(sequence: { current: number }): void {
+  useEffect(
+    () => (): void => {
+      sequence.current += 1;
+    },
+    [sequence],
+  );
 }
 
 // The branch value together with the evidence of where it came from. Nothing here knows about the
@@ -494,10 +533,14 @@ function useBranchLookup(): BranchLookup {
     setTargetBranch(branch ?? DEFAULT_TARGET_BRANCH);
   }, []);
   const lookupFor = useCallback(
-    (root: string): void => {
+    (root: string, known?: string): void => {
       const trimmed = root.trim();
       if (trimmed === "" || touchedRef.current) return;
       const seq = (lookupSeqRef.current += 1);
+      if (known !== undefined) {
+        settleLookup(seq, trimmed, known);
+        return;
+      }
       setAuthority({ kind: "none" });
       setResolving(true);
       void readBaseBranch(trimmed).then((branch) => {
@@ -506,13 +549,7 @@ function useBranchLookup(): BranchLookup {
     },
     [settleLookup],
   );
-  // A lookup that lands after unmount must not write into a surface that no longer exists.
-  useEffect(
-    () => (): void => {
-      lookupSeqRef.current += 1;
-    },
-    [],
-  );
+  useSupersededOnUnmount(lookupSeqRef);
   const chooseTargetBranch = useCallback((value: string): void => {
     touchedRef.current = true;
     setAuthority({ kind: "operator" });
@@ -566,6 +603,7 @@ const PLAIN_ALERT_KEYS: Readonly<Partial<Record<SetupErrorReason, CodingWorkbenc
   "missing-repository": "codingWorkbench.setup.missingRepository",
   "unsafe-path": "codingWorkbench.setup.unsafePath",
   "lock-contention": "codingWorkbench.setup.lockContention",
+  "provisioning-failed": "codingWorkbench.setup.provisioningFailed",
   unavailable: "codingWorkbench.setup.provisioningUnavailable",
   "repair-failed": "codingWorkbench.setup.repairFailed",
 };
@@ -720,20 +758,36 @@ function SetupActionRow({
 // The Workbench-wide selected folder is the path field's default: it follows a new selection only
 // while the operator has not typed a different path (an empty field, or one still showing the
 // previous selection, is not an operator's choice).
+// Controlled by the parent so an unmount cannot discard it (#3452 F52). The seeding rule is
+// unchanged: a new selection wins only while the field is empty or still shows the previous
+// selection -- a path the operator typed always wins.
 function useRepositoryPathDefault(
   selectedRoot: string | undefined,
+  draft: string | null,
+  onDraftChange: (value: string) => void,
 ): readonly [string, (value: string) => void] {
-  const [repositoryPath, setRepositoryPath] = useState(selectedRoot ?? "");
+  const repositoryPath = draft ?? selectedRoot ?? "";
   const previousSelectedRootRef = useRef(selectedRoot ?? "");
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   useEffect(() => {
     const previousSelectedRoot = previousSelectedRootRef.current;
     const nextSelectedRoot = selectedRoot ?? "";
     previousSelectedRootRef.current = nextSelectedRoot;
-    setRepositoryPath((current) =>
-      current.trim() === "" || current === previousSelectedRoot ? nextSelectedRoot : current,
-    );
-  }, [selectedRoot]);
-  return [repositoryPath, setRepositoryPath];
+    const current = draftRef.current ?? previousSelectedRoot;
+    if (current.trim() === "" || current === previousSelectedRoot) onDraftChange(nextSelectedRoot);
+  }, [selectedRoot, onDraftChange]);
+  return [repositoryPath, onDraftChange];
+}
+
+function submitBlocked(
+  pending: boolean,
+  unresolvedIssue: boolean,
+  issue: AcceptedWorkbenchIssue | null,
+  branch: TargetBranchState,
+  repositoryPath: string,
+): boolean {
+  return pending || unresolvedIssue || setupInputsUnavailable(issue, branch, repositoryPath);
 }
 
 function setupInputsUnavailable(
@@ -747,29 +801,52 @@ function setupInputsUnavailable(
   );
 }
 
+// Named beside this file's other wiring hooks (`useRepositoryPathDefault`, `useTargetBranchDefault`,
+// `useSetupActions`), so the card states the release rule rather than spelling out an effect -- and
+// keeps AGENTS.md section 6's 50-line ceiling after taking the parent-held draft (#3452 F52).
+// The card's own pending flag travels with the status it derives from, the way this file's other
+// wiring hooks keep a value and its derived state together.
+function useSetupStatus(): readonly [SetupStatus, Dispatch<SetStateAction<SetupStatus>>, boolean] {
+  const [status, setStatus] = useState<SetupStatus>({ kind: "idle" });
+  return [status, setStatus, status.kind === "pending"];
+}
+
+function useReleaseAcceptedIssue(
+  acceptedIssue: AcceptedWorkbenchIssue | null | undefined,
+  issue: AcceptedWorkbenchIssue | null,
+  onAcceptedIssue: (issue: AcceptedWorkbenchIssue | null) => void,
+): void {
+  useEffect(() => {
+    if (acceptedIssue !== null && issue === null) onAcceptedIssue(null);
+  }, [acceptedIssue, issue, onAcceptedIssue]);
+}
+
 export function CodingWorkbenchSetup({
   selectedRoot,
+  selectedBaseBranch,
   refreshWorkspace,
   runtimePosture,
   acceptedIssue = null,
   onAcceptedIssue = (): void => undefined,
   onOpenGit,
+  repositoryPathDraft,
+  onRepositoryPathDraftChange,
 }: CodingWorkbenchSetupProps): ReactNode {
-  const [repositoryPath, setRepositoryPath] = useRepositoryPathDefault(selectedRoot);
-  const branch = useTargetBranchDefault(selectedRoot, repositoryPath);
+  const [repositoryPath, setRepositoryPath] = useRepositoryPathDefault(
+    selectedRoot,
+    repositoryPathDraft,
+    onRepositoryPathDraftChange,
+  );
+  const branch = useTargetBranchDefault(selectedRoot, repositoryPath, selectedBaseBranch);
   const intake = useCodingWorkbenchIssueIntake(repositoryPath);
   const issue = acceptedIssue?.repositoryPath === repositoryPath.trim() ? acceptedIssue : null;
   const unresolvedIssue = intake.issueRef.trim() !== "" && issue === null;
-  useEffect(() => {
-    if (acceptedIssue !== null && issue === null) onAcceptedIssue(null);
-  }, [acceptedIssue, issue, onAcceptedIssue]);
-  const [status, setStatus] = useState<SetupStatus>({ kind: "idle" });
-  const pending = status.kind === "pending";
+  useReleaseAcceptedIssue(acceptedIssue, issue, onAcceptedIssue);
+  const [status, setStatus, pending] = useSetupStatus();
   // A branch lookup in flight is the one wait this card imposes on the operator: until it settles,
   // the field's branch belongs to another path (or to nothing), and binding it would derive the
   // task id from the wrong repository's default.
-  const submitDisabled =
-    pending || unresolvedIssue || setupInputsUnavailable(issue, branch, repositoryPath);
+  const submitDisabled = submitBlocked(pending, unresolvedIssue, issue, branch, repositoryPath);
   const actions = useSetupActions({
     repositoryPath,
     branch,

@@ -276,7 +276,7 @@ export interface ModelProviderConfig {
   readonly modelId: string;
   readonly baseUrl: string;
   readonly apiKey: string;               // Read from env/config; never logged
-  readonly timeoutMs: number;            // Default: 30_000
+  readonly timeoutMs: number;            // One attempt; default: 30_000
   readonly maxRetries: number;           // Default: 3
   readonly retryBaseDelayMs: number;     // Initial backoff; doubles each attempt; default: 500
 }
@@ -510,18 +510,55 @@ Precedence order (highest wins):
 
 ### Resilience primitives
 
-**Timeout.** Each call creates a timeout signal via `AbortSignal.timeout(config.timeoutMs)`. If the
-caller also supplies a `cancellationSignal`, the two are composed:
-`AbortSignal.any([timeoutSignal, cancellationSignal])` (Node 22 built-in). The composed signal is
-passed to `fetch(url, { signal })`. A signal abort triggered by timeout throws `TimeoutError`;
-triggered by cancellation throws `CancelledError`.
+**Timeout.** Each attempt creates its own timeout signal via `AbortSignal.timeout()`.
+`config.timeoutMs` bounds one attempt, and the attempt runs under the smaller of it and what is left
+of the call's end-to-end budget (below). If the caller also supplies a `cancellationSignal`, the two
+are composed: `AbortSignal.any([timeoutSignal, cancellationSignal])` (Node 22 built-in). The
+composed signal is passed to `fetch(url, { signal })`. A signal abort triggered by timeout throws
+`TimeoutError`; triggered by cancellation throws `CancelledError`.
 
-**Bounded retry.** On `TransportError`, `TimeoutError`, or `RateLimitError` (when `retryAfterMs` is
-null or zero), the gateway retries up to `config.maxRetries` times with exponential backoff:
-`delay = min(retryBaseDelayMs * 2^(attempt - 1), 30_000)`. The delay uses `clock.sleep()`. The
+**Reading a buffered answer over the stream.** A buffered call to a route whose capability streams
+(`streaming: true`, with an adapter that can read a stream) reads each attempt's answer over the
+provider's SSE stream instead of waiting for one body. The attempt's `timeoutMs` then bounds the
+provider's silence: before its response starts, until its first data event, and between two data
+events. What is left of the call's end-to-end budget bounds the whole read. A long generation that
+keeps producing is therefore never cut off at `timeoutMs` and generated again, and a silent
+provider still ends with a retryable `TimeoutError`. A keep-alive comment (a LiteLLM proxy's
+`: ping` while it waits for its upstream) is not a data event. An error frame inside the stream
+(`data: {"error": …}`) maps like the same HTTP failure: LiteLLM's `code` is the upstream HTTP status
+as a string, and a frame that names no status (OpenAI and Azure name a failure in `code`, `type`
+and `message`) is classified by what it says (a context overflow, a rejected key, a missing
+permission, a rate limit or an invalid request) before it falls back to a retryable upstream
+failure (502), so a terminal failure is never generated again. The read releases the provider's
+body on every exit, also when its consumer stops early. The streamed answer runs through the same
+normalization as a whole body, and an endpoint that answers a streamed request with
+`application/json` is read as that whole body.
+Coding run 30 (2026-09-11): two gpt-5.4 generations of 4.8k to 5.9k output tokens at 27 to 45
+tokens per second were cut off at 120 s and generated a second time; Azure answered both with
+HTTP 200.
+
+**Bounded retry.** On an error whose `retryable` flag is set, among them `TransportError`,
+`TimeoutError` and `RateLimitError`, the gateway retries up to `config.maxRetries` times. The
+backoff is `min(retryBaseDelayMs * 2^(attempt - 1), 30_000)` at the top of an equal-jitter band
+(each sleep lies between half of it and all of it); a `RateLimitError` that carries `retryAfterMs`
+waits exactly that long instead, capped at 30 s. The delay uses `clock.sleep()`. The
 following error types are never retried: `AuthenticationError`, `ModelRefusalError`,
 `ContextOverflowError`, `CancelledError`, `CircuitOpenError`, `ConfigInvalidError`,
 `UnknownModelError`.
+
+**End-to-end budget.** A buffered call as a whole is bounded by `providerRequestBudgetMs(provider)`
+(`resilience.ts`): `(maxRetries + 1) × timeoutMs` plus 30 s before each retry, the longest sleep the
+loop honours (the backoff cap and the cap on a provider's `retryAfterMs` are both 30 s), so a
+rate-limited provider keeps all its configured attempts and the cool-down it asked for. A retry
+whose delay does not fit what is left of the budget could never run, so the call ends at once with
+the last error (`gateway.retry.exhausted` with `reason: "budget"`, the delay and the remaining
+budget) instead of sleeping the rest of it away. An attempt that starts with less than `timeoutMs`
+left, which only an earlier attempt overrunning its own timeout can cause, runs under what is left.
+A caller that builds its own deadline around a gateway call derives it from the same function; the
+coding sidecar route adds a grace so the gateway settles its own timeout first. The budget never exceeds 2^31 − 1 ms (`MAX_TIMER_DELAY_MS`, `config.ts`): config validation holds each of its terms to that timer ceiling but not their sum, and a deadline armed past the ceiling fires at once, so the derivation clamps the sum, and the adapter's read deadline and the coding sidecar route clamp whatever bound they are handed (PR #3452 review). A stream read without bounds (`chatStream`) is never retried and stays bounded by one
+`timeoutMs`, with `STREAM_IDLE_TIMEOUT_MS` (60 s) as the longest wait for its next data event. Until PR #3452 (2026-09-11) the provider's
+`timeoutMs` reached the retry loop as the budget of the whole call, so an attempt that hung to its
+timeout left no budget and a `TimeoutError` was never retried (coding run 23).
 
 **Circuit breaker.** One `CircuitBreaker` instance per `(modelId, baseUrl)` pair, keyed in a `Map`.
 States:

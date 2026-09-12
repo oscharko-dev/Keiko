@@ -9,6 +9,7 @@
 
 import { createServer } from "node:net";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
+import { EventEmitter, once } from "node:events";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -19,7 +20,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEV_RUNNER_SHUTDOWN_GRACE_MS,
   bffChildEnv,
+  bffCodeWatchEnabled,
   bffProcessArgs,
+  createBffCodeWatch,
+  createChildSupervisor,
+  createContentDigestTracker,
+  isBffCodePath,
   canonicalLocalhostRedirectLocation,
   checkNextPortFree,
   copyHeadersSafely,
@@ -27,7 +33,6 @@ import {
   findAvailableNextPort,
   forwardedUpstreamHeaders,
   normalizeUpstreamLocation,
-  microphoneAllowanceAfterChildExit,
   packageBuildWatchArgs,
   preflightNextRespawn,
   proxyHttp,
@@ -444,19 +449,223 @@ describe("proxyHttp request target validation", () => {
   });
 });
 
+// F71 relocates the former pin of this block: interactive development still reloads the BFF's
+// code, now through the runner's content-gated watch (createBffCodeWatch below) instead of
+// `node --watch`, and hermetic tests still run one stable BFF process (bffCodeWatchEnabled).
 describe("bffProcessArgs", () => {
-  it("keeps watch mode for interactive development", () => {
-    expect(bffProcessArgs("/repo/scripts/dev-bff.mjs", true)).toEqual([
-      "--watch",
-      "--watch-preserve-output",
+  it("starts the BFF as a plain process, never under node --watch", () => {
+    expect(bffProcessArgs("/repo/scripts/dev-bff.mjs")).toEqual(["/repo/scripts/dev-bff.mjs"]);
+  });
+});
+
+describe("bffCodeWatchEnabled", () => {
+  it("watches the BFF's code in interactive development", () => {
+    expect(bffCodeWatchEnabled({})).toBe(true);
+    expect(bffCodeWatchEnabled({ NODE_ENV: "test" })).toBe(true);
+  });
+
+  it("keeps hermetic tests on one stable BFF process", () => {
+    expect(bffCodeWatchEnabled({ NODE_ENV: "test", KEIKO_DEV_TEST_SKIP_BFF_WATCH: "1" })).toBe(
+      false,
+    );
+  });
+});
+
+describe("isBffCodePath", () => {
+  it("counts only what the BFF loads at run time", () => {
+    expect(["a.js", "a.mjs", "a.cjs", "a.json"].every(isBffCodePath)).toBe(true);
+    expect(["a.d.ts", "a.js.map", "a.tsbuildinfo", "a.ts"].some(isBffCodePath)).toBe(false);
+  });
+});
+
+describe("createContentDigestTracker", () => {
+  it("names a file whose content changed and never one that was only touched", () => {
+    const contents = new Map([
+      ["/dist/a.js", "one"],
+      ["/dist/b.js", "two"],
+    ]);
+    const tracker = createContentDigestTracker((path) => contents.get(path));
+    tracker.seed(["/dist/a.js", "/dist/b.js"]);
+
+    expect(tracker.changed(["/dist/a.js", "/dist/b.js"])).toEqual([]);
+    contents.set("/dist/a.js", "one, changed");
+    expect(tracker.changed(["/dist/a.js", "/dist/b.js", "/dist/a.js"])).toEqual(["/dist/a.js"]);
+    expect(tracker.changed(["/dist/a.js"])).toEqual([]);
+  });
+
+  it("names a file that appeared or disappeared", () => {
+    const contents = new Map([["/dist/a.js", "one"]]);
+    const tracker = createContentDigestTracker((path) => contents.get(path));
+    tracker.seed(["/dist/a.js"]);
+
+    contents.set("/dist/c.js", "new");
+    contents.delete("/dist/a.js");
+    expect(tracker.changed(["/dist/a.js", "/dist/c.js"])).toEqual(["/dist/a.js", "/dist/c.js"]);
+  });
+});
+
+describe("createBffCodeWatch", () => {
+  function harness(contents, identities = new Map([["/repo/packages/a/dist", 1]])) {
+    const listeners = new Map();
+    const watchImpl = vi.fn((path, _options, listener) => {
+      listeners.set(path, listener);
+      return { close: vi.fn() };
+    });
+    const timers = [];
+    const schedule = vi.fn((callback) => timers.push(callback));
+    const cancel = vi.fn((id) => {
+      timers[id - 1] = undefined;
+    });
+    const tracker = createContentDigestTracker((path) => contents.get(path));
+    tracker.seed([...contents.keys()]);
+    const onChange = vi.fn();
+    const handle = createBffCodeWatch({
+      roots: [
+        { path: "/repo/packages/a/dist", recursive: true },
+        { path: "/repo/scripts/dev-bff.mjs", recursive: false },
+      ],
+      tracker,
+      onChange,
+      watchImpl,
+      schedule,
+      cancel,
+      identify: (path) => identities.get(path),
+      listCode: (path) => [...contents.keys()].filter((file) => file.startsWith(`${path}/`)),
+    });
+    const runTimers = () => {
+      for (const callback of timers.splice(0)) callback?.();
+    };
+    return { handle, identities, listeners, onChange, runTimers, watchImpl };
+  }
+
+  it("restarts nothing for a content-identical write or a file the BFF does not load", () => {
+    const contents = new Map([
+      ["/repo/packages/a/dist/index.js", "v1"],
+      ["/repo/packages/a/dist/index.d.ts", "t1"],
+    ]);
+    const { listeners, onChange, runTimers } = harness(contents);
+    contents.set("/repo/packages/a/dist/index.d.ts", "t2");
+
+    listeners.get("/repo/packages/a/dist")("change", "index.js");
+    listeners.get("/repo/packages/a/dist")("change", "index.d.ts");
+    runTimers();
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("restarts once for a burst of writes that changed code", () => {
+    const contents = new Map([
+      ["/repo/packages/a/dist/index.js", "v1"],
+      ["/repo/packages/a/dist/util.js", "u1"],
+      ["/repo/scripts/dev-bff.mjs", "b1"],
+    ]);
+    const { listeners, onChange, runTimers } = harness(contents);
+    contents.set("/repo/packages/a/dist/index.js", "v2");
+    contents.set("/repo/scripts/dev-bff.mjs", "b2");
+
+    listeners.get("/repo/packages/a/dist")("change", "index.js");
+    listeners.get("/repo/packages/a/dist")("change", "util.js");
+    listeners.get("/repo/scripts/dev-bff.mjs")("change", "dev-bff.mjs");
+    runTimers();
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith([
+      "/repo/packages/a/dist/index.js",
       "/repo/scripts/dev-bff.mjs",
     ]);
   });
 
-  it("uses a stable one-shot process for hermetic tests", () => {
-    expect(bffProcessArgs("/repo/scripts/dev-bff.mjs", false)).toEqual([
-      "/repo/scripts/dev-bff.mjs",
+  it("closes its watchers and drops a pending burst", () => {
+    const contents = new Map([["/repo/packages/a/dist/index.js", "v1"]]);
+    const { handle, listeners, onChange, runTimers, watchImpl } = harness(contents);
+    contents.set("/repo/packages/a/dist/index.js", "v2");
+    listeners.get("/repo/packages/a/dist")("change", "index.js");
+
+    handle.close();
+    runTimers();
+
+    expect(onChange).not.toHaveBeenCalled();
+    for (const result of watchImpl.mock.results) expect(result.value.close).toHaveBeenCalled();
+  });
+
+  // PR #3452 review: a recursive watcher's name is relative to its root; an empty, malformed or
+  // traversal-like one names nothing the BFF loads and never reaches the tracker.
+  it.each([
+    ["an empty name", ""],
+    ["a missing name", null],
+    ["a name with a NUL byte", "index\0.js"],
+    ["a traversal-like name", "../../../outside.js"],
+    ["a name that leaves its root for a sibling", "../dist-other/index.js"],
+  ])("drops %s from a recursive watcher", (_label, name) => {
+    const contents = new Map([
+      ["/repo/packages/a/dist/index.js", "v1"],
+      ["/repo/outside.js", "o1"],
+      ["/repo/packages/a/dist-other/index.js", "x1"],
     ]);
+    const { listeners, onChange, runTimers } = harness(contents);
+    contents.set("/repo/outside.js", "o2");
+    contents.set("/repo/packages/a/dist-other/index.js", "x2");
+
+    listeners.get("/repo/packages/a/dist")("change", name);
+    runTimers();
+
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  // The single-file branch watches exactly its own file and ignores the reported name by design.
+  it("names its own file for a single-file watcher whatever name it reports", () => {
+    const contents = new Map([["/repo/scripts/dev-bff.mjs", "b1"]]);
+    const { listeners, onChange, runTimers } = harness(contents);
+    contents.set("/repo/scripts/dev-bff.mjs", "b2");
+
+    listeners.get("/repo/scripts/dev-bff.mjs")("change", "../../../elsewhere.js");
+    runTimers();
+
+    expect(onChange).toHaveBeenCalledWith(["/repo/scripts/dev-bff.mjs"]);
+  });
+
+  // PR #3452 review: a runner started before the first build, or a clean rebuild while it runs,
+  // leaves a package output directory that was absent, or has been replaced, since the watch began.
+  it("watches a package output directory that appears after the watch started", () => {
+    const contents = new Map([["/repo/scripts/dev-bff.mjs", "b1"]]);
+    const { identities, listeners, onChange, runTimers, watchImpl } = harness(contents, new Map());
+    expect(listeners.has("/repo/packages/a/dist")).toBe(false);
+
+    contents.set("/repo/packages/a/dist/index.js", "v1");
+    identities.set("/repo/packages/a/dist", 7);
+    listeners.get("/repo/packages/a")("rename", "dist");
+    runTimers();
+
+    expect(watchImpl).toHaveBeenCalledWith(
+      "/repo/packages/a/dist",
+      { recursive: true, persistent: false },
+      expect.any(Function),
+    );
+    expect(onChange).toHaveBeenCalledWith(["/repo/packages/a/dist/index.js"]);
+    contents.set("/repo/packages/a/dist/index.js", "v2");
+    listeners.get("/repo/packages/a/dist")("change", "index.js");
+    runTimers();
+    expect(onChange).toHaveBeenCalledTimes(2);
+  });
+
+  it("re-arms the watch on a replaced output directory and ignores its parent's other entries", () => {
+    const contents = new Map([["/repo/packages/a/dist/index.js", "v1"]]);
+    const { identities, listeners, onChange, runTimers, watchImpl } = harness(contents);
+    const first = watchImpl.mock.results[0].value;
+
+    listeners.get("/repo/packages/a")("change", "src");
+    listeners.get("/repo/packages/a")("change", "dist");
+    runTimers();
+    expect(onChange).not.toHaveBeenCalled();
+    expect(first.close).not.toHaveBeenCalled();
+
+    identities.set("/repo/packages/a/dist", 2);
+    contents.set("/repo/packages/a/dist/index.js", "v2");
+    listeners.get("/repo/packages/a")("rename", "dist");
+    runTimers();
+
+    expect(first.close).toHaveBeenCalled();
+    expect(onChange).toHaveBeenCalledWith(["/repo/packages/a/dist/index.js"]);
   });
 });
 
@@ -578,6 +787,133 @@ describe("restart supervision", () => {
 
     expect(result).toEqual({ retried: false, started: true });
     await vi.waitFor(() => expect(reportError).toHaveBeenCalledWith(readinessFailure));
+  });
+});
+
+// F71 (PR #3452 review): the claim the fix rests on, driven through real child processes. A child
+// the runner stops on purpose respawns at once and leaves the restart budget untouched; the same
+// child exiting on its own is a crash and is counted.
+describe("child supervision", () => {
+  const idleChild = ["-e", "setInterval(() => {}, 1_000)"];
+
+  function supervised(spawnProcess) {
+    const budget = createRestartBudget(3, 60_000);
+    const respawned = [];
+    const crashes = [];
+    const exits = [];
+    const supervisor = createChildSupervisor({
+      restartBudget: budget,
+      isShuttingDown: () => false,
+      onExit: (label, _code, signal) => exits.push({ label, signal }),
+      respawn: (label) => respawned.push(label),
+      onCrash: (label, verdict) => crashes.push({ label, ...verdict }),
+      ...(spawnProcess === undefined ? {} : { spawnProcess }),
+    });
+    return { budget, respawned, crashes, exits, supervisor };
+  }
+
+  // A stand-in process the test drives by emitting its events; `pid` is undefined exactly when the
+  // process never spawned, as Node reports it.
+  function fakeChild(pid) {
+    const child = new EventEmitter();
+    child.pid = pid;
+    child.kill = vi.fn(() => true);
+    return child;
+  }
+
+  it("respawns a child stopped on purpose without counting it against the restart budget", async () => {
+    const { budget, respawned, crashes, exits, supervisor } = supervised();
+    const child = supervisor.spawn("bff", process.execPath, idleChild, {});
+    await once(child, "spawn");
+
+    expect(supervisor.restartOnPurpose("bff")).toBe(true);
+    // A burst of code changes stops the child once.
+    expect(supervisor.restartOnPurpose("bff")).toBe(false);
+    await vi.waitFor(() => expect(respawned).toEqual(["bff"]), { timeout: 10_000 });
+
+    expect(exits).toEqual([{ label: "bff", signal: "SIGTERM" }]);
+    expect(crashes).toEqual([]);
+    expect(supervisor.children.has("bff")).toBe(false);
+    // The budget never saw that exit: the next real crash is the first one it counts.
+    expect(budget.recordExit("bff")).toEqual({ allowed: true, count: 1 });
+  });
+
+  it("counts an unexpected exit of the same child against the restart budget", async () => {
+    const { respawned, crashes, supervisor } = supervised();
+    const child = supervisor.spawn("bff", process.execPath, idleChild, {});
+    await once(child, "spawn");
+
+    child.kill("SIGKILL");
+    await vi.waitFor(() => expect(crashes).toEqual([{ label: "bff", allowed: true, count: 1 }]), {
+      timeout: 10_000,
+    });
+    expect(respawned).toEqual([]);
+  });
+
+  it("leaves a child that is not running alone", () => {
+    const { supervisor } = supervised();
+    expect(supervisor.restartOnPurpose("bff")).toBe(false);
+  });
+
+  // CodeRabbit on PR #3452: Node can emit `error` and then `exit` for the same process. Each child
+  // ends once, so its crash is counted once and a restart on purpose respawns once.
+  it("counts a child that never spawned once, even when an exit follows its error", () => {
+    const child = fakeChild(undefined);
+    const { respawned, crashes, supervisor } = supervised(() => child);
+    supervisor.spawn("bff", "missing-binary", [], {});
+
+    child.emit("error", new Error("spawn ENOENT"));
+    child.emit("exit", null, null);
+
+    expect(crashes).toEqual([{ label: "bff", allowed: true, count: 1 }]);
+    expect(respawned).toEqual([]);
+    expect(supervisor.children.has("bff")).toBe(false);
+  });
+
+  it("counts a running child's crash once when an error precedes its exit", () => {
+    const child = fakeChild(4242);
+    const { crashes, supervisor } = supervised(() => child);
+    supervisor.spawn("bff", "node", [], {});
+
+    child.emit("error", new Error("channel closed"));
+    expect(supervisor.children.get("bff")).toBe(child);
+    child.emit("exit", 1, null);
+
+    expect(crashes).toEqual([{ label: "bff", allowed: true, count: 1 }]);
+  });
+
+  it("waits for the exit of a running child whose stop failed, then respawns it once", () => {
+    const child = fakeChild(4242);
+    const { respawned, crashes, supervisor } = supervised(() => child);
+    supervisor.spawn("bff", "node", [], {});
+
+    expect(supervisor.restartOnPurpose("bff")).toBe(true);
+    child.emit("error", new Error("kill EPERM"));
+    expect(respawned).toEqual([]);
+
+    child.emit("exit", null, "SIGTERM");
+    child.emit("error", new Error("late"));
+    expect(respawned).toEqual(["bff"]);
+    expect(crashes).toEqual([]);
+  });
+
+  it("drops a restart on purpose when the child it was meant for never spawned", () => {
+    const first = fakeChild(undefined);
+    const second = fakeChild(4343);
+    const queue = [first, second];
+    const { respawned, crashes, supervisor } = supervised(() => queue.shift());
+    supervisor.spawn("bff", "missing-binary", [], {});
+    expect(supervisor.restartOnPurpose("bff")).toBe(true);
+    first.emit("error", new Error("spawn ENOENT"));
+
+    supervisor.spawn("bff", "node", [], {});
+    second.emit("exit", 1, null);
+
+    expect(respawned).toEqual([]);
+    expect(crashes).toEqual([
+      { label: "bff", allowed: true, count: 1 },
+      { label: "bff", allowed: true, count: 2 },
+    ]);
   });
 });
 
@@ -1142,9 +1478,17 @@ describe("forwardedUpstreamHeaders", () => {
     },
   );
 
+  // The supervisor reports every child's exit to the controller (PR #3452 review): the rule lives in
+  // the one object production calls, not in a helper beside it.
   it("clears a prior allowance on BFF exit without coupling it to unrelated child exits", () => {
-    expect(microphoneAllowanceAfterChildExit("bff", true)).toBe(false);
-    expect(microphoneAllowanceAfterChildExit("next", true)).toBe(true);
+    const policy = createMicrophoneAllowanceController(true);
+    const revision = policy.revision();
+
+    expect(policy.childExited("next")).toBe(revision);
+    expect(policy.current()).toBe(true);
+    expect(policy.childExited("bff")).toBe(revision + 1);
+    expect(policy.current()).toBe(false);
+    expect(policy.observe(revision, true)).toBe(false);
   });
 
   it("keeps microphone capability disabled after failed health probes", async () => {

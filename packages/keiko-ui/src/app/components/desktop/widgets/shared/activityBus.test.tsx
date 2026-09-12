@@ -73,4 +73,121 @@ describe("activityBus", () => {
       time: Date.parse(event.occurredAt),
     });
   });
+
+  // #3390 wave: `operator-decision` is a governed pause reason, not a routine step, so it must
+  // project through the SAME RUNTIME_EVENT_PRESENTATION table as an approval carrying its own
+  // label — never silently fall back to a generic step the way an unmapped kind would.
+  // A settled decision must leave the pending-approval shape: each closed outcome projects onto the
+  // activity kind it already has, and only an event WITHOUT an outcome is still an open approval.
+  it.each([
+    ["accepted", "approved", "activity.event.operatorDecisionAccepted"],
+    ["denied", "rejected", "activity.event.operatorDecisionDenied"],
+    ["unavailable", "rejected", "activity.event.operatorDecisionUnavailable"],
+    ["limit-reached", "rejected", "activity.event.operatorDecisionExpired"],
+    ["stopped", "stopped", "activity.event.operatorDecisionStopped"],
+  ] as const)("projects a settled operator decision (%s) as %s", (outcome, type, labelKey) => {
+    const event: CodingWorkbenchRuntimeSseEvent = {
+      schemaVersion: "1",
+      cursor: `cursor-${outcome}`,
+      sequence: 3,
+      occurredAt: "2026-06-15T10:00:03.000Z",
+      kind: "runtime-event",
+      runId: "run-1",
+      state: "running",
+      revision: 4,
+      eventKind: "operator-decision",
+      auxiliaryOutcome: outcome,
+    };
+
+    act(() => logRuntimeActivityEvents([event]));
+
+    expect(getActivity()[0]).toMatchObject({ id: `run-1:cursor-${outcome}`, type, labelKey });
+  });
+
+  it("projects an operator-decision runtime event as an approval on the operator's own label", () => {
+    const event: CodingWorkbenchRuntimeSseEvent = {
+      schemaVersion: "1",
+      cursor: "cursor-2",
+      sequence: 2,
+      occurredAt: "2026-06-15T10:00:02.000Z",
+      kind: "runtime-event",
+      runId: "run-1",
+      state: "awaiting-approval",
+      revision: 3,
+      eventKind: "operator-decision",
+    };
+
+    act(() => logRuntimeActivityEvents([event]));
+
+    expect(getActivity()[0]).toMatchObject({
+      id: "run-1:cursor-2",
+      type: "approval",
+      labelKey: "activity.event.operatorDecision",
+      agent: "runtime",
+      time: Date.parse(event.occurredAt),
+    });
+  });
+
+  function decisionEvent(
+    cursor: string,
+    sequence: number,
+    auxiliaryOutcome?: "accepted" | "denied",
+    runId = "run-1",
+  ): CodingWorkbenchRuntimeSseEvent {
+    return {
+      schemaVersion: "1",
+      cursor,
+      sequence,
+      occurredAt: "2026-06-15T10:00:02.000Z",
+      kind: "runtime-event",
+      runId,
+      state: auxiliaryOutcome === undefined ? "awaiting-approval" : "running",
+      revision: sequence,
+      eventKind: "operator-decision",
+      ...(auxiliaryOutcome === undefined ? {} : { auxiliaryOutcome }),
+    };
+  }
+
+  // Owner review, PR #3452: the open decision and its settlement are two events with two cursors,
+  // so the settlement must retire the pending entry instead of sitting beside it.
+  it("retires the open decision entry its settlement follows", () => {
+    act(() =>
+      logRuntimeActivityEvents([
+        decisionEvent("cursor-2", 2),
+        decisionEvent("cursor-3", 3, "accepted"),
+      ]),
+    );
+
+    expect(getActivity()).toHaveLength(1);
+    expect(getActivity()[0]).toMatchObject({ id: "run-1:cursor-3", type: "approved" });
+  });
+
+  it("does not re-admit an open decision replayed after its settlement", () => {
+    act(() =>
+      logRuntimeActivityEvents([
+        decisionEvent("cursor-2", 2),
+        decisionEvent("cursor-3", 3, "denied"),
+      ]),
+    );
+    act(() => logRuntimeActivityEvents([decisionEvent("cursor-2", 2)]));
+
+    expect(getActivity().map((entry) => entry.type)).toEqual(["rejected"]);
+  });
+
+  it("keeps a settled decision when the run opens its next one, and never crosses runs", () => {
+    act(() =>
+      logRuntimeActivityEvents([
+        decisionEvent("cursor-2", 2),
+        decisionEvent("cursor-9", 9, undefined, "run-2"),
+        decisionEvent("cursor-3", 3, "accepted"),
+        decisionEvent("cursor-5", 5),
+      ]),
+    );
+
+    expect(getActivity().map((entry) => [entry.id, entry.type])).toEqual([
+      ["run-1:cursor-5", "approval"],
+      ["run-1:cursor-3", "approved"],
+      ["run-2:cursor-9", "approval"],
+    ]);
+  });
 });

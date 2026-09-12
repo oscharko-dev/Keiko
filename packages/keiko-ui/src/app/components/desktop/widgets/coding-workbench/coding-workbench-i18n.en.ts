@@ -289,6 +289,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The repository path is outside the folders this installation may bind. Choose a folder inside an allowed workspace root.",
   "codingWorkbench.setup.lockContention":
     "Another action currently holds this task workspace. Wait a moment, then try again.",
+  "codingWorkbench.setup.provisioningFailed":
+    "Keiko could not create the managed task workspace for this repository. The repository path and target branch were accepted; the activity log records the cause.",
   "codingWorkbench.setup.provisioningUnavailable":
     "Managed task workspaces are not configured on this installation, so no workspace can be bound.",
   "codingWorkbench.setup.repairRequired":
@@ -431,6 +433,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "The subscription source is selected; the gateway is not in use.",
   "codingWorkbench.source.unavailableReason.model-context-window-insufficient":
     "The configured model's context window is too small for a coding run (minimum 32,000 tokens). Increase the model's context window or choose a larger model in Settings → Models.",
+  "codingWorkbench.source.unavailableReason.tool-calling-unverified":
+    "The coding model's tool-calling check is missing or older than 24 hours. Check tool calling again in Settings → Models.",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
   "codingWorkbench.modelSource.openaiGateway": "OpenAI through Gateway",
   "codingWorkbench.modelSource.codexSubscription": "ChatGPT/Codex subscription",
@@ -610,6 +614,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Generated with some evidence omitted.",
   "codingWorkbench.descriptionStatus.reason.fallback-generated":
     "Generated deterministically; the model was unavailable.",
+  "codingWorkbench.descriptionStatus.reason.fallback-output-refused":
+    "Generated deterministically; the model's answer was refused as unsafe or invalid.",
   "codingWorkbench.descriptionStatus.reason.stale-snapshot":
     "The change moved since this draft was generated.",
   "codingWorkbench.descriptionStatus.reason.expired":
@@ -833,6 +839,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.skill-invoked": "Skill invoked",
   "codingWorkbench.event.child-run-started": "Child agent started",
   "codingWorkbench.event.child-run-completed": "Child agent completed",
+  "codingWorkbench.event.operator-decision": "Your decision needed",
   "codingWorkbench.event.failure-redacted": "Failure reported",
   "codingWorkbench.event.detail": "Sequence {sequence}. Revision {revision}.",
   "codingWorkbench.event.detailFailure":
@@ -855,6 +862,18 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.research.revoking": "Revoking…",
   "codingWorkbench.research.revokeLabel":
     "Revoke the internet research grant for this run and its child agents",
+  "codingWorkbench.skills.summary": "Approved skills ({count})",
+  "codingWorkbench.skills.ready": "Ready",
+  "codingWorkbench.skills.category.repositoryAnalysis": "Repository analysis",
+  "codingWorkbench.skills.category.publicResearch": "Public research",
+  "codingWorkbench.skills.category.documentationLookup": "Documentation lookup",
+  "codingWorkbench.skills.reason.disabled": "Disabled",
+  "codingWorkbench.skills.reason.incompatible": "Incompatible",
+  "codingWorkbench.skills.reason.handlerUnavailable": "No handler",
+  "codingWorkbench.skills.reason.authorityDenied": "Authority denied",
+  "codingWorkbench.skills.unavailable": "The approved skills could not be read.",
+  "codingWorkbench.skills.retry": "Try again",
+  "codingWorkbench.skills.reason.budgetExhausted": "Budget exhausted",
   "codingWorkbench.announcement.researchActive": "Internet research grant active.",
   "codingWorkbench.alert.actionFailedCode":
     "The requested runtime action failed ({code}). Review the live state and retry.",
@@ -930,6 +949,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.issue.error.authority-denied":
     "The current authority does not allow binding a run to this issue. Review the autonomy mode and try again.",
   "codingWorkbench.issue.error.cancelled": "The issue intake was cancelled. No run was started.",
+  "codingWorkbench.issue.error.unknown-repository":
+    "Open this repository in the workbench first, then preview the issue.",
   "codingWorkbench.issue.error.unavailable-runtime":
     "The coding runtime is unavailable on this installation, so an issue-bound run cannot start. The preview stays for reference; confirm once the runtime is active.",
   "codingWorkbench.issue.error.unknown":
@@ -957,6 +978,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "This path is not an opened project. Open the repository as a project before changing its GitHub issue access.",
   "codingWorkbench.trust.restrictedNotice":
     "Verification needs to run this repository's package scripts, and they are not yet trusted.",
+  "codingWorkbench.trust.runWaitingNotice":
+    "This run is paused: it needs to run this workspace's package scripts to verify its work, and only you can allow them for exactly these manifest bytes. The run continues by itself once you decide.",
+  "codingWorkbench.trust.driftNotice":
+    "The repository's approval does not cover this task workspace's package scripts, usually because this run changed package.json. Allowing them is your decision for exactly this manifest.",
   "codingWorkbench.trust.allow": "Allow package scripts for verification",
   "codingWorkbench.trust.allowing": "Allowing…",
 } as const;

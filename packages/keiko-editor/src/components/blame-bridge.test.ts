@@ -415,8 +415,10 @@ describe("registerEditorBlame", () => {
     errors.run("keiko.editor.toggleBlame");
     errors.run("keiko.editor.toggleBlame");
     await flush();
-    expect(onError).toHaveBeenNthCalledWith(1, "blame unavailable");
-    expect(onError).toHaveBeenNthCalledWith(2, "Blame read failed");
+    // F29: the notice names the failure and the error's class, never the error's own text.
+    expect(onError).toHaveBeenNthCalledWith(1, "blame-read-failed (error=Error)");
+    expect(onError).toHaveBeenNthCalledWith(2, "blame-read-failed (error=string)");
+    expect(JSON.stringify(onError.mock.calls)).not.toMatch(/blame unavailable|opaque/u);
   });
 
   it("discards a rejected read after disposal", async () => {

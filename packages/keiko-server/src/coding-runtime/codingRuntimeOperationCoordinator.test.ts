@@ -97,11 +97,23 @@ function coordinator(input: {
   readonly settleTask?: (runId: string, outcome: "cancelled" | "failed" | "succeeded") => void;
   readonly activityLog?: ServerLogSink;
   readonly current?: () => CodingRuntimeSnapshot | undefined;
+  // Overridable so a test can drive a PAUSED current snapshot through a controllable resume
+  // outcome; every other fixture leaves this at its always-succeeding default, which a running
+  // snapshot never even reaches (submitFollowUp only consults it while paused).
+  readonly resumePaused?: (
+    current: CodingRuntimeSnapshot,
+  ) => Promise<CodingRuntimeOrchestratorResult>;
 }): CodingRuntimeOperationCoordinator {
   return new CodingRuntimeOperationCoordinator({
     current: input.current ?? ((): CodingRuntimeSnapshot => runningSnapshot()),
     serial: (work) => work(),
     advanceRevision: () => ({ ok: true, snapshot: publicSnapshot() }),
+    // A follow-up into a pause resumes the run first (#3452, run 16); these fixtures dispatch
+    // against a running snapshot, so the resume is never reached.
+    resumePaused:
+      input.resumePaused ??
+      ((): Promise<CodingRuntimeOrchestratorResult> =>
+        Promise.resolve({ ok: true, snapshot: publicSnapshot() })),
     publicSnapshot: (current) => ({
       schemaVersion: "1",
       state: current.state,
@@ -124,6 +136,99 @@ function followUp(requestId = "req-1", expectedRevision = 3): Record<string, unk
 }
 
 describe("CodingRuntimeOperationCoordinator", () => {
+  // #3452: a follow-up into a paused run resumes it first, through this injected port, before the
+  // replacement is dispatched. These three pin the coordinator's own contract for that call,
+  // independent of what the orchestrator's real resumePausedForFollowUp decides.
+  it("resumes a paused current snapshot through the injected resumePaused, exactly once, before dispatch", async () => {
+    const order: string[] = [];
+    const resumePaused = vi.fn((): Promise<CodingRuntimeOrchestratorResult> => {
+      order.push("resumePaused");
+      return Promise.resolve({ ok: true, snapshot: publicSnapshot() });
+    });
+    const taskDispatcher = dispatcher({
+      replace: vi.fn(() => {
+        order.push("replace");
+        return Promise.resolve({
+          ok: true as const,
+          completion: Promise.resolve("succeeded" as const),
+        });
+      }),
+    });
+    const subject = coordinator({
+      taskDispatcher,
+      current: () => ({ ...runningSnapshot(), state: "paused" }),
+      resumePaused,
+    });
+
+    await expect(subject.submitFollowUp("run-1", followUp())).resolves.toMatchObject({ ok: true });
+
+    expect(resumePaused).toHaveBeenCalledOnce();
+    expect(order).toEqual(["resumePaused", "replace"]);
+  });
+
+  it("releases the reservation and answers with the refusal, dispatching nothing, when resumePaused refuses", async () => {
+    let state: CodingRuntimeSnapshot["state"] = "paused";
+    const resumePaused = vi.fn((): Promise<CodingRuntimeOrchestratorResult> =>
+      Promise.resolve({ ok: false, failureCode: "invalid-intent" }),
+    );
+    const taskDispatcher = dispatcher();
+    const subject = coordinator({
+      taskDispatcher,
+      current: () => ({ ...runningSnapshot(), state }),
+      resumePaused,
+    });
+
+    await expect(subject.submitFollowUp("run-1", followUp())).resolves.toEqual({
+      ok: false,
+      failureCode: "invalid-intent",
+    });
+    expect(resumePaused).toHaveBeenCalledOnce();
+    expect(taskDispatcher.dispatch).not.toHaveBeenCalled();
+    expect(taskDispatcher.replace).not.toHaveBeenCalled();
+
+    // The SAME request id is admitted once the run is no longer paused, proving the refusal
+    // released the replay reservation instead of leaving it permanently pending.
+    state = "running";
+    await expect(subject.submitFollowUp("run-1", followUp())).resolves.toMatchObject({ ok: true });
+    expect(resumePaused).toHaveBeenCalledOnce();
+  });
+
+  it("never calls resumePaused for a running current snapshot", async () => {
+    const resumePaused = vi.fn((): Promise<CodingRuntimeOrchestratorResult> =>
+      Promise.resolve({ ok: true, snapshot: publicSnapshot() }),
+    );
+    const subject = coordinator({ resumePaused });
+
+    await expect(subject.submitFollowUp("run-1", followUp())).resolves.toMatchObject({ ok: true });
+
+    expect(resumePaused).not.toHaveBeenCalled();
+  });
+
+  // CodeRabbit review, PR #3452: the resume moves the revision N -> N+1 and the follow-up's own
+  // advance N+1 -> N+2. A replay record committed at the ADMISSION revision N is evicted by the next
+  // reserve at N+2 (N + 1 < N + 2), so the same requestId would dispatch a second replacement task.
+  it("still refuses the same requestId after a paused follow-up resumed the run and advanced it", async () => {
+    let live: CodingRuntimeSnapshot = { ...runningSnapshot(), state: "paused", revision: 3 };
+    const resumePaused = vi.fn((): Promise<CodingRuntimeOrchestratorResult> => {
+      live = { ...live, state: "running", revision: 4 };
+      return Promise.resolve({ ok: true, snapshot: publicSnapshot() });
+    });
+    const taskDispatcher = dispatcher();
+    const subject = coordinator({ current: () => live, resumePaused, taskDispatcher });
+
+    await expect(subject.submitFollowUp("run-1", followUp("req-1", 3))).resolves.toMatchObject({
+      ok: true,
+    });
+    live = { ...live, revision: 5 };
+    await expect(subject.submitFollowUp("run-1", followUp("req-1", 5))).resolves.toEqual({
+      ok: false,
+      failureCode: "invalid-intent",
+    });
+
+    expect(taskDispatcher.replace).toHaveBeenCalledOnce();
+    expect(taskDispatcher.dispatch).not.toHaveBeenCalled();
+  });
+
   it("KEIKO-0722: exhausting the per-run replay cap yields replay-cap-exhausted, not invalid-intent", async () => {
     const taskDispatcher = dispatcher();
     const subject = coordinator({ taskDispatcher });
@@ -746,6 +851,8 @@ describe("CodingRuntimeOperationCoordinator", () => {
     const subject = new CodingRuntimeOperationCoordinator({
       current: (): CodingRuntimeSnapshot => ({ ...runningSnapshot(), revision }),
       serial: <T>(work: () => Promise<T>): Promise<T> => work(),
+      resumePaused: (): Promise<CodingRuntimeOrchestratorResult> =>
+        Promise.resolve({ ok: true, snapshot: { ...publicSnapshot(), revision } }),
       advanceRevision: (current): CodingRuntimeOrchestratorResult => {
         revision = current.revision + 1;
         return { ok: true, snapshot: { ...publicSnapshot(), revision } };

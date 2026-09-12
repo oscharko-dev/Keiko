@@ -36,6 +36,7 @@ const WORKSPACE_A: CodingWorkbenchRunWorkspace = {
   workspace: projection("workspace-a", "issue/a"),
   trust: {
     repositoryRoot: "/repos/a",
+    worktreeRoot: "/worktrees/a",
     repositoryId: "repository-a",
     workspaceId: "workspace-a",
     correlationId: "correlation-workspace-a",
@@ -48,6 +49,7 @@ const WORKSPACE_B: CodingWorkbenchRunWorkspace = {
   workspace: projection("workspace-b", "issue/b"),
   trust: {
     repositoryRoot: "/repos/b",
+    worktreeRoot: "/worktrees/b",
     repositoryId: "repository-b",
     workspaceId: "workspace-b",
     correlationId: "correlation-workspace-b",

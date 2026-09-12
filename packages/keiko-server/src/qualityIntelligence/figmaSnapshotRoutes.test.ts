@@ -56,7 +56,9 @@ import {
   handleFigmaRevokeToken,
   handleFigmaTriggerSnapshot,
   handleFigmaUpdateSnapshotMetadata,
+  figmaBuildDeadlineMsFromEnv,
   figmaPaginationFromEnv,
+  figmaRequestTimeoutMsFromEnv,
   makeInFlightMap,
   resetInFlightMap,
   type FigmaSnapshotSummary,
@@ -527,15 +529,21 @@ describe("env var parsing — KEIKO_FIGMA_BUILD_DEADLINE_MS", () => {
     }
   });
 
+  // Through the production reader, never a copy of its formula (AGENTS.md §7). A delay no timer can
+  // hold is invalid like any other, because setTimeout would fire it at once (PR #3452 review).
   it.each([
     { value: "0", label: "zero" },
     { value: "-1", label: "negative" },
     { value: "abc", label: "non-numeric" },
+    { value: String(2 ** 31), label: "beyond a timer" },
   ])("invalid value ($label) falls back to default 600 000", ({ value }) => {
-    // Inline the same logic as readPositiveIntEnv to assert the fallback.
-    const parsed = Number(value);
-    const result = Number.isInteger(parsed) && parsed > 0 ? parsed : 600_000;
-    expect(result).toBe(600_000);
+    expect(figmaBuildDeadlineMsFromEnv({ KEIKO_FIGMA_BUILD_DEADLINE_MS: value })).toBe(600_000);
+  });
+
+  it("accepts the largest delay a timer can hold", () => {
+    expect(
+      figmaBuildDeadlineMsFromEnv({ KEIKO_FIGMA_BUILD_DEADLINE_MS: String(2 ** 31 - 1) }),
+    ).toBe(2 ** 31 - 1);
   });
 });
 
@@ -546,10 +554,14 @@ describe("env var parsing — KEIKO_FIGMA_REQUEST_TIMEOUT_MS", () => {
     { value: "-1", expected: 60_000 },
     { value: "abc", expected: 60_000 },
     { value: undefined, expected: 60_000 },
+    { value: String(2 ** 31 - 1), expected: 2 ** 31 - 1 },
+    { value: String(2 ** 31), expected: 60_000 },
   ])("value=$value → effective $expected", ({ value, expected }) => {
-    const parsed = value !== undefined ? Number(value) : undefined;
-    const result = parsed !== undefined && Number.isInteger(parsed) && parsed > 0 ? parsed : 60_000;
-    expect(result).toBe(expected);
+    expect(
+      figmaRequestTimeoutMsFromEnv(
+        value === undefined ? {} : { KEIKO_FIGMA_REQUEST_TIMEOUT_MS: value },
+      ),
+    ).toBe(expected);
   });
 });
 

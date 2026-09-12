@@ -76,7 +76,9 @@ Repository content and refinement instructions are untrusted input, separated fr
 instructions by the existing prompt-segmentation mechanism. Every accepted claim references a
 supplied evidence id. Unknown fields, invalid evidence references, malformed output and unsafe
 content fail validation. Calls, tokens, input/output/chunk bytes and elapsed time are bounded.
-The renderer never converts changed test files into a claim that tests ran.
+The renderer never converts changed test files into a claim that tests ran. A delivered pull
+request's check results are never the model's to state: the server-owned body lists them from
+Keiko's own verification evidence (ADR-0086 D9), and a narrative still cannot assert one.
 
 Artifact outcomes are `complete`, `partial`, `fallback` and `failed`. Metadata-derived fallback
 and omission statements are deterministic. A partial snapshot cannot become a complete claim;
@@ -100,7 +102,12 @@ closing keywords, template structure or branding. The trusted renderer appends t
 `by Keiko`; a logo is optional and requires a validated immutable HTTPS asset plus server-established
 public availability. Missing, private or unrenderable assets produce the text fallback without a
 network fetch. Repository templates and human-authored text outside the managed region belong to
-the application adapter and must remain byte-identical.
+the application adapter and must remain byte-identical. The server-owned Checks section of a
+delivered pull request (ADR-0086 D9) is kept current by its own governed `pr-update`, never by
+description application: it replaces only the bytes inside its own frame, after re-reading the live
+body and confirming, on that same read, that the pull request is still the delivery's own, open and
+on the pushed commit, so the managed region and every human-authored byte stay identical and no
+other pull request is ever written.
 
 Description application, PR creation, mark-ready, CI readiness, human review and observed merge
 remain distinct governed operations under ADR-0086, ADR-0087, ADR-0137 and ADR-0138. A generated

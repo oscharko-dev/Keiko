@@ -19,7 +19,7 @@ const DOCUMENTATION_KEYS = new Set([
   "x-codeSamples",
 ]);
 
-/** Projects the v1.17.17 OpenAPI document onto only Keiko's admitted structural surface. */
+/** Projects the v1.18.30 OpenAPI document onto only Keiko's admitted structural surface. */
 export function projectOpenCodeProtocolSurface(
   document: unknown,
 ): OpenCodeProtocolSurfaceProjection {

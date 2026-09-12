@@ -42,8 +42,6 @@ export {
 // choke point: it sanitizes the record's correlation ids itself, so a caller that invokes
 // `.record()` directly is protected exactly like one that goes through `emitServerDiagnostic`.
 
-import { randomUUID } from "node:crypto";
-
 export interface ServerDiagnosticRecord {
   readonly correlationId: string;
   // The correlation id of the request/run that SPAWNED this one, set only when this record
@@ -90,6 +88,9 @@ export interface ServerDiagnosticRecord {
   // Removes the reconstruction ambiguity a bare `GATEWAY_PROVIDER_ERROR`/`GATEWAY_RATE_LIMIT`
   // `errorClass` leaves behind (which of 429/500/502/503/529 actually happened).
   readonly httpStatus?: number | undefined;
+  // The deadline a request was admitted under, when that deadline (not a fault) ended it: the tool
+  // bridge's own request deadline (PR #3452, F44). A duration only, never content.
+  readonly deadlineMs?: number | undefined;
   // The provider-supplied retry delay a `RateLimitError` carried (ADR-0173 D5 g26), same
   // `providerErrorDetail` derivation. A count only — never content.
   readonly retryAfterMs?: number | undefined;
@@ -125,8 +126,8 @@ export interface ServerDiagnosticRecord {
   // How many corrupt-lock quarantine files (update-session-lock.ts's `.corrupt.<iso-stamp>`
   // forensic evidence) a prune sweep could not remove -- a directory/stat/unlink failure that used
   // to be swallowed outright (#2906 round 3). The successful removal count for the SAME sweep
-  // reuses `occurrenceCount`, matching `emitEvidenceRetentionDiagnostic`'s existing convention for
-  // "how many things this retention pass removed"; this field is present only when at least one
+  // reuses `occurrenceCount` for "how many things this pass removed"; this field is present only
+  // when at least one
   // entry could not be removed, so support can tell "nothing left to prune" apart from "pruning is
   // failing repeatedly" (the latter can otherwise accumulate indefinitely with no operator signal).
   readonly quarantinePruneFailedCount?: number | undefined;
@@ -254,6 +255,7 @@ function diagnosticActivityLogFields(record: ServerDiagnosticRecord): Record<str
   addBoundedField(fields, "gatewayRequestId", record.gatewayRequestId);
   addBoundedField(fields, "httpStatus", record.httpStatus);
   addBoundedField(fields, "retryAfterMs", record.retryAfterMs);
+  addBoundedField(fields, "deadlineMs", record.deadlineMs);
   addBoundedField(fields, "occurrenceCount", record.occurrenceCount);
   addBoundedField(fields, "frameBytes", record.frameBytes);
   addBoundedField(fields, "retainedModelCount", record.retainedModelCount);
@@ -337,8 +339,8 @@ export const DEFAULT_SERVER_DIAGNOSTIC_SUMMARY = "server-operation-failed";
 // never handed foreign error text. A callback that returns request/provider content therefore
 // degrades to the default rather than extending the diagnostic trust boundary.
 //
-// Every literal `message` this module (or a caller building a `ServerDiagnosticRecord` by hand,
-// e.g. `emitEvidenceRetentionDiagnostic` below) ever assigns MUST be a member of this list.
+// Every literal `message` this module (or a caller building a `ServerDiagnosticRecord` by hand)
+// ever assigns MUST be a member of this list.
 // `ServerDiagnosticRecord.message` is typed `ServerDiagnosticSummary` (Issue #3245), so a producer
 // assigning a string that is not a member of this array fails `npm run typecheck` outright — the
 // vocabulary is now closed at compile time, not merely by convention. `allowlistedSummary` (and
@@ -378,7 +380,6 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "Audit or evidence persistence failed.",
   "Debug production service composition failed.",
   "Managed task-workspace boundary materialization failed.",
-  "Evidence retention deleted manifests.",
   "Semantic memory retrieval skipped incompatible embeddings.",
   "Semantic memory retrieval was disabled for this turn.",
   "Harness run reached a terminal completed state.",
@@ -413,7 +414,6 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "safe-activity-dropped-validation-rejected",
   "safe-activity-dropped-redactor-collapsed",
   "safe-activity-dropped-projection-rejected",
-  "safe-activity-dropped-capacity-rejected",
   "safe-activity-dropped-subscriber-rejected",
   "safe-activity-purged-stop",
   "safe-activity-purged-takeover",
@@ -437,12 +437,20 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   "prepare-bridge-close",
   "prepare-run-root-remove",
   "tool-facade-failed",
+  // The sidecar tool bridge's own request deadline stopped a call (PR #3452, F44).
+  "tool-bridge-deadline",
   // KfQ 3954841973: a coding-runtime backend process (plus its HTTP/SSE client and tool bridge)
   // that was already spawned when launch failed later (lease-broker unavailable, launch-shape
   // validation) is disposed on the failure path -- mirrors opencodeRuntimeComposition.ts's
   // `recordPrepareDisposalFailure` (KEIKO-0320): the disposal call can itself throw, and
   // swallowing that would leave the same class of leak with no diagnostic and no retry hook.
   "coding-runtime-backend-disposal-failed",
+  "coding-runtime-operator-decision-event-rejected",
+  // #3416: the governed repository rerank threw -- an embedding-provider timeout, a corrupted index,
+  // a bug in the ranking path. The one fallback reason that is a real failure rather than a clean
+  // absence of capability, so it carries an error class, frames and a cause chain; the search itself
+  // still answers in its deterministic lexical order.
+  "repository-rerank-failed",
   "sidecar-gateway-evidence-aggregation-failed",
   "coding-sidecar-gateway-profile-unavailable",
   "coding-sidecar-gateway-tool-contract-rejected",
@@ -667,43 +675,6 @@ export function emitServerDiagnostic(
   } catch {
     // A logging failure is never allowed to escalate into a second, unhandled failure.
   }
-}
-
-// `correlationId` defaults to a fresh mint ONLY so a caller that already has a request/run id in
-// scope can pass it straight through (ADR-0173 D5 / g12) — the retention sweep itself has no
-// triggering request, so `evidenceRetentionDiagnosticObserver` below is the real production path
-// and mints exactly once per observer rather than once per call, so every deletion this ONE
-// retention pass reports stays joinable under the same id.
-export function emitEvidenceRetentionDiagnostic(
-  sink: ServerDiagnosticSink | undefined,
-  source: string,
-  occurrenceCount: number,
-  correlationId: string = randomUUID(),
-): void {
-  emitServerDiagnostic(sink, {
-    correlationId,
-    timestamp: new Date().toISOString(),
-    operation: "evidence.retention",
-    source: diagnosticLabel(source, SOURCE_LABEL_SHAPE, "server.diagnostic"),
-    errorClass: "EvidenceRetention",
-    message: "Evidence retention deleted manifests.",
-    occurrenceCount,
-  });
-}
-
-// Minted ONCE here, at the start of the enclosing retention-observer registration, rather than
-// inside `emitEvidenceRetentionDiagnostic` on every `onRetentionDeleted` firing: a single retention
-// pass over one evidence store can delete manifests from more than one bucket, and each deletion
-// used to mint its own disconnected id — making it impossible for an operator to tell two
-// deletions from the SAME sweep apart from two deletions from different sweeps.
-export function evidenceRetentionDiagnosticObserver(
-  sink: ServerDiagnosticSink | undefined,
-  source: string,
-): (occurrenceCount: number) => void {
-  const correlationId = randomUUID();
-  return (occurrenceCount: number): void => {
-    emitEvidenceRetentionDiagnostic(sink, source, occurrenceCount, correlationId);
-  };
 }
 
 // The optional half of `describeError`'s output, each field omitted (never written as

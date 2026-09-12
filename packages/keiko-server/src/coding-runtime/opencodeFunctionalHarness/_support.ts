@@ -44,7 +44,7 @@ import {
 const BINARY = process.env.KEIKO_OPENCODE_REAL_BINARY;
 const RESOURCE_ROOT = process.env.KEIKO_OPENCODE_REAL_RESOURCE_ROOT;
 const RECEIPT = `sha256:${"0".repeat(64)}`;
-const PROTOCOL_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
+const PROTOCOL_SCHEMA_SHA256 = "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3";
 const MAX_FAKE_BODY_BYTES = 1024 * 1024;
 const MAX_FAKE_AGENT_STEPS = 12;
 const FAKE_SESSION_ID = "ses_functional0000000001";
@@ -224,7 +224,7 @@ export interface FunctionalGatewayTool {
  * test can derive a deliberately incomplete projection (e.g. `.filter(...)` out one tool) for a
  * live fail-closed proof against the real sidecar gateway route, without restating this mapping.
  * Derives every entry's parameters from `opencodeToolSchemas.ts`'s own `projectedGatewaySchema`
- * (the single source for OpenCode's v1.17.17 wire projection) so this scripted advertisement can
+ * (the single source for OpenCode's v1.18.30 wire projection) so this scripted advertisement can
  * never drift from the incoming trust check it is meant to satisfy.
  */
 export function functionalGatewayTools(): readonly FunctionalGatewayTool[] {
@@ -537,6 +537,7 @@ const FAKE_TOOL_ACTIONS: Readonly<
   keiko_changeset_edit: { action: "edit", arguments: ["changeset"] },
   keiko_verification: { action: "verification", arguments: ["verifierId"] },
   keiko_research_fetch: { action: "egress", arguments: ["target"] },
+  keiko_skill_discover: { action: "skill-discover", arguments: [] },
   keiko_skill: { action: "skill", arguments: ["skillId"] },
   keiko_child_agent: { action: "child-agent", arguments: ["objective", "maxToolCalls"] },
 };
@@ -1007,7 +1008,7 @@ class FakeOpenCodeChild {
 
   /**
    * A rejected (or aborted) question fails the tool and ends the turn, like the real binary.
-   * The real v1.17.17 publishes its question lifecycle live-only over /global/event — question
+   * The real v1.18.30 publishes its question lifecycle live-only over /global/event — question
    * rows never reach the durable history — so the fake mirrors exactly that.
    */
   private askQuestion(call: FakeToolCall, signal: AbortSignal): Promise<string> {
@@ -1071,7 +1072,7 @@ class FakeOpenCodeChild {
   }
 }
 
-/** Mirrors the v1.17.17 built-in: full-replace todo state, no facade round-trip, no tool event. */
+/** Mirrors the v1.18.30 built-in: full-replace todo state, no facade round-trip, no tool event. */
 function executeBuiltInTodoWrite(call: FakeToolCall): string {
   return JSON.stringify(call.args.todos ?? [], null, 2);
 }

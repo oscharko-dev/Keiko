@@ -30,6 +30,7 @@ import {
   parseUpdateGitHubIssueReaderAuthorizationWire,
   parseUpdateMemoryAutonomyPolicyWire,
   resolveGroundingLimits,
+  UNKNOWN_REPOSITORY_ERROR_CODE,
   type Chat,
   type ChatGitChangeScope,
   type ChatLocalKnowledgeScope,
@@ -1371,5 +1372,13 @@ describe("isExpandableDirectory (#2906 review)", () => {
         readable: true,
       }),
     ).toBe(false);
+  });
+});
+
+describe("UNKNOWN_REPOSITORY_ERROR_CODE", () => {
+  // Two routes emit and two Coding Workbench surfaces read this exact wire code; changing it is a
+  // wire change for every producer and consumer at once (PR #3452 review).
+  it("is the BFF wire code for a repository the workspace has not opened", () => {
+    expect(UNKNOWN_REPOSITORY_ERROR_CODE).toBe("UNKNOWN_REPOSITORY");
   });
 });

@@ -5,20 +5,34 @@ import { runDraftDeliveryRequest } from "./productionDraftDeliveryRuntime.js";
 import type { DraftDeliveryService } from "../gitDelivery/draftDeliveryTypes.js";
 import type { CiObservationService } from "../gitDelivery/ciObservationService.js";
 import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
-import type { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
-import type { VerifiedCommitService } from "../gitDelivery/verifiedCommitTypes.js";
 import type {
+  RuntimeGitRefusalReason,
+  RuntimeGitService,
+} from "../gitDelivery/runtimeGitService.js";
+import type {
+  VerificationTicketOutcome,
+  VerifiedCommitService,
+} from "../gitDelivery/verifiedCommitTypes.js";
+import type {
+  CodingWorkbenchAuxiliaryStatus,
   CodingWorkbenchMode,
+  CodingWorkbenchOperatorDecision,
   CodingWorkbenchRuntimeAdapterKind,
   CodingWorkbenchRuntimeAuthorityFacts,
   CodingWorkbenchRuntimeEvent,
   EditorAgentGovernedAuthorityReference,
   VerificationKind,
   VerificationReport,
+  VerificationResult,
   VerificationStatus,
 } from "@oscharko-dev/keiko-contracts";
-import { isVerificationFailureLocation } from "@oscharko-dev/keiko-contracts/runtime/verification";
+import {
+  isVerificationFailureLocation,
+  VERIFICATION_DEPENDENCY_FAILURE_STATES,
+  VERIFICATION_TOOL_OPERATOR_DECISION_WAIT_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import type { VerificationStepOutput } from "@oscharko-dev/keiko-verification";
 import { codingWorkbenchPolicyEffectFor } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 
@@ -30,7 +44,10 @@ import type {
   VerificationRunInput,
   VerificationRunnerManager,
 } from "../editor/verificationRunner.js";
-import { VerificationRunnerError } from "../editor/verificationRunnerErrors.js";
+import {
+  VerificationRunnerError,
+  WorkspaceTrustRequiredError,
+} from "../editor/verificationRunnerErrors.js";
 import {
   contentFreeErrorClass,
   describeError,
@@ -53,19 +70,38 @@ import type {
 } from "./codingToolGovernedDelegate.js";
 import {
   CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS,
+  dependencyBootstrapFailureSummary,
   type CodingToolVerificationFailure,
   type CodingToolVerificationResult,
+  type VerificationNotRunReason,
+  type VerificationNotRunStep,
 } from "./codingToolIpc.js";
 import {
   createCodingRepositorySearchHandler,
   type CodingRepositorySearchHandler,
 } from "./codingRepositorySearchHandler.js";
 import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
+import type {
+  RepositorySemanticSearchLease,
+  RepositorySemanticSearchResolver,
+} from "./codingRuntimeControlPlane.js";
+import { retrievalKind } from "@oscharko-dev/keiko-workspace/coding-repository-search";
+import type {
+  CodingRepositoryHit,
+  CodingRepositoryRequest,
+  CodingRepositoryRerankFallbackReason,
+  CodingRepositorySearchProvenance,
+  CodingRepositoryResult,
+  CodingRepositorySearchRequest,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import type { CodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
-import { createProductionAuxiliaryPorts } from "./productionAuxiliaryPorts.js";
+import {
+  createProductionAuxiliaryPorts,
+  PRODUCTION_SKILL_STATIC_FACTS,
+} from "./productionAuxiliaryPorts.js";
 import {
   createExplicitSkillInvocationTracker,
   type ExplicitSkillInvocationTracker,
@@ -73,6 +109,7 @@ import {
 import { createResearchEgressPort, type ResearchFetch } from "./researchEgressPort.js";
 import type { ResearchGrantRegistry } from "./researchGrantRegistry.js";
 import { createServerApprovedSkillCatalog, type SkillCatalog } from "./skillCatalog.js";
+import { staticSkillReadiness } from "./skillDiscovery.js";
 import {
   createCodingToolReadEditPorts,
   type CodingToolReadEditPortDeps,
@@ -98,38 +135,87 @@ export function waitForRuntimeProposalApproval(
   signal?: AbortSignal,
   onResolutionFailure?: (error: unknown) => void,
 ): Promise<ProposalApprovalWaitOutcome> {
-  return new Promise((resolve) => {
-    let interval: ReturnType<typeof setInterval> | undefined;
-    const timeout = setTimeout((): void => {
-      finish("expired");
-    }, MAX_APPROVAL_CHALLENGE_TTL_MS);
-    const finish = (outcome: ProposalApprovalWaitOutcome): void => {
-      if (interval === undefined) return;
-      clearInterval(interval);
-      clearTimeout(timeout);
-      signal?.removeEventListener("abort", abort);
-      interval = undefined;
-      resolve(outcome);
-    };
-    const abort = (): void => {
-      finish("cancelled");
-    };
-    const inspect = (): void => {
+  return boundedWait<ProposalApprovalWaitOutcome>({
+    ceilingMs: MAX_APPROVAL_CHALLENGE_TTL_MS,
+    intervalMs: PROPOSAL_APPROVAL_POLL_MS,
+    expired: "expired",
+    cancelled: "cancelled",
+    threw: "unavailable",
+    signal,
+    inspect: (): ProposalApprovalWaitOutcome | undefined => {
       try {
-        if (signal?.aborted === true) finish("cancelled");
-        else if (probe.review(proposalId) === undefined) finish("unavailable");
-        else if (probe.matchesApproval(proposalId)) finish("approved");
+        if (probe.review(proposalId) === undefined) return "unavailable";
+        return probe.matchesApproval(proposalId) ? "approved" : undefined;
       } catch (error) {
         // A live authority/workspace resolver may fail closed after the proposal was displayed.
         // Settle the bounded wait through its existing unavailable outcome; an exception escaping
         // this interval callback would be an uncaught process-level failure.
         onResolutionFailure?.(error);
-        finish("unavailable");
+        return "unavailable";
       }
+    },
+  });
+}
+
+interface BoundedWaitInput<Outcome extends string> {
+  readonly ceilingMs: number;
+  readonly intervalMs: number;
+  /** Settled when the ceiling passes with `inspect` never having answered. */
+  readonly expired: Outcome;
+  /** Settled when `signal` aborts first. */
+  readonly cancelled: Outcome;
+  /**
+   * Settled when `inspect` throws. A probe that throws inside the interval callback would otherwise
+   * reject nothing and leave the interval live — an uncaught process-level failure with the wait
+   * never settling (CodeRabbit review, 2026-09-10).
+   */
+  readonly threw: Outcome;
+  readonly signal?: AbortSignal | undefined;
+  /** Probed once at once and then every interval; a value settles the wait, `undefined` keeps it. */
+  readonly inspect: () => Outcome | undefined;
+}
+
+/**
+ * The one bounded poll every in-place wait in this module is built on: a proposal awaiting its
+ * approval and a verification awaiting the operator's package-script trust decision differ only in
+ * what they probe and what the ceiling and abort mean to their caller. One skeleton means one
+ * place where the interval, the ceiling timer and the abort listener are guaranteed to be released
+ * together on every exit.
+ */
+function boundedWait<Outcome extends string>(input: BoundedWaitInput<Outcome>): Promise<Outcome> {
+  return new Promise((resolve) => {
+    let interval: ReturnType<typeof setInterval> | undefined;
+    const timeout = setTimeout((): void => {
+      finish(input.expired);
+    }, input.ceilingMs);
+    const finish = (outcome: Outcome): void => {
+      if (interval === undefined) return;
+      clearInterval(interval);
+      clearTimeout(timeout);
+      input.signal?.removeEventListener("abort", abort);
+      interval = undefined;
+      resolve(outcome);
     };
-    interval = setInterval(inspect, PROPOSAL_APPROVAL_POLL_MS);
-    signal?.addEventListener("abort", abort, { once: true });
-    inspect();
+    const abort = (): void => {
+      finish(input.cancelled);
+    };
+    const tick = (): void => {
+      if (input.signal?.aborted === true) {
+        finish(input.cancelled);
+        return;
+      }
+      let outcome: Outcome | undefined;
+      try {
+        outcome = input.inspect();
+      } catch {
+        finish(input.threw);
+        return;
+      }
+      if (outcome !== undefined) finish(outcome);
+    };
+    interval = setInterval(tick, input.intervalMs);
+    input.signal?.addEventListener("abort", abort, { once: true });
+    tick();
   });
 }
 
@@ -167,8 +253,30 @@ export interface ProductionManagedWorktreeToolInput {
   readonly skillCatalog?: SkillCatalog | undefined;
   readonly explicitSkillInvocations?: ExplicitSkillInvocationTracker | undefined;
   readonly childModelPortFactory?: ((modelId: string) => ModelPort | undefined) | undefined;
-  readonly verificationRunner: Pick<VerificationRunnerManager, "runToReport">;
+  // `scriptTrustFor` is the runner's own package-script decision as a pure query, and is optional
+  // for the same reason `requestOperatorDecision` is: a composition that supplies neither cannot
+  // wait for an operator and keeps the immediate refusal it always had. Both are needed to wait.
+  readonly verificationRunner: Pick<VerificationRunnerManager, "runToReport"> &
+    Partial<Pick<VerificationRunnerManager, "scriptTrustFor">>;
+  /**
+   * Announces a decision only a local human can make, and then announces how it settled. A tool
+   * that meets one waits in place for it; this is how the run itself reports that it is waiting,
+   * so the operator sees a paused run naming the decision rather than a run that gave up. Absent
+   * in a composition without a runtime event sink — the tool then fails closed exactly as before.
+   */
+  readonly requestOperatorDecision?: (
+    decision: CodingWorkbenchOperatorDecision,
+    outcome?: CodingWorkbenchAuxiliaryStatus,
+  ) => void;
   readonly commandRunner?: Pick<CommandRunnerManager, "execute"> | undefined;
+  /**
+   * ADR-0147 D3, autonomous-delivery amendment (owner decision, 2026-09-10): records the worktree's
+   * current `package.json` as a manifest this run's governed effect left behind, so the operator's
+   * standing repository grant covers it for the rest of the run. Called after every completed edit
+   * and command effect while the run's effective mode is `autonomous-delivery`, never in the two
+   * modes that ask before risky work. Absent in a composition without the trust service.
+   */
+  readonly admitRunManifest?: (() => void) | undefined;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   /** Body-free activity-log sink for the H1 search handler; defaults to the process-wide log. */
@@ -183,6 +291,11 @@ export interface ProductionManagedWorktreeToolInput {
   readonly requestResearchApproval?: ((url: URL) => void) | undefined;
   /** Explicit hermetic-test seam for the research transport. Production never supplies this. */
   readonly researchFetchImpl?: ResearchFetch | undefined;
+  // #3416: the server's repository semantic index, late-bound by `deps.ts`. Absent -- or present
+  // with an unfilled slot -- means the governed search answers in its deterministic lexical order
+  // and says so; it is never a denied call.
+  readonly repositorySemanticSearch?:
+    { readonly current: RepositorySemanticSearchResolver | undefined } | undefined;
 }
 
 // #3414-AC9: a real, non-fake per-run signal for whether an optional tool's handler/readiness/
@@ -217,10 +330,21 @@ export function deriveOptionalToolAvailability(
 ): ReadonlySet<OpenCodeOptionalToolName> {
   const unavailable = new Set<OpenCodeOptionalToolName>();
   if (!hasResearchApprovalHandler(input)) unavailable.add("keiko_research_fetch");
-  if ((input.skillCatalog ?? createServerApprovedSkillCatalog()).list().length === 0)
+  if (!hasAdvertisableSkill(input.skillCatalog ?? createServerApprovedSkillCatalog())) {
+    unavailable.add("keiko_skill_discover");
     unavailable.add("keiko_skill");
+  }
   if (!hasResolvableChildAgentModel(input)) unavailable.add("keiko_child_agent");
   return unavailable;
+}
+
+// The skill tools are advertised only while an approved skill could actually run for this run:
+// enabled, compatible with the bound catalog profile and handled (#3417). Authority and budget are
+// asked when a skill tool is called.
+function hasAdvertisableSkill(catalog: SkillCatalog): boolean {
+  return catalog
+    .list()
+    .some((entry) => staticSkillReadiness(entry, PRODUCTION_SKILL_STATIC_FACTS).state === "ready");
 }
 
 function hasResearchApprovalHandler(input: OptionalToolAvailabilityInput): boolean {
@@ -391,9 +515,10 @@ function governedPorts(
     Promise.resolve({ status: "failed" });
   return {
     ...readEdit,
+    editorChangeset: admittingRunManifest(readEdit.editorChangeset, input),
     ...auxiliaryPorts(input, catalog),
     repositorySearch: buildRepositorySearchPort(input),
-    commandRunner: buildCommandRunner(input),
+    commandRunner: admittingRunManifest(buildCommandRunner(input), input),
     verificationRunner: buildVerificationRunner(input),
     gitAuthority: buildRuntimeGitPort(input),
     deliveryAuthority: buildVerifiedCommitPort(input),
@@ -404,6 +529,46 @@ function governedPorts(
     egressAuthority: buildEgressAuthority(input, failed),
   };
 }
+
+// ADR-0147 D3, autonomous-delivery amendment (owner decision, 2026-09-10). In `autonomous-delivery`
+// the operator has authorized this run to edit the workspace and verify it without per-action
+// approval, so a `package.json` the run's own governed effect leaves behind is admitted for package
+// scripts under the operator's standing repository grant (`WorkspaceScriptTrustService
+// .admitRunManifest`); its scripts still run only under the verification runner's enforced egress
+// isolation (ADR-0043), and the pull request carries the manifest diff to review before anything
+// persists. The two modes that ask before risky work keep asking for a rewritten manifest. The
+// admission is renewed after EVERY completed effect — edit or vetted command, since either may
+// rewrite the manifest — so a manifest changed by anything else since (another process, the
+// operator's editor) is the same drift the next verification refused before this amendment.
+function admittingRunManifest<Kind extends "edit" | "command">(
+  port: GovernedCodingToolPort<Kind>,
+  input: ProductionManagedWorktreeToolInput,
+): GovernedCodingToolPort<Kind> {
+  const admit = input.admitRunManifest;
+  if (admit === undefined) return port;
+  return {
+    execute: async (request, signal, guard): Promise<GovernedCodingToolResult> => {
+      const result = await port.execute(request, signal, guard);
+      if (result.status === "completed" && effectiveModeOf(input) === "autonomous-delivery")
+        admit();
+      return result;
+    },
+  };
+}
+
+function effectiveModeOf(input: ProductionManagedWorktreeToolInput): CodingWorkbenchMode {
+  return input.effectiveModeNow?.() ?? input.effectiveMode;
+}
+
+// The facade's closed failure code for each reason the runtime Git service answers without a
+// result (runtimeGitService.ts). Only `authority-revoked` may reach the model as a revoked
+// authority: an unknown or expired proposal and a thrown Git failure used to collapse into that same
+// code, and the model stopped delivering on the strength of it (Coding Workbench run 13, 2026-09-10).
+const GIT_REFUSAL_REASON_CODES: Readonly<Record<RuntimeGitRefusalReason, string>> = {
+  "authority-revoked": "git-authority-revoked",
+  "proposal-unknown": "git-proposal-unknown",
+  "execution-failed": "git-execution-failed",
+};
 
 function buildRuntimeGitPort(
   input: ProductionManagedWorktreeToolInput,
@@ -425,7 +590,8 @@ function buildRuntimeGitPort(
       )
         return { status: "failed", reasonCode: "capability-backend-unavailable" };
       const result = await input.runtimeGitService.execute(request, guard, signal);
-      if (result === undefined) return { status: "failed", reasonCode: "git-authority-revoked" };
+      if (result.kind === "refused")
+        return { status: "failed", reasonCode: GIT_REFUSAL_REASON_CODES[result.reason] };
       const released = await releaseStageProposal(input, result, signal);
       return released === undefined
         ? { status: "failed", reasonCode: "git-authority-revoked" }
@@ -631,6 +797,7 @@ function recordProposalApprovalWait(
       proposalId,
       state: "approval-wait-settled",
       reason: outcome,
+      waitCeilingMs: MAX_APPROVAL_CHALLENGE_TTL_MS,
     },
   });
 }
@@ -751,9 +918,222 @@ function buildRepositorySearchPort(
         correlationId: input.authorityRef.runId,
         signal: signal ?? new AbortController().signal,
       });
-      return { status: "completed", search: result };
+      return {
+        status: "completed",
+        search: await rerankedSearch(input, request.repositoryRequest, result, signal),
+      };
     },
   };
+}
+
+// #3416: the governed rerank. It runs ABOVE the handler, never inside it: the handler owns the
+// editor lane (raw bytes, real coordinates) and ADR-0165 keeps a semantic session off that lane.
+// What the index sees here is the hits' already-REDACTED excerpts -- the same text the tool result
+// hands the model -- and only the operator's query is embedded; the repository's own content was
+// embedded when the operator indexed the pod, not at ask time.
+function lexicalProvenance(
+  hits: readonly CodingRepositoryHit[],
+  fallbackReason: CodingRepositoryRerankFallbackReason,
+): CodingRepositorySearchProvenance {
+  return {
+    ranking: "lexical",
+    indexIdentityDigest: null,
+    indexFreshness: "absent",
+    rerankedHits: 0,
+    lexicalHits: hits.length,
+    fallbackReason,
+  };
+}
+
+interface RerankedOrder {
+  readonly hits: readonly CodingRepositoryHit[];
+  readonly placed: number;
+}
+
+function rerankedOrder(
+  hits: readonly CodingRepositoryHit[],
+  ranked: readonly { readonly scopePath: string }[],
+): RerankedOrder {
+  const byPath = new Map<string, CodingRepositoryHit[]>();
+  for (const hit of hits) {
+    const bucket = byPath.get(hit.path);
+    if (bucket === undefined) byPath.set(hit.path, [hit]);
+    else bucket.push(hit);
+  }
+  const ordered: CodingRepositoryHit[] = [];
+  for (const match of ranked) {
+    const bucket = byPath.get(match.scopePath);
+    if (bucket === undefined || bucket.length === 0) continue;
+    ordered.push(...bucket);
+    byPath.set(match.scopePath, []);
+  }
+  // Everything the index did not place keeps the handler's deterministic lexical order.
+  const remaining = hits.filter((hit) => (byPath.get(hit.path)?.length ?? 0) > 0);
+  return { hits: [...ordered, ...remaining], placed: ordered.length };
+}
+
+async function rankedByIndex(
+  lease: RepositorySemanticSearchLease,
+  request: CodingRepositorySearchRequest,
+  hits: readonly CodingRepositoryHit[],
+  signal: AbortSignal | undefined,
+): Promise<readonly { readonly scopePath: string }[]> {
+  const provider = lease.provider;
+  if (provider === undefined) return [];
+  return provider.search({
+    query: {
+      kind: retrievalKind(request.mode),
+      text: request.query,
+      caseSensitive: request.caseSensitive,
+      maxResults: request.maxResults,
+      emittedAtMs: Date.now(),
+    },
+    documents: hits.map((hit) => ({ scopePath: hit.path, text: hit.snippet })),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+// One body-free line per governed search that could have been reranked: what order the operator got,
+// how many hits the index placed, and -- when it placed none -- the closed reason why. Never the
+// query, a path, a snippet or a score.
+function logRerank(
+  input: ProductionManagedWorktreeToolInput,
+  provenance: CodingRepositorySearchProvenance,
+): void {
+  (input.activityLog ?? processServerLogSink()).write({
+    category: "gateway",
+    op: "coding-runtime.repository-rerank",
+    correlationId: isValidCorrelationId(input.authorityRef.runId)
+      ? input.authorityRef.runId
+      : UNKNOWN_CORRELATION_ID,
+    level: "info",
+    extra: {
+      runId: input.authorityRef.runId,
+      ranking: provenance.ranking,
+      rerankedHits: provenance.rerankedHits,
+      lexicalHits: provenance.lexicalHits,
+      indexFreshness: provenance.indexFreshness,
+      ...(provenance.fallbackReason === undefined
+        ? {}
+        : { fallbackReason: provenance.fallbackReason }),
+    },
+  });
+}
+
+interface RerankOutcome {
+  readonly hits: readonly CodingRepositoryHit[];
+  readonly provenance: CodingRepositorySearchProvenance;
+}
+
+// A cancelled request is terminal (ADR-0175): it performs no fallback. The governed facade discards
+// a cancelled call's payload on its own, so what this marker changes is the EVIDENCE -- an abort is
+// the caller's decision, and must not be filed as an index failure the operator has to chase.
+const RERANK_CANCELLED = "cancelled" as const;
+
+async function rerankOutcome(
+  resolve: RepositorySemanticSearchResolver,
+  repositoryRoot: string,
+  request: CodingRepositorySearchRequest,
+  hits: readonly CodingRepositoryHit[],
+  signal: AbortSignal | undefined,
+): Promise<RerankOutcome | typeof RERANK_CANCELLED> {
+  const lease = resolve(repositoryRoot, signal);
+  try {
+    if (lease.provider === undefined) {
+      return { hits, provenance: lexicalProvenance(hits, "provider-absent") };
+    }
+    const ranked = await rankedByIndex(lease, request, hits, signal);
+    if (signal?.aborted === true) return RERANK_CANCELLED;
+    if (ranked.length === 0) {
+      return { hits, provenance: lexicalProvenance(hits, "pod-no-fresh-candidates") };
+    }
+    const ordered = rerankedOrder(hits, ranked);
+    const identity = lease.indexIdentityDigest;
+    // Two orders that are lexical in fact and must say so: the index placed nothing this result can
+    // attribute to it (only stale or unknown paths came back), and an index that cannot name itself
+    // -- a "hybrid" record without an identity would claim an index the operator cannot identify.
+    if (ordered.placed === 0 || identity === undefined) {
+      const reason = ordered.placed === 0 ? "pod-no-fresh-candidates" : "pod-unavailable";
+      return { hits, provenance: lexicalProvenance(hits, reason) };
+    }
+    return {
+      hits: ordered.hits,
+      provenance: {
+        ranking: "hybrid",
+        indexIdentityDigest: identity,
+        indexFreshness: "fresh",
+        rerankedHits: ordered.placed,
+        lexicalHits: hits.length - ordered.placed,
+      },
+    };
+  } finally {
+    lease.close();
+  }
+}
+
+function recordRerankFailure(input: ProductionManagedWorktreeToolInput, error: unknown): void {
+  const correlationId = isValidCorrelationId(input.authorityRef.runId)
+    ? input.authorityRef.runId
+    : UNKNOWN_CORRELATION_ID;
+  (input.activityLog ?? processServerLogSink()).write({
+    category: "gateway",
+    op: "coding-runtime.repository-rerank",
+    correlationId,
+    level: "warn",
+    errorKind: contentFreeErrorClass(error),
+    extra: {
+      runId: input.authorityRef.runId,
+      reason: "pod-query-failed",
+      frames: keikoStackFrames(error),
+      causeChain: causeChain(error),
+    },
+  });
+  emitServerDiagnostic(input.diagnostics, {
+    correlationId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.repository-rerank",
+    source: "production-managed-worktree-tools.repository-rerank",
+    errorClass: contentFreeErrorClass(error),
+    message: "repository-rerank-failed",
+  });
+}
+
+/**
+ * Reorders a completed lexical search by the repository index, or says why it did not. A refusal is
+ * never an error here: the deterministic lexical result the handler produced is returned unchanged,
+ * with the reason attached, so the model and the operator read the same disclosure. The ONE reason
+ * that is a thrown failure rather than a clean absence -- `pod-query-failed` -- also leaves the
+ * structured evidence this file gives every operational failure, so an operator can tell a broken
+ * index from an unconfigured one.
+ */
+async function rerankedSearch(
+  input: ProductionManagedWorktreeToolInput,
+  requested: CodingRepositoryRequest,
+  result: CodingRepositoryResult,
+  signal: AbortSignal | undefined,
+): Promise<CodingRepositoryResult> {
+  // The union narrows on its own discriminant; a read request never reaches the index at all.
+  if (!result.ok || result.kind !== "search" || requested.kind !== "search") return result;
+  const resolve = input.repositorySemanticSearch?.current;
+  const root = input.resolveWorkspaceRootAccess()?.canonicalRoot;
+  const outcome =
+    resolve === undefined || root === undefined
+      ? { hits: result.hits, provenance: lexicalProvenance(result.hits, "capability-not-offered") }
+      : await rerankOutcome(resolve, root, requested, result.hits, signal).catch(
+          (error: unknown): RerankOutcome | typeof RERANK_CANCELLED => {
+            // An abort is not a defect and leaves no failure evidence: it is the caller's own
+            // decision, and the request ends terminally rather than in a lexical fallback.
+            if (signal?.aborted === true) return RERANK_CANCELLED;
+            recordRerankFailure(input, error);
+            return {
+              hits: result.hits,
+              provenance: lexicalProvenance(result.hits, "pod-query-failed"),
+            };
+          },
+        );
+  if (outcome === RERANK_CANCELLED) return { ok: false, reason: "cancelled" };
+  logRerank(input, outcome.provenance);
+  return { ...result, hits: outcome.hits, provenance: outcome.provenance };
 }
 
 function repositorySearchHandler(
@@ -842,6 +1222,7 @@ type VerificationPortResult =
       readonly status: "failed";
       readonly reasonCode?: string | undefined;
       readonly verificationFailure?: CodingToolVerificationFailure | undefined;
+      readonly notRun?: readonly VerificationNotRunStep[] | undefined;
     };
 
 // What a finished run that did not pass tells the model. Exhaustive by TYPE, not by convention:
@@ -875,95 +1256,379 @@ function buildVerificationRunner(
   let verificationSequence = 0;
   return {
     execute: async (request, signal, guard): Promise<VerificationPortResult> => {
-      if (!guard.check() || !live(input)) {
-        return verificationPortRefusal(input, "verification-authority-revoked");
+      const entryRefusal = verificationLivenessRefusal(input, guard, signal);
+      if (entryRefusal !== undefined) {
+        return verificationPortRefusal(input, "verification-authority-revoked", entryRefusal);
       }
       const kind = verificationKind(request.verifierId);
       if (kind === undefined) {
         return verificationPortRefusal(input, "verification-verifier-unsupported");
       }
-      let report: VerificationReport;
-      let ticket: object | undefined;
-      let commitProof: CodingToolVerificationResult | undefined;
-      try {
-        ticket = await input.verifiedCommitService?.beginVerification();
-        if (!verificationCompletionLive(input, guard, signal)) {
-          return verificationPortRefusal(input, "verification-authority-revoked");
+      // Taken at entry, right after the catalog armed its settlement timer: the registry's and the
+      // catalog's ceilings both run from admission, so the wait below must be measured from here
+      // and not from the moment the first attempt failed (owner review, PR #3452).
+      const enteredAtMs = Date.now();
+      let attempt = await runVerificationAttempt(input, request, kind, guard, signal);
+      if (attempt.outcome === "threw" && attempt.error instanceof WorkspaceTrustRequiredError) {
+        if (await settleWorkspaceScriptTrust(input, signal, enteredAtMs)) {
+          attempt = await runVerificationAttempt(input, request, kind, guard, signal);
         }
-        report = await input.verificationRunner.runToReport(
-          verificationRunInput(input, request, kind),
-          signal ?? new AbortController().signal,
-        );
-        if (!verificationCompletionLive(input, guard, signal)) {
-          return verificationPortRefusal(input, "verification-authority-revoked");
-        }
-        commitProof = await completeCandidateVerification(input, ticket, report, guard, signal);
-      } catch (error) {
-        return verificationRefused(input, error);
       }
-      if (!verificationCompletionLive(input, guard, signal)) {
-        return verificationPortRefusal(input, "verification-authority-revoked");
+      if (attempt.outcome === "refused") return attempt.result;
+      if (attempt.outcome === "threw") return verificationRefused(input, attempt.error);
+      const completionRefusal = verificationLivenessRefusal(input, guard, signal);
+      if (completionRefusal !== undefined) {
+        return verificationPortRefusal(input, "verification-authority-revoked", completionRefusal);
       }
       verificationSequence += 1;
-      publishVerification(input, verificationSequence, report, request);
-      return verificationOutcome(input, report, guard, signal, commitProof);
+      publishVerification(input, verificationSequence, attempt.report, request);
+      return verificationOutcome(input, attempt, guard, signal);
     },
   };
 }
 
-function verificationOutcome(
+type VerificationAttempt =
+  | { readonly outcome: "refused"; readonly result: VerificationPortResult }
+  | {
+      readonly outcome: "completed";
+      readonly report: VerificationReport;
+      readonly failureOutput: readonly VerificationStepOutput[];
+      readonly commitProof: CodingToolVerificationResult | undefined;
+    }
+  | { readonly outcome: "threw"; readonly error: unknown };
+
+/**
+ * One whole attempt at the verification effect, extracted so it can be made a second time after an
+ * operator's package-script trust decision. Extracting it rather than retrying `runToReport` alone
+ * is deliberate: the candidate-verification ticket and the liveness re-checks bracket the run, and
+ * a retry that reused the first attempt's ticket would attribute the second run's report to the
+ * first run's commit candidate.
+ */
+async function runVerificationAttempt(
   input: ProductionManagedWorktreeToolInput,
-  report: VerificationReport,
+  request: Extract<
+    import("./codingToolIpc.js").CodingToolActionRequest,
+    { readonly action: "verification" }
+  >,
+  kind: VerificationKind,
   guard: CodingToolMutationGuard,
   signal: AbortSignal | undefined,
-  commitProof: CodingToolVerificationResult | undefined,
-): VerificationPortResult {
-  if (report.overallStatus !== "passed") {
-    const verificationFailure = modelVerificationFailure(report);
-    return {
-      status: "failed",
-      reasonCode: VERIFICATION_OUTCOME_REASON_CODES[report.overallStatus],
-      ...(verificationFailure === undefined ? {} : { verificationFailure }),
-    };
+): Promise<VerificationAttempt> {
+  // Built on demand, never in advance: `verificationPortRefusal` EMITS the refusal diagnostic as a
+  // side effect, so materialising it up front would report a revoked authority on every attempt
+  // that then succeeded.
+  const revoked = (condition: VerificationLivenessRefusal): VerificationAttempt => ({
+    outcome: "refused",
+    result: verificationPortRefusal(input, "verification-authority-revoked", condition),
+  });
+  try {
+    const begun = await input.verifiedCommitService?.beginVerification();
+    const beforeRun = verificationLivenessRefusal(input, guard, signal);
+    if (beforeRun !== undefined) return revoked(beforeRun);
+    const { report, failureOutput } = await input.verificationRunner.runToReport(
+      verificationRunInput(input, request, kind),
+      signal ?? new AbortController().signal,
+    );
+    const afterRun = verificationLivenessRefusal(input, guard, signal);
+    if (afterRun !== undefined) return revoked(afterRun);
+    const commitProof = await completeCandidateVerification(input, begun, report, guard, signal);
+    return { outcome: "completed", report, failureOutput, commitProof };
+  } catch (error) {
+    return { outcome: "threw", error };
   }
-  // A passing runner whose authority lapsed is a refusal, never a failed test run.
-  return verificationCompletionLive(input, guard, signal)
-    ? { status: "completed", ...(commitProof === undefined ? {} : { verification: commitProof }) }
-    : verificationPortRefusal(input, "verification-authority-revoked");
 }
 
+// ADR-0147 D3 refuses package scripts the operator has not allowed for these exact manifest bytes,
+// and only the operator can change that. Before this the verification tool returned that refusal
+// straight to the model, which — correctly following its own guidance — reported the blocker and
+// stopped; run 10 of the Coding Workbench engagement then settled with nothing verified, committed
+// or delivered, and no surface had ever told the operator a decision was waiting for them.
+//
+// The tool now waits in place for that decision, exactly as a git-stage or commit proposal already
+// waits for its approval, and the run reports itself `paused` naming the decision. This is NOT the
+// Authority Envelope approval plane: the decision is recorded on the workspace's own trust surface,
+// mints no action authority, and is asked identically in all three autonomy modes because script
+// trust is a hard, mode-independent boundary.
+//
+// The poll is slower than a proposal's: each probe resolves the workspace and re-reads the manifest
+// bytes, and a human decision does not need 25 ms resolution.
+const SCRIPT_TRUST_POLL_MS = 500;
+
+/**
+ * How long the tool waits: the contract's one human-decision wait, the same a stage, commit, push
+ * or pull-request proposal waits for its approval (VERIFICATION_TOOL_OPERATOR_DECISION_WAIT_MS).
+ * The verification tool's catalog budget carries this wait on top of its install and step ceilings,
+ * and the governed-invocation registry, the tool bridge and the plugin client each outlive that
+ * budget, so a wait that runs to its end still answers with the tool's own closed refusal — the one
+ * string that tells the model what a person has to do — rather than an opaque cancellation. A 25 s
+ * window, sized to fit inside a governed-invocation life that was then a fixed 30 s, closed before
+ * an operator could notice the decision (PR #3452, F43). The co-located test pins the wait and the
+ * retry it enables inside the verification budget.
+ *
+ * This bounds the WAIT, not the decision: an operator watching the Workbench sees the notice the
+ * moment the run reports itself paused and can allow the scripts inside it, and the run then
+ * continues with no interruption at all. A decision that does not arrive in the window is not
+ * lost — the run stays paused naming it, and the model is handed the truthful refusal instead of a
+ * silent success. A decision that outlives a single tool call is a separate mechanism this does not
+ * claim to provide.
+ */
+export const SCRIPT_TRUST_WAIT_CEILING_MS = VERIFICATION_TOOL_OPERATOR_DECISION_WAIT_MS;
+
+type ScriptTrustWaitOutcome = "granted" | "cancelled" | "expired" | "unavailable";
+
+const SCRIPT_TRUST_WAIT_OUTCOMES: Readonly<
+  Record<ScriptTrustWaitOutcome, CodingWorkbenchAuxiliaryStatus>
+> = Object.freeze({
+  granted: "accepted",
+  cancelled: "stopped",
+  expired: "limit-reached",
+  unavailable: "unavailable",
+});
+
+export function waitForWorkspaceScriptTrust(
+  probe: () => { readonly trusted: boolean } | undefined,
+  signal?: AbortSignal,
+  ceilingMs: number = SCRIPT_TRUST_WAIT_CEILING_MS,
+): Promise<ScriptTrustWaitOutcome> {
+  return boundedWait<ScriptTrustWaitOutcome>({
+    ceilingMs,
+    intervalMs: SCRIPT_TRUST_POLL_MS,
+    expired: "expired",
+    cancelled: "cancelled",
+    threw: "unavailable",
+    signal,
+    inspect: (): ScriptTrustWaitOutcome | undefined => {
+      const decision = probe();
+      // An unresolvable workspace is not a verdict: it can never become a grant, so waiting on a
+      // human for it would hang the run for the full ceiling with nothing to decide.
+      if (decision === undefined) return "unavailable";
+      return decision.trusted ? "granted" : undefined;
+    },
+  });
+}
+
+/**
+ * Announces the open decision, waits for it, announces how it settled, and reports whether the
+ * caller may try the effect again. The decision is announced BEFORE the wait's first probe, so the
+ * run reports itself paused for the whole window an operator could decide in.
+ */
+async function settleWorkspaceScriptTrust(
+  input: ProductionManagedWorktreeToolInput,
+  signal: AbortSignal | undefined,
+  enteredAtMs: number,
+): Promise<boolean> {
+  const { requestOperatorDecision } = input;
+  const scriptTrustFor = input.verificationRunner.scriptTrustFor;
+  if (requestOperatorDecision === undefined || scriptTrustFor === undefined) return false;
+  // What is LEFT of the wait once the first attempt has spent its share: the verification budget
+  // carries one wait from admission, so a wait that always took the full window after a slow first
+  // attempt would leave the retry it enables no room inside that budget.
+  const ceilingMs = Math.max(0, SCRIPT_TRUST_WAIT_CEILING_MS - (Date.now() - enteredAtMs));
+  requestOperatorDecision("workspace-script-trust");
+  const outcome = await waitForWorkspaceScriptTrust(
+    () => scriptTrustFor(input.workspaceRoot),
+    signal,
+    ceilingMs,
+  );
+  requestOperatorDecision("workspace-script-trust", SCRIPT_TRUST_WAIT_OUTCOMES[outcome]);
+  recordScriptTrustWait(input, outcome, ceilingMs);
+  return outcome === "granted";
+}
+
+function recordScriptTrustWait(
+  input: ProductionManagedWorktreeToolInput,
+  outcome: ScriptTrustWaitOutcome,
+  waitCeilingMs: number,
+): void {
+  (input.activityLog ?? processServerLogSink()).write({
+    level: outcome === "granted" ? "info" : "warn",
+    category: "process",
+    op: "coding-runtime.operator-decision",
+    correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID,
+    extra: {
+      decision: "workspace-script-trust",
+      state: "settled",
+      reason: outcome,
+      waitCeilingMs,
+      pollIntervalMs: SCRIPT_TRUST_POLL_MS,
+    },
+  });
+}
+
+function verificationOutcome(
+  input: ProductionManagedWorktreeToolInput,
+  attempt: Extract<VerificationAttempt, { readonly outcome: "completed" }>,
+  guard: CodingToolMutationGuard,
+  signal: AbortSignal | undefined,
+): VerificationPortResult {
+  const { report, commitProof } = attempt;
+  if (report.overallStatus !== "passed") return failedVerificationOutcome(input, attempt);
+  // A passing runner whose authority lapsed is a refusal, never a failed test run.
+  const refusal = verificationLivenessRefusal(input, guard, signal);
+  return refusal === undefined
+    ? { status: "completed", ...(commitProof === undefined ? {} : { verification: commitProof }) }
+    : verificationPortRefusal(input, "verification-authority-revoked", refusal);
+}
+
+// The red ends a step that ran can reach, in the order the model is told about them: a failure
+// first (it carries locations and an output tail), then a wall-clock timeout, then a resource ceiling.
+const EXECUTED_RED_STATUSES = ["failed", "timed-out", "resource-exceeded"] as const;
+
+// What the model is told a finished, non-passing run was. The orchestrator lets a run-level
+// cancellation win in the overall status, so a report whose first step ran and failed and whose
+// second was cancelled is `cancelled`; but a step that ran to a red end is what the model can act
+// on, and reporting it as not run named a real failure "skipped" and dropped its locations
+// (PR #3452 review). The not-run path is left to runs in which no step went red.
+function modelFacingStatus(report: VerificationReport): Exclude<VerificationStatus, "passed"> {
+  const overall = report.overallStatus as Exclude<VerificationStatus, "passed">;
+  if (VERIFICATION_OUTCOME_REASON_CODES[overall] !== "VERIFICATION_NOT_RUN") return overall;
+  const executedRed = EXECUTED_RED_STATUSES.find((status) =>
+    report.results.some((result) => result.status === status),
+  );
+  return executedRed ?? overall;
+}
+
+function failedVerificationOutcome(
+  input: ProductionManagedWorktreeToolInput,
+  attempt: Extract<VerificationAttempt, { readonly outcome: "completed" }>,
+): VerificationPortResult {
+  const { report } = attempt;
+  const status = modelFacingStatus(report);
+  const reasonCode = VERIFICATION_OUTCOME_REASON_CODES[status];
+  const verificationFailure = modelVerificationFailure(report, attempt.failureOutput);
+  const notRun = reasonCode === "VERIFICATION_NOT_RUN" ? notRunSteps(report) : undefined;
+  if (notRun !== undefined) recordVerificationNotRun(input, notRun);
+  return {
+    status: "failed",
+    reasonCode,
+    ...(verificationFailure === undefined ? {} : { verificationFailure }),
+    ...(notRun === undefined ? {} : { notRun }),
+  };
+}
+
+// A run that never executed used to reach the model as a bare VERIFICATION_NOT_RUN, and the model
+// picked another verifier at once without knowing why (F74, Coding Workbench run 24). Each step it
+// did not run now carries the closed reason: a verifier the repository defines no script for, a
+// dependency install that never completed, a policy denial or a cancellation.
+const NOT_RUN_STEP_LIMIT = 5;
+
+// The statuses of a step that never ran. A step that ran to a red end never enters the not-run
+// list, whatever the report's overall status says (PR #3452 review): modelFacingStatus already
+// keeps such a report off the not-run path, and this list does not rely on it.
+const NOT_RUN_STATUSES: ReadonlySet<VerificationStatus> = new Set([
+  "skipped",
+  "denied",
+  "cancelled",
+]);
+
+function notRunSteps(report: VerificationReport): readonly VerificationNotRunStep[] {
+  return report.results
+    .filter((result) => NOT_RUN_STATUSES.has(result.status))
+    .slice(0, NOT_RUN_STEP_LIMIT)
+    .map((result) => ({ kind: result.kind, reason: notRunReason(result) }));
+}
+
+function notRunReason(result: VerificationResult): VerificationNotRunReason {
+  if (result.status === "denied") return "denied";
+  if (result.status === "cancelled") return "cancelled";
+  const detail = result.detail ?? "";
+  if (detail.startsWith("dependencies unavailable: bootstrap ")) return "dependencies-unavailable";
+  return /^no [a-z-]+ script detected in package\.json$/u.test(detail)
+    ? "script-missing"
+    : "skipped";
+}
+
+function recordVerificationNotRun(
+  input: ProductionManagedWorktreeToolInput,
+  steps: readonly VerificationNotRunStep[],
+): void {
+  (input.activityLog ?? processServerLogSink()).write({
+    category: "process",
+    op: "coding-runtime.verification",
+    correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID,
+    extra: {
+      state: "not-run",
+      stepCount: steps.length,
+      steps: steps.map((step) => `${step.kind}:${step.reason}`),
+    },
+  });
+}
+
+// What the model is told about a run that did not pass: the failed step's structured locations
+// when the parser could read them, and always the orchestrator's redacted output tail for that
+// step (ADR-0126 D3) — a missing binary, a bundler error or npm's own diagnostics carry no
+// location, and without the tail the model repaired nothing (Coding Workbench run 15, 2026-09-10).
+// A failed dependency bootstrap is named as such, with its own tail.
 function modelVerificationFailure(
   report: VerificationReport,
+  failureOutput: readonly VerificationStepOutput[] = [],
 ): CodingToolVerificationFailure | undefined {
-  if (report.overallStatus !== "failed") return undefined;
+  if (modelFacingStatus(report) !== "failed") return undefined;
+  const dependencies = report.dependencies;
+  if (
+    dependencies !== undefined &&
+    VERIFICATION_DEPENDENCY_FAILURE_STATES.has(dependencies.state)
+  ) {
+    return dependencyBootstrapFailure(dependencies, failureOutput);
+  }
+  return stepFailure(report, failureOutput);
+}
+
+function dependencyBootstrapFailure(
+  dependencies: NonNullable<VerificationReport["dependencies"]>,
+  failureOutput: readonly VerificationStepOutput[],
+): CodingToolVerificationFailure {
+  const excerpt = failureOutput.find((output) => output.step === "dependencies")?.excerpt;
+  return {
+    summary: dependencyBootstrapFailureSummary(dependencies.state),
+    locations: [],
+    truncated: false,
+    ...(excerpt === undefined ? {} : { excerpt }),
+    dependencies,
+  };
+}
+
+function stepFailure(
+  report: VerificationReport,
+  failureOutput: readonly VerificationStepOutput[],
+): CodingToolVerificationFailure | undefined {
   const failed = report.results.find((result) => result.status === "failed");
   if (failed === undefined) return undefined;
   const candidates = failed.locations ?? [];
   const locations = candidates
     .filter(isVerificationFailureLocation)
     .slice(0, CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS);
+  const excerpt = failureOutput.find(
+    (output) => output.step === failed.kind && output.scriptName === failed.scriptName,
+  )?.excerpt;
   return {
     summary: `${failed.kind} failed; ${String(locations.length)} structured failure location${locations.length === 1 ? "" : "s"}`,
     locations,
     truncated: failed.truncated || candidates.length > locations.length,
+    ...(excerpt === undefined ? {} : { excerpt }),
   };
 }
 
 async function completeCandidateVerification(
   input: ProductionManagedWorktreeToolInput,
-  ticket: object | undefined,
+  begun: VerificationTicketOutcome | undefined,
   report: VerificationReport,
   guard: CodingToolMutationGuard,
   signal: AbortSignal | undefined,
 ): Promise<CodingToolVerificationResult | undefined> {
-  if (input.verifiedCommitService === undefined) return undefined;
-  if (ticket === undefined)
+  if (input.verifiedCommitService === undefined || begun === undefined) return undefined;
+  if (begun.kind !== "ticket") {
+    // Not a commit proof, but still a check the run ran: kept for the pull request's list (F57).
+    input.verifiedCommitService.observeVerification(report);
     return {
       commitProof: "unavailable",
       reasonCode: "candidate-not-staged",
       nextAction: "stage-then-verify",
+      // The paths the model has to stage (run 16, 2026-09-10); a vanished run context has none.
+      ...(begun.kind === "refused" ? { blocking: begun.blocking } : {}),
     };
-  const recorded = await input.verifiedCommitService.completeVerification(ticket, report, {
+  }
+  const recorded = await input.verifiedCommitService.completeVerification(begun.ticket, report, {
     check: guard.check,
     signal,
   });
@@ -971,12 +1636,28 @@ async function completeCandidateVerification(
     ? { commitProof: "recorded" }
     : { commitProof: "unavailable", reasonCode: "candidate-drift", nextAction: "verify-again" };
 }
-function verificationCompletionLive(
-  input: ProductionManagedWorktreeToolInput,
-  guard: CodingToolMutationGuard,
+export type VerificationLivenessRefusal = "signal-aborted" | "guard-rejected" | "run-not-live";
+
+/**
+ * Which of the three liveness conditions a verification effect fails, or undefined while all hold.
+ * One closed code (`verification-authority-revoked`) answers the model for all three, and until run
+ * 12 (2026-09-10) the refusal diagnostic said no more than that: a concurrent verification refused
+ * while its sibling waited on the operator's trust decision left no way to tell an aborted signal
+ * from a rejecting guard from a workspace that had stopped resolving. The condition is now the
+ * diagnostic's `code`, so the log names the one that fired.
+ */
+export function verificationLivenessRefusal(
+  input: Pick<
+    ProductionManagedWorktreeToolInput,
+    "liveFacts" | "resolveWorkspaceRootAccess" | "authorityExpiresAt"
+  >,
+  guard: Pick<CodingToolMutationGuard, "check">,
   signal: AbortSignal | undefined,
-): boolean {
-  return !signalAborted(signal) && guard.check() && live(input);
+): VerificationLivenessRefusal | undefined {
+  if (signalAborted(signal)) return "signal-aborted";
+  if (!guard.check()) return "guard-rejected";
+  if (!live(input)) return "run-not-live";
+  return undefined;
 }
 
 // The runner keys its run-started/step/terminal evidence and its own "execution failed
@@ -1036,8 +1717,9 @@ function verificationCorrelationId(input: ProductionManagedWorktreeToolInput): s
 function verificationPortRefusal(
   input: ProductionManagedWorktreeToolInput,
   reasonCode: "verification-authority-revoked" | "verification-verifier-unsupported",
+  condition?: VerificationLivenessRefusal,
 ): VerificationPortResult {
-  emitVerificationDiagnostic(input, reasonCode, "verification-refused");
+  emitVerificationDiagnostic(input, reasonCode, "verification-refused", undefined, condition);
   return { status: "failed", reasonCode };
 }
 
@@ -1046,14 +1728,19 @@ function emitVerificationDiagnostic(
   errorClass: string,
   message: "verification-refused" | "verification-failed",
   error?: unknown,
+  code?: string,
 ): void {
   const detail = error === undefined ? undefined : describeError(error);
+  const closedCode = code ?? detail?.code;
   emitServerDiagnostic(input.diagnostics, {
     correlationId: verificationCorrelationId(input) ?? UNKNOWN_CORRELATION_ID,
     timestamp: new Date().toISOString(),
     source: "production-managed-worktree-tools.verification",
     errorClass,
     message,
+    // A coded throw (the raw status reader's `git-raw-snapshot-incomplete`, for one) names its closed
+    // reason here; before 2026-09-10 the line carried `errorKind: "Error"` and nothing else.
+    ...(closedCode === undefined ? {} : { code: closedCode }),
     ...(detail?.frames === undefined ? {} : { frames: detail.frames }),
     ...(detail?.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
     operation: "coding-runtime.verification",
@@ -1107,7 +1794,12 @@ function buildEgressAuthority(
 // connector, egress) specifically so liveness can be re-proven against the SAME resolver those ports
 // use, not just an expiry timestamp. A lifecycle transition or gitdir-identity mismatch mid-run must
 // revoke every one of those ports immediately, not only wait for authorityExpiresAt to lapse (#3347).
-function live(input: ProductionManagedWorktreeToolInput): boolean {
+function live(
+  input: Pick<
+    ProductionManagedWorktreeToolInput,
+    "liveFacts" | "resolveWorkspaceRootAccess" | "authorityExpiresAt"
+  >,
+): boolean {
   try {
     input.liveFacts();
     return (

@@ -18,7 +18,12 @@ import {
   TransportError,
   type GatewayEgressErrorCode,
 } from "@oscharko-dev/keiko-security/errors/gateway";
-import { apiKeyHeaderValue, DEFAULT_API_KEY_HEADER_NAME, trimTrailingSlash } from "./config.js";
+import {
+  apiKeyHeaderValue,
+  DEFAULT_API_KEY_HEADER_NAME,
+  MAX_TIMER_DELAY_MS,
+  trimTrailingSlash,
+} from "./config.js";
 import {
   gatewayFetch,
   OutboundHttpEgressError,
@@ -31,12 +36,7 @@ import {
   createGatewayToolCatalogBridge,
   retainMeasuredCatalogFailureUsage,
 } from "./toolCatalogBridge.js";
-import {
-  bindNormalizedToolCalls,
-  normalizeChatResponse,
-  parseNormalizedToolCalls,
-  textFromContent,
-} from "./normalize.js";
+import { bindNormalizedToolCalls, normalizeChatResponse, textFromContent } from "./normalize.js";
 import { redact } from "@oscharko-dev/keiko-security";
 import { assertValidGatewaySamplingParameters } from "./types.js";
 import { providerOutputTokenLimit } from "./output-token-limit.js";
@@ -47,7 +47,9 @@ import {
 } from "./prompt-token-accounting.js";
 import {
   logEndpointHost,
+  logErrorKind,
   logLevelEnabled,
+  logTimer,
   resolveLogSink,
   withCorrelationId,
   type ModelGatewayLogContext,
@@ -62,8 +64,8 @@ import type {
   NormalizedResponse,
   NormalizedToolCall,
   ProviderAdapter,
+  StreamReadBounds,
   ToolDefinition,
-  UsageMetadata,
 } from "./types.js";
 
 const PROVIDER_EMPTY_ASSISTANT_STATUS = 200;
@@ -108,8 +110,10 @@ interface ChatDispatchFields {
   // UTF-8 BYTES on the wire, not `String.length`'s UTF-16 code units — see the identical note on
   // `EmbeddingDispatchFields`.
   readonly bodyBytes: number;
+  // A read with bounds (ADR-0003): `timeoutMs` is then its silence bound, `readBudgetMs` its budget.
   readonly timeoutMs: number;
   readonly stream: boolean;
+  readonly readBudgetMs?: number;
 }
 
 // `info`, not `debug`: a line that only appears once the operator has already reproduced the hang
@@ -163,6 +167,71 @@ interface ChatRequestBody {
 interface DispatchedResponse {
   readonly response: Response;
   readonly signal: AbortSignal;
+  // Clears the timers of the request's deadline; every dispatched request ends with one call.
+  readonly dispose: () => void;
+}
+
+// A request's deadline. Without read bounds it is the attempt's `timeoutMs` for the whole request,
+// as always. With them (ADR-0003) the provider must START its response within `silenceMs` and the
+// whole read ends at `budgetMs`, however live: a long generation that keeps producing is no longer
+// cut off at `timeoutMs` and generated a second time (coding run 30), and a silent one still ends.
+// Both fire a TimeoutError DOMException, which `requestAbortError` maps onto the typed, retryable
+// TimeoutError.
+interface RequestDeadline {
+  readonly signal: AbortSignal;
+  readonly responseStarted: () => void;
+  readonly dispose: () => void;
+}
+
+function noop(): void {
+  // A deadline without timers of its own has nothing to settle.
+}
+
+function timedAbort(
+  ms: number,
+  message: string,
+): { readonly signal: AbortSignal; readonly dispose: () => void } {
+  const controller = new AbortController();
+  // Past the timer ceiling a timer fires at once and would end the read the moment it starts; no
+  // caller's bound may do that (PR #3452 review).
+  const timer = setTimeout(
+    () => {
+      controller.abort(new DOMException(message, "TimeoutError"));
+    },
+    Math.min(ms, MAX_TIMER_DELAY_MS),
+  );
+  return {
+    signal: controller.signal,
+    dispose: (): void => {
+      clearTimeout(timer);
+    },
+  };
+}
+
+function requestDeadline(
+  timeoutMs: number,
+  bounds: StreamReadBounds | undefined,
+  cancel: AbortSignal | undefined,
+): RequestDeadline {
+  const withCancel = (signals: readonly AbortSignal[]): AbortSignal =>
+    AbortSignal.any(cancel === undefined ? [...signals] : [...signals, cancel]);
+  if (bounds === undefined) {
+    return {
+      signal: withCancel([AbortSignal.timeout(timeoutMs)]),
+      responseStarted: noop,
+      dispose: noop,
+    };
+  }
+  const start = timedAbort(bounds.silenceMs, "the provider did not start its response in time");
+  const budget = timedAbort(bounds.budgetMs, "the provider response outlasted its budget");
+  return {
+    signal: withCancel([start.signal, budget.signal]),
+    responseStarted: start.dispose,
+    dispose: (): void => {
+      start.dispose();
+      budget.dispose();
+    },
+  };
 }
 
 // GEN-AI-GATEWAY-002 (RB-4): honor Azure deployment routing for chat providers instead of silently
@@ -236,11 +305,10 @@ function buildBody(request: ProviderGatewayRequest, config: ModelProviderConfig)
 }
 
 // Streaming body: identical to buildBody plus the OpenAI/Azure streaming flags.
-// A provider stream that stops producing chunks (half-open socket, wedged proxy,
-// stalled upstream) previously hung until the CLIENT disconnected: the wall-clock
-// deadline bounds only the buffered path's total call. 60s without a single SSE
-// chunk is far beyond any healthy inter-token gap, so treat it as a typed,
-// retry-classified TimeoutError. Exported for tests.
+// A stream read without bounds (a desktop chat stream) that stops producing data events
+// (half-open socket, wedged proxy, stalled upstream) ends after this long without one, as a typed,
+// retry-classified TimeoutError; its whole read stays bounded by `timeoutMs`. A read with bounds
+// uses its own silence bound instead (ADR-0003). Exported for tests.
 export const STREAM_IDLE_TIMEOUT_MS = 60_000;
 
 // `include_usage` requests a final usage-only chunk so token accounting survives.
@@ -367,17 +435,16 @@ function applyToolCallDelta(accumulator: ToolCallAccumulator, chunk: unknown): v
   }
 }
 
-// Reuses the same normalizer the buffered (non-streaming) path uses (normalize.ts
-// `parseNormalizedToolCalls`) instead of a second argument-parsing implementation.
-function assembledToolCalls(accumulator: ToolCallAccumulator): readonly NormalizedToolCall[] {
-  const ordered = [...accumulator.entries()].sort(([left], [right]) => left - right);
-  return parseNormalizedToolCalls(
-    ordered.map(([, entry]) => ({
+// The accumulated tool-call fragments in the wire shape of a whole answer, ordered by index, so the
+// buffered path's own normalizer parses them (normalize.ts `parseNormalizedToolCalls`).
+function rawToolCalls(accumulator: ToolCallAccumulator): readonly Record<string, unknown>[] {
+  return [...accumulator.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([, entry]) => ({
       id: entry.id,
       type: "function",
       function: { name: entry.name, arguments: entry.argumentsText },
-    })),
-  );
+    }));
 }
 
 function retryAfterMs(response: Response): number | null {
@@ -531,13 +598,14 @@ function errorSignal(payload: unknown): string {
     .toLowerCase();
 }
 
-function isContextOverflow(response: Response, payload: unknown): boolean {
-  if (response.status !== 400 && response.status !== 413 && response.status !== 422) {
+const CONTEXT_OVERFLOW_SIGNAL =
+  /context[_ -]?length[_ -]?exceeded|context window|context.*exceed|maximum context|too many tokens|prompt too long|context overflow/;
+
+function isContextOverflow(status: number, payload: unknown): boolean {
+  if (status !== 400 && status !== 413 && status !== 422) {
     return false;
   }
-  return /context[_ -]?length[_ -]?exceeded|context window|context.*exceed|maximum context|too many tokens|prompt too long|context overflow/.test(
-    errorSignal(payload),
-  );
+  return CONTEXT_OVERFLOW_SIGNAL.test(errorSignal(payload));
 }
 
 function isModelRefusal(payload: unknown): boolean {
@@ -550,28 +618,73 @@ function mapHttpError(
   secrets: readonly string[],
   payload: unknown,
 ): never {
-  if (isContextOverflow(response, payload)) {
+  mapProviderFailure(response.status, retryAfterMs(response), modelId, secrets, payload, false);
+}
+
+// One mapping for a provider failure, whether it arrived as the response's HTTP status or as an
+// error frame inside a stream that had already started.
+function mapProviderFailure(
+  status: number,
+  retryAfter: number | null,
+  modelId: string,
+  secrets: readonly string[],
+  payload: unknown,
+  streamed: boolean,
+): never {
+  if (isContextOverflow(status, payload)) {
     throw new ContextOverflowError(`provider reported context overflow for '${modelId}'`, secrets);
   }
   if (isModelRefusal(payload)) {
     throw new ModelRefusalError(`provider refused the request for '${modelId}'`, secrets);
   }
-  if (response.status === 401 || response.status === 403) {
+  if (status === 401 || status === 403) {
     throw new AuthenticationError(`provider rejected credentials for '${modelId}'`, secrets);
   }
-  if (response.status === 429) {
-    throw new RateLimitError(
-      `provider rate limited '${modelId}'`,
-      retryAfterMs(response),
-      secrets,
-      response.status,
-    );
+  if (status === 429) {
+    throw new RateLimitError(`provider rate limited '${modelId}'`, retryAfter, secrets, status);
   }
-  throw new ProviderError(
-    `provider returned HTTP ${String(response.status)} for '${modelId}'`,
-    response.status,
+  const reported = streamed
+    ? `reported status ${String(status)} mid-stream`
+    : `returned HTTP ${String(status)}`;
+  throw new ProviderError(`provider ${reported} for '${modelId}'`, status, secrets);
+}
+
+// A failure the provider, or a proxy such as LiteLLM, writes into a stream it has already started:
+// `data: {"error": {"message", "type", "param", "code"}}`, where LiteLLM's `code` is the upstream
+// HTTP status as a string. It maps exactly like the same failure at the start of the response, so
+// a rate limit mid-stream stays a retryable RateLimitError instead of reading as an empty answer.
+function throwOnStreamedFailure(chunk: unknown, modelId: string, secrets: readonly string[]): void {
+  if (!isRecord(chunk) || !isRecord(chunk.error)) return;
+  mapProviderFailure(
+    streamedFailureStatus(chunk, chunk.error),
+    null,
+    modelId,
     secrets,
+    chunk,
+    true,
   );
+}
+
+// What a failure frame without a status says, first match wins: the terminal failures before the
+// rate limit, so an overflow, a rejected key or a malformed request is never retried as an upstream
+// failure and generated again (PR #3452 review). OpenAI and Azure name a failure in `code`, `type`
+// and `message`; only a proxy such as LiteLLM writes its HTTP status.
+const STREAMED_FAILURE_SIGNALS: readonly (readonly [RegExp, number])[] = [
+  [CONTEXT_OVERFLOW_SIGNAL, 400],
+  [/invalid[_ -]?api[_ -]?key|authentication/, 401],
+  [/permission/, 403],
+  [/rate[_ -]?limit|too many requests/, 429],
+  [/invalid[_ -]?request/, 400],
+];
+
+// The status a failure frame reports: LiteLLM's `code` is the upstream HTTP status as a string. A
+// frame without one is classified by what it says, and one that says nothing known reports an
+// upstream failure (502).
+function streamedFailureStatus(chunk: unknown, error: Record<string, unknown>): number {
+  const code = typeof error.code === "number" ? error.code : Number(error.code);
+  if (Number.isInteger(code) && code >= 400 && code <= 599) return code;
+  const signal = errorSignal(chunk);
+  return STREAMED_FAILURE_SIGNALS.find(([pattern]) => pattern.test(signal))?.[1] ?? 502;
 }
 
 function apiKeyHeaders(config: ModelProviderConfig): Record<string, string> {
@@ -615,24 +728,124 @@ function* emitRedactedDelta(
 
 interface StreamAccumulator {
   content: string;
+  refusal: string;
   finishReason: FinishReason;
   prompt: number;
   completion: number;
-  usageReported: boolean;
+  // The provider's own usage record, kept as it came, so the streamed answer is normalized exactly
+  // like a whole one.
+  usage: Record<string, unknown> | undefined;
   readonly toolCalls: ToolCallAccumulator;
 }
 
-// Records the finish-reason/usage/tool-call deltas carried on a streaming chunk onto the
+function newStreamAccumulator(): StreamAccumulator {
+  return {
+    content: "",
+    refusal: "",
+    finishReason: "stop",
+    prompt: 0,
+    completion: 0,
+    usage: undefined,
+    toolCalls: new Map(),
+  };
+}
+
+// A streamed refusal arrives as `delta.refusal` text; the answer is refused when any arrived.
+function refusalFromChunk(chunk: unknown): string {
+  const choice = firstStreamChoice(chunk);
+  const delta = choice !== undefined && isRecord(choice.delta) ? choice.delta : undefined;
+  return typeof delta?.refusal === "string" ? delta.refusal : "";
+}
+
+// The streamed answer in the shape of a whole chat completion, so it runs through exactly the
+// normalization a buffered answer does: refusal, content filter, structured output and tool calls.
+function streamedPayload(acc: StreamAccumulator): Record<string, unknown> {
+  const toolCalls = rawToolCalls(acc.toolCalls);
+  const message = {
+    role: "assistant",
+    content: acc.content,
+    ...(acc.refusal.length > 0 ? { refusal: acc.refusal } : {}),
+    ...(toolCalls.length > 0 ? { tool_calls: toolCalls } : {}),
+  };
+  return {
+    choices: [{ message, finish_reason: acc.finishReason }],
+    ...(acc.usage === undefined ? {} : { usage: acc.usage }),
+  };
+}
+
+// An endpoint that answers a streamed request with the whole body at once (a proxy route that
+// ignores `stream`) is read as the whole answer it is.
+function answeredWholeBody(response: Response): boolean {
+  return (response.headers.get("content-type") ?? "").toLowerCase().includes("application/json");
+}
+
+// The timing of one streamed read, for its outcome line: when its first data event came and the
+// longest wait for one, on the log clock (never the injected clock, which usage latency uses).
+interface StreamReport {
+  readonly elapsed: () => number;
+  dataEvents: number;
+  firstDataMs: number | undefined;
+  maxGapMs: number;
+  lastDataMs: number;
+}
+
+function newStreamReport(): StreamReport {
+  return { elapsed: logTimer(), dataEvents: 0, firstDataMs: undefined, maxGapMs: 0, lastDataMs: 0 };
+}
+
+function recordDataEvent(report: StreamReport): void {
+  const now = report.elapsed();
+  report.firstDataMs ??= now;
+  report.maxGapMs = Math.max(report.maxGapMs, now - report.lastDataMs);
+  report.lastDataMs = now;
+  report.dataEvents += 1;
+}
+
+type StreamReadOutcome = "completed" | "whole-body" | "stalled" | "failed";
+
+function streamReadOutcome(error: unknown): StreamReadOutcome {
+  return error instanceof TimeoutError ? "stalled" : "failed";
+}
+
+// What one streamed read needs from its call.
+interface StreamRead {
+  readonly request: GatewayRequest;
+  readonly config: ModelProviderConfig;
+  readonly secrets: readonly string[];
+  readonly signal: AbortSignal;
+  readonly bounds: StreamReadBounds | undefined;
+  readonly bindCalls: (calls: readonly NormalizedToolCall[]) => readonly NormalizedToolCall[];
+  readonly start: number;
+}
+
+function streamReadFields(
+  read: StreamRead,
+  report: StreamReport,
+  outcome: StreamReadOutcome,
+): Readonly<Record<string, unknown>> {
+  return {
+    modelId: read.config.modelId,
+    outcome,
+    dataEvents: report.dataEvents,
+    ...(report.firstDataMs === undefined ? {} : { firstDataMs: report.firstDataMs }),
+    maxGapMs: report.maxGapMs,
+    silenceMs: read.bounds?.silenceMs ?? STREAM_IDLE_TIMEOUT_MS,
+    ...(read.bounds === undefined ? {} : { readBudgetMs: read.bounds.budgetMs }),
+  };
+}
+
+// Records the finish-reason/usage/refusal/tool-call deltas carried on a streaming chunk onto the
 // in-flight response accumulator, when present.
 function applyChunkMetadata(chunk: unknown, acc: StreamAccumulator): void {
   const finish = finishReasonFromChunk(chunk);
   if (finish !== undefined) acc.finishReason = finish;
   const usage = usageFromChunk(chunk);
-  if (usage !== undefined) {
+  if (usage !== undefined && isRecord(chunk) && isRecord(chunk.usage)) {
     acc.prompt = usage.prompt;
     acc.completion = usage.completion;
-    acc.usageReported = providerReportedUsage(chunk);
+    acc.usage = chunk.usage;
   }
+  acc.refusal += refusalFromChunk(chunk);
   applyToolCallDelta(acc.toolCalls, chunk);
 }
 
@@ -677,29 +890,17 @@ export class OpenAiAdapter implements ProviderAdapter {
       config,
       secrets,
     );
-    const { response } = dispatched;
-    if (!response.ok) {
-      const errorPayload = await this.readErrorBody(response, config, secrets, dispatched.signal);
-      mapHttpError(response, config.modelId, secrets, errorPayload);
+    try {
+      const { response } = dispatched;
+      if (!response.ok) {
+        const errorPayload = await this.readErrorBody(response, config, secrets, dispatched.signal);
+        mapHttpError(response, config.modelId, secrets, errorPayload);
+      }
+      const payload = await this.readBody(response, config, secrets, dispatched.signal);
+      return this.finishedResponse(payload, request, config, secrets, catalog.bindCalls, start);
+    } finally {
+      dispatched.dispose();
     }
-    const payload = await this.readBody(response, config, secrets, dispatched.signal);
-    const normalized = normalizeChatResponse(
-      payload,
-      config.modelId,
-      {
-        requestId: this.deps.requestId,
-        latencyMs: this.now() - start,
-        costClass: this.deps.costClass,
-      },
-      request.responseFormat?.type === "json_schema",
-    );
-    assertUsableAssistantResponse(normalized, config.modelId, secrets);
-    return bindCatalogResponse(
-      normalized,
-      secrets,
-      catalog.bindCalls,
-      providerReportedUsage(payload),
-    );
   };
 
   // Streaming chat path (Layer 1): yields redacted content-delta tokens as they arrive, then a
@@ -707,11 +908,13 @@ export class OpenAiAdapter implements ProviderAdapter {
   // accumulated from `choices[0].delta.tool_calls` fragments across chunks and bound against the
   // advertised catalog only once fully assembled at `done` — never exposed mid-stream, and never
   // reaching the caller unbound if the catalog rejects them (catalog.bindCalls throws, so this
-  // generator throws before yielding `done`).
+  // generator throws before yielding `done`). With `bounds` it is the read of a buffered attempt
+  // (ADR-0003): their silence and budget bound the read instead of one `timeoutMs`.
   callStream = async function* (
     this: OpenAiAdapter,
     request: GatewayRequest,
     config: ModelProviderConfig,
+    bounds?: StreamReadBounds,
   ): AsyncGenerator<GatewayStreamChunk> {
     const secrets = [config.apiKey, config.baseUrl];
     if (request.cancellationSignal?.aborted === true) {
@@ -729,62 +932,173 @@ export class OpenAiAdapter implements ProviderAdapter {
       config,
       secrets,
       true,
+      bounds,
     );
-    const { response } = dispatched;
-    if (!response.ok) {
-      const errorPayload = await this.readErrorBody(response, config, secrets, dispatched.signal);
-      mapHttpError(response, config.modelId, secrets, errorPayload);
+    try {
+      const { response } = dispatched;
+      if (!response.ok) {
+        const errorPayload = await this.readErrorBody(response, config, secrets, dispatched.signal);
+        mapHttpError(response, config.modelId, secrets, errorPayload);
+      }
+      const read: StreamRead = {
+        request,
+        config,
+        secrets,
+        signal: dispatched.signal,
+        bounds,
+        bindCalls: catalog.bindCalls,
+        start,
+      };
+      yield* answeredWholeBody(response)
+        ? this.wholeBodyChunks(response, read)
+        : this.streamedChunks(response, read);
+    } finally {
+      dispatched.dispose();
     }
-    const acc: StreamAccumulator = {
-      content: "",
-      finishReason: "stop",
-      prompt: 0,
-      completion: 0,
-      usageReported: false,
-      toolCalls: new Map(),
-    };
-    for await (const token of this.streamDeltas(
-      response,
-      config,
-      secrets,
-      acc,
-      dispatched.signal,
-    )) {
-      yield { type: "delta", token };
-    }
-    const assembled = this.assembleResponse(config, start, acc);
-    assertUsableAssistantResponse(assembled, config.modelId, secrets);
-    const bound = bindCatalogResponse(assembled, secrets, catalog.bindCalls, acc.usageReported);
-    yield { type: "done", response: bound };
   };
 
-  // Iterates the SSE stream, yielding redacted content tokens while mutating `acc`.
-  // A suffix that matches the start of a configured secret is held until the next
-  // delta proves it safe or completes the secret so redaction can match it.
-  // Every chunk read races the idle-stream timeout: the total wall-clock deadline
-  // only bounds the whole call, so a provider stream that silently hangs
-  // mid-response previously held the BFF response (and its SSE client) forever.
+  // Reads the SSE stream into `acc`, yielding redacted content tokens. A suffix that matches the
+  // start of a configured secret is held until the next delta proves it safe or completes the
+  // secret so redaction can match it. The wait for every data event is bounded (the read's silence
+  // bound, or STREAM_IDLE_TIMEOUT_MS without bounds), and an error frame inside the stream ends it
+  // with the failure it reports.
   private async *streamDeltas(
     response: Response,
-    config: ModelProviderConfig,
-    secrets: readonly string[],
+    read: StreamRead,
     acc: StreamAccumulator,
-    signal: AbortSignal,
+    report: StreamReport,
   ): AsyncGenerator<string> {
     const buffer = { pending: "" };
-    const activeSecrets = configuredSecrets(secrets);
+    const activeSecrets = configuredSecrets(read.secrets);
+    const silenceMs = read.bounds?.silenceMs ?? STREAM_IDLE_TIMEOUT_MS;
     try {
-      for await (const chunk of readSseStream(response, undefined, STREAM_IDLE_TIMEOUT_MS)) {
+      for await (const chunk of readSseStream(response, undefined, silenceMs, read.signal)) {
+        recordDataEvent(report);
+        throwOnStreamedFailure(chunk, read.config.modelId, read.secrets);
         const content = deltaFromChunk(chunk);
         if (content !== undefined) {
-          yield* emitRedactedDelta(content, buffer, activeSecrets, secrets, acc);
+          yield* emitRedactedDelta(content, buffer, activeSecrets, read.secrets, acc);
         }
         applyChunkMetadata(chunk, acc);
       }
-      yield* flushPendingBuffer(buffer, secrets);
+      yield* flushPendingBuffer(buffer, read.secrets);
     } catch (error) {
-      throw this.withPartialUsage(this.mapStreamError(error, config, secrets, signal), acc);
+      throw this.withPartialUsage(
+        this.mapStreamError(error, read.config, read.secrets, read.signal),
+        acc,
+      );
     }
+  }
+
+  private async *streamedChunks(
+    response: Response,
+    read: StreamRead,
+  ): AsyncGenerator<GatewayStreamChunk> {
+    const acc = newStreamAccumulator();
+    const report = newStreamReport();
+    try {
+      for await (const token of this.streamDeltas(response, read, acc, report)) {
+        yield { type: "delta", token };
+      }
+    } catch (error) {
+      this.logStreamRead(read, report, streamReadOutcome(error), error);
+      throw error;
+    }
+    const answer = this.settledAnswer(read, report, "completed", streamedPayload(acc));
+    yield { type: "done", response: answer };
+  }
+
+  private async *wholeBodyChunks(
+    response: Response,
+    read: StreamRead,
+  ): AsyncGenerator<GatewayStreamChunk> {
+    const report = newStreamReport();
+    let payload: unknown;
+    try {
+      payload = await this.readBody(response, read.config, read.secrets, read.signal);
+    } catch (error) {
+      this.logStreamRead(read, report, streamReadOutcome(error), error);
+      throw error;
+    }
+    const answer = this.settledAnswer(read, report, "whole-body", payload);
+    if (answer.content.length > 0) yield { type: "delta", token: answer.content };
+    yield { type: "done", response: answer };
+  }
+
+  // The answer a read settled on, logged as settled only once it is one: normalization can still
+  // refuse it (a refusal, a content filter, an empty answer, a catalog bind failure), and a refused
+  // answer is a failed read with its error kind, never a completed one (PR #3452 review).
+  private settledAnswer(
+    read: StreamRead,
+    report: StreamReport,
+    outcome: "completed" | "whole-body",
+    payload: unknown,
+  ): NormalizedResponse {
+    let answer: NormalizedResponse;
+    try {
+      answer = this.finishedResponse(
+        payload,
+        read.request,
+        read.config,
+        read.secrets,
+        read.bindCalls,
+        read.start,
+      );
+    } catch (error) {
+      this.logStreamRead(read, report, streamReadOutcome(error), error);
+      throw error;
+    }
+    this.logStreamRead(read, report, outcome);
+    return answer;
+  }
+
+  // The one normalization every answer goes through, read whole or over the stream: refusal and
+  // content filter, structured output, the usable-answer check, redaction and catalog binding.
+  private finishedResponse(
+    payload: unknown,
+    request: GatewayRequest,
+    config: ModelProviderConfig,
+    secrets: readonly string[],
+    bindCalls: StreamRead["bindCalls"],
+    start: number,
+  ): NormalizedResponse {
+    const normalized = normalizeChatResponse(
+      payload,
+      config.modelId,
+      {
+        requestId: this.deps.requestId,
+        latencyMs: this.now() - start,
+        costClass: this.deps.costClass,
+      },
+      request.responseFormat?.type === "json_schema",
+    );
+    assertUsableAssistantResponse(normalized, config.modelId, secrets);
+    return bindCatalogResponse(normalized, secrets, bindCalls, providerReportedUsage(payload));
+  }
+
+  // One line per streamed read, body-free (ADR-0003): how it ended, how many data events it had,
+  // when the first came, the longest wait for one and, for a read that did not settle, how long the
+  // provider had been silent, against the bounds it ran under.
+  private logStreamRead(
+    read: StreamRead,
+    report: StreamReport,
+    outcome: StreamReadOutcome,
+    error?: unknown,
+  ): void {
+    const settled = outcome === "completed" || outcome === "whole-body";
+    if (settled && !logLevelEnabled(this.log, "info")) return;
+    const durationMs = report.elapsed();
+    this.log.write({
+      level: settled ? "info" : "warn",
+      category: "gateway",
+      op: "chat.response.streamed",
+      durationMs,
+      ...(error === undefined ? {} : { errorKind: logErrorKind(error) }),
+      extra: {
+        ...streamReadFields(read, report, outcome),
+        ...(settled ? {} : { silentForMs: durationMs - report.lastDataMs }),
+      },
+    });
   }
 
   // Retain the usage the stream had already accumulated (counts only, never
@@ -803,40 +1117,17 @@ export class OpenAiAdapter implements ProviderAdapter {
     return mapped;
   }
 
-  private assembleResponse(
-    config: ModelProviderConfig,
-    start: number,
-    acc: StreamAccumulator,
-  ): NormalizedResponse {
-    const usage: UsageMetadata = {
-      requestId: this.deps.requestId,
-      promptTokens: acc.prompt,
-      completionTokens: acc.completion,
-      latencyMs: this.now() - start,
-      costClass: this.deps.costClass,
-    };
-    return {
-      modelId: config.modelId,
-      content: acc.content,
-      finishReason: acc.finishReason,
-      toolCalls: assembledToolCalls(acc.toolCalls),
-      structuredOutput: null,
-      usage,
-    };
-  }
-
-  // A mid-stream read failure surfaces as a TransportError; an already-typed
-  // cancellation/timeout (e.g. raised by the underlying reader) passes through.
-  // The transport-layer idle marker maps onto the typed, secret-redacting
-  // TimeoutError so the retry/breaker classification sees a timeout, not an
-  // anonymous transport fault.
+  // A mid-stream failure keeps its gateway type (a failure frame the provider sent, a timeout, a
+  // cancellation); an aborted request maps through its signal's reason; the transport-layer idle
+  // marker maps onto the typed, secret-redacting TimeoutError, so retry and breaker see a timeout
+  // rather than an anonymous transport fault; anything else is a TransportError.
   private mapStreamError(
     error: unknown,
     config: ModelProviderConfig,
     secrets: readonly string[],
     signal: AbortSignal,
   ): Error {
-    if (error instanceof CancelledError || error instanceof TimeoutError) {
+    if (error instanceof GatewayError) {
       return error;
     }
     if (signal.aborted) {
@@ -844,8 +1135,8 @@ export class OpenAiAdapter implements ProviderAdapter {
     }
     if (error instanceof SseIdleTimeoutError) {
       return new TimeoutError(
-        `provider stream for '${config.modelId}' produced no chunk for ${String(
-          STREAM_IDLE_TIMEOUT_MS,
+        `provider stream for '${config.modelId}' produced no data event for ${String(
+          error.idleTimeoutMs,
         )}ms`,
         secrets,
       );
@@ -862,10 +1153,8 @@ export class OpenAiAdapter implements ProviderAdapter {
     config: ModelProviderConfig,
     secrets: readonly string[],
     stream = false,
+    bounds?: StreamReadBounds,
   ): Promise<DispatchedResponse> {
-    const timeoutSignal = AbortSignal.timeout(config.timeoutMs);
-    const cancel = request.cancellationSignal;
-    const signal = cancel ? AbortSignal.any([timeoutSignal, cancel]) : timeoutSignal;
     const url = chatCompletionsUrl(config);
     const body = JSON.stringify(
       stream ? buildStreamBody(request, config) : buildBody(request, config),
@@ -879,22 +1168,26 @@ export class OpenAiAdapter implements ProviderAdapter {
       modelId: config.modelId,
       messageCount: request.messages.length,
       bodyBytes: Buffer.byteLength(body, "utf8"),
-      timeoutMs: config.timeoutMs,
+      timeoutMs: bounds?.silenceMs ?? config.timeoutMs,
       stream,
+      ...(bounds === undefined ? {} : { readBudgetMs: bounds.budgetMs }),
     });
+    const deadline = requestDeadline(config.timeoutMs, bounds, request.cancellationSignal);
     try {
       const response = await gatewayFetch(url, {
         method: "POST",
         headers,
         body,
-        signal,
+        signal: deadline.signal,
         fetchImpl: this.deps.fetchImpl,
         log: this.log,
         ...(config.egress !== undefined ? { egress: config.egress } : {}),
       });
-      return { response, signal };
+      deadline.responseStarted();
+      return { response, signal: deadline.signal, dispose: deadline.dispose };
     } catch (error) {
-      throw this.mapDispatchError(error, config, signal, secrets);
+      deadline.dispose();
+      throw this.mapDispatchError(error, config, deadline.signal, secrets);
     }
   }
 

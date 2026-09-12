@@ -89,6 +89,7 @@ import {
   type RetainedEditorModelEditor,
   type RetainedEditorModelNamespace,
 } from "./editor-model-registry.js";
+import { HOST_EDIT_IGNORED_NOTICE, MODEL_OWNERSHIP_CHANGED_NOTICE } from "./runtime-notice.js";
 
 export interface EditorHandlers {
   readonly onChange: OnChange;
@@ -364,7 +365,7 @@ function useHostEditRequest(
     if (request === undefined || handledRequestIdRef.current === request.id) return;
     if (readOnly) {
       handledRequestIdRef.current = request.id;
-      props.onRuntimeError?.("host edit request ignored: buffer is read-only");
+      props.onRuntimeError?.(HOST_EDIT_IGNORED_NOTICE);
       return;
     }
     // Monaco's onMount resolves through @monaco-editor/react's async loader, not same-tick, so a
@@ -1108,9 +1109,7 @@ function attachRegistryModel(args: {
   } catch (error: unknown) {
     if (!(error instanceof EditorModelOwnershipError)) throw error;
     retainedEditor.setModel?.(null);
-    args.props.onRuntimeError?.(
-      "Editor model ownership changed; the previous workspace buffer was not reused.",
-    );
+    args.props.onRuntimeError?.(MODEL_OWNERSHIP_CHANGED_NOTICE);
     return null;
   }
 }

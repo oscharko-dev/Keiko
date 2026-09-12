@@ -50,6 +50,8 @@ const SOURCE_UNAVAILABLE_REASON_KEYS: Readonly<Record<string, CodingWorkbenchMes
   // real request to survive (readiness gap, epic #3384). Appended, never renumbered.
   "model-context-window-insufficient":
     "codingWorkbench.source.unavailableReason.model-context-window-insufficient",
+  // PR #3452 (F73): the coding model's forced tool-call proof is missing or older than 24 h.
+  "tool-calling-unverified": "codingWorkbench.source.unavailableReason.tool-calling-unverified",
 };
 
 /** The operator-facing sentence for an unavailable source's reason, or null when it has none. */

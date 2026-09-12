@@ -9,6 +9,7 @@ import {
   ConfigInvalidError,
   ContextOverflowError,
   GatewayError,
+  TransportError,
   UnknownModelError,
 } from "@oscharko-dev/keiko-security/errors/gateway";
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
@@ -27,7 +28,13 @@ import {
 import { OpenAiAdapter, ResponseRedactionError } from "./openai-adapter.js";
 import { countGatewayPromptTokens } from "./prompt-token-accounting.js";
 import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
-import { CircuitBreaker, executeWithRetry, systemClock } from "./resilience.js";
+import {
+  CircuitBreaker,
+  executeWithRetry,
+  providerRequestBudgetMs,
+  providerRetryConfig,
+  systemClock,
+} from "./resilience.js";
 import { assertValidGatewaySamplingParameters } from "./types.js";
 import type {
   Clock,
@@ -39,6 +46,7 @@ import type {
   ModelProviderConfig,
   NormalizedResponse,
   ProviderAdapter,
+  StreamReadBounds,
   UsageMetadata,
 } from "./types.js";
 
@@ -189,6 +197,45 @@ interface BufferedChatAttempt {
   readonly state: { request: GatewayCallRequest; attemptNumber: number };
 }
 
+// Whether a buffered call reads each attempt's answer over the provider's stream (ADR-0003): the
+// route's capability streams and the adapter can read a stream.
+function readsOverStream(route: RoutedCall, adapter: ProviderAdapter): boolean {
+  return route.capability.streaming && adapter.callStream !== undefined;
+}
+
+// The bounds of one attempt's streamed read: the attempt's `timeoutMs` bounds the provider's
+// silence and what is left of the call's budget bounds the read, so a long generation that keeps
+// producing is not cut off at `timeoutMs` and generated again (coding run 30).
+function streamedReadBounds(
+  attempt: BufferedChatAttempt,
+  silenceMs: number,
+  remainingBudgetMs: number | undefined,
+): StreamReadBounds | undefined {
+  if (!readsOverStream(attempt.route, attempt.adapter)) return undefined;
+  const budgetMs =
+    remainingBudgetMs !== undefined && Number.isFinite(remainingBudgetMs)
+      ? remainingBudgetMs
+      : providerRequestBudgetMs(attempt.route.provider);
+  return { silenceMs, budgetMs: Math.max(silenceMs, Math.floor(budgetMs)) };
+}
+
+// One attempt's answer: over the provider's stream when the attempt has read bounds, whole
+// otherwise.
+async function readAnswer(
+  adapter: ProviderAdapter,
+  request: GatewayCallRequest,
+  provider: ModelProviderConfig,
+  bounds: StreamReadBounds | undefined,
+): Promise<NormalizedResponse> {
+  if (bounds === undefined || adapter.callStream === undefined) {
+    return adapter.call(request, provider);
+  }
+  for await (const chunk of adapter.callStream(request, provider, bounds)) {
+    if (chunk.type === "done") return chunk.response;
+  }
+  throw new TransportError(`provider stream for '${provider.modelId}' ended without an answer`);
+}
+
 interface RepairPromptBudget {
   readonly promptTokens: number;
   readonly maxPromptTokens: number;
@@ -199,10 +246,46 @@ interface RepairPromptBudget {
 const TOOL_SCHEMA_REPAIR_PREFIX =
   "The previous tool call was rejected before execution because its arguments did not match the advertised schema.";
 
+// What the model is told to fix, in the schema's vocabulary only (declared property paths and
+// counts; the rejected arguments are never quoted back). A generic "match the schema" sentence left
+// gpt-5.4 repeating the same omission until the retry budget was gone (run 7, 2026-09-10: three
+// `keiko_repository_search` calls without the properties the dialect declares required).
+// Module-level export (not part of the package surface) so the sentence for each branch of the
+// account can be pinned directly: the real catalog offers no tool with more than sixteen distinct
+// schema paths, so the "further properties not listed" branch is unreachable through a provider
+// round trip today and stays a guard for a wider future schema (PR #3452 review).
+export function schemaMismatchGuidance(repair: GatewayToolCatalogError["repair"]): string {
+  const shape = repair?.shape;
+  if (shape === undefined) return "";
+  const parts: string[] = [];
+  if (shape.missingRequired.length > 0) {
+    parts.push(
+      ` Missing required properties: ${shape.missingRequired.join(", ")}. Every property the schema declares is required; pass an explicit value such as false or [] when a property does not apply.`,
+    );
+  }
+  if (shape.invalidPaths.length > 0) {
+    parts.push(
+      ` Properties whose value does not match the schema: ${shape.invalidPaths.join(", ")}.`,
+    );
+  }
+  if (shape.unexpectedPropertyCount > 0) {
+    const plural = shape.unexpectedPropertyCount === 1 ? "property is" : "properties are";
+    parts.push(
+      ` ${String(shape.unexpectedPropertyCount)} ${plural} not declared by the schema and must be removed.`,
+    );
+  }
+  if (shape.droppedPathCount > 0) {
+    parts.push(
+      ` ${String(shape.droppedPathCount)} further mismatching ${shape.droppedPathCount === 1 ? "property is" : "properties are"} not listed; check every remaining property against the schema.`,
+    );
+  }
+  return parts.join("");
+}
+
 function toolSchemaRepairMessage(error: GatewayToolCatalogError): string | undefined {
   const repair = error.repair;
   if (repair === undefined) return undefined;
-  return `${TOOL_SCHEMA_REPAIR_PREFIX} Retry tool call ${repair.toolCallId} for offered tool ${repair.offeredAlias} with arguments that match its advertised schema exactly.`;
+  return `${TOOL_SCHEMA_REPAIR_PREFIX} Retry tool call ${repair.toolCallId} for offered tool ${repair.offeredAlias} with arguments that match its advertised schema exactly.${schemaMismatchGuidance(repair)}`;
 }
 
 function repairedRequest(
@@ -332,12 +415,18 @@ export class Gateway {
       correlationId: ids.correlationId,
       state: { request, attemptNumber: 0 },
     };
-    this.logCallStarted(ids, route, false, request.reasoningEffort);
+    this.logCallStarted(
+      ids,
+      route,
+      false,
+      request.reasoningEffort,
+      readsOverStream(route, adapter),
+    );
     let result;
     try {
       result = await executeWithRetry(
-        (attemptTimeoutMs) => this.invokeBufferedAttempt(attempt, attemptTimeoutMs),
-        route.provider,
+        this.invokeBufferedAttempt.bind(this, attempt),
+        providerRetryConfig(route.provider),
         this.clock,
         request.cancellationSignal,
         this.random,
@@ -365,8 +454,13 @@ export class Gateway {
   private async invokeBufferedAttempt(
     attempt: BufferedChatAttempt,
     attemptTimeoutMs: number | undefined,
+    remainingBudgetMs: number | undefined,
   ): Promise<NormalizedResponse> {
     attempt.state.attemptNumber += 1;
+    const provider = {
+      ...attempt.route.provider,
+      ...(attemptTimeoutMs === undefined ? {} : { timeoutMs: attemptTimeoutMs }),
+    };
     try {
       return await this.invoke(
         attempt.breaker,
@@ -374,10 +468,8 @@ export class Gateway {
         attempt.state.request,
         attempt.route.capability,
         attempt.correlationId,
-        {
-          ...attempt.route.provider,
-          ...(attemptTimeoutMs === undefined ? {} : { timeoutMs: attemptTimeoutMs }),
-        },
+        provider,
+        streamedReadBounds(attempt, provider.timeoutMs, remainingBudgetMs),
       );
     } catch (error) {
       if (attempt.state.attemptNumber <= attempt.route.provider.maxRetries) {
@@ -440,6 +532,14 @@ export class Gateway {
         reason: state === "denied" ? "context-window-exceeded" : "invalid-shape",
         toolCallId: repair.toolCallId,
         offeredAlias: repair.offeredAlias,
+        ...(repair.shape === undefined
+          ? {}
+          : {
+              missingRequiredCount: repair.shape.missingRequired.length,
+              invalidPathCount: repair.shape.invalidPaths.length,
+              unexpectedPropertyCount: repair.shape.unexpectedPropertyCount,
+              droppedPathCount: repair.shape.droppedPathCount,
+            }),
         ...budget,
         correctionMessageCount: 1,
         effectStarted: false,
@@ -535,6 +635,7 @@ export class Gateway {
     route: RoutedCall,
     streaming: boolean,
     reasoningEffort: GatewayCallRequest["reasoningEffort"],
+    upstreamStreaming = false,
   ): void {
     if (!logLevelEnabled(this.log, "info")) return;
     this.log.write(
@@ -549,6 +650,12 @@ export class Gateway {
           costClass: route.capability.costClass,
           timeoutMs: route.provider.timeoutMs,
           maxRetries: route.provider.maxRetries,
+          // A buffered call's bound across all its attempts, and whether its attempts read the
+          // answer over the provider's stream, where `timeoutMs` bounds the provider's silence
+          // (ADR-0003); a stream is one attempt, bounded by `timeoutMs` alone.
+          ...(streaming
+            ? {}
+            : { requestBudgetMs: providerRequestBudgetMs(route.provider), upstreamStreaming }),
           ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
           streaming,
         },
@@ -750,12 +857,13 @@ export class Gateway {
     capability: ModelCapability,
     correlationId: string,
     provider: ModelProviderConfig,
+    bounds?: StreamReadBounds,
   ): Promise<NormalizedResponse> {
     breaker.assertAllowed(correlationId);
     const reservation = this.spendBudget?.reserve(capability, request, correlationId);
     let usage: UsageMetadata | undefined;
     try {
-      const response = await adapter.call(request, provider);
+      const response = await readAnswer(adapter, request, provider, bounds);
       usage = response.usage;
       breaker.recordSuccess(correlationId);
       return response;

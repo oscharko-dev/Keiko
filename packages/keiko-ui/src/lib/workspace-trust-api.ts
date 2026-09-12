@@ -1,12 +1,17 @@
 // Co-located tests: `workspace-trust-api.test.ts` in this directory covers `fetchWorkspaceTrustStatus`,
 // `mutateWorkspaceTrust`, the `WORKSPACE_TRUST_CHANGED_EVENT` broadcast contract, and the event-shape
 // guard `workspaceTrustEventProjectId`.
-import type { WorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts";
+import type {
+  EditorVerificationCatalog,
+  WorkspaceTrustStatus,
+} from "@oscharko-dev/keiko-contracts";
+import { isEditorVerificationCatalog } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import { isWorkspaceTrustStatus } from "@oscharko-dev/keiko-contracts/runtime/workspace-trust";
 import { ApiError } from "./api";
 import { bffFetchJson } from "./http";
 
 const TRUST_URL = "/api/editor/verification/trust";
+const CATALOG_URL = "/api/editor/verification/catalog";
 export const WORKSPACE_TRUST_CHANGED_EVENT = "keiko:workspace-trust-changed";
 
 export type WorkspaceTrustMutation = "grant" | "revoke";
@@ -82,6 +87,25 @@ export async function mutateWorkspaceTrust(
     window.dispatchEvent(new CustomEvent(WORKSPACE_TRUST_CHANGED_EVENT, { detail: { projectId } }));
   }
   return status;
+}
+
+// The server-owned verification catalog for one root: the detected kinds and, per kind, the
+// package-script trust decision the verification runner itself would make right now (ADR-0147 D3).
+// Re-detected on every call; a client never trusts a cached catalog. Shared by the Editor's
+// verification card and the Coding Workbench's trust affordance so both read the runner's decision
+// through one path (AGENTS.md §5).
+export async function fetchVerificationCatalog(
+  root: string,
+  signal?: AbortSignal,
+): Promise<EditorVerificationCatalog> {
+  const url = `${CATALOG_URL}?projectId=${encodeURIComponent(root)}`;
+  const response = await fetch(url, signal === undefined ? undefined : { signal });
+  if (!response.ok) throw new Error("verification catalog rejected");
+  const payload: unknown = await response.json();
+  if (!isEditorVerificationCatalog(payload) || payload.projectId !== root) {
+    throw new Error("malformed verification catalog");
+  }
+  return payload;
 }
 
 export function workspaceTrustEventProjectId(event: Event): string | null {

@@ -7,7 +7,7 @@ import {
 import { journeyFixture } from "../gitDelivery/journeyOutcomeTest/_support.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import { MIGRATIONS, runMigrations } from "./schema.js";
+import { MIGRATIONS, runMigrations, SCHEMA_VERSION } from "./schema.js";
 import { rewindSchemaFixture } from "./legacySchemaTestFixture.js";
 
 // Exact V27 table shipped in 9219079e, before its in-place rewrite in 799c4900.
@@ -86,7 +86,10 @@ describe("V32 upgrades the original journey outcome table", () => {
       expect(() => {
         rewindSchemaFixture(db, 31);
       }).toThrow("Seed legacy journey rows after rewinding");
-      expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(32);
+      // The invariant is that a refused rewind leaves the database at the version it was already
+      // migrated to — derived from the schema, never restated, so the next migration cannot make
+      // this pin assert a version the store no longer reaches (AGENTS.md §7).
+      expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(SCHEMA_VERSION);
       expect(db.prepare("SELECT COUNT(*) AS count FROM git_journey_outcomes").get()?.count).toBe(1);
     } finally {
       db.close();

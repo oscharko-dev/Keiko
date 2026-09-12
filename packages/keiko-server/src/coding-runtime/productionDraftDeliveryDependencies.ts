@@ -1,4 +1,5 @@
 import { realpathSync } from "node:fs";
+import { resolvedLinkedIssueNumbers } from "../coding-context/codingRuntimeIssueIntake.js";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
 import { canonicalise } from "@oscharko-dev/keiko-security";
 import {
@@ -54,6 +55,17 @@ function snapshotIsDeliverable(state: string): boolean {
 
 type TargetFailure = Extract<DraftDeliveryTargetResolution, { ok: false }>;
 
+// One live-gated provider adapter serves the inspection reads and the Checks refresh's body reads and
+// writes (owner review on PR #3452).
+function livePullRequestAdapter(
+  factory: DraftDeliveryFactory,
+  context: Parameters<DraftDeliveryDependencies["inspectionAdapter"]>[0],
+): ReturnType<typeof createNodeGitPullRequestAdapter> | undefined {
+  return factory.live(context)
+    ? createNodeGitPullRequestAdapter(factory.adapterDeps(context))
+    : undefined;
+}
+
 /** Reuses the accepted run, managed workspace, checkout grant and existing Git delivery adapters. */
 export function createProductionDraftDeliveryDependencies(
   deps: DraftDeliveryCompositionDeps,
@@ -63,17 +75,20 @@ export function createProductionDraftDeliveryDependencies(
   if (verified === undefined || snapshots === undefined || deps.workspaceLifecycle === undefined)
     return undefined;
   const factory = new DraftDeliveryFactory(deps, snapshots);
+  const pullRequestAdapter = (
+    context: Parameters<DraftDeliveryDependencies["inspectionAdapter"]>[0],
+  ): ReturnType<typeof createNodeGitPullRequestAdapter> | undefined =>
+    livePullRequestAdapter(factory, context);
   return {
     snapshots,
     mutationDeps: verified.mutationDeps,
     ...(verified.execution === undefined ? {} : { execution: verified.execution }),
     resolveTarget: (context) => factory.resolveTarget(context),
+    resolveRelatedIssues: (context) => factory.resolveRelatedIssues(context),
     ciReader: (context) => factory.ciReader(context),
     journeyReader: (context) => factory.journeyReader(context),
-    inspectionAdapter: (context) =>
-      factory.live(context)
-        ? createNodeGitPullRequestAdapter(factory.adapterDeps(context))
-        : undefined,
+    inspectionAdapter: pullRequestAdapter,
+    bodyAdapter: pullRequestAdapter,
     publishSeams: (context) => ({
       activityLog: factory.log,
       beforeRemoteDispatch: () => factory.live(context),
@@ -411,6 +426,57 @@ class DraftDeliveryFactory {
     );
   }
 
+  // The epic's children for the pull request's related-issue line, read through the same authorized
+  // root and reader as the accepted issue itself. The bound issue is re-read and must still be the
+  // accepted binding; anything unavailable or drifted answers "no related issues", logged body-free.
+  public async resolveRelatedIssues(context: DraftDeliveryRunContext): Promise<readonly number[]> {
+    const root = this.originalRoot(context);
+    if (root === undefined) return this.relatedIssues(context, "unavailable", []);
+    try {
+      const bound = await resolveGitHubIssue(this.deps, {
+        repositoryRoot: root,
+        issueRef: `#${String(context.issueBinding.issueNumber)}`,
+        correlationId: context.correlationId,
+        signal: context.signal,
+      });
+      if (!bound.ok || canonicalise(bound.binding) !== canonicalise(context.issueBinding))
+        return this.relatedIssues(context, "unavailable", []);
+      const related = await resolvedLinkedIssueNumbers(this.deps, {
+        repositoryRoot: root,
+        body: bound.contextObject.body,
+        boundIssue: context.issueBinding.issueNumber,
+        correlationId: context.correlationId,
+        runId: context.runId,
+        signal: context.signal,
+      });
+      return this.relatedIssues(context, "resolved", related);
+    } catch (error) {
+      this.log.write({
+        category: "process",
+        op: "git.draft-related-issues",
+        correlationId: context.correlationId,
+        level: "warn",
+        errorKind: "internal",
+        extra: { runId: context.runId, state: "unavailable", count: 0, ...describeError(error) },
+      });
+      return [];
+    }
+  }
+
+  private relatedIssues(
+    context: DraftDeliveryRunContext,
+    state: "resolved" | "unavailable",
+    related: readonly number[],
+  ): readonly number[] {
+    this.log.write({
+      category: "process",
+      op: "git.draft-related-issues",
+      correlationId: context.correlationId,
+      extra: { runId: context.runId, state, count: related.length },
+    });
+    return related;
+  }
+
   public adapterDeps(context: DraftDeliveryRunContext): {
     workspace: WorkspaceInfo;
     processEnv: UiHandlerDeps["env"];
@@ -432,7 +498,16 @@ class DraftDeliveryFactory {
       correlationId: context.correlationId,
       level: "warn",
       errorKind: "internal",
-      extra: { runId: context.runId, state: "failed", ...describeError(error) },
+      extra: {
+        runId: context.runId,
+        state: "failed",
+        // The publish view throws closed slugs (`git-publish-metadata-unavailable`, …); the class
+        // alone ("Error") did not say which precondition failed (run 18, 2026-09-10).
+        ...(publishPreparationReason(error) === undefined
+          ? {}
+          : { reason: publishPreparationReason(error) }),
+        ...describeError(error),
+      },
     });
   }
 
@@ -489,8 +564,15 @@ class DraftDeliveryFactory {
     context: DraftDeliveryRunContext,
     root: string,
   ): Promise<{ ok: true; url: string } | TargetFailure> {
+    // The REPOSITORY root the issue was read from, never the managed worktree: the worktree lives
+    // under the state directory, which the workspace deny list (`.keiko/**`) keeps outside the
+    // governed content surface, so evaluating its remote answered `remote-unreadable` and refused
+    // every push and pull request of a run that had just committed as `remote-drift` (Coding
+    // Workbench run 17, 2026-09-10). A worktree shares its repository's remotes; `originalRoot`
+    // already resolved and authorized exactly that root, and `resolveAcceptedIssue` reads the issue
+    // through it. The push URL below is still read from the worktree's own Git configuration.
     const fetchRemote = await githubRemoteOwnerAndRepoFor(
-      context.workspace.root,
+      root,
       this.deps.env,
       this.deps.codingContextGitHubRemoteResolver,
       { activityLog: this.log, correlationId: context.correlationId, signal: context.signal },
@@ -551,4 +633,14 @@ class DraftDeliveryFactory {
       },
     });
   }
+}
+
+// A closed `git-publish-*` slug from the publish view, or undefined for anything else — never free
+// text, so the preparation line stays body-free whatever an unexpected error carries.
+const PUBLISH_PREPARATION_REASON = /^git-publish-[a-z]+(?:-[a-z]+){0,6}$/u;
+
+function publishPreparationReason(error: unknown): string | undefined {
+  return error instanceof Error && PUBLISH_PREPARATION_REASON.test(error.message)
+    ? error.message
+    : undefined;
 }

@@ -220,6 +220,8 @@ describe("durable repository delivery in the Code task", () => {
     ["stale", "stale-snapshot", "Draft is stale"],
     ["partial", "partial-generated", "Draft partially generated"],
     ["fallback", "fallback-generated", "Draft generated without the model"],
+    // F56: a refused model answer is a fallback too, but it names the refusal, not an absent model.
+    ["fallback", "fallback-output-refused", "Draft generated without the model"],
     ["blocked", "authority-expired", "Draft blocked"],
     ["failed", "provider-failed", "Draft generation failed"],
   ] as const)(

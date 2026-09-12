@@ -16,7 +16,10 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 
 import { fetchGitDiff, fetchGitHistory, fetchGitStatus } from "./api";
-import { codingAppSessionPairingSettled } from "./coding-app-session-client";
+import {
+  codingAppSessionPairingSettled,
+  useCodingAppSessionRedemptions,
+} from "./coding-app-session-client";
 import {
   parseUnifiedDiff,
   type DiffParseResult,
@@ -144,6 +147,8 @@ function useChangesSnapshot(input: {
   readonly setState: Dispatch<SetStateAction<CodingWorkbenchChangesState>>;
 }): void {
   const { bindingPending, client, epoch, root, runId, setState } = input;
+  // A re-pair without a page load reads the changes again (F65).
+  const redemptions = useCodingAppSessionRedemptions();
   const seenRunIdRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     // A runId change is a hard boundary: the stale-while-revalidate preservation only applies
@@ -184,7 +189,7 @@ function useChangesSnapshot(input: {
     return () => {
       cancelled = true;
     };
-  }, [bindingPending, client, epoch, root, runId, setState]);
+  }, [bindingPending, client, epoch, redemptions, root, runId, setState]);
 }
 
 function diffState(
@@ -208,6 +213,9 @@ function useSelectedDiff(input: {
 }): void {
   const { client, epoch, root, setState, state } = input;
   const path = state.selectedPath;
+  // A re-pair keeps the snapshot ready and the selection, so the selected diff reads again on the
+  // redemption count itself (F65, PR #3452 review).
+  const redemptions = useCodingAppSessionRedemptions();
   useEffect(() => {
     if (state.status !== "ready" || root === null || path === null) return undefined;
     let cancelled = false;
@@ -235,7 +243,7 @@ function useSelectedDiff(input: {
     return () => {
       cancelled = true;
     };
-  }, [client, epoch, path, root, setState, state.status]);
+  }, [client, epoch, path, redemptions, root, setState, state.status]);
 }
 
 /** The minimal shape the run-root lock needs. Any hook whose input carries these fields —

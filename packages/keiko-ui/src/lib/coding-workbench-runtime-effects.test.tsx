@@ -1,4 +1,4 @@
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import {
   codingWorkbenchStreamRunId,
@@ -9,6 +9,11 @@ import {
   POST_RUN_DESCRIPTION_POLL_MS,
   awaitingPostRunDescription,
 } from "./coding-workbench-runtime-effects";
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
+import {
+  redeemCodingAppSessionPairingNavigation,
+  type CodingAppSessionPairingSeams,
+} from "./coding-app-session-client";
 import { STREAMABLE_RUNTIME_STATES } from "./useCodingWorkbenchRuntime";
 import {
   createInitialCodingWorkbenchRuntimeState,
@@ -44,6 +49,19 @@ describe("codingWorkbenchStreamRunId", () => {
   });
 });
 
+// A launcher re-pair that arrives without a page load (F65): a fragment, and a pair endpoint that
+// acknowledges it.
+const REPAIR_SEAMS: CodingAppSessionPairingSeams = {
+  readFragment: (): string =>
+    encodeCodingAppSessionPairingFragment({
+      requestId: "req_re-pair",
+      issuedAtMs: 1,
+      claim: "e".repeat(64),
+    }),
+  stripFragment: (): void => undefined,
+  postPairing: (): Promise<unknown> => Promise.resolve({ schemaVersion: "1" }),
+};
+
 describe("useCodingWorkbenchPairingEffect (release-audit F-08/RG-12)", () => {
   it("projects the honest workspaces session answer into the pairing dimension", async () => {
     manifestAccessMock.mockResolvedValue({ session: "unpaired", manifests: [] });
@@ -53,6 +71,27 @@ describe("useCodingWorkbenchPairingEffect (release-audit F-08/RG-12)", () => {
     });
     await waitFor(() => {
       expect(dispatch).toHaveBeenCalledWith({ kind: "pairing-set", pairing: "unpaired" });
+    });
+  });
+
+  it("resolves the dimension again after a re-pair without a page load (F65)", async () => {
+    manifestAccessMock
+      .mockResolvedValueOnce({ session: "unpaired", manifests: [] })
+      .mockResolvedValue({ session: "paired", manifests: [] });
+    const dispatch = vi.fn();
+    renderHook(() => {
+      useCodingWorkbenchPairingEffect(dispatch);
+    });
+    await waitFor(() => {
+      expect(dispatch).toHaveBeenCalledWith({ kind: "pairing-set", pairing: "unpaired" });
+    });
+
+    await act(async () => {
+      await redeemCodingAppSessionPairingNavigation(REPAIR_SEAMS);
+    });
+
+    await waitFor(() => {
+      expect(dispatch).toHaveBeenLastCalledWith({ kind: "pairing-set", pairing: "paired" });
     });
   });
 

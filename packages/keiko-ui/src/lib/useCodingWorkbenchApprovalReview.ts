@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 import type { CodingWorkbenchRuntimePendingApprovalReview } from "@oscharko-dev/keiko-contracts";
 
-import { codingAppSessionPairingSettled } from "./coding-app-session-client";
+import {
+  codingAppSessionPairingSettled,
+  useCodingAppSessionRedemptions,
+} from "./coding-app-session-client";
 import { getCodingWorkbenchRuntimeApprovalReview } from "./coding-workbench-runtime-api";
 import { clientErrorSummary, correlationIdOf } from "./client-error-summary";
 import { reportClientDiagnostic } from "./client-diagnostics";
@@ -57,6 +60,8 @@ export function useCodingWorkbenchApprovalReview(
   // below to re-run — including its `setScoped(...LOADING)` — on demand.
   const [epoch, setEpoch] = useState(0);
   const retry = useCallback((): void => setEpoch((value) => value + 1), []);
+  // A re-pair without a page load reads the review again (F65).
+  const redemptions = useCodingAppSessionRedemptions();
 
   useEffect(() => {
     if (runId === undefined || permissionRequestId === undefined) {
@@ -65,7 +70,7 @@ export function useCodingWorkbenchApprovalReview(
     }
     setScoped(scopeState(runId, permissionRequestId, LOADING));
     return startApprovalReviewSync(runId, permissionRequestId, setScoped);
-  }, [runId, permissionRequestId, epoch]);
+  }, [runId, permissionRequestId, epoch, redemptions]);
 
   const value = sameInput(scoped, input) ? scoped.value : inputState(input);
   return { ...value, retry };

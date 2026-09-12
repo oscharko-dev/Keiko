@@ -88,12 +88,14 @@ function runtimeInteractionPorts(
 const OPTIONAL_RUNTIME_CAPABILITY_KEYS = [
   "safeActivityProjection",
   "researchGrants",
+  "approvedSkills",
   "pendingResearchApprovals",
   "runtimeCapabilityAuthenticator",
   "gitDeliveryAuthority",
   "gitDeliveryDescriptionAuthority",
   "mintDescriptionAuthority",
   "attachVerifiedHeadNotifier",
+  "attachRepositorySemanticSearch",
   "openCodeGatewayReadinessRegistry",
   "toolFacadeBridge",
 ] as const;

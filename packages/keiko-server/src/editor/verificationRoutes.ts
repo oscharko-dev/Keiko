@@ -13,7 +13,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import type { EditorVerificationEvent } from "@oscharko-dev/keiko-contracts";
 import { parseEditorVerificationRunRequest } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import { redactedEventJson } from "../sse-frame-cache.js";
-import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "../sse.js";
+import { SSE_HEADERS, startSseHeartbeat, readyMessage } from "../sse.js";
 import { writeOrDestroy, type SseBackpressureSignal } from "../sse-write.js";
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
 import type { VerificationRunInput, VerificationRunnerManager } from "./verificationRunner.js";
@@ -174,7 +174,7 @@ export async function handleGrantWorkspaceScriptTrust(
   if (isRouteResult(guard)) return guard;
   return runHandler(async () => {
     const projectId = trustProjectId(await readJsonObject(ctx.req));
-    guard.grant(projectId);
+    guard.grant(projectId, ctx.correlationId);
     return { status: 200, body: guard.status(projectId) };
   });
 }
@@ -187,7 +187,7 @@ export async function handleRevokeWorkspaceScriptTrust(
   if (isRouteResult(guard)) return guard;
   return runHandler(async () => {
     const projectId = trustProjectId(await readJsonObject(ctx.req));
-    guard.revoke(projectId);
+    guard.revoke(projectId, ctx.correlationId);
     return { status: 200, body: guard.status(projectId) };
   });
 }
@@ -258,7 +258,7 @@ export function handleDeleteVerificationRun(ctx: RouteContext, deps: UiHandlerDe
 export function handleVerificationEvents(ctx: RouteContext, deps: UiHandlerDeps): HandlerOutcome {
   const guard = requireRunner(deps);
   if (isRouteResult(guard)) return guard;
-  openVerificationSseStream(ctx.res, guard, deps.redactor);
+  openVerificationSseStream(ctx.res, guard, deps.redactor, undefined, ctx.correlationId);
   ctx.req.on("close", () => {
     ctx.res.end();
   });
@@ -273,6 +273,7 @@ export function openVerificationSseStream(
   manager: VerificationRunnerManager,
   redactor: UiHandlerDeps["redactor"],
   onBackpressure?: (signal: SseBackpressureSignal) => void,
+  correlationId?: string,
 ): void {
   res.writeHead(200, SSE_HEADERS);
   startSseHeartbeat(res);
@@ -289,7 +290,9 @@ export function openVerificationSseStream(
     unsubscribe();
   };
   controller.signal.addEventListener("abort", stop, { once: true });
-  res.write(readyMessage());
+  // The ready frame takes the same abort-and-destroy path as every event frame: refused, it aborts
+  // this controller at once, which unsubscribes the stream, so the socket is destroyed exactly once.
+  writeOrDestroy(res, readyMessage(), controller, onBackpressure, correlationId);
   res.on("close", () => {
     stop();
   });

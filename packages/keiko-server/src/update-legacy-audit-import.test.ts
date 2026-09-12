@@ -470,7 +470,7 @@ describe("legacy update audit import", () => {
           portableAssetSizeBytes: 42,
           portableSidecarName: "sidecar.json",
           portableSidecarKind: "coding-runtime",
-          portableSidecarVersion: "1.17.17",
+          portableSidecarVersion: "1.18.30",
           portableSidecarTarget: "macos-arm64",
           portableSidecarPayloadSha256: digest,
           portableSidecarPayloadSha256Prefix: digest.slice(0, 12),

@@ -123,6 +123,7 @@ const COVERED: readonly CodingToolActionRequest[] = [
   { ...identity, action: "verification", verifierId: "test" },
   { ...identity, action: "egress", target: "https://example.invalid" },
   { ...identity, action: "skill", skillId: "skill" },
+  { ...identity, action: "skill-discover" },
   { ...identity, action: "child-agent", objective: "inspect", maxToolCalls: 1 },
   { ...identity, action: "git", operation: "status" },
   { ...identity, action: "git", operation: "diff", scope: "working-tree", paths: [] },
@@ -148,6 +149,18 @@ const UNCOVERED: readonly CodingToolActionRequest[] = [
 ];
 
 describe("canonical catalog facade bridge", () => {
+  it("#3417: reports skill discovery unavailable together with the skill it lists", () => {
+    const ready = createCanonicalOpenCodeHandlerCoverage(new Set());
+    const hidden = createCanonicalOpenCodeHandlerCoverage(
+      new Set(["keiko_skill_discover", "keiko_skill"] as const),
+    );
+    expect(ready.readinessByToolId.get("keiko.skill.discover")).toBe("ready");
+    expect(hidden.readinessByToolId.get("keiko.skill.discover")).toBe("unavailable");
+    expect(hidden.readinessByToolId.get("keiko.skill.invoke")).toBe("unavailable");
+    expect(hidden.readinessByToolId.get("keiko.workspace.read")).toBe("ready");
+    expect(hidden.handlerSetDigest).not.toBe(ready.handlerSetDigest);
+  });
+
   it("binds every model-facing canonical action and leaves unsupported authority surfaces unbound", () => {
     const { bridge } = createBridge();
     for (const request of COVERED) expect(bridge.covers(request)).toBe(true);
@@ -434,6 +447,60 @@ describe("canonical catalog facade bridge", () => {
       reason: "workspace-stale",
       effectStarted: false,
     });
+  });
+
+  // PR #3452 (F43/F44): an offer bounds admission, not the call it admitted. The facade's targeted
+  // offer lives 30 s, and a verification whose effect guard ran later was refused as `unoffered-tool`.
+  it("keeps an admitted call's effect guard valid after the offer that admitted it expired", async () => {
+    let now = 0;
+    const { bridge, log } = createBridge({
+      context: () => ({ ...context, now }),
+      elapsedNow: () => now,
+    });
+    const verification: CodingToolActionRequest = {
+      ...identity,
+      action: "verification",
+      verifierId: "test",
+    };
+    let guardAfterExpiry: boolean | undefined;
+    const result = await bridge.execute(verification, facadeInput(), (_signal, mutationGuard) => {
+      now = 60_000;
+      guardAfterExpiry = mutationGuard.check();
+      return Promise.resolve({
+        status: "completed" as const,
+        evidence: [{ kind: "governed-delegate" as const, code: "completed" as const }],
+      });
+    });
+
+    expect(guardAfterExpiry).toBe(true);
+    expect(result).toMatchObject({ status: "completed" });
+    expect(
+      log.events.find((event) => event.op === "tool-catalog.invocation-settled")?.extra,
+    ).toMatchObject({ status: "completed" });
+  });
+
+  // The live authority still bounds the effect: past its expiry the guard refuses it.
+  it("still refuses an admitted call's effect once the live authority expired", async () => {
+    let now = 0;
+    const { bridge } = createBridge({
+      context: () => ({ ...context, authorityExpiresAt: new Date(10_000).toISOString(), now }),
+      elapsedNow: () => now,
+    });
+    let guardAfterExpiry: boolean | undefined;
+    await bridge.execute(
+      { ...identity, action: "verification", verifierId: "test" },
+      facadeInput(),
+      (_signal, mutationGuard) => {
+        now = 60_000;
+        guardAfterExpiry = mutationGuard.check();
+        return Promise.resolve({
+          status: "completed" as const,
+          evidence: [{ kind: "governed-delegate" as const, code: "completed" as const }],
+        });
+      },
+    );
+
+    expect(guardAfterExpiry).toBe(false);
   });
 
   it("preserves an authoritative catalog timeout in the model-facing IPC result", async () => {

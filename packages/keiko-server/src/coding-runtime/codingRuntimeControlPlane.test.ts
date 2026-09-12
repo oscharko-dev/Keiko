@@ -51,7 +51,14 @@ describe("coding runtime control plane", () => {
         taskIntent: "bounded intent",
         requestedMode: "supervised-coding",
       }),
-    ).resolves.toEqual({ ok: false, failureCode: "authority-resolution-failed" });
+    ).resolves.toEqual({
+      ok: false,
+      failureCode: "authority-resolution-failed",
+      // The refusal carries the run id the orchestrator minted, so the operation's refusal line
+      // joins the run-scoped lines in the activity log (PR #3452); the aggregate still creates no
+      // snapshot for a start it refused.
+      runId: expect.stringMatching(/^run-[0-9]+$/u) as string,
+    });
     expect(snapshots.create).not.toHaveBeenCalled();
   });
 

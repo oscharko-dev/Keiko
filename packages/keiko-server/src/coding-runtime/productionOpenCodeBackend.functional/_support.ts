@@ -66,6 +66,11 @@ import {
   repositorySearchReadHandoff,
   type RepositorySearchConsumptionProof,
 } from "./repositorySearchProof.js";
+import {
+  SKILL_DISCOVERY_PROOF_CALL_ID,
+  skillInvocationHandoff,
+  type SkillDiscoveryConsumptionProof,
+} from "./skillDiscoveryProof.js";
 
 const MAX_READ_BYTES = 65_536;
 export const FUNCTIONAL_ACTIVITY_ASSISTANT_PREFIX = "VISIBLE_ASSISTANT_TEXT_2479:";
@@ -90,6 +95,9 @@ export interface ScriptState {
   /** Invoked with every scripted tool name so a journey can assert what the model REQUESTED. */
   readonly observeToolCall?: (name: string) => void;
   readonly observeRepositorySearch?: (proof: RepositorySearchConsumptionProof) => void;
+  /** #3417: after its search-derived read, discover the approved skills and invoke the listed one. */
+  readonly proveSkillDiscovery?: boolean;
+  readonly observeSkillDiscovery?: (proof: SkillDiscoveryConsumptionProof) => void;
   /** Keeps a completed verification turn cancellable for browser journeys that prove Stop. */
   readonly holdAfterVerification?: boolean;
   verificationIssued?: boolean;
@@ -786,7 +794,14 @@ function productiveSearchResponse(
       repositorySearchReadHandoff(transcript, script.old.trim(), script.observeRepositorySearch),
     );
   }
-  return productiveResponse(step > 2 ? step - 1 : step, script);
+  const skillSteps = script.proveSkillDiscovery === true ? 2 : 0;
+  if (skillSteps > 0 && step === 3) {
+    return tool("keiko_skill_discover", {}, SKILL_DISCOVERY_PROOF_CALL_ID);
+  }
+  if (skillSteps > 0 && step === 4) {
+    return tool("keiko_skill", skillInvocationHandoff(transcript, script.observeSkillDiscovery));
+  }
+  return productiveResponse(step > 2 ? step - 1 - skillSteps : step, script);
 }
 
 /** Revision 1 opens two steps; revision 2 flips their states and appends the verify step. */
@@ -873,6 +888,7 @@ function tool(
     | "keiko_changeset_edit"
     | "keiko_verification"
     | "keiko_research_fetch"
+    | "keiko_skill_discover"
     | "keiko_skill"
     | "keiko_child_agent"
     | "question"

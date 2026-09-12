@@ -195,8 +195,23 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// A timer armed with more than 2^31 - 1 ms fires at once (setTimeout, AbortSignal.timeout), so a
+// larger request timeout would abort every call the moment it starts. A delay the gateway derives
+// instead of reading it from its config is held to the same ceiling where it is derived.
+export const MAX_TIMER_DELAY_MS = 2_147_483_647;
+
+function requireTimerDelayMs(value: unknown, path: string): number {
+  const delayMs = requirePositiveInt(value, path);
+  if (delayMs > MAX_TIMER_DELAY_MS) {
+    throw new ConfigInvalidError(
+      `${path} must be at most ${String(MAX_TIMER_DELAY_MS)} milliseconds`,
+    );
+  }
+  return delayMs;
+}
+
 function requirePositiveInt(value: unknown, path: string): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value <= 0) {
     throw new ConfigInvalidError(`${path} must be a positive integer`);
   }
   return value;
@@ -1321,7 +1336,7 @@ function requireBoolean(value: unknown, path: string): boolean {
 }
 
 function requireNonNegativeIntStrict(value: unknown, path: string): number {
-  if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) {
     throw new ConfigInvalidError(`${path} must be a non-negative integer`);
   }
   return value;
@@ -1665,7 +1680,7 @@ function parseProviderConfig(
     ...(apiVersion === undefined ? {} : { apiVersion }),
     ...(realtimeAuthMode === undefined ? {} : { realtimeAuthMode }),
     ...outputTokenParameterConfig(raw.outputTokenParameter, path),
-    timeoutMs: requirePositiveInt(raw.timeoutMs ?? DEFAULT_TIMEOUT_MS, `${path}.timeoutMs`),
+    timeoutMs: requireTimerDelayMs(raw.timeoutMs ?? DEFAULT_TIMEOUT_MS, `${path}.timeoutMs`),
     maxRetries: requireNonNegativeInt(raw.maxRetries ?? DEFAULT_MAX_RETRIES, `${path}.maxRetries`),
     retryBaseDelayMs: requirePositiveInt(
       raw.retryBaseDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS,
@@ -1768,9 +1783,9 @@ function rerankerBaseUrl(
 function rerankerTimeoutMs(block: Record<string, unknown>, env: EnvSource): number {
   const envValue = env.KEIKO_RERANKER_TIMEOUT_MS;
   if (envValue !== undefined && envValue.length > 0) {
-    return requirePositiveInt(Number(envValue), "KEIKO_RERANKER_TIMEOUT_MS");
+    return requireTimerDelayMs(Number(envValue), "KEIKO_RERANKER_TIMEOUT_MS");
   }
-  return requirePositiveInt(block.timeoutMs ?? DEFAULT_TIMEOUT_MS, "reranker.timeoutMs");
+  return requireTimerDelayMs(block.timeoutMs ?? DEFAULT_TIMEOUT_MS, "reranker.timeoutMs");
 }
 
 function rerankerHeaderName(block: Record<string, unknown>, env: EnvSource): string {
@@ -1999,7 +2014,7 @@ function hasCurrentToolCallingVerification(
   ) {
     return false;
   }
-  return isToolCallingVerificationFresh(verification, now);
+  return isToolCallingVerificationFresh(verification, { nowMs: now });
 }
 
 function verifiedToolCallingCapability(

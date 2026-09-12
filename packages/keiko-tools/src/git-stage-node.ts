@@ -1,14 +1,19 @@
 import { createHash } from "node:crypto";
 import {
+  GIT_STAGE_CANDIDATE_MAX_BYTES,
   withGitIndexTransaction,
   readGitStageFile,
   type GitStageFile,
 } from "@oscharko-dev/keiko-workspace/internal/git-index";
+import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import type { CommandResult } from "./types.js";
 import type { GitStageExecRequest } from "./git-mutation-adapter.js";
 
 export interface GitStageEffectContext {
   readonly workspaceRoot: string;
+  // The port the stage-file reads and the index transaction resolve containment through: the
+  // owned-root port for a managed worktree below `.keiko`, the plain node port otherwise.
+  readonly fs?: WorkspaceFs | undefined;
   readonly check: () => Promise<boolean>;
   readonly authorized: () => boolean;
   readonly run: (
@@ -33,16 +38,21 @@ function contentDigest(files: readonly GitStageFile[]): string {
 export async function readGitStageCandidate(
   root: string,
   paths: readonly string[],
+  fs?: WorkspaceFs,
 ): Promise<string> {
-  return contentDigest(await readFiles(root, paths));
+  return contentDigest(await readFiles(root, paths, fs));
 }
-async function readFiles(root: string, paths: readonly string[]): Promise<readonly GitStageFile[]> {
+async function readFiles(
+  root: string,
+  paths: readonly string[],
+  fs: WorkspaceFs | undefined,
+): Promise<readonly GitStageFile[]> {
   const files: GitStageFile[] = [];
   let size = 0;
   for (const path of paths) {
-    const file = await readGitStageFile(root, path);
+    const file = await readGitStageFile(root, path, { fs });
     size += file.bytes.length;
-    if (size > 65_536) throw new Error("git-stage-candidate-too-large");
+    if (size > GIT_STAGE_CANDIDATE_MAX_BYTES) throw new Error("git-stage-candidate-too-large");
     files.push(file);
   }
   return files;
@@ -109,7 +119,7 @@ export async function stageExactFiles(
     async (transaction): Promise<boolean> => {
       if (!(await ctx.check()) || !(await gitStageAttributesSupported(ctx, request.pathspecs)))
         return false;
-      const files = await readFiles(ctx.workspaceRoot, request.pathspecs);
+      const files = await readFiles(ctx.workspaceRoot, request.pathspecs, ctx.fs);
       if (request.worktreeDigest !== undefined && contentDigest(files) !== request.worktreeDigest)
         return false;
       const entries = await indexEntries(ctx, files, expected.headSha.length);
@@ -126,5 +136,6 @@ export async function stageExactFiles(
       if (result && !ctx.authorized()) throw new Error("git-stage-authority-denied");
       return result;
     },
+    ctx.fs,
   );
 }

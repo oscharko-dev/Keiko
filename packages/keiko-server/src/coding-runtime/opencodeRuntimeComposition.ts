@@ -1,5 +1,9 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import {
+  DEFAULT_SANDBOX_POLICY,
+  GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/tools";
+import {
   chmodSync,
   existsSync,
   mkdirSync,
@@ -58,7 +62,9 @@ import {
   type OpenCodeSyncHint,
 } from "./opencodeRuntimeAdapter.js";
 import {
+  OPENCODE_HISTORY_RESPONSE_MAX_BYTES,
   classifyOpenCodeLiveControl,
+  describeRejectedOpenCodeHistoryPart,
   parseOpenCodeHistory,
   projectOpenCodePermissionEvent,
   projectOpenCodePermissionRequestId,
@@ -72,8 +78,9 @@ import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import type { RuntimeProcessSupervisor } from "./runtimeProcessSupervisor.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeToolSchemas.js";
 import { CodingRuntimeQuestionAnswerRejectedError } from "./codingRuntimeQuestionPort.js";
+import { openCodeCatalogSettlementBudgetMs } from "../tool-catalog/catalogToolFacadeBridge.js";
 
-const PINNED_RAW_SCHEMA_SHA256 = "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de";
+const PINNED_RAW_SCHEMA_SHA256 = "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3";
 const DIGEST = /^[a-f0-9]{64}$/u;
 const ABORT_SETTLEMENT_TIMEOUT_MS = 30_000;
 const INITIAL_TURN_BASELINE_STABILIZATION_MS = 500;
@@ -837,7 +844,13 @@ function readinessPorts(
     history: async (checkpoints, signal): Promise<readonly OpenCodeReconciliationEvent[]> => {
       const combinedSignal =
         request.signal === undefined ? signal : AbortSignal.any([signal, request.signal]);
-      const rows = await client.history(checkpoints, { signal: combinedSignal });
+      const rows = await pullHistory(
+        client,
+        checkpoints,
+        combinedSignal,
+        input.diagnostics,
+        run.runId,
+      );
       const normalized = normalizeOpenCodeSafeActivityHistory(rows);
       stageSafeActivity(normalized, safeActivity, input.safeActivity);
       const parsed = parseOpenCodeHistory(rows);
@@ -861,6 +874,56 @@ function readinessPorts(
   };
 }
 
+async function pullHistory(
+  client: OpenCodeHttpClient,
+  checkpoints: Readonly<Record<string, number>>,
+  signal: AbortSignal,
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+): Promise<readonly Record<string, unknown>[]> {
+  try {
+    return await client.history(checkpoints, { signal });
+  } catch (error) {
+    if (!signal.aborted) recordHistoryTransportFailure(diagnostics, runId, error);
+    throw error;
+  }
+}
+
+// The client's closed error vocabulary for a pull that fails before any row is parsed.
+const HISTORY_TRANSPORT_REASONS: ReadonlyMap<string, string> = new Map([
+  ["opencode-history-failed", "transport-failed"],
+  ["opencode-history-oversized", "transport-oversized"],
+  ["opencode-json-invalid", "transport-json-invalid"],
+  ["opencode-history-invalid", "checkpoints-invalid"],
+]);
+
+// A pull can fail before any row is parsed -- a refused or oversized response, a body that is not a
+// JSON array -- and until 2026-09-10 those paths reached the lifecycle failure with no line of their
+// own. The reason is the client's closed vocabulary, never the response; an oversized pull names the
+// budget it exceeded so the operator can tell a burst from a defect. A cancelled pull is not a failure.
+function recordHistoryTransportFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  error: unknown,
+): void {
+  const reason =
+    (error instanceof Error ? HISTORY_TRANSPORT_REASONS.get(error.message) : undefined) ??
+    "transport-unclassified";
+  const budgetCode =
+    reason === "transport-oversized"
+      ? `:responseBudgetBytes=${String(OPENCODE_HISTORY_RESPONSE_MAX_BYTES)}`
+      : "";
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runId,
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.handshake",
+    source: "opencode.history",
+    errorClass: "OpenCodeHistoryFailure",
+    message: "runtime-handshake-failed",
+    code: `stage=sse-history-reconciliation:reason=${reason}${budgetCode}`,
+  });
+}
+
 function recordHistoryParseFailure(
   diagnostics: ServerDiagnosticSink | undefined,
   runId: string,
@@ -869,8 +932,10 @@ function recordHistoryParseFailure(
 ): void {
   const eventTypeDigest = firstUnknownHistoryEventTypeDigest(rows);
   const eventShape = firstUnknownMessageShape(rows);
+  const partShape = firstRejectedPartShape(rows);
   const eventDigestCode = eventTypeDigest === undefined ? "" : `:eventSha256=${eventTypeDigest}`;
   const eventShapeCode = eventShape === undefined ? "" : `:${eventShape}`;
+  const partShapeCode = partShape === undefined ? "" : `:${partShape}`;
   emitServerDiagnostic(diagnostics, {
     correlationId: runId,
     timestamp: new Date().toISOString(),
@@ -878,8 +943,21 @@ function recordHistoryParseFailure(
     source: "opencode.history",
     errorClass: "OpenCodeHistoryFailure",
     message: "runtime-handshake-failed",
-    code: `stage=sse-history-reconciliation:reason=${reason}${eventDigestCode}${eventShapeCode}`,
+    code: `stage=sse-history-reconciliation:reason=${reason}${eventDigestCode}${eventShapeCode}${partShapeCode}`,
   });
+}
+
+// Run 2026-09-10: the only evidence of a refused `message.part.updated.1` row was the digest of its
+// type; which gate refused it -- and that the row was a pending `keiko_changeset_edit` whose
+// arguments merely exceeded the metadata bound -- had to be reconstructed from source. The part's
+// closed labels and its serialized size now travel in `code`; no field of the row itself does.
+function firstRejectedPartShape(rows: readonly unknown[]): string | undefined {
+  for (const row of rows) {
+    const rejection = describeRejectedOpenCodeHistoryPart(row);
+    if (rejection === undefined) continue;
+    return `part=${rejection.partType}:tool=${rejection.tool}:status=${rejection.status}:partBytes=${String(rejection.partBytes)}:gate=${rejection.gate}`;
+  }
+  return undefined;
 }
 
 function structuralNameDigest(value: string): string {
@@ -1304,16 +1382,41 @@ interface ToolBridgeLimits {
 
 interface AdmittedToolRequest {
   readonly controller: AbortController;
+  // The deadline this request was admitted under, named by the diagnostic its expiry leaves.
+  readonly deadlineMs: number;
   release(): void;
 }
 
 interface ToolBridgeAdmissionGate {
-  readonly admit: () => AdmittedToolRequest | undefined;
+  readonly limits: ToolBridgeLimits;
+  readonly admit: (requestDeadlineMs: number) => AdmittedToolRequest | undefined;
   readonly abortAll: () => void;
 }
 
 const DEFAULT_TOOL_BRIDGE_DEADLINE_MS = 30_000;
 const MAX_TOOL_BRIDGE_DEADLINE_MS = 60_000;
+/**
+ * The deadline the tool bridge admits a request under. A tool the catalog settles beyond the
+ * sandbox default (the verification tool at its derived work budget, the four proposal tools at the
+ * wait for the operator's approval on top of their own work) is admitted one settlement grace past
+ * that budget, read from the catalog descriptor of the tool the request dispatches to, so the
+ * facade's answer (the result, or the catalog's own timeout) always reaches the sidecar instead of a
+ * bridge-side abort racing it. Every other request, and a body the facade's parser refuses, gets the
+ * configured default; the facade refuses the latter afterwards as before. A deadline read from the
+ * verification action alone cut every waiting approval off at 30 s (PR #3452, F44).
+ */
+export function toolBridgeRequestDeadlineMs(
+  configuredDeadlineMs: number,
+  body: string | undefined,
+): number {
+  const request =
+    body === undefined ? undefined : parseCodingToolRequest(body, CODING_TOOL_MAX_BODY_BYTES);
+  const budgetMs = request === undefined ? undefined : openCodeCatalogSettlementBudgetMs(request);
+  return budgetMs !== undefined && budgetMs > DEFAULT_SANDBOX_POLICY.defaultTimeoutMs
+    ? budgetMs + GOVERNED_TOOL_SETTLEMENT_GRACE_MS
+    : configuredDeadlineMs;
+}
+
 const MAX_TOOL_BRIDGE_IN_FLIGHT = 64;
 const DEADLINE_ABORT = "tool-bridge-deadline";
 const DISCONNECT_ABORT = "tool-bridge-disconnect";
@@ -1383,7 +1486,9 @@ function handleDirectToolRequest(
   if (preflight.outcome === "rejected") {
     return Promise.resolve({ status: preflight.status, body: preflight.body });
   }
-  const admission = gate.admit();
+  const admission = gate.admit(
+    toolBridgeRequestDeadlineMs(gate.limits.requestDeadlineMs, input.body),
+  );
   if (admission === undefined) return Promise.resolve({ status: 429, body: "" });
   const detachExternalAbort = bindExternalAbort(input.signal, admission);
   return executeToolRequest(deps, input.headers, input.body, admission).finally(
@@ -1417,18 +1522,20 @@ function createToolBridgeAdmissionGate(limits: ToolBridgeLimits): ToolBridgeAdmi
   let admitted = 0;
   const controllers = new Set<AbortController>();
   return {
-    admit: (): AdmittedToolRequest | undefined => {
+    limits,
+    admit: (requestDeadlineMs: number): AdmittedToolRequest | undefined => {
       if (admitted >= limits.maxInFlight) return undefined;
       admitted += 1;
       const controller = new AbortController();
       controllers.add(controller);
       const timer = setTimeout(() => {
         controller.abort(new Error(DEADLINE_ABORT));
-      }, limits.requestDeadlineMs);
+      }, requestDeadlineMs);
       timer.unref();
       let released = false;
       return {
         controller,
+        deadlineMs: requestDeadlineMs,
         release: (): void => {
           if (released) return;
           released = true;
@@ -1517,19 +1624,42 @@ async function executeToolRequest(
   try {
     const result = await raceAbort(work, admission.controller.signal);
     const reason = abortReason(admission.controller.signal);
-    if (reason !== undefined) {
-      settleSafeTool(settleTool, actionId, "cancelled");
-      return reason === DEADLINE_ABORT ? { status: 408, body: "" } : { status: 502, body: "" };
-    }
+    if (reason !== undefined) return abortedToolResponse(deps, actionId, admission, reason);
     return responseForToolResult(result, settleTool, actionId);
   } catch (error) {
     const reason = abortReason(admission.controller.signal);
     // A cancellation is an expected outcome, not a facade fault, so only a genuine failure is
     // surfaced to the operator.
-    if (reason === undefined) emitFacadeFailureDiagnostic(diagnostics, actionId, error);
-    settleSafeTool(settleTool, actionId, reason === undefined ? "failed" : "cancelled");
-    return reason === DEADLINE_ABORT ? { status: 408, body: "" } : { status: 502, body: "" };
+    if (reason !== undefined) return abortedToolResponse(deps, actionId, admission, reason);
+    emitFacadeFailureDiagnostic(diagnostics, actionId, error);
+    settleSafeTool(settleTool, actionId, "failed");
+    return { status: 502, body: "" };
   }
+}
+
+// A request the bridge itself stopped. Its own deadline leaves a diagnostic naming the deadline the
+// request was admitted under, so a call cut off here is told apart in the log from one its caller
+// dropped or the catalog timed out; a 30 s bridge deadline once cut waiting approvals off without a
+// line of its own (PR #3452, F44).
+function abortedToolResponse(
+  deps: ToolBridgeExecutionDeps,
+  actionId: string | undefined,
+  admission: AdmittedToolRequest,
+  reason: string,
+): { readonly status: number; readonly body: string } {
+  settleSafeTool(deps.settleTool, actionId, "cancelled");
+  if (reason !== DEADLINE_ABORT) return { status: 502, body: "" };
+  emitServerDiagnostic(deps.diagnostics, {
+    correlationId: actionCorrelationId(actionId),
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.tool-bridge",
+    source: "opencode-runtime-composition.request-deadline",
+    errorClass: "TimeoutError",
+    message: "tool-bridge-deadline",
+    httpStatus: 408,
+    deadlineMs: admission.deadlineMs,
+  });
+  return { status: 408, body: "" };
 }
 
 function responseForToolResult(

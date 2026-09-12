@@ -151,6 +151,22 @@ describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
     });
   });
 
+  // PR #3452 (F73): a coding model whose forced tool-call proof aged out is named for that, not
+  // mislabelled "non-coding-capable".
+  it("accepts the appended tool-calling-unverified reason", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        jsonResponse({ status: "unavailable", reason: "tool-calling-unverified" }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchCodingWorkbenchSidecarGatewayProfile()).resolves.toMatchObject({
+      status: "unavailable",
+      reason: "tool-calling-unverified",
+    });
+  });
+
   it("rejects a non-object top-level response so the isObjectRecord guard fails closed", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse("not an object")));
 

@@ -41,7 +41,7 @@ function artifact() {
     sourceCommitSha: SHA,
     platformTarget: "macos-arm64",
     result: "passed",
-    runtime: { name: "opencode-compatible", version: "1.17.17", target: "macos-arm64" },
+    runtime: { name: "opencode-compatible", version: "1.18.30", target: "macos-arm64" },
     run: { correlationId: "real-binary-correlation", activityLogSha256: DIGESTS[0] },
     limits: limits(),
     missingPayload: { unavailableReason: "payload-missing" },

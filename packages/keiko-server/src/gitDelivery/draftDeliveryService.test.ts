@@ -10,6 +10,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
 import { DraftDeliveryFixture } from "./draftDeliveryServiceTestSupport.js";
 import { DraftDeliveryController } from "./draftDeliveryService.js";
+import {
+  resolveDraftDeliveryTemplate,
+  DRAFT_DELIVERY_RELATED_ISSUES_MAX,
+} from "./draftDeliveryTemplate.js";
+import {
+  readDraftDeliveryChecks,
+  CHECKS_SECTION_END,
+  CHECKS_SECTION_START,
+} from "./draftDeliveryChecks.js";
+import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
+import { PR_DESCRIPTION_REGION_START } from "@oscharko-dev/keiko-contracts/runtime/pr-description-region";
+import type { GitPullRequestIdentity } from "@oscharko-dev/keiko-contracts/runtime/git-pull-request";
 
 let fixture: DraftDeliveryFixture;
 beforeEach(async () => {
@@ -562,5 +574,368 @@ describe("pending delivery retry semantics", () => {
     expect(second).toEqual(first);
     expect(fixture.service.review(id(second))).toBeDefined();
     expect(fixture.createCount).toBe(0);
+  });
+});
+
+describe("draft delivery related issues (#3452)", () => {
+  const relatedTitle = "feat: bounded change";
+  function currentRecord(): DraftDeliveryRecord {
+    const record = fixture.snapshots.get(fixture.context.runId)?.draftDelivery;
+    if (record === undefined) throw new Error("fixture has no draft delivery record");
+    return record;
+  }
+  function expectedTemplateBody(relatedIssueNumbers: readonly number[]): string {
+    // The checks section comes from the production reader over the fixture's own receipt and
+    // evidence store; it is never restated here.
+    const verificationChecks = readDraftDeliveryChecks({
+      snapshots: fixture.snapshots,
+      evidenceStore: fixture.options.mutationDeps.evidenceStore,
+      record: currentRecord(),
+      correlationId: fixture.context.correlationId,
+      activityLog: { write: (): void => undefined },
+    });
+    const result = resolveDraftDeliveryTemplate({
+      workspace: fixture.context.workspace,
+      issueBinding: fixture.issue,
+      relatedIssueNumbers,
+      verificationChecks,
+      title: relatedTitle,
+      correlationId: fixture.context.correlationId,
+    });
+    if (result.status !== "ready") throw new Error("fixture template must resolve");
+    return result.body;
+  }
+  it("renders resolved related issue numbers into the created pull request body", async () => {
+    const service = new DraftDeliveryController({
+      ...fixture.options,
+      resolveRelatedIssues: (): Promise<readonly number[]> => Promise.resolve([7, 9]),
+    });
+    await execute(await service.proposePush(), service);
+    await execute(await service.proposePullRequest(relatedTitle), service);
+    expect(fixture.createBody).toBe(expectedTemplateBody([7, 9]));
+    expect(fixture.events.find((event) => event.op === "git.draft-template")).toMatchObject({
+      extra: { relatedIssueCount: 2 },
+    });
+  });
+  // CodeRabbit review on PR #3452: a rejecting resolver escaped composeTemplate and moved the
+  // delivery to recovery-required, against the port's best-effort contract.
+  it("omits the related issues line and keeps delivering when the resolver rejects", async () => {
+    const service = new DraftDeliveryController({
+      ...fixture.options,
+      resolveRelatedIssues: (): Promise<readonly number[]> =>
+        Promise.reject(new Error("/private/issue/reader token=sk-private-secret")),
+    });
+    await execute(await service.proposePush(), service);
+    await execute(await service.proposePullRequest(relatedTitle), service);
+    expect(fixture.createBody).toBe(expectedTemplateBody([]));
+    expect(fixture.createBody).not.toContain("Related issues");
+    expect(fixture.events.find((event) => event.op === "git.draft-related-issues")).toMatchObject({
+      level: "warn",
+      errorKind: "internal",
+      extra: { state: "unavailable", count: 0, errorClass: "Error" },
+    });
+    expect(JSON.stringify(fixture.events)).not.toContain("sk-private-secret");
+    expect(JSON.stringify(fixture.events)).not.toContain("/private/issue");
+  });
+  it("omits the related issues line and reports zero count without a resolver", async () => {
+    await execute(await fixture.service.proposePush());
+    await execute(await fixture.service.proposePullRequest(relatedTitle));
+    expect(fixture.createBody).toBe(expectedTemplateBody([]));
+    expect(fixture.createBody).not.toContain("Related issues");
+    expect(fixture.events.find((event) => event.op === "git.draft-template")).toMatchObject({
+      extra: { relatedIssueCount: 0 },
+    });
+  });
+  it.each([
+    [[7, 7]],
+    [[1]],
+    [Array.from({ length: DRAFT_DELIVERY_RELATED_ISSUES_MAX + 1 }, (_, i) => i + 100)],
+  ])(
+    "refuses a resolver payload the template's related-issue guard rejects: %j",
+    async (related) => {
+      const service = new DraftDeliveryController({
+        ...fixture.options,
+        resolveRelatedIssues: (): Promise<readonly number[]> => Promise.resolve(related),
+      });
+      await execute(await service.proposePush(), service);
+      expect(await service.proposePullRequest(relatedTitle)).toMatchObject({
+        record: { phase: "recovery-required", reason: "payload-changed" },
+      });
+      expect(fixture.createCount).toBe(0);
+    },
+  );
+});
+
+// F57 (runs 19–28): the created pull request lists the checks the commit proof's evidence records.
+describe("draft delivery checks (F57)", () => {
+  const checksTitle = "feat: bounded change";
+  it("lists the committed change's checks from the commit proof's evidence in the created body", async () => {
+    await execute(await fixture.service.proposePush());
+    const commit = fixture.snapshots.get(fixture.context.runId)?.verifiedCommitResult;
+    const committed = commit?.committedTreeDigest;
+    const head = commit?.headSha;
+    if (committed === undefined || head === undefined)
+      throw new Error("fixture receipt must carry the committed tree and head");
+    fixture.evidence.set(
+      "verification-1",
+      JSON.stringify({
+        checks: {
+          records: [
+            {
+              startedAtMs: 1,
+              stagedTreeDigest: committed,
+              steps: [{ kind: "build", status: "passed", exitCode: 0, durationMs: 867 }],
+            },
+          ],
+          omitted: 0,
+        },
+      }),
+    );
+    await execute(await fixture.service.proposePullRequest(checksTitle));
+    expect(fixture.createBody).toContain("| build | passed | 0 | 867 ms | committed change |");
+    expect(fixture.createBody).toContain(
+      `Evidence for commit ${head.slice(0, 12)}: verification-1`,
+    );
+    expect(fixture.createBody.indexOf("## Checks")).toBeLessThan(
+      fixture.createBody.indexOf(PR_DESCRIPTION_REGION_START),
+    );
+    expect(fixture.events.find((event) => event.op === "git.draft-checks")).toMatchObject({
+      extra: { state: "listed", recordCount: 1, verificationEvidenceId: "verification-1" },
+    });
+    expect(fixture.events.find((event) => event.op === "git.draft-template")).toMatchObject({
+      extra: { checksState: "listed", checkRowCount: 1 },
+    });
+  });
+  it("says the checks could not be read when the proof's evidence is missing", async () => {
+    await execute(await fixture.service.proposePush());
+    await execute(await fixture.service.proposePullRequest(checksTitle));
+    expect(fixture.createBody).toContain(
+      "Keiko could not read its verification evidence for this commit",
+    );
+    expect(fixture.events.find((event) => event.op === "git.draft-checks")).toMatchObject({
+      level: "warn",
+      extra: { state: "unavailable", reason: "evidence-missing" },
+    });
+  });
+});
+
+// Owner review on PR #3452: the Checks section is composed when the pull request is created, and a
+// later verified commit pushed to the same pull request (a CI repair) must not leave it describing
+// the earlier commit.
+describe("draft delivery checks after a later push (#3452)", () => {
+  const title = "feat: bounded change";
+  function authorized(): DraftDeliveryController {
+    return new DraftDeliveryController({
+      ...fixture.options,
+      policyAllowsWithoutApproval: () => true,
+    });
+  }
+  function evidenceFor(evidenceId: string): void {
+    const committed = fixture.snapshots.get(fixture.context.runId)?.verifiedCommitResult
+      ?.committedTreeDigest;
+    if (committed === undefined) throw new Error("fixture receipt must carry the committed tree");
+    fixture.evidence.set(
+      evidenceId,
+      JSON.stringify({
+        checks: {
+          records: [
+            {
+              startedAtMs: 1,
+              stagedTreeDigest: committed,
+              steps: [{ kind: "build", status: "passed", exitCode: 0, durationMs: 5 }],
+            },
+          ],
+          omitted: 0,
+        },
+      }),
+    );
+  }
+  async function created(service: DraftDeliveryController): Promise<void> {
+    await execute(await service.proposePush(), service);
+    await execute(await service.proposePullRequest(title), service);
+  }
+  function refreshLine(): (typeof fixture.events)[number] | undefined {
+    return fixture.events.find(
+      (event) => event.op === "git.draft-checks" && event.extra?.phase === "refresh",
+    );
+  }
+  function outsideSection(body: string): string {
+    const start = body.indexOf(CHECKS_SECTION_START);
+    return `${body.slice(0, start)}${body.slice(body.indexOf(CHECKS_SECTION_END))}`;
+  }
+
+  it("recomposes the section for the later commit and keeps every other byte", async () => {
+    const service = authorized();
+    evidenceFor("verification-1");
+    await created(service);
+    const before = fixture.prBody;
+    const first = fixture.git(["rev-parse", "HEAD"]);
+    const head = await fixture.recordLaterCommit();
+    evidenceFor("verification-2");
+
+    await execute(await service.proposePush(), service);
+
+    expect(fixture.bodyUpdates).toHaveLength(1);
+    expect(fixture.prBody).toContain(`Evidence for commit ${head.slice(0, 12)}: verification-2`);
+    expect(fixture.prBody).not.toContain(`Evidence for commit ${first.slice(0, 12)}`);
+    expect(outsideSection(fixture.prBody)).toBe(outsideSection(before));
+    expect(refreshLine()).toMatchObject({
+      extra: {
+        state: "refreshed",
+        prNumber: 17,
+        headSha: head,
+        checkRowCount: 1,
+        authority: "policy-authorized",
+      },
+    });
+  });
+
+  it("does nothing for the first push, before a pull request exists", async () => {
+    const service = authorized();
+    await execute(await service.proposePush(), service);
+    expect(refreshLine()).toBeUndefined();
+    expect(fixture.bodyReads).toBe(0);
+  });
+
+  it("leaves the section as it was while delivery needs an operator's approval", async () => {
+    await created(fixture.service);
+    const before = fixture.prBody;
+    await fixture.recordLaterCommit();
+
+    await execute(await fixture.service.proposePush());
+
+    expect(fixture.bodyUpdates).toEqual([]);
+    expect(fixture.prBody).toBe(before);
+    expect(refreshLine()).toMatchObject({
+      extra: { state: "skipped", reason: "approval-required" },
+    });
+  });
+
+  it("never overwrites a body that changed after it was read", async () => {
+    const service = authorized();
+    await created(service);
+    await fixture.recordLaterCommit();
+    evidenceFor("verification-2");
+    fixture.beforeBodyRead = (read): void => {
+      if (read === 2) fixture.prBody = `${fixture.prBody}\n\nA reviewer's note.`;
+    };
+
+    await execute(await service.proposePush(), service);
+
+    expect(fixture.bodyUpdates).toEqual([]);
+    expect(fixture.prBody).toContain("A reviewer's note.");
+    expect(refreshLine()).toMatchObject({
+      level: "warn",
+      errorKind: "conflict",
+      extra: { state: "failed", reason: "body-changed" },
+    });
+  });
+
+  it("leaves a body without the section's frame alone", async () => {
+    const service = authorized();
+    await created(service);
+    fixture.prBody = "Closes #1\n\n## Checks\n\nWritten by hand.";
+    await fixture.recordLaterCommit();
+
+    await execute(await service.proposePush(), service);
+
+    expect(fixture.bodyUpdates).toEqual([]);
+    expect(refreshLine()).toMatchObject({ extra: { state: "skipped", reason: "section-absent" } });
+  });
+
+  it.each<[string, (pr: GitPullRequestIdentity) => GitPullRequestIdentity]>([
+    ["a closed pull request", (pr): GitPullRequestIdentity => ({ ...pr, state: "closed" })],
+    [
+      "another pull request number",
+      (pr): GitPullRequestIdentity => ({ ...pr, number: pr.number + 1 }),
+    ],
+    [
+      "another pull request node",
+      (pr): GitPullRequestIdentity => ({ ...pr, externalId: `${pr.externalId}_other` }),
+    ],
+    ["another repository", (pr): GitPullRequestIdentity => ({ ...pr, repository: "someone/else" })],
+    [
+      "another head branch",
+      (pr): GitPullRequestIdentity => ({ ...pr, headRef: `${pr.headRef}-other` }),
+    ],
+    [
+      "another base branch",
+      (pr): GitPullRequestIdentity => ({ ...pr, baseRef: `${pr.baseRef}-other` }),
+    ],
+    [
+      "an earlier head commit",
+      (pr): GitPullRequestIdentity => ({ ...pr, headSha: "0".repeat(40) }),
+    ],
+  ])("never writes the section into %s", async (_case, divergent) => {
+    const service = authorized();
+    await created(service);
+    const before = fixture.prBody;
+    await fixture.recordLaterCommit();
+    evidenceFor("verification-2");
+    fixture.liveIdentity = divergent;
+
+    await execute(await service.proposePush(), service);
+
+    expect(fixture.bodyUpdates).toEqual([]);
+    expect(fixture.prBody).toBe(before);
+    expect(refreshLine()).toMatchObject({
+      extra: { state: "skipped", reason: "identity-mismatch" },
+    });
+  });
+
+  it("never writes into a pull request that stopped being the delivery's own after the read", async () => {
+    const service = authorized();
+    await created(service);
+    const before = fixture.prBody;
+    await fixture.recordLaterCommit();
+    evidenceFor("verification-2");
+    fixture.beforeBodyRead = (read): void => {
+      if (read === 2)
+        fixture.liveIdentity = (pr): GitPullRequestIdentity => ({ ...pr, state: "closed" });
+    };
+
+    await execute(await service.proposePush(), service);
+
+    expect(fixture.bodyReads).toBe(2);
+    expect(fixture.bodyUpdates).toEqual([]);
+    expect(fixture.prBody).toBe(before);
+    expect(refreshLine()).toMatchObject({
+      level: "warn",
+      errorKind: "conflict",
+      extra: { state: "failed", reason: "identity-changed" },
+    });
+  });
+
+  it("matches the repository name without regard to case", async () => {
+    const service = authorized();
+    await created(service);
+    await fixture.recordLaterCommit();
+    evidenceFor("verification-2");
+    fixture.liveIdentity = (pr): GitPullRequestIdentity => ({
+      ...pr,
+      repository: pr.repository.toUpperCase(),
+    });
+
+    await execute(await service.proposePush(), service);
+
+    expect(fixture.bodyUpdates).toHaveLength(1);
+    expect(refreshLine()).toMatchObject({ extra: { state: "refreshed" } });
+  });
+
+  it("keeps the push when the body cannot be read, and logs why", async () => {
+    const service = authorized();
+    await created(service);
+    await fixture.recordLaterCommit();
+    fixture.failBodyRead = true;
+
+    const result = await execute(await service.proposePush(), service);
+
+    expect(result).toMatchObject({ status: "recorded", record: { phase: "pushed" } });
+    expect(fixture.bodyUpdates).toEqual([]);
+    expect(refreshLine()).toMatchObject({
+      level: "warn",
+      errorKind: "internal",
+      extra: { state: "failed", reason: "read-failed" },
+    });
   });
 });

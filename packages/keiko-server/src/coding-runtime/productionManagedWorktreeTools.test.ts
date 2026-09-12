@@ -8,18 +8,28 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
   CodeTaskGrantId,
   CommandTaskRunResult,
+  CodingWorkbenchAuxiliaryStatus,
   CodingWorkbenchMode,
+  CodingWorkbenchOperatorDecision,
   CodingWorkbenchRuntimeAuthorityFacts,
   VerificationReport,
   VerificationStatus,
 } from "@oscharko-dev/keiko-contracts";
 import type { GatewayFetchOptions } from "@oscharko-dev/keiko-model-gateway/internal/http";
 import { GitWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-worktree-snapshot-node";
+import { GitRawWorktreeReadError } from "@oscharko-dev/keiko-tools/internal/git-mutation";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 
 import { createCodingToolInvocationRegistry } from "./codingToolInvocationRegistry.js";
-import { VerificationRunnerError } from "../editor/verificationRunnerErrors.js";
+import {
+  VerificationRunnerError,
+  WorkspaceTrustRequiredError,
+} from "../editor/verificationRunnerErrors.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import type {
+  RepositorySemanticSearchLease,
+  RepositorySemanticSearchResolver,
+} from "./codingRuntimeControlPlane.js";
 import {
   createProductionManagedWorktreeToolFacade,
   codingVerificationTargetDigest,
@@ -27,8 +37,19 @@ import {
   recordProposalApprovalResolutionFailure,
   resolveChildModelForRun,
   waitForRuntimeProposalApproval,
+  waitForWorkspaceScriptTrust,
+  verificationLivenessRefusal,
+  SCRIPT_TRUST_WAIT_CEILING_MS,
+  type ProductionManagedWorktreeToolInput,
 } from "./productionManagedWorktreeTools.js";
-import type { SkillCatalog } from "./skillCatalog.js";
+import { dependencyBootstrapFailureSummary } from "./codingToolIpc.js";
+import { MAX_APPROVAL_CHALLENGE_TTL_MS } from "./codingRuntimeOrchestrator.js";
+import {
+  DEFAULT_VERIFICATION_LIMITS,
+  DEPENDENCY_INSTALL_LIMITS,
+  VERIFICATION_TOOL_MAX_DURATION_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/verification";
+import { createServerApprovedSkillCatalog, type SkillCatalog } from "./skillCatalog.js";
 import type { CiRepairExecutionBudget } from "./codingRuntimeCiRepairController.js";
 import type {
   VerifiedCommitProposal,
@@ -44,8 +65,11 @@ import type { RuntimeGitService } from "../gitDelivery/runtimeGitService.js";
 import {
   createVerificationRunnerManager,
   type VerificationExecutePort,
+  type ScriptTrustDecision,
   type VerificationRunnerManager,
+  type VerificationRunInput,
 } from "../editor/verificationRunner.js";
+import type { VerificationStepOutput } from "@oscharko-dev/keiko-verification";
 import { createInMemoryUiStore } from "../store/index.js";
 import { createInMemoryEvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createGeneratedOpenCodeBundle } from "./opencodeRuntimeAdapter.js";
@@ -200,6 +224,7 @@ describe("production managed worktree tools", () => {
             proposalId: "stage-3384",
             state: "approval-wait-settled",
             reason: "approved",
+            waitCeilingMs: MAX_APPROVAL_CHALLENGE_TTL_MS,
           },
         }),
       );
@@ -207,6 +232,42 @@ describe("production managed worktree tools", () => {
       vi.useRealTimers();
     }
   });
+
+  // Coding Workbench run 13 (2026-09-10): the runtime Git service answered `undefined` for every
+  // refusal it could not express as a Git result, and this port turned each one into
+  // `git-authority-revoked`. A stage proposal refused for its size therefore told the model its Git
+  // authority was gone, and the model stopped delivering. The service now names its refusal; only
+  // `authority-revoked` may keep that code, and the two the model can act on carry guidance.
+  it.each([
+    ["authority-revoked", "git-authority-revoked", false],
+    ["proposal-unknown", "git-proposal-unknown", true],
+    ["execution-failed", "git-execution-failed", true],
+  ] as const)(
+    "reports a %s refusal of the runtime Git service as %s",
+    async (reason, reasonCode, coached) => {
+      const service = {
+        execute: vi.fn(() => Promise.resolve({ kind: "refused", reason })),
+      } as unknown as RuntimeGitService;
+      const facade = verificationFacade({
+        runToReport: vi.fn(),
+        records: [],
+        runtimeGitService: service,
+      });
+      const result = await facade.execute({
+        capability: "runtime-capability",
+        body: JSON.stringify({
+          action: "git",
+          operation: "stage",
+          phase: "execute",
+          proposalId: "stage-3384",
+          actionId: "stage-redeem",
+          idempotencyKey: "stage-redeem",
+        }),
+      });
+      expect(result).toMatchObject({ status: "failed", reasonCode });
+      expect("guidance" in result).toBe(coached);
+    },
+  );
 
   it("routes a CI tool call to the confirmed-PR observer through the existing facade", async () => {
     const observe = vi.fn<CiObservationService["observe"]>(() =>
@@ -311,6 +372,8 @@ describe("production managed worktree tools", () => {
       expect.objectContaining({
         operation: "coding-runtime.verification",
         errorClass: "verification-authority-revoked",
+        // The lapsed repair lease is a GUARD rejection; the diagnostic says so (run 12, 2026-09-10).
+        code: "guard-rejected",
       }),
     );
     expect(settle).toHaveBeenCalledOnce();
@@ -483,6 +546,98 @@ describe("production managed worktree tools", () => {
     );
   });
 
+  // #3452: modelVerificationFailure/stepFailure/dependencyBootstrapFailure match a failureOutput
+  // entry to the step it names (kind + scriptName), or to "dependencies" when the bootstrap itself
+  // failed, and attach only that excerpt to the model-facing failure.
+  it("attaches the failed step's matching failureOutput excerpt to verificationFailure.excerpt", async () => {
+    const facade = verificationFacade({
+      runToReport: () => Promise.resolve(failedVerificationReport()),
+      failureOutput: [
+        { step: "test", scriptName: "test", excerpt: "1 test failed: expected true, got false" },
+      ],
+      records: [],
+    });
+
+    const result = await facade.execute({
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "verification",
+        actionId: "verification-excerpt",
+        idempotencyKey: "verification-excerpt-key",
+        verifierId: "test",
+      }),
+    });
+
+    if (result.status !== "failed") throw new Error("expected a failed verification result");
+    expect(result.verificationFailure?.excerpt).toBe("1 test failed: expected true, got false");
+  });
+
+  // The producer half of the bootstrap-failure pin; the facade half is
+  // codingToolFacade.dependencyFailure.test.ts. A failed dependency install reaches the model with its
+  // closed summary, the install's own output excerpt and the dependency record. Before bb585534a the
+  // summary carried free text, the facade's closed admission refused it, and the whole failure
+  // (reason, excerpt and record) was dropped before the model saw it (found by this test pass).
+  it("forwards a failed dependency bootstrap to the model with its summary, excerpt and record", async () => {
+    const dependencies = {
+      state: "failed",
+      lockfile: "absent",
+      exitCode: 1,
+      durationMs: 900,
+      detail: "npm install failed (exit 1)",
+    } as const;
+    const facade = verificationFacade({
+      runToReport: () =>
+        Promise.resolve({ ...verificationReport("failed"), results: [], dependencies }),
+      failureOutput: [
+        { step: "dependencies", scriptName: undefined, excerpt: "npm ERR! code E404" },
+      ],
+      records: [],
+    });
+
+    const result = await facade.execute({
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "verification",
+        actionId: "verification-bootstrap",
+        idempotencyKey: "verification-bootstrap-key",
+        verifierId: "test",
+      }),
+    });
+
+    if (result.status !== "failed") throw new Error("expected a failed verification result");
+    expect(result.verificationFailure).toEqual({
+      summary: dependencyBootstrapFailureSummary("failed"),
+      locations: [],
+      truncated: false,
+      excerpt: "npm ERR! code E404",
+      dependencies,
+    });
+  });
+
+  it("does not attach an excerpt captured for a different step", async () => {
+    const facade = verificationFacade({
+      runToReport: () => Promise.resolve(failedVerificationReport()),
+      failureOutput: [
+        { step: "lint", scriptName: "lint", excerpt: "unrelated lint failure output" },
+      ],
+      records: [],
+    });
+
+    const result = await facade.execute({
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "verification",
+        actionId: "verification-mismatched-excerpt",
+        idempotencyKey: "verification-mismatched-excerpt-key",
+        verifierId: "test",
+      }),
+    });
+
+    if (result.status !== "failed") throw new Error("expected a failed verification result");
+    expect(result.verificationFailure?.excerpt).toBeUndefined();
+    expect(JSON.stringify(result)).not.toContain("unrelated lint failure output");
+  });
+
   it("threads live proxy and CA settings into the governed research transport", async () => {
     const registry = createResearchGrantRegistry();
     const now = Date.now();
@@ -559,6 +714,177 @@ describe("production managed worktree tools", () => {
       denyLoopback: true,
     });
   });
+
+  // ADR-0147 D3, autonomous-delivery amendment (owner decision, 2026-09-10): a completed governed
+  // effect in `autonomous-delivery` admits the worktree's current manifest for the run; a failed
+  // effect admits nothing, and the two modes that ask before risky work never admit.
+  it.each([
+    ["autonomous-delivery", "none", 1],
+    ["autonomous-delivery", "timed-out", 0],
+    ["autonomous-delivery", "non-zero-exit", 0],
+    ["supervised-coding", "none", 0],
+    ["governed-assist", "none", 0],
+  ] as const)(
+    "admits the run's manifest after a completed command in %s (failure %s → %d admission)",
+    async (mode, failureReason, admissions) => {
+      const admitRunManifest = vi.fn();
+      const execute = vi.fn((): Promise<CommandTaskRunResult> =>
+        Promise.resolve({
+          schemaVersion: "1",
+          runId: "command-run-1",
+          taskId: "npm-script:test",
+          kind: "test",
+          exitCode: failureReason === "none" ? 0 : 1,
+          durationMs: 1,
+          truncated: false,
+          timedOut: failureReason === "timed-out",
+          failureReason,
+          stdout: "",
+          stderr: "",
+        }),
+      );
+      const liveFacts: CodingWorkbenchRuntimeAuthorityFacts = {
+        ...FACTS,
+        actionClasses: ["workspace-read", "workspace-write", "verification", "command-execution"],
+      };
+      const facade = createProductionManagedWorktreeToolFacade({
+        authority: {
+          revalidateCapabilityForMutation: () => ({
+            ok: true as const,
+            envelope: authorizedEnvelope(true),
+          }),
+          resolveCapabilityForDelegation: () => ({
+            ok: true as const,
+            envelope: authorizedEnvelope(true),
+          }),
+        },
+        authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
+        workspaceRoot: "/managed/worktree",
+        resolveWorkspaceRootAccess,
+        authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+        effectiveMode: mode,
+        deploymentCeiling: "autonomous-delivery",
+        liveFacts: () => liveFacts,
+        secureWorkspaceTextRead: {
+          readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+        },
+        editorAgentClient: {
+          action: () =>
+            Promise.resolve({
+              ok: false as const,
+              error: { kind: "route" as const, code: "denied", message: "denied" },
+            }),
+        },
+        invocationRegistry: createCodingToolInvocationRegistry(),
+        commandRunner: { execute },
+        verificationRunner: { runToReport: vi.fn() },
+        admitRunManifest,
+        onRuntimeEvent: vi.fn(),
+      });
+
+      await facade.execute({
+        capability: "runtime-capability",
+        body: JSON.stringify({
+          action: "command",
+          commandId: "npm-script:test",
+          actionId: "command-1",
+          idempotencyKey: "command-1",
+        }),
+      });
+      expect(execute).toHaveBeenCalledOnce();
+      expect(admitRunManifest).toHaveBeenCalledTimes(admissions);
+    },
+  );
+
+  // Same admittingRunManifest wrapper as the command port above, applied to the edit port: a
+  // completed edit effect in `autonomous-delivery` admits the run's manifest, a failed one admits
+  // nothing (ADR-0147 D3, autonomous-delivery amendment, owner decision 2026-09-10).
+  function baseEditAdmissionInput(): Omit<
+    ProductionManagedWorktreeToolInput,
+    "editorAgentClient" | "admitRunManifest" | "onRuntimeEvent"
+  > {
+    return {
+      authority: {
+        revalidateCapabilityForMutation: () => ({
+          ok: true as const,
+          envelope: authorizedEnvelope(),
+        }),
+        resolveCapabilityForDelegation: () => ({
+          ok: true as const,
+          envelope: authorizedEnvelope(),
+        }),
+      },
+      authorityRef: { runId: "run-1", envelopeDigest: DIGEST },
+      workspaceRoot: "/managed/worktree",
+      resolveWorkspaceRootAccess,
+      authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+      effectiveMode: "autonomous-delivery",
+      deploymentCeiling: "autonomous-delivery",
+      liveFacts: () => FACTS,
+      secureWorkspaceTextRead: {
+        readText: () => Promise.resolve({ ok: false, reason: "denied" }),
+      },
+      // registerMutationLease requires a coordinator once a producer binding is present (it is,
+      // via liveFacts) — its absence is a silent EDIT_PREPARE_FAILED before the mocked editor
+      // action ever runs, never a signal about the edit outcome under test.
+      mutationLeaseCoordinator: {
+        register: () => true,
+        discard: () => true,
+        waitForMutation: () => Promise.resolve("succeeded"),
+      },
+      invocationRegistry: createCodingToolInvocationRegistry(),
+      verificationRunner: { runToReport: vi.fn() },
+    };
+  }
+
+  it.each([
+    ["completed", 1],
+    ["failed", 0],
+  ] as const)(
+    "admits the run's manifest after a %s edit in autonomous-delivery (→ %d admission)",
+    async (outcome, admissions) => {
+      const admitRunManifest = vi.fn();
+      const action = vi.fn(() =>
+        outcome === "completed"
+          ? Promise.resolve({
+              ok: true as const,
+              value: {
+                result: {
+                  schemaVersion: "1" as const,
+                  actionId: "edit-1",
+                  sessionId: "session-1",
+                  status: "queued" as const,
+                },
+              },
+            })
+          : Promise.resolve({
+              ok: false as const,
+              error: { kind: "route" as const, code: "denied", message: "denied" },
+            }),
+      );
+      const facade = createProductionManagedWorktreeToolFacade({
+        ...baseEditAdmissionInput(),
+        editorAgentClient: { action },
+        admitRunManifest,
+        onRuntimeEvent: vi.fn(),
+      });
+
+      await facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "edit",
+          actionId: "edit-1",
+          idempotencyKey: "edit-key-1",
+          changeset: {
+            patch: "--- a/src/a.ts\n+++ b/src/a.ts\n@@\n-old\n+new\n",
+            files: [{ file: "src/a.ts", expectedContentHash: DIGEST }],
+          },
+        }),
+      });
+      expect(action).toHaveBeenCalledOnce();
+      expect(admitRunManifest).toHaveBeenCalledTimes(admissions);
+    },
+  );
 
   it("completes a governed command through production wiring", async () => {
     const execute = vi.fn((): Promise<CommandTaskRunResult> =>
@@ -831,6 +1157,170 @@ describe("production managed worktree tools", () => {
     },
   );
 
+  // F74 (Coding Workbench run 24): a skipped run names the step it did not run and why, to the model
+  // and in the activity log, instead of a bare VERIFICATION_NOT_RUN.
+  it("names each step a run did not execute, with its closed reason, and logs it", async () => {
+    const log: ServerLogEvent[] = [];
+    const [template] = failedVerificationReport().results;
+    if (template === undefined) throw new TypeError("fixture result missing");
+    const facade = verificationFacade({
+      runToReport: () =>
+        Promise.resolve({
+          ...verificationReport("skipped"),
+          results: [
+            {
+              ...template,
+              kind: "typecheck",
+              scriptName: undefined,
+              status: "skipped",
+              exitCode: null,
+              durationMs: 0,
+              outputSummary: "",
+              locations: undefined,
+              detail: "no typecheck script detected in package.json",
+            },
+          ],
+          counts: { ...verificationReport("skipped").counts, skipped: 1 },
+        }),
+      records: [],
+      log,
+    });
+
+    await expect(
+      facade.execute({
+        capability: "opaque-capability",
+        body: JSON.stringify({
+          action: "verification",
+          actionId: "verification-not-run",
+          idempotencyKey: "verification-not-run-key",
+          verifierId: "typecheck",
+        }),
+      }),
+    ).resolves.toMatchObject({
+      status: "failed",
+      reasonCode: "VERIFICATION_NOT_RUN",
+      detail: "These verification steps did not run: typecheck (no such script in package.json).",
+    });
+    expect(log).toContainEqual(
+      expect.objectContaining({
+        op: "coding-runtime.verification",
+        extra: { state: "not-run", stepCount: 1, steps: ["typecheck:script-missing"] },
+      }),
+    );
+  });
+
+  // PR #3452 review: the orchestrator lets a run-level cancellation win in the overall status, but
+  // a step that already ran to a red end decides what the model is told; it is never "not run".
+  it.each([
+    ["failed", "VERIFICATION_FAILED"],
+    ["timed-out", "VERIFICATION_TIMED_OUT"],
+    ["resource-exceeded", "VERIFICATION_RESOURCE_EXCEEDED"],
+  ] as const)(
+    "reports a step that ran to %s in a cancelled run as that outcome, not as not run",
+    async (stepStatus, reasonCode) => {
+      const log: ServerLogEvent[] = [];
+      const facade = verificationFacade({
+        runToReport: () => Promise.resolve(cancelledAfterRed(stepStatus)),
+        records: [],
+        log,
+      });
+
+      await expect(
+        executeVerification(facade, "verification-cancelled-red"),
+      ).resolves.toMatchObject({ status: "failed", reasonCode });
+      expect(log.filter((event) => event.op === "coding-runtime.verification")).toEqual([]);
+    },
+  );
+
+  it("keeps the failure a cancelled run had already found, with its locations", async () => {
+    const facade = verificationFacade({
+      runToReport: () => Promise.resolve(cancelledAfterRed("failed")),
+      records: [],
+    });
+
+    await expect(
+      executeVerification(facade, "verification-cancelled-failure"),
+    ).resolves.toMatchObject({
+      status: "failed",
+      reasonCode: "VERIFICATION_FAILED",
+      verificationFailure: {
+        summary: "test failed; 1 structured failure location",
+        locations: [
+          {
+            file: "ci/numerical-stability.test.js",
+            line: 19,
+            column: 5,
+            message: "expected the stable average to remain finite",
+          },
+        ],
+      },
+    });
+  });
+
+  // Every closed reason for a step that never ran, named to the model and in the activity log
+  // (PR #3452 review).
+  it.each([
+    ["denied", "denied", "denied", undefined, "denied by policy"],
+    ["cancelled", "cancelled", "cancelled", undefined, "cancelled"],
+    [
+      "dependencies-unavailable",
+      "skipped",
+      "skipped",
+      "dependencies unavailable: bootstrap failed",
+      "dependencies did not install",
+    ],
+    [
+      "script-missing",
+      "skipped",
+      "skipped",
+      "no typecheck script detected in package.json",
+      "no such script in package.json",
+    ],
+    ["skipped", "skipped", "skipped", "not selected for this verifier", "skipped"],
+  ] as const)(
+    "names a step that never ran with the closed reason %s",
+    async (reason, overallStatus, stepStatus, detail, word) => {
+      const log: ServerLogEvent[] = [];
+      const [template] = failedVerificationReport().results;
+      if (template === undefined) throw new TypeError("fixture result missing");
+      const facade = verificationFacade({
+        runToReport: () =>
+          Promise.resolve({
+            ...verificationReport(overallStatus),
+            results: [
+              {
+                ...template,
+                kind: "typecheck",
+                scriptName: undefined,
+                status: stepStatus,
+                exitCode: null,
+                durationMs: 0,
+                outputSummary: "",
+                locations: undefined,
+                ...(detail === undefined ? {} : { detail }),
+              },
+            ],
+          }),
+        records: [],
+        log,
+      });
+
+      await expect(
+        executeVerification(facade, `verification-not-run-${reason}`),
+      ).resolves.toMatchObject({
+        status: "failed",
+        reasonCode: "VERIFICATION_NOT_RUN",
+        detail: `These verification steps did not run: typecheck (${word}).`,
+      });
+      expect(log).toContainEqual(
+        expect.objectContaining({
+          op: "coding-runtime.verification",
+          extra: { state: "not-run", stepCount: 1, steps: [`typecheck:${reason}`] },
+        }),
+      );
+    },
+  );
+
   it("reports a passed run as completed", async () => {
     const facade = verificationFacade({
       runToReport: () => Promise.resolve(verificationReport("passed")),
@@ -879,7 +1369,8 @@ describe("production managed worktree tools", () => {
     });
     const log: ServerLogEvent[] = [];
     const facade = verificationFacade({
-      runToReport: manager.runToReport,
+      runToReport: (input, signal) =>
+        manager.runToReport(input, signal).then((outcome) => outcome.report),
       records: [],
       log,
       workspaceRoot,
@@ -984,8 +1475,8 @@ describe("production managed worktree tools", () => {
 
   it.each([
     [
-      "unstaged candidate",
-      undefined,
+      "vanished run context",
+      { kind: "unavailable" } as const,
       true,
       {
         commitProof: "unavailable",
@@ -993,13 +1484,41 @@ describe("production managed worktree tools", () => {
         nextAction: "stage-then-verify",
       },
     ],
+    // Coding Workbench run 16 (2026-09-10): the untracked lockfile the dependency install had
+    // created blocked every proof, and the model read "candidate-not-staged" seven times without a
+    // path to act on. The refusal now names what has to be staged.
+    [
+      "unstaged candidate",
+      {
+        kind: "refused",
+        reason: "candidate-not-staged",
+        blocking: {
+          unstagedCount: 1,
+          untrackedCount: 1,
+          unstaged: ["src/App.tsx"],
+          untracked: ["package-lock.json"],
+        },
+      } as const,
+      true,
+      {
+        commitProof: "unavailable",
+        reasonCode: "candidate-not-staged",
+        nextAction: "stage-then-verify",
+        blocking: {
+          unstagedCount: 1,
+          untrackedCount: 1,
+          unstaged: ["src/App.tsx"],
+          untracked: ["package-lock.json"],
+        },
+      },
+    ],
     [
       "candidate drift",
-      {},
+      { kind: "ticket", ticket: {} } as const,
       false,
       { commitProof: "unavailable", reasonCode: "candidate-drift", nextAction: "verify-again" },
     ],
-    ["recorded proof", {}, true, { commitProof: "recorded" }],
+    ["recorded proof", { kind: "ticket", ticket: {} } as const, true, { commitProof: "recorded" }],
   ] as const)(
     "reports a passed run with %s commit-proof status",
     async (_label, ticket, recorded, expected) => {
@@ -1009,6 +1528,7 @@ describe("production managed worktree tools", () => {
       const completeVerification = vi.fn<VerifiedCommitService["completeVerification"]>(() =>
         Promise.resolve(recorded),
       );
+      const observeVerification = vi.fn<VerifiedCommitService["observeVerification"]>();
       const facade = verificationFacade({
         runToReport: () => Promise.resolve(verificationReport("passed")),
         records: [],
@@ -1016,6 +1536,7 @@ describe("production managed worktree tools", () => {
           ...verificationService(),
           beginVerification,
           completeVerification,
+          observeVerification,
         },
       });
 
@@ -1031,7 +1552,9 @@ describe("production managed worktree tools", () => {
         }),
       ).resolves.toMatchObject({ status: "completed", verification: expected });
       expect(beginVerification).toHaveBeenCalledOnce();
-      expect(completeVerification).toHaveBeenCalledTimes(ticket === undefined ? 0 : 1);
+      expect(completeVerification).toHaveBeenCalledTimes(ticket.kind === "ticket" ? 1 : 0);
+      // F57: a run's check that cannot prove a commit is still kept for the pull request's list.
+      expect(observeVerification).toHaveBeenCalledTimes(ticket.kind === "ticket" ? 0 : 1);
     },
   );
 
@@ -1103,6 +1626,37 @@ describe("production managed worktree tools", () => {
     expect(record.frames).toHaveLength(1);
     expect(record.frames?.[0]).toMatch(/^packages\/keiko-server\/src\//u);
     expect(JSON.stringify(records)).not.toContain(secret);
+  });
+
+  // Run 6 (2026-09-10): every verification failed with `errorKind: "Error"`; which of the raw status
+  // reader's three exits had thrown could be reconstructed only from the dist frames. A coded throw
+  // now names its closed reason on the line; the code is a fixed token, never text.
+  it("carries the raw status reader's closed code on a verification read failure", async () => {
+    const records: ServerDiagnosticRecord[] = [];
+    const facade = verificationFacade({
+      runToReport: () => Promise.reject(new GitRawWorktreeReadError("git-raw-snapshot-incomplete")),
+      records,
+    });
+
+    await facade.execute({
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "verification",
+        actionId: "verification-coded-failure",
+        idempotencyKey: "verification-coded-failure-key",
+        verifierId: "test",
+      }),
+    });
+
+    expect(records).toEqual([
+      expect.objectContaining({
+        operation: "coding-runtime.verification",
+        message: "verification-failed",
+        errorClass: "GitRawWorktreeReadError",
+        code: "git-raw-snapshot-incomplete",
+        correlationId: "run-verification-3",
+      }),
+    ]);
   });
 
   it("revokes liveness the instant resolveWorkspaceRootAccess stops proving managed authority, even before expiry (#3347)", async () => {
@@ -1521,6 +2075,10 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
     readonly authorityExpiresAt?: string;
     readonly activityLog?: { write: (event: ServerLogEvent) => void };
+    readonly repositorySemanticSearch?: {
+      readonly current: RepositorySemanticSearchResolver | undefined;
+    };
+    readonly diagnostics?: ProductionManagedWorktreeToolInput["diagnostics"];
   }): ReturnType<typeof createProductionManagedWorktreeToolFacade> {
     return createProductionManagedWorktreeToolFacade({
       authority: {
@@ -1555,6 +2113,10 @@ describe("H1 repository search mounted into production composition (#3386)", () 
       verificationRunner: { runToReport: vi.fn() },
       onRuntimeEvent: vi.fn(),
       ...(input.activityLog === undefined ? {} : { activityLog: input.activityLog }),
+      ...(input.repositorySemanticSearch === undefined
+        ? {}
+        : { repositorySemanticSearch: input.repositorySemanticSearch }),
+      ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
     });
   }
 
@@ -1595,12 +2157,218 @@ describe("H1 repository search mounted into production composition (#3386)", () 
       "tool-catalog.invocation-started",
       "coding-repository-handler.started",
       "coding-repository-handler.settled",
+      "coding-runtime.repository-rerank",
       "tool-catalog.invocation-settled",
     ]);
     for (const event of events) {
       if (event.op.startsWith("tool-catalog.")) expect(event.correlationId).toBe("run-h1-search");
     }
     expect(JSON.stringify(events)).not.toContain("parseConfig");
+  });
+
+  // #3416: the governed rerank sits ABOVE the H1 handler. Every case below asserts the same two
+  // things the operator relies on -- the order they actually got, and a disclosure that says how it
+  // was produced -- and that a rerank which cannot happen is never an error.
+  type IndexMatches = ReturnType<NonNullable<RepositorySemanticSearchLease["provider"]>["search"]>;
+
+  function semanticSlot(provider: { search: (input: unknown) => IndexMatches } | undefined): {
+    readonly slot: { readonly current: RepositorySemanticSearchResolver | undefined };
+    readonly closed: () => number;
+  } {
+    let closes = 0;
+    const resolve: RepositorySemanticSearchResolver = () => ({
+      ...(provider === undefined
+        ? { provider: undefined }
+        : { provider: { name: "test-index", search: provider.search } }),
+      indexIdentityDigest: "b".repeat(64),
+      close: (): void => {
+        closes += 1;
+      },
+    });
+    return { slot: { current: resolve }, closed: (): number => closes };
+  }
+
+  function twoMatchingFiles(): string {
+    const root = tempWorkspace();
+    mkdirSync(join(root, "src"));
+    writeFileSync(join(root, "src", "a.ts"), "export const parseConfig = 1;\n");
+    writeFileSync(join(root, "src", "b.ts"), "export const parseConfig = 2;\n");
+    return root;
+  }
+
+  function accessFor(root: string): () => WorkspaceRootAccess {
+    return () => ({
+      kind: "managed-task" as const,
+      canonicalRoot: root,
+      fs: nodeWorkspaceFs,
+      repositoryRoot: root,
+    });
+  }
+
+  async function searchWith(
+    root: string,
+    slot?: { readonly current: RepositorySemanticSearchResolver | undefined },
+    events?: ServerLogEvent[],
+  ): Promise<{
+    readonly ok: true;
+    readonly hits: readonly { readonly path: string }[];
+    readonly provenance: unknown;
+  }> {
+    const facade = searchFacade({
+      resolveWorkspaceRootAccess: accessFor(root),
+      ...(slot === undefined ? {} : { repositorySemanticSearch: slot }),
+      ...(events === undefined
+        ? {}
+        : { activityLog: { write: (event): void => void events.push(event) } }),
+    });
+    const result = await facade.execute({ capability: "opaque-capability", body: searchBody() });
+    return (
+      result as { search: { ok: true; hits: readonly { path: string }[]; provenance: unknown } }
+    ).search;
+  }
+
+  it("says the capability was not offered when this server bound no index", async () => {
+    const search = await searchWith(twoMatchingFiles());
+    expect(search.provenance).toMatchObject({
+      ranking: "lexical",
+      rerankedHits: 0,
+      fallbackReason: "capability-not-offered",
+      indexIdentityDigest: null,
+    });
+    expect(search.hits.map((hit) => hit.path)).toEqual(["src/a.ts", "src/b.ts"]);
+  });
+
+  it.each([
+    ["provider-absent", undefined, (): IndexMatches => Promise.resolve([])],
+    ["pod-no-fresh-candidates", "present", (): IndexMatches => Promise.resolve([])],
+    [
+      "pod-query-failed",
+      "present",
+      (): IndexMatches => Promise.reject(new Error("index unreachable")),
+    ],
+  ] as const)("keeps the lexical order and discloses %s", async (reason, present, search) => {
+    const bound = semanticSlot(present === undefined ? undefined : { search });
+    const result = await searchWith(twoMatchingFiles(), bound.slot);
+    expect(result.provenance).toMatchObject({
+      ranking: "lexical",
+      rerankedHits: 0,
+      fallbackReason: reason,
+    });
+    expect(result.hits.map((hit) => hit.path)).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(bound.closed()).toBe(1);
+  });
+
+  // PR #3452 review (owner): `pod-query-failed` is the only fallback reason that means a THROWN
+  // failure rather than a clean absence of capability. Reporting it like the benign ones left an
+  // operator unable to tell a broken index from an unconfigured one, so the evidence is asserted
+  // here -- and it stays body-free.
+  it("records the failure's evidence when the index query throws", async () => {
+    const events: ServerLogEvent[] = [];
+    const records: { readonly operation: string }[] = [];
+    const bound = semanticSlot({
+      search: (): IndexMatches => Promise.reject(new Error("index unreachable")),
+    });
+    const facade = searchFacade({
+      resolveWorkspaceRootAccess: accessFor(twoMatchingFiles()),
+      repositorySemanticSearch: bound.slot,
+      activityLog: { write: (event): void => void events.push(event) },
+      diagnostics: { record: (record): void => void records.push(record) },
+    });
+
+    const result = await facade.execute({ capability: "opaque-capability", body: searchBody() });
+
+    expect(result).toMatchObject({
+      status: "completed",
+      search: { provenance: { ranking: "lexical", fallbackReason: "pod-query-failed" } },
+    });
+    const failure = events.find(
+      (event) => event.op === "coding-runtime.repository-rerank" && event.level === "warn",
+    );
+    expect(failure?.errorKind).toBeDefined();
+    expect(failure?.extra).toMatchObject({ reason: "pod-query-failed" });
+    expect(Array.isArray((failure?.extra as { frames?: unknown }).frames)).toBe(true);
+    expect(records.map((record) => record.operation)).toContain("coding-runtime.repository-rerank");
+    expect(JSON.stringify(failure)).not.toContain("index unreachable");
+    expect(JSON.stringify(failure)).not.toContain("parseConfig");
+  });
+
+  // PR #3452 review: an index can answer with paths this result cannot attribute to any hit (stale or
+  // unknown). The delivered order is then fully lexical, and saying "hybrid" would misreport it.
+  it("discloses a lexical order when the index places no hit", async () => {
+    const bound = semanticSlot({
+      search: (): IndexMatches => Promise.resolve([{ scopePath: "src/gone.ts", score: 0.9 }]),
+    });
+    const search = await searchWith(twoMatchingFiles(), bound.slot);
+
+    expect(search.provenance).toMatchObject({
+      ranking: "lexical",
+      rerankedHits: 0,
+      fallbackReason: "pod-no-fresh-candidates",
+    });
+    expect(search.hits.map((hit) => hit.path)).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(bound.closed()).toBe(1);
+  });
+
+  // A cancelled request is terminal (ADR-0175): no fallback order, no published result, no failure
+  // evidence -- the abort is the caller's own decision, not a defect of the index.
+  // PR #3452 review: an abort is the caller's own decision, not a defect of the index. The governed
+  // facade discards a cancelled call's payload either way, so the observable difference is the
+  // EVIDENCE: without the guard below, a cancelled request files a warn line and an operator
+  // diagnostic for a failure that never happened.
+  it("files no failure evidence when the index query is cancelled mid-flight", async () => {
+    const controller = new AbortController();
+    const events: ServerLogEvent[] = [];
+    const records: { readonly operation: string }[] = [];
+    const bound = semanticSlot({
+      search: (): IndexMatches => {
+        controller.abort();
+        return Promise.reject(new Error("index unreachable"));
+      },
+    });
+    const facade = searchFacade({
+      resolveWorkspaceRootAccess: accessFor(twoMatchingFiles()),
+      repositorySemanticSearch: bound.slot,
+      activityLog: { write: (event): void => void events.push(event) },
+      diagnostics: { record: (record): void => void records.push(record) },
+    });
+
+    const result = await facade.execute({
+      capability: "opaque-capability",
+      body: searchBody(),
+      signal: controller.signal,
+    });
+
+    expect(result).toMatchObject({ status: "cancelled" });
+    expect(events.filter((event) => event.op === "coding-runtime.repository-rerank")).toHaveLength(
+      0,
+    );
+    expect(records).toHaveLength(0);
+    expect(bound.closed()).toBe(1);
+  });
+
+  it("reorders the hits the index placed and discloses which index answered", async () => {
+    const bound = semanticSlot({
+      search: () => Promise.resolve([{ scopePath: "src/b.ts", score: 0.9 }]),
+    });
+    const events: ServerLogEvent[] = [];
+    const search = await searchWith(twoMatchingFiles(), bound.slot, events);
+
+    expect(search.hits.map((hit) => hit.path)).toEqual(["src/b.ts", "src/a.ts"]);
+    expect(search.provenance).toMatchObject({
+      ranking: "hybrid",
+      indexIdentityDigest: "b".repeat(64),
+      indexFreshness: "fresh",
+      rerankedHits: 1,
+      lexicalHits: 1,
+    });
+    expect(bound.closed()).toBe(1);
+
+    // The line the operator's support bundle carries: counts and labels, never the query, a path or
+    // a snippet.
+    const rerank = events.find((event) => event.op === "coding-runtime.repository-rerank");
+    expect(rerank?.correlationId).toBe("run-h1-search");
+    expect(JSON.stringify(rerank)).not.toContain("parseConfig");
+    expect(JSON.stringify(rerank)).not.toContain("src/b.ts");
   });
 
   it("denies a workspace-denylisted path as a completed domain outcome, never invented coverage", async () => {
@@ -1726,12 +2494,7 @@ describe("deriveOptionalToolAvailability (#3414-AC9)", () => {
   const runId = "run-availability-1";
 
   function emptySkillCatalog(): SkillCatalog {
-    return {
-      has: () => false,
-      get: () => undefined,
-      list: () => [],
-      isImplicitAllowed: () => false,
-    };
+    return createServerApprovedSkillCatalog([]);
   }
 
   it("marks research and child-agent unavailable, and skill available from the server default catalog, when nothing else is wired", () => {
@@ -1800,25 +2563,51 @@ describe("deriveOptionalToolAvailability (#3414-AC9)", () => {
     expect(JSON.stringify(events)).not.toContain("private configuration failure");
   });
 
-  it("marks skill available only when the catalog actually lists an approved entry", () => {
+  // #3417: both skill tools are absent together unless an approved skill could actually run for
+  // this run: enabled, compatible with the bound profile, and of a category the port handles.
+  it("marks the skill tools available only when an approved skill could run", () => {
     const empty = deriveOptionalToolAvailability({
       authorityRef: { runId, envelopeDigest: DIGEST },
       skillCatalog: emptySkillCatalog(),
     });
     expect(empty.has("keiko_skill")).toBe(true);
+    expect(empty.has("keiko_skill_discover")).toBe(true);
+    for (const unready of [
+      { category: "public-research" as const, capabilities: ["keiko.research.fetch"] },
+      { enabled: false },
+      { compatibility: { profile: "opencode", minVersion: 2, maxVersion: 2 } },
+    ]) {
+      const unavailable = deriveOptionalToolAvailability({
+        authorityRef: { runId, envelopeDigest: DIGEST },
+        skillCatalog: createServerApprovedSkillCatalog([
+          {
+            skillId: "skl_demo@1",
+            implicitAllowed: false,
+            category: "repository-analysis",
+            capabilities: ["keiko.workspace.read"],
+            compatibility: { profile: "opencode", minVersion: 1, maxVersion: 1 },
+            ...unready,
+          },
+        ]),
+      });
+      expect(unavailable.has("keiko_skill")).toBe(true);
+      expect(unavailable.has("keiko_skill_discover")).toBe(true);
+    }
 
     const nonEmpty = deriveOptionalToolAvailability({
       authorityRef: { runId, envelopeDigest: DIGEST },
-      skillCatalog: {
-        has: () => true,
-        get: () => undefined,
-        list: () => [
-          { skillId: "skl_demo@1" as never, implicitAllowed: false, category: "public-research" },
-        ],
-        isImplicitAllowed: () => false,
-      },
+      skillCatalog: createServerApprovedSkillCatalog([
+        {
+          skillId: "skl_demo@1",
+          implicitAllowed: false,
+          category: "repository-analysis",
+          capabilities: ["keiko.workspace.read"],
+          compatibility: { profile: "opencode", minVersion: 1, maxVersion: 1 },
+        },
+      ]),
     });
     expect(nonEmpty.has("keiko_skill")).toBe(false);
+    expect(nonEmpty.has("keiko_skill_discover")).toBe(false);
   });
 
   it("marks child-agent available only when the configured model resolves through the factory", () => {
@@ -1955,6 +2744,47 @@ function verificationReport(overallStatus: VerificationStatus): VerificationRepo
   };
 }
 
+// A run whose first step ran to a red end and whose second step was then cancelled: the orchestrator
+// reports it as cancelled, its run-level flag winning (PR #3452 review).
+function cancelledAfterRed(
+  stepStatus: "failed" | "timed-out" | "resource-exceeded",
+): VerificationReport {
+  const failed = failedVerificationReport();
+  const [template] = failed.results;
+  if (template === undefined) throw new TypeError("fixture result missing");
+  return {
+    ...failed,
+    overallStatus: "cancelled",
+    results: [
+      { ...template, status: stepStatus },
+      {
+        ...template,
+        kind: "lint",
+        scriptName: "lint",
+        args: ["run", "lint"],
+        status: "cancelled",
+        exitCode: null,
+        locations: undefined,
+      },
+    ],
+  };
+}
+
+function executeVerification(
+  facade: ReturnType<typeof verificationFacade>,
+  actionId: string,
+): ReturnType<ReturnType<typeof verificationFacade>["execute"]> {
+  return facade.execute({
+    capability: "opaque-capability",
+    body: JSON.stringify({
+      action: "verification",
+      actionId,
+      idempotencyKey: `${actionId}-key`,
+      verifierId: "test",
+    }),
+  });
+}
+
 function failedVerificationReport(): VerificationReport {
   return {
     ...verificationReport("failed"),
@@ -1997,6 +2827,350 @@ function failedVerificationReport(): VerificationReport {
 // The minimal live-and-authorized verification wiring: authority granted, managed access proven,
 // expiry decades away, so every refusal these tests observe comes from the run OUTCOME (or the
 // thrown error) and never from a liveness or policy check.
+// Run 10 of the Workbench engagement (2026-09-10). Verification was refused because the run had
+// rewritten `package.json`, so the repository's ADR-0147 grant no longer covered the worktree's
+// scripts. The tool handed the model the bare refusal, the model correctly reported the blocker and
+// stopped, and no surface ever told the operator a decision was waiting on them.
+//
+// The tool now waits in place — the same shape a git-stage or commit proposal already waits in —
+// announces the open decision so the run can report itself paused, and makes ONE further attempt
+// once the decision lands. The second attempt is a whole attempt, not a bare `runToReport` retry:
+// the candidate-verification ticket brackets each run.
+describe("verification waiting on the operator's package-script trust decision", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function trustRefusedThenGranted(granted: () => boolean) {
+    return (): ScriptTrustDecision =>
+      granted()
+        ? { trusted: true, basis: "worktree-human-grant" }
+        : { trusted: false, refusal: "worktree-manifest-drift" };
+  }
+
+  function verificationCall(actionId: string): { capability: string; body: string } {
+    return {
+      capability: "opaque-capability",
+      body: JSON.stringify({
+        action: "verification",
+        actionId,
+        idempotencyKey: `${actionId}-key`,
+        verifierId: "test",
+      }),
+    };
+  }
+
+  it("announces the decision, waits, and verifies once the operator allows the scripts", async () => {
+    vi.useFakeTimers();
+    let granted = false;
+    const announced: { decision: string; outcome?: string }[] = [];
+    const runToReport = vi.fn(() =>
+      granted
+        ? Promise.resolve(verificationReport("passed"))
+        : Promise.reject(new WorkspaceTrustRequiredError("worktree-manifest-drift")),
+    );
+    const log: ServerLogEvent[] = [];
+    const facade = verificationFacade({
+      runToReport,
+      scriptTrustFor: trustRefusedThenGranted(() => granted),
+      requestOperatorDecision: (decision, outcome): void => {
+        announced.push({ decision, ...(outcome === undefined ? {} : { outcome }) });
+        // Stands for the operator clicking Allow while the tool waits.
+        if (outcome === undefined) granted = true;
+      },
+      records: [],
+      log,
+    });
+
+    const pending = facade.execute(verificationCall("verification-trust-wait"));
+    await vi.advanceTimersByTimeAsync(600);
+
+    await expect(pending).resolves.toMatchObject({ status: "completed" });
+    expect(runToReport).toHaveBeenCalledTimes(2);
+    expect(announced).toEqual([
+      { decision: "workspace-script-trust" },
+      { decision: "workspace-script-trust", outcome: "accepted" },
+    ]);
+    expect(log.find((event) => event.op === "coding-runtime.operator-decision")).toMatchObject({
+      level: "info",
+      correlationId: "run-verification-3",
+      extra: { decision: "workspace-script-trust", state: "settled", reason: "granted" },
+    });
+  });
+
+  // Owner review, PR #3452: the invocation's ceilings run from admission, the wait's clock used to
+  // start only after the first attempt had failed — so a slow first attempt pushed the wait past the
+  // invocation's own ceiling and the model got an opaque cancellation. The wait is measured from the
+  // handler's entry: with 10 s spent before the refusal, it ends one wait from entry with the tool's
+  // own refusal, and the log records the ceiling less the 10 s the first attempt spent.
+  it("measures the grace window from the handler's entry, not from the refusal", async () => {
+    vi.useFakeTimers();
+    const runToReport = vi.fn(() =>
+      Promise.reject(new WorkspaceTrustRequiredError("worktree-manifest-drift")),
+    );
+    const log: ServerLogEvent[] = [];
+    const facade = verificationFacade({
+      runToReport,
+      scriptTrustFor: trustRefusedThenGranted(() => false),
+      requestOperatorDecision: (): void => undefined,
+      verifiedCommitService: {
+        beginVerification: () =>
+          new Promise<object>((resolve) => {
+            setTimeout(() => {
+              resolve({});
+            }, 10_000);
+          }),
+      } as unknown as VerifiedCommitService,
+      records: [],
+      log,
+    });
+
+    const pending = facade.execute(verificationCall("verification-trust-clock"));
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await vi.advanceTimersByTimeAsync(SCRIPT_TRUST_WAIT_CEILING_MS - 1_000);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_600);
+    expect(settled).toBe(true);
+    await expect(pending).resolves.toMatchObject({
+      status: "failed",
+      reasonCode: "WORKSPACE_TRUST_REQUIRED",
+    });
+    expect(log.find((event) => event.op === "coding-runtime.operator-decision")).toMatchObject({
+      extra: {
+        state: "settled",
+        reason: "expired",
+        waitCeilingMs: SCRIPT_TRUST_WAIT_CEILING_MS - 10_000,
+      },
+    });
+  });
+
+  // A decision that never comes must not hold the run for ever: the wait expires on the same
+  // ceiling every other approval wait uses, and the model then gets exactly the refusal it used to
+  // get immediately.
+  it("returns the runner's refusal when the decision never arrives", async () => {
+    vi.useFakeTimers();
+    const announced: { decision: string; outcome?: string }[] = [];
+    const runToReport = vi.fn(() =>
+      Promise.reject(new WorkspaceTrustRequiredError("worktree-manifest-drift")),
+    );
+    const log: ServerLogEvent[] = [];
+    const facade = verificationFacade({
+      runToReport,
+      scriptTrustFor: trustRefusedThenGranted(() => false),
+      requestOperatorDecision: (decision, outcome): void => {
+        announced.push({ decision, ...(outcome === undefined ? {} : { outcome }) });
+      },
+      records: [],
+      log,
+    });
+
+    const pending = facade.execute(verificationCall("verification-trust-expiry"));
+    // Past the wait's own ceiling but still inside the governed invocation's life, which is the
+    // whole point of pinning one below the other: the tool answers with its own refusal rather than
+    // the caller seeing an opaque cancellation.
+    await vi.advanceTimersByTimeAsync(SCRIPT_TRUST_WAIT_CEILING_MS + 600);
+
+    await expect(pending).resolves.toMatchObject({
+      status: "failed",
+      reasonCode: "WORKSPACE_TRUST_REQUIRED",
+    });
+    expect(runToReport).toHaveBeenCalledTimes(1);
+    expect(announced.at(-1)).toEqual({
+      decision: "workspace-script-trust",
+      outcome: "limit-reached",
+    });
+    expect(log.find((event) => event.op === "coding-runtime.operator-decision")).toMatchObject({
+      level: "warn",
+      extra: { state: "settled", reason: "expired" },
+    });
+  });
+
+  // A composition with no way to announce the decision — no runtime event sink — must behave
+  // exactly as it did before the wait existed, rather than blocking on a decision nobody can see.
+  it("keeps the immediate refusal when no decision can be announced", async () => {
+    const runToReport = vi.fn(() =>
+      Promise.reject(new WorkspaceTrustRequiredError("repository-not-trusted")),
+    );
+    const facade = verificationFacade({
+      runToReport,
+      scriptTrustFor: trustRefusedThenGranted(() => false),
+      records: [],
+    });
+
+    await expect(
+      facade.execute(verificationCall("verification-trust-none")),
+    ).resolves.toMatchObject({ status: "failed", reasonCode: "WORKSPACE_TRUST_REQUIRED" });
+    expect(runToReport).toHaveBeenCalledTimes(1);
+  });
+
+  // The load-bearing relation between the wait and the ceilings the governed verification call is
+  // settled at. A wait allowed to run to a ceiling is settled as an opaque cancellation before the
+  // tool can answer — proven on this fixture while the registry's fixed 30 s life was that ceiling:
+  // at a 30 s wait the call returned `cancelled`, at 29 s the refusal. The wait and the retry it
+  // enables (the install and the one step) now fit inside the verification budget, which the
+  // registry, the bridge and the plugin client each outlive; the tests beside this one walk a whole
+  // wait, a run past the registry's default life and a run past the whole budget through the real
+  // registry and catalog.
+  it("settles its wait strictly inside the governed invocation's life", () => {
+    expect(SCRIPT_TRUST_WAIT_CEILING_MS).toBeGreaterThan(0);
+    expect(SCRIPT_TRUST_WAIT_CEILING_MS).toBe(MAX_APPROVAL_CHALLENGE_TTL_MS);
+    expect(
+      SCRIPT_TRUST_WAIT_CEILING_MS +
+        DEPENDENCY_INSTALL_LIMITS.wallTimeMs +
+        DEFAULT_VERIFICATION_LIMITS.wallTimeMs,
+    ).toBeLessThan(VERIFICATION_TOOL_MAX_DURATION_MS);
+  });
+
+  // PR #3452 (F43/F44): the governed-invocation registry held every catalog call for a fixed 30 s
+  // and then cancelled it, whatever budget the catalog had settled the tool at, so a real
+  // install-then-test run was cut off as `cancelled` long before its own budget ended.
+  it("lets a verification run longer than the registry's default life report its result", async () => {
+    vi.useFakeTimers();
+    const facade = verificationFacade({
+      runToReport: () =>
+        new Promise((resolve) => {
+          setTimeout(() => {
+            resolve(verificationReport("passed"));
+          }, 60_000);
+        }),
+      records: [],
+    });
+
+    const pending = facade.execute(verificationCall("verification-long-run"));
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    await expect(pending).resolves.toMatchObject({ status: "completed" });
+  });
+
+  // The registry holds the call one grace past the catalog's budget, so a run that outlasts even
+  // that budget is answered by the catalog's own timeout, never by the registry's cancellation.
+  it("answers a run past the whole verification budget with the catalog's timeout", async () => {
+    vi.useFakeTimers();
+    const facade = verificationFacade({
+      runToReport: (_input, signal) =>
+        new Promise((_resolve, reject) => {
+          signal.addEventListener("abort", () => {
+            reject(new Error("aborted"));
+          });
+        }),
+      records: [],
+    });
+
+    const pending = facade.execute(verificationCall("verification-over-budget"));
+    await vi.advanceTimersByTimeAsync(VERIFICATION_TOOL_MAX_DURATION_MS + 1_000);
+
+    await expect(pending).resolves.toMatchObject({ status: "timeout" });
+  });
+
+  // The wait itself, in isolation: an unresolvable workspace is not a verdict a human can change,
+  // so waiting on it would hold the run for the full ceiling with nothing to decide.
+  it("settles unavailable rather than waiting when the decision cannot be read", async () => {
+    vi.useFakeTimers();
+    const outcome = waitForWorkspaceScriptTrust(() => undefined);
+    await vi.advanceTimersByTimeAsync(600);
+    await expect(outcome).resolves.toBe("unavailable");
+  });
+
+  // A probe that throws (a workspace resolver failing closed mid-wait) settles the wait through its
+  // closed `unavailable` outcome and releases the interval, instead of rejecting from inside a timer
+  // callback and leaving the run paused with no settled decision (CodeRabbit review, 2026-09-10).
+  it("settles unavailable and releases its timers when the probe throws", async () => {
+    vi.useFakeTimers();
+    let probes = 0;
+    const outcome = waitForWorkspaceScriptTrust((): { readonly trusted: boolean } => {
+      probes += 1;
+      throw new Error("workspace resolver failed closed");
+    });
+    await expect(outcome).resolves.toBe("unavailable");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(probes).toBe(1);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // The path the fix above exists for (owner review, PR #3452): the first probe keeps the wait open,
+  // and the one fired by the interval — after the promise executor has long returned — throws. The
+  // wait still settles through its closed `unavailable` outcome and releases every timer; before the
+  // fix that throw escaped the timer callback and the wait never settled.
+  it("settles unavailable when a probe fired by the interval throws", async () => {
+    vi.useFakeTimers();
+    let probes = 0;
+    const outcome = waitForWorkspaceScriptTrust((): { readonly trusted: boolean } => {
+      probes += 1;
+      if (probes === 1) return { trusted: false };
+      throw new Error("workspace resolver failed closed");
+    });
+    expect(probes).toBe(1);
+
+    await vi.advanceTimersToNextTimerAsync();
+
+    await expect(outcome).resolves.toBe("unavailable");
+    expect(probes).toBe(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  // An aborted tool call ends the wait immediately; the run is going away and nobody is deciding.
+  it("settles cancelled when the tool call is aborted", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const outcome = waitForWorkspaceScriptTrust(
+      () => ({ trusted: false, refusal: "worktree-manifest-drift" }),
+      controller.signal,
+    );
+    controller.abort();
+    await expect(outcome).resolves.toBe("cancelled");
+  });
+});
+
+// Trusted unless a test says otherwise, so every case that is not about script trust keeps its
+// single-attempt behaviour and never announces a decision.
+// The runner returns its report beside the orchestrator's failure output (ADR-0126 D3); these
+// doubles produce the report and the helper wraps it in the outcome the port actually consumes, so
+// a fixture that only cares about the report keeps saying exactly that.
+type ReportRunner = (
+  input: VerificationRunInput,
+  signal: AbortSignal,
+) => Promise<VerificationReport>;
+
+function outcomeRunner(
+  runToReport: ReportRunner,
+  failureOutput: readonly VerificationStepOutput[] = [],
+): VerificationRunnerManager["runToReport"] {
+  return async (input, signal) => ({
+    report: await runToReport(input, signal),
+    failureOutput,
+  });
+}
+
+function verificationRunnerOptions(options: {
+  readonly runToReport: ReportRunner;
+  readonly scriptTrustFor?: VerificationRunnerManager["scriptTrustFor"];
+  readonly requestOperatorDecision?: (
+    decision: CodingWorkbenchOperatorDecision,
+    outcome?: CodingWorkbenchAuxiliaryStatus,
+  ) => void;
+  // #3452: the orchestrator's redacted output tail(s) the port hands back beside the report
+  // (ADR-0126 D3). Defaulted to none, exactly as before, so only a test that cares provides one.
+  readonly failureOutput?: readonly VerificationStepOutput[];
+}): Pick<
+  Parameters<typeof createProductionManagedWorktreeToolFacade>[0],
+  "verificationRunner" | "requestOperatorDecision"
+> {
+  return {
+    verificationRunner: {
+      runToReport: outcomeRunner(options.runToReport, options.failureOutput),
+      scriptTrustFor:
+        options.scriptTrustFor ??
+        ((): ScriptTrustDecision => ({ trusted: true, basis: "repository" })),
+    },
+    ...(options.requestOperatorDecision === undefined
+      ? {}
+      : { requestOperatorDecision: options.requestOperatorDecision }),
+  };
+}
+
 function verificationFacade(options: {
   readonly ciRepairBudget?: CiRepairExecutionBudget;
   readonly verifiedCommitService?: VerifiedCommitService;
@@ -2005,7 +3179,13 @@ function verificationFacade(options: {
   readonly log?: ServerLogEvent[];
   readonly events?: CodingWorkbenchRuntimeEvent[];
   readonly ciObservationService?: CiObservationService;
-  readonly runToReport: VerificationRunnerManager["runToReport"];
+  readonly runToReport: ReportRunner;
+  readonly scriptTrustFor?: VerificationRunnerManager["scriptTrustFor"];
+  readonly requestOperatorDecision?: (
+    decision: CodingWorkbenchOperatorDecision,
+    outcome?: CodingWorkbenchAuxiliaryStatus,
+  ) => void;
+  readonly failureOutput?: readonly VerificationStepOutput[];
   readonly workspaceRoot?: string;
   readonly records: ServerDiagnosticRecord[];
 }): ReturnType<typeof createProductionManagedWorktreeToolFacade> {
@@ -2060,7 +3240,7 @@ function verificationFacade(options: {
         }),
     },
     invocationRegistry: createCodingToolInvocationRegistry(),
-    verificationRunner: { runToReport: options.runToReport },
+    ...verificationRunnerOptions(options),
     diagnostics: { record: (record): void => void options.records.push(record) },
     ...(options.log === undefined
       ? {}
@@ -2126,8 +3306,9 @@ function loadGeneratedVerificationTool(fetchImpl: typeof fetch): GeneratedVerifi
 
 function verificationService(): VerifiedCommitService {
   return {
-    beginVerification: vi.fn(() => Promise.resolve({})),
+    beginVerification: vi.fn(() => Promise.resolve({ kind: "ticket" as const, ticket: {} })),
     completeVerification: vi.fn(() => Promise.resolve(true)),
+    observeVerification: vi.fn(),
     propose: vi.fn(),
     approve: vi.fn(),
     issueApproval: vi.fn(),
@@ -2170,3 +3351,56 @@ function authorizedEnvelope(network = false): never {
     },
   } as never;
 }
+
+// Run 12 (2026-09-10): a verification refused while its sibling waited on the operator's trust
+// decision was logged as `verification-authority-revoked` and nothing else, although three different
+// conditions produce that one code. The condition is the diagnostic's `code`; these pins hold the
+// mapping so the next refusal in a customer log names what actually fired.
+describe("verificationLivenessRefusal", () => {
+  const liveInput = {
+    liveFacts: (): CodingWorkbenchRuntimeAuthorityFacts => FACTS,
+    resolveWorkspaceRootAccess,
+    authorityExpiresAt: "2099-01-01T00:00:00.000Z",
+  };
+  const liveGuard = { check: (): boolean => true };
+
+  it("names an aborted signal before anything else", () => {
+    const controller = new AbortController();
+    controller.abort();
+    expect(verificationLivenessRefusal(liveInput, { check: () => false }, controller.signal)).toBe(
+      "signal-aborted",
+    );
+  });
+
+  it("names a rejecting guard", () => {
+    expect(verificationLivenessRefusal(liveInput, { check: () => false }, undefined)).toBe(
+      "guard-rejected",
+    );
+  });
+
+  it.each([
+    [
+      "a workspace that no longer resolves as a managed task",
+      { resolveWorkspaceRootAccess: (): WorkspaceRootAccess | undefined => undefined },
+    ],
+    ["an expired authority", { authorityExpiresAt: "2000-01-01T00:00:00.000Z" }],
+    [
+      "live facts that throw",
+      {
+        liveFacts: (): CodingWorkbenchRuntimeAuthorityFacts => {
+          throw new Error("facts unavailable");
+        },
+      },
+    ],
+  ] as const)("names a run that is not live: %s", (_label, override) => {
+    expect(verificationLivenessRefusal({ ...liveInput, ...override }, liveGuard, undefined)).toBe(
+      "run-not-live",
+    );
+  });
+
+  it("reports nothing while every condition holds", () => {
+    expect(
+      verificationLivenessRefusal(liveInput, liveGuard, new AbortController().signal),
+    ).toBeUndefined();
+  });
+});

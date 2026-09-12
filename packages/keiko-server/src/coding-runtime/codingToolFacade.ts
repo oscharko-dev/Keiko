@@ -1,8 +1,16 @@
 import { isCodingRuntimeDeliveryResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-delivery";
+import {
+  VERIFIED_COMMIT_BLOCKING_PATHS_MAX,
+  type VerifiedCommitBlockingPaths,
+} from "../gitDelivery/verifiedCommitTypes.js";
 import { isCodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
 import { isDraftToolRequest } from "./codingRuntimeDeliveryIpc.js";
-import { isCodingRuntimeGitResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
+import {
+  isCodingRuntimeGitResult,
+  type CodingRuntimeGitResult,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
 import { isVerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
+import { isVerificationKind } from "@oscharko-dev/keiko-contracts/runtime/editor-verification";
 import { isCodingRepositoryResult } from "./codingRepositorySearchHandler.js";
 import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
@@ -16,7 +24,14 @@ import {
   EDITOR_AGENT_FAILURE_CODES,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { validateAuxiliaryCapabilityOutcomeV1 } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
-import { isVerificationFailureLocation } from "@oscharko-dev/keiko-contracts/runtime/verification";
+import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
+import { isRootRelativeFileIdentifier } from "@oscharko-dev/keiko-contracts/runtime/editor-workspace-path";
+import {
+  isVerificationDependencySummary,
+  isVerificationFailureLocation,
+  VERIFICATION_DEPENDENCY_FAILURE_STATES,
+  VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS,
+} from "@oscharko-dev/keiko-contracts/runtime/verification";
 
 import {
   CODING_TOOL_MAX_BODY_BYTES,
@@ -24,6 +39,7 @@ import {
   CODING_TOOL_MAX_READ_BYTES,
   CODING_TOOL_VERIFICATION_FAILURE_MAX_LOCATIONS,
   CODING_TOOL_VERIFICATION_SUMMARY_MAX_CHARS,
+  dependencyBootstrapFailureSummary,
   isPermissionObservation,
   parseCodingToolRequest,
   type CodingToolActionRequest,
@@ -32,6 +48,7 @@ import {
   type CodingToolResult,
   type CodingToolVerificationFailure,
   type CodingToolVerificationResult,
+  type VerificationNotRunReason,
 } from "./codingToolIpc.js";
 // KEIKO-0695: hoisted from below EDIT_FAILURE_REASON_CODES to the top-of-file import block.
 import type {
@@ -120,6 +137,8 @@ const GOVERNED_FAILURE_REASON_CODES: ReadonlySet<string> = new Set<string>([
   "command-authority-revoked",
   "command-execution-failed",
   "git-authority-revoked",
+  "git-proposal-unknown",
+  "git-execution-failed",
   "delivery-authority-revoked",
   "connector-authority-revoked",
   "search-authority-revoked",
@@ -374,11 +393,44 @@ function project(request: CodingToolActionRequest, input: unknown): CodingToolRe
 function isCodingToolVerificationResult(value: unknown): value is CodingToolVerificationResult {
   if (!isRecord(value)) return false;
   if (value.commitProof === "recorded") return Object.keys(value).length === 1;
+  if (value.commitProof !== "unavailable") return false;
+  if (value.reasonCode === "candidate-drift") {
+    return value.nextAction === "verify-again" && Object.keys(value).length === 3;
+  }
   return (
-    value.commitProof === "unavailable" &&
-    ((value.reasonCode === "candidate-not-staged" && value.nextAction === "stage-then-verify") ||
-      (value.reasonCode === "candidate-drift" && value.nextAction === "verify-again")) &&
-    Object.keys(value).length === 3
+    value.reasonCode === "candidate-not-staged" &&
+    value.nextAction === "stage-then-verify" &&
+    (value.blocking === undefined
+      ? Object.keys(value).length === 3
+      : Object.keys(value).length === 4 && isVerifiedCommitBlockingPaths(value.blocking))
+  );
+}
+
+// Bounded, workspace-relative and exact-keyed, like every other payload crossing this boundary. A
+// path is held to the repository's one root-relative identifier contract, never a POSIX-only
+// approximation of it: drive, rooted, backslash and NUL forms are refused as surely as "..".
+function isVerifiedCommitBlockingPaths(value: unknown): value is VerifiedCommitBlockingPaths {
+  if (!isRecord(value) || Object.keys(value).length !== 4) return false;
+  return (
+    isBlockingCount(value.unstagedCount) &&
+    isBlockingCount(value.untrackedCount) &&
+    isBlockingPathList(value.unstaged) &&
+    isBlockingPathList(value.untracked)
+  );
+}
+
+function isBlockingCount(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function isBlockingPathList(value: unknown): value is readonly string[] {
+  return (
+    Array.isArray(value) &&
+    value.length <= VERIFIED_COMMIT_BLOCKING_PATHS_MAX &&
+    value.every(
+      (path) =>
+        typeof path === "string" && path.length <= 512 && isRootRelativeFileIdentifier(path),
+    )
   );
 }
 
@@ -393,7 +445,8 @@ function projectDomainResult(
     projectRuntimeGit(request, value) ??
     projectVerifiedCommit(request, value) ??
     projectSearch(request, value) ??
-    projectVerification(request, value)
+    projectVerification(request, value) ??
+    projectSkillDiscovery(request, value)
   );
 }
 
@@ -408,6 +461,23 @@ function projectVerification(
     evidence: [{ kind: "governed-delegate", code: "completed" }],
     verification: value.verification,
   };
+}
+
+// #3417: a discovery answers with the contract's closed listing or not at all; anything else the
+// handler returned collapses to a failure rather than reaching the model.
+function projectSkillDiscovery(
+  request: CodingToolActionRequest,
+  value: Record<string, unknown>,
+): CodingToolResult | undefined {
+  if (request.action !== "skill-discover") return undefined;
+  const validated = validateSkillDiscoveryResultV1(value.skills);
+  return validated.ok
+    ? {
+        status: "completed",
+        evidence: [{ kind: "governed-delegate", code: "completed" }],
+        skills: validated.value,
+      }
+    : projected("failed");
 }
 
 function projectRuntimeGit(
@@ -428,6 +498,7 @@ function projectRuntimeGit(
           status: "completed",
           evidence: [{ kind: "governed-delegate", code: "completed" }],
           git: value.git,
+          ...stageGuidance(value.git),
         }
       : projected("failed");
   return undefined;
@@ -505,7 +576,11 @@ function projectGovernedFailure(
   if (typeof reasonCode !== "string" || !GOVERNED_FAILURE_REASON_CODES.has(reasonCode)) {
     return projected("failed");
   }
-  const result = projected("failed", reasonCode, true);
+  const result = {
+    ...projected("failed", reasonCode, true),
+    ...governedFailureCoaching(request, reasonCode),
+    ...verificationNotRunDetail(request, reasonCode, value.notRun),
+  };
   const verificationFailure =
     request.action === "verification" && reasonCode === "VERIFICATION_FAILED"
       ? codingToolVerificationFailure(value.verificationFailure)
@@ -520,11 +595,110 @@ function projectGovernedFailure(
       };
 }
 
+// What the model is told about a governed refusal it can act on, by action and closed reasonCode.
+// Verification: the runner refused for want of package-script trust (ADR-0147 D3) — only the
+// operator can change that state, in the Coding Workbench header; the bare code left the model to
+// retry the verifier or route around it (Coding Workbench run 8, 2026-09-10). Git: the two runtime
+// Git service refusals that are the model's to repair (runtimeGitService.ts) — a stale proposal id
+// and a thrown Git failure — which used to reach it as a revoked authority (run 13, 2026-09-10).
+const GOVERNED_FAILURE_GUIDANCE: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  verification: {
+    WORKSPACE_TRUST_REQUIRED:
+      "Package scripts in this workspace may not run yet: either the repository's scripts were never allowed, or this run changed package.json and the operator has to allow the rewritten scripts. Only the operator can allow them, in the Coding Workbench header. Report this blocker, do not retry verification until it has been allowed, and never run the scripts another way.",
+    // F74 (Coding Workbench run 24): a verifier with nothing to run answered a bare code, and the
+    // model picked another verifier at once without knowing why. A run cancelled after a passing
+    // step still checked something, so the guidance claims no more than the named steps (PR #3452).
+    VERIFICATION_NOT_RUN:
+      "Not every verification step ran; where the detail names a step, it says why. A missing script means package.json defines no script for that verifier: choose a verifier the repository defines, or add the script as part of your change. Dependencies that did not install, a policy denial or a cancellation are blockers to report. Do not retry the same verifier unchanged.",
+  },
+  git: {
+    "git-proposal-unknown":
+      "This proposal id cannot be redeemed: it was never proposed in this run, was already redeemed, or has expired. Propose the change again with the proposing tool and redeem the new id promptly.",
+    "git-execution-failed":
+      "Git could not complete this operation. Read keiko_git_status, then retry once against the current state; if it fails again, report the blocker instead of working around it.",
+  },
+};
+
+function governedFailureCoaching(
+  request: CodingToolActionRequest,
+  reasonCode: string,
+): { readonly guidance?: string } {
+  const guidance = GOVERNED_FAILURE_GUIDANCE[request.action]?.[reasonCode];
+  return guidance === undefined ? {} : { guidance };
+}
+
+// The steps of a verification that never executed, in closed words (F74). The port builds them from
+// its own report; they are still checked here, like every value the facade forwards to the model.
+const NOT_RUN_WORDS: Readonly<Record<VerificationNotRunReason, string>> = {
+  "script-missing": "no such script in package.json",
+  "dependencies-unavailable": "dependencies did not install",
+  denied: "denied by policy",
+  cancelled: "cancelled",
+  skipped: "skipped",
+};
+
+function isNotRunStep(value: unknown): value is { kind: string; reason: VerificationNotRunReason } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "kind" in value &&
+    "reason" in value &&
+    isVerificationKind(value.kind) &&
+    typeof value.reason === "string" &&
+    Object.hasOwn(NOT_RUN_WORDS, value.reason)
+  );
+}
+
+function verificationNotRunDetail(
+  request: CodingToolActionRequest,
+  reasonCode: string,
+  notRun: unknown,
+): { readonly detail?: string } {
+  if (request.action !== "verification" || reasonCode !== "VERIFICATION_NOT_RUN") return {};
+  const steps = Array.isArray(notRun) ? notRun.filter(isNotRunStep).slice(0, 5) : [];
+  if (steps.length === 0) return {};
+  const named = steps.map((step) => `${step.kind} (${NOT_RUN_WORDS[step.reason]})`);
+  return { detail: `These verification steps did not run: ${named.join(", ")}.` };
+}
+
+// A stage proposal the runtime Git service blocks at admission is a complete Git result, not a
+// failure, and its closed reason alone left the model guessing (run 13, 2026-09-10). Each admission
+// reason carries the one recovery the model can perform itself; the policy and preflight blocks
+// keep their own findings and need none.
+const STAGE_BLOCKED_GUIDANCE: Readonly<Record<string, string>> = {
+  "selection-unreviewed":
+    "At least one requested path is not a pending change Git lists for this worktree: it is unchanged, absent, a directory, in conflict, or hidden behind a truncated change list. Read keiko_git_status and request exactly the file paths it lists as changed and not conflicted.",
+  "buffers-dirty":
+    "An editor session holds unsaved changes in this workspace, so the bytes to stage are not settled. Report the blocker; only the operator can save or discard them.",
+  "proposal-limit":
+    "Too many stage proposals are open. Redeem the ones you need with keiko_git_execute or let them expire before proposing again.",
+};
+
+function stageGuidance(result: CodingRuntimeGitResult): { readonly guidance?: string } {
+  const guidance =
+    result.kind === "stage" && result.status === "blocked"
+      ? STAGE_BLOCKED_GUIDANCE[result.reason]
+      : undefined;
+  return guidance === undefined ? {} : { guidance };
+}
+
+const VERIFICATION_FAILURE_KEYS: ReadonlySet<string> = new Set([
+  "summary",
+  "locations",
+  "truncated",
+  "excerpt",
+  "dependencies",
+]);
+
 function codingToolVerificationFailure(value: unknown): CodingToolVerificationFailure | undefined {
-  if (!isRecord(value) || Object.keys(value).length !== 3) return undefined;
+  if (!isRecord(value) || !Object.keys(value).every((key) => VERIFICATION_FAILURE_KEYS.has(key))) {
+    return undefined;
+  }
   if (
     !validVerificationFailureHeader(value) ||
-    !validVerificationFailureLocations(value.locations)
+    !validVerificationFailureLocations(value.locations) ||
+    !validVerificationFailureExcerpt(value.excerpt) ||
+    (value.dependencies !== undefined && !isVerificationDependencySummary(value.dependencies))
   ) {
     return undefined;
   }
@@ -532,7 +706,19 @@ function codingToolVerificationFailure(value: unknown): CodingToolVerificationFa
     summary: value.summary,
     locations: value.locations,
     truncated: value.truncated,
+    ...(value.excerpt === undefined ? {} : { excerpt: value.excerpt }),
+    ...(value.dependencies === undefined ? {} : { dependencies: value.dependencies }),
   };
+}
+
+// The orchestrator's redacted output tail (ADR-0126 D3): bounded by the same cap it was cut to.
+function validVerificationFailureExcerpt(value: unknown): value is string | undefined {
+  return (
+    value === undefined ||
+    (typeof value === "string" &&
+      value.length > 0 &&
+      value.length <= VERIFICATION_OUTPUT_EXCERPT_MAX_CHARS + 1)
+  );
 }
 
 function validVerificationFailureHeader(
@@ -542,8 +728,21 @@ function validVerificationFailureHeader(
   return (
     value.summary.length > 0 &&
     value.summary.length <= CODING_TOOL_VERIFICATION_SUMMARY_MAX_CHARS &&
-    VERIFICATION_FAILURE_SUMMARY.test(value.summary) &&
+    summaryNamesItsSubject(value.summary, value.dependencies) &&
     typeof value.truncated === "boolean"
+  );
+}
+
+// A step failure carries the step's closed summary and no dependency summary; a failed dependency
+// bootstrap carries its own closed summary for exactly the state its dependency summary reports.
+// Before this, every bootstrap failure failed the step pattern and the facade dropped the whole
+// failure (reason, excerpt and dependency summary) before it reached the model (#3452).
+function summaryNamesItsSubject(summary: string, dependencies: unknown): boolean {
+  if (dependencies === undefined) return VERIFICATION_FAILURE_SUMMARY.test(summary);
+  return (
+    isVerificationDependencySummary(dependencies) &&
+    VERIFICATION_DEPENDENCY_FAILURE_STATES.has(dependencies.state) &&
+    summary === dependencyBootstrapFailureSummary(dependencies.state)
   );
 }
 

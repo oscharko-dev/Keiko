@@ -78,7 +78,7 @@ describe("dev-lane OpenCode discovery", () => {
     expect(runtime.installRoot).toBe(join(staged.paths.stagedTargetRoot, "opencode-compatible"));
     expect(runtime.sidecar.summary).toMatchObject({
       name: "opencode-compatible",
-      upstreamVersion: "1.17.17",
+      upstreamVersion: "1.18.30",
       platformTarget: "macos-arm64",
       status: "verified",
     });

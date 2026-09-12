@@ -5,7 +5,9 @@ import { describe, expect, it, vi } from "vitest";
 import type {
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeSseEvent,
+  SkillDiscoveryResultV1,
 } from "@oscharko-dev/keiko-contracts";
+import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import type { UiHandlerDeps } from "../deps.js";
 import {
   createFakeSessionPairingPort,
@@ -35,16 +37,17 @@ import {
   handleCodingRuntimeQuestionAnswer,
   handleCodingRuntimeQuestionList,
   handleCodingRuntimeQuestionReject,
+  handleCodingRuntimeReadiness,
   handleCodingRuntimeRecoveryAcknowledgement,
   handleCodingRuntimeResearch,
   handleCodingRuntimeResearchRevoke,
   handleCodingRuntimeResume,
   handleCodingRuntimeRetry,
+  handleCodingRuntimeSkills,
   handleCodingRuntimeStatus,
   handleCodingRuntimeStop,
   handleCodingRuntimeTakeover,
   handleCreateCodingRuntimeRun,
-  handleCodingRuntimeReadiness,
   handleGetCodingRuntimeRun,
   openCodingRuntimeSse,
 } from "./codingRuntimeRoutes.js";
@@ -113,6 +116,28 @@ class FakeResponse extends EventEmitter {
   }
 }
 
+// Derived through the contract's own validator, never restated here: the branded skill ids and
+// digests are the producer's, so a fixture cannot drift away from the shape the route answers.
+function approvedSkillsFixture(): SkillDiscoveryResultV1 {
+  const validated = validateSkillDiscoveryResultV1({
+    schemaVersion: 1,
+    catalogDigest: "a".repeat(64),
+    skills: [
+      {
+        skillId: "skl_repo-structure-summary@1",
+        version: "1",
+        sourceDigest: "b".repeat(64),
+        category: "repository-analysis",
+        capabilities: ["keiko.workspace.read"],
+        compatibility: { profile: "opencode", minVersion: 1, maxVersion: 1 },
+        readiness: { state: "ready" },
+      },
+    ],
+  });
+  if (!validated.ok) throw new Error(`fixture is not a listing: ${validated.errors.join(", ")}`);
+  return validated.value;
+}
+
 function runtime(
   overrides: Partial<Record<string, unknown>> = {},
   runtimeSnapshot: CodingWorkbenchRuntimeSnapshot = snapshot,
@@ -121,6 +146,7 @@ function runtime(
     readonly domains: readonly string[];
     readonly expiresAt: string;
   },
+  approvedSkills?: SkillDiscoveryResultV1,
 ): UiHandlerDeps {
   const calls: unknown[] = [];
   // codingRuntimeRoutes.ts's mutation() funnel and the direct listQuestions call site now thread
@@ -175,6 +201,7 @@ function runtime(
           }
         : undefined,
     researchGrant: (runId: string) => (runId === "run-1" ? researchGrant : undefined),
+    approvedSkills: (runId: string) => (runId === "run-1" ? approvedSkills : undefined),
     pendingApprovalReview: (runId: string) =>
       runId === "run-1"
         ? {
@@ -247,6 +274,7 @@ describe("coding runtime routes", () => {
         "GET /api/coding-workbench/runtime/status",
         "GET /api/coding-workbench/runtime/runs/:runId/events",
         "GET /api/coding-workbench/runtime/runs/:runId/research",
+        "GET /api/coding-workbench/runtime/runs/:runId/skills",
         "GET /api/coding-workbench/runtime/runs/:runId/approval-review",
         "GET /api/coding-workbench/runtime/runs/:runId/description-draft",
         "POST /api/coding-workbench/runtime/runs/:runId/approvals",
@@ -427,6 +455,90 @@ describe("coding runtime routes", () => {
     ]);
   });
 
+  // A start the orchestrator refused AFTER minting its run id (issue admission, launch resolution)
+  // used to leave a request-scoped refusal line and run-scoped cause lines that shared no key: the
+  // support id the operator saw led to `authority-resolution-failed` and nothing else (2026-09-10).
+  // The refusal line now names the run, so the two halves of one failed start join.
+  it("names the minted run on the refusal line of a start the runtime refused", async () => {
+    const session = pairedAppSession();
+    const records: unknown[] = [];
+    const deps = runtime({
+      codingAppSessionChannel: session.channel,
+      activityLog: { write: (event: unknown) => void records.push(event) },
+    });
+    (
+      deps.codingRuntimeOrchestrator as unknown as {
+        start: (
+          body: unknown,
+        ) => Promise<{ readonly ok: false; readonly failureCode: string; readonly runId: string }>;
+      }
+    ).start = () =>
+      Promise.resolve({
+        ok: false as const,
+        failureCode: "authority-resolution-failed",
+        runId: "run-9",
+      });
+    const refused = await handleCreateCodingRuntimeRun(
+      context("{}", {}, "/api/coding-workbench/runtime/runs", session.cookie, "start-corr-1"),
+      deps,
+    );
+    expect(refused).toMatchObject({ status: 403 });
+    expect(records).toEqual([
+      expect.objectContaining({
+        op: "coding-runtime.operation.refused",
+        correlationId: "start-corr-1",
+        extra: { operation: "start", runId: "run-9", reason: "authority-resolution-failed" },
+      }),
+    ]);
+  });
+
+  // A retry mints a NEW run against the predecessor named in the URL; when the runtime refuses it
+  // after minting, every cause line is keyed to the new run. Keyed on the URL's predecessor, the
+  // refusal line and the cause again shared no key (review of PR #3452).
+  it("names the newly minted run, not the URL predecessor, on a refused retry", async () => {
+    const session = pairedAppSession();
+    const records: unknown[] = [];
+    const deps = runtime({
+      codingAppSessionChannel: session.channel,
+      activityLog: { write: (event: unknown) => void records.push(event) },
+    });
+    (
+      deps.codingRuntimeOrchestrator as unknown as {
+        retry: (
+          runId: string,
+          body: unknown,
+        ) => Promise<{ readonly ok: false; readonly failureCode: string; readonly runId: string }>;
+      }
+    ).retry = (predecessorRunId) =>
+      Promise.resolve({
+        ok: false as const,
+        failureCode: "authority-resolution-failed",
+        runId: `${predecessorRunId}-successor`,
+      });
+    const refused = await handleCodingRuntimeRetry(
+      context(
+        "{}",
+        { runId: "run-1" },
+        "/api/coding-workbench/runtime/runs/run-1/retry",
+        session.cookie,
+        "retry-corr-1",
+      ),
+      deps,
+    );
+    expect(refused).toMatchObject({ status: 403 });
+    expect(records).toEqual([
+      expect.objectContaining({
+        op: "coding-runtime.operation.refused",
+        correlationId: "retry-corr-1",
+        extra: {
+          operation: "retry",
+          runId: "run-1-successor",
+          reason: "authority-resolution-failed",
+        },
+      }),
+    ]);
+  });
+
   it("returns and logs the closed question-answer-rejected reason from the runtime", async () => {
     const session = pairedAppSession();
     const records: unknown[] = [];
@@ -500,6 +612,52 @@ describe("coding runtime routes", () => {
       await expect(handleCodingRuntimeQuestionList(context("{}", params), deps)).resolves.toEqual(
         unpairedProjection,
       );
+    }
+  });
+
+  // #3417: the operator's view of the approved skills of the run they are watching. The listing is
+  // the closed, body-free record discovery reports the model; an unpaired browser sees the constant
+  // re-pair projection instead, before any run is resolved (ADR-0141 D6).
+  it("#3417: the paired skills route carries the run's approved skills with their readiness", () => {
+    const session = pairedAppSession();
+    const listing = approvedSkillsFixture();
+
+    const answered = handleCodingRuntimeSkills(
+      context("", { runId: "run-1" }, "/api/coding-workbench/runtime/runs", session.cookie),
+      runtime({ codingAppSessionChannel: session.channel }, snapshot, undefined, listing),
+    );
+
+    expect(answered).toEqual({ status: 200, body: { session: "active", skills: listing } });
+  });
+
+  it("#3417: a paired run without a composed projection carries none, and an unknown run is not found", () => {
+    const session = pairedAppSession();
+    const deps = runtime({ codingAppSessionChannel: session.channel });
+
+    expect(
+      handleCodingRuntimeSkills(
+        context("", { runId: "run-1" }, "/api/coding-workbench/runtime/runs", session.cookie),
+        deps,
+      ),
+    ).toEqual({ status: 200, body: { session: "active" } });
+    expect(
+      handleCodingRuntimeSkills(
+        context("", { runId: "run-404" }, "/api/coding-workbench/runtime/runs", session.cookie),
+        deps,
+      ),
+    ).toMatchObject({ status: 404 });
+  });
+
+  it("#3417: an unpaired skills read yields the constant content-free projection", () => {
+    const unpairedProjection = { status: 200, body: { session: "unpaired" } };
+
+    for (const params of [{ runId: "run-1" }, { runId: "run-404" }, {}]) {
+      expect(
+        handleCodingRuntimeSkills(
+          context("", params, "/api/coding-workbench/runtime/runs"),
+          runtime({}, snapshot, undefined, approvedSkillsFixture()),
+        ),
+      ).toEqual(unpairedProjection);
     }
   });
 

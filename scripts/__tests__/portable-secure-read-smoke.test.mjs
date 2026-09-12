@@ -170,9 +170,9 @@ function stagingSidecarRuntime() {
       owner: "anomalyco",
       repository: "opencode",
       name: "opencode",
-      version: "1.17.17",
-      tag: "v1.17.17",
-      commit: "474abdd7ee60f4b67476cfcef7e5311beff4a824",
+      version: "1.18.30",
+      tag: "v1.18.30",
+      commit: "3104c1428ec91f809e5ab86631300de41eb6952e",
     },
     adapterCompatibility: {
       adapterName: "keiko-coding-sidecar",
@@ -181,7 +181,7 @@ function stagingSidecarRuntime() {
     },
     protocolSchema: {
       path: "packages/sdk/openapi.json",
-      url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/sdk/openapi.json",
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/packages/sdk/openapi.json",
       sha256: DIGEST_A,
       hashAlgorithm: "sha256",
       hashEncoding: "lowercase-hex",
@@ -200,12 +200,12 @@ function stagingSidecarRuntime() {
     },
     license: {
       spdxId: "MIT",
-      url: "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/LICENSE",
+      url: "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/LICENSE",
       sha256: DIGEST_F,
     },
     archive: {
       platformTarget: "windows-x64",
-      url: "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode.zip",
+      url: "https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode.zip",
       sizeBytes: 123456,
       sha256: DIGEST_B,
     },

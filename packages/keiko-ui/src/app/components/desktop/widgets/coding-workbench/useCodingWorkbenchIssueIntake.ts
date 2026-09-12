@@ -8,6 +8,7 @@ import type {
 import { previewCodingWorkbenchIssue, type GitHubIssuePreviewResponseWire } from "@/lib/api";
 import { codingWorkbenchIssueFailure } from "@/lib/coding-workbench-issue-errors";
 import { correlationIdOf } from "@/lib/client-error-summary";
+import { UNKNOWN_REPOSITORY_ERROR_CODE } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
 export interface AcceptedWorkbenchIssue {
@@ -23,7 +24,11 @@ export interface AcceptedWorkbenchIssue {
 // (coding-workbench-issue-errors.ts stays closed on purpose). This UI-local state distinguishes it
 // from a genuinely unreadable issue so the retry-worded copy can be shown instead of "unknown".
 export type IssueIntakeFailure =
-  CodingWorkbenchIssueBindingFailure | "unknown" | "unavailable-runtime" | "read-transient-failure";
+  | CodingWorkbenchIssueBindingFailure
+  | "unknown"
+  | "unavailable-runtime"
+  | "read-transient-failure"
+  | "unknown-repository";
 type IssueIntakeState =
   | { readonly kind: "empty" | "loading" | "cancelled" }
   | { readonly kind: "ready"; readonly response: GitHubIssuePreviewResponseWire }
@@ -38,6 +43,9 @@ const READ_TRANSIENT_FAILURE_CODE = "CODING_WORKBENCH_ISSUE_READ_TRANSIENT_FAILU
 function issueFailure(error: unknown): IssueIntakeFailure {
   if (typeof error !== "object" || error === null || !("code" in error)) return "unknown";
   if (error.code === READ_TRANSIENT_FAILURE_CODE) return "read-transient-failure";
+  // The routes refuse a repository the workbench has not opened yet (F63): name what the operator
+  // must do first instead of the generic "unknown" copy.
+  if (error.code === UNKNOWN_REPOSITORY_ERROR_CODE) return "unknown-repository";
   return codingWorkbenchIssueFailure(error.code) ?? "unknown";
 }
 

@@ -746,3 +746,69 @@ describe("resolveCodingSafeSidecarGatewayProfile", () => {
     });
   });
 });
+
+// Coding run 24 (2026-09-11, F73): admitted while gpt-5.4's forced tool-call proof was 3.5 min short
+// of 24 h; from the first call after the proof aged out, every call was refused as
+// "non-coding-capable" and the run could not recover.
+describe("resolveCodingSafeSidecarGatewayProfile — tool-calling proof age", () => {
+  const checkedAt = Date.parse("2026-09-10T04:30:32.744Z");
+  const agedOutAt = checkedAt + TOOL_CALLING_VERIFICATION_MAX_AGE_MS + 3_732;
+  const admittedAt = checkedAt + TOOL_CALLING_VERIFICATION_MAX_AGE_MS - 210_000;
+  const proof = {
+    status: "verified" as const,
+    checkedAt: new Date(checkedAt).toISOString(),
+    probe: "gateway-tool-calling-v1" as const,
+    configurationFingerprint: "0".repeat(64),
+  };
+  function provider54(modelId: string): ModelProviderConfig {
+    return {
+      modelId,
+      baseUrl: "https://provider.example/v1",
+      apiKey: "secret",
+      timeoutMs: 30_000,
+      maxRetries: 3,
+      retryBaseDelayMs: 500,
+    };
+  }
+  function laneConfig(): GatewayConfig {
+    return sidecarConfig(
+      [provider54("gpt-5.4"), provider54("mistral-large")],
+      [
+        codingSidecarCapability("gpt-5.4", { toolCallingVerification: proof }),
+        codingSidecarCapability("mistral-large", {
+          toolCalling: false,
+          workflowEligible: false,
+          preferredUseCases: ["Chat"],
+        }),
+      ],
+    );
+  }
+
+  it("serves the model a run was admitted with after the proof ages out", () => {
+    vi.useFakeTimers({ now: agedOutAt });
+    expect(
+      resolveCodingSafeSidecarGatewayProfile(laneConfig(), {
+        modelId: "gpt-5.4",
+        verificationAtMs: admittedAt,
+      }),
+    ).toMatchObject({ status: "available", modelAlias: "gpt-5.4" });
+  });
+
+  it("names a stale proof instead of calling a coding model non-coding-capable", () => {
+    vi.useFakeTimers({ now: agedOutAt });
+    expect(
+      resolveCodingSafeSidecarGatewayProfile(laneConfig(), { modelId: "gpt-5.4" }),
+    ).toMatchObject({ status: "unavailable", reason: "tool-calling-unverified" });
+    expect(resolveCodingSafeSidecarGatewayProfile(laneConfig())).toMatchObject({
+      status: "unavailable",
+      reason: "tool-calling-unverified",
+    });
+  });
+
+  it("still calls a selected model without a coding use case non-coding-capable", () => {
+    vi.useFakeTimers({ now: admittedAt });
+    expect(
+      resolveCodingSafeSidecarGatewayProfile(laneConfig(), { modelId: "mistral-large" }),
+    ).toMatchObject({ status: "unavailable", reason: "non-coding-capable" });
+  });
+});

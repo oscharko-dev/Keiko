@@ -1,4 +1,4 @@
-// Real OpenCode 1.17.17 entry for #2483. Runtime resolution is deliberately absent from this
+// Real OpenCode 1.18.30 entry for #2483. Runtime resolution is deliberately absent from this
 // entry: the shared harness enables the macOS dev lane and buildUiHandlerDeps must discover the
 // staged approved payload through production discovery and production composition.
 
@@ -21,6 +21,7 @@ await runCodingRuntimeJourneyServer({
   fixtureLabel: "Real binary 2483",
   runtime: "production-discovery",
   proveRepositorySearch: true,
+  proveSkillDiscovery: true,
   includeQuestion: true,
   defaultPort: REAL_BINARY_DEFAULT_UI_PORT,
   originalContent: AUTHORITY_ORIGINAL_CONTENT,

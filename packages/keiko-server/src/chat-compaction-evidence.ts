@@ -14,11 +14,8 @@ import { randomUUID } from "node:crypto";
 import { isValidCorrelationId } from "./correlation.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentAuditRedactString, currentRedactionSecrets } from "./deps.js";
-import {
-  evidenceRetentionDiagnosticObserver,
-  emitServerDiagnostic,
-  serverDiagnosticFromError,
-} from "./diagnostics-log.js";
+import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
+import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 
 export interface ChatCompactionEvidenceInput {
   // The optional record returned by deriveCompactionOutcome; undefined on the fast path.
@@ -71,10 +68,7 @@ export function persistChatCompactionEvidence(
         env: deps.env,
         additionalSecrets: currentRedactionSecrets(deps),
         costClassResolver: resolveCostClass,
-        onRetentionDeleted: evidenceRetentionDiagnosticObserver(
-          deps.diagnostics,
-          "chat-compaction-evidence",
-        ),
+        onRetentionDeleted: evidenceRetentionObserver("chat-compaction-evidence"),
       },
     );
   } catch (error) {

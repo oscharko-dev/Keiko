@@ -2,11 +2,11 @@
   "schemaVersion": 1,
   "target": "coding-runtime",
   "policy": "observed-maximum-plus-full-range-v1",
-  "calibrationSha256": "2b3f6956653f125755bcefd4bdf44d9bbd7021fde9db4a81a8342abc9ea4a9e1",
+  "calibrationSha256": "7bc97b2ac8bfcbccb19537bdfbb8f1b212f40b9ed89c76b6b935185c26cb3307",
   "maximumP95Ms": {
-    "coldStartMs": 2919.4402489999848,
-    "readinessMs": 3.350416999994195,
-    "sseFirstByteMs": 3.8579179999942426,
-    "boundedThroughputMs": 349.0290410000016
+    "coldStartMs": 2834.2457920000015,
+    "readinessMs": 3.06812699999864,
+    "sseFirstByteMs": 3.1499580000090646,
+    "boundedThroughputMs": 262.94270700000925
   }
 }

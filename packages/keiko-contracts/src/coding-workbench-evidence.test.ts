@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { CODING_WORKBENCH_OPERATOR_DECISIONS } from "./coding-workbench.js";
 
 import {
   CODING_WORKBENCH_ACTION_CLASSES,
@@ -84,6 +85,24 @@ describe("evidence-safe-text allowlist covers every canonical enum literal (KEIK
     // allowlist and being a real CodingWorkbenchMode value (coding-workbench.ts:5,8).
     expect(isCodingWorkbenchEvidenceSafeText("governed-assist")).toBe(true);
   });
+
+  // The ids the production requester mints for `operator-decision` runtime events, and the decision
+  // literal they carry. Run 11 (2026-09-10): the validator rejected `event-operator-decision-1`
+  // because `decision` was not an approved segment, the requester dropped the event, and the run
+  // never paused — this is the pin that would have been red.
+  it.each(["event-operator-decision-1", "event-operator-decision-42"])(
+    "operator-decision event id %s is evidence-safe text",
+    (eventId) => {
+      expect(isCodingWorkbenchEvidenceSafeText(eventId)).toBe(true);
+    },
+  );
+
+  it.each(CODING_WORKBENCH_OPERATOR_DECISIONS)(
+    "CodingWorkbenchOperatorDecision %s is evidence-safe text",
+    (decision) => {
+      expect(isCodingWorkbenchEvidenceSafeText(decision)).toBe(true);
+    },
+  );
 
   it.each(CODING_WORKBENCH_MODES)("CodingWorkbenchMode %s is evidence-safe text", (mode) => {
     expect(isCodingWorkbenchEvidenceSafeText(mode)).toBe(true);

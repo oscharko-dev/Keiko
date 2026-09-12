@@ -1,6 +1,7 @@
 import {
   editorAgentPathBoundaryReason,
   type EditorAgentResolvedRoot,
+  serverResolvedDocumentText,
 } from "./agentRootBoundary.js";
 import {
   mkdirSync,
@@ -61,6 +62,8 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import type { GitProcessOptions, GitProcessResult } from "@oscharko-dev/keiko-git";
 import { forwardWorkspaceFs, nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
+import { PathDeniedError } from "@oscharko-dev/keiko-workspace";
+import { EDITOR_AGENT_NAVIGATION_DOCUMENT_MAX_BYTES as NAVIGATION_MAX_BYTES } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
 import { STREAMING, type RouteContext } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
@@ -84,6 +87,15 @@ import {
   editorAgentWorkspaceRootDigest,
 } from "./agentAuthorityRegistry.js";
 import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  createBufferedServerLogSink,
+  createServerLogger,
+  resetServerLogger,
+  setServerLogger,
+  type BufferedServerLogSink,
+  type ServerLogEvent,
+} from "../observability/index.js";
 import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
 import { deriveManagedWorktreePath } from "../task-workspace/naming.js";
 import {
@@ -318,8 +330,11 @@ function connectBridge(
   sessionId: string | readonly string[] | undefined,
   capabilityOverride?: string | readonly string[] | null,
   bridgeStreamIdOverride?: string,
+  correlationId?: string,
+  acceptWrite: (index: number) => boolean = (): boolean => true,
 ): {
   readonly frames: () => string;
+  readonly destroyed: () => boolean;
   readonly close: () => void;
   readonly outcome: ReturnType<typeof handleEditorAgentEvents>;
   readonly requestUrl: () => string | undefined;
@@ -327,17 +342,18 @@ function connectBridge(
 } {
   const writes: string[] = [];
   const closeHandlers: (() => void)[] = [];
+  const destroy = vi.fn();
   const res = {
     writeHead: vi.fn(),
     write: vi.fn((chunk: string) => {
       writes.push(chunk);
-      return true;
+      return acceptWrite(writes.length - 1);
     }),
     on: vi.fn((event: string, cb: () => void) => {
       if (event === "close") closeHandlers.push(cb);
     }),
     end: vi.fn(),
-    destroy: vi.fn(),
+    destroy,
   } as unknown as ServerResponse;
   const req = { on: vi.fn() } as unknown as IncomingMessage;
   const sessionIds: readonly string[] =
@@ -363,9 +379,10 @@ function connectBridge(
   const query = queryParts.length === 0 ? "" : `?${queryParts.join("&")}`;
   (req as { url?: string }).url = `/api/editor/agent/events${query}`;
   const url = new URL(`http://localhost/api/editor/agent/events${query}`);
-  const outcome = handleEditorAgentEvents({ correlationId: undefined, req, res, params: {}, url });
+  const outcome = handleEditorAgentEvents({ correlationId, req, res, params: {}, url });
   return {
     frames: (): string => writes.join(""),
+    destroyed: (): boolean => destroy.mock.calls.length > 0,
     outcome,
     requestUrl: (): string | undefined => req.url,
     contextUrl: (): string => url.toString(),
@@ -3615,6 +3632,94 @@ describe("editor agent routes — Issue #1392 liveness and queue lifecycle", () 
     expect(bridge2.frames()).not.toContain("event: editor-agent:action");
   });
 
+  // The editor-agent SSE bridge wrote its ready frame and every event frame with a bare
+  // `res.write`, bypassing `recordSseStreamFrame` (sse-write.ts): the stream never counted a frame,
+  // never attached a correlation id, and never produced its terminal `sse.stream.closed` line, so a
+  // customer log could not show a bridge had been open at all (AGENTS.md §8). Every frame now goes
+  // through the shared recording path under the request's correlation id.
+  describe("editor-agent bridge stream evidence", () => {
+    function closedLines(sink: BufferedServerLogSink): readonly ServerLogEvent[] {
+      return sink.events.filter((event) => event.op === "sse.stream.closed");
+    }
+
+    afterEach(() => {
+      resetServerLogger();
+    });
+
+    it("closes with one sse.stream.closed line counting the ready and event frames under the request's correlation id", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      await registerSnapshotOnly();
+      const bridge = connectBridge("session-1", undefined, undefined, "corr-agent-bridge-1");
+
+      await handleEditorAgentActions(
+        context(navAction({ actionId: "a-evidence", idempotencyKey: "k-evidence" })),
+      );
+      bridge.close();
+
+      expect(bridge.frames()).toContain("event: editor-agent:action");
+      expect(closedLines(sink)).toEqual([
+        expect.objectContaining({
+          category: "http",
+          op: "sse.stream.closed",
+          correlationId: "corr-agent-bridge-1",
+          extra: {
+            frameCount: 2,
+            bytesStreamed: Buffer.byteLength(bridge.frames(), "utf8"),
+            reason: "client-disconnected",
+          },
+        }),
+      ]);
+    });
+
+    it("closes under UNKNOWN_CORRELATION_ID, never without an id, when the request carries none", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      await registerSnapshotOnly();
+      const bridge = connectBridge("session-1");
+
+      bridge.close();
+
+      expect(closedLines(sink)).toEqual([
+        expect.objectContaining({
+          op: "sse.stream.closed",
+          correlationId: UNKNOWN_CORRELATION_ID,
+          extra: expect.objectContaining({ frameCount: 1 }) as unknown,
+        }),
+      ]);
+    });
+
+    // CodeRabbit review, PR #3452: a refused ready frame used to be ignored, leaving the controller
+    // and the session subscription alive until some other close path ran. It now takes the same
+    // abort-and-destroy path as every event frame.
+    it("destroys a bridge stream whose ready frame is refused and closes it as backpressure-killed", async () => {
+      const sink = createBufferedServerLogSink();
+      setServerLogger(createServerLogger({ sink, level: "info" }));
+      await registerSnapshotOnly();
+      const bridge = connectBridge(
+        "session-1",
+        undefined,
+        undefined,
+        "corr-agent-bridge-2",
+        () => false,
+      );
+
+      expect(bridge.destroyed()).toBe(true);
+      bridge.close();
+
+      expect(closedLines(sink)).toEqual([
+        expect.objectContaining({
+          op: "sse.stream.closed",
+          correlationId: "corr-agent-bridge-2",
+          extra: expect.objectContaining({
+            frameCount: 1,
+            reason: "backpressure-killed",
+          }) as unknown,
+        }),
+      ]);
+    });
+  });
+
   it("never writes raw source content to logs", async () => {
     const sink = vi.fn();
     vi.spyOn(console, "log").mockImplementation(sink);
@@ -4193,6 +4298,75 @@ describe("applyChangeset server transaction (Issue #2117)", () => {
       );
       // The plain node port still applies the user-workspace admission to the same root.
       expect(editorAgentPathBoundaryReason(root, ["src/a.txt"])).toBe("workspace-boundary-escape");
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  // navigateSymbol without client-supplied text reads the document server-side. That read detected
+  // the workspace through the plain node port, so for a managed task worktree it threw before
+  // reading anything and every such navigation failed with the generic server-resolved error
+  // (review of PR #3452) — the same defect class as the boundary check above.
+  it("reads a navigateSymbol document inside a managed task worktree through the access port", () => {
+    const fixture = createManagedAgentWorkspaceFixture();
+    try {
+      writeWorkspaceFile(fixture.root, "src/a.ts", "export const a = 1;\n");
+      const deps = {
+        workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome =>
+          fixture.resolveAccess(requestedRoot),
+      };
+      expect(serverResolvedDocumentText(deps, fixture.root, "src/a.ts", undefined)).toBe(
+        "export const a = 1;\n",
+      );
+      expect(serverResolvedDocumentText(deps, fixture.root, "src/a.ts", "buffer")).toBe("buffer");
+      // Without the resolver the plain node port still applies the user-workspace admission.
+      expect(() =>
+        serverResolvedDocumentText(undefined, fixture.root, "src/a.ts", undefined),
+      ).toThrow(PathDeniedError);
+    } finally {
+      fixture.dispose();
+    }
+  });
+
+  // Empty, hostile and boundary inputs on the same managed port (AGENTS.md §10; CodeRabbit,
+  // PR #3452). Supplied text is returned verbatim and reads nothing — including the empty string,
+  // which must not fall through to a server-side read; a path that escapes the worktree is refused
+  // by the port rather than read; and the navigation byte ceiling is enforced AT the limit and above
+  // it, so one oversized document cannot be pulled into a navigation response.
+  it("holds empty, escaping and oversized navigateSymbol documents to the managed port's rules", () => {
+    const fixture = createManagedAgentWorkspaceFixture();
+    try {
+      const deps = {
+        workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome =>
+          fixture.resolveAccess(requestedRoot),
+      };
+      writeWorkspaceFile(fixture.root, "src/a.ts", "export const a = 1;\n");
+      writeWorkspaceFile(fixture.root, "src/at-limit.ts", "x".repeat(NAVIGATION_MAX_BYTES));
+      writeWorkspaceFile(fixture.root, "src/over-limit.ts", "x".repeat(NAVIGATION_MAX_BYTES + 1));
+
+      // Empty supplied text is still supplied text: returned as-is, no read, no throw.
+      expect(serverResolvedDocumentText(deps, fixture.root, "src/a.ts", "")).toBe("");
+      expect(serverResolvedDocumentText(deps, fixture.root, "does-not-exist.ts", "")).toBe("");
+
+      // Hostile paths: a traversal escape, an absolute path, and a deeper traversal that still lands
+      // outside. `src/../../escape.ts` is NOT a third case — it resolves byte-for-byte to
+      // `../escape.ts` (owner review, PR #3452) — so the third one leaves from a nested directory.
+      for (const hostile of ["../escape.ts", "/etc/passwd", "src/nested/../../../escape.ts"]) {
+        expect(() => serverResolvedDocumentText(deps, fixture.root, hostile, undefined)).toThrow();
+      }
+      // The accept half of the same rule: a traversal that NORMALIZES BACK INSIDE the worktree is
+      // read through the managed port like any contained path, never refused as an escape.
+      expect(serverResolvedDocumentText(deps, fixture.root, "src/../src/a.ts", undefined)).toBe(
+        "export const a = 1;\n",
+      );
+
+      // Boundary: exactly at the ceiling reads; one byte over is refused.
+      expect(
+        serverResolvedDocumentText(deps, fixture.root, "src/at-limit.ts", undefined),
+      ).toHaveLength(NAVIGATION_MAX_BYTES);
+      expect(() =>
+        serverResolvedDocumentText(deps, fixture.root, "src/over-limit.ts", undefined),
+      ).toThrow();
     } finally {
       fixture.dispose();
     }

@@ -25,6 +25,7 @@ import {
   OutboundHttpEgressError,
   readJsonCapped,
   readSseStream,
+  SseIdleTimeoutError,
   streamingResponseFromNode,
 } from "./http.js";
 import { requestOpenAIEmbedding } from "./openai-embedding-adapter.js";
@@ -1629,6 +1630,42 @@ describe("readSseStream", () => {
     const chunks = await collect(readSseStream(nullBody));
     expect(chunks).toEqual([]);
   });
+
+  // A consumer that leaves the loop early closes the generator through return(). The body must
+  // still be released, or every mid-stream failure the adapter throws on would leave the
+  // provider's connection open (PR #3452 review).
+  it.each([
+    ["throws", "consumer stopped"],
+    ["breaks", undefined],
+  ])("releases the body when its consumer %s mid-stream", async (_exit, failure) => {
+    let cancelled = false;
+    const encoder = new TextEncoder();
+    const body = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        for (const line of ['data: {"a":1}\n', 'data: {"b":2}\n', "data: [DONE]\n"]) {
+          controller.enqueue(encoder.encode(line));
+        }
+        controller.close();
+      },
+      cancel(): void {
+        cancelled = true;
+      },
+    });
+    const seen: unknown[] = [];
+    const consume = async (): Promise<void> => {
+      for await (const payload of readSseStream(new Response(body))) {
+        seen.push(payload);
+        if (seen.length < 2) continue;
+        if (failure !== undefined) throw new TypeError(failure);
+        break;
+      }
+    };
+    if (failure === undefined) await consume();
+    else await expect(consume()).rejects.toThrow(failure);
+
+    expect(seen).toEqual([{ a: 1 }, { b: 2 }]);
+    expect(cancelled).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -2346,5 +2383,93 @@ describe("Host header via proxy (no default port)", () => {
       await close(proxy);
       await close(origin);
     }
+  });
+});
+
+// Provider stalls (coding run 30): the bound is on DATA events. A keep-alive comment (LiteLLM's
+// `: ping`) is not one, time a slow consumer takes does not count, and an aborted signal ends a
+// pending read with its reason, releasing the body even when the body was built without it.
+describe("readSseStream silence and abort bounds", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  function openStream(): {
+    readonly response: Response;
+    readonly push: (line: string) => void;
+    readonly cancelled: () => boolean;
+  } {
+    let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+    let cancelled = false;
+    const body = new ReadableStream<Uint8Array>({
+      start(started): void {
+        controller = started;
+      },
+      cancel(): void {
+        cancelled = true;
+      },
+    });
+    return {
+      response: new Response(body),
+      push: (line): void => {
+        controller?.enqueue(new TextEncoder().encode(line));
+      },
+      cancelled: (): boolean => cancelled,
+    };
+  }
+
+  it("ends the read when only keep-alive comments arrive", async () => {
+    vi.useFakeTimers();
+    const stream = openStream();
+    const reading = collect(readSseStream(stream.response, undefined, 1_000));
+    const rejected = expect(reading).rejects.toBeInstanceOf(SseIdleTimeoutError);
+    for (let ping = 0; ping < 3; ping += 1) {
+      stream.push(": ping\n\n");
+      await vi.advanceTimersByTimeAsync(300);
+    }
+    await vi.advanceTimersByTimeAsync(100);
+    await rejected;
+    expect(stream.cancelled()).toBe(true);
+  });
+
+  it("restarts the bound with every data event", async () => {
+    vi.useFakeTimers();
+    const stream = openStream();
+    const values: unknown[] = [];
+    const reading = (async (): Promise<void> => {
+      for await (const value of readSseStream(stream.response, undefined, 1_000))
+        values.push(value);
+    })();
+    for (let event = 0; event < 4; event += 1) {
+      await vi.advanceTimersByTimeAsync(900);
+      stream.push(`data: {"n":${String(event)}}\n\n`);
+    }
+    stream.push("data: [DONE]\n\n");
+    await reading;
+    expect(values).toEqual([{ n: 0 }, { n: 1 }, { n: 2 }, { n: 3 }]);
+  });
+
+  it("does not count the consumer's own time as silence", async () => {
+    vi.useFakeTimers();
+    const stream = openStream();
+    const iterator = readSseStream(stream.response, undefined, 1_000)[Symbol.asyncIterator]();
+    stream.push('data: {"n":1}\n\n');
+    await expect(iterator.next()).resolves.toEqual({ done: false, value: { n: 1 } });
+    await vi.advanceTimersByTimeAsync(5_000);
+    const next = iterator.next();
+    await vi.advanceTimersByTimeAsync(999);
+    stream.push('data: {"n":2}\n\n');
+    await expect(next).resolves.toEqual({ done: false, value: { n: 2 } });
+  });
+
+  it("ends a pending read with the signal's reason and releases the body", async () => {
+    const stream = openStream();
+    const controller = new AbortController();
+    const reading = collect(
+      readSseStream(stream.response, undefined, undefined, controller.signal),
+    );
+    controller.abort(new DOMException("budget spent", "TimeoutError"));
+    await expect(reading).rejects.toMatchObject({ name: "TimeoutError" });
+    expect(stream.cancelled()).toBe(true);
   });
 });

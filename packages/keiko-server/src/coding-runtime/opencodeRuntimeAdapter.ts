@@ -1,4 +1,10 @@
 import { opencodeRegistrationSet } from "@oscharko-dev/keiko-tool-catalog";
+import type { ToolDescriptor } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  DEFAULT_SANDBOX_POLICY,
+  GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS,
+  GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/tools";
 import { isAbsolute } from "node:path";
 import { correlationIdOrUnknown } from "../correlation.js";
 import { describeError } from "../diagnostics-log.js";
@@ -21,7 +27,6 @@ import {
   type OpenCodeReconciler,
 } from "./opencodeReconciler.js";
 import type { OpenCodeLiveControl } from "./opencodeProtocol.js";
-import { MAX_APPROVAL_CHALLENGE_TTL_MS } from "./codingRuntimeOrchestrator.js";
 import {
   OPENCODE_GOVERNED_ACTION_PERMISSION,
   OPENCODE_PINNED_VERSION,
@@ -39,7 +44,21 @@ const MAX_HISTORY_CATCH_UP_ATTEMPTS = 4;
 const MAX_STREAM_RECONNECTS = 3;
 // The generated client must outlive the server-owned 30 s governed tool-bridge deadline.
 const OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS = 35_000;
-const OPEN_CODE_APPROVAL_TOOL_CLIENT_TIMEOUT_MS = MAX_APPROVAL_CHALLENGE_TTL_MS + 5_000;
+
+/**
+ * The generated plugin client's timeout for a tool the catalog settles at `settlementBudgetMs`. A
+ * tool settled beyond the sandbox default (the verification tool, the four proposal tools that wait
+ * for the operator's approval) is admitted by the tool bridge one grace past its budget, and its
+ * client outlives that deadline by another grace and a margin, so the sidecar always receives the
+ * server's answer (the result, or the catalog's timeout) rather than producing one of its own. Every
+ * other tool keeps the default above. The proposal tools' clients were sized to the approval wait
+ * alone, behind a server that cut them off at 30 s (PR #3452, F44).
+ */
+export function openCodeToolClientTimeoutMs(settlementBudgetMs: number): number {
+  return settlementBudgetMs > DEFAULT_SANDBOX_POLICY.defaultTimeoutMs
+    ? settlementBudgetMs + 2 * GOVERNED_TOOL_SETTLEMENT_GRACE_MS + 5_000
+    : OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS;
+}
 export const OPEN_CODE_MAX_TURN_WAIT_MS = 30 * 60_000;
 
 export type OpenCodeGovernedSinkReceipt = "applied" | "duplicate";
@@ -985,6 +1004,7 @@ type GeneratedToolAction =
   | "verification"
   | "egress"
   | "skill"
+  | "skill-discover"
   | "child-agent"
   | "git-status"
   | "git-diff"
@@ -1029,24 +1049,31 @@ function wireRequestFor(
   }
 }
 
+// The catalog descriptor of every generated tool, by alias, compiled once when this module loads.
+// The registration set is deterministic, and compiling it for every lookup rebuilt all of its
+// descriptors twice per tool for every bundle: the scripted transcripts generate a bundle per tool
+// call, and doing so turned their CI runs into timeouts (PR #3452).
+const CATALOG_DESCRIPTORS_BY_ALIAS: ReadonlyMap<string, ToolDescriptor> = new Map(
+  opencodeRegistrationSet().entries.map((entry) => [entry.alias, entry.descriptor]),
+);
+
 // The native plugin and actual provider use one description owner. Otherwise richer native
 // read/edit guidance is replaced by a generic catalog description at the gateway boundary.
-function toolDescription(action: GeneratedToolAction): string {
+function toolCatalogDescriptor(action: GeneratedToolAction): ToolDescriptor {
   const definition = OPENCODE_TOOL_SOURCE_DEFINITIONS.find((tool) => tool.action === action);
-  const entry = opencodeRegistrationSet().entries.find(
-    (candidate) => candidate.alias === definition?.name,
-  );
-  if (entry === undefined) throw new TypeError("OpenCode tool is missing from the catalog");
-  return entry.descriptor.description;
+  const descriptor =
+    definition === undefined ? undefined : CATALOG_DESCRIPTORS_BY_ALIAS.get(definition.name);
+  if (descriptor === undefined) throw new TypeError("OpenCode tool is missing from the catalog");
+  return descriptor;
 }
 
+function toolDescription(action: GeneratedToolAction): string {
+  return toolCatalogDescriptor(action).description;
+}
+
+// Read from the tool's own catalog descriptor, never from a list of actions restated here.
 function toolClientTimeoutMs(action: GeneratedToolAction): number {
-  return action === "git-stage" ||
-    action === "git-commit" ||
-    action === "git-push" ||
-    action === "git-pull-request"
-    ? OPEN_CODE_APPROVAL_TOOL_CLIENT_TIMEOUT_MS
-    : OPEN_CODE_TOOL_CLIENT_TIMEOUT_MS;
+  return openCodeToolClientTimeoutMs(toolCatalogDescriptor(action).bounds.maxDurationMs);
 }
 
 function toolApprovalProofSource(): readonly string[] {
@@ -1120,7 +1147,8 @@ function governedPermissionSource(): readonly string[] {
     "    permission: governedPermission,",
     "    patterns: request.patterns,",
     "    always: [],",
-    "    metadata: { ...request.metadata, expiresAt: new Date(Date.now() + 300000).toISOString() },",
+    // The ask expires with the one human-decision wait every governed layer budgets (PR #3452 review).
+    `    metadata: { ...request.metadata, expiresAt: new Date(Date.now() + ${String(GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS)}).toISOString() },`,
     "  });",
     "}",
   ];

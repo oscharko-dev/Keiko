@@ -1,6 +1,7 @@
 import type {
-  CodingWorkbenchRuntimeEvent,
   CodingWorkbenchMode,
+  CodingWorkbenchRuntimeEvent,
+  SkillDiscoveryResultV1,
 } from "@oscharko-dev/keiko-contracts";
 
 import type { WorkspaceLifecycleService } from "../task-workspace/types.js";
@@ -29,6 +30,25 @@ import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
 import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
 import type { CodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
 import type { CodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
+import type { SemanticSearchProvider } from "@oscharko-dev/keiko-workspace";
+
+/**
+ * One opened repository semantic index, and the handle that closes it again (#3416). Structurally
+ * the lease `grounded-repo-semantic-search.ts` already hands the grounded path, named here so the
+ * coding runtime can hold it as a TYPE and never import an egress-capable module of its own.
+ */
+export interface RepositorySemanticSearchLease {
+  readonly provider: SemanticSearchProvider | undefined;
+  /** 64-hex identity of the index this lease opened; absent when it opened none. */
+  readonly indexIdentityDigest?: string | undefined;
+  close(): void;
+}
+
+/** Opens that lease for one repository root, for the life of one governed search. */
+export type RepositorySemanticSearchResolver = (
+  repositoryRoot: string,
+  signal: AbortSignal | undefined,
+) => RepositorySemanticSearchLease;
 
 export interface CodingRuntimeHost {
   readonly createManager: (
@@ -42,6 +62,9 @@ export interface CodingRuntimeHost {
   // Server-level registry of read-only research grants (#2387). Present once the runtime host is
   // composed; the orchestrator reads it to project the live grant on the snapshot and to revoke it.
   readonly researchGrants?: ResearchGrantRegistry | undefined;
+  // The operator's view of the approved skills (#3417). Present once the runtime host is composed;
+  // the orchestrator reads it for the authenticated skills channel and nowhere else.
+  readonly approvedSkills?: (() => SkillDiscoveryResultV1) | undefined;
   // Live #2387 research asks awaiting a decision. Present once the runtime host is composed; the
   // orchestrator reads it non-consumingly to project the reviewable host and request line onto the
   // authenticated research channel so the operator can see what they are approving.
@@ -79,6 +102,14 @@ export interface CodingRuntimeHost {
   // .notifyVerifiedHeadAdvanced` once it does. Consumed internally by
   // `createCodingRuntimeControlPlane` below -- never forwarded past this module.
   readonly attachVerifiedHeadNotifier?: ((notify: (runId: string) => void) => void) | undefined;
+  /**
+   * Binds the repository semantic index this server can open (#3416). Late-bound for the same
+   * reason `attachVerifiedHeadNotifier` is: the lease is derived from the assembled deps graph,
+   * which does not exist yet when the runtime resolver is composed. A server that never binds one
+   * searches lexically -- the capability is then absent, never a call denied after the fact.
+   */
+  readonly attachRepositorySemanticSearch?:
+    ((resolve: RepositorySemanticSearchResolver) => void) | undefined;
   readonly openCodeGatewayReadinessRegistry?:
     | {
         readonly claim: (runId: string) => boolean;
@@ -142,6 +173,7 @@ export interface CodingRuntimeControlPlane {
   readonly gitDeliveryAuthority?: CodingRuntimeHost["gitDeliveryAuthority"];
   readonly gitDeliveryDescriptionAuthority?: CodingRuntimeHost["gitDeliveryDescriptionAuthority"];
   readonly mintDescriptionAuthority?: CodingRuntimeHost["mintDescriptionAuthority"];
+  readonly attachRepositorySemanticSearch?: CodingRuntimeHost["attachRepositorySemanticSearch"];
   readonly openCodeGatewayReadinessRegistry?: CodingRuntimeHost["openCodeGatewayReadinessRegistry"];
   readonly toolFacadeBridge?: CodingRuntimeHost["toolFacadeBridge"];
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
@@ -219,6 +251,9 @@ function createControlPlaneOrchestrator(
     ...(input.runtimeHost?.researchGrants
       ? { researchGrants: input.runtimeHost.researchGrants }
       : {}),
+    ...(input.runtimeHost?.approvedSkills
+      ? { approvedSkills: input.runtimeHost.approvedSkills }
+      : {}),
     ...(input.runtimeHost?.pendingResearchApprovals
       ? { pendingResearchApprovals: input.runtimeHost.pendingResearchApprovals }
       : {}),
@@ -269,6 +304,7 @@ const RUNTIME_HOST_CAPABILITY_KEYS = [
   "gitDeliveryAuthority",
   "gitDeliveryDescriptionAuthority",
   "mintDescriptionAuthority",
+  "attachRepositorySemanticSearch",
   "openCodeGatewayReadinessRegistry",
   "toolFacadeBridge",
 ] as const;

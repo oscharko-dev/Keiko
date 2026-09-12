@@ -31,6 +31,16 @@ function issueCapability(store: RuntimeCapabilityStore, runId = "run-1"): string
 }
 
 describe("RuntimeCapabilityStore", () => {
+  // The instant a run was admitted is part of what its capability proves (F73): a sidecar call
+  // judges the model's tool-calling proof as of that instant, not as of the call.
+  it("remembers when each capability was issued", () => {
+    let now = 42;
+    const store = createInMemoryRuntimeCapabilityStore({ nowMs: () => now });
+    const capability = issueCapability(store);
+    now = 900;
+    expect(store.authenticate(capability, 900)).toMatchObject({ ok: true, issuedAtMs: 42 });
+  });
+
   it.each(MODEL_REASONING_EFFORTS)("accepts canonical %s reasoning capabilities", (effort) => {
     const store = createInMemoryRuntimeCapabilityStore({ nowMs: () => 0 });
     expect(store.issue({ ...binding(`run-${effort}`), reasoningEffort: effort })).toMatchObject({
@@ -90,10 +100,15 @@ describe("RuntimeCapabilityStore", () => {
     const store = createInMemoryRuntimeCapabilityStore({ nowMs: () => 0 });
     const capability = issueCapability(store);
 
-    expect(store.authenticate(capability, 999)).toEqual({ ok: true, binding: binding() });
+    expect(store.authenticate(capability, 999)).toEqual({
+      ok: true,
+      binding: binding(),
+      issuedAtMs: 0,
+    });
     expect(store.resolve({ capability, ...binding(), nowMs: 999 })).toEqual({
       ok: true,
       binding: binding(),
+      issuedAtMs: 0,
     });
     expect(
       store.resolve({

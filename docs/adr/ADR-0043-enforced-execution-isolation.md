@@ -23,6 +23,20 @@ same-uid-discoverable filesystem relay with an anonymous descriptor-transfer cha
 the kernel-proven private diagnostics-descriptor lifecycle. Issue #3451 binds that primitive to the
 release-qualified `linux-x64` runtime and its exact production evidence (2026-09-10).
 
+1.4 — PR #3452 adds D17: the verification orchestrator installs a workspace's declared dependencies
+before its script steps, the one verification command that keeps host network. A managed task
+worktree is a clean checkout, so without it no project created from nothing could be verified
+(Coding Workbench run 15, 2026-09-10). D17 also records the sources such an install may use and its
+refusals (2026-09-11).
+
+1.5 — PR #3452 review: D17's install no longer has open egress. npm reaches the network only
+through a loopback proxy that tunnels to the approved registry, with Git dependencies refused, and
+the install's tunnels and refusals are counted on its summary and activity line (2026-09-11).
+
+1.6 — PR #3452 review: the pre-install check also reads the manifest of every workspace member npm
+would install, and npm itself refuses what the proxy cannot see: `allow-remote=none`,
+`allow-file=none` and `allow-directory=root` join `allow-git=none` (2026-09-11).
+
 ## Context
 
 The Keiko Editor epic's wave-2 surface (Issue #1202) generates unit tests and, before surfacing a
@@ -432,3 +446,111 @@ of any D1–D10 denial, only a tightening of what D11 already restricted. The re
 never contains the literal Apple paths or `Xcode.app`/`CommandLineTools` substrings, alongside
 `darwin-git.test.ts`'s coverage of the user-writable-directory rejection and (on a real Darwin
 host) `resolveDarwinGitExecutable`'s successful resolution through `xcrun`.
+
+## Addendum — dependency installation is host-executed network I/O with lifecycle scripts disabled (2026-09-10)
+
+### D17 — The verification orchestrator installs a workspace's declared dependencies before its script steps
+
+D1–D10 confine every verification step to `network: "none"`, and D13 keeps that. A managed task
+worktree, however, is a clean checkout: it has the manifest a governed run wrote and none of the
+dependencies the manifest declares. Every `build` or `typecheck` step therefore failed within
+200 ms on a missing binary, and the run had no governed way to install anything — the tool catalog
+offers no command tool, and the one egress tool (`keiko.research.fetch`) is unavailable to a
+coding run (Coding Workbench run 15, 2026-09-10, PR #3452). Verification of a project created from
+nothing was impossible by construction.
+
+The dependency bootstrap (`packages/keiko-verification/src/dependencies.ts`) closes that gap at the
+layer that owns the plan. Before the first script step of a plan that has one, the orchestrator
+reads the workspace's `package.json`; when it declares dependencies and npm's own hidden lockfile
+(`node_modules/.package-lock.json`) is absent or older than the manifest or a lockfile, it runs
+exactly `npm install --ignore-scripts --no-audit --no-fund --no-progress --loglevel=error` through
+the same keiko-tools command boundary as every step (`DEPENDENCY_INSTALL_COMMAND_RULES`: `npm
+install` and nothing else, no leading flags, `-c`/`--call` denied), under
+`DEPENDENCY_INSTALL_LIMITS` (240 s wall time, 1 MiB output) and with **host network**. This is the
+one verification command that keeps egress, and the reason it may is the same reason D1–D10 deny
+it elsewhere: those steps EXECUTE untrusted, model-written code. `--ignore-scripts` disables npm's
+lifecycle hooks only. The install runs no project lifecycle script and no dependency's
+`postinstall`, but it is itself a host-network process, and the code it unpacks is executed later
+by the plan's own steps (`npm run …`, `npx`, `node --test`). Those steps run with
+`network: "none"`. The orchestrator's default `networkEnforcement: "enforce-or-fail-closed"`,
+which every server verification path uses, requires an enforcing backend and refuses a step it
+cannot confine; only a caller that explicitly selects the `inherit` compatibility mode lets steps
+inherit host network. The child receives the ephemeral empty HOME every
+governed command receives (C5), so only npm's default registry configuration applies, and a
+project-level `.npmrc` refuses the bootstrap outright (`refused`, `project npm config present`):
+a manifest cannot redirect the install to a registry nobody configured. An unreadable manifest
+refuses too; a manifest without declarations, or a workspace without one, is `none` and nothing
+runs.
+
+Host network makes every source npm would contact part of that boundary (PR #3452 review: CWE-918,
+CWE-494). Before npm runs, the bootstrap checks every source it would be handed. Each specifier in
+`dependencies`, `devDependencies`, `optionalDependencies` and `peerDependencies`, in the root
+manifest and in the manifest of every workspace member, and each root `overrides` value (npm reads
+no member's), must resolve through the registry: a version, a range, a dist-tag, or an `npm:`
+alias of one. A URL, a Git remote or hosted shorthand, a path or a tarball refuses the bootstrap
+(`refused`, `unapproved-source`), and so does a `workspaces` pattern that leaves the workspace.
+The members are the folders the `workspaces` patterns name, found as npm finds them
+(`node_modules` is never searched and a wildcard never matches a dot-folder) and over-approximated
+where that is safe: a negated pattern is ignored, since it only removes members. Members that
+cannot be enumerated cannot be checked, so a pattern that uses glob syntax other than `*` and `**`,
+that reaches a folder a symbolic link places outside the workspace, or whose search passes its
+bounds refuses the bootstrap (`refused`, `workspaces-unresolved`).
+Each entry of `package-lock.json`, `npm-shrinkwrap.json` and npm's hidden lockfile of the installed
+tree must be the workspace itself, a folder or link inside it, a package bundled in its parent's
+tarball, or a package fetched over HTTPS from the approved registry (`DEPENDENCY_APPROVED_REGISTRY`,
+npm's default `https://registry.npmjs.org/`, without credentials or another port) against a
+Subresource Integrity hash; anything else refuses the bootstrap, and a lockfile that is unreadable
+or older than version 2 refuses it as `lockfile-unreadable`. Holding the host to that one public
+registry excludes private, loopback and link-local destinations by construction.
+
+A registry package may itself declare a URL, Git, tarball-file or folder dependency, which no
+pre-install check can see, so the install is confined as well (`registryEgress.ts`; PR #3452
+review, CWE-918). npm runs with `proxy` and `https-proxy` set to a loopback proxy the bootstrap
+starts for that one install, an empty `noproxy`, the registry pinned, `allow-git=none`,
+`allow-remote=none`, `allow-file=none` and `allow-directory=root`. The proxy tunnels a
+`CONNECT` to the approved registry's own host and port and answers every other destination with
+`403`: another host or port, an IP literal, a plain-HTTP request. It never sees plaintext: what
+flows through a tunnel is npm's TLS session, verified against the registry's certificate. A Git
+dependency therefore fails before git runs, a URL before it is fetched, and a tarball file or a
+folder, which needs no network and so never reaches the proxy, before npm reads it (`EALLOWGIT`,
+`EALLOWREMOTE`, `EALLOWFILE`, `EALLOWDIRECTORY`). `allow-directory` is `root`, not `none`: npm
+holds the links it makes for the workspace's own members to the same gate, so `none` refuses
+every workspace install, and the folders the root and member manifests may name are refused
+before npm runs. npm 11.14.0 added the file, folder and URL gates and 11.15.0 stopped
+`allow-remote=none` blocking registry tarballs (npm/cli#9347); Keiko requires npm 11.16.0 or
+later, and an npm that fetched a URL anyway would still fail at the proxy. Any refused
+destination settles the bootstrap `refused`, including one npm tolerates because it names an
+optional dependency and installs around it: a package in the tree still reached for an unapproved
+source. A proxy that cannot start never runs npm, and a proxy that faults during the install fails
+the bootstrap, because its egress was cut rather than confined. The install reaches the registry directly, as it did before, so a network that requires
+an upstream proxy is not supported. After npm exits, the tree it installed is still held to the
+same rule through its hidden lockfile: an install that left none, or one naming another source, is
+`refused` and its steps are skipped.
+
+The outcome is part of the report (`VerificationReport.dependencies`: state, lockfile
+`present`/`created`/`absent`, npm's exit code, duration, a short redacted detail, the tunnels
+and refusals of its egress) and of the activity log (`editor.verification.dependencies`, the same
+fields, the counts as `egressAllowed` and `egressRefused`), never the install's output.
+When the bootstrap does not leave the workspace fit for its steps (`refused`, `failed`,
+`timed-out`), the steps are recorded as skipped with that reason and the report is `failed` —
+`matchesOverallStatus` applies the same rule on the wire — so a report whose steps all read
+"skipped" can be read back to the install that left them without their dependencies. The
+bootstrap's redacted output tail reaches the coding model through the orchestrator's
+`onStepOutput` seam exactly like a failed step's does (ADR-0126 D3); it is never persisted.
+
+Two bounds follow from this decision rather than being chosen next to it. The governed
+verification tool is settled by the tool catalog at
+`VERIFICATION_TOOL_MAX_DURATION_MS` (keiko-contracts), derived as the contract's one human-decision
+wait for a package-script trust grant plus the install ceiling plus the one step a governed call
+runs (it names exactly one verifier) at its own wall-time ceiling plus one settlement grace — the
+sandbox default of 30 s never fit a real install-then-build sequence — and the governed-invocation
+registry, the sidecar tool bridge and the generated plugin client each outlive that settlement by
+the contract's grace, so the facade's answer (the report, or the catalog's own timeout) always
+reaches the sidecar. The registry used to hold every invocation for a fixed 30 s whatever its
+budget, which cancelled a longer verification before it could report (PR #3452); it now holds a
+catalog invocation for its descriptor's budget plus that grace, and keeps 30 s only for staged edits
+and cursors, which declare no budget.
+
+D13 still holds: no D1–D10 denial is relaxed for any step that executes code. The bootstrap is a new,
+narrower kind of command — network I/O by a trusted host tool over declarations, with execution of
+the fetched code deferred to the confined steps — and it is admitted only under that shape.

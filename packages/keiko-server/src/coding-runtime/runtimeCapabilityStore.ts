@@ -28,7 +28,9 @@ export type RuntimeCapabilityIssue =
   | { readonly ok: false; readonly reason: "revoked" | "invalid" };
 
 export type RuntimeCapabilityResolution =
-  | { readonly ok: true; readonly binding: RuntimeCapabilityBinding }
+  // `issuedAtMs` is when the run was admitted: a sidecar call judges the model's tool-calling proof
+  // as of that instant, so a proof that ages out mid-run does not strand the run (F73).
+  | { readonly ok: true; readonly binding: RuntimeCapabilityBinding; readonly issuedAtMs: number }
   | { readonly ok: false; readonly reason: "invalid" | "expired" | "revoked" };
 
 export interface RuntimeCapabilityStore {
@@ -47,6 +49,7 @@ export interface RuntimeCapabilityStoreOptions {
 interface StoredCapability {
   readonly capabilityHash: string;
   readonly binding: RuntimeCapabilityBinding;
+  readonly issuedAtMs: number;
 }
 
 const CAPABILITY_PATTERN = /^[A-Za-z0-9_-]{32,256}$/u;
@@ -88,7 +91,7 @@ class InMemoryRuntimeCapabilityStore implements RuntimeCapabilityStore {
     if (!CAPABILITY_PATTERN.test(capability)) return { ok: false, reason: "invalid" };
     const hash = capabilityHash(capability);
     if (this.records.has(hash)) return { ok: false, reason: "invalid" };
-    this.records.set(hash, { capabilityHash: hash, binding });
+    this.records.set(hash, { capabilityHash: hash, binding, issuedAtMs: this.nowMs() });
     return { ok: true, capability };
   }
 
@@ -107,7 +110,7 @@ class InMemoryRuntimeCapabilityStore implements RuntimeCapabilityStore {
       this.records.delete(hash);
       return { ok: false, reason: "expired" };
     }
-    return { ok: true, binding: record.binding };
+    return { ok: true, binding: record.binding, issuedAtMs: record.issuedAtMs };
   }
 
   public resolve(input: RuntimeCapabilityResolutionInput): RuntimeCapabilityResolution {

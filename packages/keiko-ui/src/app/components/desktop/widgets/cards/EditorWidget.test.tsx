@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
-import { useEffect, type ReactElement } from "react";
+import { useEffect, useLayoutEffect, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EditorDiagnostic } from "@oscharko-dev/keiko-editor";
 import type {
@@ -155,7 +155,10 @@ const diffSurface: { props: EditorDiffSurfaceProps | null; mounts: number; unmou
 vi.mock("next/dynamic", () => ({
   default: () => {
     function EditorSurfaceProbe(props: EditorSurfaceProps): ReactElement {
-      useEffect(() => {
+      // Counted in a layout effect, which runs in the commit that inserts the element. A passive
+      // effect ran after it, so `findByTestId` could resolve on a tree whose mount was not counted
+      // yet: "probe counter isolation" failed that way under CI load (run 34578159771).
+      useLayoutEffect(() => {
         surface.mounts += 1;
         return (): void => {
           surface.unmounts += 1;
@@ -172,7 +175,8 @@ vi.mock("next/dynamic", () => ({
 // the module itself instead of riding the next/dynamic loader.
 vi.mock("./EditorDiffSurface", () => ({
   default: function EditorDiffSurfaceProbe(props: EditorDiffSurfaceProps): ReactElement {
-    useEffect(() => {
+    // A layout effect for the same reason as EditorSurfaceProbe's: counted in the mounting commit.
+    useLayoutEffect(() => {
       diffSurface.mounts += 1;
       return (): void => {
         diffSurface.unmounts += 1;

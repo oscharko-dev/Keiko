@@ -12,6 +12,7 @@ import {
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
   ToolCatalogError,
   type ToolInvocationNormalizer,
+  type CatalogSchemaMismatch,
 } from "@oscharko-dev/keiko-tool-catalog";
 import { MalformedToolCallError } from "@oscharko-dev/keiko-security/errors/gateway";
 import type { GatewayRequest, NormalizedToolCall, ToolDefinition, UsageMetadata } from "./types.js";
@@ -31,10 +32,15 @@ export class GatewayToolCatalogError extends MalformedToolCallError {
     if (cause !== undefined) this.cause = cause;
   }
 }
-/** Body-free provider-call identity retained only for a bounded schema-correction retry. */
+/**
+ * Body-free provider-call identity retained only for a bounded schema-correction retry, plus the
+ * schema's own account of the mismatch (declared property names and counts, never the arguments) so
+ * the correction can name what to fix.
+ */
 export interface GatewayToolCallRepair {
   readonly toolCallId: string;
   readonly offeredAlias: string;
+  readonly shape?: CatalogSchemaMismatch | undefined;
 }
 export interface GatewayToolCatalogBridge {
   readonly bindCalls: (calls: readonly NormalizedToolCall[]) => readonly NormalizedToolCall[];
@@ -152,6 +158,27 @@ interface CatalogRejectionDetails {
   readonly canonicalToolId?: string | undefined;
   readonly contractVersion?: number | undefined;
   readonly catalogReason?: string | undefined;
+  readonly missingRequired?: readonly string[] | undefined;
+  readonly missingRequiredCount?: number | undefined;
+  readonly invalidPaths?: readonly string[] | undefined;
+  readonly invalidPathCount?: number | undefined;
+  readonly unexpectedPropertyCount?: number | undefined;
+  readonly droppedPathCount?: number | undefined;
+}
+
+// The schema's account of an `invalid-shape` rejection, in the schema's vocabulary only: declared
+// property paths and counts. Run 7 (2026-09-10): three identical rejections of one call exhausted
+// the retry budget while the line said `invalid-shape` and nothing else.
+function shapeDetails(shape: CatalogSchemaMismatch | undefined): CatalogRejectionDetails {
+  if (shape === undefined) return {};
+  return {
+    missingRequired: shape.missingRequired,
+    missingRequiredCount: shape.missingRequired.length,
+    invalidPaths: shape.invalidPaths,
+    invalidPathCount: shape.invalidPaths.length,
+    unexpectedPropertyCount: shape.unexpectedPropertyCount,
+    droppedPathCount: shape.droppedPathCount,
+  };
 }
 
 function retryableResponseRejection(phase: "projection" | "response", cause: unknown): boolean {
@@ -197,7 +224,11 @@ function schemaRepair(
   if (!(cause instanceof ToolCatalogError) || cause.reason !== "invalid-shape") return undefined;
   const projected = normalizer?.binding.projection.tools.find((tool) => tool.alias === call.name);
   if (projected === undefined) return undefined;
-  return Object.freeze({ toolCallId: call.id, offeredAlias: projected.alias });
+  return Object.freeze({
+    toolCallId: call.id,
+    offeredAlias: projected.alias,
+    ...(cause.shape === undefined ? {} : { shape: cause.shape }),
+  });
 }
 
 function rejectionDetails(
@@ -213,7 +244,9 @@ function rejectionDetails(
           canonicalToolId: projected.toolRef.canonicalId,
           contractVersion: projected.toolRef.contractVersion,
         }),
-    ...(cause instanceof ToolCatalogError ? { catalogReason: cause.reason } : {}),
+    ...(cause instanceof ToolCatalogError
+      ? { catalogReason: cause.reason, ...shapeDetails(cause.shape) }
+      : {}),
   };
 }
 function bindCall(
@@ -351,6 +384,10 @@ function prepare(
       projectionDigest: normalizer.binding.projection.projectionDigest,
       toolCount: tools.length,
       compatibility: advertisement.kind,
+      // How long the advertised offer stays bindable from this point. Read next to the fetch's own
+      // `durationMs` it reconstructs an `expired-compatibility` rejection from the log alone: a
+      // response that took longer than this window was bound against an offer that had run out.
+      offerRemainingMs: Date.parse(advertisement.offered.expiresAt) - now(),
     },
   });
   return bridge(normalizer, tools, now, log);

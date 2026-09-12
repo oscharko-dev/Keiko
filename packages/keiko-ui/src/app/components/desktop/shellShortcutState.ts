@@ -32,6 +32,7 @@ import type {
   EditorM7ReasonCode,
   WorkspaceKeyboardShortcutBinding,
 } from "@oscharko-dev/keiko-contracts";
+import { CLIENT_NOTE_MAX_LENGTH } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
 import { EDITOR_M7_COMMAND_REGISTRY } from "@oscharko-dev/keiko-contracts/runtime/editor-m7";
 import {
   detectKeyboardShortcutPlatform,
@@ -152,14 +153,43 @@ export function shellShortcutRefusalDiagnostic(
 ): string | null {
   if (refusals.length === 0 && settingRefusalReasonCode === null) return null;
   const named = refusals.filter((refusal) => isRegistryCommandId(refusal.commandId));
-  const parts = named
-    .map((refusal) => `${refusal.commandId}=${refusal.reasonCode}`)
-    .sort((left, right) => left.localeCompare(right));
+  const parts: string[] = [];
+  if (settingRefusalReasonCode !== null) parts.push(`setting=${settingRefusalReasonCode}`);
   if (named.length < refusals.length) {
     parts.push(`unknown-commands=${String(refusals.length - named.length)}`);
   }
-  if (settingRefusalReasonCode !== null) parts.push(`setting=${settingRefusalReasonCode}`);
-  return `shell-shortcuts: refused persisted keybinding overrides (${parts.join(", ")}); affected commands keep their default binding`; // i18n-exempt: console-only operator diagnostic, never rendered to the end user
+  parts.push(
+    ...named
+      .map((refusal) => `${refusal.commandId}=${refusal.reasonCode}`)
+      .sort((left, right) => left.localeCompare(right)),
+  );
+  return boundedRefusalNote(parts);
+}
+
+// The activity log keeps a note verbatim only up to CLIENT_NOTE_MAX_LENGTH and redacts a longer one
+// whole (review on PR #3452). The parts go in by priority (the whole-setting refusal, the count of
+// unknown commands, then the named refusals) while they fit a budget that keeps room for the
+// `more=N` count of the rest, so a note stays within the bound whatever its parts are.
+function boundedRefusalNote(parts: readonly string[]): string {
+  const whole = refusalNote(parts);
+  if (whole.length <= CLIENT_NOTE_MAX_LENGTH) return whole;
+  const reserve = `${PART_SEPARATOR}more=${String(parts.length)}`.length;
+  const budget = CLIENT_NOTE_MAX_LENGTH - refusalNote([]).length - reserve;
+  const shown: string[] = [];
+  let used = 0;
+  for (const part of parts) {
+    const cost = part.length + (shown.length === 0 ? 0 : PART_SEPARATOR.length);
+    if (used + cost > budget) continue;
+    shown.push(part);
+    used += cost;
+  }
+  return refusalNote([...shown, `more=${String(parts.length - shown.length)}`]);
+}
+
+const PART_SEPARATOR = ", ";
+
+function refusalNote(parts: readonly string[]): string {
+  return `shell-shortcuts: refused persisted keybinding overrides (${parts.join(PART_SEPARATOR)}); affected commands keep their default binding`; // i18n-exempt: console-only operator diagnostic, never rendered to the end user
 }
 
 function surfaceShellShortcutRefusals(

@@ -294,7 +294,7 @@ async function runVerifiedPush(
   if (remoteUrl === undefined)
     return executionResult("failed", 0, { errorCode: "precondition-failed" });
   try {
-    return await withPrivatePublishMetadata(ctx.runDeps.workspace.root, commit, async (view) => {
+    return await withPrivatePublishMetadata(ctx.runDeps.workspace, commit, async (view) => {
       if (ctx.signal.aborted || !view.isCurrent() || beforeRemoteDispatch?.() === false)
         return executionResult("aborted", 0);
       const authentication = prepareGitHubPushAuthentication(remoteUrl, ctx.runDeps);
@@ -316,13 +316,13 @@ async function runVerifiedPush(
 }
 
 async function withPrivatePublishMetadata<T>(
-  workspaceRoot: string,
+  workspace: WorkspaceInfo,
   commit: string,
   publish: (view: GitPublishView) => Promise<T>,
 ): Promise<T> {
   const privateRoot = nodeHomeProvider.make();
   try {
-    return await withGitPublishView(workspaceRoot, commit, publish, privateRoot);
+    return await withGitPublishView(workspace, commit, publish, privateRoot);
   } finally {
     nodeHomeProvider.cleanup(privateRoot);
   }

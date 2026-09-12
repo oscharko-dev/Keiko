@@ -446,6 +446,10 @@ function RunningControl({ controller, t }: Omit<ComposerViewProps, "input">): Re
 }
 
 function PausedControls({ input, controller, t }: ComposerViewProps): ReactNode {
+  // A follow-up resumes the paused run on the server before it replaces the task, so it is offered
+  // exactly where Resume is: a run paused for an operator decision keeps that decision as its one
+  // exit (run 16, 2026-09-10: a follow-up sent into such a pause was refused by the runtime).
+  const sendBlocked = controller.submitBlocked || !input.canResume;
   return (
     <div className="cmp-bar-main">
       <button
@@ -460,11 +464,11 @@ function PausedControls({ input, controller, t }: ComposerViewProps): ReactNode 
       </button>
       <button
         className="cmp-send cmp-tip-end"
-        type={controller.submitBlocked ? "button" : "submit"}
-        data-on={!controller.submitBlocked}
+        type={sendBlocked ? "button" : "submit"}
+        data-on={!sendBlocked}
         data-tip={t("codingWorkbench.composer.send")}
         aria-label={t("codingWorkbench.composer.send")}
-        aria-disabled={controller.submitBlocked}
+        aria-disabled={sendBlocked}
       >
         <ArrowUpIcon size={16} />
       </button>

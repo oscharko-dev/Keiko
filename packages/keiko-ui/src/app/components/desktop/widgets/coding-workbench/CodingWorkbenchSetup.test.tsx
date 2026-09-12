@@ -7,7 +7,7 @@ import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { axe } from "jest-axe";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WorkspaceBinding } from "@oscharko-dev/keiko-contracts";
+import type { WorkspaceBinding, WorkspaceInstance } from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchRuntimeActions } from "@/lib/useCodingWorkbenchRuntime";
 import {
   createInitialCodingWorkbenchRuntimeState,
@@ -104,6 +104,45 @@ function workspaceApi(overrides: Partial<ActiveWorkspaceApi> = {}): ActiveWorksp
     provision: vi.fn(() => Promise.resolve(true)),
     ...overrides,
   };
+}
+
+// A workspace bound to `repositoryRoot` on `baseBranch`, as after the Workbench's own bind.
+function boundWorkspaceApi(repositoryRoot: string, baseBranch: string): ActiveWorkspaceApi {
+  const at = "2026-09-11T08:19:00.000Z";
+  const instance: WorkspaceInstance = {
+    schemaVersion: "1",
+    workspaceId: "ws-bound",
+    taskId: codingWorkbenchSetupTaskId(baseBranch),
+    repositoryId: "repository-bound",
+    repositoryRoot,
+    baseBranch,
+    taskBranch: "keiko/bound",
+    managedWorktreePath: "/worktrees/bound",
+    gitdirIdentity: "gitdir-bound",
+    lifecycleState: "active",
+    health: "healthy",
+    lock: null,
+    createdAt: at,
+    updatedAt: at,
+    driftMarkers: [],
+    recoveryHints: [],
+    auditCorrelationId: "correlation-bound",
+  };
+  const binding: WorkspaceBinding = {
+    schemaVersion: "1",
+    workspaceId: instance.workspaceId,
+    taskId: instance.taskId,
+    activeRoot: instance.managedWorktreePath,
+    boundSurfaces: ["git-delivery"],
+    gitDeliveryRoot: instance.managedWorktreePath,
+    editorProjectRoot: instance.managedWorktreePath,
+  };
+  return workspaceApi({
+    instances: [instance],
+    activeBinding: binding,
+    activeInstance: instance,
+    activeRoot: instance.managedWorktreePath,
+  });
 }
 
 function liveState(
@@ -471,6 +510,178 @@ describe("CodingWorkbenchSetup", () => {
     expect(baseBranchMock).toHaveBeenCalledWith("/repos/selected");
   });
 
+  // F81 (run 28): issue intake after a bind reopened this card seeded with the server's workspace
+  // root and looked up that path's branch. It starts from the bound workspace instead: its
+  // repository and the base branch the operator bound, with no lookup for a path nobody chose.
+  it("starts issue intake from the bound repository and its base branch without a lookup", async () => {
+    const user = userEvent.setup();
+    renderWorkbench(boundWorkspaceApi("/repos/target", "master"), liveState(), "/srv/keiko");
+
+    await user.click(screen.getByRole("button", { name: "Start from a GitHub issue" }));
+
+    expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/target");
+    expect(screen.getByLabelText("Target branch")).toHaveValue("master");
+    expect(baseBranchMock).not.toHaveBeenCalled();
+  });
+
+  // The same repository bound onto another base replaces the default it seeded (review on PR #3452):
+  // the earlier base must not stay settled for that path and reach the next bind.
+  it("takes a new bound base branch for the same repository", async () => {
+    const user = userEvent.setup();
+    const view = renderWorkbench(
+      boundWorkspaceApi("/repos/target", "master"),
+      liveState(),
+      "/srv/keiko",
+    );
+    await user.click(screen.getByRole("button", { name: "Start from a GitHub issue" }));
+    expect(screen.getByLabelText("Target branch")).toHaveValue("master");
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={boundWorkspaceApi("/repos/target", "release/2")}>
+        <CodingWorkbenchWindow selectedRoot="/srv/keiko" />
+      </ActiveWorkspaceProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target branch")).toHaveValue("release/2");
+    });
+    expect(baseBranchMock).not.toHaveBeenCalled();
+  });
+
+  // PR #3452 F52: the bootstrap card mounts only while NOTHING is bound, and the live UI flips that
+  // condition on its own within a second of load (observed on 14c4646f4: the card is up at first
+  // paint and gone once the binding and the run workspace arrive). The card owns the typed path in
+  // its own state, so the unmount discards it and the remount re-seeds from `selectedRoot` --
+  // silently replacing what the operator was typing.
+  it("keeps a typed repository path across a binding that unmounts and remounts the card", async () => {
+    const user = userEvent.setup();
+    const view = renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+    await user.clear(screen.getByLabelText("Repository path"));
+    await user.type(screen.getByLabelText("Repository path"), "/repos/typed-by-operator");
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={boundWorkspaceApi("/repos/target", "master")}>
+        <CodingWorkbenchWindow selectedRoot="/repos/selected" />
+      </ActiveWorkspaceProvider>,
+    );
+    await waitFor(() => {
+      expect(setupSection()).not.toBeInTheDocument();
+    });
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={workspaceApi()}>
+        <CodingWorkbenchWindow selectedRoot="/repos/selected" />
+      </ActiveWorkspaceProvider>,
+    );
+
+    await waitFor(() => {
+      expect(setupSection()).toBeInTheDocument();
+    });
+    expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/typed-by-operator");
+  });
+
+  // PR #3452 review: the case above proves ONE well-formed path. The seeding rule treats drafts
+  // unequally, so the edges need their own coverage (AGENTS.md §10). A path is opaque to this card
+  // -- it is never parsed, joined or executed here -- so a traversal-shaped or newline-bearing
+  // string is data like any other and must survive the flip untouched, byte for byte.
+  it.each([
+    ["a path with surrounding spaces", "  /repos/padded  "],
+    ["a traversal-shaped path", "/repos/../../etc/passwd"],
+    ["a path carrying quotes and shell punctuation", '/repos/od d"name;$(x)&|'],
+    ["a single character", "/"],
+  ])("keeps %s across the binding flip", async (_label, draft) => {
+    const user = userEvent.setup();
+    const view = renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+    await user.clear(screen.getByLabelText("Repository path"));
+    await user.type(screen.getByLabelText("Repository path"), draft);
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={boundWorkspaceApi("/repos/target", "master")}>
+        <CodingWorkbenchWindow selectedRoot="/repos/selected" />
+      </ActiveWorkspaceProvider>,
+    );
+    await waitFor(() => {
+      expect(setupSection()).not.toBeInTheDocument();
+    });
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={workspaceApi()}>
+        <CodingWorkbenchWindow selectedRoot="/repos/selected" />
+      </ActiveWorkspaceProvider>,
+    );
+
+    await waitFor(() => {
+      expect(setupSection()).toBeInTheDocument();
+    });
+    expect(screen.getByLabelText("Repository path")).toHaveValue(draft);
+  });
+
+  // The two drafts that are DELIBERATELY not kept, pinned so the rule above cannot be widened into
+  // them by accident: a field holding only whitespace is empty for seeding purposes, and a draft
+  // equal to the selection it was seeded from was never typed over. Both re-seed from the current
+  // selection instead of freezing the field against it.
+  it.each([
+    ["whitespace only", "   "],
+    ["the untouched seeded selection", "/repos/selected"],
+  ])("re-seeds a draft that is %s when the selection changes", async (_label, draft) => {
+    const user = userEvent.setup();
+    const view = renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+    await user.clear(screen.getByLabelText("Repository path"));
+    if (draft !== "") await user.type(screen.getByLabelText("Repository path"), draft);
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={workspaceApi()}>
+        <CodingWorkbenchWindow selectedRoot="/repos/next-selection" />
+      </ActiveWorkspaceProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/next-selection");
+    });
+  });
+
+  // …but a branch the operator typed wins over every default, a new bound base included.
+  it("keeps a typed branch when the bound base branch changes", async () => {
+    const user = userEvent.setup();
+    const view = renderWorkbench(
+      boundWorkspaceApi("/repos/target", "master"),
+      liveState(),
+      "/srv/keiko",
+    );
+    await user.click(screen.getByRole("button", { name: "Start from a GitHub issue" }));
+    await user.clear(screen.getByLabelText("Target branch"));
+    await user.type(screen.getByLabelText("Target branch"), "feature/typed");
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={boundWorkspaceApi("/repos/target", "release/2")}>
+        <CodingWorkbenchWindow selectedRoot="/srv/keiko" />
+      </ActiveWorkspaceProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/target");
+    });
+    expect(screen.getByLabelText("Target branch")).toHaveValue("feature/typed");
+    expect(baseBranchMock).not.toHaveBeenCalled();
+  });
+
+  // The seeded branch is the bound repository's, not a choice for another path the operator types.
+  it("reads the branch of a different path typed after the issue-intake seed", async () => {
+    const user = userEvent.setup();
+    baseBranchMock.mockResolvedValue("trunk");
+    renderWorkbench(boundWorkspaceApi("/repos/target", "master"), liveState(), "/srv/keiko");
+    await user.click(screen.getByRole("button", { name: "Start from a GitHub issue" }));
+
+    await user.clear(screen.getByLabelText("Repository path"));
+    await user.type(screen.getByLabelText("Repository path"), "/repos/other");
+    await user.tab();
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Target branch")).toHaveValue("trunk");
+    });
+    expect(baseBranchMock).toHaveBeenCalledWith("/repos/other");
+  });
+
   // A branch typed for one repository is not a choice for the next: a new workbench-wide selection
   // re-arms the default the way the path field follows it (review of ec04288dc).
   it("re-arms the branch default when the selected repository changes", async () => {
@@ -751,6 +962,11 @@ describe("CodingWorkbenchSetup", () => {
       code: "WORKSPACE_PROVISIONING_UNAVAILABLE",
       failureClass: undefined,
       text: "Managed task workspaces are not configured on this installation",
+    },
+    {
+      code: "PROVISIONING_FAILED",
+      failureClass: "terminal",
+      text: "Keiko could not create the managed task workspace for this repository.",
     },
   ])(
     "names a $code refusal instead of the generic sentence",

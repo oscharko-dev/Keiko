@@ -16,6 +16,16 @@ const STAGE_STATUS_REASONS = {
     "policy-block",
     "preflight-block",
     "unsupported-transformation",
+    // The runtime Git service's own admission refusals for a stage proposal (runtimeGitService.ts).
+    // Each is a complete Git result the model can act on; before 2026-09-10 (Coding Workbench run
+    // 13) the service answered them with no result at all and the model was told its Git authority
+    // had been revoked. `selection-unreviewed`: a requested path is not a pending or fully staged
+    // change Git lists for the worktree — unchanged, absent, a directory, in conflict, or hidden
+    // behind a truncated change list. `buffers-dirty`: an editor session holds unsaved content, so
+    // the bytes to bind are not settled. `proposal-limit`: too many stage proposals are open.
+    "selection-unreviewed",
+    "buffers-dirty",
+    "proposal-limit",
   ],
   drift: ["candidate-drift"],
   failed: ["execution-failed"],

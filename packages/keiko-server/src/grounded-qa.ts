@@ -153,11 +153,8 @@ import {
   type ConversationMemoryRuntimeContext,
 } from "./memory-conversation-context.js";
 import { renderConversationMemoryContextBlock } from "./conversation-prompt.js";
-import {
-  contentFreeErrorClass,
-  evidenceRetentionDiagnosticObserver,
-  emitServerDiagnostic,
-} from "./diagnostics-log.js";
+import { contentFreeErrorClass, emitServerDiagnostic } from "./diagnostics-log.js";
+import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { emitGatewayErrorDiagnostic } from "./gateway-error-diagnostic.js";
 import {
   buildAnswerCitations as projectAnswerCitations,
@@ -1464,10 +1461,7 @@ function persistGroundedAuditEvidence(
       // persister. `deps.redactionSecrets` is the startup snapshot frozen by buildUiHandlerDeps.
       additionalSecrets: currentRedactionSecrets(workerCtx.deps),
       costClassResolver: resolveCostClass,
-      onRetentionDeleted: evidenceRetentionDiagnosticObserver(
-        workerCtx.deps.diagnostics,
-        "grounded-qa",
-      ),
+      onRetentionDeleted: evidenceRetentionObserver("grounded-qa"),
     },
   );
   return runId;

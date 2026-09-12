@@ -53,7 +53,12 @@ import {
   handleEditorAgentVerificationRun,
   verificationAuthorityDenyReason,
 } from "./agentVerificationRoute.js";
-import type { VerificationRunInput, VerificationRunnerManager } from "./verificationRunner.js";
+import type {
+  ScriptTrustDecision,
+  VerificationRunInput,
+  VerificationRunOutcome,
+  VerificationRunnerManager,
+} from "./verificationRunner.js";
 import { VerificationRunnerError } from "./verificationRunnerErrors.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 
@@ -209,16 +214,23 @@ class FakeManager implements VerificationRunnerManager {
   public readonly abort = (): boolean => false;
   public readonly inFlightCount = (): number => 0;
   public readonly subscribe = (): (() => void) => (): void => undefined;
-  public readonly runToReport = (
+  // The runner's own package-script decision as a pure query. These doubles never exercise the
+  // operator-decision wait, so they report the workspace as trusted and no wait is ever entered.
+  public readonly scriptTrustFor = (): ScriptTrustDecision => ({
+    trusted: true,
+    basis: "repository",
+  });
+
+  public readonly runToReport = async (
     input: VerificationRunInput,
     signal: AbortSignal,
-  ): Promise<VerificationReport> => {
+  ): Promise<VerificationRunOutcome> => {
     this.calls += 1;
     this.lastInput = input;
     this.lastSignal = signal;
-    if (this.failWith !== undefined) return Promise.reject(this.failWith);
-    if (this.onRun !== undefined) return this.onRun(input, signal);
-    return Promise.resolve(this.report);
+    if (this.failWith !== undefined) throw this.failWith;
+    const report = this.onRun === undefined ? this.report : await this.onRun(input, signal);
+    return { report, failureOutput: [] };
   };
 }
 
@@ -1300,6 +1312,49 @@ describe("handleEditorAgentVerificationRun managed task worktree (PR #3381)", ()
       expect(manager.calls).toBe(calls);
     },
   );
+
+  // ADR-0147 D3 (2026-09-10): a rewritten worktree manifest is admitted only under an explicit human
+  // grant recorded for the worktree root itself — asked of the same `decideScriptTrust` the runner
+  // uses, so this route can neither deny a verification the runner would run nor admit one it
+  // refuses. The grant is asked about the WORKTREE root, never the repository's.
+  it("admits a rewritten worktree manifest under the worktree root's own explicit grant", async () => {
+    registerManagedSession(fixture.worktreeRoot, false);
+    const manifest = JSON.stringify({ name: "fixture", scripts: { typecheck: "tsc" } });
+    writeFileSync(join(fixture.repositoryRoot, "package.json"), manifest, "utf8");
+    writeFileSync(join(fixture.worktreeRoot, "package.json"), `${manifest}\n`, "utf8");
+    const manager = new FakeManager();
+    manager.report = { ...failingReport(), workspaceRoot: fixture.worktreeRoot };
+    const authorityRef = managedAuthorityRef(fixture.worktreeRoot);
+    const humanGrantAsked: string[] = [];
+    const deps = {
+      verificationRunner: manager,
+      autonomousDeliveryDeploymentCeiling: CEILING,
+      workspaceRootAccessResolver: (requestedRoot: string): WorkspaceRootAccessOutcome =>
+        managedAccess(requestedRoot, nodeWorkspaceFs, fixture.repositoryRoot),
+      workspaceScriptTrust: {
+        trustLevelForRoot: (root: string): "trusted" | "restricted" =>
+          root === fixture.repositoryRoot ? "trusted" : "restricted",
+        holdsHumanGrantForRoot: (root: string): boolean => {
+          humanGrantAsked.push(root);
+          return root === fixture.worktreeRoot;
+        },
+      },
+    } as unknown as UiHandlerDeps;
+
+    const result = await handleEditorAgentVerificationRun(
+      ctx({
+        schemaVersion: "1",
+        sessionId: MANAGED_SESSION_ID,
+        kind: "typecheck",
+        authorityRef,
+      }),
+      deps,
+    );
+
+    expect(resultBody(result)).toMatchObject({ outcome: "completed" });
+    expect(humanGrantAsked).toEqual([fixture.worktreeRoot]);
+    expect(manager.calls).toBe(1);
+  });
 
   // CodeRabbit, PR #3381 (outside the diff, agentVerificationRoute.ts:194): the POLICY-time access
   // lookup asked the resolver without a correlation id, so a `workspace.root.denied` line emitted

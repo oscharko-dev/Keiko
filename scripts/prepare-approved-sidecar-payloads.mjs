@@ -32,7 +32,7 @@ const ARCHIVE_FINAL_HOSTS = Object.freeze([
   "objects.githubusercontent.com",
 ]);
 const RAW_EVIDENCE_FINAL_HOSTS = Object.freeze(["raw.githubusercontent.com"]);
-const SPEC_EXECUTABLE_DIR = "bin";
+export const SPEC_EXECUTABLE_DIR = "bin";
 const SPEC_EVIDENCE_DIR = "evidence";
 const DEFAULT_PREPARE_DEPS = Object.freeze({ fetchFn: globalThis.fetch });
 

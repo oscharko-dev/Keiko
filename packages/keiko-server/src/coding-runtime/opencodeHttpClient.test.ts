@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { CODING_WORKBENCH_RUNTIME_QUESTIONS_MAX_UTF8_BYTES } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 import { createOpenCodeHttpClient, parseOpenCodeChildEndpoint } from "./opencodeHttpClient.js";
+import { OPENCODE_HISTORY_RESPONSE_MAX_BYTES } from "./opencodeProtocol.js";
 
 interface OpenCodeEventClient {
   readonly history: (
@@ -544,6 +545,42 @@ describe("OpenCode HTTP client", () => {
     }) as unknown as OpenCodeEventClient;
 
     await expect(client.history({})).resolves.toEqual([{ id: "evt_1" }]);
+  });
+
+  // The history pull is the one response that carries governed tool arguments -- every durable part
+  // row of a call -- so its budget is derived from the catalog ceilings (2026-09-10), not the
+  // ordinary 1 MiB object cap that still bounds every other JSON response.
+  it("reads a history pull above the ordinary 1 MiB cap up to the derived budget and cancels above it", async () => {
+    const row = { id: "evt_1", filler: "x".repeat(1024 * 1024 + 1024) };
+    const admitted = createOpenCodeHttpClient({
+      endpoint: "http://127.0.0.1:43123",
+      password: "p".repeat(43),
+      fetch: () =>
+        Promise.resolve(
+          new Response(JSON.stringify([row]), {
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+    }) as unknown as OpenCodeEventClient;
+    await expect(admitted.history({})).resolves.toEqual([row]);
+
+    const body = unreadByteStream();
+    const oversized = createOpenCodeHttpClient({
+      endpoint: "http://127.0.0.1:43123",
+      password: "p".repeat(43),
+      fetch: () =>
+        Promise.resolve(
+          new Response(body.stream, {
+            headers: {
+              "content-length": String(OPENCODE_HISTORY_RESPONSE_MAX_BYTES + 1),
+              "content-type": "application/json",
+            },
+          }),
+        ),
+    }) as unknown as OpenCodeEventClient;
+    await expect(oversized.history({})).rejects.toThrow("opencode-history-oversized");
+    expect(body.cancellations).toBe(1);
+    expect(body.pulls).toBe(0);
   });
 
   it("rejects duplicate JSON keys in documents, objects, arrays, and history before parsing", async () => {

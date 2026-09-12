@@ -46,7 +46,13 @@ function skillRequest(
 
 function catalogWith(implicitAllowed: boolean): SkillCatalog {
   const entries: readonly SkillCatalogEntryInput[] = [
-    { skillId: SKILL_ID, implicitAllowed, category: "public-research" },
+    {
+      skillId: SKILL_ID,
+      implicitAllowed,
+      category: "public-research",
+      capabilities: ["keiko.research.fetch"],
+      compatibility: { profile: "opencode", minVersion: 1, maxVersion: 1 },
+    },
   ];
   return createServerApprovedSkillCatalog(entries);
 }

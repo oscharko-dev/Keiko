@@ -8,6 +8,7 @@ import type {
   GitPullRequestInspectionAdapter,
   GitPushCommand,
   GitPrCreateCommand,
+  GitPullRequestBodyAdapter,
 } from "@oscharko-dev/keiko-tools";
 import type {
   CodingRuntimeDeliveryResult,
@@ -49,10 +50,17 @@ export interface DraftDeliveryDependencies {
     | "adoptDraftDeliveryFromPredecessor"
     | "ciReadiness"
     | "ciRepairBudget"
+    | "getLastSuccessfulVerifiedCommit"
   >;
   readonly mutationDeps: GitDeliveryMutationDeps;
   readonly execution?: GitDeliveryExecutionSeams;
   /** Revalidates the frozen issue, canonical origin and the current default base before dispatch. */
+  /**
+   * The bound issue's same-repository references that resolve through the authorized reader, for
+   * the pull request's related-issue line. Best effort: an unavailable answer is no line, never a
+   * refused delivery. Absent in compositions without an issue reader.
+   */
+  readonly resolveRelatedIssues?: (context: DraftDeliveryRunContext) => Promise<readonly number[]>;
   readonly resolveTarget: (
     context: DraftDeliveryRunContext,
   ) => Promise<DraftDeliveryTargetResolution>;
@@ -61,6 +69,13 @@ export interface DraftDeliveryDependencies {
   ) => GitPullRequestInspectionAdapter | undefined;
   readonly publishSeams: (context: DraftDeliveryRunContext) => GitDeliveryPublishSeams;
   readonly pullRequestSeams: (context: DraftDeliveryRunContext) => GitDeliveryPullRequestSeams;
+  /**
+   * Reads and replaces the delivered pull request's body for the Checks refresh after a later push
+   * (draftDeliveryChecksRefresh.ts). Absent in compositions without a pull request provider.
+   */
+  readonly bodyAdapter?: (
+    context: DraftDeliveryRunContext,
+  ) => GitPullRequestBodyAdapter | undefined;
 }
 
 export interface DraftDeliveryServiceOptions extends DraftDeliveryDependencies {

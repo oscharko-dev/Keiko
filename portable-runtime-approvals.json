@@ -30,9 +30,9 @@
         "owner": "anomalyco",
         "repository": "opencode",
         "name": "opencode",
-        "version": "1.17.17",
-        "tag": "v1.17.17",
-        "commit": "474abdd7ee60f4b67476cfcef7e5311beff4a824"
+        "version": "1.18.30",
+        "tag": "v1.18.30",
+        "commit": "3104c1428ec91f809e5ab86631300de41eb6952e"
       },
       "adapterCompatibility": {
         "adapterName": "keiko-coding-sidecar",
@@ -41,8 +41,8 @@
       },
       "protocolSchema": {
         "path": "packages/sdk/openapi.json",
-        "url": "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/packages/sdk/openapi.json",
-        "sha256": "7db5cc3bb494b4757655110f2f285b1e70fa586fb5ae2327ffb31d4f0254c7de",
+        "url": "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/packages/sdk/openapi.json",
+        "sha256": "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3",
         "hashAlgorithm": "sha256",
         "hashEncoding": "lowercase-hex",
         "digestInput": "upstream-raw-bytes",
@@ -60,42 +60,42 @@
       },
       "license": {
         "spdxId": "MIT",
-        "url": "https://raw.githubusercontent.com/anomalyco/opencode/474abdd7ee60f4b67476cfcef7e5311beff4a824/LICENSE",
+        "url": "https://raw.githubusercontent.com/anomalyco/opencode/3104c1428ec91f809e5ab86631300de41eb6952e/LICENSE",
         "sha256": "625f0f619133f89bbbb2abe37369613dfa1885eba1e50d02170deb62bb42cb6b"
       },
       "executableTreeAlgorithm": "keiko-directory-tree-sha256-v1",
       "archives": {
         "linux-x64": {
-          "url": "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode-linux-x64.tar.gz",
-          "sha256": "3957e8b9b80867633daf82cba43f17980c8daf71d4d265a40313fb21d5d58fac",
-          "sizeBytes": 69420615,
+          "url": "https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-linux-x64.tar.gz",
+          "sha256": "55007246858165496ff85ba1c2b648f7421e8e2013bf4189a680c9ff8e699d17",
+          "sizeBytes": 60557284,
           "executableName": "opencode",
-          "executableTreeSha256": "d098e61e7376f77208d4d4f52a502a70b68ab47be73ca406d81789b17385c31e",
-          "sbomSha256": "f358378c5e1b60b0691826e31de25a06c39328d03b6e3ace1eec2ec5b9c8e897"
+          "executableTreeSha256": "12d6a4075aec735a5da08f0d56754a3345b07f65466212f700866a9960b55cb9",
+          "sbomSha256": "7e18c0bed48b91afb63599246fa7f059fbd808c0e1c7ea7eead8f9cd2f51c1f5"
         },
         "windows-x64": {
-          "url": "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode-windows-x64.zip",
-          "sha256": "0a7fd7730a8efb00c69bce86fabcc0c24668371d821e99078a90dc78b71b4b85",
-          "sizeBytes": 69576819,
+          "url": "https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-windows-x64.zip",
+          "sha256": "c8c0e0d05ac3dac544a0edfad8de9eb244bf46c6c7a131c38619d40fcf31bd1f",
+          "sizeBytes": 60686185,
           "executableName": "opencode.exe",
-          "executableTreeSha256": "081a514d31cf00426400e26fb713273ffab91d23c110fa9bac469ad254f3336b",
-          "sbomSha256": "720cd291daf1d5ae3c3073a46f5058621e38918b7dadb3aec666da6fb940481a"
+          "executableTreeSha256": "9dee50ce74fb7156a11a3543847386eba2084b94e09434fc0a1648ce7ed11493",
+          "sbomSha256": "f8f3f2e9070442049367aea7137bc69516aeb57a54838ef9f8cc990cfbbb9290"
         },
         "macos-arm64": {
-          "url": "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode-darwin-arm64.zip",
-          "sha256": "cec03cf8b1119053d583e9afa14a987ca4ffa9dcd76cb79a7cd66774de6411f7",
-          "sizeBytes": 55159915,
+          "url": "https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-darwin-arm64.zip",
+          "sha256": "a5e43d6887386efc7d68ce49ae28e3bbdfdee3dfd1d7169b612c3ce67e53b1e8",
+          "sizeBytes": 46240880,
           "executableName": "opencode",
-          "executableTreeSha256": "2b670b554382e6bea3a77445dde1c5b8670fd8e64796f1431dd12da95315c3bc",
-          "sbomSha256": "a07b4888dde310026d24eed7fef77c1d8ad3a65ead1a345d7b92f6995aec92a1"
+          "executableTreeSha256": "71f2dfe877502f8a96036b2f3df34f787bec65476c035ee2ec3ff044bd5cfd63",
+          "sbomSha256": "8f7edf268f247fb681aef297985f238c05a8cd8b38fc4ab12319e1936301449d"
         },
         "macos-x64": {
-          "url": "https://github.com/anomalyco/opencode/releases/download/v1.17.17/opencode-darwin-x64.zip",
-          "sha256": "e621f1ac6c78aae10caf69d7a1cc15d8adf32b9d68ad124506e9f4e4fe04d7ba",
-          "sizeBytes": 57321241,
+          "url": "https://github.com/anomalyco/opencode/releases/download/v1.18.30/opencode-darwin-x64.zip",
+          "sha256": "7453007e58ff122401438d95ccb24334874b5908dcaee77883f96c23395d5710",
+          "sizeBytes": 48433468,
           "executableName": "opencode",
-          "executableTreeSha256": "da3bdceb2136bd6024208923f3cf626dc3db718791057bfd2a0e9c21ef89ee87",
-          "sbomSha256": "f5ed950faa25517284f50532357c9339a3ed1e0af8ce57a6f671ff6ff19fcd0e"
+          "executableTreeSha256": "7e663a27b81cca55697b34d07ce7a16a5bd35865f01f7ef1225b299a19fb6937",
+          "sbomSha256": "c1c534c89327682f2d5798809ef912eebd4789f5326ef897763544a032e2f496"
         }
       }
     }

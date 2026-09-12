@@ -57,10 +57,12 @@ import {
   createOperatorProvisioningQualification,
   currentGatewayEgressConfig,
   currentRedactionSecrets,
+  disposeRuntimeServicesRecorded,
   ensureManagedTaskWorkspaceIdentity,
-  redactEvidenceString,
   reconcileTaskWorkspacesAtStartup,
+  redactEvidenceString,
   updateCandidateGate,
+  TeardownFaults,
   type UiHandlerDeps,
 } from "./deps.js";
 import {
@@ -69,6 +71,8 @@ import {
   type ServerDiagnosticSink,
 } from "./diagnostics-log.js";
 import type { WorkspaceReconciliationService } from "./task-workspace/types.js";
+import { currentOpenSseStreamCount } from "./sse-write.js";
+import { createWorkspaceWatchService } from "./editor/watch/workspaceWatchService.js";
 import type {
   WorkspaceInstance,
   WorkspaceReconciliationReport,
@@ -78,6 +82,7 @@ import {
   parseGatewayConfig,
   toolCallingConfigurationFingerprint,
 } from "@oscharko-dev/keiko-model-gateway";
+import type { ServerLogEvent } from "./observability/index.js";
 import { createInMemoryUiStore, type UiStore } from "./store/index.js";
 import { DatabaseSync } from "node:sqlite";
 import { buildCspHeader } from "./csp.js";
@@ -665,6 +670,210 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     expect(deps.voiceRecapContentAttestations).toBeDefined();
   }, 15000);
 
+  // AGENTS.md §8 Rule 2, learned the hard way (run 9, 2026-09-10): when this process goes away, the
+  // activity log used to show only what a shutdown LEAVES BEHIND — streams closing, an aborted
+  // gateway call, a run settling as "cancelled" — and nothing saying a shutdown had begun. The cause
+  // lived in the dev runner's console, which a customer does not have. These two lines bracket the
+  // teardown under one correlation id and say what was live when it started.
+  it("brackets its own teardown with body-free shutdown evidence", async (): Promise<void> => {
+    const records: ServerLogEvent[] = [];
+    const stateDir = tmp("shutdown-evidence-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("shutdown-evidence-ev-"),
+      env: {},
+      uiDbPath: join(stateDir, "keiko-ui.db"),
+      activityLog: { write: (event: ServerLogEvent): void => void records.push(event) },
+    });
+
+    // The module-level counter is whatever other suites left open; the line must carry exactly it.
+    const openStreamsAtTeardown = currentOpenSseStreamCount();
+    await deps.dispose?.();
+
+    const shutdown = records.filter((event) => event.op === "server.runtime.shutdown");
+    expect(shutdown).toHaveLength(2);
+    expect(shutdown[0]).toMatchObject({
+      level: "warn",
+      category: "process",
+      extra: {
+        state: "started",
+        activeRunCount: 0,
+        openSseStreamCount: openStreamsAtTeardown,
+      },
+    });
+    expect(shutdown[1]).toMatchObject({
+      level: "info",
+      category: "process",
+      extra: {
+        state: "completed",
+        // What the teardown achieved, not "the call did not throw": this composition has a control
+        // plane with no live run, so its shutdown ends cleanly (owner review, PR #3452).
+        runtimeShutdown: "ended",
+        // The cleanup's own disposition rides on the same line, so a rejecting cleanup can never
+        // leave only the `started` half behind (CodeRabbit review, 2026-09-10).
+        cleanup: "completed",
+        durationMs: expect.any(Number) as unknown,
+      },
+    });
+    // One id joins the pair, so `keiko support analyze --correlation-id <id>` reads the teardown.
+    expect(shutdown[0]?.correlationId).toBe(shutdown[1]?.correlationId);
+    expect(shutdown[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(JSON.stringify(shutdown)).not.toContain(stateDir);
+  }, 15000);
+
+  // Owner review, PR #3452: the teardown's cleanup can fail on its own. Both branches of that failure
+  // go through the helper the dispose closure runs in its `finally`, reproduced here in the same
+  // shape: the faulted cleanup is recorded with its full body-free description either way, an earlier
+  // failure is never masked, and the cleanup's own error surfaces when nothing else was failing.
+  it("keeps the earlier failure when the cleanup also faults, and records why it faulted", async (): Promise<void> => {
+    const records: Readonly<Record<string, unknown>>[] = [];
+    const earlier = new Error("orchestrator shutdown failed");
+    const cleanupError = new Error("cleanup failed", { cause: new TypeError("inner") });
+    const teardown = async (): Promise<void> => {
+      try {
+        throw earlier;
+      } finally {
+        await disposeRuntimeServicesRecorded(
+          () => Promise.reject(cleanupError),
+          (cleanup): void => void records.push(cleanup),
+          true,
+        );
+      }
+    };
+
+    await expect(teardown()).rejects.toBe(earlier);
+    expect(records).toEqual([
+      expect.objectContaining({
+        cleanup: "faulted",
+        errorClass: "Error",
+        causeChain: ["TypeError"],
+      }),
+    ]);
+  });
+
+  it("surfaces the cleanup's own error when the shutdown itself succeeded", async (): Promise<void> => {
+    const records: Readonly<Record<string, unknown>>[] = [];
+    const cleanupError = new Error("cleanup failed");
+
+    await expect(
+      disposeRuntimeServicesRecorded(
+        () => Promise.reject(cleanupError),
+        (cleanup): void => void records.push(cleanup),
+        false,
+      ),
+    ).rejects.toBe(cleanupError);
+    expect(records).toEqual([expect.objectContaining({ cleanup: "faulted", errorClass: "Error" })]);
+  });
+
+  // Owner review, PR #3452: the two lines above exercise `recordRuntimeShutdown`'s warn-level
+  // branch only through `disposeRuntimeServicesRecorded` called directly with a hand-rolled
+  // record callback -- the level-selection branch inside `recordRuntimeShutdown` itself was never
+  // driven through the composed `dispose()` a real process actually calls. This drives a teardown
+  // step (`gitChangeSnapshotService.close`) that genuinely throws through `buildUiHandlerDeps`'s
+  // own composed dispose(), so the warn level is proven from the seam a customer's process uses.
+  it("marks the completion line a warning when a composed teardown step actually faults", async (): Promise<void> => {
+    const records: ServerLogEvent[] = [];
+    const stateDir = tmp("shutdown-fault-evidence-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("shutdown-fault-evidence-ev-"),
+      env: {},
+      uiDbPath: join(stateDir, "keiko-ui.db"),
+      activityLog: { write: (event: ServerLogEvent): void => void records.push(event) },
+    });
+    if (deps.gitChangeSnapshotService === undefined) {
+      throw new Error("snapshot service not composed");
+    }
+    const closeFailure = new Error("snapshot service close failed");
+    const close = vi.spyOn(deps.gitChangeSnapshotService, "close").mockImplementation(() => {
+      throw closeFailure;
+    });
+
+    let caught: unknown;
+    try {
+      await deps.dispose?.();
+    } catch (error) {
+      caught = error;
+    } finally {
+      close.mockRestore();
+    }
+
+    expect(caught).toBe(closeFailure);
+    // Every later step still ran although the first one threw: the shared node:sqlite handle, which
+    // the last step closes, is closed (CodeRabbit review, PR #3452).
+    expect(() => {
+      deps.store.listProjects();
+    }).toThrow();
+    const shutdown = records.filter((event) => event.op === "server.runtime.shutdown");
+    expect(shutdown).toHaveLength(2);
+    expect(shutdown[1]).toMatchObject({
+      level: "warn",
+      category: "process",
+      extra: {
+        state: "completed",
+        cleanup: "faulted",
+        errorClass: "Error",
+        failedStepCount: 1,
+        failedStepErrorClasses: ["Error"],
+      },
+    });
+  }, 15000);
+
+  // Owner review, PR #3452: when several steps fail, every failure survives in step order, the first
+  // one leads the completion line, and the line names how many steps failed and their classes. One
+  // failing step cannot tell "keep the first" from "keep the last"; two with different classes can.
+  it("keeps every failed teardown step, the first one leading, when several steps fault", async (): Promise<void> => {
+    const records: ServerLogEvent[] = [];
+    const stateDir = tmp("shutdown-faults-evidence-");
+    const workspaceWatchService = createWorkspaceWatchService();
+    const watchFailure = new TypeError("watch service dispose failed");
+    vi.spyOn(workspaceWatchService, "disposeAll").mockImplementation(() => {
+      throw watchFailure;
+    });
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("shutdown-faults-evidence-ev-"),
+      env: {},
+      uiDbPath: join(stateDir, "keiko-ui.db"),
+      workspaceWatchService,
+      activityLog: { write: (event: ServerLogEvent): void => void records.push(event) },
+    });
+    if (deps.gitChangeSnapshotService === undefined) {
+      throw new Error("snapshot service not composed");
+    }
+    const closeFailure = new Error("snapshot service close failed");
+    const close = vi.spyOn(deps.gitChangeSnapshotService, "close").mockImplementation(() => {
+      throw closeFailure;
+    });
+
+    let caught: unknown;
+    try {
+      await deps.dispose?.();
+    } catch (error) {
+      caught = error;
+    } finally {
+      close.mockRestore();
+    }
+
+    expect(caught).toBeInstanceOf(TeardownFaults);
+    expect((caught as TeardownFaults).errors as unknown[]).toEqual([closeFailure, watchFailure]);
+    // The steps after both failures still ran: the SQLite handle the last step closes is closed.
+    expect(() => {
+      deps.store.listProjects();
+    }).toThrow();
+    const completed = records.filter((event) => event.op === "server.runtime.shutdown")[1];
+    expect(completed).toMatchObject({
+      level: "warn",
+      extra: {
+        state: "completed",
+        cleanup: "faulted",
+        errorClass: "Error",
+        failedStepCount: 2,
+        failedStepErrorClasses: ["Error", "TypeError"],
+      },
+    });
+  }, 15000);
+
   it("materializes the managed root before content-bearing routes classify ordinary roots", async (): Promise<void> => {
     const stateDir = tmp("managed-root-composition-");
     const deps = buildUiHandlerDeps({
@@ -683,7 +892,12 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
   });
 
   it("gives a managed worktree its own exact trust identity from the selected root grant", async () => {
-    const stateDir = tmp("managed-root-identity-");
+    // Production-shaped: `~/.keiko/ui/keiko-ui.db` puts the managed root below `.keiko`, a segment
+    // the user-workspace deny list refuses as a workspace root. The derivation used to re-admit the
+    // worktree through those rules and every trusted-repository bind on a default installation
+    // failed PROVISIONING_FAILED (2026-09-10); a tmp root without the segment could not see it.
+    const stateDir = join(tmp("managed-root-identity-"), ".keiko", "ui");
+    mkdirSync(stateDir, { recursive: true });
     const repositoryRoot = tmp("managed-root-source-");
     const managedRoot = join(stateDir, "task-workspaces", "repo-1", "workspace-1");
     // This test reaches deps.verificationRunner.discover(managedRoot) below, which resolves
@@ -773,6 +987,133 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       });
     } finally {
       await deps.dispose?.();
+      store.close();
+    }
+  });
+
+  // Fresh-installation run (2026-09-10): a repository bound through the Coding Workbench was never a
+  // registered project, so script trust could not be resolved for it at all, the Workspace Trust
+  // panel had no row for it, and every verification inside its task workspace was refused with no
+  // surface able to offer the grant. Registration is what makes it a trust SUBJECT; it is not a
+  // grant, and the repository stays restricted until the operator decides.
+  it("registers the bound repository as a restricted trust subject and logs it once", () => {
+    const repositoryRoot = tmp("managed-root-register-source-");
+    const managedRoot = tmp("managed-root-register-target-");
+    const manifest = JSON.stringify({ name: "shared" });
+    writeFileSync(join(repositoryRoot, "package.json"), manifest);
+    writeFileSync(join(managedRoot, "package.json"), manifest);
+    const instance = managedWorkspaceInstance(repositoryRoot, managedRoot);
+    const store = createInMemoryUiStore();
+    const workspaceScriptTrust = createWorkspaceScriptTrustService({ store });
+    const events: ServerLogEvent[] = [];
+    const activityLog = { write: (event: ServerLogEvent): void => void events.push(event) };
+
+    try {
+      expect(store.listProjects().some((project) => project.path === repositoryRoot)).toBe(false);
+
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore: store,
+        workspaceScriptTrust,
+        instance,
+        correlationId: "provision-correlation-1",
+        activityLog,
+      });
+
+      expect(store.listProjects().some((project) => project.path === repositoryRoot)).toBe(true);
+      // Registered, never granted: the operator's decision is still outstanding, and the worktree
+      // inherits nothing from a repository that carries no grant.
+      expect(workspaceScriptTrust.trustLevelForRoot(repositoryRoot)).toBe("restricted");
+      expect(workspaceScriptTrust.status(repositoryRoot)).toMatchObject({ trust: "restricted" });
+      expect(
+        store.readWorkspaceTrustRecord(requiredManifestRootRef(store, managedRoot)),
+      ).toBeUndefined();
+      expect(events).toEqual([
+        expect.objectContaining({
+          op: "task-workspace.repository.registered",
+          correlationId: "provision-correlation-1",
+          extra: { repositoryId: instance.repositoryId, granted: false },
+        }),
+      ]);
+      // The operator grants the repository through the existing surface; the next exposure derives.
+      workspaceScriptTrust.grant(repositoryRoot);
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore: store,
+        workspaceScriptTrust,
+        instance,
+        activityLog,
+      });
+      expect(workspaceScriptTrust.status(managedRoot)).toMatchObject({
+        trust: "trusted",
+        reason: "derived-from-trusted-root",
+      });
+      // Idempotent: the second exposure re-registers nothing and emits no second line.
+      expect(events).toHaveLength(1);
+      expect(JSON.stringify(events)).not.toContain(repositoryRoot);
+    } finally {
+      store.close();
+    }
+  });
+
+  // PR #3452 review: the exclusion branch had no coverage anywhere, and it approximated
+  // `assertUiDbOutsideProject` instead of asking it. Both cells of the canonical rule are pinned
+  // here, against the SAME helper every other project-registration site uses.
+  it.each([
+    [
+      "refuses a repository that would expose the UI database",
+      (repositoryRoot: string): string => join(repositoryRoot, "state", "keiko-ui.db"),
+      false,
+    ],
+    [
+      "registers a self-hosted repository whose database sits in its runtime state root",
+      (repositoryRoot: string): string =>
+        join(repositoryRoot, ".keiko", "dev", "ui", "keiko-ui.db"),
+      true,
+    ],
+    [
+      "registers a repository whose database lives outside it",
+      (): string => join(tmpdir(), "keiko-elsewhere", "keiko-ui.db"),
+      true,
+    ],
+  ])("%s", (_label, dbPathFor, registered) => {
+    const repositoryRoot = tmp("managed-root-uidb-source-");
+    const managedRoot = tmp("managed-root-uidb-target-");
+    const manifest = JSON.stringify({ name: "shared" });
+    writeFileSync(join(repositoryRoot, "package.json"), manifest);
+    writeFileSync(join(managedRoot, "package.json"), manifest);
+    const instance = managedWorkspaceInstance(repositoryRoot, managedRoot);
+    const store = createInMemoryUiStore();
+    const workspaceScriptTrust = createWorkspaceScriptTrustService({ store });
+    const events: ServerLogEvent[] = [];
+
+    try {
+      ensureManagedTaskWorkspaceIdentity({
+        uiStore: store,
+        workspaceScriptTrust,
+        instance,
+        uiDbPath: dbPathFor(repositoryRoot),
+        activityLog: { write: (event: ServerLogEvent): void => void events.push(event) },
+      });
+
+      expect(store.listProjects().some((project) => project.path === repositoryRoot)).toBe(
+        registered,
+      );
+      // A refusal is recorded too, never silent: it names why the repository stayed unregistered
+      // and so why its verification is refused (CodeRabbit review, PR #3452).
+      expect(events).toEqual([
+        registered
+          ? expect.objectContaining({ op: "task-workspace.repository.registered" })
+          : expect.objectContaining({
+              op: "task-workspace.repository.registration-refused",
+              level: "warn",
+              extra: {
+                repositoryId: instance.repositoryId,
+                reason: "ui-database-inside-repository",
+              },
+            }),
+      ]);
+      // The worktree's own identity is registered either way: the repository decision never gates it.
+      expect(store.listProjects().some((project) => project.path === managedRoot)).toBe(true);
+    } finally {
       store.close();
     }
   });

@@ -2,21 +2,26 @@
 import { createHash, randomUUID } from "node:crypto";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type {
+  CodingWorkbenchAuxiliaryStatus,
+  CodingWorkbenchIssueBinding,
   CodingWorkbenchMode,
+  CodingWorkbenchOperatorDecision,
   CodingWorkbenchRuntimeApprovalDecisionRequest,
   CodingWorkbenchRuntimeEvent,
+  CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimePendingApprovalReview,
   CodingWorkbenchRuntimePendingPermission,
-  CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimePendingResearch,
   CodingWorkbenchRuntimeResearchGrant,
   CodingWorkbenchRuntimeResult,
-  CodingWorkbenchRuntimeStartRequest,
   CodingWorkbenchRuntimeSnapshot as PublicSnapshot,
+  CodingWorkbenchRuntimeStartRequest,
   CodingWorkbenchRuntimeStateName,
-  CodingWorkbenchIssueBinding,
+  SkillDiscoveryResultV1,
 } from "@oscharko-dev/keiko-contracts";
 import { isLegalCodingWorkbenchRuntimeTransition } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS } from "@oscharko-dev/keiko-contracts/runtime/tools";
+import { isDeliveredDraftDeliveryPhase } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import {
   parseCodingWorkbenchRuntimeRecoveryAcknowledgementRequest,
   parseCodingWorkbenchRuntimeResumeRequest,
@@ -55,6 +60,7 @@ import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
   type ServerDiagnosticSink,
+  describeError,
 } from "../diagnostics-log.js";
 import { isValidCorrelationId, UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
@@ -65,7 +71,10 @@ import type {
   CodingRuntimeQuestionOperationResult,
 } from "./codingRuntimeOrchestratorTypes.js";
 import { classifyLaunchRejection, launchRejectionDiagnosticReason } from "./launchFailure.js";
-import type { CodingRuntimeTaskOutcome } from "./productionCodingRuntimeHost.js";
+import type {
+  CodingRuntimeTaskDispatchResult,
+  CodingRuntimeTaskOutcome,
+} from "./productionCodingRuntimeHost.js";
 import {
   admitCodingRuntimeIssue,
   type CodingRuntimeIssueAttachment,
@@ -413,6 +422,64 @@ function recordRuntimeApprovalWaiting(
   });
 }
 
+/**
+ * The run's own record that a human decision is outstanding, and that it settled. This is what a
+ * customer's log has to reconstruct: WHICH decision blocked the run, at which revision it began
+ * waiting, and how the wait ended. The governed tool writes the matching
+ * `coding-runtime.operator-decision` line from its side; the two share the run's correlation id.
+ */
+function recordRuntimeOperatorDecision(
+  activityLog: ServerLogSink | undefined,
+  snapshot: {
+    readonly runId: string;
+    readonly revision: number;
+    readonly state: CodingWorkbenchRuntimeStateName;
+  },
+  decision: CodingWorkbenchOperatorDecision,
+  state: "waiting" | "settled" | "not-admissible",
+  outcome?: CodingWorkbenchAuxiliaryStatus,
+): void {
+  activityLog?.write({
+    level: state === "not-admissible" ? "warn" : "info",
+    category: "process",
+    op: "coding-runtime.run.operator-decision",
+    correlationId: runtimeDiagnosticCorrelationId(snapshot.runId),
+    extra: {
+      runId: snapshot.runId,
+      revision: snapshot.revision,
+      runState: snapshot.state,
+      decision,
+      state,
+      ...(outcome === undefined ? {} : { outcome }),
+    },
+  });
+}
+
+/**
+ * A runtime event that names a run other than the live one is refused here, and used to be refused
+ * silently: the producer saw `invalid-intent` and the log saw nothing, so a tool announcing a
+ * decision under a stale or mismatched run id left no trace of why the run never reacted. The line
+ * carries the event's kind and both ids — identifiers, not content.
+ */
+function recordRuntimeEventDropped(
+  activityLog: ServerLogSink | undefined,
+  event: CodingWorkbenchRuntimeEvent,
+  current: CodingRuntimeSnapshot | undefined,
+): void {
+  activityLog?.write({
+    level: "warn",
+    category: "process",
+    op: "coding-runtime.event.dropped",
+    correlationId: runtimeDiagnosticCorrelationId(event.runId),
+    extra: {
+      eventKind: event.kind,
+      eventRunId: event.runId,
+      reason: current === undefined ? "no-live-run" : "run-mismatch",
+      ...(current === undefined ? {} : { liveRunId: current.runId }),
+    },
+  });
+}
+
 function recordRuntimeVerificationSummary(
   activityLog: ServerLogSink | undefined,
   event: CodingWorkbenchRuntimeEvent,
@@ -526,8 +593,12 @@ const TERMINAL_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new Set([
  * clamped here, before the instant becomes the challenge expiry, the operator-visible deadline on
  * the approval card, and the TTL of the minted approval authority. All three derive from this one
  * clamped instant, so the card can never display a deadline the server does not enforce.
+ *
+ * It is the contract's one human-decision wait, so the catalog budget, the tool bridge deadline and
+ * the plugin client timeout of every tool that waits for an approval derive from the same value
+ * (keiko-contracts GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS, PR #3452).
  */
-export const MAX_APPROVAL_CHALLENGE_TTL_MS = 5 * 60 * 1_000;
+export const MAX_APPROVAL_CHALLENGE_TTL_MS = GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS;
 export const MAX_QUEUED_APPROVALS_PER_RUN = 64;
 
 const DIGEST = (value: string): string => createHash("sha256").update(value).digest("hex");
@@ -544,6 +615,38 @@ const GRANT_VISIBLE_STATES: ReadonlySet<CodingWorkbenchRuntimeStateName> = new S
  * Keeps all lifecycle mutation behind one promise tail. This deliberately provides no replay API:
  * after a process restart durable active rows are recovery-required until an operator starts anew.
  */
+type DeliveryEvidence =
+  | {
+      readonly readable: true;
+      readonly hasVerifiedCommit: boolean;
+      readonly hasDraftDelivery: boolean;
+    }
+  | { readonly readable: false; readonly error: unknown };
+
+type DeliveryContinuationRefusal =
+  "dispatch-threw" | "dispatch-refused" | "evidence-unreadable" | "run-superseded";
+
+// A settlement target is taken only when the delivery evidence could be read and the transition to
+// it is legal; anything else asks for recovery.
+function isLegalSettlementTarget<T extends { readonly state: CodingWorkbenchRuntimeStateName }>(
+  live: CodingRuntimeSnapshot,
+  target: T | undefined,
+): target is T {
+  return target !== undefined && isLegalCodingWorkbenchRuntimeTransition(live.state, target.state);
+}
+
+function deliveryContinuationExtra(
+  live: CodingRuntimeSnapshot,
+  attempt: number,
+): Readonly<Record<string, unknown>> {
+  return {
+    runId: live.runId,
+    issueNumber: live.issueBinding?.issueNumber,
+    attempt,
+    max: DELIVERY_CONTINUATION_MAX,
+  };
+}
+
 export class CodingRuntimeOrchestrator {
   private tail: Promise<void> = Promise.resolve();
   private activeRunId: string | undefined;
@@ -554,6 +657,9 @@ export class CodingRuntimeOrchestrator {
    */
   private settledRunId: string | undefined;
   private activeEffectiveMode: CodingWorkbenchMode | undefined;
+  // F66: how many delivery continuations each live run has been given (at most
+  // DELIVERY_CONTINUATION_MAX); dropped when the run settles.
+  private readonly deliveryContinuations = new Map<string, number>();
   /** Last accepted mode retained only for same-process post-terminal description work. */
   private readonly settledEffectiveModes = new Map<string, CodingWorkbenchMode>();
   private readonly approvals = new Map<string, ApprovalChallenge>();
@@ -593,6 +699,8 @@ export class CodingRuntimeOrchestrator {
         this.advanceRevision(current, eventKind),
       publicSnapshot: (current): PublicSnapshot => this.publicSnapshotWithDescription(current),
       taskDispatcher: deps.taskDispatcher,
+      resumePaused: (current): Promise<CodingRuntimeOrchestratorResult> =>
+        this.resumePausedForFollowUp(current),
       settleTask: (runId, outcome): void => {
         this.queueTaskSettlement(runId, outcome);
       },
@@ -681,6 +789,14 @@ export class CodingRuntimeOrchestrator {
     this.deps.safeActivityProjection?.purge(predecessorRunId, "stop");
     this.pruneSettled();
   }
+  /**
+   * Whether a run is live right now — the orchestrator's own notion of `current()`, exposed because
+   * the shutdown evidence has to state what it is about to end and must not re-derive "terminal"
+   * from a copy of `TERMINAL_STATES` somewhere else.
+   */
+  hasLiveRun(): boolean {
+    return this.current() !== undefined;
+  }
   snapshot(): PublicSnapshot {
     const visibleRunId = this.activeRunId ?? this.settledRunId;
     return visibleRunId === undefined
@@ -756,6 +872,31 @@ export class CodingRuntimeOrchestrator {
   ): Promise<CodingRuntimeOrchestratorResult> {
     const admitted = resumeAdmission(this.current(), runId, input, this.activeEffectiveMode);
     if (admitted === undefined) return this.fail("invalid-intent");
+    return this.resumeAdmitted(admitted);
+  }
+
+  // A follow-up sent to a paused run resumes it before the replacement task is dispatched (called
+  // by the operation coordinator inside the same serial section, so it never re-enters
+  // `serial`). The runtime admits tool calls only while running; a replacement dispatched into
+  // the pause failed its first call `state-not-admissible` and that failure ended the run (Coding
+  // Workbench run 16, 2026-09-10). A pause held for an operator decision keeps its one exit — the
+  // decision — exactly as `resumeAdmission` refuses the operator's Resume for it.
+  private resumePausedForFollowUp(
+    current: CodingRuntimeSnapshot,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    if (current.state !== "paused" || current.pauseReason !== undefined) {
+      return Promise.resolve(this.fail("invalid-intent"));
+    }
+    return this.resumeAdmitted({
+      current,
+      requestedMode: this.activeEffectiveMode ?? current.requestedMode,
+    });
+  }
+
+  private async resumeAdmitted(
+    admitted: ResumeAdmission,
+  ): Promise<CodingRuntimeOrchestratorResult> {
+    const { runId } = admitted.current;
     const approval = this.approvals.get(runId);
     if (approval !== undefined && approval.expiresAt <= this.now().getTime()) {
       this.approvals.delete(runId);
@@ -922,6 +1063,16 @@ export class CodingRuntimeOrchestrator {
       domains,
       expiresAt: new Date(newest.expiresAtMs).toISOString(),
     };
+  }
+
+  /**
+   * The approved skills of the run the operator is watching, for the AUTHENTICATED skills channel
+   * (#3417). The projection is the closed, body-free record discovery reports, with the readiness the
+   * catalog can tell on its own; the live authority and budget belong to an invocation, not to this
+   * view. A run that is not the current one has none.
+   */
+  approvedSkills(runId: string): SkillDiscoveryResultV1 | undefined {
+    return this.current()?.runId === runId ? this.deps.approvedSkills?.() : undefined;
   }
 
   decideApproval(runId: string, input: unknown): Promise<CodingRuntimeOrchestratorResult> {
@@ -1142,7 +1293,10 @@ export class CodingRuntimeOrchestrator {
     event: CodingWorkbenchRuntimeEvent,
   ): Promise<CodingRuntimeOrchestratorResult> {
     const current = this.current();
-    if (event.runId !== current?.runId) return this.fail("invalid-intent");
+    if (event.runId !== current?.runId) {
+      recordRuntimeEventDropped(this.deps.activityLog, event, current);
+      return this.fail("invalid-intent");
+    }
     if (event.kind === "failure-redacted") {
       recordRuntimeLifecycleFailure(this.deps.diagnostics, current.runId, "failure-redacted");
       return this.stopAfterIssueFailure(current, "runtime-failed");
@@ -1157,12 +1311,75 @@ export class CodingRuntimeOrchestrator {
   ): Promise<CodingRuntimeOrchestratorResult | undefined> {
     const terminal = event.kind === "runtime-stopped" || event.kind === "failure-redacted";
     if (current.state !== "paused" || terminal) return undefined;
+    // A run paused FOR a decision is resumed by that decision settling, so this one event is the
+    // exception to a paused run absorbing its runtime events.
+    if (event.kind === "operator-decision") return this.ingestOperatorDecision(current, event);
     if (event.kind === "permission-requested") {
       const challenge = this.approvalChallenge(current, event);
       if (challenge === undefined) return this.fail("invalid-intent");
       if (this.approvals.has(current.runId)) return await this.queueApproval(current, challenge);
       this.approvals.set(current.runId, challenge);
     }
+    return { ok: true, snapshot: this.publicSnapshotWithDescription(current) };
+  }
+
+  /**
+   * A governed tool met a decision only a local human can make and is waiting in place for it. The
+   * run says so: `running` -> `paused` naming the decision, and back to `running` the moment the
+   * wait settles — whichever way it settled, because the tool then either retries the effect or
+   * hands the model its refusal, and in both cases the run is no longer waiting on a person.
+   *
+   * This is deliberately NOT the Authority Envelope approval plane. The decision it carries is a
+   * hard, mode-independent boundary (ADR-0147 package-script trust), recorded on the workspace's own
+   * trust surface and minting no action authority, so routing it through `awaiting-approval` would
+   * mint the wrong artifact and, in `governed-assist`, collapse that mode's separate per-command
+   * approval into a workspace trust grant.
+   *
+   * Every other run state absorbs the event unchanged: a run already stopping, settling or awaiting
+   * an approval is not a run that can start waiting on this, and forcing a transition there would
+   * either be refused as illegal or overwrite a state the operator is already acting on.
+   */
+  private ingestOperatorDecision(
+    current: CodingRuntimeSnapshot,
+    event: CodingWorkbenchRuntimeEvent,
+  ): CodingRuntimeOrchestratorResult {
+    const decision = event.operatorDecision;
+    if (decision === undefined) return this.fail("invalid-intent");
+    const open = event.auxiliaryOutcome === undefined;
+    // Both lines record the snapshot that BEGAN or ENDED the wait — the post-transition one — so the
+    // log's revision and run state are the ones the store now holds (CodeRabbit review, 2026-09-10).
+    if (open && current.state === "running") {
+      const paused = this.transition(current, "paused", undefined, decision);
+      if (paused.ok) {
+        recordRuntimeOperatorDecision(
+          this.deps.activityLog,
+          { ...paused.snapshot, runId: current.runId },
+          decision,
+          "waiting",
+        );
+      }
+      return paused;
+    }
+    if (!open && current.state === "paused" && current.pauseReason === decision) {
+      const resumed = this.transition(current, "running");
+      if (resumed.ok) {
+        recordRuntimeOperatorDecision(
+          this.deps.activityLog,
+          { ...resumed.snapshot, runId: current.runId },
+          decision,
+          "settled",
+          event.auxiliaryOutcome,
+        );
+      }
+      return resumed;
+    }
+    recordRuntimeOperatorDecision(
+      this.deps.activityLog,
+      current,
+      decision,
+      "not-admissible",
+      event.auxiliaryOutcome,
+    );
     return { ok: true, snapshot: this.publicSnapshotWithDescription(current) };
   }
 
@@ -1173,6 +1390,7 @@ export class CodingRuntimeOrchestrator {
     if (event.kind === "permission-requested") {
       return await this.ingestPermissionRequested(current, event);
     }
+    if (event.kind === "operator-decision") return this.ingestOperatorDecision(current, event);
     if (event.kind === "task-submitted") return this.ingestTaskSubmitted(current);
     if (event.kind === "runtime-stopped") return this.ingestRuntimeStopped(current);
     recordRuntimeVerificationSummary(this.deps.activityLog, event);
@@ -1327,6 +1545,7 @@ export class CodingRuntimeOrchestrator {
   private async settleTask(runId: string, outcome: CodingRuntimeTaskOutcome): Promise<void> {
     const current = this.current();
     if (current?.runId !== runId) return;
+    if (await this.continueForDelivery(current, outcome)) return;
     const stopped = await this.stopForSettlement(runId, outcome);
     const live = this.current();
     if (live?.runId !== runId) return;
@@ -1335,12 +1554,235 @@ export class CodingRuntimeOrchestrator {
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
-    const target = taskOutcomeState(outcome);
-    if (!isLegalCodingWorkbenchRuntimeTransition(live.state, target.state)) {
+    const target = this.deliveryTruthfulOutcome(live, taskOutcomeState(outcome));
+    if (!isLegalSettlementTarget(live, target)) {
       this.transition(live, "recovery-required", "recovery-required");
       return;
     }
     this.transition(live, target.state, target.failureCode);
+  }
+
+  /**
+   * Durable delivery evidence: the store's last successful commit, or a delivered draft phase. The
+   * commit reader fails closed on an oversized, malformed or foreign record by throwing; that throw is
+   * an answer here ("unreadable"), never an escape from settlement: a settlement that threw before
+   * stopping the runtime would leave it running with no recovery transition (owner review, PR #3452).
+   */
+  private deliveryEvidence(live: CodingRuntimeSnapshot): DeliveryEvidence {
+    let hasVerifiedCommit: boolean;
+    try {
+      hasVerifiedCommit =
+        this.deps.snapshots.getLastSuccessfulVerifiedCommit?.(live.runId) !== undefined;
+    } catch (error) {
+      return { readable: false, error };
+    }
+    return {
+      readable: true,
+      hasVerifiedCommit,
+      hasDraftDelivery:
+        live.draftDelivery !== undefined && isDeliveredDraftDeliveryPhase(live.draftDelivery.phase),
+    };
+  }
+
+  private recordDeliveryEvidenceUnreadable(live: CodingRuntimeSnapshot, error: unknown): void {
+    this.deps.activityLog?.write({
+      level: "warn",
+      category: "process",
+      op: "coding-runtime.run.delivery-evidence-unreadable",
+      correlationId: runtimeDiagnosticCorrelationId(live.runId),
+      errorKind: errorKindOf(error),
+      extra: {
+        runId: live.runId,
+        issueNumber: live.issueBinding?.issueNumber,
+        ...describeError(error),
+      },
+    });
+  }
+
+  // The one-based attempt a finished turn may continue with, or undefined when it settles: only a
+  // turn that ended normally, in an issue-bound run under Full access, with continuation budget left.
+  // Every other run settles exactly as before; `continueForDelivery` then asks whether delivery is
+  // already evidenced.
+  private deliveryContinuationAttempt(
+    live: CodingRuntimeSnapshot,
+    outcome: CodingRuntimeTaskOutcome,
+  ): number | undefined {
+    if (outcome !== "succeeded" || live.issueBinding === undefined) return undefined;
+    if (this.activeRunId !== live.runId || this.activeEffectiveMode !== "autonomous-delivery")
+      return undefined;
+    const attempt = (this.deliveryContinuations.get(live.runId) ?? 0) + 1;
+    return attempt > DELIVERY_CONTINUATION_MAX ? undefined : attempt;
+  }
+
+  // Dispatches the continuation into the live session in place of stopping it. A refused or failed
+  // dispatch falls back to settlement, so a continuation can never keep a run alive on its own.
+  private async continueForDelivery(
+    live: CodingRuntimeSnapshot,
+    outcome: CodingRuntimeTaskOutcome,
+  ): Promise<boolean> {
+    const attempt = this.deliveryContinuationAttempt(live, outcome);
+    if (attempt === undefined) return false;
+    const correlationId = runtimeDiagnosticCorrelationId(live.runId);
+    const evidence = this.deliveryEvidence(live);
+    if (!evidence.readable) {
+      this.recordDeliveryContinuationRefused(
+        live,
+        attempt,
+        correlationId,
+        "evidence-unreadable",
+        evidence.error,
+      );
+      return false;
+    }
+    if (evidence.hasVerifiedCommit || evidence.hasDraftDelivery) return false;
+    const dispatched = await this.dispatchDeliveryContinuation(live, attempt, correlationId);
+    if (dispatched === undefined) return false;
+    // An operator's stop or takeover is not serialized with settlement: it has to stay immediate
+    // even while a dispatch hangs. The run may therefore have ended or moved while this continuation
+    // was dispatched; it is then abandoned, never recorded against a superseded revision, and the
+    // stop or takeover owns the run's settlement (owner review, PR #3452).
+    if (this.continuationSuperseded(live)) {
+      this.recordDeliveryContinuationRefused(live, attempt, correlationId, "run-superseded");
+      return true;
+    }
+    this.deliveryContinuations.set(live.runId, attempt);
+    this.recordDeliveryContinued(live, attempt, correlationId);
+    this.operations.observeContinuation(live.runId, dispatched.completion);
+    this.advanceRevision(live, "task-submitted");
+    return true;
+  }
+
+  private async dispatchDeliveryContinuation(
+    live: CodingRuntimeSnapshot,
+    attempt: number,
+    correlationId: string,
+  ): Promise<Extract<CodingRuntimeTaskDispatchResult, { readonly ok: true }> | undefined> {
+    let dispatched: CodingRuntimeTaskDispatchResult;
+    try {
+      dispatched = await this.deps.taskDispatcher.dispatch({
+        runId: live.runId,
+        requestId: `delivery-continuation-${String(attempt)}`,
+        expectedRevision: live.revision,
+        taskIntent: DELIVERY_CONTINUATION_INTENT,
+      });
+    } catch (error) {
+      this.recordDeliveryContinuationRefused(live, attempt, correlationId, "dispatch-threw", error);
+      return undefined;
+    }
+    if (!dispatched.ok) {
+      this.recordDeliveryContinuationRefused(live, attempt, correlationId, "dispatch-refused");
+      return undefined;
+    }
+    return dispatched;
+  }
+
+  private continuationSuperseded(live: CodingRuntimeSnapshot): boolean {
+    const current = this.current();
+    if (current === undefined) return true;
+    return (
+      this.activeRunId !== live.runId ||
+      current.runId !== live.runId ||
+      current.revision !== live.revision
+    );
+  }
+
+  private recordDeliveryContinued(
+    live: CodingRuntimeSnapshot,
+    attempt: number,
+    correlationId: string,
+  ): void {
+    this.deps.activityLog?.write({
+      level: "info",
+      category: "process",
+      op: "coding-runtime.run.delivery-continued",
+      correlationId,
+      extra: deliveryContinuationExtra(live, attempt),
+    });
+  }
+
+  // Every refusal names its reason; one that follows a thrown error also carries its errorKind and
+  // body-free frames, like every other caught failure in this file (AGENTS.md §8).
+  private recordDeliveryContinuationRefused(
+    live: CodingRuntimeSnapshot,
+    attempt: number,
+    correlationId: string,
+    reason: DeliveryContinuationRefusal,
+    error?: unknown,
+  ): void {
+    this.deps.activityLog?.write({
+      level: "warn",
+      category: "process",
+      op: "coding-runtime.run.delivery-continuation-refused",
+      correlationId,
+      ...(error === undefined ? {} : { errorKind: errorKindOf(error) }),
+      extra: {
+        ...deliveryContinuationExtra(live, attempt),
+        reason,
+        ...(error === undefined ? {} : describeError(error)),
+      },
+    });
+  }
+
+  /**
+   * A run started from an accepted GitHub issue is the product's delivery flow: the issue binds the
+   * task branch, the base ref and the pull request the work is delivered through. Such a run may not
+   * be reported as `succeeded` on the strength of the model having stopped emitting tool calls —
+   * which is all `taskOutcomeState` knows. Run 10 of the Coding Workbench engagement (2026-09-10)
+   * ended exactly that way: its verification was refused, it wrote files into the task workspace and
+   * stopped, and the Workbench showed a green success for a run that had verified, committed, pushed
+   * and delivered nothing.
+   *
+   * Delivery evidence is the durable server-owned kind: a verified-commit receipt, or a draft
+   * delivery record. Either is enough — a run that committed but could not push has delivered
+   * something and says so through its own facts. Neither means the terminal state is
+   * `delivery-not-evidenced`, and the operator sees a truthful failure instead of a false success.
+   *
+   * Deliberately scoped to issue-bound runs: an ad-hoc task ("explain this module") legitimately
+   * ends with no commit, and inferring delivery intent from free text would turn honest successes
+   * into false failures.
+   */
+  private deliveryTruthfulOutcome(
+    live: CodingRuntimeSnapshot,
+    target: {
+      readonly state: "failed" | "succeeded";
+      readonly failureCode?: "runtime-failed" | undefined;
+    },
+  ):
+    | {
+        readonly state: "failed" | "succeeded";
+        readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+      }
+    | undefined {
+    if (target.state !== "succeeded" || live.issueBinding === undefined) return target;
+    // Presence is not delivery. A `verifiedCommitResult` is persisted for every proposal outcome,
+    // `verification-failed` and `blocked` included, and a `draftDelivery` record exists as soon as a
+    // push is PROPOSED. Reading either as evidence would re-admit the false success this method
+    // exists to close (owner review, PR #3452), so both sides ask the question that has a real
+    // answer: the store's own last SUCCESSFUL commit, and a phase the contract classifies as
+    // delivered.
+    // Evidence that cannot be read settles nothing on a guess: the run asks for recovery instead.
+    const evidence = this.deliveryEvidence(live);
+    if (!evidence.readable) {
+      this.recordDeliveryEvidenceUnreadable(live, evidence.error);
+      return undefined;
+    }
+    const { hasVerifiedCommit, hasDraftDelivery } = evidence;
+    if (hasVerifiedCommit || hasDraftDelivery) return target;
+    this.deps.activityLog?.write({
+      level: "warn",
+      category: "process",
+      op: "coding-runtime.run.delivery-unevidenced",
+      correlationId: runtimeDiagnosticCorrelationId(live.runId),
+      extra: {
+        runId: live.runId,
+        issueNumber: live.issueBinding.issueNumber,
+        hasVerifiedCommit,
+        hasDraftDelivery,
+        reportedOutcome: "succeeded",
+        continuations: this.deliveryContinuations.get(live.runId) ?? 0,
+      },
+    });
+    return { state: "failed", failureCode: "delivery-not-evidenced" };
   }
 
   private async stopForSettlement(
@@ -1406,11 +1848,43 @@ export class CodingRuntimeOrchestrator {
     this.settledRunId =
       this.activeRunId === undefined ? latestSettledRunId(this.deps.snapshots) : undefined;
   }
-  shutdown(): Promise<CodingRuntimeOrchestratorResult> {
+  /**
+   * Ends the live run because the SERVER is going away, not because an operator asked. Both take the
+   * same stop path, so the settled evidence is identical — `state: "cancelled"`, `reason: "stop"` —
+   * and a customer log could not tell "the user pressed Stop" from "the machine shut the app down"
+   * (run 9, 2026-09-10). This names the cause under the RUN's own correlation id, so
+   * `keiko support analyze --correlation-id <run>` reads it alongside that run's terminal line.
+   *
+   * The line is written AFTER the attempt and reports what the attempt achieved. Writing it before
+   * asserted an outcome the code had not reached: `end()` refuses outright for a run in
+   * `recovery-required` (no transition, no terminal line), so a shutdown then left behind a cause
+   * for an ending that never happened, and the troubleshooting entry told the operator to read it as
+   * confirmation (owner review, PR #3452).
+   */
+  async shutdown(): Promise<CodingRuntimeOrchestratorResult> {
     const current = this.current();
-    if (current) return this.end("stop", current.runId, { requestId: current.runId });
-    this.deps.safeActivityProjection?.purgeAll("shutdown");
-    return Promise.resolve({ ok: true, snapshot: this.projection.idle() });
+    if (current === undefined) {
+      this.deps.safeActivityProjection?.purgeAll("shutdown");
+      return { ok: true, snapshot: this.projection.idle() };
+    }
+    const result = await this.end("stop", current.runId, { requestId: current.runId });
+    this.deps.activityLog?.write({
+      level: "warn",
+      category: "process",
+      op: "coding-runtime.run.shutdown",
+      correlationId: runtimeDiagnosticCorrelationId(current.runId),
+      extra: {
+        runId: current.runId,
+        stateBefore: current.state,
+        revision: current.revision,
+        reason: "server-shutdown",
+        // What the shutdown actually achieved for this run: it ended, or the orchestrator refused
+        // to end it and the run keeps whatever state it had.
+        outcome: result.ok ? "ended" : "refused",
+        ...(result.ok ? {} : { failureCode: result.failureCode }),
+      },
+    });
+    return result;
   }
 
   // A proof that could not run (IDENTITY_PROOF_FAILED, logged at its source) is an authority the
@@ -1438,7 +1912,7 @@ export class CodingRuntimeOrchestrator {
     if (!active || !principal) return this.fail("authority-resolution-failed");
     const runId = this.newRunId();
     const issue = await this.admitIssue(parsed.value, active, runId, predecessorRunId);
-    if (!issue.ok) return issue;
+    if (!issue.ok) return { ...issue, runId };
     const resolved = await this.resolveLaunch(
       parsed.value,
       active,
@@ -1446,7 +1920,7 @@ export class CodingRuntimeOrchestrator {
       runId,
       issue.binding,
     );
-    if (!resolved.ok) return this.fail(resolved.failureCode);
+    if (!resolved.ok) return { ok: false, failureCode: resolved.failureCode, runId };
     const launch = resolved.launch;
     const initialSnapshot = this.buildStartSnapshot(
       parsed.value,
@@ -1598,6 +2072,7 @@ export class CodingRuntimeOrchestrator {
           runId,
           issueNumber: attachment.issueNumber,
           itemCount: attachment.itemCount,
+          linkedIssueCount: attachment.linkedIssueCount,
           byteCount: attachment.byteCount,
         },
       });
@@ -1878,11 +2353,12 @@ export class CodingRuntimeOrchestrator {
     current: CodingRuntimeSnapshot,
     state: CodingWorkbenchRuntimeStateName,
     failureCode?: CodingWorkbenchRuntimeFailureCode,
+    pauseReason?: CodingWorkbenchOperatorDecision,
   ): CodingRuntimeOrchestratorResult {
     if (!isLegalCodingWorkbenchRuntimeTransition(current.state, state)) {
       return this.fail("invalid-intent");
     }
-    const next = this.createTransitionSnapshot(current, state, failureCode);
+    const next = this.createTransitionSnapshot(current, state, failureCode, pauseReason);
     const published = this.publishTransition(next);
     this.recordTransitionEvidence(next, state, failureCode);
     if (this.shouldTransitionToRecoveryRequired(published, state)) {
@@ -1896,6 +2372,7 @@ export class CodingRuntimeOrchestrator {
     current: CodingRuntimeSnapshot,
     state: CodingWorkbenchRuntimeStateName,
     failureCode?: CodingWorkbenchRuntimeFailureCode,
+    pauseReason?: CodingWorkbenchOperatorDecision,
   ): CodingRuntimeSnapshot {
     const result = TERMINAL_STATES.has(state) ? this.deps.manager.result(current.runId) : undefined;
     return this.deps.snapshots.transition(current.runId, {
@@ -1903,6 +2380,7 @@ export class CodingRuntimeOrchestrator {
       revision: current.revision + 1,
       updatedAt: this.now().toISOString(),
       ...(failureCode ? { failureCode } : {}),
+      ...(pauseReason === undefined ? {} : { pauseReason }),
       ...(result === undefined ? {} : { result }),
     });
   }
@@ -2283,6 +2761,9 @@ export class CodingRuntimeOrchestrator {
       this.activeEffectiveMode = undefined;
     this.approvals.delete(next.runId);
     this.queuedApprovals.delete(next.runId);
+    // Every settlement ends a run's continuation budget, not only the task-settlement path: a
+    // continued run that is stopped, taken over or moved to recovery must not keep its entry.
+    this.deliveryContinuations.delete(next.runId);
     this.operations.clear(next.runId);
     this.pruneSettled();
   }
@@ -2324,6 +2805,18 @@ export class CodingRuntimeOrchestrator {
   }
 }
 
+/**
+ * F66 (Coding Workbench run 22, 2026-09-11): the bounded continuation an issue-bound run under Full
+ * access gets when its model ends a turn before delivery is evidenced. The operator authorized the
+ * run to deliver without per-action approval, and run 22's model stopped one step short — build
+ * verification passed, its own result named `stage-then-verify` — and the run settled
+ * `delivery-not-evidenced` at once. The continuation restates only the accepted task's delivery
+ * goal; every effect still goes through the governed tools, and nothing widens authority.
+ */
+export const DELIVERY_CONTINUATION_MAX = 2;
+export const DELIVERY_CONTINUATION_INTENT =
+  "Delivery is not evidenced yet: this issue-bound run has no verified commit and no delivered draft pull request. Continue with the next action your last tool results named, such as staging the changed files, verifying the staged candidate, committing, pushing and opening the draft pull request. Stop only when the delivery is evidenced or a governed tool refuses.";
+
 function taskOutcomeState(outcome: CodingRuntimeTaskOutcome): {
   readonly state: "failed" | "succeeded";
   readonly failureCode?: "runtime-failed" | undefined;
@@ -2353,6 +2846,11 @@ function resumeAdmission(
   if (!parsed.ok || parsed.value.requestId !== runId || current?.state !== "paused") {
     return undefined;
   }
+  // A run paused for a human decision has a governed tool waiting in place for that decision, and
+  // the runtime was never itself paused. Resuming it would return the run to `running` while the
+  // tool still waits, and the operator's real action — making the decision — would then arrive at a
+  // run no longer recorded as waiting for it. The decision resumes the run; Resume does not.
+  if (current.pauseReason !== undefined) return undefined;
   return {
     current,
     requestedMode: parsed.value.requestedMode ?? activeEffectiveMode ?? current.requestedMode,

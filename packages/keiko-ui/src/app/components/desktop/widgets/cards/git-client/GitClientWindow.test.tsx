@@ -34,6 +34,11 @@ import type {
 import type { GitRepositoryStatusResponse } from "@/lib/types";
 import type { GitEditorDiffResponse } from "@oscharko-dev/keiko-contracts";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
+import {
+  redeemCodingAppSessionPairingNavigation,
+  type CodingAppSessionPairingSeams,
+} from "@/lib/coding-app-session-client";
+import { encodeCodingAppSessionPairingFragment } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import type { GitClientSeam } from "./git-client-seam";
 import { GitClientWindow } from "./GitClientWindow";
 import { parseUnifiedDiff } from "../shared/diffParser";
@@ -880,6 +885,56 @@ describe("GitClientWindow — repository list", () => {
 
     // Resolve to avoid async leak in test runner
     act(() => resolve({ projects: [] }));
+  });
+
+  // PR #3452 review: the re-pair effect (F65) can leave two repository listings in flight. Without a
+  // sequence guard the OLDER answer lands last and overwrites the newer one, so the operator ends up
+  // looking at the repository list of a session that has already been replaced.
+  it("ignores a repository listing that a newer request already replaced", async () => {
+    let resolveOlder!: (value: { projects: readonly ProjectWithAvailability[] }) => void;
+    const older = new Promise<{ projects: readonly ProjectWithAvailability[] }>((res) => {
+      resolveOlder = res;
+    });
+    const first = makeClient({ listRepositories: vi.fn(() => older) });
+    const { rerender } = render(<GitClientWindow client={first} />);
+
+    const second = makeClient({ listRepositories: vi.fn(async () => ({ projects: [REPO_B] })) });
+    rerender(<GitClientWindow client={second} />);
+    await screen.findByRole("button", { name: /beta/ });
+    expect(screen.queryByRole("button", { name: /alpha/ })).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveOlder({ projects: [REPO_A] });
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("button", { name: /beta/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /alpha/ })).not.toBeInTheDocument();
+  });
+
+  // PR #3452 review: the guard covers BOTH callbacks, so the rejection half needs its own proof — a
+  // promise settles once. Without it, removing the guard from the error path would let an older
+  // FAILURE clear the newer repository list and post a stale error, with every test still green.
+  it("ignores a stale rejection that a newer request already replaced", async () => {
+    let rejectOlder!: (reason: Error) => void;
+    const older = new Promise<{ projects: readonly ProjectWithAvailability[] }>((_res, rej) => {
+      rejectOlder = rej;
+    });
+    const first = makeClient({ listRepositories: vi.fn(() => older) });
+    const { rerender } = render(<GitClientWindow client={first} />);
+
+    const second = makeClient({ listRepositories: vi.fn(async () => ({ projects: [REPO_B] })) });
+    rerender(<GitClientWindow client={second} />);
+    await screen.findByRole("button", { name: /beta/ });
+
+    await act(async () => {
+      rejectOlder(new Error("stale listing failure"));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole("button", { name: /beta/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /alpha/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("stale listing failure")).not.toBeInTheDocument();
   });
 
   it("shows the error message when listRepositories rejects", async () => {
@@ -3442,5 +3497,48 @@ describe("desktop-locked active root (#3390, rehearsal run-21)", () => {
     );
     expect(updateCfg).toHaveBeenCalledWith({ projectPath: "" });
     expect(client.getStatus).not.toHaveBeenCalled();
+  });
+});
+
+// A launcher re-pair that arrives without a page load (F65): a fragment, and a pair endpoint that
+// acknowledges it.
+const REPAIR_SEAMS: CodingAppSessionPairingSeams = {
+  readFragment: (): string =>
+    encodeCodingAppSessionPairingFragment({
+      requestId: "req_git-re-pair",
+      issuedAtMs: 1,
+      claim: "f".repeat(64),
+    }),
+  stripFragment: (): void => undefined,
+  postPairing: (): Promise<unknown> => Promise.resolve({ schemaVersion: "1" }),
+};
+
+// PR #3452 review: the reads of a managed task workspace are answered only for a paired browser,
+// and the window stayed on the unpaired answer after a re-pair until the page was reloaded.
+describe("GitClientWindow after a re-pair without a page load (F65)", () => {
+  it("reads every repository view again", async () => {
+    const client = makeClient();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    const reads = [
+      client.listRepositories,
+      client.listBranches,
+      client.getSummary,
+      client.getRemotes,
+      client.getStatus,
+    ];
+    await waitFor(() => {
+      for (const read of reads) expect(read).toHaveBeenCalled();
+    });
+    const before = reads.map((read) => vi.mocked(read).mock.calls.length);
+
+    await act(async () => {
+      await redeemCodingAppSessionPairingNavigation(REPAIR_SEAMS);
+    });
+
+    await waitFor(() => {
+      reads.forEach((read, index) => {
+        expect(vi.mocked(read).mock.calls.length).toBeGreaterThan(before[index] ?? 0);
+      });
+    });
   });
 });

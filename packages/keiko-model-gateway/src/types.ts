@@ -98,6 +98,8 @@ export interface ModelProviderConfig {
   readonly apiVersion?: string | undefined;
   readonly realtimeAuthMode?: RealtimeAuthMode | undefined;
   readonly outputTokenParameter?: OutputTokenParameter | undefined;
+  // Bounds ONE attempt. The whole buffered call is bounded by the budget `providerRequestBudgetMs`
+  // (resilience.ts) derives from this and `maxRetries`.
   readonly timeoutMs: number;
   readonly maxRetries: number;
   readonly retryBaseDelayMs: number;
@@ -206,16 +208,26 @@ export type GatewayStreamChunk =
   | { readonly type: "delta"; readonly token: string }
   | { readonly type: "done"; readonly response: NormalizedResponse };
 
+// The bounds of one streamed read (ADR-0003): `silenceMs` is the longest the provider may stay
+// silent (before its response starts, until its first data event and between two data events), and
+// `budgetMs` the most the whole read may take, however live.
+export interface StreamReadBounds {
+  readonly silenceMs: number;
+  readonly budgetMs: number;
+}
+
 export interface ProviderAdapter {
   readonly call: (
     request: GatewayRequest,
     config: ModelProviderConfig,
   ) => Promise<NormalizedResponse>;
   // Optional streaming variant. Absent on adapters that only support buffered calls;
-  // the Gateway synthesises a single delta+done from `call` in that case.
+  // the Gateway synthesises a single delta+done from `call` in that case. With `bounds` it reads
+  // the answer of a buffered attempt, bounded by them instead of one `timeoutMs`.
   readonly callStream?: (
     request: GatewayRequest,
     config: ModelProviderConfig,
+    bounds?: StreamReadBounds,
   ) => AsyncIterable<GatewayStreamChunk>;
 }
 

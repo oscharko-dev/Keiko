@@ -21,6 +21,7 @@ import type {
   CodingWorkbenchIssuePreviewResponseWire,
 } from "@oscharko-dev/keiko-contracts";
 import { parseCodingWorkbenchIssuePreviewRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import { UNKNOWN_REPOSITORY_ERROR_CODE } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
 
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
@@ -161,7 +162,7 @@ function unknownRepository(correlationId: string | undefined): RouteResult {
   return {
     status: 409,
     body: errorBody(
-      "UNKNOWN_REPOSITORY",
+      UNKNOWN_REPOSITORY_ERROR_CODE,
       "Open the repository before previewing an issue for it.",
       correlationId,
     ),
@@ -202,10 +203,19 @@ function failureResult(
   return { status: mapped.status, body };
 }
 
+// The refusals the route decides before any resolver runs. They are log outcomes only, never wire
+// values: the browser keys on `error.code` for them. Each is recorded like every other outcome, so a
+// refused preview is never invisible to `keiko support analyze` (F63, Coding Workbench run 24).
+type PreviewRequestRefusal = "invalid-request" | "request-too-large" | "unknown-repository";
+
+function refusedRequest(result: RouteResult): PreviewRequestRefusal {
+  return result.status === 413 ? "request-too-large" : "invalid-request";
+}
+
 function recordPreview(
   deps: UiHandlerDeps,
   correlationId: string | undefined,
-  outcome: CodingWorkbenchIssueBindingFailure | "resolved",
+  outcome: CodingWorkbenchIssueBindingFailure | PreviewRequestRefusal | "resolved",
   status: number,
   detail: { readonly issueNumber?: number | undefined; readonly repositoryId?: string | undefined },
 ): void {
@@ -221,6 +231,37 @@ function recordPreview(
       ...(detail.repositoryId === undefined ? {} : { repositoryId: detail.repositoryId }),
     },
   });
+}
+
+type AdmittedPreview =
+  | {
+      readonly ok: true;
+      readonly request: CodingWorkbenchIssuePreviewRequestWire;
+      readonly repositoryRoot: string;
+    }
+  | { readonly ok: false; readonly result: RouteResult };
+
+// Every guard the route decides before a resolver runs; each refusal is recorded (F63).
+async function admitPreview(ctx: RouteContext, deps: UiHandlerDeps): Promise<AdmittedPreview> {
+  if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
+    // A 403 that left no server-side line was invisible to `keiko support analyze`: the support
+    // id the operator saw resolved to nothing (2026-09-10, a dev-lane BFF restart that dropped the
+    // in-memory app session). The refusal is recorded like every other preview outcome.
+    recordPreview(deps, ctx.correlationId, "authority-denied", 403, {});
+    return { ok: false, result: failureResult("authority-denied", undefined, ctx.correlationId) };
+  }
+  const read = await readRequest(ctx);
+  if (!read.ok) {
+    recordPreview(deps, ctx.correlationId, refusedRequest(read.result), read.result.status, {});
+    return read;
+  }
+  const repositoryRoot = registeredCanonicalRoot(deps, read.request.repositoryPath);
+  if (repositoryRoot === undefined) {
+    const refused = unknownRepository(ctx.correlationId);
+    recordPreview(deps, ctx.correlationId, "unknown-repository", refused.status, {});
+    return { ok: false, result: refused };
+  }
+  return { ok: true, request: read.request, repositoryRoot };
 }
 
 function upstreamFailure(deps: UiHandlerDeps, ctx: RouteContext, error: unknown): RouteResult {
@@ -253,19 +294,14 @@ export function createCodingWorkbenchIssuePreviewHandler(
   resolver: GitHubIssueResolver = resolveGitHubIssue,
 ): (ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult> {
   return async (ctx, deps): Promise<RouteResult> => {
-    if (resolveAppSessionReadAuthority(deps, ctx.req) === undefined) {
-      return failureResult("authority-denied", undefined, ctx.correlationId);
-    }
-    const read = await readRequest(ctx);
-    if (!read.ok) return read.result;
-    const repositoryRoot = registeredCanonicalRoot(deps, read.request.repositoryPath);
-    if (repositoryRoot === undefined) return unknownRepository(ctx.correlationId);
+    const admitted = await admitPreview(ctx, deps);
+    if (!admitted.ok) return admitted.result;
     const cancellation = createRequestCancellation(ctx, "issue-preview-cancelled");
     let resolution;
     try {
       resolution = await resolver(deps, {
-        repositoryRoot,
-        issueRef: read.request.issueRef,
+        repositoryRoot: admitted.repositoryRoot,
+        issueRef: admitted.request.issueRef,
         correlationId: ctx.correlationId,
         signal: cancellation.signal,
       });

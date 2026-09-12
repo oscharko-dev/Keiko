@@ -11,6 +11,7 @@ import type { ActiveWorkspaceApi } from "@/app/components/desktop/context/Active
 import { logRuntimeActivityEvents } from "@/app/components/desktop/widgets/shared/activityBus";
 import { codingWorkbenchRuntimeApiError } from "./coding-workbench-runtime-api";
 import { useCodingWorkbenchRuntimeEventStream } from "./coding-workbench-event-retention";
+import { useCodingAppSessionRedemptions } from "./coding-app-session-client";
 import { fetchWorkspaceManifestAccess } from "./workspace-manifest-api";
 import type {
   CodingWorkbenchRuntimeState,
@@ -128,12 +129,14 @@ function usePostRunDescriptionRefresh(
 }
 
 /**
- * Release-audit F-08/RG-12: resolve the window's pairing dimension once per mount from the honest
- * workspaces read (which itself orders behind the boot pairing redemption, #2478). The state stays
+ * Release-audit F-08/RG-12: resolve the window's pairing dimension on mount, and again after every
+ * re-pair without a page load (F65), from the honest workspaces read (which itself orders behind
+ * the boot pairing redemption, #2478). The state stays
  * fail-closed on `unknown` when the read cannot answer — readiness must never claim a paired
  * session it has not confirmed, because an unpaired start is guaranteed to 403 (ADR-0141).
  */
 export function useCodingWorkbenchPairingEffect(dispatch: RuntimeDispatch): void {
+  const redemptions = useCodingAppSessionRedemptions();
   useEffect(() => {
     let cancelled = false;
     void fetchWorkspaceManifestAccess().then(
@@ -155,7 +158,7 @@ export function useCodingWorkbenchPairingEffect(dispatch: RuntimeDispatch): void
     return () => {
       cancelled = true;
     };
-  }, [dispatch]);
+  }, [dispatch, redemptions]);
 }
 
 export function useCodingWorkbenchWorkspaceEffect({

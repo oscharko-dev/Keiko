@@ -308,6 +308,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Der Repository-Pfad liegt außerhalb der Ordner, die diese Installation binden darf. Wähle einen Ordner innerhalb eines erlaubten Workspace-Roots.",
   "codingWorkbench.setup.lockContention":
     "Eine andere Aktion hält diesen Task Workspace gerade. Warte einen Moment und versuche es dann erneut.",
+  "codingWorkbench.setup.provisioningFailed":
+    "Keiko konnte den verwalteten Task Workspace für dieses Repository nicht anlegen. Repository-Pfad und Zielbranch wurden akzeptiert; das Aktivitätsprotokoll enthält die Ursache.",
   "codingWorkbench.setup.provisioningUnavailable":
     "Verwaltete Task Workspaces sind auf dieser Installation nicht konfiguriert, daher kann kein Workspace gebunden werden.",
   "codingWorkbench.setup.repairRequired":
@@ -453,6 +455,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die Abo-Quelle ist ausgewählt; das Gateway wird nicht verwendet.",
   "codingWorkbench.source.unavailableReason.model-context-window-insufficient":
     "Das Kontextfenster des konfigurierten Modells ist für einen Coding-Lauf zu klein (mindestens 32.000 Tokens). Vergrößere das Kontextfenster des Modells oder wähle unter Einstellungen → Modelle ein größeres Modell.",
+  "codingWorkbench.source.unavailableReason.tool-calling-unverified":
+    "Die Tool-Calling-Prüfung des Coding-Modells fehlt oder ist älter als 24 Stunden. Prüfe das Tool-Calling unter Einstellungen → Modelle erneut.",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
   "codingWorkbench.modelSource.openaiGateway": "OpenAI über Gateway",
   "codingWorkbench.modelSource.codexSubscription": "ChatGPT/Codex-Abonnement",
@@ -633,6 +637,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Mit teilweise ausgelassenen Belegen erstellt.",
   "codingWorkbench.descriptionStatus.reason.fallback-generated":
     "Deterministisch erstellt; das Modell war nicht verfügbar.",
+  "codingWorkbench.descriptionStatus.reason.fallback-output-refused":
+    "Deterministisch erstellt; die Antwort des Modells wurde als unsicher oder ungültig abgelehnt.",
   "codingWorkbench.descriptionStatus.reason.stale-snapshot":
     "Die Änderung hat sich seit der Entwurfserstellung weiterentwickelt.",
   "codingWorkbench.descriptionStatus.reason.expired":
@@ -865,6 +871,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.skill-invoked": "Skill aufgerufen",
   "codingWorkbench.event.child-run-started": "Unteragent gestartet",
   "codingWorkbench.event.child-run-completed": "Unteragent abgeschlossen",
+  "codingWorkbench.event.operator-decision": "Deine Entscheidung nötig",
   "codingWorkbench.event.failure-redacted": "Fehler gemeldet",
   "codingWorkbench.event.detail": "Sequenz {sequence}. Revision {revision}.",
   "codingWorkbench.event.detailFailure":
@@ -887,6 +894,18 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.research.revoking": "Wird widerrufen…",
   "codingWorkbench.research.revokeLabel":
     "Internet-Recherche-Berechtigung für diesen Lauf und seine Unteragenten widerrufen",
+  "codingWorkbench.skills.summary": "Freigegebene Skills ({count})",
+  "codingWorkbench.skills.ready": "Bereit",
+  "codingWorkbench.skills.category.repositoryAnalysis": "Repository-Analyse",
+  "codingWorkbench.skills.category.publicResearch": "Öffentliche Recherche",
+  "codingWorkbench.skills.category.documentationLookup": "Dokumentationssuche",
+  "codingWorkbench.skills.reason.disabled": "Deaktiviert",
+  "codingWorkbench.skills.reason.incompatible": "Nicht kompatibel",
+  "codingWorkbench.skills.reason.handlerUnavailable": "Kein Handler",
+  "codingWorkbench.skills.reason.authorityDenied": "Berechtigung verweigert",
+  "codingWorkbench.skills.unavailable": "Die freigegebenen Skills konnten nicht gelesen werden.",
+  "codingWorkbench.skills.retry": "Erneut versuchen",
+  "codingWorkbench.skills.reason.budgetExhausted": "Budget erschöpft",
   "codingWorkbench.announcement.researchActive": "Internet-Recherche-Berechtigung aktiv.",
   "codingWorkbench.alert.actionFailedCode":
     "Die angeforderte Runtime-Aktion ist fehlgeschlagen ({code}). Prüfe den Live-Zustand und versuche es erneut.",
@@ -970,6 +989,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Die aktuelle Autorität erlaubt es nicht, einen Lauf an dieses Issue zu binden. Prüfe den Autonomiemodus und versuche es erneut.",
   "codingWorkbench.issue.error.cancelled":
     "Die Issue-Aufnahme wurde abgebrochen. Es wurde kein Lauf gestartet.",
+  "codingWorkbench.issue.error.unknown-repository":
+    "Öffne dieses Repository zuerst in der Workbench und lade dann die Vorschau des Issues.",
   "codingWorkbench.issue.error.unavailable-runtime":
     "Die Coding-Runtime ist auf dieser Installation nicht verfügbar, daher kann kein issue-gebundener Lauf starten. Die Vorschau bleibt zur Ansicht; bestätige, sobald die Runtime aktiv ist.",
   "codingWorkbench.issue.error.unknown":
@@ -997,6 +1018,10 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Dieser Pfad ist kein geöffnetes Projekt. Öffne das Repository als Projekt, bevor du seinen GitHub-Issue-Zugriff änderst.",
   "codingWorkbench.trust.restrictedNotice":
     "Die Verifizierung muss die Paket-Skripte dieses Repositorys ausführen, sie sind aber noch nicht freigegeben.",
+  "codingWorkbench.trust.runWaitingNotice":
+    "Dieser Run ist pausiert: Er muss die Paket-Skripte dieses Task-Workspace ausführen, um seine Arbeit zu verifizieren, und nur du kannst sie für genau dieses Manifest zulassen. Der Run läuft von selbst weiter, sobald du entschieden hast.",
+  "codingWorkbench.trust.driftNotice":
+    "Die Freigabe des Repositorys deckt die Paket-Skripte dieses Task-Workspace nicht ab, meist weil dieser Run die package.json geändert hat. Sie zuzulassen ist deine Entscheidung für genau dieses Manifest.",
   "codingWorkbench.trust.allow": "Paket-Skripte für die Verifizierung zulassen",
   "codingWorkbench.trust.allowing": "Wird zugelassen…",
 } satisfies CodingWorkbenchMessageCatalog;

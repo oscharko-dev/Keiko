@@ -150,6 +150,7 @@ function unavailableBudget(
     canChargePrompt: allowed,
     chargePrompt: allowed,
     chargeDelegatedRead: allowed,
+    canChargeDelegatedRead: allowed,
     observed: () => undefined,
     // #3384 wave-3 W3-8 "needs": no controller is available to ever report exhaustion here — an
     // unavailable budget is never itself the reason a readiness snapshot reads
@@ -213,6 +214,7 @@ function gateBudget(
     canChargePrompt: (tokens) => allowed() && budget.canChargePrompt(tokens),
     chargePrompt: (tokens) => allowed() && budget.chargePrompt(tokens),
     chargeDelegatedRead: (id, key) => allowed() && budget.chargeDelegatedRead?.(id, key) === true,
+    canChargeDelegatedRead: () => allowed() && budget.canChargeDelegatedRead?.() === true,
     ciObservationRequired: (): boolean => {
       const required = allowed() && budget.ciObservationRequired?.() === true;
       if (required) recordObservationRequired();

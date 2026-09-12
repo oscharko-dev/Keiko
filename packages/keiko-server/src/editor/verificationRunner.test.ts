@@ -6,7 +6,7 @@
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   EditorVerificationEvent,
   VerificationKind,
@@ -17,8 +17,10 @@ import type {
 import { createInMemoryEvidenceStore, type EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { ExecuteVerificationResult } from "./verificationExecution.js";
+import type { VerificationStepOutput } from "@oscharko-dev/keiko-verification";
 import {
   createVerificationRunnerManager,
+  decideScriptTrust,
   type VerificationExecutePort,
   type VerificationRunInput,
   type VerificationRunnerManager,
@@ -368,13 +370,143 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
 
       expect(() =>
         manager.execute(input({ projectId: worktreeRoot, kinds: ["typecheck"] })),
-      ).toThrow(expect.objectContaining({ code: "WORKSPACE_TRUST_REQUIRED" }));
+      ).toThrow(
+        expect.objectContaining({
+          code: "WORKSPACE_TRUST_REQUIRED",
+          trustRefusal: "worktree-manifest-drift",
+        }),
+      );
       expect(port.calls).toBe(0);
       // The same worktree with a byte-identical manifest keeps the repository's grant.
       writeFileSync(join(worktreeRoot, "package.json"), PACKAGE_JSON, "utf8");
       const { done } = collect(manager);
       manager.execute(input({ projectId: worktreeRoot, kinds: ["typecheck"] }));
       await done;
+      expect(port.calls).toBe(1);
+    } finally {
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  // ADR-0147 D3 (Coding Workbench run 8, 2026-09-10): a governed run that rewrote its worktree
+  // manifest can only continue under an explicit human grant recorded for the worktree root itself.
+  // The refusal names WHY on the run's own activity line — before this it read exactly like a
+  // repository nobody had trusted, and the operator was pointed at a grant that cannot clear drift.
+  it("admits a drifted worktree only under the worktree root's own explicit grant and logs the refusal reason", async () => {
+    const worktreeRoot = mkdtempSync(join(tmpdir(), "keiko-verify-worktree-grant-"));
+    try {
+      writeFileSync(
+        join(worktreeRoot, "package.json"),
+        PACKAGE_JSON.replace('"tsc --noEmit"', '"tsc --noEmit && vite build"'),
+        "utf8",
+      );
+      mkdirSync(join(worktreeRoot, "src"), { recursive: true });
+      writeFileSync(join(worktreeRoot, "src", "a.test.ts"), "test('x', () => {});\n", "utf8");
+      const port = fakePort(report(["typecheck"]));
+      const events: ServerLogEvent[] = [];
+      const humanGrantAsked: string[] = [];
+      let worktreeGranted = false;
+      const manager = makeManager({
+        activityLog: { write: (event): void => void events.push(event) },
+        resolveWorkspaceRootAccess: (root): WorkspaceRootAccess | undefined =>
+          root === worktreeRoot
+            ? {
+                kind: "managed-task",
+                canonicalRoot: worktreeRoot,
+                fs: nodeWorkspaceFs,
+                repositoryRoot: workspaceRoot,
+              }
+            : undefined,
+        execute: port.port,
+        isWorkspaceTrustedForPackageScripts: (): boolean => true,
+        isWorktreeTrustedByHumanGrant: (canonicalRoot): boolean => {
+          humanGrantAsked.push(canonicalRoot);
+          return worktreeGranted;
+        },
+      });
+      const typecheckTrust = (): string | undefined =>
+        manager.discover(worktreeRoot).kinds.find((entry) => entry.kind === "typecheck")
+          ?.trustState;
+
+      expect(() =>
+        manager.execute(
+          input({ projectId: worktreeRoot, kinds: ["typecheck"], correlationId: "run-drift" }),
+        ),
+      ).toThrow(
+        expect.objectContaining({
+          code: "WORKSPACE_TRUST_REQUIRED",
+          trustRefusal: "worktree-manifest-drift",
+        }),
+      );
+      expect(humanGrantAsked).toEqual([worktreeRoot]);
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          op: "editor.verification.execute",
+          correlationId: "run-drift",
+          errorKind: "WORKSPACE_TRUST_REQUIRED",
+          extra: expect.objectContaining({
+            state: "refused",
+            reason: "WORKSPACE_TRUST_REQUIRED",
+            trustRefusal: "worktree-manifest-drift",
+          }) as unknown,
+        }),
+      );
+      expect(typecheckTrust()).toBe("approval-required");
+
+      worktreeGranted = true;
+      expect(typecheckTrust()).toBe("trusted");
+      const { done } = collect(manager);
+      manager.execute(input({ projectId: worktreeRoot, kinds: ["typecheck"] }));
+      await done;
+      expect(port.calls).toBe(1);
+    } finally {
+      rmSync(worktreeRoot, { recursive: true, force: true });
+    }
+  });
+
+  // The worktree's own record is consulted only once the repository's grant has stopped covering
+  // it: a byte-identical worktree under a trusted repository never touches it (no invalidation
+  // side effect on a derived record), and an untrusted repository names ITSELF as the reason.
+  it("names an untrusted repository and asks the worktree grant only when the repository does not cover it", async () => {
+    const worktreeRoot = mkdtempSync(join(tmpdir(), "keiko-verify-worktree-covered-"));
+    try {
+      writeFileSync(join(worktreeRoot, "package.json"), PACKAGE_JSON, "utf8");
+      mkdirSync(join(worktreeRoot, "src"), { recursive: true });
+      writeFileSync(join(worktreeRoot, "src", "a.test.ts"), "test('x', () => {});\n", "utf8");
+      const port = fakePort(report(["typecheck"]));
+      const humanGrant = vi.fn((): boolean => false);
+      let repositoryTrusted = true;
+      const manager = makeManager({
+        resolveWorkspaceRootAccess: (root): WorkspaceRootAccess | undefined =>
+          root === worktreeRoot
+            ? {
+                kind: "managed-task",
+                canonicalRoot: worktreeRoot,
+                fs: nodeWorkspaceFs,
+                repositoryRoot: workspaceRoot,
+              }
+            : undefined,
+        execute: port.port,
+        isWorkspaceTrustedForPackageScripts: (): boolean => repositoryTrusted,
+        isWorktreeTrustedByHumanGrant: humanGrant,
+      });
+
+      const { done } = collect(manager);
+      manager.execute(input({ projectId: worktreeRoot, kinds: ["typecheck"] }));
+      await done;
+      expect(port.calls).toBe(1);
+      expect(humanGrant).not.toHaveBeenCalled();
+
+      repositoryTrusted = false;
+      expect(() =>
+        manager.execute(input({ projectId: worktreeRoot, kinds: ["typecheck"] })),
+      ).toThrow(
+        expect.objectContaining({
+          code: "WORKSPACE_TRUST_REQUIRED",
+          trustRefusal: "repository-not-trusted",
+        }),
+      );
+      expect(humanGrant).toHaveBeenCalledExactlyOnceWith(worktreeRoot);
       expect(port.calls).toBe(1);
     } finally {
       rmSync(worktreeRoot, { recursive: true, force: true });
@@ -751,7 +883,7 @@ describe("VerificationRunnerManager — runToReport shares the human run's lifec
     const events: EditorVerificationEvent[] = [];
     manager.subscribe((event) => events.push(event));
     const controller = new AbortController();
-    const resultReport = await manager.runToReport(
+    const { report: resultReport } = await manager.runToReport(
       input({ kinds: ["targeted-test"], targetPath: "src/a.test.ts" }),
       controller.signal,
     );
@@ -814,6 +946,196 @@ describe("VerificationRunnerManager — runToReport shares the human run's lifec
         controller.signal,
       ),
     ).rejects.toThrow(VerificationRunnerError);
+  });
+});
+
+// #3452: the agent path's own plumbing around the injected execute port -- runToReport must ask
+// for a dependency bootstrap and forward every orchestrator output through onStepOutput, bounded,
+// and must leave exactly one body-free activity line behind for a report that bootstrapped
+// dependencies (and none for one that did not).
+describe("VerificationRunnerManager — runToReport's dependency-bootstrap and step-output plumbing (#3452)", () => {
+  it('passes dependencyBootstrap "auto" and an onStepOutput sink to the execute port, and returns everything pushed through it as failureOutput', async () => {
+    const outputs: VerificationStepOutput[] = [
+      { step: "dependencies", scriptName: undefined, excerpt: "npm install failed" },
+      { step: "targeted-test", scriptName: "vitest", excerpt: "1 failing" },
+    ];
+    let observedBootstrap: "off" | "auto" | undefined;
+    let observedOnStepOutput: ((output: VerificationStepOutput) => void) | undefined;
+    const port: VerificationExecutePort = (args) => {
+      observedBootstrap = args.dependencyBootstrap;
+      observedOnStepOutput = args.onStepOutput;
+      for (const output of outputs) args.onStepOutput?.(output);
+      return Promise.resolve({
+        report: report(["targeted-test"]),
+        probe: { available: true, backend: "test-backend" },
+      });
+    };
+    const manager = makeManager({ execute: port });
+
+    const { failureOutput } = await manager.runToReport(
+      input({ kinds: ["targeted-test"], targetPath: "src/a.test.ts" }),
+      new AbortController().signal,
+    );
+
+    expect(observedBootstrap).toBe("auto");
+    expect(typeof observedOnStepOutput).toBe("function");
+    expect(failureOutput).toEqual(outputs);
+  });
+
+  it("caps failureOutput at 8 entries even when the port pushes more through onStepOutput", async () => {
+    // MAX_FAILURE_OUTPUTS (verificationRunner.ts) is 8 and module-private; pinned by its observable
+    // effect rather than by importing it.
+    const many: VerificationStepOutput[] = Array.from({ length: 12 }, (_, index) => ({
+      step: "targeted-test",
+      scriptName: "vitest",
+      excerpt: `failure ${String(index)}`,
+    }));
+    const port: VerificationExecutePort = (args) => {
+      for (const output of many) args.onStepOutput?.(output);
+      return Promise.resolve({
+        report: report(["targeted-test"]),
+        probe: { available: true, backend: "test-backend" },
+      });
+    };
+    const manager = makeManager({ execute: port });
+
+    const { failureOutput } = await manager.runToReport(
+      input({ kinds: ["targeted-test"], targetPath: "src/a.test.ts" }),
+      new AbortController().signal,
+    );
+
+    expect(failureOutput).toHaveLength(8);
+    expect(failureOutput).toEqual(many.slice(0, 8));
+  });
+
+  it("writes exactly one body-free editor.verification.dependencies activity line when the report carries a dependencies summary", async () => {
+    const events: ServerLogEvent[] = [];
+    const withDependencies: VerificationReport = {
+      ...report(["targeted-test"]),
+      dependencies: { state: "installed", lockfile: "created", exitCode: 0, durationMs: 4_200 },
+    };
+    const manager = makeManager({
+      activityLog: { write: (event): void => void events.push(event) },
+      execute: fakePort(withDependencies).port,
+    });
+
+    await manager.runToReport(
+      input({
+        kinds: ["targeted-test"],
+        targetPath: "src/a.test.ts",
+        correlationId: "deps-present",
+      }),
+      new AbortController().signal,
+    );
+
+    const dependencyLines = events.filter(
+      (event) => event.op === "editor.verification.dependencies",
+    );
+    expect(dependencyLines).toHaveLength(1);
+    expect(dependencyLines[0]).toMatchObject({
+      op: "editor.verification.dependencies",
+      correlationId: "deps-present",
+      extra: { state: "installed", lockfile: "created", exitCode: 0, durationMs: 4_200 },
+    });
+    expect(JSON.stringify(dependencyLines)).not.toContain(workspaceRoot);
+  });
+
+  it("carries the install's registry egress counts on the dependencies line", async () => {
+    const events: ServerLogEvent[] = [];
+    const withEgress: VerificationReport = {
+      ...report(["targeted-test"]),
+      dependencies: {
+        state: "refused",
+        lockfile: "absent",
+        exitCode: 1,
+        durationMs: 900,
+        egress: { allowed: 4, refused: 1 },
+      },
+    };
+    const manager = makeManager({
+      activityLog: { write: (event): void => void events.push(event) },
+      execute: fakePort(withEgress).port,
+    });
+
+    await manager.runToReport(
+      input({
+        kinds: ["targeted-test"],
+        targetPath: "src/a.test.ts",
+        correlationId: "deps-egress",
+      }),
+      new AbortController().signal,
+    );
+
+    const line = events.find((event) => event.op === "editor.verification.dependencies");
+    expect(line).toMatchObject({
+      correlationId: "deps-egress",
+      extra: { state: "refused", egressAllowed: 4, egressRefused: 1 },
+    });
+  });
+
+  it("writes no editor.verification.dependencies line when the report carries no dependencies summary", async () => {
+    const events: ServerLogEvent[] = [];
+    const manager = makeManager({
+      activityLog: { write: (event): void => void events.push(event) },
+      execute: fakePort(report(["targeted-test"])).port,
+    });
+
+    await manager.runToReport(
+      input({
+        kinds: ["targeted-test"],
+        targetPath: "src/a.test.ts",
+        correlationId: "deps-absent",
+      }),
+      new AbortController().signal,
+    );
+
+    expect(events.some((event) => event.op === "editor.verification.dependencies")).toBe(false);
+  });
+
+  // #3452 follow-up: `executeAndReport` (the human path behind `execute`/`runPlan`) built the
+  // SAME dependencyBootstrap request and recorded the same activity line by hand, alongside
+  // executeAgentPlan's copy above -- and only the agent path was ever driven through a test. Both
+  // call sites now build their orchestrator options from one shared helper (buildExecuteArgs); this
+  // proves the human path gets identical behaviour rather than merely trusting the refactor.
+  it('passes dependencyBootstrap "auto" to the execute port and writes the dependencies activity line for a human-triggered run', async () => {
+    const withDependencies: VerificationReport = {
+      ...report(["targeted-test"]),
+      dependencies: { state: "installed", lockfile: "created", exitCode: 0, durationMs: 4_200 },
+    };
+    let observedBootstrap: "off" | "auto" | undefined;
+    const port: VerificationExecutePort = (args) => {
+      observedBootstrap = args.dependencyBootstrap;
+      return Promise.resolve({
+        report: withDependencies,
+        probe: { available: true, backend: "test-backend" },
+      });
+    };
+    const events: ServerLogEvent[] = [];
+    const manager = makeManager({
+      execute: port,
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+    const { done } = collect(manager);
+
+    manager.execute(
+      input({
+        kinds: ["targeted-test"],
+        targetPath: "src/a.test.ts",
+        correlationId: "human-deps-present",
+      }),
+    );
+    await done;
+
+    expect(observedBootstrap).toBe("auto");
+    const dependencyLines = events.filter(
+      (event) => event.op === "editor.verification.dependencies",
+    );
+    expect(dependencyLines).toHaveLength(1);
+    expect(dependencyLines[0]).toMatchObject({
+      op: "editor.verification.dependencies",
+      correlationId: "human-deps-present",
+      extra: { state: "installed", lockfile: "created", exitCode: 0, durationMs: 4_200 },
+    });
   });
 });
 
@@ -976,5 +1298,133 @@ describe("VerificationRunnerManager — catalog + edge cases", () => {
     expect(() =>
       manager.execute(input({ kinds: ["targeted-test"], targetPath: "src/missing.test.ts" })),
     ).toThrow(VerificationRunnerError);
+  });
+});
+
+// The ONE package-script trust rule every consumer asks (verification runner, command runner, agent
+// verification route). An ordinary root is decided by its own standing grant alone — the worktree
+// decider is never consulted for it — and any decider that throws fails the decision closed under
+// its own reason instead of surfacing as an admitted run or an unexplained refusal.
+describe("decideScriptTrust", () => {
+  const ordinary: WorkspaceRootAccess = {
+    kind: "ordinary",
+    canonicalRoot: "/ordinary",
+    fs: nodeWorkspaceFs,
+  };
+
+  it("decides an ordinary root by its own standing grant alone", () => {
+    const worktreeHumanGrant = vi.fn((): boolean => true);
+    expect(
+      decideScriptTrust({
+        access: ordinary,
+        repositoryFs: nodeWorkspaceFs,
+        standingTrust: (): boolean => true,
+        worktreeHumanGrant,
+        runAdmittedManifest: (): boolean => false,
+      }),
+    ).toEqual({ trusted: true, basis: "own-root" });
+    expect(
+      decideScriptTrust({
+        access: ordinary,
+        repositoryFs: nodeWorkspaceFs,
+        standingTrust: (): boolean => false,
+        worktreeHumanGrant,
+        runAdmittedManifest: (): boolean => false,
+      }),
+    ).toEqual({ trusted: false, refusal: "root-not-trusted" });
+    expect(worktreeHumanGrant).not.toHaveBeenCalled();
+  });
+
+  it("fails closed under its own reason when a decider throws", () => {
+    expect(
+      decideScriptTrust({
+        access: ordinary,
+        repositoryFs: nodeWorkspaceFs,
+        standingTrust: (): boolean => {
+          throw new Error("trust store unavailable");
+        },
+        worktreeHumanGrant: (): boolean => true,
+        runAdmittedManifest: (): boolean => true,
+      }),
+    ).toEqual({ trusted: false, refusal: "decision-failed" });
+  });
+
+  // ADR-0147 D3, autonomous-delivery amendment (owner decision, 2026-09-10): the run's own manifest
+  // is a basis only UNDER the repository's standing grant and only after the explicit worktree
+  // grant was asked; a repository nobody trusted admits no run manifest, and an ordinary root never
+  // consults it.
+  describe("run-manifest basis", () => {
+    const worktreeDir = mkdtempSync(join(tmpdir(), "keiko-run-manifest-"));
+    const repositoryDir = mkdtempSync(join(tmpdir(), "keiko-run-manifest-repo-"));
+    writeFileSync(join(repositoryDir, "package.json"), PACKAGE_JSON, "utf8");
+    writeFileSync(
+      join(worktreeDir, "package.json"),
+      PACKAGE_JSON.replace('"vitest run"', '"vitest run --coverage"'),
+      "utf8",
+    );
+    const drifted: WorkspaceRootAccess = {
+      kind: "managed-task",
+      canonicalRoot: worktreeDir,
+      fs: nodeWorkspaceFs,
+      repositoryRoot: repositoryDir,
+    };
+    afterAll(() => {
+      rmSync(worktreeDir, { recursive: true, force: true });
+      rmSync(repositoryDir, { recursive: true, force: true });
+    });
+
+    it("admits a drifted worktree under the repository's grant when the run left the manifest", () => {
+      const runAdmittedManifest = vi.fn((): boolean => true);
+      expect(
+        decideScriptTrust({
+          access: drifted,
+          repositoryFs: nodeWorkspaceFs,
+          standingTrust: (): boolean => true,
+          worktreeHumanGrant: (): boolean => false,
+          runAdmittedManifest,
+        }),
+      ).toEqual({ trusted: true, basis: "run-manifest" });
+      expect(runAdmittedManifest).toHaveBeenCalledOnce();
+    });
+
+    it("prefers the explicit worktree grant and never asks the run when it holds", () => {
+      const runAdmittedManifest = vi.fn((): boolean => true);
+      expect(
+        decideScriptTrust({
+          access: drifted,
+          repositoryFs: nodeWorkspaceFs,
+          standingTrust: (): boolean => true,
+          worktreeHumanGrant: (): boolean => true,
+          runAdmittedManifest,
+        }),
+      ).toEqual({ trusted: true, basis: "worktree-human-grant" });
+      expect(runAdmittedManifest).not.toHaveBeenCalled();
+    });
+
+    it("admits no run manifest for a repository nobody trusted", () => {
+      const runAdmittedManifest = vi.fn((): boolean => true);
+      expect(
+        decideScriptTrust({
+          access: drifted,
+          repositoryFs: nodeWorkspaceFs,
+          standingTrust: (): boolean => false,
+          worktreeHumanGrant: (): boolean => false,
+          runAdmittedManifest,
+        }),
+      ).toEqual({ trusted: false, refusal: "repository-not-trusted" });
+      expect(runAdmittedManifest).not.toHaveBeenCalled();
+    });
+
+    it("still refuses the drift when the run left a different manifest than the one now present", () => {
+      expect(
+        decideScriptTrust({
+          access: drifted,
+          repositoryFs: nodeWorkspaceFs,
+          standingTrust: (): boolean => true,
+          worktreeHumanGrant: (): boolean => false,
+          runAdmittedManifest: (): boolean => false,
+        }),
+      ).toEqual({ trusted: false, refusal: "worktree-manifest-drift" });
+    });
   });
 });

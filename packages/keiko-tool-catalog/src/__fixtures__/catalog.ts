@@ -48,7 +48,7 @@ export function profile(
     adapterDialect: { id: dialect, version: 1 },
     adapterRuntime:
       dialect === "managed-runtime-json-schema"
-        ? { id: "opencode", version: "1.17.17" }
+        ? { id: "opencode", version: "1.18.30" }
         : { id: "keiko", version: "0.3.17" },
     compatibility: [],
   };

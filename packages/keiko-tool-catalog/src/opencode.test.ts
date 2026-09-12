@@ -1,10 +1,27 @@
 import { describe, expect, it } from "vitest";
+import type { CanonicalToolId } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
+import {
+  DEFAULT_SANDBOX_POLICY,
+  GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/tools";
+import {
+  DEFAULT_VERIFICATION_LIMITS,
+  VERIFICATION_TOOL_MAX_DURATION_MS,
+} from "@oscharko-dev/keiko-contracts/runtime/verification";
 import { opencodeRegistrationSet, OPENCODE_NATIVE_EXTENSION_DEFINITIONS } from "./opencode.js";
 import { createKeikoToolCatalog } from "./composer.js";
 import { compileToolProjection, gatewayToolDefinitions } from "./projection.js";
 import { matchesCatalogSchema } from "./schema.js";
 
 const OPENCODE_PROFILE = { id: "opencode", version: 1 } as const;
+
+// The proposal tools that wait in place for the operator's approval (F44).
+const APPROVAL_WAITING_TOOL_IDS: ReadonlySet<string> = new Set([
+  "keiko.git.stage",
+  "keiko.git.commit",
+  "keiko.git.push",
+  "keiko.git.pullrequest",
+]);
 
 const GIT_DELIVERY_CANONICAL_IDS = [
   "keiko.git.status",
@@ -73,6 +90,34 @@ describe("opencode registration set", () => {
     }
   });
 
+  // The catalog settles every governed tool call at its descriptor's `bounds.maxDurationMs`, and
+  // every managed tool inherited the sandbox default of 30 s — which no real test or build run
+  // fits, so the first verification a Coding Workbench run actually executed would have been cut
+  // off as an opaque timeout before it could report (2026-09-10). The same default cut off the four
+  // proposal tools while they waited up to five minutes for the operator's approval (F44). The
+  // verification tool declares the budget its own enforced limits need, the proposal tools their
+  // wait on top of their own work; the others keep the default, so a reader who widened it for
+  // everything would fail here too.
+  it("gives the verification and the proposal tools the budget their work needs and no other tool more", () => {
+    const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
+    const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
+    const byId = new Map(projection.tools.map((tool) => [tool.toolRef.canonicalId, tool]));
+    const verification = byId.get("keiko.verification.run" as CanonicalToolId);
+    expect(verification?.bounds.maxDurationMs).toBe(VERIFICATION_TOOL_MAX_DURATION_MS);
+    expect(VERIFICATION_TOOL_MAX_DURATION_MS).toBeGreaterThan(
+      DEFAULT_VERIFICATION_LIMITS.wallTimeMs,
+    );
+    for (const id of APPROVAL_WAITING_TOOL_IDS) {
+      expect(byId.get(id as CanonicalToolId)?.bounds.maxDurationMs).toBe(
+        GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
+      );
+    }
+    for (const [id, tool] of byId) {
+      if (id === "keiko.verification.run" || APPROVAL_WAITING_TOOL_IDS.has(id)) continue;
+      expect(tool.bounds.maxDurationMs).toBe(DEFAULT_SANDBOX_POLICY.defaultTimeoutMs);
+    }
+  });
+
   // #3386/#3387/#3388: the Git status/diff/stage/commit, push/pull-request and CI-observation
   // tools are catalog-registered so the sidecar-gateway's outgoing "toolCatalog" advertisement
   // (built from this same registration set) actually shows them to the real underlying model --
@@ -101,14 +146,31 @@ describe("opencode registration set", () => {
     });
   });
 
-  it("declares exactly sixteen governed tools with unique canonical identities and aliases", () => {
+  it("declares exactly seventeen governed tools with unique canonical identities and aliases", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
-    expect(projection.tools).toHaveLength(16);
+    expect(projection.tools).toHaveLength(17);
     const canonicalIds = projection.tools.map((tool) => tool.toolRef.canonicalId);
     const aliases = projection.tools.map((tool) => tool.alias);
-    expect(new Set(canonicalIds).size).toBe(16);
-    expect(new Set(aliases).size).toBe(16);
+    expect(new Set(canonicalIds).size).toBe(17);
+    expect(new Set(aliases).size).toBe(17);
+  });
+
+  // #3417: the catalog owns only the discovery descriptor; it reads, takes no argument, carries the
+  // default budget and names its own handler, apart from the invocation it points to.
+  it("declares skill discovery as a read-only, argument-free descriptor beside skill invocation", () => {
+    const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
+    const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
+    const discover = projection.tools.find((tool) => tool.alias === "keiko_skill_discover");
+    expect(discover?.toolRef.canonicalId).toBe("keiko.skill.discover");
+    expect(discover?.inputSchema).toMatchObject({ type: "object", properties: {} });
+    expect(discover?.bounds.maxDurationMs).toBe(DEFAULT_SANDBOX_POLICY.defaultTimeoutMs);
+    const entry = opencodeRegistrationSet().entries.find(
+      (candidate) => candidate.alias === "keiko_skill_discover",
+    );
+    expect(entry?.descriptor.effects).toEqual(["workspace-read"]);
+    expect(entry?.descriptor.idempotency).toBe("read-only");
+    expect(entry?.descriptor.handlerRequirement.id).toBe("opencode-skill-discovery-port");
   });
 
   it("keeps Git mutation, CI observation, and local skill effects distinct", () => {
@@ -176,19 +238,19 @@ describe("opencode registration set", () => {
     expect(projection.tools.map((tool) => tool.alias)).not.toContain("todowrite");
   });
 
-  it("pins the managed-runtime dialect: opencode 1.17.17, every projected schema all-required and additionalProperties stripped", () => {
+  it("pins the managed-runtime dialect: opencode 1.18.30, every projected schema all-required and additionalProperties stripped", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const projection = compileToolProjection(catalog, OPENCODE_PROFILE);
     expect(projection.adapterDialect).toEqual({ id: "managed-runtime-json-schema", version: 1 });
-    expect(projection.adapterRuntime).toEqual({ id: "opencode", version: "1.17.17" });
+    expect(projection.adapterRuntime).toEqual({ id: "opencode", version: "1.18.30" });
     for (const tool of projection.tools) assertManagedShape(tool.inputSchema);
   });
 
   it("is the source coding-sidecar-gateway.ts derives its outgoing gateway advertisement from", () => {
     const catalog = createKeikoToolCatalog([opencodeRegistrationSet()]);
     const definitions = gatewayToolDefinitions(catalog, OPENCODE_PROFILE);
-    expect(definitions).toHaveLength(16);
-    expect(new Set(definitions.map((tool) => tool.name)).size).toBe(16);
+    expect(definitions).toHaveLength(17);
+    expect(new Set(definitions.map((tool) => tool.name)).size).toBe(17);
     for (const tool of definitions) expect(tool.description.length).toBeGreaterThan(0);
   });
 

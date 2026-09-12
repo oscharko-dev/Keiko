@@ -162,9 +162,15 @@ vi.mock("../hooks/useChatSession", async (importOriginal) => {
 // jsdom, and the window is denied for want of a provable root — correct product behaviour, and not
 // what these cases are about. A settled "this workspace has no V2 manifest" is the legacy state they
 // have always meant, stated explicitly instead of arriving via a failed request.
+// The paired read authority the real hook reports for a loaded workspace is "available"; a case that
+// needs the managed task workspace unpaired says so.
+const manifestAccess = vi.hoisted(() => ({
+  current: "available" as "available" | "checking" | "unpaired" | "unavailable",
+}));
 vi.mock("../hooks/useWorkspaceManifest", () => ({
   useWorkspaceManifest: () => ({
     manifest: null,
+    pathReadAuthority: manifestAccess.current,
     loading: false,
     mutating: false,
     issue: null,
@@ -1879,6 +1885,42 @@ describe("active workspace binding override (Issue #446)", () => {
       path: "src/app.ts",
       lineStart: 7,
     });
+  });
+
+  // PR #3452 review: the Git window shares the editor's and Files' managed-access gate, so an
+  // unpaired browser on the bound managed task workspace is told why instead of shown raw denials.
+  it("shows the paired-session note, not the Git window, on an unpaired managed task workspace", async () => {
+    const activeRoot = "/worktrees/active-task";
+    const ctx: WindowRenderContext = {
+      ...boundCtx(activeRoot, "/repos/keiko"),
+      activeBinding: {
+        schemaVersion: "1",
+        workspaceId: "workspace-1",
+        taskId: "task-1",
+        activeRoot,
+        boundSurfaces: ["git-delivery"],
+        gitDeliveryRoot: activeRoot,
+        editorProjectRoot: activeRoot,
+      },
+    };
+    manifestAccess.current = "unpaired";
+    try {
+      render(
+        <>
+          {WIN_TYPES.governedGit.render(
+            { projectPath: "/repos/keiko", rootBinding: "coding-repository" },
+            ctx,
+          )}
+        </>,
+      );
+
+      expect(
+        await screen.findByRole("note", { name: "Task workspace unavailable in this browser" }),
+      ).toBeInTheDocument();
+      expect(screen.queryByTestId("git-client-window")).toBeNull();
+    } finally {
+      manifestAccess.current = "available";
+    }
   });
 
   it("retargets a dormant Git window to the active task worktree", async () => {

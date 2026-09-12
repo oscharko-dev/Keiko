@@ -117,6 +117,26 @@ const PHASE_REASONS: Readonly<Record<DraftDeliveryPhase, ReadonlySet<string>>> =
   ]),
 };
 
+/**
+ * Whether a record in this phase means something was actually delivered — a push that reached the
+ * remote, or a draft pull request that exists. Derived from `PHASE_REASONS` rather than restated as
+ * a second list: a delivered phase is exactly one whose only admissible reason is `completed`, so a
+ * later phase added to the table is classified by the same rule that validates it. The in-flight
+ * phases (`pushing`, `creating-pr`), the two approval-gated proposals, and `recovery-required` all
+ * describe an attempt, never an artifact.
+ *
+ * A caller asking "did this run deliver anything?" needs this and not the record's presence: a
+ * `recovery-required` or `push-proposed` record is proof that delivery was ATTEMPTED and did not
+ * complete.
+ */
+export function isDeliveredDraftDeliveryPhase(phase: string): boolean {
+  // Exported on the runtime subpath, so a JavaScript caller can hand in any string: a value that is
+  // not one of the table's own phases is never delivered - not a thrown `size` read on `undefined`.
+  if (!Object.hasOwn(PHASE_REASONS, phase)) return false;
+  const reasons = PHASE_REASONS[phase as DraftDeliveryPhase];
+  return reasons.size === 1 && reasons.has("completed");
+}
+
 function record(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

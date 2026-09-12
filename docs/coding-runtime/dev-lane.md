@@ -55,7 +55,7 @@ Staging writes `.portable-sidecar-payloads/<target>/`:
 
 | Path                                             | Content                                                                                     |
 | ------------------------------------------------ | ------------------------------------------------------------------------------------------- |
-| `opencode-compatible/payload/bin/opencode[.exe]` | The pinned OpenCode 1.17.17 executable, tree-digest-verified against the approvals catalog. |
+| `opencode-compatible/payload/bin/opencode[.exe]` | The pinned OpenCode 1.18.30 executable, tree-digest-verified against the approvals catalog. |
 | `opencode-compatible/payload/evidence/`          | License and freshly generated SBOM, each digest-pinned by the catalog.                      |
 | `native/keiko-secure-workspace-read[.exe]`       | The locally built KSR1/KSS1 secure-read helper.                                             |
 | `native/keiko-runtime-supervisor.exe`            | Windows native Job Object supervisor.                                                       |

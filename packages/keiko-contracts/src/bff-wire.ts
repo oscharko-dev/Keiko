@@ -1501,6 +1501,9 @@ export type BffErrorCode =
   | "CONVERSATION_UNSUPPORTED_MODALITY"
   | "CONVERSATION_UNSUPPORTED_FILE_TYPE"
   | "CONVERSATION_OVERSIZED_CONTEXT"
+  // A GitHub-issue operation on a repository the workspace has not opened (409): the issue preview
+  // and the GitHub issue reader authorization routes answer it, and the Coding Workbench names it.
+  | "UNKNOWN_REPOSITORY"
   | "INTERNAL";
 
 // The wire shape carries `code: string` — the BFF can emit codes outside the BffErrorCode union
@@ -1508,6 +1511,14 @@ export type BffErrorCode =
 export interface BffError {
   readonly error: { readonly code: string; readonly message: string };
 }
+
+/**
+ * The one definition of the `UNKNOWN_REPOSITORY` code for its producers (the issue preview and the
+ * GitHub issue reader authorization routes) and its consumers (the Coding Workbench intake and the
+ * issue reader authorization hook), so a rename can never map the refusal to a generic failure on
+ * one side (PR #3452 review).
+ */
+export const UNKNOWN_REPOSITORY_ERROR_CODE = "UNKNOWN_REPOSITORY" satisfies BffErrorCode;
 
 // ─── Run report (BFF GET /api/runs/:runId — projection over evidence + state) ─────
 

@@ -923,6 +923,48 @@ describe("CodingRuntimeAuthorityService", () => {
     });
   });
 
+  // Run 12 (2026-09-10): a verification refused while its sibling paused the run surfaced only as
+  // `verification-authority-revoked`; the authority's own refusal left no line. Every refusal now
+  // names its condition, so a paused run reads as exactly that in a customer's log.
+  it("records why a tool-path recheck is refused, naming the state the run was actually in", () => {
+    const activity: ServerLogEvent[] = [];
+    const authority = mintFailureService(activity);
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+    const recheck = {
+      capability: minted.toolFacadeCapability,
+      adapterKind: "model-gateway-sidecar" as const,
+      liveFacts: facts(),
+      workspaceRoot: ROOT,
+      deploymentCeiling: "autonomous-delivery" as const,
+      nowIso: NOW,
+    };
+    expect(authority.pause(minted.authorityRef.runId, NOW)).toMatchObject({ ok: true });
+    expect(authority.revalidateCapabilityForMutation(recheck)).toEqual({
+      ok: false,
+      reason: "authority-resolution-failed",
+    });
+    expect(
+      activity.filter((event) => event.op === "coding-runtime.authority.revalidation-refused"),
+    ).toEqual([
+      expect.objectContaining({
+        level: "warn",
+        errorKind: "CodingRuntimeAuthorityStateRefusal",
+        correlationId: minted.authorityRef.runId,
+        extra: {
+          condition: "state-not-admissible",
+          runtimeState: "paused",
+          admissibleStates: ["running"],
+        },
+      }),
+    ]);
+    // The operator-admission variant admits the paused run and therefore writes nothing.
+    expect(authority.revalidateCapabilityForOperatorAdmission(recheck)).toMatchObject({ ok: true });
+    expect(
+      activity.filter((event) => event.op === "coding-runtime.authority.revalidation-refused"),
+    ).toHaveLength(1);
+  });
+
   it("admits operator operations on a paused run while the tool path stays running-only", () => {
     const authority = service();
     const minted = mint(authority);
@@ -947,6 +989,55 @@ describe("CodingRuntimeAuthorityService", () => {
     expect(authority.revalidateCapabilityForOperatorAdmission(recheck)).toMatchObject({
       ok: true,
     });
+  });
+
+  it("#3417: answers whether one more delegation fits without reserving budget or replay identity", () => {
+    const authority = service();
+    const minted = mint(authority);
+    if (!minted.ok) throw new Error("expected mint");
+    const probe = {
+      capability: minted.toolFacadeCapability,
+      adapterKind: "model-gateway-sidecar" as const,
+      liveFacts: facts(),
+      usage: { toolCalls: 1, patchBytes: 0, promptTokens: 0 },
+      workspaceRoot: ROOT,
+      deploymentCeiling: "autonomous-delivery" as const,
+      nowIso: NOW,
+    };
+
+    expect(authority.delegationFits(probe)).toBe(true);
+    expect(authority.delegationFits(probe)).toBe(true);
+    // The probe took no replay identity: the delegation it described is still admitted once.
+    expect(
+      authority.resolveCapabilityForDelegation({
+        ...probe,
+        delegationId: "probe-action-1",
+        idempotencyKey: "probe-key-1",
+      }),
+    ).toMatchObject({ ok: true });
+    // The exact boundary: nine calls on top of the one just charged still fit the ten.
+    expect(
+      authority.delegationFits({
+        ...probe,
+        usage: { toolCalls: 9, patchBytes: 0, promptTokens: 0 },
+      }),
+    ).toBe(true);
+    // Ten tool calls on top of the one just charged exceed the envelope's ten.
+    expect(
+      authority.delegationFits({
+        ...probe,
+        usage: { toolCalls: 10, patchBytes: 0, promptTokens: 0 },
+      }),
+    ).toBe(false);
+    expect(
+      authority.delegationFits({
+        ...probe,
+        capability: "forged-capability-material-that-is-invalid",
+      }),
+    ).toBe(false);
+    expect(authority.delegationFits({ ...probe, capability: "" })).toBe(false);
+    expect(authority.pause(minted.authorityRef.runId, NOW)).toMatchObject({ ok: true });
+    expect(authority.delegationFits(probe)).toBe(false);
   });
 
   it("authenticates the server-private capability before live-fact and replay admission", () => {

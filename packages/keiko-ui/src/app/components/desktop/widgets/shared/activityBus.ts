@@ -16,6 +16,17 @@ export interface ActivityEvent {
   agent?: string;
   tool?: string;
   time: number;
+  /**
+   * Set on a runtime operator-decision entry: its run, whether the decision is still open, and the
+   * event's sequence, so the event that settles a decision can retire the open entry it settles.
+   */
+  decision?: ActivityDecision;
+}
+
+interface ActivityDecision {
+  readonly runId: string;
+  readonly open: boolean;
+  readonly sequence: number;
 }
 
 const STORE_KEY = "__keikoActivity";
@@ -44,8 +55,33 @@ const RUNTIME_EVENT_PRESENTATION: Record<
   "skill-invoked": { type: "step", labelKey: "activity.event.skillInvoked" },
   "child-run-started": { type: "run", labelKey: "activity.event.childRunStarted" },
   "child-run-completed": { type: "step", labelKey: "activity.event.childRunCompleted" },
+  "operator-decision": { type: "approval", labelKey: "activity.event.operatorDecision" },
   "failure-redacted": { type: "rejected", labelKey: "activity.event.failureRedacted" },
 };
+
+// An `operator-decision` event with no `auxiliaryOutcome` is an OPEN decision; one carrying an
+// outcome has settled and must not stay in the feed as a pending approval (CodeRabbit review,
+// 2026-09-10). The closed outcome vocabulary maps onto the activity kinds it already has.
+const OPERATOR_DECISION_SETTLED: Record<
+  NonNullable<RuntimeEvent["auxiliaryOutcome"]>,
+  { type: ActivityType; labelKey: MessageKey }
+> = {
+  accepted: { type: "approved", labelKey: "activity.event.operatorDecisionAccepted" },
+  denied: { type: "rejected", labelKey: "activity.event.operatorDecisionDenied" },
+  unavailable: { type: "rejected", labelKey: "activity.event.operatorDecisionUnavailable" },
+  "limit-reached": { type: "rejected", labelKey: "activity.event.operatorDecisionExpired" },
+  stopped: { type: "stopped", labelKey: "activity.event.operatorDecisionStopped" },
+};
+
+function runtimeEventPresentation(event: RuntimeEvent): {
+  type: ActivityType;
+  labelKey: MessageKey;
+} {
+  if (event.eventKind !== "operator-decision" || event.auxiliaryOutcome === undefined) {
+    return RUNTIME_EVENT_PRESENTATION[event.eventKind];
+  }
+  return OPERATOR_DECISION_SETTLED[event.auxiliaryOutcome];
+}
 
 declare global {
   interface Window {
@@ -68,16 +104,60 @@ export function logActivity(event: Omit<ActivityEvent, "time">): void {
   appendActivity({ ...event, time: Date.now() });
 }
 
+// An open decision and the event that settles it are two runtime events with two cursors, so the
+// id dedup above never pairs them (owner review, PR #3452). A settlement retires the open entries of
+// its run that it follows; an open event replayed after its settlement (a stream reconnect replays
+// from an earlier cursor) is not re-admitted as pending.
+function settles(
+  settlement: ActivityDecision | undefined,
+  open: ActivityDecision | undefined,
+): boolean {
+  return (
+    settlement !== undefined &&
+    open !== undefined &&
+    !settlement.open &&
+    open.open &&
+    settlement.runId === open.runId &&
+    settlement.sequence > open.sequence
+  );
+}
+
+function appendDecision(entry: ActivityEvent & { readonly decision: ActivityDecision }): void {
+  const current = window[STORE_KEY] ?? [];
+  if (entry.decision.open) {
+    if (current.some((candidate) => settles(candidate.decision, entry.decision))) return;
+  } else {
+    const retained = current.filter((candidate) => !settles(entry.decision, candidate.decision));
+    if (retained.length !== current.length) {
+      window[STORE_KEY] = retained;
+      notifyActivityChanged();
+    }
+  }
+  appendActivity(entry);
+}
+
 export function logRuntimeActivityEvents(events: readonly CodingWorkbenchRuntimeSseEvent[]): void {
   for (const event of events) {
     if (event.kind !== "runtime-event") continue;
-    const presentation = RUNTIME_EVENT_PRESENTATION[event.eventKind];
-    appendActivity({
+    const presentation = runtimeEventPresentation(event);
+    const entry: ActivityEvent = {
       id: `${event.runId}:${event.cursor}`,
       type: presentation.type,
       labelKey: presentation.labelKey,
       agent: "runtime",
       time: Date.parse(event.occurredAt),
+    };
+    if (event.eventKind !== "operator-decision") {
+      appendActivity(entry);
+      continue;
+    }
+    appendDecision({
+      ...entry,
+      decision: {
+        runId: event.runId,
+        open: event.auxiliaryOutcome === undefined,
+        sequence: event.sequence,
+      },
     });
   }
 }
