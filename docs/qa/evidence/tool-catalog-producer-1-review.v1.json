@@ -24,14 +24,6 @@
     {
       "label": "empty-record-rejected-by-provenance-validator",
       "result": "verified"
-    },
-    {
-      "label": "rerank-failure-leaves-body-free-diagnostic-evidence",
-      "result": "verified"
-    },
-    {
-      "label": "adr-0175-text-matches-the-repository-at-this-head",
-      "result": "verified"
     }
   ],
   "evidenceRef": "github:oscharko-dev/Keiko#pull/3452/review-threads@0f23317f810b6e9a459bb3f2d5dacdb1e2afc4ea"

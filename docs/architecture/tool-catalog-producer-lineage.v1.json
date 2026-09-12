@@ -18,7 +18,7 @@
       "integrationPr": 3452,
       "reason": "semantic-repository-search-reranking-and-approved-skill-discovery",
       "verificationRef": "docs/qa/evidence/tool-catalog-producer-1-verification.v1.json#sha256=18e2807ddad1f5cef361208d591cb82fb24f31a54faf96144b8f29201e3989d9",
-      "reviewRef": "docs/qa/evidence/tool-catalog-producer-1-review.v1.json#sha256=73be54db13089cbe2ec1e78d3c16e5fd4a4a55ace1b6103f5ace511e79745e5e"
+      "reviewRef": "docs/qa/evidence/tool-catalog-producer-1-review.v1.json#sha256=b01dcab4f79af10b6ccd7f6f7c395328f904776ffff4c10ce0c158306435f47d"
     }
   ]
 }
