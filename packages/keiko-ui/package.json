@@ -74,7 +74,7 @@
     "@types/jest-axe": "3.5.9",
     "@types/node": "26.4.1",
     "@types/react": "19.2.18",
-    "@types/react-dom": "19.2.4",
+    "@types/react-dom": "19.2.7",
     "@vitejs/plugin-react": "6.1.1",
     "autoprefixer": "^10.5.3",
     "axe-core": "4.12.1",
@@ -82,11 +82,11 @@
     "eslint-config-next": "16.3.4",
     "jest-axe": "11.0.0",
     "jsdom": "30.0.1",
-    "postcss": "^8.5.26",
+    "postcss": "^8.5.28",
     "postcss-load-config": "6.0.1",
     "typescript": "5.7.3",
     "vite": "8.1.4",
-    "vitest": "4.1.11"
+    "vitest": "5.0.0"
   },
   "engines": {
     "node": ">=24.18.0 <25 || >=26.3.0 <27",
