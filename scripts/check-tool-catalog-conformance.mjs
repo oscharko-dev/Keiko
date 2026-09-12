@@ -860,6 +860,17 @@ function validReviewCriterion(criterion) {
   );
 }
 
+// The findings half of a review receipt: at least one verified criterion, and every criterion
+// attributed to a thread the reviewer actually settled (CWE-345 binding, validLineageReviewThreads).
+function validLineageReviewFindings(receipt) {
+  return (
+    Array.isArray(receipt.criteria) &&
+    receipt.criteria.length > 0 &&
+    receipt.criteria.every(validReviewCriterion) &&
+    validLineageReviewThreads(receipt.reviewThreads, receipt.criteria)
+  );
+}
+
 function validLineageReviewReceipt(receipt, entry) {
   return (
     hasExactFields(receipt, LINEAGE_REVIEW_FIELDS) &&
@@ -868,10 +879,7 @@ function validLineageReviewReceipt(receipt, entry) {
     receipt.reviewKind === "independent-source-and-evidence-audit" &&
     receipt.handlerSetDigest === entry.handlerSetDigest &&
     isNonEmptyString(receipt.reviewer) &&
-    Array.isArray(receipt.criteria) &&
-    receipt.criteria.length > 0 &&
-    receipt.criteria.every(validReviewCriterion) &&
-    validLineageReviewThreads(receipt.reviewThreads, receipt.criteria) &&
+    validLineageReviewFindings(receipt) &&
     receipt.evidenceRef === lineageEvidenceRef(entry, "review-threads")
   );
 }
