@@ -582,6 +582,26 @@ second registry, index or policy path exists.
   catalog revision and digest, the approved and listed counts, the unavailable counts per closed
   reason and the duration — never a skill body, path, prompt, argument, output or credential.
 
+## Semantic reranking of the governed repository search (Issue #3416)
+
+`keiko.repo.search@1` answers lexically and may then be REORDERED by the repository index the
+operator already built. The rerank is a property of the governed port, not a new tool and not a new
+mode: the model-visible descriptor, its input schema and the shared result schema are untouched, so
+the catalog revision and the projection digest do not move.
+
+It happens above the handler, never inside it. The handler owns the editor lane -- raw bytes, real
+line and column coordinates -- and `repoSearch.ts` refuses to open a semantic session on that lane
+by design (ADR-0165): file text reaching an embedding provider is an evidence-lane egress path. What
+the index is handed here is the hits' already-redacted excerpts, the same text the result hands the
+model, and only the operator's query is embedded; the repository's own content was embedded when the
+operator indexed the pod.
+
+The result discloses which order it is: a ranking, the index identity, its freshness, the hits placed
+and left, and one bounded reason when no rerank happened. A rerank that cannot happen -- no bound
+index, no provider, no fresh candidate, a failed index query, no authority or budget -- returns the
+deterministic lexical order with that reason attached, never an error. Whole-request cancellation
+and timeout stay terminal and perform no fallback and no further model call.
+
 The operator sees the same projection through the run's authenticated app-session channel
 (`GET /runs/:runId/skills`, ADR-0141), with the readiness the catalog can tell on its own; nothing
 of a skill's body, path, prompt, argument or output reaches either surface.

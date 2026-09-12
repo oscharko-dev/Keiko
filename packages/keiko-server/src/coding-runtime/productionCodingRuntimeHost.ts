@@ -95,6 +95,7 @@ const OPTIONAL_RUNTIME_CAPABILITY_KEYS = [
   "gitDeliveryDescriptionAuthority",
   "mintDescriptionAuthority",
   "attachVerifiedHeadNotifier",
+  "attachRepositorySemanticSearch",
   "openCodeGatewayReadinessRegistry",
   "toolFacadeBridge",
 ] as const;

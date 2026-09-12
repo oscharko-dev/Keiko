@@ -125,6 +125,7 @@ import {
   type CodingToolApprovalBridge,
 } from "./codingToolApprovalBridge.js";
 import { createServerApprovedSkillCatalog, type SkillCatalog } from "./skillCatalog.js";
+import type { RepositorySemanticSearchResolver } from "./codingRuntimeControlPlane.js";
 import { operatorSkillProjection } from "./skillDiscovery.js";
 import { PRODUCTION_SKILL_STATIC_FACTS } from "./productionAuxiliaryPorts.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
@@ -231,6 +232,9 @@ interface ResearchComposition {
 // What every run of this server shares: the run-bound research grants and the one server-approved
 // skill catalog (#3417). One value, so a run's composition keeps its parameter count in hand.
 interface RunComposition {
+  // Filled once by `deps.ts` after the deps graph exists; `undefined` until then, and on a server
+  // that composes no semantic index -- which is what makes a lexical-only search the default.
+  readonly semanticSearch: { current: RepositorySemanticSearchResolver | undefined };
   readonly research: ResearchComposition;
   readonly skillCatalog: SkillCatalog;
 }
@@ -293,7 +297,11 @@ function sharedRunComposition(): RunComposition {
     grants: createResearchGrantRegistry(),
     pending: createPendingResearchApprovals(),
   };
-  return { research, skillCatalog: createServerApprovedSkillCatalog() };
+  return {
+    research,
+    skillCatalog: createServerApprovedSkillCatalog(),
+    semanticSearch: { current: undefined },
+  };
 }
 
 // The operator's view of the approved skills (#3417), bound the way `mintDescriptionAuthorityFor`
@@ -326,6 +334,16 @@ function deliveryAuthorityPorts(
     gitDeliveryAuthority: authority.gitDeliveryAuthorityPort(),
     gitDeliveryDescriptionAuthority: authority.gitDeliveryDescriptionAuthorityPort(),
     mintDescriptionAuthority: mintDescriptionAuthorityFor(authority, input),
+  };
+}
+
+// The two late-bound capabilities below fill one mutable slot exactly once -- the same
+// `receiver`/`verifiedHeadNotifier` indirection this file already uses. Named so `composeRuntime`
+// states the binding rather than spelling out the assignment, and stays under AGENTS.md section 6's
+// 50-line ceiling.
+function fillsSlot<T>(slot: { current: T }): (value: T) => void {
+  return (value: T): void => {
+    slot.current = value;
   };
 }
 
@@ -391,9 +409,8 @@ function composeRuntime(
     // #3401 CI-repair notify: the setter half of the `notifyVerifiedHeadAdvanced` slot above.
     // Called exactly once by `codingRuntimeControlPlane.ts` right after it builds the orchestrator
     // that owns the real method.
-    attachVerifiedHeadNotifier: (notify: (runId: string) => void): void => {
-      verifiedHeadNotifier.current = notify;
-    },
+    attachVerifiedHeadNotifier: fillsSlot(verifiedHeadNotifier),
+    attachRepositorySemanticSearch: fillsSlot(shared.semanticSearch),
     ...(input.backend.safeActivityProjection
       ? { safeActivityProjection: input.backend.safeActivityProjection }
       : {}),
@@ -532,6 +549,7 @@ function launchResolver(
           authority,
           research: shared.research,
           skillCatalog: shared.skillCatalog,
+          semanticSearch: shared.semanticSearch,
           onRuntimeEvent,
           notifyVerifiedHeadAdvanced,
         });
@@ -751,6 +769,9 @@ interface RunToolSurfaceInput {
   readonly authority: CodingRuntimeAuthorityService;
   readonly research: ResearchComposition;
   readonly skillCatalog: SkillCatalog;
+  // The server's late-bound repository semantic index (#3416). The SLOT travels, not a resolved
+  // value: a run composed before `deps.ts` binds one still sees it the moment it is bound.
+  readonly semanticSearch: { current: RepositorySemanticSearchResolver | undefined };
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly signal: AbortSignal;
   readonly notifyVerifiedHeadAdvanced: (runId: string) => void;
@@ -807,6 +828,7 @@ function composeRunToolPorts(
     research,
     skillCatalog,
     explicitSkills: prepared.explicitSkills,
+    semanticSearch: args.semanticSearch,
     ...services,
     onRuntimeEvent,
     resolveWorkspaceRootAccess: prepared.resolveWorkspaceRootAccess,
@@ -1131,6 +1153,7 @@ interface ManagedToolFacadeInput {
   readonly research: ResearchComposition;
   readonly researchOptions?: ReturnType<typeof managedResearchOptions> | undefined;
   readonly skillCatalog: SkillCatalog;
+  readonly semanticSearch: { current: RepositorySemanticSearchResolver | undefined };
   readonly explicitSkills: ExplicitSkillInvocationTracker;
   readonly codingToolApprovals: CodingToolApprovalBridge;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
@@ -1217,6 +1240,7 @@ function createManagedToolFacade(options: ManagedToolFacadeInput): CodingToolFac
     editorAgentClient: input.editorAgentClient,
     mutationLeaseCoordinator: leases,
     invocationRegistry,
+    repositorySemanticSearch: options.semanticSearch,
     approvalProofVerifier: codingToolApprovals,
     ...runtimeGitFacadeOptions(options),
     skillCatalog,

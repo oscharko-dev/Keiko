@@ -56,6 +56,41 @@ export type CodingRepositoryTruncationReason =
   | "depth-limit"
   | "file-too-large";
 
+/**
+ * How a search's order was produced (#3416). Body-free by construction: a ranking label, an index
+ * identity digest, counts and one closed reason -- never a query, a path, a snippet, a score or a
+ * provider endpoint.
+ */
+export type CodingRepositoryRanking = "lexical" | "semantic" | "hybrid";
+
+/**
+ * Why a requested rerank did not happen. The first four are the retrieval path's own content-free
+ * pod observations; the rest are the governance answers a run can carry. A rerank that does not
+ * happen is never an error: the deterministic lexical order stands, and says so.
+ */
+export type CodingRepositoryRerankFallbackReason =
+  | "capability-not-offered"
+  | "provider-absent"
+  | "pod-absent"
+  | "pod-unavailable"
+  | "pod-no-fresh-candidates"
+  | "pod-query-failed"
+  | "authority-denied"
+  | "budget-exhausted";
+
+export type CodingRepositoryIndexFreshness = "fresh" | "stale" | "absent";
+
+export interface CodingRepositorySearchProvenance {
+  readonly ranking: CodingRepositoryRanking;
+  /** 64-hex identity of the index the rerank read, or `null` when no index was read. */
+  readonly indexIdentityDigest: string | null;
+  readonly indexFreshness: CodingRepositoryIndexFreshness;
+  /** Hits the rerank placed, and hits left in the lexical order the handler produced. */
+  readonly rerankedHits: number;
+  readonly lexicalHits: number;
+  readonly fallbackReason?: CodingRepositoryRerankFallbackReason | undefined;
+}
+
 export interface CodingRepositoryMetrics {
   readonly candidatesDiscovered: number;
   readonly filesScanned: number;
@@ -82,6 +117,9 @@ export type CodingRepositoryResult =
   | (CodingRepositorySuccess & {
       readonly kind: "search";
       readonly hits: readonly CodingRepositoryHit[];
+      // Set where the index facts are known -- the governed server port that may rerank (#3416) --
+      // never by the workspace handler, which has neither an index nor an authority to ask.
+      readonly provenance?: CodingRepositorySearchProvenance | undefined;
     })
   | (CodingRepositorySuccess & { readonly kind: "read"; readonly excerpt: CodingRepositoryHit })
   | { readonly ok: false; readonly reason: CodingRepositoryFailureReason };
@@ -206,4 +244,98 @@ export function captureCodingRepositoryRequest(
         includeGlobs: Object.freeze([...value.includeGlobs]),
         excludeGlobs: Object.freeze([...value.excludeGlobs]),
       });
+}
+
+const CODING_REPOSITORY_RANKINGS: ReadonlySet<string> = new Set<CodingRepositoryRanking>([
+  "lexical",
+  "semantic",
+  "hybrid",
+]);
+const CODING_REPOSITORY_INDEX_FRESHNESS: ReadonlySet<string> =
+  new Set<CodingRepositoryIndexFreshness>(["fresh", "stale", "absent"]);
+const CODING_REPOSITORY_RERANK_FALLBACK_REASONS: ReadonlySet<string> =
+  new Set<CodingRepositoryRerankFallbackReason>([
+    "capability-not-offered",
+    "provider-absent",
+    "pod-absent",
+    "pod-unavailable",
+    "pod-no-fresh-candidates",
+    "pod-query-failed",
+    "authority-denied",
+    "budget-exhausted",
+  ]);
+const PROVENANCE_KEYS = [
+  "ranking",
+  "indexIdentityDigest",
+  "indexFreshness",
+  "rerankedHits",
+  "lexicalHits",
+] as const;
+
+function hitCount(value: unknown): value is number {
+  return (
+    Number.isSafeInteger(value) &&
+    typeof value === "number" &&
+    value >= 0 &&
+    value <= CODING_REPOSITORY_LIMITS.returnedHits
+  );
+}
+
+// Each half of the disclosure answers one question, the way this file already validates a request
+// (`validQuery`, `validGlobs`, `validSearch`): a reader can see which one refused.
+function provenanceVocabularyValid(value: Record<string, unknown>): boolean {
+  return (
+    typeof value.ranking === "string" &&
+    CODING_REPOSITORY_RANKINGS.has(value.ranking) &&
+    typeof value.indexFreshness === "string" &&
+    CODING_REPOSITORY_INDEX_FRESHNESS.has(value.indexFreshness)
+  );
+}
+
+function provenanceIdentityValid(value: Record<string, unknown>): boolean {
+  if (value.indexIdentityDigest === null) return true;
+  return (
+    typeof value.indexIdentityDigest === "string" &&
+    /^[0-9a-f]{64}$/u.test(value.indexIdentityDigest)
+  );
+}
+
+function provenanceReasonValid(value: Record<string, unknown>, declared: boolean): boolean {
+  if (!declared) return true;
+  return (
+    typeof value.fallbackReason === "string" &&
+    CODING_REPOSITORY_RERANK_FALLBACK_REASONS.has(value.fallbackReason)
+  );
+}
+
+function provenanceCountsValid(value: Record<string, unknown>): boolean {
+  return hitCount(value.rerankedHits) && hitCount(value.lexicalHits);
+}
+
+// The two ways a disclosure can contradict itself: a lexical order that claims reranked hits, and a
+// stated fallback reason beside a rerank that did happen. Either one makes the record unreadable to
+// the operator it exists for, so it is refused rather than reported.
+function provenanceConsistent(value: Record<string, unknown>, declared: boolean): boolean {
+  if (value.ranking === "lexical") return value.rerankedHits === 0;
+  return !declared;
+}
+
+/**
+ * Validates a disclosure: the closed vocabularies, the index identity, the counts, and the two ways
+ * the record could contradict itself. Shape and consistency only -- never a limit the producing
+ * port already enforced.
+ */
+export function isCodingRepositorySearchProvenance(
+  value: unknown,
+): value is CodingRepositorySearchProvenance {
+  if (!ownDataRecord(value)) return false;
+  const declared = Object.hasOwn(value, "fallbackReason");
+  return (
+    exactKeys(value, declared ? [...PROVENANCE_KEYS, "fallbackReason"] : PROVENANCE_KEYS) &&
+    provenanceVocabularyValid(value) &&
+    provenanceIdentityValid(value) &&
+    provenanceReasonValid(value, declared) &&
+    provenanceCountsValid(value) &&
+    provenanceConsistent(value, declared)
+  );
 }

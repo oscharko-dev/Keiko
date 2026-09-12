@@ -30,6 +30,25 @@ import type { CodingRuntimeQuestionPort } from "./codingRuntimeQuestionPort.js";
 import type { OpenCodeOptionalToolName } from "./opencodeLaunchProfile.js";
 import type { CodingSafeActivityProjection } from "./codingSafeActivityProjection.js";
 import type { CodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
+import type { SemanticSearchProvider } from "@oscharko-dev/keiko-workspace";
+
+/**
+ * One opened repository semantic index, and the handle that closes it again (#3416). Structurally
+ * the lease `grounded-repo-semantic-search.ts` already hands the grounded path, named here so the
+ * coding runtime can hold it as a TYPE and never import an egress-capable module of its own.
+ */
+export interface RepositorySemanticSearchLease {
+  readonly provider: SemanticSearchProvider | undefined;
+  /** 64-hex identity of the index this lease opened; absent when it opened none. */
+  readonly indexIdentityDigest?: string | undefined;
+  close(): void;
+}
+
+/** Opens that lease for one repository root, for the life of one governed search. */
+export type RepositorySemanticSearchResolver = (
+  repositoryRoot: string,
+  signal: AbortSignal | undefined,
+) => RepositorySemanticSearchLease;
 
 export interface CodingRuntimeHost {
   readonly createManager: (
@@ -83,6 +102,14 @@ export interface CodingRuntimeHost {
   // .notifyVerifiedHeadAdvanced` once it does. Consumed internally by
   // `createCodingRuntimeControlPlane` below -- never forwarded past this module.
   readonly attachVerifiedHeadNotifier?: ((notify: (runId: string) => void) => void) | undefined;
+  /**
+   * Binds the repository semantic index this server can open (#3416). Late-bound for the same
+   * reason `attachVerifiedHeadNotifier` is: the lease is derived from the assembled deps graph,
+   * which does not exist yet when the runtime resolver is composed. A server that never binds one
+   * searches lexically -- the capability is then absent, never a call denied after the fact.
+   */
+  readonly attachRepositorySemanticSearch?:
+    ((resolve: RepositorySemanticSearchResolver) => void) | undefined;
   readonly openCodeGatewayReadinessRegistry?:
     | {
         readonly claim: (runId: string) => boolean;
@@ -146,6 +173,7 @@ export interface CodingRuntimeControlPlane {
   readonly gitDeliveryAuthority?: CodingRuntimeHost["gitDeliveryAuthority"];
   readonly gitDeliveryDescriptionAuthority?: CodingRuntimeHost["gitDeliveryDescriptionAuthority"];
   readonly mintDescriptionAuthority?: CodingRuntimeHost["mintDescriptionAuthority"];
+  readonly attachRepositorySemanticSearch?: CodingRuntimeHost["attachRepositorySemanticSearch"];
   readonly openCodeGatewayReadinessRegistry?: CodingRuntimeHost["openCodeGatewayReadinessRegistry"];
   readonly toolFacadeBridge?: CodingRuntimeHost["toolFacadeBridge"];
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
@@ -276,6 +304,7 @@ const RUNTIME_HOST_CAPABILITY_KEYS = [
   "gitDeliveryAuthority",
   "gitDeliveryDescriptionAuthority",
   "mintDescriptionAuthority",
+  "attachRepositorySemanticSearch",
   "openCodeGatewayReadinessRegistry",
   "toolFacadeBridge",
 ] as const;

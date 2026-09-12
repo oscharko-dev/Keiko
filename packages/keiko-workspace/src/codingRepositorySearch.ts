@@ -91,7 +91,7 @@ function createContext(
   };
 }
 
-function retrievalKind(mode: CodingRepositorySearchRequest["mode"]): RetrievalQuery["kind"] {
+export function retrievalKind(mode: CodingRepositorySearchRequest["mode"]): RetrievalQuery["kind"] {
   if (mode === "lexical") return "natural-language";
   if (mode === "symbol" || mode === "literal") return "exact-symbol";
   return "regex";

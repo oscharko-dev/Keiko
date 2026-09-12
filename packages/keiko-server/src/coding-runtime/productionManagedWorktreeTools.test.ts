@@ -26,6 +26,10 @@ import {
   WorkspaceTrustRequiredError,
 } from "../editor/verificationRunnerErrors.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
+import type {
+  RepositorySemanticSearchLease,
+  RepositorySemanticSearchResolver,
+} from "./codingRuntimeControlPlane.js";
 import {
   createProductionManagedWorktreeToolFacade,
   codingVerificationTargetDigest,
@@ -2071,6 +2075,9 @@ describe("H1 repository search mounted into production composition (#3386)", () 
     readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
     readonly authorityExpiresAt?: string;
     readonly activityLog?: { write: (event: ServerLogEvent) => void };
+    readonly repositorySemanticSearch?: {
+      readonly current: RepositorySemanticSearchResolver | undefined;
+    };
   }): ReturnType<typeof createProductionManagedWorktreeToolFacade> {
     return createProductionManagedWorktreeToolFacade({
       authority: {
@@ -2105,6 +2112,9 @@ describe("H1 repository search mounted into production composition (#3386)", () 
       verificationRunner: { runToReport: vi.fn() },
       onRuntimeEvent: vi.fn(),
       ...(input.activityLog === undefined ? {} : { activityLog: input.activityLog }),
+      ...(input.repositorySemanticSearch === undefined
+        ? {}
+        : { repositorySemanticSearch: input.repositorySemanticSearch }),
     });
   }
 
@@ -2145,12 +2155,130 @@ describe("H1 repository search mounted into production composition (#3386)", () 
       "tool-catalog.invocation-started",
       "coding-repository-handler.started",
       "coding-repository-handler.settled",
+      "coding-runtime.repository-rerank",
       "tool-catalog.invocation-settled",
     ]);
     for (const event of events) {
       if (event.op.startsWith("tool-catalog.")) expect(event.correlationId).toBe("run-h1-search");
     }
     expect(JSON.stringify(events)).not.toContain("parseConfig");
+  });
+
+  // #3416: the governed rerank sits ABOVE the H1 handler. Every case below asserts the same two
+  // things the operator relies on -- the order they actually got, and a disclosure that says how it
+  // was produced -- and that a rerank which cannot happen is never an error.
+  type IndexMatches = ReturnType<NonNullable<RepositorySemanticSearchLease["provider"]>["search"]>;
+
+  function semanticSlot(provider: { search: (input: unknown) => IndexMatches } | undefined): {
+    readonly slot: { readonly current: RepositorySemanticSearchResolver | undefined };
+    readonly closed: () => number;
+  } {
+    let closes = 0;
+    const resolve: RepositorySemanticSearchResolver = () => ({
+      ...(provider === undefined
+        ? { provider: undefined }
+        : { provider: { name: "test-index", search: provider.search } }),
+      indexIdentityDigest: "b".repeat(64),
+      close: (): void => {
+        closes += 1;
+      },
+    });
+    return { slot: { current: resolve }, closed: (): number => closes };
+  }
+
+  function twoMatchingFiles(): string {
+    const root = tempWorkspace();
+    mkdirSync(join(root, "src"));
+    writeFileSync(join(root, "src", "a.ts"), "export const parseConfig = 1;\n");
+    writeFileSync(join(root, "src", "b.ts"), "export const parseConfig = 2;\n");
+    return root;
+  }
+
+  function accessFor(root: string): () => WorkspaceRootAccess {
+    return () => ({
+      kind: "managed-task" as const,
+      canonicalRoot: root,
+      fs: nodeWorkspaceFs,
+      repositoryRoot: root,
+    });
+  }
+
+  async function searchWith(
+    root: string,
+    slot?: { readonly current: RepositorySemanticSearchResolver | undefined },
+    events?: ServerLogEvent[],
+  ): Promise<{
+    readonly ok: true;
+    readonly hits: readonly { readonly path: string }[];
+    readonly provenance: unknown;
+  }> {
+    const facade = searchFacade({
+      resolveWorkspaceRootAccess: accessFor(root),
+      ...(slot === undefined ? {} : { repositorySemanticSearch: slot }),
+      ...(events === undefined
+        ? {}
+        : { activityLog: { write: (event): void => void events.push(event) } }),
+    });
+    const result = await facade.execute({ capability: "opaque-capability", body: searchBody() });
+    return (
+      result as { search: { ok: true; hits: readonly { path: string }[]; provenance: unknown } }
+    ).search;
+  }
+
+  it("says the capability was not offered when this server bound no index", async () => {
+    const search = await searchWith(twoMatchingFiles());
+    expect(search.provenance).toMatchObject({
+      ranking: "lexical",
+      rerankedHits: 0,
+      fallbackReason: "capability-not-offered",
+      indexIdentityDigest: null,
+    });
+    expect(search.hits.map((hit) => hit.path)).toEqual(["src/a.ts", "src/b.ts"]);
+  });
+
+  it.each([
+    ["provider-absent", undefined, (): IndexMatches => Promise.resolve([])],
+    ["pod-no-fresh-candidates", "present", (): IndexMatches => Promise.resolve([])],
+    [
+      "pod-query-failed",
+      "present",
+      (): IndexMatches => Promise.reject(new Error("index unreachable")),
+    ],
+  ] as const)("keeps the lexical order and discloses %s", async (reason, present, search) => {
+    const bound = semanticSlot(present === undefined ? undefined : { search });
+    const result = await searchWith(twoMatchingFiles(), bound.slot);
+    expect(result.provenance).toMatchObject({
+      ranking: "lexical",
+      rerankedHits: 0,
+      fallbackReason: reason,
+    });
+    expect(result.hits.map((hit) => hit.path)).toEqual(["src/a.ts", "src/b.ts"]);
+    expect(bound.closed()).toBe(1);
+  });
+
+  it("reorders the hits the index placed and discloses which index answered", async () => {
+    const bound = semanticSlot({
+      search: () => Promise.resolve([{ scopePath: "src/b.ts", score: 0.9 }]),
+    });
+    const events: ServerLogEvent[] = [];
+    const search = await searchWith(twoMatchingFiles(), bound.slot, events);
+
+    expect(search.hits.map((hit) => hit.path)).toEqual(["src/b.ts", "src/a.ts"]);
+    expect(search.provenance).toMatchObject({
+      ranking: "hybrid",
+      indexIdentityDigest: "b".repeat(64),
+      indexFreshness: "fresh",
+      rerankedHits: 1,
+      lexicalHits: 1,
+    });
+    expect(bound.closed()).toBe(1);
+
+    // The line the operator's support bundle carries: counts and labels, never the query, a path or
+    // a snippet.
+    const rerank = events.find((event) => event.op === "coding-runtime.repository-rerank");
+    expect(rerank?.correlationId).toBe("run-h1-search");
+    expect(JSON.stringify(rerank)).not.toContain("parseConfig");
+    expect(JSON.stringify(rerank)).not.toContain("src/b.ts");
   });
 
   it("denies a workspace-denylisted path as a completed domain outcome, never invented coverage", async () => {

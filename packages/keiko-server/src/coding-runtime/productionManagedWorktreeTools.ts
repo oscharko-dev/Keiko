@@ -81,6 +81,19 @@ import {
   type CodingRepositorySearchHandler,
 } from "./codingRepositorySearchHandler.js";
 import { detectWorkspaceAt } from "@oscharko-dev/keiko-workspace";
+import type {
+  RepositorySemanticSearchLease,
+  RepositorySemanticSearchResolver,
+} from "./codingRuntimeControlPlane.js";
+import { retrievalKind } from "@oscharko-dev/keiko-workspace/coding-repository-search";
+import type {
+  CodingRepositoryHit,
+  CodingRepositoryRequest,
+  CodingRepositoryRerankFallbackReason,
+  CodingRepositorySearchProvenance,
+  CodingRepositoryResult,
+  CodingRepositorySearchRequest,
+} from "@oscharko-dev/keiko-contracts/runtime/coding-repository-search";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
@@ -278,6 +291,11 @@ export interface ProductionManagedWorktreeToolInput {
   readonly requestResearchApproval?: ((url: URL) => void) | undefined;
   /** Explicit hermetic-test seam for the research transport. Production never supplies this. */
   readonly researchFetchImpl?: ResearchFetch | undefined;
+  // #3416: the server's repository semantic index, late-bound by `deps.ts`. Absent -- or present
+  // with an unfilled slot -- means the governed search answers in its deterministic lexical order
+  // and says so; it is never a denied call.
+  readonly repositorySemanticSearch?:
+    { readonly current: RepositorySemanticSearchResolver | undefined } | undefined;
 }
 
 // #3414-AC9: a real, non-fake per-run signal for whether an optional tool's handler/readiness/
@@ -900,9 +918,171 @@ function buildRepositorySearchPort(
         correlationId: input.authorityRef.runId,
         signal: signal ?? new AbortController().signal,
       });
-      return { status: "completed", search: result };
+      return {
+        status: "completed",
+        search: await rerankedSearch(input, request.repositoryRequest, result, signal),
+      };
     },
   };
+}
+
+// #3416: the governed rerank. It runs ABOVE the handler, never inside it: the handler owns the
+// editor lane (raw bytes, real coordinates) and ADR-0165 keeps a semantic session off that lane.
+// What the index sees here is the hits' already-REDACTED excerpts -- the same text the tool result
+// hands the model -- and only the operator's query is embedded; the repository's own content was
+// embedded when the operator indexed the pod, not at ask time.
+function lexicalProvenance(
+  hits: readonly CodingRepositoryHit[],
+  fallbackReason: CodingRepositoryRerankFallbackReason,
+): CodingRepositorySearchProvenance {
+  return {
+    ranking: "lexical",
+    indexIdentityDigest: null,
+    indexFreshness: "absent",
+    rerankedHits: 0,
+    lexicalHits: hits.length,
+    fallbackReason,
+  };
+}
+
+interface RerankedOrder {
+  readonly hits: readonly CodingRepositoryHit[];
+  readonly placed: number;
+}
+
+function rerankedOrder(
+  hits: readonly CodingRepositoryHit[],
+  ranked: readonly { readonly scopePath: string }[],
+): RerankedOrder {
+  const byPath = new Map<string, CodingRepositoryHit[]>();
+  for (const hit of hits) {
+    const bucket = byPath.get(hit.path);
+    if (bucket === undefined) byPath.set(hit.path, [hit]);
+    else bucket.push(hit);
+  }
+  const ordered: CodingRepositoryHit[] = [];
+  for (const match of ranked) {
+    const bucket = byPath.get(match.scopePath);
+    if (bucket === undefined || bucket.length === 0) continue;
+    ordered.push(...bucket);
+    byPath.set(match.scopePath, []);
+  }
+  // Everything the index did not place keeps the handler's deterministic lexical order.
+  const remaining = hits.filter((hit) => (byPath.get(hit.path)?.length ?? 0) > 0);
+  return { hits: [...ordered, ...remaining], placed: ordered.length };
+}
+
+async function rankedByIndex(
+  lease: RepositorySemanticSearchLease,
+  request: CodingRepositorySearchRequest,
+  hits: readonly CodingRepositoryHit[],
+  signal: AbortSignal | undefined,
+): Promise<readonly { readonly scopePath: string }[]> {
+  const provider = lease.provider;
+  if (provider === undefined) return [];
+  return provider.search({
+    query: {
+      kind: retrievalKind(request.mode),
+      text: request.query,
+      caseSensitive: request.caseSensitive,
+      maxResults: request.maxResults,
+      emittedAtMs: Date.now(),
+    },
+    documents: hits.map((hit) => ({ scopePath: hit.path, text: hit.snippet })),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+// One body-free line per governed search that could have been reranked: what order the operator got,
+// how many hits the index placed, and -- when it placed none -- the closed reason why. Never the
+// query, a path, a snippet or a score.
+function logRerank(
+  input: ProductionManagedWorktreeToolInput,
+  provenance: CodingRepositorySearchProvenance,
+): void {
+  (input.activityLog ?? processServerLogSink()).write({
+    category: "gateway",
+    op: "coding-runtime.repository-rerank",
+    correlationId: isValidCorrelationId(input.authorityRef.runId)
+      ? input.authorityRef.runId
+      : UNKNOWN_CORRELATION_ID,
+    level: "info",
+    extra: {
+      runId: input.authorityRef.runId,
+      ranking: provenance.ranking,
+      rerankedHits: provenance.rerankedHits,
+      lexicalHits: provenance.lexicalHits,
+      indexFreshness: provenance.indexFreshness,
+      ...(provenance.fallbackReason === undefined
+        ? {}
+        : { fallbackReason: provenance.fallbackReason }),
+    },
+  });
+}
+
+interface RerankOutcome {
+  readonly hits: readonly CodingRepositoryHit[];
+  readonly provenance: CodingRepositorySearchProvenance;
+}
+
+async function rerankOutcome(
+  resolve: RepositorySemanticSearchResolver,
+  repositoryRoot: string,
+  request: CodingRepositorySearchRequest,
+  hits: readonly CodingRepositoryHit[],
+  signal: AbortSignal | undefined,
+): Promise<RerankOutcome> {
+  const lease = resolve(repositoryRoot, signal);
+  try {
+    if (lease.provider === undefined) {
+      return { hits, provenance: lexicalProvenance(hits, "provider-absent") };
+    }
+    const ranked = await rankedByIndex(lease, request, hits, signal);
+    if (ranked.length === 0) {
+      return { hits, provenance: lexicalProvenance(hits, "pod-no-fresh-candidates") };
+    }
+    const ordered = rerankedOrder(hits, ranked);
+    return {
+      hits: ordered.hits,
+      provenance: {
+        ranking: "hybrid",
+        indexIdentityDigest: lease.indexIdentityDigest ?? null,
+        indexFreshness: "fresh",
+        rerankedHits: ordered.placed,
+        lexicalHits: hits.length - ordered.placed,
+      },
+    };
+  } finally {
+    lease.close();
+  }
+}
+
+/**
+ * Reorders a completed lexical search by the repository index, or says why it did not. A refusal is
+ * never an error here: the deterministic lexical result the handler produced is returned unchanged,
+ * with the reason attached, so the model and the operator read the same disclosure.
+ */
+async function rerankedSearch(
+  input: ProductionManagedWorktreeToolInput,
+  requested: CodingRepositoryRequest,
+  result: CodingRepositoryResult,
+  signal: AbortSignal | undefined,
+): Promise<CodingRepositoryResult> {
+  // The union narrows on its own discriminant; a read request never reaches the index at all.
+  if (!result.ok || result.kind !== "search" || requested.kind !== "search") return result;
+  const resolve = input.repositorySemanticSearch?.current;
+  const root = input.resolveWorkspaceRootAccess()?.canonicalRoot;
+  const outcome =
+    resolve === undefined || root === undefined
+      ? { hits: result.hits, provenance: lexicalProvenance(result.hits, "capability-not-offered") }
+      : await rerankOutcome(resolve, root, requested, result.hits, signal).catch(
+          (): RerankOutcome => ({
+            hits: result.hits,
+            provenance: lexicalProvenance(result.hits, "pod-query-failed"),
+          }),
+        );
+  logRerank(input, outcome.provenance);
+  return { ...result, hits: outcome.hits, provenance: outcome.provenance };
 }
 
 function repositorySearchHandler(

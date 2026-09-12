@@ -353,6 +353,7 @@ import {
   type CodingRuntimeHost,
   type CodingRuntimeToolFacadeBridge,
 } from "./coding-runtime/codingRuntimeControlPlane.js";
+import { configuredRepoSemanticSearchProviderLeaseFor } from "./grounded-repo-semantic-search.js";
 import { createProductionCodingRuntimeIssueIntake } from "./coding-context/codingRuntimeIssueIntake.js";
 import {
   createProductionCodingRuntimeHost,
@@ -4250,6 +4251,7 @@ function assembleUiHandlerDeps(args: UiHandlerDepsAssemblyArgs): UiHandlerDeps {
     prDescriptionGeneration,
     deps,
   );
+  attachRepositorySemanticSearch(services.codingRuntimeControlPlane, deps);
   return deps;
 }
 
@@ -4383,6 +4385,20 @@ function buildUiCodingRuntimeControlPlane(
 // (an injected UiStore without one, mirroring `codingRuntimeSnapshotStore`'s own contract) leaves
 // the feature unattached — the orchestrator already treats an absent `description` as "not yet
 // wired", never a crash.
+// #3416: binds the repository semantic index the governed coding search may rerank with. Bound here
+// and not in the runtime composition for the same reason the verified-head notifier is: the lease is
+// derived from the assembled deps graph, which does not exist when the resolver is composed. A
+// composition without a knowledge store binds a lease that opens no provider, and the search stays
+// lexical and says so.
+function attachRepositorySemanticSearch(
+  codingRuntimeControlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
+  deps: UiHandlerDeps,
+): void {
+  codingRuntimeControlPlane?.attachRepositorySemanticSearch?.((repositoryRoot, signal) =>
+    configuredRepoSemanticSearchProviderLeaseFor(deps, signal, repositoryRoot),
+  );
+}
+
 function attachWorkbenchDescriptionSupport(
   args: UiHandlerDepsAssemblyArgs,
   codingRuntimeControlPlane: ReturnType<typeof createCodingRuntimeControlPlane> | undefined,
