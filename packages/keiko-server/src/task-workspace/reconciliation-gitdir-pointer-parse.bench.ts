@@ -61,21 +61,24 @@ function paddedPointer(leadingSpaces: number, trailingSpaces: number): string {
 }
 
 describe("parseGitdirPointerTarget bench (S8786, shared Git identity)", () => {
-  test("whitespace-padding ladder", ({ bench }) => {
+  test("whitespace-padding ladder", async ({ bench }) => {
     // The measurement's own premise: padding on both sides of the capture group must still yield
     // the exact target. A parser that mis-extracts under padding would be timed on a wrong answer.
     expect(parseGitdirPointerTarget(paddedPointer(2_500, 2_500))).toBe(TARGET);
-    bench("5,000-char whitespace padding", () => {
+    await bench("5,000-char whitespace padding", () => {
       parseGitdirPointerTarget(paddedPointer(2_500, 2_500));
-    });
-    bench("20,000+5,000-char whitespace padding (reconciliation.test.ts fixture size)", () => {
-      parseGitdirPointerTarget(paddedPointer(20_000, 5_000));
-    });
-    bench("100,000-char whitespace padding", () => {
+    }).run();
+    await bench(
+      "20,000+5,000-char whitespace padding (reconciliation.test.ts fixture size)",
+      () => {
+        parseGitdirPointerTarget(paddedPointer(20_000, 5_000));
+      },
+    ).run();
+    await bench("100,000-char whitespace padding", () => {
       parseGitdirPointerTarget(paddedPointer(50_000, 50_000));
-    });
-    bench("200,000-char whitespace padding", () => {
+    }).run();
+    await bench("200,000-char whitespace padding", () => {
       parseGitdirPointerTarget(paddedPointer(100_000, 100_000));
-    });
+    }).run();
   });
 });

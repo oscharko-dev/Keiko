@@ -60,15 +60,15 @@ const request: PromptEnhancementRequest = {
 };
 
 describe("analyzePrompt bench (KEIKO-1028, #3340)", () => {
-  test("100,000-char adversarial near-miss input (PROMPT_ANALYSIS_MAX_SCAN_CHARS ceiling)", ({
+  test("100,000-char adversarial near-miss input (PROMPT_ANALYSIS_MAX_SCAN_CHARS ceiling)", async ({
     bench,
   }) => {
     // The measurement's own premise: earlier drafts of this fixture looked adversarial but were
     // literal substrings of real cues, so the scan short-circuited and the ceiling was never
     // reached. Assert that the analyzer really normalizes to the full ceiling before timing it.
     expect(analyzePrompt(request).normalizedInputLength).toBe(PROMPT_ANALYSIS_MAX_SCAN_CHARS);
-    bench("analyzePrompt at the scan ceiling", () => {
+    await bench("analyzePrompt at the scan ceiling", () => {
       analyzePrompt(request);
-    });
+    }).run();
   });
 });

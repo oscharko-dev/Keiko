@@ -129,13 +129,20 @@ function downloadedArchiveEntry(target, url, payload) {
   };
 }
 
-async function downloadOpencodeArchives(version, deps) {
+/**
+ * Buffers each archive to disk and keeps only its path. Holding all four in memory at once costs
+ * about 215 MB resident for no benefit: the only consumer of the bytes is the extraction below,
+ * which needs them as a file anyway (PR #3452 review).
+ */
+async function downloadOpencodeArchives(version, workRoot, deps) {
   const downloads = {};
   for (const target of PORTABLE_TARGET_NAMES) {
     const name = portableTargetByName(target).sidecarArchiveName;
     const url = `${OPENCODE_RELEASE_BASE}/v${version}/${name}`;
     const payload = await fetchBuffer(url, ARCHIVE_MAX_BYTES, RELEASE_HOSTS, deps);
-    downloads[target] = { name, payload, entry: downloadedArchiveEntry(target, url, payload) };
+    const path = join(workRoot, `${target}-${name}`);
+    writeFileSync(path, payload);
+    downloads[target] = { name, path, entry: downloadedArchiveEntry(target, url, payload) };
   }
   return downloads;
 }
@@ -182,11 +189,9 @@ function carriedForwardArchives(downloads, existingArchives) {
  * that ALREADY carries the new upstream and archive facts -- an SBOM built from the outgoing runtime
  * would name the old tag and the old archive digest while claiming to describe the new executable.
  */
-function regeneratedArchiveEvidence(runtime, target, archiveName, payload) {
+function regeneratedArchiveEvidence(runtime, target, archivePath) {
   const workRoot = mkdtempSync(join(tmpdir(), "keiko-approvals-extract-"));
   try {
-    const archivePath = join(workRoot, archiveName);
-    writeFileSync(archivePath, payload);
     const sourceRoot = join(workRoot, "payload");
     const { executableName } = runtime.archives[target];
     const executablePath = join(sourceRoot, SPEC_EXECUTABLE_DIR, executableName);
@@ -205,10 +210,9 @@ function regeneratedArchiveEvidence(runtime, target, archiveName, payload) {
 function regeneratedArchives(downloads, liftedRuntime) {
   const archives = {};
   for (const target of PORTABLE_TARGET_NAMES) {
-    const { name, payload } = downloads[target];
     archives[target] = {
       ...liftedRuntime.archives[target],
-      ...regeneratedArchiveEvidence(liftedRuntime, target, name, payload),
+      ...regeneratedArchiveEvidence(liftedRuntime, target, downloads[target].path),
     };
   }
   return archives;
@@ -244,17 +248,26 @@ function liftedOpencodeRuntime(existing, version, entries, license, protocolSche
 }
 
 export async function updatedOpencodeRuntime(existing, version, deps) {
-  const downloads = await downloadOpencodeArchives(version, deps);
-  const license = await approvedOpencodeLicense(deps);
-  if (version === existing.upstream.version) {
-    return { ...existing, license, archives: carriedForwardArchives(downloads, existing.archives) };
+  const workRoot = mkdtempSync(join(tmpdir(), "keiko-approvals-archives-"));
+  try {
+    const downloads = await downloadOpencodeArchives(version, workRoot, deps);
+    const license = await approvedOpencodeLicense(deps);
+    if (version === existing.upstream.version) {
+      return {
+        ...existing,
+        license,
+        archives: carriedForwardArchives(downloads, existing.archives),
+      };
+    }
+    const entries = Object.fromEntries(
+      PORTABLE_TARGET_NAMES.map((target) => [target, downloads[target].entry]),
+    );
+    const protocolSchema = await approvedOpencodeProtocolSchema(existing.protocolSchema, deps);
+    const lifted = liftedOpencodeRuntime(existing, version, entries, license, protocolSchema);
+    return { ...lifted, archives: regeneratedArchives(downloads, lifted) };
+  } finally {
+    rmSync(workRoot, { recursive: true, force: true });
   }
-  const entries = Object.fromEntries(
-    PORTABLE_TARGET_NAMES.map((target) => [target, downloads[target].entry]),
-  );
-  const protocolSchema = await approvedOpencodeProtocolSchema(existing.protocolSchema, deps);
-  const lifted = liftedOpencodeRuntime(existing, version, entries, license, protocolSchema);
-  return { ...lifted, archives: regeneratedArchives(downloads, lifted) };
 }
 
 export async function updatePortableRuntimeApprovals(
