@@ -48,7 +48,7 @@
 // `npm run bench:reconciliation-gitdir-pointer --workspace @oscharko-dev/keiko-server` before/after a
 // change to the shared `parseGitdirPointerTarget` logic.
 
-import { describe, test } from "vitest";
+import { describe, expect, test } from "vitest";
 import { parseGitdirPointerTarget } from "./gitdir-identity.js";
 
 const TARGET = "/managed/root/some-repo-abc123/.git/worktrees/keiko-task-def456";
@@ -62,6 +62,9 @@ function paddedPointer(leadingSpaces: number, trailingSpaces: number): string {
 
 describe("parseGitdirPointerTarget bench (S8786, shared Git identity)", () => {
   test("whitespace-padding ladder", ({ bench }) => {
+    // The measurement's own premise: padding on both sides of the capture group must still yield
+    // the exact target. A parser that mis-extracts under padding would be timed on a wrong answer.
+    expect(parseGitdirPointerTarget(paddedPointer(2_500, 2_500))).toBe(TARGET);
     bench("5,000-char whitespace padding", () => {
       parseGitdirPointerTarget(paddedPointer(2_500, 2_500));
     });
