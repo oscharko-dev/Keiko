@@ -805,6 +805,10 @@ function WorkbenchColumns({
   const t = useCodingWorkbenchTranslate();
   const [issueSetup, setIssueSetup] = useState(false);
   const [acceptedIssue, setAcceptedIssue] = useState<AcceptedWorkbenchIssue | null>(null);
+  // #3452 F52: the setup card is unmounted whenever a binding or a run workspace arrives, so the
+  // path the operator is typing is held HERE -- this component keeps its instance across that flip
+  // (WorkbenchContent renders it unconditionally and without a key).
+  const [repositoryPathDraft, setRepositoryPathDraft] = useState<string | null>(null);
   const activeIssueRepository = activeWorkspace.activeInstance?.repositoryId;
   const activeIssueTask = activeWorkspace.activeBinding?.taskId;
   const observedTerminalRunIdRef = useRef<string | undefined>(terminalRunId(state.run.value));
@@ -1000,6 +1004,8 @@ function WorkbenchColumns({
           runtimePosture={runtimePosture}
           acceptedIssue={acceptedIssue}
           onAcceptedIssue={setAcceptedIssue}
+          repositoryPathDraft={repositoryPathDraft}
+          onRepositoryPathDraftChange={setRepositoryPathDraft}
           onOpenGit={() =>
             onOpenGit({ root: null, binding: "repository", repositoryDialog: "clone" })
           }

@@ -116,6 +116,12 @@ export interface CodingWorkbenchSetupProps {
   readonly acceptedIssue: AcceptedWorkbenchIssue | null | undefined;
   readonly onAcceptedIssue: ((issue: AcceptedWorkbenchIssue | null) => void) | undefined;
   readonly onOpenGit: (() => void) | undefined;
+  // The typed repository path lives in the PARENT (#3452 F52). This card is unmounted the moment a
+  // binding or a run workspace arrives -- a sub-second flip on a fresh load -- and a card-owned
+  // draft goes with it, so the operator watched what they were typing replaced by the selection
+  // default on remount. `null` means "nothing typed yet; seed from `selectedRoot`".
+  readonly repositoryPathDraft: string | null;
+  readonly onRepositoryPathDraftChange: (value: string) => void;
 }
 
 // "pending" is a real state, not a stand-in for "verified": before the first readiness read
@@ -752,20 +758,36 @@ function SetupActionRow({
 // The Workbench-wide selected folder is the path field's default: it follows a new selection only
 // while the operator has not typed a different path (an empty field, or one still showing the
 // previous selection, is not an operator's choice).
+// Controlled by the parent so an unmount cannot discard it (#3452 F52). The seeding rule is
+// unchanged: a new selection wins only while the field is empty or still shows the previous
+// selection -- a path the operator typed always wins.
 function useRepositoryPathDefault(
   selectedRoot: string | undefined,
+  draft: string | null,
+  onDraftChange: (value: string) => void,
 ): readonly [string, (value: string) => void] {
-  const [repositoryPath, setRepositoryPath] = useState(selectedRoot ?? "");
+  const repositoryPath = draft ?? selectedRoot ?? "";
   const previousSelectedRootRef = useRef(selectedRoot ?? "");
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
   useEffect(() => {
     const previousSelectedRoot = previousSelectedRootRef.current;
     const nextSelectedRoot = selectedRoot ?? "";
     previousSelectedRootRef.current = nextSelectedRoot;
-    setRepositoryPath((current) =>
-      current.trim() === "" || current === previousSelectedRoot ? nextSelectedRoot : current,
-    );
-  }, [selectedRoot]);
-  return [repositoryPath, setRepositoryPath];
+    const current = draftRef.current ?? previousSelectedRoot;
+    if (current.trim() === "" || current === previousSelectedRoot) onDraftChange(nextSelectedRoot);
+  }, [selectedRoot, onDraftChange]);
+  return [repositoryPath, onDraftChange];
+}
+
+function submitBlocked(
+  pending: boolean,
+  unresolvedIssue: boolean,
+  issue: AcceptedWorkbenchIssue | null,
+  branch: TargetBranchState,
+  repositoryPath: string,
+): boolean {
+  return pending || unresolvedIssue || setupInputsUnavailable(issue, branch, repositoryPath);
 }
 
 function setupInputsUnavailable(
@@ -779,6 +801,26 @@ function setupInputsUnavailable(
   );
 }
 
+// Named beside this file's other wiring hooks (`useRepositoryPathDefault`, `useTargetBranchDefault`,
+// `useSetupActions`), so the card states the release rule rather than spelling out an effect -- and
+// keeps AGENTS.md section 6's 50-line ceiling after taking the parent-held draft (#3452 F52).
+// The card's own pending flag travels with the status it derives from, the way this file's other
+// wiring hooks keep a value and its derived state together.
+function useSetupStatus(): readonly [SetupStatus, Dispatch<SetStateAction<SetupStatus>>, boolean] {
+  const [status, setStatus] = useState<SetupStatus>({ kind: "idle" });
+  return [status, setStatus, status.kind === "pending"];
+}
+
+function useReleaseAcceptedIssue(
+  acceptedIssue: AcceptedWorkbenchIssue | null | undefined,
+  issue: AcceptedWorkbenchIssue | null,
+  onAcceptedIssue: (issue: AcceptedWorkbenchIssue | null) => void,
+): void {
+  useEffect(() => {
+    if (acceptedIssue !== null && issue === null) onAcceptedIssue(null);
+  }, [acceptedIssue, issue, onAcceptedIssue]);
+}
+
 export function CodingWorkbenchSetup({
   selectedRoot,
   selectedBaseBranch,
@@ -787,22 +829,24 @@ export function CodingWorkbenchSetup({
   acceptedIssue = null,
   onAcceptedIssue = (): void => undefined,
   onOpenGit,
+  repositoryPathDraft,
+  onRepositoryPathDraftChange,
 }: CodingWorkbenchSetupProps): ReactNode {
-  const [repositoryPath, setRepositoryPath] = useRepositoryPathDefault(selectedRoot);
+  const [repositoryPath, setRepositoryPath] = useRepositoryPathDefault(
+    selectedRoot,
+    repositoryPathDraft,
+    onRepositoryPathDraftChange,
+  );
   const branch = useTargetBranchDefault(selectedRoot, repositoryPath, selectedBaseBranch);
   const intake = useCodingWorkbenchIssueIntake(repositoryPath);
   const issue = acceptedIssue?.repositoryPath === repositoryPath.trim() ? acceptedIssue : null;
   const unresolvedIssue = intake.issueRef.trim() !== "" && issue === null;
-  useEffect(() => {
-    if (acceptedIssue !== null && issue === null) onAcceptedIssue(null);
-  }, [acceptedIssue, issue, onAcceptedIssue]);
-  const [status, setStatus] = useState<SetupStatus>({ kind: "idle" });
-  const pending = status.kind === "pending";
+  useReleaseAcceptedIssue(acceptedIssue, issue, onAcceptedIssue);
+  const [status, setStatus, pending] = useSetupStatus();
   // A branch lookup in flight is the one wait this card imposes on the operator: until it settles,
   // the field's branch belongs to another path (or to nothing), and binding it would derive the
   // task id from the wrong repository's default.
-  const submitDisabled =
-    pending || unresolvedIssue || setupInputsUnavailable(issue, branch, repositoryPath);
+  const submitDisabled = submitBlocked(pending, unresolvedIssue, issue, branch, repositoryPath);
   const actions = useSetupActions({
     repositoryPath,
     branch,

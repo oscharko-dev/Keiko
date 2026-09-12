@@ -548,6 +548,38 @@ describe("CodingWorkbenchSetup", () => {
     expect(baseBranchMock).not.toHaveBeenCalled();
   });
 
+  // PR #3452 F52: the bootstrap card mounts only while NOTHING is bound, and the live UI flips that
+  // condition on its own within a second of load (observed on 14c4646f4: the card is up at first
+  // paint and gone once the binding and the run workspace arrive). The card owns the typed path in
+  // its own state, so the unmount discards it and the remount re-seeds from `selectedRoot` --
+  // silently replacing what the operator was typing.
+  it("keeps a typed repository path across a binding that unmounts and remounts the card", async () => {
+    const user = userEvent.setup();
+    const view = renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+    await user.clear(screen.getByLabelText("Repository path"));
+    await user.type(screen.getByLabelText("Repository path"), "/repos/typed-by-operator");
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={boundWorkspaceApi("/repos/target", "master")}>
+        <CodingWorkbenchWindow selectedRoot="/repos/selected" />
+      </ActiveWorkspaceProvider>,
+    );
+    await waitFor(() => {
+      expect(setupSection()).not.toBeInTheDocument();
+    });
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={workspaceApi()}>
+        <CodingWorkbenchWindow selectedRoot="/repos/selected" />
+      </ActiveWorkspaceProvider>,
+    );
+
+    await waitFor(() => {
+      expect(setupSection()).toBeInTheDocument();
+    });
+    expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/typed-by-operator");
+  });
+
   // …but a branch the operator typed wins over every default, a new bound base included.
   it("keeps a typed branch when the bound base branch changes", async () => {
     const user = userEvent.setup();
