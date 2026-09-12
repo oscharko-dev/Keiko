@@ -138,6 +138,23 @@ describe("external quality integration configuration", () => {
     );
   });
 
+  it("does not let a commented invocation satisfy the zero-scan guard", () => {
+    // The counting guard closed the "0 of 0 redacted" hole, but counting the RAW source opened a
+    // second one: strip every live invocation and leave a commented redacted command behind, and
+    // the comment itself counted as the scan -- `scans === redactedScans === 1` satisfied both the
+    // zero-scan guard and the redaction guard while no secret scan ran at all (#3463 review).
+    const commentedOnly = sources.ciWorkflow
+      .replaceAll('"${RUNNER_TEMP}/gitleaks" git --redact=100 ', "")
+      .concat(
+        '\n        # "${RUNNER_TEMP}/gitleaks" git --redact=100 --no-banner --timeout=120 .\n',
+      );
+    // The decoy is present as TEXT -- only its executability is missing, which is the whole point.
+    expect(commentedOnly).toContain('gitleaks" git --redact=100');
+    expect(findings({ ciWorkflow: commentedOnly })).toContain(
+      "Gitleaks output must remain fully redacted",
+    );
+  });
+
   it("counts commented Gitleaks invocations symmetrically, so a comment cannot mask a live invocation", () => {
     // The two counters cannot be balanced against each other: the redacted pattern extends the scan
     // pattern, so every redacted match is also a scan match and `redactedScans <= scans` always
