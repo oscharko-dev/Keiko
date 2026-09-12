@@ -46,7 +46,7 @@
     "format:check": "prettier --check .",
     "test": "npm run build && vitest run",
     "test:coverage:packages": "npm run build && vitest run --config vitest.coverage.packages.config.ts --coverage",
-    "test:coverage:packages:shard": "npm run build && vitest run --config vitest.coverage.packages.config.ts --coverage --reporter=default --reporter=blob",
+    "test:coverage:packages:shard": "npm run build && vitest run --config vitest.coverage.packages.config.ts --coverage --reporter=default --reporter=blob --outputFile.blob=.vitest-reports/blob.json",
     "test:coverage:packages:merge": "vitest run --config vitest.coverage.packages.config.ts --coverage --mergeReports=.vitest-reports",
     "test:coverage:ui": "vitest run --config packages/keiko-ui/vitest.coverage.config.ts --coverage",
     "test:coverage:scripts": "npm run build && vitest run --config vitest.coverage.scripts.config.ts --coverage",
