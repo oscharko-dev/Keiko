@@ -12,6 +12,7 @@ import {
   checkH1HandoffEvidence,
   h1LandingReceiptSemanticFailures,
   h1ProvenanceShapeFailures,
+  producerLineageFailures,
   realProducerIdentityFailures,
   realSourceHeadFailures,
   ownedSourceDigestAt,
@@ -155,6 +156,14 @@ async function closeoutFailuresThisCloneCanReach(root = ROOT) {
     );
   }
   failures.push(...(await realSourceHeadFailures(root, record, execFileSync)));
+  // Since ADR-0175 v1.3 the same clone dependency reaches one step further: a producer change is
+  // admitted through an owner-issued lineage whose entries name their own `sourceCommit`. Those
+  // commits live on the integration PR's branch, so a checkout that clones every ref resolves them
+  // and a DEPTH-LIMITED one does not (`node-26-compatibility` takes `ref: github.sha` without
+  // `fetch-depth: 0`, while the coverage lanes clone in full). The gate is right to fail closed on
+  // a commit it cannot resolve — that is what stops a fabricated entry — so this expectation asks
+  // the production function what THIS clone can see, exactly as it already does for the H1 record.
+  failures.push(...(await producerLineageFailures(root, record)));
   return failures;
 }
 
