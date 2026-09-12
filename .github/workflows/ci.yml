@@ -247,6 +247,38 @@ jobs:
         run: |
           "${RUNNER_TEMP}/gitleaks" git --redact=100 --no-banner --timeout=120 \
             --log-opts="${QUALITY_BASE_SHA}..${QUALITY_HEAD_SHA}" .
+      - name: Reject secrets the squash merge would introduce
+        env:
+          QUALITY_BASE_SHA: ${{ steps.quality-range.outputs.base }}
+          QUALITY_HEAD_SHA: ${{ steps.quality-range.outputs.head }}
+          # `git commit-tree` needs a committer identity; a runner has none configured. These are
+          # for a probe object that is never pushed, referenced or kept -- only scanned.
+          GIT_AUTHOR_NAME: keiko-ci
+          GIT_AUTHOR_EMAIL: ci@keiko.invalid
+          GIT_COMMITTER_NAME: keiko-ci
+          GIT_COMMITTER_EMAIL: ci@keiko.invalid
+        # The step above walks the branch HISTORY. `dev` takes signed SQUASH merges, so what lands
+        # is ONE new commit whose SHA cannot be known before the merge and is therefore in no
+        # `.gitleaks.toml` allowlist. Any exemption bound to a branch commit still applies to the
+        # history walk and stops applying the instant the branch squashes -- so a pull request goes
+        # green while `dev` fails on byte-identical content. That is exactly how #3452 went green
+        # and d1889bf54 then failed `Secret scan` on one exempted test fixture in
+        # `codingToolFacade.dependencyFailure.test.ts`. The fixture is named by file, never quoted
+        # here: this step caught that very quotation on its own first run, which is the behaviour
+        # it exists for -- a secret-shaped literal newly introduced by a diff, whatever the file.
+        #
+        # This scans the squash EQUIVALENT: the head tree committed onto the base, one commit, the
+        # exact shape the merge produces. The probe SHA is likewise in no allowlist, by
+        # construction, so a commit-bound exemption fails here the same way it will fail on `dev`.
+        # Path- and regex-scoped allowlists and `gitleaks:allow` markers keep working untouched,
+        # which is what makes disarming a fixture at its source the repair this step steers toward.
+        run: |
+          set -euo pipefail
+          tree=$(git rev-parse "${QUALITY_HEAD_SHA}^{tree}")
+          squash=$(git commit-tree "$tree" -p "${QUALITY_BASE_SHA}" -m "squash-equivalent secret scan probe")
+          echo "Scanning the squash-equivalent commit ${squash} (${QUALITY_BASE_SHA}..${squash})."
+          "${RUNNER_TEMP}/gitleaks" git --redact=100 --no-banner --timeout=120 \
+            --log-opts="${QUALITY_BASE_SHA}..${squash}" .
 
   core-quality:
     name: Core quality
