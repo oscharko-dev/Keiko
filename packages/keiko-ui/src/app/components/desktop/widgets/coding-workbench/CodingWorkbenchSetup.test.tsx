@@ -580,6 +580,66 @@ describe("CodingWorkbenchSetup", () => {
     expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/typed-by-operator");
   });
 
+  // PR #3452 review: the case above proves ONE well-formed path. The seeding rule treats drafts
+  // unequally, so the edges need their own coverage (AGENTS.md §10). A path is opaque to this card
+  // -- it is never parsed, joined or executed here -- so a traversal-shaped or newline-bearing
+  // string is data like any other and must survive the flip untouched, byte for byte.
+  it.each([
+    ["a path with surrounding spaces", "  /repos/padded  "],
+    ["a traversal-shaped path", "/repos/../../etc/passwd"],
+    ["a path carrying quotes and shell punctuation", '/repos/od d"name;$(x)&|'],
+    ["a single character", "/"],
+  ])("keeps %s across the binding flip", async (_label, draft) => {
+    const user = userEvent.setup();
+    const view = renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+    await user.clear(screen.getByLabelText("Repository path"));
+    await user.type(screen.getByLabelText("Repository path"), draft);
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={boundWorkspaceApi("/repos/target", "master")}>
+        <CodingWorkbenchWindow selectedRoot="/repos/selected" />
+      </ActiveWorkspaceProvider>,
+    );
+    await waitFor(() => {
+      expect(setupSection()).not.toBeInTheDocument();
+    });
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={workspaceApi()}>
+        <CodingWorkbenchWindow selectedRoot="/repos/selected" />
+      </ActiveWorkspaceProvider>,
+    );
+
+    await waitFor(() => {
+      expect(setupSection()).toBeInTheDocument();
+    });
+    expect(screen.getByLabelText("Repository path")).toHaveValue(draft);
+  });
+
+  // The two drafts that are DELIBERATELY not kept, pinned so the rule above cannot be widened into
+  // them by accident: a field holding only whitespace is empty for seeding purposes, and a draft
+  // equal to the selection it was seeded from was never typed over. Both re-seed from the current
+  // selection instead of freezing the field against it.
+  it.each([
+    ["whitespace only", "   "],
+    ["the untouched seeded selection", "/repos/selected"],
+  ])("re-seeds a draft that is %s when the selection changes", async (_label, draft) => {
+    const user = userEvent.setup();
+    const view = renderWorkbench(workspaceApi(), liveState(), "/repos/selected");
+    await user.clear(screen.getByLabelText("Repository path"));
+    if (draft !== "") await user.type(screen.getByLabelText("Repository path"), draft);
+
+    view.rerender(
+      <ActiveWorkspaceProvider value={workspaceApi()}>
+        <CodingWorkbenchWindow selectedRoot="/repos/next-selection" />
+      </ActiveWorkspaceProvider>,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText("Repository path")).toHaveValue("/repos/next-selection");
+    });
+  });
+
   // …but a branch the operator typed wins over every default, a new bound base included.
   it("keeps a typed branch when the bound base branch changes", async () => {
     const user = userEvent.setup();
