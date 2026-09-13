@@ -22,6 +22,7 @@ import {
   envValue,
   portableReleaseAuthorityFailures,
 } from "../check-release-required-workflow-names.mjs";
+import { RUNTIME_ACTIVATION_RELATIVE_PATH } from "../runtime-activation-manifest.mjs";
 import {
   redactedWindowsSigningError,
   validateAzureArtifactSigningConfig,
@@ -297,6 +298,34 @@ describe("portable release-trust workflow", () => {
     expect(unpackAt).toBeGreaterThan(downloadAt);
     expect(firstUse).toBeGreaterThan(unpackAt);
     expect(fresh.steps.some((step) => step.with?.name === "portable-stage-linux-x64")).toBe(false);
+  });
+
+  it("uploads every staged tree with the hidden evidence directory the contract requires", () => {
+    // The portable contract keeps its evidence under .portable/ — runtime-activation.json and
+    // runtime-qualification.json. upload-artifact excludes hidden files by default
+    // (include-hidden-files: 'false' at the pinned v7.0.1), so every portable-stage-* zip shipped
+    // a tree with no evidence in it. The staging jobs stayed green because their smoke steps run
+    // on the local tree before the upload, and the Linux hand-off stayed green because a tar
+    // carries dotfiles; assemble is the first consumer that reads them, and it had never run. On
+    // the v1.0.0 release of 2026-09-13 it failed with "missing runtime activation manifest".
+    // A single file uploaded with archive: false is exempt: it is not a tree, and a tar keeps its
+    // own hidden entries.
+    expect(RUNTIME_ACTIVATION_RELATIVE_PATH.startsWith(".")).toBe(true);
+
+    const uploads = Object.entries(portableWorkflowDocument.jobs).flatMap(([name, job]) =>
+      (job.steps ?? [])
+        .filter((step) => String(step.uses ?? "").startsWith("actions/upload-artifact"))
+        .map((step) => ({ name, with: step.with ?? {} })),
+    );
+
+    expect(uploads.length).toBeGreaterThan(0);
+    for (const upload of uploads) {
+      if (upload.with.archive === false) continue;
+      expect(
+        upload.with["include-hidden-files"],
+        `${upload.name} uploads a tree whose ${RUNTIME_ACTIVATION_RELATIVE_PATH} would be dropped`,
+      ).toBe(true);
+    }
   });
 
   it("pins portable staging to the release workflow authority", () => {
