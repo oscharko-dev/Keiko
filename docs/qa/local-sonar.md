@@ -90,12 +90,18 @@ complete substitute: SonarCloud's `shelldre:S7679` (bind a positional parameter 
 against those two as well.
 
 **It is not the gate.** The verdict stays with SonarCloud on the pull request
-([`local-gates.md`](local-gates.md)). Two things differ by construction:
+([`local-gates.md`](local-gates.md)). Three things differ by construction:
 
 - the quality **profile** is SonarQube's built-in "Sonar way", not the organisation's profile, so a
   rule the organisation activated or silenced may differ;
 - **coverage is not imported**, on purpose — coverage has its own gate
   (`npm run check:coverage:new-code`) and importing it here would double the runtime for no signal.
+- **new-code density conditions are invisible to it.** The cloud gate scores duplication and
+  coverage on the lines a pull request adds, measured against its base. This runs over a file
+  set, not a base diff, so it cannot evaluate that class at all — and a block the repository has
+  carried for years becomes a _new_-code duplication the moment your change touches one line
+  inside it. PR #3468 failed at 6.2% (limit 3%) from two `__fixtures__` twins that had differed
+  by two lines since long before that branch; the repair was a smaller diff, not a reworded one.
 
 So read a clean run as _"no known rule violation on my diff"_ — which is exactly the local question
 you need answered before pushing — and never as _"SonarCloud will be green"_. Required PR CI uses
