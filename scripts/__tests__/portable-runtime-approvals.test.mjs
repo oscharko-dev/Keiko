@@ -788,7 +788,7 @@ describe("assemble portable release assets", () => {
     const bundleRoot = tempRoot();
     mkdirSync(join(bundleRoot, "artifacts", "portable-stage-windows-x64"), { recursive: true });
     await expect(assemblePortableReleaseAssets(["--bundle-root", bundleRoot])).rejects.toThrow(
-      /downloaded artifacts must be exactly the three canonical target names/u,
+      /downloaded artifacts must be exactly the four canonical target names/u,
     );
   });
 });

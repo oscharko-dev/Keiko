@@ -8,24 +8,32 @@
 
 <p align="center">
   The governed agentic workspace for professional knowledge work.<br />
-  Local-first. Human-controlled. It learns from experience.<br />
-  Manifest-producing surfaces emit redacted evidence for audit.
+  Local-first. Human-controlled. It learns from experience.
 </p>
 
 <p align="center">
   <a href="https://github.com/oscharko-dev/Keiko/blob/dev/LICENSE"><img alt="License" src="https://img.shields.io/badge/license-Apache%202.0-4EBA87.svg"></a>
   <a href="https://github.com/oscharko-dev/Keiko/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/oscharko-dev/Keiko/actions/workflows/ci.yml/badge.svg?branch=dev"></a>
   <a href="https://github.com/oscharko-dev/Keiko/actions/workflows/codeql.yml"><img alt="CodeQL" src="https://github.com/oscharko-dev/Keiko/actions/workflows/codeql.yml/badge.svg?branch=dev"></a>
-  <a href="https://sonarcloud.io/summary/new_code?id=oscharko-dev_Keiko"><img alt="Quality gate" src="https://sonarcloud.io/api/project_badges/measure?project=oscharko-dev_Keiko&metric=alert_status"></a>
   <img alt="Local first" src="https://img.shields.io/badge/runtime-local--first-1F2937.svg">
 </p>
 
 <p align="center">
+  <a href="https://sonarcloud.io/project/overview?id=oscharko-dev_Keiko"><img alt="Quality gate" src="https://sonarcloud.io/api/project_badges/measure?project=oscharko-dev_Keiko&metric=alert_status"></a>
+  <a href="https://sonarcloud.io/project/overview?id=oscharko-dev_Keiko"><img alt="Lines of code" src="https://sonarcloud.io/api/project_badges/measure?project=oscharko-dev_Keiko&metric=ncloc"></a>
+  <a href="https://sonarcloud.io/project/overview?id=oscharko-dev_Keiko"><img alt="Coverage" src="https://sonarcloud.io/api/project_badges/measure?project=oscharko-dev_Keiko&metric=coverage"></a>
+  <a href="https://sonarcloud.io/project/overview?id=oscharko-dev_Keiko"><img alt="Maintainability" src="https://sonarcloud.io/api/project_badges/measure?project=oscharko-dev_Keiko&metric=sqale_rating"></a>
+  <a href="https://sonarcloud.io/project/overview?id=oscharko-dev_Keiko"><img alt="Security" src="https://sonarcloud.io/api/project_badges/measure?project=oscharko-dev_Keiko&metric=security_rating"></a>
+</p>
+
+<p align="center">
+  <a href="https://www.oscharko.dev">Product page</a>
+  ·
   <a href="#download">Download</a>
   ·
-  <a href="#quickstart-with-npm">npm</a>
+  <a href="#install-with-npm">npm</a>
   ·
-  <a href="#whats-in-03">What's in 0.3</a>
+  <a href="#whats-in-10">What's in 1.0</a>
   ·
   <a href="https://github.com/oscharko-dev/Keiko/blob/dev/CONTRIBUTING.md">Contributing</a>
   ·
@@ -34,20 +42,20 @@
 
 ---
 
-Keiko turns a repository, your documents and your models into one calm place to work: chat with the models you configure, understand a codebase, generate reviewable tests, investigate bugs, run verification — and keep a memory of what was learned along the way. Everything runs on your machine, every action stays within the authority you grant, and manifest-producing surfaces emit redacted evidence for audit.
+Keiko turns your repository, your documents and your models into one calm place to work: chat with the models you configure, understand a codebase, generate reviewable tests, investigate bugs, and keep a memory of what was learned along the way. Everything runs on your machine, and every action stays inside the authority you grant.
 
 ## What you get
 
 - **A workspace that understands your repository** — inspect, search and reason over real code, not snippets.
-- **Chat with your own models** — bring the endpoints you already trust; Keiko never ships or hides credentials.
-- **A coding workbench with a managed agent runtime** — the bundled OpenCode sidecar plans and edits inside a verified sandbox, under autonomy modes you choose.
-- **Test generation, bug investigation, verification** — reviewable outcomes with honest state: no green over a broken gateway, every refusal names its reason.
-- **Memory that learns from experience** — decisions and findings persist locally and sharpen future answers; local knowledge retrieval runs on a fast approximate-nearest-neighbour index.
-- **Governance you can show an auditor** — human-controlled autonomy, fail-closed trust boundaries, and body-free evidence: counts, hashes and statuses, never your content.
+- **Your own models** — bring the endpoints you already trust; Keiko never ships or hides credentials.
+- **A coding workbench** — plan and edit inside a verified sandbox, under an autonomy mode you choose. It can take an issue all the way to a pull request in one governed run.
+- **Tests, investigations, verification** — reviewable outcomes with honest state: no green over a broken gateway, and every refusal names its reason.
+- **Memory that learns from experience** — decisions and findings persist locally and sharpen future answers.
+- **Evidence you can show an auditor** — counts, hashes and statuses; never your content.
 
 ## Download
 
-The desktop packages install in one step and include everything — Node.js runtime and the OpenCode coding sidecar bundled, nothing else to install.
+The desktop packages install in one step and include everything — runtime and coding sidecar bundled, nothing else to install.
 
 **[Download the latest release →](https://github.com/oscharko-dev/Keiko/releases/latest)**
 
@@ -56,12 +64,11 @@ The desktop packages install in one step and include everything — Node.js runt
 | macOS (Apple Silicon) | `keiko-macos-arm64.zip`                                  |
 | macOS (Intel)         | `keiko-macos-x64.zip`                                    |
 | Windows x64           | `keiko-windows-x64-setup.exe` or `keiko-windows-x64.zip` |
+| Linux x64             | `keiko-linux-x64.zip`                                    |
 
-First launch: macOS asks once for **System Settings → Privacy & Security → Open Anyway** (the 0.3 line ships as an evaluation build without an Apple developer signature — stated plainly in every release). Windows shows the SmartScreen notice once — **More info → Run anyway**. Keiko then opens at `http://127.0.0.1:1983`.
+Keiko is an open-source project and does not yet buy Apple and Microsoft code-signing certificates, so macOS and Windows ask once before the first launch: on macOS **System Settings → Privacy & Security → Open Anyway**, on Windows SmartScreen **More info → Run anyway**. Every release states this plainly. Keiko then opens at `http://127.0.0.1:1983`.
 
-## Quickstart with npm
-
-For developers who prefer the package manager path:
+## Install with npm
 
 ```bash
 npm install -g @oscharko-dev/keiko
@@ -71,40 +78,32 @@ npm install -g @oscharko-dev/keiko
 keiko init && keiko start
 ```
 
-Run it inside a project with a `package.json`; the UI opens at `http://127.0.0.1:1983` (`keiko stop` shuts it down, `keiko start --port <n>` picks another port). Configure a chat model in Settings, add a project path, and start working. The coding sidecar ships with the desktop packages above and with repository checkouts — the npm install reports it honestly as unavailable rather than pretending.
+Run it inside a project with a `package.json`. The UI opens at `http://127.0.0.1:1983` — `keiko stop` shuts it down, `keiko start --port <n>` picks another port. Requires Node.js `>=24.18.0 <25 || >=26.3.0 <27`; the desktop packages bring their own runtime. The coding sidecar ships with the desktop packages and with repository checkouts — the npm install reports it honestly as unavailable rather than pretending.
 
-## What's in 0.3
+## What's in 1.0
 
-- Multi-root editor workspaces with an explicit **Workspace Trust** gate — a new workspace stays restricted until you grant trust.
-- Editor profiles, portable profile import/export, and per-file local history with a keyboard-operable timeline.
-- Faster local knowledge: retrieval now runs on an approximate-nearest-neighbour index, built on demand from vectors you already have.
-- Honest readiness everywhere — Coding Workbench, Chat, Git, Prompt Enhancer, MemoriaViva and Quality Intelligence report real state, and every refused action carries a copyable support id.
-- Voice turns carry their attachments and document context; interrupting an answer cancels only that answer.
-- Governed Git delivery authenticates on every network path and tells offline apart from authentication failure.
-- First public download release: evaluation desktop packages for macOS and Windows with the OpenCode sidecar included.
+1.0 is the first stable major. The published surface is unchanged from 0.3.17 — nothing was added, removed or renamed — so what changes is the promise around it: **`1.x` is the supported line, and a breaking change to it requires a new major release.**
 
-## Good to know
-
-- The CLI, the UI and the SDK share one product. Surface coverage is intentionally not identical. `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest.
-- The UI can create a local runtime config during first-run setup. To list models, Keiko calls the gateway model list endpoint you configured — credentials stay in your local config.
-- Keiko serves loopback only: `keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `keiko start --port <n>` sets the Port to bind (default: 1983).
-- The full operator reference lives in the [UI runbook](https://github.com/oscharko-dev/Keiko/blob/dev/docs/ui-runbook.md).
+- Updates are production-ready on Windows, macOS and Linux, and a failed update preserves the complete current install.
+- The Coding Workbench takes an issue to a pull request in one governed run, and an approved changeset edit now lands instead of expiring beneath the decision.
+- Linux x64 joins macOS and Windows as a downloadable package, with its coding runtime shipping qualified and generated code reaching the network only through the gateway boundary.
+- Windows installs through a native bootstrap, with the setup executable's digest bound into the published manifest.
+- Every Git outcome can be reconstructed from the activity log alone.
+- Grounded retrieval is bounded on large workspaces, and local knowledge retrieval runs on a fast approximate-nearest-neighbour index.
+- Security: Next.js 16.3.3 closes two critical advisories.
 
 ## Principles
 
 - **Human-controlled by design.** You select the task, the autonomy mode and the authority envelope; hard limits fail closed.
-- **Local-first.** Your repositories, memory and evidence live on your machine.
+- **Local-first.** Your repositories, memory and evidence live on your machine, and Keiko serves loopback only.
 - **Evidence over trust.** Manifests and audit exports carry counts, scopes and hashes — never raw content.
 - **Honest state.** No silent failure, no green over broken.
 
-## Requirements
-
-The npm path supports Node.js `>=24.18.0 <25 || >=26.3.0 <27` with npm `>=11.16.0 <12`;
-the desktop packages bring their own runtime.
-
 ## Learn more
 
+- [oscharko.dev](https://www.oscharko.dev) — the product page
 - [Documentation](https://github.com/oscharko-dev/Keiko/tree/dev/docs) — architecture decisions, design system, troubleshooting
+- [Operator runbook](https://github.com/oscharko-dev/Keiko/blob/dev/docs/ui-runbook.md) — the full operator reference
 - [Contributing](https://github.com/oscharko-dev/Keiko/blob/dev/CONTRIBUTING.md) — the quality bar and how changes land
 - [Security policy](https://github.com/oscharko-dev/Keiko/blob/dev/SECURITY.md) — reporting and boundaries
 - [Report a finding](https://github.com/oscharko-dev/Keiko/blob/dev/docs/user-finding-report.md) — structured, account-free intake

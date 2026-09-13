@@ -382,7 +382,7 @@ activity evidence, or browser projections. The capsule grants no arbitrary path 
 ADR-0121's acknowledged ownership transfer, same-volume promotion, process-tree containment, exact
 target startup proof, and idempotent recovery are required in addition to the artifact checks. A
 manifest that passes schema and digest validation does not prove those runtime steps. Production
-qualification additionally requires two actual Keiko-signed eligible releases on all three targets.
+qualification additionally requires two actual Keiko-signed eligible releases on all four targets.
 Evaluation artifacts remain manual-only, including the first transition to a release-trusted build.
 
 ## State And Payload Exclusions
@@ -429,7 +429,7 @@ downloads, updater-time side downloads, global npm installs, curl installers, or
 customer-side tool installation path. Refreshing a frozen sidecar payload is a Keiko release
 decision: update the approvals file (for example with
 `npm run portable:approve-runtimes -- --opencode-version <v>`), review and merge that diff,
-regenerate all three portable artifacts, verify the
+regenerate all four portable artifacts, verify the
 new digests/evidence/signing status, and ship through the normal reviewed release flow. The runtime
 payload is an inseparable child of that whole-product release: it has no independent promotion,
 self-update, downgrade, rollback, or recovery channel.
@@ -1017,7 +1017,7 @@ This contract intentionally leaves implementation to the remaining portable runt
 - #1951 implements signing, notarization, checksum, provenance, and artifact verification gates.
 - #1983 introduced product-owned coding sidecar payload staging and manifest validation; ADR-0163
   and #2762 make the single approved OpenCode payload mandatory for customer artifacts.
-- #1952 attaches all three portable assets and reviewed evidence to GitHub Releases.
+- #1952 attaches the portable assets and reviewed evidence to GitHub Releases.
 - #1953 adds portable launch/setup smoke tests and operator documentation.
 - #1945 consumes the managed install and manifest contract for portable updater v2.
 

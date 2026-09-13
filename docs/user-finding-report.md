@@ -11,7 +11,7 @@ Do not include API keys, customer data, private screenshots, internal model endp
 ```markdown
 ## Keiko version
 
-<!-- Enter the installed Keiko version, for example 0.2.6. -->
+<!-- Enter the installed Keiko version, for example 1.0.0. -->
 
 ## Platform
 
