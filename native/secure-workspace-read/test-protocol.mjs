@@ -2429,11 +2429,19 @@ function existingBinaryArgument(argv) {
   return resolve(argv[1]);
 }
 
-if (!isWindows && process.platform !== "darwin") {
-  throw new Error("secure-workspace-read executable harness supports only Windows and macOS");
-}
-
 const externalBinary = existingBinaryArgument(process.argv.slice(2));
+// The platform restriction belongs to compile mode, not to the harness as a whole. Building the
+// helper needs MSVC on Windows or `xcrun clang -D_DARWIN_C_SOURCE` on macOS, and neither exists
+// on Linux. Everything the --binary path exercises is Windows/POSIX: the source contract is a
+// text assertion over the .c file (it already runs unconditionally on macOS), the protocol,
+// consistency and load assertions all branch `isWindows ? ... : <posix>`, the resource sampler
+// reads /dev/fd, and the adversarial races are skipped because no paused companion is compiled.
+// Refusing Linux outright left the release's own Linux helper unproven: #3451 added the
+// --binary step on 2026-09-10, this guard predates it by two months, and the Linux job never
+// reached that step until 2026-09-13 because linux-x64 had not compiled since #3456.
+if (externalBinary === undefined && !isWindows && process.platform !== "darwin") {
+  throw new Error("secure-workspace-read executable harness can only compile on Windows and macOS");
+}
 const externalBinaryBytes =
   externalBinary === undefined ? undefined : await readFile(externalBinary);
 let binaryRoot;

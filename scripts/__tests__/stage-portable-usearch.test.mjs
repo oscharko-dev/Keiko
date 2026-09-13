@@ -14,12 +14,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { URL, fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { portableTargetByName } from "../portable-runtime.mjs";
+import { PORTABLE_TARGETS, portableTargetByName } from "../portable-runtime.mjs";
 import {
   containedDigest,
+  governedStageRoot,
   loadAndSearch,
   readContainedText,
   requiredContainedFile,
@@ -367,6 +369,59 @@ describe("portable USearch staging", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("stage root argument does not match the governed target");
     expect(result.stderr).not.toContain("missing portable manifest");
+  });
+
+  it("derives the governed stage root for every released portable target", () => {
+    // SonarCloud reported 0.0% coverage on new code for the repaired governedStageRoot: its only
+    // exercise was through spawnSync, and a subprocess carries no coverage instrumentation. Call it
+    // in process so the governed path itself is asserted, not merely the absence of an error string
+    // on a child's stderr. The CLI tests below stay: they prove the wiring end to end.
+    const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
+
+    for (const target of PORTABLE_TARGETS) {
+      expect(governedStageRoot(target.platformTarget)).toBe(
+        join(repositoryRoot, ".portable-runtime", "staging", target.platformTarget),
+      );
+    }
+  });
+
+  it("refuses in process a platform target the producer does not declare", () => {
+    expect(() => governedStageRoot("linux-arm64")).toThrow("platform target is unsupported");
+  });
+
+  it("accepts every released portable target on the governed CLI path", () => {
+    // Regression: the governed stage root was a hand-copied three-case switch, so linux-x64 - the
+    // fourth released target since ADR-0121 was amended for it (Issue #3451, 2026-09-10) - was
+    // refused as "platform target is unsupported" and the stable Linux staging run died at step 11
+    // before it could read a manifest. Derive from PORTABLE_TARGETS so the next platform cannot
+    // fall out the same way.
+    for (const target of PORTABLE_TARGETS) {
+      const result = spawnSync(
+        process.execPath,
+        [
+          resolve("scripts/smoke-portable-usearch.mjs"),
+          `.portable-runtime/staging/${target.platformTarget}`,
+          target.platformTarget,
+        ],
+        { cwd: temporaryRoot(), encoding: "utf8" },
+      );
+
+      expect(result.stderr).not.toContain("platform target is unsupported");
+    }
+  });
+
+  it("still refuses a platform target the producer does not declare", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        resolve("scripts/smoke-portable-usearch.mjs"),
+        ".portable-runtime/staging/linux-arm64",
+        "linux-arm64",
+      ],
+      { cwd: temporaryRoot(), encoding: "utf8" },
+    );
+
+    expect(result.stderr).toContain("platform target is unsupported");
   });
 
   it("anchors governed repo-relative CLI roots independently of the current directory", () => {
