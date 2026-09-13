@@ -81,16 +81,15 @@ function requireArgument(index, name) {
 }
 
 function governedStageRoot(targetName) {
-  switch (targetName) {
-    case "windows-x64":
-      return join(REPOSITORY_ROOT, ".portable-runtime", "staging", "windows-x64");
-    case "macos-arm64":
-      return join(REPOSITORY_ROOT, ".portable-runtime", "staging", "macos-arm64");
-    case "macos-x64":
-      return join(REPOSITORY_ROOT, ".portable-runtime", "staging", "macos-x64");
-    default:
-      fail("platform target is unsupported");
-  }
+  // Derived from the producer, never restated. A hand-copied three-case list silently excluded
+  // linux-x64 once it became the fourth released target (ADR-0121, amended for Issue #3451 on
+  // 2026-09-10), so the stable Linux staging run failed here with "platform target is
+  // unsupported" while the three legacy targets passed in the same run. portableTargetByName
+  // validates the name against PORTABLE_TARGETS before it can reach join(), so only a declared
+  // target is ever interpolated into the governed path and the confinement guard below keeps
+  // exactly the strength it had.
+  if (portableTargetByName(targetName) === undefined) fail("platform target is unsupported");
+  return join(REPOSITORY_ROOT, ".portable-runtime", "staging", targetName);
 }
 
 function requiredCliStageRoot(value, targetName) {

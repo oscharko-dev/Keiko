@@ -17,7 +17,7 @@ import { basename, dirname, join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { portableTargetByName } from "../portable-runtime.mjs";
+import { PORTABLE_TARGETS, portableTargetByName } from "../portable-runtime.mjs";
 import {
   containedDigest,
   loadAndSearch,
@@ -367,6 +367,41 @@ describe("portable USearch staging", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("stage root argument does not match the governed target");
     expect(result.stderr).not.toContain("missing portable manifest");
+  });
+
+  it("accepts every released portable target on the governed CLI path", () => {
+    // Regression: the governed stage root was a hand-copied three-case switch, so linux-x64 - the
+    // fourth released target since ADR-0121 was amended for it (Issue #3451, 2026-09-10) - was
+    // refused as "platform target is unsupported" and the stable Linux staging run died at step 11
+    // before it could read a manifest. Derive from PORTABLE_TARGETS so the next platform cannot
+    // fall out the same way.
+    for (const target of PORTABLE_TARGETS) {
+      const result = spawnSync(
+        process.execPath,
+        [
+          resolve("scripts/smoke-portable-usearch.mjs"),
+          `.portable-runtime/staging/${target.platformTarget}`,
+          target.platformTarget,
+        ],
+        { cwd: temporaryRoot(), encoding: "utf8" },
+      );
+
+      expect(result.stderr).not.toContain("platform target is unsupported");
+    }
+  });
+
+  it("still refuses a platform target the producer does not declare", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        resolve("scripts/smoke-portable-usearch.mjs"),
+        ".portable-runtime/staging/linux-arm64",
+        "linux-arm64",
+      ],
+      { cwd: temporaryRoot(), encoding: "utf8" },
+    );
+
+    expect(result.stderr).toContain("platform target is unsupported");
   });
 
   it("anchors governed repo-relative CLI roots independently of the current directory", () => {
