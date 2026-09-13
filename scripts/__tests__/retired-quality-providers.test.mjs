@@ -50,7 +50,9 @@ const RETIRED_REVIEWER_PATHS = [
   ".github/workflows/keiko-for-quality.yml",
   "scripts/__tests__/keiko-for-quality-workflow.test.mjs",
 ];
-const RETIRED_REVIEWER_ENVIRONMENT = /environment:(\s|\n)*(name:\s*)?keiko-for-quality\b/u;
+// `\s` already matches a newline, so `(\s|\n)*` was an ambiguous alternation and backtracked
+// polynomially on `environment:` followed by many newlines (CodeQL js/redos on #3470).
+const RETIRED_REVIEWER_ENVIRONMENT = /environment:\s*(name:\s*)?keiko-for-quality\b/u;
 const fixtureRoots = [];
 
 function repositoryFile(repoRoot, path) {
