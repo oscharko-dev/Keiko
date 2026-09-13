@@ -108,6 +108,29 @@ static int keiko_tree_same_names(const keiko_tree_names *left,
 #include <time.h>
 #include <unistd.h>
 
+/*
+ * Darwin spells the timestamp members `st_*timespec` and carries a birth time; glibc spells them
+ * `st_*tim` and has no portable birth time at all. Until now this branch used the Darwin spelling
+ * unconditionally, so the POSIX path only ever compiled on macOS (#3456) and linux-x64 never built.
+ *
+ * The snapshot these feed is compared BEFORE and AFTER the digest walk: it is a concurrent-mutation
+ * guard, not the identity proof. The proof is the KHT1 SHA-256 over names and per-file content
+ * digests below, which is untouched here. Omitting the birth time on Linux therefore weakens no
+ * identity claim; it leaves the guard resting on ctime, which the kernel bumps on every content and
+ * metadata change and which userspace cannot set backwards, so evading it would additionally
+ * require inode reuse with an identical ctime inside the walk.
+ */
+#if defined(__APPLE__)
+#define KEIKO_TREE_STAT_MTIME(status) ((status)->st_mtimespec)
+#define KEIKO_TREE_STAT_CTIME(status) ((status)->st_ctimespec)
+#define KEIKO_TREE_HAS_BIRTHTIME 1
+#define KEIKO_TREE_STAT_BIRTHTIME(status) ((status)->st_birthtimespec)
+#else
+#define KEIKO_TREE_STAT_MTIME(status) ((status)->st_mtim)
+#define KEIKO_TREE_STAT_CTIME(status) ((status)->st_ctim)
+#define KEIKO_TREE_HAS_BIRTHTIME 0
+#endif
+
 #if !defined(KEIKO_TREE_POSIX_AFTER_FILE_DIGEST)
 #define KEIKO_TREE_POSIX_AFTER_FILE_DIGEST(name) ((void)(name))
 #define KEIKO_TREE_POSIX_AFTER_FILE_DIGEST_DEFINED_HERE 1
@@ -181,9 +204,13 @@ static int keiko_tree_posix_snapshot_add(keiko_tree_posix_snapshots *snapshots,
   snapshot->mode = status->st_mode;
   snapshot->links = status->st_nlink;
   snapshot->size = status->st_size;
-  snapshot->modified = status->st_mtimespec;
-  snapshot->changed = status->st_ctimespec;
-  snapshot->created = status->st_birthtimespec;
+  snapshot->modified = KEIKO_TREE_STAT_MTIME(status);
+  snapshot->changed = KEIKO_TREE_STAT_CTIME(status);
+#if KEIKO_TREE_HAS_BIRTHTIME
+  snapshot->created = KEIKO_TREE_STAT_BIRTHTIME(status);
+#else
+  memset(&snapshot->created, 0, sizeof(snapshot->created));
+#endif
   snapshots->path_bytes += length;
   return 1;
 }
@@ -199,12 +226,14 @@ static int keiko_tree_posix_status_matches(const keiko_tree_posix_snapshot *snap
   return snapshot->device == status->st_dev && snapshot->inode == status->st_ino &&
          snapshot->mode == status->st_mode && snapshot->links == status->st_nlink &&
          snapshot->size == status->st_size &&
-         snapshot->modified.tv_sec == status->st_mtimespec.tv_sec &&
-         snapshot->modified.tv_nsec == status->st_mtimespec.tv_nsec &&
-         snapshot->changed.tv_sec == status->st_ctimespec.tv_sec &&
-         snapshot->changed.tv_nsec == status->st_ctimespec.tv_nsec &&
-         snapshot->created.tv_sec == status->st_birthtimespec.tv_sec &&
-         snapshot->created.tv_nsec == status->st_birthtimespec.tv_nsec;
+         snapshot->modified.tv_sec == KEIKO_TREE_STAT_MTIME(status).tv_sec &&
+         snapshot->modified.tv_nsec == KEIKO_TREE_STAT_MTIME(status).tv_nsec &&
+         snapshot->changed.tv_sec == KEIKO_TREE_STAT_CTIME(status).tv_sec &&
+#if KEIKO_TREE_HAS_BIRTHTIME
+         snapshot->created.tv_sec == KEIKO_TREE_STAT_BIRTHTIME(status).tv_sec &&
+         snapshot->created.tv_nsec == KEIKO_TREE_STAT_BIRTHTIME(status).tv_nsec &&
+#endif
+         snapshot->changed.tv_nsec == KEIKO_TREE_STAT_CTIME(status).tv_nsec;
 }
 
 static int keiko_tree_posix_snapshots_match(const keiko_tree_posix_snapshot *left,
