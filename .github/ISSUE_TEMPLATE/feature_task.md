@@ -84,7 +84,7 @@ Describe the goal of this issue and the user, developer, platform, or governance
 - [ ] Studio visual regression when visible UI structure changes.
 - [ ] Markdown link check when documentation changes.
 - [ ] Security review when trust boundaries, auth/session, secrets, CSP, model access, execution, patch application, or external calls change.
-- [ ] `Keiko for Quality` review settled and `npm run gates:sonar` run locally when security-sensitive or shared control-plane code changes.
+- [ ] `npm run gates:sonar` run locally when security-sensitive or shared control-plane code changes.
 
 ## Review Settlement and Formal Issue Completion
 

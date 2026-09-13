@@ -30,6 +30,11 @@ and pull request, and GitHub branch protection performs repository integration. 
 ADR-0087 or add native auto-merge scheduling to the Governed Merge Gateway that Keiko exposes to
 end users for their target repositories.
 
+Amended 2026-09-13 by [ADR-0176](ADR-0176-retire-keiko-for-quality.md), which retires Keiko for Quality and
+removes the bounded auto-merge arming interlock ADR-0170 D5 added here. The file name
+retains the historical `keiko-for-quality` slug; renaming it would break every ADR that
+cites this decision.
+
 ## Context
 
 Keiko epics are implemented by autonomous agents as large integration pull requests. Requiring a
