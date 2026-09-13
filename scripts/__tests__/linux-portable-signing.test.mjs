@@ -1,3 +1,4 @@
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { Buffer } from "node:buffer";
 import {
@@ -11,7 +12,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -124,6 +125,24 @@ function dependencies(receipt = qualificationReceipt()) {
 
 afterEach(() => {
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe("linux-portable-signing CLI module graph", () => {
+  // This suite cannot see the defect it guards without spawning a real node: vitest resolves a
+  // relative "./x.js" specifier to "./x.ts", and plain node does not. scripts/linux-portable-signing.mjs
+  // imported packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts, whose own
+  // graph carries ten relative ".js" specifiers pointing at ".ts" sources, so every invocation --
+  // prepare, finalize and verify -- died at module load with ERR_MODULE_NOT_FOUND on the release
+  // runner while this suite stayed green. The sibling entry points it imports have zero such
+  // specifiers, which is why only this one broke.
+  it("loads under plain node, the runtime the release workflow actually uses", () => {
+    const result = spawnSync(process.execPath, [resolve("scripts/linux-portable-signing.mjs")], {
+      encoding: "utf8",
+    });
+
+    expect(result.stderr).not.toContain("ERR_MODULE_NOT_FOUND");
+    expect(result.stderr).not.toContain("Cannot find module");
+  });
 });
 
 describe("Linux portable qualification sealing", () => {

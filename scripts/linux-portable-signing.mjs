@@ -6,7 +6,13 @@ import { basename, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { verifyLinuxQualificationBundle } from "../packages/keiko-server/src/coding-runtime/linuxPortableSigstore.ts";
-import { discoverQualifiedPortableOpenCode } from "../packages/keiko-server/src/coding-runtime/productionPortableCodingRuntime.ts";
+// Imported from the built output, not from src: productionPortableCodingRuntime.ts carries ten
+// relative ".js" specifiers pointing at ".ts" sources, which vitest rewrites and plain node does
+// not. Every invocation of this script therefore died at module load on the release runner with
+// ERR_MODULE_NOT_FOUND while the suite stayed green. build:packages already runs on that runner --
+// smoke:portable-launch-setup invokes it one step earlier -- so dist is present. The sibling
+// entry point linuxPortableSigstore.ts has no such specifiers and stays a direct src import.
+import { discoverQualifiedPortableOpenCode } from "../packages/keiko-server/dist/coding-runtime/productionPortableCodingRuntime.js";
 import { readZipArchiveEntryNames, writeZipArchiveFromDirectory } from "./lib/zip-archive.mjs";
 import { qualificationReceiptFor } from "./qualify-linux-runtime-release.mjs";
 import {
