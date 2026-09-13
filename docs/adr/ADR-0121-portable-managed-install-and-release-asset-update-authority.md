@@ -198,6 +198,18 @@ atomic rename semantics, or an equally reviewed platform primitive with the same
 property. If the detected filesystem or layout cannot provide crash-safe promotion, one-click
 portable update is rejected as manual-only.
 
+The reviewed platform primitives are named here so "equally reviewed" is a checkable claim rather
+than a judgement call at implementation time. On Darwin the promotion uses `renameatx_np` with
+`RENAME_SWAP` (exchange) or `RENAME_EXCL` (occupied-destination refusal), combined with
+`RENAME_NOFOLLOW_ANY`. On Linux the same two operations are `renameat2` with `RENAME_EXCHANGE` and
+`RENAME_NOREPLACE`: both are single syscalls with the same fail-closed posture, and neither falls
+back to copy+delete. `RENAME_NOFOLLOW_ANY` has no Linux spelling; it refuses the rename when any
+path component is a symlink, and every call site passes a directory descriptor plus a single leaf
+name, so no intermediate component remains to follow and both operations act on the directory
+entries rather than dereferencing a leaf. The guarantee is therefore preserved structurally rather
+than dropped. Until this was recorded, the POSIX path used the Darwin spelling unconditionally and
+`linux-x64` never compiled, so it was never staged, qualified or attested (#3456).
+
 On Windows, `MoveFileEx` fails with `EPERM`/`EBUSY` while any handle is open on a file in the
 tree with incompatible sharing flags (for example, a transient scanner or an executable image).
 The existing atomic-publish helper may retry transient contention with bounded backoff; it must not

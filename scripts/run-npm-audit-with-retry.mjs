@@ -13,7 +13,7 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const MAX_ATTEMPTS = 3;
 const RETRY_DELAYS_MS = [15_000, 30_000];
 const TRANSIENT_FAILURES = [
-  /\b(?:429 Too Many Requests|500 Internal Server Error|502 Bad Gateway|503 Service Unavailable|504 Gateway Timeout)\b/iu,
+  /\b(?:429 Too Many Requests|500 Internal Server Error|502 Bad Gateway|503 Service (?:Temporarily )?Unavailable|504 Gateway Timeout)\b/iu,
   /audit endpoint returned an error/iu,
   /bad gateway/iu,
   /connection reset/iu,

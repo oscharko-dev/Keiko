@@ -368,6 +368,28 @@ describe("dev quality workflows", () => {
     expect(ci).toContain("if: ${{ always() && github.event_name == 'workflow_dispatch' }}");
   });
 
+  // A SonarCloud outage answered the report upload with "503 Service Temporarily Unavailable",
+  // while the retry allowlist matched only the adjacent-word "Service Unavailable". The loop broke
+  // and a vendor outage failed the whole dev lane closed - the exact class ADR-0139 D6 exists to
+  // absorb. Pin the BEHAVIOUR against the wording that actually took dev down, not its spelling.
+  it("retries the vendor 503 wording that failed dev closed, and never a quality-gate verdict", () => {
+    const allowlist = /if ! grep -qE "([^"]+)" "\$RUNNER_TEMP\/sonar-scanner\.log"/u.exec(ci)?.[1];
+    expect(typeof allowlist).toBe("string");
+    const retryable = new RegExp(allowlist, "u");
+
+    expect(
+      retryable.test(
+        "Failed to upload report - HTTP code 503: 503 Service Temporarily Unavailable",
+      ),
+    ).toBe(true);
+    expect(retryable.test("503 Service Unavailable")).toBe(true);
+    expect(retryable.test("ERROR: Quality Gate check timeout exceeded")).toBe(true);
+
+    // A genuine verdict must never be retried into a green run.
+    expect(retryable.test("QUALITY GATE STATUS: FAILED")).toBe(false);
+    expect(retryable.test("You are not authorized to run analysis")).toBe(false);
+  });
+
   // Issue #2704 / ADR-0157 moved the three coverage suites into their own jobs, so `coverage-sonar`
   // finalizes them and necessarily declares `needs:`. What ADR-0131 D1 actually protects — Sonar
   // never queuing behind the unrelated package, retrieval, editor and architecture gates — is now

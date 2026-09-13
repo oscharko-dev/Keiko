@@ -12,6 +12,7 @@ const result = (status, output) => ({ output, status, stderr: output, stdout: ""
 describe("npm audit retry", () => {
   it.each([
     "npm warn audit 503 Service Unavailable",
+    "npm warn audit 503 Service Temporarily Unavailable",
     "npm error audit endpoint returned an error",
     "request failed with ECONNREFUSED",
     "request failed with ECONNRESET",

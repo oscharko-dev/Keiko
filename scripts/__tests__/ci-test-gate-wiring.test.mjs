@@ -18,6 +18,39 @@ const windowsNativeQuality = readFileSync(
   resolve(repoRoot, "scripts/check-windows-native-quality.ps1"),
   "utf8",
 );
+const linuxPortableLauncher = readFileSync(
+  resolve(repoRoot, "scripts/check-linux-portable-launcher.sh"),
+  "utf8",
+);
+const portableSha256 = readFileSync(
+  resolve(repoRoot, "native/portable-launcher/keiko-portable-sha256.h"),
+  "utf8",
+);
+const updateCoordinator = readFileSync(
+  resolve(repoRoot, "native/portable-launcher/keiko-portable-update-coordinator.h"),
+  "utf8",
+);
+
+// Each `cc \` block runs to the first non-indented line, so a pair can only be read out of the
+// SAME invocation. A source that is commented out, or pointed at another command's -o target,
+// changes the extracted pairs and fails the assertion.
+const EXPECTED_LINUX_PROOFS = [
+  { output: "keiko-portable-launcher-test", source: "keiko-portable-launcher.test.c" },
+  { output: "keiko-portable-sha256-test", source: "keiko-portable-sha256.test.c" },
+  { output: "keiko-portable-tree-hash-test", source: "keiko-portable-tree-hash.test.c" },
+];
+
+function linuxProofPairs(script) {
+  return script
+    .split(/^cc \\$/mu)
+    .slice(1)
+    .map((block) => block.split(/\n(?=\S)/u)[0] ?? "")
+    .filter((command) => command.includes("-Werror"))
+    .map((command) => ({
+      output: /-o "\$scratch\/([A-Za-z0-9._-]+)"/u.exec(command)?.[1],
+      source: /portable-launcher\/([A-Za-z0-9._-]+\.test\.c)"/u.exec(command)?.[1],
+    }));
+}
 const windowsLauncher = readFileSync(
   resolve(repoRoot, "native/portable-launcher/keiko-portable-launcher.c"),
   "utf8",
@@ -231,6 +264,56 @@ describe("CI test/gate wiring guard", () => {
     expect(windowsLauncher).toContain("free_launcher_buffers(buffers)");
     expect(windowsLauncher).not.toContain("wchar_t root[32768]");
     expect(windowsLauncher).not.toContain("wchar_t command[98304]");
+  });
+
+  it("binds every Linux proof source to the binary its own cc command builds and runs", () => {
+    // linux-x64 shipped a POSIX path written against Darwin and never compiled: the release tag run
+    // died on <CommonCrypto/CommonDigest.h>. macOS and Windows had always compiled the sha256 and
+    // tree-hash proofs beside the launcher test; Linux compiled only the launcher test, which is why
+    // a header with no Linux branch reached a tag unnoticed.
+    //
+    // Independent substring checks would not prove this: one source could be compiled into all three
+    // binary names while the other two names survive only in comments, and the omitted proofs would
+    // never run. Each pair is therefore read out of ONE cc invocation, and the negative cases below
+    // prove a substituted or commented-out source is rejected.
+    expect(linuxProofPairs(linuxPortableLauncher)).toEqual(EXPECTED_LINUX_PROOFS);
+    for (const { output } of EXPECTED_LINUX_PROOFS) {
+      expect(linuxPortableLauncher).toContain(`\n"$scratch/${output}"\n`);
+    }
+  });
+
+  it("rejects a Linux proof whose source is substituted into another binary's command", () => {
+    const substituted = linuxPortableLauncher.replace(
+      "keiko-portable-tree-hash.test.c",
+      "keiko-portable-launcher.test.c",
+    );
+    expect(substituted).not.toBe(linuxPortableLauncher);
+    expect(linuxProofPairs(substituted)).not.toEqual(EXPECTED_LINUX_PROOFS);
+  });
+
+  it("rejects a Linux proof whose source line is commented out", () => {
+    const commented = linuxPortableLauncher.replace(
+      '  "$root/native/portable-launcher/keiko-portable-sha256.test.c" \\\n',
+      "",
+    );
+    expect(commented).not.toBe(linuxPortableLauncher);
+    expect(linuxProofPairs(commented)).not.toEqual(EXPECTED_LINUX_PROOFS);
+  });
+
+  it("keeps the portable crypto and rename paths from assuming Apple again", () => {
+    // The header used to branch `_WIN32` / `#else`, so "not Windows" silently meant macOS.
+    expect(portableSha256).toContain("#elif defined(__APPLE__)");
+    expect(portableSha256).toContain("CommonCrypto/CommonDigest.h");
+    // ADR-0121 names renameat2 as the reviewed Linux primitive; the call sites must route through
+    // the guarded helpers rather than calling the Darwin syscall directly.
+    expect(updateCoordinator).toContain("keiko_coordinator_exchange_at");
+    expect(updateCoordinator).toContain("keiko_coordinator_relocate_at");
+    expect(updateCoordinator).toContain("RENAME_EXCHANGE");
+    expect(updateCoordinator).toContain("RENAME_NOREPLACE");
+    const directDarwinCalls = updateCoordinator
+      .split("\n")
+      .filter((line) => line.includes("renameatx_np(")).length;
+    expect(directDarwinCalls).toBe(2);
   });
 
   it("compiles and runs the native setup-bootstrap under the strict native quality bar (#2992)", () => {

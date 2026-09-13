@@ -7,6 +7,10 @@
 
 #if !defined(_WIN32)
 
+#if !defined(__APPLE__)
+#include <linux/fs.h>
+#endif
+
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -147,11 +151,42 @@ static int keiko_coordinator_move_reserved_source(int *descriptor, int reserved)
   return 1;
 }
 
+/*
+ * ADR-0121 requires same-volume atomic rename semantics "or an equally reviewed platform primitive
+ * with the same fail-closed property". Darwin offers renameatx_np; Linux exchanges directory
+ * entries with renameat2(RENAME_EXCHANGE) and refuses an occupied destination with
+ * RENAME_NOREPLACE. Both are single syscalls and fail closed exactly like their Darwin counterparts.
+ *
+ * RENAME_NOFOLLOW_ANY has no Linux spelling. It fails the rename when ANY path component is a
+ * symlink. Every call site below passes a directory descriptor plus a single leaf name, so there is
+ * no intermediate component left to follow, and both operations act on the directory entries
+ * themselves rather than dereferencing a leaf. The guarantee is preserved structurally, not dropped.
+ */
+static int keiko_coordinator_exchange_at(int old_parent, const char *old_leaf, int new_parent,
+                                         const char *new_leaf) {
+#if defined(__APPLE__)
+  return renameatx_np(old_parent, old_leaf, new_parent, new_leaf,
+                      RENAME_SWAP | RENAME_NOFOLLOW_ANY) == 0;
+#else
+  return renameat2(old_parent, old_leaf, new_parent, new_leaf, RENAME_EXCHANGE) == 0;
+#endif
+}
+
+static int keiko_coordinator_relocate_at(int old_parent, const char *old_leaf, int new_parent,
+                                         const char *new_leaf) {
+#if defined(__APPLE__)
+  return renameatx_np(old_parent, old_leaf, new_parent, new_leaf,
+                      RENAME_EXCL | RENAME_NOFOLLOW_ANY) == 0;
+#else
+  return renameat2(old_parent, old_leaf, new_parent, new_leaf, RENAME_NOREPLACE) == 0;
+#endif
+}
+
 static int keiko_coordinator_same_file(const struct stat *left, const struct stat *right) {
   return left->st_dev == right->st_dev && left->st_ino == right->st_ino &&
          left->st_size == right->st_size &&
-         left->st_mtimespec.tv_sec == right->st_mtimespec.tv_sec &&
-         left->st_mtimespec.tv_nsec == right->st_mtimespec.tv_nsec;
+         KEIKO_TREE_STAT_MTIME(left).tv_sec == KEIKO_TREE_STAT_MTIME(right).tv_sec &&
+         KEIKO_TREE_STAT_MTIME(left).tv_nsec == KEIKO_TREE_STAT_MTIME(right).tv_nsec;
 }
 
 static int keiko_coordinator_read_file_at(int directory, const char *name, size_t maximum,
@@ -807,8 +842,8 @@ static int keiko_coordinator_promote_roots(keiko_coordinator_context *context,
         !keiko_coordinator_binding_named_as(&state.candidate, new_binding) ||
         !keiko_coordinator_binding_absent(&state.backup) ||
         !KEIKO_COORDINATOR_CUTOVER_CHECKPOINT("promote-before-exchange") ||
-        renameatx_np(state.managed.parent, state.managed.leaf, state.candidate.parent,
-                     state.candidate.leaf, RENAME_SWAP | RENAME_NOFOLLOW_ANY) != 0 ||
+        !keiko_coordinator_exchange_at(state.managed.parent, state.managed.leaf,
+                                       state.candidate.parent, state.candidate.leaf) ||
         !KEIKO_COORDINATOR_CUTOVER_CHECKPOINT("promote-after-exchange") ||
         !keiko_coordinator_sync_bindings(&state.managed, &state.candidate) ||
         !keiko_coordinator_binding_named_as(&state.managed, new_binding) ||
@@ -827,8 +862,8 @@ static int keiko_coordinator_promote_roots(keiko_coordinator_context *context,
   if (!keiko_coordinator_binding_named_as(&state.managed, new_binding) ||
       !keiko_coordinator_binding_named_as(&state.candidate, old_binding) ||
       !keiko_coordinator_binding_absent(&state.backup) ||
-      renameatx_np(state.candidate.parent, state.candidate.leaf, state.backup.parent,
-                   state.backup.leaf, RENAME_EXCL | RENAME_NOFOLLOW_ANY) != 0 ||
+      !keiko_coordinator_relocate_at(state.candidate.parent, state.candidate.leaf,
+                                     state.backup.parent, state.backup.leaf) ||
       !KEIKO_COORDINATOR_CUTOVER_CHECKPOINT("promote-after-relocation") ||
       !keiko_coordinator_sync_bindings(&state.candidate, &state.backup) ||
       !keiko_coordinator_binding_named_as(&state.managed, new_binding) ||
@@ -1242,8 +1277,8 @@ static int keiko_coordinator_restore_roots(keiko_coordinator_context *context,
     if (!keiko_coordinator_binding_named_as(&state.managed, new_binding) ||
         !keiko_coordinator_binding_named_as(other_name, old_binding) ||
         !KEIKO_COORDINATOR_CUTOVER_CHECKPOINT("restore-before-exchange") ||
-        renameatx_np(state.managed.parent, state.managed.leaf, other_name->parent,
-                     other_name->leaf, RENAME_SWAP | RENAME_NOFOLLOW_ANY) != 0 ||
+        !keiko_coordinator_exchange_at(state.managed.parent, state.managed.leaf,
+                                       other_name->parent, other_name->leaf) ||
         !KEIKO_COORDINATOR_CUTOVER_CHECKPOINT("restore-after-exchange") ||
         !keiko_coordinator_sync_bindings(&state.managed, other_name) ||
         !keiko_coordinator_binding_named_as(&state.managed, old_binding) ||
