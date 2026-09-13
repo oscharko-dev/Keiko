@@ -215,6 +215,25 @@ export function assertQualificationReport(reportPath) {
   }
 }
 
+function surfaceQualificationDiagnostics(result) {
+  if (result.error !== undefined) {
+    process.stderr.write(
+      `linux-runtime-qualification: child error ${String(result.error.message ?? result.error)}\n`,
+    );
+  }
+  if (typeof result.signal === "string" && result.signal.length > 0) {
+    process.stderr.write(`linux-runtime-qualification: child signal ${result.signal}\n`);
+  }
+  for (const [label, stream] of [
+    ["stdout", result.stdout],
+    ["stderr", result.stderr],
+  ]) {
+    if (typeof stream === "string" && stream.length > 0) {
+      process.stderr.write(`linux-runtime-qualification: ${label} follows\n${stream}\n`);
+    }
+  }
+}
+
 /** @internal Exported only for deterministic proof-runner tests. */
 export function runQualificationTests(reportPath, spawn = spawnSync) {
   const result = spawn(process.execPath, linuxQualificationVitestArgs(reportPath), {
@@ -224,7 +243,15 @@ export function runQualificationTests(reportPath, spawn = spawnSync) {
     shell: false,
     timeout: 120_000,
   });
-  if (result.error !== undefined || result.status !== 0) fail("Linux gateway tests failed");
+  if (result.error !== undefined || result.status !== 0) {
+    // The vitest output was discarded here, so a failing release job reported one line and threw
+    // the diagnosis away -- the Linux qualification step failed on 2026-09-13 with nothing to act
+    // on but "Linux gateway tests failed". Surface what the child actually said before failing.
+    // Diagnostics only: the thrown message and the failure condition are unchanged, which is what
+    // qualify-linux-runtime-release.test.mjs pins.
+    surfaceQualificationDiagnostics(result);
+    fail("Linux gateway tests failed");
+  }
   assertQualificationReport(reportPath);
 }
 

@@ -149,6 +149,42 @@ describe("portable release-trust workflow", () => {
     expect(JSON.stringify(fresh)).toContain("--verify-only true");
   });
 
+  it("relaxes hosted-runner namespace isolation before every Linux qualification", () => {
+    // Both Linux jobs run the real namespace-gateway proof, which creates a network namespace.
+    // Ubuntu 24.04 blocks unprivileged user namespaces via AppArmor and the hosted image ships no
+    // iproute2, so without ./.github/actions/setup-sandbox-isolation the denied-egress child fails
+    // closed BEFORE printing its BLOCKED/TIMEOUT marker and the proof sees an empty stdout. That is
+    // how the v1.0.0 release failed on 2026-09-13: ci.yml calls this action in seven jobs and
+    // e2e-extended.yml in two, while portable-assets.yml called it in none.
+    const isolation = "./.github/actions/setup-sandbox-isolation";
+
+    for (const name of ["stage-linux-production", "qualify-linux-production"]) {
+      const job = workflowJob(name);
+      const isolationAt = job.steps.findIndex((step) => step.uses === isolation);
+      const qualifyAt = job.steps.findIndex((step) =>
+        String(step.run ?? "").includes("qualify-linux-runtime-release.mjs"),
+      );
+
+      expect(isolationAt, `${name} must set up sandbox isolation`).toBeGreaterThan(-1);
+      expect(qualifyAt, `${name} must run the namespace-gateway qualification`).toBeGreaterThan(-1);
+      expect(isolationAt, `${name} must isolate before it qualifies`).toBeLessThan(qualifyAt);
+    }
+  });
+
+  it("keeps the Linux-only isolation action out of the Windows and macOS matrix", () => {
+    // The action installs Debian packages and writes a Linux sysctl. Adding it to the three-target
+    // matrix would fail on windows-latest and macos-*, so absence there is part of the contract,
+    // not an omission.
+    const isolation = "./.github/actions/setup-sandbox-isolation";
+
+    for (const name of ["stage", "assemble"]) {
+      expect(
+        workflowJob(name).steps.some((step) => step.uses === isolation),
+        `${name} must not call the Linux-only isolation action`,
+      ).toBe(false);
+    }
+  });
+
   it("pins portable staging to the release workflow authority", () => {
     expect(portableReleaseAuthorityFailures(releaseWorkflow, portableWorkflow)).toEqual([]);
     const releaseBaseBranch = envValue(releaseWorkflow, "RELEASE_BASE_BRANCH");
