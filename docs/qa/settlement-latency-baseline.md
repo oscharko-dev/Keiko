@@ -239,9 +239,8 @@ repository maintainer, via [`AGENTS.md`](../../AGENTS.md) §11 and
 
 - **Harvest window (immediate).** From the first finding published on a head, the delivering agent
   has 10 minutes to push one repair that includes every finding already published by every producer
-  (failing jobs, Sonar issues, unresolved threads). It does not wait for CI to turn green, for a
-  reviewer that has not yet spoken, or for the ADR-0170 D5 interlock. That interlock gates
-  auto-merge arming, not repair.
+  (failing jobs, Sonar issues, unresolved threads). It does not wait for CI to turn green or for a
+  reviewer that has not yet spoken.
 - **Handoff.** If the same session cannot push the repair within 10 minutes, the next agent that
   touches the pull request starts from CI logs, Sonar issues, and unresolved threads immediately.
 - **Not pulled.** No automation, bulk action, timer, or dismissal resolves a review conversation.

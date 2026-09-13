@@ -38,13 +38,6 @@ the wall clock.
 - **Repository `ci`:** parallel tests, coverage, secret, clone, architecture, and supply-chain
   evidence. Repair the complete failure set locally, push one consolidated head, and require every
   dependency to conclude success on that exact candidate.
-- **Keiko for Quality (ADR-0170), when `vars.KEIKO_QUALITY_ENABLED` is `true`:** external
-  SHA-pinned reviewer, no required status. Every published finding blocks until repaired and its
-  conversation is resolved. Settlement is by the run for the **current head**, not by the presence
-  of comments: a run can be absent, cancelled, or expired, and none of those is a clean review —
-  say so rather than treating silence as approval. Its incomplete-review notice is itself a
-  blocking conversation and is resolved by re-running a complete review, never by resolving the
-  thread. Arming interlock and cancellation are ADR-0170 D5.
 
 The expensive mistake this table exists to prevent is discovering findings one CI round at a time.
 Enumerate **every already-published** finding from **every** active producer above in one pass —
@@ -82,8 +75,8 @@ review does not bind a new SHA.
 
 **Harvest window.** From the first finding published on a head, the delivering agent has 10 minutes
 to push one repair. During that window it enumerates every finding already published by every
-producer into that one head. It does not wait for CI to turn green, for a reviewer that has not yet
-spoken, or for the ADR-0170 D5 interlock — that interlock gates auto-merge arming, not repair. A
+producer into that one head. It does not wait for CI to turn green or for a reviewer that has not
+yet spoken. A
 finding that appears after the head is pushed starts a new 10-minute window on the new head.
 
 If the same session cannot push the repair within 10 minutes, the next agent that touches the pull

@@ -193,7 +193,6 @@ guaranteed version-mismatch failure.
 | `github/codeql-action`             | v4.37.7 | ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd | patch-deferred |
 | `google/osv-scanner-action`        | v2.5.1  | 6e4298ebc4db23e847df9b2e2de2939d6f066c67 | current        |
 | `zizmorcore/zizmor-action`         | v0.6.3  | 70fb788f84895a7701f5643d103d587e460b5c99 | current        |
-| `oscharko-dev/Keiko-for-Quality`   | v0.25.0 | f1117fb2b56a62bcbec22afbc149d5bd1474060c | current        |
 
 The three `patch-deferred` actions have newer upstream tags (checkout v7.0.1, attest v4.2.2,
 codeql-action v4.37.9). They are left to Dependabot rather than hand-bumped here: this closeout must
