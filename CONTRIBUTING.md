@@ -64,21 +64,11 @@ Neither has repository configuration, an installed App, a workflow, or a protect
 Deterministic bundle, latency, retrieval, and performance gates inside `ci` retain merge authority.
 No payment method, finding dismissal, or gate bypass is an accepted repair path.
 
-Keiko for Quality is reintroduced by
-[ADR-0170](docs/adr/ADR-0170-keiko-for-quality-as-an-external-reviewer.md) as an external,
-SHA-pinned reviewer whose product code lives in
-[oscharko-dev/Keiko-for-Quality](https://github.com/oscharko-dev/Keiko-for-Quality). It publishes no
-required status; its findings block only through conversation resolution. **While it is active,
-arm auto-merge only after its run for the current head has terminated. If it has not terminated
-within 35 minutes, cancel every run for that head that has not reached a terminal conclusion —
-queued, requested, waiting, or pending, not only in-progress — then arm, and record
-the expiry as a delivery-policy event. If any cancellation fails, leave auto-merge disarmed and
-record that instead.** Cancelling — not the duration — is what narrows the window in which a review can publish after
-integration: `timeout-minutes` bounds execution after start, not queue time, so no fixed wait can
-guarantee a healthy review has finished. The window is narrowed, not closed; ADR-0170 D6 records
-it as a fail-open window, and an expired review is never described as clean. It stays inert until
-`KEIKO_QUALITY_ENABLED` is `true`; see
-[`docs/qa/keiko-for-quality.md`](docs/qa/keiko-for-quality.md).
+Keiko for Quality is retired by
+[ADR-0176](docs/adr/ADR-0176-retire-keiko-for-quality.md). It has no workflow, review profile,
+repository variable, credential consumer, or protected context in this repository. Its product is
+being rebuilt inside Keiko itself; until that ships, no model-backed reviewer runs on a pull
+request here.
 
 Qodo is retired by
 [ADR-0167](docs/adr/ADR-0167-zero-cost-autonomous-quality-gates.md); it is not Sonar evidence.

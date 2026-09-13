@@ -138,7 +138,7 @@ implementation, start with these clusters:
   ADR-0125, ADR-0137, ADR-0140, ADR-0141, ADR-0163.
 - Deterministic `dev` delivery, quality gates, and reviewer settlement: ADR-0135,
   ADR-0139, ADR-0145, ADR-0156, ADR-0157, ADR-0158, ADR-0159, ADR-0161, ADR-0162,
-  ADR-0170.
+  ADR-0176.
 - SonarCloud analysis and quality-signal governance: ADR-0131, ADR-0134, ADR-0142,
   ADR-0143, ADR-0166, ADR-0167, ADR-0168, ADR-0169.
 

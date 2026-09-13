@@ -38,6 +38,21 @@ const RETIRED_PATHS = [
   "scripts/lib/run-cli-check.mjs",
 ];
 const HISTORICAL_PATH_PREFIXES = ["docs/adr/", "docs/qa/"];
+
+// ADR-0176 retires Keiko for Quality. This pins the GATE surface only — the consumer workflow, its
+// review profile, and its workflow test — because those are what would restore it as a producer.
+// Documentation paths are deliberately NOT pinned: the reviewer is being rebuilt as a capability
+// inside Keiko, so a future document under that name is legitimate work rather than a regression.
+// The name is likewise not added to RETIRED_PROVIDER_NAME_PATTERN: it would match the retained
+// ADR-0135 file name and the attribution comments that record where real fixes came from.
+const RETIRED_REVIEWER_PATHS = [
+  ".github/keiko-for-quality.json",
+  ".github/workflows/keiko-for-quality.yml",
+  "scripts/__tests__/keiko-for-quality-workflow.test.mjs",
+];
+// `\s` already matches a newline, so `(\s|\n)*` was an ambiguous alternation and backtracked
+// polynomially on `environment:` followed by many newlines (CodeQL js/redos on #3470).
+const RETIRED_REVIEWER_ENVIRONMENT = /environment:\s*(name:\s*)?keiko-for-quality\b/u;
 const fixtureRoots = [];
 
 function repositoryFile(repoRoot, path) {
@@ -138,5 +153,16 @@ describe("retired hosted quality providers", () => {
 
   it("does not retain provider-named paths or active provider tokens in tracked files", () => {
     expect(repositoryProviderFindings).toEqual([]);
+  });
+
+  it.each(RETIRED_REVIEWER_PATHS)("does not retain the retired reviewer surface at %s", (path) => {
+    expect(existsSync(resolve(REPO_ROOT, path))).toBe(false);
+  });
+
+  it("does not declare the retired reviewer environment in any workflow", () => {
+    const declaring = trackedRepositoryPaths()
+      .filter((path) => path.startsWith(".github/workflows/"))
+      .filter((path) => RETIRED_REVIEWER_ENVIRONMENT.test(repositoryFile(REPO_ROOT, path)));
+    expect(declaring).toEqual([]);
   });
 });
