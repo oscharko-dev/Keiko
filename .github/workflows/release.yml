@@ -98,6 +98,15 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: RELEASE_SHA="$(git rev-parse HEAD)" node scripts/verify-release-required-checks.mjs
+      - name: Install dependencies
+        # release:plan runs scripts/release-publish.mjs, which since #3456 imports
+        # @oscharko-dev/keiko-security/portable-release-trust. That specifier resolves to the
+        # package's dist, so the workspace must be installed AND built before this step. The
+        # verification steps above stay dependency-free on purpose: a malformed tag or a missing
+        # required check still fails before any install time is spent.
+        run: npm ci --ignore-scripts
+      - name: Build workspace packages
+        run: npm run build:packages
       - name: Validate release manifest plan
         run: npm run release:plan -- --tag beta
 
