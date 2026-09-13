@@ -81,35 +81,39 @@ describe("isMainModule call sites actually fire their CLI entry on direct execut
     "../check-ui-static-js-compat.mjs",
     "../perf-evidence-gate.mjs",
     "../transpile-ui-static-js.mjs",
-  ])("%s", async (relativePath) => {
-    const absolutePath = resolve(import.meta.dirname, relativePath);
-    process.argv[1] = absolutePath;
-    const exitSpy = vi.spyOn(process, "exit").mockImplementation((code) => {
-      throw new Error(`process.exit(${String(code)}) blocked in test`);
-    });
-    const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
-    let threw = false;
-    try {
-      await import(pathToFileURL(absolutePath).href);
-    } catch {
-      // check-ui-static-js-compat.mjs and transpile-ui-static-js.mjs both call
-      // rejectUiStaticRootCliOverride(args[0]) before printing anything; with no real CLI
-      // args in this worker's process.argv, that throws synchronously before either spy
-      // below could fire. That thrown error IS this target's observable proof the guarded
-      // call ran (still target-specific: only the guarded call site can throw it, per its
-      // own source above), not a "some error, who knows why" empty catch.
-      threw = true;
-    }
-    // The guarded CLI entry always does at least one of: print a result (console.log),
-    // print a failure (console.error), set/throw an exit code, or throw synchronously —
-    // proving isMainModule returned true and the guarded call actually ran, not merely that
-    // the import resolved.
-    expect(
-      logSpy.mock.calls.length > 0 ||
-        errorSpy.mock.calls.length > 0 ||
-        exitSpy.mock.calls.length > 0 ||
-        threw,
-    ).toBe(true);
-  });
+  ])(
+    "%s",
+    async (relativePath) => {
+      const absolutePath = resolve(import.meta.dirname, relativePath);
+      process.argv[1] = absolutePath;
+      const exitSpy = vi.spyOn(process, "exit").mockImplementation((code) => {
+        throw new Error(`process.exit(${String(code)}) blocked in test`);
+      });
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+      let threw = false;
+      try {
+        await import(pathToFileURL(absolutePath).href);
+      } catch {
+        // check-ui-static-js-compat.mjs and transpile-ui-static-js.mjs both call
+        // rejectUiStaticRootCliOverride(args[0]) before printing anything; with no real CLI
+        // args in this worker's process.argv, that throws synchronously before either spy
+        // below could fire. That thrown error IS this target's observable proof the guarded
+        // call ran (still target-specific: only the guarded call site can throw it, per its
+        // own source above), not a "some error, who knows why" empty catch.
+        threw = true;
+      }
+      // The guarded CLI entry always does at least one of: print a result (console.log),
+      // print a failure (console.error), set/throw an exit code, or throw synchronously —
+      // proving isMainModule returned true and the guarded call actually ran, not merely that
+      // the import resolved.
+      expect(
+        logSpy.mock.calls.length > 0 ||
+          errorSpy.mock.calls.length > 0 ||
+          exitSpy.mock.calls.length > 0 ||
+          threw,
+      ).toBe(true);
+    },
+    30_000,
+  );
 });

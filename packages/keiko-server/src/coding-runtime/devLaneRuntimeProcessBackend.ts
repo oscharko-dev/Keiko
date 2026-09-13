@@ -8,6 +8,7 @@ import {
   safeRealFile,
 } from "./nativeRuntimeProcessPaths.js";
 import type {
+  PreparedRuntimeSandboxLaunch,
   RuntimeProcessBackend,
   RuntimeProcessTree,
   RuntimeSupervisorLaunchRequest,
@@ -19,7 +20,7 @@ import type {
  *
  * Posture: this backend deliberately forgoes the release-qualified runtime supervisor's
  * long-lived-process containment and orphan-reaping guarantees (ADR-0137 D5). It spawns the
- * managed runtime as the leader of a fresh POSIX process group and terminates the whole group,
+ * prepared sandbox wrapper as the leader of a fresh POSIX process group and terminates the whole group,
  * but a descendant that leaves the group survives unobserved — group termination is best effort,
  * never a containment proof. It is reachable only through dev-lane discovery, which is
  * structurally confined to repository checkouts; packaged installs never compose it.
@@ -89,11 +90,14 @@ class DevLaneRuntimeProcessBackend implements RuntimeProcessBackend {
     private readonly killProcessGroup: (pid: number, signal: NodeJS.Signals) => void,
   ) {}
 
-  public spawnOwnedTree(request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree {
+  public spawnOwnedTree(
+    request: RuntimeSupervisorLaunchRequest,
+    sandbox: PreparedRuntimeSandboxLaunch,
+  ): RuntimeProcessTree {
     const executable = safeRealFile(request.executable);
     if (!pathIsContained(this.runtimeRoot, executable)) invalidRequest();
     const cwd = safeRealDirectory(request.cwd);
-    const child = this.spawnRuntime(executable, request.args, {
+    const child = this.spawnRuntime(sandbox.command, sandbox.args, {
       cwd,
       env: request.env,
       detached: true,

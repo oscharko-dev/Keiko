@@ -1,10 +1,17 @@
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 
-import { runBareSpecifierVisibilityProbe } from "../lib/bare-specifier-visibility-probe.mjs";
+import {
+  normalizeDependencyCruiserPath,
+  runBareSpecifierVisibilityProbe,
+} from "../lib/bare-specifier-visibility-probe.mjs";
+
+const REPO_ROOT = process.platform === "win32" ? "C:\\repo" : "/repo";
+const PROBE_PATH = join(REPO_ROOT, "packages/keiko-security/src", "__probe.ts");
 
 function baseOptions(overrides) {
   return {
-    repoRoot: "/repo",
+    repoRoot: REPO_ROOT,
     rulesFile: ".dependency-cruiser.cjs",
     hostPackageSrc: "packages/keiko-security/src",
     probeFileBasename: "__probe.ts",
@@ -16,6 +23,12 @@ function baseOptions(overrides) {
 }
 
 describe("runBareSpecifierVisibilityProbe", () => {
+  it("normalizes Windows paths to dependency-cruiser's display form", () => {
+    expect(normalizeDependencyCruiserPath("packages\\keiko-security\\src\\__probe.ts")).toBe(
+      "packages/keiko-security/src/__probe.ts",
+    );
+  });
+
   it("returns ok when dep-cruiser reports the expected rule against the expected resolved edge", () => {
     const writeProbeFile = vi.fn();
     const removeProbeFile = vi.fn();
@@ -34,14 +47,14 @@ describe("runBareSpecifierVisibilityProbe", () => {
 
     expect(outcome).toEqual({ ok: true });
     expect(writeProbeFile).toHaveBeenCalledOnce();
-    expect(writeProbeFile.mock.calls[0][0]).toBe("/repo/packages/keiko-security/src/__probe.ts");
+    expect(writeProbeFile.mock.calls[0][0]).toBe(PROBE_PATH);
     expect(writeProbeFile.mock.calls[0][1]).toContain('from "@oscharko-dev/keiko-harness"');
-    expect(removeProbeFile).toHaveBeenCalledWith("/repo/packages/keiko-security/src/__probe.ts");
+    expect(removeProbeFile).toHaveBeenCalledWith(PROBE_PATH);
     expect(runDepcruise).toHaveBeenCalledOnce();
     const [, args] = runDepcruise.mock.calls[0];
     expect(args).toContain("--validate");
     expect(args).toContain(".dependency-cruiser.cjs");
-    expect(args).toContain("/repo/packages/keiko-security/src/__probe.ts");
+    expect(args).toContain(PROBE_PATH);
   });
 
   it("returns spawn-failed when the subprocess could not start", () => {
@@ -130,7 +143,7 @@ describe("runBareSpecifierVisibilityProbe", () => {
     expect(outcome).not.toHaveProperty("stderr");
     expect(writeInvoked).toBe(true);
     expect(removeProbeFile).toHaveBeenCalledOnce();
-    expect(removeProbeFile).toHaveBeenCalledWith("/repo/packages/keiko-security/src/__probe.ts");
+    expect(removeProbeFile).toHaveBeenCalledWith(PROBE_PATH);
   });
 
   it("returns runner-failed and removes the probe when the runner throws", () => {

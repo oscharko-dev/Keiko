@@ -28,6 +28,17 @@ export {
   qualificationFromReceipt,
   qualifyLongLivedRuntime,
 } from "./runtime.js";
+export {
+  longLivedRuntimeEgressPolicyDigest,
+  planLongLivedRuntimeSandbox,
+  verifyLongLivedRuntimeSandboxAttestation,
+} from "./runtime-egress.js";
+export type {
+  LongLivedRuntimeEgressPolicy,
+  LongLivedRuntimeSandboxAttestation,
+  LongLivedRuntimeSandboxDecision,
+  LongLivedRuntimeSandboxRequest,
+} from "./runtime-egress.js";
 export type {
   ClosedRuntimeLaunchProfile,
   LongLivedRuntimeArchitecture,

@@ -553,7 +553,11 @@ describe("editor local-history store", () => {
       const fx = fixture();
       const store = createEditorLocalHistoryStore(storeOptions(fx));
       const entry = store.capture(captureInput(fx, "legacy payload\n", "user-save", 1_000)).entry;
-      rmSync(fx.root, { recursive: true });
+      // Keep the prior directory alive so filesystems cannot immediately reuse its object identity
+      // for the replacement root and make this identity-mismatch test timing-dependent.
+      const priorRoot = `${fx.root}-prior`;
+      renameSync(fx.root, priorRoot);
+      tmpDirs.push(priorRoot);
       mkdirSync(join(fx.root, "src"), { recursive: true });
       const replacementIdentity = inspectWorkspaceRootIdentity(fx.root);
       if (replacementIdentity.objectIdentityDigest === undefined) {

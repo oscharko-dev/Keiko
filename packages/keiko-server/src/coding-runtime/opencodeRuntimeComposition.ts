@@ -125,6 +125,7 @@ export interface OpenCodeRuntimeCompositionInput {
   readonly supervisor: RuntimeProcessSupervisor;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly onRuntimeEvent?: ((event: CodingWorkbenchRuntimeEvent) => void) | undefined;
+  readonly onSandboxAttestation?: CodingRuntimeManagerDeps["onSandboxAttestation"];
   /**
    * Live question observation for the fixed session (#2386). OpenCode publishes question
    * lifecycle events live-only — they never appear as durable history rows — so the content-free
@@ -219,6 +220,7 @@ export function createOpenCodeRuntimeComposition(
     openCodeLifecycleAdapter: lifecycle,
     portableRuntimeResolver: () => input.portable,
     ...(input.onRuntimeEvent ? { onRuntimeEvent: input.onRuntimeEvent } : {}),
+    ...(input.onSandboxAttestation ? { onSandboxAttestation: input.onSandboxAttestation } : {}),
     ...(input.codingToolApprovals === undefined
       ? {}
       : { codingToolApprovals: input.codingToolApprovals }),

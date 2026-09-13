@@ -10,6 +10,7 @@ import {
   validateCodingWorkbenchRuntimeAuthorityFacts,
   validateCodingWorkbenchRuntimeState,
 } from "@oscharko-dev/keiko-contracts";
+import { planLongLivedRuntimeSandbox } from "@oscharko-dev/keiko-sandbox";
 import { EditorAgentAuthorityRegistry } from "../editor/agentAuthorityRegistry.js";
 import {
   createInMemoryRuntimeCapabilityStore,
@@ -56,6 +57,12 @@ async function reapReceipt(runId: string, treeBindingId: string): Promise<Runtim
       waitForCompleteTreeExit: (): Promise<true> => Promise.resolve(true),
       reconcileTreeExit: (): Promise<true> => Promise.resolve(true),
     },
+    planSandbox: (request) =>
+      planLongLivedRuntimeSandbox(
+        request,
+        { bubblewrap: false, unshare: false, seatbelt: true, docker: false, podman: false },
+        "darwin",
+      ),
   });
   const launched = supervisor.spawnOwnedTree({
     runId,
@@ -67,6 +74,13 @@ async function reapReceipt(runId: string, treeBindingId: string): Promise<Runtim
     env: {},
     qualification,
     launchProfile: CLOSED_RUNTIME_LAUNCH_PROFILE,
+    runtimeSource: "keiko-sidecar",
+    modelSource: "keiko-model-gateway",
+    authorityEnvelopeDigest: DIGEST,
+    egressPolicy: {
+      kind: "loopback-only",
+      reviewedEgressReceipt: qualification.releaseReceipt,
+    },
   });
   if (!launched.ok) throw new Error("expected qualified test launch");
   const result = await supervisor.waitForCompleteTreeExit(launched.tree, 1);

@@ -21,10 +21,33 @@ describe("CodingRuntimeEvidenceAggregator", () => {
     const backing = createInMemoryEvidenceStore();
     const put = vi.spyOn(backing, "put");
     const aggregator = createCodingRuntimeEvidenceAggregator(backing);
+    const sandboxAttestation = Object.assign(
+      {
+        schemaVersion: 1 as const,
+        backend: "seatbelt" as const,
+        platform: "darwin",
+        networkEnforced: true as const,
+        policyKind: "loopback-only" as const,
+        runtimeSource: "keiko-sidecar" as const,
+        modelSource: "keiko-model-gateway" as const,
+        authorityEnvelopeDigest: digest,
+        reviewedEgressReceipt: `sha256:${digest}`,
+        policyDigest: digest,
+      },
+      {
+        endpoint: "https://secret.example.invalid/v1",
+        credential: "Bearer must-not-persist",
+      },
+    );
     aggregator.observe("run-evidence", {
       kind: "tool-call",
       state: "running",
       authorityDigest: digest,
+    });
+    aggregator.observe("run-evidence", {
+      kind: "sandbox-attestation",
+      state: "starting",
+      sandboxAttestation,
     });
     expect(put).not.toHaveBeenCalled();
     aggregator.settle(settlement);
@@ -34,6 +57,19 @@ describe("CodingRuntimeEvidenceAggregator", () => {
     expect(json).not.toContain("taskIntent");
     expect(json).not.toContain("argv");
     expect(json).not.toContain("output");
+    expect(json).not.toContain("secret.example.invalid");
+    expect(json).not.toContain("must-not-persist");
+    expect(JSON.parse(json)).toMatchObject({
+      counts: { "sandbox-attestation": 1 },
+      sandboxAttestations: [
+        {
+          backend: "seatbelt",
+          platform: "darwin",
+          authorityEnvelopeDigest: digest,
+          policyDigest: digest,
+        },
+      ],
+    });
   });
   it("deletes exactly store-pruned ids without listing the evidence directory", () => {
     const backing = createInMemoryEvidenceStore();

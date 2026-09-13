@@ -11,6 +11,7 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  renameSync,
   rmSync,
   utimesSync,
   writeFileSync,
@@ -159,13 +160,14 @@ describe("operator provisioning watchdog walk cost (#2096 performance-sweep audi
     expect(qualification()).toBe("provisioned");
     expect(qualification()).toBe("provisioned");
 
-    const before = lstatSync(tamperedFile);
+    const before = lstatSync(tamperedFile, { bigint: true });
+    renameSync(tamperedFile, `${tamperedFile}.prior`);
     writeFileSync(tamperedFile, "tampered", "utf8");
     utimesSync(tamperedFile, pinnedTime, pinnedTime);
-    const after = lstatSync(tamperedFile);
+    const after = lstatSync(tamperedFile, { bigint: true });
     expect(after.size).toBe(before.size);
-    expect(after.mtimeMs).toBe(before.mtimeMs);
-    expect(after.ctimeMs).not.toBe(before.ctimeMs);
+    expect(after.mtimeNs).toBe(before.mtimeNs);
+    expect(after.ino).not.toBe(before.ino);
 
     expect(qualification()).toBe("notProvisioned");
   });

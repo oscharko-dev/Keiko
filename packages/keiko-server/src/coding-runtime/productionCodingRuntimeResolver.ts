@@ -84,7 +84,13 @@ import { createServerApprovedSkillCatalog, type SkillCatalog } from "./skillCata
 type MintedRuntime = Extract<CodingRuntimeMintResult, { readonly ok: true }>;
 type LaunchMaterial = Omit<
   CodingRuntimeLaunchRequest,
-  "effectiveMode" | "requestedMode" | "runId" | "taskRef" | "treeBindingId" | "workspaceRoot"
+  | "authorityEnvelopeDigest"
+  | "effectiveMode"
+  | "requestedMode"
+  | "runId"
+  | "taskRef"
+  | "treeBindingId"
+  | "workspaceRoot"
 >;
 
 export interface ProductionRuntimeBackendInput {
@@ -720,5 +726,6 @@ function launchRequest(
     effectiveMode: minted.effectiveMode,
     taskRef: context.taskId,
     treeBindingId: minted.treeBindingId,
+    authorityEnvelopeDigest: minted.authorityRef.envelopeDigest,
   };
 }

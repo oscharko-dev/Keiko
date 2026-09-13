@@ -16,6 +16,7 @@ import { join } from "node:path";
 import { PassThrough } from "node:stream";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { planLongLivedRuntimeSandbox } from "@oscharko-dev/keiko-sandbox";
 
 import type { ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { PortableSidecarRuntimeVerification } from "../update-portable-sidecar-verification.js";
@@ -558,6 +559,12 @@ async function startBridgeFixture(
         releaseReceipt: `sha256:${"a".repeat(64)}`,
       },
     ],
+    planSandbox: (request) =>
+      planLongLivedRuntimeSandbox(
+        request,
+        { bubblewrap: false, unshare: false, seatbelt: true, docker: false, podman: false },
+        "darwin",
+      ),
   });
   const sseFrame = new TextEncoder().encode(
     control?.sseFrame ??
@@ -734,6 +741,7 @@ async function startBridgeFixture(
     runtime.manager.start({
       runId: FIXTURE_RUN_ID,
       treeBindingId: "b".repeat(64),
+      authorityEnvelopeDigest: "c".repeat(64),
       taskRef: "issue-2254",
       workspaceRoot: join(root, "workspace"),
       adapterKind: "opencode-compatible",
@@ -899,6 +907,12 @@ describe("unmounted OpenCode runtime composition", () => {
           releaseReceipt: `sha256:${"a".repeat(64)}`,
         },
       ],
+      planSandbox: (request) =>
+        planLongLivedRuntimeSandbox(
+          request,
+          { bubblewrap: false, unshare: false, seatbelt: true, docker: false, podman: false },
+          "darwin",
+        ),
     });
     const sseControllers: ReadableStreamDefaultController<Uint8Array>[] = [];
     const sseCancellations: number[] = [];
@@ -1047,6 +1061,7 @@ describe("unmounted OpenCode runtime composition", () => {
         runtime.manager.start({
           runId: "run-1",
           treeBindingId: "a".repeat(64),
+          authorityEnvelopeDigest: "b".repeat(64),
           taskRef: "issue-2254",
           workspaceRoot,
           adapterKind: "opencode-compatible",
@@ -1103,20 +1118,25 @@ describe("unmounted OpenCode runtime composition", () => {
         launch?.env.OPENCODE_SERVER_PASSWORD,
       ]),
     ).toHaveLength(3);
-    for (const path of [
-      runRoot,
-      join(runRoot, "config"),
-      join(runRoot, "config", "opencode"),
-      join(runRoot, "config", "opencode", "tools"),
-      join(runRoot, "state"),
-    ])
-      expect(statSync(path).mode & 0o777).toBe(0o700);
-    for (const path of [
-      join(runRoot, "config", "opencode", "opencode.json"),
-      join(runRoot, "config", "opencode", "tools", "keiko_workspace_read.ts"),
-      join(runRoot, "config", "opencode", "tools", "keiko_changeset_edit.ts"),
-    ])
-      expect(statSync(path).mode & 0o777).toBe(0o600);
+    // Windows does not implement POSIX permission bits; chmodSync cannot make these mode
+    // assertions meaningful there. The state layout and secret-free contents remain covered on
+    // every platform, while Unix hosts verify the intended 0700/0600 permissions.
+    if (process.platform !== "win32") {
+      for (const path of [
+        runRoot,
+        join(runRoot, "config"),
+        join(runRoot, "config", "opencode"),
+        join(runRoot, "config", "opencode", "tools"),
+        join(runRoot, "state"),
+      ])
+        expect(statSync(path).mode & 0o777).toBe(0o700);
+      for (const path of [
+        join(runRoot, "config", "opencode", "opencode.json"),
+        join(runRoot, "config", "opencode", "tools", "keiko_workspace_read.ts"),
+        join(runRoot, "config", "opencode", "tools", "keiko_changeset_edit.ts"),
+      ])
+        expect(statSync(path).mode & 0o777).toBe(0o600);
+    }
     const files = [
       join(runRoot, "config", "opencode", "opencode.json"),
       join(runRoot, "config", "opencode", "tools", "keiko_workspace_read.ts"),

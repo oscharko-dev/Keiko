@@ -144,6 +144,7 @@ function fixture(activityProjection?: CodingSafeActivityProjection, clock?: () =
     resolve: vi.fn(() => ({
       taskRef: "task-1",
       treeBindingId: "tree",
+      authorityEnvelopeDigest: "a".repeat(64),
       adapterKind: "codex-cli",
       runtimeSource: "codex-cli-adapter",
       modelSource: "keiko-model-gateway",

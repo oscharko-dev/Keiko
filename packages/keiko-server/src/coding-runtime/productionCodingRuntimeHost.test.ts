@@ -27,6 +27,7 @@ function qualifiedRuntime(): QualifiedProductionCodingRuntime {
       resolve: () => ({
         taskRef: "task-1",
         treeBindingId: "tree-1",
+        authorityEnvelopeDigest: "a".repeat(64),
         adapterKind: "codex-cli",
         runtimeSource: "codex-cli-adapter",
         modelSource: "chatgpt-codex-subscription-profile",
