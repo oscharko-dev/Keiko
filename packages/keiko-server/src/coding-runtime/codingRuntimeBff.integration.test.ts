@@ -381,6 +381,7 @@ function launch() {
   return {
     recoveryHandle: "d".repeat(32),
     treeBindingId: "tree-binding",
+    authorityEnvelopeDigest: "a".repeat(64),
     taskRef: "task-ref",
     adapterKind: "codex-cli" as const,
     runtimeSource: "codex-cli-adapter" as const,

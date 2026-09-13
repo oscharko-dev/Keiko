@@ -669,6 +669,11 @@ describe("workspace widget renderer registry", () => {
     const ctx = makeCtx();
     render(<>{WIN_TYPES.chat.render({ chatId: "chat-1", title: "Old title" }, ctx)}</>);
 
+    // The registry loads the chat host through a Next dynamic import. Under the full coverage
+    // matrix that import can legitimately outlive Testing Library's one-second wait window, so
+    // first wait for the host itself before asserting the effect it owns.
+    await screen.findByTestId("chat-window", undefined, { timeout: 5_000 });
+
     // 0.3.0 release audit — strengthened: a rename also clears the structural "still untitled"
     // marker, so the workspace surfaces the new name instead of asking display copy whether the
     // chat was ever named (which missed under `de`).

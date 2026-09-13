@@ -12,6 +12,7 @@ import {
 } from "./nativeRuntimeProcessPaths.js";
 import { NativeRuntimeTree, type NativeRuntimeHelperProcess } from "./nativeRuntimeProcessTree.js";
 import type {
+  PreparedRuntimeSandboxLaunch,
   RuntimeProcessBackend,
   RuntimeProcessTree,
   RuntimeSupervisorLaunchRequest,
@@ -77,7 +78,10 @@ class NativeRuntimeProcessBackend implements RuntimeProcessBackend {
     this.identity = Object.freeze({ ...options.identity });
   }
 
-  public spawnOwnedTree(request: RuntimeSupervisorLaunchRequest): RuntimeProcessTree {
+  public spawnOwnedTree(
+    request: RuntimeSupervisorLaunchRequest,
+    sandbox: PreparedRuntimeSandboxLaunch,
+  ): RuntimeProcessTree {
     const paths = validateLaunchPacketRequest(request, {
       ...this.options,
       safeRealFile,
@@ -86,7 +90,10 @@ class NativeRuntimeProcessBackend implements RuntimeProcessBackend {
       invalidRequest,
     });
     const recoveryHandle = request.recoveryHandle;
-    const packet = encodeLaunchPacket(request, paths);
+    const packet = encodeLaunchPacket(
+      { ...request, executable: sandbox.command, args: sandbox.args },
+      { executable: sandbox.command, cwd: paths.cwd },
+    );
     const child = this.options.spawnHelper(this.options.helperPath, [], {
       cwd: dirname(this.options.helperPath),
       env: {},

@@ -125,3 +125,17 @@ declares a weaker evidence class and records unverified checks as unverified.
 Rejected as unnecessary indirection: the repository ships one composition, and the structural
 dev-checkout confinement (D2) plus the explicit opt-in achieve the same containment without a
 second build variant whose divergence itself would need evidence.
+
+## Amendment — Issue #2951 removes ambient network from the dev lane (2026-09-12)
+
+Issue [#2951](https://github.com/oscharko-dev/Keiko/issues/2951) narrows D3's declared development
+guarantees. Forgoing release process-tree qualification never permits ambient sidecar networking.
+The macOS dev-lane backend now receives the same prepared Seatbelt wrapper as the native supervisor,
+and the repository-confined OpenCode sidecar starts only under the loopback-only profile.
+
+The runtime supervisor performs egress planning after process-tree qualification and before invoking
+the dev backend. If `/usr/bin/sandbox-exec` is unavailable, the reviewed receipt or source binding is
+invalid, or wrapper construction fails, the lane reports `runtime-egress-unenforceable` and spawns
+nothing. Signals and stop/recovery operations continue to target the wrapper's owned process group,
+so descendants cannot outlive the supervised sandbox lifecycle. No environment flag can downgrade
+this requirement or restore direct spawn.

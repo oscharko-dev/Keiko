@@ -154,3 +154,34 @@ By explicit owner decision for this delivery (mirroring D7), the #1204 PR may be
 the epic integration branch `feat/keiko-editor` once the required `ci` check is green and review has
 settled. This is the same scoped departure from ADR-0042 D8's owner-gated merge for the editor
 integration line; it does not authorise autonomous merge into the protected release line.
+
+## Amendment — Issue #2951 confines long-lived coding sidecars (2026-09-12)
+
+Issue [#2951](https://github.com/oscharko-dev/Keiko/issues/2951) extends the same fail-closed
+principle to the server-owned, long-lived coding-runtime spawn boundary. It does not reuse the
+single-command `network: "none"` availability result as proof for a sidecar: a network namespace or
+container that removes host loopback cannot satisfy a gateway-mediated sidecar's transport contract.
+
+### D11 — A policy-specific wrapper is mandatory at the owned-tree spawn boundary
+
+Before either the native release supervisor or the repository dev-lane backend can spawn a runtime,
+the runtime supervisor plans an OS-enforced egress wrapper for the exact runtime/model-source pair.
+The backend receives only that prepared wrapper. Missing support, invalid binding, or wrapper planning
+failure returns `runtime-egress-unenforceable` with zero runtime or helper spawn. Direct sidecar spawn
+is not a fallback.
+
+The initial qualified pairing is macOS Seatbelt for the gateway-mediated OpenCode profile. Its policy
+denies outbound network except loopback and Unix sockets, so the sidecar can reach the authenticated
+Keiko gateway without public-network access. Linux network namespaces and `--network=none`
+containers, and Windows containers with the same semantics, remain unavailable for this profile
+until a release-qualified host-loopback-preserving backend exists. Address-aware enterprise-proxy
+and reviewed direct-egress profiles likewise remain unavailable until their own enforcing backend is
+qualified. These are deliberate fail-closed states, not compatibility claims.
+
+### D12 — Confinement evidence is content-free and launch-bound
+
+The prepared wrapper carries a versioned attestation binding the selected backend and platform, the
+closed runtime and model sources, the Authority Envelope digest, a reviewed-egress receipt, and the
+canonical policy digest. Proxy and CA identities, when applicable, are digests only. Endpoints,
+paths, headers, tokens, and credentials are excluded. Changing any binding invalidates attestation
+verification.

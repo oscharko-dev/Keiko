@@ -12,7 +12,27 @@ import {
   type NativeRuntimeHelperSpawn,
 } from "./nativeRuntimeProcessBackend.js";
 import { encodeLaunchPacket, validateLaunchPacketRequest } from "./nativeRuntimeProcessProtocol.js";
-import type { RuntimeSupervisorLaunchRequest } from "./runtimeProcessSupervisor.js";
+import type {
+  PreparedRuntimeSandboxLaunch,
+  RuntimeSupervisorLaunchRequest,
+} from "./runtimeProcessSupervisor.js";
+
+const SANDBOX: PreparedRuntimeSandboxLaunch = {
+  command: "/usr/bin/sandbox-exec",
+  args: ["runtime"],
+  attestation: {
+    schemaVersion: 1,
+    backend: "seatbelt",
+    platform: "darwin",
+    networkEnforced: true,
+    policyKind: "loopback-only",
+    runtimeSource: "keiko-sidecar",
+    modelSource: "keiko-model-gateway",
+    authorityEnvelopeDigest: "d".repeat(64),
+    reviewedEgressReceipt: `sha256:${"e".repeat(64)}`,
+    policyDigest: "f".repeat(64),
+  },
+};
 
 const roots: string[] = [];
 
@@ -79,6 +99,13 @@ function request(runtime: string, workspace: string): RuntimeSupervisorLaunchReq
       upstreamBrowserAuthority: false,
       unrestrictedNetworkAuthority: false,
     },
+    runtimeSource: "keiko-sidecar",
+    modelSource: "keiko-model-gateway",
+    authorityEnvelopeDigest: "d".repeat(64),
+    egressPolicy: {
+      kind: "loopback-only",
+      reviewedEgressReceipt: `sha256:${"e".repeat(64)}`,
+    },
   };
 }
 
@@ -142,7 +169,7 @@ describe("native runtime process backend", () => {
       args: ["--stdio", "second"],
       env: { KEIKO_ALPHA: "one", KEIKO_BETA: "two" },
     };
-    const tree = backend.spawnOwnedTree(launch);
+    const tree = backend.spawnOwnedTree(launch, SANDBOX);
 
     expect(spawn).toHaveBeenCalledOnce();
     expect(spawn.mock.calls[0]?.[0]).toBe(realpathSync(paths.helper));
@@ -156,10 +183,9 @@ describe("native runtime process backend", () => {
     expect(packet.subarray(0, 4).toString("ascii")).toBe("KRP1");
     expect(decodeLaunchStrings(packet)).toEqual([
       tree.treeId,
-      realpathSync(paths.runtime),
+      SANDBOX.command,
       realpathSync(paths.workspace),
-      "--stdio",
-      "second",
+      ...SANDBOX.args,
       "KEIKO_ALPHA",
       "one",
       "KEIKO_BETA",
@@ -169,7 +195,7 @@ describe("native runtime process backend", () => {
 
   it("accepts reap proof only when the helper reports zero active Job Object processes", async () => {
     const { backend, child, paths } = backendFixture();
-    const tree = backend.spawnOwnedTree(request(paths.runtime, paths.workspace));
+    const tree = backend.spawnOwnedTree(request(paths.runtime, paths.workspace), SANDBOX);
     const payload = Buffer.alloc(8);
     payload.writeInt32LE(0, 0);
     payload.writeUInt32LE(0, 4);
@@ -195,14 +221,16 @@ describe("native runtime process backend", () => {
     ];
 
     for (const candidate of candidates) {
-      expect(() => backend.spawnOwnedTree(candidate)).toThrow("native-runtime-request-invalid");
+      expect(() => backend.spawnOwnedTree(candidate, SANDBOX)).toThrow(
+        "native-runtime-request-invalid",
+      );
     }
     expect(spawn).not.toHaveBeenCalled();
   });
 
   it("maps both signals to closed helper protocol commands without OS process signaling", () => {
     const { backend, child, paths } = backendFixture();
-    const tree = backend.spawnOwnedTree(request(paths.runtime, paths.workspace));
+    const tree = backend.spawnOwnedTree(request(paths.runtime, paths.workspace), SANDBOX);
     const write = vi.spyOn(child.controlInput, "write");
 
     backend.signalTree(tree, "graceful");
@@ -215,7 +243,7 @@ describe("native runtime process backend", () => {
 
   it("fails closed on malformed or nonzero-active-process responses", async () => {
     const { backend, child, paths } = backendFixture();
-    const tree = backend.spawnOwnedTree(request(paths.runtime, paths.workspace));
+    const tree = backend.spawnOwnedTree(request(paths.runtime, paths.workspace), SANDBOX);
     child.controlOutput.write(Buffer.from("attacker-controlled-output"));
     child.emit("exit", 0);
 

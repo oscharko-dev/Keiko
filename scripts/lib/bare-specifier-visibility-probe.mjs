@@ -1,6 +1,10 @@
 import { spawnSync } from "node:child_process";
 import { rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative } from "node:path";
+
+export function normalizeDependencyCruiserPath(path) {
+  return path.replaceAll("\\", "/");
+}
 
 /**
  * Bare-specifier visibility probe (Wave-2 audit #2627).
@@ -78,7 +82,7 @@ function invokeDepcruise(runDepcruise, repoRoot, rulesFile, probePath) {
 
 function evaluateDepcruiseResult(result, repoRoot, probePath, expectedRule, expectedResolved) {
   if (result.status === null) return { ok: false, reason: "spawn-failed" };
-  const relativeProbePath = probePath.slice(repoRoot.length + 1);
+  const relativeProbePath = normalizeDependencyCruiserPath(relative(repoRoot, probePath));
   const expectedSubstring = `${expectedRule}: ${relativeProbePath} → ${expectedResolved}`;
   if (result.status === 0 || !result.stdout.includes(expectedSubstring)) {
     return { ok: false, reason: "rule-not-fired", exitStatus: result.status };

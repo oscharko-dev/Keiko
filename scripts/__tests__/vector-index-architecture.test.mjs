@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { vectorIndexArchitectureFailures } from "../lib/vector-index-architecture.mjs";
+import {
+  normalizeRepositoryPath,
+  vectorIndexArchitectureFailures,
+} from "../lib/vector-index-architecture.mjs";
 
 const WORKER = "packages/keiko-local-knowledge/src/retrieval/usearch-index-worker.ts";
 const LAUNCHER = "packages/keiko-local-knowledge/src/retrieval/usearch-ann-index.ts";
@@ -36,6 +39,12 @@ function validSources() {
 }
 
 describe("vector-index architecture", () => {
+  it("normalizes Windows repository paths before applying path-bound rules", () => {
+    expect(
+      normalizeRepositoryPath("packages\\keiko-server\\src\\memory-retrieval-signals.ts"),
+    ).toBe(MEMORY);
+  });
+
   it("accepts the single search-only service composition", () => {
     expect(vectorIndexArchitectureFailures(validSources())).toEqual([]);
   });

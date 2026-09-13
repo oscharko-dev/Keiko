@@ -15,6 +15,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { PassThrough, type Readable } from "node:stream";
 
 import type { UpdatePortableTarget } from "@oscharko-dev/keiko-contracts";
+import { planLongLivedRuntimeSandbox } from "@oscharko-dev/keiko-sandbox";
 
 import type { PortableSidecarRuntimeVerification } from "../../update-portable-sidecar-verification.js";
 import type {
@@ -313,6 +314,12 @@ export function createFunctionalSupervisor(
   return createRuntimeProcessSupervisor({
     backend: new DirectChildBackend(portable.qualification),
     qualifications: [portable.qualification],
+    planSandbox: (request) =>
+      planLongLivedRuntimeSandbox(
+        request,
+        { bubblewrap: false, unshare: false, seatbelt: true, docker: false, podman: false },
+        "darwin",
+      ),
   });
 }
 
@@ -1263,6 +1270,12 @@ export function createScriptedOpenCodeHarness(): ScriptedOpenCodeHarness {
           children,
         ),
         qualifications: [portable.qualification],
+        planSandbox: (request) =>
+          planLongLivedRuntimeSandbox(
+            request,
+            { bubblewrap: false, unshare: false, seatbelt: true, docker: false, podman: false },
+            "darwin",
+          ),
       }),
     closeAll: async (): Promise<void> => {
       for (const child of children.splice(0)) await child.close();

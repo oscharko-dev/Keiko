@@ -165,6 +165,17 @@ function composeOpenCodeRun(
     supervisor: runtimeSupervisor(input, run.context.workspaceRoot),
     diagnostics: input.diagnostics,
     onRuntimeEvent: run.onRuntimeEvent,
+    onSandboxAttestation: (runId, attestation): void => {
+      if (runId !== run.minted.authorityRef.runId) {
+        throw new Error("sandbox-attestation-run-mismatch");
+      }
+      input.runtimeEvidence.observe(runId, {
+        kind: "sandbox-attestation",
+        state: "starting",
+        authorityDigest: run.minted.authorityRef.envelopeDigest,
+        sandboxAttestation: attestation,
+      });
+    },
     authorityLifecycle: run.authorityLifecycle,
     codingToolApprovals: run.codingToolApprovals,
   });

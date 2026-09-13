@@ -22,6 +22,11 @@ import type {
   CodingWorkbenchPermissionRequestKind,
 } from "@oscharko-dev/keiko-contracts";
 import type { CodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts";
+import {
+  longLivedRuntimeEgressPolicyDigest,
+  type LongLivedRuntimeSandboxDecision,
+  type LongLivedRuntimeSandboxRequest,
+} from "@oscharko-dev/keiko-sandbox";
 
 import {
   createCodingRuntimeManager as createProductionCodingRuntimeManager,
@@ -195,7 +200,7 @@ function assertQualifiedCodexLaunch(input: {
   expect(serialized).not.toContain(input.inheritedState);
   expect(serialized).not.toContain(input.managedRoot);
   expect(serialized).not.toContain("/global/bin");
-  expect(input.spawnedEnv.HTTPS_PROXY).toBeUndefined();
+  expect(input.spawnedEnv.HTTPS_PROXY).toBe("https://proxy.example");
   expect(input.spawnedEnv.SSL_CERT_FILE).toBeUndefined();
   expect(existsSync(join(input.managedRoot, "coding-runtime", "codex"))).toBe(false);
   // Exactly one protocol listener plus the manager-owned body-free summary tee.
@@ -236,6 +241,7 @@ function createCodexTestCodingRuntimeManager(
       verified: true,
       receipt: "test-reviewed-egress-receipt",
       directEgress: "disabled",
+      httpsProxy: "https://proxy.example",
     }),
     ...deps,
   });
@@ -250,7 +256,43 @@ function testSupervisor(
   return createRuntimeProcessSupervisor({
     backend: new TestRuntimeProcessBackend(spawn, timer, TEST_QUALIFICATION),
     qualifications: [TEST_QUALIFICATION],
+    planSandbox: testSandboxPlanner,
   });
+}
+
+function testSandboxPlanner(
+  request: LongLivedRuntimeSandboxRequest,
+): LongLivedRuntimeSandboxDecision {
+  const policyDigest = longLivedRuntimeEgressPolicyDigest(request.policy);
+  return {
+    kind: "wrapped",
+    command: "test-sandbox-wrapper",
+    args: [request.command, ...request.args],
+    attestation: {
+      schemaVersion: 1,
+      backend: "container-docker",
+      platform: "test",
+      networkEnforced: true,
+      policyKind: request.policy.kind,
+      runtimeSource: request.runtimeSource,
+      modelSource: request.modelSource,
+      authorityEnvelopeDigest: request.authorityEnvelopeDigest,
+      reviewedEgressReceipt: request.policy.reviewedEgressReceipt,
+      policyDigest,
+      ...(request.policy.kind === "enterprise-proxy"
+        ? {
+            directEgress: request.policy.directEgress,
+            proxyIdentityDigest: request.policy.proxyIdentityDigest,
+            ...(request.policy.caIdentityDigest === undefined
+              ? {}
+              : { caIdentityDigest: request.policy.caIdentityDigest }),
+            ...(request.policy.noProxyIdentityDigest === undefined
+              ? {}
+              : { noProxyIdentityDigest: request.policy.noProxyIdentityDigest }),
+          }
+        : {}),
+    },
+  };
 }
 
 interface CodingRuntimeSpawnHandle {
@@ -444,6 +486,7 @@ function launchRequest(
   return {
     runId: "run-1988",
     treeBindingId: "c".repeat(64),
+    authorityEnvelopeDigest: "d".repeat(64),
     taskRef: "issue-1988",
     adapterKind: "opencode-compatible",
     runtimeSource: "keiko-sidecar",
@@ -1006,7 +1049,13 @@ describe("coding runtime manager", () => {
               return Promise.resolve({ ok: true, stateRoot: realpathSync(outside) });
             }
             mkdirSync(dirname(request.stateRoot), { recursive: true });
-            symlinkSync(outside, request.stateRoot, "dir");
+            // Directory junctions exercise the same realpath escape on Windows without requiring
+            // Developer Mode or SeCreateSymbolicLinkPrivilege.
+            symlinkSync(
+              outside,
+              request.stateRoot,
+              process.platform === "win32" ? "junction" : "dir",
+            );
             return Promise.resolve({ ok: true, stateRoot: realpathSync(request.stateRoot) });
           },
         }),
@@ -1593,8 +1642,10 @@ describe("coding runtime manager", () => {
   it("starts a managed sidecar with only allowlisted inherited env and runtime projection", () => {
     const fixture = createManagedFixture();
     const harness = createSpawnHarness();
+    const onSandboxAttestation = vi.fn();
     const manager = createTestCodingRuntimeManager({
       supervisor: testSupervisor(harness.spawn),
+      onSandboxAttestation,
       processEnv: {
         PATH: "/usr/bin",
         OPENAI_API_KEY: "provider-secret-key",
@@ -1625,6 +1676,39 @@ describe("coding runtime manager", () => {
     expect(Object.values(harness.captures[0]?.env ?? {})).not.toContain(
       "subscription-secret-token",
     );
+    expect(onSandboxAttestation).toHaveBeenCalledWith(
+      "run-1988",
+      expect.objectContaining({
+        backend: "container-docker",
+        runtimeSource: "keiko-sidecar",
+        modelSource: "keiko-model-gateway",
+        authorityEnvelopeDigest: "d".repeat(64),
+      }),
+    );
+  });
+
+  it("reaps the sandbox tree when attestation evidence cannot be recorded", async () => {
+    const fixture = createManagedFixture();
+    const harness = reapingSpawnHarness();
+    const manager = createTestCodingRuntimeManager({
+      supervisor: testSupervisor(harness.spawn),
+      processEnv: {},
+      onSandboxAttestation: (): never => {
+        throw new Error("evidence-store-unavailable");
+      },
+    });
+
+    await expect(
+      manager.start(
+        launchRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).resolves.toEqual({
+      ok: false,
+      failureCode: "runtime-egress-unenforceable",
+      retryable: false,
+    });
+    expect(harness.children[0]?.kills).toEqual(["SIGTERM"]);
+    expect(manager.health()).toEqual({ status: "stopped" });
   });
 
   it("emits a content-free diagnostic when a runtime event fails validation", () => {
@@ -3818,16 +3902,31 @@ describe("codex reviewed egress policy validation", () => {
     ],
     [
       "a no-proxy list without approved direct egress",
-      (): ReviewedCodexEgressPolicy => reviewedPolicy({ noProxy: "localhost" }),
+      (): ReviewedCodexEgressPolicy =>
+        reviewedPolicy({ httpsProxy: "https://proxy.example.test", noProxy: "localhost" }),
+    ],
+    [
+      "a no-proxy list without an enterprise proxy",
+      (): ReviewedCodexEgressPolicy =>
+        reviewedPolicy({ directEgress: "approved", noProxy: "localhost" }),
     ],
     [
       "control characters in the no-proxy list",
       (): ReviewedCodexEgressPolicy =>
-        reviewedPolicy({ directEgress: "approved", noProxy: "localhost\nevil.example" }),
+        reviewedPolicy({
+          directEgress: "approved",
+          httpsProxy: "https://proxy.example.test",
+          noProxy: "localhost\nevil.example",
+        }),
     ],
     [
       "an empty no-proxy list",
-      (): ReviewedCodexEgressPolicy => reviewedPolicy({ directEgress: "approved", noProxy: "" }),
+      (): ReviewedCodexEgressPolicy =>
+        reviewedPolicy({
+          directEgress: "approved",
+          httpsProxy: "https://proxy.example.test",
+          noProxy: "",
+        }),
     ],
     [
       "a ca bundle without a server config root",
@@ -3897,6 +3996,38 @@ describe("codex reviewed egress policy validation", () => {
         codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
       ),
     ).resolves.toEqual({ ok: false, failureCode: "runtime-state-unavailable", retryable: false });
+    expect(harness.children).toHaveLength(0);
+  });
+
+  it("fails closed when a reviewed CA bundle disappears before attestation", async () => {
+    const fixture = createManagedFixture();
+    const harness = createSpawnHarness();
+    const root = tempDir("keiko-egress-root-");
+    const bundle = join(root, "ca.pem");
+    writeFileSync(bundle, "reviewed-ca\n");
+    const manager = createCodexTestCodingRuntimeManager({
+      processEnv: {},
+      supervisor: testSupervisor(harness.spawn),
+      codexLocalSecretRoot: tempDir("keiko-codex-secret-root-"),
+      codexLifecycleAdapter: qualifiedCodexAdapter({
+        prepare: (request) => {
+          rmSync(bundle);
+          return Promise.resolve(prepareManagedCodexStateRoot(request));
+        },
+      }),
+      qualifyCodexEgress: () =>
+        reviewedPolicy({
+          httpsProxy: "https://proxy.example.test",
+          caBundlePath: bundle,
+          serverConfigRoot: root,
+        }),
+    });
+
+    await expect(
+      manager.start(
+        codexRequest(fixture.workspaceRoot, fixture.managedRoot, fixture.executablePath),
+      ),
+    ).resolves.toEqual({ ok: false, failureCode: "egress-unqualified", retryable: false });
     expect(harness.children).toHaveLength(0);
   });
 
