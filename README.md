@@ -8,7 +8,8 @@
 
 <p align="center">
   The governed agentic workspace for professional knowledge work.<br />
-  Local-first. Human-controlled. It learns from experience.
+  Local-first. Human-controlled. It learns from experience.<br />
+  Manifest-producing surfaces emit redacted evidence for audit.
 </p>
 
 <p align="center">
@@ -79,6 +80,12 @@ keiko init && keiko start
 ```
 
 Run it inside a project with a `package.json`. The UI opens at `http://127.0.0.1:1983` — `keiko stop` shuts it down, `keiko start --port <n>` picks another port. Requires Node.js `>=24.18.0 <25 || >=26.3.0 <27`; the desktop packages bring their own runtime. The coding sidecar ships with the desktop packages and with repository checkouts — the npm install reports it honestly as unavailable rather than pretending.
+
+## Honest limits
+
+- The CLI, the UI and the SDK share one product. Surface coverage is intentionally not identical. `keiko gen-tests` and `keiko investigate` print a reviewable report but do not persist an evidence manifest.
+- The UI can create a local runtime config during first-run setup. To list models, Keiko calls the gateway model list endpoint you configured — credentials stay in your local config.
+- Keiko serves loopback only: `keiko start` and the UI validate a loopback host value, and the server always binds `127.0.0.1`. `keiko start --port <n>` sets the Port to bind (default: 1983).
 
 ## What's in 1.0
 
