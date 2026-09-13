@@ -264,6 +264,41 @@ describe("portable release-trust workflow", () => {
     expect(buildAt).toBeLessThan(verifyAt);
   });
 
+  it("hands the verified Linux tree to the fresh qualification with its file modes intact", () => {
+    // upload-artifact's zipped upload stores every file as 644 (its README: "Permission Loss"), so
+    // a job that downloads portable-stage-linux-x64 holds a native helper it cannot execute, and
+    // the two requalification steps that spawn it would die with EACCES. The action's documented
+    // remedy is a tar uploaded as-is (archive: false), which download-artifact hands back unchanged
+    // and tar -p unpacks with its modes. assemble keeps consuming the zipped portable-stage-* set.
+    const tarball = "linux-x64-qualification-tree.tar";
+    const stage = workflowJob("stage-linux-production");
+    const fresh = workflowJob("qualify-linux-production");
+    const runs = (step, text) => String(step.run ?? "").includes(text);
+
+    const packAt = stage.steps.findIndex((step) =>
+      runs(step, `-cpf "$RUNNER_TEMP/${tarball}" linux-x64`),
+    );
+    const packUpload = stage.steps[packAt + 1];
+    expect(packAt).toBeGreaterThan(-1);
+    expect(String(packUpload?.uses)).toMatch(/^actions\/upload-artifact@/u);
+    expect(packUpload?.with?.archive).toBe(false);
+    expect(String(packUpload?.with?.path).endsWith(`/${tarball}`)).toBe(true);
+    expect(tarball.startsWith("portable-stage-")).toBe(false);
+
+    const downloadAt = fresh.steps.findIndex(
+      (step) =>
+        /^actions\/download-artifact@/u.test(String(step.uses)) && step.with?.name === tarball,
+    );
+    const unpackAt = fresh.steps.findIndex((step) => runs(step, "-xpf") && runs(step, tarball));
+    const firstUse = fresh.steps.findIndex((step) =>
+      runs(step, ".portable-runtime/staging/linux-x64"),
+    );
+    expect(downloadAt).toBeGreaterThan(-1);
+    expect(unpackAt).toBeGreaterThan(downloadAt);
+    expect(firstUse).toBeGreaterThan(unpackAt);
+    expect(fresh.steps.some((step) => step.with?.name === "portable-stage-linux-x64")).toBe(false);
+  });
+
   it("pins portable staging to the release workflow authority", () => {
     expect(portableReleaseAuthorityFailures(releaseWorkflow, portableWorkflow)).toEqual([]);
     const releaseBaseBranch = envValue(releaseWorkflow, "RELEASE_BASE_BRANCH");
