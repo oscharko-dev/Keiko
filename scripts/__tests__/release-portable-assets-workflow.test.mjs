@@ -1,4 +1,5 @@
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -8,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
@@ -38,6 +39,47 @@ function namedStep(job, name) {
   const step = job.steps.find((entry) => entry.name === name);
   if (step === undefined) throw new Error(`missing workflow step: ${name}`);
   return step;
+}
+
+const rootPackageScripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
+// A step provides packages/*/dist when it builds the packages itself or stages the product, which
+// runs `npm run build` on the way (stage-portable-runtime.mjs) before any later step can execute.
+const BUILT_PACKAGE_PROVIDERS = [
+  /\bnpm run build:packages\b/u,
+  /\bnpm run build\b(?!:)/u,
+  /\brun-portable-assets-stage\.mjs\b/u,
+];
+const RELATIVE_IMPORT =
+  /\b(?:import|export)\b[^;]*?\bfrom\s+["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)/gu;
+
+function providesBuiltPackages(step) {
+  const run = String(step.run ?? "");
+  return BUILT_PACKAGE_PROVIDERS.some((pattern) => pattern.test(run));
+}
+
+function repositoryScriptsIn(command) {
+  const scripts = [...command.matchAll(/\bnode ((?:scripts|native)\/[\w./-]+\.mjs)/gu)].map(
+    (match) => match[1],
+  );
+  for (const [, name] of command.matchAll(/\bnpm run ([\w:.-]+)/gu)) {
+    const script = rootPackageScripts[name];
+    if (typeof script === "string") scripts.push(...repositoryScriptsIn(script));
+  }
+  return scripts;
+}
+
+function importGraphReachesDist(entry, seen = new Set()) {
+  const file = resolve(entry);
+  if (seen.has(file) || !existsSync(file)) return false;
+  seen.add(file);
+  for (const match of readFileSync(file, "utf8").matchAll(RELATIVE_IMPORT)) {
+    const specifier = match[1] ?? match[2];
+    if (!specifier.startsWith(".")) continue;
+    const target = resolve(dirname(file), specifier);
+    if (target.split(/[\\/]/u).includes("dist")) return true;
+    if (!target.endsWith(".ts") && importGraphReachesDist(target, seen)) return true;
+  }
+  return false;
 }
 
 describe("portable release-trust workflow", () => {
@@ -183,6 +225,78 @@ describe("portable release-trust workflow", () => {
         `${name} must not call the Linux-only isolation action`,
       ).toBe(false);
     }
+  });
+
+  it("builds workspace packages before any Linux step that loads built package output", () => {
+    // qualify-linux-production installs with --ignore-scripts and stages nothing, so no step of its
+    // own produces packages/*/dist — yet linux-portable-signing.mjs imports the built keiko-server
+    // production discovery module. The first ever run of that job, on the v1.0.0 release of
+    // 2026-09-13, died there with ERR_MODULE_NOT_FOUND after six earlier Linux repairs, while the
+    // plain-node load proof in linux-portable-signing.test.mjs stayed green: it runs in a checkout
+    // that already carries dist. This pin holds the job's provisioning, which that proof cannot see.
+    for (const name of ["stage-linux-production", "qualify-linux-production"]) {
+      const job = workflowJob(name);
+      const providerAt = job.steps.findIndex(providesBuiltPackages);
+      job.steps.forEach((step, index) => {
+        for (const script of repositoryScriptsIn(String(step.run ?? ""))) {
+          if (!importGraphReachesDist(script)) continue;
+          expect(providerAt, `${name}: ${script} imports packages/*/dist`).toBeGreaterThan(-1);
+          expect(providerAt, `${name}: ${script} runs before the packages are built`).toBeLessThan(
+            index,
+          );
+        }
+      });
+    }
+  });
+
+  it("re-verifies the sealed Linux artifact only after building the packages it imports", () => {
+    // The named-step form of the incident above, and a check that the import walk still sees the
+    // dist import it was written for — a walker that goes blind would pass the pin over a broken job.
+    const steps = workflowJob("qualify-linux-production").steps.map((step) => step.name);
+    const buildAt = steps.indexOf("Build workspace packages");
+    const verifyAt = steps.indexOf(
+      "Re-verify the offline Sigstore bundle, archive, and production discovery",
+    );
+
+    expect(importGraphReachesDist("scripts/linux-portable-signing.mjs")).toBe(true);
+    expect(buildAt).toBeGreaterThan(-1);
+    expect(verifyAt).toBeGreaterThan(-1);
+    expect(buildAt).toBeLessThan(verifyAt);
+  });
+
+  it("hands the verified Linux tree to the fresh qualification with its file modes intact", () => {
+    // upload-artifact's zipped upload stores every file as 644 (its README: "Permission Loss"), so
+    // a job that downloads portable-stage-linux-x64 holds a native helper it cannot execute, and
+    // the two requalification steps that spawn it would die with EACCES. The action's documented
+    // remedy is a tar uploaded as-is (archive: false), which download-artifact hands back unchanged
+    // and tar -p unpacks with its modes. assemble keeps consuming the zipped portable-stage-* set.
+    const tarball = "linux-x64-qualification-tree.tar";
+    const stage = workflowJob("stage-linux-production");
+    const fresh = workflowJob("qualify-linux-production");
+    const runs = (step, text) => String(step.run ?? "").includes(text);
+
+    const packAt = stage.steps.findIndex((step) =>
+      runs(step, `-cpf "$RUNNER_TEMP/${tarball}" linux-x64`),
+    );
+    const packUpload = stage.steps[packAt + 1];
+    expect(packAt).toBeGreaterThan(-1);
+    expect(String(packUpload?.uses)).toMatch(/^actions\/upload-artifact@/u);
+    expect(packUpload?.with?.archive).toBe(false);
+    expect(String(packUpload?.with?.path).endsWith(`/${tarball}`)).toBe(true);
+    expect(tarball.startsWith("portable-stage-")).toBe(false);
+
+    const downloadAt = fresh.steps.findIndex(
+      (step) =>
+        /^actions\/download-artifact@/u.test(String(step.uses)) && step.with?.name === tarball,
+    );
+    const unpackAt = fresh.steps.findIndex((step) => runs(step, "-xpf") && runs(step, tarball));
+    const firstUse = fresh.steps.findIndex((step) =>
+      runs(step, ".portable-runtime/staging/linux-x64"),
+    );
+    expect(downloadAt).toBeGreaterThan(-1);
+    expect(unpackAt).toBeGreaterThan(downloadAt);
+    expect(firstUse).toBeGreaterThan(unpackAt);
+    expect(fresh.steps.some((step) => step.with?.name === "portable-stage-linux-x64")).toBe(false);
   });
 
   it("pins portable staging to the release workflow authority", () => {
