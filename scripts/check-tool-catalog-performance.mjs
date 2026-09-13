@@ -54,6 +54,7 @@ import {
   CODING_PERFORMANCE_PROCEDURE,
 } from "./coding-runtime-performance-evidence.mjs";
 import { loadToolCatalogProducer } from "./check-tool-catalog-conformance.mjs";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 
 export const TOOL_CATALOG_PERFORMANCE_PROCEDURE = Object.freeze({
   warmups: CODING_PERFORMANCE_PROCEDURE.warmups,
@@ -126,7 +127,10 @@ export function buildSyntheticRegistrationSet(producer, toolCount) {
   return {
     profile: { id: "performance-synthetic", version: 1 },
     adapterDialect: { id: "legacy-json-schema", version: 1 },
-    adapterRuntime: { id: "keiko", version: "0.3.17" },
+    // Derived from the one product version, never a hand-copied literal: assertCatalogDialect
+    // compares it against NATIVE_TOOL_CATALOG_RUNTIME, so a copied string would reject every
+    // fixture on the next version bump (b3-25, the residue a 1.0.0 bump exposed).
+    adapterRuntime: { id: "keiko", version: KEIKO_PRODUCT_VERSION },
     nativeExtensions: [],
     compatibility: [],
     entries,

@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-tool-catalog",
-  "version": "0.3.17",
+  "version": "1.0.0",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal pure governed-tool descriptors, schema projections, compatibility, and catalog identities.",
@@ -25,8 +25,8 @@
     "node": ">=24.18.0 <25 || >=26.3.0 <27"
   },
   "dependencies": {
-    "@oscharko-dev/keiko-contracts": "0.3.17",
-    "@oscharko-dev/keiko-security": "0.3.17"
+    "@oscharko-dev/keiko-contracts": "1.0.0",
+    "@oscharko-dev/keiko-security": "1.0.0"
   },
   "private": true
 }

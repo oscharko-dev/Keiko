@@ -5,9 +5,16 @@
 // without ever touching the Deployments panel). There is no meaningful "before" state to pin
 // against; every scenario below proves the new checker classifies its case correctly.
 
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { checkReleaseAlignment, printAlignmentReport } from "../check-release-alignment.mjs";
+import {
+  checkReleaseAlignment,
+  declaredReleaseLine,
+  printAlignmentReport,
+} from "../check-release-alignment.mjs";
 
 const REPOSITORY = "oscharko-dev/Keiko";
 const PACKAGE_NAME = "@oscharko-dev/keiko";
@@ -68,6 +75,7 @@ function alignedSeams(overrides = {}) {
     runGh: ghFor({ deploymentRef: "v0.3.15", latestReleaseTag: "v0.3.15" }),
     runGit: gitTags(["v0.3.14", "v0.3.15"]),
     runNpm: npmDistTags("0.3.15"),
+    readReleaseLine: () => undefined,
     ...overrides,
   };
 }
@@ -161,12 +169,35 @@ describe("checkReleaseAlignment", () => {
     expect(result.aligned).toBe(false);
     expect(result.failures).toContain(
       "checkout version 0.3.17 diverges from npm latest 0.3.15 " +
-        "(must equal it or be exactly one patch/minor release ahead).",
+        "(must equal it, be exactly one patch/minor release ahead, or be the major release its " +
+        "line declares).",
     );
   });
 
   it("fails when the checkout is a major version ahead of npm latest", () => {
     const result = checkReleaseAlignment(alignedSeams({ checkoutVersion: "1.0.0" }));
+    expect(result.aligned).toBe(false);
+    expect(result.failures.some((failure) => failure.includes("diverges from npm latest"))).toBe(
+      true,
+    );
+  });
+
+  // The counterpart to the pin above: the incident this gate exists for was a SILENT divergence,
+  // and an announced major line is the opposite of silent. `release.yml`'s RELEASE_BASE_BRANCH is
+  // that announcement, and check:release-required-workflows already pins portable-assets.yml to
+  // the same value, so one declaration governs both lanes.
+  it("passes when the major step is the release line the repository declares", () => {
+    const result = checkReleaseAlignment(
+      alignedSeams({ checkoutVersion: "1.0.0", readReleaseLine: () => "1.0" }),
+    );
+    expect(result.aligned).toBe(true);
+    expect(result.failures).toEqual([]);
+  });
+
+  it("still fails a declared line that does not match the checkout's own major", () => {
+    const result = checkReleaseAlignment(
+      alignedSeams({ checkoutVersion: "2.0.0", readReleaseLine: () => "1.0" }),
+    );
     expect(result.aligned).toBe(false);
     expect(result.failures.some((failure) => failure.includes("diverges from npm latest"))).toBe(
       true,
@@ -259,7 +290,8 @@ describe("checkReleaseAlignment", () => {
     expect(result.rows[0]).toEqual({ source: "checkout version", value: undefined });
     expect(result.failures).toContain(
       "checkout version undefined diverges from npm latest 0.3.15 " +
-        "(must equal it or be exactly one patch/minor release ahead).",
+        "(must equal it, be exactly one patch/minor release ahead, or be the major release its " +
+        "line declares).",
     );
   });
 
@@ -271,7 +303,8 @@ describe("checkReleaseAlignment", () => {
     expect(result.rows).toContainEqual({ source: "npm latest dist-tag", value: "canary" });
     expect(result.failures).toContain(
       "checkout version 0.3.15 diverges from npm latest canary " +
-        "(must equal it or be exactly one patch/minor release ahead).",
+        "(must equal it, be exactly one patch/minor release ahead, or be the major release its " +
+        "line declares).",
     );
   });
 
@@ -371,5 +404,62 @@ describe("printAlignmentReport", () => {
       "  - npm latest dist-tag could not be read.",
       "  - GitHub Latest release could not be read.",
     ]);
+  });
+});
+
+// The gate reads its own declaration rather than taking a caller's word for it, so the injected
+// seam used above must not be the only thing ever exercised: these four cases pin the real
+// producer. The happy path derives its expectation from the repository's own release.yml
+// (AGENTS.md section 7 — never restate a formula the code under test owns), and the three negative
+// shapes pin the fail-closed contract: an unreadable or unexpected declaration must yield
+// undefined and leave a major step failing exactly as it did before this function existed.
+describe("declaredReleaseLine", () => {
+  const roots = [];
+
+  afterEach(() => {
+    while (roots.length > 0) rmSync(roots.pop(), { force: true, recursive: true });
+  });
+
+  function rootWith(workflow) {
+    const root = mkdtempSync(join(tmpdir(), "keiko-release-line-"));
+    roots.push(root);
+    if (workflow !== undefined) {
+      mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+      writeFileSync(join(root, ".github", "workflows", "release.yml"), workflow);
+    }
+    return root;
+  }
+
+  it("reads the line the repository actually declares in its own release workflow", () => {
+    const declared = declaredReleaseLine();
+    const workflow = readFileSync(".github/workflows/release.yml", "utf8");
+    expect(declared).toBeDefined();
+    expect(workflow).toContain(`RELEASE_BASE_BRANCH: release/${String(declared)}`);
+  });
+
+  it("yields undefined when the declared branch is not a release line", () => {
+    expect(declaredReleaseLine(rootWith("env:\n  RELEASE_BASE_BRANCH: dev\n"))).toBeUndefined();
+  });
+
+  it("yields undefined when the workflow declares no environment at all", () => {
+    const workflow = "on:\n  push:\n    tags:\n      - v*\n";
+    expect(declaredReleaseLine(rootWith(workflow))).toBeUndefined();
+  });
+
+  // Distinct parser inputs rather than a second spelling of one: an empty value PARSES to null and
+  // falls through the nullish default into a pattern miss, while tab indentation makes the YAML
+  // parser itself throw (verified: YAMLParseError) and so reaches the catch by a different route
+  // than an unreadable file does. Both must still fail closed.
+  it("yields undefined when the declared branch is empty", () => {
+    expect(declaredReleaseLine(rootWith("env:\n  RELEASE_BASE_BRANCH:\n"))).toBeUndefined();
+  });
+
+  it("yields undefined when the workflow is not parseable YAML", () => {
+    const workflow = "env:\n\tRELEASE_BASE_BRANCH: release/1.0\n";
+    expect(declaredReleaseLine(rootWith(workflow))).toBeUndefined();
+  });
+
+  it("yields undefined when the workflow cannot be read", () => {
+    expect(declaredReleaseLine(rootWith(undefined))).toBeUndefined();
   });
 });

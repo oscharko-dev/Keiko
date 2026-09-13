@@ -7,7 +7,7 @@ This repository now has a dedicated automated release workflow at [`.github/work
 When a maintainer says "ship a new release", the release operator must run the scripted path
 below. Do not publish packages and then manually remember the rest of the cleanup.
 
-1. Land the release PR into the active release branch (`release/0.3`).
+1. Land the release PR into the active release branch (`release/1.0`).
 2. Tag the reviewed merge commit as `v<package.json version>` and push the tag.
 3. Check out the tag locally or dispatch the Release workflow on that tag.
 4. Run:
@@ -227,20 +227,20 @@ still requires an operator dispatch with `portable_assets_run_id` pointing at th
 
 The release stabilization flow uses a dedicated branch for release-only hardening:
 
-- Freeze features for `0.3` on `dev` and cut or update `release/0.3` from that point.
+- Freeze features for `1.0` on `dev` and cut or update `release/1.0` from that point.
 - Keep feature development open on `dev`.
-- Land all beta/RC fixes through pull requests targeting `release/0.3`; direct commits to the
+- Land all beta/RC fixes through pull requests targeting `release/1.0`; direct commits to the
   release branch are blocked by branch protection.
 - Require the same protected-branch quality gates as `dev` before release PRs can merge: strict
   status checks, CodeQL, dependency review, pinned-action verification, UI/build/smoke gates, signed
   commits, conversation resolution, and linear history.
-- Run beta and RC validation from that branch and tag prereleases as `v0.3.0-beta.N`.
-- When final verification is complete, merge `release/0.3` to the appropriate stable branch and
+- Run beta and RC validation from that branch and tag prereleases as `v1.0.0-beta.N`.
+- When final verification is complete, merge `release/1.0` to the appropriate stable branch and
   tag `v<version>`.
-- Immediately back-merge `release/0.3` into `dev` so next-cycle work can continue with stable
+- Immediately back-merge `release/1.0` into `dev` so next-cycle work can continue with stable
   fixes included.
 
-`release/0.3` branch protection is an operational part of that contract. Its required checks are
+`release/1.0` branch protection is an operational part of that contract. Its required checks are
 `ci`, `workflow hygiene`, `Analyze (actions)`, `Analyze (javascript-typescript)`, `Build, scan,
 SBOM, smoke`, `ui`, and `Review dependency diff (dev/main)`, each bound to the GitHub Actions app.
 It also requires an up-to-date head, signed commits, resolved conversations, and linear history;
@@ -476,7 +476,7 @@ Review remains a required PR gate, but it is not listed in `RELEASE_REQUIRED_CHE
 `pull_request`-only and GitHub does not emit it on the tagged squash commit. This avoids the
 manual commit-status mirroring that previously made patch releases slow and error-prone.
 
-This exception is limited to tag verification. `release/0.3` PR branch protection must continue to
+This exception is limited to tag verification. `release/1.0` PR branch protection must continue to
 require `Review dependency diff (dev/main)` before a hotfix can merge.
 
 The GitHub Release entry is owned by `scripts/release-publish.mjs`; do not create it manually as

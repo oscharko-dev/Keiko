@@ -834,9 +834,15 @@ describe("Windows portable PE signing inventory", () => {
       launcherPath: "Keiko.exe",
       launcherSha256: sha256(readFileSync(launcherPath)),
     };
+    // Derived from the real root manifest, never a copied literal: the producer under test
+    // (stage-portable-runtime.mjs `stageSetupManifest`) writes the setup manifest from
+    // rootPackage.name/version, so a copied pair silently breaks on every version bump.
+    const rootManifest = JSON.parse(
+      readFileSync(join(import.meta.dirname, "..", "..", "package.json"), "utf8"),
+    );
     const manifest = {
       schemaVersion: 2,
-      product: { packageName: "@oscharko-dev/keiko", packageVersion: "0.3.17" },
+      product: { packageName: rootManifest.name, packageVersion: rootManifest.version },
       release: { stable: true },
       windowsGeneration,
     };

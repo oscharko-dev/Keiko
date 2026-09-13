@@ -23,7 +23,7 @@ on:
 permissions: {}
 
 env:
-  RELEASE_BASE_BRANCH: release/0.3
+  RELEASE_BASE_BRANCH: release/1.0
   RELEASE_REQUIRED_CHECKS: '["ci","workflow hygiene","Analyze (actions)","Analyze (javascript-typescript)","Build, scan, SBOM, smoke","ui"]'
 
 jobs:

@@ -1,6 +1,6 @@
 {
   "name": "@oscharko-dev/keiko-sandbox",
-  "version": "0.3.17",
+  "version": "1.0.0",
   "type": "module",
   "license": "Apache-2.0",
   "description": "Internal sandbox package: reusable OS/container egress isolation and gateway-only Linux namespace confinement (ADR-0043). Owns backend selection, wrapper construction, attestation, availability probes, and the internal Linux namespace/descriptor-relay launcher. Not published independently.",
@@ -25,7 +25,7 @@
     "node": ">=24.18.0 <25 || >=26.3.0 <27"
   },
   "dependencies": {
-    "@oscharko-dev/keiko-contracts": "0.3.17"
+    "@oscharko-dev/keiko-contracts": "1.0.0"
   },
   "private": true
 }

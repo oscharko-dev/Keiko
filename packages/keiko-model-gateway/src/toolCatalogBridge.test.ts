@@ -19,6 +19,7 @@ import { withCorrelationId } from "./observability.js";
 import { createGatewayToolCatalogBridge, GatewayToolCatalogError } from "./toolCatalogBridge.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import type { GatewayRequest, GatewayStreamChunk, ModelProviderConfig } from "./types.js";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 
 const NOW = Date.parse("2026-09-05T00:00:00.000Z");
 const CONFIG: ModelProviderConfig = {
@@ -537,7 +538,7 @@ describe("representable gateway schemas", () => {
             toolRefs: [{ toolRef: descriptor.toolRef, alias: "primitive" }],
             nativeExtensions: [],
             adapterDialect: { id: "gateway-json-schema", version: 1 },
-            adapterRuntime: { id: "keiko", version: "0.3.17" },
+            adapterRuntime: { id: "keiko", version: KEIKO_PRODUCT_VERSION },
             compatibility: [],
           },
         ],
