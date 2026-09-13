@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted (owner decision, 2026-08-02). Epic #2881 tracks the adoption.
+Superseded by [ADR-0176](ADR-0176-retire-keiko-for-quality.md) (owner decision, 2026-09-13),
+which retires the reviewer and removes its workflow, configuration, variables, and
+credentials. Originally Accepted (owner decision, 2026-08-02); epic #2881 tracked the
+adoption. Retained as historical decision context.
 
 ## Supersedes and amends
 
