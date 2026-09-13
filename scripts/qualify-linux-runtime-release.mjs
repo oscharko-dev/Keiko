@@ -215,6 +215,25 @@ export function assertQualificationReport(reportPath) {
   }
 }
 
+// The child's streams are vitest output from a public-repository job log, so they are bounded and
+// redacted before they are written. CodeRabbit 4000210073 (CWE-532) on #3478: surfacing the
+// diagnosis must not turn an unbounded third-party stream into a public log entry.
+const MAX_DIAGNOSTIC_BYTES = 64 * 1024;
+const SECRET_ASSIGNMENT =
+  /((?:token|secret|password|passwd|api[_-]?key|authorization)\s*[:=]\s*)\S+/giu;
+const GITHUB_TOKEN_SHAPE = /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,})\b/gu;
+
+function boundedRedacted(value) {
+  const text = String(value);
+  const bounded =
+    text.length > MAX_DIAGNOSTIC_BYTES
+      ? `${text.slice(0, MAX_DIAGNOSTIC_BYTES)}\n[truncated at ${String(MAX_DIAGNOSTIC_BYTES)} bytes]`
+      : text;
+  return bounded
+    .replace(GITHUB_TOKEN_SHAPE, "[redacted]")
+    .replace(SECRET_ASSIGNMENT, "$1[redacted]");
+}
+
 function surfaceQualificationDiagnostics(result) {
   if (result.error !== undefined) {
     process.stderr.write(
@@ -229,7 +248,9 @@ function surfaceQualificationDiagnostics(result) {
     ["stderr", result.stderr],
   ]) {
     if (typeof stream === "string" && stream.length > 0) {
-      process.stderr.write(`linux-runtime-qualification: ${label} follows\n${stream}\n`);
+      process.stderr.write(
+        `linux-runtime-qualification: ${label} follows\n${boundedRedacted(stream)}\n`,
+      );
     }
   }
 }

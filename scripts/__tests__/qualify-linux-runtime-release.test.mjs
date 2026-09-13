@@ -414,6 +414,63 @@ describe("Linux runtime qualification", () => {
     ).toThrow("Linux gateway tests failed");
   });
 
+  it("surfaces every child diagnostic it has, bounded and redacted", () => {
+    // The release job failed with one line and no diagnosis, so these four fields are the whole
+    // point of the change; a fixture carrying only `status: 1` proves none of them.
+    const written = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      written.push(String(chunk));
+      return true;
+    });
+
+    try {
+      expect(() =>
+        runQualificationTests(
+          "unused.json",
+          vi.fn(() => ({
+            error: new Error("spawn failed"),
+            signal: "SIGKILL",
+            status: 1,
+            stderr: "AssertionError: expected [ 'BLOCKED' ] to include ''",
+            stdout: "token: ghp_0123456789abcdefghijklmnopqrstuvwxyz",
+          })),
+        ),
+      ).toThrow("Linux gateway tests failed");
+    } finally {
+      spy.mockRestore();
+    }
+
+    const surfaced = written.join("");
+    expect(surfaced).toContain("child error spawn failed");
+    expect(surfaced).toContain("child signal SIGKILL");
+    expect(surfaced).toContain("stdout follows");
+    expect(surfaced).toContain("stderr follows");
+    expect(surfaced).toContain("AssertionError");
+    expect(surfaced).not.toContain("ghp_0123456789abcdefghijklmnopqrstuvwxyz");
+    expect(surfaced).toContain("[redacted]");
+  });
+
+  it("writes nothing for a failure that carries no diagnostic fields", () => {
+    const written = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      written.push(String(chunk));
+      return true;
+    });
+
+    try {
+      expect(() =>
+        runQualificationTests(
+          "unused.json",
+          vi.fn(() => ({ status: 1, stderr: "", stdout: "" })),
+        ),
+      ).toThrow("Linux gateway tests failed");
+    } finally {
+      spy.mockRestore();
+    }
+
+    expect(written.join("")).toBe("");
+  });
+
   it("redacts unreadable qualification-report details", () => {
     const value = fixture();
     expect(() => assertQualificationReport(join(value.stageRoot, "missing.json"))).toThrow(
