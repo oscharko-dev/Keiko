@@ -80,7 +80,7 @@ function requireArgument(index, name) {
   return value;
 }
 
-function governedStageRoot(targetName) {
+export function governedStageRoot(targetName) {
   // Derived from the producer, never restated. A hand-copied three-case list silently excluded
   // linux-x64 once it became the fourth released target (ADR-0121, amended for Issue #3451 on
   // 2026-09-10), so the stable Linux staging run failed here with "platform target is

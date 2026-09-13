@@ -14,12 +14,14 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
+import { URL, fileURLToPath } from "node:url";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { PORTABLE_TARGETS, portableTargetByName } from "../portable-runtime.mjs";
 import {
   containedDigest,
+  governedStageRoot,
   loadAndSearch,
   readContainedText,
   requiredContainedFile,
@@ -367,6 +369,24 @@ describe("portable USearch staging", () => {
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("stage root argument does not match the governed target");
     expect(result.stderr).not.toContain("missing portable manifest");
+  });
+
+  it("derives the governed stage root for every released portable target", () => {
+    // SonarCloud reported 0.0% coverage on new code for the repaired governedStageRoot: its only
+    // exercise was through spawnSync, and a subprocess carries no coverage instrumentation. Call it
+    // in process so the governed path itself is asserted, not merely the absence of an error string
+    // on a child's stderr. The CLI tests below stay: they prove the wiring end to end.
+    const repositoryRoot = fileURLToPath(new URL("../../", import.meta.url));
+
+    for (const target of PORTABLE_TARGETS) {
+      expect(governedStageRoot(target.platformTarget)).toBe(
+        join(repositoryRoot, ".portable-runtime", "staging", target.platformTarget),
+      );
+    }
+  });
+
+  it("refuses in process a platform target the producer does not declare", () => {
+    expect(() => governedStageRoot("linux-arm64")).toThrow("platform target is unsupported");
   });
 
   it("accepts every released portable target on the governed CLI path", () => {
