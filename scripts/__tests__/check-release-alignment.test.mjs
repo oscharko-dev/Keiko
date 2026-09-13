@@ -446,6 +446,19 @@ describe("declaredReleaseLine", () => {
     expect(declaredReleaseLine(rootWith(workflow))).toBeUndefined();
   });
 
+  // Distinct parser inputs rather than a second spelling of one: an empty value PARSES to null and
+  // falls through the nullish default into a pattern miss, while tab indentation makes the YAML
+  // parser itself throw (verified: YAMLParseError) and so reaches the catch by a different route
+  // than an unreadable file does. Both must still fail closed.
+  it("yields undefined when the declared branch is empty", () => {
+    expect(declaredReleaseLine(rootWith("env:\n  RELEASE_BASE_BRANCH:\n"))).toBeUndefined();
+  });
+
+  it("yields undefined when the workflow is not parseable YAML", () => {
+    const workflow = "env:\n\tRELEASE_BASE_BRANCH: release/1.0\n";
+    expect(declaredReleaseLine(rootWith(workflow))).toBeUndefined();
+  });
+
   it("yields undefined when the workflow cannot be read", () => {
     expect(declaredReleaseLine(rootWith(undefined))).toBeUndefined();
   });
