@@ -215,6 +215,46 @@ export function assertQualificationReport(reportPath) {
   }
 }
 
+// The child's streams are vitest output from a public-repository job log, so they are bounded and
+// redacted before they are written. CodeRabbit 4000210073 (CWE-532) on #3478: surfacing the
+// diagnosis must not turn an unbounded third-party stream into a public log entry.
+const MAX_DIAGNOSTIC_BYTES = 64 * 1024;
+const SECRET_ASSIGNMENT =
+  /((?:token|secret|password|passwd|api[_-]?key|authorization)\s*[:=]\s*)\S+/giu;
+const GITHUB_TOKEN_SHAPE = /\b(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_\w{20,})\b/gu;
+
+function boundedRedacted(value) {
+  const text = String(value);
+  const bounded =
+    text.length > MAX_DIAGNOSTIC_BYTES
+      ? `${text.slice(0, MAX_DIAGNOSTIC_BYTES)}\n[truncated at ${String(MAX_DIAGNOSTIC_BYTES)} bytes]`
+      : text;
+  return bounded
+    .replace(GITHUB_TOKEN_SHAPE, "[redacted]")
+    .replace(SECRET_ASSIGNMENT, "$1[redacted]");
+}
+
+function surfaceQualificationDiagnostics(result) {
+  if (result.error !== undefined) {
+    process.stderr.write(
+      `linux-runtime-qualification: child error ${String(result.error.message ?? result.error)}\n`,
+    );
+  }
+  if (typeof result.signal === "string" && result.signal.length > 0) {
+    process.stderr.write(`linux-runtime-qualification: child signal ${result.signal}\n`);
+  }
+  for (const [label, stream] of [
+    ["stdout", result.stdout],
+    ["stderr", result.stderr],
+  ]) {
+    if (typeof stream === "string" && stream.length > 0) {
+      process.stderr.write(
+        `linux-runtime-qualification: ${label} follows\n${boundedRedacted(stream)}\n`,
+      );
+    }
+  }
+}
+
 /** @internal Exported only for deterministic proof-runner tests. */
 export function runQualificationTests(reportPath, spawn = spawnSync) {
   const result = spawn(process.execPath, linuxQualificationVitestArgs(reportPath), {
@@ -224,7 +264,15 @@ export function runQualificationTests(reportPath, spawn = spawnSync) {
     shell: false,
     timeout: 120_000,
   });
-  if (result.error !== undefined || result.status !== 0) fail("Linux gateway tests failed");
+  if (result.error !== undefined || result.status !== 0) {
+    // The vitest output was discarded here, so a failing release job reported one line and threw
+    // the diagnosis away -- the Linux qualification step failed on 2026-09-13 with nothing to act
+    // on but "Linux gateway tests failed". Surface what the child actually said before failing.
+    // Diagnostics only: the thrown message and the failure condition are unchanged, which is what
+    // qualify-linux-runtime-release.test.mjs pins.
+    surfaceQualificationDiagnostics(result);
+    fail("Linux gateway tests failed");
+  }
   assertQualificationReport(reportPath);
 }
 
