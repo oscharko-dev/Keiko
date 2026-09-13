@@ -266,6 +266,13 @@ jobs:
         run: npm ci --ignore-scripts
       - name: Verify checked-out commit
         run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Build workspace packages
+        # This job installs with --ignore-scripts and never stages the product, so nothing
+        # here produces packages/*/dist. linux-portable-signing.mjs imports the built
+        # keiko-server production discovery module, which is exactly how the v1.0.0 release
+        # failed on 2026-09-13 (ERR_MODULE_NOT_FOUND on the first ever run of this job).
+        # stage-linux-production gets the same output as a side effect of staging.
+        run: npm run build:packages
       - name: Setup Linux sandbox isolation
         uses: ./.github/actions/setup-sandbox-isolation
       - name: Download immutable verified Linux artifact
