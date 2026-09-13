@@ -5,9 +5,16 @@
 // without ever touching the Deployments panel). There is no meaningful "before" state to pin
 // against; every scenario below proves the new checker classifies its case correctly.
 
-import { describe, expect, it } from "vitest";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 
-import { checkReleaseAlignment, printAlignmentReport } from "../check-release-alignment.mjs";
+import {
+  checkReleaseAlignment,
+  declaredReleaseLine,
+  printAlignmentReport,
+} from "../check-release-alignment.mjs";
 
 const REPOSITORY = "oscharko-dev/Keiko";
 const PACKAGE_NAME = "@oscharko-dev/keiko";
@@ -397,5 +404,49 @@ describe("printAlignmentReport", () => {
       "  - npm latest dist-tag could not be read.",
       "  - GitHub Latest release could not be read.",
     ]);
+  });
+});
+
+// The gate reads its own declaration rather than taking a caller's word for it, so the injected
+// seam used above must not be the only thing ever exercised: these four cases pin the real
+// producer. The happy path derives its expectation from the repository's own release.yml
+// (AGENTS.md section 7 — never restate a formula the code under test owns), and the three negative
+// shapes pin the fail-closed contract: an unreadable or unexpected declaration must yield
+// undefined and leave a major step failing exactly as it did before this function existed.
+describe("declaredReleaseLine", () => {
+  const roots = [];
+
+  afterEach(() => {
+    while (roots.length > 0) rmSync(roots.pop(), { force: true, recursive: true });
+  });
+
+  function rootWith(workflow) {
+    const root = mkdtempSync(join(tmpdir(), "keiko-release-line-"));
+    roots.push(root);
+    if (workflow !== undefined) {
+      mkdirSync(join(root, ".github", "workflows"), { recursive: true });
+      writeFileSync(join(root, ".github", "workflows", "release.yml"), workflow);
+    }
+    return root;
+  }
+
+  it("reads the line the repository actually declares in its own release workflow", () => {
+    const declared = declaredReleaseLine();
+    const workflow = readFileSync(".github/workflows/release.yml", "utf8");
+    expect(declared).toBeDefined();
+    expect(workflow).toContain(`RELEASE_BASE_BRANCH: release/${String(declared)}`);
+  });
+
+  it("yields undefined when the declared branch is not a release line", () => {
+    expect(declaredReleaseLine(rootWith("env:\n  RELEASE_BASE_BRANCH: dev\n"))).toBeUndefined();
+  });
+
+  it("yields undefined when the workflow declares no environment at all", () => {
+    const workflow = "on:\n  push:\n    tags:\n      - v*\n";
+    expect(declaredReleaseLine(rootWith(workflow))).toBeUndefined();
+  });
+
+  it("yields undefined when the workflow cannot be read", () => {
+    expect(declaredReleaseLine(rootWith(undefined))).toBeUndefined();
   });
 });
