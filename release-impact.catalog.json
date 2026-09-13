@@ -1946,7 +1946,7 @@
         "issue": 1948,
         "stagingOnly": true,
         "signingScope": "evaluation",
-        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
       }
     }
   ]
