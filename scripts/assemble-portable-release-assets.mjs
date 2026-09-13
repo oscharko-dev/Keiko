@@ -231,7 +231,7 @@ function validateRequiredTargets(byTarget, expected, failures) {
 }
 
 // Deliberate defense-in-depth: release-publish.mjs (portableAssetsFromManifest) re-enforces this
-// same exact-three/qualification-binding invariant at the publish trust boundary; keep in sync.
+// same exact-four/qualification-binding invariant at the publish trust boundary; keep in sync.
 export function validatePortableReleaseSet(manifests, expected) {
   const failures = [];
   const byTarget = collectTargetManifests(manifests, failures);
@@ -248,7 +248,7 @@ function assertExactDownloadedSet(artifactsRoot, prefix) {
   const expected = new Set(PORTABLE_TARGETS.map((target) => `${prefix}${target.platformTarget}`));
   const actual = readdirSync(artifactsRoot);
   if (actual.length !== expected.size || actual.some((name) => !expected.has(name))) {
-    fail("downloaded artifacts must be exactly the three canonical target names");
+    fail("downloaded artifacts must be exactly the four canonical target names");
   }
 }
 

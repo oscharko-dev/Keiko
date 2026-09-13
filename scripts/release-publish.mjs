@@ -220,7 +220,7 @@ function assertUploadedPortableSetComplete(releaseInfo) {
 /**
  * Release notes advertise portable downloads exactly when the release is guaranteed to carry them.
  * For a stable `latest` release that guarantee is now unconditional: ensureStableLatestDownloads
- * fails the publish before npm learns the dist-tag unless all four downloads are present and
+ * fails the publish before npm learns the dist-tag unless all five downloads are present and
  * evidence-bound, so the notes can no longer point at downloads that do not exist — the failure
  * Codex raised on #3051. A prerelease never advertises them; it is not a promotion surface.
  */

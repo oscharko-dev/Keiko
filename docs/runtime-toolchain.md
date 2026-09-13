@@ -40,7 +40,8 @@ contract. Updating `packageManager` alone is never sufficient.
   install smoke with native optional dependencies.
 - Sandbox fallback image: `node:24.18.0-slim` with the existing no-network and workspace-containment
   controls unchanged.
-- Portable Node archives: official 24.18.0 Windows x64, macOS arm64, and macOS x64 archives with
+- Portable Node archives: official 24.18.0 Windows x64, macOS arm64, macOS x64, and Linux x64
+  archives with
   SHA-256 identities sourced by the existing verified approvals updater.
 
 Runtime diagnostics are body-free. The toolchain gate reports only Node.js version, npm version,
