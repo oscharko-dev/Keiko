@@ -113,6 +113,11 @@ jobs:
         with:
           name: portable-stage-${{ matrix.platform_target }}${{ github.event_name == 'workflow_dispatch' && inputs.evaluation_build && '-evaluation-unsigned' || '' }}
           path: .portable-runtime/staging/${{ matrix.platform_target }}
+          # The portable contract stores its evidence under .portable/ (runtime-activation.json,
+          # runtime-qualification.json). upload-artifact excludes hidden files by default, so
+          # without this the consumer downloads a tree with no evidence at all - which is how
+          # assemble failed on the v1.0.0 release, 2026-09-13: "missing runtime activation manifest".
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 30
 
@@ -162,6 +167,11 @@ jobs:
         with:
           name: portable-stage-linux-x64${{ inputs.evaluation_build && '-evaluation-unsigned' || '' }}
           path: .portable-runtime/staging/linux-x64
+          # The portable contract stores its evidence under .portable/ (runtime-activation.json,
+          # runtime-qualification.json). upload-artifact excludes hidden files by default, so
+          # without this the consumer downloads a tree with no evidence at all - which is how
+          # assemble failed on the v1.0.0 release, 2026-09-13: "missing runtime activation manifest".
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 30
 
@@ -239,6 +249,11 @@ jobs:
         with:
           name: portable-stage-linux-x64
           path: .portable-runtime/staging/linux-x64
+          # The portable contract stores its evidence under .portable/ (runtime-activation.json,
+          # runtime-qualification.json). upload-artifact excludes hidden files by default, so
+          # without this the consumer downloads a tree with no evidence at all - which is how
+          # assemble failed on the v1.0.0 release, 2026-09-13: "missing runtime activation manifest".
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 30
       - name: Pack the verified Linux tree for the fresh qualification
@@ -374,5 +389,10 @@ jobs:
         with:
           name: portable-release-assets
           path: portable-release-assets
+          # The portable contract stores its evidence under .portable/ (runtime-activation.json,
+          # runtime-qualification.json). upload-artifact excludes hidden files by default, so
+          # without this the consumer downloads a tree with no evidence at all - which is how
+          # assemble failed on the v1.0.0 release, 2026-09-13: "missing runtime activation manifest".
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 90
