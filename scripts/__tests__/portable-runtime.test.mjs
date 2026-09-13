@@ -3272,14 +3272,26 @@ describe.skipIf(REPO_VERSION_IS_PRERELEASE)("stage-portable-runtime", () => {
     const releaseImpactEntry = catalog.entries.find(
       (entry) => entry.id === manifest.releaseImpact.entryId,
     );
-    expect(releaseImpactEntry?.portableRuntimeArtifactContract).toEqual({
+    const reviewedContract = releaseImpactEntry?.portableRuntimeArtifactContract;
+    // The reviewed staging contract is derived from the producer, never restated here. ADR-0121,
+    // amended for the production-qualified Linux x64 archive (Issue #3451, 2026-09-10), makes the
+    // four platform targets release-blocking as a set; a hand-copied triple let linux-x64 fall out
+    // of the contract while PORTABLE_TARGETS already carried it, and stage-portable-runtime.mjs
+    // refused the stable Linux staging run for tag v1.0.0 with "release-impact catalog must
+    // contain exactly one reviewed portable runtime staging entry". Deriving means the next
+    // platform cannot repeat that. Targets are compared as a sorted set so the catalog is not
+    // chained to the producer's array order, while toEqual still rejects any extra key.
+    expect({
+      ...reviewedContract,
+      targets: [...(reviewedContract?.targets ?? [])].toSorted(),
+    }).toEqual({
       programEpic: 1944,
       parentEpic: 1942,
       issue: 1948,
       stagingOnly: true,
       // The explicit signing scope the portable-assets release-scope gate reads (ADR-0121).
       signingScope: "evaluation",
-      targets: ["windows-x64", "macos-arm64", "macos-x64"],
+      targets: PORTABLE_TARGETS.map((entry) => entry.platformTarget).toSorted(),
     });
     expect(
       existsSync(join(root, "payload", "Keiko", "Keiko.app", "Contents", "Resources", "runtime")),
