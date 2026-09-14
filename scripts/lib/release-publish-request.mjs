@@ -1,4 +1,4 @@
-import { readFound, remoteTagCommit } from "./release-candidate.mjs";
+import { OPEN_RUN_STATUSES, readFound, remoteTagCommit } from "./release-candidate.mjs";
 
 // ADR-0177 D8: the last job of a stable tag build asks release.yml to publish exactly that build, so
 // nobody copies a run id into a dispatch form. It publishes nothing itself: the publish job it starts
@@ -8,7 +8,6 @@ import { readFound, remoteTagCommit } from "./release-candidate.mjs";
 const COMMIT_SHA = /^[0-9a-f]{40}$/u;
 const STABLE_TAG = /^v\d+\.\d+\.\d+$/u;
 const REPOSITORY = /^[\w.-]+\/[\w.-]+$/u;
-const OPEN_RUN_STATUSES = new Set(["requested", "waiting", "pending", "queued", "in_progress"]);
 const PORTABLE_ASSETS_ARTIFACT_NAME = "portable-release-assets";
 
 class ReleasePublishRequestError extends Error {}

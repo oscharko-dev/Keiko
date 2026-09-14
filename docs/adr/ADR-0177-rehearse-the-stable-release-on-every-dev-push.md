@@ -114,8 +114,8 @@ starts it:
   that commit's checkout: its version must pass the D1
   readiness, neither npm nor a GitHub release may carry it, and the commit must still be the live `dev`
   head. It creates `v<version>`, moves it from an older unpublished commit, keeps it, or skips. A
-  published version's tag never moves, and neither does a tag whose approved publish is queued or
-  running.
+  published version's tag never moves, and neither does a tag with an open publish, including one
+  that waits for its approval, so an approval always covers the commit it was requested for.
 - For a create or move the tag job writes the ref at once, so the stable build runs beside the
   commit's CI instead of after it. No build step waits for the release-required checks any more — the
   first v1.0.0 build failed every target on that 30-minute wait while its CI was still queued. The
@@ -128,10 +128,11 @@ starts it:
   attempt and cancels an older candidate's publish that still waits for approval. A commit whose
   checks fail is never requested; the next green candidate moves the tag. A `workflow_dispatch` is an event `GITHUB_TOKEN` may start, and it
   runs on the tag ref, so npm provenance names the tagged commit.
-- The publish job keeps its `npm-publish` review (ADR-0170 D3), which is the only manual step. A
-  publish that checked out an older candidate stops before any side effect: its qualified source SHA
-  no longer matches the checkout, and the publisher re-reads the tag right before it creates the
-  GitHub Release.
+- The publish job keeps its `npm-publish` review (ADR-0170 D3), which is the only manual step. Every
+  release.yml job checks out the commit it was started for and proves it, never the tag as it is when
+  the job starts, and the publish re-verifies the required checks without waiting for CI. Should the
+  tag move anyway, the publisher re-reads it right before it creates the GitHub Release and stops
+  before any side effect.
 
 ## Consequences
 

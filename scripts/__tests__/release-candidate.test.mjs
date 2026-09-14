@@ -89,7 +89,7 @@ describe("releaseCandidatePlan", () => {
     ],
     ["a candidate dev has moved past", { devHeadSha: OLDER }],
     ["a published version", { published: true, remoteTagSha: OLDER }],
-    ["a tag whose publish is running", { publishRunActive: true, remoteTagSha: OLDER }],
+    ["a tag whose publish is open", { publishRunActive: true, remoteTagSha: OLDER }],
   ])("skips %s", (_label, overrides) => {
     expect(plan(overrides).action).toBe("skip");
   });
@@ -181,28 +181,35 @@ describe("planReleaseCandidate", () => {
     expect(gather(github).reason).toContain("already published");
   });
 
-  it("does not move a tag while an approved publish of it is queued or running", () => {
+  it.each(["waiting", "requested", "pending", "queued", "in_progress"])(
+    "does not move a tag while a publish of it is %s",
+    (status) => {
+      // "waiting" is the npm-publish approval gate: moving the tag there would let an approval given
+      // for one commit publish another (review finding on #3488).
+      const github = fakeGithub({
+        [`repos/${REPO}/git/ref/tags/${TAG}`]: ok({ object: { sha: OLDER, type: "commit" } }),
+        [`repos/${REPO}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100`]:
+          ok({
+            workflow_runs: [
+              { head_branch: "v1.0.0", status: "in_progress" },
+              { head_branch: TAG, status },
+            ],
+          }),
+      });
+      expect(gather(github)).toMatchObject({ action: "skip" });
+      expect(gather(github).reason).toContain(`a publish of ${TAG} is open`);
+    },
+  );
+
+  it("moves a tag whose publish runs have all completed, or belong to another tag", () => {
     const github = fakeGithub({
       [`repos/${REPO}/git/ref/tags/${TAG}`]: ok({ object: { sha: OLDER, type: "commit" } }),
       [`repos/${REPO}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100`]: ok(
         {
           workflow_runs: [
-            { head_branch: "v1.0.0", status: "in_progress" },
-            { head_branch: TAG, status: "waiting" },
-            { head_branch: TAG, status: "queued" },
+            { head_branch: TAG, status: "completed" },
+            { head_branch: "v1.0.0", status: "waiting" },
           ],
-        },
-      ),
-    });
-    expect(gather(github).reason).toContain("is running");
-  });
-
-  it("moves a tag whose only publish run still waits for approval", () => {
-    const github = fakeGithub({
-      [`repos/${REPO}/git/ref/tags/${TAG}`]: ok({ object: { sha: OLDER, type: "commit" } }),
-      [`repos/${REPO}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100`]: ok(
-        {
-          workflow_runs: [{ head_branch: TAG, status: "waiting" }],
         },
       ),
     });

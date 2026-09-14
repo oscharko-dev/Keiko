@@ -12,6 +12,7 @@ const workflows = resolve(import.meta.dirname, "../../.github/workflows");
 const candidateSource = readFileSync(resolve(workflows, "release-candidate.yml"), "utf8");
 const candidate = parse(candidateSource);
 const portable = parse(readFileSync(resolve(workflows, "portable-assets.yml"), "utf8"));
+const release = parse(readFileSync(resolve(workflows, "release.yml"), "utf8"));
 
 function stepIndex(job, predicate, label) {
   const index = job.steps.findIndex(predicate);
@@ -80,6 +81,37 @@ describe("release candidate workflow", () => {
     expect(candidateSource.match(/secrets\.[A-Z_]+/gu)).toStrictEqual([
       "secrets.KEIKO_RELEASE_TAG_APP_PRIVATE_KEY",
     ]);
+  });
+});
+
+describe("release workflow commit binding", () => {
+  it.each(["release-verify", "publish"])(
+    "checks out exactly the commit %s was started for and proves it",
+    (jobName) => {
+      // An explicit ref followed a tag moved after dispatch, so an approval given for one commit
+      // could publish another (review finding on #3488).
+      const job = release.jobs[jobName];
+      const checkout = stepIndex(
+        job,
+        (step) => String(step.uses).startsWith("actions/checkout@"),
+        "checkout",
+      );
+      expect(job.steps[checkout].with.ref).toBeUndefined();
+      expect(job.steps[checkout + 1]).toMatchObject({
+        name: "Verify checked-out commit",
+        run: 'test "$(git rev-parse HEAD)" = "$GITHUB_SHA"',
+      });
+    },
+  );
+
+  it("re-verifies the required checks in the publish job without waiting for CI", () => {
+    const { publish } = release.jobs;
+    const verify = publish.steps.find(
+      (step) => step.name === "Verify required checks for release SHA",
+    );
+    const budget = Number(verify.env.RELEASE_CHECK_TIMEOUT_SECONDS);
+    expect(budget).toBeGreaterThan(0);
+    expect(budget).toBeLessThan(publish["timeout-minutes"] * 60);
   });
 });
 

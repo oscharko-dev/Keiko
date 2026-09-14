@@ -4,7 +4,16 @@
 // branch here is proven in-process.
 
 const COMMIT_SHA = /^[0-9a-f]{40}$/u;
-const ACTIVE_RUN_STATUSES = new Set(["queued", "in_progress"]);
+// A release.yml publish is open from its dispatch until it completes, including while it waits for
+// the npm-publish approval: that approval is given for the commit the run was dispatched for, so the
+// tag must not move under it. The publish request reads the same set.
+export const OPEN_RUN_STATUSES = new Set([
+  "requested",
+  "waiting",
+  "pending",
+  "queued",
+  "in_progress",
+]);
 const WRITING_ACTIONS = new Set(["create", "move"]);
 
 class ReleaseCandidateError extends Error {}
@@ -26,7 +35,7 @@ function requireCommitSha(value, label) {
  * @param devHeadSha        the dev head right now
  * @param published         npm or GitHub already carries the version
  * @param remoteTagSha      the commit `v<version>` points at, or undefined when it does not exist
- * @param publishRunActive  an approved release.yml publish of this tag is queued or running
+ * @param publishRunActive  a release.yml publish of this tag is open, waiting for approval included
  * @returns {{ action: "skip" | "keep" | "create" | "move", tag: string, reason: string }}
  */
 export function releaseCandidatePlan({
@@ -62,7 +71,7 @@ export function releaseCandidatePlan({
     return {
       action: "skip",
       tag,
-      reason: `a publish of ${tag} is running, so the tag stays at ${remoteTagSha} until it ends`,
+      reason: `a publish of ${tag} is open, so the tag stays at ${remoteTagSha} until it ends`,
     };
   }
   return { action: "move", tag, reason: `${tag} moves from ${remoteTagSha} to the green dev head` };
@@ -133,7 +142,7 @@ function publishRunActive(runGh, repository, tag) {
   );
   if (!Array.isArray(runs?.workflow_runs)) fail("the release workflow runs are malformed.");
   return runs.workflow_runs.some(
-    (run) => run?.head_branch === tag && ACTIVE_RUN_STATUSES.has(run?.status),
+    (run) => run?.head_branch === tag && OPEN_RUN_STATUSES.has(run?.status),
   );
 }
 
