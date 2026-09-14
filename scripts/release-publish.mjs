@@ -1431,6 +1431,14 @@ function portableReleaseTrustedKeys() {
 function signedPortableManifest(manifest, releaseId, releaseCreatedAt) {
   const signedAt = canonicalReleaseInstant(releaseCreatedAt);
   if (signedAt === undefined) fail("GitHub release creation time must be a canonical instant.");
+  const { signed, verification } = portableReleaseTrustSignature(manifest, releaseId, signedAt);
+  if (!verification.ok) {
+    fail(`portable release signing key is not trusted (${verification.reason}).`);
+  }
+  return signed;
+}
+
+function portableReleaseTrustSignature(manifest, releaseId, signedAt) {
   const expiresAt = new Date(new Date(signedAt).valueOf() + PORTABLE_RELEASE_TRUST_MAX_LIFETIME_MS);
   const signed = createPortableReleaseTrust(manifest, {
     expiresAt: expiresAt.toISOString(),
@@ -1442,10 +1450,34 @@ function signedPortableManifest(manifest, releaseId, releaseCreatedAt) {
     now: new Date(signedAt),
     trustedKeys: portableReleaseTrustedKeys(),
   });
-  if (!verification.ok) {
-    fail(`portable release signing key is not trusted (${verification.reason}).`);
+  return { signed, verification };
+}
+
+// The signing key is first used while binding archives that are already uploaded to the created
+// GitHub release, so a key the shipped trust roots reject would strand a half-published release.
+// Prove it through the same sign-and-verify path on a probe before the first side effect. The
+// probe cannot fail on its own metadata, so any throw is the key; its text is not echoed because
+// Node's argument errors may quote the offending value, and that value is the secret.
+function assertPortableReleaseSigningKeyTrusted() {
+  const probeReleaseId = 1;
+  let verification;
+  try {
+    ({ verification } = portableReleaseTrustSignature(
+      { release: { releaseId: probeReleaseId } },
+      probeReleaseId,
+      new Date().toISOString(),
+    ));
+  } catch {
+    fail(
+      "portable release signing key is not a usable Ed25519 private key; nothing was published.",
+    );
   }
-  return signed;
+  if (!verification.ok) {
+    fail(
+      `portable release signing key is not trusted (${verification.reason}); nothing was published.`,
+    );
+  }
+  console.log(`release-publish: portable release signing key ${verification.keyId} is trusted.`);
 }
 
 function remoteSetupBinding(asset, remoteByName) {
@@ -1876,6 +1908,9 @@ if (options.planOnly) {
   process.exit(0);
 }
 
+if (portableAssets.length > 0 && portableUploadEnabled(options)) {
+  assertPortableReleaseSigningKeyTrusted();
+}
 if (!options.allowUntagged) {
   ensureReleaseTag(rootManifest.version);
 }
