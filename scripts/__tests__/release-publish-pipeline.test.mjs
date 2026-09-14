@@ -608,11 +608,11 @@ function ghStubBody() {
     "    writeFileSync(1, JSON.stringify(state().workflowRun || {}));",
     "    process.exit(0);",
     "  }",
-    // GitHub immutable releases (2026-09-14): a draft is invisible to the by-tag endpoint and is read by
-    // id from the release listing; the publisher re-reads the tag ref before it publishes the draft.
-    '  if (argv[1] && argv[1].includes("/releases?")) {',
-    `    const listed = state().publisherDraft || state().releasePublished ? [{ id: 987654321, tag_name: \`v\${VERSION}\`, draft: state().publisherDraft === true, created_at: ${JSON.stringify(RELEASE_CREATED_AT)}, assets: state().uploadedAssets || [] }] : [];`,
-    "    writeFileSync(1, JSON.stringify(listed));",
+    // GitHub immutable releases (2026-09-14): the publisher creates its draft through the REST API and
+    // takes the id from that answer, then reads the draft by id; the by-tag endpoint cannot see it.
+    '  if (argv.includes("--method") && argv.includes("POST") && argv.some((a) => typeof a === "string" && /^repos\\/[^/]+\\/[^/]+\\/releases$/.test(a))) {',
+    "    setState({ publisherDraft: true });",
+    `    writeFileSync(1, JSON.stringify({ id: 987654321, tag_name: \`v\${VERSION}\`, draft: true, created_at: ${JSON.stringify(RELEASE_CREATED_AT)}, assets: [] }));`,
     "    process.exit(0);",
     "  }",
     '  if (argv[1] && argv[1].endsWith("/releases/987654321")) {',
@@ -1902,13 +1902,16 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       });
 
       expect(lastRun.status, lastRun.stderr).toBe(0);
-      const create = indexOfCall(lastRun.calls, (l) => l.startsWith('gh ["release","create"'));
+      const create = indexOfCall(
+        lastRun.calls,
+        (l) => l.startsWith('gh ["api","--method","POST"') && l.includes('/releases"'),
+      );
       const firstUpload = indexOfCall(lastRun.calls, (l) => l.startsWith('gh ["release","upload"'));
       const publish = indexOfCall(
         lastRun.calls,
         (l) => l.startsWith('gh ["release","edit"') && l.includes('"--draft=false"'),
       );
-      expect(lastRun.calls[create]).toContain('"--draft"');
+      expect(lastRun.calls[create]).toContain('"draft=true"');
       expect(create).toBeLessThan(firstUpload);
       expect(firstUpload).toBeLessThan(publish);
       expect(lastRun.calls.slice(publish).some((l) => l.startsWith('gh ["release","upload"'))).toBe(

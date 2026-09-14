@@ -10,21 +10,41 @@ const COMMIT_SHA = /^[0-9a-f]{40}$/u;
 const SHA256_DIGEST = /^sha256:[0-9a-f]{64}$/u;
 
 /**
- * @param releases  the REST release listing, which includes drafts for a token with contents access
+ * The id of the draft this run created, read from GitHub's answer to the create call itself. A lookup
+ * in the release listing right after the create missed the new draft on 2026-09-14 (v1.0.1: "found
+ * 0"), because the listing lags behind the write.
+ *
+ * @param release  the REST create-release response
  * @returns {{ id?: number, failure?: string }}
  */
-export function draftReleaseId(releases, tag) {
-  if (!Array.isArray(releases)) return { failure: "the GitHub release listing is malformed." };
-  const drafts = releases.filter((release) => release?.tag_name === tag && release?.draft === true);
-  if (drafts.length !== 1) {
+export function createdDraftId(release, tag) {
+  if (release?.tag_name !== tag || release?.draft !== true) {
     return {
-      failure: `expected exactly one draft GitHub release for ${tag}, found ${String(drafts.length)}.`,
+      failure: `GitHub did not answer the draft release create for ${tag} with that draft.`,
     };
   }
-  const { id } = drafts[0];
-  return Number.isSafeInteger(id) && id > 0
-    ? { id }
+  return Number.isSafeInteger(release.id) && release.id > 0
+    ? { id: release.id }
     : { failure: `the draft GitHub release for ${tag} has no valid id.` };
+}
+
+/**
+ * Why an existing draft of the tag cannot be completed by this run, or undefined when it can. An
+ * interrupted publish leaves its draft behind; a draft carrying the evaluation lane's manifest is
+ * not this lane's to complete.
+ */
+export function resumableDraftFailure(view, tag, evaluationManifestAssetName) {
+  // Only a readable asset list can prove the evaluation manifest is absent.
+  const assets = view?.assets;
+  if (!Array.isArray(assets) || assets.some((asset) => typeof asset?.name !== "string")) {
+    return `the draft GitHub release ${tag} has an invalid asset listing.`;
+  }
+  if (assets.some((asset) => asset.name === evaluationManifestAssetName)) {
+    return `the draft GitHub release ${tag} carries the evaluation lane's manifest; a qualified production publish needs its own version and tag.`;
+  }
+  return Number.isSafeInteger(view?.databaseId) && view.databaseId > 0
+    ? undefined
+    : `the draft GitHub release ${tag} has no valid id.`;
 }
 
 /**
@@ -105,8 +125,12 @@ export function releaseTagAtHeadFailure({ head, repository, runGh, tag }) {
  *   refuseEvaluationOwnedRelease(viewResult, tag), snapshot(releaseInfo) → { assets, createdAt, id },
  *   verifyAssets(remoteAssets, expected, releaseInfo).
  */
-export function openPortableRelease(publisher, { latest, notes, prerelease, repo, tag, title }) {
+export function openPortableRelease(
+  publisher,
+  { head, latest, notes, prerelease, repo, tag, title },
+) {
   publisher.assertTagAtHead(tag);
+  const latestArgs = latest && !prerelease ? ["--latest"] : ["--latest=false"];
   const existing = publisher.gh([
     "release",
     "view",
@@ -114,33 +138,52 @@ export function openPortableRelease(publisher, { latest, notes, prerelease, repo
     "--repo",
     repo,
     "--json",
-    "isDraft,assets",
+    "isDraft,assets,databaseId,name",
   ]);
   if (existing?.status === 0) {
+    const view = parsedStdout(existing);
+    // Only a draft under this publisher's own title is resumed; the evaluation lane names its draft
+    // "Keiko <version> (<tag>)" and owns resuming or deleting it (#3054).
+    if (view?.isDraft === true && view.name === title) {
+      return resumeDraft(publisher, view, { latestArgs, repo, tag });
+    }
     publisher.refuseEvaluationOwnedRelease(existing, tag);
     publisher.log(`GitHub release ${tag} is already published; verifying it.`);
     return { published: true, repo, tag };
   }
   publisher.log(`creating draft GitHub release ${tag}.`);
-  publisher.runGh([
-    "release",
-    "create",
-    tag,
-    "--repo",
-    repo,
-    "--title",
-    title,
-    "--notes",
-    notes,
-    "--verify-tag",
-    "--draft",
-    ...(prerelease ? ["--prerelease"] : []),
+  // The tag was just proven to point at head; target_commitish names the same commit, so even a tag
+  // deleted in between could only be recreated where this build came from.
+  const created = publisher.runGh([
+    "api",
+    "--method",
+    "POST",
+    `repos/${repo}/releases`,
+    "-f",
+    `tag_name=${tag}`,
+    "-f",
+    `target_commitish=${head}`,
+    "-f",
+    `name=${title}`,
+    "-f",
+    `body=${notes}`,
+    "-F",
+    "draft=true",
+    "-F",
+    `prerelease=${String(prerelease)}`,
   ]);
-  const listing = publisher.runGh(["api", `repos/${repo}/releases?per_page=100`]);
-  const draft = draftReleaseId(parsedStdout(listing), tag);
+  const draft = createdDraftId(parsedStdout(created), tag);
   if (draft.failure !== undefined) publisher.fail(draft.failure);
-  const latestArgs = latest && !prerelease ? ["--latest"] : ["--latest=false"];
   return { draft: true, id: draft.id, latestArgs, repo, tag };
+}
+
+function resumeDraft(publisher, view, { latestArgs, repo, tag }) {
+  const failure = resumableDraftFailure(view, tag, publisher.evaluationManifestAssetName);
+  if (failure !== undefined) publisher.fail(failure);
+  publisher.log(
+    `resuming draft GitHub release ${tag} (id ${String(view.databaseId)}) left by an interrupted publish.`,
+  );
+  return { draft: true, id: view.databaseId, latestArgs, repo, tag };
 }
 
 function parsedStdout(result) {
