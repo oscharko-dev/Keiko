@@ -474,8 +474,8 @@ jobs:
       contents: read
       statuses: read
     # The tag is written on the dev push, so this build runs beside the commit's CI; this job waits
-    # for the six release-required checks (at most 30 minutes) before it asks for a publish.
-    timeout-minutes: 45
+    # for the six release-required checks (at most 90 minutes) before it asks for a publish.
+    timeout-minutes: 100
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:

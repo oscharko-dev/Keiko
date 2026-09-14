@@ -315,10 +315,9 @@ export function releaseCandidateMain({
     return 0;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    write(
-      "stderr",
-      `${error instanceof ReleaseCandidateError ? message : `release-candidate: ${message}`}\n`,
-    );
+    const report =
+      error instanceof ReleaseCandidateError ? message : `release-candidate: ${message}`;
+    write("stderr", `${report}\n`);
     return 1;
   }
 }

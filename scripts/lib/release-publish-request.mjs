@@ -165,7 +165,8 @@ export function releasePublishRequestMain({ appendFile, env, runGh, write }) {
     const message = error instanceof Error ? error.message : String(error);
     const known =
       message.startsWith("request-release-publish: ") || message.startsWith("release-candidate: ");
-    write("stderr", `${known ? message : `request-release-publish: ${message}`}\n`);
+    const report = known ? message : `request-release-publish: ${message}`;
+    write("stderr", `${report}\n`);
     return 1;
   }
 }
