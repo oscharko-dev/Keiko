@@ -1,4 +1,5 @@
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -27,31 +28,49 @@ describe("requireVersion", () => {
 });
 
 describe("versionedManifest", () => {
-  const manifest = [
-    "{",
-    '  "name": "@oscharko-dev/keiko",',
-    '  "version": "1.0.0",',
-    '  "files": ["dist", "README.md"],',
-    '  "dependencies": {',
-    '    "@oscharko-dev/keiko-contracts": "1.0.0",',
-    '    "@oscharko-dev/keiko-harness": "1.0.0",',
-    '    "yaml": "2.8.1"',
-    "  },",
-    '  "devDependencies": {',
-    '    "@oscharko-dev/keiko-contracts": "1.0.0"',
-    "  },",
-    '  "bundleDependencies": ["@oscharko-dev/keiko-contracts"]',
-    "}",
-    "",
-  ].join("\n");
+  const manifestFor = (version) =>
+    `${JSON.stringify(
+      {
+        name: "@oscharko-dev/keiko",
+        version,
+        files: ["dist", "README.md"],
+        dependencies: {
+          "@oscharko-dev/keiko-contracts": version,
+          "@oscharko-dev/keiko-harness": version,
+          yaml: "2.8.1",
+        },
+        devDependencies: { "@oscharko-dev/keiko-contracts": version },
+        bundleDependencies: ["@oscharko-dev/keiko-contracts"],
+      },
+      null,
+      2,
+    )}\n`;
+  const manifest = manifestFor("1.0.0");
 
   it("moves the version and every workspace pin, and nothing else", () => {
     const result = versionedManifest(manifest, WORKSPACES, "1.0.1");
 
-    expect(result).toBe(manifest.replaceAll('"1.0.0"', '"1.0.1"'));
+    expect(result).toBe(manifestFor("1.0.1"));
     expect(result).toContain('"yaml": "2.8.1"');
-    // Formatting is untouched: the compact array stays compact.
-    expect(result).toContain('"files": ["dist", "README.md"],');
+    expect(result).toContain('"bundleDependencies": [\n    "@oscharko-dev/keiko-contracts"\n  ]');
+  });
+
+  it("rewrites every manifest of this checkout byte for byte apart from the version", () => {
+    // The rewrite is JSON.stringify(…, null, 2); prettier's json-stringify form of package.json is
+    // exactly that, so a manifest that drifted from it would be reformatted by a version move.
+    const root = resolve(import.meta.dirname, "../..");
+    const manifests = [
+      join(root, "package.json"),
+      ...readdirSync(join(root, "packages"))
+        .map((name) => join(root, "packages", name, "package.json"))
+        .filter((path) => existsSync(path)),
+    ];
+    expect(manifests.length).toBeGreaterThan(20);
+    for (const path of manifests) {
+      const text = readFileSync(path, "utf8");
+      const { version } = JSON.parse(text);
+      expect(versionedManifest(text, [], version), path).toBe(text);
+    }
   });
 
   it("leaves a pin on a package that is not a workspace alone", () => {

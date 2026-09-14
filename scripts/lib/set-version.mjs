@@ -10,16 +10,17 @@ import { join } from "node:path";
 const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
 const VERSION_CONSTANT =
   /(export\s+const\s+(?:KEIKO_PRODUCT_VERSION|KEIKO_[A-Z0-9_]*_VERSION)\s*=\s*")[^"]+("\s+as\s+const)/gu;
-const OWN_VERSION = /^(\s*"version":\s*")[^"]+(")/mu;
+const DEPENDENCY_FIELDS = [
+  "dependencies",
+  "devDependencies",
+  "optionalDependencies",
+  "peerDependencies",
+];
 
 class SetVersionError extends Error {}
 
 function fail(message) {
   throw new SetVersionError(`set-version: ${message}`);
-}
-
-function escapeRegExp(text) {
-  return text.replace(/[.*+?^${}()|[\]\\]/gu, String.raw`\$&`);
 }
 
 export function requireVersion(value) {
@@ -30,17 +31,21 @@ export function requireVersion(value) {
 }
 
 /**
- * The manifest text with its own version and every pin on a workspace package moved, formatting
- * untouched; the result is parsed back so a manifest without a version field fails closed.
+ * The manifest with its own version and every dependency pin on a workspace package moved. Every
+ * manifest here is in prettier's json-stringify form, which is exactly JSON.stringify(…, null, 2), so
+ * the rewrite changes nothing but the versions; set-version.test.mjs pins that form for the checkout.
  */
 export function versionedManifest(text, workspaceNames, version) {
-  let result = text.replace(OWN_VERSION, (_match, head, tail) => `${head}${version}${tail}`);
-  for (const name of workspaceNames) {
-    const pin = new RegExp(String.raw`^(\s*"${escapeRegExp(name)}":\s*")[^"]+(")`, "gmu");
-    result = result.replace(pin, (_match, head, tail) => `${head}${version}${tail}`);
+  const manifest = JSON.parse(text);
+  if (typeof manifest.version !== "string") fail("a manifest has no version field.");
+  manifest.version = version;
+  const workspaces = new Set(workspaceNames);
+  for (const field of DEPENDENCY_FIELDS) {
+    for (const name of Object.keys(manifest[field] ?? {})) {
+      if (workspaces.has(name)) manifest[field][name] = version;
+    }
   }
-  if (JSON.parse(result).version !== version) fail("a manifest has no version field.");
-  return result;
+  return `${JSON.stringify(manifest, null, 2)}\n`;
 }
 
 /** The source text with every exported KEIKO_*_VERSION constant moved. */
@@ -59,7 +64,8 @@ function rewrite(path, readText, writeText, produce) {
 function runStep(spawn, root, label, executable, args) {
   const result = spawn(executable, args, root);
   if (result?.error !== undefined || result?.status !== 0) {
-    fail(`${label} failed${result?.stderr ? `: ${String(result.stderr).trim()}` : "."}`);
+    const detail = result?.stderr ? `: ${String(result.stderr).trim()}` : ".";
+    fail(`${label} failed${detail}`);
   }
 }
 
