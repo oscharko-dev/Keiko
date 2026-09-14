@@ -201,9 +201,10 @@ describe("workflow Node toolchain parity", () => {
     // assertion below into a loop over an empty array and report success.
     // The exact count is intentional: a workflow disappearing is as relevant as an unreviewed
     // workflow appearing. Issue #3403 retired six credential-bound Apple/Microsoft signing lanes
-    // and added three Linux runtime qualification lanes; the resulting 24 lanes cover every
+    // and added three Linux runtime qualification lanes; ADR-0177 added the dev release-rehearsal
+    // readiness lane and the standing release-alignment lane. The resulting 26 lanes cover every
     // workflow and composite action discovered above.
-    expect(withSetupNode).toHaveLength(24);
+    expect(withSetupNode).toHaveLength(26);
   });
 
   it("pins every actions/setup-node step to an approved exact Node version", () => {

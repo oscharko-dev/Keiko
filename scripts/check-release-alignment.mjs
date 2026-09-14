@@ -16,6 +16,11 @@
 // Exported as `checkReleaseAlignment(seams)` so scripts/__tests__ can drive it hermetically, and
 // so scripts/release-publish.mjs can call it at the end of a real `latest` publish without a
 // second implementation of the same rule.
+//
+// The CLI separates two kinds of red for the standing release-alignment lane, which files a public
+// tracking issue: exit 1 is a divergence every source answered (something a maintainer can act on),
+// exit 2 means at least one source could not answer at all, so no alignment result exists. An empty
+// tag or deployment list is an answer, not an unreadable source.
 
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
@@ -157,20 +162,21 @@ function readGithubLatestRelease({ repository, rows, runGh }) {
   return tagName;
 }
 
-function readNewestDeploymentRef({ repository, rows, runGh }) {
+// An unreadable or non-list payload is not an answer; an empty list is one: no deployment exists.
+function readNewestDeployment({ repository, rows, runGh }) {
   const result = runGh([
     "api",
     `repos/${repository}/deployments?environment=${NPM_PUBLISH_ENVIRONMENT}&per_page=1`,
   ]);
   const parsed = parsedJson(result);
-  const newest = Array.isArray(parsed) ? parsed[0] : undefined;
-  const ref = isRecord(newest) ? newest.ref : undefined;
-  if (typeof ref !== "string" || ref.length === 0) {
+  if (!Array.isArray(parsed)) {
     rows.push({ source: "newest npm-publish deployment", value: UNREADABLE });
-    return undefined;
+    return { answered: false, ref: undefined };
   }
-  rows.push({ source: "newest npm-publish deployment", value: ref });
-  return ref;
+  const ref = isRecord(parsed[0]) ? parsed[0].ref : undefined;
+  const named = typeof ref === "string" && ref.length > 0;
+  rows.push({ source: "newest npm-publish deployment", value: named ? ref : "(none)" });
+  return { answered: true, ref: named ? ref : undefined };
 }
 
 // A newer tag can exist while the expected one is still present — a stray or premature tag push
@@ -196,13 +202,12 @@ function githubLatestReleaseFailures({ expectedTag, githubLatestTag }) {
   return [];
 }
 
-function deploymentFailures({ deploymentRef, expectedTag }) {
-  if (deploymentRef === undefined) {
-    return [`no ${NPM_PUBLISH_ENVIRONMENT} deployment could be read.`];
-  }
-  if (expectedTag !== undefined && deploymentRef !== expectedTag) {
+function deploymentFailures({ deployment, expectedTag }) {
+  if (!deployment.answered) return [`no ${NPM_PUBLISH_ENVIRONMENT} deployment could be read.`];
+  if (deployment.ref === undefined) return [`no ${NPM_PUBLISH_ENVIRONMENT} deployment exists.`];
+  if (expectedTag !== undefined && deployment.ref !== expectedTag) {
     return [
-      `newest ${NPM_PUBLISH_ENVIRONMENT} deployment ref is ${deploymentRef}, expected ${expectedTag} (stale deployment record).`,
+      `newest ${NPM_PUBLISH_ENVIRONMENT} deployment ref is ${deployment.ref}, expected ${expectedTag} (stale deployment record).`,
     ];
   }
   return [];
@@ -213,13 +218,13 @@ function deploymentFailures({ deploymentRef, expectedTag }) {
 // whole reason to exist is to say so, not to report only the first thing it noticed (issue #3252
 // review finding: an unreadable npm latest previously masked a simultaneously unreadable
 // GitHub Latest release from the failures list, even though `rows` already showed both).
-function evaluateAgainstLatest({ deploymentRef, githubLatestTag, latest, newestTag, tags }) {
+function evaluateAgainstLatest({ deployment, githubLatestTag, latest, newestTag, tags }) {
   const expectedTag = latest === undefined ? undefined : `v${latest}`;
   return [
     ...(latest === undefined ? ["npm latest dist-tag could not be read."] : []),
     ...tagFailures({ expectedTag, latest, newestTag, tags }),
     ...githubLatestReleaseFailures({ expectedTag, githubLatestTag }),
-    ...deploymentFailures({ deploymentRef, expectedTag }),
+    ...deploymentFailures({ deployment, expectedTag }),
   ];
 }
 
@@ -246,10 +251,10 @@ export function checkReleaseAlignment({
   const latest = readNpmLatest({ packageName, registry, rows, runNpm });
   const { newestTag, tags } = readTags({ rows, runGit }) ?? {};
   const githubLatestTag = readGithubLatestRelease({ repository, rows, runGh });
-  const deploymentRef = readNewestDeploymentRef({ repository, rows, runGh });
+  const deployment = readNewestDeployment({ repository, rows, runGh });
 
   const failures = evaluateAgainstLatest({
-    deploymentRef,
+    deployment,
     githubLatestTag,
     latest,
     newestTag,
@@ -263,7 +268,13 @@ export function checkReleaseAlignment({
     );
   }
 
-  return { aligned: failures.length === 0, failures, rows };
+  const unanswered = rows.filter((row) => row.value === UNREADABLE).map((row) => row.source);
+  return { aligned: failures.length === 0, failures, rows, unanswered };
+}
+
+export function releaseAlignmentExitCode(result) {
+  if (result.aligned) return 0;
+  return result.unanswered.length > 0 ? 2 : 1;
 }
 
 export function printAlignmentReport(result, { log = console.log, logError = console.error } = {}) {
@@ -297,28 +308,38 @@ function realSeams() {
   };
 }
 
-function main() {
-  const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-  const manifest = readJsonFile(resolve(repoRoot, "package.json"));
-  const seams = realSeams();
-  const repository = resolveGithubRepository({ env: process.env, runGit: seams.runGit });
+export function runReleaseAlignment({
+  env,
+  manifest,
+  seams,
+  log = console.log,
+  logError = console.error,
+}) {
+  const repository = resolveGithubRepository({ env, runGit: seams.runGit });
   if (repository === undefined) {
-    console.error("release-alignment: could not determine GitHub repository.");
-    process.exit(1);
+    logError("release-alignment: could not determine GitHub repository.");
+    return 2;
   }
   const result = checkReleaseAlignment({
     checkoutVersion: manifest.version,
     packageName: manifest.name,
-    registry: process.env.KEIKO_REGISTRY_URL ?? "https://registry.npmjs.org/",
+    registry: env.KEIKO_REGISTRY_URL ?? "https://registry.npmjs.org/",
     repository,
     runGh: seams.runGh,
     runGit: seams.runGit,
     runNpm: seams.runNpm,
+    ...(seams.readReleaseLine === undefined ? {} : { readReleaseLine: seams.readReleaseLine }),
   });
-  printAlignmentReport(result);
-  process.exit(result.aligned ? 0 : 1);
+  printAlignmentReport(result, { log, logError });
+  return releaseAlignmentExitCode(result);
 }
 
 if (isMainModule(import.meta.url)) {
-  main();
+  process.exit(
+    runReleaseAlignment({
+      env: process.env,
+      manifest: readJsonFile(resolve(moduleRoot, "package.json")),
+      seams: realSeams(),
+    }),
+  );
 }

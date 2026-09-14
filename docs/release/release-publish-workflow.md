@@ -522,4 +522,14 @@ npm run check:release-alignment
 It reads the checkout version, the newest `v*` tag, the GitHub Latest release, npm `latest`, and
 the newest `npm-publish` deployment ref, and passes only when the checkout equals npm `latest` or
 is exactly one patch/minor release ahead of it (a cut pending) and the other four sources all name
-that same version. An unreadable source counts as a divergence, never a pass.
+that same version. An unreadable source counts as a divergence, never a pass. The CLI exits 0 when
+aligned, 1 for a divergence every source answered, and 2 when a source could not answer at all (a
+failed command or unparseable output); an empty tag or deployment list is an answer, not an
+unreadable source.
+
+The `Release alignment` workflow (`.github/workflows/release-alignment.yml`) asks the same
+question every night and on manual dispatch, so a release left half-finished between two publishes
+no longer waits for someone to run the check by hand. A divergence files or updates one
+`Release alignment diverged` tracking issue and fails the lane; the first aligned run closes that
+issue. Exit 2 fails the lane without filing anything, because no alignment result exists. The lane
+only detects: finishing or repairing a release stays a maintainer action.

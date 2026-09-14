@@ -14,6 +14,8 @@ import {
   checkReleaseAlignment,
   declaredReleaseLine,
   printAlignmentReport,
+  releaseAlignmentExitCode,
+  runReleaseAlignment,
 } from "../check-release-alignment.mjs";
 
 const REPOSITORY = "oscharko-dev/Keiko";
@@ -236,12 +238,17 @@ describe("checkReleaseAlignment", () => {
     expect(result.failures).toContain("GitHub Latest release could not be read.");
   });
 
-  it("treats a missing npm-publish deployment as a divergence", () => {
+  it("treats a missing npm-publish deployment as a divergence the sources did answer", () => {
     const result = checkReleaseAlignment(
       alignedSeams({ runGh: ghFor({ deploymentRef: undefined, latestReleaseTag: "v0.3.15" }) }),
     );
     expect(result.aligned).toBe(false);
-    expect(result.failures).toContain("no npm-publish deployment could be read.");
+    expect(result.failures).toContain("no npm-publish deployment exists.");
+    expect(result.rows).toContainEqual({
+      source: "newest npm-publish deployment",
+      value: "(none)",
+    });
+    expect(result.unanswered).toEqual([]);
   });
 
   it("fails when a newer tag already exists even though every other source still agrees on npm latest", () => {
@@ -359,6 +366,98 @@ describe("checkReleaseAlignment", () => {
       source: "newest npm-publish deployment",
       value: "UNREADABLE",
     });
+  });
+});
+
+// The standing release-alignment lane files a public tracking issue for a divergence. A source that
+// could not answer at all (a failed command, unparseable output) is not a divergence anyone can act
+// on, so the CLI separates the two: 0 aligned, 1 diverged, 2 could not answer.
+describe("releaseAlignmentExitCode", () => {
+  it("exits 0 when every source agrees", () => {
+    const result = checkReleaseAlignment(alignedSeams());
+    expect(result.unanswered).toEqual([]);
+    expect(releaseAlignmentExitCode(result)).toBe(0);
+  });
+
+  it("exits 1 for a divergence every source answered", () => {
+    const result = checkReleaseAlignment(
+      alignedSeams({ runGh: ghFor({ deploymentRef: "v0.3.14", latestReleaseTag: "v0.3.15" }) }),
+    );
+    expect(result.unanswered).toEqual([]);
+    expect(releaseAlignmentExitCode(result)).toBe(1);
+  });
+
+  it("exits 1 for a half-finished release: a newer tag exists that npm latest does not name", () => {
+    const result = checkReleaseAlignment(
+      alignedSeams({ runGit: gitTags(["v0.3.15", "v1.0.0"]), checkoutVersion: "1.0.0" }),
+    );
+    expect(result.unanswered).toEqual([]);
+    expect(releaseAlignmentExitCode(result)).toBe(1);
+  });
+
+  it.each([
+    ["npm latest dist-tag", { runNpm: () => failed() }],
+    ["npm latest dist-tag", { runNpm: () => ({ error: new Error("spawn npm ENOENT") }) }],
+    ["npm latest dist-tag", { runNpm: () => ({ status: 0 }) }],
+    ["newest tag", { runGit: () => failed() }],
+    [
+      "GitHub Latest release",
+      { runGh: ghFor({ deploymentRef: "v0.3.15", latestReleaseTag: undefined }) },
+    ],
+  ])("exits 2 when %s could not answer", (source, overrides) => {
+    const result = checkReleaseAlignment(alignedSeams(overrides));
+    expect(result.unanswered).toEqual([source]);
+    expect(releaseAlignmentExitCode(result)).toBe(2);
+  });
+
+  it("exits 2 when the deployment list is not a list", () => {
+    const runGh = (args) =>
+      args[1].includes("/releases/latest")
+        ? ok(JSON.stringify({ tag_name: "v0.3.15" }))
+        : ok(JSON.stringify({ message: "not found" }));
+    const result = checkReleaseAlignment(alignedSeams({ runGh }));
+    expect(result.unanswered).toEqual(["newest npm-publish deployment"]);
+    expect(releaseAlignmentExitCode(result)).toBe(2);
+  });
+
+  it("prefers 2 over 1 when an unanswered source hides whether the rest diverge", () => {
+    const result = checkReleaseAlignment(
+      alignedSeams({ runGit: gitTags(["v0.3.15", "v1.0.0"]), runNpm: () => failed() }),
+    );
+    expect(releaseAlignmentExitCode(result)).toBe(2);
+  });
+});
+
+describe("runReleaseAlignment", () => {
+  it("prints the report and returns the exit code of the evaluated result", () => {
+    const log = collector();
+    const logError = collector();
+    const code = runReleaseAlignment({
+      env: { GITHUB_REPOSITORY: REPOSITORY },
+      manifest: { name: PACKAGE_NAME, version: "0.3.15" },
+      seams: alignedSeams({
+        runGh: ghFor({ deploymentRef: "v0.3.14", latestReleaseTag: "v0.3.15" }),
+      }),
+      log,
+      logError,
+    });
+    expect(code).toBe(1);
+    expect(logError.messages[0]).toBe("release-alignment: FAIL");
+  });
+
+  it("returns 2 when the repository cannot be determined", () => {
+    const logError = collector();
+    const code = runReleaseAlignment({
+      env: {},
+      manifest: { name: PACKAGE_NAME, version: "0.3.15" },
+      seams: alignedSeams({ runGit: () => failed() }),
+      log: collector(),
+      logError,
+    });
+    expect(code).toBe(2);
+    expect(logError.messages).toEqual([
+      "release-alignment: could not determine GitHub repository.",
+    ]);
   });
 });
 
