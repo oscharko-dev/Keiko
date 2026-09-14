@@ -1,5 +1,4 @@
 import {
-  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -9,9 +8,15 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
+
+import {
+  importGraphReachesDist,
+  providesBuiltPackages,
+  repositoryScriptsIn,
+} from "./workflow-script-graph.mjs";
 
 import {
   resolvePortableAssetsManifest,
@@ -40,47 +45,6 @@ function namedStep(job, name) {
   const step = job.steps.find((entry) => entry.name === name);
   if (step === undefined) throw new Error(`missing workflow step: ${name}`);
   return step;
-}
-
-const rootPackageScripts = JSON.parse(readFileSync("package.json", "utf8")).scripts;
-// A step provides packages/*/dist when it builds the packages itself or stages the product, which
-// runs `npm run build` on the way (stage-portable-runtime.mjs) before any later step can execute.
-const BUILT_PACKAGE_PROVIDERS = [
-  /\bnpm run build:packages\b/u,
-  /\bnpm run build\b(?!:)/u,
-  /\brun-portable-assets-stage\.mjs\b/u,
-];
-const RELATIVE_IMPORT =
-  /\b(?:import|export)\b[^;]*?\bfrom\s+["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)/gu;
-
-function providesBuiltPackages(step) {
-  const run = String(step.run ?? "");
-  return BUILT_PACKAGE_PROVIDERS.some((pattern) => pattern.test(run));
-}
-
-function repositoryScriptsIn(command) {
-  const scripts = [...command.matchAll(/\bnode ((?:scripts|native)\/[\w./-]+\.mjs)/gu)].map(
-    (match) => match[1],
-  );
-  for (const [, name] of command.matchAll(/\bnpm run ([\w:.-]+)/gu)) {
-    const script = rootPackageScripts[name];
-    if (typeof script === "string") scripts.push(...repositoryScriptsIn(script));
-  }
-  return scripts;
-}
-
-function importGraphReachesDist(entry, seen = new Set()) {
-  const file = resolve(entry);
-  if (seen.has(file) || !existsSync(file)) return false;
-  seen.add(file);
-  for (const match of readFileSync(file, "utf8").matchAll(RELATIVE_IMPORT)) {
-    const specifier = match[1] ?? match[2];
-    if (!specifier.startsWith(".")) continue;
-    const target = resolve(dirname(file), specifier);
-    if (target.split(/[\\/]/u).includes("dist")) return true;
-    if (!target.endsWith(".ts") && importGraphReachesDist(target, seen)) return true;
-  }
-  return false;
 }
 
 describe("portable release-trust workflow", () => {
@@ -237,7 +201,7 @@ describe("portable release-trust workflow", () => {
     // that already carries dist. This pin holds the job's provisioning, which that proof cannot see.
     for (const name of ["stage-linux-production", "qualify-linux-production"]) {
       const job = workflowJob(name);
-      const providerAt = job.steps.findIndex(providesBuiltPackages);
+      const providerAt = job.steps.findIndex((step) => providesBuiltPackages(step.run));
       job.steps.forEach((step, index) => {
         for (const script of repositoryScriptsIn(String(step.run ?? ""))) {
           if (!importGraphReachesDist(script)) continue;

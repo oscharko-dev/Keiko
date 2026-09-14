@@ -213,6 +213,11 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
           NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
         run: node scripts/resolve-release-portable-assets.mjs
+      - name: Build workspace packages
+        # --ignore-scripts builds nothing, and release-publish.mjs imports the portable release trust
+        # from @oscharko-dev/keiko-security's packages/*/dist. No publish ran after that import was
+        # added, so this job would have died with ERR_MODULE_NOT_FOUND after the npm-publish approval.
+        run: npm run build:packages
       - name: Publish package
         # No NODE_AUTH_TOKEN/NPM_TOKEN here by design: this job authenticates to the npm
         # registry via OIDC trusted publishing (id-token: write above), scoped to this exact
