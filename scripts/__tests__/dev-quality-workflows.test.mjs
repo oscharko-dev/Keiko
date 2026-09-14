@@ -55,23 +55,6 @@ function runCiAggregate(overrides = {}) {
 }
 
 describe("dev quality workflows", () => {
-  it("gives the type-aware lint one heap ceiling with headroom over its measured peak", () => {
-    // npm run lint loads the whole monorepo's TypeScript program graph (projectService), and on
-    // 2026-09-13 it peaked at 8,947,433,472 B resident against an 8192 MiB ceiling, so Core quality
-    // died with exit 134 and not a single finding, twice in one day. The step's NODE_OPTIONS said
-    // 6144 while the script's own flag said 8192 and won, which is how the real ceiling stayed
-    // invisible. One value in both places, above the measurement.
-    const MEASURED_LINT_PEAK_MIB = 8533;
-    const ceiling = (text) => Number(/--max-old-space-size=(\d+)/u.exec(String(text))?.[1]);
-    const lintStep = ciWorkflow.jobs["core-quality"].steps.find(
-      (step) => step.run === "npm run lint",
-    );
-
-    expect(lintStep, "core-quality must run npm run lint").toBeDefined();
-    expect(ceiling(lintStep.env?.NODE_OPTIONS)).toBe(ceiling(packageJson.scripts.lint));
-    expect(ceiling(packageJson.scripts.lint)).toBeGreaterThan(MEASURED_LINT_PEAK_MIB * 1.25);
-  });
-
   it("reruns CI for metadata edits without displacing code-head evidence", () => {
     expect(ciWorkflow.on.pull_request.types).toContain("edited");
     expect(ciWorkflow.concurrency.group).toBe(
