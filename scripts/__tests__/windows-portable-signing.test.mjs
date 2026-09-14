@@ -330,6 +330,8 @@ describe("Windows portable PE signing inventory", () => {
           artifact: { platformTarget: "windows-x64" },
           runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
           security: { verificationStatus: "verified-production" },
+          // runtimeActivationManifest emits nativeAddons unconditionally (#3455).
+          nativeAddons: [],
           nativeHelpers: [
             {
               name: "keiko-runtime-supervisor",

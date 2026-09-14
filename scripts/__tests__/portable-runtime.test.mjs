@@ -17,6 +17,9 @@ import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { qualificationReceiptFor as linuxQualificationReceiptFor } from "../qualify-linux-runtime-release.mjs";
+import { qualificationReceiptFor as macosQualificationReceiptFor } from "../qualify-macos-runtime-release.mjs";
+
 import {
   hashDirectoryTree,
   PORTABLE_MANIFEST_VALIDATION_CONTEXTS,
@@ -654,6 +657,13 @@ function syncReviewedBinding(candidate) {
       JSON.stringify(candidate.nativeHelpers),
     );
   }
+  // The contract binds nativeAddons the same way it binds nativeHelpers; mirroring only the
+  // helpers left a production candidate carrying an addon it had never reviewed.
+  if (Array.isArray(candidate.nativeAddons)) {
+    candidate.releaseImpact.reviewedBinding.nativeAddons = JSON.parse(
+      JSON.stringify(candidate.nativeAddons),
+    );
+  }
   if (candidate.runtimeAttestation === undefined) {
     delete candidate.releaseImpact.reviewedBinding.runtimeAttestation;
   } else {
@@ -908,31 +918,88 @@ function rebindAssemblerSidecar(sidecar, sidecarRoot, executablePath) {
     statSync(join(sidecarRoot, "evidence", "sbom.cdx.json")).size;
 }
 
+// Derived from the producer that writes the receipt, never restated. The old copy pinned
+// schemaVersion 1 without runtimeComponents while the Linux producer moved to schemaVersion 2 in
+// #3455, so it kept the assembler tests green over a consumer that rejected every stable Linux
+// bundle. Deriving makes the next shape change fail here instead of in a release.
 function writeAssemblerQualificationFixture(candidate, target, resourceRoot) {
   if (target.nodePlatform !== "darwin" && target.nodePlatform !== "linux") return;
-  const helpers = new Map(candidate.nativeHelpers.map((helper) => [helper.name, helper]));
-  const qualificationBytes = `${JSON.stringify(
-    {
-      schemaVersion: 1,
-      suiteVersion: "runtime-tree-qualification-v1",
-      platformTarget: target.platformTarget,
-      sourceCommitSha: candidate.release.commitSha,
-      activationManifestSha256: candidate.runtimeActivation.sha256,
-      supervisorSha256: helpers.get("keiko-runtime-supervisor").shippedSha256,
-      secureReadSha256: helpers.get("keiko-secure-workspace-read").shippedSha256,
-      sidecars: candidate.sidecarRuntimes.map((sidecar) => ({
-        name: sidecar.name,
-        sha256: sidecar.payloadSha256,
-      })),
-      backend:
-        target.nodePlatform === "linux" ? "linux-namespace-gateway" : "macos-endpoint-security",
-      result: "passed",
-    },
-    null,
-    2,
-  )}\n`;
+  // Mirrors the consumer: assemble reads this receipt only for a production-lane artifact, and
+  // the producers refuse an activation manifest that is not verified-production.
+  if (candidate.security.verificationPolicy !== "production") return;
+  writeQualificationRuntimeComponents(candidate, target, resourceRoot);
+  const input = {
+    activationPath: join(resourceRoot, ".portable", "runtime-activation.json"),
+    resourceRoot,
+    sourceCommitSha: candidate.release.commitSha,
+  };
+  const receipt =
+    target.nodePlatform === "linux"
+      ? linuxQualificationReceiptFor(input)
+      : macosQualificationReceiptFor({ ...input, target: target.platformTarget });
+  const qualificationBytes = `${JSON.stringify(receipt, null, 2)}\n`;
   writeFileSync(join(resourceRoot, ".portable", "runtime-qualification.json"), qualificationBytes);
   candidate.runtimeQualification.sha256 = digestFor(qualificationBytes);
+}
+
+// The Linux receipt digests the primary launcher, the Node runtime and the USearch addon straight
+// off the tree (RUNTIME_COMPONENTS + usearchComponent), so the fixture has to ship them as real
+// files. fileDigest refuses a symlink, a hard link or an empty file.
+function writeQualificationRuntimeComponents(candidate, target, resourceRoot) {
+  if (target.nodePlatform !== "linux") return;
+  for (const relativePath of ["Keiko", "runtime/node/bin/node"]) {
+    const path = join(resourceRoot, ...relativePath.split("/"));
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `fixture ${relativePath} for ${target.platformTarget}\n`);
+  }
+  const [addon] = writeUsearchAddonFixture(target, resourceRoot);
+  // writeUsearchAddonFixture records the APPROVED upstream digest, which is what the staging
+  // provenance tests need. The qualification receipt digests the bytes actually on disk, so the
+  // shipped digest has to describe the fixture file. source.binarySha256 keeps the approval.
+  const addonPath = join(resourceRoot, ...addon.executablePath.split("/"));
+  addon.shippedSha256 = digestFor(readFileSync(addonPath));
+  addon.unsignedSha256 = addon.shippedSha256;
+  addon.sizeBytes = statSync(addonPath).size;
+  // The addon joins a production-lane candidate, so its signing state follows the candidate the
+  // way syncNativeHelperVerification does it for the native helpers, and the reviewed binding is
+  // re-synced before the activation manifest is regenerated from it.
+  addon.signing.signatureKind = target.signatureKind;
+  addon.signing.verificationStatus = candidate.security.verificationStatus;
+  addon.signing.signatureVerified = candidate.security.signatureVerified;
+  addon.signing.notarizationRequired = candidate.security.notarizationRequired;
+  addon.signing.notarizationVerified = candidate.security.notarizationVerified;
+  candidate.nativeAddons = [addon];
+  syncReviewedBinding(candidate);
+  candidate.runtimeActivation.sha256 = refreshAssemblerActivationFixture(candidate, resourceRoot);
+}
+
+// nativeAddons is part of the activation manifest, so adding the addon moves the activation bytes
+// and their digest with it.
+function refreshAssemblerActivationFixture(candidate, resourceRoot) {
+  const activationPath = join(resourceRoot, ".portable", "runtime-activation.json");
+  const activationBytes = `${JSON.stringify(runtimeActivationManifest(candidate), null, 2)}\n`;
+  writeFileSync(activationPath, activationBytes);
+  return digestFor(activationBytes);
+}
+
+// A stable-tag build stages every target as a release-trust candidate; markProduction then signs Linux
+// into the production lane and flips only the platform-signature predicate, so Linux keeps the
+// release-build update eligibility the other targets carry.
+function applyReleaseBuildEligibility(candidate) {
+  candidate.updateEligibility.requiredPredicates.releaseTrustRequired = true;
+  candidate.updateEligibility.manualOnlyWhen = candidate.updateEligibility.manualOnlyWhen.map(
+    (reason) =>
+      reason === "signature-or-notarization-cannot-be-verified"
+        ? "release-trust-cannot-be-verified"
+        : reason,
+  );
+}
+
+function stableLaneCandidate(target) {
+  if (target.nodePlatform !== "linux") return assemblerCandidate(target, true);
+  const candidate = assemblerCandidate(target, false);
+  applyReleaseBuildEligibility(candidate);
+  return candidate;
 }
 
 function assemblerCandidate(target, evaluation) {
@@ -958,11 +1025,16 @@ function assemblerArchiveSize(index, largeArchive) {
   return largeArchive && index === 0 ? 17 * 1024 * 1024 : 1;
 }
 
+function assemblerFixtureCandidate(target, evaluation, stableLanes) {
+  return stableLanes ? stableLaneCandidate(target) : assemblerCandidate(target, evaluation);
+}
+
 function writeAssemblerFixture(
   bundleRoot,
   largeArchive = false,
   unsafeSidecarKind,
   evaluation = false,
+  stableLanes = false,
 ) {
   const artifactsRoot = join(bundleRoot, "artifacts");
   for (const [index, target] of PORTABLE_TARGETS.entries()) {
@@ -974,7 +1046,8 @@ function writeAssemblerFixture(
     if (target.platformTarget === "windows-x64") {
       writeFileSync(join(stageRoot, WINDOWS_PORTABLE_SETUP_ASSET_NAME), portableExecutable(42));
     }
-    const candidate = assemblerCandidate(target, evaluation);
+    const candidate = assemblerFixtureCandidate(target, evaluation, stableLanes);
+    const targetEvaluation = candidate.security.verificationPolicy === "evaluation";
     candidate.release.releaseId = 0;
     candidate.artifact.assetId = 0;
     candidate.artifact.sizeBytes = statSync(archivePath).size;
@@ -992,7 +1065,7 @@ function writeAssemblerFixture(
     }
     writeAssemblerAttestationFixture(candidate, target, resourceRoot);
     const fixtureKind = index === 0 ? unsafeSidecarKind : undefined;
-    writeAssemblerSidecarFixture(candidate, target, resourceRoot, fixtureKind, evaluation);
+    writeAssemblerSidecarFixture(candidate, target, resourceRoot, fixtureKind, targetEvaluation);
     const activationPath = join(resourceRoot, ...candidate.runtimeActivation.path.split("/"));
     mkdirSync(dirname(activationPath), { recursive: true });
     const activationBytes = `${JSON.stringify(runtimeActivationManifest(candidate), null, 2)}\n`;
@@ -2333,6 +2406,57 @@ describe("validatePortableReleaseSet", () => {
     expect(validatePortableReleaseSet(candidateSet(), expected)).toEqual([]);
   });
 
+  function stableLaneSet() {
+    return candidateSet().map((candidate, index) => {
+      const target = PORTABLE_TARGETS[index];
+      if (target.nodePlatform !== "linux") return assemblerCandidate(target, true);
+      applyReleaseBuildEligibility(candidate);
+      syncReviewedBinding(candidate);
+      return candidate;
+    });
+  }
+
+  it("accepts the stable lanes: a production Linux target beside release-trust candidates", () => {
+    // Before, the release identity demanded one shared security state, so this set - the only
+    // shape a stable-tag run produces - could never assemble.
+    expect(validatePortableReleaseSet(stableLaneSet(), expected)).toEqual([]);
+  });
+
+  it.each([
+    [
+      "the release-impact entry",
+      (candidate) => {
+        candidate.releaseImpact.entryId = "2026-01-01-another-release";
+      },
+    ],
+    [
+      "a lane-independent update predicate",
+      (candidate) => {
+        candidate.updateEligibility.stableOnly = false;
+      },
+    ],
+  ])("still binds every stable lane to one release identity through %s", (_label, mutate) => {
+    const set = stableLaneSet();
+    mutate(set[1]);
+
+    expect(validatePortableReleaseSet(set, expected).join("\n")).toContain(
+      "portable targets do not share one release identity",
+    );
+  });
+
+  it("holds every non-Linux target to the production or release-trust lane", () => {
+    const set = candidateSet();
+    setVerificationState(set[1], {
+      verificationPolicy: "pull-request",
+      verificationReasonCodes: ["non-production-artifact"],
+      verificationStatus: "verified-non-production",
+    });
+
+    expect(validatePortableReleaseSet(set, expected).join("\n")).toContain(
+      "windows-x64.security.verificationPolicy must be production or evaluation in a stable release (pull-request)",
+    );
+  });
+
   it("rejects a verified non-production target during assembly qualification", () => {
     const set = candidateSet();
     setVerificationState(set[0], {
@@ -2421,6 +2545,31 @@ describe("validatePortableReleaseSet", () => {
   });
 });
 
+describe("portable qualification producers", () => {
+  it("keeps the macOS producer able to read the activation manifest it is handed", () => {
+    // runtimeActivationManifest always emits nativeAddons (#3455). The macOS producer's exactKeys
+    // list predates it, so it refused every real activation manifest.
+    const macos = readFileSync("scripts/qualify-macos-runtime-release.mjs", "utf8");
+    const emitted = Object.keys(
+      runtimeActivationManifest(setManifestTargetCopy("macos-arm64")),
+    ).sort();
+    const declared = macos
+      .slice(macos.indexOf("function activationIdentityIsValid"))
+      .match(/exactKeys\(activation, \[([\s\S]*?)\]\)/u)[1]
+      .match(/"([a-zA-Z]+)"/gu)
+      .map((key) => key.replaceAll('"', ""))
+      .sort();
+    expect(declared).toEqual(emitted);
+  });
+});
+
+function setManifestTargetCopy(platformTarget) {
+  const candidate = manifest();
+  setManifestTarget(candidate, platformTarget);
+  setVerificationState(candidate);
+  return candidate;
+}
+
 describe("assemblePortableReleaseAssets bounds", () => {
   const args = (bundleRoot) => [
     "--bundle-root",
@@ -2458,12 +2607,88 @@ describe("assemblePortableReleaseAssets bounds", () => {
   });
 
   it("assembles evaluation helpers under the manifest-level trust policy", async () => {
+    // The stable lanes as a stable-tag run produces them: the three release-trust candidates carry
+    // the evaluation helpers this pins, and Linux is the production-signed target. An all-evaluation
+    // set is no longer a stable release - see the Linux lane test below.
     const bundleRoot = tempDir();
-    writeAssemblerFixture(bundleRoot, false, undefined, true);
+    writeAssemblerFixture(bundleRoot, false, undefined, false, true);
 
     await expect(assemblePortableReleaseAssets(args(bundleRoot))).resolves.toMatchObject({
       schemaVersion: 1,
     });
+  });
+
+  const linuxStage = (bundleRoot) => join(bundleRoot, "artifacts", "portable-stage-linux-x64");
+  const readStagedManifest = (stageRoot) =>
+    JSON.parse(readFileSync(join(stageRoot, "manifest", "portable-manifest.json"), "utf8"));
+  const writeStagedManifest = (stageRoot, value) =>
+    writeFileSync(
+      join(stageRoot, "manifest", "portable-manifest.json"),
+      `${JSON.stringify(value, null, 2)}\n`,
+    );
+
+  it("refuses a stable release whose Linux target is only a release-trust candidate", async () => {
+    // The runtime qualification evidence is asserted for non-evaluation artifacts only, so a Linux
+    // release-trust candidate would ship without it. It passed before, as an all-evaluation set.
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot, false, undefined, true);
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).rejects.toThrow(
+      "linux-x64.security.verificationPolicy must be production in a stable release (evaluation)",
+    );
+  });
+
+  it("fails closed when a production Linux target carries no qualification binding", async () => {
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot, false, undefined, false, true);
+    const stageRoot = linuxStage(bundleRoot);
+    const staged = readStagedManifest(stageRoot);
+    delete staged.runtimeQualification;
+    writeStagedManifest(stageRoot, staged);
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).rejects.toThrow(
+      "linux-x64 production artifact carries no runtime qualification binding",
+    );
+  });
+
+  it("rejects a production Linux receipt that restates an older receipt shape", async () => {
+    // The consumer used to hold a schemaVersion 1 copy of this receipt while the producer emitted
+    // schemaVersion 2 with runtimeComponents. Rebind the digest so only the shape is wrong.
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot, false, undefined, false, true);
+    const stageRoot = linuxStage(bundleRoot);
+    const receiptPath = join(
+      stageRoot,
+      "payload",
+      "Keiko",
+      ".portable",
+      "runtime-qualification.json",
+    );
+    const { runtimeComponents, ...stale } = JSON.parse(readFileSync(receiptPath, "utf8"));
+    expect(runtimeComponents.length).toBeGreaterThan(0);
+    const staleBytes = `${JSON.stringify({ ...stale, schemaVersion: 1 }, null, 2)}\n`;
+    writeFileSync(receiptPath, staleBytes);
+    const staged = readStagedManifest(stageRoot);
+    staged.runtimeQualification.sha256 = digestFor(staleBytes);
+    staged.releaseImpact.reviewedBinding.runtimeQualification.sha256 = digestFor(staleBytes);
+    writeStagedManifest(stageRoot, staged);
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).rejects.toThrow(
+      "linux-x64 runtime qualification binding is invalid",
+    );
+  });
+
+  it("fails closed when a production Windows target carries no attestation binding", async () => {
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot);
+    const stageRoot = join(bundleRoot, "artifacts", "portable-stage-windows-x64");
+    const staged = readStagedManifest(stageRoot);
+    delete staged.runtimeAttestation;
+    writeStagedManifest(stageRoot, staged);
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).rejects.toThrow(
+      "windows-x64 production artifact carries no runtime attestation binding",
+    );
   });
 
   it("records setup metadata from the copied companion bytes", async () => {
