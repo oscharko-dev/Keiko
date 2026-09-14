@@ -1,13 +1,14 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { parse } from "yaml";
 
 // One answer, shared by the workflow guard tests, to "which repository scripts does a workflow step
 // run, does their import graph load built workspace output, and does an earlier step build it".
 
+// Named and namespace forms, dynamic import(), and the bare side-effect form `import "x";`.
 const IMPORT_STATEMENT =
-  /\b(?:import|export)\b([^;]*?)\bfrom\s+["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)/gu;
+  /\b(?:import|export)\b([^;]*?)\bfrom\s+["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)|\bimport\s*["']([^"']+)["']/gu;
 const WORKSPACE_SPECIFIER = /^(@[^/]+\/[^/]+)(\/.+)?$/u;
 // A step provides packages/*/dist when it builds the packages itself or stages the product, which
 // runs `npm run build` on the way (stage-portable-runtime.mjs) before any later step can execute.
@@ -51,6 +52,15 @@ function isRegularFile(path) {
   return existsSync(path) && statSync(path).isFile();
 }
 
+// An unreadable manifest must stop the walk: skipping it would hide every import of that package.
+function readWorkspaceManifest(manifestPath) {
+  try {
+    return JSON.parse(readFileSync(manifestPath, "utf8"));
+  } catch {
+    throw new Error(`unreadable workspace manifest: ${manifestPath}`);
+  }
+}
+
 function workspacePackages(root) {
   const packages = new Map();
   const packagesDir = join(root, "packages");
@@ -58,7 +68,7 @@ function workspacePackages(root) {
   for (const dir of readdirSync(packagesDir)) {
     const manifestPath = join(packagesDir, dir, "package.json");
     if (!isRegularFile(manifestPath)) continue;
-    const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+    const manifest = readWorkspaceManifest(manifestPath);
     packages.set(manifest.name, { dir: join(packagesDir, dir), manifest });
   }
   return packages;
@@ -84,24 +94,44 @@ function wildcardExportTarget(exports, subpath) {
   return undefined;
 }
 
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+// Without "exports", node loads subpaths from the package root and the root from "main".
+function legacyTarget(manifest, subpath) {
+  if (subpath !== ".") return subpath;
+  if (manifest.main === undefined) return "index.js";
+  return typeof manifest.main === "string" ? manifest.main : undefined;
+}
+
 function exportTarget(manifest, subpath) {
   const { exports } = manifest;
-  if (exports === undefined) return subpath === "." ? (manifest.main ?? "index.js") : subpath;
+  if (exports === undefined) return legacyTarget(manifest, subpath);
   if (typeof exports === "string") return subpath === "." ? exports : undefined;
-  if (exports[subpath] !== undefined) return conditionTarget(exports[subpath]);
-  return wildcardExportTarget(exports, subpath);
+  if (!isPlainObject(exports)) return undefined;
+  return exports[subpath] === undefined
+    ? wildcardExportTarget(exports, subpath)
+    : conditionTarget(exports[subpath]);
+}
+
+function isInside(root, path) {
+  const offset = relative(root, path);
+  return offset === "" || (!offset.startsWith("..") && !isAbsolute(offset));
 }
 
 // Where node would load a workspace package specifier from, or undefined for any other package.
-// A workspace export node cannot resolve counts as built output: it cannot load without a build.
+// A workspace import that resolves to no file inside its package cannot be proven to load without
+// a build, so it counts as built output and the provisioning pin fails closed.
 function workspaceImportTarget(specifier, packages) {
   const match = WORKSPACE_SPECIFIER.exec(specifier);
   const workspace = match === null ? undefined : packages.get(match[1]);
   if (workspace === undefined) return undefined;
   const target = exportTarget(workspace.manifest, `.${match[2] ?? ""}`);
-  return target === undefined
-    ? join(workspace.dir, "dist", "(unexported)")
-    : resolve(workspace.dir, target);
+  const resolved = typeof target === "string" ? resolve(workspace.dir, target) : undefined;
+  return resolved !== undefined && isInside(workspace.dir, resolved)
+    ? resolved
+    : join(workspace.dir, "dist", "(unresolvable)");
 }
 
 function isBuiltOutput(path) {
@@ -113,7 +143,7 @@ function runtimeImportTargets(file, packages) {
   const targets = [];
   for (const match of readFileSync(file, "utf8").matchAll(IMPORT_STATEMENT)) {
     if (/^\s*type\b/u.test(match[1] ?? "")) continue;
-    const specifier = match[2] ?? match[3];
+    const specifier = match[2] ?? match[3] ?? match[4];
     const target = specifier.startsWith(".")
       ? resolve(dirname(file), specifier)
       : workspaceImportTarget(specifier, packages);

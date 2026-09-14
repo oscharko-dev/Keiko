@@ -91,6 +91,7 @@ describe("the import walk and build detection the pin relies on", () => {
     ["a workspace wildcard export", 'import { c } from "@scope/contracts/schemas/task";\n'],
     ["a workspace root export", 'export { d } from "@scope/contracts";\n'],
     ["a dynamic workspace import", 'await import("@scope/contracts");\n'],
+    ["a side-effect workspace import", 'import "@scope/contracts";\n'],
     ["an unexported workspace subpath", 'import { e } from "@scope/contracts/internal";\n'],
   ])("reaches built output through %s", (_shape, source) => {
     const root = fixture({ ...contracts, "scripts/entry.mjs": source });
@@ -112,6 +113,37 @@ describe("the import walk and build detection the pin relies on", () => {
     });
 
     expect(importGraphReachesDist("scripts/entry.mjs", root)).toBe(true);
+  });
+
+  it.each([
+    ["null exports", { exports: null }, "@scope/bad"],
+    ["non-object exports", { exports: 42 }, "@scope/bad"],
+    ["an array of export targets", { exports: ["./dist/a.js"] }, "@scope/bad"],
+    ["a non-string condition", { exports: { "./x": 42 } }, "@scope/bad/x"],
+    ["a non-string main", { main: 42 }, "@scope/bad"],
+    ["a subpath that leaves the package", {}, "@scope/bad/../../outside.mjs"],
+  ])("fails closed on %s", (_shape, manifest, specifier) => {
+    // Metadata the walk cannot resolve to a file inside the package must not read as "no build
+    // needed": it counts as built output, so the provisioning pin demands a build.
+    const root = fixture({
+      "packages/bad/package.json": { name: "@scope/bad", ...manifest },
+      "outside.mjs": "export const outside = 1;\n",
+      "scripts/entry.mjs": `import { a } from "${specifier}";\n`,
+    });
+
+    expect(importGraphReachesDist("scripts/entry.mjs", root)).toBe(true);
+  });
+
+  it("names an unreadable workspace manifest instead of skipping its package", () => {
+    const root = fixture({
+      "packages/bad/package.json": "{ not json",
+      "scripts/entry.mjs": 'import { a } from "./a.mjs";\n',
+      "scripts/a.mjs": "export const a = 1;\n",
+    });
+
+    expect(() => importGraphReachesDist("scripts/entry.mjs", root)).toThrow(
+      /unreadable workspace manifest: .*packages[\\/]bad[\\/]package\.json/u,
+    );
   });
 
   it("follows a script into a TypeScript source that imports a workspace package", () => {
