@@ -977,6 +977,26 @@ function refreshAssemblerActivationFixture(candidate, resourceRoot) {
   return digestFor(activationBytes);
 }
 
+// A stable-tag build stages every target as a release-trust candidate; markProduction then signs Linux
+// into the production lane and flips only the platform-signature predicate, so Linux keeps the
+// release-build update eligibility the other targets carry.
+function applyReleaseBuildEligibility(candidate) {
+  candidate.updateEligibility.requiredPredicates.releaseTrustRequired = true;
+  candidate.updateEligibility.manualOnlyWhen = candidate.updateEligibility.manualOnlyWhen.map(
+    (reason) =>
+      reason === "signature-or-notarization-cannot-be-verified"
+        ? "release-trust-cannot-be-verified"
+        : reason,
+  );
+}
+
+function stableLaneCandidate(target) {
+  if (target.nodePlatform !== "linux") return assemblerCandidate(target, true);
+  const candidate = assemblerCandidate(target, false);
+  applyReleaseBuildEligibility(candidate);
+  return candidate;
+}
+
 function assemblerCandidate(target, evaluation) {
   if (evaluation) {
     const candidate = evaluationManifest(target.platformTarget);
@@ -1000,11 +1020,16 @@ function assemblerArchiveSize(index, largeArchive) {
   return largeArchive && index === 0 ? 17 * 1024 * 1024 : 1;
 }
 
+function assemblerFixtureCandidate(target, evaluation, stableLanes) {
+  return stableLanes ? stableLaneCandidate(target) : assemblerCandidate(target, evaluation);
+}
+
 function writeAssemblerFixture(
   bundleRoot,
   largeArchive = false,
   unsafeSidecarKind,
   evaluation = false,
+  stableLanes = false,
 ) {
   const artifactsRoot = join(bundleRoot, "artifacts");
   for (const [index, target] of PORTABLE_TARGETS.entries()) {
@@ -1016,7 +1041,8 @@ function writeAssemblerFixture(
     if (target.platformTarget === "windows-x64") {
       writeFileSync(join(stageRoot, WINDOWS_PORTABLE_SETUP_ASSET_NAME), portableExecutable(42));
     }
-    const candidate = assemblerCandidate(target, evaluation);
+    const candidate = assemblerFixtureCandidate(target, evaluation, stableLanes);
+    const targetEvaluation = candidate.security.verificationPolicy === "evaluation";
     candidate.release.releaseId = 0;
     candidate.artifact.assetId = 0;
     candidate.artifact.sizeBytes = statSync(archivePath).size;
@@ -1034,7 +1060,7 @@ function writeAssemblerFixture(
     }
     writeAssemblerAttestationFixture(candidate, target, resourceRoot);
     const fixtureKind = index === 0 ? unsafeSidecarKind : undefined;
-    writeAssemblerSidecarFixture(candidate, target, resourceRoot, fixtureKind, evaluation);
+    writeAssemblerSidecarFixture(candidate, target, resourceRoot, fixtureKind, targetEvaluation);
     const activationPath = join(resourceRoot, ...candidate.runtimeActivation.path.split("/"));
     mkdirSync(dirname(activationPath), { recursive: true });
     const activationBytes = `${JSON.stringify(runtimeActivationManifest(candidate), null, 2)}\n`;
@@ -2375,6 +2401,57 @@ describe("validatePortableReleaseSet", () => {
     expect(validatePortableReleaseSet(candidateSet(), expected)).toEqual([]);
   });
 
+  function stableLaneSet() {
+    return candidateSet().map((candidate, index) => {
+      const target = PORTABLE_TARGETS[index];
+      if (target.nodePlatform !== "linux") return assemblerCandidate(target, true);
+      applyReleaseBuildEligibility(candidate);
+      syncReviewedBinding(candidate);
+      return candidate;
+    });
+  }
+
+  it("accepts the stable lanes: a production Linux target beside release-trust candidates", () => {
+    // Before, the release identity demanded one shared security state, so this set - the only
+    // shape a stable-tag run produces - could never assemble.
+    expect(validatePortableReleaseSet(stableLaneSet(), expected)).toEqual([]);
+  });
+
+  it.each([
+    [
+      "the release-impact entry",
+      (candidate) => {
+        candidate.releaseImpact.entryId = "2026-01-01-another-release";
+      },
+    ],
+    [
+      "a lane-independent update predicate",
+      (candidate) => {
+        candidate.updateEligibility.stableOnly = false;
+      },
+    ],
+  ])("still binds every stable lane to one release identity through %s", (_label, mutate) => {
+    const set = stableLaneSet();
+    mutate(set[1]);
+
+    expect(validatePortableReleaseSet(set, expected).join("\n")).toContain(
+      "portable targets do not share one release identity",
+    );
+  });
+
+  it("holds every non-Linux target to the production or release-trust lane", () => {
+    const set = candidateSet();
+    setVerificationState(set[1], {
+      verificationPolicy: "pull-request",
+      verificationReasonCodes: ["non-production-artifact"],
+      verificationStatus: "verified-non-production",
+    });
+
+    expect(validatePortableReleaseSet(set, expected).join("\n")).toContain(
+      "windows-x64.security.verificationPolicy must be production or evaluation in a stable release (pull-request)",
+    );
+  });
+
   it("rejects a verified non-production target during assembly qualification", () => {
     const set = candidateSet();
     setVerificationState(set[0], {
@@ -2383,14 +2460,8 @@ describe("validatePortableReleaseSet", () => {
       verificationStatus: "verified-non-production",
     });
 
-    // Still rejected, and now for a broader reason: the set is validated against the lane the
-    // manifest declares, so a pull-request policy is refused outright as an unstageable lane
-    // instead of reaching the candidate contract and failing one of its sub-checks. The invariant
-    // this pin guards -- a verified non-production target never assembles -- is unchanged.
-    const failures = validatePortableReleaseSet(set, expected);
-    expect(failures).not.toEqual([]);
-    expect(failures.join("\n")).toContain(
-      "security.verificationPolicy: declares no stageable lifecycle lane (pull-request)",
+    expect(validatePortableReleaseSet(set, expected).join("\n")).toContain(
+      "verification must match candidate lifecycle context",
     );
   });
 
@@ -2469,51 +2540,7 @@ describe("validatePortableReleaseSet", () => {
   });
 });
 
-describe("assembly evidence follows the declared lane", () => {
-  const source = readFileSync("scripts/assemble-portable-release-assets.mjs", "utf8");
-  const publish = readFileSync("scripts/release-publish.mjs", "utf8");
-
-  it("asks the manifest which lane it declares instead of the binary evaluation question", () => {
-    // Both consumers used "evaluation ? release-trust : candidate" from #2261, which held every
-    // staging-lane artifact to the production contract. macOS and Windows are staged unsigned by
-    // design, so the stable four-target lane could never assemble. #3019 added the declared-lane
-    // helper and three other consumers migrated; these two did not, and it went unnoticed because
-    // assemble had never executed.
-    for (const [name, text] of [
-      ["assemble-portable-release-assets.mjs", source],
-      ["release-publish.mjs", publish],
-    ]) {
-      expect(text, `${name} must ask the manifest for its lane`).toContain(
-        "portableManifestValidationFailuresForDeclaredLane(manifest)",
-      );
-      expect(text, `${name} must not restate the binary lane question`).not.toMatch(
-        /verificationPolicy === "evaluation"\s*\n?\s*\?\s*validatePortableReleaseTrustCandidateManifest/u,
-      );
-    }
-  });
-
-  it("reads production-only evidence only from a production-lane artifact", () => {
-    // runtimeQualification and runtimeAttestation are written by the signing and qualification
-    // producers alone. Gating on "not evaluation" demanded them from staging artifacts too.
-    expect(source).toContain('manifest.security.verificationPolicy !== "production"');
-    expect(source).not.toContain('manifest.security.verificationPolicy === "evaluation") return;');
-  });
-
-  it("names a missing binding instead of dereferencing undefined", () => {
-    expect(source).toContain("carries no runtime qualification binding");
-    expect(source).toContain("carries no runtime attestation binding");
-  });
-
-  it("derives the expected qualification receipt from the owning producer", () => {
-    // The consumer kept a schemaVersion 1 copy of a receipt the Linux producer moved to
-    // schemaVersion 2 with runtimeComponents in #3455, so isDeepStrictEqual failed on every stable
-    // Linux bundle. AGENTS.md section 7: derive from the production entry point, never restate.
-    expect(source).toContain("qualificationReceiptFor as linuxQualificationReceiptFor");
-    expect(source).toContain("qualificationReceiptFor as macosQualificationReceiptFor");
-    expect(source).not.toMatch(/suiteVersion:\s*"runtime-tree-qualification-v1"/u);
-    expect(source).not.toMatch(/schemaVersion:\s*1,\s*\n\s*suiteVersion:/u);
-  });
-
+describe("portable qualification producers", () => {
   it("keeps the macOS producer able to read the activation manifest it is handed", () => {
     // runtimeActivationManifest always emits nativeAddons (#3455). The macOS producer's exactKeys
     // list predates it, so it refused every real activation manifest.
@@ -2575,12 +2602,88 @@ describe("assemblePortableReleaseAssets bounds", () => {
   });
 
   it("assembles evaluation helpers under the manifest-level trust policy", async () => {
+    // The stable lanes as a stable-tag run produces them: the three release-trust candidates carry
+    // the evaluation helpers this pins, and Linux is the production-signed target. An all-evaluation
+    // set is no longer a stable release - see the Linux lane test below.
     const bundleRoot = tempDir();
-    writeAssemblerFixture(bundleRoot, false, undefined, true);
+    writeAssemblerFixture(bundleRoot, false, undefined, false, true);
 
     await expect(assemblePortableReleaseAssets(args(bundleRoot))).resolves.toMatchObject({
       schemaVersion: 1,
     });
+  });
+
+  const linuxStage = (bundleRoot) => join(bundleRoot, "artifacts", "portable-stage-linux-x64");
+  const readStagedManifest = (stageRoot) =>
+    JSON.parse(readFileSync(join(stageRoot, "manifest", "portable-manifest.json"), "utf8"));
+  const writeStagedManifest = (stageRoot, value) =>
+    writeFileSync(
+      join(stageRoot, "manifest", "portable-manifest.json"),
+      `${JSON.stringify(value, null, 2)}\n`,
+    );
+
+  it("refuses a stable release whose Linux target is only a release-trust candidate", async () => {
+    // The runtime qualification evidence is asserted for non-evaluation artifacts only, so a Linux
+    // release-trust candidate would ship without it. It passed before, as an all-evaluation set.
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot, false, undefined, true);
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).rejects.toThrow(
+      "linux-x64.security.verificationPolicy must be production in a stable release (evaluation)",
+    );
+  });
+
+  it("fails closed when a production Linux target carries no qualification binding", async () => {
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot, false, undefined, false, true);
+    const stageRoot = linuxStage(bundleRoot);
+    const staged = readStagedManifest(stageRoot);
+    delete staged.runtimeQualification;
+    writeStagedManifest(stageRoot, staged);
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).rejects.toThrow(
+      "linux-x64 production artifact carries no runtime qualification binding",
+    );
+  });
+
+  it("rejects a production Linux receipt that restates an older receipt shape", async () => {
+    // The consumer used to hold a schemaVersion 1 copy of this receipt while the producer emitted
+    // schemaVersion 2 with runtimeComponents. Rebind the digest so only the shape is wrong.
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot, false, undefined, false, true);
+    const stageRoot = linuxStage(bundleRoot);
+    const receiptPath = join(
+      stageRoot,
+      "payload",
+      "Keiko",
+      ".portable",
+      "runtime-qualification.json",
+    );
+    const { runtimeComponents, ...stale } = JSON.parse(readFileSync(receiptPath, "utf8"));
+    expect(runtimeComponents.length).toBeGreaterThan(0);
+    const staleBytes = `${JSON.stringify({ ...stale, schemaVersion: 1 }, null, 2)}\n`;
+    writeFileSync(receiptPath, staleBytes);
+    const staged = readStagedManifest(stageRoot);
+    staged.runtimeQualification.sha256 = digestFor(staleBytes);
+    staged.releaseImpact.reviewedBinding.runtimeQualification.sha256 = digestFor(staleBytes);
+    writeStagedManifest(stageRoot, staged);
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).rejects.toThrow(
+      "linux-x64 runtime qualification binding is invalid",
+    );
+  });
+
+  it("fails closed when a production Windows target carries no attestation binding", async () => {
+    const bundleRoot = tempDir();
+    writeAssemblerFixture(bundleRoot);
+    const stageRoot = join(bundleRoot, "artifacts", "portable-stage-windows-x64");
+    const staged = readStagedManifest(stageRoot);
+    delete staged.runtimeAttestation;
+    writeStagedManifest(stageRoot, staged);
+
+    await expect(assemblePortableReleaseAssets(args(bundleRoot))).rejects.toThrow(
+      "windows-x64 production artifact carries no runtime attestation binding",
+    );
   });
 
   it("records setup metadata from the copied companion bytes", async () => {

@@ -115,6 +115,9 @@ function activationIdentityIsValid(activation, target, sourceCommitSha) {
       "sidecarRuntimes",
       "releaseImpact",
     ]) &&
+    // exactKeys only proves the key is present. Without this an activation manifest could
+    // declare nativeAddons: null or an object and still receive a qualification receipt.
+    Array.isArray(activation.nativeAddons) &&
     activation.schemaVersion === 1 &&
     activation.suiteVersion === RUNTIME_QUALIFICATION_SUITE &&
     activation.platformTarget === target &&

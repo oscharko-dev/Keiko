@@ -164,6 +164,30 @@ describe("macOS runtime qualification", () => {
     qualifyMacosRuntimeRelease({ ...options, "verify-only": "true" }, deps);
   });
 
+  it.each([
+    ["null", null],
+    ["an object", { usearch: {} }],
+    ["a string", "usearch"],
+    ["absent", undefined],
+  ])("refuses an activation manifest whose nativeAddons is %s", (_label, value) => {
+    // exactKeys only proves the key exists, so a malformed nativeAddons would otherwise receive a
+    // successful qualification receipt. The gate fails closed on every shape that is not an array.
+    const state = fixture();
+    const activation = { ...state.activation };
+    if (value === undefined) delete activation.nativeAddons;
+    else activation.nativeAddons = value;
+    writeFileSync(state.activationPath, `${JSON.stringify(activation)}\n`);
+
+    expect(() =>
+      qualificationReceiptFor({
+        activationPath: state.activationPath,
+        resourceRoot: state.resourceRoot,
+        target: state.target,
+        sourceCommitSha: COMMIT,
+      }),
+    ).toThrow("activation manifest is invalid");
+  });
+
   it("rejects incomplete identity, approval, verification mode, and stale receipts", () => {
     const value = fixture();
     const base = {

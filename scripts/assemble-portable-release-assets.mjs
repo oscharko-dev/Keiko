@@ -19,7 +19,8 @@ import {
   PORTABLE_TARGETS,
   WINDOWS_PORTABLE_SETUP_ASSET_NAME,
   sha256File,
-  portableManifestValidationFailuresForDeclaredLane,
+  validatePortableCandidateManifest,
+  validatePortableReleaseTrustCandidateManifest,
 } from "./portable-runtime.mjs";
 import {
   RUNTIME_ACTIVATION_RELATIVE_PATH,
@@ -141,22 +142,47 @@ function commonIdentity(manifest) {
       rootPackageVersion: field(manifest, "provenance", "rootPackageVersion"),
       sourceCommitSha: field(manifest, "provenance", "sourceCommitSha"),
     },
-    securityState: {
-      verificationPolicy: field(manifest, "security", "verificationPolicy"),
-      verificationReasonCodes: field(manifest, "security", "verificationReasonCodes"),
-      verificationStatus: field(manifest, "security", "verificationStatus"),
-    },
     stateExclusion: manifest.stateExclusion,
-    updateEligibility: manifest.updateEligibility,
+    updateEligibility: laneIndependentUpdateEligibility(manifest.updateEligibility),
   });
 }
 
+// The stable lane is not symmetric, so the release identity must not demand one shared security state:
+// it did from #2261, and once Linux became the production-signed target no stable four-target set
+// could assemble. Each target is held to the lane it may carry instead. Linux must be production,
+// because the runtime qualification evidence is only asserted for a non-evaluation artifact and a
+// Linux release-trust candidate would otherwise ship without it. The other targets are release-trust
+// candidates, or production once a platform signature is verified.
+function stableReleaseLaneFailures(manifest, target) {
+  const policy = manifest.security?.verificationPolicy;
+  const permitted =
+    policy === "production" || (target.nodePlatform !== "linux" && policy === "evaluation");
+  if (permitted) return [];
+  const lanes = target.nodePlatform === "linux" ? "production" : "production or evaluation";
+  return [`security.verificationPolicy must be ${lanes} in a stable release (${String(policy)})`];
+}
+
+// platformSignatureLocallyVerified follows each target's own lane - true only where a platform
+// signature was verified - and its lane contract already validates it per manifest. It is the one
+// update-eligibility field the targets of a stable release legitimately do not share.
+function laneIndependentUpdateEligibility(updateEligibility) {
+  const predicates = updateEligibility?.requiredPredicates;
+  if (predicates === null || typeof predicates !== "object") return updateEligibility;
+  const copy = structuredClone(updateEligibility);
+  delete copy.requiredPredicates.platformSignatureLocallyVerified;
+  return copy;
+}
+
 function targetFailures(manifest, target, expected) {
-  // The manifest declares its own lifecycle lane; validating it against a lane it never claimed
-  // is how the stable four-target lane broke. portableManifestValidationFailuresForDeclaredLane
-  // maps production -> candidate, staging -> staging, evaluation -> evaluation, and fails closed
-  // on anything else. Three other consumers migrated to it in #3019; this one did not.
-  const failures = portableManifestValidationFailuresForDeclaredLane(manifest);
+  // A stable-tag build stages every target as a release-trust candidate (--release-build sets the
+  // evaluation lane with releaseTrustRequired), and stage-linux-production then signs Linux into the
+  // production lane. Each manifest is validated against the contract of the lane it carries.
+  const failures = [
+    ...(manifest.security?.verificationPolicy === "evaluation"
+      ? validatePortableReleaseTrustCandidateManifest(manifest)
+      : validatePortableCandidateManifest(manifest)),
+    ...stableReleaseLaneFailures(manifest, target),
+  ];
   const checks = [
     [
       "artifact.platformTarget",
@@ -307,11 +333,9 @@ function assertRuntimeActivationEvidence(stageRoot, manifest, target, sbom) {
   ) {
     fail(`${target.platformTarget} runtime activation binding is invalid`);
   }
-  // runtimeQualification and runtimeAttestation are written only by the signing and
-  // qualification producers, which run only for a production-lane artifact. A staging or
-  // evaluation manifest declares no such evidence and its own validator does not require it,
-  // so demanding it here held macOS and Windows to a contract their producer never claimed.
-  if (manifest.security.verificationPolicy !== "production") return;
+  // A release-trust candidate carries no runtime qualification or attestation yet; those belong to a
+  // production-lane artifact, and stableReleaseLaneFailures keeps Linux out of the evaluation lane.
+  if (manifest.security.verificationPolicy === "evaluation") return;
   if (target.nodePlatform === "win32") {
     assertRuntimeAttestationEvidence(resourceRoot, manifest, sbom);
   } else {

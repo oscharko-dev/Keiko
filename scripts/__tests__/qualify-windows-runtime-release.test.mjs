@@ -88,6 +88,8 @@ function fixture() {
     artifact: { platformTarget: "windows-x64" },
     runtime: { nodePlatform: "win32", nodeArchitecture: "x64" },
     security: { verificationStatus: "verified-production" },
+    // runtimeActivationManifest emits nativeAddons unconditionally (#3455).
+    nativeAddons: [],
     nativeHelpers: helpers,
     sidecarRuntimes: [
       {
@@ -191,6 +193,25 @@ afterEach(() => {
 });
 
 describe("Windows runtime qualification", () => {
+  it.each([
+    ["null", null],
+    ["an object", { usearch: {} }],
+    ["a string", "usearch"],
+    ["absent", undefined],
+  ])("refuses an activation manifest whose nativeAddons is %s", (_label, addons) => {
+    // exactKeys only proves the key exists, so a malformed nativeAddons would otherwise receive a
+    // successful qualification receipt. The gate fails closed on every shape that is not an array.
+    const value = fixture();
+    const activation = { ...value.activation };
+    if (addons === undefined) delete activation.nativeAddons;
+    else activation.nativeAddons = addons;
+    writeFileSync(value.activationPath, `${JSON.stringify(activation)}\n`);
+
+    expect(() => qualificationReceiptFor(receiptInput(value))).toThrow(
+      "activation manifest is invalid",
+    );
+  });
+
   it("binds the exact activation, helper bytes, OpenCode payload, and backend", () => {
     const value = fixture();
     expect(qualificationReceiptFor(receiptInput(value))).toMatchObject({
