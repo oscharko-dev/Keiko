@@ -214,6 +214,11 @@ still requires an operator dispatch with `portable_assets_run_id` pointing at th
 
 ## Triggering
 
+- One-approval stable release (ADR-0177 D8): after CI passes on a `dev` push whose version is
+  approved for every portable target and not yet published, `release-candidate.yml` points
+  `v<version>` at that commit through the release tag GitHub App. The tag push runs the stable
+  portable build, whose `request-publish` job dispatches this workflow with that run's id and attempt.
+  The only manual step is approving the `npm-publish` deployment.
 - Stable tag pushes (`v<version>`, no prerelease suffix) run the full release verification job.
 - An EXACT tag over the current package version (`v<package.json version>`, including npm
   prerelease versions such as `v0.3.0-rc.1` over `0.3.0-rc.1`) runs the full verification —
@@ -224,7 +229,7 @@ still requires an operator dispatch with `portable_assets_run_id` pointing at th
   version match, checksums, macOS seal — ADR-0163 D9). Any other hyphenated `v*` tag (a
   non-exact RC, a foreign version, malformed) fails the tag validation.
 - Manual `workflow_dispatch` with `publish: false` runs the same verification job.
-- Manual `workflow_dispatch` with `publish: true` enables the publish job only when the selected ref is a tag that starts with `v` and the same tag/SHA already has a successful tag-push release verification run.
+- Manual `workflow_dispatch` with `publish: true` enables the publish job only when the selected ref is a tag that starts with `v`; the job then verifies the release-required checks for that tag's commit and waits for the `npm-publish` approval.
 - Manual publishes require an explicit npm dist-tag. The default is `beta`.
 - Production stable `latest` publishes require the four archives plus the Windows setup companion
   to be present on the GitHub Release when the run finishes; a reviewed portable asset bundle is how
@@ -239,6 +244,22 @@ still requires an operator dispatch with `portable_assets_run_id` pointing at th
   `.portable-release-assets/portable-assets.json`. The manifest input is interpreted only as a
   relative path inside the downloaded artifact bundle; absolute paths, parent traversal, symlinked
   manifests, and non-file manifests are rejected before publish starts.
+
+### One-time setup for the release candidate
+
+The candidate workflow needs a credential that may change tags. Only the repository owner can create
+it, because each step is a security setting:
+
+1. Create a GitHub App owned by the repository owner, with no webhook, installable only on that
+   account, and exactly one repository permission: **Contents: Read and write**.
+2. Install it on `oscharko-dev/Keiko` only, and generate a private key.
+3. Create the environment `release-tagging` with a deployment branch policy that allows `dev` only.
+   Add the environment secret `KEIKO_RELEASE_TAG_APP_PRIVATE_KEY` (the private key) and the environment
+   variable `KEIKO_RELEASE_TAG_APP_CLIENT_ID` (the App's client ID).
+4. Add the App to the bypass list of the tag ruleset "Owner-only tag changes".
+
+Until then, `release-candidate.yml` still decides every candidate; an eligible one fails in its tag
+job, and a tag can be cut by the owner as before.
 
 ## Release-branch workflow
 
