@@ -414,6 +414,39 @@ describe("release workflow portable asset manifest resolution", () => {
   });
 });
 
+describe("jobs downstream of the rehearsal readiness on a tag push", () => {
+  // rehearsal-readiness runs only on a dev push, so every tag push and every dispatch skips it. A job
+  // condition without a status function gets GitHub's implicit success(), which counts that skipped
+  // ancestor as not successful: the first v1.0.1 tag build staged all four targets and then skipped
+  // the Linux qualification, the assembly and the publish request, and still concluded "success".
+  const jobs = portableWorkflowDocument.jobs;
+  const needsOf = (id) => [jobs[id]?.needs ?? []].flat();
+  const hasAncestor = (id, ancestor, seen = new Set()) =>
+    needsOf(id).some((parent) => {
+      if (parent === ancestor) return true;
+      if (seen.has(parent)) return false;
+      seen.add(parent);
+      return hasAncestor(parent, ancestor, seen);
+    });
+  const downstream = Object.keys(jobs).filter((id) => hasAncestor(id, "rehearsal-readiness"));
+
+  it("covers every job the release path needs after the readiness", () => {
+    expect(downstream).toEqual(
+      expect.arrayContaining([
+        "stage",
+        "stage-linux-production",
+        "qualify-linux-production",
+        "assemble",
+        "request-publish",
+      ]),
+    );
+  });
+
+  it.each(downstream)("gives %s an explicit status function", (id) => {
+    expect(String(jobs[id].if)).toMatch(/^\$\{\{ (?:!cancelled\(\)|always\(\)) && /u);
+  });
+});
+
 describe("stable release rehearsal on dev", () => {
   // Every job behind a needs edge used to run for the first time inside a tagged release, so the
   // v1.0.0 cut surfaced one defect per attempt. A dev push now rehearses the whole chain without
