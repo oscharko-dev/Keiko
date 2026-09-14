@@ -42,8 +42,8 @@ Optional native signing verification remains owned by
 `scripts/verify-portable-runtime-signing.mjs`. Stable installability is instead established when
 `scripts/release-publish.mjs` signs the final API-bound manifest with Ed25519 and immediately
 revalidates it through the same trust module the installed updater uses.
-Before its first side effect the publisher proves the configured key through that same
-sign-and-verify path on a probe, so a key the bundled trust roots reject stops the run before a
+Before its first side effect the publisher signs and verifies a probe with the configured key
+through that same trust module, so a key the bundled trust roots reject stops the run before a
 GitHub release, an upload, or an npm publication exists.
 
 Portable GitHub Release Assets are published by the same `scripts/release-publish.mjs` path, not by
