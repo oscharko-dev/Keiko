@@ -1948,6 +1948,67 @@
         "signingScope": "evaluation",
         "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
       }
+    },
+    {
+      "packageName": "@oscharko-dev/keiko",
+      "packageVersion": "1.0.1",
+      "distTag": "latest",
+      "registry": "https://registry.npmjs.org/",
+      "releaseTag": "v1.0.1",
+      "supportedFrom": ["0.2.0"],
+      "internalOnly": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
+      "oneClickEligible": false,
+      "publishGates": [
+        "version-consistency",
+        "publish-manifests",
+        "release-impact",
+        "workspace-supply-chain",
+        "package-surface",
+        "qi-supply-chain",
+        "install-smoke"
+      ],
+      "id": "2026-09-14-keiko-1.0.1-first-published-stable",
+      "releaseNoteCategory": "improvements",
+      "releaseNotePriority": "high",
+      "userVisibleChange": "observable",
+      "userVisibleSummary": "Keiko 1.0.1 is the first published release of the stable 1.x line. The v1.0.0 tag was cut but never published: its GitHub release could not receive its downloads, and GitHub never lets a tag of an immutable release be reused, so 1.0.1 ships what 1.0.0 was meant to. The customer-facing surface is unchanged from 0.3.17 — no export, CLI flag, or package entry point was added, removed, or renamed by the bump — so what changes is the promise around that surface: 1.x is now the supported line, and a breaking change to it requires a new major release. The release carries the work since 0.3.17: cross-platform updates are production-ready end to end, the Linux x64 coding runtime ships qualified with its sidecar egress confined to the gateway, and the Coding Workbench can now take an issue to a pull request in one governed run — including a governed changeset edit that survives the operator's approval instead of timing out beneath it. Windows installs through a native bootstrap rather than an IExpress companion, every git process outcome is reconstructible from the activity log, and grounded retrieval is bounded with hardened canonical roots.",
+      "affectedStateStores": [],
+      "stateImpact": [],
+      "releaseNoteBullets": [
+        "First published 1.x release: 1.0.0 was tagged but never published, so 1.0.1 opens the supported `1.x` line, and a breaking change to it requires a new major release.",
+        "Since 0.3.17 the published customer surface is unchanged: no export, CLI flag or package entry point was added, removed or renamed.",
+        "Updates work end to end on Windows, macOS and Linux: the updater installs release-signed portable assets, and a failed promotion leaves the complete current install in place.",
+        "The Linux x64 coding runtime is qualified, and its sidecar reaches the network only through the gateway boundary.",
+        "The Coding Workbench goes from an issue to a pull request in one governed run, with one pull-request description shared by the run and the repository.",
+        "An approved governed changeset edit now lands instead of expiring 30 seconds into the operator's decision.",
+        "Windows setup uses a native bootstrap in place of the IExpress companion, and the setup executable's digest is bound into the published manifest.",
+        "The activity log records every git process outcome without bodies, so a failed delivery can be reconstructed from the log alone.",
+        "Grounded retrieval is bounded, canonical workspace roots are hardened, and large workspaces no longer hit a quadratic fallback.",
+        "Security: Next.js and eslint-config-next are on 16.3.4, which carries the fixes for two critical advisories, and pdfjs-dist resolves to 6.3.289.",
+        "Portable downloads ship as an immutable GitHub release, each archive with build provenance and a CycloneDX SBOM attestation."
+      ],
+      "review": {
+        "status": "reviewed",
+        "reviewer": "release-owner",
+        "reviewedAt": "2026-09-14",
+        "humanApproved": true,
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3467#5665589415",
+        "rationale": "The release owner approved 1.0.1 after the 1.0.0 publish could not complete. The repository has GitHub immutable releases enabled, and the publisher created the v1.0.0 release as published before uploading its downloads, so GitHub refused every upload and the tag name can never carry a complete release. npm never received 1.0.0. The publisher now assembles a portable release as a draft, verifies every download and its signed evidence by name, size and SHA-256 digest while it is still a draft, and publishes it last. The customer-facing surface is the 1.0.0 surface; the version moves only because the tag name is spent.",
+        "traceability": null
+      },
+      "userActionRequired": true,
+      "remediation": "restart-required",
+      "traceability": null,
+      "portableRuntimeArtifactContract": {
+        "programEpic": 1944,
+        "parentEpic": 1942,
+        "issue": 1948,
+        "stagingOnly": true,
+        "signingScope": "evaluation",
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
+      }
     }
   ]
 }

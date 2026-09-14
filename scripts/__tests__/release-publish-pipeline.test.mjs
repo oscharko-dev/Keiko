@@ -608,9 +608,19 @@ function ghStubBody() {
     "    writeFileSync(1, JSON.stringify(state().workflowRun || {}));",
     "    process.exit(0);",
     "  }",
-    // The release tag binding (ADR-0177 D8): the remote tag points at HEAD unless a fixture moves it.
+    // GitHub immutable releases (2026-09-14): a draft is invisible to the by-tag endpoint and is read by
+    // id from the release listing; the publisher re-reads the tag ref before it publishes the draft.
+    '  if (argv[1] && argv[1].includes("/releases?")) {',
+    `    const listed = state().publisherDraft || state().releasePublished ? [{ id: 987654321, tag_name: \`v\${VERSION}\`, draft: state().publisherDraft === true, created_at: ${JSON.stringify(RELEASE_CREATED_AT)}, assets: state().uploadedAssets || [] }] : [];`,
+    "    writeFileSync(1, JSON.stringify(listed));",
+    "    process.exit(0);",
+    "  }",
+    '  if (argv[1] && argv[1].endsWith("/releases/987654321")) {',
+    `    writeFileSync(1, JSON.stringify({ id: 987654321, created_at: ${JSON.stringify(RELEASE_CREATED_AT)}, draft: state().publisherDraft === true, prerelease: false, assets: state().uploadedAssets || [] }));`,
+    "    process.exit(0);",
+    "  }",
     '  if (argv[1] && argv[1].includes("/git/ref/tags/")) {',
-    `    writeFileSync(1, JSON.stringify({ object: { sha: state().remoteTagSha || "${HEAD_SHA}", type: "commit" } }));`,
+    `    writeFileSync(1, JSON.stringify({ object: { sha: state().remoteTagSha || ${JSON.stringify(HEAD_SHA)}, type: "commit" } }));`,
     "    process.exit(0);",
     "  }",
     '  if (argv[1] && argv[1].includes("/releases/latest")) {',
@@ -658,6 +668,7 @@ function ghStubBody() {
     "    process.exit(0);",
     "  }",
     '  if (argv[1] && argv[1].includes("/releases/tags/")) {',
+    "    if (state().publisherDraft === true) { process.stderr.write('gh: Not Found (HTTP 404)\\n'); process.exit(1); }",
     // The release-by-tag endpoint always reports both flags; the prepublished gate requires the
     // published stable shape, so the double states it the way the real API does.
     `    writeFileSync(1, JSON.stringify({ id: 987654321, created_at: ${JSON.stringify(RELEASE_CREATED_AT)}, draft: state().releaseDraft === true, prerelease: state().releasePrerelease === true, assets: state().uploadedAssets || [] }));`,
@@ -672,10 +683,21 @@ function ghStubBody() {
     'if (sub === "release" && argv[1] === "view") {',
     "  if (state().existingReleaseIsDraft) { writeFileSync(1, JSON.stringify({ isDraft: true, assets: [] })); process.exit(0); }",
     "  if (state().existingEvaluationRelease) { writeFileSync(1, JSON.stringify({ isDraft: false, assets: [{ name: 'keiko-portable-evaluation-manifest.json' }] })); process.exit(0); }",
+    "  if (state().releasePublished) { writeFileSync(1, JSON.stringify({ isDraft: false, assets: state().uploadedAssets || [] })); process.exit(0); }",
+    "  if (state().publisherDraft) { writeFileSync(1, JSON.stringify({ isDraft: true, assets: state().uploadedAssets || [] })); process.exit(0); }",
     "  process.exit(1);",
+    "}",
+    'if (sub === "release" && argv[1] === "create") {',
+    "  setState(argv.includes('--draft') ? { publisherDraft: true } : { releasePublished: true });",
+    "  process.exit(0);",
+    "}",
+    'if (sub === "release" && argv[1] === "edit") {',
+    "  if (argv.includes('--draft=false')) setState({ publisherDraft: false, releasePublished: true });",
+    "  process.exit(0);",
     "}",
     'if (sub === "release" && argv[1] === "upload") {',
     "  const current = state();",
+    "  if (current.immutableReleases && current.releasePublished) { process.stderr.write('HTTP 422: Cannot upload assets to an immutable release.\\n'); process.exit(1); }",
     "  if (current.failGhUpload) { process.stderr.write('portable upload failed\\n'); process.exit(42); }",
     "  const tag = argv[2];",
     '  const repoIndex = argv.indexOf("--repo");',
@@ -707,6 +729,7 @@ function ghStubBody() {
     "    }",
     "    byName.set(name, {",
     "      content: readFileSync(path).toString('base64'),",
+    "      digest: 'sha256:' + createHash('sha256').update(readFileSync(path)).digest('hex'),",
     "      id,",
     "      name,",
     "      size: readFileSync(path).byteLength,",
@@ -1864,6 +1887,48 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.stdout).toContain("portable assets uploaded and verified");
     });
 
+    it("assembles the release as a draft and publishes it only after every download verified", () => {
+      // v1.0.0, 2026-09-14: the release was created as published, and GitHub immutable releases refused
+      // every upload after that ("HTTP 422: Cannot upload assets to an immutable release"), which burned
+      // the tag name. Assets now go into a draft that is published last.
+      const viewBody = [
+        '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+        '  if (argv.some((a) => a.startsWith("dist-tags."))) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
+      ].join("\n");
+
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody, { failOnPublish: true }),
+        initState: { immutableReleases: true, published: true, tagged: true },
+      });
+
+      expect(lastRun.status, lastRun.stderr).toBe(0);
+      const create = indexOfCall(lastRun.calls, (l) => l.startsWith('gh ["release","create"'));
+      const firstUpload = indexOfCall(lastRun.calls, (l) => l.startsWith('gh ["release","upload"'));
+      const publish = indexOfCall(
+        lastRun.calls,
+        (l) => l.startsWith('gh ["release","edit"') && l.includes('"--draft=false"'),
+      );
+      expect(lastRun.calls[create]).toContain('"--draft"');
+      expect(create).toBeLessThan(firstUpload);
+      expect(firstUpload).toBeLessThan(publish);
+      expect(lastRun.calls.slice(publish).some((l) => l.startsWith('gh ["release","upload"'))).toBe(
+        false,
+      );
+      expect(lastRun.stdout).toContain("portable assets uploaded and verified");
+    });
+
+    it("refuses to upload into a release that is already published without its downloads", () => {
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { immutableReleases: true, published: false, releasePublished: true },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("an immutable release cannot be repaired");
+      expect(lastRun.calls.some((l) => l.startsWith('gh ["release","upload"'))).toBe(false);
+      expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
     it("fails before npm publish when portable upload verification fails", () => {
       const viewBody = [
         "  const s = state();",
@@ -1950,7 +2015,9 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       });
 
       expect(lastRun.status).toBe(1);
-      expect(lastRun.stderr).toContain("a newer release candidate moved it");
+      expect(lastRun.stderr).toContain(
+        "a release created or published now would bind to another commit",
+      );
       expectNoPublicationSideEffect(lastRun.calls);
     });
 

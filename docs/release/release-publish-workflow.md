@@ -47,7 +47,14 @@ through that same trust module, so a key the bundled trust roots reject stops th
 GitHub release, an upload, or an npm publication exists.
 
 Portable GitHub Release Assets are published by the same `scripts/release-publish.mjs` path, not by
-a second release process. A production stable `latest` publish must end with all five downloads
+a second release process. The repository has GitHub immutable releases enabled, which refuses every
+asset change once a release is published and never lets a deleted immutable release's tag name be
+reused. The publisher therefore creates the release as a draft, uploads the archives, API-binds and
+signs the evidence, uploads it, and checks every asset by name, size, and GitHub's SHA-256 digest
+while it is still a draft; it re-reads the tag and publishes the draft only then. An already
+published release is verified, never uploaded into; one that lacks its downloads stops the run,
+because only the next patch version can repair it (v1.0.0 was lost to a create-then-upload publish
+on 2026-09-14). A production stable `latest` publish must end with all five downloads
 (`keiko-linux-x64.zip`, `keiko-windows-x64.zip`, `keiko-macos-arm64.zip`,
 `keiko-macos-x64.zip`, and `keiko-windows-x64-setup.exe`) present on the GitHub Release; the publisher
 verifies that against the release itself and fails closed **before** npm learns the dist-tag. A

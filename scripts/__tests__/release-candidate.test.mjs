@@ -4,7 +4,6 @@ import {
   applyReleaseCandidatePlan,
   planReleaseCandidate,
   releaseCandidatePlan,
-  releaseTagBinding,
   remoteTagCommit,
   runReleaseCandidate,
 } from "../lib/release-candidate.mjs";
@@ -403,30 +402,5 @@ describe("runReleaseCandidate", () => {
     ],
   ])("refuses %s", (_label, mode, env, message) => {
     expect(() => run(mode, env)).toThrow(message);
-  });
-});
-
-describe("releaseTagBinding", () => {
-  function bind(response) {
-    const { runGh } = fakeGithub({ [`repos/${REPO}/git/ref/tags/${TAG}`]: response });
-    return releaseTagBinding({ head: CANDIDATE, repository: REPO, runGh, tag: TAG });
-  }
-
-  it("lets the publish continue while the tag points at the checked-out commit", () => {
-    expect(bind(ok({ object: { sha: CANDIDATE, type: "commit" } }))).toStrictEqual({});
-  });
-
-  it("stops the publish when a newer candidate moved the tag", () => {
-    expect(bind(ok({ object: { sha: OLDER, type: "commit" } })).failure).toContain(
-      `points at ${OLDER} on GitHub, not at the checked-out ${CANDIDATE}`,
-    );
-  });
-
-  it("stops the publish when the tag is gone", () => {
-    expect(bind(NOT_FOUND).failure).toContain("points at nothing");
-  });
-
-  it("stops the publish when the tag cannot be read", () => {
-    expect(bind(SERVER_ERROR).failure).toBe(`release-candidate: the ${TAG} ref could not be read.`);
   });
 });
