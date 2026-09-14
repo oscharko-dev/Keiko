@@ -6,7 +6,9 @@ import { join, resolve } from "node:path";
 const repoRoot = resolve(import.meta.dirname, "..");
 const workflowsDir = join(repoRoot, ".github", "workflows");
 const releaseWorkflowPath = join(workflowsDir, "release.yml");
-const portableWorkflowPath = join(workflowsDir, "portable-assets.yml");
+// Every workflow that verifies the release-required checks itself must read the same authority as
+// release.yml: the tag build (portable-assets.yml) and the release candidate (ADR-0177 D8).
+const RELEASE_AUTHORITY_WORKFLOWS = ["portable-assets.yml", "release-candidate.yml"];
 
 function fail(message) {
   console.error(`release-required-workflow-names: FAIL - ${message}`);
@@ -146,13 +148,27 @@ export function portableReleaseAuthorityFailures(releaseSource, portableSource) 
   return failures;
 }
 
+/**
+ * @param dependents  [{ file, source }] for every workflow that must share release.yml's authority
+ * @returns one message per drifted workflow
+ */
+export function releaseAuthorityDrift(releaseSource, dependents) {
+  return dependents.flatMap(({ file, source }) => {
+    const failures = portableReleaseAuthorityFailures(releaseSource, source);
+    return failures.length > 0 ? [`${file} release authority drifted: ${failures.join(", ")}`] : [];
+  });
+}
+
 function main() {
   const releaseSource = readFileSync(releaseWorkflowPath, "utf8");
-  const portableSource = readFileSync(portableWorkflowPath, "utf8");
-  const authorityFailures = portableReleaseAuthorityFailures(releaseSource, portableSource);
-  if (authorityFailures.length > 0) {
-    fail(`portable-assets.yml release authority drifted: ${authorityFailures.join(", ")}`);
-  }
+  const drift = releaseAuthorityDrift(
+    releaseSource,
+    RELEASE_AUTHORITY_WORKFLOWS.map((file) => ({
+      file,
+      source: readFileSync(join(workflowsDir, file), "utf8"),
+    })),
+  );
+  if (drift.length > 0) fail(drift.join("; "));
 
   const required = releaseRequiredChecks(releaseSource);
   const emitted = allWorkflowJobNames();

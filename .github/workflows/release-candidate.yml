@@ -1,0 +1,123 @@
+name: Release candidate
+
+# ADR-0177 D8: once CI has passed on a dev push, a dev head whose version is approved for every
+# portable target and not yet published becomes the release candidate, and a GitHub App that may
+# change tags points v<version> at it. The tag push runs the signed stable build in
+# portable-assets.yml, whose last job asks release.yml to publish exactly that build; the npm-publish
+# approval stays the one human step. Every decision lives in scripts/lib/release-candidate.mjs.
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types:
+      - completed
+    branches:
+      - dev
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  # The newest green dev head supersedes an older candidate. Cancelling is safe at any point: the plan
+  # job writes nothing, and the tag write is a single API call that is read back.
+  group: release-candidate
+  cancel-in-progress: true
+
+env:
+  RELEASE_BASE_BRANCH: release/1.0
+  RELEASE_REQUIRED_CHECKS: '["ci","workflow hygiene","Analyze (actions)","Analyze (javascript-typescript)","Build, scan, SBOM, smoke","ui"]'
+
+jobs:
+  plan:
+    name: Decide the release candidate
+    # Only a successful push run on dev is a candidate. A fork pull request can name its branch dev,
+    # but its run event is pull_request, and the plan compares the commit with the live dev head.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev')
+      || (github.event.workflow_run.conclusion == 'success'
+      && github.event.workflow_run.event == 'push'
+      && github.event.workflow_run.head_branch == 'dev')
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    timeout-minutes: 10
+    outputs:
+      action: ${{ steps.plan.outputs.action }}
+      sha: ${{ steps.candidate.outputs.sha }}
+    steps:
+      - name: Resolve the candidate commit
+        id: candidate
+        env:
+          DISPATCHED_SHA: ${{ github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
+          RUN_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          sha="$RUN_HEAD_SHA"
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then sha="$DISPATCHED_SHA"; fi
+          if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "release-candidate: the candidate commit is not a full SHA." >&2
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ steps.candidate.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Decide whether the release tag should point at this commit
+        id: plan
+        env:
+          CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/release-candidate.mjs --plan
+
+  tag:
+    name: Point the release tag at the candidate
+    needs: plan
+    if: ${{ needs.plan.outputs.action == 'create' || needs.plan.outputs.action == 'move' }}
+    runs-on: ubuntu-latest
+    # The GitHub App credentials exist only in this environment, and only dev may deploy to it.
+    environment: release-tagging
+    permissions:
+      actions: read
+      checks: read
+      contents: read
+      statuses: read
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Verify the release-required checks on the candidate
+        # The tag build verifies the same six checks and waits at most 30 minutes; on 2026-09-14 a tag
+        # cut while dev CI was still queued failed every target, so the tag is written only after them.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_SHA: ${{ needs.plan.outputs.sha }}
+        run: node scripts/verify-release-required-checks.mjs
+      - name: Mint the release tag token
+        id: tag-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.KEIKO_RELEASE_TAG_APP_CLIENT_ID }}
+          private-key: ${{ secrets.KEIKO_RELEASE_TAG_APP_PRIVATE_KEY }}
+          permission-contents: write
+      - name: Point the release tag at the candidate
+        env:
+          CANDIDATE_SHA: ${{ needs.plan.outputs.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+          KEIKO_RELEASE_TAG_TOKEN: ${{ steps.tag-token.outputs.token }}
+        run: node scripts/release-candidate.mjs --apply

@@ -54,6 +54,14 @@ rules:
       # Verified with the pinned scanner version: zizmor 1.26.1 reports this one finding for this
       # file and nothing else.
       - infra-failure-retry.yml:25
+      # ADR-0177 D8: the release candidate must follow a COMPLETED CI run on dev, and `workflow_run` is the
+      # only trigger GitHub offers for that. It does check out `workflow_run.head_sha`, but only for
+      # a run whose event is `push` on `dev`: a push comes from the repository itself, never from a
+      # fork, so the commit is reviewed, merged dev code. Before anything privileged happens the plan
+      # compares that commit with the live dev head through the API and skips on any difference. The
+      # plan job holds only read grants; the tag job reads the GitHub App key from the `release-tagging`
+      # environment, which only dev deploys to, and writes one tag ref with a contents-only token.
+      - release-candidate.yml:8
   adhoc-packages:
     ignore:
       # Publishing deliberately uses the separately reviewed npm version required by ADR-0130;

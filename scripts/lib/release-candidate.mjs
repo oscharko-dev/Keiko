@@ -82,7 +82,8 @@ function readGithub(runGh, path) {
     : { kind: "error" };
 }
 
-function readFound(runGh, path, label) {
+/** A GitHub API read that must succeed; any failure, a 404 included, fails closed. */
+export function readFound(runGh, path, label) {
   const read = readGithub(runGh, path);
   if (read.kind !== "found") fail(`${label} could not be read.`);
   return read.value;

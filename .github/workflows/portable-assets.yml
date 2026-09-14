@@ -466,3 +466,35 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 90
+
+  request-publish:
+    name: Request the publish of this stable build
+    needs: assemble
+    # ADR-0177 D8: a stable tag build asks release.yml to publish exactly this run's bundle. The dev
+    # rehearsal and manual dispatches never do, and the publish job keeps its npm-publish approval.
+    if: ${{ needs.assemble.result == 'success' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      # Dispatching release.yml and cancelling an older candidate's publish that still waits for its
+      # approval. Neither can publish: every publish job still needs the npm-publish review.
+      actions: write
+      contents: read
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Request the publish of this build
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: node scripts/request-release-publish.mjs

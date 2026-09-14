@@ -1,7 +1,11 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { describe, expect, it } from "vitest";
 
 import {
   portableReleaseAuthorityFailures,
+  releaseAuthorityDrift,
   releaseRequiredChecks,
   workflowJobNames,
 } from "../check-release-required-workflow-names.mjs";
@@ -114,5 +118,34 @@ describe("portableReleaseAuthorityFailures", () => {
       "  RELEASE_REQUIRED_CHECKS: '[\"ci\"]'",
     ].join("\n");
     expect(portableReleaseAuthorityFailures(release, portable)).toEqual(["RELEASE_BASE_BRANCH"]);
+  });
+});
+
+describe("releaseAuthorityDrift", () => {
+  const release = [
+    "env:",
+    "  RELEASE_BASE_BRANCH: release/1.0",
+    "  RELEASE_REQUIRED_CHECKS: '[\"ci\"]'",
+  ].join("\n");
+
+  it("names every dependent workflow whose authority drifted, and only those", () => {
+    const drifted = release.replace("release/1.0", () => "dev");
+    expect(
+      releaseAuthorityDrift(release, [
+        { file: "portable-assets.yml", source: release },
+        { file: "release-candidate.yml", source: drifted },
+      ]),
+    ).toEqual(["release-candidate.yml release authority drifted: RELEASE_BASE_BRANCH"]);
+  });
+
+  it("holds the committed release candidate workflow to release.yml's authority", () => {
+    const read = (file) =>
+      readFileSync(resolve(import.meta.dirname, "../../.github/workflows", file), "utf8");
+    expect(
+      releaseAuthorityDrift(read("release.yml"), [
+        { file: "portable-assets.yml", source: read("portable-assets.yml") },
+        { file: "release-candidate.yml", source: read("release-candidate.yml") },
+      ]),
+    ).toEqual([]);
   });
 });

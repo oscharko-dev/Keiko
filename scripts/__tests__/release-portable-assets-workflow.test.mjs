@@ -97,6 +97,7 @@ describe("portable release-trust workflow", () => {
       "stage-linux-production",
       "qualify-linux-production",
       "assemble",
+      "request-publish",
     ]);
     expect(portableWorkflow).not.toMatch(
       /AZURE_|APPLE_|artifact-signing-action|notarytool|codesign/u,

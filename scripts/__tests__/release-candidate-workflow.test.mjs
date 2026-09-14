@@ -1,0 +1,126 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
+import { describe, expect, it } from "vitest";
+import { parse } from "yaml";
+
+// ADR-0177 D8 pins. The release candidate is the one place a workflow may write a release tag, and
+// the stable build's publish request is the one place a workflow may dispatch release.yml, so their
+// triggers, grants, secrets and step order are fixed here.
+
+const workflows = resolve(import.meta.dirname, "../../.github/workflows");
+const candidateSource = readFileSync(resolve(workflows, "release-candidate.yml"), "utf8");
+const candidate = parse(candidateSource);
+const portable = parse(readFileSync(resolve(workflows, "portable-assets.yml"), "utf8"));
+
+function stepIndex(job, predicate, label) {
+  const index = job.steps.findIndex(predicate);
+  expect(index, label).toBeGreaterThanOrEqual(0);
+  return index;
+}
+
+describe("release candidate workflow", () => {
+  it("runs only after CI completes on dev, or on a manual dispatch", () => {
+    expect(candidate.on).toStrictEqual({
+      workflow_run: { branches: ["dev"], types: ["completed"], workflows: ["CI"] },
+      workflow_dispatch: null,
+    });
+    expect(candidate.permissions).toStrictEqual({});
+    expect(candidate.concurrency).toStrictEqual({
+      "cancel-in-progress": true,
+      group: "release-candidate",
+    });
+  });
+
+  it("plans only for a successful push run on dev, with read grants and no secrets", () => {
+    const { plan } = candidate.jobs;
+    expect(plan.if).toContain("github.event.workflow_run.conclusion == 'success'");
+    expect(plan.if).toContain("github.event.workflow_run.event == 'push'");
+    expect(plan.if).toContain("github.event.workflow_run.head_branch == 'dev'");
+    expect(plan.if).toContain(
+      "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev'",
+    );
+    expect(plan.permissions).toStrictEqual({ actions: "read", contents: "read" });
+    expect(plan.environment).toBeUndefined();
+    expect(JSON.stringify(plan)).not.toContain("secrets.");
+    expect(plan.steps.at(-1)).toMatchObject({
+      id: "plan",
+      run: "node scripts/release-candidate.mjs --plan",
+    });
+  });
+
+  it("writes the tag only after the required checks, with a contents-only App token from its environment", () => {
+    const { tag } = candidate.jobs;
+    expect(tag.needs).toBe("plan");
+    expect(tag.if).toBe(
+      "${{ needs.plan.outputs.action == 'create' || needs.plan.outputs.action == 'move' }}",
+    );
+    expect(tag.environment).toBe("release-tagging");
+    expect(tag.permissions).toStrictEqual({
+      actions: "read",
+      checks: "read",
+      contents: "read",
+      statuses: "read",
+    });
+
+    const checks = stepIndex(
+      tag,
+      (step) => step.run === "node scripts/verify-release-required-checks.mjs",
+      "checks",
+    );
+    const token = stepIndex(
+      tag,
+      (step) => String(step.uses).startsWith("actions/create-github-app-token@"),
+      "token",
+    );
+    const apply = stepIndex(
+      tag,
+      (step) => step.run === "node scripts/release-candidate.mjs --apply",
+      "apply",
+    );
+    expect(checks).toBeLessThan(token);
+    expect(token).toBeLessThan(apply);
+
+    expect(tag.steps[token].uses).toBe(
+      "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
+    );
+    expect(tag.steps[token].with).toStrictEqual({
+      "client-id": "${{ vars.KEIKO_RELEASE_TAG_APP_CLIENT_ID }}",
+      "permission-contents": "write",
+      "private-key": "${{ secrets.KEIKO_RELEASE_TAG_APP_PRIVATE_KEY }}",
+    });
+    expect(tag.steps[apply].env.KEIKO_RELEASE_TAG_TOKEN).toBe(
+      "${{ steps.tag-token.outputs.token }}",
+    );
+  });
+
+  it("references exactly one secret, the App key, in exactly one place", () => {
+    expect(candidateSource.match(/secrets\.[A-Z_]+/gu)).toStrictEqual([
+      "secrets.KEIKO_RELEASE_TAG_APP_PRIVATE_KEY",
+    ]);
+  });
+});
+
+describe("stable build publish request", () => {
+  it("asks for a publish only after a stable tag build assembled, with no secrets", () => {
+    const job = portable.jobs["request-publish"];
+    expect(job.needs).toBe("assemble");
+    expect(job.if).toBe(
+      "${{ needs.assemble.result == 'success' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}",
+    );
+    expect(job.permissions).toStrictEqual({ actions: "write", contents: "read" });
+    expect(job.environment).toBeUndefined();
+    expect(JSON.stringify(job)).not.toContain("secrets.");
+    expect(job.steps.some((step) => /npm (ci|install)/u.test(String(step.run)))).toBe(false);
+    expect(job.steps.at(-1)).toMatchObject({
+      env: {
+        GITHUB_TOKEN: "${{ github.token }}",
+        RELEASE_TAG: "${{ github.ref_name }}",
+        RUN_ATTEMPT: "${{ github.run_attempt }}",
+        RUN_ID: "${{ github.run_id }}",
+        SOURCE_SHA: "${{ github.sha }}",
+      },
+      run: "node scripts/request-release-publish.mjs",
+    });
+  });
+});
