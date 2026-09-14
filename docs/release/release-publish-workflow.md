@@ -4,17 +4,20 @@ This repository now has a dedicated automated release workflow at [`.github/work
 
 ## Operator contract
 
-When a maintainer says "ship a new release", the release operator must run the scripted path
-below. Do not publish packages and then manually remember the rest of the cleanup.
+A stable release is one reviewed merge and one approval (ADR-0177 D8):
 
-1. Land the release PR into the active release branch (`release/1.0`).
-2. Tag the reviewed merge commit as `v<package.json version>` and push the tag.
-3. Check out the tag locally or dispatch the Release workflow on that tag.
-4. Run:
+1. Land the version bump on `dev`: `npm run set-version -- <version>` moves every mechanical
+   spot, and the release-impact catalog entry carries the release-owner approval.
+2. The `dev` push runs `release-candidate.yml`, which points `v<version>` at that commit through
+   the release tag GitHub App; the tag push builds the stable portable assets beside the commit's
+   CI, and the build's last job dispatches `release.yml` with `publish: true` once the
+   release-required checks are green.
+3. Approve the `npm-publish` deployment. The publish job runs `release:publish` for you.
 
-   ```sh
-   npm run release:publish -- --tag latest
-   ```
+Cutting the tag by hand (`git tag -s v<version>` on the reviewed commit, then dispatching
+`release.yml` with that build's `portable_assets_run_id`) remains the fallback while the App is not
+installed; the candidate workflow keeps, moves, or leaves an owner-cut tag by the same plan. Do not
+publish packages and then manually remember the rest of the cleanup.
 
 `scripts/release-publish.mjs` is the source of truth for the final publish. A stable `latest`
 release is created or updated BEFORE npm publishes, so its downloads can be verified while the
@@ -216,8 +219,9 @@ protected native-runner jobs triggered by a reviewed stable tag, with separate e
 exact `v<package.json.version>`, digest, and signing-identity guards. Only their
 `verified-production` outputs may enter the reviewed-candidate bundle. The Ubuntu assembler
 validates those outputs but cannot generate or upgrade signing-verification booleans. `release.yml`
-still requires an operator dispatch with `portable_assets_run_id` pointing at the resulting green
-`Portable assets` run.
+publishes only from a `workflow_dispatch` whose `portable_assets_run_id` points at the resulting
+green `Portable assets` run; the stable tag build dispatches it itself, an operator does so only on
+the hand-cut fallback path.
 
 ## Moving the version
 
