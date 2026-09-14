@@ -25,6 +25,7 @@ import {
   PORTABLE_TARGETS,
   portableRuntimeContractMatches,
   reviewedPortableTargetSet,
+  reviewedStagingEntryMatches,
   PORTABLE_VERIFICATION_POLICIES,
   PORTABLE_VERIFICATION_STATUSES,
   WINDOWS_PORTABLE_SETUP_ASSET_NAME,
@@ -3981,5 +3982,41 @@ describe("reviewed portable staging contract", () => {
     expect(portableRuntimeContractMatches({ ...contract, stagingOnly: false }, "linux-x64")).toBe(
       false,
     );
+  });
+});
+
+describe("reviewed staging entry", () => {
+  const rootPackage = { name: "@oscharko-dev/keiko", version: "2.3.4" };
+  const entry = (overrides = {}) => ({
+    packageName: rootPackage.name,
+    packageVersion: rootPackage.version,
+    releaseTag: "v2.3.4",
+    review: { status: "reviewed", humanApproved: true },
+    portableRuntimeArtifactContract: {
+      ...PORTABLE_RELEASE_IMPACT_CONTRACT,
+      targets: PORTABLE_TARGETS.map((target) => target.platformTarget),
+    },
+    ...overrides,
+  });
+
+  it("matches the approved entry of the current package at its stable tag", () => {
+    expect(reviewedStagingEntryMatches(entry(), rootPackage, "v2.3.4", "linux-x64")).toBe(true);
+  });
+
+  it.each([
+    ["another package", { packageName: "@oscharko-dev/other" }],
+    ["another version", { packageVersion: "2.3.3" }],
+    ["another release tag", { releaseTag: "v2.3.3" }],
+    ["a pending review", { review: { status: "pending", humanApproved: true } }],
+    ["no human approval", { review: { status: "reviewed", humanApproved: false } }],
+    ["no staging contract", { portableRuntimeArtifactContract: undefined }],
+  ])("refuses an entry with %s", (_label, overrides) => {
+    expect(reviewedStagingEntryMatches(entry(overrides), rootPackage, "v2.3.4", "linux-x64")).toBe(
+      false,
+    );
+  });
+
+  it("refuses a missing entry", () => {
+    expect(reviewedStagingEntryMatches(undefined, rootPackage, "v2.3.4", "linux-x64")).toBe(false);
   });
 });

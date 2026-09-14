@@ -15,6 +15,7 @@ import { parse } from "yaml";
 import { importGraphReachesDist, repositoryScriptsIn } from "./workflow-script-graph.mjs";
 
 import {
+  PORTABLE_ASSETS_ARTIFACT_NAME,
   resolvePortableAssetsManifest,
   validatePortableAssetsRunSnapshot,
   writeGithubOutput,
@@ -35,6 +36,20 @@ const releaseWorkflow = readFileSync(".github/workflows/release.yml", "utf8");
 
 function workflowJob(name) {
   return portableWorkflowDocument.jobs[name];
+}
+
+// Evaluates the one ref-selecting expression shape this workflow uses:
+// ${{ github.ref == 'refs/heads/dev' && 'A' || 'B' }}
+function valueForRef(expression, ref) {
+  const match = /^\$\{\{\s*github\.ref == '([^']+)' && '([^']+)' \|\| '([^']+)'\s*\}\}$/u.exec(
+    String(expression).trim(),
+  );
+  if (match === null) throw new Error(`unexpected ref expression: ${String(expression)}`);
+  return ref === match[1] ? match[2] : match[3];
+}
+
+function jobNeeds(job) {
+  return Array.isArray(job.needs) ? job.needs : [job.needs].filter(Boolean);
 }
 
 function namedStep(job, name) {
@@ -85,6 +100,7 @@ describe("portable release-trust workflow", () => {
 
   it("keeps native signing optional and out of the release authority path", () => {
     expect(Object.keys(portableWorkflowDocument.jobs)).toEqual([
+      "rehearsal-readiness",
       "stage",
       "stage-linux-manual",
       "stage-linux-production",
@@ -100,7 +116,15 @@ describe("portable release-trust workflow", () => {
       contents: "read",
       statuses: "read",
     });
-    expect(workflowJob("stage-linux-production").environment).toBe("portable-release-signing");
+    const linuxEnvironment = workflowJob("stage-linux-production").environment;
+    expect(valueForRef(linuxEnvironment, "refs/tags/v1.0.0")).toBe("portable-release-signing");
+    // A rehearsal must not wait on, or reach into, the signing environment.
+    expect(valueForRef(linuxEnvironment, "refs/heads/dev")).toBe("portable-release-rehearsal");
+    // The job the rehearsal added reads the catalog and nothing else.
+    const readiness = workflowJob("rehearsal-readiness");
+    expect(readiness.environment).toBeUndefined();
+    expect(readiness.permissions).toEqual({ contents: "read" });
+    expect(JSON.stringify(readiness)).not.toMatch(/secrets\.|vars\./u);
   });
 
   it("assembles only a complete stable matrix and keeps attestations supplementary", () => {
@@ -114,9 +138,9 @@ describe("portable release-trust workflow", () => {
       contents: "read",
       "id-token": "write",
     });
-    expect(namedStep(assemble, "Upload release-trust candidate bundle").with.name).toBe(
-      "portable-release-assets",
-    );
+    const bundleName = namedStep(assemble, "Upload release-trust candidate bundle").with.name;
+    expect(valueForRef(bundleName, "refs/tags/v1.0.0")).toBe(PORTABLE_ASSETS_ARTIFACT_NAME);
+    expect(valueForRef(bundleName, "refs/heads/dev")).not.toBe(PORTABLE_ASSETS_ARTIFACT_NAME);
     expect(assemble.steps.filter((step) => step.uses?.startsWith("actions/attest@"))).toHaveLength(
       6,
     );
@@ -400,6 +424,130 @@ describe("release workflow portable asset manifest resolution", () => {
   });
 });
 
+describe("stable release rehearsal on dev", () => {
+  // Every job behind a needs edge used to run for the first time inside a tagged release, so the
+  // v1.0.0 cut surfaced one defect per attempt. A dev push now rehearses the whole chain without
+  // publishing it.
+
+  it("rehearses on every dev push and cancels only a superseded rehearsal", () => {
+    expect(portableWorkflowDocument.on.push.branches).toEqual(["dev"]);
+    expect(portableWorkflowDocument.on.push.tags).toEqual(["v*"]);
+    // Exact: GitHub cancels a queued run in a shared group even without cancel-in-progress, so a tag
+    // run or a manual dispatch must never share a group with another run.
+    expect(portableWorkflowDocument.concurrency).toEqual({
+      group:
+        "${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' && 'portable-assets-dev-rehearsal' || format('portable-assets-run-{0}', github.run_id) }}",
+      "cancel-in-progress": "${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' }}",
+    });
+  });
+
+  it("stages a rehearsal only once readiness finds the version approved", () => {
+    const readiness = workflowJob("rehearsal-readiness");
+    expect(readiness.if).toContain("github.event_name == 'push'");
+    expect(readiness.if).toContain("github.ref == 'refs/heads/dev'");
+    expect(readiness.outputs.ready).toBe("${{ steps.readiness.outputs.ready }}");
+    expect(readiness.steps.find((step) => step.id === "readiness")?.run).toBe(
+      "node scripts/portable-rehearsal-readiness.mjs",
+    );
+    for (const name of ["stage", "stage-linux-production"]) {
+      const job = workflowJob(name);
+      expect(jobNeeds(job), `${name} must wait for readiness`).toContain("rehearsal-readiness");
+      expect(job.if, `${name} must survive a skipped readiness job`).toMatch(
+        /^\$\{\{ !cancelled\(\)/u,
+      );
+      expect(job.if).toContain("needs.rehearsal-readiness.outputs.ready == 'true'");
+    }
+  });
+
+  it("keeps tag identity and required-check verification on stable tags only", () => {
+    for (const name of ["stage", "stage-linux-production"]) {
+      const job = workflowJob(name);
+      const authority = namedStep(job, "Validate stable tag and governed release authority");
+      expect(authority.if, `${name} authority`).toContain("startsWith(github.ref, 'refs/tags/v')");
+      expect(authority.run).toContain("verify-release-required-checks.mjs");
+      const rehearsal = namedStep(
+        job,
+        "Validate the release workflow authority a rehearsal will face",
+      );
+      expect(rehearsal.if).toContain("github.ref == 'refs/heads/dev'");
+      expect(rehearsal.run).toContain("npm run check:release-required-workflows");
+    }
+    expect(namedStep(workflowJob("stage"), "Validate approved runtime inputs").if).toContain(
+      "github.ref == 'refs/heads/dev'",
+    );
+  });
+
+  it("verifies a rehearsal in the rehearsal lane and a release in the release lane", () => {
+    for (const [jobName, stepName] of [
+      ["stage-linux-production", "Seal and verify the production Linux archive"],
+      [
+        "qualify-linux-production",
+        "Re-verify the offline Sigstore bundle, archive, and production discovery",
+      ],
+    ]) {
+      const step = namedStep(workflowJob(jobName), stepName);
+      expect(step.run, stepName).toContain('--lane "$SIGNING_LANE"');
+      expect(valueForRef(step.env.SIGNING_LANE, "refs/heads/dev")).toBe("rehearsal");
+      expect(valueForRef(step.env.SIGNING_LANE, "refs/tags/v1.0.0")).toBe("release");
+    }
+  });
+
+  it("builds, signs, and assembles exactly the commit that triggered the run", () => {
+    // An explicit ref makes actions/checkout fetch that ref's tip when the job starts; on
+    // refs/heads/dev that can already be a newer push, while every artifact is bound to GITHUB_SHA.
+    for (const [jobName, job] of Object.entries(portableWorkflowDocument.jobs)) {
+      const checkout = job.steps.find((step) => String(step.uses).startsWith("actions/checkout@"));
+      expect(checkout, `${jobName} checkout`).toBeDefined();
+      expect(checkout.with?.ref, `${jobName} must check out the event commit`).toBeUndefined();
+    }
+    for (const jobName of ["stage", "stage-linux-production", "qualify-linux-production"]) {
+      const { steps } = workflowJob(jobName);
+      const verify = steps.findIndex((step) => step.name === "Verify checked-out commit");
+      expect(verify, `${jobName} verifies its commit`).toBeGreaterThan(0);
+      expect(steps[verify].run).toBe('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"');
+      expect(steps[verify].if, `${jobName} verification is unconditional`).toBeUndefined();
+      steps.forEach((step, index) => {
+        if (index !== verify && String(step.run).includes("GITHUB_SHA")) {
+          expect(
+            index,
+            `${jobName}: ${String(step.name)} runs after the commit check`,
+          ).toBeGreaterThan(verify);
+        }
+      });
+    }
+    // The Windows leg runs pwsh by default; the check is bash.
+    expect(namedStep(workflowJob("stage"), "Verify checked-out commit").shell).toBe("bash");
+  });
+
+  it("keeps every secret-bearing step off the rehearsal lane", () => {
+    // Environment separation keeps signing credentials away from a rehearsal only while no step reads
+    // a secret on the rehearsal lane, so a step may read one only behind a reviewed stable-tag
+    // condition.
+    const stableTagOnly = new Set([
+      "${{ startsWith(github.ref, 'refs/tags/v') }}",
+      "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}",
+    ]);
+    for (const [jobName, job] of Object.entries(portableWorkflowDocument.jobs)) {
+      const { steps, ...jobSettings } = job;
+      expect(JSON.stringify(jobSettings), `${jobName} job settings`).not.toContain("secrets.");
+      for (const step of steps) {
+        if (!JSON.stringify(step).includes("secrets.")) continue;
+        expect(stableTagOnly.has(step.if), `${jobName}: ${String(step.name)}`).toBe(true);
+      }
+    }
+    expect(JSON.stringify(portableWorkflowDocument.env ?? {})).not.toContain("secrets.");
+  });
+
+  it("checks the release tag a rehearsal would cut, derived from the version", () => {
+    const run = namedStep(
+      workflowJob("assemble"),
+      "Assemble and validate the release asset bundle",
+    ).run;
+    expect(run).toContain('--release-tag "v$(node -p');
+    expect(run).not.toContain("GITHUB_REF_NAME");
+  });
+});
+
 describe("portable asset workflow run resolution", () => {
   const config = {
     artifactName: "portable-release-assets",
@@ -431,6 +579,23 @@ describe("portable asset workflow run resolution", () => {
       artifactId: 777,
       runAttempt: 2,
     });
+  });
+
+  it("refuses a dev rehearsal run and its rehearsal bundle", () => {
+    const rehearsal = {
+      ...run,
+      head_branch: "dev",
+      path: ".github/workflows/portable-assets.yml@refs/heads/dev",
+    };
+    expect(() => validatePortableAssetsRunSnapshot(config, rehearsal, artifacts)).toThrow(
+      "stable tag",
+    );
+    const rehearsalBundle = {
+      artifacts: [{ ...artifacts.artifacts[0], name: "portable-rehearsal-assets" }],
+    };
+    expect(() => validatePortableAssetsRunSnapshot(config, run, rehearsalBundle)).toThrow(
+      "exactly one canonical portable asset artifact is required",
+    );
   });
 
   it.each([

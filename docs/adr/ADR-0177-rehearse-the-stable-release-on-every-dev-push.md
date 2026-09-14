@@ -1,0 +1,130 @@
+# ADR-0177: Rehearse the stable release on every dev push
+
+## Status
+
+Accepted (owner decision, 2026-09-14).
+
+## Amends
+
+- [ADR-0121](ADR-0121-portable-managed-install-and-release-asset-update-authority.md) D8: the
+  `assemble` job that generates the portable GitHub Attestations also runs as a rehearsal on `dev`,
+  and every documented verifier of those attestations binds the stable tag.
+- [ADR-0163](ADR-0163-self-contained-release-qualified-coding-runtime.md) D2: the Linux
+  runtime-qualification receipt may also be signed under a rehearsal identity that production
+  discovery never accepts.
+
+## Context
+
+`.github/workflows/portable-assets.yml` built the stable portable release set only on a stable `v*`
+tag push. Its Linux production staging, fresh-runner requalification, and assembly jobs sit behind
+`needs` edges that no pull request and no manual dispatch reaches, so they ran for the first time
+inside the v1.0.0 release on 2026-09-13. Each attempt surfaced the next defect of a class no earlier
+run could have shown: the fresh qualification job had no built `packages/*/dist`
+(`ERR_MODULE_NOT_FOUND`), the zipped artifact upload dropped the native helper's file modes, the
+upload excluded the hidden `.portable/` evidence ("missing runtime activation manifest"), and the
+assembler refused the stable lanes it exists to combine. Every defect cost a tag, a four-platform
+run, and a repair pull request.
+
+A pull request cannot run this chain: it needs the stable build, the OIDC signing grant, and the
+complete four-target set. The owner asked for the opposite property — every green `dev` state
+releasable with one approval — and that holds only if the chain has already run on that state before
+anyone tags it.
+
+## Decision
+
+### D1 — A releasable dev push runs the stable chain as a rehearsal
+
+A push to `dev` runs the `stage`, `stage-linux-production`, `qualify-linux-production`, and
+`assemble` jobs of a stable tag with the same steps: native staging with `--release`, the USearch,
+launch/setup, and secure-read smokes, Linux qualification, OIDC signing, sealing, offline
+re-verification on a fresh runner, the Windows setup companion build, assembly, and the GitHub
+Attestations. The release tag the assembly binds is derived from the committed version,
+`v<package.json version>`, never from the ref name.
+
+Dev pushes share one concurrency group, and a newer push cancels the older rehearsal. Every tag run
+and every manual dispatch gets a group of its own, because GitHub cancels a queued run in a shared
+group when a third one arrives, even without `cancel-in-progress`.
+
+### D2 — "Not releasable yet" is a named status, not a failure
+
+The read-only `rehearsal-readiness` job (`scripts/portable-rehearsal-readiness.mjs`) reads only the
+committed `package.json` and `release-impact.catalog.json`. A prerelease version, or a portable
+target without exactly one reviewed, human-approved release-impact entry for `v<version>`, sets
+`ready=false` and writes the reason to the job summary. The rehearsal jobs are then skipped rather
+than failed, so the lane does not stand red between two releases. An unreadable package or catalog
+fails the job, because that is a defect rather than a state.
+
+### D3 — Only what needs a real tag is skipped
+
+The rehearsal skips exactly the checks that cannot be answered without the tag: that the tag points
+at the commit and names `v<version>`, and `scripts/verify-release-required-checks.mjs`, which reads
+the required check runs of the tagged commit. It still validates the release workflow authority
+(`check:release-required-workflows`) and the approved runtime inputs (`check:portable-approvals`).
+`release.yml` is not rehearsed: Keiko release-trust signing, the npm publish behind the
+`npm-publish` approval, and the GitHub Release upload stay with the tag.
+
+### D4 — A rehearsal signs under its own identity
+
+The Linux receipt's Sigstore certificate names the workflow ref that signed it, so a rehearsal signs
+as `…/portable-assets.yml@refs/heads/dev`. `scripts/linux-portable-signing.mjs` verifies that
+signature with `--lane rehearsal` against `LINUX_QUALIFICATION_REHEARSAL_SIGSTORE_POLICY` and does
+not offer the artifact to production discovery. Production discovery keeps verifying against
+`LINUX_QUALIFICATION_SIGSTORE_POLICY`, which accepts `…@refs/tags/v<major>.<minor>.<patch>` only. A
+fence test fails when any package module other than the defining one, or any script other than the
+Linux signing tool, references the rehearsal policy or its verifier.
+
+### D5 — A rehearsal can never be released
+
+The rehearsal bundle is uploaded as `portable-rehearsal-assets`. The release workflow's resolver
+accepts only `portable-release-assets` from a successful stable-tag push of this workflow for the
+exact tag, so it refuses a rehearsal run on its branch and on its artifact name independently. The
+bundle carries no Keiko release-trust signature; only the protected publisher creates one. Its
+GitHub Attestations name `refs/heads/dev`: the publisher verifies the setup companion's attestation
+with `--signer-workflow`, `--source-digest`, and `--source-ref refs/tags/<tag>`, and the operator
+guide binds the signer workflow and the stable tag the same way, so a rehearsal attestation never
+verifies as a release.
+
+### D6 — The rehearsal stays out of the signing environment
+
+Every deployment protection rule must pass before a job that references an environment gets a
+runner. A rehearsal entering `portable-release-signing` would stall once that environment receives a
+stable-tag deployment policy or the approval the signing contract describes, and it would run next
+to any credential provisioned there. The Linux production job therefore selects
+`portable-release-rehearsal` on `dev` and `portable-release-signing` on a tag. GitHub creates the
+rehearsal environment on its first reference, without protection rules or secrets. Independently of
+the environment, a step may read a secret only behind a reviewed stable-tag condition.
+
+### D7 — Every job works on the commit that triggered the run
+
+`actions/checkout` with an explicit `ref` fetches that ref's tip when the job starts. On `dev` that
+tip can already be a newer push, while every artifact is bound to `GITHUB_SHA`. No checkout in the
+workflow passes a `ref`, so each binds the event commit, and the jobs that stage, sign, or requalify
+compare `git rev-parse HEAD` with `GITHUB_SHA` before any step uses it.
+
+## Consequences
+
+- A release-only defect surfaces on the `dev` push that introduces it, not in a tagged release.
+- Each releasable `dev` push costs one full four-platform chain; a newer push cancels the older one.
+- Each rehearsal writes public Sigstore transparency-log entries for the Linux receipt and the GitHub
+  Attestations. They name the repository, `refs/heads/dev`, and the commit, which the public
+  repository already discloses, and they cannot be removed.
+- `portable-release-signing` can take a `v*` deployment policy and a required approval without
+  affecting `dev`.
+- A green rehearsal proves the chain for `v<version>` at that commit. After a version is published,
+  the next release still needs its version bump and its reviewed release-impact approval; readiness
+  names that gap until the approval lands.
+
+## Guards
+
+`scripts/__tests__/release-portable-assets-workflow.test.mjs` pins the trigger and concurrency, the
+readiness gating, the tag-only authority, the signing-lane mapping, the environment split, the
+checkout binding, secret gating, the derived release tag, and the resolver's refusal of a rehearsal
+run and bundle. `scripts/__tests__/linux-qualification-rehearsal-fence.test.mjs` pins the consumers
+of the rehearsal policy.
+
+## References
+
+- [ADR-0121](ADR-0121-portable-managed-install-and-release-asset-update-authority.md)
+- [ADR-0163](ADR-0163-self-contained-release-qualified-coding-runtime.md)
+- [Release publish workflow](../release/release-publish-workflow.md)
+- [Optional Native Platform Signing Contract](../release/portable-production-signing-contract.md)

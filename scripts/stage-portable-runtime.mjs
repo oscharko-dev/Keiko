@@ -28,7 +28,7 @@ import {
   isSafePortableRelativePath,
   portableTargetByName,
   PORTABLE_TARGET_NAMES,
-  portableRuntimeContractMatches,
+  reviewedStagingEntryMatches,
   WINDOWS_GENERATION_STAGING_RELATIVE_PATH,
   portableVerificationSummaryForManifest,
   sha256File,
@@ -2318,14 +2318,7 @@ function reviewedReleaseImpactEntry(options) {
 }
 
 function releaseImpactEntryMatches(entry, options) {
-  return (
-    entry.packageName === rootPackage.name &&
-    entry.packageVersion === rootPackage.version &&
-    entry.releaseTag === options.releaseTag &&
-    entry.review?.status === "reviewed" &&
-    entry.review?.humanApproved === true &&
-    portableRuntimeContractMatches(entry.portableRuntimeArtifactContract, options.target)
-  );
+  return reviewedStagingEntryMatches(entry, rootPackage, options.releaseTag, options.target);
 }
 
 export async function assemblePortableStage(options, hooks = {}) {

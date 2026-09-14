@@ -426,11 +426,12 @@ describe("CI test/gate wiring guard", () => {
       runtimeWorkflows.match(/node scripts\/check-runtime-toolchain\.mjs --exact/gu)?.length ?? 0;
     // This inventory covers every workflow that selects Node. Issue #3403 retired the six
     // credential-bound Apple/Microsoft production-signing lanes; Issue #3451 adds three Linux
-    // staging/qualification lanes. The load-bearing pairing below proves every lane verifies the
-    // governed toolchain, while the exact counts make a removed or unreviewed new lane fail.
-    expect(node24SetupCount).toBe(23);
+    // staging/qualification lanes; ADR-0177 adds the dev release-rehearsal readiness lane. The
+    // load-bearing pairing below proves every lane verifies the governed toolchain, while the exact
+    // counts make a removed or unreviewed new lane fail.
+    expect(node24SetupCount).toBe(24);
     expect(node26SetupCount).toBe(1);
-    expect(nodeSetupCount).toBe(24);
+    expect(nodeSetupCount).toBe(25);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
     expect(ci).toContain("NODE_26_COMPATIBILITY_RESULT");

@@ -176,6 +176,18 @@ it:
    the Release workflow consumes through `portable_assets_run_id`. GitHub attestations are emitted
    as supplementary provenance; the protected publisher later adds mandatory Keiko release trust.
 
+A push to `dev` runs this chain as a rehearsal
+([ADR-0177](../adr/ADR-0177-rehearse-the-stable-release-on-every-dev-push.md)). Its
+`rehearsal-readiness` job first checks that the committed version is stable and that each of the
+four targets has exactly one reviewed, human-approved release-impact entry; otherwise the job
+summary names what is missing and the rehearsal stops without failing. A releasable push runs every
+step above for `v<package.json version>` except the tag identity and the required-check verification
+of the tagged commit. Its Linux job runs in the `portable-release-rehearsal` environment and signs
+the qualification receipt as `portable-assets.yml@refs/heads/dev`, an identity production discovery
+never accepts, and its bundle is uploaded as `portable-rehearsal-assets`, which the Release workflow
+refuses. A newer `dev` push cancels an older rehearsal; tag runs and manual dispatches are never
+cancelled.
+
 Version approval is a pull request: [`portable-runtime-approvals.json`](../../portable-runtime-approvals.json)
 pins the Node.js runtime version and each coding sidecar's immutable upstream commit, raw protocol
 schema, archive, executable-tree, license, redistribution, and subscription-auth evidence.
@@ -187,7 +199,9 @@ The staging pipeline never downloads unpinned or `latest` inputs.
 Publishing remains a human decision. Secret-free `workflow_dispatch`, prerelease, development, and
 pull-request staging never selects `portable-release-signing`, requests Azure OIDC, or receives Apple
 secrets; those artifacts intentionally remain staging/non-production, do not emit the canonical
-`portable-release-assets` bundle, and cannot be promoted. Production signing is restricted to
+`portable-release-assets` bundle, and cannot be promoted. The `dev` release rehearsal builds the
+stable lanes but cannot be promoted either: it signs only under its own identity and never emits
+the canonical bundle. Production signing is restricted to
 protected native-runner jobs triggered by a reviewed stable tag, with separate event, tag-shape,
 exact `v<package.json.version>`, digest, and signing-identity guards. Only their
 `verified-production` outputs may enter the reviewed-candidate bundle. The Ubuntu assembler

@@ -21,8 +21,13 @@ import {
   LinuxPortableSigningError,
   parseLinuxPortableSigningArgs,
   prepareLinuxQualifiedPayload,
+  signingLane,
   verifyLinuxQualifiedPayload,
 } from "../linux-portable-signing.mjs";
+import {
+  verifyLinuxQualificationBundle,
+  verifyLinuxQualificationRehearsalBundle,
+} from "../../packages/keiko-server/src/coding-runtime/linuxPortableSigstore.ts";
 import { runSignLinuxRuntimeQualificationCli } from "../sign-linux-runtime-qualification.mjs";
 
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
@@ -229,6 +234,39 @@ describe("Linux portable qualification sealing", () => {
     expect(deps.discoverQualifiedRuntime).toHaveBeenCalledOnce();
     expect(() => verifyLinuxQualifiedPayload(optionsFor(value.stageRoot), deps)).not.toThrow();
   });
+
+  it("defaults to the release lane: release verifier and product discovery", () => {
+    const lane = signingLane({});
+    expect(lane.verifyQualificationBundle).toBe(verifyLinuxQualificationBundle);
+    expect(lane.assertsProductDiscovery).toBe(true);
+    expect(signingLane({ lane: "release" })).toBe(lane);
+  });
+
+  it("rehearses with the rehearsal verifier and never the product discovery", async () => {
+    const lane = signingLane({ lane: "rehearsal" });
+    expect(lane.verifyQualificationBundle).toBe(verifyLinuxQualificationRehearsalBundle);
+    expect(lane.assertsProductDiscovery).toBe(false);
+
+    // The product discovery verifies against the release identity only; a rehearsal-signed
+    // qualification must never be offered to it, so the rehearsal chain does not call it.
+    const value = fixture();
+    const deps = dependencies(value.receipt);
+    const options = { ...optionsFor(value.stageRoot), lane: "rehearsal" };
+    prepareLinuxQualifiedPayload(options, deps);
+    await finalizeLinuxQualifiedPayload(options, deps);
+
+    expect(deps.verifyQualificationBundle).toHaveBeenCalledTimes(2);
+    expect(deps.discoverQualifiedRuntime).not.toHaveBeenCalled();
+    expect(() => verifyLinuxQualifiedPayload(options, deps)).not.toThrow();
+    expect(deps.discoverQualifiedRuntime).not.toHaveBeenCalled();
+  });
+
+  it.each(["production", "evaluation", "toString", "", 7])(
+    "refuses the unknown signing lane %s",
+    (lane) => {
+      expect(() => signingLane({ lane })).toThrow("unsupported signing lane");
+    },
+  );
 
   it("rejects stale receipts, tampered archives, and unavailable production discovery", async () => {
     const value = fixture();

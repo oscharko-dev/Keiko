@@ -8,6 +8,10 @@
     qualification and activation chain for all four supported targets.
   - [ADR-0140](ADR-0140-macos-dev-lane-activation-of-the-managed-coding-runtime.md) by completing
     the Wave-5 packaged path without changing the deliberately weaker development lane.
+- Amended by:
+  - [ADR-0177](ADR-0177-rehearse-the-stable-release-on-every-dev-push.md) D4 for D2: a `dev`
+    release rehearsal signs the Linux receipt under its own identity, which production discovery
+    never accepts.
 
 ## Context
 
@@ -162,7 +166,10 @@ secure-read helper, OpenCode payload, `Keiko` launcher, Node.js executable, and 
 addon. The activation projection carries the reviewed native-addon identity and shipped digest;
 the receipt additionally binds the actual launcher's and Node.js executable's staged bytes. A
 Sigstore bundle created through GitHub OIDC anchors the receipt to the protected `portable-assets`
-workflow identity and source commit. Immediately before admitting the runtime, production
+workflow identity and source commit. Production discovery accepts that identity only at a stable
+tag (`portable-assets.yml@refs/tags/v<major>.<minor>.<patch>`); the `dev` release rehearsal of
+ADR-0177 signs as `portable-assets.yml@refs/heads/dev`, which only the rehearsal verifier of
+`scripts/linux-portable-signing.mjs` accepts. Immediately before admitting the runtime, production
 discovery reopens each fixed, contained, regular single-link file and compares its SHA-256 digest
 with that offline-verified receipt. No network result, mutable key file, caller Boolean, unsigned
 receipt, legacy Linux receipt, or post-qualification byte replacement can authorize activation.
@@ -481,3 +488,4 @@ green. This is the class audit finding F-01 closed, and it must not be reintrodu
 | 1.2     | 2026-09-10 | Added the production-only `linux-x64` runtime target, offline GitHub-OIDC Sigstore qualification, exact component/source binding, fresh-runner re-verification, and namespace-gateway activation. |
 | 1.3     | 2026-09-10 | Closed the Linux launch-path binding for Issue #3451: receipt schema v2 and production discovery now bind and rehash the launcher, Node.js executable, and USearch addon in addition to the existing activation, helper, and sidecar evidence. |
 | 1.4     | 2026-09-10 | Allowed stable Windows and macOS payloads to use ADR-0121 D7 platform-neutral release trust without claiming native qualification; dispatch artifacts remain unpublishable. |
+| 1.5     | 2026-09-14 | Recorded the ADR-0177 rehearsal identity for the Linux receipt: `@refs/heads/dev` signatures verify only in the Linux signing tool's rehearsal lane, never in production discovery. |

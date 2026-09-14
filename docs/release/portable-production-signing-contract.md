@@ -96,7 +96,12 @@ must delete the temporary keychain and decoded files; cleanup failure fails the 
 ### Linux
 
 - Identity: GitHub's keyless OIDC identity for the protected `portable-assets` workflow in
-  `oscharko-dev/Keiko`; no repository-managed signing key or secret is accepted.
+  `oscharko-dev/Keiko`; no repository-managed signing key or secret is accepted. Production
+  discovery accepts that identity only at a stable tag (`@refs/tags/v<major>.<minor>.<patch>`).
+  The `dev` release rehearsal
+  ([ADR-0177](../adr/ADR-0177-rehearse-the-stable-release-on-every-dev-push.md)) signs as
+  `@refs/heads/dev` from the `portable-release-rehearsal` environment; only the rehearsal lane of
+  `scripts/linux-portable-signing.mjs` accepts that identity, and its archive is never published.
 - Signed subject: the canonical bytes of the exact `linux-x64` runtime-qualification receipt after
   the staged runtime has passed the real namespace-gateway suite.
 - Binding: the receipt fixes the source commit, target, `linux-namespace-gateway` backend,
@@ -111,9 +116,11 @@ must delete the temporary keychain and decoded files; cleanup failure fails the 
 
 ## Configuration references
 
-All references are scoped to `portable-release-signing`. Values are provisioned outside the repository.
-Names may be documented; live values must not appear in commits, manifests, evidence, logs, issues, or
-pull requests.
+All references are scoped to `portable-release-signing`. Values are provisioned outside the
+repository. The `dev` release rehearsal never enters that environment; it runs in
+`portable-release-rehearsal`, which holds no references, and no workflow step reads a secret outside
+a stable-tag condition. Names may be documented; live values must not appear in commits, manifests,
+evidence, logs, issues, or pull requests.
 
 | Reference                                         | GitHub storage                 | Purpose                                          |
 | ------------------------------------------------- | ------------------------------ | ------------------------------------------------ |

@@ -8,6 +8,8 @@ const PUBLIC_TUF_MIRROR = "https://tuf-repo-cdn.sigstore.dev";
 const GITHUB_OIDC_ISSUER = "https://token.actions.githubusercontent.com";
 const RELEASE_WORKFLOW_IDENTITY =
   /^https:\/\/github\.com\/oscharko-dev\/Keiko\/\.github\/workflows\/portable-assets\.yml@refs\/tags\/v\d+\.\d+\.\d+$/u;
+const REHEARSAL_WORKFLOW_IDENTITY =
+  /^https:\/\/github\.com\/oscharko-dev\/Keiko\/\.github\/workflows\/portable-assets\.yml@refs\/heads\/dev$/u;
 
 export interface SigstoreBundleVerifier {
   verify(
@@ -46,12 +48,44 @@ export const LINUX_QUALIFICATION_SIGSTORE_POLICY = Object.freeze({
   extensions: Object.freeze({ issuer: GITHUB_OIDC_ISSUER }),
 });
 
+/**
+ * The release lane rehearses on every dev push with the same workflow, so its certificate names
+ * refs/heads/dev. Only the release tooling's rehearsal lane verifies against this policy. The
+ * product runtime verifies exclusively against LINUX_QUALIFICATION_SIGSTORE_POLICY
+ * (readLinuxAttestation), so an installed Keiko can never accept a rehearsal-signed qualification,
+ * and a structural test pins that no product module imports this export.
+ */
+export const LINUX_QUALIFICATION_REHEARSAL_SIGSTORE_POLICY = Object.freeze({
+  subjectAlternativeName: REHEARSAL_WORKFLOW_IDENTITY,
+  extensions: Object.freeze({ issuer: GITHUB_OIDC_ISSUER }),
+});
+
+// Private on purpose: each exported verifier below is fixed to exactly one policy, so no caller can
+// hand a verifier an identity of its own choosing.
+function verifyAgainst(
+  receipt: Buffer,
+  serializedBundle: unknown,
+  verifier: SigstoreBundleVerifier,
+  policy: typeof LINUX_QUALIFICATION_SIGSTORE_POLICY,
+): void {
+  const bundle = bundleFromJSON(serializedBundle);
+  verifier.verify(toSignedEntity(bundle, receipt), policy);
+}
+
 /** Verifies the exact receipt bytes offline against Sigstore's embedded public trust root. */
 export function verifyLinuxQualificationBundle(
   receipt: Buffer,
   serializedBundle: unknown,
   verifier: SigstoreBundleVerifier = publicVerifier(),
 ): void {
-  const bundle = bundleFromJSON(serializedBundle);
-  verifier.verify(toSignedEntity(bundle, receipt), LINUX_QUALIFICATION_SIGSTORE_POLICY);
+  verifyAgainst(receipt, serializedBundle, verifier, LINUX_QUALIFICATION_SIGSTORE_POLICY);
+}
+
+/** Verifies a dev-branch rehearsal's receipt bytes. Never called by the product runtime. */
+export function verifyLinuxQualificationRehearsalBundle(
+  receipt: Buffer,
+  serializedBundle: unknown,
+  verifier: SigstoreBundleVerifier = publicVerifier(),
+): void {
+  verifyAgainst(receipt, serializedBundle, verifier, LINUX_QUALIFICATION_REHEARSAL_SIGSTORE_POLICY);
 }

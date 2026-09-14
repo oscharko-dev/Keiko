@@ -114,6 +114,20 @@ export function portableRuntimeContractMatches(contract, requestedTarget) {
     reviewedPortableTargetSet(contract.targets, requestedTarget)
   );
 }
+
+// The release-impact entry a tagged run stages a target from: the current package at the stable tag,
+// reviewed and approved by a human, carrying the reviewed staging contract for that target. The
+// staging producer and the dev rehearsal's readiness check apply this one rule.
+export function reviewedStagingEntryMatches(entry, rootPackage, releaseTag, target) {
+  return (
+    entry?.packageName === rootPackage.name &&
+    entry.packageVersion === rootPackage.version &&
+    entry.releaseTag === releaseTag &&
+    entry.review?.status === "reviewed" &&
+    entry.review?.humanApproved === true &&
+    portableRuntimeContractMatches(entry.portableRuntimeArtifactContract, target)
+  );
+}
 export const PORTABLE_VERIFICATION_POLICIES = Object.freeze([
   "staging",
   "development",
