@@ -90,6 +90,9 @@ function fixture(target = "macos-arm64") {
     },
     security: { verificationStatus: "verified-production" },
     nativeHelpers: helpers,
+    // runtimeActivationManifest emits nativeAddons unconditionally (#3455), so a real activation
+    // manifest always carries the key; omitting it here restated a shape the producer never sees.
+    nativeAddons: [],
     sidecarRuntimes: [{ name: "opencode-compatible", payloadSha256: "a".repeat(64) }],
     releaseImpact: { entryId: "fixture" },
   };
@@ -159,6 +162,30 @@ describe("macOS runtime qualification", () => {
     expect(runQuietFn).toHaveBeenCalledTimes(2);
     expect(runFn).toHaveBeenCalledTimes(2);
     qualifyMacosRuntimeRelease({ ...options, "verify-only": "true" }, deps);
+  });
+
+  it.each([
+    ["null", null],
+    ["an object", { usearch: {} }],
+    ["a string", "usearch"],
+    ["absent", undefined],
+  ])("refuses an activation manifest whose nativeAddons is %s", (_label, value) => {
+    // exactKeys only proves the key exists, so a malformed nativeAddons would otherwise receive a
+    // successful qualification receipt. The gate fails closed on every shape that is not an array.
+    const state = fixture();
+    const activation = { ...state.activation };
+    if (value === undefined) delete activation.nativeAddons;
+    else activation.nativeAddons = value;
+    writeFileSync(state.activationPath, `${JSON.stringify(activation)}\n`);
+
+    expect(() =>
+      qualificationReceiptFor({
+        activationPath: state.activationPath,
+        resourceRoot: state.resourceRoot,
+        target: state.target,
+        sourceCommitSha: COMMIT,
+      }),
+    ).toThrow("activation manifest is invalid");
   });
 
   it("rejects incomplete identity, approval, verification mode, and stale receipts", () => {

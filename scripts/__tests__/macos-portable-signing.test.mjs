@@ -532,6 +532,8 @@ describe("macOS portable signing inventory", () => {
           artifact: { platformTarget: "macos-arm64" },
           runtime: { nodePlatform: "darwin", nodeArchitecture: "arm64" },
           security: { verificationStatus: "verified-production" },
+          // runtimeActivationManifest emits nativeAddons unconditionally (#3455).
+          nativeAddons: [],
           nativeHelpers: [
             {
               name: "keiko-runtime-supervisor",

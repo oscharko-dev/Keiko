@@ -27,6 +27,8 @@ import {
   runtimeActivationManifest,
 } from "./runtime-activation-manifest.mjs";
 import { isPortableExecutableFile } from "./lib/portable-executable.mjs";
+import { qualificationReceiptFor as linuxQualificationReceiptFor } from "./qualify-linux-runtime-release.mjs";
+import { qualificationReceiptFor as macosQualificationReceiptFor } from "./qualify-macos-runtime-release.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
@@ -140,21 +142,47 @@ function commonIdentity(manifest) {
       rootPackageVersion: field(manifest, "provenance", "rootPackageVersion"),
       sourceCommitSha: field(manifest, "provenance", "sourceCommitSha"),
     },
-    securityState: {
-      verificationPolicy: field(manifest, "security", "verificationPolicy"),
-      verificationReasonCodes: field(manifest, "security", "verificationReasonCodes"),
-      verificationStatus: field(manifest, "security", "verificationStatus"),
-    },
     stateExclusion: manifest.stateExclusion,
-    updateEligibility: manifest.updateEligibility,
+    updateEligibility: laneIndependentUpdateEligibility(manifest.updateEligibility),
   });
 }
 
+// The stable lane is not symmetric, so the release identity must not demand one shared security state:
+// it did from #2261, and once Linux became the production-signed target no stable four-target set
+// could assemble. Each target is held to the lane it may carry instead. Linux must be production,
+// because the runtime qualification evidence is only asserted for a non-evaluation artifact and a
+// Linux release-trust candidate would otherwise ship without it. The other targets are release-trust
+// candidates, or production once a platform signature is verified.
+function stableReleaseLaneFailures(manifest, target) {
+  const policy = manifest.security?.verificationPolicy;
+  const permitted =
+    policy === "production" || (target.nodePlatform !== "linux" && policy === "evaluation");
+  if (permitted) return [];
+  const lanes = target.nodePlatform === "linux" ? "production" : "production or evaluation";
+  return [`security.verificationPolicy must be ${lanes} in a stable release (${String(policy)})`];
+}
+
+// platformSignatureLocallyVerified follows each target's own lane - true only where a platform
+// signature was verified - and its lane contract already validates it per manifest. It is the one
+// update-eligibility field the targets of a stable release legitimately do not share.
+function laneIndependentUpdateEligibility(updateEligibility) {
+  const predicates = updateEligibility?.requiredPredicates;
+  if (predicates === null || typeof predicates !== "object") return updateEligibility;
+  const copy = structuredClone(updateEligibility);
+  delete copy.requiredPredicates.platformSignatureLocallyVerified;
+  return copy;
+}
+
 function targetFailures(manifest, target, expected) {
-  const failures =
-    manifest.security?.verificationPolicy === "evaluation"
+  // A stable-tag build stages every target as a release-trust candidate (--release-build sets the
+  // evaluation lane with releaseTrustRequired), and stage-linux-production then signs Linux into the
+  // production lane. Each manifest is validated against the contract of the lane it carries.
+  const failures = [
+    ...(manifest.security?.verificationPolicy === "evaluation"
       ? validatePortableReleaseTrustCandidateManifest(manifest)
-      : validatePortableCandidateManifest(manifest);
+      : validatePortableCandidateManifest(manifest)),
+    ...stableReleaseLaneFailures(manifest, target),
+  ];
   const checks = [
     [
       "artifact.platformTarget",
@@ -305,6 +333,8 @@ function assertRuntimeActivationEvidence(stageRoot, manifest, target, sbom) {
   ) {
     fail(`${target.platformTarget} runtime activation binding is invalid`);
   }
+  // A release-trust candidate carries no runtime qualification or attestation yet; those belong to a
+  // production-lane artifact, and stableReleaseLaneFailures keeps Linux out of the evaluation lane.
   if (manifest.security.verificationPolicy === "evaluation") return;
   if (target.nodePlatform === "win32") {
     assertRuntimeAttestationEvidence(resourceRoot, manifest, sbom);
@@ -315,6 +345,9 @@ function assertRuntimeActivationEvidence(stageRoot, manifest, target, sbom) {
 
 function assertRuntimeQualificationEvidence(resourceRoot, manifest, target) {
   const qualification = manifest.runtimeQualification;
+  if (qualification?.path === undefined || qualification.sha256 === undefined) {
+    fail(`${target.platformTarget} production artifact carries no runtime qualification binding`);
+  }
   const path = regularContainedFile(
     resourceRoot,
     qualification.path,
@@ -322,33 +355,34 @@ function assertRuntimeQualificationEvidence(resourceRoot, manifest, target) {
   );
   const bytes = readFileSync(path);
   const receipt = JSON.parse(bytes.toString("utf8"));
-  const helpers = new Map(manifest.nativeHelpers.map((helper) => [helper.name, helper]));
-  const expected = {
-    schemaVersion: 1,
-    suiteVersion: "runtime-tree-qualification-v1",
-    platformTarget: manifest.artifact.platformTarget,
-    sourceCommitSha: manifest.release.commitSha,
-    activationManifestSha256: manifest.runtimeActivation.sha256,
-    supervisorSha256: helpers.get("keiko-runtime-supervisor")?.shippedSha256,
-    secureReadSha256: helpers.get("keiko-secure-workspace-read")?.shippedSha256,
-    sidecars: (manifest.sidecarRuntimes ?? []).map((sidecar) => ({
-      name: sidecar.name,
-      sha256: sidecar.payloadSha256,
-    })),
-    backend:
-      target.nodePlatform === "linux" ? "linux-namespace-gateway" : "macos-endpoint-security",
-    result: "passed",
-  };
   if (
     createHash("sha256").update(bytes).digest("hex") !== qualification.sha256 ||
-    !isDeepStrictEqual(receipt, expected)
+    !isDeepStrictEqual(receipt, expectedQualificationReceipt(resourceRoot, manifest, target))
   ) {
     fail(`${manifest.artifact.platformTarget} runtime qualification binding is invalid`);
   }
 }
 
+// Derived from the producer that writes the receipt, never restated here. The Linux producer moved
+// to schemaVersion 2 with a runtimeComponents list in #3455 while this consumer kept a copy of the
+// schemaVersion 1 shape, so an isDeepStrictEqual over an extra key failed every stable Linux
+// bundle -- AGENTS.md section 7: a fixture derives from the production entry point.
+function expectedQualificationReceipt(resourceRoot, manifest, target) {
+  const input = {
+    activationPath: join(resourceRoot, ...RUNTIME_ACTIVATION_RELATIVE_PATH.split("/")),
+    resourceRoot,
+    sourceCommitSha: manifest.release.commitSha,
+  };
+  return target.nodePlatform === "linux"
+    ? linuxQualificationReceiptFor(input)
+    : macosQualificationReceiptFor({ ...input, target: target.platformTarget });
+}
+
 function assertRuntimeAttestationEvidence(resourceRoot, manifest, sbom) {
   const attestation = manifest.runtimeAttestation;
+  if (attestation?.executablePath === undefined) {
+    fail("windows-x64 production artifact carries no runtime attestation binding");
+  }
   const executable = regularContainedFile(
     resourceRoot,
     attestation.executablePath,
@@ -361,6 +395,10 @@ function assertRuntimeAttestationEvidence(resourceRoot, manifest, sbom) {
   ) {
     fail("windows-x64 runtime attestation carrier is invalid");
   }
+  assertRuntimeAttestationSbomBinding(manifest, attestation, sbom);
+}
+
+function assertRuntimeAttestationSbomBinding(manifest, attestation, sbom) {
   const bomRef = `pkg:generic/keiko-runtime-attestation@${manifest.product.packageVersion}?platform=windows-x64`;
   const components = (sbom.components ?? []).filter(
     (component) => component?.["bom-ref"] === bomRef,
