@@ -60,6 +60,45 @@ describe("withCyclonedxSerialNumber", () => {
     expect(withCyclonedxSerialNumber(derived)).toStrictEqual(derived);
   });
 
+  // Stamping a serial number onto something that is not CycloneDX would hand actions/attest a
+  // document it rejects only much later in the tag run, or attest the wrong thing.
+  it.each([
+    ["null", null],
+    ["undefined", undefined],
+    ["an array", [{ bomFormat: "CycloneDX", specVersion: "1.6" }]],
+    ["JSON text instead of a parsed document", '{"bomFormat":"CycloneDX","specVersion":"1.6"}'],
+    ["an empty object", {}],
+    ["an SPDX document", { spdxVersion: "SPDX-2.3", SPDXID: "SPDXRef-DOCUMENT" }],
+    ["a bomFormat in the wrong case", { bomFormat: "cyclonedx", specVersion: "1.6" }],
+    ["a missing specVersion", { bomFormat: "CycloneDX", components: [] }],
+    ["an empty specVersion", { bomFormat: "CycloneDX", specVersion: "" }],
+    ["a numeric specVersion", { bomFormat: "CycloneDX", specVersion: 1.6 }],
+  ])("refuses %s instead of stamping a serial number on it", (_label, document) => {
+    expect(() => withCyclonedxSerialNumber(document)).toThrow(TypeError);
+    expect(() => withCyclonedxSerialNumber(document)).toThrow(
+      'a CycloneDX serial number needs a JSON object with bomFormat "CycloneDX" and a specVersion.',
+    );
+  });
+
+  it("accepts the smallest CycloneDX document", () => {
+    const sbom = withCyclonedxSerialNumber({ bomFormat: "CycloneDX", specVersion: "1.6" });
+
+    expect(Object.keys(sbom)).toStrictEqual(["bomFormat", "specVersion", "serialNumber"]);
+    expect(sbom.serialNumber).toMatch(CYCLONEDX_SERIAL_NUMBER);
+  });
+
+  it("keeps a parsed __proto__ key an inert data field", () => {
+    const hostile = JSON.parse(
+      '{"bomFormat":"CycloneDX","specVersion":"1.6","__proto__":{"polluted":true}}',
+    );
+    const sbom = withCyclonedxSerialNumber(hostile);
+
+    expect(Object.getPrototypeOf(sbom)).toBe(Object.prototype);
+    expect(Object.hasOwn(sbom, "__proto__")).toBe(true);
+    expect(sbom.polluted).toBeUndefined();
+    expect({}.polluted).toBeUndefined();
+  });
+
   it("keeps the document fields and puts the serial number beside the format", () => {
     const sbom = withCyclonedxSerialNumber(portableSbom());
 

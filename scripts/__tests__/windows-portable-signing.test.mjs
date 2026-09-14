@@ -223,6 +223,7 @@ function windowsPrepareStage() {
     join(stage, "evidence", "sbom.cdx.json"),
     `${JSON.stringify({
       bomFormat: "CycloneDX",
+      specVersion: "1.6",
       components: manifest.nativeHelpers
         .map((helper) => ({
           "bom-ref": helper.sbomBomRef,

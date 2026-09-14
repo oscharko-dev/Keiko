@@ -1918,6 +1918,23 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expectNoPublicationSideEffect(lastRun.calls);
     });
 
+    it.each([
+      ["empty", ""],
+      ["unset", undefined],
+    ])("refuses an %s release signing key before the GitHub release exists", (_label, value) => {
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { published: false },
+        qualificationEnv: { KEIKO_PORTABLE_RELEASE_SIGNING_KEY: value },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain(
+        "KEIKO_PORTABLE_RELEASE_SIGNING_KEY is required for portable release publication.",
+      );
+      expectNoPublicationSideEffect(lastRun.calls);
+    });
+
     it("refuses to upload qualified assets over a published evaluation release", () => {
       // The evaluation lane's completed release is isDraft:false and carries the evidence
       // manifest; clobbering it with production bytes would leave that evidence beside foreign

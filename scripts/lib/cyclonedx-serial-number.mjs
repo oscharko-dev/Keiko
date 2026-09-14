@@ -7,7 +7,23 @@ import { createHash } from "node:crypto";
 // passes its document through this last, so a rewrite never keeps a stale serial number.
 const FORMAT_FIELDS = new Set(["bomFormat", "specVersion", "serialNumber"]);
 
+function isCyclonedxDocument(document) {
+  return (
+    typeof document === "object" &&
+    document !== null &&
+    !Array.isArray(document) &&
+    document.bomFormat === "CycloneDX" &&
+    typeof document.specVersion === "string" &&
+    document.specVersion.length > 0
+  );
+}
+
 export function withCyclonedxSerialNumber(document) {
+  if (!isCyclonedxDocument(document)) {
+    throw new TypeError(
+      'a CycloneDX serial number needs a JSON object with bomFormat "CycloneDX" and a specVersion.',
+    );
+  }
   const { bomFormat, specVersion } = document;
   const rest = Object.fromEntries(
     Object.entries(document).filter(([key]) => !FORMAT_FIELDS.has(key)),
