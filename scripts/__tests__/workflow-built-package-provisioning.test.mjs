@@ -98,6 +98,22 @@ describe("the import walk and build detection the pin relies on", () => {
     expect(importGraphReachesDist("scripts/entry.mjs", root)).toBe(true);
   });
 
+  it("substitutes every * of a pattern export target, as node does", () => {
+    // Node replaces each "*" on the target side, so "./src/*/*.mjs" for "tools/run" is
+    // ./src/run/run.mjs. Substituting only the first one looks at a file that does not exist and
+    // misses the built output that file imports.
+    const root = fixture({
+      "packages/tools/package.json": {
+        name: "@scope/tools",
+        exports: { "./tools/*": "./src/*/*.mjs" },
+      },
+      "packages/tools/src/run/run.mjs": 'export { x } from "../../dist/x.js";\n',
+      "scripts/entry.mjs": 'import { x } from "@scope/tools/tools/run";\n',
+    });
+
+    expect(importGraphReachesDist("scripts/entry.mjs", root)).toBe(true);
+  });
+
   it("follows a script into a TypeScript source that imports a workspace package", () => {
     const root = fixture({
       ...contracts,

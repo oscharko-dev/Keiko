@@ -78,7 +78,7 @@ function wildcardExportTarget(exports, subpath) {
     const suffix = key.slice(star + 1);
     if (subpath.startsWith(prefix) && subpath.endsWith(suffix)) {
       const match = subpath.slice(prefix.length, subpath.length - suffix.length);
-      return conditionTarget(value)?.replace("*", match);
+      return conditionTarget(value)?.replaceAll("*", match);
     }
   }
   return undefined;
