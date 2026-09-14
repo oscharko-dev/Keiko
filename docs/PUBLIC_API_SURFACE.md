@@ -80,6 +80,9 @@ for compatibility. The root `package.json` `"version"` field is kept in lockstep
   0.3.17 — no root-barrel export, CLI flag, or package entry point was added, removed, or
   renamed by the bump itself. What changes is the promise around that surface: `1.x` is now the
   supported line (see SECURITY.md), so a breaking change to it requires a new major release.
+- 1.0.1 (2026-09-14): the first published 1.x release, with the 1.0.0 surface unchanged. The
+  v1.0.0 GitHub release could not receive its downloads under immutable releases, and its tag
+  name can never carry another release, so 1.0.0 was never published.
 - 0.3.17 (2026-09-10, PR #3452): the root barrel gains `boundWorkspaceFs` from
   `@oscharko-dev/keiko-workspace` — the filesystem port a consumer should resolve paths through for a
   `WorkspaceInfo` (the owned-root port the managed-worktree prover bound to it, else the caller's
