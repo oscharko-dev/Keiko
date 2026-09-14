@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyReleaseCandidatePlan,
   planReleaseCandidate,
+  releaseCandidateMain,
   releaseCandidatePlan,
   remoteTagCommit,
   runReleaseCandidate,
@@ -402,5 +403,72 @@ describe("runReleaseCandidate", () => {
     ],
   ])("refuses %s", (_label, mode, env, message) => {
     expect(() => run(mode, env)).toThrow(message);
+  });
+});
+
+describe("releaseCandidateMain", () => {
+  function main({ argv = ["--plan"], env = {}, spawn } = {}) {
+    const written = [];
+    const spawns = [];
+    const github = fakeGithub();
+    const code = releaseCandidateMain({
+      appendFile: (_path, text) => written.push(["summary", text]),
+      argv,
+      decideReadiness: () => READY,
+      env: {
+        CANDIDATE_SHA: CANDIDATE,
+        GITHUB_REPOSITORY: REPO,
+        GITHUB_TOKEN: "workflow-token",
+        ...env,
+      },
+      readText: (file) =>
+        file === "package.json" ? JSON.stringify(ROOT_PACKAGE) : '{"entries":[]}',
+      spawn:
+        spawn ??
+        ((executable, args, spawnEnv) => {
+          spawns.push([executable, spawnEnv.GH_TOKEN]);
+          return executable === "npm" ? NPM_MISSING() : github.runGh(args);
+        }),
+      write: (stream, text) => written.push([stream, text]),
+    });
+    return { code, spawns, written };
+  }
+
+  it("plans with the workflow token for gh and no token override for npm", () => {
+    const { code, spawns, written } = main();
+    expect(code).toBe(0);
+    expect(written).toStrictEqual([
+      ["stdout", `Release candidate ${CANDIDATE}: create, ${TAG} does not exist yet.\n`],
+    ]);
+    expect(spawns).toContainEqual(["gh", "workflow-token"]);
+    expect(spawns).toContainEqual(["npm", undefined]);
+  });
+
+  it("prints a known refusal as it is and exits 1", () => {
+    const { code, written } = main({ argv: ["--publish"] });
+    expect(code).toBe(1);
+    expect(written).toStrictEqual([["stderr", "release-candidate: pass --plan or --apply.\n"]]);
+  });
+
+  it("prefixes an unexpected failure and a thrown non-Error", () => {
+    expect(
+      main({
+        spawn: () => {
+          throw new TypeError("spawn failed");
+        },
+      }).written,
+    ).toStrictEqual([["stderr", "release-candidate: spawn failed\n"]]);
+    expect(
+      main({
+        spawn: () => {
+          throw "gone";
+        },
+      }).written,
+    ).toStrictEqual([["stderr", "release-candidate: gone\n"]]);
+  });
+
+  it("spawns gh without a token override when the workflow token is absent", () => {
+    const { spawns } = main({ env: { GITHUB_TOKEN: undefined } });
+    expect(spawns).toContainEqual(["gh", undefined]);
   });
 });

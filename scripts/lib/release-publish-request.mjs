@@ -11,7 +11,7 @@ const REPOSITORY = /^[\w.-]+\/[\w.-]+$/u;
 const OPEN_RUN_STATUSES = new Set(["requested", "waiting", "pending", "queued", "in_progress"]);
 const PORTABLE_ASSETS_ARTIFACT_NAME = "portable-release-assets";
 
-export class ReleasePublishRequestError extends Error {}
+class ReleasePublishRequestError extends Error {}
 
 function fail(message) {
   throw new ReleasePublishRequestError(`request-release-publish: ${message}`);
@@ -147,4 +147,25 @@ export function runReleasePublishRequest({ env, runGh }) {
   const cancelNote =
     notCancelled.length > 0 ? `; could not cancel run(s) ${notCancelled.join(", ")}` : "";
   return `Publish request for ${inputs.tag}: ${plan.action}, ${plan.reason}; cancelled ${cancelled} superseded run(s)${cancelNote}.`;
+}
+
+/**
+ * The CLI around runReleasePublishRequest: the report line on stdout and in the step summary, or one
+ * error line on stderr and exit code 1.
+ *
+ * @param write  (stream: "stdout" | "stderr", text) => void
+ */
+export function releasePublishRequestMain({ appendFile, env, runGh, write }) {
+  try {
+    const line = runReleasePublishRequest({ env, runGh });
+    if (env.GITHUB_STEP_SUMMARY) appendFile(env.GITHUB_STEP_SUMMARY, `${line}\n`);
+    write("stdout", `${line}\n`);
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const known =
+      message.startsWith("request-release-publish: ") || message.startsWith("release-candidate: ");
+    write("stderr", `${known ? message : `request-release-publish: ${message}`}\n`);
+    return 1;
+  }
 }

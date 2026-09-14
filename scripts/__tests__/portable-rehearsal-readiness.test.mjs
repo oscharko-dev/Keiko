@@ -140,6 +140,11 @@ describe("portable release rehearsal readiness in a workflow step", () => {
     expect(readFileSync(env.GITHUB_STEP_SUMMARY, "utf8")).toContain(summary);
   });
 
+  it("decides without GitHub step outputs outside a workflow", () => {
+    const root = workspace([approvedEntry()]);
+    expect(runPortableRehearsalReadiness(root, {}).ready).toBe(true);
+  });
+
   it("exits non-zero with a named message when the catalog is unreadable", () => {
     const root = workspace([]);
     writeFileSync(join(root, "release-impact.catalog.json"), "{ not json");

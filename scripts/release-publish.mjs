@@ -62,10 +62,12 @@ import { resolveGithubRepository } from "./lib/github-repository.mjs";
 import { recordNpmPublishDeployment } from "./lib/npm-publish-deployment.mjs";
 import { checkReleaseAlignment, printAlignmentReport } from "./check-release-alignment.mjs";
 import {
-  draftReleaseId,
-  immutableReleaseRepairFailure,
+  openPortableRelease,
+  publishVerifiedPortableRelease,
+  refuseIncompletePublishedRelease,
+  releaseSnapshotPath,
   releaseTagAtHeadFailure,
-  remoteDigestFailures,
+  uploadIntoDraft,
 } from "./lib/portable-release-publication.mjs";
 import { proveReleaseSigningKeyBeforePublishing } from "./lib/portable-release-signing-key.mjs";
 import { createStagedPublishPackage } from "./stage-publish-package.mjs";
@@ -1239,38 +1241,28 @@ function ensureGithubRelease(rootPackage, options, notes) {
 // portable release is therefore created as a draft, completed and verified, and only then published.
 // An already published release is never uploaded into again; it is verified or refused.
 function ensurePortableRelease(rootPackage, options, notes) {
-  const tag = releaseTag(rootPackage.version);
-  const repo = githubRepository();
-  const prerelease = releaseIsPrerelease(rootPackage.version, options.tag);
-  assertReleaseTagAtHead(repo, tag);
-  const existing = gh(["release", "view", tag, "--repo", repo, "--json", "isDraft,assets"]);
-  if (existing.status === 0) {
-    refuseEvaluationOwnedRelease(existing, tag);
-    console.log(`release-publish: GitHub release ${tag} is already published; verifying it.`);
-    return { published: true, repo, tag };
-  }
-  console.log(`release-publish: creating draft GitHub release ${tag}.`);
-  runGh([
-    "release",
-    "create",
-    tag,
-    "--repo",
-    repo,
-    "--title",
-    `Keiko ${rootPackage.version}`,
-    "--notes",
+  return openPortableRelease(portablePublisher(), {
+    latest: options.tag === "latest",
     notes,
-    "--verify-tag",
-    "--draft",
-    ...(prerelease ? ["--prerelease"] : []),
-  ]);
-  const draft = draftReleaseId(
-    jsonFromCommand(runGh(["api", `repos/${repo}/releases?per_page=100`])),
-    tag,
-  );
-  if (draft.failure !== undefined) fail(draft.failure);
-  const latestArgs = options.tag === "latest" && !prerelease ? ["--latest"] : ["--latest=false"];
-  return { draft: true, id: draft.id, latestArgs, repo, tag };
+    prerelease: releaseIsPrerelease(rootPackage.version, options.tag),
+    repo: githubRepository(),
+    tag: releaseTag(rootPackage.version),
+    title: `Keiko ${rootPackage.version}`,
+  });
+}
+
+// The publisher's own seams for scripts/lib/portable-release-publication.mjs.
+function portablePublisher() {
+  return {
+    assertTagAtHead: (tag) => assertReleaseTagAtHead(githubRepository(), tag),
+    fail,
+    gh,
+    log: (message) => console.log(`release-publish: ${message}`),
+    refuseEvaluationOwnedRelease,
+    runGh,
+    snapshot: githubReleaseSnapshot,
+    verifyAssets: verifyRemotePortableAssets,
+  };
 }
 
 function publishPortableReleaseAssets(options, assets, releaseInfo) {
@@ -1282,74 +1274,33 @@ function publishPortableReleaseAssets(options, assets, releaseInfo) {
   verifyPortableSetupAttestations(assets, releaseInfo);
   const evidenceUpload = preparePortableEvidenceUploadRoot();
   try {
+    const publisher = portablePublisher();
     const archiveUpload = portableArchiveUploadFiles(assets);
-    uploadIntoDraft(releaseInfo, archiveUpload.paths);
+    uploadIntoDraft(publisher, releaseInfo, archiveUpload.paths);
     const archiveSnapshot = githubReleaseSnapshot(releaseInfo);
-    refuseIncompletePublishedRelease(releaseInfo, archiveSnapshot.assets, archiveUpload.expected);
+    refuseIncompletePublishedRelease(
+      publisher,
+      releaseInfo,
+      archiveSnapshot.assets,
+      archiveUpload.expected,
+    );
     verifyRemotePortableAssets(archiveSnapshot.assets, archiveUpload.expected, releaseInfo);
     const boundAssets = bindPortableAssetsToRemoteRelease(assets, archiveSnapshot);
     const boundEvidence = portableEvidenceUploadFiles(boundAssets, evidenceUpload.root);
-    uploadIntoDraft(releaseInfo, boundEvidence.paths);
+    uploadIntoDraft(publisher, releaseInfo, boundEvidence.paths);
     const finalSnapshot = githubReleaseSnapshot(releaseInfo);
     const expected = [...archiveUpload.expected, ...boundEvidence.expected];
-    refuseIncompletePublishedRelease(releaseInfo, finalSnapshot.assets, expected);
-    verifyRemotePortableAssets(finalSnapshot.assets, expected, releaseInfo);
-    const digestFailures = remoteDigestFailures(finalSnapshot.assets, expected);
-    if (digestFailures.length > 0) {
-      fail(`GitHub Release portable asset digests failed:\n  - ${digestFailures.join("\n  - ")}`);
-    }
-    const publicAssets =
-      releaseInfo.draft === true
-        ? publishPortableDraft(releaseInfo, expected)
-        : finalSnapshot.assets;
+    const publicAssets = publishVerifiedPortableRelease(
+      publisher,
+      releaseInfo,
+      finalSnapshot.assets,
+      expected,
+    );
     runPortableDownloadSmoke(publicAssets, expected);
     console.log(`release-publish: portable assets uploaded and verified for ${releaseInfo.tag}.`);
   } finally {
     rmSync(evidenceUpload.root, { recursive: true, force: true });
   }
-}
-
-function uploadIntoDraft(releaseInfo, paths) {
-  if (releaseInfo.published === true) return;
-  runGh(["release", "upload", releaseInfo.tag, "--repo", releaseInfo.repo, "--clobber", ...paths]);
-}
-
-// An already published release is immutable: it can only be verified, never completed.
-function refuseIncompletePublishedRelease(releaseInfo, remoteAssets, expected) {
-  if (releaseInfo.published !== true) return;
-  const names = new Set(remoteAssets.map((asset) => asset?.name));
-  const missing = expected.filter((entry) => !names.has(entry.assetName));
-  if (missing.length > 0) {
-    fail(
-      immutableReleaseRepairFailure(
-        releaseInfo.tag,
-        `lacks ${missing.map((entry) => entry.assetName).join(", ")}`,
-      ),
-    );
-  }
-  const digestFailures = remoteDigestFailures(remoteAssets, expected);
-  if (digestFailures.length > 0) {
-    fail(immutableReleaseRepairFailure(releaseInfo.tag, `differs: ${digestFailures.join(" ")}`));
-  }
-}
-
-// The last GitHub step: the draft goes public with every download already verified on it.
-function publishPortableDraft(releaseInfo, expected) {
-  assertReleaseTagAtHead(releaseInfo.repo, releaseInfo.tag);
-  runGh([
-    "release",
-    "edit",
-    releaseInfo.tag,
-    "--repo",
-    releaseInfo.repo,
-    "--verify-tag",
-    "--draft=false",
-    ...releaseInfo.latestArgs,
-  ]);
-  console.log(`release-publish: published GitHub release ${releaseInfo.tag}.`);
-  const publicSnapshot = githubReleaseSnapshot({ repo: releaseInfo.repo, tag: releaseInfo.tag });
-  verifyRemotePortableAssets(publicSnapshot.assets, expected, releaseInfo);
-  return publicSnapshot.assets;
 }
 
 function verifyPortableSetupAttestations(assets, releaseInfo) {
@@ -1446,12 +1397,7 @@ function addUploadPath(path, assetName, names, paths) {
 }
 
 function githubReleaseSnapshot(releaseInfo) {
-  // A draft is invisible to the by-tag endpoint, so a release this run created is read by its id.
-  const path =
-    releaseInfo.id === undefined
-      ? `repos/${releaseInfo.repo}/releases/tags/${releaseInfo.tag}`
-      : `repos/${releaseInfo.repo}/releases/${String(releaseInfo.id)}`;
-  const result = runGh(["api", path]);
+  const result = runGh(["api", releaseSnapshotPath(releaseInfo)]);
   try {
     const release = JSON.parse(result.stdout);
     if (

@@ -159,15 +159,19 @@ export function releaseAuthorityDrift(releaseSource, dependents) {
   });
 }
 
+/** The authority drift of this checkout's workflows against release.yml. */
+export function repositoryReleaseAuthorityDrift(
+  read = (file) => readFileSync(join(workflowsDir, file), "utf8"),
+) {
+  return releaseAuthorityDrift(
+    read("release.yml"),
+    RELEASE_AUTHORITY_WORKFLOWS.map((file) => ({ file, source: read(file) })),
+  );
+}
+
 function main() {
   const releaseSource = readFileSync(releaseWorkflowPath, "utf8");
-  const drift = releaseAuthorityDrift(
-    releaseSource,
-    RELEASE_AUTHORITY_WORKFLOWS.map((file) => ({
-      file,
-      source: readFileSync(join(workflowsDir, file), "utf8"),
-    })),
-  );
+  const drift = repositoryReleaseAuthorityDrift();
   if (drift.length > 0) fail(drift.join("; "));
 
   const required = releaseRequiredChecks(releaseSource);

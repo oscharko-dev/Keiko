@@ -7,7 +7,7 @@ const COMMIT_SHA = /^[0-9a-f]{40}$/u;
 const ACTIVE_RUN_STATUSES = new Set(["queued", "in_progress"]);
 const WRITING_ACTIONS = new Set(["create", "move"]);
 
-export class ReleaseCandidateError extends Error {}
+class ReleaseCandidateError extends Error {}
 
 function fail(message) {
   throw new ReleaseCandidateError(`release-candidate: ${message}`);
@@ -280,4 +280,45 @@ function reportRun({ appendFile, env, line, mode, plan }) {
     appendFile(env.GITHUB_OUTPUT, `action=${plan.action}\ntag=${plan.tag}\n`);
   }
   if (env.GITHUB_STEP_SUMMARY) appendFile(env.GITHUB_STEP_SUMMARY, `${line}\n`);
+}
+
+/**
+ * The CLI around runReleaseCandidate: reads use the workflow token, the tag write uses the GitHub App
+ * token, and the run prints one report line or one error line with exit code 1.
+ *
+ * @param spawn  (executable, args, env) => {status, stdout, stderr, error}
+ * @param write  (stream: "stdout" | "stderr", text) => void
+ */
+export function releaseCandidateMain({
+  appendFile,
+  argv,
+  decideReadiness,
+  env,
+  readText,
+  spawn,
+  write,
+}) {
+  const runner = (executable, token) => (args) =>
+    spawn(executable, args, token === undefined ? env : { ...env, GH_TOKEN: token });
+  try {
+    const { line } = runReleaseCandidate({
+      appendFile,
+      decideReadiness,
+      env,
+      mode: argv[0],
+      readText,
+      runGh: runner("gh", env.GITHUB_TOKEN),
+      runGhWithTagToken: runner("gh", env.KEIKO_RELEASE_TAG_TOKEN),
+      runNpm: runner("npm", undefined),
+    });
+    write("stdout", `${line}\n`);
+    return 0;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    write(
+      "stderr",
+      `${error instanceof ReleaseCandidateError ? message : `release-candidate: ${message}`}\n`,
+    );
+    return 1;
+  }
 }

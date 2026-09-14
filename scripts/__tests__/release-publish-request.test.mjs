@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  releasePublishRequestMain,
   releasePublishRequestPlan,
   runReleasePublishRequest,
 } from "../lib/release-publish-request.mjs";
@@ -191,5 +192,70 @@ describe("runReleasePublishRequest", () => {
     expect(() => runReleasePublishRequest({ env: ENV, runGh })).toThrow(
       "release workflow runs are malformed",
     );
+  });
+});
+
+describe("releasePublishRequestMain", () => {
+  const ENV = {
+    GITHUB_REPOSITORY: REPO,
+    RELEASE_TAG: TAG,
+    RUN_ATTEMPT: "1",
+    RUN_ID: "77",
+    SOURCE_SHA: BUILD,
+  };
+  const runGh = (args) => {
+    if (args.at(-1) === RUNS_PATH)
+      return { status: 0, stdout: JSON.stringify({ workflow_runs: [] }), stderr: "" };
+    if (args.at(-1) === `repos/${REPO}/git/ref/tags/${TAG}`) {
+      return {
+        status: 0,
+        stdout: JSON.stringify({ object: { sha: BUILD, type: "commit" } }),
+        stderr: "",
+      };
+    }
+    return { status: 0, stdout: "", stderr: "" };
+  };
+
+  function main(env, gh = runGh) {
+    const written = [];
+    const appended = [];
+    const code = releasePublishRequestMain({
+      appendFile: (path, text) => appended.push([path, text]),
+      env,
+      runGh: gh,
+      write: (stream, text) => written.push([stream, text]),
+    });
+    return { appended, code, written };
+  }
+
+  it("prints the report and records it in the step summary", () => {
+    const { appended, code, written } = main({ ...ENV, GITHUB_STEP_SUMMARY: "/summary" });
+    expect(code).toBe(0);
+    expect(written).toHaveLength(1);
+    expect(written[0][0]).toBe("stdout");
+    expect(appended).toStrictEqual([["/summary", written[0][1]]]);
+  });
+
+  it("prints a known refusal as it is and exits 1", () => {
+    const { code, written } = main({ ...ENV, RUN_ID: "x" });
+    expect(code).toBe(1);
+    expect(written).toStrictEqual([
+      ["stderr", "request-release-publish: RUN_ID is not a positive integer.\n"],
+    ]);
+  });
+
+  it("prefixes an unexpected failure", () => {
+    const { code, written } = main(ENV, () => {
+      throw new TypeError("spawn failed");
+    });
+    expect(code).toBe(1);
+    expect(written).toStrictEqual([["stderr", "request-release-publish: spawn failed\n"]]);
+  });
+
+  it("reports a thrown value that is not an Error", () => {
+    const { written } = main(ENV, () => {
+      throw "gh vanished";
+    });
+    expect(written).toStrictEqual([["stderr", "request-release-publish: gh vanished\n"]]);
   });
 });
