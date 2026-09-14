@@ -120,7 +120,7 @@ describe("stable build publish request", () => {
     const job = portable.jobs["request-publish"];
     expect(job.needs).toBe("assemble");
     expect(job.if).toBe(
-      "${{ needs.assemble.result == 'success' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}",
+      "${{ !cancelled() && needs.assemble.result == 'success' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}",
     );
     expect(job.permissions).toStrictEqual({
       actions: "write",

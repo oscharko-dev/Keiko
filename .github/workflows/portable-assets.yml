@@ -329,7 +329,7 @@ jobs:
   qualify-linux-production:
     name: Fresh native qualification (linux-x64)
     needs: stage-linux-production
-    if: ${{ needs.stage-linux-production.result == 'success' }}
+    if: ${{ !cancelled() && needs.stage-linux-production.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -464,7 +464,7 @@ jobs:
     needs: assemble
     # ADR-0177 D8: a stable tag build asks release.yml to publish exactly this run's bundle. The dev
     # rehearsal and manual dispatches never do, and the publish job keeps its npm-publish approval.
-    if: ${{ needs.assemble.result == 'success' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+    if: ${{ !cancelled() && needs.assemble.result == 'success' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
     runs-on: ubuntu-latest
     permissions:
       # Dispatching release.yml and cancelling an older candidate's publish that still waits for its

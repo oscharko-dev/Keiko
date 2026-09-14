@@ -101,6 +101,12 @@ tip can already be a newer push, while every artifact is bound to `GITHUB_SHA`. 
 workflow passes a `ref`, so each binds the event commit, and the jobs that stage, sign, or requalify
 compare `git rev-parse HEAD` with `GITHUB_SHA` before any step uses it.
 
+`rehearsal-readiness` runs only on a `dev` push, so a tag push skips it. Every job downstream of it
+states its own status function (`!cancelled()` or `always()`): without one, GitHub's implicit
+`success()` counts the skipped readiness as an unsuccessful ancestor. The first v1.0.1 tag build
+staged every target and then skipped the Linux qualification, the assembly and the publish request
+that way while the run still concluded "success".
+
 ### D8 — A green dev head becomes the release candidate; the approval is the only manual step
 
 The rehearsal itself cannot be released. The Linux runtime-qualification signature inside the shipped
