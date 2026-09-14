@@ -2416,6 +2416,26 @@ describe("validatePortableReleaseSet", () => {
     });
   }
 
+  it("assembles targets whose root package tarballs were packed on their own runners", () => {
+    // Each native runner builds and packs the root package itself, so the tarball digest is
+    // per-target provenance. These are the four digests of the v1.0.0 tag run 34813644666
+    // (2026-09-14); assembling its real artifacts failed on them with "portable targets do not
+    // share one release identity", while the fixture above gave every target the same digest.
+    const packedOnItsRunner = {
+      "linux-x64": "c72d75879208c5b2a67357e531acbfa93aceb6c5df94bd54c858b3ae85b0f43c",
+      "macos-arm64": "3b55da3334c9425f1ca44be01fde6bc32c674db288acfa8f379bc5ed15c00056",
+      "macos-x64": "5e4ffd2b27db2f7a91875a3924136f40dba0a436b69ace05f86127255444e89a",
+      "windows-x64": "ca9282ba40667a7a194a5463aacea60d6bb3f4af323e688924a9377dbcce8c1e",
+    };
+    const set = stableLaneSet();
+    for (const candidate of set) {
+      candidate.provenance.rootPackageTarballSha256 =
+        packedOnItsRunner[candidate.artifact.platformTarget];
+    }
+
+    expect(validatePortableReleaseSet(set, expected)).toEqual([]);
+  });
+
   it("accepts the stable lanes: a production Linux target beside release-trust candidates", () => {
     // Before, the release identity demanded one shared security state, so this set - the only
     // shape a stable-tag run produces - could never assemble.

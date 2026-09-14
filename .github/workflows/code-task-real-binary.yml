@@ -26,6 +26,11 @@ jobs:
         run: node scripts/check-runtime-toolchain.mjs --exact
       - name: Install workspaces
         run: npm ci --ignore-scripts
+      - name: Build workspace packages
+        # run-code-task-real-binary.mjs imports @oscharko-dev/keiko-model-gateway from
+        # packages/*/dist, and --ignore-scripts builds nothing: every scheduled run since at least
+        # 2026-09-09 failed with ERR_MODULE_NOT_FOUND before the journey started.
+        run: npm run build:packages
       - name: Stage approved OpenCode dev-lane payload
         run: npm run dev:coding-runtime:stage
       - name: Install Playwright Chromium

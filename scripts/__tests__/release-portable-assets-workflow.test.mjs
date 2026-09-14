@@ -12,7 +12,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 
-import { importGraphReachesDist, repositoryScriptsIn } from "./workflow-script-graph.mjs";
+import {
+  importGraphReachesDist,
+  providesBuiltPackages,
+  repositoryScriptsIn,
+} from "./workflow-script-graph.mjs";
 
 import {
   PORTABLE_ASSETS_ARTIFACT_NAME,
@@ -56,19 +60,6 @@ function namedStep(job, name) {
   const step = job.steps.find((entry) => entry.name === name);
   if (step === undefined) throw new Error(`missing workflow step: ${name}`);
   return step;
-}
-
-// A step provides packages/*/dist when it builds the packages itself or stages the product, which
-// runs `npm run build` on the way (stage-portable-runtime.mjs) before any later step can execute.
-const BUILT_PACKAGE_PROVIDERS = [
-  /\bnpm run build:packages\b/u,
-  /\bnpm run build\b(?!:)/u,
-  /\brun-portable-assets-stage\.mjs\b/u,
-];
-
-function providesBuiltPackages(step) {
-  const run = String(step.run ?? "");
-  return BUILT_PACKAGE_PROVIDERS.some((pattern) => pattern.test(run));
 }
 
 describe("portable release-trust workflow", () => {
@@ -234,7 +225,7 @@ describe("portable release-trust workflow", () => {
     // that already carries dist. This pin holds the job's provisioning, which that proof cannot see.
     for (const name of ["stage-linux-production", "qualify-linux-production"]) {
       const job = workflowJob(name);
-      const providerAt = job.steps.findIndex(providesBuiltPackages);
+      const providerAt = job.steps.findIndex((step) => providesBuiltPackages(step.run));
       job.steps.forEach((step, index) => {
         for (const script of repositoryScriptsIn(String(step.run ?? ""))) {
           if (!importGraphReachesDist(script)) continue;

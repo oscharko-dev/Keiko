@@ -135,10 +135,13 @@ function commonIdentity(manifest) {
     },
     releaseTag: field(manifest, "release", "releaseTag"),
     sourceCommitSha: field(manifest, "release", "commitSha"),
+    // rootPackageTarballSha256 is deliberately absent: every native runner builds and packs the root
+    // package itself, so the digest is per-target provenance, bound in each manifest beside its
+    // packagedAppTreeSha256 and provenance statement. Demanding one digest across runners made every
+    // real stable set unassemblable (the v1.0.0 artifacts carried four different ones).
     provenance: {
       buildWorkflowAttempt: field(manifest, "provenance", "buildWorkflowAttempt"),
       buildWorkflowRunId: field(manifest, "provenance", "buildWorkflowRunId"),
-      rootPackageTarballSha256: field(manifest, "provenance", "rootPackageTarballSha256"),
       rootPackageVersion: field(manifest, "provenance", "rootPackageVersion"),
       sourceCommitSha: field(manifest, "provenance", "sourceCommitSha"),
     },
