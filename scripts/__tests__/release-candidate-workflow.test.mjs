@@ -20,11 +20,8 @@ function stepIndex(job, predicate, label) {
 }
 
 describe("release candidate workflow", () => {
-  it("runs only after CI completes on dev, or on a manual dispatch", () => {
-    expect(candidate.on).toStrictEqual({
-      workflow_run: { branches: ["dev"], types: ["completed"], workflows: ["CI"] },
-      workflow_dispatch: null,
-    });
+  it("runs on every dev push, or on a manual dispatch", () => {
+    expect(candidate.on).toStrictEqual({ push: { branches: ["dev"] }, workflow_dispatch: null });
     expect(candidate.permissions).toStrictEqual({});
     expect(candidate.concurrency).toStrictEqual({
       "cancel-in-progress": true,
@@ -32,14 +29,9 @@ describe("release candidate workflow", () => {
     });
   });
 
-  it("plans only for a successful push run on dev, with read grants and no secrets", () => {
+  it("plans only on dev, with read grants and no secrets", () => {
     const { plan } = candidate.jobs;
-    expect(plan.if).toContain("github.event.workflow_run.conclusion == 'success'");
-    expect(plan.if).toContain("github.event.workflow_run.event == 'push'");
-    expect(plan.if).toContain("github.event.workflow_run.head_branch == 'dev'");
-    expect(plan.if).toContain(
-      "github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev'",
-    );
+    expect(plan.if).toBe("${{ github.ref == 'refs/heads/dev' }}");
     expect(plan.permissions).toStrictEqual({ actions: "read", contents: "read" });
     expect(plan.environment).toBeUndefined();
     expect(JSON.stringify(plan)).not.toContain("secrets.");
@@ -49,25 +41,17 @@ describe("release candidate workflow", () => {
     });
   });
 
-  it("writes the tag only after the required checks, with a contents-only App token from its environment", () => {
+  it("writes the tag at once, with a contents-only App token from its environment", () => {
+    // The tag build now runs beside the commit's CI; the release-required checks gate the publish
+    // request at the end of that build instead (see the stable build publish request below).
     const { tag } = candidate.jobs;
     expect(tag.needs).toBe("plan");
     expect(tag.if).toBe(
       "${{ needs.plan.outputs.action == 'create' || needs.plan.outputs.action == 'move' }}",
     );
     expect(tag.environment).toBe("release-tagging");
-    expect(tag.permissions).toStrictEqual({
-      actions: "read",
-      checks: "read",
-      contents: "read",
-      statuses: "read",
-    });
+    expect(tag.permissions).toStrictEqual({ actions: "read", contents: "read" });
 
-    const checks = stepIndex(
-      tag,
-      (step) => step.run === "node scripts/verify-release-required-checks.mjs",
-      "checks",
-    );
     const token = stepIndex(
       tag,
       (step) => String(step.uses).startsWith("actions/create-github-app-token@"),
@@ -78,9 +62,7 @@ describe("release candidate workflow", () => {
       (step) => step.run === "node scripts/release-candidate.mjs --apply",
       "apply",
     );
-    expect(checks).toBeLessThan(token);
     expect(token).toBeLessThan(apply);
-
     expect(tag.steps[token].uses).toBe(
       "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
     );
@@ -108,10 +90,22 @@ describe("stable build publish request", () => {
     expect(job.if).toBe(
       "${{ needs.assemble.result == 'success' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}",
     );
-    expect(job.permissions).toStrictEqual({ actions: "write", contents: "read" });
+    expect(job.permissions).toStrictEqual({
+      actions: "write",
+      checks: "read",
+      contents: "read",
+      statuses: "read",
+    });
     expect(job.environment).toBeUndefined();
     expect(JSON.stringify(job)).not.toContain("secrets.");
     expect(job.steps.some((step) => /npm (ci|install)/u.test(String(step.run)))).toBe(false);
+    const verify = stepIndex(
+      job,
+      (step) =>
+        step.run === 'RELEASE_SHA="$GITHUB_SHA" node scripts/verify-release-required-checks.mjs',
+      "required checks",
+    );
+    expect(verify).toBe(job.steps.length - 2);
     expect(job.steps.at(-1)).toMatchObject({
       env: {
         GITHUB_TOKEN: "${{ github.token }}",

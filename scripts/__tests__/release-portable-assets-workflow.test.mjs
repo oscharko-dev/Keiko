@@ -104,9 +104,7 @@ describe("portable release-trust workflow", () => {
     );
     expect(workflowJob("stage").environment).toBeUndefined();
     expect(workflowJob("stage").permissions).toEqual({
-      checks: "read",
       contents: "read",
-      statuses: "read",
     });
     const linuxEnvironment = workflowJob("stage-linux-production").environment;
     expect(valueForRef(linuxEnvironment, "refs/tags/v1.0.0")).toBe("portable-release-signing");
@@ -451,12 +449,14 @@ describe("stable release rehearsal on dev", () => {
     }
   });
 
-  it("keeps tag identity and required-check verification on stable tags only", () => {
+  it("keeps tag identity on stable tags and leaves the required checks to the publish request", () => {
     for (const name of ["stage", "stage-linux-production"]) {
       const job = workflowJob(name);
       const authority = namedStep(job, "Validate stable tag and governed release authority");
       expect(authority.if, `${name} authority`).toContain("startsWith(github.ref, 'refs/tags/v')");
-      expect(authority.run).toContain("verify-release-required-checks.mjs");
+      // ADR-0177 D8: the tag build runs beside the commit's CI, so the release-required checks
+      // gate the publish request after assemble (release-candidate-workflow.test.mjs) instead.
+      expect(authority.run).not.toContain("verify-release-required-checks.mjs");
       const rehearsal = namedStep(
         job,
         "Validate the release workflow authority a rehearsal will face",

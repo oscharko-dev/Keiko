@@ -221,10 +221,11 @@ still requires an operator dispatch with `portable_assets_run_id` pointing at th
 
 ## Triggering
 
-- One-approval stable release (ADR-0177 D8): after CI passes on a `dev` push whose version is
-  approved for every portable target and not yet published, `release-candidate.yml` points
-  `v<version>` at that commit through the release tag GitHub App. The tag push runs the stable
-  portable build, whose `request-publish` job dispatches this workflow with that run's id and attempt.
+- One-approval stable release (ADR-0177 D8): on a `dev` push whose version is approved for every
+  portable target and not yet published, `release-candidate.yml` points `v<version>` at that commit
+  through the release tag GitHub App. The tag push runs the stable portable build beside the commit's
+  CI; its `request-publish` job waits for the release-required checks and then dispatches this
+  workflow with that run's id and attempt.
   The only manual step is approving the `npm-publish` deployment.
 - Stable tag pushes (`v<version>`, no prerelease suffix) run the full release verification job.
 - An EXACT tag over the current package version (`v<package.json version>`, including npm

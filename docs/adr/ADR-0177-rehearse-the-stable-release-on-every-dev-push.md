@@ -110,21 +110,23 @@ zip names the Git ref of its build, and installed Keiko accepts only
 be refused by every existing install, so the release keeps building on the tag. What changes is who
 starts it:
 
-- `.github/workflows/release-candidate.yml` follows every completed CI run. For a successful push run
-  on `dev`, a read-only plan job decides from that commit's checkout: its version must pass the D1
+- `.github/workflows/release-candidate.yml` runs on every `dev` push. A read-only plan job decides from
+  that commit's checkout: its version must pass the D1
   readiness, neither npm nor a GitHub release may carry it, and the commit must still be the live `dev`
   head. It creates `v<version>`, moves it from an older unpublished commit, keeps it, or skips. A
   published version's tag never moves, and neither does a tag whose approved publish is queued or
   running.
-- Only for a create or move does the tag job verify the six release-required checks, and only then
-  write the ref. The tag build waits for those checks for at most 30 minutes, and the first v1.0.0
-  build failed every target for tagging before them. The write uses a token from a GitHub App whose
+- For a create or move the tag job writes the ref at once, so the stable build runs beside the
+  commit's CI instead of after it. No build step waits for the release-required checks any more — the
+  first v1.0.0 build failed every target on that 30-minute wait while its CI was still queued. The
+  write uses a token from a GitHub App whose
   only permission is repository contents; the App key lives in the `release-tagging` environment,
   which only `dev` deploys to, and the App is the second bypass actor of the "Owner-only tag changes"
   ruleset.
-- The tag push runs the stable build unchanged. After `assemble`, its `request-publish` job
-  dispatches `release.yml` with that run's id and attempt and cancels an older candidate's publish
-  that still waits for approval. A `workflow_dispatch` is an event `GITHUB_TOKEN` may start, and it
+- The tag push runs the stable build. After `assemble`, its `request-publish` job waits for the six
+  release-required checks on the tag commit, then dispatches `release.yml` with that run's id and
+  attempt and cancels an older candidate's publish that still waits for approval. A commit whose
+  checks fail is never requested; the next green candidate moves the tag. A `workflow_dispatch` is an event `GITHUB_TOKEN` may start, and it
   runs on the tag ref, so npm provenance names the tagged commit.
 - The publish job keeps its `npm-publish` review (ADR-0170 D3), which is the only manual step. A
   publish that checked out an older candidate stops before any side effect: its qualified source SHA

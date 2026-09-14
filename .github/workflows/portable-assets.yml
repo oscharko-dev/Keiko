@@ -79,9 +79,7 @@ jobs:
             runner: macos-15-intel
     runs-on: ${{ matrix.runner }}
     permissions:
-      checks: read
       contents: read
-      statuses: read
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -104,7 +102,6 @@ jobs:
       - name: Validate stable tag and governed release authority
         if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
         env:
-          GITHUB_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         # The matrix runs this leg on windows-latest, whose default shell is pwsh; the block
         # below is bash (a heredoc and $(...) substitutions) and fails to parse there with
@@ -121,13 +118,12 @@ jobs:
           NODE
           npm run check:release-required-workflows
           npm run check:portable-approvals
-          RELEASE_SHA="$(git rev-parse HEAD)" node scripts/verify-release-required-checks.mjs
       - name: Validate approved runtime inputs
         if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/dev' }}
         run: npm run check:portable-approvals
       - name: Validate the release workflow authority a rehearsal will face
-        # The tag identity and the required-check verification above need a stable tag; the workflow
-        # authority does not, so a rehearsal still proves it.
+        # The tag identity above needs a stable tag; the workflow authority does not, so a rehearsal
+        # still proves it.
         if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
         run: npm run check:release-required-workflows
       - name: Run executable secure-read adversarial harness
@@ -230,10 +226,8 @@ jobs:
     # would stall each dev push, and a credential provisioned there must stay out of its reach.
     environment: ${{ github.ref == 'refs/heads/dev' && 'portable-release-rehearsal' || 'portable-release-signing' }}
     permissions:
-      checks: read
       contents: read
       id-token: write
-      statuses: read
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -255,7 +249,6 @@ jobs:
       - name: Validate stable tag and governed release authority
         if: ${{ startsWith(github.ref, 'refs/tags/v') }}
         env:
-          GITHUB_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -268,7 +261,6 @@ jobs:
           NODE
           npm run check:release-required-workflows
           npm run check:portable-approvals
-          RELEASE_SHA="$(git rev-parse HEAD)" node scripts/verify-release-required-checks.mjs
       - name: Validate the release workflow authority a rehearsal will face
         if: ${{ github.ref == 'refs/heads/dev' }}
         run: |
@@ -478,8 +470,12 @@ jobs:
       # Dispatching release.yml and cancelling an older candidate's publish that still waits for its
       # approval. Neither can publish: every publish job still needs the npm-publish review.
       actions: write
+      checks: read
       contents: read
-    timeout-minutes: 10
+      statuses: read
+    # The tag is written on the dev push, so this build runs beside the commit's CI; this job waits
+    # for the six release-required checks (at most 30 minutes) before it asks for a publish.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -490,6 +486,10 @@ jobs:
           package-manager-cache: false
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Verify the release-required checks on the tag commit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: RELEASE_SHA="$GITHUB_SHA" node scripts/verify-release-required-checks.mjs
       - name: Request the publish of this build
         env:
           GITHUB_TOKEN: ${{ github.token }}
