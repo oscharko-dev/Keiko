@@ -18,11 +18,38 @@ import {
 const WORKSPACES = ["@oscharko-dev/keiko-contracts", "@oscharko-dev/keiko-harness"];
 
 describe("requireVersion", () => {
-  it.each(["1.0.1", "0.3.17", "1.2.3-beta.4"])("accepts %s", (version) => {
+  it.each([
+    "1.0.1",
+    "0.3.17",
+    "0.0.0",
+    "1.2.3-beta.4",
+    "1.0.0-0",
+    "1.0.0-alpha-1",
+    "1.0.0-rc.1.x-y",
+  ])("accepts %s", (version) => {
     expect(requireVersion(version)).toBe(version);
   });
 
-  it.each(["1.0", "v1.0.1", "1.0.1\n", " 1.0.1", "", undefined])("refuses %j", (version) => {
+  it.each([
+    "1.0",
+    "1.0.0.0",
+    "v1.0.1",
+    "01.0.0",
+    "1.00.0",
+    "1.0.01",
+    "1.0.0-",
+    "1.0.0-01",
+    "1.0.0-beta..4",
+    "1.0.0-.beta",
+    "1.0.0-beta.",
+    "1.0.0-beta_4",
+    "1.0.0+build.1",
+    "1.0.1\n",
+    " 1.0.1",
+    "",
+    undefined,
+    101,
+  ])("refuses %j", (version) => {
     expect(() => requireVersion(version)).toThrow("is not a semantic version");
   });
 });

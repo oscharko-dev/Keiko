@@ -7,7 +7,12 @@ import { join } from "node:path";
 // check-version-consistency refuses that now, and this is the command that never produces it. The
 // release-impact catalog entry and the documents stay reviewed work.
 
-const VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
+// SemVer 2.0.0 without build metadata, which no Keiko release carries. Identifier by identifier, so
+// no pattern backtracks: numeric identifiers have no leading zero, prerelease identifiers are
+// non-empty.
+const NUMERIC_IDENTIFIER = /^(?:0|[1-9]\d*)$/u;
+const PRERELEASE_IDENTIFIER = /^[0-9A-Za-z-]+$/u;
+const DIGITS = /^\d+$/u;
 const VERSION_CONSTANT =
   /(export\s+const\s+(?:KEIKO_PRODUCT_VERSION|KEIKO_[A-Z0-9_]*_VERSION)\s*=\s*")[^"]+("\s+as\s+const)/gu;
 const DEPENDENCY_FIELDS = [
@@ -23,8 +28,26 @@ function fail(message) {
   throw new SetVersionError(`set-version: ${message}`);
 }
 
+function prereleaseIdentifier(identifier) {
+  if (!PRERELEASE_IDENTIFIER.test(identifier)) return false;
+  return !DIGITS.test(identifier) || NUMERIC_IDENTIFIER.test(identifier);
+}
+
+function semanticVersion(value) {
+  const dash = value.indexOf("-");
+  const core = (dash === -1 ? value : value.slice(0, dash)).split(".");
+  if (core.length !== 3 || !core.every((part) => NUMERIC_IDENTIFIER.test(part))) return false;
+  return (
+    dash === -1 ||
+    value
+      .slice(dash + 1)
+      .split(".")
+      .every(prereleaseIdentifier)
+  );
+}
+
 export function requireVersion(value) {
-  if (typeof value !== "string" || !VERSION.test(value)) {
+  if (typeof value !== "string" || !semanticVersion(value)) {
     fail(`${JSON.stringify(value)} is not a semantic version.`);
   }
   return value;

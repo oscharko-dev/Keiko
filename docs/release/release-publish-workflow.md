@@ -386,8 +386,9 @@ first release-trusted build. Do not retroactively change their trust scope or tr
 as a canary. Apple/Microsoft provider access is not a prerequisite and this updater repair grants no
 publish approval.
 
-The publish job runs `npm run release:publish -- --tag "$NPM_DIST_TAG"` after confirming
-that the tag-push release verification already completed successfully for the same commit.
+The publish job runs `npm run release:publish -- --tag "$NPM_DIST_TAG"` once the `npm-publish`
+approval is given, after it re-verified the release-required checks of the commit it was dispatched
+for and validated the green `Portable assets` run of that commit as its input.
 The script:
 
 - checks version and publish-manifest consistency,

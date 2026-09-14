@@ -92,7 +92,7 @@ function readGithub(runGh, path) {
 }
 
 /** A GitHub API read that must succeed; any failure, a 404 included, fails closed. */
-export function readFound(runGh, path, label) {
+function readFound(runGh, path, label) {
   const read = readGithub(runGh, path);
   if (read.kind !== "found") fail(`${label} could not be read.`);
   return read.value;
@@ -134,14 +134,32 @@ function npmHasVersion(runNpm, packageName, version) {
   return fail(`npm could not say whether ${packageName}@${version} exists.`);
 }
 
+const RUN_PAGE_SIZE = 100;
+// A release history still full after this many pages is not one this repository has; refusing it
+// bounds the read instead of deciding on a partial listing.
+const RUN_PAGE_LIMIT = 20;
+
+/**
+ * Every workflow_dispatch run of release.yml, page by page until a page is not full. A malformed
+ * page or an unbounded listing fails closed: a decision on one page could miss an open publish.
+ */
+export function readReleaseDispatchRuns(runGh, repository) {
+  const runs = [];
+  for (let page = 1; page <= RUN_PAGE_LIMIT; page += 1) {
+    const listing = readFound(
+      runGh,
+      `repos/${repository}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=${RUN_PAGE_SIZE}&page=${page}`,
+      "the release workflow runs",
+    );
+    if (!Array.isArray(listing?.workflow_runs)) fail("the release workflow runs are malformed.");
+    runs.push(...listing.workflow_runs);
+    if (listing.workflow_runs.length < RUN_PAGE_SIZE) return runs;
+  }
+  return fail(`the release workflow runs span more than ${RUN_PAGE_LIMIT} pages.`);
+}
+
 function publishRunActive(runGh, repository, tag) {
-  const runs = readFound(
-    runGh,
-    `repos/${repository}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100`,
-    "the release workflow runs",
-  );
-  if (!Array.isArray(runs?.workflow_runs)) fail("the release workflow runs are malformed.");
-  return runs.workflow_runs.some(
+  return readReleaseDispatchRuns(runGh, repository).some(
     (run) => run?.head_branch === tag && OPEN_RUN_STATUSES.has(run?.status),
   );
 }

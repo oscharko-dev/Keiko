@@ -118,7 +118,7 @@ for (const name of readdirSync(packagesDir)) {
   } catch {
     continue;
   }
-  workspaceManifests.push({ label: `${name}/package.json`, manifest });
+  workspaceManifests.push({ dir: name, label: `${name}/package.json`, manifest });
   if (manifest.version !== expected) {
     fail(`${name}: version ${manifest.version} does not match root ${expected}`);
   }
@@ -170,6 +170,12 @@ if (!existsSync(lockPath)) {
   const lockRootVersion = lock.packages?.[""]?.version;
   if (lockRootVersion !== expected) {
     fail(`package-lock.json: root entry is ${lockRootVersion}, but root is ${expected}`);
+  }
+  // A workspace the lockfile does not list at all was never refreshed; the loop below could not see it.
+  for (const { dir } of workspaceManifests) {
+    if (!Object.hasOwn(lock.packages ?? {}, `packages/${dir}`)) {
+      fail(`package-lock.json: packages/${dir} has no entry, so the lockfile was not refreshed`);
+    }
   }
   for (const [path, entry] of Object.entries(lock.packages ?? {})) {
     if (!path.startsWith("packages/") || path.includes("/node_modules/")) continue;

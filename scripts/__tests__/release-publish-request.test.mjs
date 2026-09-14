@@ -13,7 +13,7 @@ const REPO = "oscharko-dev/Keiko";
 const TAG = "v1.0.1";
 const BUILD = "a".repeat(40);
 const OLDER = "b".repeat(40);
-const RUNS_PATH = `repos/${REPO}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100`;
+const RUNS_PATH = `repos/${REPO}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100&page=1`;
 
 function run(overrides) {
   return {
@@ -149,6 +149,47 @@ describe("runReleasePublishRequest", () => {
     ]);
     expect(line).toBe(
       `Publish request for ${TAG}: dispatch, ${TAG} at ${BUILD} is ready for the npm-publish approval; cancelled 1 superseded run(s).`,
+    );
+  });
+
+  it("cancels a superseded waiting publish that is listed on the second page", () => {
+    // One page of 100 completed runs hid the waiting one on page two, and the dispatch then put a
+    // second approval for the tag in the queue (review finding on #3488).
+    const completed = Array.from({ length: 100 }, (_, index) =>
+      run({ head_sha: OLDER, id: 1000 + index, status: "completed" }),
+    );
+    const gh = fakeGh({ runs: completed });
+    const page2 = RUNS_PATH.replace("&page=1", "&page=2");
+    const runGh = (args) =>
+      args.at(-1) === page2
+        ? {
+            status: 0,
+            stdout: JSON.stringify({ workflow_runs: [run({ head_sha: OLDER, id: 21 })] }),
+            stderr: "",
+          }
+        : gh.runGh(args);
+
+    runReleasePublishRequest({ env: ENV, runGh });
+
+    expect(gh.calls).toContainEqual([
+      "api",
+      "--method",
+      "POST",
+      `repos/${REPO}/actions/runs/21/cancel`,
+    ]);
+  });
+
+  it("refuses to decide on a run listing that never ends", () => {
+    const full = Array.from({ length: 100 }, (_, index) =>
+      run({ head_sha: OLDER, id: 1000 + index, status: "completed" }),
+    );
+    const runGh = (args) =>
+      String(args.at(-1)).startsWith(RUNS_PATH.replace("&page=1", "&page="))
+        ? { status: 0, stdout: JSON.stringify({ workflow_runs: full }), stderr: "" }
+        : fakeGh().runGh(args);
+
+    expect(() => runReleasePublishRequest({ env: ENV, runGh })).toThrow(
+      "the release workflow runs span more than 20 pages",
     );
   });
 

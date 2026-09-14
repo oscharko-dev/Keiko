@@ -36,9 +36,10 @@ function fakeGithub(overrides = {}) {
     [`repos/${REPO}/git/ref/heads/dev`]: ok({ object: { sha: CANDIDATE, type: "commit" } }),
     [`repos/${REPO}/git/ref/tags/${TAG}`]: NOT_FOUND,
     [`repos/${REPO}/releases/tags/${TAG}`]: NOT_FOUND,
-    [`repos/${REPO}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100`]: ok({
-      workflow_runs: [],
-    }),
+    [`repos/${REPO}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100&page=1`]:
+      ok({
+        workflow_runs: [],
+      }),
     ...overrides,
   };
   const calls = [];
@@ -188,7 +189,7 @@ describe("planReleaseCandidate", () => {
       // for one commit publish another (review finding on #3488).
       const github = fakeGithub({
         [`repos/${REPO}/git/ref/tags/${TAG}`]: ok({ object: { sha: OLDER, type: "commit" } }),
-        [`repos/${REPO}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100`]:
+        [`repos/${REPO}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100&page=1`]:
           ok({
             workflow_runs: [
               { head_branch: "v1.0.0", status: "in_progress" },
@@ -204,14 +205,13 @@ describe("planReleaseCandidate", () => {
   it("moves a tag whose publish runs have all completed, or belong to another tag", () => {
     const github = fakeGithub({
       [`repos/${REPO}/git/ref/tags/${TAG}`]: ok({ object: { sha: OLDER, type: "commit" } }),
-      [`repos/${REPO}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100`]: ok(
-        {
+      [`repos/${REPO}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100&page=1`]:
+        ok({
           workflow_runs: [
             { head_branch: TAG, status: "completed" },
             { head_branch: "v1.0.0", status: "waiting" },
           ],
-        },
-      ),
+        }),
     });
     expect(gather(github).action).toBe("move");
   });
@@ -226,7 +226,7 @@ describe("planReleaseCandidate", () => {
     [
       "the release runs",
       {
-        [`repos/${REPO}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100`]:
+        [`repos/${REPO}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100&page=1`]:
           ok({}),
       },
       "release workflow runs are malformed",

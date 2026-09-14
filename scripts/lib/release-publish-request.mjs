@@ -1,4 +1,8 @@
-import { OPEN_RUN_STATUSES, readFound, remoteTagCommit } from "./release-candidate.mjs";
+import {
+  OPEN_RUN_STATUSES,
+  readReleaseDispatchRuns,
+  remoteTagCommit,
+} from "./release-candidate.mjs";
 
 // ADR-0177 D8: the last job of a stable tag build asks release.yml to publish exactly that build, so
 // nobody copies a run id into a dispatch form. It publishes nothing itself: the publish job it starts
@@ -105,14 +109,8 @@ function cancelSupersededRuns(runGh, repository, runIds) {
  */
 export function runReleasePublishRequest({ env, runGh }) {
   const inputs = requestInputs(env);
-  const runs = readFound(
-    runGh,
-    `repos/${inputs.repository}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100`,
-    "the release workflow runs",
-  );
-  if (!Array.isArray(runs?.workflow_runs)) fail("the release workflow runs are malformed.");
   const plan = releasePublishRequestPlan({
-    releaseRuns: runs.workflow_runs,
+    releaseRuns: readReleaseDispatchRuns(runGh, inputs.repository),
     remoteTagSha: remoteTagCommit(runGh, inputs.repository, inputs.tag),
     sourceSha: inputs.sourceSha,
     tag: inputs.tag,

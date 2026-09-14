@@ -266,6 +266,21 @@ describe("check-version-consistency gate", () => {
     );
   });
 
+  it("fails and names a workspace the lockfile does not list", () => {
+    root = makeRoot();
+    writeCleanRoot(root);
+    const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
+    delete lock.packages["packages/keiko-harness"];
+    writeJson(root, "package-lock.json", lock);
+
+    const result = runGate(root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "package-lock.json: packages/keiko-harness has no entry, so the lockfile was not refreshed",
+    );
+  });
+
   it("fails when the lockfile is missing", () => {
     root = makeRoot();
     writeCleanRoot(root);
