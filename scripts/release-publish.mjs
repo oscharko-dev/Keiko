@@ -61,6 +61,7 @@ import { readJsonFile } from "./lib/json.mjs";
 import { resolveGithubRepository } from "./lib/github-repository.mjs";
 import { recordNpmPublishDeployment } from "./lib/npm-publish-deployment.mjs";
 import { checkReleaseAlignment, printAlignmentReport } from "./check-release-alignment.mjs";
+import { proveReleaseSigningKeyBeforePublishing } from "./lib/portable-release-signing-key.mjs";
 import { createStagedPublishPackage } from "./stage-publish-package.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -1876,6 +1877,14 @@ if (options.planOnly) {
   process.exit(0);
 }
 
+proveReleaseSigningKeyBeforePublishing({
+  fail,
+  log: console.log,
+  portableAssetCount: portableAssets.length,
+  signingKey: portableReleaseSigningKey,
+  trustedKeys: portableReleaseTrustedKeys,
+  uploadEnabled: portableUploadEnabled(options),
+});
 if (!options.allowUntagged) {
   ensureReleaseTag(rootManifest.version);
 }

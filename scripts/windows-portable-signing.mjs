@@ -43,6 +43,7 @@ import {
   assertWindowsProductionVerificationInput,
   WindowsVerificationInputError,
 } from "./windows-portable-verification-input.mjs";
+import { withCyclonedxSerialNumber } from "./lib/cyclonedx-serial-number.mjs";
 import { sha256 } from "./lib/digest.mjs";
 import {
   hashPortableHandoffTree,
@@ -563,7 +564,7 @@ function bindRuntimeAttestationSbom(stageRoot, manifest, attestation) {
       ],
     },
   ];
-  writeFileSync(path, `${JSON.stringify(sbom, null, 2)}\n`);
+  writeFileSync(path, `${JSON.stringify(withCyclonedxSerialNumber(sbom), null, 2)}\n`);
 }
 
 function generationStagingRoot(stageRoot) {

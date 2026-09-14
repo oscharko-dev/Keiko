@@ -743,6 +743,23 @@ function makeStub(binDir, name, body, logFile, stateFile) {
   chmodSync(path, 0o755);
 }
 
+// Every call that makes a release visible outside the run: a GitHub release or its assets, a
+// pushed tag, or registry state.
+const PUBLICATION_CALL_PREFIXES = [
+  'gh ["release","create"',
+  'gh ["release","edit"',
+  'gh ["release","upload"',
+  'git ["push"',
+  'npm ["publish"',
+  'npm ["dist-tag"',
+];
+
+function expectNoPublicationSideEffect(calls) {
+  for (const prefix of PUBLICATION_CALL_PREFIXES) {
+    expect(calls.filter((line) => line.startsWith(prefix))).toEqual([]);
+  }
+}
+
 function passthroughViewBody() {
   return [
     '  if (argv.includes("version")) { process.stdout.write(VERSION + "\\n"); process.exit(0); }',
@@ -1861,6 +1878,61 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain("portable upload failed");
       expect(lastRun.calls.some((l) => l.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("refuses an untrusted release signing key before the GitHub release exists", () => {
+      // The key was first used while binding archives already uploaded to the created release, so
+      // a key the shipped trust roots reject failed only after `gh release create` and the
+      // archive upload, and stranded a half-published Latest release.
+      const signingKey = generateKeyPairSync("ed25519").privateKey.export({
+        format: "pem",
+        type: "pkcs8",
+      });
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { published: false },
+        qualificationEnv: { KEIKO_PORTABLE_RELEASE_SIGNING_KEY: signingKey },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain(
+        "portable release signing key is not trusted (key-untrusted); nothing was published.",
+      );
+      expect(lastRun.stdout + lastRun.stderr).not.toContain(signingKey.split("\n")[1]);
+      expectNoPublicationSideEffect(lastRun.calls);
+    });
+
+    it("refuses an unusable release signing key before the GitHub release exists", () => {
+      const signingKey = "not-an-ed25519-private-key";
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { published: false },
+        qualificationEnv: { KEIKO_PORTABLE_RELEASE_SIGNING_KEY: signingKey },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain(
+        "portable release signing key is not a usable Ed25519 private key; nothing was published.",
+      );
+      expect(lastRun.stdout + lastRun.stderr).not.toContain(signingKey);
+      expectNoPublicationSideEffect(lastRun.calls);
+    });
+
+    it.each([
+      ["empty", ""],
+      ["unset", undefined],
+    ])("refuses an %s release signing key before the GitHub release exists", (_label, value) => {
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { published: false },
+        qualificationEnv: { KEIKO_PORTABLE_RELEASE_SIGNING_KEY: value },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain(
+        "KEIKO_PORTABLE_RELEASE_SIGNING_KEY is required for portable release publication.",
+      );
+      expectNoPublicationSideEffect(lastRun.calls);
     });
 
     it("refuses to upload qualified assets over a published evaluation release", () => {
