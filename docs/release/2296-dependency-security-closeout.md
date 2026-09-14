@@ -188,6 +188,7 @@ guaranteed version-mismatch failure.
 | `actions/download-artifact`        | v8.0.1  | 3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c | current        |
 | `actions/cache`                    | v6.1.0  | 55cc8345863c7cc4c66a329aec7e433d2d1c52a9 | current        |
 | `actions/attest`                   | v4.2.0  | f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 | patch-deferred |
+| `actions/create-github-app-token`  | v3.2.0  | bcd2ba49218906704ab6c1aa796996da409d3eb1 | current        |
 | `actions/setup-dotnet`             | v6.0.0  | a98b56852c35b8e3190ac28c8c2271da59106c68 | current        |
 | `actions/dependency-review-action` | v5.0.0  | a1d282b36b6f3519aa1f3fc636f609c47dddb294 | current        |
 | `github/codeql-action`             | v4.37.7 | ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd | patch-deferred |

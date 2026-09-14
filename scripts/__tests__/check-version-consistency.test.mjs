@@ -61,11 +61,27 @@ function writeCleanRoot(root, { version = VERSION } = {}) {
     copyFileSync(join(REPO_ROOT, relative), absolute);
   }
 
-  // 3) Root manifest establishes the expected version.
+  // 3) Root manifest establishes the expected version and pins one workspace package.
   writeJson(root, "package.json", {
     name: "@oscharko-dev/keiko",
     version,
     private: true,
+    dependencies: { "@oscharko-dev/keiko-contracts": version },
+  });
+
+  // 3b) The lockfile carries the root and every workspace entry at that version; a nested
+  //     node_modules entry under a workspace is not a workspace and keeps its own version.
+  writeJson(root, "package-lock.json", {
+    name: "@oscharko-dev/keiko",
+    version,
+    lockfileVersion: 3,
+    packages: {
+      "": { name: "@oscharko-dev/keiko", version },
+      "packages/keiko-contracts": { name: "@oscharko-dev/keiko-contracts", version },
+      "packages/keiko-harness": { name: "@oscharko-dev/keiko-harness", version },
+      "packages/keiko-harness/node_modules/typescript": { version: "5.7.3" },
+      "packages/keiko-sdk": { name: "@oscharko-dev/keiko-sdk", version },
+    },
   });
 
   // 4) keiko-contracts: manifest + KEIKO_PRODUCT_VERSION + a second KEIKO_*_VERSION constant,
@@ -216,6 +232,66 @@ describe("check-version-consistency gate", () => {
   });
 
   // RED path C: a workspace package.json version drifts from the root version.
+  it("fails and names the lockfile entry a hand-written cut left behind", () => {
+    // The 1.0.0 cut: every manifest at the new version, the lockfile's workspace entries not.
+    root = makeRoot();
+    writeCleanRoot(root);
+    const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
+    lock.packages["packages/keiko-harness"].version = "0.1.0";
+    writeJson(root, "package-lock.json", lock);
+
+    const result = runGate(root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      `package-lock.json: packages/keiko-harness is 0.1.0, but root is ${VERSION}`,
+    );
+  });
+
+  it("fails and names a dependency pin on a workspace package that was not moved", () => {
+    root = makeRoot();
+    writeCleanRoot(root);
+    writeJson(root, "packages/keiko-harness/package.json", {
+      name: "@oscharko-dev/keiko-harness",
+      version: VERSION,
+      private: true,
+      dependencies: { "@oscharko-dev/keiko-contracts": "0.1.0" },
+    });
+
+    const result = runGate(root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      `keiko-harness/package.json: dependency @oscharko-dev/keiko-contracts is pinned to 0.1.0, but root is ${VERSION}`,
+    );
+  });
+
+  it("fails and names a workspace the lockfile does not list", () => {
+    root = makeRoot();
+    writeCleanRoot(root);
+    const lock = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
+    delete lock.packages["packages/keiko-harness"];
+    writeJson(root, "package-lock.json", lock);
+
+    const result = runGate(root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "package-lock.json: packages/keiko-harness has no entry, so the lockfile was not refreshed",
+    );
+  });
+
+  it("fails when the lockfile is missing", () => {
+    root = makeRoot();
+    writeCleanRoot(root);
+    rmSync(join(root, "package-lock.json"));
+
+    const result = runGate(root);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("package-lock.json is missing.");
+  });
+
   it("fails and names the offending package when a workspace package.json version drifts", () => {
     root = makeRoot();
     writeCleanRoot(root);

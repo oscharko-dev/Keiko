@@ -2,10 +2,14 @@ import { createHash, generateKeyPairSync } from "node:crypto";
 import { describe, expect, it, type Mock, vi } from "vitest";
 
 import {
+  LINUX_QUALIFICATION_REHEARSAL_SIGSTORE_POLICY,
   LINUX_QUALIFICATION_SIGSTORE_POLICY,
   type SigstoreBundleVerifier,
   verifyLinuxQualificationBundle,
+  verifyLinuxQualificationRehearsalBundle,
 } from "./linuxPortableSigstore.js";
+
+const WORKFLOW = "https://github.com/oscharko-dev/Keiko/.github/workflows/portable-assets.yml";
 
 function verifierMock(): Mock<SigstoreBundleVerifier["verify"]> {
   const { publicKey } = generateKeyPairSync("ed25519");
@@ -64,6 +68,61 @@ describe("Linux portable Sigstore verification", () => {
 
     expect(() => {
       verifyLinuxQualificationBundle(Buffer.from("receipt"), {}, { verify });
+    }).toThrow();
+    expect(verify).not.toHaveBeenCalled();
+  });
+
+  it("binds a rehearsal receipt to the dev-branch workflow policy, never the release policy", () => {
+    const verify = verifierMock();
+    const receipt = Buffer.from('{"result":"passed"}\n', "utf8");
+
+    verifyLinuxQualificationRehearsalBundle(receipt, serializedBundle(receipt), { verify });
+
+    expect(verify).toHaveBeenCalledOnce();
+    expect(verify.mock.calls[0]?.[1]).toBe(LINUX_QUALIFICATION_REHEARSAL_SIGSTORE_POLICY);
+    expect(verify.mock.calls[0]?.[1]).not.toBe(LINUX_QUALIFICATION_SIGSTORE_POLICY);
+    expect(LINUX_QUALIFICATION_REHEARSAL_SIGSTORE_POLICY.extensions.issuer).toBe(
+      "https://token.actions.githubusercontent.com",
+    );
+  });
+
+  // The fence: an identity one policy accepts, the other must refuse, so a rehearsal-signed
+  // qualification can never satisfy the release policy the product runtime enforces.
+  it.each([
+    [`${WORKFLOW}@refs/tags/v1.2.3`, true, false],
+    [`${WORKFLOW}@refs/heads/dev`, false, true],
+    [`${WORKFLOW}@refs/heads/dev-release`, false, false],
+    [`${WORKFLOW}@refs/heads/devel`, false, false],
+    [`${WORKFLOW}@refs/heads/main`, false, false],
+    [`${WORKFLOW}@refs/tags/v1.2.3-rc.1`, false, false],
+    [`${WORKFLOW}@refs/heads/dev\n`, false, false],
+    [
+      "https://github.com/someone-else/Keiko/.github/workflows/portable-assets.yml@refs/heads/dev",
+      false,
+      false,
+    ],
+    [
+      "https://github.com/oscharko-dev/Keiko/.github/workflows/release.yml@refs/heads/dev",
+      false,
+      false,
+    ],
+  ])(
+    "keeps the release and rehearsal identities disjoint for %s",
+    (identity, release, rehearsal) => {
+      expect(LINUX_QUALIFICATION_SIGSTORE_POLICY.subjectAlternativeName.test(identity)).toBe(
+        release,
+      );
+      expect(
+        LINUX_QUALIFICATION_REHEARSAL_SIGSTORE_POLICY.subjectAlternativeName.test(identity),
+      ).toBe(rehearsal);
+    },
+  );
+
+  it("rejects a malformed rehearsal bundle before the verifier can run", () => {
+    const verify = verifierMock();
+
+    expect(() => {
+      verifyLinuxQualificationRehearsalBundle(Buffer.from("receipt"), {}, { verify });
     }).toThrow();
     expect(verify).not.toHaveBeenCalled();
   });

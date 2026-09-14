@@ -77,6 +77,57 @@ export const PORTABLE_TARGETS = Object.freeze([
 export const PORTABLE_TARGET_NAMES = Object.freeze(
   PORTABLE_TARGETS.map((target) => target.platformTarget),
 );
+
+// The reviewed staging contract a release-impact entry must carry before a portable target may be
+// staged from it. It lives beside the target list so that one rule serves both callers: the staging
+// producer applies it when a tagged run stages a target, and check:release-impact applies it on the
+// pull request. Before, only the producer knew it, so on the v1.0.0 cut a target list that still
+// omitted linux-x64 surfaced three steps into a tagged release instead of in review.
+export const PORTABLE_RELEASE_IMPACT_CONTRACT = Object.freeze({
+  issue: 1948,
+  parentEpic: 1942,
+  programEpic: 1944,
+  stagingOnly: true,
+});
+export const LEGACY_PORTABLE_TARGETS = Object.freeze(["windows-x64", "macos-arm64", "macos-x64"]);
+
+export function reviewedPortableTargetSet(actual, requestedTarget) {
+  if (!Array.isArray(actual)) return false;
+  const actualSet = new Set(actual);
+  const knownTargets = new Set(PORTABLE_TARGET_NAMES);
+  return (
+    actualSet.size === actual.length &&
+    LEGACY_PORTABLE_TARGETS.every((target) => actualSet.has(target)) &&
+    actualSet.has(requestedTarget) &&
+    actual.every((target) => knownTargets.has(target))
+  );
+}
+
+export function portableRuntimeContractMatches(contract, requestedTarget) {
+  return (
+    contract !== null &&
+    typeof contract === "object" &&
+    contract.issue === PORTABLE_RELEASE_IMPACT_CONTRACT.issue &&
+    contract.parentEpic === PORTABLE_RELEASE_IMPACT_CONTRACT.parentEpic &&
+    contract.programEpic === PORTABLE_RELEASE_IMPACT_CONTRACT.programEpic &&
+    contract.stagingOnly === PORTABLE_RELEASE_IMPACT_CONTRACT.stagingOnly &&
+    reviewedPortableTargetSet(contract.targets, requestedTarget)
+  );
+}
+
+// The release-impact entry a tagged run stages a target from: the current package at the stable tag,
+// reviewed and approved by a human, carrying the reviewed staging contract for that target. The
+// staging producer and the dev rehearsal's readiness check apply this one rule.
+export function reviewedStagingEntryMatches(entry, rootPackage, releaseTag, target) {
+  return (
+    entry?.packageName === rootPackage.name &&
+    entry.packageVersion === rootPackage.version &&
+    entry.releaseTag === releaseTag &&
+    entry.review?.status === "reviewed" &&
+    entry.review?.humanApproved === true &&
+    portableRuntimeContractMatches(entry.portableRuntimeArtifactContract, target)
+  );
+}
 export const PORTABLE_VERIFICATION_POLICIES = Object.freeze([
   "staging",
   "development",

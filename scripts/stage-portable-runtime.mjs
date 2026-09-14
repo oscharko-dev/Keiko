@@ -28,6 +28,7 @@ import {
   isSafePortableRelativePath,
   portableTargetByName,
   PORTABLE_TARGET_NAMES,
+  reviewedStagingEntryMatches,
   WINDOWS_GENERATION_STAGING_RELATIVE_PATH,
   portableVerificationSummaryForManifest,
   sha256File,
@@ -99,13 +100,6 @@ const REQUIRED_APP_SURFACE_FILES = Object.freeze([
   "NOTICE",
 ]);
 const TAR_LINK_POLICY_SKIP_SAFE = "skip-safe";
-const PORTABLE_RELEASE_IMPACT_CONTRACT = Object.freeze({
-  issue: 1948,
-  parentEpic: 1942,
-  programEpic: 1944,
-  stagingOnly: true,
-});
-const LEGACY_PORTABLE_TARGETS = Object.freeze(["windows-x64", "macos-arm64", "macos-x64"]);
 
 function fail(message) {
   console.error(`portable-stage failed: ${message}`);
@@ -2325,38 +2319,7 @@ function reviewedReleaseImpactEntry(options) {
 }
 
 function releaseImpactEntryMatches(entry, options) {
-  return (
-    entry.packageName === rootPackage.name &&
-    entry.packageVersion === rootPackage.version &&
-    entry.releaseTag === options.releaseTag &&
-    entry.review?.status === "reviewed" &&
-    entry.review?.humanApproved === true &&
-    portableRuntimeContractMatches(entry.portableRuntimeArtifactContract, options.target)
-  );
-}
-
-function portableRuntimeContractMatches(contract, requestedTarget) {
-  return (
-    contract !== null &&
-    typeof contract === "object" &&
-    contract.issue === PORTABLE_RELEASE_IMPACT_CONTRACT.issue &&
-    contract.parentEpic === PORTABLE_RELEASE_IMPACT_CONTRACT.parentEpic &&
-    contract.programEpic === PORTABLE_RELEASE_IMPACT_CONTRACT.programEpic &&
-    contract.stagingOnly === PORTABLE_RELEASE_IMPACT_CONTRACT.stagingOnly &&
-    reviewedPortableTargetSet(contract.targets, requestedTarget)
-  );
-}
-
-function reviewedPortableTargetSet(actual, requestedTarget) {
-  if (!Array.isArray(actual)) return false;
-  const actualSet = new Set(actual);
-  const knownTargets = new Set(PORTABLE_TARGET_NAMES);
-  return (
-    actualSet.size === actual.length &&
-    LEGACY_PORTABLE_TARGETS.every((target) => actualSet.has(target)) &&
-    actualSet.has(requestedTarget) &&
-    actual.every((target) => knownTargets.has(target))
-  );
+  return reviewedStagingEntryMatches(entry, rootPackage, options.releaseTag, options.target);
 }
 
 export async function assemblePortableStage(options, hooks = {}) {

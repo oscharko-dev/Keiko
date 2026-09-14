@@ -5,7 +5,10 @@ import { existsSync, lstatSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { basename, join, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
-import { verifyLinuxQualificationBundle } from "../packages/keiko-server/src/coding-runtime/linuxPortableSigstore.ts";
+import {
+  verifyLinuxQualificationBundle,
+  verifyLinuxQualificationRehearsalBundle,
+} from "../packages/keiko-server/src/coding-runtime/linuxPortableSigstore.ts";
 // Imported from the built output, not from src: productionPortableCodingRuntime.ts carries ten
 // relative ".js" specifiers pointing at ".ts" sources, which vitest rewrites and plain node does
 // not. Every invocation of this script therefore died at module load on the release runner with
@@ -162,12 +165,35 @@ export function prepareLinuxQualifiedPayload(options, dependencies = {}) {
   writeFileSync(files.manifestPath, `${JSON.stringify(files.manifest, null, 2)}\n`);
 }
 
-function boundQualification(files, sourceCommitSha, dependencies) {
+// The release lane is the default and the only lane an installed Keiko can accept. The rehearsal lane
+// runs this same chain on every dev push; its OIDC certificate names refs/heads/dev, so it verifies
+// against the rehearsal policy and skips the product discovery, whose trust decision is fixed to
+// release signatures and is exercised only by a real release.
+const SIGNING_LANES = Object.freeze({
+  release: Object.freeze({
+    verifyQualificationBundle: verifyLinuxQualificationBundle,
+    assertsProductDiscovery: true,
+  }),
+  rehearsal: Object.freeze({
+    verifyQualificationBundle: verifyLinuxQualificationRehearsalBundle,
+    assertsProductDiscovery: false,
+  }),
+});
+
+export function signingLane(options) {
+  const name = options.lane ?? "release";
+  if (typeof name !== "string" || !Object.hasOwn(SIGNING_LANES, name)) {
+    fail("unsupported signing lane");
+  }
+  return SIGNING_LANES[name];
+}
+
+function boundQualification(files, sourceCommitSha, dependencies, lane) {
   const receiptPath = join(files.resourceRoot, ...RECEIPT_PATH.split("/"));
   const bundlePath = join(files.resourceRoot, ...BUNDLE_PATH.split("/"));
   const receiptBytes = readBoundedBytes(receiptPath, "qualification receipt");
   const bundle = readBoundedJson(bundlePath, "qualification bundle");
-  (dependencies.verifyQualificationBundle ?? verifyLinuxQualificationBundle)(receiptBytes, bundle);
+  (dependencies.verifyQualificationBundle ?? lane.verifyQualificationBundle)(receiptBytes, bundle);
   const actual = JSON.parse(receiptBytes.toString("utf8"));
   const expected = (dependencies.qualificationReceiptFor ?? qualificationReceiptFor)({
     activationPath: join(files.resourceRoot, ".portable", "runtime-activation.json"),
@@ -246,6 +272,12 @@ function assertArchive(files) {
   }
 }
 
+// Only the release lane offers its artifact to the product discovery: that discovery accepts release
+// signatures alone, so a rehearsal-signed qualification is never put in front of it.
+function assertLaneProductDiscovery(lane, files, discover) {
+  if (lane.assertsProductDiscovery) assertProductionDiscovery(files, discover);
+}
+
 function assertProductionDiscovery(files, discover = discoverQualifiedPortableOpenCode) {
   const runtime = discover({
     env: {},
@@ -263,9 +295,10 @@ function assertProductionDiscovery(files, discover = discoverQualifiedPortableOp
 }
 
 export function verifyLinuxQualifiedPayload(options, dependencies = {}) {
+  const lane = signingLane(options);
   const files = stageFiles(options);
   const sourceCommitSha = required(options, "source-commit-sha");
-  const qualification = boundQualification(files, sourceCommitSha, dependencies);
+  const qualification = boundQualification(files, sourceCommitSha, dependencies, lane);
   if (
     files.manifest.runtimeQualification?.path !== RECEIPT_PATH ||
     files.manifest.runtimeQualification?.sha256 !== sha256File(qualification.receiptPath) ||
@@ -278,14 +311,15 @@ export function verifyLinuxQualifiedPayload(options, dependencies = {}) {
   );
   if (failures.length > 0) fail(`production manifest is invalid: ${failures.join("; ")}`);
   assertArchive(files);
-  assertProductionDiscovery(files, dependencies.discoverQualifiedRuntime);
+  assertLaneProductDiscovery(lane, files, dependencies.discoverQualifiedRuntime);
   return files;
 }
 
 export async function finalizeLinuxQualifiedPayload(options, dependencies = {}) {
+  const lane = signingLane(options);
   const files = stageFiles(options);
   const sourceCommitSha = required(options, "source-commit-sha");
-  const qualification = boundQualification(files, sourceCommitSha, dependencies);
+  const qualification = boundQualification(files, sourceCommitSha, dependencies, lane);
   bindQualification(files.manifest, qualification.receiptPath);
   const archivePath = rebuildArchive(files);
   await (dependencies.rebindExistingSignedArchive ?? rebindExistingSignedArchive)(

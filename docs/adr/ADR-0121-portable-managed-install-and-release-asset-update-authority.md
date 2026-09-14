@@ -5,7 +5,8 @@
 Accepted (Issue #1946, 2026-07-05); amended for the Windows setup companion (Issue #2966,
 2026-08-04); construction surface replaced by a Keiko-owned native bootstrap (Issue #2992,
 2026-08-29); platform-neutral release trust adopted for unsigned native delivery (Epic #3403,
-2026-09-10); amended with the production-qualified Linux x64 archive (Issue #3451, 2026-09-10).
+2026-09-10); amended with the production-qualified Linux x64 archive (Issue #3451, 2026-09-10);
+D8 amended by the `dev` release rehearsal of ADR-0177 (2026-09-14).
 
 ## Context
 
@@ -435,7 +436,13 @@ not accumulate attestations for commits that never ship. A `workflow_dispatch` r
 build, `evaluation-unqualified` instead. Neither dispatch mode is attested or can reach `assemble`.
 Stable-tag builds also report unsigned native status honestly, but additionally declare
 `releaseTrustRequired`; Linux additionally requires its OIDC-attested runtime qualification. Only
-that stable path can be assembled and passed to the protected publisher.
+that stable path can be assembled and passed to the protected publisher. ADR-0177 runs the same
+`assemble` job, attestations included, as a rehearsal on every `dev` push whose version is approved:
+those attestations name `refs/heads/dev`, the bundle is uploaded as `portable-rehearsal-assets`,
+which the release resolver refuses, and the publisher verifies the setup companion's attestation
+with `--signer-workflow`, `--source-digest`, and `--source-ref refs/tags/<tag>`, so no rehearsal
+output crosses the publish boundary. Consumers verify with the same signer-workflow and tag
+bindings; without them, `gh attestation verify` also accepts a rehearsal attestation.
 
 This is additive evidence, not a replacement for the existing portable manifest, the content-free
 `evidence/signing-verification.json` projection, or the `provenance.intoto.jsonl` statement. Those
@@ -608,6 +615,7 @@ Security review for implementation under this ADR must cover:
 | ------- | ---------- | ------ |
 | 1.0     | 2026-07-05 | Accepted the portable managed-install and release-asset authority. |
 | 1.1     | 2026-09-10 | Added `linux-x64` as the fourth release-blocking archive for Issue #3451 so the production packaging model matches the qualified runtime target set. |
+| 1.2     | 2026-09-14 | Amended D8 for the ADR-0177 `dev` release rehearsal: rehearsal attestations name `refs/heads/dev`, and every documented verifier binds the signer workflow and the stable tag. |
 
 ## Amendment history
 
@@ -653,3 +661,7 @@ Security review for implementation under this ADR must cover:
   protected-workflow OIDC receipt, offline Sigstore verification, exact component/source binding,
   and real namespace-gateway qualification. Historical reviewed three-target releases remain
   readable by the updater but do not satisfy a new production release set.
+- **2026-09-14 — ADR-0177:** Amended D8. The `assemble` job also runs as a rehearsal on every `dev`
+  push whose version is approved. Its attestations name `refs/heads/dev`, its bundle cannot reach
+  the publisher, and the publisher and the operator guide verify attestations bound to the
+  `portable-assets` workflow and the stable tag.

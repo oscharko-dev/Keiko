@@ -8,6 +8,10 @@ name: Portable assets
 
 on:
   push:
+    # A dev push rehearses the stable release end to end without publishing it (rehearsal-readiness
+    # decides whether the dev head's version is approved at all); a stable v* tag runs the release.
+    branches:
+      - dev
     tags:
       - "v*"
   workflow_dispatch:
@@ -22,14 +26,47 @@ on:
 
 permissions: {}
 
+concurrency:
+  # Only the newest dev head needs its rehearsal, so dev pushes share one group and a superseded
+  # rehearsal is cancelled. Every tag run and manual dispatch gets a group of its own: a shared group
+  # would still cancel a queued run when a third one arrives, even without cancel-in-progress.
+  group: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' && 'portable-assets-dev-rehearsal' || format('portable-assets-run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
+
 env:
   RELEASE_BASE_BRANCH: release/1.0
   RELEASE_REQUIRED_CHECKS: '["ci","workflow hygiene","Analyze (actions)","Analyze (javascript-typescript)","Build, scan, SBOM, smoke","ui"]'
 
 jobs:
+  rehearsal-readiness:
+    name: Stable release rehearsal readiness
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    timeout-minutes: 10
+    outputs:
+      ready: ${{ steps.readiness.outputs.ready }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Decide whether this dev head's version is approved for a stable release
+        id: readiness
+        # Not approved yet is a named status, not a failure: the rehearsal jobs below are skipped and
+        # the summary says why, so the lane does not stand red between two releases.
+        run: node scripts/portable-rehearsal-readiness.mjs
+
   stage:
     name: Stage and smoke portable asset (${{ matrix.platform_target }})
-    if: ${{ github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')) }}
+    needs: rehearsal-readiness
+    if: ${{ !cancelled() && (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && ((startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')) || (github.ref == 'refs/heads/dev' && needs.rehearsal-readiness.outputs.ready == 'true')))) }}
     strategy:
       fail-fast: false
       matrix:
@@ -42,16 +79,18 @@ jobs:
             runner: macos-15-intel
     runs-on: ${{ matrix.runner }}
     permissions:
-      checks: read
       contents: read
-      statuses: read
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
-          ref: ${{ github.ref }}
           persist-credentials: false
+      - name: Verify checked-out commit
+        # The checkout binds the event commit; this proves it, because every artifact below is bound
+        # to GITHUB_SHA. Windows runs pwsh by default, and the test below is bash.
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
@@ -61,9 +100,8 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
       - name: Validate stable tag and governed release authority
-        if: ${{ github.event_name == 'push' }}
+        if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
         env:
-          GITHUB_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         # The matrix runs this leg on windows-latest, whose default shell is pwsh; the block
         # below is bash (a heredoc and $(...) substitutions) and fails to parse there with
@@ -80,10 +118,14 @@ jobs:
           NODE
           npm run check:release-required-workflows
           npm run check:portable-approvals
-          RELEASE_SHA="$(git rev-parse HEAD)" node scripts/verify-release-required-checks.mjs
       - name: Validate approved runtime inputs
-        if: ${{ github.event_name == 'workflow_dispatch' }}
+        if: ${{ github.event_name == 'workflow_dispatch' || github.ref == 'refs/heads/dev' }}
         run: npm run check:portable-approvals
+      - name: Validate the release workflow authority a rehearsal will face
+        # The tag identity above needs a stable tag; the workflow authority does not, so a rehearsal
+        # still proves it.
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/dev' }}
+        run: npm run check:release-required-workflows
       - name: Run executable secure-read adversarial harness
         run: node native/secure-workspace-read/test-protocol.mjs
       - name: Provision the pinned USearch native addon
@@ -132,7 +174,6 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
-          ref: ${{ github.ref }}
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -177,21 +218,26 @@ jobs:
 
   stage-linux-production:
     name: Stage, qualify, and attest portable asset (linux-x64)
-    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+    needs: rehearsal-readiness
+    if: ${{ !cancelled() && github.event_name == 'push' && ((startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')) || (github.ref == 'refs/heads/dev' && needs.rehearsal-readiness.outputs.ready == 'true')) }}
     runs-on: ubuntu-latest
-    environment: portable-release-signing
+    # A rehearsal never enters the signing environment: every protection rule must pass before a job
+    # referencing an environment gets a runner, so a stable-tag policy or a required approval there
+    # would stall each dev push, and a credential provisioned there must stay out of its reach.
+    environment: ${{ github.ref == 'refs/heads/dev' && 'portable-release-rehearsal' || 'portable-release-signing' }}
     permissions:
-      checks: read
       contents: read
       id-token: write
-      statuses: read
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
-          ref: ${{ github.ref }}
           persist-credentials: false
+      - name: Verify checked-out commit
+        # The qualification receipt and its signature are bound to GITHUB_SHA, so the staged bytes
+        # must come from exactly that commit.
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24.18.0"
@@ -201,8 +247,8 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
       - name: Validate stable tag and governed release authority
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
         env:
-          GITHUB_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
@@ -215,7 +261,11 @@ jobs:
           NODE
           npm run check:release-required-workflows
           npm run check:portable-approvals
-          RELEASE_SHA="$(git rev-parse HEAD)" node scripts/verify-release-required-checks.mjs
+      - name: Validate the release workflow authority a rehearsal will face
+        if: ${{ github.ref == 'refs/heads/dev' }}
+        run: |
+          npm run check:release-required-workflows
+          npm run check:portable-approvals
       - name: Setup Linux sandbox isolation
         uses: ./.github/actions/setup-sandbox-isolation
       - name: Run Linux portable launcher native quality
@@ -239,7 +289,11 @@ jobs:
       - name: Attest the exact qualification receipt with GitHub OIDC
         run: node scripts/sign-linux-runtime-qualification.mjs "$GITHUB_WORKSPACE/.portable-runtime/staging/linux-x64/payload/Keiko/.portable/runtime-qualification.json" "$GITHUB_WORKSPACE/.portable-runtime/staging/linux-x64/payload/Keiko/.portable/runtime-qualification.sigstore.json"
       - name: Seal and verify the production Linux archive
-        run: node scripts/linux-portable-signing.mjs finalize --stage-root .portable-runtime/staging/linux-x64 --source-commit-sha "$GITHUB_SHA"
+        # A rehearsal's certificate names refs/heads/dev, so it verifies against the rehearsal policy
+        # and never offers its artifact to the product discovery, which accepts release signatures only.
+        env:
+          SIGNING_LANE: ${{ github.ref == 'refs/heads/dev' && 'rehearsal' || 'release' }}
+        run: node scripts/linux-portable-signing.mjs finalize --stage-root .portable-runtime/staging/linux-x64 --source-commit-sha "$GITHUB_SHA" --lane "$SIGNING_LANE"
       - name: Smoke test the verified production artifact
         run: npm run smoke:portable-launch-setup -- --stage-root .portable-runtime/staging --stage-target linux-x64
       - name: Run secure-read executable consistency harness
@@ -284,7 +338,6 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           fetch-depth: 0
-          ref: ${{ github.ref }}
           persist-credentials: false
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -317,7 +370,9 @@ jobs:
           mkdir -p .portable-runtime/staging
           tar -C .portable-runtime/staging -xpf "$RUNNER_TEMP/linux-x64-qualification-tree/linux-x64-qualification-tree.tar"
       - name: Re-verify the offline Sigstore bundle, archive, and production discovery
-        run: node scripts/linux-portable-signing.mjs verify --stage-root .portable-runtime/staging/linux-x64 --source-commit-sha "$GITHUB_SHA"
+        env:
+          SIGNING_LANE: ${{ github.ref == 'refs/heads/dev' && 'rehearsal' || 'release' }}
+        run: node scripts/linux-portable-signing.mjs verify --stage-root .portable-runtime/staging/linux-x64 --source-commit-sha "$GITHUB_SHA" --lane "$SIGNING_LANE"
       - name: Re-run real namespace-gateway qualification against the sealed receipt
         run: node scripts/qualify-linux-runtime-release.mjs --stage-root .portable-runtime/staging/linux-x64 --source-commit-sha "$GITHUB_SHA" --test-report "$RUNNER_TEMP/linux-runtime-tests.json" --verify-only true
       - name: Functionally requalify the secure-read helper
@@ -328,7 +383,7 @@ jobs:
   assemble:
     name: Assemble portable release-trust bundle
     needs: [stage, stage-linux-production, qualify-linux-production]
-    if: ${{ always() && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') && needs.stage.result == 'success' && needs.stage-linux-production.result == 'success' && needs.qualify-linux-production.result == 'success' }}
+    if: ${{ always() && github.event_name == 'push' && ((startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-')) || github.ref == 'refs/heads/dev') && needs.stage.result == 'success' && needs.stage-linux-production.result == 'success' && needs.qualify-linux-production.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       attestations: write
@@ -358,7 +413,7 @@ jobs:
           pattern: portable-stage-*
           path: portable-release-assets/artifacts
       - name: Assemble and validate the release asset bundle
-        run: node scripts/assemble-portable-release-assets.mjs --bundle-root portable-release-assets --commit-sha "$GITHUB_SHA" --release-tag "$GITHUB_REF_NAME" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --version "$(node -p 'require("./package.json").version')"
+        run: node scripts/assemble-portable-release-assets.mjs --bundle-root portable-release-assets --commit-sha "$GITHUB_SHA" --release-tag "v$(node -p 'require("./package.json").version')" --run-id "$GITHUB_RUN_ID" --run-attempt "$GITHUB_RUN_ATTEMPT" --version "$(node -p 'require("./package.json").version')"
       - name: Attest build provenance for portable release artifacts
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
@@ -392,7 +447,9 @@ jobs:
       - name: Upload release-trust candidate bundle
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: portable-release-assets
+          # A rehearsal bundle carries a name the publisher refuses (it accepts portable-release-assets
+          # from a stable-tag push only), so a rehearsal can never be released.
+          name: ${{ github.ref == 'refs/heads/dev' && 'portable-rehearsal-assets' || 'portable-release-assets' }}
           path: portable-release-assets
           # The portable contract stores its evidence under .portable/ (runtime-activation.json,
           # runtime-qualification.json). upload-artifact excludes hidden files by default, so
@@ -401,3 +458,43 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 90
+
+  request-publish:
+    name: Request the publish of this stable build
+    needs: assemble
+    # ADR-0177 D8: a stable tag build asks release.yml to publish exactly this run's bundle. The dev
+    # rehearsal and manual dispatches never do, and the publish job keeps its npm-publish approval.
+    if: ${{ needs.assemble.result == 'success' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+    runs-on: ubuntu-latest
+    permissions:
+      # Dispatching release.yml and cancelling an older candidate's publish that still waits for its
+      # approval. Neither can publish: every publish job still needs the npm-publish review.
+      actions: write
+      checks: read
+      contents: read
+      statuses: read
+    # The tag is written on the dev push, so this build runs beside the commit's CI; this job waits
+    # for the six release-required checks (at most 90 minutes) before it asks for a publish.
+    timeout-minutes: 100
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.18.0"
+          package-manager-cache: false
+      - name: Verify governed Node.js and npm toolchain
+        run: node scripts/check-runtime-toolchain.mjs --exact
+      - name: Verify the release-required checks on the tag commit
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: RELEASE_SHA="$GITHUB_SHA" node scripts/verify-release-required-checks.mjs
+      - name: Request the publish of this build
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          RUN_ID: ${{ github.run_id }}
+          SOURCE_SHA: ${{ github.sha }}
+        run: node scripts/request-release-publish.mjs

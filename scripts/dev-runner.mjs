@@ -880,12 +880,20 @@ function nextArgs() {
   ];
 }
 
+// next dev compiles NODE_ENV=development into the client bundles whatever this process carries, but
+// Next's own server side reads process.env.NODE_ENV. Inherited from the e2e harness as "test", it
+// made Next's tsconfig verifier treat the isolated .next/dev build as a production one, demand a
+// ".next/dev/dev/types" include, and rewrite the committed packages/keiko-ui/tsconfig.json on every
+// local smoke run. This runner keeps NODE_ENV=test for its own test gates; the child runs as the
+// development server it is.
+export function nextChildEnv(port) {
+  return { NODE_ENV: "development", PORT: String(port) };
+}
+
 function startNext() {
   supervisor.spawn("next", process.execPath, nextArgs(), {
     cwd: uiDir,
-    env: {
-      PORT: String(nextPort),
-    },
+    env: nextChildEnv(nextPort),
   });
 }
 

@@ -86,6 +86,14 @@ const portableAssetsWorkflow = readFileSync(
   resolve(repoRoot, ".github/workflows/portable-assets.yml"),
   "utf8",
 );
+const releaseCandidateWorkflow = readFileSync(
+  resolve(repoRoot, ".github/workflows/release-candidate.yml"),
+  "utf8",
+);
+const releaseAlignmentWorkflow = readFileSync(
+  resolve(repoRoot, ".github/workflows/release-alignment.yml"),
+  "utf8",
+);
 const secretScanningQueueWorkflow = readFileSync(
   resolve(repoRoot, ".github/workflows/secret-scanning-queue.yml"),
   "utf8",
@@ -414,8 +422,10 @@ describe("CI test/gate wiring guard", () => {
       extendedE2e,
       releaseWorkflow,
       portableAssetsWorkflow,
+      releaseCandidateWorkflow,
       mutationSecurityWorkflow,
       secretScanningQueueWorkflow,
+      releaseAlignmentWorkflow,
       nightlyPerfEvidenceWorkflow,
       codeTaskRealBinaryWorkflow,
     ].join("\n");
@@ -426,11 +436,13 @@ describe("CI test/gate wiring guard", () => {
       runtimeWorkflows.match(/node scripts\/check-runtime-toolchain\.mjs --exact/gu)?.length ?? 0;
     // This inventory covers every workflow that selects Node. Issue #3403 retired the six
     // credential-bound Apple/Microsoft production-signing lanes; Issue #3451 adds three Linux
-    // staging/qualification lanes. The load-bearing pairing below proves every lane verifies the
-    // governed toolchain, while the exact counts make a removed or unreviewed new lane fail.
-    expect(node24SetupCount).toBe(23);
+    // staging/qualification lanes; ADR-0177 adds the dev release-rehearsal readiness lane and the
+    // standing release-alignment lane; ADR-0177 D8 adds the release-candidate plan and tag lanes and
+    // the stable build's publish-request lane. The load-bearing pairing below proves every lane
+    // verifies the governed toolchain, while the exact counts make a removed or unreviewed new lane fail.
+    expect(node24SetupCount).toBe(28);
     expect(node26SetupCount).toBe(1);
-    expect(nodeSetupCount).toBe(24);
+    expect(nodeSetupCount).toBe(29);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
     expect(ci).toContain("NODE_26_COMPATIBILITY_RESULT");

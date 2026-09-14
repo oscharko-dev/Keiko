@@ -4,11 +4,14 @@ import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { parse } from "yaml";
 
 // One answer, shared by the workflow guard tests, to "which repository scripts does a workflow step
-// run, does their import graph load built workspace output, and does an earlier step build it".
+// run, does their import graph load built workspace output, does an earlier step build it, and does
+// every relative import resolve the way plain node resolves it".
 
 // Named and namespace forms, dynamic import(), and the bare side-effect form `import "x";`.
 const IMPORT_STATEMENT =
   /\b(?:import|export)\b([^;]*?)\bfrom\s+["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)|\bimport\s*["']([^"']+)["']/gu;
+// A .cjs module in the graph loads its neighbours through require(); node resolves those literally too.
+const REQUIRE_CALL = /\brequire\(\s*["']([^"']+)["']\s*\)/gu;
 const WORKSPACE_SPECIFIER = /^(@[^/]+\/[^/]+)(\/.+)?$/u;
 // A step provides packages/*/dist when it builds the packages itself or stages the product, which
 // runs `npm run build` on the way (stage-portable-runtime.mjs) before any later step can execute.
@@ -19,6 +22,7 @@ const BUILT_PACKAGE_PROVIDERS = [
 ];
 const NPM_RUN = /\bnpm run(?:-script)?(?:\s+-s)?\s+([\w:.-]+)/gu;
 const NPM_TEST = /\bnpm (?:test|t)\b/u;
+const CODE_EXTENSION = /\.(?:mjs|cjs|js|ts|mts)$/u;
 
 export function rootPackageScripts(root = process.cwd()) {
   return JSON.parse(readFileSync(join(root, "package.json"), "utf8")).scripts ?? {};
@@ -175,4 +179,53 @@ export function workflowJobs(workflowsDir = ".github/workflows") {
       const document = parse(readFileSync(join(workflowsDir, file), "utf8"));
       return Object.entries(document.jobs ?? {}).map(([name, job]) => ({ file, name, job }));
     });
+}
+
+export function workflowEntryScripts(workflowsDir = ".github/workflows") {
+  const scripts = rootPackageScripts();
+  const entries = new Set();
+  for (const { job } of workflowJobs(workflowsDir)) {
+    for (const step of job.steps ?? []) {
+      for (const script of repositoryScriptsIn(step.run ?? "", scripts)) entries.add(script);
+    }
+  }
+  return [...entries].sort();
+}
+
+// Relative runtime import and require() edges of one module, exactly as written.
+function relativeImportEdges(file) {
+  const source = readFileSync(file, "utf8");
+  const specifiers = [];
+  for (const match of source.matchAll(IMPORT_STATEMENT)) {
+    if (/^\s*type\b/u.test(match[1] ?? "")) continue;
+    specifiers.push(match[2] ?? match[3] ?? match[4]);
+  }
+  for (const match of source.matchAll(REQUIRE_CALL)) specifiers.push(match[1]);
+  return specifiers
+    .filter((specifier) => specifier.startsWith("."))
+    .map((specifier) => ({ specifier, target: resolve(dirname(file), specifier) }));
+}
+
+// Every relative specifier in the graph that plain node cannot load as written: node's ESM loader
+// adds no extension and never rewrites ".js" to ".ts", while vitest does both. Built output is left
+// to the provisioning pin.
+export function unresolvableImports(entry, root = process.cwd()) {
+  const unresolved = [];
+  const seen = new Set();
+  const visit = (file) => {
+    if (seen.has(file)) return;
+    seen.add(file);
+    for (const { specifier, target } of relativeImportEdges(file)) {
+      if (isBuiltOutput(target)) continue;
+      if (!isRegularFile(target)) {
+        unresolved.push({ from: relative(root, file), specifier });
+        continue;
+      }
+      if (CODE_EXTENSION.test(target)) visit(target);
+    }
+  };
+  const start = resolve(root, entry);
+  if (!isRegularFile(start)) return [{ from: entry, specifier: "(entry point missing)" }];
+  visit(start);
+  return unresolved;
 }

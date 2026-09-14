@@ -5,6 +5,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
+import { PORTABLE_TARGET_NAMES, portableRuntimeContractMatches } from "./portable-runtime.mjs";
 
 export const releaseImpactCatalogFile = "release-impact.catalog.json";
 export const releaseImpactSchemaVersion = 1;
@@ -929,6 +930,37 @@ function recordDefaultPatchNotes(entry, index, defaultNotes, failures) {
   }
 }
 
+// A tagged run stages every portable target from the current package's entry and refuses a target its
+// contract does not cover. Historical entries are left alone: each was right for its own release.
+// The tagged release stages only from a current entry that carries the reviewed staging contract
+// (reviewedStagingEntryMatches), so the primary entry of the current version must carry one here
+// too; a correction or superseding record is a non-staging entry and may leave it out.
+function validateStagingContract(entry, failures) {
+  const contract = entry.portableRuntimeArtifactContract;
+  if (contract === undefined) {
+    if (!correctionEntry(entry)) {
+      failures.push(
+        failure(
+          `${entry.id}: portableRuntimeArtifactContract is missing, so a tagged release would ` +
+            "refuse to stage it.",
+        ),
+      );
+    }
+    return;
+  }
+  const uncovered = PORTABLE_TARGET_NAMES.filter(
+    (target) => !portableRuntimeContractMatches(contract, target),
+  );
+  if (uncovered.length > 0) {
+    failures.push(
+      failure(
+        `${entry.id}: portableRuntimeArtifactContract does not cover ${uncovered.join(", ")}, ` +
+          "so a tagged release would refuse to stage it.",
+      ),
+    );
+  }
+}
+
 function validateCurrentPackage(catalog, rootManifest, failures) {
   if (!objectRecord(rootManifest)) return;
   const current = catalog.entries.filter((entry) => currentPackageEntry(entry, rootManifest));
@@ -945,6 +977,7 @@ function validateCurrentPackage(catalog, rootManifest, failures) {
   catalog.entries.forEach((entry, index) => {
     if (!currentPackageEntry(entry, rootManifest)) return;
     validateCurrentEntry(entry, rootManifest, failures);
+    validateStagingContract(entry, failures);
     validateApprovalReferenceLive(entry, index, failures);
   });
 }

@@ -64,16 +64,21 @@ operator can verify a downloaded file independently of Keiko's own release tooli
 [GitHub CLI](https://cli.github.com/):
 
 ```console
-gh attestation verify keiko-windows-x64.zip --repo oscharko-dev/Keiko
-gh attestation verify keiko-linux-x64.zip --repo oscharko-dev/Keiko
-gh attestation verify keiko-windows-x64-setup.exe --repo oscharko-dev/Keiko
-gh attestation verify windows-x64-sbom.cdx.json --repo oscharko-dev/Keiko
+TAG=v<version>
+SIGNER=oscharko-dev/Keiko/.github/workflows/portable-assets.yml
+gh attestation verify keiko-windows-x64.zip --repo oscharko-dev/Keiko --signer-workflow "$SIGNER" --source-ref "refs/tags/$TAG"
+gh attestation verify keiko-linux-x64.zip --repo oscharko-dev/Keiko --signer-workflow "$SIGNER" --source-ref "refs/tags/$TAG"
+gh attestation verify keiko-windows-x64-setup.exe --repo oscharko-dev/Keiko --signer-workflow "$SIGNER" --source-ref "refs/tags/$TAG"
+gh attestation verify windows-x64-sbom.cdx.json --repo oscharko-dev/Keiko --signer-workflow "$SIGNER" --source-ref "refs/tags/$TAG"
 ```
 
-A successful verification proves the file was built by the recorded `portable-assets` workflow run
-at the recorded commit, without needing to trust anything other than GitHub's Sigstore-backed
-attestation service. This is independent of, and in addition to, the manifest signature Keiko
-verifies automatically (see [ADR-0121](../adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md#d8--release-archives-and-sboms-carry-independently-verifiable-github-artifact-attestations)).
+Set `TAG` to the release you downloaded. A successful verification proves the file was built by the
+`portable-assets` workflow for that stable tag, at the recorded commit, without needing to trust
+anything other than GitHub's Sigstore-backed attestation service. Keep both bindings: without them
+the command also accepts an attestation from any other workflow or ref of the repository, including
+the `dev` release rehearsal, whose archives are never published. This is independent of, and in
+addition to, the manifest signature Keiko verifies automatically (see
+[ADR-0121](../adr/ADR-0121-portable-managed-install-and-release-asset-update-authority.md#d8--release-archives-and-sboms-carry-independently-verifiable-github-artifact-attestations)).
 Attestation verification is optional; it is not part of the managed setup journey below.
 
 ## Managed Setup

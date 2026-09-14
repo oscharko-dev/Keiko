@@ -806,6 +806,13 @@ async function dialogueTurnFlow(page: Page, request: APIRequestContext): Promise
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
 
   await expectActiveComposerSettled(page);
+  // Interrupt is actionable while the assistant thinks as well as while it speaks, and a barge-in
+  // suppresses whatever the canonical turn has not produced yet. Clicking it as soon as it was enabled
+  // made the phase it hits depend on engine speed, which is how the WebKit smoke lost its canonical
+  // speech at random. Barge in once the answer is synthesized and its fake playback is held, the
+  // state the holdSpeech fixture exists for.
+  await expect.poll(() => synthesizedTexts.length).toBe(1);
+  await expect.poll(() => canonicalTtsPlays(page)).toBe(1);
   await expectDialogueOnlyControls(page);
 
   await page.screenshot({

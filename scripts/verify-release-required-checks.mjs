@@ -8,7 +8,10 @@ import { resolveHostExecutable } from "./lib/host-executable.mjs";
 const githubApiVersion = "2022-11-28";
 const defaultBaseBranch = "release/1.0";
 const defaultPollSeconds = 15;
-const defaultTimeoutSeconds = 30 * 60;
+// ADR-0177 D8 writes the stable tag on the dev push, so every waiter on that tag runs beside the
+// tagged commit's CI and must be able to span a whole run: 32 to 36 minutes when runners are free,
+// 62 under congestion, and the longest ci.yml job may take 50. A failed check is refused at once.
+const defaultTimeoutSeconds = 90 * 60;
 
 function fail(message) {
   console.error(`release-required-checks: FAIL - ${message}`);

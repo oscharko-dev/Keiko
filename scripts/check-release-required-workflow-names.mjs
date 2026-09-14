@@ -6,7 +6,9 @@ import { join, resolve } from "node:path";
 const repoRoot = resolve(import.meta.dirname, "..");
 const workflowsDir = join(repoRoot, ".github", "workflows");
 const releaseWorkflowPath = join(workflowsDir, "release.yml");
-const portableWorkflowPath = join(workflowsDir, "portable-assets.yml");
+// Every workflow that verifies the release-required checks itself must read the same authority as
+// release.yml; the tag build (portable-assets.yml) does so before it asks for a publish.
+const RELEASE_AUTHORITY_WORKFLOWS = ["portable-assets.yml"];
 
 function fail(message) {
   console.error(`release-required-workflow-names: FAIL - ${message}`);
@@ -146,13 +148,31 @@ export function portableReleaseAuthorityFailures(releaseSource, portableSource) 
   return failures;
 }
 
+/**
+ * @param dependents  [{ file, source }] for every workflow that must share release.yml's authority
+ * @returns one message per drifted workflow
+ */
+export function releaseAuthorityDrift(releaseSource, dependents) {
+  return dependents.flatMap(({ file, source }) => {
+    const failures = portableReleaseAuthorityFailures(releaseSource, source);
+    return failures.length > 0 ? [`${file} release authority drifted: ${failures.join(", ")}`] : [];
+  });
+}
+
+/** The authority drift of this checkout's workflows against release.yml. */
+export function repositoryReleaseAuthorityDrift(
+  read = (file) => readFileSync(join(workflowsDir, file), "utf8"),
+) {
+  return releaseAuthorityDrift(
+    read("release.yml"),
+    RELEASE_AUTHORITY_WORKFLOWS.map((file) => ({ file, source: read(file) })),
+  );
+}
+
 function main() {
   const releaseSource = readFileSync(releaseWorkflowPath, "utf8");
-  const portableSource = readFileSync(portableWorkflowPath, "utf8");
-  const authorityFailures = portableReleaseAuthorityFailures(releaseSource, portableSource);
-  if (authorityFailures.length > 0) {
-    fail(`portable-assets.yml release authority drifted: ${authorityFailures.join(", ")}`);
-  }
+  const drift = repositoryReleaseAuthorityDrift();
+  if (drift.length > 0) fail(drift.join("; "));
 
   const required = releaseRequiredChecks(releaseSource);
   const emitted = allWorkflowJobNames();

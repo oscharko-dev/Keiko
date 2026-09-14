@@ -4,17 +4,20 @@ This repository now has a dedicated automated release workflow at [`.github/work
 
 ## Operator contract
 
-When a maintainer says "ship a new release", the release operator must run the scripted path
-below. Do not publish packages and then manually remember the rest of the cleanup.
+A stable release is one reviewed merge and one approval (ADR-0177 D8):
 
-1. Land the release PR into the active release branch (`release/1.0`).
-2. Tag the reviewed merge commit as `v<package.json version>` and push the tag.
-3. Check out the tag locally or dispatch the Release workflow on that tag.
-4. Run:
+1. Land the version bump on `dev`: `npm run set-version -- <version>` moves every mechanical
+   spot, and the release-impact catalog entry carries the release-owner approval.
+2. The `dev` push runs `release-candidate.yml`, which points `v<version>` at that commit through
+   the release tag GitHub App; the tag push builds the stable portable assets beside the commit's
+   CI, and the build's last job dispatches `release.yml` with `publish: true` once the
+   release-required checks are green.
+3. Approve the `npm-publish` deployment. The publish job runs `release:publish` for you.
 
-   ```sh
-   npm run release:publish -- --tag latest
-   ```
+Cutting the tag by hand (`git tag -s v<version>` on the reviewed commit, then dispatching
+`release.yml` with that build's `portable_assets_run_id`) remains the fallback while the App is not
+installed; the candidate workflow keeps, moves, or leaves an owner-cut tag by the same plan. Do not
+publish packages and then manually remember the rest of the cleanup.
 
 `scripts/release-publish.mjs` is the source of truth for the final publish. A stable `latest`
 release is created or updated BEFORE npm publishes, so its downloads can be verified while the
@@ -47,7 +50,14 @@ through that same trust module, so a key the bundled trust roots reject stops th
 GitHub release, an upload, or an npm publication exists.
 
 Portable GitHub Release Assets are published by the same `scripts/release-publish.mjs` path, not by
-a second release process. A production stable `latest` publish must end with all five downloads
+a second release process. The repository has GitHub immutable releases enabled, which refuses every
+asset change once a release is published and never lets a deleted immutable release's tag name be
+reused. The publisher therefore creates the release as a draft, uploads the archives, API-binds and
+signs the evidence, uploads it, and checks every asset by name, size, and GitHub's SHA-256 digest
+while it is still a draft; it re-reads the tag and publishes the draft only then. An already
+published release is verified, never uploaded into; one that lacks its downloads stops the run,
+because only the next patch version can repair it (v1.0.0 was lost to a create-then-upload publish
+on 2026-09-14). A production stable `latest` publish must end with all five downloads
 (`keiko-linux-x64.zip`, `keiko-windows-x64.zip`, `keiko-macos-arm64.zip`,
 `keiko-macos-x64.zip`, and `keiko-windows-x64-setup.exe`) present on the GitHub Release; the publisher
 verifies that against the release itself and fails closed **before** npm learns the dist-tag. A
@@ -179,6 +189,18 @@ it:
    the Release workflow consumes through `portable_assets_run_id`. GitHub attestations are emitted
    as supplementary provenance; the protected publisher later adds mandatory Keiko release trust.
 
+A push to `dev` runs this chain as a rehearsal
+([ADR-0177](../adr/ADR-0177-rehearse-the-stable-release-on-every-dev-push.md)). Its
+`rehearsal-readiness` job first checks that the committed version is stable and that each of the
+four targets has exactly one reviewed, human-approved release-impact entry; otherwise the job
+summary names what is missing and the rehearsal stops without failing. A releasable push runs every
+step above for `v<package.json version>` except the tag identity and the required-check verification
+of the tagged commit. Its Linux job runs in the `portable-release-rehearsal` environment and signs
+the qualification receipt as `portable-assets.yml@refs/heads/dev`, an identity production discovery
+never accepts, and its bundle is uploaded as `portable-rehearsal-assets`, which the Release workflow
+refuses. A newer `dev` push cancels an older rehearsal; tag runs and manual dispatches are never
+cancelled.
+
 Version approval is a pull request: [`portable-runtime-approvals.json`](../../portable-runtime-approvals.json)
 pins the Node.js runtime version and each coding sidecar's immutable upstream commit, raw protocol
 schema, archive, executable-tree, license, redistribution, and subscription-auth evidence.
@@ -190,16 +212,36 @@ The staging pipeline never downloads unpinned or `latest` inputs.
 Publishing remains a human decision. Secret-free `workflow_dispatch`, prerelease, development, and
 pull-request staging never selects `portable-release-signing`, requests Azure OIDC, or receives Apple
 secrets; those artifacts intentionally remain staging/non-production, do not emit the canonical
-`portable-release-assets` bundle, and cannot be promoted. Production signing is restricted to
+`portable-release-assets` bundle, and cannot be promoted. The `dev` release rehearsal builds the
+stable lanes but cannot be promoted either: it signs only under its own identity and never emits
+the canonical bundle. Production signing is restricted to
 protected native-runner jobs triggered by a reviewed stable tag, with separate event, tag-shape,
 exact `v<package.json.version>`, digest, and signing-identity guards. Only their
 `verified-production` outputs may enter the reviewed-candidate bundle. The Ubuntu assembler
 validates those outputs but cannot generate or upgrade signing-verification booleans. `release.yml`
-still requires an operator dispatch with `portable_assets_run_id` pointing at the resulting green
-`Portable assets` run.
+publishes only from a `workflow_dispatch` whose `portable_assets_run_id` points at the resulting
+green `Portable assets` run; the stable tag build dispatches it itself, an operator does so only on
+the hand-cut fallback path.
+
+## Moving the version
+
+`npm run set-version -- <version>` moves the product version everywhere it lives mechanically: the
+root and every workspace `package.json`, every dependency pin one workspace package holds on
+another, the exported `KEIKO_*_VERSION` constants, and the lockfile through
+`npm install --package-lock-only`. It ends by running `check:version-consistency`, which also
+refuses a lockfile entry or pin left behind: the 1.0.0 cut was written by hand and left
+`package-lock.json`'s 26 workspace entries at 0.3.17 while every manifest said 1.0.0. The
+release-impact catalog entry, `docs/PUBLIC_API_SURFACE.md` and the regenerated evidence documents
+stay reviewed work.
 
 ## Triggering
 
+- One-approval stable release (ADR-0177 D8): on a `dev` push whose version is approved for every
+  portable target and not yet published, `release-candidate.yml` points `v<version>` at that commit
+  through the release tag GitHub App. The tag push runs the stable portable build beside the commit's
+  CI; its `request-publish` job waits for the release-required checks and then dispatches this
+  workflow with that run's id and attempt.
+  The only manual step is approving the `npm-publish` deployment.
 - Stable tag pushes (`v<version>`, no prerelease suffix) run the full release verification job.
 - An EXACT tag over the current package version (`v<package.json version>`, including npm
   prerelease versions such as `v0.3.0-rc.1` over `0.3.0-rc.1`) runs the full verification —
@@ -210,7 +252,7 @@ still requires an operator dispatch with `portable_assets_run_id` pointing at th
   version match, checksums, macOS seal — ADR-0163 D9). Any other hyphenated `v*` tag (a
   non-exact RC, a foreign version, malformed) fails the tag validation.
 - Manual `workflow_dispatch` with `publish: false` runs the same verification job.
-- Manual `workflow_dispatch` with `publish: true` enables the publish job only when the selected ref is a tag that starts with `v` and the same tag/SHA already has a successful tag-push release verification run.
+- Manual `workflow_dispatch` with `publish: true` enables the publish job only when the selected ref is a tag that starts with `v`; the job then verifies the release-required checks for that tag's commit and waits for the `npm-publish` approval.
 - Manual publishes require an explicit npm dist-tag. The default is `beta`.
 - Production stable `latest` publishes require the four archives plus the Windows setup companion
   to be present on the GitHub Release when the run finishes; a reviewed portable asset bundle is how
@@ -225,6 +267,22 @@ still requires an operator dispatch with `portable_assets_run_id` pointing at th
   `.portable-release-assets/portable-assets.json`. The manifest input is interpreted only as a
   relative path inside the downloaded artifact bundle; absolute paths, parent traversal, symlinked
   manifests, and non-file manifests are rejected before publish starts.
+
+### One-time setup for the release candidate
+
+The candidate workflow needs a credential that may change tags. Only the repository owner can create
+it, because each step is a security setting:
+
+1. Create a GitHub App owned by the repository owner, with no webhook, installable only on that
+   account, and exactly one repository permission: **Contents: Read and write**.
+2. Install it on `oscharko-dev/Keiko` only, and generate a private key.
+3. Create the environment `release-tagging` with a deployment branch policy that allows `dev` only.
+   Add the environment secret `KEIKO_RELEASE_TAG_APP_PRIVATE_KEY` (the private key) and the environment
+   variable `KEIKO_RELEASE_TAG_APP_CLIENT_ID` (the App's client ID).
+4. Add the App to the bypass list of the tag ruleset "Owner-only tag changes".
+
+Until then, `release-candidate.yml` still decides every candidate; an eligible one fails in its tag
+job, and a tag can be cut by the owner as before.
 
 ## Release-branch workflow
 
@@ -328,8 +386,9 @@ first release-trusted build. Do not retroactively change their trust scope or tr
 as a canary. Apple/Microsoft provider access is not a prerequisite and this updater repair grants no
 publish approval.
 
-The publish job runs `npm run release:publish -- --tag "$NPM_DIST_TAG"` after confirming
-that the tag-push release verification already completed successfully for the same commit.
+The publish job runs `npm run release:publish -- --tag "$NPM_DIST_TAG"` once the `npm-publish`
+approval is given, after it re-verified the release-required checks of the commit it was dispatched
+for and validated the green `Portable assets` run of that commit as its input.
 The script:
 
 - checks version and publish-manifest consistency,
@@ -511,4 +570,15 @@ npm run check:release-alignment
 It reads the checkout version, the newest `v*` tag, the GitHub Latest release, npm `latest`, and
 the newest `npm-publish` deployment ref, and passes only when the checkout equals npm `latest` or
 is exactly one patch/minor release ahead of it (a cut pending) and the other four sources all name
-that same version. An unreadable source counts as a divergence, never a pass.
+that same version. An unreadable source fails the check without an alignment result, never a
+pass. The CLI exits 0 when
+aligned, 1 for a divergence every source answered, and 2 when a source could not answer at all (a
+failed command or unparseable output); an empty tag or deployment list is an answer, not an
+unreadable source.
+
+The `Release alignment` workflow (`.github/workflows/release-alignment.yml`) asks the same
+question every night and on manual dispatch, so a release left half-finished between two publishes
+no longer waits for someone to run the check by hand. A divergence files or updates one
+`Release alignment diverged` tracking issue and fails the lane; the first aligned run closes that
+issue. Exit 2 fails the lane without filing anything, because no alignment result exists. The lane
+only detects: finishing or repairing a release stays a maintainer action.
