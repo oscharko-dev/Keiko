@@ -20,7 +20,11 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   hashDirectoryTree,
   PORTABLE_MANIFEST_VALIDATION_CONTEXTS,
+  LEGACY_PORTABLE_TARGETS,
+  PORTABLE_RELEASE_IMPACT_CONTRACT,
   PORTABLE_TARGETS,
+  portableRuntimeContractMatches,
+  reviewedPortableTargetSet,
   PORTABLE_VERIFICATION_POLICIES,
   PORTABLE_VERIFICATION_STATUSES,
   WINDOWS_PORTABLE_SETUP_ASSET_NAME,
@@ -3944,5 +3948,38 @@ describe("moveStagedDirectory (cross-device promote)", () => {
       throw Object.assign(new Error("EACCES"), { code: "EACCES" });
     };
     expect(() => moveStagedDirectory(source, join(root, "final"), renameDenied)).toThrow("EACCES");
+  });
+});
+
+describe("reviewed portable staging contract", () => {
+  const names = PORTABLE_TARGETS.map((target) => target.platformTarget);
+
+  it("accepts the complete target list for every target it stages", () => {
+    for (const target of names) expect(reviewedPortableTargetSet([...names], target)).toBe(true);
+  });
+
+  it.each([
+    ["not a list", "linux-x64", () => "linux-x64"],
+    ["a duplicate entry", "linux-x64", () => [...names, "linux-x64"]],
+    ["an unknown target", "linux-x64", () => [...names, "solaris-x64"]],
+    ["a missing legacy target", "linux-x64", () => names.filter((name) => name !== "macos-x64")],
+    ["the requested target missing", "linux-x64", () => [...LEGACY_PORTABLE_TARGETS]],
+  ])("refuses a target list with %s", (_label, requested, list) => {
+    expect(reviewedPortableTargetSet(list(), requested)).toBe(false);
+  });
+
+  it("matches only the reviewed staging contract", () => {
+    const contract = { ...PORTABLE_RELEASE_IMPACT_CONTRACT, targets: [...names] };
+    expect(portableRuntimeContractMatches(contract, "linux-x64")).toBe(true);
+    expect(portableRuntimeContractMatches(null, "linux-x64")).toBe(false);
+    expect(portableRuntimeContractMatches("contract", "linux-x64")).toBe(false);
+    for (const key of ["issue", "parentEpic", "programEpic"]) {
+      expect(
+        portableRuntimeContractMatches({ ...contract, [key]: contract[key] + 1 }, "linux-x64"),
+      ).toBe(false);
+    }
+    expect(portableRuntimeContractMatches({ ...contract, stagingOnly: false }, "linux-x64")).toBe(
+      false,
+    );
   });
 });

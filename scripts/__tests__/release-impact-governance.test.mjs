@@ -5,6 +5,12 @@ import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  LEGACY_PORTABLE_TARGETS,
+  PORTABLE_RELEASE_IMPACT_CONTRACT,
+  PORTABLE_TARGET_NAMES,
+} from "../portable-runtime.mjs";
+
+import {
   publishApprovalPhrase,
   validateReleaseImpactCatalog,
   validateReleaseImpactRoot,
@@ -114,6 +120,72 @@ function withEnv(name, value, callback) {
     }
   }
 }
+
+describe("release-impact portable staging contract", () => {
+  // The contract a tagged run stages from, derived from the producer rather than restated.
+  const stagingContract = (targets, overrides = {}) => ({
+    ...PORTABLE_RELEASE_IMPACT_CONTRACT,
+    signingScope: "evaluation",
+    targets,
+    ...overrides,
+  });
+
+  it("refuses a current entry whose staging contract omits a portable target", () => {
+    // The v1.0.0 state before #3475: linux-x64 had joined the targets, the contract had not, both
+    // release-impact gates passed, and staging refused it three steps into the tagged release.
+    const result = validateReleaseImpactCatalog(
+      catalog([
+        entry({ portableRuntimeArtifactContract: stagingContract([...LEGACY_PORTABLE_TARGETS]) }),
+      ]),
+      rootManifest(),
+    );
+
+    expect(messages(result)).toContain(
+      "portableRuntimeArtifactContract does not cover linux-x64, so a tagged release would refuse to stage it.",
+    );
+  });
+
+  it("accepts a current entry whose staging contract covers every portable target", () => {
+    const result = validateReleaseImpactCatalog(
+      catalog([
+        entry({ portableRuntimeArtifactContract: stagingContract([...PORTABLE_TARGET_NAMES]) }),
+      ]),
+      rootManifest(),
+    );
+
+    expect(messages(result)).not.toContain("portableRuntimeArtifactContract");
+  });
+
+  it("refuses every target when the contract is not the reviewed staging contract", () => {
+    const result = validateReleaseImpactCatalog(
+      catalog([
+        entry({
+          portableRuntimeArtifactContract: stagingContract([...PORTABLE_TARGET_NAMES], {
+            issue: PORTABLE_RELEASE_IMPACT_CONTRACT.issue + 1,
+          }),
+        }),
+      ]),
+      rootManifest(),
+    );
+
+    expect(messages(result)).toContain(
+      `portableRuntimeArtifactContract does not cover ${PORTABLE_TARGET_NAMES.join(", ")}`,
+    );
+  });
+
+  it("leaves the staging contract of a historical entry alone", () => {
+    const historical = entry({
+      id: "2026-06-29-keiko-0.2.10-previous-release",
+      packageVersion: "0.2.10",
+      releaseTag: "v0.2.10",
+      portableRuntimeArtifactContract: stagingContract([...LEGACY_PORTABLE_TARGETS]),
+    });
+
+    const result = validateReleaseImpactCatalog(catalog([historical, entry()]), rootManifest());
+
+    expect(messages(result)).not.toContain("portableRuntimeArtifactContract");
+  });
+});
 
 describe("release-impact governance", () => {
   let tempRoot;
