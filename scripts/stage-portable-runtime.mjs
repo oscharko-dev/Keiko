@@ -50,6 +50,7 @@ import {
   usearchRuntimeTargetKey,
 } from "../packages/keiko-local-knowledge/src/retrieval/usearch-runtime-manifest.ts";
 import { writeRuntimeActivationManifest } from "./runtime-activation-manifest.mjs";
+import { withCyclonedxSerialNumber } from "./lib/cyclonedx-serial-number.mjs";
 import { sha256 } from "./lib/digest.mjs";
 
 const repoRoot = resolve(import.meta.dirname, "..");
@@ -1429,7 +1430,7 @@ function nativeAddonSbomComponent(addon) {
 }
 
 function sbomForManifest(manifest) {
-  return {
+  return withCyclonedxSerialNumber({
     bomFormat: "CycloneDX",
     specVersion: "1.6",
     version: 1,
@@ -1437,7 +1438,7 @@ function sbomForManifest(manifest) {
       ...manifest.nativeHelpers.map(nativeHelperSbomComponent),
       ...(manifest.nativeAddons ?? []).map(nativeAddonSbomComponent),
     ],
-  };
+  });
 }
 
 function thirdPartyNotices(manifest) {

@@ -10,6 +10,7 @@ import {
   WINDOWS_PORTABLE_MANIFEST_SCHEMA_VERSION,
 } from "./portable-runtime.mjs";
 import { writeRuntimeActivationManifest } from "./runtime-activation-manifest.mjs";
+import { withCyclonedxSerialNumber } from "./lib/cyclonedx-serial-number.mjs";
 import { sha256 } from "./lib/digest.mjs";
 
 export class PortableSignedArchiveError extends Error {}
@@ -119,7 +120,7 @@ function rebindNativeHelper(stageRoot, helper, resourceRoot) {
   );
   if (matches.length !== 1) fail("native helper CycloneDX component is missing or ambiguous");
   matches[0].hashes = [{ alg: "SHA-256", content: helper.shippedSha256 }];
-  writeFileSync(sbomPath, `${JSON.stringify(sbom, null, 2)}\n`);
+  writeFileSync(sbomPath, `${JSON.stringify(withCyclonedxSerialNumber(sbom), null, 2)}\n`);
 }
 
 function rebindNativeAddon(stageRoot, manifest, resourceRoot) {
@@ -147,7 +148,7 @@ function rebindNativeAddon(stageRoot, manifest, resourceRoot) {
   );
   if (matches.length !== 1) fail("native addon CycloneDX component is missing or ambiguous");
   matches[0].hashes = [{ alg: "SHA-256", content: addon.shippedSha256 }];
-  writeFileSync(sbomPath, `${JSON.stringify(sbom, null, 2)}\n`);
+  writeFileSync(sbomPath, `${JSON.stringify(withCyclonedxSerialNumber(sbom), null, 2)}\n`);
 }
 
 function rebindSidecarExecutable(sidecar, sidecarRoot, resourceRoot) {

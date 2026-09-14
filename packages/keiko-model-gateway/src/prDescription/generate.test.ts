@@ -26,7 +26,8 @@ import {
 import { Gateway } from "../gateway.js";
 import { createDefaultChatCapability } from "../capabilities.js";
 import type { ModelGatewayLogEvent } from "../observability.js";
-import type { GatewayConfig, ProviderAdapter } from "../types.js";
+import { systemClock } from "../resilience.js";
+import type { Clock, GatewayConfig, ProviderAdapter } from "../types.js";
 import { generatePrDescription } from "./generate.js";
 import { prDescriptionChunks } from "./evidence.js";
 import { validatedPrDescriptionLogoUrl } from "./render.js";
@@ -38,6 +39,10 @@ import {
 } from "./types.js";
 
 const NOW = Date.parse("2026-09-04T12:00:00.000Z");
+// The Gateway reports max(1, clock.now() - start) as a call's latency. On the system clock that is
+// wall-clock time, which a loaded CI runner measured as 3 ms against the asserted 1 ms. The fixture
+// instant makes it exact; sleeps stay real, so retry backoff and fake timers behave as before.
+const FIXTURE_CLOCK: Clock = { now: () => NOW, sleep: systemClock.sleep };
 const REQUEST: PrDescriptionRequest = {
   snapshotReference: `gcs_${"a".repeat(32)}`,
   language: "en",
@@ -220,7 +225,7 @@ function fixture(
       ? { write: (event: ModelGatewayLogEvent): void => void events.push(event) }
       : undefined;
   const deps: PrDescriptionDeps = {
-    gateway: new Gateway(gatewayConfig, { adapter, log: gatewayLog }),
+    gateway: new Gateway(gatewayConfig, { adapter, clock: FIXTURE_CLOCK, log: gatewayLog }),
     config: gatewayConfig,
     resolveSnapshot: async () => await Promise.resolve(source),
     revalidateAuthority: () => true,
@@ -285,6 +290,21 @@ describe("production Gateway PR narrative composition", () => {
       }
     },
   );
+
+  it("reports the gateway latency from the fixture clock, not from wall-clock time", async () => {
+    const evidenceId = resolved().evidence[0]?.evidenceId ?? "";
+    const setup = fixture({
+      respond: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        return await response(candidate(evidenceId));
+      },
+    });
+    const result = await generatePrDescription(REQUEST, setup.deps);
+
+    expect(result.status).toBe("generated");
+    if (result.status !== "generated") throw new Error("Missing fixture artifact");
+    expect(result.usage).toMatchObject({ latencyMs: 1, requestCount: 1 });
+  });
 
   it.each([
     { structuredOutput: false, supportsResponseFormat: false, enforced: false },
