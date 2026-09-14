@@ -281,3 +281,23 @@ function reportRun({ appendFile, env, line, mode, plan }) {
   }
   if (env.GITHUB_STEP_SUMMARY) appendFile(env.GITHUB_STEP_SUMMARY, `${line}\n`);
 }
+
+/**
+ * The release candidate may move an unpublished tag, and `gh release create --verify-tag` binds the
+ * release to wherever the tag points at that moment. The publisher therefore re-reads the tag right
+ * before it creates the release and stops when a newer candidate has moved it.
+ *
+ * @returns {{ failure?: string }}
+ */
+export function releaseTagBinding({ head, repository, runGh, tag }) {
+  let remote;
+  try {
+    remote = remoteTagCommit(runGh, repository, tag);
+  } catch (error) {
+    return { failure: error instanceof ReleaseCandidateError ? error.message : String(error) };
+  }
+  if (remote === head) return {};
+  return {
+    failure: `${tag} points at ${remote ?? "nothing"} on GitHub, not at the checked-out ${head}: a newer release candidate moved it, so this publish stops before creating the release.`,
+  };
+}

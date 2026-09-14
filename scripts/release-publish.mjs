@@ -61,6 +61,7 @@ import { readJsonFile } from "./lib/json.mjs";
 import { resolveGithubRepository } from "./lib/github-repository.mjs";
 import { recordNpmPublishDeployment } from "./lib/npm-publish-deployment.mjs";
 import { checkReleaseAlignment, printAlignmentReport } from "./check-release-alignment.mjs";
+import { releaseTagBinding } from "./lib/release-candidate.mjs";
 import { proveReleaseSigningKeyBeforePublishing } from "./lib/portable-release-signing-key.mjs";
 import { createStagedPublishPackage } from "./stage-publish-package.mjs";
 
@@ -1162,6 +1163,16 @@ function refuseEvaluationOwnedRelease(existing, tag) {
   }
 }
 
+function assertReleaseTagAtHead(repository, tag) {
+  const binding = releaseTagBinding({
+    head: commandResult("git", ["rev-parse", "HEAD"]).stdout.trim(),
+    repository,
+    runGh: gh,
+    tag,
+  });
+  if (binding.failure !== undefined) fail(binding.failure);
+}
+
 function ensureGithubRelease(rootPackage, options, notes) {
   const tag = releaseTag(rootPackage.version);
   if (options.skipGithubRelease || options.dryRun) {
@@ -1171,6 +1182,7 @@ function ensureGithubRelease(rootPackage, options, notes) {
   }
 
   const repo = githubRepository();
+  assertReleaseTagAtHead(repo, tag);
   const title = `Keiko ${rootPackage.version}`;
   const prerelease = releaseIsPrerelease(rootPackage.version, options.tag);
   const latestArgs = options.tag === "latest" && !prerelease ? ["--latest"] : [];

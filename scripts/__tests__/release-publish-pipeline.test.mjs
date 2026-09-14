@@ -608,6 +608,11 @@ function ghStubBody() {
     "    writeFileSync(1, JSON.stringify(state().workflowRun || {}));",
     "    process.exit(0);",
     "  }",
+    // The release tag binding (ADR-0177 D8): the remote tag points at HEAD unless a fixture moves it.
+    '  if (argv[1] && argv[1].includes("/git/ref/tags/")) {',
+    `    writeFileSync(1, JSON.stringify({ object: { sha: state().remoteTagSha || "${HEAD_SHA}", type: "commit" } }));`,
+    "    process.exit(0);",
+    "  }",
     '  if (argv[1] && argv[1].includes("/releases/latest")) {',
     // Which release GitHub presents as Latest. By default the same release the by-tag read
     // answers with; a test can hand the badge to another release to prove the refusal. The
@@ -1932,6 +1937,20 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.stderr).toContain(
         "KEIKO_PORTABLE_RELEASE_SIGNING_KEY is required for portable release publication.",
       );
+      expectNoPublicationSideEffect(lastRun.calls);
+    });
+
+    it("stops before creating the release when a newer candidate moved the tag", () => {
+      // ADR-0177 D8: the release candidate may move an unpublished tag, and `gh release create`
+      // binds the release to wherever the tag points. A publish that checked out the older commit
+      // must not attach its bundle to the newer one.
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: { published: false, remoteTagSha: "f".repeat(40) },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("a newer release candidate moved it");
       expectNoPublicationSideEffect(lastRun.calls);
     });
 
