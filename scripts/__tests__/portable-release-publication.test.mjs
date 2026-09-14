@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  draftReleaseId,
+  createdDraftId,
   immutableReleaseRepairFailure,
   openPortableRelease,
   publishVerifiedPortableRelease,
@@ -9,6 +9,7 @@ import {
   releaseSnapshotPath,
   releaseTagAtHeadFailure,
   remoteDigestFailures,
+  resumableDraftFailure,
   uploadIntoDraft,
 } from "../lib/portable-release-publication.mjs";
 
@@ -26,30 +27,45 @@ function answer(value) {
   return { status: 0, stdout: JSON.stringify(value), stderr: "" };
 }
 
-describe("draftReleaseId", () => {
-  it("finds the one draft for the tag among published releases", () => {
-    const releases = [
-      { draft: false, id: 1, tag_name: TAG },
-      { draft: true, id: 2, tag_name: TAG },
-      { draft: true, id: 3, tag_name: "v1.0.2" },
-    ];
-    expect(draftReleaseId(releases, TAG)).toStrictEqual({ id: 2 });
+describe("createdDraftId", () => {
+  it("takes the id from GitHub's answer to the create call", () => {
+    expect(createdDraftId({ draft: true, id: 388722230, tag_name: TAG }, TAG)).toStrictEqual({
+      id: 388722230,
+    });
   });
 
   it.each([
-    ["a malformed listing", {}, "listing is malformed"],
-    ["no draft", [{ draft: false, id: 1, tag_name: TAG }], "found 0"],
+    ["an unparseable answer", undefined, "did not answer"],
+    ["an answer for another tag", { draft: true, id: 1, tag_name: "v1.0.2" }, "did not answer"],
+    ["a published release", { draft: false, id: 1, tag_name: TAG }, "did not answer"],
+    ["an invalid id", { draft: true, id: "2", tag_name: TAG }, "no valid id"],
+  ])("refuses %s", (_label, release, message) => {
+    expect(createdDraftId(release, TAG).failure).toContain(message);
+  });
+});
+
+describe("resumableDraftFailure", () => {
+  const MANIFEST = "keiko-portable-evaluation-manifest.json";
+
+  it("resumes an interrupted draft of this lane", () => {
+    expect(
+      resumableDraftFailure(
+        { assets: [{ name: "keiko-linux-x64.zip" }], databaseId: 7, isDraft: true },
+        TAG,
+        MANIFEST,
+      ),
+    ).toBeUndefined();
+  });
+
+  it.each([
     [
-      "two drafts",
-      [
-        { draft: true, id: 1, tag_name: TAG },
-        { draft: true, id: 2, tag_name: TAG },
-      ],
-      "found 2",
+      "a draft carrying the evaluation manifest",
+      { assets: [{ name: MANIFEST }], databaseId: 7, isDraft: true },
+      "evaluation lane's manifest",
     ],
-    ["an invalid id", [{ draft: true, id: "2", tag_name: TAG }], "no valid id"],
-  ])("refuses %s", (_label, releases, message) => {
-    expect(draftReleaseId(releases, TAG).failure).toContain(message);
+    ["a draft without a valid id", { assets: [], databaseId: 0, isDraft: true }, "no valid id"],
+  ])("refuses %s", (_label, view, message) => {
+    expect(resumableDraftFailure(view, TAG, MANIFEST)).toContain(message);
   });
 });
 
@@ -173,6 +189,7 @@ function fakePublisher({
   const logs = [];
   const publisher = {
     assertTagAtHead: (tag) => calls.push(["assertTagAtHead", tag]),
+    evaluationManifestAssetName: "keiko-portable-evaluation-manifest.json",
     fail: (message) => {
       throw new Error(message);
     },
@@ -198,6 +215,7 @@ function fakePublisher({
 }
 
 const OPEN = {
+  head: HEAD,
   latest: true,
   notes: "notes",
   prerelease: false,
@@ -205,11 +223,11 @@ const OPEN = {
   tag: TAG,
   title: "Keiko 1.0.1",
 };
-const LISTING = answer([{ draft: true, id: 42, tag_name: TAG }]);
+const CREATED = answer({ draft: true, id: 42, tag_name: TAG });
 
 describe("openPortableRelease", () => {
-  it("creates a draft after checking the tag, and returns its id and the Latest flag", () => {
-    const { calls, logs, publisher } = fakePublisher({ listing: LISTING });
+  it("creates a draft after checking the tag, and returns the id GitHub answered with", () => {
+    const { calls, logs, publisher } = fakePublisher({ listing: CREATED });
     expect(openPortableRelease(publisher, OPEN)).toStrictEqual({
       draft: true,
       id: 42,
@@ -220,27 +238,73 @@ describe("openPortableRelease", () => {
     expect(calls[0]).toStrictEqual(["assertTagAtHead", TAG]);
     expect(calls).toContainEqual([
       "runGh",
-      "release",
-      "create",
-      TAG,
-      "--repo",
-      REPO,
-      "--title",
-      "Keiko 1.0.1",
-      "--notes",
-      "notes",
-      "--verify-tag",
-      "--draft",
+      "api",
+      "--method",
+      "POST",
+      `repos/${REPO}/releases`,
+      "-f",
+      `tag_name=${TAG}`,
+      "-f",
+      `target_commitish=${HEAD}`,
+      "-f",
+      "name=Keiko 1.0.1",
+      "-f",
+      "body=notes",
+      "-F",
+      "draft=true",
+      "-F",
+      "prerelease=false",
     ]);
+    // No second read: the listing lags behind the create (v1.0.1, 2026-09-14: "found 0").
+    expect(calls.filter((call) => call[0] === "runGh")).toHaveLength(1);
     expect(logs).toStrictEqual([`creating draft GitHub release ${TAG}.`]);
   });
 
   it("creates a prerelease draft that never claims Latest", () => {
-    const { calls, publisher } = fakePublisher({ listing: LISTING });
+    const { calls, publisher } = fakePublisher({ listing: CREATED });
     expect(openPortableRelease(publisher, { ...OPEN, prerelease: true }).latestArgs).toStrictEqual([
       "--latest=false",
     ]);
-    expect(calls.find((call) => call[2] === "create")).toContain("--prerelease");
+    expect(calls.find((call) => call[3] === "POST")).toContain("prerelease=true");
+  });
+
+  it("resumes the draft an interrupted publish left, by its id, without creating another", () => {
+    const { calls, logs, publisher } = fakePublisher({
+      view: answer({ assets: [], databaseId: 388722230, isDraft: true, name: "Keiko 1.0.1" }),
+    });
+    expect(openPortableRelease(publisher, OPEN)).toStrictEqual({
+      draft: true,
+      id: 388722230,
+      latestArgs: ["--latest"],
+      repo: REPO,
+      tag: TAG,
+    });
+    expect(calls.some((call) => call[0] === "runGh")).toBe(false);
+    expect(calls).not.toContainEqual(["refuseEvaluationOwnedRelease", TAG]);
+    expect(logs).toStrictEqual([
+      `resuming draft GitHub release ${TAG} (id 388722230) left by an interrupted publish.`,
+    ]);
+  });
+
+  it("refuses to resume a draft under this title that carries the evaluation manifest", () => {
+    const { publisher } = fakePublisher({
+      view: answer({
+        assets: [{ name: "keiko-portable-evaluation-manifest.json" }],
+        databaseId: 7,
+        isDraft: true,
+        name: "Keiko 1.0.1",
+      }),
+    });
+    expect(() => openPortableRelease(publisher, OPEN)).toThrow("evaluation lane's manifest");
+  });
+
+  it("leaves a draft under the evaluation lane's title to that lane's refusal", () => {
+    const { calls, publisher } = fakePublisher({
+      view: answer({ assets: [], databaseId: 7, isDraft: true, name: "Keiko 1.0.1 (v1.0.1)" }),
+    });
+    openPortableRelease(publisher, OPEN);
+    expect(calls).toContainEqual(["refuseEvaluationOwnedRelease", TAG]);
+    expect(calls.some((call) => call[0] === "runGh")).toBe(false);
   });
 
   it("verifies an already published release instead of creating one", () => {
@@ -258,17 +322,13 @@ describe("openPortableRelease", () => {
   });
 
   it.each([
+    ["an answer that is not JSON", { status: 0, stdout: "<html>", stderr: "" }, "did not answer"],
     [
-      "an unreadable listing",
-      { status: 1, stdout: "", stderr: "HTTP 502" },
-      "listing is malformed",
+      "an answer for another tag",
+      answer({ draft: true, id: 1, tag_name: "v1.0.2" }),
+      "did not answer",
     ],
-    [
-      "a listing that is not JSON",
-      { status: 0, stdout: "<html>", stderr: "" },
-      "listing is malformed",
-    ],
-    ["a listing without the draft", answer([]), "found 0"],
+    ["an answer without a valid id", answer({ draft: true, tag_name: TAG }), "no valid id"],
   ])("fails for %s", (_label, listing, message) => {
     const { publisher } = fakePublisher({ listing });
     expect(() => openPortableRelease(publisher, OPEN)).toThrow(message);

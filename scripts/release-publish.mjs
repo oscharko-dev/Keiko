@@ -1242,6 +1242,7 @@ function ensureGithubRelease(rootPackage, options, notes) {
 // An already published release is never uploaded into again; it is verified or refused.
 function ensurePortableRelease(rootPackage, options, notes) {
   return openPortableRelease(portablePublisher(), {
+    head: commandResult("git", ["rev-parse", "HEAD"]).stdout.trim(),
     latest: options.tag === "latest",
     notes,
     prerelease: releaseIsPrerelease(rootPackage.version, options.tag),
@@ -1255,6 +1256,7 @@ function ensurePortableRelease(rootPackage, options, notes) {
 function portablePublisher() {
   return {
     assertTagAtHead: (tag) => assertReleaseTagAtHead(githubRepository(), tag),
+    evaluationManifestAssetName: PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
     fail,
     gh,
     log: (message) => console.log(`release-publish: ${message}`),
