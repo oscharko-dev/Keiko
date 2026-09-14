@@ -119,6 +119,10 @@ export function runReleasePublishRequest({ env, runGh }) {
     tag: inputs.tag,
   });
   const notCancelled = cancelSupersededRuns(runGh, inputs.repository, plan.cancel);
+  // Dispatching past a stale approval would put two approvals for one tag in the queue.
+  if (notCancelled.length > 0) {
+    fail(`superseded publish run(s) ${notCancelled.join(", ")} could not be cancelled.`);
+  }
   if (plan.action === "dispatch") {
     const dispatched = runGh([
       "workflow",
@@ -143,10 +147,7 @@ export function runReleasePublishRequest({ env, runGh }) {
       fail(`release.yml could not be dispatched for ${inputs.tag}.`);
     }
   }
-  const cancelled = plan.cancel.length - notCancelled.length;
-  const cancelNote =
-    notCancelled.length > 0 ? `; could not cancel run(s) ${notCancelled.join(", ")}` : "";
-  return `Publish request for ${inputs.tag}: ${plan.action}, ${plan.reason}; cancelled ${cancelled} superseded run(s)${cancelNote}.`;
+  return `Publish request for ${inputs.tag}: ${plan.action}, ${plan.reason}; cancelled ${plan.cancel.length} superseded run(s).`;
 }
 
 /**

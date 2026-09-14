@@ -44,6 +44,13 @@ function entry(overrides = {}) {
     oneClickEligible: true,
     packageName: "@oscharko-dev/keiko",
     packageVersion: "0.2.11",
+    // The reviewed staging contract, derived from the producer: a current primary entry without one
+    // cannot be staged by a tagged release.
+    portableRuntimeArtifactContract: {
+      ...PORTABLE_RELEASE_IMPACT_CONTRACT,
+      signingScope: "evaluation",
+      targets: [...PORTABLE_TARGET_NAMES],
+    },
     publishGates: [
       "version-consistency",
       "publish-manifests",
@@ -142,6 +149,19 @@ describe("release-impact portable staging contract", () => {
 
     expect(messages(result)).toContain(
       "portableRuntimeArtifactContract does not cover linux-x64, so a tagged release would refuse to stage it.",
+    );
+  });
+
+  it("refuses a current primary entry without a staging contract", () => {
+    // check-release-impact passed such an entry while reviewedStagingEntryMatches refused it, so
+    // the gap surfaced only inside the tagged release.
+    const result = validateReleaseImpactCatalog(
+      catalog([entry({ portableRuntimeArtifactContract: undefined })]),
+      rootManifest(),
+    );
+
+    expect(messages(result)).toContain(
+      "portableRuntimeArtifactContract is missing, so a tagged release would refuse to stage it.",
     );
   });
 
@@ -289,6 +309,8 @@ describe("release-impact governance", () => {
       correctionRationale: "Clarifies the release-note bullet without mutating the original entry.",
       defaultPatchNotes: false,
       id: "2026-06-30-keiko-0.2.11-governed-release-impact-baseline-correction-1",
+      // A correction is a non-staging record and needs no staging contract of its own.
+      portableRuntimeArtifactContract: undefined,
       releaseNoteBullets: ["Correction: release-impact metadata is source-controlled."],
     });
 

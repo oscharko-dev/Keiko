@@ -82,6 +82,19 @@ describe("the resolver the guard relies on", () => {
     expect(unresolvableImports("scripts/entry.mjs", root)).toEqual([]);
   });
 
+  it("reports a relative require() target a CommonJS module in the graph cannot load", () => {
+    // An .mjs entry may import a .cjs bridge; node resolves that bridge's require() calls just
+    // as literally, so a missing target there is the same MODULE_NOT_FOUND on the runner.
+    const root = fixture({
+      "scripts/entry.mjs": 'import bridge from "./bridge.cjs";\nbridge();\n',
+      "scripts/bridge.cjs": 'const dep = require("./missing.cjs");\nmodule.exports = dep;\n',
+    });
+
+    expect(unresolvableImports("scripts/entry.mjs", root)).toEqual([
+      { from: "scripts/bridge.cjs", specifier: "./missing.cjs" },
+    ]);
+  });
+
   it("names a missing entry point instead of passing it silently", () => {
     const root = fixture({ "scripts/present.mjs": "export {};\n" });
 

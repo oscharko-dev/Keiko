@@ -932,9 +932,22 @@ function recordDefaultPatchNotes(entry, index, defaultNotes, failures) {
 
 // A tagged run stages every portable target from the current package's entry and refuses a target its
 // contract does not cover. Historical entries are left alone: each was right for its own release.
+// The tagged release stages only from a current entry that carries the reviewed staging contract
+// (reviewedStagingEntryMatches), so the primary entry of the current version must carry one here
+// too; a correction or superseding record is a non-staging entry and may leave it out.
 function validateStagingContract(entry, failures) {
   const contract = entry.portableRuntimeArtifactContract;
-  if (contract === undefined) return;
+  if (contract === undefined) {
+    if (!correctionEntry(entry)) {
+      failures.push(
+        failure(
+          `${entry.id}: portableRuntimeArtifactContract is missing, so a tagged release would ` +
+            "refuse to stage it.",
+        ),
+      );
+    }
+    return;
+  }
   const uncovered = PORTABLE_TARGET_NAMES.filter(
     (target) => !portableRuntimeContractMatches(contract, target),
   );

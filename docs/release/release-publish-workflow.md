@@ -554,7 +554,8 @@ npm run check:release-alignment
 It reads the checkout version, the newest `v*` tag, the GitHub Latest release, npm `latest`, and
 the newest `npm-publish` deployment ref, and passes only when the checkout equals npm `latest` or
 is exactly one patch/minor release ahead of it (a cut pending) and the other four sources all name
-that same version. An unreadable source counts as a divergence, never a pass. The CLI exits 0 when
+that same version. An unreadable source fails the check without an alignment result, never a
+pass. The CLI exits 0 when
 aligned, 1 for a divergence every source answered, and 2 when a source could not answer at all (a
 failed command or unparseable output); an empty tag or deployment list is an answer, not an
 unreadable source.

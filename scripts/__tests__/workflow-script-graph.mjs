@@ -10,6 +10,8 @@ import { parse } from "yaml";
 // Named and namespace forms, dynamic import(), and the bare side-effect form `import "x";`.
 const IMPORT_STATEMENT =
   /\b(?:import|export)\b([^;]*?)\bfrom\s+["']([^"']+)["']|\bimport\(\s*["']([^"']+)["']\s*\)|\bimport\s*["']([^"']+)["']/gu;
+// A .cjs module in the graph loads its neighbours through require(); node resolves those literally too.
+const REQUIRE_CALL = /\brequire\(\s*["']([^"']+)["']\s*\)/gu;
 const WORKSPACE_SPECIFIER = /^(@[^/]+\/[^/]+)(\/.+)?$/u;
 // A step provides packages/*/dist when it builds the packages itself or stages the product, which
 // runs `npm run build` on the way (stage-portable-runtime.mjs) before any later step can execute.
@@ -190,17 +192,18 @@ export function workflowEntryScripts(workflowsDir = ".github/workflows") {
   return [...entries].sort();
 }
 
-// Relative runtime import edges of one module, exactly as written.
+// Relative runtime import and require() edges of one module, exactly as written.
 function relativeImportEdges(file) {
-  const edges = [];
-  for (const match of readFileSync(file, "utf8").matchAll(IMPORT_STATEMENT)) {
+  const source = readFileSync(file, "utf8");
+  const specifiers = [];
+  for (const match of source.matchAll(IMPORT_STATEMENT)) {
     if (/^\s*type\b/u.test(match[1] ?? "")) continue;
-    const specifier = match[2] ?? match[3] ?? match[4];
-    if (specifier.startsWith(".")) {
-      edges.push({ specifier, target: resolve(dirname(file), specifier) });
-    }
+    specifiers.push(match[2] ?? match[3] ?? match[4]);
   }
-  return edges;
+  for (const match of source.matchAll(REQUIRE_CALL)) specifiers.push(match[1]);
+  return specifiers
+    .filter((specifier) => specifier.startsWith("."))
+    .map((specifier) => ({ specifier, target: resolve(dirname(file), specifier) }));
 }
 
 // Every relative specifier in the graph that plain node cannot load as written: node's ESM loader

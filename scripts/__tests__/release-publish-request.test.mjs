@@ -152,11 +152,12 @@ describe("runReleasePublishRequest", () => {
     );
   });
 
-  it("reports a run it could not cancel and still dispatches", () => {
+  it("refuses to dispatch while a superseded publish could not be cancelled", () => {
     const gh = fakeGh({ cancelStatus: 1, runs: [run({ head_sha: OLDER, id: 21 })] });
-    expect(runReleasePublishRequest({ env: ENV, runGh: gh.runGh })).toContain(
-      "could not cancel run(s) 21",
+    expect(() => runReleasePublishRequest({ env: ENV, runGh: gh.runGh })).toThrow(
+      "superseded publish run(s) 21 could not be cancelled",
     );
+    expect(gh.calls.some((args) => args[0] === "workflow")).toBe(false);
   });
 
   it("dispatches nothing once the tag has moved", () => {
