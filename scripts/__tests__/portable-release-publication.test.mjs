@@ -64,6 +64,23 @@ describe("resumableDraftFailure", () => {
       "evaluation lane's manifest",
     ],
     ["a draft without a valid id", { assets: [], databaseId: 0, isDraft: true }, "no valid id"],
+    ["a draft without an asset list", { databaseId: 7, isDraft: true }, "invalid asset listing"],
+    [
+      "an asset list that is not a list",
+      { assets: {}, databaseId: 7, isDraft: true },
+      "invalid asset listing",
+    ],
+    [
+      "an asset without a name",
+      { assets: [{}], databaseId: 7, isDraft: true },
+      "invalid asset listing",
+    ],
+    [
+      "an asset with a hostile name",
+      { assets: [{ name: 42 }], databaseId: 7, isDraft: true },
+      "invalid asset listing",
+    ],
+    ["a null asset", { assets: [null], databaseId: 7, isDraft: true }, "invalid asset listing"],
   ])("refuses %s", (_label, view, message) => {
     expect(resumableDraftFailure(view, TAG, MANIFEST)).toContain(message);
   });

@@ -34,8 +34,12 @@ export function createdDraftId(release, tag) {
  * not this lane's to complete.
  */
 export function resumableDraftFailure(view, tag, evaluationManifestAssetName) {
-  const assets = Array.isArray(view?.assets) ? view.assets : [];
-  if (assets.some((asset) => asset?.name === evaluationManifestAssetName)) {
+  // Only a readable asset list can prove the evaluation manifest is absent.
+  const assets = view?.assets;
+  if (!Array.isArray(assets) || assets.some((asset) => typeof asset?.name !== "string")) {
+    return `the draft GitHub release ${tag} has an invalid asset listing.`;
+  }
+  if (assets.some((asset) => asset.name === evaluationManifestAssetName)) {
     return `the draft GitHub release ${tag} carries the evaluation lane's manifest; a qualified production publish needs its own version and tag.`;
   }
   return Number.isSafeInteger(view?.databaseId) && view.databaseId > 0
