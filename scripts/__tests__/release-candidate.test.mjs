@@ -1,0 +1,406 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  applyReleaseCandidatePlan,
+  planReleaseCandidate,
+  releaseCandidatePlan,
+  remoteTagCommit,
+  runReleaseCandidate,
+} from "../lib/release-candidate.mjs";
+
+// ADR-0177 D8. On 2026-09-14 the v1.0.0 tag was cut by hand while dev CI was still running, and every
+// target failed its required-check wait one minute before ci turned green. The candidate workflow now
+// points the tag at a dev head only after CI succeeded, and never at a published version.
+
+const REPO = "oscharko-dev/Keiko";
+const CANDIDATE = "a".repeat(40);
+const OLDER = "b".repeat(40);
+const TAG = "v1.0.1";
+const READY = {
+  ready: true,
+  releaseTag: TAG,
+  reason: `${TAG} is approved for every portable target`,
+};
+const ROOT_PACKAGE = { name: "@oscharko-dev/keiko", version: "1.0.1" };
+
+function ok(value) {
+  return { status: 0, stdout: JSON.stringify(value), stderr: "" };
+}
+
+const NOT_FOUND = { status: 1, stdout: "", stderr: "gh: Not Found (HTTP 404)" };
+const SERVER_ERROR = { status: 1, stdout: "", stderr: "gh: Server Error (HTTP 502)" };
+
+function fakeGithub(overrides = {}) {
+  const routes = {
+    [`repos/${REPO}/git/ref/heads/dev`]: ok({ object: { sha: CANDIDATE, type: "commit" } }),
+    [`repos/${REPO}/git/ref/tags/${TAG}`]: NOT_FOUND,
+    [`repos/${REPO}/releases/tags/${TAG}`]: NOT_FOUND,
+    [`repos/${REPO}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100`]: ok({
+      workflow_runs: [],
+    }),
+    ...overrides,
+  };
+  const calls = [];
+  const runGh = (args) => {
+    calls.push(args);
+    const route = routes[args.at(-1)];
+    if (route === undefined) throw new Error(`unexpected gh call: ${args.join(" ")}`);
+    return route;
+  };
+  return { calls, runGh };
+}
+
+const NPM_MISSING = () => ({ status: 1, stdout: "", stderr: "npm error code E404" });
+
+function plan(overrides) {
+  return releaseCandidatePlan({
+    candidateSha: CANDIDATE,
+    devHeadSha: CANDIDATE,
+    publishRunActive: false,
+    published: false,
+    readiness: READY,
+    remoteTagSha: undefined,
+    ...overrides,
+  });
+}
+
+describe("releaseCandidatePlan", () => {
+  it("creates the tag for an approved, unpublished version whose dev head is green", () => {
+    expect(plan({})).toStrictEqual({
+      action: "create",
+      tag: TAG,
+      reason: `${TAG} does not exist yet`,
+    });
+  });
+
+  it("moves an unpublished tag to the newer green dev head", () => {
+    expect(plan({ remoteTagSha: OLDER }).action).toBe("move");
+  });
+
+  it("keeps a tag that already points at the candidate", () => {
+    expect(plan({ remoteTagSha: CANDIDATE }).action).toBe("keep");
+  });
+
+  it.each([
+    [
+      "an unapproved version",
+      { readiness: { ready: false, releaseTag: TAG, reason: "not approved" } },
+    ],
+    ["a candidate dev has moved past", { devHeadSha: OLDER }],
+    ["a published version", { published: true, remoteTagSha: OLDER }],
+    ["a tag whose publish is running", { publishRunActive: true, remoteTagSha: OLDER }],
+  ])("skips %s", (_label, overrides) => {
+    expect(plan(overrides).action).toBe("skip");
+  });
+
+  it.each([
+    ["candidate", { candidateSha: "HEAD" }],
+    ["dev head", { devHeadSha: undefined }],
+    ["release tag commit", { remoteTagSha: "abc" }],
+  ])("refuses a malformed %s", (_label, overrides) => {
+    expect(() => plan(overrides)).toThrow("is not a full commit SHA");
+  });
+});
+
+describe("remoteTagCommit", () => {
+  it("peels an annotated tag to its commit", () => {
+    const { runGh } = fakeGithub({
+      [`repos/${REPO}/git/ref/tags/${TAG}`]: ok({ object: { sha: "c".repeat(40), type: "tag" } }),
+      [`repos/${REPO}/git/tags/${"c".repeat(40)}`]: ok({ object: { sha: OLDER, type: "commit" } }),
+    });
+    expect(remoteTagCommit(runGh, REPO, TAG)).toBe(OLDER);
+  });
+
+  it.each([
+    [
+      "a ref that points at a tree",
+      ok({ object: { sha: OLDER, type: "tree" } }),
+      "points at a tree",
+    ],
+    ["an unreadable ref", SERVER_ERROR, "could not be read"],
+    [
+      "a ref whose body is not JSON",
+      { status: 0, stdout: "<html>", stderr: "" },
+      "could not be read",
+    ],
+  ])("refuses %s", (_label, response, message) => {
+    const { runGh } = fakeGithub({ [`repos/${REPO}/git/ref/tags/${TAG}`]: response });
+    expect(() => remoteTagCommit(runGh, REPO, TAG)).toThrow(message);
+  });
+
+  it("refuses an annotated tag that does not point at a commit", () => {
+    const { runGh } = fakeGithub({
+      [`repos/${REPO}/git/ref/tags/${TAG}`]: ok({ object: { sha: "c".repeat(40), type: "tag" } }),
+      [`repos/${REPO}/git/tags/${"c".repeat(40)}`]: ok({ object: { sha: OLDER, type: "tag" } }),
+    });
+    expect(() => remoteTagCommit(runGh, REPO, TAG)).toThrow("does not point at a commit");
+  });
+});
+
+describe("planReleaseCandidate", () => {
+  function gather(github, runNpm = NPM_MISSING, readiness = READY) {
+    return planReleaseCandidate({
+      candidateSha: CANDIDATE,
+      readiness,
+      repository: REPO,
+      rootPackage: ROOT_PACKAGE,
+      runGh: github.runGh,
+      runNpm,
+    });
+  }
+
+  it("reads only the dev head for a version that is not approved", () => {
+    const github = fakeGithub();
+    let npmCalls = 0;
+    const result = gather(
+      github,
+      () => {
+        npmCalls += 1;
+        return NPM_MISSING();
+      },
+      { ready: false, releaseTag: TAG, reason: "not approved" },
+    );
+
+    expect(result.action).toBe("skip");
+    expect(github.calls).toStrictEqual([["api", `repos/${REPO}/git/ref/heads/dev`]]);
+    expect(npmCalls).toBe(0);
+  });
+
+  it("creates when npm, GitHub and the tag know nothing of the version", () => {
+    expect(gather(fakeGithub()).action).toBe("create");
+  });
+
+  it("treats a version npm already carries as published", () => {
+    const published = () => ({ status: 0, stdout: '"1.0.1"\n', stderr: "" });
+    expect(gather(fakeGithub(), published).reason).toContain("already published");
+  });
+
+  it("treats a version with a GitHub release as published", () => {
+    const github = fakeGithub({ [`repos/${REPO}/releases/tags/${TAG}`]: ok({ id: 1 }) });
+    expect(gather(github).reason).toContain("already published");
+  });
+
+  it("does not move a tag while an approved publish of it is queued or running", () => {
+    const github = fakeGithub({
+      [`repos/${REPO}/git/ref/tags/${TAG}`]: ok({ object: { sha: OLDER, type: "commit" } }),
+      [`repos/${REPO}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100`]: ok(
+        {
+          workflow_runs: [
+            { head_branch: "v1.0.0", status: "in_progress" },
+            { head_branch: TAG, status: "waiting" },
+            { head_branch: TAG, status: "queued" },
+          ],
+        },
+      ),
+    });
+    expect(gather(github).reason).toContain("is running");
+  });
+
+  it("moves a tag whose only publish run still waits for approval", () => {
+    const github = fakeGithub({
+      [`repos/${REPO}/git/ref/tags/${TAG}`]: ok({ object: { sha: OLDER, type: "commit" } }),
+      [`repos/${REPO}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100`]: ok(
+        {
+          workflow_runs: [{ head_branch: TAG, status: "waiting" }],
+        },
+      ),
+    });
+    expect(gather(github).action).toBe("move");
+  });
+
+  it.each([
+    [
+      "the dev head",
+      { [`repos/${REPO}/git/ref/heads/dev`]: SERVER_ERROR },
+      "the dev head could not be read",
+    ],
+    ["the release", { [`repos/${REPO}/releases/tags/${TAG}`]: SERVER_ERROR }, "GitHub release"],
+    [
+      "the release runs",
+      {
+        [`repos/${REPO}/actions/workflows/release.yml/runs?event=workflow_dispatch&per_page=100`]:
+          ok({}),
+      },
+      "release workflow runs are malformed",
+    ],
+  ])("fails closed when %s cannot be read", (_label, overrides, message) => {
+    expect(() => gather(fakeGithub(overrides))).toThrow(message);
+  });
+
+  it("fails closed when npm cannot answer", () => {
+    const broken = () => ({ status: 1, stdout: "", stderr: "npm error code ETIMEDOUT" });
+    expect(() => gather(fakeGithub(), broken)).toThrow("npm could not say");
+  });
+});
+
+describe("applyReleaseCandidatePlan", () => {
+  function apply(
+    action,
+    { write = { status: 0, stdout: "{}", stderr: "" }, after = CANDIDATE } = {},
+  ) {
+    const github = fakeGithub({
+      [`repos/${REPO}/git/ref/tags/${TAG}`]: ok({ object: { sha: after, type: "commit" } }),
+    });
+    const writes = [];
+    const result = applyReleaseCandidatePlan({
+      candidateSha: CANDIDATE,
+      plan: { action, reason: "test", tag: TAG },
+      repository: REPO,
+      runGh: github.runGh,
+      runGhWithTagToken: (args) => {
+        writes.push(args);
+        return write;
+      },
+    });
+    return { result, writes };
+  }
+
+  it("creates the tag ref with the tag token and reads it back", () => {
+    const { result, writes } = apply("create");
+    expect(result).toBe(true);
+    expect(writes).toStrictEqual([
+      [
+        "api",
+        "--method",
+        "POST",
+        `repos/${REPO}/git/refs`,
+        "-f",
+        `ref=refs/tags/${TAG}`,
+        "-f",
+        `sha=${CANDIDATE}`,
+      ],
+    ]);
+  });
+
+  it("moves the tag ref with a forced update", () => {
+    expect(apply("move").writes).toStrictEqual([
+      [
+        "api",
+        "--method",
+        "PATCH",
+        `repos/${REPO}/git/refs/tags/${TAG}`,
+        "-f",
+        `sha=${CANDIDATE}`,
+        "-F",
+        "force=true",
+      ],
+    ]);
+  });
+
+  it.each(["skip", "keep"])("writes nothing for %s", (action) => {
+    expect(apply(action)).toStrictEqual({ result: false, writes: [] });
+  });
+
+  it("fails when GitHub refuses the write", () => {
+    expect(() => apply("create", { write: { status: 1, stdout: "", stderr: "HTTP 422" } })).toThrow(
+      "could not be written (create)",
+    );
+  });
+
+  it("fails when the tag does not point at the candidate afterwards", () => {
+    expect(() => apply("move", { after: OLDER })).toThrow(`does not point at ${CANDIDATE}`);
+  });
+});
+
+describe("runReleaseCandidate", () => {
+  function run(mode, env = {}, github = fakeGithub()) {
+    const appended = [];
+    const writes = [];
+    const result = runReleaseCandidate({
+      appendFile: (path, text) => appended.push([path, text]),
+      decideReadiness: () => READY,
+      env: {
+        CANDIDATE_SHA: CANDIDATE,
+        GITHUB_OUTPUT: "/out",
+        GITHUB_REPOSITORY: REPO,
+        GITHUB_STEP_SUMMARY: "/summary",
+        ...env,
+      },
+      mode,
+      readText: (path) =>
+        path === "package.json" ? JSON.stringify(ROOT_PACKAGE) : '{"entries":[]}',
+      runGh: github.runGh,
+      runGhWithTagToken: (args) => {
+        writes.push(args);
+        return { status: 0, stdout: "{}", stderr: "" };
+      },
+      runNpm: NPM_MISSING,
+    });
+    return { appended, result, writes };
+  }
+
+  it("plans without writing and hands the action to the workflow", () => {
+    const { appended, result, writes } = run("--plan");
+    expect(result.plan.action).toBe("create");
+    expect(writes).toStrictEqual([]);
+    expect(appended).toStrictEqual([
+      ["/out", `action=create\ntag=${TAG}\n`],
+      ["/summary", `Release candidate ${CANDIDATE}: create, ${TAG} does not exist yet.\n`],
+    ]);
+  });
+
+  it("applies a create with the tag token and says so", () => {
+    let created = false;
+    const github = fakeGithub();
+    const runGh = (args) =>
+      created && args.at(-1) === `repos/${REPO}/git/ref/tags/${TAG}`
+        ? ok({ object: { sha: CANDIDATE, type: "commit" } })
+        : github.runGh(args);
+    const appended = [];
+    const result = runReleaseCandidate({
+      appendFile: (path, text) => appended.push([path, text]),
+      decideReadiness: () => READY,
+      env: {
+        CANDIDATE_SHA: CANDIDATE,
+        GITHUB_REPOSITORY: REPO,
+        KEIKO_RELEASE_TAG_TOKEN: "app-token",
+      },
+      mode: "--apply",
+      readText: (path) =>
+        path === "package.json" ? JSON.stringify(ROOT_PACKAGE) : '{"entries":[]}',
+      runGh,
+      runGhWithTagToken: () => {
+        created = true;
+        return { status: 0, stdout: "{}", stderr: "" };
+      },
+      runNpm: NPM_MISSING,
+    });
+    expect(result.line).toBe(
+      `Release candidate ${CANDIDATE}: ${TAG} written (create), ${TAG} does not exist yet.`,
+    );
+    expect(appended).toStrictEqual([]);
+  });
+
+  it("refuses to apply a write without the tag token", () => {
+    expect(() => run("--apply", { KEIKO_RELEASE_TAG_TOKEN: "" })).toThrow(
+      "release tag token is missing",
+    );
+  });
+
+  it("applies nothing for a plan that does not write", () => {
+    const github = fakeGithub({
+      [`repos/${REPO}/git/ref/tags/${TAG}`]: ok({ object: { sha: CANDIDATE, type: "commit" } }),
+    });
+    const { result, writes } = run("--apply", {}, github);
+    expect(result.plan.action).toBe("keep");
+    expect(writes).toStrictEqual([]);
+  });
+
+  it.each([
+    ["an unknown mode", "--publish", {}, "pass --plan or --apply"],
+    [
+      "a malformed candidate",
+      "--plan",
+      { CANDIDATE_SHA: "dev" },
+      "CANDIDATE_SHA is not a full commit SHA",
+    ],
+    [
+      "a malformed repository",
+      "--plan",
+      { GITHUB_REPOSITORY: "Keiko" },
+      "GITHUB_REPOSITORY is not owner/repo",
+    ],
+  ])("refuses %s", (_label, mode, env, message) => {
+    expect(() => run(mode, env)).toThrow(message);
+  });
+});
