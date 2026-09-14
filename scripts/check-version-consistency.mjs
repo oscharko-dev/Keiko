@@ -10,6 +10,11 @@
 //   4. Issue #426's removed shim/duplicate paths stay removed: src/sdk/** and the local
 //      _sdk-version.ts mirrors under packages/keiko-cli/src and packages/keiko-server/src.
 //   5. packages/keiko-sdk/src/index.ts directly re-exports KEIKO_PRODUCT_VERSION as SDK_VERSION.
+//   6. package-lock.json's root and workspace entries, and every dependency pin one workspace
+//      package holds on another, carry that same version. The 1.0.0 cut was written by hand and
+//      left the lockfile's 26 workspace entries at 0.3.17 while every manifest said 1.0.0; nothing
+//      here noticed until Socket diffed the next version's pull request. scripts/set-version.mjs
+//      is the command that moves all of it at once.
 //
 // Runs in the prepack chain after the build steps. This validates the source/build inputs the
 // publish path depends on; tarball contents are separately enforced by check:package-surface and
@@ -102,6 +107,7 @@ if (typeof expected !== "string" || expected.length === 0) {
 }
 
 const packagesDir = join(repoRoot, "packages");
+const workspaceManifests = [];
 for (const name of readdirSync(packagesDir)) {
   const pkgDir = join(packagesDir, name);
   if (!statSync(pkgDir).isDirectory()) continue;
@@ -112,6 +118,7 @@ for (const name of readdirSync(packagesDir)) {
   } catch {
     continue;
   }
+  workspaceManifests.push({ label: `${name}/package.json`, manifest });
   if (manifest.version !== expected) {
     fail(`${name}: version ${manifest.version} does not match root ${expected}`);
   }
@@ -130,6 +137,44 @@ for (const name of readdirSync(packagesDir)) {
             `but package.json is ${manifest.version}`,
         );
       }
+    }
+  }
+}
+
+const DEPENDENCY_FIELDS = [
+  "dependencies",
+  "devDependencies",
+  "optionalDependencies",
+  "peerDependencies",
+];
+const workspaceNames = new Set(workspaceManifests.map(({ manifest }) => manifest.name));
+
+function checkWorkspacePins(label, manifest) {
+  for (const field of DEPENDENCY_FIELDS) {
+    for (const [dependency, pin] of Object.entries(manifest[field] ?? {})) {
+      if (workspaceNames.has(dependency) && pin !== expected) {
+        fail(`${label}: dependency ${dependency} is pinned to ${pin}, but root is ${expected}`);
+      }
+    }
+  }
+}
+
+checkWorkspacePins("package.json", rootManifest);
+for (const { label, manifest } of workspaceManifests) checkWorkspacePins(label, manifest);
+
+const lockPath = join(repoRoot, "package-lock.json");
+if (!existsSync(lockPath)) {
+  fail("package-lock.json is missing.");
+} else {
+  const lock = readJsonFile(lockPath);
+  const lockRootVersion = lock.packages?.[""]?.version;
+  if (lockRootVersion !== expected) {
+    fail(`package-lock.json: root entry is ${lockRootVersion}, but root is ${expected}`);
+  }
+  for (const [path, entry] of Object.entries(lock.packages ?? {})) {
+    if (!path.startsWith("packages/") || path.includes("/node_modules/")) continue;
+    if (entry.version !== expected) {
+      fail(`package-lock.json: ${path} is ${entry.version}, but root is ${expected}`);
     }
   }
 }
@@ -203,5 +248,5 @@ if (failures.length > 0) {
 }
 
 console.log(
-  `version-consistency: PASS — every workspace package and exported KEIKO_*_VERSION constant reports ${expected}.`,
+  `version-consistency: PASS — every workspace package, pin, lockfile entry and exported KEIKO_*_VERSION constant reports ${expected}.`,
 );

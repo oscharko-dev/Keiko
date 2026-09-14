@@ -219,6 +219,17 @@ validates those outputs but cannot generate or upgrade signing-verification bool
 still requires an operator dispatch with `portable_assets_run_id` pointing at the resulting green
 `Portable assets` run.
 
+## Moving the version
+
+`npm run set-version -- <version>` moves the product version everywhere it lives mechanically: the
+root and every workspace `package.json`, every dependency pin one workspace package holds on
+another, the exported `KEIKO_*_VERSION` constants, and the lockfile through
+`npm install --package-lock-only`. It ends by running `check:version-consistency`, which also
+refuses a lockfile entry or pin left behind: the 1.0.0 cut was written by hand and left
+`package-lock.json`'s 26 workspace entries at 0.3.17 while every manifest said 1.0.0. The
+release-impact catalog entry, `docs/PUBLIC_API_SURFACE.md` and the regenerated evidence documents
+stay reviewed work.
+
 ## Triggering
 
 - One-approval stable release (ADR-0177 D8): on a `dev` push whose version is approved for every

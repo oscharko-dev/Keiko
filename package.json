@@ -117,6 +117,7 @@
     "test:e2e:code-task:real-binary": "node scripts/run-code-task-real-binary.mjs",
     "release:plan": "node scripts/release-publish.mjs --plan-only",
     "release:publish": "node scripts/release-publish.mjs",
+    "set-version": "node scripts/set-version.mjs",
     "eval:prompt-enhancer": "npm run build:packages && vitest run packages/keiko-evaluations/src/promptEnhancer",
     "eval:voice-acoustic": "npm run build:packages && node -e \"import('./packages/keiko-evaluations/dist/index.js').then(({ VoiceAcousticEval }) => { const scorecard = VoiceAcousticEval.runVoiceAcousticEvaluation(); console.log(VoiceAcousticEval.renderVoiceAcousticSummary(scorecard)); process.exitCode = scorecard.summary.goNoGo === 'GO' ? 0 : 1; })\"",
     "dev:start": "node scripts/dev-start.mjs",
