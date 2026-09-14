@@ -125,8 +125,13 @@ jobs:
     environment: npm-publish
     permissions:
       actions: read
+      # release-publish.mjs verifies the setup companion with gh attestation verify, and its alignment
+      # gate lists npm-publish deployments; an installation token needs attestations:read and
+      # deployments:read for those reads.
+      attestations: read
       checks: read
       contents: write
+      deployments: read
       id-token: write
       statuses: read
     timeout-minutes: 30
