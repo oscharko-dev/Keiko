@@ -33,6 +33,7 @@ import {
   findAvailableNextPort,
   forwardedUpstreamHeaders,
   normalizeUpstreamLocation,
+  nextChildEnv,
   packageBuildWatchArgs,
   preflightNextRespawn,
   proxyHttp,
@@ -666,6 +667,14 @@ describe("createBffCodeWatch", () => {
 
     expect(first.close).toHaveBeenCalled();
     expect(onChange).toHaveBeenCalledWith(["/repo/packages/a/dist/index.js"]);
+  });
+});
+
+describe("nextChildEnv", () => {
+  it("runs next dev as the development server even when the runner itself runs under test", () => {
+    // The e2e harness starts this runner with NODE_ENV=test for its own test gates. Inherited by
+    // next dev, that value made Next's tsconfig verifier rewrite packages/keiko-ui/tsconfig.json.
+    expect(nextChildEnv(3001)).toStrictEqual({ NODE_ENV: "development", PORT: "3001" });
   });
 });
 
