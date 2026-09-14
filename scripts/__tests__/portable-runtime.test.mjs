@@ -17,6 +17,9 @@ import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { qualificationReceiptFor as linuxQualificationReceiptFor } from "../qualify-linux-runtime-release.mjs";
+import { qualificationReceiptFor as macosQualificationReceiptFor } from "../qualify-macos-runtime-release.mjs";
+
 import {
   hashDirectoryTree,
   PORTABLE_MANIFEST_VALIDATION_CONTEXTS,
@@ -649,6 +652,13 @@ function syncReviewedBinding(candidate) {
       JSON.stringify(candidate.nativeHelpers),
     );
   }
+  // The contract binds nativeAddons the same way it binds nativeHelpers; mirroring only the
+  // helpers left a production candidate carrying an addon it had never reviewed.
+  if (Array.isArray(candidate.nativeAddons)) {
+    candidate.releaseImpact.reviewedBinding.nativeAddons = JSON.parse(
+      JSON.stringify(candidate.nativeAddons),
+    );
+  }
   if (candidate.runtimeAttestation === undefined) {
     delete candidate.releaseImpact.reviewedBinding.runtimeAttestation;
   } else {
@@ -903,31 +913,68 @@ function rebindAssemblerSidecar(sidecar, sidecarRoot, executablePath) {
     statSync(join(sidecarRoot, "evidence", "sbom.cdx.json")).size;
 }
 
+// Derived from the producer that writes the receipt, never restated. The old copy pinned
+// schemaVersion 1 without runtimeComponents while the Linux producer moved to schemaVersion 2 in
+// #3455, so it kept the assembler tests green over a consumer that rejected every stable Linux
+// bundle. Deriving makes the next shape change fail here instead of in a release.
 function writeAssemblerQualificationFixture(candidate, target, resourceRoot) {
   if (target.nodePlatform !== "darwin" && target.nodePlatform !== "linux") return;
-  const helpers = new Map(candidate.nativeHelpers.map((helper) => [helper.name, helper]));
-  const qualificationBytes = `${JSON.stringify(
-    {
-      schemaVersion: 1,
-      suiteVersion: "runtime-tree-qualification-v1",
-      platformTarget: target.platformTarget,
-      sourceCommitSha: candidate.release.commitSha,
-      activationManifestSha256: candidate.runtimeActivation.sha256,
-      supervisorSha256: helpers.get("keiko-runtime-supervisor").shippedSha256,
-      secureReadSha256: helpers.get("keiko-secure-workspace-read").shippedSha256,
-      sidecars: candidate.sidecarRuntimes.map((sidecar) => ({
-        name: sidecar.name,
-        sha256: sidecar.payloadSha256,
-      })),
-      backend:
-        target.nodePlatform === "linux" ? "linux-namespace-gateway" : "macos-endpoint-security",
-      result: "passed",
-    },
-    null,
-    2,
-  )}\n`;
+  // Mirrors the consumer: assemble reads this receipt only for a production-lane artifact, and
+  // the producers refuse an activation manifest that is not verified-production.
+  if (candidate.security.verificationPolicy !== "production") return;
+  writeQualificationRuntimeComponents(candidate, target, resourceRoot);
+  const input = {
+    activationPath: join(resourceRoot, ".portable", "runtime-activation.json"),
+    resourceRoot,
+    sourceCommitSha: candidate.release.commitSha,
+  };
+  const receipt =
+    target.nodePlatform === "linux"
+      ? linuxQualificationReceiptFor(input)
+      : macosQualificationReceiptFor({ ...input, target: target.platformTarget });
+  const qualificationBytes = `${JSON.stringify(receipt, null, 2)}\n`;
   writeFileSync(join(resourceRoot, ".portable", "runtime-qualification.json"), qualificationBytes);
   candidate.runtimeQualification.sha256 = digestFor(qualificationBytes);
+}
+
+// The Linux receipt digests the primary launcher, the Node runtime and the USearch addon straight
+// off the tree (RUNTIME_COMPONENTS + usearchComponent), so the fixture has to ship them as real
+// files. fileDigest refuses a symlink, a hard link or an empty file.
+function writeQualificationRuntimeComponents(candidate, target, resourceRoot) {
+  if (target.nodePlatform !== "linux") return;
+  for (const relativePath of ["Keiko", "runtime/node/bin/node"]) {
+    const path = join(resourceRoot, ...relativePath.split("/"));
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, `fixture ${relativePath} for ${target.platformTarget}\n`);
+  }
+  const [addon] = writeUsearchAddonFixture(target, resourceRoot);
+  // writeUsearchAddonFixture records the APPROVED upstream digest, which is what the staging
+  // provenance tests need. The qualification receipt digests the bytes actually on disk, so the
+  // shipped digest has to describe the fixture file. source.binarySha256 keeps the approval.
+  const addonPath = join(resourceRoot, ...addon.executablePath.split("/"));
+  addon.shippedSha256 = digestFor(readFileSync(addonPath));
+  addon.unsignedSha256 = addon.shippedSha256;
+  addon.sizeBytes = statSync(addonPath).size;
+  // The addon joins a production-lane candidate, so its signing state follows the candidate the
+  // way syncNativeHelperVerification does it for the native helpers, and the reviewed binding is
+  // re-synced before the activation manifest is regenerated from it.
+  addon.signing.signatureKind = target.signatureKind;
+  addon.signing.verificationStatus = candidate.security.verificationStatus;
+  addon.signing.signatureVerified = candidate.security.signatureVerified;
+  addon.signing.notarizationRequired = candidate.security.notarizationRequired;
+  addon.signing.notarizationVerified = candidate.security.notarizationVerified;
+  candidate.nativeAddons = [addon];
+  syncReviewedBinding(candidate);
+  candidate.runtimeActivation.sha256 = refreshAssemblerActivationFixture(candidate, resourceRoot);
+}
+
+// nativeAddons is part of the activation manifest, so adding the addon moves the activation bytes
+// and their digest with it.
+function refreshAssemblerActivationFixture(candidate, resourceRoot) {
+  const activationPath = join(resourceRoot, ".portable", "runtime-activation.json");
+  const activationBytes = `${JSON.stringify(runtimeActivationManifest(candidate), null, 2)}\n`;
+  writeFileSync(activationPath, activationBytes);
+  return digestFor(activationBytes);
 }
 
 function assemblerCandidate(target, evaluation) {
@@ -2336,8 +2383,14 @@ describe("validatePortableReleaseSet", () => {
       verificationStatus: "verified-non-production",
     });
 
-    expect(validatePortableReleaseSet(set, expected).join("\n")).toContain(
-      "verification must match candidate lifecycle context",
+    // Still rejected, and now for a broader reason: the set is validated against the lane the
+    // manifest declares, so a pull-request policy is refused outright as an unstageable lane
+    // instead of reaching the candidate contract and failing one of its sub-checks. The invariant
+    // this pin guards -- a verified non-production target never assembles -- is unchanged.
+    const failures = validatePortableReleaseSet(set, expected);
+    expect(failures).not.toEqual([]);
+    expect(failures.join("\n")).toContain(
+      "security.verificationPolicy: declares no stageable lifecycle lane (pull-request)",
     );
   });
 
@@ -2415,6 +2468,75 @@ describe("validatePortableReleaseSet", () => {
     );
   });
 });
+
+describe("assembly evidence follows the declared lane", () => {
+  const source = readFileSync("scripts/assemble-portable-release-assets.mjs", "utf8");
+  const publish = readFileSync("scripts/release-publish.mjs", "utf8");
+
+  it("asks the manifest which lane it declares instead of the binary evaluation question", () => {
+    // Both consumers used "evaluation ? release-trust : candidate" from #2261, which held every
+    // staging-lane artifact to the production contract. macOS and Windows are staged unsigned by
+    // design, so the stable four-target lane could never assemble. #3019 added the declared-lane
+    // helper and three other consumers migrated; these two did not, and it went unnoticed because
+    // assemble had never executed.
+    for (const [name, text] of [
+      ["assemble-portable-release-assets.mjs", source],
+      ["release-publish.mjs", publish],
+    ]) {
+      expect(text, `${name} must ask the manifest for its lane`).toContain(
+        "portableManifestValidationFailuresForDeclaredLane(manifest)",
+      );
+      expect(text, `${name} must not restate the binary lane question`).not.toMatch(
+        /verificationPolicy === "evaluation"\s*\n?\s*\?\s*validatePortableReleaseTrustCandidateManifest/u,
+      );
+    }
+  });
+
+  it("reads production-only evidence only from a production-lane artifact", () => {
+    // runtimeQualification and runtimeAttestation are written by the signing and qualification
+    // producers alone. Gating on "not evaluation" demanded them from staging artifacts too.
+    expect(source).toContain('manifest.security.verificationPolicy !== "production"');
+    expect(source).not.toContain('manifest.security.verificationPolicy === "evaluation") return;');
+  });
+
+  it("names a missing binding instead of dereferencing undefined", () => {
+    expect(source).toContain("carries no runtime qualification binding");
+    expect(source).toContain("carries no runtime attestation binding");
+  });
+
+  it("derives the expected qualification receipt from the owning producer", () => {
+    // The consumer kept a schemaVersion 1 copy of a receipt the Linux producer moved to
+    // schemaVersion 2 with runtimeComponents in #3455, so isDeepStrictEqual failed on every stable
+    // Linux bundle. AGENTS.md section 7: derive from the production entry point, never restate.
+    expect(source).toContain("qualificationReceiptFor as linuxQualificationReceiptFor");
+    expect(source).toContain("qualificationReceiptFor as macosQualificationReceiptFor");
+    expect(source).not.toMatch(/suiteVersion:\s*"runtime-tree-qualification-v1"/u);
+    expect(source).not.toMatch(/schemaVersion:\s*1,\s*\n\s*suiteVersion:/u);
+  });
+
+  it("keeps the macOS producer able to read the activation manifest it is handed", () => {
+    // runtimeActivationManifest always emits nativeAddons (#3455). The macOS producer's exactKeys
+    // list predates it, so it refused every real activation manifest.
+    const macos = readFileSync("scripts/qualify-macos-runtime-release.mjs", "utf8");
+    const emitted = Object.keys(
+      runtimeActivationManifest(setManifestTargetCopy("macos-arm64")),
+    ).sort();
+    const declared = macos
+      .slice(macos.indexOf("function activationIdentityIsValid"))
+      .match(/exactKeys\(activation, \[([\s\S]*?)\]\)/u)[1]
+      .match(/"([a-zA-Z]+)"/gu)
+      .map((key) => key.replaceAll('"', ""))
+      .sort();
+    expect(declared).toEqual(emitted);
+  });
+});
+
+function setManifestTargetCopy(platformTarget) {
+  const candidate = manifest();
+  setManifestTarget(candidate, platformTarget);
+  setVerificationState(candidate);
+  return candidate;
+}
 
 describe("assemblePortableReleaseAssets bounds", () => {
   const args = (bundleRoot) => [

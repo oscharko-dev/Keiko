@@ -19,14 +19,15 @@ import {
   PORTABLE_TARGETS,
   WINDOWS_PORTABLE_SETUP_ASSET_NAME,
   sha256File,
-  validatePortableCandidateManifest,
-  validatePortableReleaseTrustCandidateManifest,
+  portableManifestValidationFailuresForDeclaredLane,
 } from "./portable-runtime.mjs";
 import {
   RUNTIME_ACTIVATION_RELATIVE_PATH,
   runtimeActivationManifest,
 } from "./runtime-activation-manifest.mjs";
 import { isPortableExecutableFile } from "./lib/portable-executable.mjs";
+import { qualificationReceiptFor as linuxQualificationReceiptFor } from "./qualify-linux-runtime-release.mjs";
+import { qualificationReceiptFor as macosQualificationReceiptFor } from "./qualify-macos-runtime-release.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const rootPackage = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8"));
@@ -151,10 +152,11 @@ function commonIdentity(manifest) {
 }
 
 function targetFailures(manifest, target, expected) {
-  const failures =
-    manifest.security?.verificationPolicy === "evaluation"
-      ? validatePortableReleaseTrustCandidateManifest(manifest)
-      : validatePortableCandidateManifest(manifest);
+  // The manifest declares its own lifecycle lane; validating it against a lane it never claimed
+  // is how the stable four-target lane broke. portableManifestValidationFailuresForDeclaredLane
+  // maps production -> candidate, staging -> staging, evaluation -> evaluation, and fails closed
+  // on anything else. Three other consumers migrated to it in #3019; this one did not.
+  const failures = portableManifestValidationFailuresForDeclaredLane(manifest);
   const checks = [
     [
       "artifact.platformTarget",
@@ -305,7 +307,11 @@ function assertRuntimeActivationEvidence(stageRoot, manifest, target, sbom) {
   ) {
     fail(`${target.platformTarget} runtime activation binding is invalid`);
   }
-  if (manifest.security.verificationPolicy === "evaluation") return;
+  // runtimeQualification and runtimeAttestation are written only by the signing and
+  // qualification producers, which run only for a production-lane artifact. A staging or
+  // evaluation manifest declares no such evidence and its own validator does not require it,
+  // so demanding it here held macOS and Windows to a contract their producer never claimed.
+  if (manifest.security.verificationPolicy !== "production") return;
   if (target.nodePlatform === "win32") {
     assertRuntimeAttestationEvidence(resourceRoot, manifest, sbom);
   } else {
@@ -315,6 +321,9 @@ function assertRuntimeActivationEvidence(stageRoot, manifest, target, sbom) {
 
 function assertRuntimeQualificationEvidence(resourceRoot, manifest, target) {
   const qualification = manifest.runtimeQualification;
+  if (qualification?.path === undefined || qualification.sha256 === undefined) {
+    fail(`${target.platformTarget} production artifact carries no runtime qualification binding`);
+  }
   const path = regularContainedFile(
     resourceRoot,
     qualification.path,
@@ -322,33 +331,34 @@ function assertRuntimeQualificationEvidence(resourceRoot, manifest, target) {
   );
   const bytes = readFileSync(path);
   const receipt = JSON.parse(bytes.toString("utf8"));
-  const helpers = new Map(manifest.nativeHelpers.map((helper) => [helper.name, helper]));
-  const expected = {
-    schemaVersion: 1,
-    suiteVersion: "runtime-tree-qualification-v1",
-    platformTarget: manifest.artifact.platformTarget,
-    sourceCommitSha: manifest.release.commitSha,
-    activationManifestSha256: manifest.runtimeActivation.sha256,
-    supervisorSha256: helpers.get("keiko-runtime-supervisor")?.shippedSha256,
-    secureReadSha256: helpers.get("keiko-secure-workspace-read")?.shippedSha256,
-    sidecars: (manifest.sidecarRuntimes ?? []).map((sidecar) => ({
-      name: sidecar.name,
-      sha256: sidecar.payloadSha256,
-    })),
-    backend:
-      target.nodePlatform === "linux" ? "linux-namespace-gateway" : "macos-endpoint-security",
-    result: "passed",
-  };
   if (
     createHash("sha256").update(bytes).digest("hex") !== qualification.sha256 ||
-    !isDeepStrictEqual(receipt, expected)
+    !isDeepStrictEqual(receipt, expectedQualificationReceipt(resourceRoot, manifest, target))
   ) {
     fail(`${manifest.artifact.platformTarget} runtime qualification binding is invalid`);
   }
 }
 
+// Derived from the producer that writes the receipt, never restated here. The Linux producer moved
+// to schemaVersion 2 with a runtimeComponents list in #3455 while this consumer kept a copy of the
+// schemaVersion 1 shape, so an isDeepStrictEqual over an extra key failed every stable Linux
+// bundle -- AGENTS.md section 7: a fixture derives from the production entry point.
+function expectedQualificationReceipt(resourceRoot, manifest, target) {
+  const input = {
+    activationPath: join(resourceRoot, ...RUNTIME_ACTIVATION_RELATIVE_PATH.split("/")),
+    resourceRoot,
+    sourceCommitSha: manifest.release.commitSha,
+  };
+  return target.nodePlatform === "linux"
+    ? linuxQualificationReceiptFor(input)
+    : macosQualificationReceiptFor({ ...input, target: target.platformTarget });
+}
+
 function assertRuntimeAttestationEvidence(resourceRoot, manifest, sbom) {
   const attestation = manifest.runtimeAttestation;
+  if (attestation?.executablePath === undefined) {
+    fail("windows-x64 production artifact carries no runtime attestation binding");
+  }
   const executable = regularContainedFile(
     resourceRoot,
     attestation.executablePath,
@@ -361,6 +371,10 @@ function assertRuntimeAttestationEvidence(resourceRoot, manifest, sbom) {
   ) {
     fail("windows-x64 runtime attestation carrier is invalid");
   }
+  assertRuntimeAttestationSbomBinding(manifest, attestation, sbom);
+}
+
+function assertRuntimeAttestationSbomBinding(manifest, attestation, sbom) {
   const bomRef = `pkg:generic/keiko-runtime-attestation@${manifest.product.packageVersion}?platform=windows-x64`;
   const components = (sbom.components ?? []).filter(
     (component) => component?.["bom-ref"] === bomRef,

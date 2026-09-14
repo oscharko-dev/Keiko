@@ -111,6 +111,7 @@ function activationIdentityIsValid(activation, target, sourceCommitSha) {
       "runtime",
       "security",
       "nativeHelpers",
+      "nativeAddons",
       "sidecarRuntimes",
       "releaseImpact",
     ]) &&

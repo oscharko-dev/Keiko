@@ -90,6 +90,9 @@ function fixture(target = "macos-arm64") {
     },
     security: { verificationStatus: "verified-production" },
     nativeHelpers: helpers,
+    // runtimeActivationManifest emits nativeAddons unconditionally (#3455), so a real activation
+    // manifest always carries the key; omitting it here restated a shape the producer never sees.
+    nativeAddons: [],
     sidecarRuntimes: [{ name: "opencode-compatible", payloadSha256: "a".repeat(64) }],
     releaseImpact: { entryId: "fixture" },
   };

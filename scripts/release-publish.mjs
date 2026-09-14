@@ -36,8 +36,7 @@ import {
   PORTABLE_TARGETS,
   portableVerificationSummaryForManifest,
   readPortableManifest,
-  validatePortableCandidateManifest,
-  validatePortableReleaseTrustCandidateManifest,
+  portableManifestValidationFailuresForDeclaredLane,
   validatePortablePublishedManifest,
   WINDOWS_PORTABLE_SETUP_ASSET_NAME,
 } from "./portable-runtime.mjs";
@@ -788,10 +787,10 @@ function validatePortableAssetFiles({
   if (basename(archivePath) !== target.assetName) {
     failures.push(`${target.platformTarget}.archivePath must be named ${target.assetName}.`);
   }
-  const manifestFailures =
-    manifest.security?.verificationPolicy === "evaluation"
-      ? validatePortableReleaseTrustCandidateManifest(manifest)
-      : validatePortableCandidateManifest(manifest);
+  // Same migration as assemble-portable-release-assets.mjs: the manifest declares its lifecycle
+  // lane and is validated against that lane, never against a lane it never claimed. Keeping the
+  // binary question here would only move the stable-lane failure from assemble to publish time.
+  const manifestFailures = portableManifestValidationFailuresForDeclaredLane(manifest);
   for (const failure of manifestFailures) {
     failures.push(`${target.platformTarget}.${failure}`);
   }
