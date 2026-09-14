@@ -58,22 +58,27 @@ interface FakeReq extends EventEmitter {
   resume(): void;
 }
 
-function makeReq(body: unknown): FakeReq {
+function makeReq(body: unknown, bodyArrives: "microtask" | "macrotask" = "microtask"): FakeReq {
   const req = new EventEmitter() as FakeReq;
   req.headers = { "content-type": "application/json" };
   req.url = "/";
   req.method = "POST";
   req.resume = (): void => undefined;
-  queueMicrotask(() => {
+  const emitBody = (): void => {
     req.emit("data", Buffer.from(JSON.stringify(body)));
     req.emit("end");
-  });
+  };
+  if (bodyArrives === "microtask") queueMicrotask(emitBody);
+  else setTimeout(emitBody, 0);
   return req;
 }
 
-function makeCtx(body: unknown): RouteContext {
+function makeCtx(
+  body: unknown,
+  bodyArrives: "microtask" | "macrotask" = "microtask",
+): RouteContext {
   return {
-    req: makeReq(body) as unknown as IncomingMessage,
+    req: makeReq(body, bodyArrives) as unknown as IncomingMessage,
     res: {} as ServerResponse,
     params: {},
     url: new URL("http://localhost/"),
@@ -193,18 +198,26 @@ interface Harness {
 
 // A capture that parks the FIRST call until it is released, so two connect requests can be
 // interleaved deterministically: both read the chat, then the writes happen in a controlled order.
+// Parks the first capture call until release(). `arrived` settles when that call has reached the
+// park, so a test can start the next request only once the first one is really waiting there.
 function parkingSnapshotService(results: readonly GitChangeSnapshotResult[]): {
   readonly service: UiHandlerDeps["gitChangeSnapshotService"];
   readonly release: () => void;
+  readonly arrived: Promise<void>;
 } {
   let index = 0;
   let releaseFirst: (() => void) | undefined;
+  let markArrived: (() => void) | undefined;
   const parked = new Promise<void>((resolve) => {
     releaseFirst = resolve;
+  });
+  const arrived = new Promise<void>((resolve) => {
+    markArrived = resolve;
   });
   const base = fakeSnapshotService(results);
   if (base === undefined) throw new TypeError("Fake snapshot service is required");
   return {
+    arrived,
     release: (): void => {
       if (releaseFirst === undefined) throw new TypeError("Parked capture is not armed");
       releaseFirst();
@@ -216,11 +229,31 @@ function parkingSnapshotService(results: readonly GitChangeSnapshotResult[]): {
       ): Promise<{ readonly snapshot: GitChangeSnapshotResult }> => {
         const first = index === 0;
         index += 1;
-        if (first) await parked;
+        if (first) {
+          markArrived?.();
+          await parked;
+        }
         return base.capture(request);
       },
     },
   };
+}
+
+/**
+ * Resolves once the first request has parked at its capture. Should that request settle before it
+ * gets there, this rejects at once with that reason instead of letting the test wait for a release
+ * that can never come.
+ */
+async function untilFirstRequestParks(
+  arrived: Promise<void>,
+  firstRequest: Promise<unknown>,
+): Promise<void> {
+  await Promise.race([
+    arrived,
+    firstRequest.then(() => {
+      throw new Error("the first connect settled before it reached its parked capture");
+    }),
+  ]);
 }
 
 function buildHarness(opts: {
@@ -382,30 +415,35 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
   // writes. The write must append to the list as it is at write time; against the previous code —
   // which wrote back `[...capturedBeforeTheAwait, scope]` — the slower request silently dropped
   // the faster one's scope and left its relationship edge behind (#3384 review).
-  it("keeps both scopes when two concurrent connects interleave around the capture await", async () => {
-    const parking = parkingSnapshotService([
-      fixtureSnapshot({ headSha: "a".repeat(40) }),
-      fixtureSnapshot({ headSha: "b".repeat(40) }),
-    ]);
-    const { deps, chatStore } = buildHarness({
-      runnerScript: {},
-      snapshots: [],
-      snapshotService: parking.service,
-    });
-    const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
-    const slow = connectHandler(makeCtx(connectRequestBody(chat.id)), deps);
-    // Let the first request reach its parked capture before the second one starts, so both have
-    // already read the chat.
-    await Promise.resolve();
-    const fast = asRouteResult(await connectHandler(makeCtx(connectRequestBody(chat.id)), deps));
-    expect(fast.status).toBe(200);
-    parking.release();
-    const slowResult = asRouteResult(await slow);
-    expect(slowResult.status).toBe(200);
-    const scopes = chatStore.findChatById(chat.id)?.gitChangeScopes ?? [];
-    expect(scopes).toHaveLength(2);
-    expect(new Set(scopes.map((scope) => scope.relationshipId)).size).toBe(2);
-  });
+  it.each(["microtask", "macrotask"] as const)(
+    "keeps both scopes when two concurrent connects interleave around the capture await (first body: %s)",
+    async (firstBodyArrives) => {
+      const parking = parkingSnapshotService([
+        fixtureSnapshot({ headSha: "a".repeat(40) }),
+        fixtureSnapshot({ headSha: "b".repeat(40) }),
+      ]);
+      const { deps, chatStore } = buildHarness({
+        runnerScript: {},
+        snapshots: [],
+        snapshotService: parking.service,
+      });
+      const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+      const slow = connectHandler(makeCtx(connectRequestBody(chat.id), firstBodyArrives), deps);
+      // Start the second request only once the first has read the chat and parked at its capture. A
+      // fixed number of ticks did not guarantee that: when the first request's body read and
+      // repository probes finished after the second request's, the second one took the park, the
+      // test awaited it before releasing, and the run hung until its timeout (CI run 34887656792).
+      await untilFirstRequestParks(parking.arrived, slow);
+      const fast = asRouteResult(await connectHandler(makeCtx(connectRequestBody(chat.id)), deps));
+      expect(fast.status).toBe(200);
+      parking.release();
+      const slowResult = asRouteResult(await slow);
+      expect(slowResult.status).toBe(200);
+      const scopes = chatStore.findChatById(chat.id)?.gitChangeScopes ?? [];
+      expect(scopes).toHaveLength(2);
+      expect(new Set(scopes.map((scope) => scope.relationshipId)).size).toBe(2);
+    },
+  );
 
   it("blocks with detached-head before any relationship or scope is created", async () => {
     const { deps, chatStore } = buildHarness({
