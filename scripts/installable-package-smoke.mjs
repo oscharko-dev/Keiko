@@ -38,7 +38,10 @@ import {
   yarnPackageManagerFromIntegrityLocator,
   yarnPackageManagerFromLocator,
 } from "./lib/pinned-yarn.mjs";
-import { createStagedPublishPackage } from "./stage-publish-package.mjs";
+import {
+  bundleExternalRuntimeDependencies,
+  createStagedPublishPackage,
+} from "./stage-publish-package.mjs";
 
 export const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 600_000;
 export const WINDOWS_NPM_INSTALL_TIMEOUT_MS = 600_000;
@@ -730,6 +733,10 @@ export function packRoot() {
     }
   }
   const staged = createStagedPublishPackage();
+  // Fill node_modules with the external runtime dependency closure so `npm pack` includes it,
+  // making the published tarball self-contained. Without this, `npm install -g <tarball>` leaves
+  // the non-workspace deps empty and every `keiko` command fails on `Cannot find package 'ws'`.
+  bundleExternalRuntimeDependencies(staged.packageDir);
   const manifest = JSON.parse(readFileSync(join(staged.packageDir, "package.json"), "utf8"));
   const artifactRoot = mkdtempSync(join(tmpdir(), "keiko-install-artifact-"));
   const result = run(

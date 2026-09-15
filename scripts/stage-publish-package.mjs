@@ -429,6 +429,59 @@ function validateRuntimeRecords(runtimeNames, records) {
   }
 }
 
+function externalRuntimeInstallInvocation(npmExecutable, platform = process.platform) {
+  return {
+    // `--package-lock=false`: the tarball never re-uses a consumer's lock; we generate a fresh
+    //   dependency tree here that reflects THIS repository's resolved versions.
+    // `--ignore-scripts`: mirror the security posture of the workspace-pack step (issue #169 L1).
+    // `--no-save`, `--no-audit`, `--no-fund`: pack is deterministic and offline; no interactive
+    //   noise, no audit round-trip, no lockfile edit.
+    // `--omit=dev` + `--omit=optional`: publish surface is production-only; the platform-specific
+    //   optional bindings are pulled in by consumers on their own platform at their install time.
+    args: [
+      "install",
+      "--package-lock=false",
+      "--ignore-scripts",
+      "--no-save",
+      "--no-audit",
+      "--no-fund",
+      "--omit=dev",
+      "--omit=optional",
+    ],
+    command: shellCommandForTrustedExecutable(npmExecutable, platform),
+    // SECURITY-SHELL-OK: Windows requires a shell for the trusted npm.cmd executable; argv is static.
+    shell: platform === "win32",
+  };
+}
+
+function listTopLevelInstalledPackages(nodeModulesDir) {
+  if (!existsSync(nodeModulesDir)) return [];
+  const results = [];
+  for (const entry of readdirSync(nodeModulesDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    if (entry.name.startsWith("@")) {
+      for (const scoped of readdirSync(join(nodeModulesDir, entry.name), {
+        withFileTypes: true,
+      })) {
+        if (scoped.isDirectory() && !scoped.name.startsWith(".")) {
+          results.push(`${entry.name}/${scoped.name}`);
+        }
+      }
+    } else {
+      results.push(entry.name);
+    }
+  }
+  return results;
+}
+
+function extendStagedBundleDependencies(stageRoot, additionalNames) {
+  if (additionalNames.length === 0) return;
+  const manifest = readJson(join(stageRoot, "package.json"));
+  const existing = Array.isArray(manifest.bundleDependencies) ? manifest.bundleDependencies : [];
+  manifest.bundleDependencies = [...new Set([...existing, ...additionalNames])];
+  writeJson(join(stageRoot, "package.json"), manifest);
+}
+
 export function createStagedPublishPackage({
   repoRoot = defaultRepoRoot,
   temporaryRoot = tmpdir(),
@@ -461,4 +514,58 @@ export function createStagedPublishPackage({
     vendorPackages,
     cleanup: () => rmSync(stageRoot, { recursive: true, force: true }),
   };
+}
+
+/**
+ * Fill the staged root's `node_modules/` with the external runtime dependency closure and name
+ * every top-level package in `bundleDependencies`, so the tarball `npm pack` produces is
+ * self-contained.
+ *
+ * Rationale (proven on npm 11.19.0, macOS/arm64, 2026-09-15):
+ * A published root that lists `bundleDependencies` and expects the rest to be pulled from the
+ * registry installs cleanly with `npm install <tarball>` into a project (the smoke lane and every
+ * user with a project checkout), but `npm install -g <the same tarball>` reports `added 1
+ * package`, leaves the external siblings' directories empty, and every `keiko` command dies with
+ * `Cannot find package 'ws'`. The reify step for a bundle-carrying package does not add the
+ * non-bundle deps that would sit at the top of node_modules; only the bundled subtree survives.
+ * Extending the bundle to carry every runtime dep makes `npm install -g` extract them from the
+ * tarball directly and never talk to the registry for anything the package needs at runtime.
+ *
+ * Split from `createStagedPublishPackage` so that suites exercising the pure-staging behaviour do
+ * not have to run a real `npm install` and can stay hermetic. `packRoot` in the smoke script
+ * calls this on the real stage before `npm pack` runs.
+ *
+ * @param stageRoot     the directory `createStagedPublishPackage` returned as `packageDir`.
+ * @param npmExecutable a trusted absolute path to the npm binary this build uses.
+ * @param spawn         seam for the child process; defaults to `child_process.spawnSync`.
+ * @param platform      seam for the OS; defaults to `process.platform`.
+ * @returns             the top-level package names newly added to `bundleDependencies`.
+ */
+export function bundleExternalRuntimeDependencies(
+  stageRoot,
+  npmExecutable = resolveHostExecutable("npm"),
+  { spawn = spawnSync, platform = process.platform } = {},
+) {
+  const invocation = externalRuntimeInstallInvocation(npmExecutable, platform);
+  const result = spawn(invocation.command, invocation.args, {
+    cwd: stageRoot,
+    encoding: "utf8",
+    shell: invocation.shell,
+  });
+  if (result.error !== undefined) {
+    throw new Error(`external runtime dependency install could not spawn: ${result.error.message}`);
+  }
+  if (result.status !== 0) {
+    throw new Error(
+      `external runtime dependency install failed with status ${String(result.status)}: ${result.stderr}`,
+    );
+  }
+  // The internal workspaces were placed under `stageRoot/node_modules/@oscharko-dev/*` by
+  // packWorkspace and are already in bundleDependencies; only the freshly-resolved externals and
+  // their transitives need adding.
+  const additional = listTopLevelInstalledPackages(join(stageRoot, "node_modules")).filter(
+    (name) => !name.startsWith(scope),
+  );
+  extendStagedBundleDependencies(stageRoot, additional);
+  return additional;
 }

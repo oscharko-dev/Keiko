@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   assertWorkspacePack,
+  bundleExternalRuntimeDependencies,
   createStagedPublishPackage,
   stagedVendorDirectory,
   workspacePackInvocation,
@@ -461,5 +462,136 @@ describe("staged publish package", () => {
     expect(() => createStagedPublishPackage({ repoRoot: root })).toThrow(
       /smol-toml has no resolved runtime version in package-lock\.json/u,
     );
+  });
+});
+
+describe("bundleExternalRuntimeDependencies", () => {
+  function stagedFixture() {
+    // The internal workspaces are already in bundleDependencies; the freshly-added externals go
+    // in beside them. Two files, no more, are enough for the assertion — the pack step in
+    // production writes hundreds.
+    const stageRoot = mkdtempSync(join(tmpdir(), "keiko-stage-bundle-ext-test-"));
+    roots.push(stageRoot);
+    writeJson(join(stageRoot, "package.json"), {
+      name: "@oscharko-dev/keiko",
+      version: "1.2.3",
+      dependencies: {
+        "@oscharko-dev/keiko-cli": "file:vendor/oscharko-dev-keiko-cli-1.2.3.tgz",
+        ws: "8.21.3",
+      },
+      bundleDependencies: ["@oscharko-dev/keiko-cli"],
+    });
+    return stageRoot;
+  }
+
+  function fakeSpawn(populate, options = {}) {
+    const calls = [];
+    const spawn = (command, args, opts) => {
+      calls.push({ command, args, opts });
+      if (options.status !== undefined && options.status !== 0) {
+        return { status: options.status, stderr: options.stderr ?? "boom", stdout: "" };
+      }
+      if (options.error !== undefined) return { error: options.error };
+      const modules = join(opts.cwd, "node_modules");
+      mkdirSync(modules, { recursive: true });
+      populate(modules);
+      return { status: 0, stderr: "", stdout: "" };
+    };
+    return { calls, spawn };
+  }
+
+  it("names every non-workspace top-level install in bundleDependencies", () => {
+    // BUG (2026-09-15): a published tarball whose bundleDependencies only lists the internal
+    // @oscharko-dev/* workspaces breaks `npm install -g` — the reify step for a bundle-carrying
+    // package never adds the non-bundle top-level siblings, and every keiko command dies with
+    // `Cannot find package 'ws'`. The fix is to name every runtime dep in bundleDependencies so
+    // `npm pack` includes it, and this test pins that: after a spawn that lands `ws` (and its
+    // transitive `pend`, plus a scoped `@sigstore/bundle`) under stageRoot/node_modules, the
+    // staged manifest's bundleDependencies must carry all three next to the workspace name.
+    const stageRoot = stagedFixture();
+    const { calls, spawn } = fakeSpawn((modules) => {
+      mkdirSync(join(modules, "ws"));
+      mkdirSync(join(modules, "pend"));
+      mkdirSync(join(modules, "@sigstore", "bundle"), { recursive: true });
+    });
+    const added = bundleExternalRuntimeDependencies(stageRoot, "/trusted/npm", {
+      spawn,
+      platform: "linux",
+    });
+    expect(added.sort()).toEqual(["@sigstore/bundle", "pend", "ws"]);
+    expect(calls).toHaveLength(1);
+    expect(calls[0].args.slice(0, 2)).toEqual(["install", "--package-lock=false"]);
+    expect(calls[0].args).toContain("--omit=dev");
+    expect(calls[0].args).toContain("--omit=optional");
+    expect(calls[0].opts.cwd).toBe(stageRoot);
+    const manifest = JSON.parse(readFileSync(join(stageRoot, "package.json"), "utf8"));
+    expect(manifest.bundleDependencies).toEqual([
+      "@oscharko-dev/keiko-cli",
+      "@sigstore/bundle",
+      "pend",
+      "ws",
+    ]);
+  });
+
+  it("skips the internal workspaces already bundled by packWorkspace", () => {
+    // The workspace directories are placed under stageRoot/node_modules/@oscharko-dev/* by an
+    // earlier stage step and are already named in bundleDependencies. This install call must not
+    // re-add them (they would appear twice) — the filter is scope-aware.
+    const stageRoot = stagedFixture();
+    const { spawn } = fakeSpawn((modules) => {
+      mkdirSync(join(modules, "@oscharko-dev", "keiko-cli"), { recursive: true });
+      mkdirSync(join(modules, "ws"));
+    });
+    const added = bundleExternalRuntimeDependencies(stageRoot, "/trusted/npm", {
+      spawn,
+      platform: "linux",
+    });
+    expect(added).toEqual(["ws"]);
+    const manifest = JSON.parse(readFileSync(join(stageRoot, "package.json"), "utf8"));
+    expect(manifest.bundleDependencies).toEqual(["@oscharko-dev/keiko-cli", "ws"]);
+  });
+
+  const noPopulate = (_modules) => {
+    // A no-op populate: this test only cares about the spawn outcome or the callee's shape, not
+    // any node_modules the install would produce.
+  };
+
+  it("fails closed when the install could not spawn", () => {
+    const stageRoot = stagedFixture();
+    const { spawn } = fakeSpawn(noPopulate, { error: new Error("no such executable") });
+    expect(() =>
+      bundleExternalRuntimeDependencies(stageRoot, "/trusted/npm", { spawn, platform: "linux" }),
+    ).toThrow(/could not spawn: no such executable/u);
+  });
+
+  it("fails closed when the install exits non-zero", () => {
+    const stageRoot = stagedFixture();
+    const { spawn } = fakeSpawn(noPopulate, { status: 1, stderr: "E404" });
+    expect(() =>
+      bundleExternalRuntimeDependencies(stageRoot, "/trusted/npm", { spawn, platform: "linux" }),
+    ).toThrow(/failed with status 1: E404/u);
+  });
+
+  it("uses a Windows shell for the trusted npm.cmd", () => {
+    const stageRoot = stagedFixture();
+    const { calls, spawn } = fakeSpawn(noPopulate);
+    bundleExternalRuntimeDependencies(stageRoot, "C:\\Program Files\\npm.cmd", {
+      spawn,
+      platform: "win32",
+    });
+    expect(calls[0].opts.shell).toBe(true);
+    expect(calls[0].command).toBe('"C:\\Program Files\\npm.cmd"');
+  });
+
+  it("leaves bundleDependencies untouched when nothing new was installed", () => {
+    const stageRoot = stagedFixture();
+    const { spawn } = fakeSpawn(noPopulate);
+    const added = bundleExternalRuntimeDependencies(stageRoot, "/trusted/npm", {
+      spawn,
+      platform: "linux",
+    });
+    expect(added).toEqual([]);
+    const manifest = JSON.parse(readFileSync(join(stageRoot, "package.json"), "utf8"));
+    expect(manifest.bundleDependencies).toEqual(["@oscharko-dev/keiko-cli"]);
   });
 });
