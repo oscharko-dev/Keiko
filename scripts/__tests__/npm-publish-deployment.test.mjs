@@ -50,7 +50,7 @@ describe("runsInsideActionsPublishJob", () => {
       true,
     );
     expect(
-      runsInsideActionsPublishJob({ GITHUB_ACTIONS: "true", GITHUB_JOB: "release-verify" }),
+      runsInsideActionsPublishJob({ GITHUB_ACTIONS: "true", GITHUB_JOB: "request-publish" }),
     ).toBe(false);
     expect(runsInsideActionsPublishJob({ GITHUB_JOB: "publish" })).toBe(false);
     expect(runsInsideActionsPublishJob({})).toBe(false);
@@ -155,7 +155,7 @@ describe("recordNpmPublishDeployment", () => {
       return { status: 0, stdout: JSON.stringify({ id: 1 }) };
     };
     recordNpmPublishDeployment(
-      baseArgs({ env: { GITHUB_ACTIONS: "true", GITHUB_JOB: "release-verify" }, spawnGh }),
+      baseArgs({ env: { GITHUB_ACTIONS: "true", GITHUB_JOB: "request-publish" }, spawnGh }),
     );
     const create = calls.find((call) => pathOf(call.args) === CREATE_DEPLOYMENT_PATH);
     expect(JSON.parse(create.input).description).toContain("GitHub Actions npm publish of");

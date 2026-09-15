@@ -89,7 +89,7 @@ describe("release candidate workflow", () => {
 });
 
 describe("release workflow commit binding", () => {
-  it.each(["release-verify", "publish"])(
+  it.each(["publish"])(
     "checks out exactly the commit %s was started for and proves it",
     (jobName) => {
       // An explicit ref followed a tag moved after dispatch, so an approval given for one commit
