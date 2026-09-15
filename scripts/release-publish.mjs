@@ -1638,9 +1638,16 @@ function npmViewVersion(pkg, npmEnv, registry) {
 }
 
 function npmViewVersionResult(pkg, npmEnv, registry) {
-  const result = commandResult("npm", ["view", pkg.spec, "version", "--registry", registry], {
-    env: npmEnv,
-  });
+  // `--prefer-online` forces npm to revalidate against the origin registry rather than serve from
+  // the CDN packument cache (max-age=300 on registry.npmjs.org). Right after our own `npm publish`,
+  // the CDN still holds the pre-publish response for ~5 minutes; a bare `npm view` here reads that
+  // stale copy and reports the previous version. Prefer-online sidesteps that race so the read
+  // matches what the source registry just wrote (v1.0.2 publish incident).
+  const result = commandResult(
+    "npm",
+    ["view", pkg.spec, "version", "--prefer-online", "--registry", registry],
+    { env: npmEnv },
+  );
   if (result.status === 0) {
     return { kind: "available", version: result.stdout.trim() };
   }
@@ -1660,9 +1667,10 @@ function npmViewDistTag(pkg, npmEnv, registry, tag) {
 }
 
 function npmViewDistTagResult(pkg, npmEnv, registry, tag) {
+  // See npmViewVersionResult for the --prefer-online rationale (v1.0.2 publish CDN-cache race).
   const result = commandResult(
     "npm",
-    ["view", pkg.name, `dist-tags.${tag}`, "--registry", registry],
+    ["view", pkg.name, `dist-tags.${tag}`, "--prefer-online", "--registry", registry],
     {
       env: npmEnv,
     },
