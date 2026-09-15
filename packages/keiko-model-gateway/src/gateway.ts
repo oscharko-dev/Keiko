@@ -75,6 +75,9 @@ export interface GatewayDeps {
   // Activity-log sink (ADR-0019: declared as a local port in `observability.ts`, never imported
   // from the server). Unset means no-op — the Gateway behaves exactly as it did before.
   readonly log?: ModelGatewayLogSink | undefined;
+  // Correlation for the one-time configuration snapshot emitted by construction. This is not a
+  // default for calls: each request continues to carry its own logContext correlation id.
+  readonly configurationCorrelationId?: string | undefined;
   // Fetch seam (ADR-0173 §7.3): threaded into every `OpenAiAdapter` this Gateway constructs, so a
   // caller can replace the transport for deterministic replay (`createScriptedGatewayFetch`)
   // without touching the real network. Unset means the adapter falls back to `globalThis.fetch`,
@@ -353,6 +356,7 @@ export class Gateway {
   private readonly providers: ReadonlyMap<string, ModelProviderConfig>;
   private readonly breakers = new Map<string, CircuitBreaker>();
   private readonly log: ModelGatewayLogSink;
+  private readonly configurationCorrelationId: string | undefined;
 
   constructor(
     private readonly config: GatewayConfig,
@@ -364,6 +368,7 @@ export class Gateway {
     this.adapter = deps.adapter;
     this.fetchImpl = deps.fetchImpl;
     this.log = resolveLogSink(deps.log);
+    this.configurationCorrelationId = deps.configurationCorrelationId;
     this.providers = new Map(config.providers.map((p) => [p.modelId, p]));
     this.logConfigResolved();
   }
@@ -386,7 +391,7 @@ export class Gateway {
   // or embedded-credential leak.
   private logConfigResolved(): void {
     this.log.write(
-      gatewayEvent("info", "gateway.config.resolved", undefined, {
+      gatewayEvent("info", "gateway.config.resolved", this.configurationCorrelationId, {
         providers: this.config.providers.map((provider) => ({
           modelId: provider.modelId,
           endpointHost: providerEndpointHost(provider.baseUrl),

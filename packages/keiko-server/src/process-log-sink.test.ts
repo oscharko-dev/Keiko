@@ -12,7 +12,11 @@ import {
   resetServerLogger,
   setServerLogger,
 } from "./observability/index.js";
-import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
+import {
+  logCommandTermination,
+  processServerLogSink,
+  processServerLogSinkFor,
+} from "./process-log-sink.js";
 
 afterEach(() => {
   resetServerLogger();
@@ -84,6 +88,24 @@ describe("processServerLogSink", () => {
     processServerLogSink().write({ level: "debug", category: "search", op: "search.noisy" });
 
     expect(sink.events).toEqual([]);
+  });
+
+  it("binds an absent correlation id without replacing producer-owned correlation", () => {
+    const sink = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink, level: "info" }));
+    const bootstrap = processServerLogSinkFor("bootstrap-correlation-1");
+
+    bootstrap.write({ category: "setup", op: "store.opened" });
+    bootstrap.write({
+      category: "setup",
+      op: "store.opened",
+      correlationId: "producer-correlation-1",
+    });
+
+    expect(sink.events.map((event) => event.correlationId)).toEqual([
+      "bootstrap-correlation-1",
+      "producer-correlation-1",
+    ]);
   });
 });
 

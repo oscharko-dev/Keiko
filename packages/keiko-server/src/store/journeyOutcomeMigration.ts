@@ -1,8 +1,7 @@
 import type { DatabaseSync, SQLOutputValue } from "node:sqlite";
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
 import { isJourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-validation";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import { processServerLogSink } from "../process-log-sink.js";
+import type { ServerLogSink } from "../observability/index.js";
 
 const PROJECTION_SQL = `CREATE TABLE git_journey_outcomes_v32 (
   remote_digest TEXT NOT NULL CHECK (length(remote_digest) = 64),
@@ -36,7 +35,10 @@ function legacyOutcome(row: Record<string, SQLOutputValue>): JourneyOutcome {
 
 // V27 briefly shipped two shapes. Upgrade the original blob table forward; the later bounded
 // projection already has the final shape and must retain every revision unchanged.
-export function migrateJourneyOutcomeProjection(db: DatabaseSync): void {
+export function migrateJourneyOutcomeProjection(
+  db: DatabaseSync,
+  activityLog?: ServerLogSink,
+): void {
   const columns = db.prepare("PRAGMA table_info(git_journey_outcomes)").all();
   if (!columns.some((column) => column.name === "outcome_json")) return;
   db.exec(PROJECTION_SQL);
@@ -63,10 +65,9 @@ export function migrateJourneyOutcomeProjection(db: DatabaseSync): void {
   db.exec(
     "DROP TABLE git_journey_outcomes; ALTER TABLE git_journey_outcomes_v32 RENAME TO git_journey_outcomes;",
   );
-  processServerLogSink().write({
+  activityLog?.write({
     category: "setup",
     op: "store.journey-outcomes.migration",
-    correlationId: UNKNOWN_CORRELATION_ID,
     extra: { storeSchemaVersion: 32, stage: "prepared", migratedCount },
   });
 }

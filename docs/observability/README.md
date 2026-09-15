@@ -85,6 +85,13 @@ Cross-process (and cross-request) causality is instead established through two i
   the customer directly triggered" to "what that triggered in turn" — `correlationId` alone names
   only the current operation, not its ancestry.
 
+Startup is an operation too: one server-bootstrap correlation joins persistent store migrations,
+store and memory-vault opening, security/config resolution, gateway initialization, runtime
+construction, and task-workspace composition. Detached startup work receives a fresh child
+correlation plus the bootstrap id as `parentCorrelationId`. Process lifecycle lines remain
+correlation-free and are joined by `(pid, instanceId, seq)`. In-memory/test stores are not wired to
+the process sink by default, preventing fixture construction from appearing in the live product log.
+
 Governed updates add two body-free join keys to those envelope ids: `candidateId` binds the exact
 preflight offer to its confirmation and session, while `sessionId` binds lifecycle, recovery, and
 remediation records after execution begins. `keiko support analyze --json` exposes the resulting

@@ -5,8 +5,7 @@ import {
   produceJourneyOutcome,
 } from "../gitDelivery/journeyOutcome.js";
 import { journeyFixture } from "../gitDelivery/journeyOutcomeTest/_support.js";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
-import { processServerLogSink } from "../process-log-sink.js";
+import { processServerLogSink, processServerLogSinkFor } from "../process-log-sink.js";
 import { MIGRATIONS, runMigrations, SCHEMA_VERSION } from "./schema.js";
 import { rewindSchemaFixture } from "./legacySchemaTestFixture.js";
 
@@ -133,14 +132,45 @@ describe("V32 upgrades the original journey outcome table", () => {
     const write = vi.spyOn(processServerLogSink(), "write").mockImplementation(() => undefined);
     try {
       const outcome = seedLegacy(db);
-      runMigrations(db);
+      runMigrations(db, processServerLogSink());
       expect(write).toHaveBeenCalledWith({
         category: "setup",
         op: "store.journey-outcomes.migration",
-        correlationId: UNKNOWN_CORRELATION_ID,
         extra: { storeSchemaVersion: 32, stage: "prepared", migratedCount: 1 },
       });
       expect(JSON.stringify(write.mock.calls)).not.toContain(outcome.binding.repository);
+    } finally {
+      write.mockRestore();
+      db.close();
+    }
+  });
+
+  it("uses the bootstrap correlation supplied by the production migration runner", () => {
+    const db = legacyDatabase(31);
+    const write = vi.spyOn(processServerLogSink(), "write").mockImplementation(() => undefined);
+    try {
+      seedLegacy(db);
+      runMigrations(db, processServerLogSinkFor("bootstrap-correlation-1"));
+      expect(write).toHaveBeenCalledWith(
+        expect.objectContaining({
+          op: "store.journey-outcomes.migration",
+          correlationId: "bootstrap-correlation-1",
+        }),
+      );
+    } finally {
+      write.mockRestore();
+      db.close();
+    }
+  });
+
+  it("does not pollute the process activity log when an in-memory runner has no sink", () => {
+    const db = legacyDatabase(31);
+    const write = vi.spyOn(processServerLogSink(), "write").mockImplementation(() => undefined);
+    try {
+      seedLegacy(db);
+      write.mockClear();
+      runMigrations(db);
+      expect(write).not.toHaveBeenCalled();
     } finally {
       write.mockRestore();
       db.close();

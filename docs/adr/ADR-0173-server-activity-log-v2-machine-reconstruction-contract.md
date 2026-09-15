@@ -269,6 +269,16 @@ reach and adds the one relationship it cannot express today:
   triggered in turn," which `correlationId` alone cannot express because it names only the current
   operation, not its ancestry.
 
+Server bootstrap follows the same operation model even though it has no HTTP request: composition
+mints one valid bootstrap correlation and threads it through persistent store migrations, store and
+memory-vault opening, security/config resolution, gateway initialization, runtime construction, and
+initial task-workspace composition. A detached startup job mints its own correlation and points its
+`parentCorrelationId` at that bootstrap id. Process-lifecycle events remain the deliberate exception
+described in D9 and continue to use `(pid, instanceId, seq)`. Test-only and in-memory stores receive
+no implicit process sink, so constructing a fixture cannot contaminate the running application's
+activity log. `UNKNOWN_CORRELATION_ID` remains available only when a reusable internal operation
+genuinely has neither a request, run, job, nor bootstrap context; it is not a bootstrap default.
+
 `parentCorrelationId` reuses the existing `isValidCorrelationId` shape guard; it is not a new trust
 boundary, and browser-supplied values are never accepted as authoritative without server-side
 validation — the same posture that already governs `correlationId`.

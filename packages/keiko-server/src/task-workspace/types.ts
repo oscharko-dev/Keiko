@@ -275,12 +275,13 @@ export interface WorkspaceReconciliationService {
   readonly report: (repositoryRoot?: string) => WorkspaceReconciliationReport;
   // Live: verify every (or one repository's) instance against disk + git, persist the classification,
   // and return the fresh report. Used at startup and by the explicit refresh route. `correlationId` is
-  // the triggering HTTP request's own id (see WorkspaceProvisionRequest.correlationId); the startup
-  // caller has no request scope and omits it, so evidence from that pass falls back to
-  // UNKNOWN_CORRELATION_ID — genuinely correct there, since no request produced it.
+  // the triggering HTTP request's own id (see WorkspaceProvisionRequest.correlationId), or a fresh
+  // background-operation id at startup. `parentCorrelationId` joins that startup operation back to
+  // the bootstrap that spawned it; request-driven calls omit it.
   readonly reconcile: (
     repositoryRoot?: string,
     correlationId?: string,
+    parentCorrelationId?: string,
   ) => Promise<WorkspaceReconciliationReport>;
 }
 

@@ -13,12 +13,21 @@ import { processServerLogSink } from "./process-log-sink.js";
 // gateway was selected while saying nothing about what it did.
 const GATEWAY_LOG_DEPS = { log: processServerLogSink() };
 
-function newGateway(config: GatewayConfig, spendBudget?: GatewaySpendBudget): Gateway {
-  return new Gateway(config, { ...GATEWAY_LOG_DEPS, spendBudget });
+function newGateway(
+  config: GatewayConfig,
+  spendBudget?: GatewaySpendBudget,
+  configurationCorrelationId?: string,
+): Gateway {
+  return new Gateway(config, {
+    ...GATEWAY_LOG_DEPS,
+    spendBudget,
+    ...(configurationCorrelationId === undefined ? {} : { configurationCorrelationId }),
+  });
 }
 
 export interface RuntimeGatewayConfigSource {
   readonly spendBudget?: GatewaySpendBudget | undefined;
+  readonly initializationCorrelationId?: string | undefined;
   current(): GatewayConfig | undefined;
   generation(): number;
 }
@@ -60,8 +69,16 @@ function runtimeSelectionReason(
   return existing.config === config ? "reused" : "rebound";
 }
 
-function logRuntimeSelection(reason: RuntimeSelectionReason, generation: number): void {
-  const log = getServerLogger();
+function logRuntimeSelection(
+  reason: RuntimeSelectionReason,
+  generation: number,
+  initializationCorrelationId?: string,
+): void {
+  const root = getServerLogger();
+  const log =
+    initializationCorrelationId === undefined
+      ? root
+      : root.child({ correlationId: initializationCorrelationId });
   if (reason === "reused") {
     // The steady state, once per gateway-touching request. Deferred so it costs nothing at `info`.
     log.debug(() => ({
@@ -105,10 +122,10 @@ class GatewayInstanceCache {
   private readonly byConfig = new WeakMap<GatewayConfig, Gateway>();
   private readonly byRuntimeConfig = new WeakMap<RuntimeGatewayConfigSource, RuntimeGatewayEntry>();
 
-  forConfig(config: GatewayConfig): Gateway {
+  forConfig(config: GatewayConfig, configurationCorrelationId?: string): Gateway {
     const existing = this.byConfig.get(config);
     if (existing !== undefined) return existing;
-    const gateway = newGateway(config, this.spendBudget);
+    const gateway = newGateway(config, this.spendBudget, configurationCorrelationId);
     this.byConfig.set(config, gateway);
     return gateway;
   }
@@ -123,14 +140,16 @@ class GatewayInstanceCache {
       return undefined;
     }
     const reason = runtimeSelectionReason(existing, generation, config);
-    logRuntimeSelection(reason, generation);
+    const initializationCorrelationId =
+      reason === "created" && generation === 0 ? source.initializationCorrelationId : undefined;
+    logRuntimeSelection(reason, generation, initializationCorrelationId);
     if (reason === "reused" && existing?.kind === "available") return existing.gateway;
     // A runtime generation change invalidates circuit-breaker and request state even when a caller
     // reused the same parsed config object. A config change inside the SAME generation is not an
     // invalidation, so it must still converge with direct callers on the config-keyed instance.
     const gateway = LIFECYCLE_RESET_REASONS.has(reason)
       ? newGateway(config, this.spendBudget)
-      : this.forConfig(config);
+      : this.forConfig(config, initializationCorrelationId);
     this.byRuntimeConfig.set(source, { kind: "available", config, gateway, generation });
     return gateway;
   }

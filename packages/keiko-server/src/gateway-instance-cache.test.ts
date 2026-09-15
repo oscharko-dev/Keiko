@@ -71,6 +71,39 @@ function configResolvedEvent(): Record<string, unknown> {
 }
 
 describe("gateway instance cache", () => {
+  it("correlates the initial runtime binding and configuration snapshot to bootstrap", () => {
+    const current = config();
+    const sink = capture("info");
+
+    gatewayForRuntimeConfig({
+      current: () => current,
+      generation: () => 0,
+      initializationCorrelationId: "bootstrap-correlation-1",
+    });
+
+    expect(sink.events.map((event) => event.op)).toEqual([
+      "gateway.instance.bound",
+      "gateway.config.resolved",
+    ]);
+    expect(sink.events.map((event) => event.correlationId)).toEqual([
+      "bootstrap-correlation-1",
+      "bootstrap-correlation-1",
+    ]);
+  });
+
+  it("does not reuse bootstrap correlation after runtime configuration changed", () => {
+    const current = config();
+    const sink = capture("info");
+
+    gatewayForRuntimeConfig({
+      current: () => current,
+      generation: () => 1,
+      initializationCorrelationId: "bootstrap-correlation-1",
+    });
+
+    expect(sink.events.map((event) => event.correlationId)).toEqual([undefined, undefined]);
+  });
+
   it("reuses a config-keyed gateway when the runtime source is resolved later", () => {
     const current = config();
     const direct = gatewayForConfig(current);

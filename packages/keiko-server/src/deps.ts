@@ -120,7 +120,11 @@ import {
 } from "./diagnostics-log.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
 import { newCorrelationId, UNKNOWN_CORRELATION_ID } from "./correlation.js";
-import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
+import {
+  logCommandTermination,
+  processServerLogSink,
+  processServerLogSinkFor,
+} from "./process-log-sink.js";
 import { currentOpenSseStreamCount, markServerShuttingDown } from "./sse-write.js";
 import type { ServerLogSink } from "./observability/index.js";
 import { recordWorkspaceRootDenial } from "./workspace-root-denial-log.js";
@@ -477,6 +481,7 @@ export type QualityIntelligenceReviewPrincipalResolver = (
 
 export interface RuntimeGatewayConfig {
   readonly spendBudget?: GatewaySpendBudget | undefined;
+  readonly initializationCorrelationId?: string | undefined;
   readonly storagePath: string;
   current(): GatewayConfig | undefined;
   present(): boolean;
@@ -1338,6 +1343,7 @@ function createRuntimeGatewayConfig(
   initialPresent: boolean,
   storagePath: string,
   env: EnvSource,
+  bootstrapCorrelationId: string,
 ): RuntimeGatewayConfig {
   let config = initial;
   let present = initialPresent;
@@ -1352,6 +1358,7 @@ function createRuntimeGatewayConfig(
   let generation = 0;
   return {
     storagePath,
+    initializationCorrelationId: bootstrapCorrelationId,
     spendBudget: gatewaySpendBudgetForEnv(env),
     current: (): GatewayConfig | undefined => config,
     present: (): boolean => present,
@@ -2104,6 +2111,7 @@ function buildMemoryVault(
   evidenceStore: EvidenceStore,
   env: EnvSource,
   diagnostics: ServerDiagnosticSink | undefined,
+  bootstrapCorrelationId: string,
 ): MemoryVaultStore {
   const postCommitAudit = createMemoryAuditHandler({ evidenceStore, redactString });
   const vault = createBffMemoryVault(
@@ -2119,6 +2127,7 @@ function buildMemoryVault(
     },
     createMemoryAuditDeleteCommitHandler({ evidenceStore, redactString }),
     env,
+    bootstrapCorrelationId,
   );
   // Issue #3189 — seed only the transition classifier's body-free pre-image fields after the
   // vault exists and before this composition returns it to mutation routes. This keeps the first
@@ -2145,7 +2154,7 @@ function buildMemoryVault(
   processServerLogSink().write({
     category: "memory",
     op: "memory.audit.state-cache.seeded",
-    correlationId: UNKNOWN_CORRELATION_ID,
+    correlationId: bootstrapCorrelationId,
     extra: { recordCount: records.length },
   });
   return vault;
@@ -2218,9 +2227,10 @@ interface ComposedPersistence {
 function openUiDatabaseForComposition(
   resolvedUiDbPath: string,
   diagnostics: ServerDiagnosticSink | undefined,
+  bootstrapCorrelationId: string,
 ): DatabaseSync {
   try {
-    return openNodeUiDatabase(resolvedUiDbPath, processServerLogSink());
+    return openNodeUiDatabase(resolvedUiDbPath, processServerLogSinkFor(bootstrapCorrelationId));
   } catch (error) {
     emitCompositionDiagnostic(
       diagnostics,
@@ -2232,14 +2242,19 @@ function openUiDatabaseForComposition(
   }
 }
 
+interface PersistenceRuntimeContext {
+  readonly env: EnvSource;
+  readonly diagnostics: ServerDiagnosticSink | undefined;
+  readonly bootstrapCorrelationId: string;
+}
+
 function composePersistence(
   injected: UiStore | undefined,
   injectedCodingRuntimeSnapshots: CodingRuntimeSnapshotStore | undefined,
   injectedCodingRuntimeDescriptionJobStore: CodingRuntimeDescriptionJobStore | undefined,
   resolvedUiDbPath: string,
   redactString: (value: string) => string,
-  env: EnvSource,
-  diagnostics: ServerDiagnosticSink | undefined,
+  runtime: PersistenceRuntimeContext,
 ): ComposedPersistence {
   if (injected !== undefined) {
     return {
@@ -2252,11 +2267,15 @@ function composePersistence(
       codingRuntimeDescriptionJobStore: injectedCodingRuntimeDescriptionJobStore,
     };
   }
-  const db = openUiDatabaseForComposition(resolvedUiDbPath, diagnostics);
+  const db = openUiDatabaseForComposition(
+    resolvedUiDbPath,
+    runtime.diagnostics,
+    runtime.bootstrapCorrelationId,
+  );
   const store = buildUiStoreOverDatabase(db, { redactString });
   const relationship: RelationshipHandlerDeps = {
     scopeResolver: (): { readonly workspaceId: string } => ({
-      workspaceId: resolveLoopbackWorkspaceId(env),
+      workspaceId: resolveLoopbackWorkspaceId(runtime.env),
     }),
     store: createRelationshipStorePort({ db, redactString }),
   };
@@ -2698,8 +2717,10 @@ function buildWorkspaceCleanup(
 export function reconcileTaskWorkspacesAtStartup(
   service: WorkspaceReconciliationService | undefined,
   diagnostics?: ServerDiagnosticSink,
+  parentCorrelationId?: string,
 ): void {
   if (service === undefined) return;
+  const correlationId = newCorrelationId();
   // Construction must never fail because of reconciliation, so both failure modes are detached.
   // Invoking inside `.then` rather than a `try` is what makes that possible with a single handler:
   // a synchronous throw from the call itself (property lookup + invocation), which a non-conforming
@@ -2708,12 +2729,13 @@ export function reconcileTaskWorkspacesAtStartup(
   // `try` around a promise-returning call is rejected by typescript:S4822 in either direction —
   // with a `.catch` it asks for the `try` to go, without one it asks for the `.catch`.
   void Promise.resolve()
-    .then(() => service.reconcile())
+    .then(() => service.reconcile(undefined, correlationId, parentCorrelationId))
     .catch((error: unknown) => {
       emitServerDiagnostic(
         diagnostics,
         serverDiagnosticFromError({
-          correlationId: UNKNOWN_CORRELATION_ID,
+          correlationId,
+          ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
           operation: "task-workspace.reconcile.startup",
           source: "task-workspace.bootstrap",
           error,
@@ -2824,6 +2846,7 @@ interface BuildPeripheralsArgs {
   readonly runtimeStateDir: string;
   readonly dapRuntime: DapRuntimeReference;
   readonly resolveWorkspaceRootAccess: WorkspaceRootAccessResolver;
+  readonly bootstrapCorrelationId: string;
 }
 
 function unavailableDebugDeploymentPolicy(): DebugDeploymentPolicy {
@@ -3349,6 +3372,7 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
     args.evidenceStore,
     args.options.env,
     args.options.diagnostics,
+    args.bootstrapCorrelationId,
   );
   const { workspaceScriptTrust, managedLspControl, disposeTrustLspBridge } =
     resolveTrustAndManagedLspControl(args);
@@ -3495,19 +3519,21 @@ function loadRuntimeGatewayConfig(
   options: BuildHandlerDepsOptions,
   runtimeConfigPath: string,
   resolvedEvidenceDir: string,
+  bootstrapCorrelationId: string,
 ): { config: GatewayConfig | undefined; configPresent: boolean; storagePath: string } {
   const effectiveConfigPath = options.configPath ?? runtimeConfigPath;
+  const securityLogSink = processServerLogSinkFor(bootstrapCorrelationId);
   migrateLocalConfigCredentials({
     configPath: effectiveConfigPath,
     env: options.env,
     evidenceDir: resolvedEvidenceDir,
-    securityLogSink: processServerLogSink(),
+    securityLogSink,
     diagnostics: options.diagnostics,
   });
   const secretResolver = createProviderSecretResolver({
     configPath: effectiveConfigPath,
     env: options.env,
-    securityLogSink: processServerLogSink(),
+    securityLogSink,
   });
   const resolved = resolveConfig(
     options.configPath,
@@ -3751,7 +3777,12 @@ function buildPersistenceBundle(
   evidenceStore: EvidenceStore,
   bootstrapCorrelationId: string,
 ): PersistenceBundle {
-  const persistence = composeUiPersistence(options, resolvedUiDbPath, redactString);
+  const persistence = composeUiPersistence(
+    options,
+    resolvedUiDbPath,
+    redactString,
+    bootstrapCorrelationId,
+  );
   const { store, dispose, relationship } = persistence;
   try {
     const { workspaceScriptTrust, services } = composePersistenceTaskWorkspaceServices(
@@ -3793,6 +3824,7 @@ function composeUiPersistence(
   options: BuildHandlerDepsOptions,
   resolvedUiDbPath: string,
   redactString: (value: string) => string,
+  bootstrapCorrelationId: string,
 ): ReturnType<typeof composePersistence> {
   return composePersistence(
     options.store,
@@ -3800,8 +3832,7 @@ function composeUiPersistence(
     options.codingRuntimeDescriptionJobStore,
     resolvedUiDbPath,
     redactString,
-    options.env,
-    options.diagnostics,
+    { env: options.env, diagnostics: options.diagnostics, bootstrapCorrelationId },
   );
 }
 
@@ -3836,9 +3867,14 @@ function optionalPersistenceServices(bundle: PersistenceBundle): Partial<UiHandl
 function reconcileNodeStoreAtStartup(
   options: BuildHandlerDepsOptions,
   bundle: PersistenceBundle,
+  bootstrapCorrelationId: string,
 ): void {
   if (options.store !== undefined) return;
-  reconcileTaskWorkspacesAtStartup(bundle.workspaceReconciliation, options.diagnostics);
+  reconcileTaskWorkspacesAtStartup(
+    bundle.workspaceReconciliation,
+    options.diagnostics,
+    bootstrapCorrelationId,
+  );
 }
 
 function gatewayConfigFields(
@@ -3871,6 +3907,7 @@ interface UiHandlerDepsAssemblyArgs {
   readonly localKnowledgeKeyProvider: KnowledgeStoreKeyProvider;
   readonly bundle: PersistenceBundle;
   readonly contextProfileForModel: ContextProfileResolver;
+  readonly bootstrapCorrelationId: string;
 }
 
 function codingSidecarGatewayModelSourceFields(
@@ -3962,6 +3999,7 @@ function buildAssemblyPeripherals(
     runtimeStateDir: dirname(args.resolvedUiDbPath),
     dapRuntime,
     resolveWorkspaceRootAccess,
+    bootstrapCorrelationId: args.bootstrapCorrelationId,
   });
 }
 
@@ -5521,17 +5559,49 @@ function qualifiedProductionRuntimeComposition(
   };
 }
 
+interface InitialGatewayState {
+  readonly config: GatewayConfig | undefined;
+  readonly configPresent: boolean;
+  readonly runtimeConfig: RuntimeGatewayConfig;
+  readonly egress: ReturnType<typeof resolveConfiguredEgress>;
+}
+
+function buildInitialGatewayState(
+  options: BuildHandlerDepsOptions,
+  runtimeConfigPath: string,
+  resolvedEvidenceDir: string,
+  bootstrapCorrelationId: string,
+): InitialGatewayState {
+  const loaded = loadRuntimeGatewayConfig(
+    options,
+    runtimeConfigPath,
+    resolvedEvidenceDir,
+    bootstrapCorrelationId,
+  );
+  return {
+    config: loaded.config,
+    configPresent: loaded.configPresent,
+    runtimeConfig: createRuntimeGatewayConfig(
+      loaded.config,
+      loaded.configPresent,
+      loaded.storagePath,
+      options.env,
+      bootstrapCorrelationId,
+    ),
+    egress: resolveConfiguredEgress(options.configPath, options.env, runtimeConfigPath),
+  };
+}
+
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
   const bootstrapCorrelationId = newCorrelationId();
   const { resolvedUiDbPath, runtimeConfigPath } = runtimePathFields(options);
   const resolvedEvidenceDir = resolveEvidenceDirAndEnforceRetention(options);
-  const { config, configPresent, storagePath } = loadRuntimeGatewayConfig(
+  const { config, configPresent, runtimeConfig, egress } = buildInitialGatewayState(
     options,
     runtimeConfigPath,
     resolvedEvidenceDir,
+    bootstrapCorrelationId,
   );
-  const egress = resolveConfiguredEgress(options.configPath, options.env, runtimeConfigPath);
-  const runtimeConfig = createRuntimeGatewayConfig(config, configPresent, storagePath, options.env);
   const evidenceStore = createNodeEvidenceStore(resolvedEvidenceDir);
   const codingWorkbenchEvidenceStore =
     options.codingWorkbenchEvidenceStore ??
@@ -5550,7 +5620,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     bootstrapCorrelationId,
   );
   const contextProfileForModel = buildContextProfileResolver(() => runtimeConfig.current());
-  reconcileNodeStoreAtStartup(options, bundle);
+  reconcileNodeStoreAtStartup(options, bundle, bootstrapCorrelationId);
   const deps = assembleUiHandlerDeps({
     options,
     resolvedUiDbPath,
@@ -5566,6 +5636,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     localKnowledgeKeyProvider,
     bundle,
     contextProfileForModel,
+    bootstrapCorrelationId,
   });
   return deps;
 }
