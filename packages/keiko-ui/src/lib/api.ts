@@ -2978,6 +2978,7 @@ export interface GitDeliveryCommitExecuteInput {
   readonly message: string;
   readonly allowEmpty?: boolean;
   readonly approval?: GitDeliveryApprovalClaim;
+  readonly userInitiated?: true | undefined;
 }
 
 export async function fetchGitDeliveryCommitExecute(
@@ -2992,6 +2993,7 @@ export async function fetchGitDeliveryCommitExecute(
       message: input.message,
       ...(input.allowEmpty === undefined ? {} : { allowEmpty: input.allowEmpty }),
       ...(input.approval === undefined ? {} : { approval: input.approval }),
+      ...(input.userInitiated === true ? { userInitiated: true } : {}),
     }),
     ...(signal === undefined ? {} : { signal }),
   });
@@ -3798,6 +3800,7 @@ export async function fetchGitDeliveryCommitApprove(
       projectId: input.projectId,
       message: input.message,
       ...(input.allowEmpty === undefined ? {} : { allowEmpty: input.allowEmpty }),
+      ...(input.userInitiated === true ? { userInitiated: true } : {}),
     }),
     ...(signal === undefined ? {} : { signal }),
   });
@@ -3848,8 +3851,9 @@ export async function proposeCommit(
   input: Omit<GitDeliveryCommitExecuteInput, "approval">,
   signal?: AbortSignal,
 ): Promise<GitDeliveryMutationResponse> {
-  const minted = await fetchGitDeliveryCommitApprove(input, signal);
-  return fetchGitDeliveryCommitExecute({ ...input, approval: minted.approval }, signal);
+  const localUserInput = { ...input, userInitiated: true as const };
+  const minted = await fetchGitDeliveryCommitApprove(localUserInput, signal);
+  return fetchGitDeliveryCommitExecute({ ...localUserInput, approval: minted.approval }, signal);
 }
 
 /**
