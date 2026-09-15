@@ -68,6 +68,7 @@ import {
   releaseSnapshotPath,
   releaseTagAtHeadFailure,
   uploadIntoDraft,
+  verifyPublishedPortableEvidence,
 } from "./lib/portable-release-publication.mjs";
 import { proveReleaseSigningKeyBeforePublishing } from "./lib/portable-release-signing-key.mjs";
 import { createStagedPublishPackage } from "./stage-publish-package.mjs";
@@ -1256,6 +1257,7 @@ function ensurePortableRelease(rootPackage, options, notes) {
 function portablePublisher() {
   return {
     assertTagAtHead: (tag) => assertReleaseTagAtHead(githubRepository(), tag),
+    downloadReleaseAsset,
     evaluationManifestAssetName: PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
     fail,
     gh,
@@ -1264,7 +1266,63 @@ function portablePublisher() {
     runGh,
     snapshot: githubReleaseSnapshot,
     verifyAssets: verifyRemotePortableAssets,
+    verifyPublishedManifestBinding,
   };
+}
+
+function downloadReleaseAsset(releaseInfo, assetName) {
+  const root = mkdtempSync(join(tmpdir(), "keiko-portable-verify-"));
+  try {
+    const download = commandResult(
+      "gh",
+      [
+        "release",
+        "download",
+        releaseInfo.tag,
+        "--repo",
+        releaseInfo.repo,
+        "--pattern",
+        assetName,
+        "--dir",
+        root,
+        "--clobber",
+      ],
+      { env: githubEnvironment() },
+    );
+    if (download.error !== undefined || download.status !== 0) return undefined;
+    const filePath = join(root, assetName);
+    if (!existsSync(filePath)) return undefined;
+    const bytes = readFileSync(filePath);
+    return { sha256: sha256(bytes), text: bytes.toString("utf8") };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
+// The verification the immutable-release path uses in place of a byte match against a rebuilt
+// portable-manifest. A rerun of the publish job cannot reproduce the released manifest bytes when
+// the draft was signed at an earlier `created_at` than the release now reports (v1.0.1's draft was
+// signed 2026-09-14T20:38:54Z; the published release now carries `created_at`
+// 2026-09-14T23:19:18Z), because signedPortableManifest anchors an Ed25519 signature to
+// release.created_at, and a signature over the same manifest content at a different signedAt
+// produces different bytes even under a deterministic scheme. A trusted-key signature check plus
+// commit and tag binding is at least as strong as demanding those exact bytes back.
+function verifyPublishedManifestBinding(manifest, expected) {
+  const verification = verifyPortableReleaseTrust(manifest, {
+    now: new Date(),
+    trustedKeys: portableReleaseTrustedKeys(),
+  });
+  if (!verification.ok) return `release-trust signature invalid (${verification.reason})`;
+  if (manifest.release?.commitSha !== expected.commitSha) {
+    return "release.commitSha does not match the checked-out HEAD";
+  }
+  if (manifest.release?.releaseTag !== expected.releaseTag) {
+    return `release.releaseTag does not match ${expected.releaseTag}`;
+  }
+  if (manifest.provenance?.sourceCommitSha !== expected.commitSha) {
+    return "provenance.sourceCommitSha does not match the checked-out HEAD";
+  }
+  return undefined;
 }
 
 function publishPortableReleaseAssets(options, assets, releaseInfo) {
@@ -1287,6 +1345,10 @@ function publishPortableReleaseAssets(options, assets, releaseInfo) {
       archiveUpload.expected,
     );
     verifyRemotePortableAssets(archiveSnapshot.assets, archiveUpload.expected, releaseInfo);
+    if (releaseInfo.published === true) {
+      verifyPublishedPortableAssets(publisher, releaseInfo, assets, archiveSnapshot);
+      return;
+    }
     const boundAssets = bindPortableAssetsToRemoteRelease(assets, archiveSnapshot);
     const boundEvidence = portableEvidenceUploadFiles(boundAssets, evidenceUpload.root);
     uploadIntoDraft(publisher, releaseInfo, boundEvidence.paths);
@@ -1303,6 +1365,38 @@ function publishPortableReleaseAssets(options, assets, releaseInfo) {
   } finally {
     rmSync(evidenceUpload.root, { recursive: true, force: true });
   }
+}
+
+// An already published release cannot receive an upload (immutable) and cannot have its bytes
+// changed. A rerun of the publish job therefore only verifies what is already on GitHub. The
+// non-manifest evidence files (SHA256SUMS, SBOM, license notice, signing summary, provenance
+// statement, sidecar SBOM/license) are copied verbatim from the assemble stage and are byte
+// reproducible; their digests are checked against GitHub. The four portable-manifest.json files
+// are re-signed by the publisher at release.created_at, and a rerun cannot reproduce those bytes
+// once the draft was signed at an earlier `created_at` than the release now reports (v1.0.1's
+// draft was signed 2026-09-14T20:38:54Z; the published release now carries `created_at`
+// 2026-09-14T23:19:18Z). Verify each manifest by its trusted Ed25519 signature and its commit/tag
+// binding instead.
+function verifyPublishedPortableAssets(publisher, releaseInfo, assets, archiveSnapshot) {
+  const nonManifestEvidenceExpected = assets.flatMap((asset) =>
+    asset.evidenceFiles
+      .filter((evidence) => evidence.relativePath !== "manifest/portable-manifest.json")
+      .map((evidence) => ({
+        assetName: evidence.assetName,
+        expectedSha256: sha256FileSync(evidence.sourcePath),
+        expectedSize: statSync(evidence.sourcePath).size,
+        firstClassArchive: false,
+      })),
+  );
+  verifyRemotePortableAssets(archiveSnapshot.assets, nonManifestEvidenceExpected, releaseInfo);
+  const head = commandResult("git", ["rev-parse", "HEAD"]).stdout.trim();
+  const manifestBindings = assets.map((asset) => ({
+    assetName: `${asset.platformTarget}-portable-manifest.json`,
+    commitSha: head,
+    releaseTag: releaseInfo.tag,
+  }));
+  verifyPublishedPortableEvidence(publisher, releaseInfo, archiveSnapshot.assets, manifestBindings);
+  console.log(`release-publish: portable assets verified on published ${releaseInfo.tag}.`);
 }
 
 function verifyPortableSetupAttestations(assets, releaseInfo) {

@@ -270,3 +270,79 @@ export function releaseSnapshotPath(releaseInfo) {
     ? `repos/${releaseInfo.repo}/releases/tags/${releaseInfo.tag}`
     : `repos/${releaseInfo.repo}/releases/${String(releaseInfo.id)}`;
 }
+
+/**
+ * Verifies the portable-manifest.json evidence assets of an already published release by their
+ * trusted Ed25519 signature and their commit/tag binding, not by a byte match against a locally
+ * rebuilt manifest. A rerun cannot reproduce the released evidence bytes when the publish signed
+ * the manifest at the release's earlier draft `created_at` (v1.0.1's draft was signed
+ * 2026-09-14T20:38:54Z while the published release now carries `created_at` 2026-09-14T23:19:18Z);
+ * an Ed25519 signature over the same manifest content at a different `signedAt` produces different
+ * bytes even for a deterministic signature scheme. A cryptographic signature check on the released
+ * bytes is at least as strong as demanding a byte match against a rebuild.
+ *
+ * The publisher's seams here are `downloadReleaseAsset(releaseInfo, assetName) → { text, sha256 }`
+ * and `verifyPublishedManifestBinding(manifest, expected) → failure | undefined`.
+ *
+ * @param manifestBindings  [{ assetName, commitSha, releaseTag }] — one per portable-manifest asset
+ */
+export function verifyPublishedPortableEvidence(
+  publisher,
+  releaseInfo,
+  remoteAssets,
+  manifestBindings,
+) {
+  const remoteByName = new Map(
+    (Array.isArray(remoteAssets) ? remoteAssets : []).map((asset) => [asset?.name, asset]),
+  );
+  const failures = manifestBindings.flatMap((binding) =>
+    publishedEvidenceFailuresForBinding(publisher, releaseInfo, remoteByName, binding),
+  );
+  if (failures.length > 0) {
+    publisher.fail(
+      `GitHub Release portable evidence verification failed:\n  - ${failures.join("\n  - ")}`,
+    );
+  }
+}
+
+function publishedEvidenceFailuresForBinding(publisher, releaseInfo, remoteByName, binding) {
+  const remote = remoteByName.get(binding.assetName);
+  if (!validRemoteDigest(remote)) {
+    return [`${binding.assetName} has no SHA-256 digest on GitHub.`];
+  }
+  const download = publisher.downloadReleaseAsset(releaseInfo, binding.assetName);
+  if (!validDownloadResult(download)) {
+    return [`${binding.assetName} could not be downloaded from GitHub.`];
+  }
+  if (`sha256:${download.sha256}` !== remote.digest) {
+    return [`${binding.assetName} bytes do not match the digest GitHub reports.`];
+  }
+  const manifest = parseJsonOrUndefined(download.text);
+  if (manifest === undefined) {
+    return [`${binding.assetName} is not valid JSON.`];
+  }
+  const bindingFailure = publisher.verifyPublishedManifestBinding(manifest, binding);
+  return bindingFailure === undefined ? [] : [`${binding.assetName}: ${bindingFailure}`];
+}
+
+function validRemoteDigest(remote) {
+  return (
+    remote !== undefined && typeof remote.digest === "string" && SHA256_DIGEST.test(remote.digest)
+  );
+}
+
+function validDownloadResult(download) {
+  return (
+    download !== undefined &&
+    typeof download.text === "string" &&
+    typeof download.sha256 === "string"
+  );
+}
+
+function parseJsonOrUndefined(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
