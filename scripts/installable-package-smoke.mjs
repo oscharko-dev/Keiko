@@ -959,7 +959,7 @@ export function vendoredDependencyRequirements(
   // walks the workspace-scoped ones (bundledWorkspaceLockfilePath rejects any other shape); the
   // external closure has already been resolved from the lockfile at pack time, so the smoke's
   // job is only to reason about the workspaces themselves.
-  const bundled = declared.filter((name) => /^@oscharko-dev\//u.test(name));
+  const bundled = declared.filter((name) => name.startsWith("@oscharko-dev/"));
   const bundledSet = new Set(bundled);
   const requirements = new Map();
   // Keyed by name AND range AND kind, so each descriptor keeps the origins that actually declared
