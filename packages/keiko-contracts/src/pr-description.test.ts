@@ -13,7 +13,11 @@ import {
   summarizeGitChangeSnapshotCompleteness,
   type GitChangeSnapshot,
 } from "./git-change-snapshot.js";
-import { framePrDescriptionRegion, PR_DESCRIPTION_REGION_START } from "./pr-description-region.js";
+import {
+  framePrDescriptionRegion,
+  PR_DESCRIPTION_ATTRIBUTION,
+  PR_DESCRIPTION_REGION_START,
+} from "./pr-description-region.js";
 
 const ID = "a".repeat(64);
 const statement = { text: "Handle an empty collection.", evidenceIds: [ID] };
@@ -66,6 +70,7 @@ describe("PR description candidate boundary", () => {
   it.each([
     "<!-- keiko:pr-description:v1:start -->",
     "Tests passed.",
+    PR_DESCRIPTION_ATTRIBUTION,
     "by Keiko",
     "https://example.test",
     "safe\u202etext",
@@ -163,7 +168,9 @@ describe("PR description candidate boundary", () => {
   });
 
   it("frames a trusted region without accepting nested markers", () => {
-    expect(framePrDescriptionRegion("by Keiko")).toContain(PR_DESCRIPTION_REGION_START);
+    expect(framePrDescriptionRegion("Trusted renderer text")).toContain(
+      PR_DESCRIPTION_REGION_START,
+    );
     expect(() => framePrDescriptionRegion(PR_DESCRIPTION_REGION_START)).toThrow(TypeError);
   });
 

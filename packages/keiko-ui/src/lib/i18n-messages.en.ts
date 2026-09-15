@@ -684,6 +684,8 @@ export const EN_MESSAGES = {
     "Keiko could not connect that source. Check that it is still available and try again.",
   "chat.grounding.connectKnowledgeFailed":
     "Keiko could not connect that knowledge source. Check that it is still available and try again.",
+  "chat.grounding.connectGitChangeFailed":
+    "Keiko could not connect that Git change. Check that the repository and branches are still available and try again.",
   "chat.memory.panel": "Conversation memory",
   "chat.memory.enableForChat": "Enable MemoriaViva for this chat",
   "chat.memory.disableForChat": "Disable MemoriaViva for this chat",
@@ -1372,6 +1374,7 @@ export const EN_MESSAGES = {
   "gitChangeScope.blocked.detachedHead": "Blocked: the repository HEAD is detached.",
   "gitChangeScope.blocked.unbornHead": "Blocked: the repository has no commits yet.",
   "gitChangeScope.blocked.missingRef": "Blocked: the selected ref could not be resolved.",
+  "gitChangeScope.blocked.identicalRefs": "Blocked: base and head must be different branches.",
   "gitChangeScope.blocked.noPullRequest":
     "Blocked: no open pull request was found for this branch.",
   "gitChangeScope.blocked.ambiguousPullRequest":
@@ -1398,6 +1401,8 @@ export const EN_MESSAGES = {
   "gitChangeScope.connect.cancel": "Cancel",
   "gitChangeScope.connect.openButton": "Connect to Chat",
   "gitChangeScope.connect.noChats": "No chats are open for this repository yet.",
+  "gitChangeScope.connect.noBaseBranch":
+    "Choose a different base branch before connecting this Git change.",
   "gitChangeScope.connect.chatLoadError": "Unable to load chats for this repository.",
   "gitChangeScope.connect.error": "Unable to connect this Git change to the chat.",
   "gitChangeScope.description.preview": "Preview",

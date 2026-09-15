@@ -30,6 +30,7 @@ import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.j
 import { startUiTestServer } from "../ui-test-server/_support.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { RouteContext, RouteResult } from "../routes.js";
+import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import {
   createGitDeliveryLocalMutationRouteGroup,
@@ -144,6 +145,23 @@ function capturingEvidenceStore(throwOnPut = false): CapturingStore {
       }
       return out;
     },
+  };
+}
+
+interface CapturingActivityLog {
+  readonly activityLog: ServerLogSink;
+  readonly events: () => readonly ServerLogEvent[];
+}
+
+function capturingActivityLog(): CapturingActivityLog {
+  const events: ServerLogEvent[] = [];
+  return {
+    activityLog: {
+      write: (event: ServerLogEvent): void => {
+        events.push(event);
+      },
+    },
+    events: () => events,
   };
 }
 
@@ -661,6 +679,75 @@ describe("local mutation routes — real specs through the route group (direct h
 
   const CREATE = "/api/git-delivery/local-branch/create";
   const UNSTAGE = "/api/git-delivery/staging/unstage";
+
+  // Product decision, 2026-09-15: clicking inside the Git widget is a local operator action on the
+  // selected repository. It must not inherit the currently active coding run's internal worktree
+  // authority, otherwise the Git window shows and mutates a task branch while the header names the
+  // repository branch. This marker is accepted only on the UI local-mutation routes; the agent
+  // facade has a separate pin rejecting it.
+  it("admits a user-initiated repository branch switch outside the active task-worktree authority", async () => {
+    const adapter = recordingAdapter();
+    const log = capturingActivityLog();
+    const res = await handlerFor(
+      SWITCH,
+      seams({ adapterFactory: () => adapter.adapter, activityLog: log.activityLog }),
+    )(
+      ctxFor(SWITCH, {
+        schemaVersion: "1",
+        projectId,
+        branchName: "feature/x",
+        userInitiated: true,
+      }),
+      deps({
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => "/worktrees/active-task",
+          () => "/worktrees/active-task",
+          "autonomous-delivery",
+          LOCAL_BRANCH_AUTHORITY,
+        ),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect((res.body as { status: string }).status).toBe("succeeded");
+    expect(adapter.calls()).toEqual(["switchBranch"]);
+    const admission = log.events().find((event) => event.op === "git.delivery.authority.admitted");
+    expect(admission?.extra).toEqual({
+      operation: "branch-switch",
+      phase: "admission",
+      source: "local-user",
+    });
+  });
+
+  it("keeps managed task worktrees bound to their accepted run even for user-initiated local mutations", async () => {
+    const managed = managedWorkspaceDeps();
+    const adapter = recordingAdapter();
+    try {
+      const res = await handlerFor(SWITCH, seams({ adapterFactory: () => adapter.adapter }))(
+        ctxFor(SWITCH, {
+          schemaVersion: "1",
+          projectId: managed.instance.managedWorktreePath,
+          branchName: "feature/x",
+          userInitiated: true,
+        }),
+        deps({
+          ...managed.override,
+          gitDeliveryAuthority: permittedGitDeliveryAuthority(
+            () => projectId,
+            () => projectId,
+            "autonomous-delivery",
+            LOCAL_BRANCH_AUTHORITY,
+          ),
+        }),
+      );
+
+      expect(res.status).toBe(403);
+      expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
+      expect(adapter.calls()).toEqual([]);
+    } finally {
+      managed.cleanup();
+    }
+  });
 
   it("creates a branch via the real branch-create spec", async () => {
     const adapter = recordingAdapter();

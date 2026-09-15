@@ -4,6 +4,7 @@ import type {
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimeResearchGrant,
   CodingWorkbenchRuntimeSnapshot,
+  CodingWorkbenchRuntimeStartRequest,
 } from "@oscharko-dev/keiko-contracts";
 import { isCodingWorkbenchModeWidening } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
@@ -42,6 +43,28 @@ function managedGatewayModelSelection(current: CodingWorkbenchRuntimeState): Run
   };
 }
 
+function startRequest(
+  id: string,
+  taskIntent: string,
+  current: CodingWorkbenchRuntimeState,
+  options: CodingWorkbenchStartOptions,
+): CodingWorkbenchRuntimeStartRequest {
+  const request = {
+    requestId: id,
+    taskIntent,
+    requestedMode: current.requestedMode,
+    runtimePreference: current.runtimePreference,
+    projectMemory: { enabled: options.projectMemoryEnabled },
+    ...managedGatewayModelSelection(current),
+  };
+  if (options.issue === undefined) return request;
+  return {
+    ...request,
+    issueRef: options.issue.issueRef,
+    expectedIssueBindingDigest: options.issue.expectedIssueBindingDigest,
+  };
+}
+
 export function mutationResultMatchesCurrentTruth(
   command: CodingWorkbenchMutationCommand,
   current: CodingWorkbenchRuntimeSnapshot | null,
@@ -65,16 +88,7 @@ export function createStartMutation(
   return {
     requestId: id,
     mayInstallNewRun: true,
-    run: () =>
-      startCodingWorkbenchRuntime({
-        requestId: id,
-        taskIntent,
-        requestedMode: current.requestedMode,
-        runtimePreference: current.runtimePreference,
-        projectMemory: { enabled: options.projectMemoryEnabled },
-        ...managedGatewayModelSelection(current),
-        ...(options.issue ?? {}),
-      }),
+    run: () => startCodingWorkbenchRuntime(startRequest(id, taskIntent, current, options)),
   };
 }
 

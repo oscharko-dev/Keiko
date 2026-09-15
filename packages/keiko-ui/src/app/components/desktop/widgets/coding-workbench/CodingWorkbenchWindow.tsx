@@ -437,14 +437,39 @@ export interface CodingWorkbenchGitTarget {
 
 function noopOpenGit(_target: CodingWorkbenchGitTarget): void {}
 
-function workbenchRepositoryRoot(
-  runIsActive: boolean,
-  runBoundRoot: string | null,
+function runRepositoryRoot(
+  runWorkspace: CodingWorkbenchRunWorkspaceBinding,
   activeWorkspace: WorkbenchWorkspaceApi,
   selectedRoot: string | undefined,
 ): string | null {
-  if (!runIsActive) return activeWorkspace.activeInstance?.repositoryRoot ?? selectedRoot ?? null;
-  return runBoundRoot ?? activeWorkspace.activeBinding?.activeRoot ?? selectedRoot ?? null;
+  const bound = runWorkspace.bound;
+  const trust = bound === null ? null : bound.trust;
+  if (trust !== null) return trust.repositoryRoot;
+  const activeInstance = activeWorkspace.activeInstance;
+  if (activeInstance !== null) return activeInstance.repositoryRoot;
+  return selectedRoot ?? null;
+}
+
+function idleRepositoryRoot(
+  activeWorkspace: WorkbenchWorkspaceApi,
+  selectedRoot: string | undefined,
+): string | null {
+  const activeInstance = activeWorkspace.activeInstance;
+  if (activeInstance !== null) return activeInstance.repositoryRoot;
+  if (selectedRoot !== undefined) return selectedRoot;
+  const activeBinding = activeWorkspace.activeBinding;
+  return activeBinding === null ? null : activeBinding.activeRoot;
+}
+
+function workbenchRepositoryRoot(
+  runWorkspace: CodingWorkbenchRunWorkspaceBinding,
+  activeWorkspace: WorkbenchWorkspaceApi,
+  selectedRoot: string | undefined,
+  runIsActive: boolean,
+): string | null {
+  return runIsActive
+    ? runRepositoryRoot(runWorkspace, activeWorkspace, selectedRoot)
+    : idleRepositoryRoot(activeWorkspace, selectedRoot);
 }
 
 function repositoryBranchReadRoot(
@@ -630,10 +655,10 @@ export function CodingWorkbenchWindow({
   );
   const runIsActive = activeRunState(state.run.value?.state);
   const repositoryRoot = workbenchRepositoryRoot(
-    runIsActive,
-    runWorkspace.bound?.root ?? null,
+    runWorkspace,
     activeWorkspace,
     selectedRoot,
+    runIsActive,
   );
 
   useEffect(() => {
@@ -728,10 +753,10 @@ function WorkbenchAlert({ message }: { readonly message: string | null }): React
 
 /**
  * The one place the LIVE workspace pointer is consulted during a run (#3381 review): it cannot
- * retarget the run — the chips, the Git target and the editor bridge stay on the workspace the run
- * was submitted against — but a pointer that no longer names that workspace is exactly why the
- * changes panel reports a lost binding and why nothing the operator does in the other workspace
- * reaches this run. Stating it is what turns two silent inert panels into one actionable fact.
+ * retarget the run — the run attribution and editor bridge stay on the workspace the run was
+ * submitted against — but a pointer that no longer names that workspace is exactly why the changes
+ * panel reports a lost binding and why nothing the operator does in the other workspace reaches
+ * this run. Stating it is what turns two silent inert panels into one actionable fact.
  */
 function RunWorkspaceMismatchNotice({ visible }: { readonly visible: boolean }): ReactNode {
   const t = useCodingWorkbenchTranslate();
@@ -950,14 +975,15 @@ function WorkbenchColumns({
     pausedRun?.effectiveMode,
   );
   const resumeModes = pausedRun?.effectiveMode ? resumableModes(pausedRun.effectiveMode) : [];
-  // The composer acts on the bound task workspace, not on the folder selected elsewhere in the
-  // Workbench: before a run it names the repository that workspace was bound from, during a run
-  // the worktree the run edits. Showing the selected folder next to the bound branch misled the
-  // operator about where the run would work (workbench end-to-end run, 2026-09-03).
+  // The composer acts on the repository the bound task workspace belongs to, not on a folder
+  // selected elsewhere in the Workbench. The run attribution below still names the run's task
+  // branch/workspace, but the repository chip and normal Git target remain the repository's Git
+  // control surface. Showing an internal task worktree as the Git repository made branch switching
+  // look like a workspace operation instead of repository administration.
   //
-  // During a run those chips — and the Git target they open — name the RUN's workspace, which the
-  // server still holds authority over, not the live pointer: labelling a run in A with B's root and
-  // branch, and opening B's Git, invited the operator to act on the wrong tree (#3381 review).
+  // During a run the branch chip names the RUN's workspace, which the server still holds authority
+  // over, not the live pointer: labelling a run in A with B's branch invited the operator to act on
+  // the wrong tree (#3381 review).
   const repositoryBranch = useRepositoryBranchState(
     repositoryBranchReadRoot(runIsActive, repositoryRoot),
   );
@@ -1007,7 +1033,7 @@ function WorkbenchColumns({
       onOpenGit={() =>
         onOpenGit({
           root: repositoryRoot,
-          binding: runIsActive ? "task-workspace" : "repository",
+          binding: "repository",
         })
       }
       projectMemoryEnabled={projectMemoryEnabled}

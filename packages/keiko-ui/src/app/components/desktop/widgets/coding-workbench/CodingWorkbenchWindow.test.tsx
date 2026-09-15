@@ -734,7 +734,7 @@ describe("CodingWorkbenchWindow", () => {
     });
   });
 
-  it("opens Git on the active task worktree while a coding run is in progress", async (): Promise<void> => {
+  it("opens Git on the repository root while a coding run is in progress", async (): Promise<void> => {
     const user = userEvent.setup();
     const onOpenGit = vi.fn();
     chatCatalogMock.activeProject = {
@@ -762,10 +762,10 @@ describe("CodingWorkbenchWindow", () => {
 
     expect(screen.getByRole("button", { name: "Manage branch task-1" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Manage branch dev" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Manage repository active-task" }));
+    await user.click(screen.getByRole("button", { name: "Manage repository keiko" }));
     expect(onOpenGit).toHaveBeenCalledWith({
-      root: "/worktrees/active-task",
-      binding: "task-workspace",
+      root: "/repos/keiko",
+      binding: "repository",
     });
   });
 
@@ -3002,12 +3002,12 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     );
   }
 
-  it("keeps the composer, context bar and Git target on the run's own workspace", async () => {
+  it("keeps the composer and context bar on the run while Git opens the repository", async () => {
     const onOpenGit = vi.fn();
     await startInAThenSwitchToB(actions(), onOpenGit);
 
-    expect(screen.getByRole("button", { name: "Manage repository task-a" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Manage repository task-b" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Manage repository a" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Manage repository b" })).toBeNull();
     expect(
       screen.getByRole("button", { name: `Manage branch ${WORKSPACE_A.branch}` }),
     ).toBeInTheDocument();
@@ -3017,10 +3017,10 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     expect(facts).not.toBeNull();
     expect(facts).not.toHaveTextContent(WORKSPACE_B.branch);
 
-    await userEvent.setup().click(screen.getByRole("button", { name: "Manage repository task-a" }));
+    await userEvent.setup().click(screen.getByRole("button", { name: "Manage repository a" }));
     expect(onOpenGit).toHaveBeenCalledWith({
-      root: WORKSPACE_A.root,
-      binding: "task-workspace",
+      root: WORKSPACE_A.repositoryRoot,
+      binding: "repository",
     });
   });
 
@@ -3108,7 +3108,7 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     expect(
       screen.queryByText(/This run keeps the authority of the workspace it started in/u),
     ).toBeNull();
-    expect(screen.getByRole("button", { name: "Manage repository task-a" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Manage repository a" })).toBeInTheDocument();
   });
 
   it("binds the editor bridge to the root the run was submitted against", async () => {

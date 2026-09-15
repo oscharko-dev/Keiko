@@ -28,12 +28,12 @@ import {
   type CodingRuntimeIssueIntake,
   type CodingRuntimeOrchestratorResult,
   type CodingRuntimeLaunchResolver,
-  type CodingRuntimeProjectMemoryPort,
   type WorkbenchDescriptionDispatchOutcome,
   type WorkbenchDescriptionDispatcher,
   DELIVERY_CONTINUATION_INTENT,
   DELIVERY_CONTINUATION_MAX,
 } from "./codingRuntimeOrchestrator.js";
+import type { CodingRuntimeProjectMemoryPort } from "./codingRuntimeOrchestratorTypes.js";
 import type { CodingRuntimeDescriptionJobStore } from "./codingRuntimeDescriptionJobStore.js";
 import type { VerifiedCommitResult } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
@@ -66,6 +66,13 @@ import {
   draftDeliveryLineageRecord,
   sameDraftRecoveryTask,
 } from "./codingRuntimeDraftDeliverySource.js";
+
+type OptionalOrchestratorDeps = Pick<
+  Parameters<typeof createCodingRuntimeOrchestrator>[0],
+  "activityLog" | "diagnostics" | "issueIntake" | "projectMemory"
+>;
+type ProjectMemoryRequest = Parameters<CodingRuntimeProjectMemoryPort["getContextForRun"]>[0];
+type TaskDispatchRequest = Parameters<CodingRuntimeTaskDispatcher["dispatch"]>[0];
 
 function successfulSnapshot(result: CodingRuntimeOrchestratorResult) {
   if (!result.ok) throw new Error(`expected success, received ${result.failureCode}`);
@@ -116,6 +123,45 @@ function orderedRows(rows: Map<string, CodingRuntimeSnapshot>): CodingRuntimeSna
     (left, right) =>
       right.updatedAt.localeCompare(left.updatedAt) || left.runId.localeCompare(right.runId),
   );
+}
+
+function optionalOrchestratorDeps(input: {
+  readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
+  readonly issueIntake?: CodingRuntimeIssueIntake | undefined;
+  readonly projectMemory?: CodingRuntimeProjectMemoryPort | undefined;
+}): Partial<OptionalOrchestratorDeps> {
+  return {
+    ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
+    ...(input.activityLog ? { activityLog: input.activityLog } : {}),
+    ...(input.issueIntake ? { issueIntake: input.issueIntake } : {}),
+    ...(input.projectMemory ? { projectMemory: input.projectMemory } : {}),
+  };
+}
+
+function firstProjectMemoryRequest(
+  calls: readonly (readonly [ProjectMemoryRequest])[],
+): ProjectMemoryRequest {
+  const request = calls[0]?.[0];
+  if (request === undefined) throw new Error("expected project memory lookup");
+  return request;
+}
+
+function firstTaskDispatchRequest(
+  calls: readonly (readonly [TaskDispatchRequest])[],
+): TaskDispatchRequest {
+  const request = calls[0]?.[0];
+  if (request === undefined) throw new Error("expected initial turn dispatch");
+  return request;
+}
+
+function expectProjectMemoryLog(
+  records: readonly ServerLogEvent[],
+  expected: Record<string, unknown>,
+): void {
+  const event = records.find((record) => record.op === "coding-runtime.project-memory.context");
+  expect(event).toBeDefined();
+  expect(event?.extra).toMatchObject(expected);
 }
 
 // #3417: the operator's view of the approved skills, as the composed runtime host answers it.
@@ -381,10 +427,7 @@ function fixture(
       researchGrants,
       pendingResearchApprovals,
       approvedSkills: () => APPROVED_SKILLS,
-      ...(diagnostics ? { diagnostics } : {}),
-      ...(activityLog ? { activityLog } : {}),
-      ...(issueIntake ? { issueIntake } : {}),
-      ...(projectMemory ? { projectMemory } : {}),
+      ...optionalOrchestratorDeps({ diagnostics, activityLog, issueIntake, projectMemory }),
       now: clock ?? ((): Date => new Date("2026-01-01T00:00:00.000Z")),
       newRunId: newRunId ?? ((): string => `run-${String(rows.size + 1)}`),
     },
@@ -867,8 +910,7 @@ describe("CodingRuntimeOrchestrator", () => {
 
     await f.orchestrator.start(start);
 
-    const memoryRequest = getContextForRun.mock.calls[0]?.[0];
-    if (memoryRequest === undefined) throw new Error("expected project memory lookup");
+    const memoryRequest = firstProjectMemoryRequest(getContextForRun.mock.calls);
     expect(memoryRequest).toMatchObject({
       runId: "run-1",
       taskIntent: start.taskIntent,
@@ -878,29 +920,17 @@ describe("CodingRuntimeOrchestrator", () => {
       ],
     });
     expect(memoryRequest.scopes.map((scope) => scope.kind)).toEqual(["project", "workspace"]);
-    expect(f.taskDispatcher.dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        initialContext: expect.stringContaining(
-          "Local Project Memory from MemoriaViva is available for this run.",
-        ),
-      }),
+    const dispatchRequest = firstTaskDispatchRequest(f.taskDispatcher.dispatch.mock.calls);
+    expect(dispatchRequest.initialContext).toContain(
+      "Local Project Memory from MemoriaViva is available for this run.",
     );
-    expect(f.taskDispatcher.dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        initialContext: expect.stringContaining("design-system controls"),
-      }),
-    );
-    expect(captured.records).toContainEqual(
-      expect.objectContaining({
-        op: "coding-runtime.project-memory.context",
-        extra: expect.objectContaining({
-          runId: "run-1",
-          outcome: "included",
-          includedMemoryCount: 1,
-          scopeKindCount: 2,
-        }),
-      }),
-    );
+    expect(dispatchRequest.initialContext).toContain("design-system controls");
+    expectProjectMemoryLog(captured.records, {
+      runId: "run-1",
+      outcome: "included",
+      includedMemoryCount: 1,
+      scopeKindCount: 2,
+    });
     expect(JSON.stringify(captured.records)).not.toContain("design-system controls");
   });
 
@@ -924,19 +954,13 @@ describe("CodingRuntimeOrchestrator", () => {
     await f.orchestrator.start({ ...start, projectMemory: { enabled: false } });
 
     expect(getContextForRun).not.toHaveBeenCalled();
-    const dispatchRequest = f.taskDispatcher.dispatch.mock.calls[0]?.[0];
-    if (dispatchRequest === undefined) throw new Error("expected initial turn dispatch");
-    expect(dispatchRequest).not.toHaveProperty("initialContext");
-    expect(captured.records).toContainEqual(
-      expect.objectContaining({
-        op: "coding-runtime.project-memory.context",
-        extra: expect.objectContaining({
-          runId: "run-1",
-          outcome: "disabled",
-          includedMemoryCount: 0,
-        }),
-      }),
-    );
+    const noMemoryDispatchRequest = firstTaskDispatchRequest(f.taskDispatcher.dispatch.mock.calls);
+    expect(noMemoryDispatchRequest).not.toHaveProperty("initialContext");
+    expectProjectMemoryLog(captured.records, {
+      runId: "run-1",
+      outcome: "disabled",
+      includedMemoryCount: 0,
+    });
   });
 
   // Run 9 (2026-09-10): a server shutdown ends the live run through the same stop path an operator

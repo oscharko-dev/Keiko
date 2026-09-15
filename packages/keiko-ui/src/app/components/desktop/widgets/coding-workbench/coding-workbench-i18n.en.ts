@@ -271,7 +271,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.help":
     "Pause the active run to send a follow-up. A drafted follow-up is admitted only while paused and is never queued.",
   "codingWorkbench.composer.workspaceMismatch":
-    "This run keeps the authority of the workspace it started in, which is no longer the active one. The chips, Git and the run's changes stay on the run's workspace; switch back to it to review or edit those files.",
+    "This run keeps the authority of the workspace it started in, which is no longer the active one. The repository and branch chips keep describing that run; switch back to review or edit its files.",
   "codingWorkbench.composer.blocked.busy": "Keiko is already processing a runtime action.",
   "codingWorkbench.composer.blocked.emptyStart": "Describe what Keiko should do first.",
   "codingWorkbench.composer.blocked.emptyFollowUp": "Write a follow-up first.",

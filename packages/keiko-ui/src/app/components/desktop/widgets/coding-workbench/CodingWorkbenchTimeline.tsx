@@ -161,7 +161,9 @@ function timelineItems(
       order += 1;
     }
   }
-  const compacted = compactToolItems(items.sort(compareTimelineItems));
+  const orderedItems = [...items];
+  orderedItems.sort(compareTimelineItems);
+  const compacted = compactToolItems(orderedItems);
   return feed?.plan === undefined ? compacted : insertPlan(compacted, feed.plan, order);
 }
 

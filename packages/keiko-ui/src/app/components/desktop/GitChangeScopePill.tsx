@@ -104,6 +104,7 @@ const BLOCKED_REASON_KEY: Readonly<Record<GitChangeBlockedReason, MessageKey>> =
   "detached-head": "gitChangeScope.blocked.detachedHead",
   "unborn-head": "gitChangeScope.blocked.unbornHead",
   "missing-ref": "gitChangeScope.blocked.missingRef",
+  "identical-refs": "gitChangeScope.blocked.identicalRefs",
   "no-pull-request": "gitChangeScope.blocked.noPullRequest",
   "ambiguous-pull-request": "gitChangeScope.blocked.ambiguousPullRequest",
   "reader-unauthorized": "gitChangeScope.blocked.readerUnauthorized",

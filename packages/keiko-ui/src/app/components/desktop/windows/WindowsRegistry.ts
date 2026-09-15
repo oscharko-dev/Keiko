@@ -150,6 +150,8 @@ export type WindowCfgByType = {
   };
   readonly governedGit: ProjectRootWindowCfg & {
     readonly rootBinding?: "coding-repository";
+    readonly gitChangeBaseRef?: string;
+    readonly gitChangeHeadRef?: string;
   };
   readonly governedPullRequest: ProjectRootWindowCfg & { readonly headBranchName?: string };
   readonly governedMerge: ProjectRootWindowCfg & { readonly headBranchName?: string };

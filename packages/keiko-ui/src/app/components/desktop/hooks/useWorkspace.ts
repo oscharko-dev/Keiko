@@ -37,6 +37,7 @@ import {
   duplicateWorkspaceClipboardWindows,
 } from "./workspaceClipboard";
 import {
+  boundGitChangeRelationshipIdOf,
   boundConnectorScopeOf,
   connectorChatBind,
   boundScopeOf,
@@ -51,8 +52,9 @@ import {
   normalizeWorkspaceSelection,
   replaceWorkspaceSelection,
   toggleWorkspaceSelection,
+  type GitChangeBindSelection,
 } from "./workspaceActions";
-import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
+import type { ChatConnectedScope, ChatGitChangeScope, ChatLocalKnowledgeScope } from "@/lib/types";
 import type { WorkspaceUiSelectionState } from "@oscharko-dev/keiko-contracts";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 
@@ -1176,6 +1178,25 @@ function adoptPolledRevisionWhileDirty(
   });
 }
 
+// A stale, lower conflict ETag usually belongs to a delayed PUT response and must not roll the
+// client back behind a newer poll. The one legitimate lower value we have to accept is the BFF
+// restart shape: the tab still remembers a non-zero workspace revision, the in-memory server store
+// restarted at 0, and every PUT conflicts until the client retries against revision 0.
+function adoptConflictRevision(
+  revision: number | null,
+  baseRevision: number,
+  revisionRef: CurrentRef<number>,
+): void {
+  if (revision === null) return;
+  if (revision > revisionRef.current) {
+    revisionRef.current = revision;
+    return;
+  }
+  if (revision === 0 && baseRevision === revisionRef.current && revisionRef.current > 0) {
+    revisionRef.current = 0;
+  }
+}
+
 function buildServerWorkspaceSnapshot(
   wins: readonly AppWindow[],
   conns: readonly Connection[],
@@ -1354,15 +1375,12 @@ function useWorkspaceServerSync({
       keepalive,
     }).then((result) => {
       if (result?.kind === "conflict") {
-        // A 412 is a handled concurrency signal: adopt a strictly newer revision when the
-        // response carries one, and ALWAYS schedule the bounded retry — the send uses the
-        // freshest adopted revision at fire time, so a stale, equal, or missing conflict
-        // ETag (delayed response, proxy-stripped header) never parks the dirty snapshot.
-        // The per-snapshot marker and the unmount guard inside the scheduler bound the
-        // attempt; no revision comparison is needed for loop safety.
-        if (result.revision !== null && result.revision > revisionRef.current) {
-          revisionRef.current = result.revision;
-        }
+        // A 412 is a handled concurrency signal: adopt a usable conflict revision when doing so is
+        // safe, and ALWAYS schedule the bounded retry — the send uses the freshest adopted revision
+        // at fire time, so a stale, equal, restart-reset, or missing conflict ETag never parks the
+        // dirty snapshot. The per-snapshot marker and the unmount guard inside the scheduler bound
+        // the attempt; no revision comparison is needed for loop safety.
+        adoptConflictRevision(result.revision, baseRevision, revisionRef);
         scheduleWorkspaceConflictRetry(
           snapshot.serialized,
           localDirtyRef,
@@ -1802,6 +1820,20 @@ export interface UseWorkspaceOptions {
         target?: ChatUnbindTarget,
       ) => boolean | Promise<boolean>)
     | undefined;
+  readonly onGitChangeBind?:
+    | ((
+        chatWindowId: string,
+        selection: GitChangeBindSelection,
+        target?: ChatBindingTarget,
+      ) => ChatGitChangeScope | false | null | Promise<ChatGitChangeScope | false | null>)
+    | undefined;
+  readonly onGitChangeUnbind?:
+    | ((
+        chatWindowId: string,
+        relationshipId: string,
+        target?: ChatUnbindTarget,
+      ) => boolean | Promise<boolean>)
+    | undefined;
 }
 
 // S3776 — closeWithTeardown's per-connection unbind logic (below) used to run inside a
@@ -1835,6 +1867,30 @@ function connectionUnbindScope(
   if (bound !== null) return bound;
   if (conn.boundScopeElided === true) return null;
   return filesChatBindScope(win, other, Date.now());
+}
+
+function connectionOtherWindow(
+  conn: Connection,
+  closedWindowId: string,
+  winsById: ReadonlyMap<string, AppWindow>,
+): AppWindow | null {
+  const otherId = connectionOtherEndpoint(conn, closedWindowId);
+  return otherId === null ? null : (winsById.get(otherId) ?? null);
+}
+
+function addGitChangeTeardown(
+  results: Promise<boolean>[],
+  chatWindowId: string,
+  relationshipId: string | null,
+  target: ChatUnbindTarget | undefined,
+  unbindGitChangeScope: (
+    chatWindowId: string,
+    relationshipId: string,
+    target?: ChatUnbindTarget,
+  ) => boolean | Promise<boolean>,
+): void {
+  if (relationshipId === null) return;
+  results.push(Promise.resolve(unbindGitChangeScope(chatWindowId, relationshipId, target)));
 }
 
 // Runs a connection's teardown at most once across OVERLAPPING close operations:
@@ -1901,16 +1957,20 @@ async function unbindClosedWindowConnection(
     scope: ChatLocalKnowledgeScope,
     target?: ChatUnbindTarget,
   ) => boolean | Promise<boolean>,
+  unbindGitChangeScope: (
+    chatWindowId: string,
+    relationshipId: string,
+    target?: ChatUnbindTarget,
+  ) => boolean | Promise<boolean>,
 ): Promise<boolean> {
-  const otherId = connectionOtherEndpoint(conn, closedWindowId);
-  if (otherId === null) return true;
-  const other = winsById.get(otherId);
-  if (other === undefined) return true;
+  const other = connectionOtherWindow(conn, closedWindowId, winsById);
+  if (other === null) return true;
   const chatWindowId = connectionChatWindowId(conn, closedWin, other);
   const chatWindow = chatWindowId === closedWin.id ? closedWin : winsById.get(chatWindowId ?? "");
   const target = chatUnbindTarget(chatWindow);
   const scope = connectionUnbindScope(conn, closedWin, other);
   const connectorScope = boundConnectorScopeOf(conn) ?? connectorChatBind(closedWin, other);
+  const gitChangeRelationshipId = boundGitChangeRelationshipIdOf(conn);
   if (chatWindowId === null) return true;
   try {
     const results: Promise<boolean>[] = [];
@@ -1918,6 +1978,13 @@ async function unbindClosedWindowConnection(
     if (connectorScope !== null) {
       results.push(Promise.resolve(unbindConnectorScope(chatWindowId, connectorScope, target)));
     }
+    addGitChangeTeardown(
+      results,
+      chatWindowId,
+      gitChangeRelationshipId,
+      target,
+      unbindGitChangeScope,
+    );
     return (await Promise.all(results)).every(Boolean);
   } catch {
     reportConnectionUnbindFailure();
@@ -1971,6 +2038,8 @@ export function useWorkspace(
     onScopeUnbind,
     onConnectorBind,
     onConnectorUnbind,
+    onGitChangeBind,
+    onGitChangeUnbind,
     onWindowLimitReached,
   } = opts;
   // GEN-PERF-RENDER-001 — route the optional scope-bind callbacks through refs so the
@@ -1987,6 +2056,10 @@ export function useWorkspace(
   onConnectorBindRef.current = onConnectorBind;
   const onConnectorUnbindRef = useRef(onConnectorUnbind);
   onConnectorUnbindRef.current = onConnectorUnbind;
+  const onGitChangeBindRef = useRef(onGitChangeBind);
+  onGitChangeBindRef.current = onGitChangeBind;
+  const onGitChangeUnbindRef = useRef(onGitChangeUnbind);
+  onGitChangeUnbindRef.current = onGitChangeUnbind;
   const onWindowLimitReachedRef = useRef(onWindowLimitReached);
   onWindowLimitReachedRef.current = onWindowLimitReached;
   const stableScopeBind = useCallback(
@@ -2022,6 +2095,24 @@ export function useWorkspace(
       target?: ChatUnbindTarget,
     ): boolean | Promise<boolean> =>
       onConnectorUnbindRef.current?.(chatWindowId, scope, target) ?? true,
+    [],
+  );
+  const stableGitChangeBind = useCallback(
+    (
+      chatWindowId: string,
+      selection: GitChangeBindSelection,
+      target?: ChatBindingTarget,
+    ): ChatGitChangeScope | false | null | Promise<ChatGitChangeScope | false | null> =>
+      onGitChangeBindRef.current?.(chatWindowId, selection, target) ?? null,
+    [],
+  );
+  const stableGitChangeUnbind = useCallback(
+    (
+      chatWindowId: string,
+      relationshipId: string,
+      target?: ChatUnbindTarget,
+    ): boolean | Promise<boolean> =>
+      onGitChangeUnbindRef.current?.(chatWindowId, relationshipId, target) ?? true,
     [],
   );
   const stableWindowLimitReached = useCallback((limit: number): void => {
@@ -2304,6 +2395,8 @@ export function useWorkspace(
         onScopeUnbind: stableScopeUnbind,
         onConnectorBind: stableConnectorBind,
         onConnectorUnbind: stableConnectorUnbind,
+        onGitChangeBind: stableGitChangeBind,
+        onGitChangeUnbind: stableGitChangeUnbind,
         onConnectionUnbindFailure: reportConnectionUnbindFailure,
       }),
     [
@@ -2323,6 +2416,8 @@ export function useWorkspace(
       stableScopeUnbind,
       stableConnectorBind,
       stableConnectorUnbind,
+      stableGitChangeBind,
+      stableGitChangeUnbind,
     ],
   );
   cancelConnectRef.current = connectActions.cancelConnect;
@@ -2370,6 +2465,7 @@ export function useWorkspace(
                   winsByIdRef.current,
                   stableScopeUnbind,
                   stableConnectorUnbind,
+                  stableGitChangeUnbind,
                 );
               },
             );
@@ -2384,7 +2480,14 @@ export function useWorkspace(
         for (const id of targets) pendingWindowClosesRef.current.delete(id);
       }
     },
-    [winsByIdRef, connsByEndpointRef, mutations, stableScopeUnbind, stableConnectorUnbind],
+    [
+      winsByIdRef,
+      connsByEndpointRef,
+      mutations,
+      stableScopeUnbind,
+      stableConnectorUnbind,
+      stableGitChangeUnbind,
+    ],
   );
 
   const closeWithTeardown = useCallback<WorkspaceApi["close"]>(
@@ -2407,6 +2510,21 @@ export function useWorkspace(
                   ? { boundRelativePath: scope.relativePaths[0] }
                   : {}),
               }
+            : conn,
+        ),
+      );
+    },
+    [setConns],
+  );
+
+  const updateConnGitChangeScope = useCallback<
+    NonNullable<WorkspaceApi["updateConnGitChangeScope"]>
+  >(
+    (connId, scope) => {
+      setConns((cs) =>
+        cs.map((conn) =>
+          conn.id === connId
+            ? { ...conn, boundGitChangeRelationshipId: scope.relationshipId }
             : conn,
         ),
       );
@@ -2655,6 +2773,7 @@ export function useWorkspace(
       cancelConnect: connectActions.cancelConnect,
       removeConn: connectActions.removeConn,
       updateConnBoundScope,
+      updateConnGitChangeScope,
       connect: connectActions.connect,
       linkedFilesRoot: connectActions.linkedFilesRoot,
       linkedFilesContext: connectActions.linkedFilesContext,
@@ -2694,6 +2813,7 @@ export function useWorkspace(
       cutSelectedWindows,
       pasteCopiedWindows,
       updateConnBoundScope,
+      updateConnGitChangeScope,
       currentView,
       zoomTo,
       fitView,

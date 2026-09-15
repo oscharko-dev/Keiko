@@ -17,6 +17,9 @@ import type { GitMutationCommand } from "@oscharko-dev/keiko-tools";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
 import type { UiHandlerDeps } from "../deps.js";
+import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { processServerLogSink } from "../process-log-sink.js";
+import { requiresConfiguredManagedWorkspaceAuthority } from "../task-workspace/workspace-root-access.js";
 import {
   parseGitDeliveryApprovalRequest,
   resolveGitDeliveryApprovalRequirement,
@@ -88,7 +91,7 @@ interface LocalMutationSpec {
   readonly parse: (obj: Record<string, unknown>) => ParsedCommand;
 }
 
-const sharedKeys = ["schemaVersion", "projectId", "approval"] as const;
+const sharedKeys = ["schemaVersion", "projectId", "approval", "userInitiated"] as const;
 
 function localDeliveryOperationFor(
   command: GitMutationCommand,
@@ -181,14 +184,32 @@ interface ValidatedRequest {
   readonly projectId: string;
   readonly command: GitMutationCommand;
   readonly approval: ParsedGitDeliveryApprovalRequest;
+  readonly userInitiated: boolean;
 }
 
 type Validation =
   | { readonly kind: "ok"; readonly value: ValidatedRequest }
   | { readonly kind: "err"; readonly result: RouteResult };
 
-function validate(spec: LocalMutationSpec, parsed: unknown): Validation {
-  const bad: Validation = {
+type ValidatedPayloadEnvelope = Record<string, unknown> & { readonly projectId: string };
+
+type PayloadValidation =
+  | { readonly kind: "ok"; readonly value: ValidatedPayloadEnvelope }
+  | { readonly kind: "err"; readonly result: RouteResult };
+
+function badLocalMutationRequest(): Validation {
+  return {
+    kind: "err",
+    result: errResult(400, "GIT_DELIVERY_LOCAL_BAD_REQUEST"),
+  };
+}
+
+function isValidUserInitiatedMarker(value: unknown): boolean {
+  return value === undefined || value === true;
+}
+
+function validatePayloadEnvelope(spec: LocalMutationSpec, parsed: unknown): PayloadValidation {
+  const bad: PayloadValidation = {
     kind: "err",
     result: errResult(400, "GIT_DELIVERY_LOCAL_BAD_REQUEST"),
   };
@@ -199,11 +220,27 @@ function validate(spec: LocalMutationSpec, parsed: unknown): Validation {
   }
   if (scanUnsafeFormatChars(parsed)) return bad;
   if (!isNonEmptyString(parsed.projectId)) return bad;
-  const approval = parseGitDeliveryApprovalRequest(parsed.approval);
-  if (approval === undefined) return bad;
-  const command = spec.parse(parsed);
-  if (!command.ok) return bad;
-  return { kind: "ok", value: { projectId: parsed.projectId, command: command.command, approval } };
+  if (!isValidUserInitiatedMarker(parsed.userInitiated)) return bad;
+  return { kind: "ok", value: { ...parsed, projectId: parsed.projectId } };
+}
+
+function validate(spec: LocalMutationSpec, parsed: unknown): Validation {
+  const payload = validatePayloadEnvelope(spec, parsed);
+  if (payload.kind === "err") return payload;
+  const parsedObject = payload.value;
+  const approval = parseGitDeliveryApprovalRequest(parsedObject.approval);
+  if (approval === undefined) return badLocalMutationRequest();
+  const command = spec.parse(parsedObject);
+  if (!command.ok) return badLocalMutationRequest();
+  return {
+    kind: "ok",
+    value: {
+      projectId: parsedObject.projectId,
+      command: command.command,
+      approval,
+      userInitiated: parsedObject.userInitiated === true,
+    },
+  };
 }
 
 // ─── Handler factory ──────────────────────────────────────────────────────────────────────────
@@ -236,8 +273,32 @@ interface LocalMutationAuthorityDenialInput {
   readonly operation: LocalDeliveryOperation;
   readonly command: GitMutationCommand;
   readonly approval: ParsedGitDeliveryApprovalRequest;
+  readonly userInitiated: boolean;
   readonly seams: GitDeliveryExecutionSeams;
 }
+
+function requiresRunAuthority(
+  deps: UiHandlerDeps,
+  workspace: WorkspaceInfo,
+  userInitiated: boolean,
+): boolean {
+  return !userInitiated || requiresConfiguredManagedWorkspaceAuthority(deps, workspace.root);
+}
+
+function logUserInitiatedLocalMutationAdmission(
+  ctx: RouteContext,
+  operation: LocalDeliveryOperation,
+  seams: GitDeliveryExecutionSeams,
+): void {
+  (seams.activityLog ?? processServerLogSink()).write({
+    category: "security",
+    op: "git.delivery.authority.admitted",
+    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    status: 200,
+    extra: { operation, phase: "admission", source: "local-user" },
+  });
+}
+
 function localMutationAuthorityDenial({
   ctx,
   deps,
@@ -246,8 +307,13 @@ function localMutationAuthorityDenial({
   operation,
   command,
   approval,
+  userInitiated,
   seams,
 }: LocalMutationAuthorityDenialInput): RouteResult | undefined {
+  if (!requiresRunAuthority(deps, workspace, userInitiated)) {
+    logUserInitiatedLocalMutationAdmission(ctx, operation, seams);
+    return undefined;
+  }
   return gitDeliveryAuthorityDenial(
     ctx,
     deps,
@@ -264,6 +330,51 @@ function localMutationAuthorityDenial({
   );
 }
 
+interface LocalMutationExecutionInput {
+  readonly deps: UiHandlerDeps;
+  readonly projectId: string;
+  readonly workspace: WorkspaceInfo;
+  readonly command: GitMutationCommand;
+  readonly approval: ParsedGitDeliveryApprovalRequest;
+  readonly seams: GitDeliveryExecutionSeams;
+  readonly correlationId: string | undefined;
+}
+
+async function executeLocalMutationRoute({
+  deps,
+  projectId,
+  workspace,
+  command,
+  approval,
+  seams,
+  correlationId,
+}: LocalMutationExecutionInput): Promise<RouteResult> {
+  const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
+    store: seams.approvalStore,
+    binding: { projectId, operation: "local-mutation", command },
+    nowMs: (seams.now ?? Date.now)(),
+  });
+  if (verifiedApproval === undefined) {
+    return errResult(400, "GIT_DELIVERY_LOCAL_BAD_REQUEST");
+  }
+  try {
+    const result = await executeGovernedMutation(
+      command,
+      verifiedApproval,
+      workspace,
+      deps,
+      seams,
+      correlationId,
+    );
+    return { status: 200, body: deps.redactor(gitDeliveryMutationResponse(result)) };
+  } catch {
+    // The live worktree could not be read (not a git repository, git unavailable). The kernel itself
+    // never throws — only the read-only snapshot step can — so this is a precondition failure, not a
+    // mutation; nothing was executed.
+    return errResult(409, "GIT_DELIVERY_LOCAL_WORKTREE_UNAVAILABLE");
+  }
+}
+
 export const createHandleLocalMutation = (
   spec: LocalMutationSpec,
   options: GitDeliveryLocalRouteOptions = {},
@@ -274,7 +385,7 @@ export const createHandleLocalMutation = (
     if (!read.ok) return read.result;
     const validation = validate(spec, read.value);
     if (validation.kind === "err") return validation.result;
-    const { projectId, command, approval } = validation.value;
+    const { projectId, command, approval, userInitiated } = validation.value;
     const workspace = resolveProjectWorkspace(deps, projectId);
     if (workspace === undefined) return errResult(404, "GIT_DELIVERY_LOCAL_UNKNOWN_PROJECT");
     const operation = spec.operation ?? localDeliveryOperationFor(command);
@@ -287,34 +398,19 @@ export const createHandleLocalMutation = (
       operation,
       command,
       approval,
+      userInitiated,
       seams,
     });
     if (authorityDenial !== undefined) return authorityDenial;
-    const verifiedApproval = resolveGitDeliveryApprovalRequirement(approval, {
-      store: seams.approvalStore,
-      binding: { projectId, operation: "local-mutation", command },
-      nowMs: (seams.now ?? Date.now)(),
+    return executeLocalMutationRoute({
+      deps,
+      projectId,
+      workspace,
+      command,
+      approval,
+      seams,
+      correlationId: ctx.correlationId,
     });
-    if (verifiedApproval === undefined) {
-      return errResult(400, "GIT_DELIVERY_LOCAL_BAD_REQUEST");
-    }
-    let result;
-    try {
-      result = await executeGovernedMutation(
-        command,
-        verifiedApproval,
-        workspace,
-        deps,
-        seams,
-        ctx.correlationId,
-      );
-    } catch {
-      // The live worktree could not be read (not a git repository, git unavailable). The kernel itself
-      // never throws — only the read-only snapshot step can — so this is a precondition failure, not a
-      // mutation; nothing was executed.
-      return errResult(409, "GIT_DELIVERY_LOCAL_WORKTREE_UNAVAILABLE");
-    }
-    return { status: 200, body: deps.redactor(gitDeliveryMutationResponse(result)) };
   };
 };
 

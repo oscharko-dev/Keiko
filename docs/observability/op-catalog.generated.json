@@ -2412,37 +2412,37 @@
     {
       "op": "git-change.chat.blocked",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:520",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:521",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.blocked",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:610",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:611",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.blocked",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:651",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:652",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.blocked",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:682",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:683",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.blocked",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:726",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:727",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.connected",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:525",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:526",
       "package": "keiko-server"
     },
     {
@@ -2454,13 +2454,13 @@
     {
       "op": "git-change.chat.refreshed",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:781",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:782",
       "package": "keiko-server"
     },
     {
       "op": "git-change.chat.stale",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeRoutes.ts:731",
+      "site": "packages/keiko-server/src/gitChangeRoutes.ts:732",
       "package": "keiko-server"
     },
     {
@@ -2531,6 +2531,12 @@
       "category": "diagnostic",
       "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:480",
       "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "git.delivery.authority.admitted",
+      "category": "security",
+      "site": "packages/keiko-server/src/gitDelivery/localMutationRoutes.ts:295",
       "package": "keiko-server"
     },
     {

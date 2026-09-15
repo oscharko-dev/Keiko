@@ -20,6 +20,7 @@ import {
   prDescriptionArtifactEvidence,
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description";
 import {
+  PR_DESCRIPTION_ATTRIBUTION,
   PR_DESCRIPTION_REGION_START,
   PR_DESCRIPTION_REGION_END,
 } from "@oscharko-dev/keiko-contracts/runtime/pr-description-region";
@@ -333,7 +334,7 @@ describe("production Gateway PR narrative composition", () => {
     );
     expect(result.artifact.markdown).toContain(PR_DESCRIPTION_REGION_START);
     expect(result.artifact.markdown).toContain(PR_DESCRIPTION_REGION_END);
-    expect(result.artifact.markdown).toContain("by Keiko");
+    expect(result.artifact.markdown).toContain(PR_DESCRIPTION_ATTRIBUTION);
     expect(result.artifact.markdown).not.toContain("![Keiko]");
     expect(Object.isFrozen(result.artifact.candidate.summary)).toBe(true);
     expect(result.usage).toMatchObject({
@@ -797,7 +798,7 @@ describe("trusted PR branding", () => {
       "## Zusammenfassung",
     );
     expect(result.status === "generated" && result.artifact.markdown).toContain(
-      `![Keiko](${immutable}) by Keiko`,
+      `![Keiko](${immutable}) ${PR_DESCRIPTION_ATTRIBUTION}`,
     );
   });
   it.each([

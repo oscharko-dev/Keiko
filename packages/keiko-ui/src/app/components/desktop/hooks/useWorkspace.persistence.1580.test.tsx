@@ -418,6 +418,81 @@ describe("Issue #1580 — visibility-gated server poll", () => {
     expect(putCalls()).toHaveLength(2);
   });
 
+  it("retries a BFF-restarted conflict against the reset server revision", async () => {
+    window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
+    let puts = 0;
+    fetchMock.mockImplementation(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "PUT") {
+        puts += 1;
+        if (puts === 1) {
+          return {
+            ok: false,
+            status: 412,
+            headers: new Headers({ ETag: '"workspace-state-0"' }),
+            json: async () => Promise.resolve({}),
+          } as unknown as Response;
+        }
+        return {
+          ok: true,
+          status: 200,
+          headers: new Headers({ ETag: '"workspace-state-1"' }),
+          json: async () =>
+            Promise.resolve({ workspace: { revision: 1, windows: [], connections: [] } }),
+        } as unknown as Response;
+      }
+      return {
+        ok: true,
+        status: 200,
+        headers: new Headers({ ETag: '"workspace-state-7"' }),
+        json: async () =>
+          Promise.resolve({
+            workspace: {
+              revision: 7,
+              windows: [
+                {
+                  id: "foreign-1",
+                  type: "files",
+                  x: 1,
+                  y: 2,
+                  w: 320,
+                  h: 240,
+                  z: 9,
+                  cfg: {},
+                  max: false,
+                },
+              ],
+              connections: [],
+            },
+          }),
+      } as unknown as Response;
+    });
+
+    render(<Harness />);
+    await flushAsyncEffects();
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+    expect(puts).toBe(1);
+    expect((putCalls()[0]?.[1]?.headers as Record<string, string>)["If-Match"]).toBe(
+      '"workspace-state-7"',
+    );
+
+    act(() => {
+      vi.advanceTimersByTime(400);
+    });
+    await flushAsyncEffects();
+
+    // The server restarted its in-memory workspace store at revision 0 while the still-open tab
+    // held revision 7. The retry must target that reset revision, otherwise the visible local
+    // windows/connections remain forever disconnected from /api/workspace/state.
+    expect(puts).toBe(2);
+    expect((putCalls()[1]?.[1]?.headers as Record<string, string>)["If-Match"]).toBe(
+      '"workspace-state-0"',
+    );
+    expect(String(putCalls()[1]?.[1]?.body)).toContain("agents-1");
+  });
+
   it("retries when the poll adopted the conflict's revision while the PUT was in flight", async () => {
     window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
     let resolveFirstPoll: ((response: Response) => void) | undefined;

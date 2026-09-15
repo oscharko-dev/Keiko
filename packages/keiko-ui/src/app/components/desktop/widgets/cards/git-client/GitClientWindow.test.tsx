@@ -3477,6 +3477,7 @@ describe("desktop-locked active root (#3390, rehearsal run-21)", () => {
         updateCfg={updateCfg}
         projectId={MANAGED_ROOT}
         lockedToActiveRoot
+        lockedRepositoryLabel="Keiko"
       />,
     );
     await waitFor(() => {
@@ -3485,7 +3486,33 @@ describe("desktop-locked active root (#3390, rehearsal run-21)", () => {
     expect(
       screen.queryByText("This local repository is unavailable. Choose another repository."),
     ).toBeNull();
+    const repositorySelector = screen.getByRole("combobox", { name: "Repository" });
+    expect(repositorySelector).toHaveTextContent("Keiko");
+    expect(repositorySelector).toBeDisabled();
+    expect(screen.queryByText("Select a repository")).not.toBeInTheDocument();
     expect(updateCfg).not.toHaveBeenCalledWith({ projectPath: "" });
+    expect(client.reconnectRepository).not.toHaveBeenCalled();
+  });
+
+  it("does not block a locked active task workspace on the recent repository list", async () => {
+    const client = makeClient({
+      listRepositories: vi.fn(async () => {
+        throw new Error("recent list unavailable");
+      }),
+    });
+    render(
+      <GitClientWindow
+        client={client}
+        projectId={MANAGED_ROOT}
+        lockedToActiveRoot
+        lockedRepositoryLabel="Keiko"
+      />,
+    );
+
+    await waitFor(() => expect(client.getStatus).toHaveBeenCalledWith(MANAGED_ROOT));
+    expect(screen.getByRole("combobox", { name: "Repository" })).toHaveTextContent("Keiko");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.queryByText("recent list unavailable")).not.toBeInTheDocument();
   });
 
   it("still treats an unlisted configured root as unavailable when the desktop did not lock it", async () => {

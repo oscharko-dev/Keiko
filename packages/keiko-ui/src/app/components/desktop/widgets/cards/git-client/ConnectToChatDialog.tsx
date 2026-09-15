@@ -13,7 +13,7 @@
 // repository, captures the immutable snapshot, and returns either the server-issued scope or a
 // closed blocked reason — rendered here via the same vocabulary as GitChangeScopePill.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, SubmitEventHandler, ReactNode, RefObject } from "react";
 import { createPortal } from "react-dom";
 import { connectGitChangeToChat, fetchChats } from "@/lib/api";
@@ -66,6 +66,23 @@ const FORM_STYLE: CSSProperties = {
 };
 
 type ConnectMode = "comparison" | "pull-request";
+
+function usableBaseBranchChoices(
+  currentBranch: string | undefined,
+  choices: readonly string[],
+): readonly string[] {
+  if (currentBranch === undefined) return choices;
+  return choices.filter((choice) => choice !== currentBranch);
+}
+
+function defaultBaseRef(
+  currentBranch: string | undefined,
+  baseBranchName: string | undefined,
+  choices: readonly string[],
+): string {
+  if (baseBranchName !== undefined && baseBranchName !== currentBranch) return baseBranchName;
+  return choices[0] ?? "";
+}
 
 export interface ConnectToChatDialogProps {
   /** Repository root whose chats are eligible connect targets. */
@@ -203,11 +220,13 @@ function BaseBranchField({
   baseRef,
   onBaseRefChange,
   choices,
+  disabled,
   t,
 }: {
   readonly baseRef: string;
   readonly onBaseRefChange: (name: string) => void;
   readonly choices: readonly string[];
+  readonly disabled: boolean;
   readonly t: I18nTranslate;
 }): ReactNode {
   return (
@@ -219,9 +238,13 @@ function BaseBranchField({
         menuTitle={t("gitChangeScope.connect.baseLabel")}
         leadingVisual={<BranchIcon size={12} />}
         mono
+        disabled={disabled}
         sections={[{ options: choices.map((name) => ({ value: name, label: name })) }]}
         onValueChange={onBaseRefChange}
       />
+      {disabled ? (
+        <span style={SUBTLE_TEXT_STYLE}>{t("gitChangeScope.connect.noBaseBranch")}</span>
+      ) : null}
     </label>
   );
 }
@@ -283,6 +306,7 @@ interface ConnectDialogFieldsProps {
   readonly baseRef: string;
   readonly onBaseRefChange: (name: string) => void;
   readonly baseBranchChoices: readonly string[];
+  readonly baseBranchDisabled: boolean;
   readonly error: string | null;
   readonly busy: boolean;
   readonly canSubmit: boolean;
@@ -303,6 +327,7 @@ function ConnectDialogFields(props: ConnectDialogFieldsProps): ReactNode {
     baseRef,
     onBaseRefChange,
     baseBranchChoices,
+    baseBranchDisabled,
     error,
     busy,
     canSubmit,
@@ -323,6 +348,7 @@ function ConnectDialogFields(props: ConnectDialogFieldsProps): ReactNode {
           baseRef={baseRef}
           onBaseRefChange={onBaseRefChange}
           choices={baseBranchChoices}
+          disabled={baseBranchDisabled}
           t={t}
         />
       ) : null}
@@ -374,7 +400,7 @@ function useSubmit({
     !busy &&
     chatId !== "" &&
     currentBranch !== undefined &&
-    (mode === "pull-request" || baseRef !== "");
+    (mode === "pull-request" || (baseRef !== "" && baseRef !== currentBranch));
 
   async function run(): Promise<void> {
     if (currentBranch === undefined) return;
@@ -462,6 +488,7 @@ interface ConnectDialogState {
 function useConnectDialogState(
   currentBranch: string | undefined,
   baseBranchName: string | undefined,
+  baseBranchChoices: readonly string[],
   connect: typeof connectGitChangeToChat,
   onConnected: (chatId: string, result: GitChangeConnectResponse) => void,
   onClose: () => void,
@@ -469,7 +496,17 @@ function useConnectDialogState(
 ): ConnectDialogState {
   const [chatId, setChatId] = useState("");
   const [mode, setMode] = useState<ConnectMode>("comparison");
-  const [baseRef, setBaseRef] = useState(baseBranchName ?? "");
+  const [baseRef, setBaseRef] = useState(() =>
+    defaultBaseRef(currentBranch, baseBranchName, baseBranchChoices),
+  );
+  const choicesKey = baseBranchChoices.join("\u0000");
+  useEffect(() => {
+    setBaseRef((current) =>
+      current !== "" && current !== currentBranch && baseBranchChoices.includes(current)
+        ? current
+        : defaultBaseRef(currentBranch, baseBranchName, baseBranchChoices),
+    );
+  }, [baseBranchName, choicesKey, currentBranch, baseBranchChoices]);
   const { busy, error, canSubmit, submit } = useSubmit({
     chatId,
     mode,
@@ -535,6 +572,7 @@ function ConnectDialogForm({
         baseRef={state.baseRef}
         onBaseRefChange={state.setBaseRef}
         baseBranchChoices={baseBranchChoices}
+        baseBranchDisabled={baseBranchChoices.length === 0}
         error={state.error}
         busy={state.busy}
         canSubmit={state.canSubmit}
@@ -557,6 +595,10 @@ export function ConnectToChatDialog({
 }: ConnectToChatDialogProps): ReactNode {
   const t = useTranslate();
   const catalog = useChatCatalog(projectId, listChats, t);
+  const baseChoices = useMemo(
+    () => usableBaseBranchChoices(currentBranch, baseBranchChoices),
+    [baseBranchChoices, currentBranch],
+  );
   const recordConnection = (chatId: string, result: GitChangeConnectResponse): void => {
     const connected = projectConnectedChat(catalog.chats, chatId, result);
     if (connected !== undefined) onConnected(connected);
@@ -564,6 +606,7 @@ export function ConnectToChatDialog({
   const state = useConnectDialogState(
     currentBranch,
     baseBranchName,
+    baseChoices,
     connect,
     recordConnection,
     onClose,
@@ -579,7 +622,7 @@ export function ConnectToChatDialog({
       state={state}
       catalog={catalog}
       currentBranch={currentBranch}
-      baseBranchChoices={baseBranchChoices}
+      baseBranchChoices={baseChoices}
       onClose={onClose}
       t={t}
     />
