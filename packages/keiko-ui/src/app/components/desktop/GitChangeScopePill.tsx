@@ -34,6 +34,7 @@ import { newClientCorrelationId } from "@/lib/bff-correlation";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { restoreScopeHeaderFocus } from "./ConnectedScopePill";
 import { formatUserError } from "./format-error";
+import type { WorkspaceLinkedGitChangeComparison } from "./hooks/useWorkspace.types";
 import type { Chat, ChatGitChangeDescriptionStatus, ChatGitChangeScope } from "@/lib/types";
 import type {
   GitChangeBlockedReason,
@@ -72,6 +73,7 @@ export type ReviewGitChangeDescriptionFn = (
 
 export interface GitChangeScopePillProps {
   readonly chat: Chat;
+  readonly pendingComparisons?: readonly WorkspaceLinkedGitChangeComparison[] | undefined;
   readonly onDisconnect?: (chat: Chat) => void;
   readonly onRefreshed?: (chat: Chat) => void;
   /** Injectable wire seams for tests. Default to the real BFF helpers. */
@@ -767,6 +769,48 @@ function ScopePillStatus({
   );
 }
 
+function comparisonKey(baseRef: string, headRef: string): string {
+  return `${baseRef}\u0000${headRef}`;
+}
+
+function pendingComparisonLabel(comparison: WorkspaceLinkedGitChangeComparison): string {
+  return `${comparison.baseRef}...${comparison.headRef}`;
+}
+
+function pendingComparisonsWithoutConfirmed(
+  pendingComparisons: readonly WorkspaceLinkedGitChangeComparison[],
+  scopes: readonly ChatGitChangeScope[],
+): readonly WorkspaceLinkedGitChangeComparison[] {
+  const confirmed = new Set(scopes.map((scope) => comparisonKey(scope.baseRef, scope.headRef)));
+  return pendingComparisons.filter(
+    (comparison) =>
+      comparison.pending && !confirmed.has(comparisonKey(comparison.baseRef, comparison.headRef)),
+  );
+}
+
+function PendingGitChangePillItem({
+  comparison,
+  t,
+}: {
+  readonly comparison: WorkspaceLinkedGitChangeComparison;
+  readonly t: I18nTranslate;
+}): ReactNode {
+  const label = pendingComparisonLabel(comparison);
+  const accessibleLabel = t("gitChangeScope.pending.accessible", { label });
+  return (
+    <span className="scope-pill-wrap">
+      <span className="scope-pill" data-testid="git-change-scope-pending">
+        <span aria-hidden="true">⇄</span>
+        <span aria-label={accessibleLabel}>{label}</span>
+        <span className="cmp-budget-badge cmp-budget-badge-moderate scope-pill-status">
+          {t("gitChangeScope.status.connecting")}
+        </span>
+      </span>
+      <span className="scope-pill-detail">{t("gitChangeScope.pending.detail")}</span>
+    </span>
+  );
+}
+
 function GitChangePillRow({
   scope,
   status,
@@ -856,6 +900,14 @@ function scopesSignature(scopes: readonly ChatGitChangeScope[]): string {
   return scopes.map((scope) => `${scope.relationshipId}:${scope.descriptionStatus}`).join(" ");
 }
 
+function pendingComparisonsSignature(
+  comparisons: readonly WorkspaceLinkedGitChangeComparison[],
+): string {
+  return comparisons
+    .map((comparison) => `${comparison.connectionId}:${comparison.baseRef}:${comparison.headRef}`)
+    .join(" ");
+}
+
 function scopesAnnouncement(isEmpty: boolean, hasStale: boolean, t: I18nTranslate): string {
   if (isEmpty) return t("gitChangeScope.announcement.removed");
   return hasStale
@@ -912,32 +964,45 @@ function GitChangeScopeAnnouncer({ text }: { readonly text: string }): ReactNode
   );
 }
 
-export function GitChangeScopePill({
+interface GitChangeScopePillContentProps {
+  readonly announcer: ReactNode;
+  readonly chat: Chat;
+  readonly pending: readonly WorkspaceLinkedGitChangeComparison[];
+  readonly scopes: readonly ChatGitChangeScope[];
+  readonly onDisconnect: ((chat: Chat) => void) | undefined;
+  readonly onRefreshed: ((chat: Chat) => void) | undefined;
+  readonly updateScopes: typeof updateChatGitChangeScopes;
+  readonly refreshScope: typeof refreshGitChangeScope;
+  readonly approveDescription: ApproveGitChangeDescriptionFn;
+  readonly applyDescription: ApplyGitChangeDescriptionFn;
+  readonly reviewDescription: ReviewGitChangeDescriptionFn;
+  readonly t: I18nTranslate;
+}
+
+function GitChangeScopePillContent({
+  announcer,
   chat,
+  pending,
+  scopes,
   onDisconnect,
   onRefreshed,
-  updateScopes = updateChatGitChangeScopes,
-  refreshScope = refreshGitChangeScope,
-  approveDescription = defaultApproveDescription,
-  applyDescription = defaultApplyDescription,
-  reviewDescription = defaultReviewDescription,
-}: GitChangeScopePillProps): ReactNode {
-  const t = useTranslate();
-  const scopes = chat.gitChangeScopes ?? [];
-  const signature = scopesSignature(scopes);
-  const isEmpty = scopes.length === 0;
-  const hasStale = scopes.some((scope) => scope.descriptionStatus === "stale");
-  // Deps are the primitives the announcement needs, never the `scopes` array itself (a fresh
-  // `[]` reference every render for an unbound chat would otherwise re-fire on every render).
-  const announcement = useGitChangeScopeAnnouncement(chat.id, signature, isEmpty, hasStale, t);
-  const announcer = <GitChangeScopeAnnouncer text={announcement} />;
-
-  if (scopes.length === 0) {
-    return announcement === "" ? null : announcer;
-  }
+  updateScopes,
+  refreshScope,
+  approveDescription,
+  applyDescription,
+  reviewDescription,
+  t,
+}: GitChangeScopePillContentProps): ReactNode {
   return (
     <span className="scope-pill-group">
       {announcer}
+      {pending.map((comparison) => (
+        <PendingGitChangePillItem
+          key={`pending:${comparison.connectionId}`}
+          comparison={comparison}
+          t={t}
+        />
+      ))}
       {scopes.map((scope) => (
         <GitChangePillItem
           key={scope.relationshipId}
@@ -955,5 +1020,52 @@ export function GitChangeScopePill({
         />
       ))}
     </span>
+  );
+}
+
+function emptyGitChangeScopePill(announcement: string, announcer: ReactNode): ReactNode {
+  return announcement === "" ? null : announcer;
+}
+
+export function GitChangeScopePill({
+  chat,
+  pendingComparisons = [],
+  onDisconnect,
+  onRefreshed,
+  updateScopes = updateChatGitChangeScopes,
+  refreshScope = refreshGitChangeScope,
+  approveDescription = defaultApproveDescription,
+  applyDescription = defaultApplyDescription,
+  reviewDescription = defaultReviewDescription,
+}: GitChangeScopePillProps): ReactNode {
+  const t = useTranslate();
+  const scopes = chat.gitChangeScopes ?? [];
+  const pending = pendingComparisonsWithoutConfirmed(pendingComparisons, scopes);
+  const signature = `${scopesSignature(scopes)}|${pendingComparisonsSignature(pending)}`;
+  const isEmpty = scopes.length === 0 && pending.length === 0;
+  const hasStale = scopes.some((scope) => scope.descriptionStatus === "stale");
+  // Deps are the primitives the announcement needs, never the `scopes` array itself (a fresh
+  // `[]` reference every render for an unbound chat would otherwise re-fire on every render).
+  const announcement = useGitChangeScopeAnnouncement(chat.id, signature, isEmpty, hasStale, t);
+  const announcer = <GitChangeScopeAnnouncer text={announcement} />;
+
+  if (isEmpty) {
+    return emptyGitChangeScopePill(announcement, announcer);
+  }
+  return (
+    <GitChangeScopePillContent
+      announcer={announcer}
+      chat={chat}
+      pending={pending}
+      scopes={scopes}
+      onDisconnect={onDisconnect}
+      onRefreshed={onRefreshed}
+      updateScopes={updateScopes}
+      refreshScope={refreshScope}
+      approveDescription={approveDescription}
+      applyDescription={applyDescription}
+      reviewDescription={reviewDescription}
+      t={t}
+    />
   );
 }

@@ -492,6 +492,63 @@ describe("gitChangeChatBind", () => {
   });
 });
 
+describe("linkedGitChangeComparisons", () => {
+  it("returns every Git comparison connected to the chat, including pending bindings", () => {
+    const { linkedGitChangeComparisons } = makeConnectHarness(
+      [
+        win("chat", {}, "chat-1"),
+        win("governedGit", {}, "git-a"),
+        win("governedGit", {}, "git-b"),
+        win("files", { resolvedRoot: "/repo" }, "files-1"),
+      ],
+      [
+        {
+          ...conn("chat-1", "git-a"),
+          boundGitChangeBaseRef: "dev",
+          boundGitChangeHeadRef: "feature/a",
+          boundGitChangeRelationshipId: "rel-a",
+        },
+        {
+          ...conn("git-b", "chat-1"),
+          boundGitChangeBaseRef: "dev",
+          boundGitChangeHeadRef: "feature/b",
+        },
+        conn("chat-1", "files-1"),
+      ],
+    );
+
+    expect(linkedGitChangeComparisons("chat-1")).toEqual([
+      {
+        connectionId: "chat-1~git-a",
+        baseRef: "dev",
+        headRef: "feature/a",
+        pending: false,
+      },
+      {
+        connectionId: "git-b~chat-1",
+        baseRef: "dev",
+        headRef: "feature/b",
+        pending: true,
+      },
+    ]);
+  });
+
+  it("skips stale Git connector edges that do not carry a valid comparison snapshot", () => {
+    const { linkedGitChangeComparisons } = makeConnectHarness(
+      [win("chat", {}, "chat-1"), win("governedGit", {}, "git-1")],
+      [
+        {
+          ...conn("chat-1", "git-1"),
+          boundGitChangeBaseRef: "feature/x",
+          boundGitChangeHeadRef: "feature/x",
+        },
+      ],
+    );
+
+    expect(linkedGitChangeComparisons("chat-1")).toEqual([]);
+  });
+});
+
 // ─── Epic #710 #718 — linkedConnectorCapsuleIds ──────────────────────────────
 
 function ref<T>(value: T): MutableRefObject<T> {
@@ -2850,9 +2907,9 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     expect(store.conns[0]?.boundConnectorId).toBe("cap-a");
   });
 
-  it("draws a Git↔Chat edge only after the git-change bind returns a relationship scope", async () => {
+  it("draws a Git↔Chat edge immediately, then attaches the confirmed relationship scope", async () => {
     const store = { conns: [] as Connection[] };
-    const bound = gitScope();
+    const deferredScope = deferredValue<ChatGitChangeScope>();
     const seenSelections: Array<{ readonly baseRef: string; readonly headRef: string }> = [];
     const harness = makeConnectHarness(
       [
@@ -2865,19 +2922,51 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
         setConns: collectingSetConns(store),
         onGitChangeBind: (_chatWindowId, selection) => {
           seenSelections.push(selection);
-          return bound;
+          return deferredScope.promise;
         },
       },
     );
     harness.confirmConnect("chat-1", evt);
-    await flushAsyncBind();
     expect(seenSelections).toEqual([{ baseRef: "dev", headRef: "feature/x" }]);
     expect(store.conns[0]).toMatchObject({
       a: "git-1",
       b: "chat-1",
       boundChatWindowId: "chat-1",
+      boundGitChangeBaseRef: "dev",
+      boundGitChangeHeadRef: "feature/x",
+    });
+    expect(store.conns[0]?.boundGitChangeRelationshipId).toBeUndefined();
+    deferredScope.resolve(gitScope());
+    await deferredScope.promise;
+    await flushAsyncBind();
+    expect(store.conns[0]).toMatchObject({
+      a: "git-1",
+      b: "chat-1",
+      boundChatWindowId: "chat-1",
+      boundGitChangeBaseRef: "dev",
+      boundGitChangeHeadRef: "feature/x",
       boundGitChangeRelationshipId: "rel-git-1",
     });
+  });
+
+  it("removes the immediate Git↔Chat edge again when the git-change bind is vetoed", async () => {
+    const store = { conns: [] as Connection[] };
+    const harness = makeConnectHarness(
+      [
+        win("governedGit", { gitChangeBaseRef: "dev", gitChangeHeadRef: "feature/x" }, "git-1"),
+        win("chat", { chatId: "chat-private", projectPath: "/repo" }, "chat-1"),
+      ],
+      [],
+      {
+        connecting: { from: "git-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onGitChangeBind: () => Promise.resolve(false as const),
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    expect(store.conns).toHaveLength(1);
+    await flushAsyncBind();
+    expect(store.conns).toHaveLength(0);
   });
 
   it("does not draw a Git↔Chat edge when the Git comparison has no distinct base", async () => {

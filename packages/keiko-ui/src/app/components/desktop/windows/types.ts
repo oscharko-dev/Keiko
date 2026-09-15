@@ -39,6 +39,8 @@ export interface Connection {
   readonly boundScopeElided?: true;
   readonly boundConnectorKind?: "capsule" | "capsule-set";
   readonly boundConnectorId?: string;
+  readonly boundGitChangeBaseRef?: string;
+  readonly boundGitChangeHeadRef?: string;
   readonly boundGitChangeRelationshipId?: string;
 }
 

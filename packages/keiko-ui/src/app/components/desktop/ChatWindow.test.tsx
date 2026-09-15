@@ -546,6 +546,29 @@ describe("ChatWindow cancel button", () => {
     expect(screen.getByText("main...feature/chat-header")).toBeInTheDocument();
   });
 
+  it("marks the chat header as grounded while a Git connector edge is still preparing", () => {
+    const chat = makeChat();
+    const { container } = render(
+      <ChatSessionProvider value={makeSession({ activeChat: chat })}>
+        <ChatWindow
+          linkedRoot="/proj"
+          linkedGitChangeComparisons={[
+            {
+              connectionId: "git-1~chat-1",
+              baseRef: "main",
+              headRef: "feature/header-pending",
+              pending: true,
+            },
+          ]}
+        />
+      </ChatSessionProvider>,
+    );
+
+    expect(container.querySelector(".chat-scope-header")).toHaveAttribute("data-grounded", "true");
+    expect(screen.getByText("main...feature/header-pending")).toBeInTheDocument();
+    expect(screen.getByText("Connecting")).toBeInTheDocument();
+  });
+
   it("does not render the cancel button when not sending", () => {
     const chat = makeChat({
       connectedScope: { kind: "files", relativePaths: ["src/a.ts"], connectedAtMs: 1 },
