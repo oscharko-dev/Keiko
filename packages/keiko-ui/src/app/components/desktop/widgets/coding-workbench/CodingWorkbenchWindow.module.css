@@ -998,11 +998,30 @@
 }
 
 .timeline {
+  position: relative;
+  display: flex;
   max-height: none;
-  margin: var(--space-4) 0 0;
-  padding: 0;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin: var(--space-5) 0 0;
+  padding: 0 0 0 var(--space-1);
   overflow: visible;
   list-style: none;
+}
+
+.timeline::before {
+  position: absolute;
+  inset-block: 0;
+  inset-inline-start: 0.68rem;
+  width: 1px;
+  background: linear-gradient(
+    to bottom,
+    transparent,
+    color-mix(in oklch, var(--border-accent) 34%, transparent) 3rem,
+    color-mix(in oklch, var(--border-subtle) 72%, transparent) calc(100% - 3rem),
+    transparent
+  );
+  content: "";
 }
 
 .timeline:focus-visible {
@@ -1011,12 +1030,13 @@
 }
 
 .timelineItem {
+  position: relative;
   display: grid;
   min-width: 0;
-  grid-template-columns: 0.875rem minmax(0, 1fr);
+  grid-template-columns: 1.4rem minmax(0, 1fr);
   gap: var(--space-3);
   align-content: start;
-  padding: var(--space-2) 0;
+  padding: 0;
 }
 
 .timelineItem[data-timeline-kind="event"] {
@@ -1024,19 +1044,33 @@
 }
 
 .timelineMarker {
-  width: 0.45rem;
-  height: 0.45rem;
-  margin-top: 0.7rem;
-  border: 1px solid var(--border-accent);
+  z-index: 1;
+  display: grid;
+  width: 1.15rem;
+  height: 1.15rem;
+  place-items: center;
+  margin-top: 0.88rem;
+  border: 1px solid color-mix(in oklch, var(--border-accent) 72%, var(--border-subtle));
   border-radius: var(--radius-pill);
   background: var(--surface-primary);
-  box-shadow: 0 0 0 3px var(--surface-accent-subtle);
+  box-shadow: 0 0 0 4px color-mix(in oklch, var(--surface-primary) 88%, transparent);
+}
+
+.timelineMarker::after {
+  width: 0.38rem;
+  height: 0.38rem;
+  border-radius: inherit;
+  background: var(--accent);
+  content: "";
 }
 
 .timelineItem[data-timeline-kind="event"][data-event-tone="routine"] .timelineMarker {
   border-color: var(--border-subtle);
-  box-shadow: none;
-  opacity: 0.75;
+  opacity: 0.5;
+}
+
+.timelineItem[data-timeline-kind="event"][data-event-tone="routine"] .timelineMarker::after {
+  background: var(--text-tertiary);
 }
 
 .timelineItem[data-event-tone="success"] .timelineMarker,
@@ -1048,6 +1082,15 @@
 .timelineItem[data-event-tone="attention"] .timelineMarker {
   border-color: var(--feedback-warning);
   box-shadow: 0 0 0 3px color-mix(in oklch, var(--feedback-warning) 18%, transparent);
+}
+
+.timelineItem[data-event-tone="success"] .timelineMarker::after,
+.timelineItem[data-timeline-kind="tool"] .timelineMarker::after {
+  background: var(--feedback-success);
+}
+
+.timelineItem[data-event-tone="attention"] .timelineMarker::after {
+  background: var(--feedback-warning);
 }
 
 .timelineBody,
@@ -1068,20 +1111,31 @@
 }
 
 .timelineBody[data-message-role] {
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-control);
-  padding: var(--space-3) var(--space-4);
-  background: color-mix(in oklch, var(--surface-primary) 92%, var(--surface-inset));
+  width: min(100%, 62rem);
+  border: 1px solid var(--ai-response-border);
+  border-radius: var(--radius-surface);
+  padding: var(--space-4) var(--space-5);
+  background: var(--ai-response-surface);
+  box-shadow: 0 18px 46px -38px rgb(var(--shadow-ink-rgb) / 0.72);
 }
 
 .timelineBody[data-message-role="assistant"] {
-  border-color: color-mix(in oklch, var(--border-accent) 28%, var(--border-subtle));
-  background: color-mix(in oklch, var(--surface-primary) 94%, var(--surface-accent-subtle));
+  border-color: color-mix(in oklch, var(--border-accent) 36%, var(--ai-response-border));
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in oklch, var(--surface-accent-subtle) 34%, transparent),
+      transparent 8rem
+    ),
+    var(--ai-response-surface);
 }
 
 .timelineBody[data-message-role="user"] {
-  border-color: color-mix(in oklch, var(--border-accent) 42%, var(--border-subtle));
-  background: color-mix(in oklch, var(--surface-primary) 82%, var(--surface-accent-subtle));
+  width: fit-content;
+  max-width: min(100%, 54rem);
+  margin-inline-start: clamp(0rem, 9vw, 8rem);
+  border-color: color-mix(in oklch, var(--border-accent) 48%, var(--ai-response-border));
+  background: color-mix(in oklch, var(--surface-accent-subtle) 58%, var(--surface-primary));
 }
 
 .timelineBody[data-message-role] .timelineTitle {
@@ -1092,36 +1146,114 @@
 }
 
 .messageText {
-  display: flex;
   min-width: 0;
-  flex-direction: column;
-  gap: var(--space-2);
   margin-top: var(--space-2);
   color: var(--text-primary);
-  font-size: var(--text-body-sm);
+  font-size: var(--text-body);
   font-weight: var(--weight-regular);
-  line-height: 1.55;
+  line-height: 1.64;
 }
 
-.messageText p,
+.messageText > p,
 .planCard p {
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
+.messageText > p + p {
+  margin-top: var(--space-2);
+}
+
+.messageText :global(.sm-root) {
+  color: inherit;
+  line-height: 1.64;
+}
+
+.messageText :global(.sm-p) {
+  margin-block-end: var(--space-3);
+}
+
+.messageText :global(.sm-inline-code) {
+  color: var(--text-accent);
+  background: color-mix(in oklch, var(--surface-inset) 84%, transparent);
+}
+
+.messageText :global(.sm-h) {
+  color: var(--text-primary);
+  font-weight: var(--weight-semibold);
+}
+
 .toolCard {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-2);
+  display: grid;
+  width: min(100%, 34rem);
+  min-height: 3rem;
+  grid-template-columns: 1.7rem minmax(0, 1fr) auto auto;
+  gap: var(--space-3);
   align-items: center;
-  width: fit-content;
-  max-width: 100%;
-  border: 1px solid color-mix(in oklch, var(--ai-tool-border) 55%, var(--border-subtle));
-  border-radius: var(--radius-pill);
+  border: 1px solid var(--ai-tool-border);
+  border-radius: var(--radius-control);
   padding: var(--space-2) var(--space-3);
-  background: color-mix(in oklch, var(--ai-tool-surface) 60%, transparent);
+  background: color-mix(in oklch, var(--ai-tool-surface) 84%, transparent);
   color: var(--text-secondary);
+  box-shadow: 0 12px 30px -28px rgb(var(--shadow-ink-rgb) / 0.75);
+}
+
+.toolIcon {
+  display: grid;
+  width: 1.55rem;
+  height: 1.55rem;
+  place-items: center;
+  border: 1px solid var(--border-subtle);
+  border-radius: calc(var(--radius-control) - 2px);
+  background: color-mix(in oklch, var(--surface-secondary) 74%, transparent);
+}
+
+.toolIcon::before {
+  width: 0.72rem;
+  height: 0.72rem;
+  border: 1.5px solid currentColor;
+  border-block-start-color: transparent;
+  border-radius: var(--radius-pill);
+  color: var(--text-tertiary);
+  content: "";
+}
+
+.toolCard[data-tool-state="succeeded"] .toolIcon::before {
+  border: 0;
+  background: var(--feedback-success);
+}
+
+.toolMeta {
+  min-width: 0;
+}
+
+.toolMeta .timelineTitle {
+  overflow: hidden;
+  color: var(--text-primary);
+  font-size: var(--text-body-sm);
+  font-weight: var(--weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toolName {
+  display: inline-block;
+  max-width: 100%;
+  margin-top: var(--space-1);
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: top;
+  white-space: nowrap;
+}
+
+.toolCount {
+  color: var(--text-tertiary);
+  font-family: var(--font-mono);
+  font-size: var(--text-caption);
 }
 
 .toolCard[data-tool-state="succeeded"] {
@@ -1135,9 +1267,10 @@
 
 .planCard {
   border: 1px solid color-mix(in oklch, var(--border-accent) 52%, var(--border-subtle));
-  border-radius: var(--radius-control);
-  padding: var(--space-3) var(--space-4);
-  background: color-mix(in oklch, var(--surface-accent-subtle) 62%, transparent);
+  border-radius: var(--radius-surface);
+  padding: var(--space-4) var(--space-5);
+  background: color-mix(in oklch, var(--surface-accent-subtle) 50%, var(--surface-primary));
+  box-shadow: 0 18px 46px -40px rgb(var(--shadow-ink-rgb) / 0.8);
 }
 
 .planSteps {
@@ -1185,8 +1318,10 @@
 .eventCard {
   display: flex;
   flex-wrap: wrap;
-  gap: var(--space-1) var(--space-2);
+  gap: var(--space-1) var(--space-3);
   align-items: baseline;
+  min-height: 1.9rem;
+  padding-block: var(--space-1);
   color: var(--text-tertiary);
 }
 
@@ -1555,6 +1690,7 @@
   .alert,
   .activityStatus,
   .toolCard,
+  .toolIcon,
   .planCard,
   .questionInline,
   .activityBadge,

@@ -2511,7 +2511,8 @@ describe("CodingWorkbenchWindow", () => {
 
     const timeline = screen.getByRole("list", { name: "Coding run event timeline" });
     expect(timeline).toHaveTextContent("Review the repository");
-    expect(timeline).toHaveTextContent("Tool activity: workspace.read");
+    expect(timeline).toHaveTextContent("Workspace Read");
+    expect(timeline).toHaveTextContent("workspace.read");
     expect(timeline).toHaveTextContent("Succeeded");
     expect(timeline).toHaveTextContent("Current plan");
     expect(timeline).toHaveTextContent("Output truncated");

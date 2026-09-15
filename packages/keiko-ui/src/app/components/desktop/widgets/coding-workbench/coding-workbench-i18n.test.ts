@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { DE_MESSAGES } from "@/lib/i18n-messages.de";
 import { EN_MESSAGES } from "@/lib/i18n-messages.en";
 import { translateCodingWorkbench } from "./coding-workbench-i18n";
+import { DE_CODING_WORKBENCH_MESSAGES } from "./coding-workbench-i18n.de";
+import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
 
 describe("Coding Workbench translations", () => {
   it("localizes English and German feature labels", () => {
@@ -82,6 +84,30 @@ describe("Coding Workbench translations", () => {
         state: "Wird ausgeführt",
       }),
     ).toBe("Wird ausgeführt. Revision 7.");
+  });
+
+  it("falls back instead of crashing when a feature catalog is momentarily stale", () => {
+    const key = "codingWorkbench.activity.toolCount";
+    const messages = DE_CODING_WORKBENCH_MESSAGES as Partial<
+      Record<CodingWorkbenchMessageKey, string>
+    >;
+    const previous = messages[key];
+    expect(previous).toBeDefined();
+    if (previous === undefined) {
+      throw new TypeError(`${key} must exist before the stale-catalog regression runs`);
+    }
+    delete messages[key];
+
+    try {
+      expect(translateCodingWorkbench("de", key, { count: 3 })).toBe("3 calls");
+    } finally {
+      messages[key] = previous;
+    }
+  });
+
+  it("returns the key instead of throwing when no catalog contains a runtime key", () => {
+    const key = "codingWorkbench.runtime.missing" as CodingWorkbenchMessageKey;
+    expect(translateCodingWorkbench("en", key)).toBe(key);
   });
 
   it("localizes the authenticated run-changes surface", () => {

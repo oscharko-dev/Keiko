@@ -466,6 +466,7 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.role.user": "Du",
   "codingWorkbench.activity.role.assistant": "Coding-Agent",
   "codingWorkbench.activity.tool": "Tool-Aktivität: {tool}",
+  "codingWorkbench.activity.toolCount": "{count} Aufrufe",
   "codingWorkbench.activity.toolState.pending": "Ausstehend",
   "codingWorkbench.activity.toolState.running": "Wird ausgeführt",
   "codingWorkbench.activity.toolState.succeeded": "Erfolgreich",
