@@ -810,6 +810,17 @@ function installInto(tmp, tarballPath, options) {
  */
 function installIntoGlobalPrefix(prefixRoot, tarballPath) {
   const timeoutMs = npmInstallTimeoutMs();
+  // npm's global install writes into `<prefix>/lib/node_modules/…` on POSIX and
+  // `<prefix>/node_modules/…` on Windows. On Linux/macOS it lstats `<prefix>/lib` before
+  // populating it and dies with ENOENT when the caller's fresh prefix directory only exists at
+  // the root, so pre-create the layout npm expects instead of relying on it to mkdir the parent
+  // itself.
+  if (process.platform !== "win32") {
+    mkdirSync(join(prefixRoot, "lib", "node_modules"), { recursive: true });
+    mkdirSync(join(prefixRoot, "bin"), { recursive: true });
+  } else {
+    mkdirSync(join(prefixRoot, "node_modules"), { recursive: true });
+  }
   const installResult = run(
     "npm",
     [
