@@ -45,7 +45,7 @@ import {
 } from "./WindowsRegistry";
 import { WindowBodyBoundary } from "./WindowBodyBoundary";
 import type { AppWindow, ConnState, View } from "./types";
-import type { WorkspaceApi } from "../hooks/useWorkspace.types";
+import type { WorkspaceApi, WorkspaceLinkedGitChangeComparison } from "../hooks/useWorkspace.types";
 import selectionStyles from "../WorkspaceSelection.module.css";
 import { clampWorkspaceWindowOrigin } from "../windowRecovery";
 
@@ -663,6 +663,9 @@ function attachResizeListeners(
 // yields the SAME array identity — required for the body useMemo below to hold
 // across re-renders (issue #1580).
 const EMPTY_STRINGS: readonly string[] = Object.freeze([]);
+const EMPTY_GIT_CHANGE_COMPARISONS: readonly WorkspaceLinkedGitChangeComparison[] = Object.freeze(
+  [],
+);
 
 interface LinkedContext {
   readonly linkedRoot: string | null;
@@ -674,6 +677,7 @@ interface LinkedContext {
   readonly linkedFigmaSnapshotSources:
     readonly QualityIntelligenceFigmaSnapshotSource[] | undefined;
   readonly linkedImageSources: readonly QualityIntelligenceImageSource[] | undefined;
+  readonly linkedGitChangeComparisons: readonly WorkspaceLinkedGitChangeComparison[] | undefined;
 }
 
 // Shared "no linked context" identity. A window with no connected sources resolves
@@ -689,19 +693,27 @@ const EMPTY_LINKED: LinkedContext = Object.freeze({
   linkedFigmaSnapshotRunIds: EMPTY_STRINGS,
   linkedFigmaSnapshotSources: undefined,
   linkedImageSources: undefined,
+  linkedGitChangeComparisons: undefined,
 });
 
 function isEmptyLinkedContext(c: LinkedContext): boolean {
-  return (
-    c.linkedRoot === null &&
-    c.linkedFilePath === undefined &&
-    c.linkedRoots.length === 0 &&
-    c.linkedCapsuleIds.length === 0 &&
-    c.linkedCapsuleSetIds.length === 0 &&
-    c.linkedFigmaSnapshotRunIds.length === 0 &&
-    (c.linkedFigmaSnapshotSources === undefined || c.linkedFigmaSnapshotSources.length === 0) &&
-    (c.linkedImageSources === undefined || c.linkedImageSources.length === 0)
-  );
+  return c.linkedRoot === null && c.linkedFilePath === undefined && !hasLinkedArrayContext(c);
+}
+
+function hasArrayItems(value: readonly unknown[] | undefined): boolean {
+  return value !== undefined && value.length > 0;
+}
+
+function hasLinkedArrayContext(c: LinkedContext): boolean {
+  return [
+    c.linkedRoots,
+    c.linkedCapsuleIds,
+    c.linkedCapsuleSetIds,
+    c.linkedFigmaSnapshotRunIds,
+    c.linkedFigmaSnapshotSources,
+    c.linkedImageSources,
+    c.linkedGitChangeComparisons,
+  ].some(hasArrayItems);
 }
 
 // Resolve linkedRoots per window type: the multi-root types read the full linked-roots
@@ -717,6 +729,56 @@ function resolveLinkedRoots(
   return EMPTY_STRINGS;
 }
 
+function resolveConnectorContext(
+  api: WorkspaceApi,
+  type: WindowType,
+  id: string,
+): {
+  readonly linkedCapsuleIds: readonly string[];
+  readonly linkedCapsuleSetIds: readonly string[];
+} {
+  if (type !== "quality" && type !== "editor") {
+    return { linkedCapsuleIds: EMPTY_STRINGS, linkedCapsuleSetIds: EMPTY_STRINGS };
+  }
+  return {
+    linkedCapsuleIds: api.linkedConnectorCapsuleIds(id),
+    linkedCapsuleSetIds: api.linkedConnectorCapsuleSetIds(id),
+  };
+}
+
+function resolveQualitySources(
+  api: WorkspaceApi,
+  type: WindowType,
+  id: string,
+): {
+  readonly linkedFigmaSnapshotRunIds: readonly string[];
+  readonly linkedFigmaSnapshotSources:
+    readonly QualityIntelligenceFigmaSnapshotSource[] | undefined;
+  readonly linkedImageSources: readonly QualityIntelligenceImageSource[] | undefined;
+} {
+  if (type !== "quality") {
+    return {
+      linkedFigmaSnapshotRunIds: EMPTY_STRINGS,
+      linkedFigmaSnapshotSources: undefined,
+      linkedImageSources: undefined,
+    };
+  }
+  return {
+    linkedFigmaSnapshotRunIds: api.linkedFigmaSnapshotRunIds(id),
+    linkedFigmaSnapshotSources: api.linkedFigmaSnapshotSources?.(id),
+    linkedImageSources: api.linkedImageSources?.(id),
+  };
+}
+
+function resolveGitChangeComparisons(
+  api: WorkspaceApi,
+  type: WindowType,
+  id: string,
+): readonly WorkspaceLinkedGitChangeComparison[] | undefined {
+  if (type !== "chat") return undefined;
+  return api.linkedGitChangeComparisons?.(id) ?? EMPTY_GIT_CHANGE_COMPARISONS;
+}
+
 // Resolve every cross-window linked* context a window of `type` reads. Pulled out
 // of the render body so it can be wrapped in a single useMemo keyed on the link
 // revision — the resolvers each scan conns+wins, so re-running them on every
@@ -724,32 +786,21 @@ function resolveLinkedRoots(
 function computeLinkedContext(api: WorkspaceApi, type: WindowType, id: string): LinkedContext {
   const readsFilesContext = receivesFilesContext(type);
   const readsFocusedFileContext = receivesFocusedFileContext(type);
-  const receivesConnectorContext = type === "quality" || type === "editor";
   const linkedRoot = readsFilesContext ? api.linkedFilesRoot(id) : null;
   const linkedFilePath = readsFocusedFileContext
     ? api.linkedFilesContext(id)?.activeFilePath
     : undefined;
   const linkedRoots = resolveLinkedRoots(type, linkedRoot, api, id);
-  const linkedCapsuleIds = receivesConnectorContext
-    ? api.linkedConnectorCapsuleIds(id)
-    : EMPTY_STRINGS;
-  const linkedCapsuleSetIds = receivesConnectorContext
-    ? api.linkedConnectorCapsuleSetIds(id)
-    : EMPTY_STRINGS;
-  const linkedFigmaSnapshotRunIds =
-    type === "quality" ? api.linkedFigmaSnapshotRunIds(id) : EMPTY_STRINGS;
-  const linkedFigmaSnapshotSources =
-    type === "quality" ? api.linkedFigmaSnapshotSources?.(id) : undefined;
-  const linkedImageSources = type === "quality" ? api.linkedImageSources?.(id) : undefined;
+  const connectorContext = resolveConnectorContext(api, type, id);
+  const qualitySources = resolveQualitySources(api, type, id);
+  const linkedGitChangeComparisons = resolveGitChangeComparisons(api, type, id);
   const resolved: LinkedContext = {
     linkedRoot,
     linkedFilePath,
     linkedRoots,
-    linkedCapsuleIds,
-    linkedCapsuleSetIds,
-    linkedFigmaSnapshotRunIds,
-    linkedFigmaSnapshotSources,
-    linkedImageSources,
+    ...connectorContext,
+    ...qualitySources,
+    linkedGitChangeComparisons,
   };
   return isEmptyLinkedContext(resolved) ? EMPTY_LINKED : resolved;
 }

@@ -2998,8 +2998,9 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     const user = userEvent.setup();
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
-    await user.click(await screen.findByRole("button", { name: "Use commit draft" }));
-    expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes"),
+    );
     expect(screen.getByLabelText("Description")).toHaveValue("Body.");
     await user.click(screen.getByRole("button", { name: "Unstage all" }));
 
@@ -3131,8 +3132,7 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     expect(await screen.findByText("index.ts")).toBeInTheDocument();
 
-    await user.click(await screen.findByRole("button", { name: "Use commit draft" }));
-    expect(screen.getByLabelText("Description")).toHaveValue("Body.");
+    await waitFor(() => expect(screen.getByLabelText("Description")).toHaveValue("Body."));
     await user.click(screen.getByText("README.md"));
 
     expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes");

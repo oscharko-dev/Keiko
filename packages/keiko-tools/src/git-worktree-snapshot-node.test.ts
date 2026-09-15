@@ -96,6 +96,18 @@ function deps(): NodeGitWorktreeReaderDeps {
   return { workspace: info, processEnv: { PATH: process.env.PATH ?? "" }, now: () => Date.now() };
 }
 
+function writeLargeIndexFixture(): void {
+  const fixtureDir = join(root, "large-index");
+  const longName = "x".repeat(128);
+  mkdirSync(fixtureDir, { recursive: true });
+  for (let i = 0; i < 1_700; i += 1) {
+    const name = `entry-${String(i).padStart(4, "0")}-${longName}.txt`;
+    writeFileSync(join(fixtureDir, name), "v1\n", "utf8");
+  }
+  git(["add", "large-index"]);
+  git(["commit", "-m", "large index"]);
+}
+
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-read-")));
   git(["init", "-q", "-b", "main"]);
@@ -381,6 +393,18 @@ describe("readGitWorktreeSnapshot", () => {
     const stagedDigest = snap.stagedTreeDigest;
     git(["add", "a.txt"]);
     expect((await readGitWorktreeSnapshot(deps())).stagedTreeDigest).not.toBe(stagedDigest);
+  });
+
+  it("keeps the snapshot readable when the tracked index exceeds the default command output cap", async () => {
+    writeLargeIndexFixture();
+    expect(git(["ls-files", "--stage", "-z"]).length).toBeGreaterThan(
+      DEFAULT_SANDBOX_POLICY.maxOutputBytes,
+    );
+
+    const snap = await readGitWorktreeSnapshot(deps());
+
+    expect(snap.currentBranchName).toBe("main");
+    expect(snap.stagedTreeDigest).toMatch(/^[a-f0-9]{64}$/u);
   });
 
   it("reports a detached HEAD", async () => {

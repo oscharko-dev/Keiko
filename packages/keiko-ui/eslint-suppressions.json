@@ -1081,9 +1081,6 @@
   "src/app/components/desktop/widgets/cards/git-client/CommitComposer.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
       "count": 1
-    },
-    "complexity": {
-      "count": 1
     }
   },
   "src/app/components/desktop/widgets/cards/git-client/ConnectPanel.tsx": {
@@ -1649,7 +1646,7 @@
       "count": 2
     },
     "complexity": {
-      "count": 5
+      "count": 4
     },
     "max-lines-per-function": {
       "count": 4

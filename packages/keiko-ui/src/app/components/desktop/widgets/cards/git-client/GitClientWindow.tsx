@@ -972,6 +972,7 @@ export function GitClientWindow({
   const branchActions = useGitActions(client, projectKey, mutationRepositoryRoot);
   const staging = useGitActions(client, projectKey, mutationRepositoryRoot);
   const commit = useGitActions(client, projectKey, mutationRepositoryRoot);
+  const runCommitPreview = commit.runPreview;
   const resetBranchActions = branchActions.reset;
   const resetStaging = staging.reset;
   const resetCommit = commit.reset;
@@ -1712,6 +1713,10 @@ export function GitClientWindow({
     },
     [resizeSidebar, sidebarWidth],
   );
+  const previewCommitDraft = useCallback(
+    (messageDraft: string): void => runCommitPreview(messageDraft, statusRevision),
+    [runCommitPreview, statusRevision],
+  );
   const commitComposer = (
     <CommitComposer
       key={`${selectedPath ?? ""}:${commitNonce.toString()}`}
@@ -1723,6 +1728,7 @@ export function GitClientWindow({
       error={commit.flow.error}
       preview={commit.preview}
       previewDraft={commit.previewDraft}
+      previewRequestRevision={commit.previewRequestRevision}
       previewError={commit.previewError}
       previewRevision={statusRevision}
       layout={useCommitWorkspace ? "workspace" : "sidebar"}
@@ -1730,7 +1736,7 @@ export function GitClientWindow({
       bodyValue={commitBody}
       onSummaryChange={setCommitSummary}
       onBodyChange={setCommitBody}
-      onPreview={commit.runPreview}
+      onPreview={previewCommitDraft}
       onCommit={commitChanges}
       onCreateBranch={openNewBranchDialog}
       onCreatePullRequest={() => openRightPane("pull-request")}

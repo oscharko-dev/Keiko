@@ -191,7 +191,7 @@ describe("CommitComposer — preview and outcomes", () => {
       busy: false,
       outcome: null,
       error: null,
-      preview: makePreview({ suggestedMessage: "chore: update staged changes" }),
+      preview: makePreview(),
       previewDraft: "",
       previewError: "stale preview error",
       previewRevision: 1,
@@ -237,10 +237,12 @@ describe("CommitComposer — preview and outcomes", () => {
     );
   });
 
-  it("shows, copies, and applies an eligible commit draft", async () => {
+  it("fills an empty composer with an eligible commit draft and keeps it copyable", async () => {
     const user = userEvent.setup();
     const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
     const writeText = vi.fn().mockResolvedValue(undefined);
+    const diagnostics: string[] = [];
+    setClientDiagnosticWriter((message) => diagnostics.push(message));
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText },
@@ -257,28 +259,18 @@ describe("CommitComposer — preview and outcomes", () => {
     });
 
     try {
-      expect(screen.getByTestId("git-commit-draft")).toHaveTextContent(
-        "2 staged files across 1 area",
+      await waitFor(() =>
+        expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes"),
       );
-      expect(screen.getByRole("group", { name: "Commit draft" })).toBeInTheDocument();
-      expect(screen.getByTestId("git-commit-draft-subject")).toHaveTextContent(
-        "chore: update staged changes",
-      );
-      expect(screen.getByTestId("git-commit-draft-body")).toHaveTextContent(
-        "Update 2 staged files in src. Keep the commit limited to the staged selection.",
-      );
-      expect(screen.getByLabelText("Summary")).toHaveValue("");
-      await user.click(screen.getByRole("button", { name: "Copy commit draft" }));
-      await waitFor(() => expect(writeText).toHaveBeenCalledWith(suggestedMessage));
-      expect(screen.getByText("Copied")).toBeInTheDocument();
-
-      await user.click(screen.getByRole("button", { name: "Use commit draft" }));
-
-      expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes");
       expect(screen.getByLabelText("Description")).toHaveValue(
         "Update 2 staged files in src.\nKeep the commit limited to the staged selection.",
       );
+      expect(diagnostics).toEqual(["git-client: generated commit draft applied to empty composer"]);
+      expect(screen.queryByTestId("git-commit-draft")).not.toBeInTheDocument();
       expect(screen.getByTestId("git-commit-message-preview")).toHaveTextContent("Commit draft");
+      await user.click(screen.getByRole("button", { name: "Copy commit draft" }));
+      await waitFor(() => expect(writeText).toHaveBeenCalledWith(suggestedMessage));
+      expect(screen.getByText("Copied")).toBeInTheDocument();
 
       await waitFor(() => expect(onPreview).toHaveBeenCalledWith(suggestedMessage));
     } finally {
@@ -288,6 +280,36 @@ describe("CommitComposer — preview and outcomes", () => {
         Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
       }
     }
+  });
+
+  it("does not overwrite a manual draft when an empty-preview suggestion arrives", () => {
+    renderComposer({
+      summaryValue: "docs: keep my subject",
+      bodyValue: "Manual body",
+      previewDraft: "",
+      preview: makePreview({
+        suggestedMessage: "chore: update staged changes\n\nGenerated detail.",
+      }),
+    });
+
+    expect(screen.getByLabelText("Summary")).toHaveValue("docs: keep my subject");
+    expect(screen.getByLabelText("Description")).toHaveValue("Manual body");
+    expect(screen.queryByRole("group", { name: "Commit draft" })).not.toBeInTheDocument();
+  });
+
+  it("does not apply a commit draft from an older staged selection revision", async () => {
+    renderComposer({
+      previewDraft: "",
+      previewRevision: 2,
+      previewRequestRevision: 1,
+      preview: makePreview({
+        suggestedMessage: "chore: update old staged changes\n\nGenerated stale detail.",
+      }),
+    });
+
+    expect(screen.getByLabelText("Summary")).toHaveValue("");
+    expect(screen.getByLabelText("Description")).toHaveValue("");
+    expect(screen.queryByTestId("git-commit-draft")).not.toBeInTheDocument();
   });
 
   it("clears an unchanged generated draft when the staged revision changes", async () => {
@@ -303,20 +325,23 @@ describe("CommitComposer — preview and outcomes", () => {
       error: null,
       preview: makePreview({ suggestedMessage }),
       previewDraft: "",
+      previewRequestRevision: 1,
       previewError: null,
       onPreview: vi.fn(),
       onCommit: vi.fn(),
     } as const;
     const view = render(<CommitComposer {...props} previewRevision={1} />);
 
-    await user.click(screen.getByRole("button", { name: "Use commit draft" }));
-    expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes");
+    await waitFor(() =>
+      expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes"),
+    );
 
     view.rerender(<CommitComposer {...props} stagedFileCount={1} previewRevision={2} />);
 
     await waitFor(() => expect(screen.getByLabelText("Summary")).toHaveValue(""));
     expect(screen.getByLabelText("Description")).toHaveValue("");
     expect(diagnostics).toEqual([
+      "git-client: generated commit draft applied to empty composer",
       "git-client: stale generated commit draft cleared (repository-revision-changed)",
     ]);
   });
@@ -332,13 +357,16 @@ describe("CommitComposer — preview and outcomes", () => {
       error: null,
       preview: makePreview({ suggestedMessage }),
       previewDraft: "",
+      previewRequestRevision: 1,
       previewError: null,
       onPreview: vi.fn(),
       onCommit: vi.fn(),
     } as const;
     const view = render(<CommitComposer {...props} previewRevision={1} />);
 
-    await user.click(screen.getByRole("button", { name: "Use commit draft" }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes"),
+    );
     await user.clear(screen.getByLabelText("Summary"));
     await user.type(screen.getByLabelText("Summary"), "docs: explain the selected change");
 

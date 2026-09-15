@@ -24,6 +24,7 @@ import type {
   OpenEditorFileResult,
   ViewportWorld,
   WorkspaceApi,
+  WorkspaceLinkedGitChangeComparison,
 } from "./useWorkspace.types";
 import type {
   CapsuleSetId,
@@ -1096,8 +1097,24 @@ interface ConnectionBindingSelection {
   readonly gitChangeSelection: GitChangeBindSelection | null;
 }
 
+interface ConnectionAttempt {
+  readonly fromId: string;
+  readonly toId: string;
+  readonly boundScope: ChatConnectedScope | null;
+  readonly chatWindowId: string | null;
+  readonly chatConversationIdAtBind: string | undefined;
+  readonly connectorScope: ChatLocalKnowledgeScope | null;
+  readonly gitChangeSelection: GitChangeBindSelection | null;
+  readonly bindingTarget: ChatBindingTarget | undefined;
+  readonly hadGitConnectionBeforeBind: boolean;
+}
+
 function isDuplicate(cs: readonly Connection[], a: string, b: string): boolean {
-  return cs.some((c) => (c.a === a && c.b === b) || (c.a === b && c.b === a));
+  return cs.some((c) => isConnectionBetween(c, a, b));
+}
+
+function isConnectionBetween(c: Connection, a: string, b: string): boolean {
+  return (c.a === a && c.b === b) || (c.a === b && c.b === a);
 }
 
 function chatWindowIdInPair(a: AppWindow | undefined, b: AppWindow | undefined): string | null {
@@ -1136,6 +1153,18 @@ function chatBindingTarget(
     projectPath: chatProjectPath(chatWindow),
     isCurrent: (): boolean => chatConversationId(winById(chatWindowId)) === conversationId,
   };
+}
+
+function endpointsStillCurrent(
+  fromId: string,
+  toId: string,
+  chatWindowId: string | null,
+  chatConversationIdAtBind: string | undefined,
+  winById: (id: string) => AppWindow | undefined,
+): boolean {
+  if (winById(fromId) === undefined || winById(toId) === undefined) return false;
+  if (chatWindowId === null) return true;
+  return chatConversationId(winById(chatWindowId)) === chatConversationIdAtBind;
 }
 
 /** The id of the endpoint on the other side of `c` from `id`, or null when `id` isn't in `c`. */
@@ -1288,6 +1317,7 @@ function connectionScopeFields(
   chatWindowId: string | null,
   boundScope: ChatConnectedScope | null,
   connectorScope: ChatLocalKnowledgeScope | null,
+  gitChangeSelection: GitChangeBindSelection | null,
   gitChangeRelationshipId: string | undefined,
 ): Partial<
   Pick<
@@ -1298,6 +1328,8 @@ function connectionScopeFields(
     | "boundRelativePath"
     | "boundConnectorKind"
     | "boundConnectorId"
+    | "boundGitChangeBaseRef"
+    | "boundGitChangeHeadRef"
     | "boundGitChangeRelationshipId"
   >
 > {
@@ -1311,6 +1343,12 @@ function connectionScopeFields(
         }
       : {}),
     ...connectionConnectorFields(connectorScope),
+    ...(gitChangeSelection !== null
+      ? {
+          boundGitChangeBaseRef: gitChangeSelection.baseRef,
+          boundGitChangeHeadRef: gitChangeSelection.headRef,
+        }
+      : {}),
     ...(gitChangeRelationshipId !== undefined
       ? { boundGitChangeRelationshipId: gitChangeRelationshipId }
       : {}),
@@ -1480,12 +1518,14 @@ type ConnectApi = Omit<
     | "linkedFigmaSnapshotRunIds"
     | "linkedFigmaSnapshotSources"
     | "linkedImageSources"
+    | "linkedGitChangeComparisons"
     | "currentFilesContext"
   >,
-  "linkedFigmaSnapshotSources" | "linkedImageSources"
+  "linkedFigmaSnapshotSources" | "linkedImageSources" | "linkedGitChangeComparisons"
 > & {
   readonly linkedFigmaSnapshotSources: NonNullable<WorkspaceApi["linkedFigmaSnapshotSources"]>;
   readonly linkedImageSources: NonNullable<WorkspaceApi["linkedImageSources"]>;
+  readonly linkedGitChangeComparisons: NonNullable<WorkspaceApi["linkedGitChangeComparisons"]>;
 };
 
 // Click-to-Connect flow (replaces the old pointerdown→drag→pointerup gesture):
@@ -1527,6 +1567,11 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   const removeStoredConnection = (id: string): void => {
     setConns((connections) => connections.filter((connection) => connection.id !== id));
   };
+  const removeStoredConnectionBetween = (fromId: string, toId: string): void => {
+    setConns((connections) =>
+      connections.filter((connection) => !isConnectionBetween(connection, fromId, toId)),
+    );
+  };
   // The window on the other end of `c` from `id`, resolved through winById, or null when the
   // connection doesn't touch `id` or the other endpoint no longer exists.
   const connectedWindow = (c: Connection, id: string): AppWindow | null => {
@@ -1547,7 +1592,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   // are still live, appends the Connection (with its bind-time scope snapshot) unless it's a
   // duplicate, and focuses the target. Split out of confirmConnect so the promise continuation
   // doesn't add nested branches to confirmConnect's own complexity.
-  const applyConfirmedConnection = (
+  const applyConnection = (
     binding: BindAcceptance,
     fromId: string,
     toId: string,
@@ -1555,16 +1600,11 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     chatConversationIdAtBind: string | undefined,
     boundScope: ChatConnectedScope | null,
     connectorScope: ChatLocalKnowledgeScope | null,
+    gitChangeSelection: GitChangeBindSelection | null,
   ): void => {
     if (!binding.accepted) return;
-    const stillLive = winById(fromId) !== undefined && winById(toId) !== undefined;
-    if (!stillLive) return;
-    if (
-      chatWindowId !== null &&
-      chatConversationId(winById(chatWindowId)) !== chatConversationIdAtBind
-    ) {
+    if (!endpointsStillCurrent(fromId, toId, chatWindowId, chatConversationIdAtBind, winById))
       return;
-    }
     // Snapshot WHAT the edge bound at bind time. Unbind paths (removeConn / close teardown) must
     // use this snapshot: re-deriving from the window's current cfg unbinds the wrong source after
     // the user navigated the Files window or re-selected another capsule.
@@ -1581,12 +1621,162 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
                 chatWindowId,
                 boundScope,
                 connectorScope,
+                gitChangeSelection,
                 binding.gitChangeRelationshipId,
               ),
             },
           ],
     );
     focus(toId);
+  };
+
+  const updateConnectionScope = (
+    fromId: string,
+    toId: string,
+    fields: Partial<Connection>,
+  ): void => {
+    setConns((connections) =>
+      connections.map((connection) =>
+        isConnectionBetween(connection, fromId, toId) ? { ...connection, ...fields } : connection,
+      ),
+    );
+  };
+
+  const applyOptimisticGitConnection = (
+    fromId: string,
+    toId: string,
+    chatWindowId: string | null,
+    chatConversationIdAtBind: string | undefined,
+    gitChangeSelection: GitChangeBindSelection,
+  ): void => {
+    applyConnection(
+      { accepted: true },
+      fromId,
+      toId,
+      chatWindowId,
+      chatConversationIdAtBind,
+      null,
+      null,
+      gitChangeSelection,
+    );
+  };
+
+  const settleOptimisticGitConnection = (
+    binding: BindAcceptance,
+    fromId: string,
+    toId: string,
+    chatWindowId: string | null,
+    chatConversationIdAtBind: string | undefined,
+    gitChangeSelection: GitChangeBindSelection,
+    removeIfRejected: boolean,
+  ): void => {
+    if (
+      !binding.accepted ||
+      !endpointsStillCurrent(fromId, toId, chatWindowId, chatConversationIdAtBind, winById)
+    ) {
+      if (removeIfRejected) removeStoredConnectionBetween(fromId, toId);
+      return;
+    }
+    updateConnectionScope(
+      fromId,
+      toId,
+      connectionScopeFields(
+        chatWindowId,
+        null,
+        null,
+        gitChangeSelection,
+        binding.gitChangeRelationshipId,
+      ),
+    );
+    focus(toId);
+  };
+
+  const connectionAttemptFor = (
+    fromId: string,
+    toId: string,
+    from: AppWindow,
+    to: AppWindow,
+  ): ConnectionAttempt | null => {
+    const selection = connectionBindingSelection(from, to);
+    if (selection === null) return null;
+    const { boundScope, chatWindowId, connectorScope, gitChangeSelection } = selection;
+    const chatConversationIdAtBind =
+      chatWindowId === null ? undefined : chatConversationId(winById(chatWindowId));
+    return {
+      fromId,
+      toId,
+      boundScope,
+      chatWindowId,
+      chatConversationIdAtBind,
+      connectorScope,
+      gitChangeSelection,
+      bindingTarget: chatBindingTarget(chatWindowId, chatConversationIdAtBind, winById),
+      hadGitConnectionBeforeBind:
+        gitChangeSelection !== null && isDuplicate(connsRef.current, fromId, toId),
+    };
+  };
+
+  const applyAcceptedConnectionAttempt = (
+    attempt: ConnectionAttempt,
+    binding: BindAcceptance,
+  ): void => {
+    if (attempt.gitChangeSelection !== null) {
+      settleOptimisticGitConnection(
+        binding,
+        attempt.fromId,
+        attempt.toId,
+        attempt.chatWindowId,
+        attempt.chatConversationIdAtBind,
+        attempt.gitChangeSelection,
+        !attempt.hadGitConnectionBeforeBind,
+      );
+      return;
+    }
+    applyConnection(
+      binding,
+      attempt.fromId,
+      attempt.toId,
+      attempt.chatWindowId,
+      attempt.chatConversationIdAtBind,
+      attempt.boundScope,
+      attempt.connectorScope,
+      null,
+    );
+  };
+
+  const rollbackRejectedConnectionAttempt = (attempt: ConnectionAttempt): void => {
+    if (attempt.gitChangeSelection !== null && !attempt.hadGitConnectionBeforeBind) {
+      removeStoredConnectionBetween(attempt.fromId, attempt.toId);
+    }
+  };
+
+  const resolveConnectionAttempt = (attempt: ConnectionAttempt): void => {
+    const accepted = resolveBindAcceptance(
+      attempt.chatWindowId,
+      attempt.boundScope,
+      attempt.connectorScope,
+      attempt.gitChangeSelection,
+      onScopeBind,
+      onConnectorBind,
+      onGitChangeBind,
+      attempt.bindingTarget,
+    );
+    void Promise.resolve(accepted)
+      .then((binding) => applyAcceptedConnectionAttempt(attempt, binding))
+      .catch(() => rollbackRejectedConnectionAttempt(attempt));
+  };
+
+  const beginConnectionAttempt = (attempt: ConnectionAttempt): void => {
+    if (attempt.gitChangeSelection !== null) {
+      applyOptimisticGitConnection(
+        attempt.fromId,
+        attempt.toId,
+        attempt.chatWindowId,
+        attempt.chatConversationIdAtBind,
+        attempt.gitChangeSelection,
+      );
+    }
+    resolveConnectionAttempt(attempt);
   };
 
   const confirmConnect: WorkspaceApi["confirmConnect"] = (toId, e) => {
@@ -1597,44 +1787,8 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     const from = winById(c.from);
     const to = winById(toId);
     if (from !== undefined && to !== undefined && canConnect(from.type, to.type)) {
-      // Epic #532 — a Files↔Chat edge also binds the folder to the chat's connectedScopes so the
-      // relationship gesture grounds the chat. Epic #189 Slice 3 M3 — a Connector↔Chat edge binds
-      // the selected connector scope to the chat's localKnowledgeScopes. Both are no-ops for any
-      // other window pairing. Release 0.2.0 — the bind callback now VETOES the edge: when the
-      // source limit rejects the bind, drawing the edge anyway would show a connection that does
-      // not ground anything (dangling-edge inconsistency).
-      const bindingSelection = connectionBindingSelection(from, to);
-      if (bindingSelection === null) {
-        cancelConnect();
-        return;
-      }
-      const { boundScope, chatWindowId, connectorScope, gitChangeSelection } = bindingSelection;
-      const chatConversationIdAtBind =
-        chatWindowId === null ? undefined : chatConversationId(winById(chatWindowId));
-      const bindingTarget = chatBindingTarget(chatWindowId, chatConversationIdAtBind, winById);
-      const accepted = resolveBindAcceptance(
-        chatWindowId,
-        boundScope,
-        connectorScope,
-        gitChangeSelection,
-        onScopeBind,
-        onConnectorBind,
-        onGitChangeBind,
-        bindingTarget,
-      );
-      void Promise.resolve(accepted)
-        .then((binding) =>
-          applyConfirmedConnection(
-            binding,
-            c.from,
-            toId,
-            chatWindowId,
-            chatConversationIdAtBind,
-            boundScope,
-            connectorScope,
-          ),
-        )
-        .catch(() => undefined);
+      const attempt = connectionAttemptFor(c.from, toId, from, to);
+      if (attempt !== null) beginConnectionAttempt(attempt);
     }
     cancelConnect();
   };
@@ -1894,6 +2048,19 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     return sources;
   };
 
+  const linkedGitChangeComparisons: NonNullable<WorkspaceApi["linkedGitChangeComparisons"]> = (
+    id,
+  ) => {
+    const comparisons: WorkspaceLinkedGitChangeComparison[] = [];
+    for (const c of connectionsFor(id)) {
+      if (comparisons.length >= MAX_SCOPES) break;
+      const w = connectedWindow(c, id);
+      const comparison = w?.type === "governedGit" ? boundGitChangeComparisonOf(c) : null;
+      if (comparison !== null) comparisons.push(comparison);
+    }
+    return comparisons;
+  };
+
   return {
     startConnect,
     confirmConnect,
@@ -1908,6 +2075,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     linkedFigmaSnapshotRunIds,
     linkedFigmaSnapshotSources,
     linkedImageSources,
+    linkedGitChangeComparisons,
     currentFilesContext,
   };
 }
@@ -2280,6 +2448,27 @@ export function boundGitChangeRelationshipIdOf(conn: {
 }): string | null {
   const relationshipId = conn.boundGitChangeRelationshipId;
   return typeof relationshipId === "string" && relationshipId.length > 0 ? relationshipId : null;
+}
+
+function boundGitChangeRef(value: string | undefined): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value : null;
+}
+
+export function boundGitChangeComparisonOf(conn: {
+  readonly id: string;
+  readonly boundGitChangeBaseRef?: string;
+  readonly boundGitChangeHeadRef?: string;
+  readonly boundGitChangeRelationshipId?: string;
+}): WorkspaceLinkedGitChangeComparison | null {
+  const baseRef = boundGitChangeRef(conn.boundGitChangeBaseRef);
+  const headRef = boundGitChangeRef(conn.boundGitChangeHeadRef);
+  if (baseRef === null || headRef === null || baseRef === headRef) return null;
+  return {
+    connectionId: conn.id,
+    baseRef,
+    headRef,
+    pending: boundGitChangeRelationshipIdOf(conn) === null,
+  };
 }
 
 function cfgString(window: AppWindow, key: string): string | null {

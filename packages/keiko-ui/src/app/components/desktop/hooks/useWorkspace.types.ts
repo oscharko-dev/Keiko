@@ -44,6 +44,13 @@ export type OpenEditorFileResult =
   | { readonly ok: true; readonly windowId: string }
   | { readonly ok: false; readonly message: string };
 
+export interface WorkspaceLinkedGitChangeComparison {
+  readonly connectionId: string;
+  readonly baseRef: string;
+  readonly headRef: string;
+  readonly pending: boolean;
+}
+
 // Issue #2150 follow-up — copy/cut/paste report counts so the workspace can
 // announce the outcome (ADR-0123 D5 requires skipped windows to carry a
 // documented reason; a silent no-op is not one). `captured` is the number of
@@ -123,6 +130,9 @@ export interface WorkspaceApi {
   /** Image-only sources from connected Figma Image windows. */
   readonly linkedImageSources?:
     ((id: string) => readonly QualityIntelligenceImageSource[]) | undefined;
+  /** Git-change comparison projected from a Git↔Chat workspace connector edge. */
+  readonly linkedGitChangeComparisons?:
+    ((id: string) => readonly WorkspaceLinkedGitChangeComparison[]) | undefined;
   readonly currentFilesContext: () => FilesWindowContext | null;
   /**
    * Live snapshot of the pan/zoom view, read through a ref so window children can

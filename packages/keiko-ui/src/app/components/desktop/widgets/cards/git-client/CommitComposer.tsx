@@ -82,6 +82,7 @@ interface CommitComposerProps {
   readonly error: string | null;
   readonly preview: GitDeliveryCommitPreviewResponse | null;
   readonly previewDraft: string | null;
+  readonly previewRequestRevision?: number | null;
   readonly previewError: string | null;
   readonly previewRevision: number;
   readonly layout?: CommitComposerLayout | undefined;
@@ -130,6 +131,23 @@ function splitCommitMessageDraft(message: string): CommitDraftParts {
     summary: lines[0]?.trim() ?? "",
     body: lines.slice(1).join("\n").trim(),
   };
+}
+
+function commitDraftAutoApplyKey(previewRevision: number, message: string): string {
+  return `${previewRevision.toString()}\u0000${message}`;
+}
+
+function eligibleAutoCommitDraft(input: {
+  readonly summary: string;
+  readonly body: string;
+  readonly stagedFileCount: number;
+  readonly preview: GitDeliveryCommitPreviewResponse | null;
+  readonly previewDraft: string | null;
+  readonly previewFresh: boolean;
+}): string | null {
+  if (input.summary.trim() !== "" || input.body.trim() !== "") return null;
+  if (input.stagedFileCount <= 0 || !input.previewFresh || input.previewDraft !== "") return null;
+  return input.preview?.suggestedMessage ?? null;
 }
 
 function commitHint(
@@ -564,6 +582,7 @@ interface CommitComposerStateInput {
   readonly busy: boolean;
   readonly preview: GitDeliveryCommitPreviewResponse | null;
   readonly previewDraft: string | null;
+  readonly previewFresh: boolean;
   readonly summary: string;
   readonly body: string;
   readonly onCreateBranch: ((trigger: HTMLButtonElement) => void) | undefined;
@@ -587,6 +606,15 @@ interface CommitComposerState {
   readonly commitLabel: string;
 }
 
+interface CommitComposerPreviewState {
+  readonly emptyDraftPreview: GitDeliveryCommitPreviewResponse | null;
+  readonly visiblePreview: GitDeliveryCommitPreviewResponse | null;
+  readonly protectedBranchBlocked: boolean;
+  readonly messageBlocked: boolean;
+  readonly policyBlocked: boolean;
+  readonly missingFreshPreview: boolean;
+}
+
 function hasRepository(projectId: string | null): boolean {
   return projectId !== null && projectId !== "";
 }
@@ -595,8 +623,9 @@ function emptyDraftPreviewFor(
   subjectEmpty: boolean,
   preview: GitDeliveryCommitPreviewResponse | null,
   previewDraft: string | null,
+  previewFresh: boolean,
 ): GitDeliveryCommitPreviewResponse | null {
-  if (!subjectEmpty || preview === null || previewDraft !== "") return null;
+  if (!subjectEmpty || preview === null || previewDraft !== "" || !previewFresh) return null;
   return preview;
 }
 
@@ -604,9 +633,10 @@ function visiblePreviewFor(
   subjectEmpty: boolean,
   preview: GitDeliveryCommitPreviewResponse | null,
   previewDraft: string | null,
+  previewFresh: boolean,
   message: string,
 ): GitDeliveryCommitPreviewResponse | null {
-  if (subjectEmpty || preview === null || previewDraft !== message) return null;
+  if (subjectEmpty || preview === null || previewDraft !== message || !previewFresh) return null;
   return preview;
 }
 
@@ -615,48 +645,89 @@ function commitLabelFor(branchName: string | undefined, t: OptionalWidgetTransla
   return t("commitComposer.action.commitTo", { branch: branchName });
 }
 
-function commitComposerState(input: CommitComposerStateInput): CommitComposerState {
-  const message = composeCommitMessage(input.summary, input.body);
-  const subjectEmpty = input.summary.trim() === "";
-  const selectedRepository = hasRepository(input.projectId);
-  const hasStaged = input.stagedFileCount > 0;
+function commitDisabledFor(input: {
+  readonly busy: boolean;
+  readonly selectedRepository: boolean;
+  readonly hasStaged: boolean;
+  readonly subjectEmpty: boolean;
+  readonly missingFreshPreview: boolean;
+  readonly policyBlocked: boolean;
+}): boolean {
+  return (
+    input.busy ||
+    !input.selectedRepository ||
+    !input.hasStaged ||
+    input.subjectEmpty ||
+    input.missingFreshPreview ||
+    input.policyBlocked
+  );
+}
+
+function commitComposerPreviewState(
+  input: CommitComposerStateInput,
+  subjectEmpty: boolean,
+  hasStaged: boolean,
+  message: string,
+): CommitComposerPreviewState {
   const emptyDraftPreview = hasStaged
-    ? emptyDraftPreviewFor(subjectEmpty, input.preview, input.previewDraft)
+    ? emptyDraftPreviewFor(subjectEmpty, input.preview, input.previewDraft, input.previewFresh)
     : null;
   const visiblePreview = hasStaged
-    ? visiblePreviewFor(subjectEmpty, input.preview, input.previewDraft, message)
+    ? visiblePreviewFor(
+        subjectEmpty,
+        input.preview,
+        input.previewDraft,
+        input.previewFresh,
+        message,
+      )
     : null;
   const protectedBranchBlocked = isProtectedBranchBlock(visiblePreview);
   const messageBlocked = visiblePreview !== null && !visiblePreview.messageValidation.ok;
   const policyBlocked =
     visiblePreview !== null && (messageBlocked || isPolicyBlock(visiblePreview));
-  const missingFreshPreview = !subjectEmpty && visiblePreview === null;
   return {
-    hasRepository: selectedRepository,
-    hasStaged,
-    message,
-    subjectEmpty,
     emptyDraftPreview,
     visiblePreview,
     protectedBranchBlocked,
     messageBlocked,
     policyBlocked,
-    missingFreshPreview,
-    commitDisabled:
-      input.busy ||
-      !selectedRepository ||
-      !hasStaged ||
-      subjectEmpty ||
-      missingFreshPreview ||
-      policyBlocked,
+    missingFreshPreview: !subjectEmpty && visiblePreview === null,
+  };
+}
+
+function commitComposerState(input: CommitComposerStateInput): CommitComposerState {
+  const message = composeCommitMessage(input.summary, input.body);
+  const subjectEmpty = input.summary.trim() === "";
+  const selectedRepository = hasRepository(input.projectId);
+  const hasStaged = input.stagedFileCount > 0;
+  const previewState = commitComposerPreviewState(input, subjectEmpty, hasStaged, message);
+  return {
+    hasRepository: selectedRepository,
+    hasStaged,
+    message,
+    subjectEmpty,
+    emptyDraftPreview: previewState.emptyDraftPreview,
+    visiblePreview: previewState.visiblePreview,
+    protectedBranchBlocked: previewState.protectedBranchBlocked,
+    messageBlocked: previewState.messageBlocked,
+    policyBlocked: previewState.policyBlocked,
+    missingFreshPreview: previewState.missingFreshPreview,
+    commitDisabled: commitDisabledFor({
+      busy: input.busy,
+      selectedRepository,
+      hasStaged,
+      subjectEmpty,
+      missingFreshPreview: previewState.missingFreshPreview,
+      policyBlocked: previewState.policyBlocked,
+    }),
     branchActionAvailable: selectedRepository && input.onCreateBranch !== undefined,
     hint: commitHint(
       selectedRepository,
       hasStaged,
       subjectEmpty,
-      missingFreshPreview,
-      protectedBranchBlocked,
-      policyBlocked,
+      previewState.missingFreshPreview,
+      previewState.protectedBranchBlocked,
+      previewState.policyBlocked,
       input.t,
     ),
     commitLabel: commitLabelFor(input.branchName, input.t),
@@ -955,6 +1026,85 @@ function clearStaleAppliedDraft(
   return null;
 }
 
+interface ClearStaleCommitDraftInput {
+  readonly appliedDraftRef: { current: AppliedCommitDraft | null };
+  readonly previewRevision: number;
+  readonly summary: string;
+  readonly body: string;
+  readonly setSummary: (value: string) => void;
+  readonly setBody: (value: string) => void;
+}
+
+function useClearStaleCommitDraft({
+  appliedDraftRef,
+  previewRevision,
+  summary,
+  body,
+  setSummary,
+  setBody,
+}: ClearStaleCommitDraftInput): void {
+  useEffect(() => {
+    appliedDraftRef.current = clearStaleAppliedDraft(
+      appliedDraftRef.current,
+      previewRevision,
+      composeCommitMessage(summary, body),
+      () => {
+        setSummary("");
+        setBody("");
+      },
+    );
+  }, [appliedDraftRef, body, previewRevision, setBody, setSummary, summary]);
+}
+
+interface AutoApplyCommitDraftInput {
+  readonly summary: string;
+  readonly body: string;
+  readonly stagedFileCount: number;
+  readonly preview: GitDeliveryCommitPreviewResponse | null;
+  readonly previewDraft: string | null;
+  readonly previewFresh: boolean;
+  readonly previewRevision: number;
+  readonly applyDraft: (message: string) => void;
+}
+
+function useAutoApplyCommitDraft({
+  summary,
+  body,
+  stagedFileCount,
+  preview,
+  previewDraft,
+  previewFresh,
+  previewRevision,
+  applyDraft,
+}: AutoApplyCommitDraftInput): void {
+  const autoAppliedDraftKeyRef = useRef<string | null>(null);
+  useEffect(() => {
+    const message = eligibleAutoCommitDraft({
+      summary,
+      body,
+      stagedFileCount,
+      preview,
+      previewDraft,
+      previewFresh,
+    });
+    if (message === null) return;
+    const key = commitDraftAutoApplyKey(previewRevision, message);
+    if (autoAppliedDraftKeyRef.current === key) return;
+    autoAppliedDraftKeyRef.current = key;
+    applyDraft(message);
+    reportClientDiagnostic("git-client: generated commit draft applied to empty composer");
+  }, [
+    applyDraft,
+    body,
+    preview,
+    previewDraft,
+    previewFresh,
+    previewRevision,
+    stagedFileCount,
+    summary,
+  ]);
+}
+
 function useCommitDraftFields(props: CommitComposerProps): CommitDraftFields {
   const [summary, setSummary] = useControlledComposerField(
     props.summaryValue,
@@ -962,17 +1112,14 @@ function useCommitDraftFields(props: CommitComposerProps): CommitDraftFields {
   );
   const [body, setBody] = useControlledComposerField(props.bodyValue, props.onBodyChange);
   const appliedDraftRef = useRef<AppliedCommitDraft | null>(null);
-  useEffect(() => {
-    appliedDraftRef.current = clearStaleAppliedDraft(
-      appliedDraftRef.current,
-      props.previewRevision,
-      composeCommitMessage(summary, body),
-      () => {
-        setSummary("");
-        setBody("");
-      },
-    );
-  }, [body, props.previewRevision, setBody, setSummary, summary]);
+  useClearStaleCommitDraft({
+    appliedDraftRef,
+    previewRevision: props.previewRevision,
+    summary,
+    body,
+    setSummary,
+    setBody,
+  });
   const applyDraft = useCallback(
     (message: string): void => {
       const draft = splitCommitMessageDraft(message);
@@ -996,6 +1143,16 @@ function useCommitDraftFields(props: CommitComposerProps): CommitDraftFields {
     },
     [setBody],
   );
+  useAutoApplyCommitDraft({
+    summary,
+    body,
+    stagedFileCount: props.stagedFileCount,
+    preview: props.preview,
+    previewDraft: props.previewDraft,
+    previewFresh: (props.previewRequestRevision ?? props.previewRevision) === props.previewRevision,
+    previewRevision: props.previewRevision,
+    applyDraft,
+  });
   return { summary, body, setSummary: updateSummary, setBody: updateBody, applyDraft };
 }
 
@@ -1021,6 +1178,8 @@ function useCommitComposerController(
   t: OptionalWidgetTranslate,
 ): CommitComposerController {
   const fields = useCommitDraftFields(props);
+  const previewFresh =
+    (props.previewRequestRevision ?? props.previewRevision) === props.previewRevision;
   const baseId = useId();
   const hintId = `${baseId}-hint`;
   const previewId = `${baseId}-preview`;
@@ -1031,6 +1190,7 @@ function useCommitComposerController(
     busy: props.busy,
     preview: props.preview,
     previewDraft: props.previewDraft,
+    previewFresh,
     summary: fields.summary,
     body: fields.body,
     onCreateBranch: props.onCreateBranch,
