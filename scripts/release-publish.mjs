@@ -97,8 +97,14 @@ const valueArgFields = new Map([
   ["--registry", "registry"],
   ["--tag", "tag"],
 ]);
-const verifyAttempts = positiveIntegerEnv("KEIKO_RELEASE_VERIFY_ATTEMPTS", 13);
-const verifyDelayMs = nonNegativeIntegerEnv("KEIKO_RELEASE_VERIFY_DELAY_MS", 5000);
+// #3499 (Epic #3495): the wait-for-npm confirmation loop is retired. `npm publish` returning
+// success IS the publish confirmation. The registry install smoke, dist-tag verification and
+// alignment checks that used to poll npm from inside the publish job move to a nightly lane so a
+// six-minute registry lag never turns the publish job red again (v1.0.1 lost that way). The env
+// vars stay as an escape hatch for a local operator on a slow registry: the defaults are one shot
+// with no wait, and everything above 1 is documented as an incident bypass, not the normal path.
+const verifyAttempts = positiveIntegerEnv("KEIKO_RELEASE_VERIFY_ATTEMPTS", 1);
+const verifyDelayMs = nonNegativeIntegerEnv("KEIKO_RELEASE_VERIFY_DELAY_MS", 0);
 
 function positiveIntegerEnv(name, fallback) {
   const raw = process.env[name];
