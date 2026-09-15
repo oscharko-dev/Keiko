@@ -47,8 +47,12 @@ describe("release candidate workflow", () => {
     // request at the end of that build instead (see the stable build publish request below).
     const { tag } = candidate.jobs;
     expect(tag.needs).toBe("plan");
+    // Explicit !cancelled() guard added in Epic #3495 (#3502): the tag job needs the plan job,
+    // and plan is legitimately skipped on any non-dev ref. Without an explicit status function
+    // GitHub's implicit success() gate silently skips the tag job too. The `!cancelled() &&`
+    // prefix makes the intent visible and satisfies the implicit-success-trap regression pin.
     expect(tag.if).toBe(
-      "${{ needs.plan.outputs.action == 'create' || needs.plan.outputs.action == 'move' }}",
+      "${{ !cancelled() && (needs.plan.outputs.action == 'create' || needs.plan.outputs.action == 'move') }}",
     );
     expect(tag.environment).toBe("release-tagging");
     expect(tag.permissions).toStrictEqual({ actions: "read", contents: "read" });

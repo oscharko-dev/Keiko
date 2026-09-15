@@ -203,9 +203,10 @@ describe("workflow Node toolchain parity", () => {
     // workflow appearing. Issue #3403 retired six credential-bound Apple/Microsoft signing lanes
     // and added three Linux runtime qualification lanes; ADR-0177 added the dev release-rehearsal
     // readiness lane and the standing release-alignment lane, and ADR-0177 D8 the release-candidate
-    // plan and tag lanes and the stable build's publish-request lane. The resulting 29 lanes cover
-    // every workflow and composite action discovered above.
-    expect(withSetupNode).toHaveLength(29);
+    // plan and tag lanes and the stable build's publish-request lane. Epic #3495 added the
+    // event-driven release-publish-request lane (#3498). The resulting 30 lanes cover every
+    // workflow and composite action discovered above.
+    expect(withSetupNode).toHaveLength(30);
   });
 
   it("pins every actions/setup-node step to an approved exact Node version", () => {

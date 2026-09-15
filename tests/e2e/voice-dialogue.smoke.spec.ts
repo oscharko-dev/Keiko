@@ -1134,14 +1134,7 @@ async function activeComposerControlsFlow(page: Page): Promise<void> {
   await dialogSwitch.click();
   await expect(dialogSwitch).toHaveAttribute("aria-checked", "true");
 
-  // The count-zero assertions below observe the DOM after the layer swap: normalLayer opacity 0,
-  // aria-hidden true, inert; voiceLayer opacity 1. Playwright's `toHaveCount(0)` returns as soon as
-  // the current DOM matches — so any element still mid-crossfade in the normal layer would be
-  // counted before the swap completes. Firefox does the crossfade in a wider window than Chromium,
-  // and the "Interrupt the assistant" button was counted 1 on Firefox where 0 was expected (run
-  // 34902410038, #3497). Anchor the sequence on the settled state first, then observe.
   await expect(page.getByRole("button", { name: "Mute voice dialogue microphone" })).toBeVisible();
-  await expectActiveComposerSettled(page);
   await expect(page.getByRole("button", { name: "Stop voice dialogue" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Leave voice dialogue" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Interrupt the assistant" })).toHaveCount(0);
@@ -1152,6 +1145,7 @@ async function activeComposerControlsFlow(page: Page): Promise<void> {
   await expect(page.getByRole("button", { name: "Dictate a message" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Mute assistant voice" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Send message" })).toHaveCount(0);
+  await expectActiveComposerSettled(page);
 
   await page.screenshot({
     path: evidenceScreenshotPath("docs/voice/evidence/1563-dialogue-evaluation.png"),
