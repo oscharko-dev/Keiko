@@ -575,7 +575,9 @@ describe("CodingWorkbenchWindow", () => {
     const taskInput = screen.getByLabelText("Task instructions");
     await user.type(taskInput, "Investigate the failing test");
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
-    expect(liveActions.start).toHaveBeenCalledWith("Investigate the failing test");
+    expect(liveActions.start).toHaveBeenCalledWith("Investigate the failing test", {
+      projectMemoryEnabled: true,
+    });
   });
 
   // Workbench audit, 2026-09-03: the draft used to persist after Start succeeded — indistinguishable
@@ -637,7 +639,9 @@ describe("CodingWorkbenchWindow", () => {
     const taskInput = screen.getByLabelText("Task instructions");
     await user.type(taskInput, "Investigate the failing test");
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
-    expect(liveActions.start).toHaveBeenCalledWith("Investigate the failing test");
+    expect(liveActions.start).toHaveBeenCalledWith("Investigate the failing test", {
+      projectMemoryEnabled: true,
+    });
 
     // The mutation queue starts the "start" mutation…
     runtimeHookMock.mockReturnValue({
@@ -756,12 +760,8 @@ describe("CodingWorkbenchWindow", () => {
       activeWorkspaceWithBinding("/repos/keiko", "/worktrees/active-task"),
     );
 
-    expect(
-      screen.getByRole("button", { name: "Manage branch Task branch task-1" }),
-    ).toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: "Manage branch Repository branch dev" }),
-    ).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Manage branch task-1" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Manage branch dev" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Manage repository active-task" }));
     expect(onOpenGit).toHaveBeenCalledWith({
       root: "/worktrees/active-task",
@@ -2210,7 +2210,9 @@ describe("CodingWorkbenchWindow", () => {
     await user.type(taskInput, "Continue after the restart");
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
 
-    expect(liveActions.start).toHaveBeenCalledWith("Continue after the restart");
+    expect(liveActions.start).toHaveBeenCalledWith("Continue after the restart", {
+      projectMemoryEnabled: true,
+    });
   });
 
   it("keeps terminal result evidence out of the user-facing workbench", async () => {
@@ -3007,7 +3009,7 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     expect(screen.getByRole("button", { name: "Manage repository task-a" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Manage repository task-b" })).toBeNull();
     expect(
-      screen.getByRole("button", { name: `Manage branch Task branch ${WORKSPACE_A.branch}` }),
+      screen.getByRole("button", { name: `Manage branch ${WORKSPACE_A.branch}` }),
     ).toBeInTheDocument();
     const dialog = openWorkbenchInformation();
     expect(screen.getByText(`workspace-a · ${WORKSPACE_A.branch} · healthy`)).toBeInTheDocument();

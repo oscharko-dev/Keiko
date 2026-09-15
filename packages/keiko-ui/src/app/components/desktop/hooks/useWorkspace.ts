@@ -281,129 +281,6 @@ function nextContentZoom(current: number, key: string): number {
   return clampContentZoom(current + 0.1);
 }
 
-export function nextContentZoomFromWheel(current: number, deltaY: number): number {
-  return clampContentZoom(current * Math.exp(-deltaY * 0.0015));
-}
-
-export function applyContentWheelZoom(win: AppWindow, deltaY: number): AppWindow {
-  const current = win.zoom ?? 1;
-  const zoom = nextContentZoomFromWheel(current, deltaY);
-  return zoom === current ? win : { ...win, zoom };
-}
-
-// GEN-UI-WORKSPACE-S2004 — extracted so the ctrl/cmd-wheel content-zoom updater
-// passed to setWins does not nest a `.map()` closure inside the wheel handler
-// inside the effect callback (SonarCloud S2004: nesting > 4 levels).
-// Issue #2402 — identity-preserving: content zoom snaps to 0.1 steps, so most
-// wheel events are no-ops; returning the SAME array for those keeps the wins
-// identity stable and skips the whole downstream chain (persistence schedule,
-// connection prune, selection normalization, scene re-render). `deltas` replays
-// every queued wheel event IN ORDER through applyContentWheelZoom — see
-// createWheelContentZoomQueue for why a raw deltaY SUM cannot be substituted here.
-export function applyWheelZoomToWindows(
-  ws: AppWindow[] | null,
-  windowId: string,
-  deltas: readonly number[],
-): AppWindow[] | null {
-  if (ws === null) return ws;
-  const index = ws.findIndex((w) => w.id === windowId);
-  const current = index === -1 ? undefined : ws[index];
-  if (current === undefined) return ws;
-  let updated = current;
-  for (const deltaY of deltas) updated = applyContentWheelZoom(updated, deltaY);
-  // Compare the resulting zoom, not the object: a batch that moves the zoom and
-  // returns to where it started (e.g. a delta that pins at the clamp and one
-  // that eases straight back) allocates a new object with the ORIGINAL value.
-  // Only the final value decides whether anything changed.
-  if (updated.zoom === current.zoom) return ws;
-  const next = ws.slice();
-  next[index] = updated;
-  return next;
-}
-
-// Issue #2402 — the ctrl/cmd-wheel content-zoom branch committed one setWins per
-// wheel event, uncapped by frame rate (a trackpad pinch synthesizes ctrl-wheel at
-// 60-120+Hz). Mirror queueView's rAF coalescing: wheel deltas for one window
-// accumulate per animation frame and flush as ONE commit.
-//
-// The commit replays the queued deltas IN ORDER instead of summing them first.
-// exp() is multiplicative in the continuous math, but nextContentZoomFromWheel
-// also snaps to a 0.1 grid and clamps to [CONTENT_MIN_ZOOM, CONTENT_MAX_ZOOM] on
-// EVERY step, and both are nonlinear: summing raw deltaY before that per-step
-// snap/clamp does not reproduce what N separate per-event commits would have
-// produced. Two concrete examples (verified): from zoom=1, deltaY -100 twice
-// sequentially reaches 1.2 then 1.4; summing first (-200 in one exp() call)
-// reaches only 1.3. From zoom=1.9, deltaY -300 then +40 sequentially hits the
-// 2.0 cap and settles back to 1.9; summing first (-260) never crosses the cap
-// and lands on 2.0. Replaying the ordered deltas against each step's SNAPPED
-// result — exactly like N separate commits would — keeps the coalesced commit
-// bit-for-bit identical to the pre-coalescing per-event behaviour.
-export interface WheelContentZoomQueue {
-  readonly queue: (windowId: string, deltaY: number) => void;
-  readonly cancel: () => void;
-}
-
-// Exported so a direct unit test can pin the frame-cancellation bookkeeping without
-// wiring two window targets through the full wheel-event/DOM harness — the same
-// reason utf8ByteLength/keepaliveBodyFitsBudget below are exported for tests.
-export function createWheelContentZoomQueue(
-  apply: (windowId: string, deltas: readonly number[]) => void,
-): WheelContentZoomQueue {
-  let frame: number | null = null;
-  let pendingWindowId: string | null = null;
-  let pendingDeltas: number[] = [];
-  // Cancels whatever frame is currently tracked, if any. Shared by flush() (so a
-  // mid-frame target switch cancels the frame it is superseding instead of merely
-  // forgetting its id) and cancel() (so unmount never leaves a dangling browser-level
-  // registration behind).
-  const cancelScheduledFrame = (): void => {
-    if (frame !== null && typeof window.cancelAnimationFrame === "function") {
-      window.cancelAnimationFrame(frame);
-    }
-    frame = null;
-  };
-  const flush = (): void => {
-    // Review finding on #3305 — this used to only null out the local `frame`
-    // variable, never telling the browser to cancel it. queue() below calls flush()
-    // on a mid-frame target switch and then schedules a NEW frame, so the id just
-    // forgotten here was still live with the browser: two frames ended up
-    // outstanding while `frame` could only ever track the newest one, so cancel()
-    // (called by the wheel effect's unmount cleanup) could only cancel that one and
-    // the other stayed dangling. Cancelling here first guarantees at most one frame
-    // is ever outstanding, so cancel() is always complete.
-    cancelScheduledFrame();
-    const windowId = pendingWindowId;
-    const deltas = pendingDeltas;
-    pendingWindowId = null;
-    pendingDeltas = [];
-    if (windowId !== null) apply(windowId, deltas);
-  };
-  const queue = (windowId: string, deltaY: number): void => {
-    // A mid-frame target switch flushes the previous window's pending deltas so
-    // deltas never leak across windows; flush() above now also cancels the frame it
-    // is superseding, so the already-scheduled frame can never fire twice.
-    if (pendingWindowId !== null && pendingWindowId !== windowId) flush();
-    pendingWindowId = windowId;
-    pendingDeltas.push(deltaY);
-    if (typeof window.requestAnimationFrame !== "function") {
-      flush();
-      return;
-    }
-    frame ??= window.requestAnimationFrame(flush);
-  };
-  const cancel = (): void => {
-    cancelScheduledFrame();
-    pendingWindowId = null;
-    pendingDeltas = [];
-  };
-  return { queue, cancel };
-}
-
-function windowIdFromWheelTarget(target: EventTarget | null): string | null {
-  if (!(target instanceof Element)) return null;
-  return target.closest<HTMLElement>(".window[data-window-id]")?.dataset.windowId ?? null;
-}
-
 // GEN-UI-KEYBOARD-006 — resolve which window a keyboard chord (move/resize/content
 // zoom/snap) acts on from where focus currently is, instead of always the topmost
 // window. Walk up from document.activeElement to the nearest
@@ -423,8 +300,8 @@ interface UsePanZoomArgs {
   readonly view: View;
   readonly cameraSmoothness: number;
   readonly winsRef: CurrentRef<AppWindow[]>;
+  readonly selectionRef: CurrentRef<WorkspaceUiSelectionState>;
   readonly setView: Dispatch<SetStateAction<View>>;
-  readonly setWins: Dispatch<SetStateAction<AppWindow[] | null>>;
 }
 
 interface QueueViewOptions {
@@ -451,6 +328,157 @@ function wheelDeltaMultiplier(deltaMode: number): number {
 export function normalizeWheelDelta(e: WheelEvent): { readonly x: number; readonly y: number } {
   const multiplier = wheelDeltaMultiplier(e.deltaMode);
   return { x: e.deltaX * multiplier, y: e.deltaY * multiplier };
+}
+
+function overflowCanScroll(value: string): boolean {
+  return value === "auto" || value === "scroll" || value === "overlay";
+}
+
+function canScrollVertically(element: HTMLElement, deltaY: number): boolean {
+  if (deltaY === 0) return false;
+  const style = window.getComputedStyle(element);
+  if (!overflowCanScroll(style.overflowY)) return false;
+  const maxScrollTop = element.scrollHeight - element.clientHeight;
+  if (maxScrollTop <= 1) return false;
+  if (deltaY < 0) return element.scrollTop > 0;
+  return element.scrollTop < maxScrollTop - 1;
+}
+
+function canScrollHorizontally(element: HTMLElement, deltaX: number): boolean {
+  if (deltaX === 0) return false;
+  const style = window.getComputedStyle(element);
+  if (!overflowCanScroll(style.overflowX)) return false;
+  const maxScrollLeft = element.scrollWidth - element.clientWidth;
+  if (maxScrollLeft <= 1) return false;
+  if (deltaX < 0) return element.scrollLeft > 0;
+  return element.scrollLeft < maxScrollLeft - 1;
+}
+
+function scrollTargetCanConsumeWheel(
+  target: EventTarget | null,
+  delta: { readonly x: number; readonly y: number },
+): boolean {
+  if (!(target instanceof Element)) return false;
+  const windowElement = target.closest(".window[data-window-id]");
+  if (windowElement === null) return false;
+  let current: Element | null = target;
+  while (current !== null && current !== windowElement) {
+    if (
+      current instanceof HTMLElement &&
+      (canScrollVertically(current, delta.y) || canScrollHorizontally(current, delta.x))
+    ) {
+      return true;
+    }
+    current = current.parentElement;
+  }
+  return false;
+}
+
+function activeSelectedWindowId(selection: WorkspaceUiSelectionState): string | null {
+  if (
+    selection.focusedWindowId !== null &&
+    selection.selectedWindowIds.includes(selection.focusedWindowId)
+  ) {
+    return selection.focusedWindowId;
+  }
+  return selection.selectedWindowIds.length === 1 ? (selection.selectedWindowIds[0] ?? null) : null;
+}
+
+function windowIdFromWheelTarget(target: EventTarget | null): string | null {
+  if (!(target instanceof Element)) return null;
+  return target.closest<HTMLElement>(".window[data-window-id]")?.dataset.windowId ?? null;
+}
+
+function activeWindowOwnsWheelTarget(
+  target: EventTarget | null,
+  selection: WorkspaceUiSelectionState,
+): boolean {
+  const activeWindowId = activeSelectedWindowId(selection);
+  return activeWindowId !== null && windowIdFromWheelTarget(target) === activeWindowId;
+}
+
+function frontmostLayoutWindowId(
+  wins: readonly AppWindow[],
+  options: { readonly includeMinimized: boolean },
+): string | null {
+  let frontmost: AppWindow | null = null;
+  for (const win of wins) {
+    if (!options.includeMinimized && win.minimized === true) continue;
+    if (frontmost === null || win.z > frontmost.z) frontmost = win;
+  }
+  return frontmost?.id ?? null;
+}
+
+function toolToggleActivationWindowId(
+  wins: readonly AppWindow[],
+  type: AppWindow["type"],
+): string | null {
+  const existing = wins.find((win) => win.type === type);
+  if (existing === undefined) return wins.length >= MAX_WORKSPACE_WINDOWS ? null : type;
+  return existing.minimized === true ? existing.id : null;
+}
+
+type ReusableWindowIdentity = {
+  readonly key: "chatId" | "runId";
+  readonly type: "chat" | "qiRun";
+  readonly value: string;
+};
+
+function cfgString(cfg: AppWindow["cfg"] | undefined, key: "chatId" | "runId"): string | null {
+  const value = cfg?.[key];
+  return typeof value === "string" && value.length > 0 ? value : null;
+}
+
+function singletonWindowId(wins: readonly AppWindow[], type: AppWindow["type"]): string | null {
+  if (WIN_TYPES[type].singleton !== true) return null;
+  return wins.find((win) => win.type === type)?.id ?? null;
+}
+
+function reusableWindowIdentity(
+  type: AppWindow["type"],
+  cfg: AppWindow["cfg"] | undefined,
+): ReusableWindowIdentity | null {
+  if (type === "qiRun") {
+    const runId = cfgString(cfg, "runId");
+    return runId === null ? null : { key: "runId", type, value: runId };
+  }
+  if (type === "chat") {
+    const chatId = cfgString(cfg, "chatId");
+    return chatId === null ? null : { key: "chatId", type, value: chatId };
+  }
+  return null;
+}
+
+function reusableWindowId(
+  wins: readonly AppWindow[],
+  identity: ReusableWindowIdentity,
+): string | null {
+  return (
+    wins.find((win) => win.type === identity.type && win.cfg[identity.key] === identity.value)
+      ?.id ?? null
+  );
+}
+
+function existingAddWindowId(
+  wins: readonly AppWindow[],
+  type: AppWindow["type"],
+  cfg: AppWindow["cfg"] | undefined,
+): string | null {
+  const singletonId = singletonWindowId(wins, type);
+  if (singletonId !== null) return singletonId;
+  const identity = reusableWindowIdentity(type, cfg);
+  return identity === null ? null : reusableWindowId(wins, identity);
+}
+
+function predictableAddWindowId(
+  wins: readonly AppWindow[],
+  type: AppWindow["type"],
+  cfg: AppWindow["cfg"] | undefined,
+): string | null {
+  const existingId = existingAddWindowId(wins, type, cfg);
+  if (existingId !== null) return existingId;
+  if (wins.length >= MAX_WORKSPACE_WINDOWS) return null;
+  return WIN_TYPES[type].singleton === true ? type : null;
 }
 
 export function fitWorkspaceViewToWindows(
@@ -509,8 +537,8 @@ function usePanZoom({
   view,
   cameraSmoothness,
   winsRef,
+  selectionRef,
   setView,
-  setWins,
 }: UsePanZoomArgs): PanZoomResult {
   const viewRef = useRef<View>(view);
   viewRef.current = view;
@@ -644,15 +672,6 @@ function usePanZoom({
     [cameraSmoothness, setView],
   );
 
-  const settleCameraAnimation = useCallback((): void => {
-    if (animationFrameRef.current !== null && typeof window.cancelAnimationFrame === "function") {
-      window.cancelAnimationFrame(animationFrameRef.current);
-      animationFrameRef.current = null;
-      setView(animationTargetRef.current);
-      renderedViewRef.current = animationTargetRef.current;
-    }
-  }, [setView]);
-
   const queueView = useCallback(
     (next: View | ((current: View) => View), options: QueueViewOptions = {}): void => {
       const base = pendingViewRef.current ?? viewRef.current;
@@ -711,24 +730,13 @@ function usePanZoom({
       }
       return zoomRect;
     };
-    // Issue #2402 — per-frame coalescer for the content-zoom branch below; the
-    // camera branch already coalesces through queueView.
-    const contentZoom = createWheelContentZoomQueue((windowId, deltas) => {
-      setWins((ws) => applyWheelZoomToWindows(ws, windowId, deltas));
-    });
     const onWheel = (e: WheelEvent): void => {
       if (e.metaKey || e.ctrlKey) {
-        e.preventDefault();
-        const windowId = windowIdFromWheelTarget(e.target);
-        if (windowId !== null) {
-          settleCameraAnimation();
-          // Issue #2402 — the wallpaper shader's gesture suppression
-          // (data-view-active, GEN-PERF-WORKSPACE-004) must engage for content
-          // zoom exactly as it does for camera zoom.
-          markViewActive();
-          contentZoom.queue(windowId, e.deltaY);
+        if (activeWindowOwnsWheelTarget(e.target, selectionRef.current)) {
+          e.preventDefault();
           return;
         }
+        e.preventDefault();
         const r = gestureRect();
         const v = viewRef.current;
         const delta = normalizeWheelDelta(e);
@@ -742,23 +750,23 @@ function usePanZoom({
         });
         return;
       }
-      const target = e.target;
-      if (target instanceof Element && target.closest(".window") !== null) {
+      const delta = normalizeWheelDelta(e);
+      if (activeWindowOwnsWheelTarget(e.target, selectionRef.current)) {
+        if (scrollTargetCanConsumeWheel(e.target, delta)) return;
+        e.preventDefault();
         return;
       }
       e.preventDefault();
-      const delta = normalizeWheelDelta(e);
       queueView((v) => ({ ...v, x: v.x - delta.x, y: v.y - delta.y }), {
         minDurationMs: 0,
         smoothnessScale: DIRECT_PAN_SMOOTHNESS_SCALE,
       });
     };
-    el.addEventListener("wheel", onWheel, { passive: false });
+    el.addEventListener("wheel", onWheel, { passive: false, capture: true });
     return () => {
-      el.removeEventListener("wheel", onWheel);
-      contentZoom.cancel();
+      el.removeEventListener("wheel", onWheel, { capture: true });
     };
-  }, [wsRef, setWins, queueView, settleCameraAnimation, markViewActive]);
+  }, [wsRef, queueView, selectionRef]);
 
   const rect = useCallback(
     (): DOMRect | null => (wsRef.current === null ? null : wsRef.current.getBoundingClientRect()),
@@ -2105,8 +2113,8 @@ export function useWorkspace(
     view,
     cameraSmoothness,
     winsRef,
+    selectionRef,
     setView,
-    setWins,
   });
 
   useHydrate({ wsRef, setWins, setConns, zc, lastAppliedSerializedRef });
@@ -2227,6 +2235,48 @@ export function useWorkspace(
     [winsRef],
   );
   const layout = useMemo(() => makeLayoutActions({ setWins, worldVP }), [setWins, worldVP]);
+  const activateLayoutOwner = useCallback(
+    (ownerId: string | null): void => {
+      if (ownerId === null || worldVP() === null) return;
+      setSelection({ focusedWindowId: ownerId, selectedWindowIds: [ownerId] });
+      mutations.focus(ownerId);
+    },
+    [mutations, setSelection, worldVP],
+  );
+  const addWithActivation = useCallback<WorkspaceApi["add"]>(
+    (type, cfg) => {
+      if (worldVP() === null) return null;
+      const predictedId = predictableAddWindowId(winsRef.current, type, cfg);
+      const createdId = mutations.add(type, cfg);
+      const activatedId = createdId ?? predictedId;
+      activateLayoutOwner(activatedId);
+      return activatedId;
+    },
+    [activateLayoutOwner, mutations, winsRef, worldVP],
+  );
+  const toggleToolWithActivation = useCallback<WorkspaceApi["toggleTool"]>(
+    (type) => {
+      const ownerId = toolToggleActivationWindowId(winsRef.current, type);
+      mutations.toggleTool(type);
+      activateLayoutOwner(ownerId);
+    },
+    [activateLayoutOwner, mutations, winsRef],
+  );
+  const tileAllWithActivation = useCallback<WorkspaceApi["tileAll"]>(() => {
+    const ownerId = frontmostLayoutWindowId(winsRef.current, { includeMinimized: true });
+    layout.tileAll();
+    activateLayoutOwner(ownerId);
+  }, [activateLayoutOwner, layout, winsRef]);
+  const splitFrontWithActivation = useCallback<WorkspaceApi["splitFront"]>(() => {
+    const ownerId = frontmostLayoutWindowId(winsRef.current, { includeMinimized: false });
+    layout.splitFront();
+    activateLayoutOwner(ownerId);
+  }, [activateLayoutOwner, layout, winsRef]);
+  const cascadeWithActivation = useCallback<WorkspaceApi["cascade"]>(() => {
+    const ownerId = frontmostLayoutWindowId(winsRef.current, { includeMinimized: true });
+    layout.cascade();
+    activateLayoutOwner(ownerId);
+  }, [activateLayoutOwner, layout, winsRef]);
   const snap = useMemo(
     () => makeSnapActions({ setSnapPrev, snapZone, worldVP, update: mutations.update }),
     [setSnapPrev, snapZone, worldVP, mutations],
@@ -2576,9 +2626,9 @@ export function useWorkspace(
   // storm from O(N windows) to O(windows that actually changed).
   const api = useMemo<WorkspaceApi>(
     () => ({
-      add: mutations.add,
+      add: addWithActivation,
       openEditorFile: mutations.openEditorFile,
-      toggleTool: mutations.toggleTool,
+      toggleTool: toggleToolWithActivation,
       activateWindow,
       focus: focusWindow,
       currentWindowStack,
@@ -2597,9 +2647,9 @@ export function useWorkspace(
       update: mutations.update,
       setSnap: snap.setSnap,
       commitSnap: snap.commitSnap,
-      tileAll: layout.tileAll,
-      splitFront: layout.splitFront,
-      cascade: layout.cascade,
+      tileAll: tileAllWithActivation,
+      splitFront: splitFrontWithActivation,
+      cascade: cascadeWithActivation,
       startConnect: connectActions.startConnect,
       confirmConnect: connectActions.confirmConnect,
       cancelConnect: connectActions.cancelConnect,
@@ -2625,7 +2675,11 @@ export function useWorkspace(
     [
       mutations,
       snap,
-      layout,
+      addWithActivation,
+      toggleToolWithActivation,
+      tileAllWithActivation,
+      splitFrontWithActivation,
+      cascadeWithActivation,
       connectActions,
       closeWithTeardown,
       activateWindow,

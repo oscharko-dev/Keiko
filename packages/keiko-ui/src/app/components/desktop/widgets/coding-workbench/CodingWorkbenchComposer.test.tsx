@@ -125,11 +125,10 @@ describe("Coding Workbench composer", () => {
 
     const context = screen.getByLabelText("Coding context");
     await user.click(within(context).getByRole("button", { name: "Manage repository Keiko" }));
-    await user.click(
-      within(context).getByRole("button", { name: "Manage branch Repository branch dev" }),
-    );
+    await user.click(within(context).getByRole("button", { name: "Manage branch dev" }));
 
     expect(onOpenGit).toHaveBeenCalledTimes(2);
+    expect(within(context).queryByText("Repository branch")).toBeNull();
     expect(within(context).getByText("MemoriaViva")).toBeInTheDocument();
   });
 
@@ -175,7 +174,7 @@ describe("Coding Workbench composer", () => {
 
     expect(
       await screen.findByRole("button", {
-        name: "Branch Repository-Branch dev in Git verwalten",
+        name: "Branch dev in Git verwalten",
       }),
     ).toBeInTheDocument();
     expect(screen.queryByText("Repository branch")).not.toBeInTheDocument();

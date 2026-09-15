@@ -2292,15 +2292,12 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
   });
 });
 
-describe("issue #2150 — selection ring renders above every window, not per-window", () => {
-  it("renders one selection-ring overlay per selected window, z-indexed above the topmost window", () => {
+describe("selection ring overlay stacking", () => {
+  it("renders selected-window rings on their own z-layer so foreground windows cover them", () => {
     // Two overlapping windows: "back" (lower z) is selected, "front" (higher
-    // z, unselected) overlaps it. Before the fix, a selected window's ring was
-    // painted on the window's own (lower) z-index, so an overlapping
-    // higher-z window would visually cover it — "select two windows, one
-    // highlighted, the other isn't". The ring is now a sibling overlay whose
-    // z-index is always above the topmost window's, so it can never be
-    // occluded by window stacking order.
+    // z, unselected) overlaps it. The ring is a sibling overlay, but it must
+    // not float above every foreground window; frontmost windows should cover
+    // lower selected-window rings where they overlap.
     const wins = [
       appWindow({ id: "back", type: "agents", x: 40, y: 40, z: 1 }),
       appWindow({ id: "front", type: "files", x: 60, y: 60, z: 5 }),
@@ -2319,12 +2316,16 @@ describe("issue #2150 — selection ring renders above every window, not per-win
     const ring = screen.getByTestId("selection-ring-back");
     expect(container.querySelector('[data-testid="selection-ring-front"]')).toBeNull();
     const ringZIndex = Number(ring.style.zIndex);
+    const backWindowZIndex = Number(
+      (container.querySelector<HTMLElement>('.window[data-window-id="back"]') as HTMLElement).style
+        .zIndex,
+    );
     const frontWindowZIndex = Number(
       (container.querySelector<HTMLElement>('.window[data-window-id="front"]') as HTMLElement).style
         .zIndex,
     );
-    expect(ringZIndex).toBeGreaterThan(frontWindowZIndex);
-    expect(ringZIndex).toBeGreaterThan(1);
+    expect(ringZIndex).toBe(backWindowZIndex);
+    expect(ringZIndex).toBeLessThan(frontWindowZIndex);
   });
 
   it("renders no selection-ring overlays when nothing is selected", () => {

@@ -147,6 +147,10 @@ describe("Design-system styling exception register", () => {
     expect(localClassNames(selection)).toStrictEqual(
       new Set(["marquee", "workspaceWindow", "selectionRing"]),
     );
+    expect(selection).toContain('.workspaceWindow:focus-visible:not([data-selected="true"])');
+    expect(selection).toContain('.workspaceWindow.workspaceWindow[data-selected="true"]');
+    expect(selection).toContain("box-shadow: 0 0 0 2px var(--accent);");
+    expect(selection).not.toContain(".selectionRing::after");
     expect(workbench).toContain(":global(.window):has(.shell)");
     expect(exceptionDetails(workbench, "cmp").globalSelectors).toContain(".window");
   });

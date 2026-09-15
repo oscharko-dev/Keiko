@@ -128,7 +128,7 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
   });
 
   it("replays an explicitly rootless Search open without inheriting a stale root", (): void => {
-    const api = fakeApi();
+    const api = fakeApi({ add: vi.fn(() => "search") });
     const action: WorkspaceUiAction = {
       kind: "ui.panel.toggle",
       panel: "search",
@@ -140,11 +140,12 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
     applyShellUndoAction(target(false, api), action);
 
     expect(api.add).toHaveBeenCalledWith("search", { root: undefined });
+    expect(api.activateWindow).not.toHaveBeenCalled();
     expect(api.toggleTool).not.toHaveBeenCalled();
   });
 
   it("replays a Git open with its recorded project root", (): void => {
-    const api = fakeApi();
+    const api = fakeApi({ add: vi.fn(() => "governedGit") });
     const action: WorkspaceUiAction = {
       kind: "ui.panel.toggle",
       panel: "governedGit",
@@ -159,11 +160,12 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
       projectPath: "/repo/a",
       rootBinding: "coding-repository",
     });
+    expect(api.activateWindow).not.toHaveBeenCalled();
     expect(api.toggleTool).not.toHaveBeenCalled();
   });
 
   it("replays an explicitly rootless Git open without inheriting a stale project", (): void => {
-    const api = fakeApi();
+    const api = fakeApi({ add: vi.fn(() => "governedGit") });
     const action: WorkspaceUiAction = {
       kind: "ui.panel.toggle",
       panel: "governedGit",
@@ -178,6 +180,7 @@ describe("applyShellUndoAction — AppShell undo wiring (epic #518 #527 / ADR-00
       projectPath: undefined,
       rootBinding: undefined,
     });
+    expect(api.activateWindow).not.toHaveBeenCalled();
     expect(api.toggleTool).not.toHaveBeenCalled();
   });
 

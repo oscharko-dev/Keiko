@@ -576,10 +576,6 @@
   overflow: hidden;
 }
 
-.composerContextChip > .cmpComposerContextKind {
-  color: var(--text-tertiary);
-}
-
 .composerContextChip svg {
   flex: 0 0 auto;
 }

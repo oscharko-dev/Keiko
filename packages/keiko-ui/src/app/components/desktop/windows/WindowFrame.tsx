@@ -1233,6 +1233,11 @@ function WindowFrameImpl({
     restoreFocusAfterRemoval();
   }, [api, win.id, restoreFocusAfterRemoval]);
 
+  const maximizeWithActivation = useCallback((): void => {
+    api.activateWindow(win.id);
+    api.maximize(win.id);
+  }, [api, win.id]);
+
   // GEN-UI-KEYBOARD-011 — complete an in-flight connect from the keyboard when the
   // window SECTION itself holds focus (Tabbed to a highlighted valid target) and
   // Enter is pressed. The connection ports still own Enter/Space when focus is on a
@@ -1314,11 +1319,10 @@ function WindowFrameImpl({
     }),
     [ew, eh, zoom],
   );
-  // Issue #2150 — the selected-state ring is rendered by Workspace.tsx as a
-  // z-indexed overlay above every window (see WorkspaceSelection.module.css
-  // .selectionRing), not as styling here, so it stays visible regardless of
-  // window overlap. `data-selected` below remains the source of truth for a11y
-  // and for that overlay to find this window's geometry.
+  // The selected-state ring is rendered by Workspace.tsx as a z-indexed overlay
+  // on this window's stacking layer (see WorkspaceSelection.module.css
+  // .selectionRing), not as extra chrome here. `data-selected` below remains
+  // the source of truth for a11y and for that overlay to find this geometry.
   const windowClassName = `window ${selectionStyles.workspaceWindow}`;
 
   return (
@@ -1471,18 +1475,17 @@ function WindowFrameImpl({
                 }
                 onPointerDown={(e) => {
                   e.stopPropagation();
-                  // Maximize IS a raise (makeMaximize bumps z), and this stopPropagation()
-                  // keeps activateWindowForTarget from counting the interaction — so invalidate
-                  // at PRESS time. Click time is too late: a press-and-hold across the 180ms
-                  // delay would let a pending delayed text-entry raise fire mid-hold, covering
-                  // this window and even retargeting the release. The raise itself stays on
-                  // click (traffic-button presses never reorder windows before the action).
+                  // This traffic-button press bypasses activateWindowForTarget via
+                  // stopPropagation(), so invalidate stale delayed raises at PRESS time. Click
+                  // time is too late: a press-and-hold across the 180ms delay would let a pending
+                  // text-entry raise fire mid-hold, covering this window and even retargeting the
+                  // release. The click still owns the intentional activation + maximize/restore.
                   if (isPrimaryActivationPointer(e)) noteWindowInteraction();
                 }}
                 onDoubleClick={(e) => {
                   e.stopPropagation();
                 }}
-                onClick={() => api.maximize(win.id)}
+                onClick={maximizeWithActivation}
               >
                 {win.max ? <RestoreIcon size={17} /> : <MaximizeIcon size={17} />}
               </button>

@@ -669,7 +669,7 @@ export function makeMutations(args: MutateArgs): Mutations {
 }
 
 export function isWorkspaceWindowSelectable(win: AppWindow): boolean {
-  return win.minimized !== true && win.max !== true;
+  return win.minimized !== true;
 }
 
 function selectableWindowIds(wins: readonly AppWindow[]): ReadonlySet<string> {
@@ -734,7 +734,9 @@ function selectedMoveTargets(
   selectedWindowIds: readonly string[],
 ): readonly AppWindow[] {
   const selected = new Set(selectedWindowIds);
-  return wins.filter((win) => selected.has(win.id) && isWorkspaceWindowSelectable(win));
+  return wins.filter(
+    (win) => selected.has(win.id) && isWorkspaceWindowSelectable(win) && win.max !== true,
+  );
 }
 
 function selectedWindowBounds(targets: readonly AppWindow[]): {

@@ -562,6 +562,36 @@ describe("WindowFrame content zoom controls", () => {
     expect(focus).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { max: false, action: "maximize" },
+    { max: true, action: "restore" },
+  ])("activates the window before the $action traffic action", async ({ max }) => {
+    const calls: string[] = [];
+    const activateWindow = vi.fn((id: string): void => {
+      calls.push(`activate:${id}`);
+    });
+    const maximize = vi.fn((id: string): void => {
+      calls.push(`maximize:${id}`);
+    });
+    const user = userEvent.setup();
+    const { container } = render(
+      <WindowFrame
+        win={appWindow({ max })}
+        top={false}
+        connState={null}
+        linkRevision={0}
+        api={api({ activateWindow, maximize })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const button = container.querySelector<HTMLElement>(".win-traffic-maximize");
+    expect(button).not.toBeNull();
+    await user.click(button as HTMLElement);
+
+    expect(calls).toEqual(["activate:agents-1", "maximize:agents-1"]);
+  });
+
   it("raises on a secondary open-area click without replacing the window selection", () => {
     const activateWindow = vi.fn();
     const focus = vi.fn();
@@ -764,9 +794,10 @@ describe("WindowFrame content zoom controls", () => {
   it("invalidates delayed text-entry focus when the maximize control is pressed and held", () => {
     vi.useFakeTimers();
     registerWindowRender("promptEnhancer", () => <textarea aria-label="Prompt" />);
+    const activateWindow = vi.fn();
     const focus = vi.fn();
     const maximize = vi.fn();
-    const sharedApi = api({ focus, maximize });
+    const sharedApi = api({ activateWindow, focus, maximize });
 
     const { container } = render(
       <>
@@ -809,9 +840,11 @@ describe("WindowFrame content zoom controls", () => {
     expect(focus).not.toHaveBeenCalled();
     expect(maximize).not.toHaveBeenCalled();
 
-    // The release still lands the maximize, raising through makeMaximize's own z bump —
-    // the click path performs no separate focus call and no second token advance.
+    // The release still activates and maximizes the intended target. Activation is deliberate here:
+    // after maximize/restore, the clicked window must own selection and gesture routing.
     fireEvent.click(maximizeButton as HTMLElement);
+    expect(activateWindow).toHaveBeenCalledTimes(1);
+    expect(activateWindow).toHaveBeenCalledWith("agents-1");
     expect(maximize).toHaveBeenCalledTimes(1);
     expect(maximize).toHaveBeenCalledWith("agents-1");
     expect(focus).not.toHaveBeenCalled();

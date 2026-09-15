@@ -276,12 +276,11 @@ function ComposerContext({ input, t }: ControlProps): ReactNode {
           type="button"
           title={`${branchLabel}: ${input.branchLabel}`}
           aria-label={t("codingWorkbench.composer.branch.open", {
-            branch: `${branchLabel} ${input.branchLabel}`,
+            branch: input.branchLabel,
           })}
           onClick={input.onOpenGit}
         >
           <BranchIcon size={14} />
-          <span className={styles.cmpComposerContextKind}>{branchLabel}</span>
           <span>{input.branchLabel}</span>
         </button>
       )}

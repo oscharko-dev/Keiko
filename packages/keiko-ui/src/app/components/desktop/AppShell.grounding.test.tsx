@@ -1463,6 +1463,7 @@ describe("AppShell grounding connections", () => {
 
   it("dispatches undo, redo, focus-status, and search shortcuts through the shell handler", async () => {
     const api = workspaceApi();
+    vi.mocked(api.add).mockReturnValue("search-window");
     mocks.state.workspaceResult = workspaceResult(
       [
         win("search", { root: "/repo/stale-chat" }, "search-window"),
@@ -1493,6 +1494,7 @@ describe("AppShell grounding connections", () => {
     expect(mocks.redo).toHaveBeenCalledTimes(1);
     expect(statusSpy).toHaveBeenCalled();
     expect(api.add).toHaveBeenCalledWith("search", { root: "/repo/editor-selected" });
+    expect(api.activateWindow).not.toHaveBeenCalled();
     expect(api.toggleTool).not.toHaveBeenCalledWith("search");
     statusSpy.mockRestore();
     rafSpy.mockRestore();
@@ -1500,6 +1502,7 @@ describe("AppShell grounding connections", () => {
 
   it("records a rooted minimized Search restore as a closed-to-open transition", async (): Promise<void> => {
     const api = workspaceApi();
+    vi.mocked(api.add).mockReturnValue("search-window");
     mocks.state.workspaceResult = workspaceResult(
       [
         { ...win("search", { root: "/repo/stale" }, "search-window"), minimized: true },
@@ -1519,6 +1522,7 @@ describe("AppShell grounding connections", () => {
     });
 
     expect(api.add).toHaveBeenCalledWith("search", { root: "/repo/editor-selected" });
+    expect(api.activateWindow).not.toHaveBeenCalled();
     expect(mocks.pushUndo).toHaveBeenCalledWith({
       kind: "ui.panel.toggle",
       panel: "search",
@@ -1531,6 +1535,7 @@ describe("AppShell grounding connections", () => {
 
   it("opens Git from the rail with the selected project and records it for redo", async () => {
     const api = workspaceApi();
+    vi.mocked(api.add).mockReturnValue("governedGit");
     mocks.state.workspaceResult = workspaceResult([], [], api);
     await renderMounted();
     expect(mocks.state.rightRailOnTool).toBeTypeOf("function");
@@ -1545,6 +1550,7 @@ describe("AppShell grounding connections", () => {
       projectPath: "/repo",
       rootBinding: "coding-repository",
     });
+    expect(api.activateWindow).not.toHaveBeenCalled();
     expect(api.toggleTool).not.toHaveBeenCalledWith("governedGit");
     expect(mocks.pushUndo).toHaveBeenCalledWith({
       kind: "ui.panel.toggle",
@@ -1628,6 +1634,7 @@ describe("AppShell grounding connections", () => {
 
   it("opens or focuses Search with an explicit root and clears it when ownership is unavailable", (): void => {
     const api = workspaceApi();
+    vi.mocked(api.add).mockReturnValueOnce("search").mockReturnValueOnce(null);
     const rafSpy = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
       callback(0);
       return 0;
@@ -1638,6 +1645,7 @@ describe("AppShell grounding connections", () => {
 
     expect(api.add).toHaveBeenNthCalledWith(1, "search", { root: "/repo/editor-selected" });
     expect(api.add).toHaveBeenNthCalledWith(2, "search", { root: undefined });
+    expect(api.activateWindow).not.toHaveBeenCalled();
     expect(api.toggleTool).not.toHaveBeenCalled();
     rafSpy.mockRestore();
   });
