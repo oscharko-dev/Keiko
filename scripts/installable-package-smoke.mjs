@@ -2573,9 +2573,28 @@ export function assertVendoredPayload(tmp) {
 }
 
 export function assertProductiveTypeScriptRuntime(tmp) {
-  const manifest = join(tmp, "node_modules", "typescript", "package.json");
-  if (!existsSync(manifest)) {
-    fail(`productive TypeScript runtime dependency missing: ${manifest}`);
+  // TypeScript is a runtime dep the CLI resolves at request time (the diagnostics runtime
+  // registers a native TypeScript service). After #3510 the published tarball bundles the
+  // whole external runtime closure — TypeScript included — so a consumer's `npm install`
+  // extracts it under `<consumer>/node_modules/@oscharko-dev/keiko/node_modules/typescript`
+  // rather than hoisting it to the top level. Both layouts are valid resolution paths for
+  // `@oscharko-dev/keiko`'s own imports and one is enough to satisfy this gate; check for
+  // either, mirroring the two-layout tolerance `assertVendoredPayload` already applies to
+  // the workspace bundle.
+  const candidates = [
+    join(tmp, "node_modules", "typescript", "package.json"),
+    join(
+      tmp,
+      "node_modules",
+      "@oscharko-dev",
+      "keiko",
+      "node_modules",
+      "typescript",
+      "package.json",
+    ),
+  ];
+  if (!candidates.some((candidate) => existsSync(candidate))) {
+    fail(`productive TypeScript runtime dependency missing: ${candidates.join(" or ")}`);
   }
 }
 
