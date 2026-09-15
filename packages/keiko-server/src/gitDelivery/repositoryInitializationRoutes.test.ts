@@ -11,6 +11,7 @@ import type { ServerLogEvent } from "../observability/index.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import type { RouteContext } from "../routes.js";
 import { createInMemoryUiStore } from "../store/index.js";
+import { GIT_DELIVERY_MAX_BODY_BYTES } from "./requestGuards.js";
 import { createHandleGitRepositoryInitialize } from "./repositoryInitializationRoutes.js";
 
 const CORRELATION_ID = "123e4567-e89b-42d3-a456-426614174000";
@@ -20,8 +21,8 @@ function result(exitCode: number, stderr = "", stdout = ""): GitProcessResult {
   return { exitCode, signal: null, stderr, stdout, truncated: false };
 }
 
-function context(body: unknown): RouteContext {
-  const req = Readable.from([Buffer.from(JSON.stringify(body), "utf8")]) as IncomingMessage;
+function rawContext(body: string): RouteContext {
+  const req = Readable.from([Buffer.from(body, "utf8")]) as IncomingMessage;
   req.method = "POST";
   req.headers = { "content-type": "application/json", "x-keiko-csrf": "1" };
   return {
@@ -31,6 +32,15 @@ function context(body: unknown): RouteContext {
     params: {},
     url: new URL(`http://127.0.0.1${ROUTE}`),
   };
+}
+
+function context(body: unknown): RouteContext {
+  return rawContext(JSON.stringify(body));
+}
+
+function boundedInitializationBody(extraBytes = 0): string {
+  const body = JSON.stringify({ projectId: root, initialBranch: "main" });
+  return `${body}${" ".repeat(GIT_DELIVERY_MAX_BODY_BYTES - Buffer.byteLength(body) + extraBytes)}`;
 }
 
 let root: string;
@@ -132,6 +142,79 @@ describe("repository initialization route", () => {
     expect(branch.status).toBe(400);
     expect(argument.status).toBe(400);
     expect(runner).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "{ malformed json"])(
+    "rejects an unreadable body without invoking Git: %j",
+    async (body) => {
+      const runner = vi.fn<GitProcessRunner>();
+      const response = await createHandleGitRepositoryInitialize({ runner })(
+        rawContext(body),
+        deps,
+      );
+
+      expect(response.status).toBe(400);
+      expect(runner).not.toHaveBeenCalled();
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          correlationId: CORRELATION_ID,
+          status: 400,
+          extra: { outcome: "invalid-request" },
+        }),
+      );
+    },
+  );
+
+  it("accepts a request exactly at the bounded body limit", async () => {
+    const runner = vi.fn<GitProcessRunner>().mockResolvedValueOnce(result(0));
+    const response = await createHandleGitRepositoryInitialize({ runner })(
+      rawContext(boundedInitializationBody()),
+      deps,
+    );
+
+    expect(response.status).toBe(409);
+    expect(runner).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a request above the bounded body limit before invoking Git", async () => {
+    const runner = vi.fn<GitProcessRunner>();
+    const response = await createHandleGitRepositoryInitialize({ runner })(
+      rawContext(boundedInitializationBody(1)),
+      deps,
+    );
+
+    expect(response).toMatchObject({
+      status: 413,
+      body: { error: { code: "GIT_REPOSITORY_INITIALIZE_PAYLOAD_TOO_LARGE" } },
+    });
+    expect(runner).not.toHaveBeenCalled();
+    expect(events).toContainEqual(
+      expect.objectContaining({ status: 413, extra: { outcome: "invalid-request" } }),
+    );
+  });
+
+  it.each([
+    [
+      "timeout",
+      { ...result(1), timedOut: true, truncated: true },
+      504,
+      "GIT_REPOSITORY_INITIALIZE_TIMEOUT",
+    ],
+    [
+      "truncated output",
+      { ...result(1), truncated: true },
+      409,
+      "GIT_REPOSITORY_INITIALIZE_FAILED",
+    ],
+  ] as const)("maps %s to a bounded failure response", async (_label, process, status, code) => {
+    const runner = vi.fn<GitProcessRunner>().mockResolvedValueOnce(process);
+    const response = await createHandleGitRepositoryInitialize({ runner })(
+      context({ projectId: root, initialBranch: "main" }),
+      deps,
+    );
+
+    expect(response).toMatchObject({ status, body: { error: { code } } });
+    expect(runner).toHaveBeenCalledOnce();
   });
 
   it("turns an unexpected runner exception into correlated body-free diagnostics", async () => {

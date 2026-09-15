@@ -25,6 +25,7 @@ import {
   type CodingWorkbenchRuntimeState,
 } from "@/lib/coding-workbench-live-state";
 import type { ProjectWithAvailability } from "@/lib/types";
+import type { RepositoryBranchState } from "../../hooks/useRepositoryBranchState";
 import { CodingWorkbenchWindow, type CodingWorkbenchGitTarget } from "./CodingWorkbenchWindow";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import styles from "./CodingWorkbenchWindow.module.css";
@@ -43,6 +44,9 @@ const skillsHookMock = vi.hoisted(() => vi.fn());
 const approvalReviewHookMock = vi.hoisted(() => vi.fn());
 const autonomyHookMock = vi.hoisted(() => vi.fn());
 const editorBridgeHookMock = vi.hoisted(() => vi.fn());
+const repositoryBranchHookMock = vi.hoisted(() =>
+  vi.fn<(root: string | null) => RepositoryBranchState>(),
+);
 const chatCatalogMock = vi.hoisted(() => ({
   activeProject: undefined as ProjectWithAvailability | undefined,
   projects: [] as ProjectWithAvailability[],
@@ -125,6 +129,10 @@ vi.mock("@/lib/workspace-trust-api", async (importOriginal) => ({
 
 vi.mock("@/lib/useCodingWorkbenchEditorBridge", () => ({
   useCodingWorkbenchEditorBridge: editorBridgeHookMock,
+}));
+
+vi.mock("../../hooks/useRepositoryBranchState", () => ({
+  useRepositoryBranchState: repositoryBranchHookMock,
 }));
 
 vi.mock("../../context/ChatSessionContext", async (importOriginal) => {
@@ -385,6 +393,15 @@ beforeEach(() => {
   researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null, retry: vi.fn() });
   skillsHookMock.mockReturnValue({ status: "idle", skills: null, retry: vi.fn() });
   editorBridgeHookMock.mockReset();
+  repositoryBranchHookMock.mockReset().mockImplementation((root) => ({
+    root,
+    response: null,
+    loading: false,
+    error: null,
+    branches: [],
+    currentBranch: root === null ? null : "dev",
+    refresh: vi.fn(() => Promise.resolve()),
+  }));
   editorBridgeHookMock.mockReturnValue({
     pendingReview: null,
     approve: vi.fn(),
@@ -740,6 +757,30 @@ describe("CodingWorkbenchWindow", () => {
       root: "/worktrees/active-task",
       binding: "task-workspace",
     });
+  });
+
+  it("uses one bound repository root for the composer and information panel", () => {
+    chatCatalogMock.activeProject = {
+      path: "/repos/selected-elsewhere",
+      name: "Selected elsewhere",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+      workspaceAvailable: false,
+    };
+
+    renderWorkbench(
+      liveState(),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/bound", "/worktrees/prior-task"),
+    );
+    openWorkbenchInformation();
+
+    expect(repositoryBranchHookMock).toHaveBeenCalledWith("/repos/bound");
+    expect(repositoryBranchHookMock).not.toHaveBeenCalledWith("/repos/selected-elsewhere");
+    expect(screen.getByRole("button", { name: "Manage repository bound" })).toBeInTheDocument();
   });
 
   // Epic #3384 live-flow defect (#3401 "Review description"): after a settled run the Workbench

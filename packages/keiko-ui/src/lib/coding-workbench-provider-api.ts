@@ -77,7 +77,9 @@ const CODING_WORKBENCH_SIDECAR_UNAVAILABLE_REASONS = new Set([
   "tool-calling-unverified",
 ]);
 const AUTOMATIC_READINESS_REASONS = new Set(["no-tool-calling", "tool-calling-unverified"]);
+const MODEL_KINDS = new Set(["chat", "embedding", "ocr-vision", "voice"]);
 const MODEL_COST_CLASSES = new Set(["low", "medium", "high"]);
+const MODEL_LATENCY_CLASSES = new Set(["fast", "standard", "slow"]);
 const AUTOMATIC_READINESS_RETRY_COOLDOWN_MS = 30_000;
 const automaticReadinessRequests = new Map<string, Promise<boolean>>();
 const automaticReadinessRetryAt = new Map<string, number>();
@@ -154,6 +156,31 @@ function validateSidecarGatewayProfileResponse(
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }
 
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function isRequiredModelCapability(value: unknown): value is ModelCapability {
+  if (!isObjectRecord(value)) return false;
+  return [
+    typeof value.id === "string" && value.id.length > 0,
+    MODEL_KINDS.has(String(value.kind)),
+    isPositiveSafeInteger(value.contextWindow),
+    isPositiveSafeInteger(value.maxOutputTokens),
+    typeof value.toolCalling === "boolean",
+    typeof value.structuredOutput === "boolean",
+    typeof value.streaming === "boolean",
+    typeof value.supportsImageInput === "boolean",
+    typeof value.supportsDocumentInput === "boolean",
+    typeof value.workflowEligible === "boolean",
+    MODEL_COST_CLASSES.has(String(value.costClass)),
+    MODEL_LATENCY_CLASSES.has(String(value.latencyClass)),
+    typeof value.throughputHint === "string",
+    isStringArray(value.preferredUseCases),
+    isStringArray(value.knownLimitations),
+  ].every(Boolean);
+}
+
 function validateCodexSubscriptionProfileResponse(
   value: unknown,
 ): CodingWorkbenchProviderValidation | CodingWorkbenchProviderValidationFailure {
@@ -174,16 +201,7 @@ function validateModelListResponse(
   if (!isObjectRecord(value) || !Array.isArray(value.models)) {
     return { ok: false, reasons: ["models must be an array"] };
   }
-  const malformed = value.models.some(
-    (model) =>
-      !isObjectRecord(model) ||
-      typeof model.id !== "string" ||
-      typeof model.kind !== "string" ||
-      typeof model.workflowEligible !== "boolean" ||
-      !Array.isArray(model.preferredUseCases) ||
-      !model.preferredUseCases.every((useCase) => typeof useCase === "string") ||
-      !MODEL_COST_CLASSES.has(String(model.costClass)),
-  );
+  const malformed = value.models.some((model) => !isRequiredModelCapability(model));
   return malformed
     ? { ok: false, reasons: ["models contains an invalid capability"] }
     : { ok: true };

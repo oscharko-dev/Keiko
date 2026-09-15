@@ -1346,7 +1346,8 @@ function WindowFrameImpl({
       onPointerDown={(e) => {
         if (connState === "valid") api.confirmConnect(win.id, e);
         if (connState === "valid") api.focus(win.id);
-        else activateWindowForTarget(e.target);
+        else if (isPrimaryActivationPointer(e)) activateWindowForTarget(e.target);
+        else api.focus(win.id);
       }}
       // GEN-UI-KEYBOARD-011 — Enter on a focused, highlighted valid target window
       // completes the connect (the section's keyboard counterpart to the pointer

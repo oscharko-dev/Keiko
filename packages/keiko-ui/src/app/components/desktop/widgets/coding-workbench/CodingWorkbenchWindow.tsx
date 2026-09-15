@@ -627,6 +627,13 @@ export function CodingWorkbenchWindow({
     bootstrapSetupVisible(state, activeWorkspace),
     authority.errorMessage,
   );
+  const runIsActive = activeRunState(state.run.value?.state);
+  const repositoryRoot = workbenchRepositoryRoot(
+    runIsActive,
+    runWorkspace.bound?.root ?? null,
+    activeWorkspace,
+    selectedRoot,
+  );
 
   useEffect(() => {
     if (!approvalAction.current || pendingPermission !== undefined) return;
@@ -657,6 +664,8 @@ export function CodingWorkbenchWindow({
       authority={authority}
       onOpenGit={onOpenGit}
       runWorkspace={runWorkspace}
+      repositoryRoot={repositoryRoot}
+      runIsActive={runIsActive}
     />
   );
 }
@@ -702,6 +711,9 @@ interface WorkbenchContentProps {
   readonly onOpenGit: (target: CodingWorkbenchGitTarget) => void;
   /** The run's own workspace attribution, independent of the live pointer (#3381 review). */
   readonly runWorkspace: CodingWorkbenchRunWorkspaceBinding;
+  /** One repository projection shared by the information panel and composer. */
+  readonly repositoryRoot: string | null;
+  readonly runIsActive: boolean;
 }
 
 function WorkbenchAlert({ message }: { readonly message: string | null }): ReactNode {
@@ -756,7 +768,7 @@ function WorkbenchContent({
   workbenchLabel,
   ...columns
 }: WorkbenchContentProps): ReactNode {
-  const { research, runWorkspace, state, activeWorkspace } = columns;
+  const { research, repositoryRoot, runIsActive, runWorkspace, state, activeWorkspace } = columns;
   return (
     <section
       className={styles.shell}
@@ -769,6 +781,8 @@ function WorkbenchContent({
         <SessionContextBar
           state={state}
           workspace={sessionWorkspaceProjection(state, runWorkspace)}
+          repositoryRoot={repositoryRoot}
+          runIsActive={runIsActive}
         />
         <CodingWorkbenchTrustAffordance
           binding={sessionRepositoryTrustBinding(state, runWorkspace, activeWorkspace)}
@@ -805,7 +819,6 @@ function WorkbenchColumns({
   state,
   actions,
   activeWorkspace,
-  selectedRoot,
   taskIntent,
   onTaskIntentChange,
   focusRef,
@@ -816,6 +829,8 @@ function WorkbenchColumns({
   authority,
   onOpenGit,
   runWorkspace,
+  repositoryRoot,
+  runIsActive,
 }: Omit<WorkbenchContentProps, "alert" | "t" | "workbenchLabel">): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const [issueSetup, setIssueSetup] = useState(false);
@@ -932,7 +947,6 @@ function WorkbenchColumns({
     pausedRun?.effectiveMode,
   );
   const resumeModes = pausedRun?.effectiveMode ? resumableModes(pausedRun.effectiveMode) : [];
-  const runIsActive = activeRunState(state.run.value?.state);
   // The composer acts on the bound task workspace, not on the folder selected elsewhere in the
   // Workbench: before a run it names the repository that workspace was bound from, during a run
   // the worktree the run edits. Showing the selected folder next to the bound branch misled the
@@ -941,12 +955,6 @@ function WorkbenchColumns({
   // During a run those chips — and the Git target they open — name the RUN's workspace, which the
   // server still holds authority over, not the live pointer: labelling a run in A with B's root and
   // branch, and opening B's Git, invited the operator to act on the wrong tree (#3381 review).
-  const repositoryRoot = workbenchRepositoryRoot(
-    runIsActive,
-    runBoundRoot,
-    activeWorkspace,
-    selectedRoot,
-  );
   const repositoryBranch = useRepositoryBranchState(
     repositoryBranchReadRoot(runIsActive, repositoryRoot),
   );
@@ -1336,16 +1344,21 @@ function sessionInfoFacts(input: SessionInfoSources): readonly CodingWorkbenchIn
 function SessionContextBar({
   state,
   workspace,
+  repositoryRoot,
+  runIsActive,
 }: {
   readonly state: CodingWorkbenchRuntimeState;
   /** The workspace this session is about: the RUN's while one is live, else the live binding's. */
   readonly workspace: CodingWorkbenchWorkspaceProjection | null;
+  readonly repositoryRoot: string | null;
+  readonly runIsActive: boolean;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
   const catalog = useOptionalChatSessionCatalog();
   const activeWorkspace = useOptionalActiveWorkspace();
-  const projectRoot = catalog?.activeProject?.path ?? null;
-  const repository = useRepositoryBranchState(projectRoot);
+  const repository = useRepositoryBranchState(
+    repositoryBranchReadRoot(runIsActive, repositoryRoot),
+  );
   const mode = confirmedMode(state);
   const posture = useRuntimeAssurancePosture(state);
   const facts = sessionInfoFacts({

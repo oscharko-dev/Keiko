@@ -243,8 +243,11 @@ export function createHandleGitRepositoryInitialize(
     const log = seams.activityLog ?? deps.activityLog ?? processServerLogSink();
     const correlationId = ctx.correlationId ?? randomUUID();
     const parsed = await readParsed(ctx.req);
-    const request = parsed.ok ? parseRequest(parsed.value) : undefined;
-    if (!parsed.ok) return parsed.result;
+    if (!parsed.ok) {
+      recordOutcome(log, correlationId, parsed.result.status, "invalid-request");
+      return parsed.result;
+    }
+    const request = parseRequest(parsed.value);
     if (request === undefined) {
       recordOutcome(log, correlationId, 400, "invalid-request");
       return invalidRequest();

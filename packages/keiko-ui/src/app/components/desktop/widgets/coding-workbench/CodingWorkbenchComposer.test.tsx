@@ -5,6 +5,12 @@ import type {
   CodingWorkbenchRuntimeStateName,
   ModelCapability,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  I18N_STORAGE_KEY,
+  I18nProvider,
+  loadLocaleMessages,
+  resetLoadedMessageCatalogs,
+} from "@/lib/i18n";
 
 import { TaskStartSection, type TaskComposerActions } from "./CodingWorkbenchSections";
 import { operatorResumeAvailable } from "./CodingWorkbenchWindow";
@@ -96,7 +102,11 @@ function renderComposerWithOverrides(overrides: Partial<ComposerProps>): Compose
 }
 
 describe("Coding Workbench composer", () => {
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+    window.localStorage.removeItem(I18N_STORAGE_KEY);
+    resetLoadedMessageCatalogs();
+  });
 
   it("uses the dedicated governed-coding glyph for the run-authority mode label (#2694)", () => {
     renderComposer("idle", composerActions());
@@ -118,6 +128,24 @@ describe("Coding Workbench composer", () => {
 
     expect(onOpenGit).toHaveBeenCalledTimes(2);
     expect(within(context).getByText("MemoriaViva")).toBeInTheDocument();
+  });
+
+  it("localizes the repository branch context in German", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+
+    render(
+      <I18nProvider>
+        <TaskStartSection {...composerProps("idle", composerActions())} />
+      </I18nProvider>,
+    );
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Branch Repository-Branch dev in Git verwalten",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Repository branch")).not.toBeInTheDocument();
   });
 
   it("shows Start while idle and calls the start handler", async () => {

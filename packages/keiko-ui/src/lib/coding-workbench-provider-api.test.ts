@@ -217,6 +217,39 @@ describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
     window.removeEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, readinessUpdated);
   });
 
+  it.each([
+    ["non-array model list", { models: "coding-chat" }],
+    ["non-object capability", { models: [null] }],
+    [
+      "non-string use case",
+      {
+        models: [
+          {
+            id: "coding-chat",
+            kind: "chat",
+            workflowEligible: true,
+            costClass: "medium",
+            preferredUseCases: ["Coding", { injected: true }],
+          },
+        ],
+      },
+    ],
+  ] as const)("fails closed on a %s before issuing a readiness mutation", async (_name, models) => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ status: "unavailable", reason: "tool-calling-unverified" }),
+      )
+      .mockResolvedValueOnce(jsonResponse(models));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchCodingWorkbenchSidecarGatewayProfile()).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+    });
+    expect(fetchMock.mock.calls.some(([path]) => path === "/api/gateway/readiness")).toBe(false);
+  });
+
   it("does not publish a refresh loop and cools down after every candidate fails", async () => {
     const readinessUpdated = vi.fn();
     window.addEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, readinessUpdated);
@@ -226,10 +259,19 @@ describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
         {
           id: "coding-chat-failed",
           kind: "chat",
+          contextWindow: 128_000,
+          maxOutputTokens: 4_096,
           toolCalling: false,
+          structuredOutput: true,
+          streaming: true,
+          supportsImageInput: false,
+          supportsDocumentInput: false,
           workflowEligible: true,
           costClass: "medium",
+          latencyClass: "standard",
+          throughputHint: "configured gateway",
           preferredUseCases: ["Coding"],
+          knownLimitations: [],
         },
       ],
     };

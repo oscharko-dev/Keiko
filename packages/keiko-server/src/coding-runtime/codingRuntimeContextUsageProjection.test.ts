@@ -31,6 +31,17 @@ function snapshot(): CodingRuntimeSnapshot {
 }
 
 describe("coding runtime context usage projection", () => {
+  it("omits context usage until a runtime reports it", () => {
+    const state = new CodingRuntimeOrchestratorState({
+      eventHub: new CodingRuntimeEventHub(),
+      now: (): Date => new Date(AT),
+      pendingPermission: (): undefined => undefined,
+      effectiveMode: (): "governed-assist" => "governed-assist",
+    });
+
+    expect(state.publicSnapshot(snapshot())).not.toHaveProperty("contextUsage");
+  });
+
   it("projects current context separately from cumulative run usage", () => {
     const contextUsage = {
       state: "available" as const,

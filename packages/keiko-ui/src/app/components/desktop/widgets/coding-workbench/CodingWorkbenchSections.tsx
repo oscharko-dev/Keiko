@@ -183,8 +183,17 @@ export function TaskStartSection(input: TaskStartSectionProps): ReactNode {
   );
 }
 
+function branchContextLabel(input: TaskStartSectionProps, t: CodingWorkbenchTranslate): string {
+  return t(
+    input.branchContext === "task"
+      ? "codingWorkbench.info.taskBranch"
+      : "codingWorkbench.info.repositoryBranch",
+  );
+}
+
 function ComposerContext({ input, t }: ControlProps): ReactNode {
   if (input.repositoryLabel === null && input.branchLabel === null) return null;
+  const branchLabel = branchContextLabel(input, t);
   return (
     <div
       className={styles.composerContext}
@@ -208,16 +217,14 @@ function ComposerContext({ input, t }: ControlProps): ReactNode {
         <button
           className={`${styles.composerContextChip} ${styles.composerContextButton}`}
           type="button"
-          title={`${input.branchContext === "task" ? "Task branch" : "Repository branch"}: ${input.branchLabel}`}
+          title={`${branchLabel}: ${input.branchLabel}`}
           aria-label={t("codingWorkbench.composer.branch.open", {
-            branch: `${input.branchContext === "task" ? "Task branch" : "Repository branch"} ${input.branchLabel}`,
+            branch: `${branchLabel} ${input.branchLabel}`,
           })}
           onClick={input.onOpenGit}
         >
           <BranchIcon size={14} />
-          <span className={styles.cmpComposerContextKind}>
-            {input.branchContext === "task" ? "Task branch" : "Repository branch"}
-          </span>
+          <span className={styles.cmpComposerContextKind}>{branchLabel}</span>
           <span>{input.branchLabel}</span>
         </button>
       )}

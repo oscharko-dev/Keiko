@@ -163,17 +163,30 @@ function useRepositoryInitialization(root: string | null): InitializationControl
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const rootGenerationRef = useRef(0);
+  useEffect(() => {
+    rootGenerationRef.current += 1;
+    setOpen(false);
+    setBusy(false);
+    setError(null);
+    return (): void => {
+      rootGenerationRef.current += 1;
+    };
+  }, [root]);
   const run = useCallback((): void => {
     if (root === null) return;
+    const rootGeneration = rootGenerationRef.current;
     setBusy(true);
     setError(null);
     void initializeGitRepository({ projectId: root, initialBranch: "main" }).then(
       (): void => {
+        if (rootGenerationRef.current !== rootGeneration) return;
         setBusy(false);
         setOpen(false);
         notifyGitRepositoryStateInvalidated(root);
       },
       (cause: unknown): void => {
+        if (rootGenerationRef.current !== rootGeneration) return;
         setBusy(false);
         setError(formatGitError(cause));
         reportClientDiagnostic(
@@ -203,11 +216,12 @@ interface DialogState {
 function useBranchDialogs(root: string | null, guard: TaskBindingGuard): DialogState {
   const [newBranchOpen, setNewBranchOpen] = useState(false);
   const [pendingSwitch, setPendingSwitch] = useState<string | null>(null);
+  const { clearError } = guard;
   useEffect(() => {
     setPendingSwitch(null);
     setNewBranchOpen(false);
-    guard.clearError();
-  }, [guard, root]);
+    clearError();
+  }, [clearError, root]);
   const openNewBranch = useCallback((): void => {
     if (!guard.blocked()) setNewBranchOpen(true);
   }, [guard]);
