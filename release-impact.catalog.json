@@ -2212,8 +2212,8 @@
         "0.2.0"
       ],
       "internalOnly": true,
-      "observableImpact": false,
-      "defaultPatchNotes": false,
+      "observableImpact": true,
+      "defaultPatchNotes": true,
       "oneClickEligible": true,
       "publishGates": [
         "version-consistency",
@@ -2227,12 +2227,12 @@
       "id": "2026-09-15-keiko-1.0.2-one-button-release",
       "releaseNoteCategory": "internal-only",
       "releaseNotePriority": "internal",
-      "userVisibleChange": "none",
+      "userVisibleChange": "observable",
       "userVisibleSummary": "Release tooling and CI only. No user-visible change from 1.0.1: no export, CLI flag, package entry point, or runtime behavior was added, removed, or renamed. This release exists to prove the one-button release path delivered by Epic #3495 (PR #3507): the wait-for-checks release-verify job was retired, the publish job now gates on a bot-refuse plus a release-owner allowlist so a workflow_dispatch button on release.yml is the publish approval, and the wait-for-npm confirmation loop is retired to a single shot because npm publish returning success is the confirmation.",
       "affectedStateStores": [],
       "stateImpact": [],
       "releaseNoteBullets": [
-        "First release cut through the new one-button path: the release owner presses Run workflow on release.yml with publish=true and everything else is automatic."
+        "Release toolchain: the release owner presses `Run workflow` on release.yml with `publish: true` and the publish completes automatically \u2014 no wait-for-checks job, no wait-for-npm loop, and no second-click approval."
       ],
       "review": {
         "status": "reviewed",
