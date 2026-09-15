@@ -3090,6 +3090,7 @@ export interface GitDeliverySyncInput {
   readonly projectId: string;
   readonly remote?: string | undefined;
   readonly approval?: GitDeliveryApprovalClaim;
+  readonly userInitiated?: true | undefined;
 }
 
 function gitDeliverySyncBody(input: GitDeliverySyncInput): string {
@@ -3098,6 +3099,7 @@ function gitDeliverySyncBody(input: GitDeliverySyncInput): string {
     projectId: input.projectId,
     ...(input.remote === undefined ? {} : { remote: input.remote }),
     ...(input.approval === undefined ? {} : { approval: input.approval }),
+    ...(input.userInitiated === true ? { userInitiated: true } : {}),
   });
 }
 
@@ -3145,7 +3147,7 @@ export interface GitDeliverySyncApproveResponse {
 }
 
 export async function fetchGitDeliverySyncApprove(
-  input: Omit<GitDeliverySyncInput, "approval">,
+  input: Omit<GitDeliverySyncInput, "approval" | "userInitiated">,
   signal?: AbortSignal,
 ): Promise<GitDeliverySyncApproveResponse> {
   return fetchJson(gitDeliverySyncPath(input.operation, "approve"), {
@@ -3156,15 +3158,14 @@ export async function fetchGitDeliverySyncApprove(
 }
 
 /**
- * Treats one explicit Fetch/Pull action as the approval-mint plus one-use execute sequence. The
- * server independently validates the same project, operation, and remote at both steps.
+ * Treats one explicit Fetch/Pull action as the local user's own request. Agent/background sync
+ * callers use the low-level approve/execute pair instead.
  */
 export async function proposeGitDeliverySync(
-  input: Omit<GitDeliverySyncInput, "approval">,
+  input: Omit<GitDeliverySyncInput, "approval" | "userInitiated">,
   signal?: AbortSignal,
 ): Promise<GitSyncExecuteResponse> {
-  const minted = await fetchGitDeliverySyncApprove(input, signal);
-  return fetchGitDeliverySyncExecute({ ...input, approval: minted.approval }, signal);
+  return fetchGitDeliverySyncExecute({ ...input, userInitiated: true }, signal);
 }
 
 // ─── Governed GitHub pull request command center (#477, ADR-0064) ────────────────────────────────────
