@@ -1359,6 +1359,7 @@ export type {
   CodingWorkbenchRuntimeEvidenceClass,
   CodingWorkbenchRuntimePendingPermission,
   CodingWorkbenchRuntimePreference,
+  CodingWorkbenchRuntimeProjectMemoryRequest,
   CodingWorkbenchRuntimeReadiness,
   CodingWorkbenchRuntimeReadinessRequest,
   CodingWorkbenchRuntimeRecoveryAcknowledgementRequest,

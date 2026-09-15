@@ -80,6 +80,11 @@ import {
   type CodingRuntimeIssueAttachment,
 } from "./codingRuntimeIssueIntake.js";
 import { renderInitialTurnContext } from "./productionCodingRuntimePorts.js";
+import {
+  codingRuntimeProjectMemoryScopes,
+  composeCodingRuntimeInitialContext,
+  renderCodingRuntimeProjectMemoryContext,
+} from "./codingRuntimeProjectMemory.js";
 import type {
   CodingRuntimeDescriptionJobStore,
   WorkbenchDescriptionScope,
@@ -362,6 +367,44 @@ function recordRuntimeRunStarted(
         ? {}
         : { predecessorRunId: snapshot.predecessorRunId }),
     },
+  });
+}
+
+type ProjectMemoryContextOutcome = "disabled" | "empty" | "failed" | "included" | "unavailable";
+
+function recordRuntimeProjectMemoryContext(
+  activityLog: ServerLogSink | undefined,
+  runId: string,
+  outcome: ProjectMemoryContextOutcome,
+  includedMemoryCount = 0,
+): void {
+  activityLog?.write({
+    level: outcome === "failed" ? "warn" : "info",
+    category: "process",
+    op: "coding-runtime.project-memory.context",
+    correlationId: runtimeDiagnosticCorrelationId(runId),
+    extra: {
+      runId,
+      outcome,
+      includedMemoryCount,
+      scopeKindCount: 2,
+    },
+  });
+}
+
+function recordRuntimeProjectMemoryFailure(
+  diagnostics: ServerDiagnosticSink | undefined,
+  runId: string,
+  error: unknown,
+): void {
+  emitServerDiagnostic(diagnostics, {
+    correlationId: runtimeDiagnosticCorrelationId(runId),
+    timestamp: new Date().toISOString(),
+    operation: "coding-runtime.project-memory",
+    source: "coding-runtime-orchestrator.project-memory",
+    errorClass: contentFreeErrorClass(error),
+    message: "coding-runtime-project-memory-context-failed",
+    code: "stage=start:reason=project-memory-context",
   });
 }
 
@@ -1948,7 +1991,7 @@ export class CodingRuntimeOrchestrator {
     this.projection.publish(snapshot);
     const started = await this.startManagedRuntime(parsed.value, active, runId, launch);
     if (started !== undefined) return started;
-    return this.runInitialTurn(parsed.value, runId, issue.attachment);
+    return this.runInitialTurn(parsed.value, active, runId, issue.attachment);
   }
 
   private selectStartPredecessor(
@@ -2031,6 +2074,7 @@ export class CodingRuntimeOrchestrator {
 
   private async runInitialTurn(
     request: CodingWorkbenchRuntimeStartRequest,
+    active: ActiveWorkspaceView,
     runId: string,
     attachment?: CodingRuntimeIssueAttachment,
   ): Promise<CodingRuntimeOrchestratorResult> {
@@ -2057,12 +2101,13 @@ export class CodingRuntimeOrchestrator {
     if (!isExactRunRevision(runningInternal, runId, running.snapshot.revision)) {
       return this.transitionActive("recovery-required", "recovery-required");
     }
+    const initialContext = await this.initialContextFor(request, active, runId, attachment);
     const initialTurn = await this.operations.startInitialTurn({
       runId,
       requestId: request.requestId,
       expectedRevision: runningInternal.revision,
       taskIntent: request.taskIntent,
-      ...(attachment === undefined ? {} : { initialContext: renderInitialTurnContext(attachment) }),
+      ...(initialContext === undefined ? {} : { initialContext }),
     });
     if (initialTurn === "accepted" && attachment !== undefined) {
       this.deps.activityLog?.write({
@@ -2101,6 +2146,52 @@ export class CodingRuntimeOrchestrator {
     return this.transitionActive("recovery-required", "recovery-required");
   }
 
+  private async initialContextFor(
+    request: CodingWorkbenchRuntimeStartRequest,
+    active: ActiveWorkspaceView,
+    runId: string,
+    attachment?: CodingRuntimeIssueAttachment,
+  ): Promise<string | undefined> {
+    const issueContext =
+      attachment === undefined ? undefined : renderInitialTurnContext(attachment);
+    const memoryContext = await this.projectMemoryInitialContext(request, active, runId);
+    return composeCodingRuntimeInitialContext([issueContext, memoryContext]);
+  }
+
+  private async projectMemoryInitialContext(
+    request: CodingWorkbenchRuntimeStartRequest,
+    active: ActiveWorkspaceView,
+    runId: string,
+  ): Promise<string | undefined> {
+    if (request.projectMemory?.enabled === false) {
+      recordRuntimeProjectMemoryContext(this.deps.activityLog, runId, "disabled");
+      return undefined;
+    }
+    if (this.deps.projectMemory === undefined) {
+      recordRuntimeProjectMemoryContext(this.deps.activityLog, runId, "unavailable");
+      return undefined;
+    }
+    try {
+      const context = await this.deps.projectMemory.getContextForRun({
+        runId,
+        taskIntent: request.taskIntent,
+        scopes: codingRuntimeProjectMemoryScopes(active.instance.repositoryRoot),
+      });
+      const rendered = renderCodingRuntimeProjectMemoryContext(context);
+      recordRuntimeProjectMemoryContext(
+        this.deps.activityLog,
+        runId,
+        rendered === undefined ? "empty" : "included",
+        context.includedMemoryIds.length,
+      );
+      return rendered;
+    } catch (error) {
+      recordRuntimeProjectMemoryFailure(this.deps.diagnostics, runId, error);
+      recordRuntimeProjectMemoryContext(this.deps.activityLog, runId, "failed");
+      return undefined;
+    }
+  }
+
   private async resolveLaunch(
     request: CodingWorkbenchRuntimeStartRequest,
     active: ActiveWorkspaceView,
@@ -2120,6 +2211,7 @@ export class CodingRuntimeOrchestrator {
         ...(request.runtimePreference ? { runtimePreference: request.runtimePreference } : {}),
         ...(request.modelId ? { modelId: request.modelId } : {}),
         ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
+        projectMemoryEnabled: request.projectMemory?.enabled ?? true,
         workspaceId: active.instance.workspaceId,
         workspaceRoot: active.binding.activeRoot,
         serverPrincipal: principal,

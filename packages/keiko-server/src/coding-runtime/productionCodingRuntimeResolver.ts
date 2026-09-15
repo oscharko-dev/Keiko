@@ -604,6 +604,7 @@ function confirmationFacts(
     ...(request.runtimePreference ? { runtimePreference: request.runtimePreference } : {}),
     ...(request.modelId ? { modelId: request.modelId } : {}),
     ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
+    projectMemoryEnabled: request.projectMemoryEnabled ?? true,
     operatorId: context.operatorId,
     taskId: context.taskId,
     projectId: context.projectId,

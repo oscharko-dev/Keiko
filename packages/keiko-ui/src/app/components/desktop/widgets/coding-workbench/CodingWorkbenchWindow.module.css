@@ -584,8 +584,46 @@
   flex: 0 0 auto;
 }
 
-.composerMemoryChip svg {
+.composerMemoryChip {
+  appearance: none;
+  font: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+
+.composerMemoryChip[data-enabled="true"] {
+  border-color: color-mix(in srgb, var(--text-accent) 42%, var(--border-subtle));
+  color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-accent) 13%, var(--button-secondary-surface));
+}
+
+.composerMemoryChip[data-enabled="false"] {
+  color: var(--text-tertiary);
+  background: var(--button-secondary-surface);
+}
+
+.composerMemoryChip:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  color: var(--text-primary);
+  background: var(--button-secondary-surface-hover);
+}
+
+.composerMemoryChip:focus-visible {
+  outline: var(--focus-w) solid var(--focus-ring);
+  outline-offset: var(--space-1);
+}
+
+.composerMemoryChip:disabled {
+  cursor: default;
+  opacity: 0.72;
+}
+
+.composerMemoryChip[data-enabled="true"] svg {
   color: var(--text-accent);
+}
+
+.composerMemoryChip[data-enabled="false"] svg {
+  color: var(--text-tertiary);
 }
 
 .composerConfiguration {

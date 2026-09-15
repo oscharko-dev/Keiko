@@ -67,6 +67,8 @@ function composerProps(
     branchLabel: "dev",
     branchContext: "repository",
     onOpenGit,
+    projectMemoryEnabled: true,
+    onProjectMemoryEnabledChange: vi.fn(),
     autonomyMode: "supervised-coding",
     autonomyLabel: "Supervised workspace",
     requestedMode: "supervised-coding",
@@ -129,6 +131,36 @@ describe("Coding Workbench composer", () => {
 
     expect(onOpenGit).toHaveBeenCalledTimes(2);
     expect(within(context).getByText("MemoriaViva")).toBeInTheDocument();
+  });
+
+  it("keeps project memory active by default and lets the operator toggle it per run", async () => {
+    const user = userEvent.setup();
+    const onProjectMemoryEnabledChange = vi.fn();
+    renderComposerWithOverrides({ onProjectMemoryEnabledChange });
+
+    const context = screen.getByLabelText("Coding context");
+    const toggle = within(context).getByRole("button", {
+      name: "Disable project memory for this run",
+    });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(within(toggle).queryByText("On")).toBeNull();
+    expect(within(toggle).queryByText("Off")).toBeNull();
+
+    await user.click(toggle);
+
+    expect(onProjectMemoryEnabledChange).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("shows the disabled project memory state as a real toggle state", () => {
+    renderComposerWithOverrides({ projectMemoryEnabled: false });
+
+    const toggle = screen.getByRole("button", {
+      name: "Enable project memory for this run",
+    });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(within(toggle).getByText("MemoriaViva")).toBeInTheDocument();
+    expect(within(toggle).queryByText("On")).toBeNull();
+    expect(within(toggle).queryByText("Off")).toBeNull();
   });
 
   it("localizes the repository branch context in German", async () => {

@@ -118,6 +118,10 @@ export interface CodingWorkbenchRuntimeReadiness {
   readonly runtimeEvidenceClass?: CodingWorkbenchRuntimeEvidenceClass | undefined;
 }
 
+export interface CodingWorkbenchRuntimeProjectMemoryRequest {
+  readonly enabled: boolean;
+}
+
 export interface CodingWorkbenchRuntimeStartRequest {
   readonly requestId: string;
   /** Transient model input; no response, snapshot, SSE projection, or evidence may retain it. */
@@ -137,6 +141,12 @@ export interface CodingWorkbenchRuntimeStartRequest {
   readonly issueRef?: string | undefined;
   /** Optimistic precondition from the accepted preview; never authority. */
   readonly expectedIssueBindingDigest?: string | undefined;
+  /**
+   * Operator preference only. The browser can turn project memory context on/off for this run, but
+   * it cannot choose scopes, paths, user memory, or credentials. The server derives those from the
+   * active workspace binding and defaults an omitted field to enabled for older clients.
+   */
+  readonly projectMemory?: CodingWorkbenchRuntimeProjectMemoryRequest | undefined;
 }
 
 /** The retry route has the same fresh, transient intent shape as start. */
@@ -407,6 +417,16 @@ function validateIssueRef(value: unknown, errors: string[]): void {
   }
 }
 
+function validateProjectMemoryRequest(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    errors.push("projectMemory must be an object");
+    return;
+  }
+  errors.push(...exactKeys(value, ["enabled"], "projectMemory"));
+  if (typeof value.enabled !== "boolean") errors.push("projectMemory.enabled must be boolean");
+}
+
 export function parseCodingWorkbenchRuntimeStartRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeStartRequest> {
@@ -422,6 +442,7 @@ export function parseCodingWorkbenchRuntimeStartRequest(
       "reasoningEffort",
       "issueRef",
       "expectedIssueBindingDigest",
+      "projectMemory",
     ],
     "startRequest",
   );
@@ -434,6 +455,7 @@ export function parseCodingWorkbenchRuntimeStartRequest(
   validateRuntimeModelId(value.modelId, errors);
   validateReasoningEffort(value.reasoningEffort, errors);
   validateIssueRef(value.issueRef, errors);
+  validateProjectMemoryRequest(value.projectMemory, errors);
   if (
     value.expectedIssueBindingDigest !== undefined &&
     (value.issueRef === undefined ||

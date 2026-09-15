@@ -103,6 +103,8 @@ interface TaskStartSectionProps {
   readonly branchLabel: string | null;
   readonly branchContext: "repository" | "task";
   readonly onOpenGit: () => void;
+  readonly projectMemoryEnabled: boolean;
+  readonly onProjectMemoryEnabledChange: (enabled: boolean) => void;
   readonly autonomyMode: CodingWorkbenchMode | null;
   readonly autonomyLabel: string;
   readonly requestedMode: CodingWorkbenchMode;
@@ -283,14 +285,35 @@ function ComposerContext({ input, t }: ControlProps): ReactNode {
           <span>{input.branchLabel}</span>
         </button>
       )}
-      <span
-        className={`${styles.composerContextChip} ${styles.composerMemoryChip}`}
-        title={t("codingWorkbench.composer.projectMemory.help")}
-      >
-        <BrainIcon size={14} />
-        <span>{t("codingWorkbench.composer.projectMemory.label")}</span>
-      </span>
+      <ProjectMemoryToggle input={input} t={t} />
     </div>
+  );
+}
+
+function ProjectMemoryToggle({ input, t }: ControlProps): ReactNode {
+  const enabled = input.projectMemoryEnabled;
+  return (
+    <button
+      className={`${styles.composerContextChip} ${styles.composerMemoryChip}`}
+      type="button"
+      data-enabled={enabled ? "true" : "false"}
+      aria-pressed={enabled}
+      aria-label={t(
+        enabled
+          ? "codingWorkbench.composer.projectMemory.disable"
+          : "codingWorkbench.composer.projectMemory.enable",
+      )}
+      title={t(
+        enabled
+          ? "codingWorkbench.composer.projectMemory.help.enabled"
+          : "codingWorkbench.composer.projectMemory.help.disabled",
+      )}
+      disabled={input.configurationLocked}
+      onClick={(): void => input.onProjectMemoryEnabledChange(!enabled)}
+    >
+      <BrainIcon size={14} />
+      <span>{t("codingWorkbench.composer.projectMemory.label")}</span>
+    </button>
   );
 }
 

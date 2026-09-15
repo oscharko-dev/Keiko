@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import type { GitBranchListEntry } from "@/lib/api";
 import { Icons } from "../../../Icons";
 import {
@@ -19,6 +19,7 @@ import {
 // PascalCase aliases so the JSX tag itself signals "component", not member access (S6770).
 const BranchIcon = Icons.branch;
 const PlusIcon = Icons.plus;
+const HEADER_ACCENT_ICON_STYLE = { color: "var(--text-accent)" } satisfies CSSProperties;
 
 interface BranchSelectorProps {
   readonly branches: readonly GitBranchListEntry[];
@@ -156,7 +157,7 @@ export function BranchSelector({
         style={{ ...SECONDARY_BTN, minWidth: 168, ...disabledStyle(disabled || loading) }}
         onClick={toggleOpen}
       >
-        <BranchIcon size={12} />
+        <BranchIcon size={12} style={HEADER_ACCENT_ICON_STYLE} />
         <span className="mono" style={{ overflow: "hidden", textOverflow: "ellipsis" }}>
           {triggerLabel}
         </span>
@@ -168,7 +169,7 @@ export function BranchSelector({
         style={{ ...COMPACT_BTN, ...disabledStyle(disabled || loading || busy) }}
         onClick={(event) => onCreateBranch(event.currentTarget)}
       >
-        <PlusIcon size={11} /> New
+        <PlusIcon size={11} style={HEADER_ACCENT_ICON_STYLE} /> New
       </button>
       {open ? (
         <div style={MENU_STYLE}>

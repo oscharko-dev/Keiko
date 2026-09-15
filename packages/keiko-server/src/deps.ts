@@ -351,6 +351,10 @@ import {
 } from "./coding-runtime/codingRuntimeEvidenceAggregator.js";
 import type { CodingRuntimeEventHub } from "./coding-runtime/codingRuntimeEventHub.js";
 import type { CodingRuntimeOrchestrator } from "./coding-runtime/codingRuntimeOrchestrator.js";
+import {
+  createCodingRuntimeProjectMemoryPort,
+  type CodingRuntimeProjectMemoryPort,
+} from "./coding-runtime/codingRuntimeProjectMemory.js";
 import type { CodingSafeActivityProjection } from "./coding-runtime/codingSafeActivityProjection.js";
 import {
   createCodingRuntimeControlPlane,
@@ -4351,6 +4355,7 @@ function assembleUiHandlerRuntimeServices(
     args,
     codingRuntimeEvidenceAggregator,
     codingRuntimeHost,
+    peripherals.memoryVault,
   );
   const gitChangeSnapshotService = createGitChangeSnapshotService({
     logSink: processServerLogSink(),
@@ -4414,8 +4419,10 @@ function buildUiCodingRuntimeControlPlane(
   args: UiHandlerDepsAssemblyArgs,
   codingRuntimeEvidenceAggregator: ReturnType<typeof createCodingRuntimeEvidenceAggregator>,
   codingRuntimeHost: NonNullable<BuildHandlerDepsOptions["codingRuntimeHost"]> | undefined,
+  memoryVault: MemoryVaultStore,
 ): ReturnType<typeof createCodingRuntimeControlPlane> | undefined {
   if (!args.bundle.codingRuntimeSnapshotStore || !args.bundle.workspaceLifecycle) return undefined;
+  const projectMemory = createUiCodingRuntimeProjectMemory(args, memoryVault);
   return createCodingRuntimeControlPlane({
     issueIntake: createProductionCodingRuntimeIssueIntake({
       store: args.bundle.uiStore,
@@ -4431,6 +4438,7 @@ function buildUiCodingRuntimeControlPlane(
       args.options.codingRuntimeServerPrincipal ??
       ((): string | undefined => DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID),
     ...(codingRuntimeHost ? { runtimeHost: codingRuntimeHost } : {}),
+    projectMemory,
     // KEIKO-0225: forward the operator diagnostic sink so mid-stream SSE fan-out write failures
     // surface as one redacted record per subscriber instead of being silently swallowed.
     // #3099 P2 (KEIKO-0225 follow-up): default to the stderr sink when no custom sink is
@@ -4438,6 +4446,17 @@ function buildUiCodingRuntimeControlPlane(
     // failures instead of silently no-op'ing recordSseFailure().
     diagnostics: args.options.diagnostics ?? defaultServerDiagnosticSink,
     activityLog: processServerLogSink(),
+  });
+}
+
+function createUiCodingRuntimeProjectMemory(
+  args: UiHandlerDepsAssemblyArgs,
+  memoryVault: MemoryVaultStore,
+): CodingRuntimeProjectMemoryPort {
+  return createCodingRuntimeProjectMemoryPort({
+    vault: memoryVault,
+    evidenceStore: args.evidenceStore,
+    redactString: args.redactString,
   });
 }
 

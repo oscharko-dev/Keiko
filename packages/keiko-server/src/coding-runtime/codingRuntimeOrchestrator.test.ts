@@ -28,6 +28,7 @@ import {
   type CodingRuntimeIssueIntake,
   type CodingRuntimeOrchestratorResult,
   type CodingRuntimeLaunchResolver,
+  type CodingRuntimeProjectMemoryPort,
   type WorkbenchDescriptionDispatchOutcome,
   type WorkbenchDescriptionDispatcher,
   DELIVERY_CONTINUATION_INTENT,
@@ -56,6 +57,7 @@ import type {
   AuxiliaryResearchScopeV1,
   CodingWorkbenchIssueBinding,
   CodingWorkbenchIssueBindingFailure,
+  MemoryId,
   SkillDiscoveryResultV1,
 } from "@oscharko-dev/keiko-contracts";
 import { validateSkillDiscoveryResultV1 } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
@@ -154,6 +156,7 @@ function fixture(
   // established "run-1"/"run-2" convention.
   newRunId?: () => string,
   snapshotStore?: CodingRuntimeSnapshotStore,
+  projectMemory?: CodingRuntimeProjectMemoryPort,
 ) {
   const rows = new Map<string, CodingRuntimeSnapshot>(seededRows.map((row) => [row.runId, row]));
   const listPrunableSettled = vi.fn((): readonly string[] => []);
@@ -381,6 +384,7 @@ function fixture(
       ...(diagnostics ? { diagnostics } : {}),
       ...(activityLog ? { activityLog } : {}),
       ...(issueIntake ? { issueIntake } : {}),
+      ...(projectMemory ? { projectMemory } : {}),
       now: clock ?? ((): Date => new Date("2026-01-01T00:00:00.000Z")),
       newRunId: newRunId ?? ((): string => `run-${String(rows.size + 1)}`),
     },
@@ -837,6 +841,102 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(serialized).not.toContain(start.taskIntent);
     expect(serialized).not.toContain("/workspace");
     expect(serialized).not.toContain("/bin/runtime");
+  });
+
+  it("attaches active project memory from the repository root to the initial turn by default", async () => {
+    const captured = captureActivityLog();
+    const getContextForRun = vi.fn<CodingRuntimeProjectMemoryPort["getContextForRun"]>(() =>
+      Promise.resolve({
+        text: "Use the existing design-system controls for repository UI.",
+        includedMemoryIds: ["memory-1" as MemoryId],
+      }),
+    );
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      captured.activityLog,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { getContextForRun },
+    );
+
+    await f.orchestrator.start(start);
+
+    const memoryRequest = getContextForRun.mock.calls[0]?.[0];
+    if (memoryRequest === undefined) throw new Error("expected project memory lookup");
+    expect(memoryRequest).toMatchObject({
+      runId: "run-1",
+      taskIntent: start.taskIntent,
+      scopes: [
+        { kind: "project", projectId: ACTIVE_REPOSITORY_ROOT },
+        { kind: "workspace", workspaceId: ACTIVE_REPOSITORY_ROOT },
+      ],
+    });
+    expect(memoryRequest.scopes.map((scope) => scope.kind)).toEqual(["project", "workspace"]);
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialContext: expect.stringContaining(
+          "Local Project Memory from MemoriaViva is available for this run.",
+        ),
+      }),
+    );
+    expect(f.taskDispatcher.dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        initialContext: expect.stringContaining("design-system controls"),
+      }),
+    );
+    expect(captured.records).toContainEqual(
+      expect.objectContaining({
+        op: "coding-runtime.project-memory.context",
+        extra: expect.objectContaining({
+          runId: "run-1",
+          outcome: "included",
+          includedMemoryCount: 1,
+          scopeKindCount: 2,
+        }),
+      }),
+    );
+    expect(JSON.stringify(captured.records)).not.toContain("design-system controls");
+  });
+
+  it("does not read project memory when the operator disables it for the run", async () => {
+    const captured = captureActivityLog();
+    const getContextForRun = vi.fn<CodingRuntimeProjectMemoryPort["getContextForRun"]>();
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      undefined,
+      captured.activityLog,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { getContextForRun },
+    );
+
+    await f.orchestrator.start({ ...start, projectMemory: { enabled: false } });
+
+    expect(getContextForRun).not.toHaveBeenCalled();
+    const dispatchRequest = f.taskDispatcher.dispatch.mock.calls[0]?.[0];
+    if (dispatchRequest === undefined) throw new Error("expected initial turn dispatch");
+    expect(dispatchRequest).not.toHaveProperty("initialContext");
+    expect(captured.records).toContainEqual(
+      expect.objectContaining({
+        op: "coding-runtime.project-memory.context",
+        extra: expect.objectContaining({
+          runId: "run-1",
+          outcome: "disabled",
+          includedMemoryCount: 0,
+        }),
+      }),
+    );
   });
 
   // Run 9 (2026-09-10): a server shutdown ends the live run through the same stop path an operator

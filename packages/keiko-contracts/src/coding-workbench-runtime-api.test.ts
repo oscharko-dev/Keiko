@@ -82,6 +82,11 @@ describe("Coding Workbench runtime API contracts", () => {
       "modelSource",
       "runtimeSource",
       "profileId",
+      "memory",
+      "memoryScope",
+      "projectId",
+      "projectMemoryScope",
+      "userMemory",
     ]) {
       expect(
         parseCodingWorkbenchRuntimeStartRequest({ ...start, [field]: "forged" }),
@@ -89,6 +94,35 @@ describe("Coding Workbench runtime API contracts", () => {
         ok: false,
       });
     }
+  });
+
+  it("accepts only the project-memory enabled flag from the browser", () => {
+    const start = {
+      requestId: "request-1",
+      taskIntent: "Use project memory for the repository",
+      requestedMode: "supervised-coding",
+      projectMemory: { enabled: true },
+    };
+
+    expect(parseCodingWorkbenchRuntimeStartRequest(start)).toEqual({ ok: true, value: start });
+    expect(
+      parseCodingWorkbenchRuntimeStartRequest({
+        ...start,
+        projectMemory: { enabled: false },
+      }),
+    ).toMatchObject({ ok: true });
+    expect(
+      parseCodingWorkbenchRuntimeStartRequest({
+        ...start,
+        projectMemory: { enabled: "true" },
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      parseCodingWorkbenchRuntimeStartRequest({
+        ...start,
+        projectMemory: { enabled: true, scopes: ["forged"] },
+      }),
+    ).toMatchObject({ ok: false });
   });
 
   it("keeps approval decisions and run controls closed", () => {

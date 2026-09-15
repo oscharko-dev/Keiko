@@ -6,6 +6,8 @@ import type {
   CodingWorkbenchRuntimeQuestionsResponse,
   CodingWorkbenchRuntimeSnapshot,
   CodingWorkbenchRuntimeStartRequest,
+  MemoryScope,
+  MemoryWorkflowContext,
   SkillDiscoveryResultV1,
 } from "@oscharko-dev/keiko-contracts";
 
@@ -43,6 +45,7 @@ export interface CodingRuntimeLaunchResolver {
     readonly runtimePreference?: CodingWorkbenchRuntimeStartRequest["runtimePreference"];
     readonly modelId?: CodingWorkbenchRuntimeStartRequest["modelId"];
     readonly reasoningEffort?: CodingWorkbenchRuntimeStartRequest["reasoningEffort"];
+    readonly projectMemoryEnabled?: boolean | undefined;
     readonly workspaceId: string;
     readonly workspaceRoot: string;
     readonly serverPrincipal: string;
@@ -50,6 +53,18 @@ export interface CodingRuntimeLaunchResolver {
   }): Omit<CodingRuntimeLaunchRequest, "runId" | "taskRef" | "workspaceRoot" | "requestedMode"> & {
     readonly taskRef: string;
   };
+}
+
+export interface CodingRuntimeProjectMemoryRequest {
+  readonly runId: string;
+  readonly taskIntent: string;
+  readonly scopes: readonly MemoryScope[];
+}
+
+export interface CodingRuntimeProjectMemoryPort {
+  readonly getContextForRun: (
+    request: CodingRuntimeProjectMemoryRequest,
+  ) => Promise<MemoryWorkflowContext>;
 }
 
 export interface CodingRuntimeApprovalAuthority {
@@ -72,6 +87,7 @@ export interface CodingRuntimeOrchestratorDeps {
   readonly permissionPort?: CodingRuntimePermissionPort | undefined;
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
   readonly contextUsage?: ((runId: string) => CodingWorkbenchContextUsage | undefined) | undefined;
+  readonly projectMemory?: CodingRuntimeProjectMemoryPort | undefined;
   readonly serverPrincipal: () => string | undefined;
   /**
    * Server-level read-only research grant registry (#2387). The grant is exposed only through the

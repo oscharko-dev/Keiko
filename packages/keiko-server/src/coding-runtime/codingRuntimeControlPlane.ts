@@ -22,6 +22,7 @@ import {
   type CodingRuntimeLaunchResolver,
   type CodingRuntimeOrchestrator,
 } from "./codingRuntimeOrchestrator.js";
+import type { CodingRuntimeProjectMemoryPort } from "./codingRuntimeOrchestratorTypes.js";
 import type { PendingResearchApprovals } from "./researchApprovalIssuance.js";
 import type { ResearchGrantRegistry } from "./researchGrantRegistry.js";
 import type { CodingRuntimeSnapshotStore } from "./codingRuntimeSnapshotStore.js";
@@ -164,6 +165,7 @@ export interface CodingRuntimeControlPlaneInput {
    */
   readonly diagnostics?: ServerDiagnosticSink | undefined;
   readonly activityLog?: ServerLogSink | undefined;
+  readonly projectMemory?: CodingRuntimeProjectMemoryPort | undefined;
 }
 
 export interface CodingRuntimeControlPlane {
@@ -263,6 +265,7 @@ function createControlPlaneOrchestrator(
     ...(input.runtimeHost?.contextUsage
       ? { contextUsage: input.runtimeHost.contextUsage.read }
       : {}),
+    ...(input.projectMemory ? { projectMemory: input.projectMemory } : {}),
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
     ...(input.activityLog ? { activityLog: input.activityLog } : {}),
   });

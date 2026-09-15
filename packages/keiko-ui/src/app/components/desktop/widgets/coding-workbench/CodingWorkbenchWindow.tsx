@@ -836,6 +836,7 @@ function WorkbenchColumns({
   const t = useCodingWorkbenchTranslate();
   const [issueSetup, setIssueSetup] = useState(false);
   const [acceptedIssue, setAcceptedIssue] = useState<AcceptedWorkbenchIssue | null>(null);
+  const [projectMemoryEnabled, setProjectMemoryEnabled] = useState(true);
   // #3452 F52: the setup card is unmounted whenever a binding or a run workspace arrives, so the
   // path the operator is typing is held HERE -- this component keeps its instance across that flip
   // (WorkbenchContent renders it unconditionally and without a key).
@@ -960,6 +961,9 @@ function WorkbenchColumns({
   const repositoryBranch = useRepositoryBranchState(
     repositoryBranchReadRoot(runIsActive, repositoryRoot),
   );
+  useEffect(() => {
+    setProjectMemoryEnabled(true);
+  }, [repositoryRoot]);
   const onProposeReady = useMarkReadyPropose(journey.outcome, repositoryRoot);
   const taskComposer = (
     <TaskStartSection
@@ -970,11 +974,15 @@ function WorkbenchColumns({
           // Capture the workspace identity the Start is submitted against BEFORE the request goes
           // out: the run id only arrives with the response, by which time the pointer may have moved.
           runWorkspace.captureSubmission();
-          if (acceptedIssue === null) void actions.start(taskIntent.trim());
+          const projectMemory = { projectMemoryEnabled };
+          if (acceptedIssue === null) void actions.start(taskIntent.trim(), projectMemory);
           else
             void actions.start(taskIntent.trim(), {
-              issueRef: acceptedIssue.issueRef,
-              expectedIssueBindingDigest: acceptedIssue.binding.bindingDigest,
+              ...projectMemory,
+              issue: {
+                issueRef: acceptedIssue.issueRef,
+                expectedIssueBindingDigest: acceptedIssue.binding.bindingDigest,
+              },
             });
         },
         onPause: () => void actions.pause(),
@@ -1002,6 +1010,8 @@ function WorkbenchColumns({
           binding: runIsActive ? "task-workspace" : "repository",
         })
       }
+      projectMemoryEnabled={projectMemoryEnabled}
+      onProjectMemoryEnabledChange={setProjectMemoryEnabled}
       autonomyMode={confirmedMode(state)}
       autonomyLabel={confirmedModeLabel(state, t)}
       requestedMode={state.requestedMode}

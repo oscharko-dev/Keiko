@@ -22,6 +22,10 @@
   opacity: 0.55;
 }
 
+.cmpSetupButton svg {
+  color: var(--text-accent);
+}
+
 .cmpFeedback {
   position: absolute;
   z-index: 80;

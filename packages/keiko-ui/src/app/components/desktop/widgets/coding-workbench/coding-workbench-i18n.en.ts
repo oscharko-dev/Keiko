@@ -262,6 +262,12 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.projectMemory.label": "MemoriaViva",
   "codingWorkbench.composer.projectMemory.help":
     "MemoriaViva uses only the active project memory in Coding Workbench.",
+  "codingWorkbench.composer.projectMemory.help.enabled":
+    "Project Memory is active for the next coding run.",
+  "codingWorkbench.composer.projectMemory.help.disabled":
+    "Project Memory is disabled for the next coding run.",
+  "codingWorkbench.composer.projectMemory.enable": "Enable project memory for this run",
+  "codingWorkbench.composer.projectMemory.disable": "Disable project memory for this run",
   "codingWorkbench.composer.help":
     "Pause the active run to send a follow-up. A drafted follow-up is admitted only while paused and is never queued.",
   "codingWorkbench.composer.workspaceMismatch":
