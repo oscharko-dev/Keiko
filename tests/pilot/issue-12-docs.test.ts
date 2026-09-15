@@ -121,14 +121,9 @@ describe("Issue #12 docs drift", () => {
   it("prunes publisher-native optional dependencies before manual package-surface gates", () => {
     expectPruneBeforePackageSurface(readWorkflowJobBlock(".github/workflows/ci.yml", "ui"));
 
-    const releaseVerify = readWorkflowJobBlock(".github/workflows/release.yml", "release-verify");
-    expect(releaseVerify).toContain("Verify required checks for tagged SHA");
-    expect(releaseVerify).toContain('RELEASE_SHA="$(git rev-parse HEAD)"');
-    expect(releaseVerify).toContain("npm run release:plan -- --tag beta");
-    expect(releaseVerify).not.toContain("npm run test:coverage:quality");
-    expect(releaseVerify).not.toContain("npm run check:package-surface");
-    expect(releaseVerify).not.toContain("npm run prune:package-native-optionals");
-
+    // #3498 Phase 2 retired the wait-for-required-checks `release-verify` job (event-driven
+    // `.github/workflows/release-publish-request.yml` replaced it). The `publish` job still
+    // re-verifies required checks itself before publishing — that is what this pin now covers.
     const publish = readWorkflowJobBlock(".github/workflows/release.yml", "publish");
     expect(publish).toContain("Verify required checks for release SHA");
     expect(publish).toContain('RELEASE_SHA="$(git rev-parse HEAD)"');

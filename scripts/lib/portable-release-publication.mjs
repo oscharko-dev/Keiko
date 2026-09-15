@@ -270,3 +270,211 @@ export function releaseSnapshotPath(releaseInfo) {
     ? `repos/${releaseInfo.repo}/releases/tags/${releaseInfo.tag}`
     : `repos/${releaseInfo.repo}/releases/${String(releaseInfo.id)}`;
 }
+
+/**
+ * Verifies the portable-manifest.json evidence assets of an already published release by their
+ * trusted Ed25519 signature and their commit/tag binding, not by a byte match against a locally
+ * rebuilt manifest. A rerun cannot reproduce the released evidence bytes when the publish signed
+ * the manifest at the release's earlier draft `created_at` (v1.0.1's draft was signed
+ * 2026-09-14T20:38:54Z while the published release now carries `created_at` 2026-09-14T23:19:18Z);
+ * an Ed25519 signature over the same manifest content at a different `signedAt` produces different
+ * bytes even for a deterministic signature scheme. A cryptographic signature check on the released
+ * bytes is at least as strong as demanding a byte match against a rebuild.
+ *
+ * The publisher's seams here are `downloadReleaseAsset(releaseInfo, assetName) → { text, sha256 }`
+ * and `verifyPublishedManifestBinding(manifest, expected) → failure | undefined`.
+ *
+ * @param manifestBindings  [{ assetName, commitSha, releaseTag }] — one per portable-manifest asset
+ */
+export function verifyPublishedPortableEvidence(
+  publisher,
+  releaseInfo,
+  remoteAssets,
+  manifestBindings,
+) {
+  const remoteByName = new Map(
+    (Array.isArray(remoteAssets) ? remoteAssets : []).map((asset) => [asset?.name, asset]),
+  );
+  const failures = manifestBindings.flatMap((binding) =>
+    publishedEvidenceFailuresForBinding(publisher, releaseInfo, remoteByName, binding),
+  );
+  if (failures.length > 0) {
+    publisher.fail(
+      `GitHub Release portable evidence verification failed:\n  - ${failures.join("\n  - ")}`,
+    );
+  }
+}
+
+function publishedEvidenceFailuresForBinding(publisher, releaseInfo, remoteByName, binding) {
+  const remote = remoteByName.get(binding.assetName);
+  if (!validRemoteDigest(remote)) {
+    return [`${binding.assetName} has no SHA-256 digest on GitHub.`];
+  }
+  const download = publisher.downloadReleaseAsset(releaseInfo, binding.assetName);
+  if (!validDownloadResult(download)) {
+    return [`${binding.assetName} could not be downloaded from GitHub.`];
+  }
+  if (`sha256:${download.sha256}` !== remote.digest) {
+    return [`${binding.assetName} bytes do not match the digest GitHub reports.`];
+  }
+  const manifest = parseJsonOrUndefined(download.text);
+  if (manifest === undefined) {
+    return [`${binding.assetName} is not valid JSON.`];
+  }
+  const bindingFailure = publisher.verifyPublishedManifestBinding(manifest, binding);
+  return bindingFailure === undefined ? [] : [`${binding.assetName}: ${bindingFailure}`];
+}
+
+function validRemoteDigest(remote) {
+  return (
+    remote !== undefined && typeof remote.digest === "string" && SHA256_DIGEST.test(remote.digest)
+  );
+}
+
+function validDownloadResult(download) {
+  return (
+    download !== undefined &&
+    typeof download.text === "string" &&
+    typeof download.sha256 === "string"
+  );
+}
+
+function parseJsonOrUndefined(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Downloads a single asset from a GitHub release into a fresh temporary directory and returns its
+ * UTF-8 text plus SHA-256 digest. Returns undefined when the download failed or the asset did not
+ * land where `gh release download` was expected to write it, so the caller can turn that into a
+ * verification failure by name.
+ *
+ * Seams (all required): `mkdtemp(prefix) → dir`, `runGh(args) → { status, error?, ... }`,
+ * `pathJoin(...parts)`, `exists(path)`, `readFile(path) → Buffer`, `sha256(Buffer) → hex`,
+ * `toUtf8(Buffer) → string`, `rm(dir, options)`.
+ */
+export function downloadPortableReleaseAsset(seams, releaseInfo, assetName) {
+  const root = seams.mkdtemp("keiko-portable-verify-");
+  try {
+    const result = seams.runGh([
+      "release",
+      "download",
+      releaseInfo.tag,
+      "--repo",
+      releaseInfo.repo,
+      "--pattern",
+      assetName,
+      "--dir",
+      root,
+      "--clobber",
+    ]);
+    if (result?.error !== undefined || result?.status !== 0) return undefined;
+    const filePath = seams.pathJoin(root, assetName);
+    if (!seams.exists(filePath)) return undefined;
+    const bytes = seams.readFile(filePath);
+    return { sha256: seams.sha256(bytes), text: seams.toUtf8(bytes) };
+  } finally {
+    seams.rm(root, { force: true, recursive: true });
+  }
+}
+
+/**
+ * Verifies a released portable manifest's trusted Ed25519 signature and its commit/tag binding. A
+ * rerun of the publish job cannot reproduce the released manifest bytes when the draft was signed
+ * at an earlier `created_at` than the release now reports (v1.0.1: draft signed
+ * 2026-09-14T20:38:54Z, release created_at 2026-09-14T23:19:18Z). This check is at least as strong
+ * as demanding those exact bytes back.
+ *
+ * Seams: `verifyReleaseTrust(manifest, { now, trustedKeys }) → { ok, reason? }`, and `now: Date`
+ * plus `trustedKeys: readonly key[]` for that call.
+ * Expected: `{ commitSha, releaseTag }` — the checked-out HEAD and this run's tag.
+ */
+export function checkPublishedManifestBinding(manifest, expected, seams) {
+  const verification = seams.verifyReleaseTrust(manifest, {
+    now: seams.now,
+    trustedKeys: seams.trustedKeys,
+  });
+  if (!verification.ok) return `release-trust signature invalid (${verification.reason})`;
+  if (manifest.release?.commitSha !== expected.commitSha) {
+    return "release.commitSha does not match the checked-out HEAD";
+  }
+  if (manifest.release?.releaseTag !== expected.releaseTag) {
+    return `release.releaseTag does not match ${expected.releaseTag}`;
+  }
+  if (manifest.provenance?.sourceCommitSha !== expected.commitSha) {
+    return "provenance.sourceCommitSha does not match the checked-out HEAD";
+  }
+  return undefined;
+}
+
+/**
+ * The `expected` records for the non-manifest evidence assets (SHA256SUMS, SBOM, license notice,
+ * signing summary, provenance statement, sidecar SBOM/license). These files are copied verbatim
+ * from the assemble stage and are byte-reproducible, so the run's own bytes are what a released
+ * digest must match. The manifest evidence (`*-portable-manifest.json`) is deliberately excluded —
+ * it is verified by signature instead.
+ *
+ * Seams: `sha256File(path) → hex`, `statFile(path) → { size }`.
+ */
+export function nonManifestEvidenceExpected(assets, seams) {
+  return assets.flatMap((asset) =>
+    asset.evidenceFiles
+      .filter((evidence) => evidence.relativePath !== "manifest/portable-manifest.json")
+      .map((evidence) => ({
+        assetName: evidence.assetName,
+        expectedSha256: seams.sha256File(evidence.sourcePath),
+        expectedSize: seams.statFile(evidence.sourcePath).size,
+        firstClassArchive: false,
+      })),
+  );
+}
+
+/**
+ * One binding record per portable target: which manifest asset must be verified, which commit its
+ * `release.commitSha` and `provenance.sourceCommitSha` must equal, and which tag its
+ * `release.releaseTag` must equal.
+ */
+export function manifestBindingsFromAssets(assets, head, releaseTag) {
+  return assets.map((asset) => ({
+    assetName: `${asset.platformTarget}-portable-manifest.json`,
+    commitSha: head,
+    releaseTag,
+  }));
+}
+
+/**
+ * The failures for one GitHub release asset compared against the bytes this run built. Reports
+ * missing asset, missing/invalid asset id, size mismatch, SHA-256 digest mismatch (a same-size
+ * asset with different bytes must fail — this is what the release path relies on when no download
+ * smoke runs afterwards, e.g. on the published-release rerun), and an unusable
+ * `browser_download_url`.
+ *
+ * Seams: `isRecord(value)`, `validBrowserDownloadUrl(value)`.
+ */
+export function checkRemotePortableAsset(remote, expected, seams) {
+  const failures = [];
+  if (!seams.isRecord(remote)) {
+    failures.push(`${expected.assetName} is missing from the GitHub Release.`);
+    return failures;
+  }
+  if (!Number.isSafeInteger(remote.id) || remote.id <= 0) {
+    failures.push(`${expected.assetName} must have a non-zero GitHub asset id.`);
+  }
+  if (remote.size !== expected.expectedSize) {
+    failures.push(`${expected.assetName} size does not match the reviewed local asset.`);
+  }
+  const expectedDigest = `sha256:${expected.expectedSha256}`;
+  if (typeof remote.digest !== "string" || remote.digest !== expectedDigest) {
+    failures.push(
+      `${expected.assetName} SHA-256 digest on GitHub does not match the reviewed local asset.`,
+    );
+  }
+  if (!seams.validBrowserDownloadUrl(remote.browser_download_url)) {
+    failures.push(`${expected.assetName} must expose an HTTPS browser_download_url.`);
+  }
+  return failures;
+}

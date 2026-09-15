@@ -62,6 +62,7 @@ import { resolveGithubRepository } from "./lib/github-repository.mjs";
 import { recordNpmPublishDeployment } from "./lib/npm-publish-deployment.mjs";
 import { checkReleaseAlignment, printAlignmentReport } from "./check-release-alignment.mjs";
 import {
+  checkRemotePortableAsset,
   openPortableRelease,
   publishVerifiedPortableRelease,
   refuseIncompletePublishedRelease,
@@ -69,6 +70,10 @@ import {
   releaseTagAtHeadFailure,
   uploadIntoDraft,
 } from "./lib/portable-release-publication.mjs";
+import {
+  makePublishedPortableSeams,
+  runVerifyPublishedPortableAssets,
+} from "./lib/portable-release-publish-helpers.mjs";
 import { proveReleaseSigningKeyBeforePublishing } from "./lib/portable-release-signing-key.mjs";
 import { createStagedPublishPackage } from "./stage-publish-package.mjs";
 
@@ -92,8 +97,14 @@ const valueArgFields = new Map([
   ["--registry", "registry"],
   ["--tag", "tag"],
 ]);
-const verifyAttempts = positiveIntegerEnv("KEIKO_RELEASE_VERIFY_ATTEMPTS", 13);
-const verifyDelayMs = nonNegativeIntegerEnv("KEIKO_RELEASE_VERIFY_DELAY_MS", 5000);
+// #3499 (Epic #3495): the wait-for-npm confirmation loop is retired. `npm publish` returning
+// success IS the publish confirmation. The registry install smoke, dist-tag verification and
+// alignment checks that used to poll npm from inside the publish job move to a nightly lane so a
+// six-minute registry lag never turns the publish job red again (v1.0.1 lost that way). The env
+// vars stay as an escape hatch for a local operator on a slow registry: the defaults are one shot
+// with no wait, and everything above 1 is documented as an incident bypass, not the normal path.
+const verifyAttempts = positiveIntegerEnv("KEIKO_RELEASE_VERIFY_ATTEMPTS", 1);
+const verifyDelayMs = nonNegativeIntegerEnv("KEIKO_RELEASE_VERIFY_DELAY_MS", 0);
 
 function positiveIntegerEnv(name, fallback) {
   const raw = process.env[name];
@@ -1264,6 +1275,11 @@ function portablePublisher() {
     runGh,
     snapshot: githubReleaseSnapshot,
     verifyAssets: verifyRemotePortableAssets,
+    ...makePublishedPortableSeams({
+      runGh: (args) => commandResult("gh", args, { env: githubEnvironment() }),
+      verifyReleaseTrust: verifyPortableReleaseTrust,
+      trustedKeys: portableReleaseTrustedKeys(),
+    }),
   };
 }
 
@@ -1287,6 +1303,17 @@ function publishPortableReleaseAssets(options, assets, releaseInfo) {
       archiveUpload.expected,
     );
     verifyRemotePortableAssets(archiveSnapshot.assets, archiveUpload.expected, releaseInfo);
+    if (releaseInfo.published === true) {
+      runVerifyPublishedPortableAssets({
+        publisher,
+        releaseInfo,
+        assets,
+        archiveSnapshot,
+        verifyAssets: verifyRemotePortableAssets,
+        headOfCheckout: () => commandResult("git", ["rev-parse", "HEAD"]).stdout.trim(),
+      });
+      return;
+    }
     const boundAssets = bindPortableAssetsToRemoteRelease(assets, archiveSnapshot);
     const boundEvidence = portableEvidenceUploadFiles(boundAssets, evidenceUpload.root);
     uploadIntoDraft(publisher, releaseInfo, boundEvidence.paths);
@@ -1558,19 +1585,9 @@ function verifyFirstClassArchiveSet(remoteAssets, failures) {
 }
 
 function verifyRemotePortableAsset(remote, expected, failures) {
-  if (!isRecord(remote)) {
-    failures.push(`${expected.assetName} is missing from the GitHub Release.`);
-    return;
-  }
-  if (!Number.isSafeInteger(remote.id) || remote.id <= 0) {
-    failures.push(`${expected.assetName} must have a non-zero GitHub asset id.`);
-  }
-  if (remote.size !== expected.expectedSize) {
-    failures.push(`${expected.assetName} size does not match the reviewed local asset.`);
-  }
-  if (!validBrowserDownloadUrl(remote.browser_download_url)) {
-    failures.push(`${expected.assetName} must expose an HTTPS browser_download_url.`);
-  }
+  failures.push(
+    ...checkRemotePortableAsset(remote, expected, { isRecord, validBrowserDownloadUrl }),
+  );
 }
 
 function validBrowserDownloadUrl(value) {

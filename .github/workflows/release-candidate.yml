@@ -65,7 +65,11 @@ jobs:
   tag:
     name: Point the release tag at the candidate
     needs: plan
-    if: ${{ needs.plan.outputs.action == 'create' || needs.plan.outputs.action == 'move' }}
+    # `plan` is dev-only and legitimately skipped on any other ref. GitHub's implicit success() gate
+    # then hides the skip through this chain (incident-register row 10, Epic #3495): the run
+    # concludes success while tag never ran. Declare the status function explicitly so the intent
+    # is visible to readers and to the workflow-trigger-scenarios test.
+    if: ${{ !cancelled() && (needs.plan.outputs.action == 'create' || needs.plan.outputs.action == 'move') }}
     runs-on: ubuntu-latest
     # The GitHub App credentials exist only in this environment, and only dev may deploy to it.
     environment: release-tagging
