@@ -1,8 +1,13 @@
+import { Buffer } from "node:buffer";
 import { describe, expect, it } from "vitest";
 
 import {
+  checkPublishedManifestBinding,
   createdDraftId,
+  downloadPortableReleaseAsset,
   immutableReleaseRepairFailure,
+  manifestBindingsFromAssets,
+  nonManifestEvidenceExpected,
   openPortableRelease,
   publishVerifiedPortableRelease,
   refuseIncompletePublishedRelease,
@@ -600,5 +605,210 @@ describe("verifyPublishedPortableEvidence", () => {
     }
     expect(error?.message).toContain(bindings[0].assetName);
     expect(error?.message).toContain(bindings[1].assetName);
+  });
+});
+
+describe("downloadPortableReleaseAsset", () => {
+  const RELEASE_INFO = { published: true, repo: REPO, tag: TAG };
+  const ASSET = "linux-x64-portable-manifest.json";
+
+  function fakeSeams({
+    ghResult,
+    exists = true,
+    fileBytes = Buffer.from("{}\n"),
+    hex = "e".repeat(64),
+  } = {}) {
+    const calls = [];
+    const seams = {
+      mkdtemp: (prefix) => {
+        calls.push(["mkdtemp", prefix]);
+        return `/tmp/${prefix}xyz`;
+      },
+      runGh: (args) => {
+        calls.push(["runGh", ...args]);
+        return ghResult ?? { status: 0, stdout: "", stderr: "" };
+      },
+      pathJoin: (...parts) => parts.join("/"),
+      exists: (path) => {
+        calls.push(["exists", path]);
+        return exists;
+      },
+      readFile: (path) => {
+        calls.push(["readFile", path]);
+        return fileBytes;
+      },
+      sha256: (bytes) => {
+        calls.push(["sha256", bytes.length]);
+        return hex;
+      },
+      toUtf8: (bytes) => bytes.toString("utf8"),
+      rm: (path, opts) => calls.push(["rm", path, opts]),
+    };
+    return { calls, seams };
+  }
+
+  it("downloads a released asset and returns its text with the computed sha", () => {
+    const { calls, seams } = fakeSeams();
+    const result = downloadPortableReleaseAsset(seams, RELEASE_INFO, ASSET);
+    expect(result).toStrictEqual({ sha256: "e".repeat(64), text: "{}\n" });
+    expect(
+      calls.some((c) => c[0] === "runGh" && c.includes("--pattern") && c.includes(ASSET)),
+    ).toBe(true);
+    expect(calls.at(-1)).toStrictEqual([
+      "rm",
+      "/tmp/keiko-portable-verify-xyz",
+      { force: true, recursive: true },
+    ]);
+  });
+
+  it("returns undefined when gh release download exits non-zero", () => {
+    const { seams } = fakeSeams({ ghResult: { status: 1, stdout: "", stderr: "gh: 404" } });
+    expect(downloadPortableReleaseAsset(seams, RELEASE_INFO, ASSET)).toBeUndefined();
+  });
+
+  it("returns undefined when gh release download reported an error but no exit", () => {
+    const { seams } = fakeSeams({ ghResult: { status: 0, error: new Error("ENOENT") } });
+    expect(downloadPortableReleaseAsset(seams, RELEASE_INFO, ASSET)).toBeUndefined();
+  });
+
+  it("returns undefined when gh did not write the asset where it should be", () => {
+    const { seams } = fakeSeams({ exists: false });
+    expect(downloadPortableReleaseAsset(seams, RELEASE_INFO, ASSET)).toBeUndefined();
+  });
+
+  it("always removes the temporary directory, even after a failure inside runGh", () => {
+    const { calls, seams } = fakeSeams({ ghResult: { status: 1, stderr: "boom" } });
+    downloadPortableReleaseAsset(seams, RELEASE_INFO, ASSET);
+    expect(calls.some((c) => c[0] === "rm")).toBe(true);
+  });
+});
+
+describe("checkPublishedManifestBinding", () => {
+  const EXPECTED = { commitSha: "a".repeat(40), releaseTag: TAG };
+  const OK_MANIFEST = {
+    release: { commitSha: EXPECTED.commitSha, releaseTag: TAG },
+    provenance: { sourceCommitSha: EXPECTED.commitSha },
+  };
+  const TRUSTED_KEYS = [];
+  const NOW = new Date("2026-09-15T00:00:00Z");
+
+  function seams(verification = { ok: true }) {
+    return {
+      verifyReleaseTrust: () => verification,
+      now: NOW,
+      trustedKeys: TRUSTED_KEYS,
+    };
+  }
+
+  it("returns undefined when signature and every binding match", () => {
+    expect(checkPublishedManifestBinding(OK_MANIFEST, EXPECTED, seams())).toBeUndefined();
+  });
+
+  it("reports a rejected signature", () => {
+    expect(
+      checkPublishedManifestBinding(
+        OK_MANIFEST,
+        EXPECTED,
+        seams({ ok: false, reason: "signature-invalid" }),
+      ),
+    ).toContain("release-trust signature invalid (signature-invalid)");
+  });
+
+  it("reports a commit that does not match the checked-out HEAD", () => {
+    const manifest = {
+      ...OK_MANIFEST,
+      release: { ...OK_MANIFEST.release, commitSha: "b".repeat(40) },
+    };
+    expect(checkPublishedManifestBinding(manifest, EXPECTED, seams())).toContain(
+      "release.commitSha does not match",
+    );
+  });
+
+  it("reports a release tag that does not match", () => {
+    const manifest = { ...OK_MANIFEST, release: { ...OK_MANIFEST.release, releaseTag: "v0.0.1" } };
+    expect(checkPublishedManifestBinding(manifest, EXPECTED, seams())).toContain(
+      `release.releaseTag does not match ${TAG}`,
+    );
+  });
+
+  it("reports a provenance commit that does not match the checked-out HEAD", () => {
+    const manifest = {
+      ...OK_MANIFEST,
+      provenance: { sourceCommitSha: "b".repeat(40) },
+    };
+    expect(checkPublishedManifestBinding(manifest, EXPECTED, seams())).toContain(
+      "provenance.sourceCommitSha does not match",
+    );
+  });
+});
+
+describe("nonManifestEvidenceExpected", () => {
+  const seams = {
+    sha256File: (path) => `sha-of-${path}`,
+    statFile: (path) => ({ size: path.length }),
+  };
+
+  it("keeps every non-manifest evidence file with its byte digest and size", () => {
+    const assets = [
+      {
+        evidenceFiles: [
+          {
+            assetName: "linux-x64-portable-manifest.json",
+            relativePath: "manifest/portable-manifest.json",
+            sourcePath: "/stage/manifest/portable-manifest.json",
+          },
+          {
+            assetName: "linux-x64-SHA256SUMS.txt",
+            relativePath: "evidence/SHA256SUMS.txt",
+            sourcePath: "/stage/evidence/SHA256SUMS.txt",
+          },
+          {
+            assetName: "linux-x64-sbom.cdx.json",
+            relativePath: "evidence/sbom.cdx.json",
+            sourcePath: "/stage/evidence/sbom.cdx.json",
+          },
+        ],
+      },
+    ];
+    expect(nonManifestEvidenceExpected(assets, seams)).toStrictEqual([
+      {
+        assetName: "linux-x64-SHA256SUMS.txt",
+        expectedSha256: "sha-of-/stage/evidence/SHA256SUMS.txt",
+        expectedSize: "/stage/evidence/SHA256SUMS.txt".length,
+        firstClassArchive: false,
+      },
+      {
+        assetName: "linux-x64-sbom.cdx.json",
+        expectedSha256: "sha-of-/stage/evidence/sbom.cdx.json",
+        expectedSize: "/stage/evidence/sbom.cdx.json".length,
+        firstClassArchive: false,
+      },
+    ]);
+  });
+
+  it("returns an empty list when every evidence file is the portable manifest itself", () => {
+    const assets = [
+      {
+        evidenceFiles: [
+          {
+            assetName: "linux-x64-portable-manifest.json",
+            relativePath: "manifest/portable-manifest.json",
+            sourcePath: "/stage/manifest/portable-manifest.json",
+          },
+        ],
+      },
+    ];
+    expect(nonManifestEvidenceExpected(assets, seams)).toStrictEqual([]);
+  });
+});
+
+describe("manifestBindingsFromAssets", () => {
+  it("returns one binding per portable target using its platformTarget for the asset name", () => {
+    const head = "a".repeat(40);
+    const assets = [{ platformTarget: "linux-x64" }, { platformTarget: "macos-arm64" }];
+    expect(manifestBindingsFromAssets(assets, head, TAG)).toStrictEqual([
+      { assetName: "linux-x64-portable-manifest.json", commitSha: head, releaseTag: TAG },
+      { assetName: "macos-arm64-portable-manifest.json", commitSha: head, releaseTag: TAG },
+    ]);
   });
 });

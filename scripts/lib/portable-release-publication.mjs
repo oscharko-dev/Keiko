@@ -346,3 +346,102 @@ function parseJsonOrUndefined(text) {
     return undefined;
   }
 }
+
+/**
+ * Downloads a single asset from a GitHub release into a fresh temporary directory and returns its
+ * UTF-8 text plus SHA-256 digest. Returns undefined when the download failed or the asset did not
+ * land where `gh release download` was expected to write it, so the caller can turn that into a
+ * verification failure by name.
+ *
+ * Seams (all required): `mkdtemp(prefix) → dir`, `runGh(args) → { status, error?, ... }`,
+ * `pathJoin(...parts)`, `exists(path)`, `readFile(path) → Buffer`, `sha256(Buffer) → hex`,
+ * `toUtf8(Buffer) → string`, `rm(dir, options)`.
+ */
+export function downloadPortableReleaseAsset(seams, releaseInfo, assetName) {
+  const root = seams.mkdtemp("keiko-portable-verify-");
+  try {
+    const result = seams.runGh([
+      "release",
+      "download",
+      releaseInfo.tag,
+      "--repo",
+      releaseInfo.repo,
+      "--pattern",
+      assetName,
+      "--dir",
+      root,
+      "--clobber",
+    ]);
+    if (result?.error !== undefined || result?.status !== 0) return undefined;
+    const filePath = seams.pathJoin(root, assetName);
+    if (!seams.exists(filePath)) return undefined;
+    const bytes = seams.readFile(filePath);
+    return { sha256: seams.sha256(bytes), text: seams.toUtf8(bytes) };
+  } finally {
+    seams.rm(root, { force: true, recursive: true });
+  }
+}
+
+/**
+ * Verifies a released portable manifest's trusted Ed25519 signature and its commit/tag binding. A
+ * rerun of the publish job cannot reproduce the released manifest bytes when the draft was signed
+ * at an earlier `created_at` than the release now reports (v1.0.1: draft signed
+ * 2026-09-14T20:38:54Z, release created_at 2026-09-14T23:19:18Z). This check is at least as strong
+ * as demanding those exact bytes back.
+ *
+ * Seams: `verifyReleaseTrust(manifest, { now, trustedKeys }) → { ok, reason? }`, and `now: Date`
+ * plus `trustedKeys: readonly key[]` for that call.
+ * Expected: `{ commitSha, releaseTag }` — the checked-out HEAD and this run's tag.
+ */
+export function checkPublishedManifestBinding(manifest, expected, seams) {
+  const verification = seams.verifyReleaseTrust(manifest, {
+    now: seams.now,
+    trustedKeys: seams.trustedKeys,
+  });
+  if (!verification.ok) return `release-trust signature invalid (${verification.reason})`;
+  if (manifest.release?.commitSha !== expected.commitSha) {
+    return "release.commitSha does not match the checked-out HEAD";
+  }
+  if (manifest.release?.releaseTag !== expected.releaseTag) {
+    return `release.releaseTag does not match ${expected.releaseTag}`;
+  }
+  if (manifest.provenance?.sourceCommitSha !== expected.commitSha) {
+    return "provenance.sourceCommitSha does not match the checked-out HEAD";
+  }
+  return undefined;
+}
+
+/**
+ * The `expected` records for the non-manifest evidence assets (SHA256SUMS, SBOM, license notice,
+ * signing summary, provenance statement, sidecar SBOM/license). These files are copied verbatim
+ * from the assemble stage and are byte-reproducible, so the run's own bytes are what a released
+ * digest must match. The manifest evidence (`*-portable-manifest.json`) is deliberately excluded —
+ * it is verified by signature instead.
+ *
+ * Seams: `sha256File(path) → hex`, `statFile(path) → { size }`.
+ */
+export function nonManifestEvidenceExpected(assets, seams) {
+  return assets.flatMap((asset) =>
+    asset.evidenceFiles
+      .filter((evidence) => evidence.relativePath !== "manifest/portable-manifest.json")
+      .map((evidence) => ({
+        assetName: evidence.assetName,
+        expectedSha256: seams.sha256File(evidence.sourcePath),
+        expectedSize: seams.statFile(evidence.sourcePath).size,
+        firstClassArchive: false,
+      })),
+  );
+}
+
+/**
+ * One binding record per portable target: which manifest asset must be verified, which commit its
+ * `release.commitSha` and `provenance.sourceCommitSha` must equal, and which tag its
+ * `release.releaseTag` must equal.
+ */
+export function manifestBindingsFromAssets(assets, head, releaseTag) {
+  return assets.map((asset) => ({
+    assetName: `${asset.platformTarget}-portable-manifest.json`,
+    commitSha: head,
+    releaseTag,
+  }));
+}
