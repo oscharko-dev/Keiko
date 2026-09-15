@@ -1945,45 +1945,23 @@ describe("files API helpers", () => {
     );
   });
 
-  it("proposes sync by minting the exact approval before execute", async () => {
-    const approval = {
-      schemaVersion: "1" as const,
-      approvalId: "gda_sync_1",
-      approvalToken: "t".repeat(64),
-    };
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        jsonResponse({
-          schemaVersion: "1",
-          approval,
-          expiresAt: "2026-09-05T18:00:00.000Z",
-        }),
-      )
-      .mockResolvedValueOnce(
-        jsonResponse({
-          schemaVersion: "1",
-          operation: "pull",
-          status: "succeeded",
-          available: true,
-          truncated: false,
-        }),
-      );
+  it("proposes sync as an explicit local-user execute without minting a run approval", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      jsonResponse({
+        schemaVersion: "1",
+        operation: "pull",
+        status: "succeeded",
+        available: true,
+        truncated: false,
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     await proposeGitDeliverySync({ operation: "pull", projectId: "/repo", remote: "origin" });
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      "/api/git-delivery/pull/approve",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ schemaVersion: "1", projectId: "/repo", remote: "origin" }),
-      }),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
       "/api/git-delivery/pull/execute",
       expect.objectContaining({
         method: "POST",
@@ -1991,7 +1969,7 @@ describe("files API helpers", () => {
           schemaVersion: "1",
           projectId: "/repo",
           remote: "origin",
-          approval,
+          userInitiated: true,
         }),
       }),
     );

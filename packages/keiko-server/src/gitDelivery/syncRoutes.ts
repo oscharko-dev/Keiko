@@ -36,6 +36,7 @@ import type { UiHandlerDeps } from "../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { requiresConfiguredManagedWorkspaceAuthority } from "../task-workspace/workspace-root-access.js";
 import { logGitDeliveryNoSpawnRefusal } from "./execution.js";
 import {
   DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
@@ -116,12 +117,14 @@ const ALLOWED_KEYS: ReadonlySet<string> = new Set([
   "projectId",
   "remote",
   "approval",
+  "userInitiated",
 ]);
 
 interface ValidatedRequest {
   readonly projectId: string;
   readonly remote: string | undefined;
   readonly approval: ParsedGitDeliveryApprovalRequest;
+  readonly userInitiated: boolean;
 }
 
 type Validation =
@@ -140,12 +143,17 @@ function scanError(parsed: Record<string, unknown>): RouteResult | undefined {
   return undefined;
 }
 
+function isValidUserInitiatedMarker(value: unknown): boolean {
+  return value === undefined || value === true;
+}
+
 function validate(parsed: unknown): Validation {
   const bad: Validation = { kind: "err", result: errResult(400, "GIT_DELIVERY_SYNC_BAD_REQUEST") };
   if (!isPlainObject(parsed) || !hasOnlyAllowedKeys(parsed, ALLOWED_KEYS)) return bad;
   if (parsed.schemaVersion !== GIT_SYNC_SCHEMA_VERSION || !isNonEmptyString(parsed.projectId)) {
     return bad;
   }
+  if (!isValidUserInitiatedMarker(parsed.userInitiated)) return bad;
   const scanErr = scanError(parsed);
   if (scanErr !== undefined) return { kind: "err", result: scanErr };
   if (parsed.remote !== undefined && !isSafeGitRef(parsed.remote)) return bad;
@@ -153,7 +161,12 @@ function validate(parsed: unknown): Validation {
   if (approval === undefined) return bad;
   return {
     kind: "ok",
-    value: { projectId: parsed.projectId, remote: parsed.remote, approval },
+    value: {
+      projectId: parsed.projectId,
+      remote: parsed.remote,
+      approval,
+      userInitiated: parsed.userInitiated === true,
+    },
   };
 }
 
@@ -265,7 +278,7 @@ interface SyncDispatchInput {
   readonly workspace: WorkspaceInfo;
   readonly before: GitSyncPreview;
   readonly remote: string | undefined;
-  readonly authority: GitDeliveryAuthorityIdentity;
+  readonly authority: GitDeliveryAuthorityIdentity | undefined;
 }
 
 interface SyncDispatchResult {
@@ -274,6 +287,16 @@ interface SyncDispatchResult {
 }
 
 async function dispatchSync(input: SyncDispatchInput): Promise<SyncDispatchResult> {
+  if (input.authority === undefined) {
+    const result = await runSyncExecute(
+      input.operation,
+      input.workspace.root,
+      input.remote,
+      input.seams,
+      input.before,
+    );
+    return { result };
+  }
   const denialCapture: GitDeliveryAuthorityContinuityDenialCapture = {};
   const activityLog = input.seams.activityLog ?? processServerLogSink();
   const authorityGuard = gitDeliveryAuthorityContinuityGuard({
@@ -472,7 +495,7 @@ function resolveSyncApproval(
 }
 
 type SyncAdmission =
-  | { readonly ok: true; readonly authority: GitDeliveryAuthorityIdentity }
+  | { readonly ok: true; readonly authority: GitDeliveryAuthorityIdentity | undefined }
   | { readonly ok: false; readonly result: RouteResult };
 
 // Extracted purely to keep `handleSyncExecute` under the repo's max-lines-per-function bar
@@ -485,9 +508,33 @@ interface AdmitSyncExecuteInput {
   readonly operation: GitSyncOperation;
   readonly binding: GitDeliveryApprovalBinding;
   readonly approval: ParsedGitDeliveryApprovalRequest;
+  readonly userInitiated: boolean;
   readonly seams: GitDeliverySyncSeams;
   readonly nowMs: number;
 }
+
+function requiresRunAuthority(
+  deps: UiHandlerDeps,
+  workspace: WorkspaceInfo,
+  userInitiated: boolean,
+): boolean {
+  return !userInitiated || requiresConfiguredManagedWorkspaceAuthority(deps, workspace.root);
+}
+
+function logUserInitiatedSyncAdmission(
+  ctx: RouteContext,
+  operation: GitSyncOperation,
+  seams: GitDeliverySyncSeams,
+): void {
+  (seams.activityLog ?? processServerLogSink()).write({
+    category: "security",
+    op: "git.delivery.authority.admitted",
+    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+    status: 200,
+    extra: { operation, phase: "admission", source: "local-user" },
+  });
+}
+
 function admitSyncExecute({
   ctx,
   deps,
@@ -495,9 +542,14 @@ function admitSyncExecute({
   operation,
   binding,
   approval,
+  userInitiated,
   seams,
   nowMs,
 }: AdmitSyncExecuteInput): SyncAdmission {
+  if (!requiresRunAuthority(deps, workspace, userInitiated)) {
+    logUserInitiatedSyncAdmission(ctx, operation, seams);
+    return { ok: true, authority: undefined };
+  }
   const authority = syncAuthorityGate({
     ctx,
     deps,
@@ -515,6 +567,19 @@ function admitSyncExecute({
   return { ok: true, authority };
 }
 
+async function finishSyncExecute(input: SyncDispatchInput): Promise<RouteResult> {
+  const dispatched = await dispatchSync(input);
+  return syncResponse(
+    input.deps,
+    input.operation,
+    input.remote,
+    input.workspace.root,
+    input.before,
+    dispatched,
+    input.seams.now ?? Date.now,
+  );
+}
+
 async function handleSyncExecute(
   ctx: RouteContext,
   deps: UiHandlerDeps,
@@ -524,7 +589,7 @@ async function handleSyncExecute(
   const prepared = await prepareGitDeliveryRequest(ctx, deps, SYNC_REQUEST_ERRORS, validate);
   if (!prepared.ok) return prepared.result;
   const { workspace } = prepared;
-  const { projectId, remote, approval } = prepared.value;
+  const { projectId, remote, approval, userInitiated } = prepared.value;
   const nowMs = (seams.now ?? Date.now)();
   const binding = syncApprovalBinding(projectId, operation, remote);
   const admission = admitSyncExecute({
@@ -534,6 +599,7 @@ async function handleSyncExecute(
     operation,
     binding,
     approval,
+    userInitiated,
     seams,
     nowMs,
   });
@@ -544,7 +610,7 @@ async function handleSyncExecute(
   } catch {
     return errResult(409, "GIT_DELIVERY_SYNC_WORKTREE_UNAVAILABLE");
   }
-  const dispatched = await dispatchSync({
+  return finishSyncExecute({
     ctx,
     deps,
     projectId,
@@ -555,15 +621,6 @@ async function handleSyncExecute(
     remote,
     authority: admission.authority,
   });
-  return syncResponse(
-    deps,
-    operation,
-    remote,
-    workspace.root,
-    before,
-    dispatched,
-    seams.now ?? Date.now,
-  );
 }
 
 export const createHandleSyncExecute = (

@@ -884,6 +884,44 @@ describe("sync execute — admission redemption below autonomous-delivery", () =
     expect(scripted.calls()).toContain(operation);
   });
 
+  it("admits an explicit local-user fetch without minting a run approval", async () => {
+    const scripted = scriptedRunner({
+      status: ok(porcelain({ upstream: "origin/main" })),
+      fetch: ok(""),
+    });
+    const activity = captureActivityLog();
+    const handler = createHandleSyncExecute("fetch", {
+      execution: {
+        runner: scripted.runner,
+        now: () => 1_700_000_000_000,
+        activityLog: activity.sink,
+      },
+    });
+    const modeDeps = deps({
+      gitDeliveryAuthority: permittedGitDeliveryAuthority(
+        () => projectId,
+        () => projectId,
+        "governed-assist",
+      ),
+    });
+
+    const res = await handler(
+      ctxFor(FETCH_EXECUTE, syncBody({ remote: "origin", userInitiated: true })),
+      modeDeps,
+    );
+
+    expect(res.status).toBe(200);
+    expect((res.body as GitSyncExecuteResponse).operation).toBe("fetch");
+    expect(scripted.calls()).toContain("fetch");
+    expect(activity.events).toContainEqual(
+      expect.objectContaining({
+        op: "git.delivery.authority.admitted",
+        status: 200,
+        extra: { operation: "fetch", phase: "admission", source: "local-user" },
+      }),
+    );
+  });
+
   it.each(CASES)(
     "still returns approval-required (never mode-denied) at %s for %s when execute carries no approval",
     async (mode, operation) => {
