@@ -38,7 +38,10 @@ import {
   yarnPackageManagerFromIntegrityLocator,
   yarnPackageManagerFromLocator,
 } from "./lib/pinned-yarn.mjs";
-import { createStagedPublishPackage } from "./stage-publish-package.mjs";
+import {
+  bundleExternalRuntimeDependencies,
+  createStagedPublishPackage,
+} from "./stage-publish-package.mjs";
 
 export const DEFAULT_NPM_INSTALL_TIMEOUT_MS = 600_000;
 export const WINDOWS_NPM_INSTALL_TIMEOUT_MS = 600_000;
@@ -730,6 +733,10 @@ export function packRoot() {
     }
   }
   const staged = createStagedPublishPackage();
+  // Fill node_modules with the external runtime dependency closure so `npm pack` includes it,
+  // making the published tarball self-contained. Without this, `npm install -g <tarball>` leaves
+  // the non-workspace deps empty and every `keiko` command fails on `Cannot find package 'ws'`.
+  bundleExternalRuntimeDependencies(staged.packageDir);
   const manifest = JSON.parse(readFileSync(join(staged.packageDir, "package.json"), "utf8"));
   const artifactRoot = mkdtempSync(join(tmpdir(), "keiko-install-artifact-"));
   const result = run(
@@ -785,6 +792,107 @@ function installInto(tmp, tarballPath, options) {
     fail(
       `npm install of tarball exited ${String(installResult.status)} ` +
         `(signal=${String(installResult.signal)}): ${installResult.stderr}`,
+    );
+  }
+}
+
+/**
+ * `npm install --global --ignore-scripts <tarball>` into an isolated npm prefix — the exact
+ * command `keiko update apply` runs on a supported global install (see
+ * `packages/keiko-server/src/update-install-mode.ts` `commandPreview`). This proves the updater's
+ * mutation path builds a working tree, not just that a local project install extracts one.
+ *
+ * The v1.0.1 tarball was broken on this path: npm's global reify step for a bundle-carrying
+ * package silently skipped the non-bundle top-level siblings and every `keiko` command died on
+ * `Cannot find package 'ws'`. `bundleExternalRuntimeDependencies` now self-contains the tarball;
+ * this smoke pins that fix on every supported host — Linux, macOS, Windows — so the class of bug
+ * cannot come back on any consumer platform.
+ */
+/**
+ * The set of directories `npm install --global --prefix <prefix>` requires to exist before it
+ * writes anything. On POSIX hosts npm lstat's `<prefix>/lib` before populating it and dies with
+ * ENOENT when the caller's fresh prefix directory only exists at the root; on Windows npm writes
+ * directly into `<prefix>/node_modules/…`. Returning the paths rather than creating them lets a
+ * caller both drive `mkdirSync` on the live installer and assert on the layout in tests.
+ */
+export function globalPrefixLayoutPaths(prefixRoot, platform = process.platform) {
+  if (platform === "win32") {
+    return [join(prefixRoot, "node_modules")];
+  }
+  return [join(prefixRoot, "lib", "node_modules"), join(prefixRoot, "bin")];
+}
+
+export function installIntoGlobalPrefix(prefixRoot, tarballPath) {
+  const timeoutMs = npmInstallTimeoutMs();
+  // Pre-create the layout npm expects so its own lstat/parent lookup never dies with ENOENT.
+  for (const dir of globalPrefixLayoutPaths(prefixRoot)) {
+    mkdirSync(dir, { recursive: true });
+  }
+  const installResult = run(
+    "npm",
+    [
+      "install",
+      "--global",
+      "--ignore-scripts",
+      "--no-audit",
+      "--no-fund",
+      "--prefix",
+      prefixRoot,
+      tarballPath,
+    ],
+    { timeout: timeoutMs },
+  );
+  if (installResult.status !== 0) {
+    fail(
+      `global npm install of tarball exited ${String(installResult.status)} ` +
+        `(signal=${String(installResult.signal)}): ${installResult.stderr}`,
+    );
+  }
+}
+
+/**
+ * Location the global install put `@oscharko-dev/keiko` at, on this platform. On POSIX hosts npm
+ * writes into `<prefix>/lib/node_modules/…`; on Windows into `<prefix>/node_modules/…`. Both
+ * layouts are npm's own conventions — the smoke has to tolerate both to stay portable.
+ */
+export function globallyInstalledPackageRoot(prefixRoot) {
+  const posix = join(prefixRoot, "lib", "node_modules", "@oscharko-dev", "keiko");
+  const win = join(prefixRoot, "node_modules", "@oscharko-dev", "keiko");
+  if (existsSync(posix)) return posix;
+  if (existsSync(win)) return win;
+  fail(
+    `global npm install placed no @oscharko-dev/keiko package under ${prefixRoot} — ` +
+      `neither ${posix} nor ${win} exists`,
+  );
+  return posix; // unreachable — fail exits.
+}
+
+/**
+ * The globally-installed tree must let a plain `node <bin> --version` command run to completion:
+ * that is the exact shape of the CLI entry the updater's post-install re-exec expects. The prior
+ * `-g` bug left every external non-bundle dep (`ws`, `pdfjs-dist`, `typescript`, …) as an empty
+ * directory, so this same invocation would die with `ERR_MODULE_NOT_FOUND` on the first import.
+ */
+export function assertGloballyInstalledKeiko(prefixRoot) {
+  const packageRoot = globallyInstalledPackageRoot(prefixRoot);
+  const cliEntry = join(packageRoot, "dist", "cli", "index.js");
+  if (!existsSync(cliEntry)) {
+    fail(`global install missing CLI entry at ${cliEntry}`);
+  }
+  const versionResult = run("node", [cliEntry, "--version"], {});
+  if (versionResult.status !== 0) {
+    fail(`global keiko --version exited ${String(versionResult.status)}: ${versionResult.stderr}`);
+  }
+  if (!versionResult.stdout.includes(rootVersion)) {
+    fail(`global keiko --version reported an unexpected version. stdout=${versionResult.stdout}`);
+  }
+  // The specific dep the -g bug left empty on npm 11.19.0. If the fix regresses, this file is
+  // gone and `keiko update status` (which imports ws through keiko-tools) dies at load time.
+  const wsEntry = join(packageRoot, "node_modules", "ws", "package.json");
+  if (!existsSync(wsEntry)) {
+    fail(
+      `global install is missing the bundled ws package at ${wsEntry} — the -g bundling ` +
+        `regression is back and every keiko command would die on Cannot find package 'ws'`,
     );
   }
 }
@@ -944,7 +1052,15 @@ export function vendoredDependencyRequirements(
   manifest = rootPackageJson,
   packagesRoot = repoRoot,
 ) {
-  const bundled = manifest.bundleDependencies ?? manifest.bundledDependencies ?? [];
+  const declared = manifest.bundleDependencies ?? manifest.bundledDependencies ?? [];
+  // The staged manifest carries two classes of bundled entry: the private `@oscharko-dev/*`
+  // workspaces the vendor archive tree ships (a `packages/<name>` path answers each), and — as
+  // of the #3510 self-contained-tarball fix — every external runtime dep and transitive that
+  // was copied into `stageRoot/node_modules/` from the source tree. The offline closure only
+  // walks the workspace-scoped ones (bundledWorkspaceLockfilePath rejects any other shape); the
+  // external closure has already been resolved from the lockfile at pack time, so the smoke's
+  // job is only to reason about the workspaces themselves.
+  const bundled = declared.filter((name) => name.startsWith("@oscharko-dev/"));
   const bundledSet = new Set(bundled);
   const requirements = new Map();
   // Keyed by name AND range AND kind, so each descriptor keeps the origins that actually declared
@@ -2566,9 +2682,28 @@ export function assertVendoredPayload(tmp) {
 }
 
 export function assertProductiveTypeScriptRuntime(tmp) {
-  const manifest = join(tmp, "node_modules", "typescript", "package.json");
-  if (!existsSync(manifest)) {
-    fail(`productive TypeScript runtime dependency missing: ${manifest}`);
+  // TypeScript is a runtime dep the CLI resolves at request time (the diagnostics runtime
+  // registers a native TypeScript service). After #3510 the published tarball bundles the
+  // whole external runtime closure — TypeScript included — so a consumer's `npm install`
+  // extracts it under `<consumer>/node_modules/@oscharko-dev/keiko/node_modules/typescript`
+  // rather than hoisting it to the top level. Both layouts are valid resolution paths for
+  // `@oscharko-dev/keiko`'s own imports and one is enough to satisfy this gate; check for
+  // either, mirroring the two-layout tolerance `assertVendoredPayload` already applies to
+  // the workspace bundle.
+  const candidates = [
+    join(tmp, "node_modules", "typescript", "package.json"),
+    join(
+      tmp,
+      "node_modules",
+      "@oscharko-dev",
+      "keiko",
+      "node_modules",
+      "typescript",
+      "package.json",
+    ),
+  ];
+  if (!candidates.some((candidate) => existsSync(candidate))) {
+    fail(`productive TypeScript runtime dependency missing: ${candidates.join(" or ")}`);
   }
 }
 
@@ -3101,10 +3236,12 @@ async function main() {
   // the first; the finally tolerates either being unassigned.
   let tmp;
   let yarnTmp;
+  let globalPrefixTmp;
   let artifact;
   try {
     tmp = mkdtempSync(join(tmpdir(), "keiko-install-smoke-"));
     yarnTmp = mkdtempSync(join(tmpdir(), "keiko-yarn-install-smoke-"));
+    globalPrefixTmp = mkdtempSync(join(tmpdir(), "keiko-global-install-smoke-"));
     const seeded = seedThenPack(vendorTmp);
     const { vendored } = seeded;
     artifact = seeded.artifact;
@@ -3128,12 +3265,19 @@ async function main() {
     assertCliVersionAndHelp(yarnTmp);
     await assertInstalledRootRuntimeSurface(yarnTmp);
     assertInstalledRootTypeSurface(yarnTmp);
+    // Global-install proof — the exact command the updater runs on a supported npm host. This
+    // catches the -g bundling regression that shipped in v1.0.1 (empty ws/pdfjs-dist/etc. under
+    // the installed package) on every supported OS instead of only where an operator happens to
+    // run `npm install -g` manually.
+    installIntoGlobalPrefix(globalPrefixTmp, artifact.tarballPath);
+    assertGloballyInstalledKeiko(globalPrefixTmp);
     console.log(
-      `installable-smoke ok: npm tarball + Yarn registry installs passed (${options.includeOptional ? "optional deps included" : "optional deps omitted"}), ${String(runtimeWorkspaces.length)} vendored packages present, root runtime/types + CLI + UI/lifecycle reachable.`,
+      `installable-smoke ok: npm tarball + Yarn registry + global-prefix installs passed (${options.includeOptional ? "optional deps included" : "optional deps omitted"}), ${String(runtimeWorkspaces.length)} vendored packages present, root runtime/types + CLI + UI/lifecycle reachable.`,
     );
   } finally {
     if (tmp !== undefined) rmSync(tmp, { recursive: true, force: true });
     if (yarnTmp !== undefined) rmSync(yarnTmp, { recursive: true, force: true });
+    if (globalPrefixTmp !== undefined) rmSync(globalPrefixTmp, { recursive: true, force: true });
     // vendorTmp is deliberately NOT removed: it is the lockfile-keyed cache the next invocation
     // reuses, and it lives under the OS temp directory.
     artifact?.cleanup();
