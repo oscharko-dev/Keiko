@@ -3155,21 +3155,31 @@ describe("installable package smoke optional-dependency coverage", () => {
   // Two bundled workspaces may declare the same absent optional dependency under non-overlapping
   // ranges. A name-keyed map would keep only the first, and Yarn — which still resolves the second
   // descriptor from the tarball — would find no candidate for it.
-  // A foreign-scope or missing workspace manifest used to return [] silently, dropping that
-  // workspace's third-party dependencies from the closure — Yarn would then request a package the
-  // registry never seeded, and the failure would name the dependency rather than the cause.
-  it("fails loudly when a bundled workspace manifest cannot be located", () => {
+  // Since #3510 the staged root's bundleDependencies carries two classes of entry: the private
+  // `@oscharko-dev/*` workspaces the vendor archive tree ships, and every external runtime dep
+  // (and transitive) copied into `stageRoot/node_modules/` from the source tree at pack time.
+  // `vendoredDependencyRequirements` walks only the workspace scope for the Yarn closure — the
+  // externals were already resolved from the lockfile at pack time and need no lookup here —
+  // so a foreign-scope name is legitimately treated as an external and never throws. A missing
+  // `@oscharko-dev/*` workspace still fails loudly, because that shape means the source tree
+  // itself is inconsistent with the staged manifest.
+  it("ignores foreign-scope bundleDependencies entries as pre-resolved externals", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-workspace-scope-test-"));
     try {
-      rejectProcessExit();
-      expect(() =>
-        vendoredDependencyRequirements(
-          { dependencies: {}, bundleDependencies: ["@other-scope/thing"] },
-          root,
-        ),
-      ).toThrow(/process\.exit\(1\)/u);
+      // No process.exit — `@other-scope/thing` is a runtime external, not a workspace to walk.
+      const requirements = vendoredDependencyRequirements(
+        { dependencies: {}, bundleDependencies: ["@other-scope/thing"] },
+        root,
+      );
+      expect(requirements).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
-      vi.restoreAllMocks();
+  it("fails loudly when a bundled @oscharko-dev/* workspace manifest cannot be located", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-workspace-scope-test-"));
+    try {
       rejectProcessExit();
       expect(() =>
         vendoredDependencyRequirements(
