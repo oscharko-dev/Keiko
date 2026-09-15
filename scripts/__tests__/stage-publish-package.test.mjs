@@ -497,8 +497,16 @@ describe("bundleExternalRuntimeDependencies", () => {
   }
 
   function sourceFixture() {
-    const root = mkdtempSync(join(tmpdir(), "keiko-source-node-modules-"));
-    roots.push(root);
+    // The temp directory holds a `node_modules` sub-directory whose NAME matches what the real
+    // caller passes (`<repoRoot>/node_modules`). An earlier fixture used a randomly-suffixed
+    // temp directory as `sourceNodeModules` (single segment, no `node_modules` in the path), and
+    // the `copyDependencyPackage` filter test missed a class of bug where the filter compared
+    // absolute path segments and dropped the entire copy because the caller's own directory
+    // was already inside a `node_modules` folder.
+    const parent = mkdtempSync(join(tmpdir(), "keiko-source-tree-"));
+    roots.push(parent);
+    const root = join(parent, "node_modules");
+    mkdirSync(root, { recursive: true });
     return root;
   }
 

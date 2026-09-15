@@ -483,6 +483,11 @@ function resolveDependencyRoot(sourceNodeModules, name) {
  * `node_modules/` are dropped (npm hoists at consume-install time), and a symlinked package
  * (a monorepo workspace resolved into another workspace's node_modules) is dereferenced so the
  * tarball never carries a link that only means something on the publisher's machine.
+ *
+ * The filter compares path segments RELATIVE TO sourcePath, not the absolute path: the real call
+ * passes a `sourceNodeModules` under `<repoRoot>/node_modules`, so every source path already
+ * carries `node_modules` as a segment of its own root and an absolute-path filter would drop the
+ * entire copy. The relative-path filter cannot see the caller's own directory layout.
  */
 function copyDependencyPackage(sourcePath, destinationPath) {
   mkdirSync(dirname(destinationPath), { recursive: true });
@@ -490,8 +495,9 @@ function copyDependencyPackage(sourcePath, destinationPath) {
     recursive: true,
     dereference: true,
     filter: (source) => {
-      const parts = source.split(sep);
-      return !parts.includes("node_modules");
+      const relativePath = relative(sourcePath, source);
+      if (relativePath === "") return true;
+      return !relativePath.split(sep).includes("node_modules");
     },
   });
 }
