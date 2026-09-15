@@ -16,9 +16,7 @@
       "stateImpact": [],
       "userActionRequired": false,
       "remediation": "no-action-required",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "releaseNoteBullets": [
         "Release-impact metadata and validation now govern stable package publication."
       ],
@@ -58,9 +56,7 @@
       "stateImpact": [],
       "userActionRequired": false,
       "remediation": "no-action-required",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "releaseNoteBullets": [
         "GitHub Release notes are now generated from reviewed release-impact metadata."
       ],
@@ -100,9 +96,7 @@
       "stateImpact": [],
       "userActionRequired": false,
       "remediation": "no-action-required",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "releaseNoteBullets": [
         "Keiko can now resolve stable update availability and release-impact preflight data through the local server boundary."
       ],
@@ -142,9 +136,7 @@
       "stateImpact": [],
       "userActionRequired": false,
       "remediation": "no-action-required",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "releaseNoteBullets": [
         "Keiko now provides a governed update experience with Settings and startup checks, policy-gated package updates, local recovery state, remediation guidance, and CLI fallback commands."
       ],
@@ -184,9 +176,7 @@
       "stateImpact": [],
       "userActionRequired": false,
       "remediation": "no-action-required",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "releaseNoteBullets": [
         "Portable runtime staging metadata now binds reviewed package and runtime artifact evidence before release upload."
       ],
@@ -207,11 +197,7 @@
         "parentEpic": 1942,
         "issue": 1948,
         "stagingOnly": true,
-        "targets": [
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "review": {
         "status": "reviewed",
@@ -260,9 +246,7 @@
       ],
       "userActionRequired": false,
       "remediation": "no-action-required",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "releaseNoteBullets": [
         "Adds portable Keiko downloads for Windows x64, macOS arm64, and macOS x64 with bundled Node, managed first-run setup, one-click in-app updates for portable-managed installs, and no competing browser-managed install prompt."
       ],
@@ -284,11 +268,7 @@
         "updaterEpic": 1945,
         "finalQaIssue": 1961,
         "authorityAdr": "ADR-0115",
-        "targets": [
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ],
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"],
         "primaryUserPath": "download-extract-open-setup-update-in-app",
         "promotedPackageManagerPath": false,
         "promotedBrowserPwaPath": false,
@@ -320,9 +300,7 @@
       "stateImpact": [],
       "userActionRequired": false,
       "remediation": "no-action-required",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "releaseNoteBullets": [
         "Improves repository understanding with query-aware ranking, coverage diagnostics, persistent indexing, resolved import and symbol graph traversal, endpoint-to-client linking, semantic reranking, and large-repo hardening."
       ],
@@ -362,9 +340,7 @@
       "stateImpact": [],
       "userActionRequired": false,
       "remediation": "no-action-required",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "releaseNoteBullets": [
         "Fixes targeted performance and stability hotspots by deduplicating startup reads and cold-start requests, bounding retained run-stream events, improving SSE buffering behavior, and making Memory Vault SQLite contention more resilient."
       ],
@@ -404,9 +380,7 @@
       "stateImpact": [],
       "userActionRequired": false,
       "remediation": "no-action-required",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "releaseNoteBullets": [
         "Hardens security and supply-chain posture with audit remediation, safe dependency updates, and release-gate verification."
       ],
@@ -437,9 +411,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.2.13",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -457,9 +429,7 @@
       "releaseNotePriority": "high",
       "userVisibleChange": "observable",
       "userVisibleSummary": "Knowledge Pod Sets, sealed model-use policy, embedding-space governance, hybrid retrieval quality controls, and retrieval-activity evidence make local knowledge work more governable and auditable.",
-      "affectedStateStores": [
-        "local-knowledge"
-      ],
+      "affectedStateStores": ["local-knowledge"],
       "stateImpact": [
         {
           "store": "local-knowledge",
@@ -488,9 +458,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.2.13",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -530,9 +498,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.2.13",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -572,9 +538,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.2.13",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": true,
       "observableImpact": false,
       "defaultPatchNotes": false,
@@ -614,9 +578,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.2.14",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -634,9 +596,7 @@
       "releaseNotePriority": "high",
       "userVisibleChange": "observable",
       "userVisibleSummary": "Local Knowledge stores sealed with the previous v2 encryption scope open again and are upgraded to the current v3 scope instead of showing LOCAL_KNOWLEDGE_UNAVAILABLE.",
-      "affectedStateStores": [
-        "local-knowledge"
-      ],
+      "affectedStateStores": ["local-knowledge"],
       "stateImpact": [
         {
           "store": "local-knowledge",
@@ -665,9 +625,7 @@
       "distTag": "beta",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.2.15-beta.0",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": false,
@@ -722,9 +680,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.2.15",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -788,9 +744,7 @@
       "stateImpact": [],
       "userActionRequired": false,
       "remediation": "no-action-required",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "releaseNoteBullets": [
         "Portable runtime staging metadata now binds reviewed package and runtime artifact evidence before release upload."
       ],
@@ -811,11 +765,7 @@
         "parentEpic": 1942,
         "issue": 1948,
         "stagingOnly": true,
-        "targets": [
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "review": {
         "status": "reviewed",
@@ -837,9 +787,7 @@
       "releaseNotePriority": "normal",
       "userVisibleChange": "observable",
       "userVisibleSummary": "The editor now presents per-file local history with read-only comparisons, pinning, deletion, and conflict-aware restore.",
-      "affectedStateStores": [
-        "editor-local-history"
-      ],
+      "affectedStateStores": ["editor-local-history"],
       "stateImpact": [
         {
           "store": "editor-local-history",
@@ -850,9 +798,7 @@
       ],
       "userActionRequired": false,
       "remediation": "no-action-required",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "releaseNoteBullets": [
         "Every save is a restore point \u2014 browse, compare, and restore file history locally."
       ],
@@ -883,9 +829,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.3.0",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -970,9 +914,7 @@
       "stateImpact": [],
       "userActionRequired": false,
       "remediation": "no-action-required",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "releaseNoteBullets": [
         "Portable runtime staging metadata now binds reviewed package and runtime artifact evidence before release upload."
       ],
@@ -993,11 +935,7 @@
         "parentEpic": 1942,
         "issue": 1948,
         "stagingOnly": true,
-        "targets": [
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "review": {
         "status": "reviewed",
@@ -1014,9 +952,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.3.1",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -1034,9 +970,7 @@
       "releaseNotePriority": "normal",
       "userVisibleChange": "behavioral",
       "userVisibleSummary": "Keiko 0.3.1 is the first public download release. It carries the same product as 0.3.0 and republishes it under a usable tag: the 0.3.0 GitHub release was withdrawn during verification and GitHub keeps that tag immutable, so the downloadable packages ship as 0.3.1. Nothing has to be uninstalled or migrated. An older build left running only occupies the local port, and the new one says so on startup and names both ways out (stop it, or start on another port). The governed one-click update does not apply to this release: its portable evidence declares the evaluation signing status, and the updater accepts only production-signed, notarized portable artifacts. Install it from the GitHub Release download; the in-app update returns once the signed lane ships.",
-      "affectedStateStores": [
-        "ui-store-schema"
-      ],
+      "affectedStateStores": ["ui-store-schema"],
       "stateImpact": [
         {
           "store": "ui-store-schema",
@@ -1065,11 +999,7 @@
         "parentEpic": 1942,
         "issue": 1948,
         "stagingOnly": true,
-        "targets": [
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       }
     },
     {
@@ -1078,9 +1008,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.3.2",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -1098,9 +1026,7 @@
       "releaseNotePriority": "normal",
       "userVisibleChange": "behavioral",
       "userVisibleSummary": "Keiko 0.3.2 carries the same product as 0.3.1 and completes its publication: the npm latest dist-tag points at the current release again, so a plain npm install delivers today's Keiko instead of a 0.2.x build. The release pipeline that blocked the 0.3.1 npm promotion was repaired end to end - the publisher verifies the four published downloads (three archives and the Windows setup companion) byte for byte against build-run artifacts fetched by their immutable ids (a rerun can neither substitute bytes nor block a verified release), no longer refuses over per-target evidence files, resolves its own operating conditions (release-owner allowlist, transport policy, provenance attestation only where an OIDC provider exists), and states every unmet precondition before the gate chain runs. The project README was rewritten around the product. Nothing has to be uninstalled or migrated; the governed one-click update still does not apply while the portable line ships with evaluation signing.",
-      "affectedStateStores": [
-        "ui-store-schema"
-      ],
+      "affectedStateStores": ["ui-store-schema"],
       "stateImpact": [
         {
           "store": "ui-store-schema",
@@ -1121,9 +1047,7 @@
         "humanApproved": true,
         "approvalReference": "github-issue-comment:oscharko-dev/Keiko#2802#5235616947",
         "rationale": "Completion of the 0.3.1 release event: the npm latest promotion was blocked by a defect in the publish verification itself, repaired in #3055, and the repaired pipeline requires a version whose tag can still carry a release. 0.3.2 ships the identical product with the repaired release machinery and the product-first README; the evidence is the release owner's authored comment on epic #2802 carrying the version-bound publish phrase on a line of its own, verified live by the publish gate.",
-        "sourceReferences": [
-          "oscharko-dev/Keiko#3055"
-        ]
+        "sourceReferences": ["oscharko-dev/Keiko#3055"]
       },
       "userActionRequired": false,
       "remediation": "no-action-required",
@@ -1133,11 +1057,7 @@
         "issue": 1948,
         "stagingOnly": true,
         "signingScope": "evaluation",
-        "targets": [
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       }
     },
     {
@@ -1146,9 +1066,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.3.3",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -1166,9 +1084,7 @@
       "releaseNotePriority": "normal",
       "userVisibleChange": "behavioral",
       "userVisibleSummary": "Keiko 0.3.3 carries the same product as 0.3.2 and completes the npm publication both prior releases were denied: the byte-for-byte publish verifier crashed on the first empty file inside a build-run artifact (Node 24.18 rejects a zero inflate ceiling), so every governed promotion path refused with an unreadable-artifacts error while the GitHub release itself was intact. An empty entry now reads as proven empty - a stream hiding content behind a zero declaration still refuses - and the npm latest dist-tag finally follows the current release, so a plain npm install delivers today's Keiko instead of a 0.2.x build. Nothing has to be uninstalled or migrated; the governed one-click update still does not apply while the portable line ships with evaluation signing.",
-      "affectedStateStores": [
-        "ui-store-schema"
-      ],
+      "affectedStateStores": ["ui-store-schema"],
       "stateImpact": [
         {
           "store": "ui-store-schema",
@@ -1198,11 +1114,7 @@
         "issue": 1948,
         "stagingOnly": true,
         "signingScope": "evaluation",
-        "targets": [
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       }
     },
     {
@@ -1211,9 +1123,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.3.4",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -1231,9 +1141,7 @@
       "releaseNotePriority": "high",
       "userVisibleChange": "behavioral",
       "userVisibleSummary": "Keiko 0.3.4 repairs the Windows portable installation end to end (issue #3072): setup no longer flashes a console window and stops - the launcher distinguishes a double-click from a terminal start, launches the UI, and reports real failures in a native dialog instead of exiting silently (incomplete install, damaged app bundle, runtime that cannot start). The Start Menu entry is a real shortcut; a legacy Keiko.bat from earlier releases is retired automatically during setup, repair, and the first start after an in-app update. The Windows archive pipeline now refuses symlinks, NTFS alternate-data-stream names, encryption-marked and mistyped entries outright, and installer cleanup retries correctly under silent installs.",
-      "affectedStateStores": [
-        "ui-store-schema"
-      ],
+      "affectedStateStores": ["ui-store-schema"],
       "stateImpact": [
         {
           "store": "ui-store-schema",
@@ -1265,11 +1173,7 @@
         "issue": 1948,
         "stagingOnly": true,
         "signingScope": "evaluation",
-        "targets": [
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       }
     },
     {
@@ -1278,9 +1182,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.3.5",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -1298,9 +1200,7 @@
       "releaseNotePriority": "high",
       "userVisibleChange": "behavioral",
       "userVisibleSummary": "Keiko 0.3.5 repairs the Windows portable installation end to end (issue #3072): setup no longer flashes a console window and stops - the launcher distinguishes a double-click from a terminal start, launches the UI, and reports real failures in a native dialog instead of exiting silently (incomplete install, damaged app bundle, runtime that cannot start). The Start Menu entry is a real shortcut; a legacy Keiko.bat from earlier releases is retired automatically during setup, repair, and the first start after an in-app update. The Windows archive pipeline now refuses symlinks, NTFS alternate-data-stream names, encryption-marked and mistyped entries outright, and installer cleanup retries correctly under silent installs.",
-      "affectedStateStores": [
-        "ui-store-schema"
-      ],
+      "affectedStateStores": ["ui-store-schema"],
       "stateImpact": [
         {
           "store": "ui-store-schema",
@@ -1332,11 +1232,7 @@
         "issue": 1948,
         "stagingOnly": true,
         "signingScope": "evaluation",
-        "targets": [
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "traceability": null
     },
@@ -1346,9 +1242,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.3.6",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -1366,9 +1260,7 @@
       "releaseNotePriority": "high",
       "userVisibleChange": "behavioral",
       "userVisibleSummary": "Keiko 0.3.6 delivers the Windows installation repair to end users. Installing on Windows now opens the app instead of flashing a console window and stopping; when a start genuinely cannot proceed, a native dialog explains it. The Start Menu entry becomes a verified shortcut with automatic cleanup of the legacy launcher file, and the archive pipeline behind the installer refuses hostile entries outright. The tags v0.3.4 and v0.3.5 were burned during this release chain (each froze a defective asset-build path discovered only by the release lane); 0.3.6 is the first version whose Windows asset build was proven green before tagging.",
-      "affectedStateStores": [
-        "ui-store-schema"
-      ],
+      "affectedStateStores": ["ui-store-schema"],
       "stateImpact": [
         {
           "store": "ui-store-schema",
@@ -1400,11 +1292,7 @@
         "issue": 1948,
         "stagingOnly": true,
         "signingScope": "evaluation",
-        "targets": [
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "traceability": null
     },
@@ -1414,9 +1302,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.3.7",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -1457,11 +1343,7 @@
         "issue": 1948,
         "stagingOnly": true,
         "signingScope": "evaluation",
-        "targets": [
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "traceability": null
     },
@@ -1471,9 +1353,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.3.8",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -1516,11 +1396,7 @@
         "issue": 1948,
         "stagingOnly": true,
         "signingScope": "evaluation",
-        "targets": [
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "traceability": null
     },
@@ -1530,9 +1406,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.3.9",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -1576,11 +1450,7 @@
         "issue": 1948,
         "stagingOnly": true,
         "signingScope": "evaluation",
-        "targets": [
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "traceability": null
     },
@@ -1590,9 +1460,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.3.10",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -1633,11 +1501,7 @@
         "issue": 1948,
         "stagingOnly": true,
         "signingScope": "evaluation",
-        "targets": [
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "traceability": null
     },
@@ -1647,9 +1511,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.3.11",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -1691,11 +1553,7 @@
         "issue": 1948,
         "stagingOnly": true,
         "signingScope": "evaluation",
-        "targets": [
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "traceability": null
     },
@@ -1705,9 +1563,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.3.12",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -1752,11 +1608,7 @@
         "issue": 1948,
         "stagingOnly": true,
         "signingScope": "evaluation",
-        "targets": [
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "traceability": null
     },
@@ -1766,9 +1618,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.3.13",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -1811,11 +1661,7 @@
         "issue": 1948,
         "stagingOnly": true,
         "signingScope": "evaluation",
-        "targets": [
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "traceability": null
     },
@@ -1825,9 +1671,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.3.14",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -1872,11 +1716,7 @@
         "issue": 1948,
         "stagingOnly": true,
         "signingScope": "evaluation",
-        "targets": [
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "traceability": null
     },
@@ -1886,9 +1726,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.3.15",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -1933,11 +1771,7 @@
         "issue": 1948,
         "stagingOnly": true,
         "signingScope": "evaluation",
-        "targets": [
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "traceability": null
     },
@@ -1947,9 +1781,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.3.16",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -1997,11 +1829,7 @@
         "issue": 1948,
         "stagingOnly": true,
         "signingScope": "evaluation",
-        "targets": [
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "traceability": null
     },
@@ -2011,9 +1839,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v0.3.17",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -2060,11 +1886,7 @@
         "issue": 1948,
         "stagingOnly": true,
         "signingScope": "evaluation",
-        "targets": [
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["windows-x64", "macos-arm64", "macos-x64"]
       },
       "traceability": null
     },
@@ -2074,9 +1896,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v1.0.0",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -2126,12 +1946,7 @@
         "issue": 1948,
         "stagingOnly": true,
         "signingScope": "evaluation",
-        "targets": [
-          "linux-x64",
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
       }
     },
     {
@@ -2140,9 +1955,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v1.0.1",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": false,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -2194,12 +2007,7 @@
         "issue": 1948,
         "stagingOnly": true,
         "signingScope": "evaluation",
-        "targets": [
-          "linux-x64",
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
       }
     },
     {
@@ -2208,9 +2016,7 @@
       "distTag": "latest",
       "registry": "https://registry.npmjs.org/",
       "releaseTag": "v1.0.2",
-      "supportedFrom": [
-        "0.2.0"
-      ],
+      "supportedFrom": ["0.2.0"],
       "internalOnly": true,
       "observableImpact": true,
       "defaultPatchNotes": true,
@@ -2252,12 +2058,7 @@
         "issue": 1948,
         "stagingOnly": true,
         "signingScope": "evaluation",
-        "targets": [
-          "linux-x64",
-          "windows-x64",
-          "macos-arm64",
-          "macos-x64"
-        ]
+        "targets": ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"]
       }
     }
   ]
