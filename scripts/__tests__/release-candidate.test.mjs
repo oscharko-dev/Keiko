@@ -318,6 +318,17 @@ describe("applyReleaseCandidatePlan", () => {
     );
   });
 
+  it("fails when the write response body is empty", () => {
+    // An empty stdout is a distinct boundary input from "not-json": both reach the same
+    // parse-error catch, but the empty case is what a gh subprocess actually produces when it
+    // returns status 0 but writes nothing (a runner that drops the response body before we
+    // read it, a piped shim that swallowed stdout). Refuse it the same way — never let a
+    // silent write pass as a proof.
+    expect(() => apply("create", { write: { status: 0, stdout: "", stderr: "" } })).toThrow(
+      "write response (create) could not be parsed as JSON",
+    );
+  });
+
   it("fails when the write response body points at an annotated tag instead of a commit", () => {
     // The candidate flow writes the ref straight to the commit SHA (POST /git/refs with
     // sha=<commit>), so the response object.type must be "commit". An object.type of "tag"
