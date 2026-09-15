@@ -54,22 +54,10 @@ rules:
       # Verified with the pinned scanner version: zizmor 1.26.1 reports this one finding for this
       # file and nothing else.
       - infra-failure-retry.yml:25
-      # #3498 (Epic #3495): the event-driven publish observer replaces a job that waited 30 minutes
-      # for CI, CodeQL, workflow hygiene and portable-assets to conclude on a tag build. Same
-      # posture as infra-failure-retry.yml above and for the same reason: this workflow checks out
-      # `github.event.repository.default_branch` explicitly (never `workflow_run.head_sha`), runs
-      # only committed repository code, its only write grant is `actions: write`, and the head SHA
-      # goes through `env:` indirection and is then re-validated against a 40-hex pattern before
-      # any API path is built. The one privileged call it can make -
-      # `POST /repos/{owner}/{repo}/actions/workflows/release.yml/dispatches` - is refused by
-      # scripts/lib/release-publish-request-event.mjs before the step is reached if the observed
-      # head is not a stable v* tag or if any of the four required workflows is not green on that
-      # exact SHA. The npm-publish deployment environment gates every publish that would follow.
-      - release-publish-request.yml:18
   adhoc-packages:
     ignore:
       # Publishing deliberately uses the separately reviewed npm version required by ADR-0130;
       # bootstrapping npm is inherently outside the lockfile since it changes the binary that
       # later reads that lockfile. The version is pinned exactly (not @latest), which is the
       # practical mitigation for this specific operation (see the inline comment there).
-      - release.yml:129
+      - release.yml:131

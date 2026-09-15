@@ -203,10 +203,12 @@ describe("workflow Node toolchain parity", () => {
     // workflow appearing. Issue #3403 retired six credential-bound Apple/Microsoft signing lanes
     // and added three Linux runtime qualification lanes; ADR-0177 added the dev release-rehearsal
     // readiness lane and the standing release-alignment lane, and ADR-0177 D8 the release-candidate
-    // plan and tag lanes and the stable build's publish-request lane. Epic #3495 (#3498 Phase 1)
-    // added the event-driven release-publish-request lane and (#3498 Phase 2) retired the
-    // wait-for-checks release-verify lane it replaces, leaving the total unchanged at 29 lanes.
-    expect(withSetupNode).toHaveLength(29);
+    // plan and tag lanes and the stable build's publish-request lane. Epic #3495 (#3498) retired
+    // the wait-for-checks release-verify lane; the event-driven cross-workflow dispatch it
+    // considered was withdrawn because default GITHUB_TOKEN dispatch attributes triggering_actor
+    // to github-actions[bot] and would fail the dispatch guard silently, so the button on
+    // release.yml is the authoritative dispatch. Total: 28 lanes.
+    expect(withSetupNode).toHaveLength(28);
   });
 
   it("pins every actions/setup-node step to an approved exact Node version", () => {
