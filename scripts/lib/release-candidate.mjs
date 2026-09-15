@@ -198,48 +198,72 @@ export function planReleaseCandidate({
   return releaseCandidatePlan(facts);
 }
 
+function writeArgs(repository, plan, candidateSha) {
+  if (plan.action === "create") {
+    return [
+      "api",
+      "--method",
+      "POST",
+      `repos/${repository}/git/refs`,
+      "-f",
+      `ref=refs/tags/${plan.tag}`,
+      "-f",
+      `sha=${candidateSha}`,
+    ];
+  }
+  return [
+    "api",
+    "--method",
+    "PATCH",
+    `repos/${repository}/git/refs/tags/${plan.tag}`,
+    "-f",
+    `sha=${candidateSha}`,
+    "-F",
+    "force=true",
+  ];
+}
+
 /**
- * Writes the tag for a create or move plan with the tag token and proves the result by reading
- * the ref back. Any other plan writes nothing.
+ * The commit a ref-write response body says the tag now points at, or undefined when the body is
+ * not a lightweight ref pointing at a commit. GitHub's git-refs POST/PATCH returns the ref just
+ * written with `object.type === "commit"` and `object.sha` set to the commit passed in, so the
+ * response body is authoritative and — unlike a subsequent GET — is atomic with the write.
+ */
+function writtenCommitSha(body) {
+  if (body?.object?.type !== "commit") return undefined;
+  return typeof body.object.sha === "string" ? body.object.sha : undefined;
+}
+
+/**
+ * Writes the tag for a create or move plan with the tag token and proves the result from the
+ * write's own response body. Any other plan writes nothing.
+ *
+ * GitHub's git-refs API is eventually consistent for read-after-write: a POST that returns 201
+ * (or a PATCH that returns 200) can be invisible to the next GET for a short window, so proving
+ * the write by re-reading the ref races that window and turns a successful tag write into a
+ * failed job. The write's own response body carries the ref just written — `object.sha` is the
+ * commit the ref now points at, atomic with the write and immune to that race — so verify from
+ * the body instead. This is not a retry; it is the correct authority for the write's result.
  *
  * @param runGhWithTagToken  (args) => {status, stdout, stderr, error}; the GitHub App token
  */
-export function applyReleaseCandidatePlan({
-  candidateSha,
-  plan,
-  repository,
-  runGh,
-  runGhWithTagToken,
-}) {
+export function applyReleaseCandidatePlan({ candidateSha, plan, repository, runGhWithTagToken }) {
   if (!WRITING_ACTIONS.has(plan.action)) return false;
-  const args =
-    plan.action === "create"
-      ? [
-          "api",
-          "--method",
-          "POST",
-          `repos/${repository}/git/refs`,
-          "-f",
-          `ref=refs/tags/${plan.tag}`,
-          "-f",
-          `sha=${candidateSha}`,
-        ]
-      : [
-          "api",
-          "--method",
-          "PATCH",
-          `repos/${repository}/git/refs/tags/${plan.tag}`,
-          "-f",
-          `sha=${candidateSha}`,
-          "-F",
-          "force=true",
-        ];
-  const result = runGhWithTagToken(args);
+  const result = runGhWithTagToken(writeArgs(repository, plan, candidateSha));
   if (result?.error !== undefined || result?.status !== 0) {
     fail(`the ${plan.tag} tag could not be written (${plan.action}).`);
   }
-  if (remoteTagCommit(runGh, repository, plan.tag) !== candidateSha) {
-    fail(`${plan.tag} does not point at ${candidateSha} after the write.`);
+  let body;
+  try {
+    body = JSON.parse(String(result.stdout ?? ""));
+  } catch {
+    fail(`the ${plan.tag} write response (${plan.action}) could not be parsed as JSON.`);
+  }
+  const writtenSha = writtenCommitSha(body);
+  if (writtenSha !== candidateSha) {
+    fail(
+      `${plan.tag} points at ${writtenSha ?? "?"} after the write (${plan.action}), not ${candidateSha}.`,
+    );
   }
   return true;
 }
@@ -283,7 +307,7 @@ export function runReleaseCandidate({
     if (typeof env.KEIKO_RELEASE_TAG_TOKEN !== "string" || env.KEIKO_RELEASE_TAG_TOKEN === "") {
       fail("the release tag token is missing.");
     }
-    applyReleaseCandidatePlan({ candidateSha, plan, repository, runGh, runGhWithTagToken });
+    applyReleaseCandidatePlan({ candidateSha, plan, repository, runGhWithTagToken });
   }
   const line = writes
     ? `Release candidate ${candidateSha}: ${plan.tag} written (${plan.action}), ${plan.reason}.`
