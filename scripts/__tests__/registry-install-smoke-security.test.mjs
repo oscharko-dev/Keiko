@@ -44,6 +44,10 @@ import {
   seedVendoredRegistry,
   stubManifest,
   findInstalledCopies,
+  assertGloballyInstalledKeiko,
+  globalPrefixLayoutPaths,
+  globallyInstalledPackageRoot,
+  installIntoGlobalPrefix,
   isSmokeGateFailure,
   runAsync,
   SmokeGateFailure,
@@ -632,7 +636,17 @@ describe("installable package smoke optional-dependency coverage", () => {
       try {
         artifact = packRoot();
         expect(existsSync(artifact.tarballPath)).toBe(true);
-        expect(artifact.manifest.bundleDependencies).toEqual(ROOT_MANIFEST.bundleDependencies);
+        // The published tarball extends bundleDependencies with the external runtime dep
+        // closure so `npm install -g` extracts every dep straight from the tarball — see the
+        // block comment on `bundleExternalRuntimeDependencies` in `stage-publish-package.mjs`.
+        // The root's runtime workspaces must still all be there; anything beyond them is the
+        // external closure the closure walk resolves from the source `node_modules` tree.
+        for (const name of ROOT_MANIFEST.bundleDependencies) {
+          expect(artifact.manifest.bundleDependencies).toContain(name);
+        }
+        expect(artifact.manifest.bundleDependencies.length).toBeGreaterThan(
+          ROOT_MANIFEST.bundleDependencies.length,
+        );
       } finally {
         artifact?.cleanup();
         if (previous === undefined) delete process.env.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS;
@@ -3145,21 +3159,31 @@ describe("installable package smoke optional-dependency coverage", () => {
   // Two bundled workspaces may declare the same absent optional dependency under non-overlapping
   // ranges. A name-keyed map would keep only the first, and Yarn — which still resolves the second
   // descriptor from the tarball — would find no candidate for it.
-  // A foreign-scope or missing workspace manifest used to return [] silently, dropping that
-  // workspace's third-party dependencies from the closure — Yarn would then request a package the
-  // registry never seeded, and the failure would name the dependency rather than the cause.
-  it("fails loudly when a bundled workspace manifest cannot be located", () => {
+  // Since #3510 the staged root's bundleDependencies carries two classes of entry: the private
+  // `@oscharko-dev/*` workspaces the vendor archive tree ships, and every external runtime dep
+  // (and transitive) copied into `stageRoot/node_modules/` from the source tree at pack time.
+  // `vendoredDependencyRequirements` walks only the workspace scope for the Yarn closure — the
+  // externals were already resolved from the lockfile at pack time and need no lookup here —
+  // so a foreign-scope name is legitimately treated as an external and never throws. A missing
+  // `@oscharko-dev/*` workspace still fails loudly, because that shape means the source tree
+  // itself is inconsistent with the staged manifest.
+  it("ignores foreign-scope bundleDependencies entries as pre-resolved externals", () => {
     const root = mkdtempSync(join(tmpdir(), "keiko-workspace-scope-test-"));
     try {
-      rejectProcessExit();
-      expect(() =>
-        vendoredDependencyRequirements(
-          { dependencies: {}, bundleDependencies: ["@other-scope/thing"] },
-          root,
-        ),
-      ).toThrow(/process\.exit\(1\)/u);
+      // No process.exit — `@other-scope/thing` is a runtime external, not a workspace to walk.
+      const requirements = vendoredDependencyRequirements(
+        { dependencies: {}, bundleDependencies: ["@other-scope/thing"] },
+        root,
+      );
+      expect(requirements).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
-      vi.restoreAllMocks();
+  it("fails loudly when a bundled @oscharko-dev/* workspace manifest cannot be located", () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-workspace-scope-test-"));
+    try {
       rejectProcessExit();
       expect(() =>
         vendoredDependencyRequirements(
@@ -3958,5 +3982,230 @@ describe("release publish security posture", () => {
     expect(provenancePublishArgs({ ACTIONS_ID_TOKEN_REQUEST_TOKEN: token })).toEqual([]);
     expect(provenancePublishArgs({})).toEqual([]);
     expect(workflow).toMatch(/publish:[\s\S]*permissions:[\s\S]*id-token:\s*write/u);
+  });
+});
+
+// The updater's post-install re-exec loads a globally-installed tarball. v1.0.1 shipped a bundle
+// that broke exactly here: `npm install -g` silently skipped every non-bundle top-level dep and
+// every command died on `Cannot find package 'ws'`. These tests pin the shape of that repair:
+// the pre-created prefix layout npm's global reify expects, the two package-root layouts npm
+// writes into, and the four evidence classes assertGloballyInstalledKeiko checks before a smoke
+// declares the tarball fit for the updater. Failure paths use fixture directories rather than
+// spawn mocks so each assertion binds to the exact filesystem/process state npm actually leaves.
+describe("global install prefix layout — updater mutation path", () => {
+  const ROOT_VERSION = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")).version;
+
+  function tempPrefix() {
+    return mkdtempSync(join(tmpdir(), "keiko-global-prefix-"));
+  }
+
+  function writeFakeCli(packageRoot, versionEchoed = ROOT_VERSION) {
+    mkdirSync(join(packageRoot, "dist", "cli"), { recursive: true });
+    // A minimal CLI shim that mirrors the shape `node <bin> --version` expects: exit 0 with the
+    // version on stdout. Assertion binds on stdout.includes(rootVersion), so any framing is fine.
+    writeFileSync(
+      join(packageRoot, "dist", "cli", "index.js"),
+      `#!/usr/bin/env node\nprocess.stdout.write(${JSON.stringify(versionEchoed)});\n`,
+      { mode: 0o755 },
+    );
+  }
+
+  function writeBundledWs(packageRoot) {
+    mkdirSync(join(packageRoot, "node_modules", "ws"), { recursive: true });
+    writeFileSync(
+      join(packageRoot, "node_modules", "ws", "package.json"),
+      JSON.stringify({ name: "ws", version: "0.0.0" }),
+    );
+  }
+
+  it("names the POSIX layout npm's global reify writes into", () => {
+    const prefix = tempPrefix();
+    try {
+      expect(globalPrefixLayoutPaths(prefix, "linux")).toEqual([
+        join(prefix, "lib", "node_modules"),
+        join(prefix, "bin"),
+      ]);
+      expect(globalPrefixLayoutPaths(prefix, "darwin")).toEqual([
+        join(prefix, "lib", "node_modules"),
+        join(prefix, "bin"),
+      ]);
+    } finally {
+      rmSync(prefix, { recursive: true, force: true });
+    }
+  });
+
+  it("names the Windows layout npm's global reify writes into", () => {
+    const prefix = tempPrefix();
+    try {
+      expect(globalPrefixLayoutPaths(prefix, "win32")).toEqual([join(prefix, "node_modules")]);
+    } finally {
+      rmSync(prefix, { recursive: true, force: true });
+    }
+  });
+
+  it("defaults the platform argument to the current process platform", () => {
+    const prefix = tempPrefix();
+    try {
+      expect(globalPrefixLayoutPaths(prefix)).toEqual(
+        globalPrefixLayoutPaths(prefix, process.platform),
+      );
+    } finally {
+      rmSync(prefix, { recursive: true, force: true });
+    }
+  });
+
+  it("finds the POSIX package root", () => {
+    const prefix = tempPrefix();
+    try {
+      const posixRoot = join(prefix, "lib", "node_modules", "@oscharko-dev", "keiko");
+      mkdirSync(posixRoot, { recursive: true });
+      expect(globallyInstalledPackageRoot(prefix)).toBe(posixRoot);
+    } finally {
+      rmSync(prefix, { recursive: true, force: true });
+    }
+  });
+
+  it("finds the Windows package root when only that layout exists", () => {
+    const prefix = tempPrefix();
+    try {
+      const winRoot = join(prefix, "node_modules", "@oscharko-dev", "keiko");
+      mkdirSync(winRoot, { recursive: true });
+      expect(globallyInstalledPackageRoot(prefix)).toBe(winRoot);
+    } finally {
+      rmSync(prefix, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when npm placed no @oscharko-dev/keiko under the prefix", () => {
+    const { consoleError, exit } = rejectProcessExit();
+    const prefix = tempPrefix();
+    try {
+      expect(() => globallyInstalledPackageRoot(prefix)).toThrow(/process\.exit\(1\)/u);
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining("global npm install placed no @oscharko-dev/keiko package under"),
+      );
+    } finally {
+      rmSync(prefix, { recursive: true, force: true });
+      consoleError.mockRestore();
+      exit.mockRestore();
+    }
+  });
+
+  it("pre-creates the layout npm needs before it invokes the installer", () => {
+    // A `run` call to a nonexistent `npm-executable-does-not-exist` fails fast enough to keep the
+    // test hermetic — but the pre-create must have completed by then, since that is the whole
+    // reason installIntoGlobalPrefix exists (the ENOENT the fix repairs happens INSIDE npm).
+    const { consoleError, exit } = rejectProcessExit();
+    const prefix = tempPrefix();
+    const bogusTarball = join(prefix, "does-not-exist.tgz");
+    // Point `npm` at a nonexistent absolute path so `run` fails via install exit code, not spawn.
+    // We accept either failure mode: what matters is that the pre-create happened first.
+    try {
+      try {
+        installIntoGlobalPrefix(prefix, bogusTarball);
+      } catch (error) {
+        expect(String(error)).toMatch(/process\.exit\(1\)/u);
+      }
+      for (const dir of globalPrefixLayoutPaths(prefix)) {
+        expect(existsSync(dir)).toBe(true);
+      }
+      expect(consoleError).toHaveBeenCalled();
+    } finally {
+      rmSync(prefix, { recursive: true, force: true });
+      consoleError.mockRestore();
+      exit.mockRestore();
+    }
+  });
+
+  it("accepts a self-contained global tree", () => {
+    const prefix = tempPrefix();
+    const packageRoot = join(prefix, "lib", "node_modules", "@oscharko-dev", "keiko");
+    try {
+      mkdirSync(packageRoot, { recursive: true });
+      writeFakeCli(packageRoot);
+      writeBundledWs(packageRoot);
+      expect(() => assertGloballyInstalledKeiko(prefix)).not.toThrow();
+    } finally {
+      rmSync(prefix, { recursive: true, force: true });
+    }
+  });
+
+  it("fails when the global install is missing the CLI entry", () => {
+    const { consoleError, exit } = rejectProcessExit();
+    const prefix = tempPrefix();
+    const packageRoot = join(prefix, "lib", "node_modules", "@oscharko-dev", "keiko");
+    try {
+      mkdirSync(packageRoot, { recursive: true });
+      expect(() => assertGloballyInstalledKeiko(prefix)).toThrow(/process\.exit\(1\)/u);
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining("global install missing CLI entry at"),
+      );
+    } finally {
+      rmSync(prefix, { recursive: true, force: true });
+      consoleError.mockRestore();
+      exit.mockRestore();
+    }
+  });
+
+  it("fails when the CLI reports a version other than the packed root", () => {
+    const { consoleError, exit } = rejectProcessExit();
+    const prefix = tempPrefix();
+    const packageRoot = join(prefix, "lib", "node_modules", "@oscharko-dev", "keiko");
+    try {
+      mkdirSync(packageRoot, { recursive: true });
+      writeFakeCli(packageRoot, "9.9.9-not-the-packed-version");
+      writeBundledWs(packageRoot);
+      expect(() => assertGloballyInstalledKeiko(prefix)).toThrow(/process\.exit\(1\)/u);
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining("global keiko --version reported an unexpected version"),
+      );
+    } finally {
+      rmSync(prefix, { recursive: true, force: true });
+      consoleError.mockRestore();
+      exit.mockRestore();
+    }
+  });
+
+  it("fails when the bundled ws package is missing — the exact -g regression this pins", () => {
+    const { consoleError, exit } = rejectProcessExit();
+    const prefix = tempPrefix();
+    const packageRoot = join(prefix, "lib", "node_modules", "@oscharko-dev", "keiko");
+    try {
+      mkdirSync(packageRoot, { recursive: true });
+      writeFakeCli(packageRoot);
+      // Deliberately do NOT writeBundledWs — this is the shape v1.0.1's tarball left behind.
+      expect(() => assertGloballyInstalledKeiko(prefix)).toThrow(/process\.exit\(1\)/u);
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining("global install is missing the bundled ws package at"),
+      );
+    } finally {
+      rmSync(prefix, { recursive: true, force: true });
+      consoleError.mockRestore();
+      exit.mockRestore();
+    }
+  });
+
+  it("fails when the CLI exits nonzero — a runtime-broken bundle would too", () => {
+    const { consoleError, exit } = rejectProcessExit();
+    const prefix = tempPrefix();
+    const packageRoot = join(prefix, "lib", "node_modules", "@oscharko-dev", "keiko");
+    try {
+      mkdirSync(join(packageRoot, "dist", "cli"), { recursive: true });
+      // A CLI shim that mimics the -g regression: fails at import time (nonzero exit).
+      writeFileSync(
+        join(packageRoot, "dist", "cli", "index.js"),
+        `#!/usr/bin/env node\nprocess.stderr.write('Cannot find package ws');\nprocess.exit(2);\n`,
+        { mode: 0o755 },
+      );
+      writeBundledWs(packageRoot);
+      expect(() => assertGloballyInstalledKeiko(prefix)).toThrow(/process\.exit\(1\)/u);
+      expect(consoleError).toHaveBeenCalledWith(
+        expect.stringContaining("global keiko --version exited"),
+      );
+    } finally {
+      rmSync(prefix, { recursive: true, force: true });
+      consoleError.mockRestore();
+      exit.mockRestore();
+    }
   });
 });
