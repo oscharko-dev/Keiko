@@ -14,9 +14,13 @@ import {
 } from "./workspace-manifest-api";
 
 const pairingSettled = vi.hoisted(() => vi.fn(() => Promise.resolve(false)));
+const ensureLocalSession = vi.hoisted(() => vi.fn(() => Promise.resolve(false)));
+const notifySessionChanged = vi.hoisted(() => vi.fn());
 
 vi.mock("./coding-app-session-client", () => ({
   codingAppSessionPairingSettled: pairingSettled,
+  ensureLocalCodingAppSession: ensureLocalSession,
+  notifyCodingAppSessionChanged: notifySessionChanged,
 }));
 
 function root(rootRef: string, canonicalRoot: string): WorkspaceRootDescriptor {
@@ -45,7 +49,12 @@ function manifest(revision = 1): WorkspaceManifest {
   };
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  ensureLocalSession.mockReset();
+  ensureLocalSession.mockResolvedValue(false);
+  notifySessionChanged.mockReset();
+  vi.unstubAllGlobals();
+});
 
 describe("workspace manifest API", () => {
   it("waits for launcher pairing before requesting canonical workspace paths", async () => {
@@ -86,6 +95,29 @@ describe("workspace manifest API", () => {
       manifests: [],
     });
     await expect(fetchWorkspaceManifests()).resolves.toEqual([]);
+  });
+
+  it("repairs a stale unpaired browser session once and then returns paired manifests", async () => {
+    ensureLocalSession.mockResolvedValueOnce(true);
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ session: "unpaired", manifests: [] }), { status: 200 }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ session: "paired", manifests: [manifest()] }), {
+          status: 200,
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchWorkspaceManifestAccess()).resolves.toEqual({
+      session: "paired",
+      manifests: [manifest()],
+    });
+    expect(ensureLocalSession).toHaveBeenCalledOnce();
+    expect(notifySessionChanged).toHaveBeenCalledOnce();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("carries the server's explicit paired assertion through to the caller", async () => {

@@ -131,6 +131,7 @@ function timelineItems(
   let order = events.length;
   for (const turn of feed?.turns ?? []) {
     for (const message of turn.messages) {
+      if (!hasVisibleMessageContent(message)) continue;
       items.push({
         kind: "message",
         id: `message:${message.messageId}`,
@@ -153,6 +154,13 @@ function timelineItems(
   }
   items.sort(compareTimelineItems);
   return feed?.plan === undefined ? items : insertPlan(items, feed.plan, order);
+}
+
+function hasVisibleMessageContent(message: CodingSafeActivityMessage): boolean {
+  return (
+    message.truncated ||
+    message.segments.some((segment) => segment.truncated || segment.text.trim().length > 0)
+  );
 }
 
 function compareTimelineItems(left: TimelineItem, right: TimelineItem): number {
@@ -514,7 +522,7 @@ function MessageRow({
       data-timeline-kind="message"
     >
       <span className={styles.timelineMarker} aria-hidden="true" />
-      <article className={styles.timelineBody}>
+      <article className={styles.timelineBody} data-message-role={item.message.role}>
         <p className={styles.timelineTitle}>
           {t(`codingWorkbench.activity.role.${item.message.role}`)}
         </p>
@@ -610,6 +618,7 @@ function EventRow({
   hasMeasured,
 }: RowProps<Extract<TimelineItem, { kind: "event" }>>): ReactNode {
   const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured);
+  const tone = eventTone(item.event);
   return (
     <li
       ref={rowRef}
@@ -617,14 +626,22 @@ function EventRow({
       aria-posinset={position}
       aria-setsize={total}
       data-timeline-kind="event"
+      data-event-tone={tone}
     >
       <span className={styles.timelineMarker} aria-hidden="true" />
-      <div className={styles.timelineBody}>
+      <div className={styles.eventCard}>
         <p className={styles.timelineTitle}>{eventTitle(item.event, t)}</p>
         <p className={styles.timelineDetail}>{eventDetail(item.event, t)}</p>
       </div>
     </li>
   );
+}
+
+function eventTone(event: CodingWorkbenchRuntimeSseEvent): "attention" | "routine" | "success" {
+  if (event.failureCode !== undefined) return "attention";
+  if (event.kind === "runtime-event" && event.eventKind === "failure-redacted") return "attention";
+  if (event.state === "succeeded") return "success";
+  return "routine";
 }
 
 function QuestionRow({

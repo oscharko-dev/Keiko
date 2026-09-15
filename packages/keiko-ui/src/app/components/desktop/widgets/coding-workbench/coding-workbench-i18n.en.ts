@@ -886,9 +886,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.child-run-completed": "Child agent completed",
   "codingWorkbench.event.operator-decision": "Your decision needed",
   "codingWorkbench.event.failure-redacted": "Failure reported",
-  "codingWorkbench.event.detail": "Sequence {sequence}. Revision {revision}.",
-  "codingWorkbench.event.detailFailure":
-    "Sequence {sequence}. Revision {revision}. Failure: {failure}.",
+  "codingWorkbench.event.detail": "Seq. {sequence} · Rev. {revision}",
+  "codingWorkbench.event.detailFailure": "Seq. {sequence} · Rev. {revision} · Failure: {failure}",
   "codingWorkbench.event.detailOutcome": "Outcome: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Untrusted content: the fetched page was quarantined as data, not instructions.",

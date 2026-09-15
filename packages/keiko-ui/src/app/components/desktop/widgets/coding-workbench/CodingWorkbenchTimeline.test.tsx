@@ -77,6 +77,40 @@ function feedWithPlan(steps: number): AvailableCodingSafeActivityFeed {
   };
 }
 
+function feedWithBlankAgentMessage(): AvailableCodingSafeActivityFeed {
+  return {
+    schemaVersion: "1",
+    availability: "available",
+    runId: "run-1",
+    updatedAt: AT,
+    turns: [
+      {
+        turnId: "turn-1",
+        messages: [
+          {
+            messageId: "message-blank",
+            role: "assistant",
+            occurredAt: AT,
+            segments: [{ kind: "text", text: "   ", truncated: false }],
+            truncated: false,
+          },
+          {
+            messageId: "message-visible",
+            role: "assistant",
+            occurredAt: AT,
+            segments: [{ kind: "text", text: "Visible answer", truncated: false }],
+            truncated: false,
+          },
+        ],
+        tools: [],
+        truncated: false,
+      },
+    ],
+    truncated: false,
+    droppedEventCount: 0,
+  };
+}
+
 const IDLE_QUESTIONS: UseCodingWorkbenchQuestionsResult = {
   status: "empty",
   questions: [],
@@ -194,6 +228,35 @@ describe("CodingWorkbenchTimeline", () => {
     const planRow = container.querySelector('[data-timeline-kind="plan"]');
     expect(planRow).not.toBeNull();
     expect(planRow?.querySelectorAll("[data-plan-state]")).toHaveLength(64);
+  });
+
+  it("does not render empty coding-agent message rows", () => {
+    const { container } = render(
+      <Timeline
+        events={[]}
+        activity={activityLike(feedWithBlankAgentMessage())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    expect(container.querySelectorAll('[data-timeline-kind="message"]')).toHaveLength(1);
+    expect(container).toHaveTextContent("Visible answer");
+  });
+
+  it("marks routine, success, and attention events for quieter visual treatment", () => {
+    const failed = { ...event(2), failureCode: "runtime-failed" as const };
+    const succeeded = { ...event(3), state: "succeeded" as const };
+    const { container } = render(
+      <Timeline
+        events={[event(1), failed, succeeded]}
+        activity={activityLike(bareFeed())}
+        questions={IDLE_QUESTIONS}
+      />,
+    );
+
+    expect(container.querySelector('[data-event-tone="routine"]')).not.toBeNull();
+    expect(container.querySelector('[data-event-tone="attention"]')).not.toBeNull();
+    expect(container.querySelector('[data-event-tone="success"]')).not.toBeNull();
   });
 
   // The tool-call card (`.toolCard`) and plan card rows are otherwise exercised only indirectly

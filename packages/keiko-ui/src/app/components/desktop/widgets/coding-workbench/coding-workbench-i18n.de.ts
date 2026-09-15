@@ -918,9 +918,8 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.child-run-completed": "Unteragent abgeschlossen",
   "codingWorkbench.event.operator-decision": "Deine Entscheidung nötig",
   "codingWorkbench.event.failure-redacted": "Fehler gemeldet",
-  "codingWorkbench.event.detail": "Sequenz {sequence}. Revision {revision}.",
-  "codingWorkbench.event.detailFailure":
-    "Sequenz {sequence}. Revision {revision}. Fehler: {failure}.",
+  "codingWorkbench.event.detail": "Seq. {sequence} · Rev. {revision}",
+  "codingWorkbench.event.detailFailure": "Seq. {sequence} · Rev. {revision} · Fehler: {failure}",
   "codingWorkbench.event.detailOutcome": "Ergebnis: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Nicht vertrauenswürdiger Inhalt: Die abgerufene Seite wurde als Daten isoliert, nicht als Anweisungen.",

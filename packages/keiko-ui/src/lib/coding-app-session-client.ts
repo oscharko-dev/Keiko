@@ -142,7 +142,17 @@ function redemptionCount(): number {
   return navigationRedemptions;
 }
 
-/** How many pairings this window redeemed after its boot; session reads re-run on it (F65). */
+function publishSessionRefresh(): void {
+  navigationRedemptions += 1;
+  for (const listener of redemptionListeners) listener();
+}
+
+/** Notify readers that the browser session was restored without a page load. */
+export function notifyCodingAppSessionChanged(): void {
+  publishSessionRefresh();
+}
+
+/** How many pairings or local restores this window completed after boot; session reads re-run on it. */
 export function useCodingAppSessionRedemptions(): number {
   return useSyncExternalStore(subscribeToRedemptions, redemptionCount, () => 0);
 }
@@ -158,7 +168,6 @@ export async function redeemCodingAppSessionPairingNavigation(
   await bootRedemption;
   if (!(await redeemCodingAppSessionPairingFragment(seams))) return false;
   await ensureLocalCodingAppSession(seams);
-  navigationRedemptions += 1;
-  for (const listener of redemptionListeners) listener();
+  publishSessionRefresh();
   return true;
 }
