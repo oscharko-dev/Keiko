@@ -62,18 +62,11 @@ const markReadyExecuteMock = vi.hoisted(() => vi.fn());
 const mergeExecuteMock = vi.hoisted(() => vi.fn());
 const prUpdateExecuteMock = vi.hoisted(() => vi.fn());
 // #3390 wave: the header's trust affordance (`CodingWorkbenchTrustAffordance`) reads live workspace
-// trust through the SAME client the Editor uses (`useWorkspaceTrust` → workspace-trust-api). Every
-// suite in this file that binds an active workspace would otherwise reach this real fetch; the
-// `beforeEach` below resolves it "trusted" by default so the affordance stays invisible and every
-// pre-existing assertion in this file is unaffected. The dedicated suite further down overrides it.
+// trust through the SAME client the Editor uses (`useWorkspaceTrust` → workspace-trust-api), but
+// only once a run is actually paused on `workspace-script-trust`. The default stays trusted so the
+// dedicated paused-state suite can opt into the exact branch it needs without reaching the network.
 const trustStatusMock = vi.hoisted(() => vi.fn());
 const trustMutateMock = vi.hoisted(() => vi.fn());
-// The affordance also reads the verification runner's own decision for the run's worktree through
-// the shared catalog client (ADR-0147 D3, 2026-09-10). Unreadable here — the suites in this file
-// exercise the repository-restricted branch and every other surface, never the worktree drift one.
-const verificationCatalogMock = vi.hoisted(() =>
-  vi.fn(() => Promise.reject(new Error("verification catalog rejected"))),
-);
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -124,7 +117,6 @@ vi.mock("@/lib/workspace-trust-api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/workspace-trust-api")>()),
   fetchWorkspaceTrustStatus: trustStatusMock,
   mutateWorkspaceTrust: trustMutateMock,
-  fetchVerificationCatalog: verificationCatalogMock,
 }));
 
 vi.mock("@/lib/useCodingWorkbenchEditorBridge", () => ({
@@ -259,6 +251,24 @@ function liveState(
     canStart: true,
     ...overrides,
   };
+}
+
+function scriptTrustPausedState(
+  overrides: Partial<CodingWorkbenchRuntimeSnapshot> = {},
+): CodingWorkbenchRuntimeState {
+  return liveState({
+    run: {
+      status: "ready",
+      value: snapshot({
+        state: "paused",
+        runId: "run-script-trust",
+        revision: 2,
+        pauseReason: "workspace-script-trust",
+        ...overrides,
+      }),
+      error: null,
+    },
+  });
 }
 
 function renderWorkbench(
@@ -2776,7 +2786,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
     trustMutateMock.mockResolvedValue(trustStatus("/repos/keiko", "trusted"));
     const user = userEvent.setup();
     renderWorkbench(
-      liveState(),
+      scriptTrustPausedState(),
       actions(),
       undefined,
       activeWorkspaceWithBinding("/repos/keiko", "/state/.keiko/task-workspaces/task-1"),
@@ -2789,7 +2799,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
     expect(trustStatusMock).toHaveBeenCalledExactlyOnceWith("/repos/keiko");
     expect(trustMutateMock).toHaveBeenCalledExactlyOnceWith("/repos/keiko", "grant");
     expect(diagnostic).toHaveBeenCalledWith("[keiko] coding workbench repository trust bound", {
-      correlationId: "correlation-1",
+      correlationId: "run-script-trust",
       workspaceTrustBinding: {
         repositoryId: "repository-1",
         workspaceId: "workspace-1",
@@ -2804,7 +2814,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
     { activeInstance: null },
     { activeBinding: null },
   ])("withholds trust while the workspace binding is unsettled: %j", (unsettled) => {
-    renderWorkbench(liveState(), actions(), undefined, {
+    renderWorkbench(scriptTrustPausedState(), actions(), undefined, {
       ...activeWorkspaceWithBinding("/repos/keiko", "/worktrees/task-1"),
       ...unsettled,
     });
@@ -2815,7 +2825,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
   it("shows the allow action once the bound workspace resolves as restricted", async () => {
     trustStatusMock.mockResolvedValue(trustStatus("/repos/keiko", "restricted"));
     renderWorkbench(
-      liveState(),
+      scriptTrustPausedState(),
       actions(),
       undefined,
       activeWorkspaceWithBinding("/repos/keiko", "/repos/keiko"),
@@ -2833,7 +2843,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
     trustMutateMock.mockResolvedValue(trustStatus("/repos/keiko", "trusted"));
     const user = userEvent.setup();
     renderWorkbench(
-      liveState(),
+      scriptTrustPausedState(),
       actions(),
       undefined,
       activeWorkspaceWithBinding("/repos/keiko", "/repos/keiko"),
@@ -2852,7 +2862,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
     );
   });
 
-  it("renders no affordance once the bound workspace resolves as trusted", async () => {
+  it("renders no affordance before a run is waiting, even when the bound workspace is trusted", () => {
     trustStatusMock.mockResolvedValue(trustStatus("/repos/keiko", "trusted"));
     renderWorkbench(
       liveState(),
@@ -2861,7 +2871,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
       activeWorkspaceWithBinding("/repos/keiko", "/repos/keiko"),
     );
 
-    await waitFor(() => expect(trustStatusMock).toHaveBeenCalledWith("/repos/keiko"));
+    expect(trustStatusMock).not.toHaveBeenCalled();
     expect(
       screen.queryByRole("button", { name: /Allow package scripts/u }),
     ).not.toBeInTheDocument();
@@ -2946,6 +2956,7 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     transitions: {
       readonly beforeStart?: () => Promise<void>;
       readonly onPendingSwitch?: () => Promise<void>;
+      readonly finalRun?: Partial<CodingWorkbenchRuntimeSnapshot>;
     } = {},
   ): Promise<void> {
     const user = userEvent.setup();
@@ -2974,10 +2985,13 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
 
     // The Start response lands only now, still attributed to A.
     runtimeHookMock.mockReturnValue({
-      state: stateIn(WORKSPACE_B, {
-        state: "running",
-        runId: "run-correlation-0001",
-      }),
+      state: stateIn(
+        WORKSPACE_B,
+        transitions.finalRun ?? {
+          state: "running",
+          runId: "run-correlation-0001",
+        },
+      ),
       actions: liveActions,
     });
     view.rerender(
@@ -3018,13 +3032,21 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     );
     await startInAThenSwitchToB(actions(), vi.fn(), {
       beforeStart: async () => {
-        await screen.findByRole("button", { name: "Allow package scripts for verification" });
+        expect(
+          screen.queryByRole("button", { name: "Allow package scripts for verification" }),
+        ).not.toBeInTheDocument();
       },
       onPendingSwitch: async () => {
         expect(
           screen.queryByRole("button", { name: "Allow package scripts for verification" }),
         ).not.toBeInTheDocument();
         expect(trustStatusMock).not.toHaveBeenCalledWith(WORKSPACE_B.repositoryRoot);
+      },
+      finalRun: {
+        state: "paused",
+        runId: "run-correlation-0001",
+        revision: 2,
+        pauseReason: "workspace-script-trust",
       },
     });
 
