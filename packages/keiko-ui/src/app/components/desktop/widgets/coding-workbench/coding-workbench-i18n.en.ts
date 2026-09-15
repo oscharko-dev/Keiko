@@ -422,7 +422,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.unavailableReason.non-chat":
     "No configured model is a chat model. Add a chat-capable model in Settings → Models.",
   "codingWorkbench.source.unavailableReason.no-tool-calling":
-    "No chat model has verified tool calling. Run the readiness check in Settings → Models and apply the verified values.",
+    "The automatic tool-calling check did not confirm a compatible coding model. Review the model capability and latest readiness result in Settings → Models.",
   "codingWorkbench.source.unavailableReason.non-workflow-eligible":
     "The tool-calling chat model is not workflow-eligible. Enable workflow eligibility in Settings → Models.",
   "codingWorkbench.source.unavailableReason.non-coding-capable":
@@ -434,7 +434,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.unavailableReason.model-context-window-insufficient":
     "The configured model's context window is too small for a coding run (minimum 32,000 tokens). Increase the model's context window or choose a larger model in Settings → Models.",
   "codingWorkbench.source.unavailableReason.tool-calling-unverified":
-    "The coding model's tool-calling check is missing or older than 24 hours. Check tool calling again in Settings → Models.",
+    "The coding model's automatic tool-calling check did not complete successfully. Review the latest readiness result in Settings → Models.",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
   "codingWorkbench.modelSource.openaiGateway": "OpenAI through Gateway",
   "codingWorkbench.modelSource.codexSubscription": "ChatGPT/Codex subscription",

@@ -314,17 +314,43 @@ const CODING_WORKBENCH_USE_CASES: ReadonlySet<string> = new Set([
  */
 export type CodingWorkbenchModelEligibility = "eligible" | "tool-calling-unverified" | "ineligible";
 
+/**
+ * Whether a configured model is structurally suitable for a Coding Workbench readiness probe.
+ * Tool calling is deliberately excluded: the probe exists to discover that capability, so making
+ * the provider claim a prerequisite would leave a fresh or changed configuration unable to heal.
+ */
+export function isCodingWorkbenchReadinessCandidate(capability: ModelCapability): boolean {
+  return (
+    capability.kind === "chat" &&
+    capability.workflowEligible &&
+    capability.preferredUseCases.some((value) =>
+      CODING_WORKBENCH_USE_CASES.has(normalizedCodingUseCase(value)),
+    )
+  );
+}
+
+/** Selects the cheapest configured structural candidate, preserving configuration order on ties. */
+export function selectCodingWorkbenchReadinessCandidate(
+  capabilities: readonly ModelCapability[],
+): ModelCapability | undefined {
+  let selected: ModelCapability | undefined;
+  for (const capability of capabilities) {
+    if (!isCodingWorkbenchReadinessCandidate(capability)) continue;
+    if (
+      selected === undefined ||
+      MODEL_COST_RANK[capability.costClass] < MODEL_COST_RANK[selected.costClass]
+    ) {
+      selected = capability;
+    }
+  }
+  return selected;
+}
+
 export function codingWorkbenchModelEligibility(
   capability: ModelCapability,
   at?: { readonly nowMs: number },
 ): CodingWorkbenchModelEligibility {
-  const qualified =
-    capability.kind === "chat" &&
-    capability.toolCalling &&
-    capability.workflowEligible &&
-    capability.preferredUseCases.some((value) =>
-      CODING_WORKBENCH_USE_CASES.has(normalizedCodingUseCase(value)),
-    );
+  const qualified = isCodingWorkbenchReadinessCandidate(capability) && capability.toolCalling;
   if (!qualified) return "ineligible";
   return isToolCallingVerificationFresh(capability.toolCallingVerification, at)
     ? "eligible"

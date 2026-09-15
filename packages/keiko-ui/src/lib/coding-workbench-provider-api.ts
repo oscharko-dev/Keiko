@@ -23,13 +23,17 @@ import type {
   CodingWorkbenchCodexAuthSetupPlan,
   CodingWorkbenchCodexSubscriptionProfile,
   CodingWorkbenchSidecarGatewayResult,
+  ModelCapability,
 } from "@oscharko-dev/keiko-contracts";
+import type { GatewayReadinessReport } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { selectCodingWorkbenchReadinessCandidate } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { isGatewayVerificationState } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import {
   validateCodingWorkbenchCodexAuthSetupPlan,
   validateCodingWorkbenchCodexSubscriptionProfile,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth";
-import { ApiError } from "./api";
+import { notifyGatewayModelReadinessUpdated } from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
+import { ApiError, resetModelRequestCache } from "./api";
 import { bffFetchJson } from "./http";
 
 // Match the `withReadDeadline` behaviour in api.ts: a GET/HEAD read that stalls past this
@@ -69,6 +73,13 @@ const CODING_WORKBENCH_SIDECAR_UNAVAILABLE_REASONS = new Set([
   // PR #3452 (F73): the coding model's forced tool-call proof has aged out or is missing.
   "tool-calling-unverified",
 ]);
+const AUTOMATIC_READINESS_REASONS = new Set(["no-tool-calling", "tool-calling-unverified"]);
+const MODEL_COST_CLASSES = new Set(["low", "medium", "high"]);
+const automaticReadinessRequests = new Map<string, Promise<void>>();
+
+interface ModelListResponse {
+  readonly models: readonly ModelCapability[];
+}
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -150,6 +161,27 @@ function validateCodexAuthSetupPlanResponse(
   return result.ok ? { ok: true } : { ok: false, reasons: result.errors };
 }
 
+function validateModelListResponse(
+  value: unknown,
+): CodingWorkbenchProviderValidation | CodingWorkbenchProviderValidationFailure {
+  if (!isObjectRecord(value) || !Array.isArray(value.models)) {
+    return { ok: false, reasons: ["models must be an array"] };
+  }
+  const malformed = value.models.some(
+    (model) =>
+      !isObjectRecord(model) ||
+      typeof model.id !== "string" ||
+      typeof model.kind !== "string" ||
+      typeof model.workflowEligible !== "boolean" ||
+      !Array.isArray(model.preferredUseCases) ||
+      !model.preferredUseCases.every((useCase) => typeof useCase === "string") ||
+      !MODEL_COST_CLASSES.has(String(model.costClass)),
+  );
+  return malformed
+    ? { ok: false, reasons: ["models contains an invalid capability"] }
+    : { ok: true };
+}
+
 function contractValidator<T>(
   validator: ProviderResponseValidator,
 ): (path: string, value: unknown) => T {
@@ -169,7 +201,7 @@ function readDeadlineSignal(): AbortSignal {
   return AbortSignal.timeout(DEFAULT_READ_TIMEOUT_MS);
 }
 
-export async function fetchCodingWorkbenchSidecarGatewayProfile(): Promise<CodingWorkbenchSidecarGatewayResult> {
+async function readSidecarGatewayProfile(): Promise<CodingWorkbenchSidecarGatewayResult> {
   return bffFetchJson(
     "/api/coding-sidecar/gateway/profile",
     { cache: "no-store", signal: readDeadlineSignal() },
@@ -179,6 +211,46 @@ export async function fetchCodingWorkbenchSidecarGatewayProfile(): Promise<Codin
       ),
     },
   );
+}
+
+function requestAutomaticReadiness(modelId: string): Promise<void> {
+  const active = automaticReadinessRequests.get(modelId);
+  if (active !== undefined) return active;
+  const request = bffFetchJson<GatewayReadinessReport>("/api/gateway/readiness", {
+    method: "POST",
+    cache: "no-store",
+    body: JSON.stringify({
+      modelId,
+      options: { probes: ["tool_calling"], purpose: "coding-workbench-auto" },
+    }),
+  }).then((): void => {
+    resetModelRequestCache();
+    notifyGatewayModelReadinessUpdated();
+  });
+  const tracked = request.finally(() => automaticReadinessRequests.delete(modelId));
+  automaticReadinessRequests.set(modelId, tracked);
+  return tracked;
+}
+
+async function recoverUnverifiedGatewayProfile(
+  profile: CodingWorkbenchSidecarGatewayResult,
+): Promise<CodingWorkbenchSidecarGatewayResult> {
+  if (profile.status !== "unavailable" || !AUTOMATIC_READINESS_REASONS.has(profile.reason)) {
+    return profile;
+  }
+  const response = await bffFetchJson<ModelListResponse>(
+    "/api/models",
+    { cache: "no-store", signal: readDeadlineSignal() },
+    { validator: contractValidator<ModelListResponse>(validateModelListResponse) },
+  );
+  const candidate = selectCodingWorkbenchReadinessCandidate(response.models);
+  if (candidate === undefined) return profile;
+  await requestAutomaticReadiness(candidate.id);
+  return readSidecarGatewayProfile();
+}
+
+export async function fetchCodingWorkbenchSidecarGatewayProfile(): Promise<CodingWorkbenchSidecarGatewayResult> {
+  return recoverUnverifiedGatewayProfile(await readSidecarGatewayProfile());
 }
 
 export async function fetchCodingWorkbenchCodexSubscriptionProfile(): Promise<CodingWorkbenchCodexSubscriptionProfile> {

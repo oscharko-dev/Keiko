@@ -2311,22 +2311,34 @@
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:1284",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:1356",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:1412",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:1490",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "gateway.readiness",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gateway-readiness.ts:491",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:563",
       "sourceKind": "diagnostic-operation",
+      "package": "keiko-server"
+    },
+    {
+      "op": "gateway.readiness.automatic.completed",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:272",
+      "package": "keiko-server"
+    },
+    {
+      "op": "gateway.readiness.automatic.started",
+      "category": "gateway",
+      "site": "packages/keiko-server/src/gateway-readiness.ts:259",
       "package": "keiko-server"
     },
     {
@@ -4059,6 +4071,8 @@
     "gateway.instance.unavailable",
     "gateway.log.sink-failed",
     "gateway.readiness",
+    "gateway.readiness.automatic.completed",
+    "gateway.readiness.automatic.started",
     "gateway.retry.budget-exhausted",
     "gateway.retry.exhausted",
     "gateway.retry.scheduled",

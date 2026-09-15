@@ -1252,8 +1252,8 @@ describe("CodingWorkbenchWindow", () => {
     );
 
     const alert = screen.getByRole("alert");
-    expect(alert).toHaveTextContent(/No chat model has verified tool calling/u);
-    expect(alert).toHaveTextContent(/Run the readiness check in Settings/u);
+    expect(alert).toHaveTextContent(/automatic tool-calling check did not confirm/u);
+    expect(alert).toHaveTextContent(/Review the model capability/u);
   });
 
   // Workbench audit, 2026-09-03: every truncatable header chip carries a `title` equal to its OWN

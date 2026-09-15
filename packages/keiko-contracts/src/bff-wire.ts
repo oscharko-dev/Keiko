@@ -2028,6 +2028,8 @@ export interface GatewayReadinessOptions {
   readonly probes?: readonly GatewayReadinessProbeName[] | undefined;
   readonly includeDeepProbes?: boolean | undefined;
   readonly maxContextTokens?: number | undefined;
+  /** Machine-readable origin for the bounded, automatic Coding Workbench verification flow. */
+  readonly purpose?: "coding-workbench-auto" | undefined;
 }
 
 export interface GatewayReadinessRequest {

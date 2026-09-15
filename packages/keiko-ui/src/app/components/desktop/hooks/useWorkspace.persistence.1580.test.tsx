@@ -138,6 +138,12 @@ describe("Issue #1580 — debounced workspace persistence", () => {
     vi.useRealTimers();
   });
 
+  it("starts a genuinely fresh workspace with every window closed", () => {
+    const { getByTestId } = render(<Harness />);
+
+    expect(getByTestId("wins")).toHaveTextContent("");
+  });
+
   it("debounces the windows write and flushes it on pagehide", async () => {
     window.localStorage.setItem(WS_LS, JSON.stringify([seedWindow()]));
     const { getByTestId } = render(<Harness />);

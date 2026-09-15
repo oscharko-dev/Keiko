@@ -1532,9 +1532,6 @@
     }
   },
   "src/app/components/desktop/widgets/panels/SettingsPanel.tsx": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 5
-    },
     "complexity": {
       "count": 1
     },
