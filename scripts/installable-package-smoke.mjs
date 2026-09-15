@@ -951,7 +951,15 @@ export function vendoredDependencyRequirements(
   manifest = rootPackageJson,
   packagesRoot = repoRoot,
 ) {
-  const bundled = manifest.bundleDependencies ?? manifest.bundledDependencies ?? [];
+  const declared = manifest.bundleDependencies ?? manifest.bundledDependencies ?? [];
+  // The staged manifest carries two classes of bundled entry: the private `@oscharko-dev/*`
+  // workspaces the vendor archive tree ships (a `packages/<name>` path answers each), and — as
+  // of the #3510 self-contained-tarball fix — every external runtime dep and transitive that
+  // was copied into `stageRoot/node_modules/` from the source tree. The offline closure only
+  // walks the workspace-scoped ones (bundledWorkspaceLockfilePath rejects any other shape); the
+  // external closure has already been resolved from the lockfile at pack time, so the smoke's
+  // job is only to reason about the workspaces themselves.
+  const bundled = declared.filter((name) => /^@oscharko-dev\//u.test(name));
   const bundledSet = new Set(bundled);
   const requirements = new Map();
   // Keyed by name AND range AND kind, so each descriptor keeps the origins that actually declared
