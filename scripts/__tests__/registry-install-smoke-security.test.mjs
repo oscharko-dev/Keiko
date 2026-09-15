@@ -632,7 +632,17 @@ describe("installable package smoke optional-dependency coverage", () => {
       try {
         artifact = packRoot();
         expect(existsSync(artifact.tarballPath)).toBe(true);
-        expect(artifact.manifest.bundleDependencies).toEqual(ROOT_MANIFEST.bundleDependencies);
+        // The published tarball extends bundleDependencies with the external runtime dep
+        // closure so `npm install -g` extracts every dep straight from the tarball — see the
+        // block comment on `bundleExternalRuntimeDependencies` in `stage-publish-package.mjs`.
+        // The root's runtime workspaces must still all be there; anything beyond them is the
+        // external closure the closure walk resolves from the source `node_modules` tree.
+        for (const name of ROOT_MANIFEST.bundleDependencies) {
+          expect(artifact.manifest.bundleDependencies).toContain(name);
+        }
+        expect(artifact.manifest.bundleDependencies.length).toBeGreaterThan(
+          ROOT_MANIFEST.bundleDependencies.length,
+        );
       } finally {
         artifact?.cleanup();
         if (previous === undefined) delete process.env.KEIKO_SMOKE_PACK_IGNORE_SCRIPTS;

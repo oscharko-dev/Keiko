@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -466,10 +466,10 @@ describe("staged publish package", () => {
 });
 
 describe("bundleExternalRuntimeDependencies", () => {
-  function stagedFixture() {
-    // The internal workspaces are already in bundleDependencies; the freshly-added externals go
-    // in beside them. Two files, no more, are enough for the assertion — the pack step in
-    // production writes hundreds.
+  function stagedFixture(dependencies) {
+    // A minimal stage: `@oscharko-dev/keiko-cli` is the workspace vendor pointer already handled
+    // by packWorkspace, everything else is an external runtime dep whose closure this function
+    // must copy in from the source `node_modules` tree.
     const stageRoot = mkdtempSync(join(tmpdir(), "keiko-stage-bundle-ext-test-"));
     roots.push(stageRoot);
     writeJson(join(stageRoot, "package.json"), {
@@ -477,121 +477,133 @@ describe("bundleExternalRuntimeDependencies", () => {
       version: "1.2.3",
       dependencies: {
         "@oscharko-dev/keiko-cli": "file:vendor/oscharko-dev-keiko-cli-1.2.3.tgz",
-        ws: "8.21.3",
+        ...dependencies,
       },
       bundleDependencies: ["@oscharko-dev/keiko-cli"],
     });
     return stageRoot;
   }
 
-  function fakeSpawn(populate, options = {}) {
-    const calls = [];
-    const spawn = (command, args, opts) => {
-      calls.push({ command, args, opts });
-      if (options.status !== undefined && options.status !== 0) {
-        return { status: options.status, stderr: options.stderr ?? "boom", stdout: "" };
-      }
-      if (options.error !== undefined) return { error: options.error };
-      const modules = join(opts.cwd, "node_modules");
-      mkdirSync(modules, { recursive: true });
-      populate(modules);
-      return { status: 0, stderr: "", stdout: "" };
-    };
-    return { calls, spawn };
+  function writePackage(sourceNodeModules, name, manifest, files = {}) {
+    const packageRoot = join(sourceNodeModules, ...name.split("/"));
+    mkdirSync(packageRoot, { recursive: true });
+    writeJson(join(packageRoot, "package.json"), { name, version: "1.0.0", ...manifest });
+    for (const [relativePath, contents] of Object.entries(files)) {
+      const target = join(packageRoot, relativePath);
+      mkdirSync(dirname(target), { recursive: true });
+      writeFileSync(target, contents, "utf8");
+    }
+    return packageRoot;
   }
 
-  it("names every non-workspace top-level install in bundleDependencies", () => {
+  function sourceFixture() {
+    const root = mkdtempSync(join(tmpdir(), "keiko-source-node-modules-"));
+    roots.push(root);
+    return root;
+  }
+
+  it("copies the transitive runtime closure into stageRoot/node_modules", () => {
     // BUG (2026-09-15): a published tarball whose bundleDependencies only lists the internal
     // @oscharko-dev/* workspaces breaks `npm install -g` — the reify step for a bundle-carrying
     // package never adds the non-bundle top-level siblings, and every keiko command dies with
-    // `Cannot find package 'ws'`. The fix is to name every runtime dep in bundleDependencies so
-    // `npm pack` includes it, and this test pins that: after a spawn that lands `ws` (and its
-    // transitive `pend`, plus a scoped `@sigstore/bundle`) under stageRoot/node_modules, the
-    // staged manifest's bundleDependencies must carry all three next to the workspace name.
-    const stageRoot = stagedFixture();
-    const { calls, spawn } = fakeSpawn((modules) => {
-      mkdirSync(join(modules, "ws"));
-      mkdirSync(join(modules, "pend"));
-      mkdirSync(join(modules, "@sigstore", "bundle"), { recursive: true });
-    });
-    const added = bundleExternalRuntimeDependencies(stageRoot, "/trusted/npm", {
-      spawn,
-      platform: "linux",
-    });
-    expect(added.sort()).toEqual(["@sigstore/bundle", "pend", "ws"]);
-    expect(calls).toHaveLength(1);
-    expect(calls[0].args.slice(0, 2)).toEqual(["install", "--package-lock=false"]);
-    expect(calls[0].args).toContain("--omit=dev");
-    expect(calls[0].args).toContain("--omit=optional");
-    expect(calls[0].opts.cwd).toBe(stageRoot);
-    const manifest = JSON.parse(readFileSync(join(stageRoot, "package.json"), "utf8"));
-    expect(manifest.bundleDependencies).toEqual([
+    // `Cannot find package 'ws'`. The fix names every runtime dep in bundleDependencies so
+    // `npm pack` includes it; this test pins the closure walk (ws → pend, @sigstore/bundle →
+    // @sigstore/protobuf-specs) and the resulting staged manifest.
+    const source = sourceFixture();
+    writePackage(source, "ws", { dependencies: { pend: "1.2.0" } }, { "index.js": "// ws\n" });
+    writePackage(source, "pend", {}, { "index.js": "// pend\n" });
+    writePackage(
+      source,
+      "@sigstore/bundle",
+      { dependencies: { "@sigstore/protobuf-specs": "0.5.2" } },
+      { "index.js": "// bundle\n" },
+    );
+    writePackage(source, "@sigstore/protobuf-specs", {}, { "index.js": "// specs\n" });
+    const stageRoot = stagedFixture({ ws: "8.21.3", "@sigstore/bundle": "5.0.0" });
+
+    const added = bundleExternalRuntimeDependencies(stageRoot, { sourceNodeModules: source });
+
+    expect(added.sort()).toEqual(["@sigstore/bundle", "@sigstore/protobuf-specs", "pend", "ws"]);
+    const stageManifest = JSON.parse(readFileSync(join(stageRoot, "package.json"), "utf8"));
+    expect(stageManifest.bundleDependencies).toEqual([
       "@oscharko-dev/keiko-cli",
+      "ws",
       "@sigstore/bundle",
       "pend",
-      "ws",
+      "@sigstore/protobuf-specs",
     ]);
+    expect(existsSync(join(stageRoot, "node_modules", "ws", "index.js"))).toBe(true);
+    expect(existsSync(join(stageRoot, "node_modules", "pend", "index.js"))).toBe(true);
+    expect(existsSync(join(stageRoot, "node_modules", "@sigstore", "bundle", "index.js"))).toBe(
+      true,
+    );
+    expect(
+      existsSync(join(stageRoot, "node_modules", "@sigstore", "protobuf-specs", "index.js")),
+    ).toBe(true);
   });
 
-  it("skips the internal workspaces already bundled by packWorkspace", () => {
-    // The workspace directories are placed under stageRoot/node_modules/@oscharko-dev/* by an
-    // earlier stage step and are already named in bundleDependencies. This install call must not
-    // re-add them (they would appear twice) — the filter is scope-aware.
-    const stageRoot = stagedFixture();
-    const { spawn } = fakeSpawn((modules) => {
-      mkdirSync(join(modules, "@oscharko-dev", "keiko-cli"), { recursive: true });
-      mkdirSync(join(modules, "ws"));
+  it("skips the internal @oscharko-dev/* scope", () => {
+    // The internal workspaces are placed under stageRoot/node_modules/@oscharko-dev/* by an
+    // earlier stage step and are already named in bundleDependencies. The closure walk must not
+    // recurse into them, even when a workspace peer/dependency chain names another workspace,
+    // otherwise the same name would appear twice in bundleDependencies.
+    const source = sourceFixture();
+    writePackage(source, "ws", {}, { "index.js": "// ws\n" });
+    const stageRoot = stagedFixture({
+      ws: "8.21.3",
+      "@oscharko-dev/keiko-server": "file:vendor/oscharko-dev-keiko-server-1.2.3.tgz",
     });
-    const added = bundleExternalRuntimeDependencies(stageRoot, "/trusted/npm", {
-      spawn,
-      platform: "linux",
-    });
+
+    const added = bundleExternalRuntimeDependencies(stageRoot, { sourceNodeModules: source });
+
     expect(added).toEqual(["ws"]);
-    const manifest = JSON.parse(readFileSync(join(stageRoot, "package.json"), "utf8"));
-    expect(manifest.bundleDependencies).toEqual(["@oscharko-dev/keiko-cli", "ws"]);
+    const stageManifest = JSON.parse(readFileSync(join(stageRoot, "package.json"), "utf8"));
+    expect(stageManifest.bundleDependencies).toEqual(["@oscharko-dev/keiko-cli", "ws"]);
   });
 
-  const noPopulate = (_modules) => {
-    // A no-op populate: this test only cares about the spawn outcome or the callee's shape, not
-    // any node_modules the install would produce.
-  };
+  it("drops nested node_modules from a copied dependency", () => {
+    // The source tree has npm-hoisted its transitive graph to the top level; a nested
+    // `node_modules` under a package is either a duplicate or a version conflict, and letting it
+    // through would double-count the bundle. The copy filter must exclude nested node_modules,
+    // and the closure walk gets the transitive deps from the top level anyway.
+    const source = sourceFixture();
+    writePackage(
+      source,
+      "ws",
+      {},
+      {
+        "index.js": "// ws\n",
+        "node_modules/leftover/index.js": "// nested\n",
+        "node_modules/leftover/package.json": '{"name":"leftover","version":"1.0.0"}\n',
+      },
+    );
+    const stageRoot = stagedFixture({ ws: "8.21.3" });
 
-  it("fails closed when the install could not spawn", () => {
-    const stageRoot = stagedFixture();
-    const { spawn } = fakeSpawn(noPopulate, { error: new Error("no such executable") });
+    bundleExternalRuntimeDependencies(stageRoot, { sourceNodeModules: source });
+
+    expect(existsSync(join(stageRoot, "node_modules", "ws", "index.js"))).toBe(true);
+    expect(existsSync(join(stageRoot, "node_modules", "ws", "node_modules"))).toBe(false);
+  });
+
+  it("fails closed when a required dependency is absent from the source tree", () => {
+    // If the source `node_modules/` is out of date, we would silently ship a broken tarball. The
+    // failure names the missing dep and the tree it was searched in.
+    const source = sourceFixture();
+    const stageRoot = stagedFixture({ ws: "8.21.3" });
+
     expect(() =>
-      bundleExternalRuntimeDependencies(stageRoot, "/trusted/npm", { spawn, platform: "linux" }),
-    ).toThrow(/could not spawn: no such executable/u);
+      bundleExternalRuntimeDependencies(stageRoot, { sourceNodeModules: source }),
+    ).toThrow(/external runtime dependency ws is not installed/u);
   });
 
-  it("fails closed when the install exits non-zero", () => {
+  it("leaves bundleDependencies untouched when the staged manifest has no externals", () => {
+    const source = sourceFixture();
     const stageRoot = stagedFixture();
-    const { spawn } = fakeSpawn(noPopulate, { status: 1, stderr: "E404" });
-    expect(() =>
-      bundleExternalRuntimeDependencies(stageRoot, "/trusted/npm", { spawn, platform: "linux" }),
-    ).toThrow(/failed with status 1: E404/u);
-  });
 
-  it("uses a Windows shell for the trusted npm.cmd", () => {
-    const stageRoot = stagedFixture();
-    const { calls, spawn } = fakeSpawn(noPopulate);
-    bundleExternalRuntimeDependencies(stageRoot, "C:\\Program Files\\npm.cmd", {
-      spawn,
-      platform: "win32",
-    });
-    expect(calls[0].opts.shell).toBe(true);
-    expect(calls[0].command).toBe('"C:\\Program Files\\npm.cmd"');
-  });
+    const added = bundleExternalRuntimeDependencies(stageRoot, { sourceNodeModules: source });
 
-  it("leaves bundleDependencies untouched when nothing new was installed", () => {
-    const stageRoot = stagedFixture();
-    const { spawn } = fakeSpawn(noPopulate);
-    const added = bundleExternalRuntimeDependencies(stageRoot, "/trusted/npm", {
-      spawn,
-      platform: "linux",
-    });
     expect(added).toEqual([]);
-    const manifest = JSON.parse(readFileSync(join(stageRoot, "package.json"), "utf8"));
-    expect(manifest.bundleDependencies).toEqual(["@oscharko-dev/keiko-cli"]);
+    const stageManifest = JSON.parse(readFileSync(join(stageRoot, "package.json"), "utf8"));
+    expect(stageManifest.bundleDependencies).toEqual(["@oscharko-dev/keiko-cli"]);
   });
 });

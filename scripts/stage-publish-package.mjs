@@ -429,57 +429,71 @@ function validateRuntimeRecords(runtimeNames, records) {
   }
 }
 
-function externalRuntimeInstallInvocation(npmExecutable, platform = process.platform) {
-  return {
-    // `--package-lock=false`: the tarball never re-uses a consumer's lock; we generate a fresh
-    //   dependency tree here that reflects THIS repository's resolved versions.
-    // `--ignore-scripts`: mirror the security posture of the workspace-pack step (issue #169 L1).
-    // `--no-save`, `--no-audit`, `--no-fund`: pack is deterministic and offline; no interactive
-    //   noise, no audit round-trip, no lockfile edit.
-    // `--omit=dev` + `--omit=optional`: publish surface is production-only; the platform-specific
-    //   optional bindings are pulled in by consumers on their own platform at their install time.
-    args: [
-      "install",
-      "--package-lock=false",
-      "--ignore-scripts",
-      "--no-save",
-      "--no-audit",
-      "--no-fund",
-      "--omit=dev",
-      "--omit=optional",
-    ],
-    command: shellCommandForTrustedExecutable(npmExecutable, platform),
-    // SECURITY-SHELL-OK: Windows requires a shell for the trusted npm.cmd executable; argv is static.
-    shell: platform === "win32",
-  };
-}
-
-function listTopLevelInstalledPackages(nodeModulesDir) {
-  if (!existsSync(nodeModulesDir)) return [];
-  const results = [];
-  for (const entry of readdirSync(nodeModulesDir, { withFileTypes: true })) {
-    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
-    if (entry.name.startsWith("@")) {
-      for (const scoped of readdirSync(join(nodeModulesDir, entry.name), {
-        withFileTypes: true,
-      })) {
-        if (scoped.isDirectory() && !scoped.name.startsWith(".")) {
-          results.push(`${entry.name}/${scoped.name}`);
-        }
-      }
-    } else {
-      results.push(entry.name);
-    }
-  }
-  return results;
-}
-
 function extendStagedBundleDependencies(stageRoot, additionalNames) {
   if (additionalNames.length === 0) return;
   const manifest = readJson(join(stageRoot, "package.json"));
   const existing = Array.isArray(manifest.bundleDependencies) ? manifest.bundleDependencies : [];
   manifest.bundleDependencies = [...new Set([...existing, ...additionalNames])];
   writeJson(join(stageRoot, "package.json"), manifest);
+}
+
+function externalNamesFromDependencyMap(map) {
+  return Object.keys(map ?? {}).filter((name) => !name.startsWith(scope));
+}
+
+/**
+ * The runtime dependency closure of a staged root manifest, computed from the source
+ * `node_modules/` tree — the one this workflow already resolved from `package-lock.json` — and
+ * expressed as the top-level package names outside the `@oscharko-dev/` scope. This is hermetic
+ * and offline: no `npm install` at pack time, no registry round-trip, no divergence from the
+ * lockfile.
+ *
+ * Only regular `dependencies` are followed; `optionalDependencies` are omitted because they carry
+ * platform-specific native bindings a Linux publish should not seed with macOS artefacts (issue
+ * #169 D2, AC2 — the smoke lane already omits optionals).
+ */
+function computeExternalRuntimeClosure(stageManifest, sourceNodeModules) {
+  const seen = new Set();
+  const queue = externalNamesFromDependencyMap(stageManifest.dependencies);
+  while (queue.length > 0) {
+    const name = queue.shift();
+    if (seen.has(name)) continue;
+    const dependencyRoot = join(sourceNodeModules, ...name.split("/"));
+    if (!existsSync(dependencyRoot)) {
+      throw new Error(
+        `external runtime dependency ${name} is not installed at ${sourceNodeModules}; ` +
+          "run `npm install` at the repository root before staging the publish package",
+      );
+    }
+    seen.add(name);
+    const manifest = readJson(join(dependencyRoot, "package.json"));
+    for (const dependency of externalNamesFromDependencyMap(manifest.dependencies)) {
+      if (!seen.has(dependency)) queue.push(dependency);
+    }
+  }
+  return [...seen];
+}
+
+function resolveDependencyRoot(sourceNodeModules, name) {
+  return join(sourceNodeModules, ...name.split("/"));
+}
+
+/**
+ * Copy the package at `sourcePath` to `destinationPath` for the bundled tree. Nested
+ * `node_modules/` are dropped (npm hoists at consume-install time), and a symlinked package
+ * (a monorepo workspace resolved into another workspace's node_modules) is dereferenced so the
+ * tarball never carries a link that only means something on the publisher's machine.
+ */
+function copyDependencyPackage(sourcePath, destinationPath) {
+  mkdirSync(dirname(destinationPath), { recursive: true });
+  cpSync(sourcePath, destinationPath, {
+    recursive: true,
+    dereference: true,
+    filter: (source) => {
+      const parts = source.split(sep);
+      return !parts.includes("node_modules");
+    },
+  });
 }
 
 export function createStagedPublishPackage({
@@ -531,41 +545,32 @@ export function createStagedPublishPackage({
  * Extending the bundle to carry every runtime dep makes `npm install -g` extract them from the
  * tarball directly and never talk to the registry for anything the package needs at runtime.
  *
- * Split from `createStagedPublishPackage` so that suites exercising the pure-staging behaviour do
- * not have to run a real `npm install` and can stay hermetic. `packRoot` in the smoke script
- * calls this on the real stage before `npm pack` runs.
+ * The closure is computed hermetically from the source repository's already-resolved
+ * `node_modules/` tree (populated from `package-lock.json` at the CI setup step) — no `npm
+ * install` at pack time, no registry round-trip, no divergence from the lockfile — and each
+ * package is copied into `stageRoot/node_modules/`, then named in `bundleDependencies` of the
+ * staged manifest.
  *
- * @param stageRoot     the directory `createStagedPublishPackage` returned as `packageDir`.
- * @param npmExecutable a trusted absolute path to the npm binary this build uses.
- * @param spawn         seam for the child process; defaults to `child_process.spawnSync`.
- * @param platform      seam for the OS; defaults to `process.platform`.
- * @returns             the top-level package names newly added to `bundleDependencies`.
+ * Split from `createStagedPublishPackage` so that suites exercising the pure-staging behaviour do
+ * not have to walk the source tree and can stay hermetic under a synthetic fixture. `packRoot`
+ * in the smoke script calls this on the real stage before `npm pack` runs.
+ *
+ * @param stageRoot           the directory `createStagedPublishPackage` returned as `packageDir`.
+ * @param sourceNodeModules   the source `node_modules/` this closure is copied from; defaults to
+ *                            the repository root's own `node_modules/`.
+ * @returns                   the top-level package names newly added to `bundleDependencies`.
  */
 export function bundleExternalRuntimeDependencies(
   stageRoot,
-  npmExecutable = resolveHostExecutable("npm"),
-  { spawn = spawnSync, platform = process.platform } = {},
+  { sourceNodeModules = join(defaultRepoRoot, "node_modules") } = {},
 ) {
-  const invocation = externalRuntimeInstallInvocation(npmExecutable, platform);
-  const result = spawn(invocation.command, invocation.args, {
-    cwd: stageRoot,
-    encoding: "utf8",
-    shell: invocation.shell,
-  });
-  if (result.error !== undefined) {
-    throw new Error(`external runtime dependency install could not spawn: ${result.error.message}`);
+  const stageManifest = readJson(join(stageRoot, "package.json"));
+  const closure = computeExternalRuntimeClosure(stageManifest, sourceNodeModules);
+  for (const name of closure) {
+    const source = resolveDependencyRoot(sourceNodeModules, name);
+    const destination = join(stageRoot, "node_modules", ...name.split("/"));
+    copyDependencyPackage(source, destination);
   }
-  if (result.status !== 0) {
-    throw new Error(
-      `external runtime dependency install failed with status ${String(result.status)}: ${result.stderr}`,
-    );
-  }
-  // The internal workspaces were placed under `stageRoot/node_modules/@oscharko-dev/*` by
-  // packWorkspace and are already in bundleDependencies; only the freshly-resolved externals and
-  // their transitives need adding.
-  const additional = listTopLevelInstalledPackages(join(stageRoot, "node_modules")).filter(
-    (name) => !name.startsWith(scope),
-  );
-  extendStagedBundleDependencies(stageRoot, additional);
-  return additional;
+  extendStagedBundleDependencies(stageRoot, closure);
+  return closure;
 }
