@@ -2216,11 +2216,6 @@ export function useWorkspace(
                 focusedWindowId: id,
               }),
         );
-        if (replacesSelection) {
-          reportClientDiagnostic(
-            "workspace-window: primary activation synchronized focus and selection",
-          );
-        }
       }
       mutations.focus(id);
     },

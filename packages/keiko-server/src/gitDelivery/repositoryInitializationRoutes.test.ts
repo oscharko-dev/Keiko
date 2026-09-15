@@ -51,7 +51,7 @@ beforeEach(() => {
       put: (): ReturnType<UiHandlerDeps["evidenceStore"]["put"]> => "",
       list: (): ReturnType<UiHandlerDeps["evidenceStore"]["list"]> => [],
       get: (): ReturnType<UiHandlerDeps["evidenceStore"]["get"]> => undefined,
-      delete: (): ReturnType<UiHandlerDeps["evidenceStore"]["delete"]> => false,
+      delete: (): ReturnType<UiHandlerDeps["evidenceStore"]["delete"]> => undefined,
     },
     env: {},
     redactor: buildRedactor({}),
@@ -59,7 +59,11 @@ beforeEach(() => {
     modelPortFactory: (): undefined => undefined,
     store,
     activityLog: { write: (event): void => void events.push(event) },
-    diagnostics: { record: (record): void => void diagnostics.push(record) },
+    diagnostics: {
+      record: (record): void => {
+        diagnostics.push(record);
+      },
+    },
   };
 });
 

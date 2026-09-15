@@ -223,9 +223,10 @@ task workspace registers BOTH roots as projects — the worktree and the reposit
 because a root that is not registered cannot be a trust subject at all: script trust is resolved only
 for a registered root, and the trust surfaces list registered roots. Registration alone is never a
 grant; the repository stays restricted until the operator decides. Choosing a folder in the browser
-and launching Keiko with an explicitly selected initial project are the two equivalent local-human
-selection paths that grant through the same trust service. Restoring a stored project row or opening
-an arbitrary URL is not such a selection and never grants. A repository that CONTAINS the managed worktree is left
+and a project selection explicitly attested by a trusted launcher are the two equivalent local-human
+selection paths that grant through the same trust service. An ambient process working directory may
+seed the preferred project, but carries no grant; restoring a stored project row or opening an
+arbitrary URL does not grant either. A repository that CONTAINS the managed worktree is left
 unregistered, because that root also contains the UI database. A managed task worktree is a
 registered project row whose script decision is resolved from the repository it was bound from, and
 that inherited decision holds only while the worktree's `package.json` is byte-identical to that

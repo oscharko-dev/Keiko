@@ -1881,7 +1881,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     }
   });
 
-  it("seeds the launch project into the UI store as the preferred project", () => {
+  it("seeds an ambient launch directory without inferring package-script trust", () => {
     const projectDir = tmp("launch-project-");
     const evidenceDir = tmp("ev-launch-");
     const dbPath = join(projectDir, ".keiko", "ui", "keiko-ui.db");
@@ -1895,6 +1895,23 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
 
     expect(deps.preferredProjectPath).toBe(projectDir);
     expect(deps.store.listProjects().map((project) => project.path)).toEqual([projectDir]);
+    expect(deps.workspaceScriptTrust?.trustLevelForRoot(projectDir)).toBe("restricted");
+    deps.store.close();
+    deps.memoryVault?.close();
+  });
+
+  it("grants package-script trust for an explicitly launcher-selected initial project", () => {
+    const projectDir = tmp("launcher-selected-project-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-launcher-selected-"),
+      env: {},
+      uiDbPath: join(projectDir, ".keiko", "ui", "keiko-ui.db"),
+      initialProjectPath: projectDir,
+      initialProjectTrustSource: "explicit-launcher-selection",
+    });
+
+    expect(deps.preferredProjectPath).toBe(projectDir);
     expect(deps.workspaceScriptTrust?.trustLevelForRoot(projectDir)).toBe("trusted");
     deps.store.close();
     deps.memoryVault?.close();

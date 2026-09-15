@@ -2068,6 +2068,7 @@ export type {
   isAsYouTypeCompletionModel,
   isCodingWorkbenchReadinessCandidate,
   isCodingWorkbenchModel,
+  listCodingWorkbenchReadinessCandidates,
   selectCodingWorkbenchReadinessCandidate,
   isVoiceCapability,
   modelSupportsSpeechInput,

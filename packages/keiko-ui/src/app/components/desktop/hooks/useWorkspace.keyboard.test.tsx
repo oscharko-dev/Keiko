@@ -5,6 +5,11 @@ import { useWorkspace, type UseWorkspaceOptions } from "./useWorkspace";
 import { MAX_WORKSPACE_WINDOWS } from "./workspace-persistence";
 import type { AppWindow, Connection } from "../windows/types";
 
+const reportClientDiagnosticMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/client-diagnostics", () => ({
+  reportClientDiagnostic: reportClientDiagnosticMock,
+}));
+
 const WORKSPACE_STORAGE_KEY = "keiko.workspace.v4";
 const CONNECTION_STORAGE_KEY = "keiko.conns.v1";
 
@@ -224,6 +229,7 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
   // whatever order the tests run in.
   beforeEach(() => {
     window.localStorage.clear();
+    reportClientDiagnosticMock.mockClear();
   });
 
   afterEach(() => {
@@ -246,6 +252,7 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
     );
 
     fireEvent.click(screen.getByRole("button", { name: "select files" }));
+    reportClientDiagnosticMock.mockClear();
     fireEvent.click(screen.getByRole("button", { name: "activate chat" }));
 
     await waitFor(() =>
@@ -257,6 +264,7 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
     expect(readWins().find((win) => win.id === "chat-1")?.z).toBeGreaterThan(
       readWins().find((win) => win.id === "files-1")?.z ?? 0,
     );
+    expect(reportClientDiagnosticMock).not.toHaveBeenCalled();
   });
 
   it("reserves workspace capacity across editor allocations queued in one event", async () => {

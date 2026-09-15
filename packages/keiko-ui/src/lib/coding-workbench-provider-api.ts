@@ -26,13 +26,16 @@ import type {
   ModelCapability,
 } from "@oscharko-dev/keiko-contracts";
 import type { GatewayReadinessReport } from "@oscharko-dev/keiko-contracts/bff-wire";
-import { selectCodingWorkbenchReadinessCandidate } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import { listCodingWorkbenchReadinessCandidates } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { isGatewayVerificationState } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import {
   validateCodingWorkbenchCodexAuthSetupPlan,
   validateCodingWorkbenchCodexSubscriptionProfile,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth";
-import { notifyGatewayModelReadinessUpdated } from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
+import {
+  GATEWAY_CONFIG_UPDATED_EVENT,
+  notifyGatewayModelReadinessUpdated,
+} from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
 import { ApiError, resetModelRequestCache } from "./api";
 import { bffFetchJson } from "./http";
 
@@ -75,7 +78,11 @@ const CODING_WORKBENCH_SIDECAR_UNAVAILABLE_REASONS = new Set([
 ]);
 const AUTOMATIC_READINESS_REASONS = new Set(["no-tool-calling", "tool-calling-unverified"]);
 const MODEL_COST_CLASSES = new Set(["low", "medium", "high"]);
-const automaticReadinessRequests = new Map<string, Promise<void>>();
+const AUTOMATIC_READINESS_RETRY_COOLDOWN_MS = 30_000;
+const automaticReadinessRequests = new Map<string, Promise<boolean>>();
+const automaticReadinessRetryAt = new Map<string, number>();
+let automaticReadinessGeneration = 0;
+let automaticReadinessConfigListenerInstalled = false;
 
 interface ModelListResponse {
   readonly models: readonly ModelCapability[];
@@ -213,22 +220,88 @@ async function readSidecarGatewayProfile(): Promise<CodingWorkbenchSidecarGatewa
   );
 }
 
-function requestAutomaticReadiness(modelId: string): Promise<void> {
-  const active = automaticReadinessRequests.get(modelId);
+function resetAutomaticReadinessGeneration(): void {
+  automaticReadinessGeneration += 1;
+  automaticReadinessRetryAt.clear();
+}
+
+function ensureAutomaticReadinessConfigListener(): void {
+  if (automaticReadinessConfigListenerInstalled || typeof window === "undefined") return;
+  window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, resetAutomaticReadinessGeneration);
+  automaticReadinessConfigListenerInstalled = true;
+}
+
+function readinessConfigurationKey(candidates: readonly ModelCapability[]): string {
+  return JSON.stringify(
+    candidates.map((candidate) => ({
+      id: candidate.id,
+      costClass: candidate.costClass,
+      toolCalling: candidate.toolCalling,
+      toolCallingVerification: candidate.toolCallingVerification,
+    })),
+  );
+}
+
+function reportVerifiedToolCalling(report: GatewayReadinessReport): boolean {
+  return (
+    report.verifiedCapabilities.toolCalling === true &&
+    report.probes.some((probe) => probe.name === "tool_calling" && probe.status === "passed")
+  );
+}
+
+async function probeAutomaticReadinessCandidates(
+  candidates: readonly ModelCapability[],
+): Promise<boolean> {
+  for (const candidate of candidates) {
+    const report = await bffFetchJson<GatewayReadinessReport>("/api/gateway/readiness", {
+      method: "POST",
+      cache: "no-store",
+      body: JSON.stringify({
+        modelId: candidate.id,
+        options: { probes: ["tool_calling"], purpose: "coding-workbench-auto" },
+      }),
+    });
+    if (reportVerifiedToolCalling(report)) return true;
+  }
+  return false;
+}
+
+function requestAutomaticReadiness(candidates: readonly ModelCapability[]): Promise<boolean> {
+  ensureAutomaticReadinessConfigListener();
+  const generation = automaticReadinessGeneration;
+  const fingerprint = readinessConfigurationKey(candidates);
+  const requestKey = `${String(generation)}:${fingerprint}`;
+  if ((automaticReadinessRetryAt.get(requestKey) ?? 0) > Date.now()) {
+    return Promise.resolve(false);
+  }
+  const active = automaticReadinessRequests.get(requestKey);
   if (active !== undefined) return active;
-  const request = bffFetchJson<GatewayReadinessReport>("/api/gateway/readiness", {
-    method: "POST",
-    cache: "no-store",
-    body: JSON.stringify({
-      modelId,
-      options: { probes: ["tool_calling"], purpose: "coding-workbench-auto" },
-    }),
-  }).then((): void => {
-    resetModelRequestCache();
-    notifyGatewayModelReadinessUpdated();
-  });
-  const tracked = request.finally(() => automaticReadinessRequests.delete(modelId));
-  automaticReadinessRequests.set(modelId, tracked);
+  const request = probeAutomaticReadinessCandidates(candidates)
+    .then((ready): boolean => {
+      if (generation !== automaticReadinessGeneration) return false;
+      if (ready) {
+        automaticReadinessRetryAt.delete(requestKey);
+        resetModelRequestCache();
+        notifyGatewayModelReadinessUpdated();
+      } else {
+        automaticReadinessRetryAt.set(
+          requestKey,
+          Date.now() + AUTOMATIC_READINESS_RETRY_COOLDOWN_MS,
+        );
+      }
+      return ready;
+    })
+    .catch((error: unknown): never => {
+      if (generation === automaticReadinessGeneration) {
+        automaticReadinessRetryAt.set(
+          requestKey,
+          Date.now() + AUTOMATIC_READINESS_RETRY_COOLDOWN_MS,
+        );
+      }
+      throw error;
+    });
+  const tracked = request.finally(() => automaticReadinessRequests.delete(requestKey));
+  automaticReadinessRequests.set(requestKey, tracked);
   return tracked;
 }
 
@@ -243,9 +316,9 @@ async function recoverUnverifiedGatewayProfile(
     { cache: "no-store", signal: readDeadlineSignal() },
     { validator: contractValidator<ModelListResponse>(validateModelListResponse) },
   );
-  const candidate = selectCodingWorkbenchReadinessCandidate(response.models);
-  if (candidate === undefined) return profile;
-  await requestAutomaticReadiness(candidate.id);
+  const candidates = listCodingWorkbenchReadinessCandidates(response.models);
+  if (candidates.length === 0) return profile;
+  if (!(await requestAutomaticReadiness(candidates))) return profile;
   return readSidecarGatewayProfile();
 }
 

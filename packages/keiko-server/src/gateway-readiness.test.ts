@@ -19,6 +19,7 @@ import {
 } from "./gateway-readiness.js";
 import type { RouteContext } from "./routes.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
+import type { ServerLogEvent } from "./observability/server-log.js";
 import {
   QUALIFICATION_SPEND_BUDGET_USD_ENV,
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
@@ -235,7 +236,7 @@ describe("gateway readiness route", () => {
           ],
         }),
       ) as typeof fetch;
-    const events: Record<string, unknown>[] = [];
+    const events: ServerLogEvent[] = [];
     const deps: UiHandlerDeps = {
       ...depsWith(config, fetchImpl),
       activityLog: { write: (event): void => void events.push(event) },
@@ -268,7 +269,7 @@ describe("gateway readiness route", () => {
 
   it("rejects an automatic probe for a non-coding model without dispatching or logging", async () => {
     const fetchImpl = vi.fn() as unknown as typeof fetch;
-    const events: Record<string, unknown>[] = [];
+    const events: ServerLogEvent[] = [];
     const deps: UiHandlerDeps = {
       ...depsWith(gatewayConfig("general-chat"), fetchImpl),
       activityLog: { write: (event): void => void events.push(event) },

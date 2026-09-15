@@ -329,21 +329,20 @@ export function isCodingWorkbenchReadinessCandidate(capability: ModelCapability)
   );
 }
 
+/** Lists configured structural candidates by cost, preserving configuration order on ties. */
+export function listCodingWorkbenchReadinessCandidates(
+  capabilities: readonly ModelCapability[],
+): readonly ModelCapability[] {
+  return capabilities
+    .filter((capability) => isCodingWorkbenchReadinessCandidate(capability))
+    .sort((left, right) => MODEL_COST_RANK[left.costClass] - MODEL_COST_RANK[right.costClass]);
+}
+
 /** Selects the cheapest configured structural candidate, preserving configuration order on ties. */
 export function selectCodingWorkbenchReadinessCandidate(
   capabilities: readonly ModelCapability[],
 ): ModelCapability | undefined {
-  let selected: ModelCapability | undefined;
-  for (const capability of capabilities) {
-    if (!isCodingWorkbenchReadinessCandidate(capability)) continue;
-    if (
-      selected === undefined ||
-      MODEL_COST_RANK[capability.costClass] < MODEL_COST_RANK[selected.costClass]
-    ) {
-      selected = capability;
-    }
-  }
-  return selected;
+  return listCodingWorkbenchReadinessCandidates(capabilities).at(0);
 }
 
 export function codingWorkbenchModelEligibility(

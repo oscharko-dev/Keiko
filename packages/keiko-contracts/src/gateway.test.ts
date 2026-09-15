@@ -21,6 +21,7 @@ import {
   codingWorkbenchModelEligibility,
   isCodingWorkbenchReadinessCandidate,
   isCodingWorkbenchModel,
+  listCodingWorkbenchReadinessCandidates,
   selectCodingWorkbenchReadinessCandidate,
   isVoiceCapability,
   TOOL_CALLING_VERIFICATION_MAX_AGE_MS,
@@ -130,6 +131,23 @@ describe("isCodingWorkbenchModel", () => {
     ]);
 
     expect(selected?.id).toBe("coding-cheap");
+  });
+
+  it("orders every structural readiness candidate by cost and keeps configuration order on ties", () => {
+    const candidates = listCodingWorkbenchReadinessCandidates([
+      cap({ id: "coding-high", preferredUseCases: ["Coding"], costClass: "high" }),
+      cap({ id: "coding-medium-a", preferredUseCases: ["Coding"], costClass: "medium" }),
+      cap({ id: "chat-only", preferredUseCases: ["Chat"], costClass: "low" }),
+      cap({ id: "coding-low", preferredUseCases: ["Code review"], costClass: "low" }),
+      cap({ id: "coding-medium-b", preferredUseCases: ["Coding"], costClass: "medium" }),
+    ]);
+
+    expect(candidates.map((candidate) => candidate.id)).toEqual([
+      "coding-low",
+      "coding-medium-a",
+      "coding-medium-b",
+      "coding-high",
+    ]);
   });
 
   // A forced tool-call proof expires 24 h after its probe. Coding run 24 (2026-09-11) was admitted

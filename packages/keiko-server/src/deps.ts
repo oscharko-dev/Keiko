@@ -1193,6 +1193,11 @@ export interface BuildHandlerDepsOptions {
   // The working directory from which `keiko ui` was launched. Production seeds it into the UI store
   // so first-run project selection is deterministic even when an older UI DB already has rows.
   readonly initialProjectPath?: string | undefined;
+  // An initial project path is normally ambient process context and carries no trust. A trusted
+  // launcher that obtained an explicit local-human project selection may opt into the same durable
+  // package-script grant as the browser folder picker. This server-internal signal is never read
+  // from a browser request, path value, or generic environment fallback.
+  readonly initialProjectTrustSource?: "explicit-launcher-selection" | undefined;
   // Optional setup tester (tests); production performs a real gateway call.
   readonly gatewaySetupTester?:
     | ((
@@ -2725,6 +2730,7 @@ function seedInitialProject(
   initialProjectPath: string | undefined,
   workspaceScriptTrust: WorkspaceScriptTrustService,
   correlationId: string,
+  trustSource: BuildHandlerDepsOptions["initialProjectTrustSource"],
 ): string | undefined {
   if (initialProjectPath === undefined || initialProjectPath.trim().length === 0) {
     return undefined;
@@ -2732,7 +2738,9 @@ function seedInitialProject(
   const normalizedPath = validateProjectPath(initialProjectPath, { mustExist: true });
   assertUiDbOutsideProject(uiDbPath, normalizedPath);
   const project = store.createProject(normalizedPath);
-  workspaceScriptTrust.grant(project.path, correlationId);
+  if (trustSource === "explicit-launcher-selection") {
+    workspaceScriptTrust.grant(project.path, correlationId);
+  }
   return project.path;
 }
 
@@ -3772,6 +3780,7 @@ function buildPersistenceBundle(
         options.initialProjectPath,
         workspaceScriptTrust,
         bootstrapCorrelationId,
+        options.initialProjectTrustSource,
       ),
     };
   } catch (error) {
