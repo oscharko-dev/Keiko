@@ -26,6 +26,7 @@ import type {
 } from "@/lib/types";
 import type {
   GitBranchListResponse,
+  GitDeliveryCommitDraftResponse,
   GitDeliveryMergePreviewResponse,
   GitDeliveryCommitPreviewResponse,
   GitDeliveryPrPreviewResponse,
@@ -322,6 +323,18 @@ function makeCommitPreview(
   };
 }
 
+function makeCommitDraft(
+  suggestedMessage = "chore: update staged changes\n\nBody.",
+): GitDeliveryCommitDraftResponse {
+  return {
+    schemaVersion: "1",
+    status: "succeeded",
+    source: "model",
+    suggestedMessage,
+    summary: { stagedFileCount: 2, areaCount: 1, areas: ["src"], touchesTests: false },
+  };
+}
+
 function makeSyncPreview(
   operation: "fetch" | "pull",
   overrides: Partial<GitSyncPreview> = {},
@@ -477,6 +490,7 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       actionKind: "unstage",
     })),
     commitPreview: vi.fn<GitClientSeam["commitPreview"]>(async () => makeCommitPreview()),
+    commitDraft: vi.fn<GitClientSeam["commitDraft"]>(async () => makeCommitDraft()),
     commitExecute: vi.fn<GitClientSeam["commitExecute"]>(async () => ({
       schemaVersion: "1",
       status: "succeeded",
@@ -2984,6 +2998,28 @@ describe("GitClientWindow — staging controls (Issue #1575)", () => {
 });
 
 describe("GitClientWindow — commit composer (Issue #1575)", () => {
+  it("does not request a Keiko commit draft while loading or selecting changed files", async () => {
+    const commitDraft = vi.fn<GitClientSeam["commitDraft"]>(async () => makeCommitDraft());
+    const client = makeClient({
+      getStatus: vi.fn(async () => makeStatusRich()),
+      commitDraft,
+    });
+    const user = userEvent.setup();
+    render(<GitClientWindow projectId={REPO_A.path} client={client} />);
+    expect(await screen.findByText("index.ts")).toBeInTheDocument();
+
+    await user.click(screen.getByText("README.md"));
+
+    await waitFor(() =>
+      expect(client.getStructuredDiff).toHaveBeenCalledWith({
+        root: REPO_A.path,
+        path: "README.md",
+        scope: "unstaged",
+      }),
+    );
+    expect(commitDraft).not.toHaveBeenCalled();
+  });
+
   it("removes stale commit evidence after all selected files are unstaged", async () => {
     const getStatus = vi
       .fn<GitClientSeam["getStatus"]>()
@@ -2991,13 +3027,12 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
       .mockResolvedValue(makeStatus());
     const client = makeClient({
       getStatus,
-      commitPreview: vi.fn<GitClientSeam["commitPreview"]>(async () =>
-        makeCommitPreview({ suggestedMessage: "chore: update staged changes\n\nBody." }),
-      ),
+      commitDraft: vi.fn<GitClientSeam["commitDraft"]>(async () => makeCommitDraft()),
     });
     const user = userEvent.setup();
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
 
+    await user.click(await screen.findByRole("button", { name: "Generate with Keiko" }));
     await waitFor(() =>
       expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes"),
     );
@@ -3124,14 +3159,13 @@ describe("GitClientWindow — commit composer (Issue #1575)", () => {
   it("keeps the commit draft while moving between workspace and sidebar layouts", async () => {
     const client = makeClient({
       getStatus: vi.fn(async () => makeStatusRich()),
-      commitPreview: vi.fn<GitClientSeam["commitPreview"]>(async () =>
-        makeCommitPreview({ suggestedMessage: "chore: update staged changes\n\nBody." }),
-      ),
+      commitDraft: vi.fn<GitClientSeam["commitDraft"]>(async () => makeCommitDraft()),
     });
     const user = userEvent.setup();
     render(<GitClientWindow projectId={REPO_A.path} client={client} />);
     expect(await screen.findByText("index.ts")).toBeInTheDocument();
 
+    await user.click(screen.getByRole("button", { name: "Generate with Keiko" }));
     await waitFor(() => expect(screen.getByLabelText("Description")).toHaveValue("Body."));
     await user.click(screen.getByText("README.md"));
 

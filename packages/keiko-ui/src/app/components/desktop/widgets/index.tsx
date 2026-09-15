@@ -237,7 +237,7 @@ function isCodingRepositoryBinding(
 
 function isManagedTaskWorkspaceRoot(root: string | undefined): boolean {
   if (root === undefined || root.length === 0) return false;
-  const normalized = root.replace(/\\/gu, "/");
+  const normalized = root.replaceAll("\\", "/");
   return normalized.includes("/.keiko/") && normalized.includes("/task-workspaces/");
 }
 

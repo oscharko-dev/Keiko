@@ -35,11 +35,20 @@ import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerLogEvent } from "../observability/server-log.js";
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import type { RouteContext } from "../routes.js";
+import type {
+  GatewayCallRequest,
+  GatewayConfig,
+  ModelCapability,
+  NormalizedResponse,
+} from "@oscharko-dev/keiko-model-gateway";
+import type { ModelPort } from "@oscharko-dev/keiko-harness";
 import {
   createHandleCommitApprove,
+  createHandleCommitDraft,
   createHandleCommitExecute,
   createHandleCommitPreview,
   type GitDeliveryCommitApproveResponseBody,
+  type GitDeliveryCommitDraftBody,
   type GitDeliveryCommitPreviewBody,
 } from "./commitRoutes.js";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
@@ -55,6 +64,7 @@ import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
 import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
 
 const PREVIEW = "/api/git-delivery/commit/preview";
+const DRAFT = "/api/git-delivery/commit/draft";
 const EXECUTE = "/api/git-delivery/commit/execute";
 
 const SNAPSHOT: GitWorktreeSnapshot = {
@@ -86,6 +96,63 @@ const BLOCK_ALL_PACK: GitDeliveryRepoPolicyPack = {
   rules: [],
   defaultRule: { decision: "blocked" },
 };
+
+const DRAFT_MODEL_CAPABILITY: ModelCapability = {
+  id: "draft-model",
+  kind: "chat",
+  contextWindow: 128_000,
+  maxOutputTokens: 4_096,
+  toolCalling: false,
+  structuredOutput: true,
+  streaming: false,
+  supportsImageInput: false,
+  supportsDocumentInput: false,
+  workflowEligible: true,
+  costClass: "low",
+  latencyClass: "fast",
+  throughputHint: "test",
+  preferredUseCases: [],
+  knownLimitations: [],
+  supportsResponseFormat: true,
+};
+
+const DRAFT_GATEWAY_CONFIG: GatewayConfig = {
+  providers: [
+    {
+      modelId: "draft-model",
+      baseUrl: "https://gateway.example.invalid/v1",
+      apiKey: "test-key",
+      timeoutMs: 1_000,
+      maxRetries: 0,
+      retryBaseDelayMs: 0,
+    },
+  ],
+  circuitBreaker: { failureThreshold: 3, cooldownMs: 1_000, halfOpenProbes: 1 },
+  capabilities: [DRAFT_MODEL_CAPABILITY],
+};
+
+function draftResponse(candidate: Readonly<Record<string, string>>): NormalizedResponse {
+  return {
+    modelId: "draft-model",
+    content: JSON.stringify(candidate),
+    finishReason: "stop",
+    toolCalls: [],
+    structuredOutput: candidate,
+    usage: {
+      requestId: "draft-model-request",
+      promptTokens: 100,
+      completionTokens: 40,
+      latencyMs: 12,
+      costClass: "low",
+    },
+  };
+}
+
+function draftModelPort(respond: (request: GatewayCallRequest) => NormalizedResponse): ModelPort {
+  return {
+    call: (request): Promise<NormalizedResponse> => Promise.resolve(respond(request)),
+  };
+}
 
 interface RecordingAdapter {
   readonly adapter: GitLocalMutationAdapter;
@@ -466,134 +533,7 @@ describe("commit preview — read-only verification context (AC3)", () => {
     expect(body.intent.isWip).toBe(true);
     expect(body.messageValidation.ok).toBe(false);
     expect(body.policyOutcome).toBe("allowed");
-    expect(body.suggestedMessage).toBe(
-      [
-        "chore: update selected files and documentation",
-        "",
-        "Update the staged selected files and documentation.",
-        "Keep the commit limited to the selected staged files.",
-        "",
-        "Selected staged files:",
-        "- a (source change).",
-        "- b (documentation).",
-        "",
-        "🤖 Generated with [Keiko](https://github.com/oscharko-dev/Keiko)",
-      ].join("\n"),
-    );
-  });
-
-  it("builds an attributed repository-neutral commit draft from the selected staged files", async () => {
-    const handler = createHandleCommitPreview({
-      execution: seams({
-        stagedPathsReader: () =>
-          Promise.resolve([
-            "apps/checkout/src/cartService.ts",
-            "apps/checkout/src/cartService.test.ts",
-            "apps/checkout/package.json",
-          ]),
-      }),
-    });
-    const res = await handler(
-      ctxFor(PREVIEW, { schemaVersion: "1", projectId, messageDraft: "" }),
-      deps(),
-    );
-    const body = res.body as GitDeliveryCommitPreviewBody;
-    expect(body.suggestedMessage).toBe(
-      [
-        "chore(checkout): update cart service and related changes",
-        "",
-        "Update the staged cart service, test coverage, and configuration.",
-        "Keep the commit limited to the selected staged files.",
-        "Includes related test coverage.",
-        "",
-        "Selected staged files:",
-        "- cart service (source change).",
-        "- cart service test (test coverage).",
-        "- package (configuration).",
-        "",
-        "🤖 Generated with [Keiko](https://github.com/oscharko-dev/Keiko)",
-      ].join("\n"),
-    );
-  });
-
-  it("classifies common config files and normalizes a repository scope", async () => {
-    const handler = createHandleCommitPreview({
-      execution: seams({
-        stagedPathsReader: () =>
-          Promise.resolve([
-            "services/---Billing Platform---/tsconfig.build.json",
-            "services/---Billing Platform---/vite.config.ts",
-            "services/---Billing Platform---/settings.yaml",
-          ]),
-      }),
-    });
-    const res = await handler(
-      ctxFor(PREVIEW, { schemaVersion: "1", projectId, messageDraft: "" }),
-      deps(),
-    );
-
-    expect((res.body as GitDeliveryCommitPreviewBody).suggestedMessage).toBe(
-      [
-        "chore(billing-platform): update configuration",
-        "",
-        "Update the staged configuration.",
-        "Keep the commit limited to the selected staged files.",
-        "",
-        "Selected staged files:",
-        "- tsconfig build (configuration).",
-        "- vite config (configuration).",
-        "- settings (configuration).",
-        "",
-        "🤖 Generated with [Keiko](https://github.com/oscharko-dev/Keiko)",
-      ].join("\n"),
-    );
-  });
-
-  it("uses the package name rather than the npm namespace as a scoped-package draft scope", async () => {
-    const handler = createHandleCommitPreview({
-      execution: seams({
-        stagedPathsReader: () =>
-          Promise.resolve([
-            "packages/@acme/payments/src/invoice.ts",
-            "packages/@acme/payments/src/invoice.test.ts",
-          ]),
-      }),
-    });
-    const res = await handler(
-      ctxFor(PREVIEW, { schemaVersion: "1", projectId, messageDraft: "" }),
-      deps(),
-    );
-
-    expect((res.body as GitDeliveryCommitPreviewBody).suggestedMessage).toContain(
-      "chore(payments):",
-    );
-  });
-
-  it("keeps the selected-file draft notes bounded for large staged selections", async () => {
-    const handler = createHandleCommitPreview({
-      execution: seams({
-        stagedPathsReader: () =>
-          Promise.resolve([
-            "packages/keiko-ui/src/alpha.ts",
-            "packages/keiko-ui/src/beta.ts",
-            "packages/keiko-ui/src/gamma.ts",
-            "packages/keiko-ui/src/delta.ts",
-            "packages/keiko-ui/src/epsilon.ts",
-            "packages/keiko-ui/src/zeta.ts",
-            "packages/keiko-ui/src/eta.ts",
-          ]),
-      }),
-    });
-    const res = await handler(
-      ctxFor(PREVIEW, { schemaVersion: "1", projectId, messageDraft: "" }),
-      deps(),
-    );
-    const suggested = (res.body as GitDeliveryCommitPreviewBody).suggestedMessage ?? "";
-
-    expect(suggested).toContain("Selected staged files:");
-    expect(suggested).toContain("- alpha (source change).");
-    expect(suggested).toContain("- 1 more staged files.");
-    expect(suggested).not.toContain("- eta (source change).");
+    expect(body.suggestedMessage).toBeUndefined();
   });
 
   it("records a content-free preview summary and never the drafted message", async () => {
@@ -621,7 +561,7 @@ describe("commit preview — read-only verification context (AC3)", () => {
         stagedFileCount: 2,
         areaCount: 2,
         touchesTests: false,
-        draftSuggested: true,
+        draftSuggested: false,
         policyOutcome: "allowed",
       },
     });
@@ -750,6 +690,171 @@ describe("commit preview — read-only verification context (AC3)", () => {
     expect(body.summary.stagedFileCount).toBe(0);
     expect(body.preflightFindingCodes).toContain("nothing-staged-to-commit");
     expect(body.suggestedMessage).toBeUndefined();
+  });
+
+  it("never calls the model while refreshing the read-only preview", async () => {
+    let modelFactoryCalls = 0;
+    const handler = createHandleCommitPreview({ execution: seams() });
+
+    const res = await handler(
+      ctxFor(PREVIEW, { schemaVersion: "1", projectId, messageDraft: "" }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () => {
+          modelFactoryCalls += 1;
+          return draftModelPort(() => draftResponse({ subject: "feat: x", body: "Body." }));
+        },
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    expect(modelFactoryCalls).toBe(0);
+    expect((res.body as GitDeliveryCommitPreviewBody).suggestedMessage).toBeUndefined();
+  });
+});
+
+describe("commit draft — explicit model-backed generation", () => {
+  it("generates a draft from the staged diff only when requested", async () => {
+    const stagedDiff = [
+      "diff --git a/packages/keiko-ui/src/CommitComposer.tsx b/packages/keiko-ui/src/CommitComposer.tsx",
+      "+render an explicit Keiko draft button",
+      "+pass the operator instruction through the draft request",
+    ].join("\n");
+    let seenRequest: GatewayCallRequest | undefined;
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedPathsReader: () =>
+          Promise.resolve([
+            "packages/keiko-ui/src/CommitComposer.tsx",
+            "packages/keiko-ui/src/CommitComposer.test.tsx",
+          ]),
+        stagedDiffReader: () => Promise.resolve(stagedDiff),
+      }),
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, {
+        schemaVersion: "1",
+        projectId,
+        instruction: "Keep the explanation detailed.",
+      }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () =>
+          draftModelPort((request) => {
+            seenRequest = request;
+            return draftResponse({
+              subject: "feat(ui): add explicit commit drafting",
+              body: [
+                "Add a user-triggered Keiko draft action for staged Git changes.",
+                "Keep automatic previews limited to validation and policy context.",
+              ].join("\n"),
+            });
+          }),
+      }),
+    );
+
+    expect(res.status).toBe(200);
+    const body = res.body as GitDeliveryCommitDraftBody;
+    expect(body.source).toBe("model");
+    expect(body.summary).toMatchObject({ stagedFileCount: 2, touchesTests: true });
+    expect(body.suggestedMessage).toBe(
+      [
+        "feat(ui): add explicit commit drafting",
+        "",
+        "Add a user-triggered Keiko draft action for staged Git changes.",
+        "Keep automatic previews limited to validation and policy context.",
+        "",
+        "🤖 Generated with [Keiko](https://github.com/oscharko-dev/Keiko)",
+      ].join("\n"),
+    );
+    const requestJson = JSON.stringify(seenRequest);
+    expect(requestJson).toContain("render an explicit Keiko draft button");
+    expect(requestJson).toContain("Keep the explanation detailed.");
+    expect(requestJson).toContain("untrusted data");
+  });
+
+  it("fails visibly instead of calling the model when no staged changes are selected", async () => {
+    let modelFactoryCalls = 0;
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedPathsReader: () => Promise.resolve([]),
+      }),
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () => {
+          modelFactoryCalls += 1;
+          return draftModelPort(() => draftResponse({ subject: "feat: x", body: "Body." }));
+        },
+      }),
+    );
+
+    expect(res.status).toBe(409);
+    expect(res.body).toMatchObject({
+      error: { code: "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES" },
+    });
+    expect(modelFactoryCalls).toBe(0);
+  });
+
+  it("fails visibly when no compatible model is configured", async () => {
+    const events: ServerLogEvent[] = [];
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+      activityLog: {
+        write(event): void {
+          events.push(event);
+        },
+      },
+    });
+
+    const res = await handler(ctxFor(DRAFT, { schemaVersion: "1", projectId }), deps());
+
+    expect(res.status).toBe(503);
+    expect(res.body).toMatchObject({
+      error: { code: "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE" },
+    });
+    expect(events).toContainEqual({
+      category: "diagnostic",
+      op: "git.commit.draft.completed",
+      correlationId: UNKNOWN_CORRELATION_ID,
+      status: 503,
+      extra: {
+        stagedFileCount: 2,
+        areaCount: 2,
+        touchesTests: false,
+        outcome: "failed",
+        failureCode: "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE",
+      },
+    });
+  });
+
+  it("rejects invalid model output without falling back to a generic commit message", async () => {
+    const handler = createHandleCommitDraft({
+      execution: seams({
+        stagedDiffReader: () => Promise.resolve("diff --git a/src/a.ts b/src/a.ts\n+change"),
+      }),
+    });
+
+    const res = await handler(
+      ctxFor(DRAFT, { schemaVersion: "1", projectId }),
+      deps({
+        config: DRAFT_GATEWAY_CONFIG,
+        modelPortFactory: () =>
+          draftModelPort(() => draftResponse({ subject: "", body: "Body without subject." })),
+      }),
+    );
+
+    expect(res.status).toBe(502);
+    expect(res.body).toMatchObject({
+      error: { code: "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT" },
+    });
+    expect(JSON.stringify(res.body)).not.toContain("update staged changes");
   });
 });
 

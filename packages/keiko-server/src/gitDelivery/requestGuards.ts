@@ -104,6 +104,7 @@ export const hasOnlyAllowedKeys = (
 export const GIT_DELIVERY_FREE_TEXT_KEYS: ReadonlySet<string> = new Set([
   "body",
   "description",
+  "instruction",
   "message",
   "messageDraft",
   "title",

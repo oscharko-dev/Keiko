@@ -24,6 +24,7 @@ import {
 import type { GitCommitExecRequest } from "./git-mutation-adapter.js";
 
 let root: string;
+let signingRoot: string;
 let workspace: WorkspaceInfo;
 const git = (args: readonly string[]): string =>
   execFileSync("git", [...args], {
@@ -32,14 +33,36 @@ const git = (args: readonly string[]): string =>
     env: { PATH: process.env.PATH, GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null" },
   }).trim();
 
+function configureSshCommitSigning(email: string): void {
+  const keyPath = join(signingRoot, "keiko-test-signing-key");
+  execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", email, "-f", keyPath], {
+    cwd: signingRoot,
+  });
+  const publicKeyPath = `${keyPath}.pub`;
+  const publicKey = readFileSync(publicKeyPath, "utf8").trim();
+  const allowedSigners = join(signingRoot, "keiko-test-allowed-signers");
+  writeFileSync(allowedSigners, `${email} ${publicKey}\n`, "utf8");
+  git(["config", "gpg.format", "ssh"]);
+  git(["config", "gpg.ssh.allowedSignersFile", allowedSigners]);
+  git(["config", "user.signingkey", publicKeyPath]);
+  git(["config", "commit.gpgsign", "true"]);
+}
+
+function expectLastCommitSigned(): void {
+  expect(git(["log", "-1", "--format=%G?"])).toBe("G");
+}
+
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-verified-commit-")));
+  signingRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-verified-signing-")));
   git(["init", "-q", "-b", "dev"]);
   git(["config", "user.name", "Keiko Test"]);
   git(["config", "user.email", "keiko@example.test"]);
+  configureSshCommitSigning("keiko@example.test");
   writeFileSync(join(root, "code.txt"), "base\n");
   git(["add", "code.txt"]);
   git(["commit", "-qm", "base"]);
+  expectLastCommitSigned();
   git(["checkout", "-qb", "codex/task"]);
   writeFileSync(join(root, "code.txt"), "verified\n");
   git(["add", "code.txt"]);
@@ -57,6 +80,7 @@ beforeEach(() => {
 });
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
+  rmSync(signingRoot, { recursive: true, force: true });
 });
 
 async function candidate(): Promise<
@@ -180,12 +204,12 @@ describe("verified commit at the sole mutation adapter", () => {
       (await adapter().stage({ pathspecs: ["code.txt"], verified: approved.verified })).outcome,
     ).toBe("failed");
   });
-  it("refuses required repository signing instead of committing an unsigned object", async () => {
+  it("refuses a broken signing key instead of committing an unsigned object", async () => {
     const request = await candidate();
-    git(["config", "commit.gpgsign", "true"]);
-    git(["config", "gpg.program", "/keiko/missing-signing-program"]);
+    git(["config", "user.signingkey", join(root, "missing-key.pub")]);
     const result = await adapter().commit(request);
     expect(result.outcome).toBe("failed");
+    expect(result.errorCode).toBe("signature-failed");
     expect(git(["rev-parse", "HEAD"])).toBe(request.verified.headSha);
   });
   it("commits the approved tree and returns its exact SHA while preserving unrelated files", async () => {
@@ -199,6 +223,7 @@ describe("verified commit at the sole mutation adapter", () => {
       request.verified.stagedTreeDigest,
     );
     expect(readFileSync(join(root, "unrelated.txt"), "utf8")).toBe("keep me\n");
+    expectLastCommitSigned();
   });
   it("refuses a changed candidate without changing HEAD", async () => {
     const request = await candidate();

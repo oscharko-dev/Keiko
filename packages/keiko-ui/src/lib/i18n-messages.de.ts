@@ -2464,6 +2464,7 @@ export const DE_MESSAGES = {
   "gitClientWindow.sync.hint.retry": "Versuchen Sie es erneut.",
   "gitClientWindow.sync.hint.stageChanges": "Stagen Sie die Änderungen zuerst.",
   "gitClientWindow.sync.hint.configureUpstream": "Konfigurieren Sie zuerst einen Upstream-Branch.",
+  "gitClientWindow.sync.hint.configureSigning": "Konfigurieren Sie zuerst die Commit-Signierung.",
   "gitClientWindow.sync.hint.resolveConflicts":
     "Pullen Sie zuerst und lösen Sie den Unterschied auf.",
   "gitClientWindow.sync.hint.abortInProgress":

@@ -414,49 +414,66 @@ function ConnectedToolbarCells(props: ConnectedToolbarCellsProps): ReactNode {
   );
 }
 
-interface ConnectedRepositoryToolbarProps {
-  readonly props: RepositoryToolbarProps;
+interface ConnectedToolbarDerivedProps {
   readonly repositorySelectionLocked: boolean;
   readonly addRepository: AddRepositoryEntry | undefined;
   readonly branchValue: string;
-  readonly connectToChatLabel: string;
   readonly t: ReturnType<typeof useTranslate>;
 }
 
-function ConnectedRepositoryToolbar(input: ConnectedRepositoryToolbarProps): ReactNode {
-  const props = input.props;
+interface ConnectedRepositoryToolbarProps {
+  readonly cells: ConnectedToolbarCellsProps;
+  readonly actions: ToolbarActionsProps;
+}
+
+function connectedToolbarCellsProps(
+  props: RepositoryToolbarProps,
+  derived: ConnectedToolbarDerivedProps,
+): ConnectedToolbarCellsProps {
+  return {
+    repositories: props.repositories,
+    selectedPath: props.selectedPath,
+    repositorySelectionLocked: derived.repositorySelectionLocked,
+    branches: props.branches,
+    branchesLoading: props.branchesLoading,
+    status: props.status,
+    branchBusy: props.branchBusy,
+    branchValue: derived.branchValue,
+    syncView: props.syncView,
+    syncBusy: props.syncBusy,
+    syncOutcome: props.syncOutcome,
+    syncError: props.syncError,
+    onSelectRepository: props.onSelectRepository,
+    addRepository: derived.addRepository,
+    onSwitchBranch: props.onSwitchBranch,
+    onCreateBranch: props.onCreateBranch,
+    onRunSync: props.onRunSync,
+    t: derived.t,
+  };
+}
+
+function toolbarActionsProps(
+  props: RepositoryToolbarProps,
+  connectToChatLabel: string,
+): ToolbarActionsProps {
+  return {
+    selectedPath: props.selectedPath,
+    onOpenEditor: props.onOpenEditor,
+    onOpenFiles: props.onOpenFiles,
+    onConnectToChat: props.onConnectToChat,
+    connectToChatLabel,
+  };
+}
+
+function ConnectedRepositoryToolbar({
+  cells,
+  actions,
+}: ConnectedRepositoryToolbarProps): ReactNode {
   return (
     <header style={TOOLBAR_STYLE} aria-label="Repository toolbar">
-      <ConnectedToolbarCells
-        repositories={props.repositories}
-        selectedPath={props.selectedPath}
-        repositorySelectionLocked={input.repositorySelectionLocked}
-        branches={props.branches}
-        branchesLoading={props.branchesLoading}
-        status={props.status}
-        branchBusy={props.branchBusy}
-        branchValue={input.branchValue}
-        syncView={props.syncView}
-        syncBusy={props.syncBusy}
-        syncOutcome={props.syncOutcome}
-        syncError={props.syncError}
-        onSelectRepository={props.onSelectRepository}
-        addRepository={input.addRepository}
-        onSwitchBranch={props.onSwitchBranch}
-        onCreateBranch={props.onCreateBranch}
-        onRunSync={props.onRunSync}
-        t={input.t}
-      />
-
+      <ConnectedToolbarCells {...cells} />
       <span style={{ flex: 1 }} />
-
-      <ToolbarActions
-        selectedPath={props.selectedPath}
-        onOpenEditor={props.onOpenEditor}
-        onOpenFiles={props.onOpenFiles}
-        onConnectToChat={props.onConnectToChat}
-        connectToChatLabel={input.connectToChatLabel}
-      />
+      <ToolbarActions {...actions} />
     </header>
   );
 }
@@ -464,19 +481,21 @@ function ConnectedRepositoryToolbar(input: ConnectedRepositoryToolbarProps): Rea
 export function RepositoryToolbar(props: RepositoryToolbarProps): ReactNode {
   const t = useTranslate();
   const addRepository = useAddRepositoryEntry(props.onAddRepository);
-  const branchValue = currentBranchName(props.branches, props.status);
 
   if (props.selectedPath === null)
     return <EmptyRepositoryToolbar onOpenEditor={props.onOpenEditor} />;
 
+  const derived = {
+    repositorySelectionLocked: props.repositorySelectionLocked ?? false,
+    addRepository,
+    branchValue: currentBranchName(props.branches, props.status),
+    t,
+  };
+
   return (
     <ConnectedRepositoryToolbar
-      props={props}
-      repositorySelectionLocked={props.repositorySelectionLocked ?? false}
-      addRepository={addRepository}
-      branchValue={branchValue}
-      connectToChatLabel={t("gitChangeScope.connect.openButton")}
-      t={t}
+      cells={connectedToolbarCellsProps(props, derived)}
+      actions={toolbarActionsProps(props, t("gitChangeScope.connect.openButton"))}
     />
   );
 }

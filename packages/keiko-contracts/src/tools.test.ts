@@ -3,6 +3,7 @@ import {
   copyNetworkGatewayPolicy,
   DEFAULT_COMMAND_RULES,
   DEFAULT_SANDBOX_POLICY,
+  GOVERNED_GIT_IDENTITY_SANDBOX_POLICY,
   GOVERNED_APPROVAL_TOOL_MAX_DURATION_MS,
   GOVERNED_TOOL_HUMAN_DECISION_WAIT_MS,
   GOVERNED_TOOL_SETTLEMENT_GRACE_MS,
@@ -37,6 +38,14 @@ describe("DEFAULT_COMMAND_RULES", () => {
   // shallow `Object.freeze` on the outer array alone), so every nested rule object is frozen too.
   it("reports every nested rule object as frozen (Object.isFrozen), not just the array", () => {
     expect(Object.isFrozen(DEFAULT_COMMAND_RULES[0])).toBe(true);
+  });
+});
+
+describe("GOVERNED_GIT_IDENTITY_SANDBOX_POLICY", () => {
+  it("inherits the user's home so local Git identity and signing configuration are visible", () => {
+    expect(GOVERNED_GIT_IDENTITY_SANDBOX_POLICY.homeIsolation).toBe("inherit");
+    expect(GOVERNED_GIT_IDENTITY_SANDBOX_POLICY.envAllowlist).toContain("HOME");
+    expect(GOVERNED_GIT_IDENTITY_SANDBOX_POLICY.envAllowlist).toContain("USERPROFILE");
   });
 });
 

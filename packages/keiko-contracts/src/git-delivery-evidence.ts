@@ -229,6 +229,8 @@ const RECOVERY_DISPOSITION_BY_EXECUTION_ERROR: Readonly<
   conflict: "user-fixable",
   // A stale precondition (e.g. non-fast-forward): the operator must re-resolve before retrying.
   "precondition-failed": "user-fixable",
+  // The local signing key, signing agent, or verifier setup must be repaired before retrying.
+  "signature-failed": "user-fixable",
   // A transient timeout: safe to retry.
   timeout: "retryable",
   // An internal fault: transient from the caller's view; safe to retry.

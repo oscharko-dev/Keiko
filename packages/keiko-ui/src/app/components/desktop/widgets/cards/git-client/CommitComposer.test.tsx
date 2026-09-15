@@ -135,13 +135,15 @@ describe("CommitComposer — commit gate", () => {
 });
 
 describe("CommitComposer — preview and outcomes", () => {
-  it("loads the current staged summary and eligible draft for an empty composer", async () => {
+  it("loads the current staged summary without auto-generating a Keiko draft", async () => {
     vi.useFakeTimers();
-    const { onPreview } = renderComposer();
+    const onGenerateDraft = vi.fn(async () => "chore: generated\n\nBody.");
+    const { onPreview } = renderComposer({ onGenerateDraft });
 
     await vi.advanceTimersByTimeAsync(0);
 
     expect(onPreview).toHaveBeenCalledWith("");
+    expect(onGenerateDraft).not.toHaveBeenCalled();
   });
 
   it("debounces a policy preview for the composed draft when changes are staged", async () => {
@@ -199,9 +201,7 @@ describe("CommitComposer — preview and outcomes", () => {
       onCommit: vi.fn(),
     } as const;
     const view = render(<CommitComposer {...props} stagedFileCount={2} />);
-    expect(screen.getByTestId("git-commit-draft")).toHaveTextContent(
-      "2 staged files across 1 area",
-    );
+    expect(screen.queryByTestId("git-commit-draft")).not.toBeInTheDocument();
 
     view.rerender(<CommitComposer {...props} stagedFileCount={0} previewRevision={2} />);
 
@@ -210,34 +210,18 @@ describe("CommitComposer — preview and outcomes", () => {
     expect(screen.getByText("Stage changes to prepare a commit draft.")).toBeInTheDocument();
   });
 
-  it("renders the change summary before a commit draft is entered", () => {
+  it("does not render an unavailable draft card when the preview has no suggestion", () => {
     renderComposer({
       previewDraft: "",
       preview: makePreview({
         summary: { stagedFileCount: 3, areaCount: 2, areas: ["src", "docs"], touchesTests: true },
       }),
     });
-    const preview = screen.getByTestId("git-commit-draft");
-    expect(preview).toHaveTextContent("3 staged files across 2 areas");
-    expect(preview).toHaveTextContent("touches tests");
+
+    expect(screen.queryByTestId("git-commit-draft")).not.toBeInTheDocument();
   });
 
-  it("renders singular summary nouns and an unavailable draft", () => {
-    renderComposer({
-      previewDraft: "",
-      preview: makePreview({
-        summary: { stagedFileCount: 1, areaCount: 1, areas: ["src"], touchesTests: false },
-      }),
-    });
-
-    const preview = screen.getByTestId("git-commit-draft");
-    expect(preview).toHaveTextContent("1 staged file across 1 area");
-    expect(preview).toHaveTextContent(
-      "This repository policy needs details that Keiko cannot safely draft.",
-    );
-  });
-
-  it("fills an empty composer with an eligible commit draft and keeps it copyable", async () => {
+  it("fills an empty composer only after the explicit Keiko draft button is clicked", async () => {
     const user = userEvent.setup();
     const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
     const writeText = vi.fn().mockResolvedValue(undefined);
@@ -255,17 +239,20 @@ describe("CommitComposer — preview and outcomes", () => {
     ].join("\n");
     const { onPreview } = renderComposer({
       previewDraft: "",
-      preview: makePreview({ suggestedMessage }),
+      preview: makePreview(),
+      onGenerateDraft: vi.fn(async () => suggestedMessage),
     });
 
     try {
+      expect(screen.getByLabelText("Summary")).toHaveValue("");
+      await user.click(screen.getByRole("button", { name: "Generate with Keiko" }));
       await waitFor(() =>
         expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes"),
       );
       expect(screen.getByLabelText("Description")).toHaveValue(
         "Update 2 staged files in src.\nKeep the commit limited to the staged selection.",
       );
-      expect(diagnostics).toEqual(["git-client: generated commit draft applied to empty composer"]);
+      expect(diagnostics).toEqual(["git-client: model commit draft applied from explicit action"]);
       expect(screen.queryByTestId("git-commit-draft")).not.toBeInTheDocument();
       expect(screen.getByTestId("git-commit-message-preview")).toHaveTextContent("Commit draft");
       await user.click(screen.getByRole("button", { name: "Copy commit draft" }));
@@ -328,10 +315,12 @@ describe("CommitComposer — preview and outcomes", () => {
       previewRequestRevision: 1,
       previewError: null,
       onPreview: vi.fn(),
+      onGenerateDraft: vi.fn(async () => suggestedMessage),
       onCommit: vi.fn(),
     } as const;
     const view = render(<CommitComposer {...props} previewRevision={1} />);
 
+    await user.click(screen.getByRole("button", { name: "Generate with Keiko" }));
     await waitFor(() =>
       expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes"),
     );
@@ -341,7 +330,7 @@ describe("CommitComposer — preview and outcomes", () => {
     await waitFor(() => expect(screen.getByLabelText("Summary")).toHaveValue(""));
     expect(screen.getByLabelText("Description")).toHaveValue("");
     expect(diagnostics).toEqual([
-      "git-client: generated commit draft applied to empty composer",
+      "git-client: model commit draft applied from explicit action",
       "git-client: stale generated commit draft cleared (repository-revision-changed)",
     ]);
   });
@@ -360,10 +349,12 @@ describe("CommitComposer — preview and outcomes", () => {
       previewRequestRevision: 1,
       previewError: null,
       onPreview: vi.fn(),
+      onGenerateDraft: vi.fn(async () => suggestedMessage),
       onCommit: vi.fn(),
     } as const;
     const view = render(<CommitComposer {...props} previewRevision={1} />);
 
+    await user.click(screen.getByRole("button", { name: "Generate with Keiko" }));
     await waitFor(() =>
       expect(screen.getByLabelText("Summary")).toHaveValue("chore: update staged changes"),
     );
@@ -374,6 +365,23 @@ describe("CommitComposer — preview and outcomes", () => {
 
     expect(screen.getByLabelText("Summary")).toHaveValue("docs: explain the selected change");
     expect(screen.getByLabelText("Description")).toHaveValue("Generated detail.");
+  });
+
+  it("surfaces a Keiko draft generation failure without fabricating a fallback message", async () => {
+    const user = userEvent.setup();
+    renderComposer({
+      onGenerateDraft: vi.fn(async () => {
+        throw new Error("No compatible model is available for commit draft generation.");
+      }),
+    });
+
+    await user.click(screen.getByRole("button", { name: "Generate with Keiko" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "No compatible model is available for commit draft generation.",
+    );
+    expect(screen.getByLabelText("Summary")).toHaveValue("");
+    expect(screen.getByLabelText("Description")).toHaveValue("");
   });
 
   it("renders the commit mutation outcome", () => {

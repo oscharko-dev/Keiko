@@ -85,6 +85,13 @@ function makeSeam(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
     stage: vi.fn<GitClientSeam["stage"]>(async () => ok),
     unstage: vi.fn<GitClientSeam["unstage"]>(async () => ok),
     commitPreview: vi.fn<GitClientSeam["commitPreview"]>(),
+    commitDraft: vi.fn<GitClientSeam["commitDraft"]>(async () => ({
+      schemaVersion: "1",
+      status: "succeeded",
+      source: "model",
+      suggestedMessage: "chore: update staged changes\n\nBody.",
+      summary: { stagedFileCount: 1, areaCount: 1, areas: ["src"], touchesTests: false },
+    })),
     commitExecute: vi.fn<GitClientSeam["commitExecute"]>(async () => ok),
     commitPropose: vi.fn<GitClientSeam["commitPropose"]>(async () => ok),
     syncPreview: vi.fn<GitClientSeam["syncPreview"]>(),

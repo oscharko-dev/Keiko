@@ -2391,6 +2391,7 @@ export const EN_MESSAGES = {
   "gitClientWindow.sync.hint.retry": "Try again.",
   "gitClientWindow.sync.hint.stageChanges": "Stage the changes first.",
   "gitClientWindow.sync.hint.configureUpstream": "Configure an upstream branch first.",
+  "gitClientWindow.sync.hint.configureSigning": "Configure commit signing first.",
   "gitClientWindow.sync.hint.resolveConflicts": "Pull and resolve the difference first.",
   "gitClientWindow.sync.hint.abortInProgress": "Finish or abort the operation in progress first.",
   "gitClientWindow.sync.hint.requestApproval": "Request approval first.",

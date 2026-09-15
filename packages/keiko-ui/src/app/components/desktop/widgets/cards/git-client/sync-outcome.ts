@@ -79,6 +79,7 @@ const RECOVERY_HINT_LABEL: Readonly<Record<string, MessageKey>> = {
   retry: "gitClientWindow.sync.hint.retry",
   "stage-changes": "gitClientWindow.sync.hint.stageChanges",
   "configure-upstream": "gitClientWindow.sync.hint.configureUpstream",
+  "configure-signing": "gitClientWindow.sync.hint.configureSigning",
   "resolve-conflicts": "gitClientWindow.sync.hint.resolveConflicts",
   "abort-in-progress-operation": "gitClientWindow.sync.hint.abortInProgress",
   "request-approval": "gitClientWindow.sync.hint.requestApproval",

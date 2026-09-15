@@ -456,6 +456,7 @@ export type GitDeliveryExecutionErrorCode =
   | "network-failure"
   | "conflict"
   | "precondition-failed"
+  | "signature-failed"
   | "timeout"
   | "internal-error";
 
@@ -464,6 +465,7 @@ export const GIT_DELIVERY_EXECUTION_ERROR_CODES: readonly GitDeliveryExecutionEr
   "network-failure",
   "conflict",
   "precondition-failed",
+  "signature-failed",
   "timeout",
   "internal-error",
 ] as const;
