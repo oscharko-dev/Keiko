@@ -1400,7 +1400,7 @@
     {
       "op": "coding-app-session.channel.subscribe",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-app-session/sessionChannel.ts:169",
+      "site": "packages/keiko-server/src/coding-app-session/sessionChannel.ts:176",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -1412,6 +1412,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "coding-app-session.local-session.issued",
+      "category": "http",
+      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:203",
+      "package": "keiko-server"
+    },
+    {
       "op": "coding-app-session.paired",
       "category": "http",
       "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:182",
@@ -1420,13 +1426,13 @@
     {
       "op": "coding-app-session.rotated",
       "category": "http",
-      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:318",
+      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:339",
       "package": "keiko-server"
     },
     {
       "op": "coding-app-session.signed-out",
       "category": "http",
-      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:333",
+      "site": "packages/keiko-server/src/coding-app-session/codingAppSessionRoutes.ts:354",
       "package": "keiko-server"
     },
     {
@@ -3927,6 +3933,7 @@
     "coding-app-session.channel.closed",
     "coding-app-session.channel.opened",
     "coding-app-session.channel.subscribe",
+    "coding-app-session.local-session.issued",
     "coding-app-session.paired",
     "coding-app-session.rotated",
     "coding-app-session.signed-out",

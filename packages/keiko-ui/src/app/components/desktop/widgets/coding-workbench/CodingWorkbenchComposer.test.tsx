@@ -62,6 +62,7 @@ function composerProps(
     runState,
     mutationPending: false,
     startBusy: false,
+    startBlockedReason: null,
     repositoryLabel: "Keiko",
     branchLabel: "dev",
     branchContext: "repository",
@@ -294,6 +295,44 @@ describe("Coding Workbench composer", () => {
     expect(screen.getByRole("combobox", { name: "Run authority" })).not.toHaveAttribute(
       "aria-describedby",
     );
+  });
+
+  it("explains why a typed start request is blocked instead of swallowing the click", async () => {
+    const user = userEvent.setup();
+    const actions = composerActions();
+    renderComposerWithOverrides({
+      actions,
+      canStart: false,
+      startBlockedReason: "This browser session is not paired.",
+      taskIntent: "Can you answer a normal question?",
+    });
+
+    const start = screen.getByRole("button", { name: "Start coding run" });
+    await user.click(start);
+
+    const notice = screen.getByRole("alert");
+    expect(notice).toHaveTextContent("This browser session is not paired.");
+    expect(start).toHaveAttribute("aria-describedby", notice.id);
+    expect(actions.onStart).not.toHaveBeenCalled();
+  });
+
+  it("explains a decision-paused run when Enter cannot send a follow-up", () => {
+    const actions = composerActions();
+    renderComposerWithOverrides({
+      actions,
+      runState: "paused",
+      canResume: false,
+      taskIntent: "Please continue differently.",
+    });
+
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Task instructions" }), {
+      key: "Enter",
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "This paused run is waiting for a required decision.",
+    );
+    expect(actions.onSend).not.toHaveBeenCalled();
   });
 
   it("marks only confirmed full access on the authority control", () => {

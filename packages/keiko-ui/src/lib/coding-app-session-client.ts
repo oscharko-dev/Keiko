@@ -2,10 +2,13 @@
 
 /**
  * Browser half of the launcher-automatic app-session pairing flow (ADR-0141 D2, finalized by
- * #2478). The trusted launcher opens the app URL with a single-use pairing attestation in the URL
- * fragment; on boot the desktop shell redeems it against the pair endpoint — which answers with a
- * content-free acknowledgement and, on approval, sets the HttpOnly session cookie — and strips the
+ * #2478). The trusted launcher may open the app URL with a single-use pairing attestation in the
+ * URL fragment; on boot the desktop shell redeems it against the pair endpoint — which answers with
+ * a content-free acknowledgement and, on approval, sets the HttpOnly session cookie — and strips the
  * fragment from the address bar and history entry immediately, whether or not it was well-formed.
+ * A launcher-authorized local BFF can also ensure that cookie for normal reloads and reused tabs,
+ * so the Workbench does not depend on a fragile one-shot fragment after the desktop app is already
+ * running.
  *
  * Redemption success is deliberately unobservable here (the acknowledgement never distinguishes
  * approval from denial, and page script cannot read the HttpOnly cookie); the questions surface
@@ -21,12 +24,14 @@ import {
 import { bffFetchJson } from "./http";
 
 const PAIR_PATH = "/api/coding-workbench/app-session/pair";
+const LOCAL_SESSION_PATH = "/api/coding-workbench/app-session/local-session";
 
 /** Injectable browser seams so the redeem flow is unit-testable without a real window. */
 export interface CodingAppSessionPairingSeams {
   readonly readFragment: () => string;
   readonly stripFragment: () => void;
   readonly postPairing: (attestation: CodingAppSessionPairingAttestation) => Promise<unknown>;
+  readonly postLocalSession?: () => Promise<unknown>;
 }
 
 function defaultSeams(): CodingAppSessionPairingSeams | undefined {
@@ -41,6 +46,11 @@ function defaultSeams(): CodingAppSessionPairingSeams | undefined {
         method: "POST",
         cache: "no-store",
         body: JSON.stringify(attestation),
+      }),
+    postLocalSession: (): Promise<unknown> =>
+      bffFetchJson(LOCAL_SESSION_PATH, {
+        method: "POST",
+        cache: "no-store",
       }),
   };
 }
@@ -69,22 +79,45 @@ export async function redeemCodingAppSessionPairingFragment(
   }
 }
 
+/**
+ * Ask a launcher-authorized local BFF to ensure this browser has an app-session cookie. The endpoint
+ * intentionally acknowledges without revealing whether a cookie was issued; subsequent channel reads
+ * report the honest paired/unpaired state.
+ */
+export async function ensureLocalCodingAppSession(
+  seams: CodingAppSessionPairingSeams | undefined = defaultSeams(),
+): Promise<boolean> {
+  if (seams?.postLocalSession === undefined) return false;
+  try {
+    await seams.postLocalSession();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function bootCodingAppSession(): Promise<boolean> {
+  const redeemed = await redeemCodingAppSessionPairingFragment();
+  const ensured = await ensureLocalCodingAppSession();
+  return redeemed || ensured;
+}
+
 let bootRedemption: Promise<boolean> | undefined;
 
 /**
- * Desktop-boot entry: runs the fragment redemption exactly once per page load (StrictMode's second
- * invocation joins the same promise) and remembers it so data surfaces can order behind it.
+ * Desktop-boot entry: runs the app-session bootstrap exactly once per page load (StrictMode's
+ * second invocation joins the same promise) and remembers it so data surfaces can order behind it.
  */
 export function redeemCodingAppSessionPairingOnBoot(): Promise<boolean> {
-  bootRedemption ??= redeemCodingAppSessionPairingFragment();
+  bootRedemption ??= bootCodingAppSession();
   return bootRedemption;
 }
 
 /**
  * Starts the shared boot pairing attempt when a child read effect reaches this before the desktop
  * parent's effect, then resolves once that same attempt has settled. Protected data surfaces await
- * this before their first read so a freshly opened window cannot race its own redemption into a
- * stale `unpaired` state; no timers, retries, or second session state are involved.
+ * this before their first read so a freshly opened window cannot race its own bootstrap into a stale
+ * `unpaired` state; no timers, retries, or second session state are involved.
  */
 export function codingAppSessionPairingSettled(): Promise<boolean> {
   return redeemCodingAppSessionPairingOnBoot();
@@ -124,6 +157,7 @@ export async function redeemCodingAppSessionPairingNavigation(
 ): Promise<boolean> {
   await bootRedemption;
   if (!(await redeemCodingAppSessionPairingFragment(seams))) return false;
+  await ensureLocalCodingAppSession(seams);
   navigationRedemptions += 1;
   for (const listener of redemptionListeners) listener();
   return true;

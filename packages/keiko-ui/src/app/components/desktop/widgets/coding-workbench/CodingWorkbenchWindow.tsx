@@ -140,6 +140,7 @@ import {
   lifecycleAnnouncement,
   modeLabel,
   modelSourceLabel,
+  startBlockedReason,
   visibleAlert,
 } from "./codingWorkbenchLabels";
 import styles from "./CodingWorkbenchWindow.module.css";
@@ -872,6 +873,7 @@ function WorkbenchColumns({
   // explains why a run cannot start yet (#2476 AC4). Once a binding lands it yields to the task-start
   // flow. The honest note shows only once readiness has RESOLVED as unavailable, never during load.
   const showSetup = issueSetup || bootstrapSetupVisible(state, activeWorkspace);
+  const startBlocker = startBlockedReason(state, t, showSetup, authority.errorMessage);
   const runtimePosture = useRuntimeAssurancePosture(state);
   // Monotonic, not a count: the event buffer is capped (CODING_WORKBENCH_EVENT_RETENTION_LIMIT), so
   // its length plateaus on a long run and every change-driven resync — questions and the activity
@@ -986,6 +988,7 @@ function WorkbenchColumns({
       canResume={operatorResumeAvailable(resumeMode, pausedRun?.pauseReason)}
       mutationPending={state.mutation.status === "pending"}
       startBusy={state.mutation.kind === "start" && state.mutation.status === "pending"}
+      startBlockedReason={startBlocker}
       repositoryLabel={repositoryLabel(repositoryRoot)}
       branchLabel={
         runIsActive

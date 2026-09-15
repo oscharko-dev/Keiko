@@ -284,6 +284,21 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
     "Pausieren Sie den aktiven Lauf, um eine Rückfrage zu senden. Ein entworfener Follow-up wird nur im pausierten Zustand zugelassen und niemals in eine Warteschlange gestellt.",
   "codingWorkbench.composer.workspaceMismatch":
     "Dieser Lauf behält die Autorität des Arbeitsbereichs, in dem er gestartet wurde; dieser ist nicht mehr der aktive. Chips, Git und die Änderungen des Laufs bleiben bei seinem Arbeitsbereich. Wechseln Sie zurück, um diese Dateien zu prüfen oder zu bearbeiten.",
+  "codingWorkbench.composer.blocked.busy": "Keiko verarbeitet gerade eine Runtime-Aktion.",
+  "codingWorkbench.composer.blocked.emptyStart": "Beschreibe zuerst, was Keiko tun soll.",
+  "codingWorkbench.composer.blocked.emptyFollowUp": "Schreibe zuerst eine Rückfrage.",
+  "codingWorkbench.composer.blocked.pauseDecision":
+    "Dieser pausierte Lauf wartet auf eine erforderliche Entscheidung. Nutze die oben angezeigte Entscheidungsaktion.",
+  "codingWorkbench.composer.blocked.notReady":
+    "Keiko ist noch nicht startbereit. Prüfe die Workbench-Informationen oben.",
+  "codingWorkbench.composer.blocked.pairing":
+    "Keiko prüft noch, ob diese Browsersitzung gekoppelt ist.",
+  "codingWorkbench.composer.blocked.unpaired":
+    "Diese Browsersitzung ist nicht gekoppelt; Keiko kann hier keinen Coding-Lauf starten. Öffne Keiko über den Launcher und versuche es erneut.",
+  "codingWorkbench.composer.blocked.modelSource": "Keiko prüft noch die Modellquelle.",
+  "codingWorkbench.composer.blocked.workspace": "Keiko prüft noch den Task-Workspace.",
+  "codingWorkbench.composer.blocked.runtime": "Keiko prüft noch die Coding-Runtime.",
+  "codingWorkbench.composer.blocked.run": "Keiko prüft noch den aktuellen Laufstatus.",
   "codingWorkbench.editorBridge.reconnecting":
     "Bearbeitungen sind pausiert: Die Editor-Bridge wird neu verbunden.",
   "codingWorkbench.questions.sectionLabel": "Laufzeitfragen",

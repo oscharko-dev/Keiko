@@ -16,6 +16,7 @@ import {
 } from "./channelContract.js";
 import {
   isWellFormedSessionPairingAttestation,
+  LOCAL_APP_SESSION_PRINCIPAL_LABEL,
   type SessionPairingPort,
 } from "./sessionPairingPort.js";
 import type { AppSession, SessionRegistry } from "./sessionRegistry.js";
@@ -44,8 +45,14 @@ export type CodingAppSessionPairResult =
 export type CodingAppSessionRotateResult =
   { readonly rotated: true; readonly cookieToken: string } | { readonly rotated: false };
 
+export type CodingAppSessionEnsureResult =
+  | { readonly status: "active" }
+  | { readonly status: "issued"; readonly cookieToken: string }
+  | { readonly status: "unavailable" };
+
 export interface CodingAppSessionChannel {
   readonly pair: (attestation: unknown) => CodingAppSessionPairResult;
+  readonly ensureLocalSession: (cookieToken: string | undefined) => CodingAppSessionEnsureResult;
   readonly snapshot: (cookieToken: string | undefined) => CodingAppSessionChannelSnapshot;
   readonly rotate: (cookieToken: string | undefined) => CodingAppSessionRotateResult;
   /**
@@ -338,19 +345,40 @@ function makeLiveSubscriptionAdmission(): LiveSubscriptionAdmission {
   };
 }
 
+function pairSession(
+  registry: SessionRegistry,
+  pairingPort: SessionPairingPort | undefined,
+  attestation: unknown,
+): CodingAppSessionPairResult {
+  if (pairingPort === undefined) return { paired: false };
+  if (!isWellFormedSessionPairingAttestation(attestation)) return { paired: false };
+  const decision = pairingPort.attest(attestation);
+  if (decision.outcome !== "approved") return { paired: false };
+  const mint = registry.mint(decision.principalLabel);
+  return { paired: true, cookieToken: mint.cookieToken };
+}
+
+function ensureLocalSession(
+  registry: SessionRegistry,
+  pairingPort: SessionPairingPort | undefined,
+  cookieToken: string | undefined,
+): CodingAppSessionEnsureResult {
+  if (registry.verify(cookieToken) !== undefined) return { status: "active" };
+  if (pairingPort === undefined) return { status: "unavailable" };
+  const mint = registry.mint(LOCAL_APP_SESSION_PRINCIPAL_LABEL);
+  return { status: "issued", cookieToken: mint.cookieToken };
+}
+
 export function createCodingAppSessionChannel(
   deps: CodingAppSessionChannelDeps,
 ): CodingAppSessionChannel {
   const { registry, pairingPort, contentSource, diagnostics } = deps;
   const admission = makeLiveSubscriptionAdmission();
   return {
-    pair: (attestation: unknown): CodingAppSessionPairResult => {
-      if (pairingPort === undefined) return { paired: false };
-      if (!isWellFormedSessionPairingAttestation(attestation)) return { paired: false };
-      const decision = pairingPort.attest(attestation);
-      if (decision.outcome !== "approved") return { paired: false };
-      const mint = registry.mint(decision.principalLabel);
-      return { paired: true, cookieToken: mint.cookieToken };
+    pair: (attestation: unknown): CodingAppSessionPairResult =>
+      pairSession(registry, pairingPort, attestation),
+    ensureLocalSession: (cookieToken: string | undefined): CodingAppSessionEnsureResult => {
+      return ensureLocalSession(registry, pairingPort, cookieToken);
     },
     snapshot: (cookieToken: string | undefined): CodingAppSessionChannelSnapshot => {
       const session = registry.verify(cookieToken);

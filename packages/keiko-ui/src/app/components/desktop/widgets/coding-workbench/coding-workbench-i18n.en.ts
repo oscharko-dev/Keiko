@@ -266,6 +266,21 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
     "Pause the active run to send a follow-up. A drafted follow-up is admitted only while paused and is never queued.",
   "codingWorkbench.composer.workspaceMismatch":
     "This run keeps the authority of the workspace it started in, which is no longer the active one. The chips, Git and the run's changes stay on the run's workspace; switch back to it to review or edit those files.",
+  "codingWorkbench.composer.blocked.busy": "Keiko is already processing a runtime action.",
+  "codingWorkbench.composer.blocked.emptyStart": "Describe what Keiko should do first.",
+  "codingWorkbench.composer.blocked.emptyFollowUp": "Write a follow-up first.",
+  "codingWorkbench.composer.blocked.pauseDecision":
+    "This paused run is waiting for a required decision. Use the decision action shown above.",
+  "codingWorkbench.composer.blocked.notReady":
+    "Keiko is not ready to start this coding run yet. Check the Workbench information above.",
+  "codingWorkbench.composer.blocked.pairing":
+    "Keiko is still checking whether this browser session is paired.",
+  "codingWorkbench.composer.blocked.unpaired":
+    "This browser session is not paired, so Keiko cannot start a coding run here. Open Keiko through the launcher and try again.",
+  "codingWorkbench.composer.blocked.modelSource": "Keiko is still checking the model source.",
+  "codingWorkbench.composer.blocked.workspace": "Keiko is still checking the task workspace.",
+  "codingWorkbench.composer.blocked.runtime": "Keiko is still checking the coding runtime.",
+  "codingWorkbench.composer.blocked.run": "Keiko is still checking the current run state.",
   "codingWorkbench.editorBridge.reconnecting": "Edits are paused: reconnecting the editor bridge.",
   "codingWorkbench.questions.sectionLabel": "Runtime questions",
   "codingWorkbench.questions.eyebrow": "Input needed",

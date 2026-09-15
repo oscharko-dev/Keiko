@@ -28,6 +28,7 @@ describe("production composition of the app-session channel (ADR-0141 D7)", () =
     const channel = productionDeps({}).codingAppSessionChannel;
     expect(channel).toBeDefined();
     expect(channel?.pair(fakePairingRequestBody())).toEqual({ paired: false });
+    expect(channel?.ensureLocalSession(undefined)).toEqual({ status: "unavailable" });
     expect(channel?.snapshot(undefined).content).toBeNull();
     expect(channel?.sessionCount()).toBe(0);
   });
@@ -45,6 +46,7 @@ describe("production composition of the app-session channel (ADR-0141 D7)", () =
     expect(result?.paired).toBe(true);
     // No content source is wired in production this wave, so even a paired session reads content-free.
     if (result?.paired) expect(channel?.snapshot(result.cookieToken).content).toBeNull();
+    expect(channel?.ensureLocalSession(undefined).status).toBe("issued");
   });
 
   it("no production source imports the CI pairing fake (_support), so it is unreachable", () => {

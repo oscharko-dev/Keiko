@@ -47,6 +47,15 @@ async function pairSession(server: AppSessionTestServer): Promise<string> {
   return cookie;
 }
 
+async function ensureLocalSession(server: AppSessionTestServer): Promise<string | undefined> {
+  const response = await fetch(`${server.baseUrl}${APP_SESSION_PATHS.localSession}`, {
+    method: "POST",
+    headers: postHeaders(),
+  });
+  expect(response.status).toBe(200);
+  return extractSessionCookie(response);
+}
+
 async function readStreamContent(
   server: AppSessionTestServer,
   cookie?: string,
@@ -90,6 +99,28 @@ describe("authenticated app-session channel journey (ADR-0141, #2477)", () => {
       const cookie = await pairSession(server);
       expect(await snapshotContent(server, cookie)).toEqual(CANARY);
       expect(await readStreamContent(server, cookie)).toEqual(CANARY);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("a launcher-authorized local session reads the bounded payload without a URL fragment", async () => {
+    const server = await startServer();
+    try {
+      const cookie = await ensureLocalSession(server);
+      if (cookie === undefined) throw new TypeError("local session did not issue a cookie");
+      expect(await snapshotContent(server, cookie)).toEqual(CANARY);
+      expect(await readStreamContent(server, cookie)).toEqual(CANARY);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("local-session stays fail-closed when no pairing authority is composed", async () => {
+    const server = await startAppSessionTestServer();
+    try {
+      await expect(ensureLocalSession(server)).resolves.toBeUndefined();
+      expect(await snapshotContent(server)).toBeNull();
     } finally {
       await server.close();
     }
