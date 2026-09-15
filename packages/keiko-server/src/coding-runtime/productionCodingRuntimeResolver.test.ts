@@ -57,6 +57,35 @@ afterEach(() => {
 });
 
 describe("production coding runtime resolver", () => {
+  it("shares provider context usage between the backend and public host projection", () => {
+    const fixture = workspaceFixture();
+    const confirmations = confirmationFixture();
+    const createRun = vi.fn((input: ProductionRuntimeBackendInput) => {
+      input.contextUsage?.recordProviderSample(input.request.runId, {
+        sampleId: "sample-1",
+        capacityTokens: 128_000,
+        reservedOutputTokens: 8_000,
+        inputTokens: 42_000,
+        updatedAt: "2026-09-15T06:30:00.000Z",
+      });
+      return backendRun(input.request.runId);
+    });
+    const host = createProductionCodingRuntimeHost(
+      resolverFor(fixture, createRun, confirmations.consumer),
+    );
+    if (host === undefined) throw new Error("expected qualified host");
+    const request = launchRequest(fixture.workspace);
+    confirmations.issue(resolveProductionRuntimeStartConfirmationClaim(fixture.authority, request));
+
+    host.launchResolver.resolve(request);
+
+    expect(host.contextUsage?.read(request.runId)).toMatchObject({
+      state: "available",
+      usedInputTokens: 42_000,
+      cumulativePromptTokens: 42_000,
+    });
+  });
+
   it("carries the admitted issue through the production context and start confirmation", () => {
     const fixture = workspaceFixture();
     const confirmations = confirmationFixture();

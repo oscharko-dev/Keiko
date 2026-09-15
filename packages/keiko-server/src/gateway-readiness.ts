@@ -20,7 +20,11 @@ import type {
 } from "@oscharko-dev/keiko-contracts/bff-wire";
 import { gatewayVerificationFromProbeOutcome } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import { maxUtf8BytesForTokenBudget } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
-import { preferredConversationModelOrder } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import {
+  isCodingWorkbenchReadinessCandidate,
+  preferredConversationModelOrder,
+  selectCodingWorkbenchReadinessCandidate,
+} from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import type { UiHandlerDeps, VerifiedModelCapabilityFields } from "./deps.js";
 import { currentConversationReady, currentGatewayConfig } from "./deps.js";
 import { newCorrelationId } from "./correlation.js";
@@ -37,6 +41,7 @@ import {
   type GatewayProbeSpendContext,
 } from "./gateway-tool-calling-probe.js";
 import { reconcileGatewayToolCallingReadiness } from "./gateway-setup.js";
+import { processServerLogSink } from "./process-log-sink.js";
 
 const DEFAULT_PROBES: readonly GatewayReadinessProbeName[] = [
   "chat",
@@ -153,10 +158,12 @@ function parseReadinessOptions(raw: Record<string, unknown>): GatewayReadinessOp
     typeof raw.maxContextTokens === "number" && Number.isFinite(raw.maxContextTokens)
       ? Math.max(1, Math.min(MAX_CONTEXT_TOKENS, Math.trunc(raw.maxContextTokens)))
       : undefined;
+  const purpose = raw.purpose === "coding-workbench-auto" ? raw.purpose : undefined;
   return {
     ...(probes !== undefined ? { probes } : {}),
     ...(includeDeepProbes !== undefined ? { includeDeepProbes } : {}),
     ...(maxContextTokens !== undefined ? { maxContextTokens } : {}),
+    ...(purpose !== undefined ? { purpose } : {}),
   };
 }
 
@@ -184,15 +191,23 @@ function requestedProbeNames(
 function chooseProvider(
   config: GatewayConfig | undefined,
   requestedModelId: string | undefined,
+  options: GatewayReadinessOptions | undefined,
 ): ProviderSelection | RouteResult {
   if (config === undefined || config.providers.length === 0) {
     return error("NO_MODEL", "Configure a gateway before running readiness checks.");
   }
+  const firstProvider = config.providers[0];
+  if (firstProvider === undefined) {
+    return error("NO_MODEL", "Configure a gateway before running readiness checks.");
+  }
   const capabilities = listConfiguredCapabilities(config);
-  const modelId =
-    requestedModelId ??
-    capabilities.find((capability) => isConversationEligibleModel(capability))?.id ??
-    config.providers[0]?.modelId;
+  const modelId = selectReadinessModelId(
+    capabilities,
+    requestedModelId,
+    options,
+    firstProvider.modelId,
+  );
+  if (typeof modelId !== "string") return modelId;
   const provider = config.providers.find((candidate) => candidate.modelId === modelId);
   if (provider === undefined) {
     return error("NO_MODEL", "Select a configured chat model before running readiness checks.");
@@ -205,6 +220,63 @@ function chooseProvider(
     );
   }
   return { config, provider, capability };
+}
+
+function selectReadinessModelId(
+  capabilities: readonly ModelCapability[],
+  requestedModelId: string | undefined,
+  options: GatewayReadinessOptions | undefined,
+  fallbackModelId: string,
+): string | RouteResult {
+  if (options?.purpose !== "coding-workbench-auto") {
+    return (
+      requestedModelId ??
+      capabilities.find((capability) => isConversationEligibleModel(capability))?.id ??
+      fallbackModelId
+    );
+  }
+  const candidate =
+    requestedModelId === undefined
+      ? selectCodingWorkbenchReadinessCandidate(capabilities)
+      : capabilities.find((capability) => capability.id === requestedModelId);
+  if (candidate === undefined || !isCodingWorkbenchReadinessCandidate(candidate)) {
+    return error(
+      "NO_MODEL",
+      "Select a configured, workflow-eligible coding model before automatic verification.",
+    );
+  }
+  return candidate.id;
+}
+
+function logAutomaticReadinessStarted(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  modelId: string,
+  probeCount: number,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write({
+    category: "gateway",
+    op: "gateway.readiness.automatic.started",
+    correlationId,
+    extra: { modelId, probeCount },
+  });
+}
+
+function logAutomaticReadinessCompleted(
+  deps: UiHandlerDeps,
+  correlationId: string,
+  report: GatewayReadinessReport,
+): void {
+  (deps.activityLog ?? processServerLogSink()).write({
+    category: "gateway",
+    op: "gateway.readiness.automatic.completed",
+    correlationId,
+    extra: {
+      modelId: report.modelId,
+      overallStatus: report.overallStatus,
+      probeCount: report.probes.length,
+    },
+  });
 }
 
 async function providerRequest(
@@ -1299,13 +1371,16 @@ export async function runGatewayReadiness(
   // than an id-less record.
   requestCorrelationId?: string,
 ): Promise<GatewayReadinessReport | RouteResult> {
-  const selection = chooseProvider(currentGatewayConfig(deps), request.modelId);
+  const selection = chooseProvider(currentGatewayConfig(deps), request.modelId, request.options);
   if ("status" in selection) return selection;
   // Capture the config generation BEFORE the async probes: the verdict describes this
   // configuration, and the holder drops it if the config was replaced mid-probe (#2847 review).
   const observedGeneration = deps.gatewayConfig?.generation();
   const correlationId = requestCorrelationId ?? newCorrelationId();
   const names = requestedProbeNames(request.options);
+  if (request.options?.purpose === "coding-workbench-auto") {
+    logAutomaticReadinessStarted(deps, correlationId, selection.provider.modelId, names.length);
+  }
   const probes: GatewayReadinessProbeResult[] = [];
   const chat = await runProbe("chat", deps, selection, request.options, correlationId);
   probes.push(chat);
@@ -1335,6 +1410,9 @@ export async function runGatewayReadiness(
   // Content-free: one state word, no probe bodies, no endpoints, no credentials.
   recordReadinessObservation(deps, report, observedGeneration);
   reconcileToolCallingReadiness(deps, report, observedGeneration, correlationId);
+  if (request.options?.purpose === "coding-workbench-auto") {
+    logAutomaticReadinessCompleted(deps, correlationId, report);
+  }
   return report;
 }
 

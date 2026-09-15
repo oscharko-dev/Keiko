@@ -98,11 +98,12 @@ blocked.
 ### D4 — Trusted rendering and separately governed application
 
 One contract owns the versioned managed-region markers. Model output cannot author those markers,
-closing keywords, template structure or branding. The trusted renderer appends the exact text
-`by Keiko`; a logo is optional and requires a validated immutable HTTPS asset plus server-established
-public availability. Missing, private or unrenderable assets produce the text fallback without a
-network fetch. Repository templates and human-authored text outside the managed region belong to
-the application adapter and must remain byte-identical. The server-owned Checks section of a
+closing keywords, template structure or branding. The trusted renderer appends the exact linked
+attribution `Generated with [Keiko](https://github.com/oscharko-dev/Keiko)`; a logo is optional and
+requires a validated immutable HTTPS asset plus server-established public availability. Missing,
+private or unrenderable assets produce the text fallback without a network fetch. Repository
+templates and human-authored text outside the managed region belong to the application adapter and
+must remain byte-identical. The server-owned Checks section of a
 delivered pull request (ADR-0086 D9) is kept current by its own governed `pr-update`, never by
 description application: it replaces only the bytes inside its own frame, after re-reading the live
 body and confirming, on that same read, that the pull request is still the delivery's own, open and

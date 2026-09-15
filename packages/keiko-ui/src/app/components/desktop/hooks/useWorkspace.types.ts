@@ -2,7 +2,7 @@ import type { PointerEvent as ReactPointerEvent } from "react";
 import type { SnapZone } from "../windows/connectionUtils";
 import type { WindowType } from "../windows/WindowsRegistry";
 import type { AppWindow, Connection, ConnectingState, SnapPrev, View } from "../windows/types";
-import type { ChatConnectedScope } from "@/lib/types";
+import type { ChatConnectedScope, ChatGitChangeScope } from "@/lib/types";
 import type {
   QualityIntelligenceFigmaSnapshotSource,
   QualityIntelligenceImageSource,
@@ -44,6 +44,13 @@ export type OpenEditorFileResult =
   | { readonly ok: true; readonly windowId: string }
   | { readonly ok: false; readonly message: string };
 
+export interface WorkspaceLinkedGitChangeComparison {
+  readonly connectionId: string;
+  readonly baseRef: string;
+  readonly headRef: string;
+  readonly pending: boolean;
+}
+
 // Issue #2150 follow-up — copy/cut/paste report counts so the workspace can
 // announce the outcome (ADR-0123 D5 requires skipped windows to carry a
 // documented reason; a silent no-op is not one). `captured` is the number of
@@ -76,6 +83,9 @@ export interface WorkspaceApi {
   readonly add: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
   readonly openEditorFile: (request: OpenEditorFileRequest) => OpenEditorFileResult;
   readonly toggleTool: (type: WindowType) => void;
+  /** Atomically raises, focuses, and selects a window for a primary user activation. */
+  readonly activateWindow: (id: string) => void;
+  /** Raises and focuses without changing an intentional workspace selection. */
   readonly focus: (id: string) => void;
   readonly currentWindowStack?: (() => readonly string[]) | undefined;
   readonly currentSelection: () => WorkspaceUiSelectionState;
@@ -104,6 +114,8 @@ export interface WorkspaceApi {
   readonly cancelConnect: () => void;
   readonly removeConn: (connId: string, options?: { readonly unbind?: boolean }) => void;
   readonly updateConnBoundScope: (connId: string, scope: ChatConnectedScope) => void;
+  readonly updateConnGitChangeScope?:
+    ((connId: string, scope: ChatGitChangeScope) => void) | undefined;
   readonly connect: (a: string, b: string) => void;
   readonly linkedFilesRoot: (id: string) => string | null;
   readonly linkedFilesContext: (id: string) => FilesWindowContext | null;
@@ -118,6 +130,9 @@ export interface WorkspaceApi {
   /** Image-only sources from connected Figma Image windows. */
   readonly linkedImageSources?:
     ((id: string) => readonly QualityIntelligenceImageSource[]) | undefined;
+  /** Git-change comparison projected from a Git↔Chat workspace connector edge. */
+  readonly linkedGitChangeComparisons?:
+    ((id: string) => readonly WorkspaceLinkedGitChangeComparison[]) | undefined;
   readonly currentFilesContext: () => FilesWindowContext | null;
   /**
    * Live snapshot of the pan/zoom view, read through a ref so window children can

@@ -13,7 +13,10 @@
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 export { canonicalGitHubPushUrl } from "./git-push-destination.js";
-import type { GitDeliveryExecutionResult } from "@oscharko-dev/keiko-contracts";
+import type {
+  GitDeliveryExecutionErrorCode,
+  GitDeliveryExecutionResult,
+} from "@oscharko-dev/keiko-contracts";
 import { GIT_DELIVERY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import {
   buildAbortArgv,
@@ -100,16 +103,41 @@ function executionResult(
 
 // A non-zero git exit at execution time means a precondition that the preflight snapshot did not
 // capture failed against the live repository (a time-of-check/time-of-use gap) — classified as
-// `precondition-failed`, which the taxonomy routes to recovery-required. When part of a multi-step
-// plan already partially applied, the result is `partial` with the attempted/succeeded counts.
-function failureFromExit(durationMs: number, stepIndex: number): GitDeliveryExecutionResult {
+// `precondition-failed`, which the taxonomy routes to recovery-required. Signing failures use their
+// own code so the caller never presents them as a generic repository-state issue. When part of a
+// multi-step plan already partially applied, the result is `partial` with the attempted/succeeded
+// counts.
+function failureFromExit(
+  durationMs: number,
+  stepIndex: number,
+  errorCode: GitDeliveryExecutionErrorCode = "precondition-failed",
+): GitDeliveryExecutionResult {
   if (stepIndex > 0) {
     return executionResult("partial", durationMs, {
-      errorCode: "precondition-failed",
+      errorCode,
       partialDetail: { attemptedUnitCount: stepIndex + 1, succeededUnitCount: stepIndex },
     });
   }
-  return executionResult("failed", durationMs, { errorCode: "precondition-failed" });
+  return executionResult("failed", durationMs, { errorCode });
+}
+
+const SIGNING_FAILURE_PATTERN =
+  /(?:gpg failed to sign|failed to sign|couldn.t sign|couldn.t load public key|no signing key|user\.signingkey|ssh-keygen)/iu;
+
+function failureFromGitExit(
+  result: CommandResult,
+  durationMs: number,
+  stepIndex: number,
+  argv: readonly string[],
+): GitDeliveryExecutionResult {
+  const errorCode = gitSigningFailure(argv, result) ? "signature-failed" : "precondition-failed";
+  return failureFromExit(durationMs, stepIndex, errorCode);
+}
+
+function gitSigningFailure(argv: readonly string[], result: CommandResult): boolean {
+  if (!argv.some((arg) => arg === "--gpg-sign" || arg === "-S")) return false;
+  if (result.truncated) return false;
+  return SIGNING_FAILURE_PATTERN.test(`${result.stderr}\n${result.stdout}`);
 }
 
 function failureFromThrow(
@@ -160,21 +188,16 @@ const GOVERNED_GIT_MUTATION_CONFIG_ARGS: readonly string[] = [
   "-c",
   "alias.commit=",
   "-c",
-  "commit.gpgSign=false",
+  "gpg.program=gpg",
+  "-c",
+  "gpg.ssh.program=ssh-keygen",
   "-c",
   "protocol.ext.allow=never",
   "-c",
   "submodule.recurse=false",
 ];
 
-const GLOBAL_SIGNING_POLICY_ARGS: readonly string[] = [
-  "config",
-  "--global",
-  "--type=bool",
-  "--get",
-  "commit.gpgSign",
-];
-const GLOBAL_SIGNING_POLICY_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
+const GIT_CONFIG_COMMAND_RULES: readonly CommandRule[] = Object.freeze([
   {
     executable: "git",
     allowedSubcommands: Object.freeze(["config"]),
@@ -223,46 +246,16 @@ async function runPlan(
     }
     totalDuration += result.durationMs;
     if (result.exitCode !== 0) {
-      return failureFromExit(totalDuration, stepIndex);
+      return failureFromGitExit(result, totalDuration, stepIndex, argv);
     }
   }
   return executionResult("succeeded", totalDuration);
 }
 
-async function configuredSigningRequired(
-  ctx: RunContext,
-  scope: "--global" | "--local",
-): Promise<boolean | undefined> {
-  const runDeps = {
-    ...ctx.runDeps,
-    commandRules: GLOBAL_SIGNING_POLICY_COMMAND_RULES,
-    onTerminated: ctx.runDeps.onTerminated,
-  };
-  const result = await runCommand(
-    {
-      command: "git",
-      args:
-        scope === "--global"
-          ? GLOBAL_SIGNING_POLICY_ARGS
-          : ["config", "--local", "--type=bool", "--get", "commit.gpgSign"],
-      cwd: undefined,
-      timeoutMs: ctx.timeoutMs,
-      signal: ctx.signal,
-    },
-    runDeps,
-  );
-  if (result.exitCode === 1 && result.stdout.trim().length === 0) return false;
-  if (result.exitCode !== 0) return undefined;
-  const value = result.stdout.trim();
-  if (value === "true") return true;
-  if (value === "false") return false;
-  return undefined;
-}
-
 async function configuredStageNormalizationSupported(ctx: RunContext): Promise<boolean> {
   const runDeps = {
     ...ctx.runDeps,
-    commandRules: GLOBAL_SIGNING_POLICY_COMMAND_RULES,
+    commandRules: GIT_CONFIG_COMMAND_RULES,
     onTerminated: ctx.runDeps.onTerminated,
   };
   const result = await runCommand(
@@ -332,17 +325,6 @@ async function execCommit(
   ctx: RunContext,
   request: GitCommitExecRequest,
 ): Promise<GitDeliveryExecutionResult> {
-  let signingRequired: boolean | undefined;
-  try {
-    signingRequired = await configuredSigningRequired(ctx, "--global");
-    if (signingRequired === false && request.verified !== undefined)
-      signingRequired = await configuredSigningRequired(ctx, "--local");
-  } catch (error) {
-    return failureFromThrow(error, 0, 0);
-  }
-  if (signingRequired !== false) {
-    return executionResult("failed", 0, { errorCode: "precondition-failed" });
-  }
   if (request.verified !== undefined) return execVerifiedCommit(ctx, request);
   const result = await execPlan(ctx, () => buildCommitArgv(request));
   if (result.outcome !== "succeeded") return result;
@@ -359,7 +341,13 @@ function commitReadDeps(
   return { ...ctx.runDeps, signal: ctx.signal, timeoutMs: ctx.timeoutMs };
 }
 
-function validVerifiedOperands(request: GitCommitExecRequest): boolean {
+type VerifiedCommitExecRequest = GitCommitExecRequest & {
+  readonly verified: NonNullable<GitCommitExecRequest["verified"]>;
+};
+
+function validVerifiedOperands(
+  request: GitCommitExecRequest,
+): request is VerifiedCommitExecRequest {
   const v = request.verified;
   if (v === undefined) return false;
   return [
@@ -371,6 +359,18 @@ function validVerifiedOperands(request: GitCommitExecRequest): boolean {
     request.message.length > 0,
     !request.message.includes("\0"),
   ].every(Boolean);
+}
+
+class GitObjectCommandFailure extends Error {
+  public readonly result: CommandResult;
+  public readonly argv: readonly string[];
+
+  public constructor(result: CommandResult, argv: readonly string[]) {
+    super("git-object-command-failed");
+    this.name = "GitObjectCommandFailure";
+    this.result = result;
+    this.argv = argv;
+  }
 }
 
 async function verifiedFactsMatch(
@@ -401,44 +401,81 @@ async function checkedObjectCommand(ctx: RunContext, argv: readonly string[]): P
     result.truncated ||
     !/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(objectId)
   ) {
-    throw new TypeError("verified-commit-object-unavailable");
+    throw new GitObjectCommandFailure(result, argv);
   }
   return objectId;
+}
+
+interface PreparedVerifiedCommit {
+  readonly baseRef: string;
+  readonly head: string;
+}
+
+async function prepareVerifiedCommit(
+  ctx: RunContext,
+  request: VerifiedCommitExecRequest,
+): Promise<PreparedVerifiedCommit | undefined> {
+  if (!(await verifiedFactsMatch(ctx, request))) return undefined;
+  const tree = await checkedObjectCommand(ctx, ["write-tree"]);
+  const deps = commitReadDeps(ctx);
+  const baseRef = await readGitFullRef(deps, request.verified.baseRef);
+  if ((await readGitTreeDigest(deps, tree)) !== request.verified.stagedTreeDigest) return undefined;
+  const head = await checkedObjectCommand(ctx, [
+    "commit-tree",
+    tree,
+    "-S",
+    "-p",
+    request.verified.headSha,
+    "-m",
+    request.message,
+  ]);
+  if (!(await createdCommitMatches(ctx, request, head))) return undefined;
+  if (!(await verifiedEffectReady(ctx, request))) return undefined;
+  return { baseRef, head };
+}
+
+async function updateVerifiedCommitRef(
+  ctx: RunContext,
+  request: VerifiedCommitExecRequest,
+  prepared: PreparedVerifiedCommit,
+): Promise<GitDeliveryExecutionResult> {
+  const result = await runOne(
+    ctx,
+    ["update-ref", "--stdin"],
+    `start\nverify ${prepared.baseRef} ${request.verified.baseSha}\nupdate refs/heads/${request.verified.branchName} ${prepared.head} ${request.verified.headSha}\nprepare\ncommit\n`,
+  );
+  if (result.exitCode !== 0) return failureFromExit(result.durationMs, 0);
+  return executionResult("succeeded", result.durationMs, { externalId: prepared.head });
+}
+
+function failureFromVerifiedCommitError(
+  error: unknown,
+  refAttempted: boolean,
+): GitDeliveryExecutionResult {
+  if (error instanceof GitObjectCommandFailure) {
+    return failureFromGitExit(
+      error.result,
+      error.result.durationMs,
+      refAttempted ? 1 : 0,
+      error.argv,
+    );
+  }
+  return failureFromThrow(error, 0, refAttempted ? 1 : 0);
 }
 
 async function execVerifiedCommit(
   ctx: RunContext,
   request: GitCommitExecRequest,
 ): Promise<GitDeliveryExecutionResult> {
-  if (!validVerifiedOperands(request) || request.verified === undefined)
-    return failureFromExit(0, 0);
+  if (!validVerifiedOperands(request)) return failureFromExit(0, 0);
   let refAttempted = false;
   try {
-    if (!(await verifiedFactsMatch(ctx, request))) return failureFromExit(0, 0);
-    const tree = await checkedObjectCommand(ctx, ["write-tree"]);
-    const baseRef = await readGitFullRef(commitReadDeps(ctx), request.verified.baseRef);
-    if ((await readGitTreeDigest(commitReadDeps(ctx), tree)) !== request.verified.stagedTreeDigest)
-      return failureFromExit(0, 0);
-    const head = await checkedObjectCommand(ctx, [
-      "commit-tree",
-      tree,
-      "-p",
-      request.verified.headSha,
-      "-m",
-      request.message,
-    ]);
-    if (!(await createdCommitMatches(ctx, request, head))) return failureFromExit(0, 0);
-    if (!(await verifiedEffectReady(ctx, request))) return failureFromExit(0, 0);
+    const prepared = await prepareVerifiedCommit(ctx, request);
+    if (prepared === undefined) return failureFromExit(0, 0);
     refAttempted = true;
-    const result = await runOne(
-      ctx,
-      ["update-ref", "--stdin"],
-      `start\nverify ${baseRef} ${request.verified.baseSha}\nupdate refs/heads/${request.verified.branchName} ${head} ${request.verified.headSha}\nprepare\ncommit\n`,
-    );
-    if (result.exitCode !== 0) return failureFromExit(result.durationMs, 0);
-    return executionResult("succeeded", result.durationMs, { externalId: head });
+    return await updateVerifiedCommitRef(ctx, request, prepared);
   } catch (error) {
-    return failureFromThrow(error, 0, refAttempted ? 1 : 0);
+    return failureFromVerifiedCommitError(error, refAttempted);
   }
 }
 

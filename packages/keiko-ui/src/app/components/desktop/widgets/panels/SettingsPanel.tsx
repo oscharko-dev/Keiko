@@ -14,6 +14,7 @@ import {
   applyGatewayVerifiedCapabilities,
   fetchConfig,
   fetchModels,
+  resetModelRequestCache,
   runGatewayReadiness,
   type VerifiedGatewayCapabilityFields,
 } from "@/lib/api";
@@ -58,6 +59,7 @@ import {
 import { Toggle } from "../shared/Toggle";
 import {
   GATEWAY_CONFIG_UPDATED_EVENT,
+  GATEWAY_MODEL_READINESS_UPDATED_EVENT,
   GATEWAY_SETUP_REQUEST_EVENT,
   consumePendingGatewaySetup,
   notifyGatewayConfigUpdated,
@@ -543,7 +545,7 @@ function CapabilityApplyConfirmDialog({
       if (event.key === "Escape") decline();
     };
     document.addEventListener("keydown", onKeyDown);
-    return () => {
+    return (): void => {
       document.removeEventListener("keydown", onKeyDown);
       if (opener?.isConnected === true) opener.focus();
     };
@@ -962,7 +964,7 @@ function GeneralPrefs({ voicePersonas, openUpdatesWindow }: GeneralPrefsProps): 
     };
     window.addEventListener(VOICE_PERSONA_CHANGED_EVENT, applyStoredPreference);
     window.addEventListener("storage", applyStoragePreference);
-    return () => {
+    return (): void => {
       window.removeEventListener(VOICE_PERSONA_CHANGED_EVENT, applyStoredPreference);
       window.removeEventListener("storage", applyStoragePreference);
     };
@@ -1427,7 +1429,7 @@ function computeGatewayStatusLabel(
   // and "configured" already withholds the connection claim (uiux-fix C286's distinction).
   if (!hasDiscoveredModels) return t("settings.models.configured");
   // "connected" is a claim about reaching the gateway, so only a passing probe earns it.
-  if (verification === UNVERIFIED_GATEWAY) return t("settings.models.notVerified");
+  if (verification === UNVERIFIED_GATEWAY) return t("settings.models.configured");
   return t("settings.models.connected");
 }
 
@@ -1781,7 +1783,7 @@ export function SettingsPanel({
       setTab("editor");
     };
     window.addEventListener(OPEN_EDITOR_SETTINGS_EVENT, onOpenEditorSettings);
-    return () => {
+    return (): void => {
       window.removeEventListener(OPEN_EDITOR_SETTINGS_EVENT, onOpenEditorSettings);
     };
   }, []);
@@ -1831,7 +1833,7 @@ export function SettingsPanel({
       },
       t,
     );
-    return () => {
+    return (): void => {
       cancelled = true;
     };
   }, [applyConfig, reloadTick, t]);
@@ -1846,10 +1848,21 @@ export function SettingsPanel({
       setReloadTick((tick) => tick + 1);
     };
     window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
-    return () => {
+    return (): void => {
       window.removeEventListener(GATEWAY_CONFIG_UPDATED_EVENT, onConfigUpdated);
     };
   }, [advanceConfigGeneration]);
+
+  useEffect(() => {
+    const onModelReadinessUpdated = (): void => {
+      resetModelRequestCache();
+      setReloadTick((tick) => tick + 1);
+    };
+    window.addEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, onModelReadinessUpdated);
+    return (): void => {
+      window.removeEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, onModelReadinessUpdated);
+    };
+  }, []);
 
   const voicePersonas = useMemo(() => voicePersonasFromModels(models), [models]);
   const gatewayConfigured = configPresent;

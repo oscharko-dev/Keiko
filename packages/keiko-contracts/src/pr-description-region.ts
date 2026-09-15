@@ -2,7 +2,8 @@
 export const PR_DESCRIPTION_REGION_VERSION = "1" as const;
 export const PR_DESCRIPTION_REGION_START = "<!-- keiko:pr-description:v1:start -->";
 export const PR_DESCRIPTION_REGION_END = "<!-- keiko:pr-description:v1:end -->";
-export const PR_DESCRIPTION_ATTRIBUTION = "by Keiko";
+export const PR_DESCRIPTION_ATTRIBUTION =
+  "Generated with [Keiko](https://github.com/oscharko-dev/Keiko)";
 export const PR_DESCRIPTION_LOGO_SOURCE = "packages/keiko-ui/public/keiko-logo.svg";
 
 /** Also catches malformed/future markers: only the trusted frame may emit this namespace. */

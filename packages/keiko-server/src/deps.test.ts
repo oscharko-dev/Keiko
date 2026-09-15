@@ -1881,7 +1881,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     }
   });
 
-  it("seeds the launch project into the UI store as the preferred project", () => {
+  it("seeds an ambient launch directory without inferring package-script trust", () => {
     const projectDir = tmp("launch-project-");
     const evidenceDir = tmp("ev-launch-");
     const dbPath = join(projectDir, ".keiko", "ui", "keiko-ui.db");
@@ -1895,6 +1895,24 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
 
     expect(deps.preferredProjectPath).toBe(projectDir);
     expect(deps.store.listProjects().map((project) => project.path)).toEqual([projectDir]);
+    expect(deps.workspaceScriptTrust?.trustLevelForRoot(projectDir)).toBe("restricted");
+    deps.store.close();
+    deps.memoryVault?.close();
+  });
+
+  it("grants package-script trust for an explicitly launcher-selected initial project", () => {
+    const projectDir = tmp("launcher-selected-project-");
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("ev-launcher-selected-"),
+      env: {},
+      uiDbPath: join(projectDir, ".keiko", "ui", "keiko-ui.db"),
+      initialProjectPath: projectDir,
+      initialProjectTrustSource: "explicit-launcher-selection",
+    });
+
+    expect(deps.preferredProjectPath).toBe(projectDir);
+    expect(deps.workspaceScriptTrust?.trustLevelForRoot(projectDir)).toBe("trusted");
     deps.store.close();
     deps.memoryVault?.close();
   });
@@ -2064,6 +2082,43 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     deps.memoryVault?.close();
   });
 
+  it("uses one valid correlation for production bootstrap store and memory events", async () => {
+    const stateDir = tmp("bootstrap-correlation-state-");
+    const activityLog = createBufferedServerLogSink();
+    setServerLogger(createServerLogger({ sink: activityLog, level: "info" }));
+    const deps = buildUiHandlerDeps({
+      configPath: undefined,
+      evidenceDir: tmp("bootstrap-correlation-evidence-"),
+      uiDbPath: join(stateDir, "keiko-ui.db"),
+      env: {
+        KEIKO_MEMORY_DIR: join(stateDir, "memory"),
+        KEIKO_MEMORY_KEY: Buffer.alloc(32, 7).toString("base64"),
+      },
+    });
+
+    try {
+      const bootstrapOps = new Set([
+        "store.journey-outcomes.migration",
+        "store.opened",
+        "memory-vault.store.opened",
+        "memory.audit.state-cache.seeded",
+      ]);
+      const bootstrapEvents = activityLog.events.filter((event) => bootstrapOps.has(event.op));
+      expect(bootstrapEvents.map((event) => event.op)).toEqual([
+        "store.journey-outcomes.migration",
+        "store.opened",
+        "memory-vault.store.opened",
+        "memory.audit.state-cache.seeded",
+      ]);
+      const correlationIds = new Set(bootstrapEvents.map((event) => event.correlationId));
+      expect([...correlationIds]).toEqual([expect.stringMatching(/^[0-9a-f-]{36}$/u) as unknown]);
+      expect(correlationIds.has(UNKNOWN_CORRELATION_ID)).toBe(false);
+    } finally {
+      await deps.dispose?.();
+      resetServerLogger();
+    }
+  });
+
   it("seeds memory audit transition state before the first post-restart mutation (#3189)", () => {
     const memoryDir = tmp("memory-audit-restart-");
     const evidenceDir = tmp("memory-audit-restart-evidence-");
@@ -2110,10 +2165,17 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
       expect.objectContaining({
         category: "memory",
         op: "memory.audit.state-cache.seeded",
-        correlationId: UNKNOWN_CORRELATION_ID,
+        correlationId: expect.stringMatching(/^[0-9a-f-]{36}$/u) as unknown,
         extra: { recordCount: 1 },
       }),
     );
+    expect(
+      activityLog.events.some(
+        (event) =>
+          event.op === "memory.audit.state-cache.seeded" &&
+          event.correlationId === UNKNOWN_CORRELATION_ID,
+      ),
+    ).toBe(false);
   });
 
   // Wave 4a (epic #3233 §8): a UiStoreSchemaVersionError previously crashed startup as a bare,
@@ -2848,7 +2910,11 @@ describe("reconcileTaskWorkspacesAtStartup", () => {
     process.on("unhandledRejection", unhandled);
 
     expect(() => {
-      reconcileTaskWorkspacesAtStartup(service, { record: (record) => records.push(record) });
+      reconcileTaskWorkspacesAtStartup(
+        service,
+        { record: (record) => records.push(record) },
+        "bootstrap-parent-correlation-1",
+      );
     }).not.toThrow();
 
     // Flush microtasks so the `.catch` on the detached promise has a chance to settle before
@@ -2860,7 +2926,8 @@ describe("reconcileTaskWorkspacesAtStartup", () => {
     expect(unhandled).not.toHaveBeenCalled();
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({
-      correlationId: "unknown-correlation-id",
+      correlationId: expect.stringMatching(/^[0-9a-f-]{36}$/u) as unknown,
+      parentCorrelationId: "bootstrap-parent-correlation-1",
       errorClass: "Error",
       frames: ["packages/keiko-server/dist/task-workspace/reconciliation.js:12:4"],
       message: DEFAULT_SERVER_DIAGNOSTIC_SUMMARY,
@@ -2880,12 +2947,17 @@ describe("reconcileTaskWorkspacesAtStartup", () => {
     const records: ServerDiagnosticRecord[] = [];
 
     expect(() => {
-      reconcileTaskWorkspacesAtStartup(service, { record: (record) => records.push(record) });
+      reconcileTaskWorkspacesAtStartup(
+        service,
+        { record: (record) => records.push(record) },
+        "bootstrap-parent-correlation-1",
+      );
     }).not.toThrow();
     await new Promise<void>((resolve) => setImmediate(resolve));
     expect(records).toHaveLength(1);
     expect(records[0]).toMatchObject({
-      correlationId: "unknown-correlation-id",
+      correlationId: expect.stringMatching(/^[0-9a-f-]{36}$/u) as unknown,
+      parentCorrelationId: "bootstrap-parent-correlation-1",
       errorClass: "Error",
       operation: "task-workspace.reconcile.startup",
     });
@@ -2893,23 +2965,27 @@ describe("reconcileTaskWorkspacesAtStartup", () => {
   });
 
   it("does not throw when reconcile() resolves normally", async () => {
-    let called = false;
+    let received: readonly unknown[] = [];
     const report: WorkspaceReconciliationReport = {
       schemaVersion: TASK_WORKSPACE_SCHEMA_VERSION,
       generatedAt: new Date(0).toISOString(),
       entries: [],
       activeRestoration: { kind: "none" },
     };
-    const service = fakeReconciliationService(() => {
-      called = true;
+    const service = fakeReconciliationService((...args) => {
+      received = args;
       return Promise.resolve(report);
     });
 
     expect(() => {
-      reconcileTaskWorkspacesAtStartup(service);
+      reconcileTaskWorkspacesAtStartup(service, undefined, "bootstrap-parent-correlation-1");
     }).not.toThrow();
     await Promise.resolve();
-    expect(called).toBe(true);
+    expect(received).toEqual([
+      undefined,
+      expect.stringMatching(/^[0-9a-f-]{36}$/u) as unknown,
+      "bootstrap-parent-correlation-1",
+    ]);
   });
 });
 

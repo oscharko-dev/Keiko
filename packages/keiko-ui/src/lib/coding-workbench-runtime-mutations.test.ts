@@ -122,7 +122,7 @@ describe("createStartMutation", () => {
     const mutation = createStartMutation(
       "implement the issue",
       stateWithRun(null, { canStart: true }),
-      issue,
+      { issue, projectMemoryEnabled: true },
     );
     await mutation.run();
     expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith(
@@ -131,14 +131,16 @@ describe("createStartMutation", () => {
   });
 
   it("refuses to start while the runtime readiness gate is closed", () => {
-    expect(() => createStartMutation("task", stateWithRun(null))).toThrowError(
-      expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }),
-    );
+    expect(() =>
+      createStartMutation("task", stateWithRun(null), { projectMemoryEnabled: true }),
+    ).toThrowError(expect.objectContaining({ code: "CODING_RUNTIME_ACTION_UNAVAILABLE" }));
   });
 
   it("starts a new run with the requested mode and preference", async () => {
     const state = stateWithRun(null, { canStart: true });
-    const mutation = createStartMutation("add a regression test", state);
+    const mutation = createStartMutation("add a regression test", state, {
+      projectMemoryEnabled: true,
+    });
     expect(mutation.mayInstallNewRun).toBe(true);
     expect(mutation.expected).toBeUndefined();
     await mutation.run();
@@ -147,6 +149,24 @@ describe("createStartMutation", () => {
       taskIntent: "add a regression test",
       requestedMode: "supervised-coding",
       runtimePreference: "managed-gateway",
+      projectMemory: { enabled: true },
+    });
+  });
+
+  it("can disable project memory for the next run without sending browser-authored scopes", async () => {
+    const state = stateWithRun(null, { canStart: true });
+    const mutation = createStartMutation("inspect the repository", state, {
+      projectMemoryEnabled: false,
+    });
+
+    await mutation.run();
+
+    expect(apiMocks.startCodingWorkbenchRuntime).toHaveBeenCalledWith({
+      requestId: mutation.requestId,
+      taskIntent: "inspect the repository",
+      requestedMode: "supervised-coding",
+      runtimePreference: "managed-gateway",
+      projectMemory: { enabled: false },
     });
   });
 
@@ -157,7 +177,9 @@ describe("createStartMutation", () => {
       selectedModelId: "stale-model",
       reasoningEffort: "high",
     });
-    const mutation = createStartMutation("inspect the repository", state);
+    const mutation = createStartMutation("inspect the repository", state, {
+      projectMemoryEnabled: true,
+    });
 
     await mutation.run();
 
@@ -166,6 +188,7 @@ describe("createStartMutation", () => {
       taskIntent: "inspect the repository",
       requestedMode: "supervised-coding",
       runtimePreference: "codex-subscription",
+      projectMemory: { enabled: true },
     });
   });
 
@@ -175,7 +198,9 @@ describe("createStartMutation", () => {
       selectedModelId: "coding-model",
       reasoningEffort: "high",
     });
-    const mutation = createStartMutation("inspect the repository", state);
+    const mutation = createStartMutation("inspect the repository", state, {
+      projectMemoryEnabled: true,
+    });
 
     await mutation.run();
 

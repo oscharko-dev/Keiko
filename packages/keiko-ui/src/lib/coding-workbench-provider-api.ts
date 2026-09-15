@@ -23,13 +23,20 @@ import type {
   CodingWorkbenchCodexAuthSetupPlan,
   CodingWorkbenchCodexSubscriptionProfile,
   CodingWorkbenchSidecarGatewayResult,
+  ModelCapability,
 } from "@oscharko-dev/keiko-contracts";
+import type { GatewayReadinessReport } from "@oscharko-dev/keiko-contracts/bff-wire";
+import { listCodingWorkbenchReadinessCandidates } from "@oscharko-dev/keiko-contracts/runtime/gateway";
 import { isGatewayVerificationState } from "@oscharko-dev/keiko-contracts/runtime/gateway-verification";
 import {
   validateCodingWorkbenchCodexAuthSetupPlan,
   validateCodingWorkbenchCodexSubscriptionProfile,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-codex-auth";
-import { ApiError } from "./api";
+import {
+  GATEWAY_CONFIG_UPDATED_EVENT,
+  notifyGatewayModelReadinessUpdated,
+} from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
+import { ApiError, resetModelRequestCache } from "./api";
 import { bffFetchJson } from "./http";
 
 // Match the `withReadDeadline` behaviour in api.ts: a GET/HEAD read that stalls past this
@@ -69,6 +76,19 @@ const CODING_WORKBENCH_SIDECAR_UNAVAILABLE_REASONS = new Set([
   // PR #3452 (F73): the coding model's forced tool-call proof has aged out or is missing.
   "tool-calling-unverified",
 ]);
+const AUTOMATIC_READINESS_REASONS = new Set(["no-tool-calling", "tool-calling-unverified"]);
+const MODEL_KINDS = new Set(["chat", "embedding", "ocr-vision", "voice"]);
+const MODEL_COST_CLASSES = new Set(["low", "medium", "high"]);
+const MODEL_LATENCY_CLASSES = new Set(["fast", "standard", "slow"]);
+const AUTOMATIC_READINESS_RETRY_COOLDOWN_MS = 30_000;
+const automaticReadinessRequests = new Map<string, Promise<boolean>>();
+const automaticReadinessRetryAt = new Map<string, number>();
+let automaticReadinessGeneration = 0;
+let automaticReadinessConfigListenerInstalled = false;
+
+interface ModelListResponse {
+  readonly models: readonly ModelCapability[];
+}
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -136,6 +156,31 @@ function validateSidecarGatewayProfileResponse(
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }
 
+function isStringArray(value: unknown): value is readonly string[] {
+  return Array.isArray(value) && value.every((entry) => typeof entry === "string");
+}
+
+function isRequiredModelCapability(value: unknown): value is ModelCapability {
+  if (!isObjectRecord(value)) return false;
+  return [
+    typeof value.id === "string" && value.id.length > 0,
+    MODEL_KINDS.has(String(value.kind)),
+    isPositiveSafeInteger(value.contextWindow),
+    isPositiveSafeInteger(value.maxOutputTokens),
+    typeof value.toolCalling === "boolean",
+    typeof value.structuredOutput === "boolean",
+    typeof value.streaming === "boolean",
+    typeof value.supportsImageInput === "boolean",
+    typeof value.supportsDocumentInput === "boolean",
+    typeof value.workflowEligible === "boolean",
+    MODEL_COST_CLASSES.has(String(value.costClass)),
+    MODEL_LATENCY_CLASSES.has(String(value.latencyClass)),
+    typeof value.throughputHint === "string",
+    isStringArray(value.preferredUseCases),
+    isStringArray(value.knownLimitations),
+  ].every(Boolean);
+}
+
 function validateCodexSubscriptionProfileResponse(
   value: unknown,
 ): CodingWorkbenchProviderValidation | CodingWorkbenchProviderValidationFailure {
@@ -148,6 +193,18 @@ function validateCodexAuthSetupPlanResponse(
 ): CodingWorkbenchProviderValidation | CodingWorkbenchProviderValidationFailure {
   const result = validateCodingWorkbenchCodexAuthSetupPlan(value);
   return result.ok ? { ok: true } : { ok: false, reasons: result.errors };
+}
+
+function validateModelListResponse(
+  value: unknown,
+): CodingWorkbenchProviderValidation | CodingWorkbenchProviderValidationFailure {
+  if (!isObjectRecord(value) || !Array.isArray(value.models)) {
+    return { ok: false, reasons: ["models must be an array"] };
+  }
+  const malformed = value.models.some((model) => !isRequiredModelCapability(model));
+  return malformed
+    ? { ok: false, reasons: ["models contains an invalid capability"] }
+    : { ok: true };
 }
 
 function contractValidator<T>(
@@ -169,7 +226,7 @@ function readDeadlineSignal(): AbortSignal {
   return AbortSignal.timeout(DEFAULT_READ_TIMEOUT_MS);
 }
 
-export async function fetchCodingWorkbenchSidecarGatewayProfile(): Promise<CodingWorkbenchSidecarGatewayResult> {
+async function readSidecarGatewayProfile(): Promise<CodingWorkbenchSidecarGatewayResult> {
   return bffFetchJson(
     "/api/coding-sidecar/gateway/profile",
     { cache: "no-store", signal: readDeadlineSignal() },
@@ -179,6 +236,112 @@ export async function fetchCodingWorkbenchSidecarGatewayProfile(): Promise<Codin
       ),
     },
   );
+}
+
+function resetAutomaticReadinessGeneration(): void {
+  automaticReadinessGeneration += 1;
+  automaticReadinessRetryAt.clear();
+}
+
+function ensureAutomaticReadinessConfigListener(): void {
+  if (automaticReadinessConfigListenerInstalled || typeof window === "undefined") return;
+  window.addEventListener(GATEWAY_CONFIG_UPDATED_EVENT, resetAutomaticReadinessGeneration);
+  automaticReadinessConfigListenerInstalled = true;
+}
+
+function readinessConfigurationKey(candidates: readonly ModelCapability[]): string {
+  return JSON.stringify(
+    candidates.map((candidate) => ({
+      id: candidate.id,
+      costClass: candidate.costClass,
+      toolCalling: candidate.toolCalling,
+      toolCallingVerification: candidate.toolCallingVerification,
+    })),
+  );
+}
+
+function reportVerifiedToolCalling(report: GatewayReadinessReport): boolean {
+  return (
+    report.verifiedCapabilities.toolCalling === true &&
+    report.probes.some((probe) => probe.name === "tool_calling" && probe.status === "passed")
+  );
+}
+
+async function probeAutomaticReadinessCandidates(
+  candidates: readonly ModelCapability[],
+): Promise<boolean> {
+  for (const candidate of candidates) {
+    const report = await bffFetchJson<GatewayReadinessReport>("/api/gateway/readiness", {
+      method: "POST",
+      cache: "no-store",
+      body: JSON.stringify({
+        modelId: candidate.id,
+        options: { probes: ["tool_calling"], purpose: "coding-workbench-auto" },
+      }),
+    });
+    if (reportVerifiedToolCalling(report)) return true;
+  }
+  return false;
+}
+
+function requestAutomaticReadiness(candidates: readonly ModelCapability[]): Promise<boolean> {
+  ensureAutomaticReadinessConfigListener();
+  const generation = automaticReadinessGeneration;
+  const fingerprint = readinessConfigurationKey(candidates);
+  const requestKey = `${String(generation)}:${fingerprint}`;
+  if ((automaticReadinessRetryAt.get(requestKey) ?? 0) > Date.now()) {
+    return Promise.resolve(false);
+  }
+  const active = automaticReadinessRequests.get(requestKey);
+  if (active !== undefined) return active;
+  const request = probeAutomaticReadinessCandidates(candidates)
+    .then((ready): boolean => {
+      if (generation !== automaticReadinessGeneration) return false;
+      if (ready) {
+        automaticReadinessRetryAt.delete(requestKey);
+        resetModelRequestCache();
+        notifyGatewayModelReadinessUpdated();
+      } else {
+        automaticReadinessRetryAt.set(
+          requestKey,
+          Date.now() + AUTOMATIC_READINESS_RETRY_COOLDOWN_MS,
+        );
+      }
+      return ready;
+    })
+    .catch((error: unknown): never => {
+      if (generation === automaticReadinessGeneration) {
+        automaticReadinessRetryAt.set(
+          requestKey,
+          Date.now() + AUTOMATIC_READINESS_RETRY_COOLDOWN_MS,
+        );
+      }
+      throw error;
+    });
+  const tracked = request.finally(() => automaticReadinessRequests.delete(requestKey));
+  automaticReadinessRequests.set(requestKey, tracked);
+  return tracked;
+}
+
+async function recoverUnverifiedGatewayProfile(
+  profile: CodingWorkbenchSidecarGatewayResult,
+): Promise<CodingWorkbenchSidecarGatewayResult> {
+  if (profile.status !== "unavailable" || !AUTOMATIC_READINESS_REASONS.has(profile.reason)) {
+    return profile;
+  }
+  const response = await bffFetchJson<ModelListResponse>(
+    "/api/models",
+    { cache: "no-store", signal: readDeadlineSignal() },
+    { validator: contractValidator<ModelListResponse>(validateModelListResponse) },
+  );
+  const candidates = listCodingWorkbenchReadinessCandidates(response.models);
+  if (candidates.length === 0) return profile;
+  if (!(await requestAutomaticReadiness(candidates))) return profile;
+  return readSidecarGatewayProfile();
+}
+
+export async function fetchCodingWorkbenchSidecarGatewayProfile(): Promise<CodingWorkbenchSidecarGatewayResult> {
+  return recoverUnverifiedGatewayProfile(await readSidecarGatewayProfile());
 }
 
 export async function fetchCodingWorkbenchCodexSubscriptionProfile(): Promise<CodingWorkbenchCodexSubscriptionProfile> {

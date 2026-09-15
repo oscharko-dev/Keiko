@@ -348,6 +348,34 @@ describe("OpenCode v1.18.30 protocol boundary", () => {
     });
   });
 
+  it("projects provider input usage only from completed assistant messages", () => {
+    const completed = assistantMessage({
+      finish: "stop",
+      time: { created: 1, completed: 10 },
+      tokens: { ...tokens(), input: 42_000 },
+    });
+    const parsed = parseOpenCodeHistory([
+      syncRow(1, "message.updated.1", { sessionID: "ses_1", info: completed }),
+      syncRow(2, "message.updated.1", {
+        sessionID: "ses_1",
+        info: assistantMessage({ tokens: { ...tokens(), input: 99_000 } }),
+      }),
+      syncRow(3, "message.updated.1", { sessionID: "ses_1", info: userMessage() }),
+    ]);
+
+    expect(parsed).toMatchObject({
+      ok: true,
+      value: [
+        { sequence: 1, providerTokenUsage: { inputTokens: 42_000 } },
+        { sequence: 2 },
+        { sequence: 3 },
+      ],
+    });
+    if (!parsed.ok) throw new Error("expected parsed history");
+    expect(parsed.value[1]).not.toHaveProperty("providerTokenUsage");
+    expect(parsed.value[2]).not.toHaveProperty("providerTokenUsage");
+  });
+
   // #2475 first-contact regression: OpenCode 1.18.30 reports `path: ""` for a session whose
   // working directory is the project root (every git-worktree task workspace). The pinned
   // projection must admit the empty string while still rejecting an absent or non-string path.

@@ -82,9 +82,11 @@ beforeAll(async () => {
   for (const path of [
     APP_SESSION_PATHS.channel,
     APP_SESSION_PATHS.stream,
+    APP_SESSION_PATHS.localSession,
     APP_SESSION_PATHS.rotate,
   ]) {
-    const method = path === APP_SESSION_PATHS.rotate ? "POST" : "GET";
+    const method =
+      path === APP_SESSION_PATHS.rotate || path === APP_SESSION_PATHS.localSession ? "POST" : "GET";
     const response = await fetch(`${server.baseUrl}${path}`, {
       method,
       headers: method === "POST" ? postHeaders(cookie) : { cookie },

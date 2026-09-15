@@ -1,4 +1,12 @@
-import { useCallback, useId, useRef, type ReactNode, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+  type ReactNode,
+  type RefObject,
+} from "react";
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchRuntimePreference,
@@ -90,9 +98,13 @@ interface TaskStartSectionProps {
   readonly runState: CodingWorkbenchRuntimeStateName | undefined;
   readonly mutationPending: boolean;
   readonly startBusy: boolean;
+  readonly startBlockedReason: string | null;
   readonly repositoryLabel: string | null;
   readonly branchLabel: string | null;
+  readonly branchContext: "repository" | "task";
   readonly onOpenGit: () => void;
+  readonly projectMemoryEnabled: boolean;
+  readonly onProjectMemoryEnabledChange: (enabled: boolean) => void;
   readonly autonomyMode: CodingWorkbenchMode | null;
   readonly autonomyLabel: string;
   readonly requestedMode: CodingWorkbenchMode;
@@ -113,30 +125,56 @@ interface TaskComposerController {
   readonly dictation: ReturnType<typeof useDictation>;
   readonly dictationVisible: boolean;
   readonly submitBlocked: boolean;
+  readonly submitFeedback: string | null;
+  readonly submitFeedbackId: string;
   readonly submit: () => void;
 }
 
-function isSubmitBlocked(input: TaskStartSectionProps): boolean {
-  return (
-    input.mutationPending ||
-    (input.runState !== "running" && input.taskIntent.trim().length === 0) ||
-    (input.runState !== "running" &&
-      input.runState !== "paused" &&
-      (!input.canStart || input.startBusy))
-  );
+function submitBlockedReason(
+  input: TaskStartSectionProps,
+  t: CodingWorkbenchTranslate,
+): string | null {
+  if (input.mutationPending) return t("codingWorkbench.composer.blocked.busy");
+  if (input.runState === "running") return null;
+  return emptySubmitReason(input, t) ?? unavailableSubmitReason(input, t);
 }
 
-function submitTask(input: TaskStartSectionProps, blocked: boolean): void {
-  if (blocked) return;
+function emptySubmitReason(
+  input: TaskStartSectionProps,
+  t: CodingWorkbenchTranslate,
+): string | null {
+  if (input.taskIntent.trim().length > 0) return null;
+  return input.runState === "paused"
+    ? t("codingWorkbench.composer.blocked.emptyFollowUp")
+    : t("codingWorkbench.composer.blocked.emptyStart");
+}
+
+function unavailableSubmitReason(
+  input: TaskStartSectionProps,
+  t: CodingWorkbenchTranslate,
+): string | null {
+  if (input.runState === "paused") {
+    return input.canResume ? null : t("codingWorkbench.composer.blocked.pauseDecision");
+  }
+  if (!input.startBusy && input.canStart) return null;
+  return input.startBlockedReason ?? t("codingWorkbench.composer.blocked.notReady");
+}
+
+function submitTask(input: TaskStartSectionProps): void {
   if (input.runState === "running") input.actions.onPause();
   else if (input.runState === "paused") input.actions.onSend();
   else input.actions.onStart();
 }
 
-function useTaskComposerController(input: TaskStartSectionProps): TaskComposerController {
+function useTaskComposerController(
+  input: TaskStartSectionProps,
+  t: CodingWorkbenchTranslate,
+): TaskComposerController {
   const { onTaskIntentChange, taskIntent } = input;
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const micButtonRef = useRef<HTMLButtonElement>(null);
+  const submitFeedbackId = useId();
+  const [blockedSubmitAttempted, setBlockedSubmitAttempted] = useState(false);
   const voiceCapability = useVoiceCapability();
   const dictationVisible = supportsDictation(voiceCapability) && dictationCaptureSupported();
   const liveDictationEnabled =
@@ -152,15 +190,35 @@ function useTaskComposerController(input: TaskStartSectionProps): TaskComposerCo
     onInsert: insertTranscript,
     realtime: { enabled: liveDictationEnabled },
   });
-  const submitBlocked = isSubmitBlocked(input);
-  const submit = (): void => submitTask(input, submitBlocked);
+  const blockedReason = submitBlockedReason(input, t);
+  const submitBlocked = blockedReason !== null;
+  const submit = (): void => {
+    if (submitBlocked) {
+      setBlockedSubmitAttempted(true);
+      return;
+    }
+    setBlockedSubmitAttempted(false);
+    submitTask(input);
+  };
+  useEffect(() => {
+    if (!submitBlocked) setBlockedSubmitAttempted(false);
+  }, [submitBlocked]);
   useComposerAutoGrow(textareaRef, taskIntent);
-  return { textareaRef, micButtonRef, dictation, dictationVisible, submitBlocked, submit };
+  return {
+    textareaRef,
+    micButtonRef,
+    dictation,
+    dictationVisible,
+    submitBlocked,
+    submitFeedback: blockedSubmitAttempted ? blockedReason : null,
+    submitFeedbackId,
+    submit,
+  };
 }
 
 export function TaskStartSection(input: TaskStartSectionProps): ReactNode {
   const t = useCodingWorkbenchTranslate();
-  const controller = useTaskComposerController(input);
+  const controller = useTaskComposerController(input, t);
   return (
     <form
       className="composer"
@@ -182,8 +240,17 @@ export function TaskStartSection(input: TaskStartSectionProps): ReactNode {
   );
 }
 
+function branchContextLabel(input: TaskStartSectionProps, t: CodingWorkbenchTranslate): string {
+  return t(
+    input.branchContext === "task"
+      ? "codingWorkbench.info.taskBranch"
+      : "codingWorkbench.info.repositoryBranch",
+  );
+}
+
 function ComposerContext({ input, t }: ControlProps): ReactNode {
   if (input.repositoryLabel === null && input.branchLabel === null) return null;
+  const branchLabel = branchContextLabel(input, t);
   return (
     <div
       className={styles.composerContext}
@@ -207,22 +274,45 @@ function ComposerContext({ input, t }: ControlProps): ReactNode {
         <button
           className={`${styles.composerContextChip} ${styles.composerContextButton}`}
           type="button"
-          title={input.branchLabel}
-          aria-label={t("codingWorkbench.composer.branch.open", { branch: input.branchLabel })}
+          title={`${branchLabel}: ${input.branchLabel}`}
+          aria-label={t("codingWorkbench.composer.branch.open", {
+            branch: input.branchLabel,
+          })}
           onClick={input.onOpenGit}
         >
           <BranchIcon size={14} />
           <span>{input.branchLabel}</span>
         </button>
       )}
-      <span
-        className={`${styles.composerContextChip} ${styles.composerMemoryChip}`}
-        title={t("codingWorkbench.composer.projectMemory.help")}
-      >
-        <BrainIcon size={14} />
-        <span>{t("codingWorkbench.composer.projectMemory.label")}</span>
-      </span>
+      <ProjectMemoryToggle input={input} t={t} />
     </div>
+  );
+}
+
+function ProjectMemoryToggle({ input, t }: ControlProps): ReactNode {
+  const enabled = input.projectMemoryEnabled;
+  return (
+    <button
+      className={`${styles.composerContextChip} ${styles.composerMemoryChip}`}
+      type="button"
+      data-enabled={enabled ? "true" : "false"}
+      aria-pressed={enabled}
+      aria-label={t(
+        enabled
+          ? "codingWorkbench.composer.projectMemory.disable"
+          : "codingWorkbench.composer.projectMemory.enable",
+      )}
+      title={t(
+        enabled
+          ? "codingWorkbench.composer.projectMemory.help.enabled"
+          : "codingWorkbench.composer.projectMemory.help.disabled",
+      )}
+      disabled={input.configurationLocked}
+      onClick={(): void => input.onProjectMemoryEnabledChange(!enabled)}
+    >
+      <BrainIcon size={14} />
+      <span>{t("codingWorkbench.composer.projectMemory.label")}</span>
+    </button>
   );
 }
 
@@ -261,12 +351,30 @@ function DictationPreview({
 }: {
   readonly controller: TaskComposerController;
 }): ReactNode {
-  return controller.dictationVisible ? (
-    <VoiceDictationPreviewFromController
-      controller={controller.dictation}
-      onAfterDiscard={() => controller.micButtonRef.current?.focus()}
-    />
-  ) : null;
+  return (
+    <>
+      {controller.dictationVisible ? (
+        <VoiceDictationPreviewFromController
+          controller={controller.dictation}
+          onAfterDiscard={() => controller.micButtonRef.current?.focus()}
+        />
+      ) : null}
+      <SubmitBlockedFeedback controller={controller} />
+    </>
+  );
+}
+
+function SubmitBlockedFeedback({
+  controller,
+}: {
+  readonly controller: TaskComposerController;
+}): ReactNode {
+  if (controller.submitFeedback === null) return null;
+  return (
+    <p className={styles.composerSubmitNotice} id={controller.submitFeedbackId} role="alert">
+      {controller.submitFeedback}
+    </p>
+  );
 }
 
 function ComposerFooter({ input, controller, t }: ComposerViewProps): ReactNode {
@@ -438,6 +546,10 @@ function RunningControl({ controller, t }: Omit<ComposerViewProps, "input">): Re
         data-tip={t("codingWorkbench.composer.pause")}
         aria-label={t("codingWorkbench.composer.pause")}
         aria-disabled={controller.submitBlocked}
+        aria-describedby={
+          controller.submitFeedback === null ? undefined : controller.submitFeedbackId
+        }
+        onClick={controller.submitBlocked ? controller.submit : undefined}
       >
         <MinimizeIcon size={16} />
       </button>
@@ -469,6 +581,10 @@ function PausedControls({ input, controller, t }: ComposerViewProps): ReactNode 
         data-tip={t("codingWorkbench.composer.send")}
         aria-label={t("codingWorkbench.composer.send")}
         aria-disabled={sendBlocked}
+        aria-describedby={
+          controller.submitFeedback === null ? undefined : controller.submitFeedbackId
+        }
+        onClick={sendBlocked ? controller.submit : undefined}
       >
         <ArrowUpIcon size={16} />
       </button>
@@ -488,6 +604,10 @@ function StartControl({ input, controller, t }: ComposerViewProps): ReactNode {
       data-tip={label}
       aria-label={label}
       aria-disabled={controller.submitBlocked}
+      aria-describedby={
+        controller.submitFeedback === null ? undefined : controller.submitFeedbackId
+      }
+      onClick={controller.submitBlocked ? controller.submit : undefined}
     >
       <ArrowUpIcon size={16} />
     </button>

@@ -3,6 +3,7 @@
 // runner applies migrations whose 1-based index > current user_version.
 
 import type { DatabaseSync } from "node:sqlite";
+import type { ServerLogSink } from "../observability/index.js";
 import { migrateJourneyOutcomeProjection } from "./journeyOutcomeMigration.js";
 import {
   migrateLegacyProjectManifests,
@@ -14,7 +15,7 @@ export const SCHEMA_VERSION = 34;
 interface Migration {
   readonly version: number;
   readonly sql: string;
-  readonly apply?: (db: DatabaseSync) => void;
+  readonly apply?: (db: DatabaseSync, activityLog?: ServerLogSink) => void;
 }
 
 export class UiStoreSchemaVersionError extends Error {
@@ -1274,7 +1275,7 @@ function setUserVersion(db: DatabaseSync, v: number): void {
 }
 
 // Applies pending migrations inside a single transaction. Throws (and rolls back) on any failure.
-export function runMigrations(db: DatabaseSync): void {
+export function runMigrations(db: DatabaseSync, activityLog?: ServerLogSink): void {
   const start = currentUserVersion(db);
   if (start > SCHEMA_VERSION) {
     throw new UiStoreSchemaVersionError(start, SCHEMA_VERSION);
@@ -1285,7 +1286,7 @@ export function runMigrations(db: DatabaseSync): void {
   try {
     for (const m of pending) {
       db.exec(m.sql);
-      m.apply?.(db);
+      m.apply?.(db, activityLog);
       setUserVersion(db, m.version);
     }
     db.exec("COMMIT");

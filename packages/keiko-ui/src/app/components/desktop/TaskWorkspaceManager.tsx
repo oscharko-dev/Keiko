@@ -32,7 +32,7 @@ import { Icons } from "./Icons";
 import styles from "./TaskWorkspaceManager.module.css";
 
 const ChevronIcon = Icons.chevron;
-const GitIcon = Icons.git;
+const WorkspaceIcon = Icons.cube;
 
 type LifecycleAction = "pause" | "resume" | "handoff" | "switch" | "repair";
 // The four actions above carry a fixed lifecycle target state (checked against
@@ -451,7 +451,7 @@ function TaskWorkspaceManagerImpl(): ReactNode {
         }
         onClick={panel.toggle}
       >
-        <GitIcon size={16} aria-hidden="true" />
+        <WorkspaceIcon size={16} aria-hidden="true" />
         <span>{label}</span>
         <ChevronIcon className={styles["cmp-c"] ?? ""} size={13} aria-hidden="true" />
       </button>

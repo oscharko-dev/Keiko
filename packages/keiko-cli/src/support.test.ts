@@ -956,7 +956,14 @@ describe("runSupportCli analyze", () => {
     writeFileSync(filePath, `${l1}\n${l2}\n`);
 
     const c = makeIo();
-    const code = await runSupportCli(["analyze", filePath, "--json"], c.io);
+    const code = await runSupportCli(
+      ["analyze", filePath, "--json"],
+      c.io,
+      {},
+      {
+        now: () => new Date("2026-08-21T00:00:02.000Z"),
+      },
+    );
 
     expect(code).toBe(0);
     const parsed: Record<string, unknown> = JSON.parse(c.out()) as Record<string, unknown>;
@@ -972,6 +979,83 @@ describe("runSupportCli analyze", () => {
     expect(parsed.warnings).toEqual([
       "2 line(s) predate the v2 envelope and were ordered by file position",
     ]);
+  });
+
+  it("identifies the analyzed raw-log context and warns when it is obviously stale", async () => {
+    const stateDir = join(dir, ".keiko");
+    const logDir = join(stateDir, "logs");
+    mkdirSync(logDir, { recursive: true });
+    const filePath = join(logDir, "server.log");
+    writeFileSync(
+      filePath,
+      `${JSON.stringify({
+        ts: "2026-08-21T00:00:00.000Z",
+        category: "process",
+        op: "process.heartbeat",
+        pid: 4242,
+        instanceId: "aaaaaaaa",
+        seq: 1,
+      })}\n`,
+    );
+
+    const c = makeIo();
+    const code = await runSupportCli(
+      ["analyze", filePath, "--json"],
+      c.io,
+      {},
+      {
+        now: () => new Date("2026-08-21T00:10:01.000Z"),
+      },
+    );
+
+    expect(code).toBe(0);
+    const parsed = JSON.parse(c.out()) as {
+      readonly analysisContext: Readonly<Record<string, unknown>>;
+      readonly warnings: readonly string[];
+    };
+    expect(parsed.analysisContext).toEqual({
+      sourceKind: "raw-log",
+      inputFile: filePath,
+      stateDir,
+      latestTimestamp: "2026-08-21T00:00:00.000Z",
+      latestInstanceId: "aaaaaaaa",
+      freshness: "stale",
+      processActivity: "inactive",
+    });
+    expect(parsed.warnings).toContain(
+      "analyzed log is stale: its newest valid event is older than 5 minutes",
+    );
+  });
+
+  it("renders the analyzed log context before the human-readable timeline", async () => {
+    const filePath = join(dir, "server.log");
+    writeFileSync(
+      filePath,
+      `${JSON.stringify({
+        ts: "2026-08-21T00:00:00.000Z",
+        category: "http",
+        op: "request",
+        correlationId: "req-1",
+        pid: 1,
+        instanceId: "bbbbbbbb",
+        seq: 1,
+      })}\n`,
+    );
+
+    const c = makeIo();
+    const code = await runSupportCli(
+      ["analyze", filePath],
+      c.io,
+      {},
+      {
+        now: () => new Date("2026-08-21T00:00:01.000Z"),
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(c.out()).toContain(`Analyzed log: ${filePath}`);
+    expect(c.out()).toContain("Newest event: 2026-08-21T00:00:00.000Z");
+    expect(c.out()).toContain("Newest instance: bbbbbbbb");
   });
 
   it("auto-detects a bundle (manifest first line) and analyzes only the log content", async () => {

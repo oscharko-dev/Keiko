@@ -416,6 +416,7 @@ async function resolveConnectComparison(
   | GitChangeBlockedReason
 > {
   if (request.mode === "comparison") {
+    if (request.baseRef === request.headRef) return "identical-refs";
     return { baseRef: request.baseRef ?? "", headRef: request.headRef, prNumber: undefined };
   }
   const resolved = await resolvePullRequestByHead(

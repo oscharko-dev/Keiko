@@ -5,9 +5,6 @@
     }
   },
   "src/app/components/desktop/AppShell.grounding.test.tsx": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 13
-    },
     "complexity": {
       "count": 1
     }
@@ -405,7 +402,7 @@
       "count": 4
     },
     "max-lines-per-function": {
-      "count": 5
+      "count": 4
     }
   },
   "src/app/components/desktop/hooks/useWorkspaceManifest.ts": {
@@ -1084,9 +1081,6 @@
   "src/app/components/desktop/widgets/cards/git-client/CommitComposer.tsx": {
     "@typescript-eslint/explicit-function-return-type": {
       "count": 1
-    },
-    "complexity": {
-      "count": 1
     }
   },
   "src/app/components/desktop/widgets/cards/git-client/ConnectPanel.tsx": {
@@ -1125,11 +1119,6 @@
     "complexity": {
       "count": 1
     },
-    "max-lines-per-function": {
-      "count": 1
-    }
-  },
-  "src/app/components/desktop/widgets/cards/git-client/RepositoryToolbar.tsx": {
     "max-lines-per-function": {
       "count": 1
     }
@@ -1532,9 +1521,6 @@
     }
   },
   "src/app/components/desktop/widgets/panels/SettingsPanel.tsx": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 5
-    },
     "complexity": {
       "count": 1
     },
@@ -1660,7 +1646,7 @@
       "count": 2
     },
     "complexity": {
-      "count": 5
+      "count": 4
     },
     "max-lines-per-function": {
       "count": 4
@@ -1672,9 +1658,6 @@
     }
   },
   "src/app/components/desktop/windows/connectionUtils.ts": {
-    "@typescript-eslint/explicit-function-return-type": {
-      "count": 8
-    },
     "complexity": {
       "count": 1
     }

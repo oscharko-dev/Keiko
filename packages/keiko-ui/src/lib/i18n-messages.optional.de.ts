@@ -348,6 +348,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "commitComposer.action.commitTo": "In {branch} committen",
   "commitComposer.action.createBranchFirst": "Zuerst Branch erstellen",
   "commitComposer.action.useDraft": "Commit-Entwurf übernehmen",
+  "commitComposer.action.generateDraft": "Mit Keiko erzeugen",
+  "commitComposer.action.generatingDraft": "Keiko erzeugt…",
   "commitComposer.action.copyDraft": "Commit-Entwurf kopieren",
   "commitComposer.field.summary": "Zusammenfassung",
   "commitComposer.field.summaryPlaceholder": "Kurze Zusammenfassung der Änderung",
@@ -374,6 +376,8 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "commitComposer.draft.detail": "Prüfen oder bearbeiten Sie diese Nachricht vor dem Commit.",
   "commitComposer.draft.subject": "Betreff",
   "commitComposer.draft.body": "Textkörper",
+  "commitComposer.draft.generateHint":
+    "Keiko liest den ausgewählten staged Diff erst, wenn Sie diesen Button klicken.",
   "commitComposer.draft.unavailable":
     "Diese Repository-Richtlinie benötigt Angaben, die Keiko nicht sicher entwerfen kann.",
   "commitComposer.copy.copied": "Kopiert",
@@ -396,6 +400,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "commitComposer.violation.subject-too-long": "Die Betreffzeile ist zu lang",
   "commitComposer.violation.missing-issue-key": "Der erforderliche Issue-Schlüssel fehlt",
   "commitComposer.violation.missing-signoff": "Der Signed-off-by-Trailer fehlt",
+  "gitClientWindow.error.noRepository": "Wählen Sie zuerst ein Repository aus.",
   "promptEnhancer.error.cancelled": "Anfrage abgebrochen.",
   "promptEnhancer.error.failed":
     "Die Prompt-Verbesserung ist fehlgeschlagen. Bitte versuchen Sie es erneut.",
@@ -696,6 +701,7 @@ export const OPTIONAL_WIDGET_DE_MESSAGES = {
   "gitDelivery.recoveryHint.retry": "Aktion erneut versuchen",
   "gitDelivery.recoveryHint.stage-changes": "Änderungen bereitstellen",
   "gitDelivery.recoveryHint.configure-upstream": "Upstream-Branch konfigurieren",
+  "gitDelivery.recoveryHint.configure-signing": "Commit-Signierung konfigurieren",
   "gitDelivery.recoveryHint.resolve-conflicts": "Konflikte lösen",
   "gitDelivery.recoveryHint.abort-in-progress-operation": "Laufende Operation abbrechen",
   "gitDelivery.recoveryHint.request-approval": "Genehmigung anfordern",

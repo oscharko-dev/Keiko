@@ -39,20 +39,25 @@ import {
   boundScopeOf,
   filesChatBindScope,
   totalSourceCap,
+  type GitChangeBindSelection,
 } from "./hooks/workspaceActions";
 import {
+  connectGitChangeToChat,
   fetchChats,
   fetchConfig,
   updateChatConnectedScopes,
+  updateChatGitChangeScopes,
   updateChatLocalKnowledgeScopes,
 } from "@/lib/api";
-import { newClientCorrelationId } from "@/lib/http";
+import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
+import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { I18nProvider, useTranslate } from "@/lib/i18n";
 import type { I18nTranslate } from "@/lib/i18n";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import type {
   Chat,
   ChatConnectedScope,
+  ChatGitChangeScope,
   ChatLocalKnowledgeScope,
   GroundingLimits,
 } from "@/lib/types";
@@ -207,8 +212,8 @@ const RepositoryFolderSwitcher = dynamic(
   () => import("./RepositoryFolderSwitcher").then((mod) => mod.RepositoryFolderSwitcher),
   { ssr: false, loading: () => null },
 );
-const TaskWorkspaceManager = dynamic(
-  () => import("./TaskWorkspaceManager").then((mod) => mod.TaskWorkspaceManager),
+const RepositoryBranchSwitcher = dynamic(
+  () => import("./RepositoryBranchSwitcher").then((mod) => mod.RepositoryBranchSwitcher),
   { ssr: false, loading: () => null },
 );
 
@@ -497,9 +502,12 @@ function runtimeProjectPathForChat(chatWindowId: string, chatId: string): string
 
 export const CHAT_MUTATION_TIMEOUT_MS = 15_000;
 
-function reportGroundingMutationFailure(message: string): void {
-  const correlationId = newClientCorrelationId();
-  window.reportError(new Error(`${message} Correlation ID: ${correlationId}`));
+function reportGroundingMutationFailure(message: string, error: unknown): void {
+  const correlationId = correlationIdOf(error);
+  reportClientDiagnostic(
+    `[keiko] ${message}: ${clientErrorSummary(error)}`,
+    correlationId === undefined ? undefined : { correlationId },
+  );
 }
 
 class ChatLookupFailure extends Error {
@@ -522,21 +530,22 @@ function groundingMutationFailureKey(
   mutationFailedKey:
     | "chat.grounding.connectSourceFailed"
     | "chat.grounding.connectKnowledgeFailed"
+    | "chat.grounding.connectGitChangeFailed"
     | "scope.disconnectError",
 ): "chat.grounding.recoveryRequired" | "chat.grounding.timeoutBlocked" | typeof mutationFailedKey {
   if (error instanceof ChatLookupFailure) {
-    reportGroundingMutationFailure("Chat lookup failed.");
+    reportGroundingMutationFailure("Chat lookup failed", error);
     return mutationFailedKey;
   }
   if (error instanceof ChatBindingCompensationFailure) {
-    reportGroundingMutationFailure("Chat binding compensation failed.");
+    reportGroundingMutationFailure("Chat binding compensation failed", error);
     return "chat.grounding.recoveryRequired";
   }
   if (error instanceof ChatMutationTimeoutFailure) {
-    reportGroundingMutationFailure("Chat grounding timeout.");
+    reportGroundingMutationFailure("Chat grounding timeout", error);
     return "chat.grounding.timeoutBlocked";
   }
-  reportGroundingMutationFailure("Chat grounding mutation failed.");
+  reportGroundingMutationFailure("Chat grounding mutation failed", error);
   return mutationFailedKey;
 }
 
@@ -616,7 +625,7 @@ function isConversationGroundingConnection(
 ): boolean {
   const otherWindowId = connection.a === chatWindowId ? connection.b : connection.a;
   const otherType = winsById.get(otherWindowId)?.type;
-  return otherType === "files" || otherType === "connector";
+  return otherType === "files" || otherType === "connector" || otherType === "governedGit";
 }
 
 function relationshipPathForScope(scope: ChatConnectedScope): string | null {
@@ -629,6 +638,22 @@ function relationshipPathForScope(scope: ChatConnectedScope): string | null {
   if (relativePath === undefined || relativePath.length === 0) return scope.root;
   const root = stripTrailingSlashRun(scope.root.replaceAll("\\", "/"));
   return `${root}/${relativePath}`;
+}
+
+function appendGitChangeScope(
+  current: readonly ChatGitChangeScope[],
+  scope: ChatGitChangeScope,
+): readonly ChatGitChangeScope[] {
+  return current.some((candidate) => candidate.relationshipId === scope.relationshipId)
+    ? current
+    : [...current, scope];
+}
+
+function removeGitChangeScope(
+  current: readonly ChatGitChangeScope[],
+  relationshipId: string,
+): readonly ChatGitChangeScope[] {
+  return current.filter((scope) => scope.relationshipId !== relationshipId);
 }
 
 // Root-relative file-identifier contract (Issue #1374). The editor-window cfg-persistence layer is
@@ -859,6 +884,9 @@ function AppShellInner(): ReactNode {
   // whole shell so the Header switcher and every window's render context read one source of truth.
   const activeWorkspace = useActiveWorkspaceState();
   const shortcutRoot = activeWorkspace.activeRoot ?? session.activeProject?.path ?? undefined;
+  // Git is repository control, not task-worktree content. Opening it from shell chrome must therefore
+  // use the selected repository root and must not borrow `activeWorkspace.activeRoot`.
+  const repositoryShortcutRoot = session.activeProject?.path ?? undefined;
   const [shellShortcutState, setShellShortcutState] = useState<ShellShortcutState>(
     EMPTY_SHELL_SHORTCUT_STATE,
   );
@@ -1267,6 +1295,107 @@ function AppShellInner(): ReactNode {
       t,
     ],
   );
+  const handleGitChangeBind = useCallback(
+    async (
+      chatWindowId: string,
+      selection: GitChangeBindSelection,
+      target?: ChatBindingTarget,
+    ): Promise<ChatGitChangeScope | false> => {
+      try {
+        return await serializeChatMutation(
+          groundingMutationQueueRef.current,
+          groundingMutationKey(chatWindowId, target),
+          async (attempt): Promise<ChatGitChangeScope | false> => {
+            const chat = await resolveChatForWindow(chatWindowId, target);
+            if (chat === undefined) {
+              rejectForConnectionFailure(t("chat.grounding.readyChatRequired"));
+              return false;
+            }
+            if ((target?.conversationId ?? chat.id) !== chat.id) return false;
+            const result = await connectGitChangeToChat({
+              chatId: chat.id,
+              mode: "comparison",
+              ...selection,
+            });
+            if (result.status === "blocked") {
+              rejectForConnectionFailure(t("chat.grounding.connectGitChangeFailed"));
+              return false;
+            }
+            if (!attempt.isCurrent() || !chatLookupTargetIsCurrent(target)) return false;
+            const updated = {
+              ...chat,
+              gitChangeScopes: appendGitChangeScope(chat.gitChangeScopes ?? [], result.scope),
+              updatedAt: Date.now(),
+            };
+            rememberGroundingChat(updated);
+            session.replaceChat(updated);
+            setSourceConnectionNotice(null);
+            return result.scope;
+          },
+        );
+      } catch (error: unknown) {
+        rejectForConnectionFailure(
+          t(groundingMutationFailureKey(error, "chat.grounding.connectGitChangeFailed")),
+        );
+        return false;
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
+    [
+      groundingMutationKey,
+      rememberGroundingChat,
+      rejectForConnectionFailure,
+      resolveChatForWindow,
+      session.replaceChat,
+      t,
+    ],
+  );
+  const handleGitChangeUnbind = useCallback(
+    async (
+      chatWindowId: string,
+      relationshipId: string,
+      target?: ChatUnbindTarget,
+    ): Promise<boolean> => {
+      try {
+        return await serializeChatMutation(
+          groundingMutationQueueRef.current,
+          groundingMutationKey(chatWindowId, target),
+          async (attempt): Promise<boolean> => {
+            const chat = await resolveChatForWindow(chatWindowId, target);
+            if (chat === undefined) return true;
+            const current = chat.gitChangeScopes ?? [];
+            const next = removeGitChangeScope(current, relationshipId);
+            const persisted = await persistCurrentChatScopes(
+              target,
+              attempt,
+              chat.id,
+              current,
+              next,
+              updateChatGitChangeScopes,
+              rememberGroundingChat,
+            );
+            if (persisted === undefined) return false;
+            session.replaceChat(persisted);
+            setSourceConnectionNotice(null);
+            return true;
+          },
+        );
+      } catch (error: unknown) {
+        return rejectForConnectionFailure(
+          t(groundingMutationFailureKey(error, "scope.disconnectError")),
+        );
+      }
+    },
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- GEN-PERF-RENDER-001 stable-member narrowing
+    [
+      groundingMutationKey,
+      rememberGroundingChat,
+      rejectForConnectionFailure,
+      resolveChatForWindow,
+      session.replaceChat,
+      t,
+    ],
+  );
   const [cameraSmoothness, setCameraSmoothness] = useState<number>(readWorkspaceCameraSmoothness);
 
   useEffect(() => {
@@ -1286,6 +1415,8 @@ function AppShellInner(): ReactNode {
     onScopeUnbind: handleScopeUnbind,
     onConnectorBind: handleConnectorBind,
     onConnectorUnbind: handleConnectorUnbind,
+    onGitChangeBind: handleGitChangeBind,
+    onGitChangeUnbind: handleGitChangeUnbind,
     onWindowLimitReached: reportWindowLimit,
   });
   wsWinsForBindingRef.current = ws.wins;
@@ -1377,14 +1508,14 @@ function AppShellInner(): ReactNode {
   const wsContextValue: WsContextValue = useMemo(() => ({ active, winCount }), [active, winCount]);
   // GEN-PERF-RENDER-002 — Header is memoized, but passing a freshly-constructed
   // Building the context controls inline defeated Header's memoization (new element identities on
-  // every AppShell render). The controls intentionally remain separate: the repository picker owns
-  // base-folder selection, while TaskWorkspaceManager owns the server-backed lifecycle inventory.
+  // every AppShell render). Project and repository branch stay distinct controls with one shared
+  // design-system gap; managed Task Workspace lifecycle belongs to Coding Workbench context.
   const contextControl = useMemo(
     () => (
-      <>
+      <div className={styles.cmpContextControls}>
         <RepositoryFolderSwitcher />
-        <TaskWorkspaceManager />
-      </>
+        <RepositoryBranchSwitcher />
+      </div>
     ),
     [],
   );
@@ -1523,7 +1654,7 @@ function AppShellInner(): ReactNode {
       }
       let projectRoot: string | undefined;
       if (panel === "governedGit") {
-        projectRoot = before ? panelBindingRoot(ws.wins, "governedGit") : shortcutRoot;
+        projectRoot = before ? panelBindingRoot(ws.wins, "governedGit") : repositoryShortcutRoot;
       }
       openShellTool(ws.api, panel, opensSearch, opensProjectGit, searchRoot, projectRoot);
       undoStack.push({
@@ -1535,7 +1666,7 @@ function AppShellInner(): ReactNode {
         ...(panel === "governedGit" ? { projectRoot } : {}),
       });
     },
-    [activeWorkspace.activeRoot, searchOwner, shortcutRoot, undoStack, ws.api, ws.wins],
+    [activeWorkspace.activeRoot, repositoryShortcutRoot, searchOwner, undoStack, ws.api, ws.wins],
   );
 
   const openEditorSettings = useCallback((): void => openEditorSettingsPanel(onTool), [onTool]);

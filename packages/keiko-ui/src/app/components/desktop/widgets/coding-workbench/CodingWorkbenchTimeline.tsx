@@ -20,6 +20,7 @@ import type {
 
 import type { UseCodingWorkbenchQuestionsResult } from "@/lib/useCodingWorkbenchQuestions";
 import type { UseCodingWorkbenchSafeActivityResult } from "@/lib/useCodingWorkbenchSafeActivity";
+import { SafeMarkdownBoundary } from "../../SafeMarkdown";
 import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
@@ -32,6 +33,12 @@ import styles from "./CodingWorkbenchWindow.module.css";
 const VIRTUAL_THRESHOLD = 100;
 const VISIBLE_ROWS = 96;
 const OVERSCAN_ROWS = 8;
+const KNOWN_TOOL_LABELS: Readonly<Record<string, string>> = {
+  keiko_git_status: "Git status",
+  keiko_repository_search: "Repository search",
+  keiko_workspace_discover: "Workspace discovery",
+  keiko_workspace_read: "Workspace read",
+};
 // Per-kind default heights used until a row has been rendered and measured. A single 64 px
 // estimate (the pre-fix value) is 4–20x too small for plan cards and multi-segment messages,
 // which is what makes scroll offsets drift on long feeds.
@@ -59,6 +66,7 @@ type TimelineItem =
       readonly occurredAt: string;
       readonly order: number;
       readonly tool: CodingSafeActivityTool;
+      readonly count: number;
     }
   | {
       readonly kind: "plan";
@@ -131,6 +139,7 @@ function timelineItems(
   let order = events.length;
   for (const turn of feed?.turns ?? []) {
     for (const message of turn.messages) {
+      if (!hasVisibleMessageContent(message)) continue;
       items.push({
         kind: "message",
         id: `message:${message.messageId}`,
@@ -147,12 +156,22 @@ function timelineItems(
         occurredAt: tool.occurredAt,
         order,
         tool,
+        count: 1,
       });
       order += 1;
     }
   }
-  items.sort(compareTimelineItems);
-  return feed?.plan === undefined ? items : insertPlan(items, feed.plan, order);
+  const orderedItems = [...items];
+  orderedItems.sort(compareTimelineItems);
+  const compacted = compactToolItems(orderedItems);
+  return feed?.plan === undefined ? compacted : insertPlan(compacted, feed.plan, order);
+}
+
+function hasVisibleMessageContent(message: CodingSafeActivityMessage): boolean {
+  return (
+    message.truncated ||
+    message.segments.some((segment) => segment.truncated || segment.text.trim().length > 0)
+  );
 }
 
 function compareTimelineItems(left: TimelineItem, right: TimelineItem): number {
@@ -177,6 +196,35 @@ function insertPlan(
   );
   if (anchor < 0) return [...items, planItem].sort(compareTimelineItems);
   return [...items.slice(0, anchor + 1), planItem, ...items.slice(anchor + 1)];
+}
+
+function compactToolItems(items: readonly TimelineItem[]): readonly TimelineItem[] {
+  const compacted: TimelineItem[] = [];
+  for (const item of items) {
+    const previous = compacted.at(-1);
+    if (item.kind === "tool" && canMergeToolItem(previous, item.tool)) {
+      compacted[compacted.length - 1] = {
+        ...previous,
+        id: `${previous.id}:${item.tool.callId}`,
+        count: previous.count + 1,
+      };
+    } else {
+      compacted.push(item);
+    }
+  }
+  return compacted;
+}
+
+function canMergeToolItem(
+  previous: TimelineItem | undefined,
+  tool: CodingSafeActivityTool,
+): previous is Extract<TimelineItem, { kind: "tool" }> {
+  return (
+    previous?.kind === "tool" &&
+    previous.tool.state === "succeeded" &&
+    tool.state === "succeeded" &&
+    previous.tool.tool === tool.tool
+  );
 }
 
 interface TimelineWindow {
@@ -514,24 +562,56 @@ function MessageRow({
       data-timeline-kind="message"
     >
       <span className={styles.timelineMarker} aria-hidden="true" />
-      <article className={styles.timelineBody}>
+      <article className={styles.timelineBody} data-message-role={item.message.role}>
         <p className={styles.timelineTitle}>
           {t(`codingWorkbench.activity.role.${item.message.role}`)}
         </p>
         <div className={styles.messageText}>
-          {item.message.segments.map((segment, index) => (
-            <p key={`${item.message.messageId}:${String(index)}`}>
-              {segment.text}
-              {segment.truncated ? <TruncationMark t={t} /> : null}
-            </p>
-          ))}
-          {item.message.truncated && !item.message.segments.some((segment) => segment.truncated) ? (
-            <TruncationMark t={t} />
-          ) : null}
+          <MessageContent message={item.message} t={t} />
         </div>
       </article>
     </li>
   );
+}
+
+function MessageContent({
+  message,
+  t,
+}: {
+  readonly message: CodingSafeActivityMessage;
+  readonly t: CodingWorkbenchTranslate;
+}): ReactNode {
+  if (message.role === "assistant") {
+    return (
+      <SafeMarkdownBoundary
+        source={message.segments.map((segment) => segment.text).join("")}
+        applyScopeId={`coding-workbench:${message.messageId}`}
+        trailing={truncationFor(message, t)}
+      />
+    );
+  }
+  return (
+    <>
+      {message.segments.map((segment, index) => (
+        <p key={`${message.messageId}:${String(index)}`}>
+          {segment.text}
+          {segment.truncated ? <TruncationMark t={t} /> : null}
+        </p>
+      ))}
+      {message.truncated && !message.segments.some((segment) => segment.truncated) ? (
+        <TruncationMark t={t} />
+      ) : null}
+    </>
+  );
+}
+
+function truncationFor(
+  message: CodingSafeActivityMessage,
+  t: CodingWorkbenchTranslate,
+): ReactNode | undefined {
+  return message.truncated || message.segments.some((segment) => segment.truncated) ? (
+    <TruncationMark t={t} />
+  ) : undefined;
 }
 
 function ToolRow({
@@ -553,15 +633,33 @@ function ToolRow({
     >
       <span className={styles.timelineMarker} aria-hidden="true" />
       <article className={styles.toolCard} data-tool-state={item.tool.state}>
-        <p className={styles.timelineTitle}>
-          {t("codingWorkbench.activity.tool", { tool: item.tool.tool })}
-        </p>
+        <span className={styles.toolIcon} aria-hidden="true" />
+        <div className={styles.toolMeta}>
+          <p className={styles.timelineTitle}>{humanizeToolName(item.tool.tool)}</p>
+          <code className={styles.toolName}>{item.tool.tool}</code>
+        </div>
+        {item.count > 1 ? (
+          <span className={styles.toolCount}>
+            {t("codingWorkbench.activity.toolCount", { count: item.count })}
+          </span>
+        ) : null}
         <span className={styles.activityBadge} data-state={item.tool.state}>
           {t(`codingWorkbench.activity.toolState.${item.tool.state}`)}
         </span>
       </article>
     </li>
   );
+}
+
+function humanizeToolName(tool: string): string {
+  const known = KNOWN_TOOL_LABELS[tool];
+  if (known !== undefined) return known;
+  return tool
+    .replace(/^keiko[_-]/u, "")
+    .split(/[_\-.]+/u)
+    .filter((part) => part.length > 0)
+    .map((part) => `${part[0]?.toUpperCase() ?? ""}${part.slice(1)}`)
+    .join(" ");
 }
 
 function PlanRow({
@@ -610,6 +708,7 @@ function EventRow({
   hasMeasured,
 }: RowProps<Extract<TimelineItem, { kind: "event" }>>): ReactNode {
   const rowRef = useRowMeasurement(item.id, measureRow, hasMeasured);
+  const tone = eventTone(item.event);
   return (
     <li
       ref={rowRef}
@@ -617,14 +716,22 @@ function EventRow({
       aria-posinset={position}
       aria-setsize={total}
       data-timeline-kind="event"
+      data-event-tone={tone}
     >
       <span className={styles.timelineMarker} aria-hidden="true" />
-      <div className={styles.timelineBody}>
+      <div className={styles.eventCard}>
         <p className={styles.timelineTitle}>{eventTitle(item.event, t)}</p>
         <p className={styles.timelineDetail}>{eventDetail(item.event, t)}</p>
       </div>
     </li>
   );
+}
+
+function eventTone(event: CodingWorkbenchRuntimeSseEvent): "attention" | "routine" | "success" {
+  if (event.failureCode !== undefined) return "attention";
+  if (event.kind === "runtime-event" && event.eventKind === "failure-redacted") return "attention";
+  if (event.state === "succeeded") return "success";
+  return "routine";
 }
 
 function QuestionRow({

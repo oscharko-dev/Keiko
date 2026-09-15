@@ -35,6 +35,17 @@ In scope: new keiko-contracts leaves for commit message policy and commit intent
 
 Out of scope: remote push, PR creation, or merge (#476–#478); hunk-level staging (path-level only); Model Gateway calls; a new evidence schema or a new ledger; breaking-change detection; session correlation beyond what the existing evidence record carries.
 
+**Amendment (Issue #3494, 2026-09-15).** The desktop project header projects the checked-out
+repository branch through the existing read-only branch snapshot and governed create/switch flows;
+a Task Workspace identifier is never presented as a Git branch. A selected non-Git project may be
+initialized only after explicit confirmation through the bounded
+`POST /api/git-delivery/repository/initialize` bootstrap route. That route accepts the server-owned
+`projectId` and the literal initial branch `main`, resolves the path from the project catalog, and
+constructs the fixed `git init --quiet --initial-branch=main` argument vector. It accepts no path,
+remote, credential, or free Git argument, rejects already initialized or unresolved projects, and
+emits body-free correlated activity. Once the repository exists, every branch mutation continues
+to use the governed D1/D5 execution path below.
+
 ### Cross-branch ADR numbering
 
 The governed-git feat branch uses ADR numbers 0058–0062. An independent feat branch (voice digital twin) independently used numbers 0058–0069. These are non-conflicting while both branches are un-merged to `dev`; the numbers are per-branch-local until a feat-to-dev PR is opened. The merge coordinator must verify that the final ADR numbering on `dev` is globally sequential and adjust if needed before merging.

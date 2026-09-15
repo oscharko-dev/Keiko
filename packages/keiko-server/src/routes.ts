@@ -380,6 +380,7 @@ import {
 import { GIT_DELIVERY_ACTION_SHEET_ROUTE_GROUP } from "./gitDelivery/actionSheetRoutes.js";
 import { GIT_DELIVERY_EVIDENCE_ROUTE_GROUP } from "./gitDelivery/evidenceRoutes.js";
 import { GIT_DELIVERY_LOCAL_MUTATION_ROUTE_GROUP } from "./gitDelivery/localMutationRoutes.js";
+import { GIT_REPOSITORY_INITIALIZATION_ROUTE_GROUP } from "./gitDelivery/repositoryInitializationRoutes.js";
 import { GIT_DELIVERY_COMMIT_ROUTE_GROUP } from "./gitDelivery/commitRoutes.js";
 import { GIT_DELIVERY_PUSH_ROUTE_GROUP } from "./gitDelivery/pushRoutes.js";
 import { GIT_DELIVERY_PR_ROUTE_GROUP } from "./gitDelivery/prRoutes.js";
@@ -1537,6 +1538,7 @@ export const API_ROUTES: readonly RouteDefinition[] = [
   // #475 governed local write flows: branch create/switch, staging, and commit preview/execute. These
   // EXECUTE through the #472 kernel + #474 evidence ledger; gated by the same capability flag and CSRF.
   ...GIT_DELIVERY_LOCAL_MUTATION_ROUTE_GROUP,
+  ...GIT_REPOSITORY_INITIALIZATION_ROUTE_GROUP,
   ...GIT_DELIVERY_COMMIT_ROUTE_GROUP,
   // #476 governed remote publish: push preview (read-only) + execute through the SEPARATE publish
   // gateway (dedicated push-only allowlist) + #474 evidence ledger; same capability flag and CSRF.

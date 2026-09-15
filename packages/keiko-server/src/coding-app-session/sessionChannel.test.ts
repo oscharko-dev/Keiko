@@ -59,7 +59,23 @@ describe("createCodingAppSessionChannel", () => {
   it("cannot pair without a pairing authority (fail closed)", () => {
     const channel = createCodingAppSessionChannel({ registry: createSessionRegistry() });
     expect(channel.pair(fakePairingRequestBody())).toEqual({ paired: false });
+    expect(channel.ensureLocalSession(undefined)).toEqual({ status: "unavailable" });
     expect(channel.sessionCount()).toBe(0);
+  });
+
+  it("ensures a local session only when launcher pairing authority is composed", () => {
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+    });
+
+    const issued = channel.ensureLocalSession(undefined);
+
+    expect(issued.status).toBe("issued");
+    if (issued.status !== "issued") throw new TypeError("expected a local app session");
+    expect(channel.sessionCount()).toBe(1);
+    expect(channel.ensureLocalSession(issued.cookieToken)).toEqual({ status: "active" });
+    expect(channel.sessionCount()).toBe(1);
   });
 
   it("does not pair when the authority denies a well-formed attestation", () => {

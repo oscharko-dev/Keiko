@@ -1858,7 +1858,7 @@ function parseGatewayBrandingConfig(raw: unknown): GatewayBrandingConfig | undef
  * Resolves the server-configured branding into the exact shape the PR-description renderer
  * consumes. `validatedPrDescriptionLogoUrl` is the single owner of "is this a safe, immutable,
  * publicly hosted HTTPS SVG"; an absent or invalid `branding.logoUrl` yields `{}`, which the
- * renderer's own fallback turns into text-only "by Keiko" attribution — never a thrown error.
+ * renderer's own fallback turns into the trusted text attribution — never a thrown error.
  */
 export function resolvePrDescriptionBrandingFromConfig(
   config: GatewayConfig,

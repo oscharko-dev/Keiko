@@ -119,8 +119,12 @@ import {
   type ServerDiagnosticSummary,
 } from "./diagnostics-log.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
-import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
-import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
+import { newCorrelationId, UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import {
+  logCommandTermination,
+  processServerLogSink,
+  processServerLogSinkFor,
+} from "./process-log-sink.js";
 import { currentOpenSseStreamCount, markServerShuttingDown } from "./sse-write.js";
 import type { ServerLogSink } from "./observability/index.js";
 import { recordWorkspaceRootDenial } from "./workspace-root-denial-log.js";
@@ -347,6 +351,10 @@ import {
 } from "./coding-runtime/codingRuntimeEvidenceAggregator.js";
 import type { CodingRuntimeEventHub } from "./coding-runtime/codingRuntimeEventHub.js";
 import type { CodingRuntimeOrchestrator } from "./coding-runtime/codingRuntimeOrchestrator.js";
+import {
+  createCodingRuntimeProjectMemoryPort,
+  type CodingRuntimeProjectMemoryPort,
+} from "./coding-runtime/codingRuntimeProjectMemory.js";
 import type { CodingSafeActivityProjection } from "./coding-runtime/codingSafeActivityProjection.js";
 import {
   createCodingRuntimeControlPlane,
@@ -477,6 +485,7 @@ export type QualityIntelligenceReviewPrincipalResolver = (
 
 export interface RuntimeGatewayConfig {
   readonly spendBudget?: GatewaySpendBudget | undefined;
+  readonly initializationCorrelationId?: string | undefined;
   readonly storagePath: string;
   current(): GatewayConfig | undefined;
   present(): boolean;
@@ -1193,6 +1202,11 @@ export interface BuildHandlerDepsOptions {
   // The working directory from which `keiko ui` was launched. Production seeds it into the UI store
   // so first-run project selection is deterministic even when an older UI DB already has rows.
   readonly initialProjectPath?: string | undefined;
+  // An initial project path is normally ambient process context and carries no trust. A trusted
+  // launcher that obtained an explicit local-human project selection may opt into the same durable
+  // package-script grant as the browser folder picker. This server-internal signal is never read
+  // from a browser request, path value, or generic environment fallback.
+  readonly initialProjectTrustSource?: "explicit-launcher-selection" | undefined;
   // Optional setup tester (tests); production performs a real gateway call.
   readonly gatewaySetupTester?:
     | ((
@@ -1333,6 +1347,7 @@ function createRuntimeGatewayConfig(
   initialPresent: boolean,
   storagePath: string,
   env: EnvSource,
+  bootstrapCorrelationId: string,
 ): RuntimeGatewayConfig {
   let config = initial;
   let present = initialPresent;
@@ -1347,6 +1362,7 @@ function createRuntimeGatewayConfig(
   let generation = 0;
   return {
     storagePath,
+    initializationCorrelationId: bootstrapCorrelationId,
     spendBudget: gatewaySpendBudgetForEnv(env),
     current: (): GatewayConfig | undefined => config,
     present: (): boolean => present,
@@ -2099,6 +2115,7 @@ function buildMemoryVault(
   evidenceStore: EvidenceStore,
   env: EnvSource,
   diagnostics: ServerDiagnosticSink | undefined,
+  bootstrapCorrelationId: string,
 ): MemoryVaultStore {
   const postCommitAudit = createMemoryAuditHandler({ evidenceStore, redactString });
   const vault = createBffMemoryVault(
@@ -2114,6 +2131,7 @@ function buildMemoryVault(
     },
     createMemoryAuditDeleteCommitHandler({ evidenceStore, redactString }),
     env,
+    bootstrapCorrelationId,
   );
   // Issue #3189 — seed only the transition classifier's body-free pre-image fields after the
   // vault exists and before this composition returns it to mutation routes. This keeps the first
@@ -2140,7 +2158,7 @@ function buildMemoryVault(
   processServerLogSink().write({
     category: "memory",
     op: "memory.audit.state-cache.seeded",
-    correlationId: UNKNOWN_CORRELATION_ID,
+    correlationId: bootstrapCorrelationId,
     extra: { recordCount: records.length },
   });
   return vault;
@@ -2213,9 +2231,10 @@ interface ComposedPersistence {
 function openUiDatabaseForComposition(
   resolvedUiDbPath: string,
   diagnostics: ServerDiagnosticSink | undefined,
+  bootstrapCorrelationId: string,
 ): DatabaseSync {
   try {
-    return openNodeUiDatabase(resolvedUiDbPath, processServerLogSink());
+    return openNodeUiDatabase(resolvedUiDbPath, processServerLogSinkFor(bootstrapCorrelationId));
   } catch (error) {
     emitCompositionDiagnostic(
       diagnostics,
@@ -2227,14 +2246,19 @@ function openUiDatabaseForComposition(
   }
 }
 
+interface PersistenceRuntimeContext {
+  readonly env: EnvSource;
+  readonly diagnostics: ServerDiagnosticSink | undefined;
+  readonly bootstrapCorrelationId: string;
+}
+
 function composePersistence(
   injected: UiStore | undefined,
   injectedCodingRuntimeSnapshots: CodingRuntimeSnapshotStore | undefined,
   injectedCodingRuntimeDescriptionJobStore: CodingRuntimeDescriptionJobStore | undefined,
   resolvedUiDbPath: string,
   redactString: (value: string) => string,
-  env: EnvSource,
-  diagnostics: ServerDiagnosticSink | undefined,
+  runtime: PersistenceRuntimeContext,
 ): ComposedPersistence {
   if (injected !== undefined) {
     return {
@@ -2247,11 +2271,15 @@ function composePersistence(
       codingRuntimeDescriptionJobStore: injectedCodingRuntimeDescriptionJobStore,
     };
   }
-  const db = openUiDatabaseForComposition(resolvedUiDbPath, diagnostics);
+  const db = openUiDatabaseForComposition(
+    resolvedUiDbPath,
+    runtime.diagnostics,
+    runtime.bootstrapCorrelationId,
+  );
   const store = buildUiStoreOverDatabase(db, { redactString });
   const relationship: RelationshipHandlerDeps = {
     scopeResolver: (): { readonly workspaceId: string } => ({
-      workspaceId: resolveLoopbackWorkspaceId(env),
+      workspaceId: resolveLoopbackWorkspaceId(runtime.env),
     }),
     store: createRelationshipStorePort({ db, redactString }),
   };
@@ -2693,8 +2721,10 @@ function buildWorkspaceCleanup(
 export function reconcileTaskWorkspacesAtStartup(
   service: WorkspaceReconciliationService | undefined,
   diagnostics?: ServerDiagnosticSink,
+  parentCorrelationId?: string,
 ): void {
   if (service === undefined) return;
+  const correlationId = newCorrelationId();
   // Construction must never fail because of reconciliation, so both failure modes are detached.
   // Invoking inside `.then` rather than a `try` is what makes that possible with a single handler:
   // a synchronous throw from the call itself (property lookup + invocation), which a non-conforming
@@ -2703,12 +2733,13 @@ export function reconcileTaskWorkspacesAtStartup(
   // `try` around a promise-returning call is rejected by typescript:S4822 in either direction —
   // with a `.catch` it asks for the `try` to go, without one it asks for the `.catch`.
   void Promise.resolve()
-    .then(() => service.reconcile())
+    .then(() => service.reconcile(undefined, correlationId, parentCorrelationId))
     .catch((error: unknown) => {
       emitServerDiagnostic(
         diagnostics,
         serverDiagnosticFromError({
-          correlationId: UNKNOWN_CORRELATION_ID,
+          correlationId,
+          ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
           operation: "task-workspace.reconcile.startup",
           source: "task-workspace.bootstrap",
           error,
@@ -2723,13 +2754,20 @@ function seedInitialProject(
   store: UiStore,
   uiDbPath: string,
   initialProjectPath: string | undefined,
+  workspaceScriptTrust: WorkspaceScriptTrustService,
+  correlationId: string,
+  trustSource: BuildHandlerDepsOptions["initialProjectTrustSource"],
 ): string | undefined {
   if (initialProjectPath === undefined || initialProjectPath.trim().length === 0) {
     return undefined;
   }
   const normalizedPath = validateProjectPath(initialProjectPath, { mustExist: true });
   assertUiDbOutsideProject(uiDbPath, normalizedPath);
-  return store.createProject(normalizedPath).path;
+  const project = store.createProject(normalizedPath);
+  if (trustSource === "explicit-launcher-selection") {
+    workspaceScriptTrust.grant(project.path, correlationId);
+  }
+  return project.path;
 }
 
 interface PeripheralManagers {
@@ -2812,6 +2850,7 @@ interface BuildPeripheralsArgs {
   readonly runtimeStateDir: string;
   readonly dapRuntime: DapRuntimeReference;
   readonly resolveWorkspaceRootAccess: WorkspaceRootAccessResolver;
+  readonly bootstrapCorrelationId: string;
 }
 
 function unavailableDebugDeploymentPolicy(): DebugDeploymentPolicy {
@@ -3337,6 +3376,7 @@ function buildPeripherals(args: BuildPeripheralsArgs): PeripheralManagers {
     args.evidenceStore,
     args.options.env,
     args.options.diagnostics,
+    args.bootstrapCorrelationId,
   );
   const { workspaceScriptTrust, managedLspControl, disposeTrustLspBridge } =
     resolveTrustAndManagedLspControl(args);
@@ -3483,19 +3523,21 @@ function loadRuntimeGatewayConfig(
   options: BuildHandlerDepsOptions,
   runtimeConfigPath: string,
   resolvedEvidenceDir: string,
+  bootstrapCorrelationId: string,
 ): { config: GatewayConfig | undefined; configPresent: boolean; storagePath: string } {
   const effectiveConfigPath = options.configPath ?? runtimeConfigPath;
+  const securityLogSink = processServerLogSinkFor(bootstrapCorrelationId);
   migrateLocalConfigCredentials({
     configPath: effectiveConfigPath,
     env: options.env,
     evidenceDir: resolvedEvidenceDir,
-    securityLogSink: processServerLogSink(),
+    securityLogSink,
     diagnostics: options.diagnostics,
   });
   const secretResolver = createProviderSecretResolver({
     configPath: effectiveConfigPath,
     env: options.env,
-    securityLogSink: processServerLogSink(),
+    securityLogSink,
   });
   const resolved = resolveConfig(
     options.configPath,
@@ -3737,15 +3779,13 @@ function buildPersistenceBundle(
   resolvedUiDbPath: string,
   redactString: (value: string) => string,
   evidenceStore: EvidenceStore,
+  bootstrapCorrelationId: string,
 ): PersistenceBundle {
-  const persistence = composePersistence(
-    options.store,
-    options.codingRuntimeSnapshotStore,
-    options.codingRuntimeDescriptionJobStore,
+  const persistence = composeUiPersistence(
+    options,
     resolvedUiDbPath,
     redactString,
-    options.env,
-    options.diagnostics,
+    bootstrapCorrelationId,
   );
   const { store, dispose, relationship } = persistence;
   try {
@@ -3756,11 +3796,6 @@ function buildPersistenceBundle(
       evidenceStore,
       redactString,
     );
-    const managedTaskWorkspaceRoot = composedManagedWorktreeRoot(
-      services.workspaceProvisioning,
-      resolvedUiDbPath,
-      options.diagnostics,
-    );
     return {
       uiStore: store,
       workspaceScriptTrust,
@@ -3769,13 +3804,40 @@ function buildPersistenceBundle(
       codingRuntimeSnapshotStore: persistence.codingRuntimeSnapshotStore,
       codingRuntimeDescriptionJobStore: persistence.codingRuntimeDescriptionJobStore,
       ...services,
-      managedTaskWorkspaceRoot,
-      preferredProjectPath: seedInitialProject(store, resolvedUiDbPath, options.initialProjectPath),
+      managedTaskWorkspaceRoot: composedManagedWorktreeRoot(
+        services.workspaceProvisioning,
+        resolvedUiDbPath,
+        options.diagnostics,
+      ),
+      preferredProjectPath: seedInitialProject(
+        store,
+        resolvedUiDbPath,
+        options.initialProjectPath,
+        workspaceScriptTrust,
+        bootstrapCorrelationId,
+        options.initialProjectTrustSource,
+      ),
     };
   } catch (error) {
     dispose?.();
     throw error;
   }
+}
+
+function composeUiPersistence(
+  options: BuildHandlerDepsOptions,
+  resolvedUiDbPath: string,
+  redactString: (value: string) => string,
+  bootstrapCorrelationId: string,
+): ReturnType<typeof composePersistence> {
+  return composePersistence(
+    options.store,
+    options.codingRuntimeSnapshotStore,
+    options.codingRuntimeDescriptionJobStore,
+    resolvedUiDbPath,
+    redactString,
+    { env: options.env, diagnostics: options.diagnostics, bootstrapCorrelationId },
+  );
 }
 
 // The optional persistence services (relationship engine + the #445/#446/#447 task-workspace
@@ -3809,9 +3871,14 @@ function optionalPersistenceServices(bundle: PersistenceBundle): Partial<UiHandl
 function reconcileNodeStoreAtStartup(
   options: BuildHandlerDepsOptions,
   bundle: PersistenceBundle,
+  bootstrapCorrelationId: string,
 ): void {
   if (options.store !== undefined) return;
-  reconcileTaskWorkspacesAtStartup(bundle.workspaceReconciliation, options.diagnostics);
+  reconcileTaskWorkspacesAtStartup(
+    bundle.workspaceReconciliation,
+    options.diagnostics,
+    bootstrapCorrelationId,
+  );
 }
 
 function gatewayConfigFields(
@@ -3844,6 +3911,7 @@ interface UiHandlerDepsAssemblyArgs {
   readonly localKnowledgeKeyProvider: KnowledgeStoreKeyProvider;
   readonly bundle: PersistenceBundle;
   readonly contextProfileForModel: ContextProfileResolver;
+  readonly bootstrapCorrelationId: string;
 }
 
 function codingSidecarGatewayModelSourceFields(
@@ -3935,6 +4003,7 @@ function buildAssemblyPeripherals(
     runtimeStateDir: dirname(args.resolvedUiDbPath),
     dapRuntime,
     resolveWorkspaceRootAccess,
+    bootstrapCorrelationId: args.bootstrapCorrelationId,
   });
 }
 
@@ -4286,6 +4355,7 @@ function assembleUiHandlerRuntimeServices(
     args,
     codingRuntimeEvidenceAggregator,
     codingRuntimeHost,
+    peripherals.memoryVault,
   );
   const gitChangeSnapshotService = createGitChangeSnapshotService({
     logSink: processServerLogSink(),
@@ -4349,8 +4419,10 @@ function buildUiCodingRuntimeControlPlane(
   args: UiHandlerDepsAssemblyArgs,
   codingRuntimeEvidenceAggregator: ReturnType<typeof createCodingRuntimeEvidenceAggregator>,
   codingRuntimeHost: NonNullable<BuildHandlerDepsOptions["codingRuntimeHost"]> | undefined,
+  memoryVault: MemoryVaultStore,
 ): ReturnType<typeof createCodingRuntimeControlPlane> | undefined {
   if (!args.bundle.codingRuntimeSnapshotStore || !args.bundle.workspaceLifecycle) return undefined;
+  const projectMemory = createUiCodingRuntimeProjectMemory(args, memoryVault);
   return createCodingRuntimeControlPlane({
     issueIntake: createProductionCodingRuntimeIssueIntake({
       store: args.bundle.uiStore,
@@ -4366,6 +4438,7 @@ function buildUiCodingRuntimeControlPlane(
       args.options.codingRuntimeServerPrincipal ??
       ((): string | undefined => DEFAULT_LOOPBACK_MEMORY_REVIEWER_ID),
     ...(codingRuntimeHost ? { runtimeHost: codingRuntimeHost } : {}),
+    projectMemory,
     // KEIKO-0225: forward the operator diagnostic sink so mid-stream SSE fan-out write failures
     // surface as one redacted record per subscriber instead of being silently swallowed.
     // #3099 P2 (KEIKO-0225 follow-up): default to the stderr sink when no custom sink is
@@ -4373,6 +4446,17 @@ function buildUiCodingRuntimeControlPlane(
     // failures instead of silently no-op'ing recordSseFailure().
     diagnostics: args.options.diagnostics ?? defaultServerDiagnosticSink,
     activityLog: processServerLogSink(),
+  });
+}
+
+function createUiCodingRuntimeProjectMemory(
+  args: UiHandlerDepsAssemblyArgs,
+  memoryVault: MemoryVaultStore,
+): CodingRuntimeProjectMemoryPort {
+  return createCodingRuntimeProjectMemoryPort({
+    vault: memoryVault,
+    evidenceStore: args.evidenceStore,
+    redactString: args.redactString,
   });
 }
 
@@ -5494,16 +5578,49 @@ function qualifiedProductionRuntimeComposition(
   };
 }
 
-export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
-  const { resolvedUiDbPath, runtimeConfigPath } = runtimePathFields(options);
-  const resolvedEvidenceDir = resolveEvidenceDirAndEnforceRetention(options);
-  const { config, configPresent, storagePath } = loadRuntimeGatewayConfig(
+interface InitialGatewayState {
+  readonly config: GatewayConfig | undefined;
+  readonly configPresent: boolean;
+  readonly runtimeConfig: RuntimeGatewayConfig;
+  readonly egress: ReturnType<typeof resolveConfiguredEgress>;
+}
+
+function buildInitialGatewayState(
+  options: BuildHandlerDepsOptions,
+  runtimeConfigPath: string,
+  resolvedEvidenceDir: string,
+  bootstrapCorrelationId: string,
+): InitialGatewayState {
+  const loaded = loadRuntimeGatewayConfig(
     options,
     runtimeConfigPath,
     resolvedEvidenceDir,
+    bootstrapCorrelationId,
   );
-  const egress = resolveConfiguredEgress(options.configPath, options.env, runtimeConfigPath);
-  const runtimeConfig = createRuntimeGatewayConfig(config, configPresent, storagePath, options.env);
+  return {
+    config: loaded.config,
+    configPresent: loaded.configPresent,
+    runtimeConfig: createRuntimeGatewayConfig(
+      loaded.config,
+      loaded.configPresent,
+      loaded.storagePath,
+      options.env,
+      bootstrapCorrelationId,
+    ),
+    egress: resolveConfiguredEgress(options.configPath, options.env, runtimeConfigPath),
+  };
+}
+
+export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
+  const bootstrapCorrelationId = newCorrelationId();
+  const { resolvedUiDbPath, runtimeConfigPath } = runtimePathFields(options);
+  const resolvedEvidenceDir = resolveEvidenceDirAndEnforceRetention(options);
+  const { config, configPresent, runtimeConfig, egress } = buildInitialGatewayState(
+    options,
+    runtimeConfigPath,
+    resolvedEvidenceDir,
+    bootstrapCorrelationId,
+  );
   const evidenceStore = createNodeEvidenceStore(resolvedEvidenceDir);
   const codingWorkbenchEvidenceStore =
     options.codingWorkbenchEvidenceStore ??
@@ -5514,9 +5631,15 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     env: options.env,
     securityLogSink: processServerLogSink(),
   });
-  const bundle = buildPersistenceBundle(options, resolvedUiDbPath, redactString, evidenceStore);
+  const bundle = buildPersistenceBundle(
+    options,
+    resolvedUiDbPath,
+    redactString,
+    evidenceStore,
+    bootstrapCorrelationId,
+  );
   const contextProfileForModel = buildContextProfileResolver(() => runtimeConfig.current());
-  reconcileNodeStoreAtStartup(options, bundle);
+  reconcileNodeStoreAtStartup(options, bundle, bootstrapCorrelationId);
   const deps = assembleUiHandlerDeps({
     options,
     resolvedUiDbPath,
@@ -5532,6 +5655,7 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     localKnowledgeKeyProvider,
     bundle,
     contextProfileForModel,
+    bootstrapCorrelationId,
   });
   return deps;
 }

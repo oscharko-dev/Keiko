@@ -122,7 +122,11 @@ import {
 } from "./hooks/voice-dialog-state";
 import { VoiceDialogInterruptButton, VoiceDialogModeSwitch } from "./VoiceDialogMode";
 import styles from "./ChatWindow.module.css";
-import type { OpenEditorFileRequest, OpenEditorFileResult } from "./hooks/useWorkspace.types";
+import type {
+  OpenEditorFileRequest,
+  OpenEditorFileResult,
+  WorkspaceLinkedGitChangeComparison,
+} from "./hooks/useWorkspace.types";
 import { fetchFilesSearch, updateChat } from "@/lib/api";
 import { GitChangeScopePill } from "./GitChangeScopePill";
 import { ConnectedScopePill } from "./ConnectedScopePill";
@@ -179,6 +183,7 @@ interface ChatWindowProps {
   readonly workflowCompact?: boolean;
   readonly linkedRoot?: string | null;
   readonly linkedRoots?: readonly string[];
+  readonly linkedGitChangeComparisons?: readonly WorkspaceLinkedGitChangeComparison[] | undefined;
   readonly openEditorFile?: (request: OpenEditorFileRequest) => OpenEditorFileResult;
   readonly previewWindows?: PdfCitationPreviewWindowApi;
   readonly onOpenRunResult?: (message: ChatMessage) => void;
@@ -3533,8 +3538,16 @@ function hasConnectorGroundingScope(chat: Chat | undefined): boolean {
   );
 }
 
+function hasGitChangeGroundingScope(chat: Chat | undefined): boolean {
+  return chat !== undefined && (chat.gitChangeScopes ?? []).length > 0;
+}
+
 function hasGroundingScope(chat: Chat | undefined): boolean {
-  return hasFolderGroundingScope(chat) || hasConnectorGroundingScope(chat);
+  return (
+    hasFolderGroundingScope(chat) ||
+    hasConnectorGroundingScope(chat) ||
+    hasGitChangeGroundingScope(chat)
+  );
 }
 
 function formatScopeUpdateError(error: unknown, t: I18nTranslate): string {
@@ -4081,17 +4094,20 @@ function ChatScopeHeaderImpl({
   chat,
   onChatChanged,
   memoryControl,
+  pendingGitChangeComparisons,
 }: {
   readonly chat: Chat;
   readonly onChatChanged: (chat: Chat) => void;
   readonly memoryControl?: ReactNode;
+  readonly pendingGitChangeComparisons?: readonly WorkspaceLinkedGitChangeComparison[];
 }): ReactNode {
   // uiux-fix F041 (C172) — one catalog load feeds both the connector-pill display
   // names and the grounding select's option lists.
   const catalog = useKnowledgeCatalog();
   // uiux-fix F041 (C178/C179) — layout moved from inline styles to the
   // .chat-scope-header rule in globals.css (16px inset, themeable).
-  const connected = hasGroundingScope(chat);
+  const pendingGitChanges = pendingGitChangeComparisons ?? [];
+  const connected = hasGroundingScope(chat) || pendingGitChanges.length > 0;
   return (
     <div className="chat-scope-header" data-grounded={connected ? "true" : "false"}>
       <LocalKnowledgeScopeControl
@@ -4110,7 +4126,12 @@ function ChatScopeHeaderImpl({
           Chat" action renders here, alongside the grounding scope control, so its current /
           stale / blocked status and refresh/disconnect actions are visible where a turn is
           actually sent. Renders nothing when the chat has no connected git-change scope. */}
-      <GitChangeScopePill chat={chat} onDisconnect={onChatChanged} onRefreshed={onChatChanged} />
+      <GitChangeScopePill
+        chat={chat}
+        pendingComparisons={pendingGitChanges}
+        onDisconnect={onChatChanged}
+        onRefreshed={onChatChanged}
+      />
       {memoryControl !== undefined ? (
         <div className="chat-scope-header-actions">{memoryControl}</div>
       ) : null}
@@ -4901,6 +4922,7 @@ function ChatWindowStatusHeader({
   activeChat,
   replaceChat,
   memoryControl,
+  pendingGitChangeComparisons,
   latestMemory,
   memoryBudgetTokens,
   setMemoryBudgetTokens,
@@ -4914,6 +4936,7 @@ function ChatWindowStatusHeader({
   readonly activeChat: Chat | undefined;
   readonly replaceChat: (chat: Chat) => void;
   readonly memoryControl: ReactNode;
+  readonly pendingGitChangeComparisons: readonly WorkspaceLinkedGitChangeComparison[];
   readonly latestMemory: ConversationMemoryResultWire | undefined;
   readonly memoryBudgetTokens: number;
   readonly setMemoryBudgetTokens: (next: number) => void;
@@ -4931,6 +4954,7 @@ function ChatWindowStatusHeader({
           chat={activeChat}
           onChatChanged={replaceChat}
           memoryControl={memoryControl}
+          pendingGitChangeComparisons={pendingGitChangeComparisons}
         />
       ) : null}
       {activeChat !== undefined ? (
@@ -5284,6 +5308,7 @@ export function ChatWindow({
   workflowCompact = false,
   linkedRoot = null,
   linkedRoots = [],
+  linkedGitChangeComparisons = [],
   openEditorFile,
   previewWindows,
   onOpenRunResult,
@@ -5480,6 +5505,7 @@ export function ChatWindow({
         activeChat={activeChat}
         replaceChat={replaceChat}
         memoryControl={memoryControl}
+        pendingGitChangeComparisons={linkedGitChangeComparisons}
         latestMemory={latestMemory}
         memoryBudgetTokens={memoryBudgetTokens}
         setMemoryBudgetTokens={setMemoryBudgetTokens}

@@ -18,6 +18,11 @@ export interface CodingWorkbenchIssueStartIntent {
   readonly expectedIssueBindingDigest: string;
 }
 
+export interface CodingWorkbenchStartOptions {
+  readonly issue?: CodingWorkbenchIssueStartIntent | undefined;
+  readonly projectMemoryEnabled: boolean;
+}
+
 export interface CodingWorkbenchRuntimeActions {
   readonly setRequestedMode: (mode: CodingWorkbenchMode) => void;
   readonly setRuntimePreference: (preference: CodingWorkbenchRuntimePreference) => void;
@@ -28,7 +33,7 @@ export interface CodingWorkbenchRuntimeActions {
   readonly refreshSource: () => Promise<void>;
   readonly refreshRuntime: () => Promise<void>;
   readonly refreshRun: () => Promise<void>;
-  readonly start: (taskIntent: string, issue?: CodingWorkbenchIssueStartIntent) => Promise<void>;
+  readonly start: (taskIntent: string, options: CodingWorkbenchStartOptions) => Promise<void>;
   readonly decideApproval: (decision: CodingWorkbenchRuntimeApprovalDecision) => Promise<void>;
   readonly stop: () => Promise<void>;
   readonly takeover: () => Promise<void>;

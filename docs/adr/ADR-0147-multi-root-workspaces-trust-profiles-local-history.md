@@ -221,9 +221,12 @@ restricted invalidation at a newer revision. Restoring the old `package.json` by
 not resurrect the prior grant; a new explicit grant is required. Binding a repository into a managed
 task workspace registers BOTH roots as projects — the worktree and the repository it was bound from —
 because a root that is not registered cannot be a trust subject at all: script trust is resolved only
-for a registered root, and the trust surfaces list registered roots. That registration is never a
-grant; the repository stays restricted until the operator decides, and choosing a folder remains the
-only path that grants on selection. A repository that CONTAINS the managed worktree is left
+for a registered root, and the trust surfaces list registered roots. Registration alone is never a
+grant; the repository stays restricted until the operator decides. Choosing a folder in the browser
+and a project selection explicitly attested by a trusted launcher are the two equivalent local-human
+selection paths that grant through the same trust service. An ambient process working directory may
+seed the preferred project, but carries no grant; restoring a stored project row or opening an
+arbitrary URL does not grant either. A repository that CONTAINS the managed worktree is left
 unregistered, because that root also contains the UI database. A managed task worktree is a
 registered project row whose script decision is resolved from the repository it was bound from, and
 that inherited decision holds only while the worktree's `package.json` is byte-identical to that

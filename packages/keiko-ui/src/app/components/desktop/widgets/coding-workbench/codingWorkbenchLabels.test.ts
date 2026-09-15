@@ -22,6 +22,7 @@ import {
   eventDetail,
   lifecycleAnnouncement,
   modelSourceLabel,
+  startBlockedReason,
   visibleAlert,
 } from "./codingWorkbenchLabels";
 
@@ -366,6 +367,16 @@ describe("app-session pairing truth (release-audit F-08/RG-12)", () => {
   it("keeps the unpaired window out of standing visible alerts", () => {
     expect(visibleAlert(unpairedState(), t, false)).toBeNull();
     expect(visibleAlert(createInitialCodingWorkbenchRuntimeState(), t, false)).toBeNull();
+  });
+
+  it("uses the composer blocker for a direct start attempt from an unpaired window", () => {
+    expect(startBlockedReason(unpairedState(), t, false)).toBe(
+      "codingWorkbench.composer.blocked.unpaired",
+    );
+  });
+
+  it("does not render a composer blocker once start is actually available", () => {
+    expect(startBlockedReason({ ...unpairedState(), canStart: true }, t, false)).toBeNull();
   });
 
   it("keeps an actionable refresh failure ahead of the standing pairing condition", () => {

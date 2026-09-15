@@ -380,7 +380,9 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
   it("starts a run and installs the server truth", async () => {
     vi.mocked(startCodingWorkbenchRuntime).mockResolvedValue(snapshot({ state: "starting" }));
     const { mutations, dispatch } = renderMutations(readyRunState(null, { canStart: true }));
-    await act(() => mutations.start("write the failing test first"));
+    await act(() =>
+      mutations.start("write the failing test first", { projectMemoryEnabled: true }),
+    );
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "mutation-start", mutation: "start" }),
     );
@@ -393,7 +395,7 @@ describe("useCodingWorkbenchRuntimeMutations", () => {
 
   it("reports a mutation failure when the readiness gate rejects the start", async () => {
     const { mutations, dispatch } = renderMutations(readyRunState(null, { canStart: false }));
-    await act(() => mutations.start("blocked"));
+    await act(() => mutations.start("blocked", { projectMemoryEnabled: true }));
     expect(dispatch).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "mutation-failed",

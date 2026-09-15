@@ -19,6 +19,7 @@ import {
   effectiveScopes,
   filesChatBindRoot,
   filesVisibleScope,
+  gitChangeChatBind,
   isWorkspaceWindowSelectable,
   moveSelectedWorkspaceWindows,
   makeConnectActions,
@@ -39,7 +40,7 @@ import {
   totalSourceCap,
 } from "./workspaceActions";
 import type { AppWindow, Connection, ConnectingState, View } from "../windows/types";
-import type { ChatConnectedScope, ChatLocalKnowledgeScope } from "@/lib/types";
+import type { ChatConnectedScope, ChatGitChangeScope, ChatLocalKnowledgeScope } from "@/lib/types";
 import { DEFAULT_GROUNDING_LIMITS } from "@/lib/types";
 import { WIN_TYPES } from "../windows/WindowsRegistry";
 import type { ChatBindingTarget, ChatUnbindTarget } from "./useWorkspace.types";
@@ -221,6 +222,41 @@ describe("filesVisibleScope", () => {
       relativePaths: [],
       root: "/repo",
       connectedAtMs: 10,
+    });
+  });
+
+  it("uses the configured repository root for repository-bound Files windows", () => {
+    expect(
+      filesVisibleScope(
+        win("files", {
+          root: "/repo",
+          resolvedRoot: "/worktrees/active-task",
+          rootBinding: "coding-repository",
+        }),
+        15,
+      ),
+    ).toEqual({
+      kind: "workspace-root",
+      relativePaths: [],
+      root: "/repo",
+      connectedAtMs: 15,
+    });
+  });
+
+  it("repairs a legacy Files window before binding it to Chat", () => {
+    expect(
+      filesVisibleScope(
+        win("files", {
+          root: "/repos/product",
+          resolvedRoot: "/repos/product/.keiko/dev/ui/task-workspaces/repo/ws-1",
+        }),
+        16,
+      ),
+    ).toEqual({
+      kind: "workspace-root",
+      relativePaths: [],
+      root: "/repos/product",
+      connectedAtMs: 16,
     });
   });
 
@@ -435,6 +471,84 @@ describe("connectorChatBind", () => {
   });
 });
 
+describe("gitChangeChatBind", () => {
+  it("returns the Git comparison selection for a governed Git↔Chat pair", () => {
+    const git = win("governedGit", {
+      gitChangeBaseRef: "dev",
+      gitChangeHeadRef: "feature/x",
+    });
+    expect(gitChangeChatBind(git, win("chat"))).toEqual({
+      baseRef: "dev",
+      headRef: "feature/x",
+    });
+  });
+
+  it("returns null when the Git comparison has no distinct base branch", () => {
+    const git = win("governedGit", {
+      gitChangeBaseRef: "feature/x",
+      gitChangeHeadRef: "feature/x",
+    });
+    expect(gitChangeChatBind(git, win("chat"))).toBeNull();
+  });
+});
+
+describe("linkedGitChangeComparisons", () => {
+  it("returns every Git comparison connected to the chat, including pending bindings", () => {
+    const { linkedGitChangeComparisons } = makeConnectHarness(
+      [
+        win("chat", {}, "chat-1"),
+        win("governedGit", {}, "git-a"),
+        win("governedGit", {}, "git-b"),
+        win("files", { resolvedRoot: "/repo" }, "files-1"),
+      ],
+      [
+        {
+          ...conn("chat-1", "git-a"),
+          boundGitChangeBaseRef: "dev",
+          boundGitChangeHeadRef: "feature/a",
+          boundGitChangeRelationshipId: "rel-a",
+        },
+        {
+          ...conn("git-b", "chat-1"),
+          boundGitChangeBaseRef: "dev",
+          boundGitChangeHeadRef: "feature/b",
+        },
+        conn("chat-1", "files-1"),
+      ],
+    );
+
+    expect(linkedGitChangeComparisons("chat-1")).toEqual([
+      {
+        connectionId: "chat-1~git-a",
+        baseRef: "dev",
+        headRef: "feature/a",
+        pending: false,
+      },
+      {
+        connectionId: "git-b~chat-1",
+        baseRef: "dev",
+        headRef: "feature/b",
+        pending: true,
+      },
+    ]);
+  });
+
+  it("skips stale Git connector edges that do not carry a valid comparison snapshot", () => {
+    const { linkedGitChangeComparisons } = makeConnectHarness(
+      [win("chat", {}, "chat-1"), win("governedGit", {}, "git-1")],
+      [
+        {
+          ...conn("chat-1", "git-1"),
+          boundGitChangeBaseRef: "feature/x",
+          boundGitChangeHeadRef: "feature/x",
+        },
+      ],
+    );
+
+    expect(linkedGitChangeComparisons("chat-1")).toEqual([]);
+  });
+});
+
 // ─── Epic #710 #718 — linkedConnectorCapsuleIds ──────────────────────────────
 
 function ref<T>(value: T): MutableRefObject<T> {
@@ -462,6 +576,16 @@ interface ConnectHarnessOverrides {
   readonly onConnectorUnbind?: (
     chatWindowId: string,
     scope: ChatLocalKnowledgeScope,
+    target?: ChatUnbindTarget,
+  ) => boolean | Promise<boolean>;
+  readonly onGitChangeBind?: (
+    chatWindowId: string,
+    selection: { readonly baseRef: string; readonly headRef: string },
+    target?: ChatBindingTarget,
+  ) => ChatGitChangeScope | false | null | Promise<ChatGitChangeScope | false | null>;
+  readonly onGitChangeUnbind?: (
+    chatWindowId: string,
+    relationshipId: string,
     target?: ChatUnbindTarget,
   ) => boolean | Promise<boolean>;
   readonly onConnectionUnbindFailure?: () => void;
@@ -500,12 +624,35 @@ function makeConnectHarness(
     onScopeUnbind: overrides.onScopeUnbind,
     onConnectorBind: overrides.onConnectorBind,
     onConnectorUnbind: overrides.onConnectorUnbind,
+    onGitChangeBind: overrides.onGitChangeBind,
+    onGitChangeUnbind: overrides.onGitChangeUnbind,
     onConnectionUnbindFailure: overrides.onConnectionUnbindFailure,
   });
 }
 
 function conn(a: string, b: string): Connection {
   return { id: `${a}~${b}`, a, b };
+}
+
+function gitScope(relationshipId = "rel-git-1"): ChatGitChangeScope {
+  return {
+    kind: "git-change",
+    relationshipId,
+    remoteDigest: "d".repeat(64),
+    comparisonLabel: "dev...feature/x",
+    baseRef: "dev",
+    headRef: "feature/x",
+    baseSha: "a".repeat(40),
+    headSha: "b".repeat(40),
+    mergeBaseSha: "a".repeat(40),
+    snapshotDigest: "c".repeat(64),
+    fileCount: 1,
+    totalFiles: 1,
+    omittedFiles: 0,
+    truncatedFiles: 0,
+    descriptionStatus: "current",
+    connectedAtMs: 1,
+  };
 }
 
 function applyState<T>(store: { value: T }, update: SetStateAction<T>): void {
@@ -515,15 +662,15 @@ function applyState<T>(store: { value: T }, update: SetStateAction<T>): void {
 const layoutViewport = { x: 10, y: 20, w: 900, h: 600 };
 
 describe("workspace window selection helpers (Issue #2057)", () => {
-  it("treats visible floating windows as selectable only", () => {
+  it("treats visible windows as selectable even when maximized", () => {
     expect(isWorkspaceWindowSelectable(win("chat", {}, "chat-1"))).toBe(true);
     expect(isWorkspaceWindowSelectable({ ...win("chat", {}, "chat-1"), minimized: true })).toBe(
       false,
     );
-    expect(isWorkspaceWindowSelectable({ ...win("chat", {}, "chat-1"), max: true })).toBe(false);
+    expect(isWorkspaceWindowSelectable({ ...win("chat", {}, "chat-1"), max: true })).toBe(true);
   });
 
-  it("normalizes selection by pruning stale, duplicate, minimized, and maximized ids", () => {
+  it("normalizes selection by pruning stale, duplicate, and minimized ids", () => {
     const wins = [
       win("files", {}, "files-1"),
       { ...win("chat", {}, "chat-1"), minimized: true },
@@ -537,8 +684,8 @@ describe("workspace window selection helpers (Issue #2057)", () => {
         selectedWindowIds: ["files-1", "missing", "files-1", "chat-1", "quality-1", "terminal-1"],
       }),
     ).toEqual({
-      focusedWindowId: null,
-      selectedWindowIds: ["files-1", "terminal-1"],
+      focusedWindowId: "quality-1",
+      selectedWindowIds: ["files-1", "quality-1", "terminal-1"],
     });
   });
 
@@ -552,26 +699,33 @@ describe("workspace window selection helpers (Issue #2057)", () => {
     const replaced = replaceWorkspaceSelection(wins, ["files-1", "quality-1", "chat-1"]);
     expect(replaced).toEqual({
       focusedWindowId: "chat-1",
-      selectedWindowIds: ["files-1", "chat-1"],
+      selectedWindowIds: ["files-1", "quality-1", "chat-1"],
     });
 
     const toggledOff = toggleWorkspaceSelection(wins, replaced, "files-1");
-    expect(toggledOff).toEqual({ focusedWindowId: "files-1", selectedWindowIds: ["chat-1"] });
+    expect(toggledOff).toEqual({
+      focusedWindowId: "files-1",
+      selectedWindowIds: ["quality-1", "chat-1"],
+    });
 
-    expect(toggleWorkspaceSelection(wins, toggledOff, "quality-1")).toEqual(toggledOff);
+    expect(toggleWorkspaceSelection(wins, toggledOff, "quality-1")).toEqual({
+      focusedWindowId: "quality-1",
+      selectedWindowIds: ["chat-1"],
+    });
   });
 
   it("moves only eligible selected windows while preserving offsets and content config", () => {
     const filesCfg = { resolvedRoot: "/repo" };
+    const maximized = { ...win("terminal", {}, "terminal-1"), max: true, x: 640, y: 100 };
     const wins = [
       { ...win("files", filesCfg, "files-1"), x: 40, y: 50, w: 200, h: 120 },
       { ...win("chat", {}, "chat-1"), x: 280, y: 90, w: 240, h: 160 },
-      { ...win("terminal", {}, "terminal-1"), x: 640, y: 100, w: 260, h: 180 },
+      maximized,
     ];
 
     const moved = moveSelectedWorkspaceWindows(
       wins,
-      ["files-1", "chat-1"],
+      ["files-1", "chat-1", "terminal-1"],
       { dx: 25, dy: 30 },
       layoutViewport,
     );
@@ -580,7 +734,7 @@ describe("workspace window selection helpers (Issue #2057)", () => {
     expect(moved.appliedDelta).toEqual({ dx: 25, dy: 30 });
     expect(moved.wins[0]).toMatchObject({ id: "files-1", x: 65, y: 80 });
     expect(moved.wins[1]).toMatchObject({ id: "chat-1", x: 305, y: 120 });
-    expect(moved.wins[2]).toBe(wins[2]);
+    expect(moved.wins[2]).toBe(maximized);
     expect(moved.wins[0]?.cfg).toBe(filesCfg);
   });
 
@@ -2753,6 +2907,93 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     expect(store.conns[0]?.boundConnectorId).toBe("cap-a");
   });
 
+  it("draws a Git↔Chat edge immediately, then attaches the confirmed relationship scope", async () => {
+    const store = { conns: [] as Connection[] };
+    const deferredScope = deferredValue<ChatGitChangeScope>();
+    const seenSelections: Array<{ readonly baseRef: string; readonly headRef: string }> = [];
+    const harness = makeConnectHarness(
+      [
+        win("governedGit", { gitChangeBaseRef: "dev", gitChangeHeadRef: "feature/x" }, "git-1"),
+        win("chat", { chatId: "chat-private", projectPath: "/repo" }, "chat-1"),
+      ],
+      [],
+      {
+        connecting: { from: "git-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onGitChangeBind: (_chatWindowId, selection) => {
+          seenSelections.push(selection);
+          return deferredScope.promise;
+        },
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    expect(seenSelections).toEqual([{ baseRef: "dev", headRef: "feature/x" }]);
+    expect(store.conns[0]).toMatchObject({
+      a: "git-1",
+      b: "chat-1",
+      boundChatWindowId: "chat-1",
+      boundGitChangeBaseRef: "dev",
+      boundGitChangeHeadRef: "feature/x",
+    });
+    expect(store.conns[0]?.boundGitChangeRelationshipId).toBeUndefined();
+    deferredScope.resolve(gitScope());
+    await deferredScope.promise;
+    await flushAsyncBind();
+    expect(store.conns[0]).toMatchObject({
+      a: "git-1",
+      b: "chat-1",
+      boundChatWindowId: "chat-1",
+      boundGitChangeBaseRef: "dev",
+      boundGitChangeHeadRef: "feature/x",
+      boundGitChangeRelationshipId: "rel-git-1",
+    });
+  });
+
+  it("removes the immediate Git↔Chat edge again when the git-change bind is vetoed", async () => {
+    const store = { conns: [] as Connection[] };
+    const harness = makeConnectHarness(
+      [
+        win("governedGit", { gitChangeBaseRef: "dev", gitChangeHeadRef: "feature/x" }, "git-1"),
+        win("chat", { chatId: "chat-private", projectPath: "/repo" }, "chat-1"),
+      ],
+      [],
+      {
+        connecting: { from: "git-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onGitChangeBind: () => Promise.resolve(false as const),
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    expect(store.conns).toHaveLength(1);
+    await flushAsyncBind();
+    expect(store.conns).toHaveLength(0);
+  });
+
+  it("does not draw a Git↔Chat edge when the Git comparison has no distinct base", async () => {
+    const store = { conns: [] as Connection[] };
+    const onGitChangeBind = vi.fn();
+    const harness = makeConnectHarness(
+      [
+        win(
+          "governedGit",
+          { gitChangeBaseRef: "feature/x", gitChangeHeadRef: "feature/x" },
+          "git-1",
+        ),
+        win("chat", { chatId: "chat-private" }, "chat-1"),
+      ],
+      [],
+      {
+        connecting: { from: "git-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onGitChangeBind,
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    await flushAsyncBind();
+    expect(onGitChangeBind).not.toHaveBeenCalled();
+    expect(store.conns).toHaveLength(0);
+  });
+
   it("still draws non-binding edges when no callbacks are wired", async () => {
     const store = { conns: [] as Connection[] };
     const harness = makeConnectHarness(
@@ -2945,6 +3186,27 @@ describe("removeConn — unbinds the bind-time snapshot, not the current cfg", (
     harness.removeConn("conn-1~chat-1");
     expect(unbound).toHaveLength(1);
     expect(unbound[0]).toMatchObject({ kind: "capsule", capsuleId: "cap-a" });
+  });
+
+  it("unbinds the Git-change relationship id stored on the edge", () => {
+    const unbound: string[] = [];
+    const git = win("governedGit", {}, "git-1");
+    const chat = win("chat", { chatId: "chat-private", projectPath: "/repo" }, "chat-1");
+    const edge: Connection = {
+      id: "git-1~chat-1",
+      a: "git-1",
+      b: "chat-1",
+      boundChatWindowId: "chat-1",
+      boundGitChangeRelationshipId: "rel-git-1",
+    };
+    const harness = makeConnectHarness([git, chat], [edge], {
+      onGitChangeUnbind: (_chatWindowId, relationshipId) => {
+        unbound.push(relationshipId);
+        return true;
+      },
+    });
+    harness.removeConn("git-1~chat-1");
+    expect(unbound).toEqual(["rel-git-1"]);
   });
 
   it("unbinds the bound root even after the Files window navigated elsewhere", () => {

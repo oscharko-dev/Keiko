@@ -3,8 +3,8 @@
 This directory holds captured visual/journey proof for `GovernedPullRequestCard.tsx`'s Description
 section: repository/PR-number/language fields, the Preview -> Approve -> Apply lifecycle against
 the real `pr-description` route group, the server-rendered final body (repository template and
-human text preserved outside the managed region, the trusted "by Keiko" attribution rendered by the
-server, never recomposed client-side), and the one-use Apply action.
+human text preserved outside the managed region, the trusted "Generated with Keiko" attribution
+rendered by the server, never recomposed client-side), and the one-use Apply action.
 
 ## Producer
 

@@ -195,11 +195,12 @@ export type ChatGitChangeDescriptionStatus = (typeof CHAT_GIT_CHANGE_DESCRIPTION
 // Issue #3400 (epic #3384) — the closed set of reasons a connect/refresh request may block on,
 // per the issue's Baseline Delta. Never a raw git error string. ONE owner: the browser
 // (`api.ts`) and the server (`gitChangeRoutes.ts`) both import this constant rather than each
-// hand-restating the same 11-member set (F30 in the epic #3384 final audit).
+// hand-restating the same set (F30 in the epic #3384 final audit).
 export const GIT_CHANGE_BLOCKED_REASONS = [
   "detached-head",
   "unborn-head",
   "missing-ref",
+  "identical-refs",
   "no-pull-request",
   "ambiguous-pull-request",
   "reader-unauthorized",
@@ -2028,6 +2029,8 @@ export interface GatewayReadinessOptions {
   readonly probes?: readonly GatewayReadinessProbeName[] | undefined;
   readonly includeDeepProbes?: boolean | undefined;
   readonly maxContextTokens?: number | undefined;
+  /** Machine-readable origin for the bounded, automatic Coding Workbench verification flow. */
+  readonly purpose?: "coding-workbench-auto" | undefined;
 }
 
 export interface GatewayReadinessRequest {

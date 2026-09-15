@@ -75,6 +75,17 @@ describe("canConnect — quality ↔ connector (#710 #718)", () => {
   });
 });
 
+describe("canConnect — Git change ↔ chat", () => {
+  it("allows a Git window to connect its current comparison to Chat in both orders", () => {
+    expect(canConnect("governedGit", "chat")).toBe(true);
+    expect(canConnect("chat", "governedGit")).toBe(true);
+  });
+
+  it("labels the edge as a Git-change context binding", () => {
+    expect(relLabel(snap("governedGit"), snap("chat"))).toBe("uses Git change");
+  });
+});
+
 describe("relLabel — files ↔ quality (#270)", () => {
   // uiux-fix F008 C074 — the label shows the folder BASENAME (a full absolute path grew the
   // destructive remove badge to hundreds of pixels) and never invents the "src" sentinel.

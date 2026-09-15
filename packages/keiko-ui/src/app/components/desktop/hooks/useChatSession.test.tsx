@@ -2,7 +2,13 @@ import { act, render, renderHook, screen, waitFor } from "@testing-library/react
 import { useEffect, type ReactNode } from "react";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { MAX_DESKTOP_CHAT_INPUT_CHARS } from "@oscharko-dev/keiko-contracts/bff-wire";
-import type { Chat, ChatMessage, ModelCapability, ProjectWithAvailability } from "@/lib/types";
+import type {
+  Chat,
+  ChatGitChangeScope,
+  ChatMessage,
+  ModelCapability,
+  ProjectWithAvailability,
+} from "@/lib/types";
 import {
   ApiError,
   askGrounded,
@@ -174,6 +180,28 @@ function chat(patch: Partial<Chat> = {}): Chat {
     groundingScopeIdentity: `gsi-v1:${"a".repeat(64)}`,
     ...patch,
   } as Chat;
+}
+
+function gitChangeScope(patch: Partial<ChatGitChangeScope> = {}): ChatGitChangeScope {
+  return {
+    kind: "git-change",
+    relationshipId: "rel-git-1",
+    remoteDigest: "d".repeat(64),
+    comparisonLabel: "main...feature/x",
+    baseRef: "main",
+    headRef: "feature/x",
+    baseSha: "a".repeat(40),
+    headSha: "b".repeat(40),
+    mergeBaseSha: "c".repeat(40),
+    snapshotDigest: "e".repeat(64),
+    fileCount: 2,
+    totalFiles: 2,
+    omittedFiles: 0,
+    truncatedFiles: 0,
+    descriptionStatus: "current",
+    connectedAtMs: 1,
+    ...patch,
+  };
 }
 
 function canonicalVoiceTurn(
@@ -1662,12 +1690,14 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
   // Helper: bootstrap the hook with a grounded chat and a model that accepts documents.
   async function setupGroundedSession(
     initialMessages: readonly ChatMessage[] = [],
+    chatPatch: Partial<Chat> = {},
   ): Promise<ReturnType<typeof renderHook<ReturnType<typeof useChatSession>, never>>> {
     const groundedChat = chat({
       id: "chat-grounded",
       selectedModel: "chat-doc",
       // connectedScopes is non-empty → hasGroundingScope returns true
       connectedScopes: [{ kind: "files" as const, relativePaths: ["README.md"], connectedAtMs: 1 }],
+      ...chatPatch,
     });
     vi.mocked(fetchModels).mockResolvedValue({
       models: [model({ id: "chat-doc", supportsDocumentInput: true })],
@@ -1706,6 +1736,29 @@ describe("useChatSession sendMessage — grounded attachment guard", () => {
     expect(askGrounded).not.toHaveBeenCalled();
     // The optimistic user message must NOT have been appended.
     expect(result.current.messages).toHaveLength(0);
+  });
+
+  it("treats git-change scopes as grounded when attachments are staged", async () => {
+    const { result } = await setupGroundedSession([], {
+      connectedScopes: [],
+      gitChangeScopes: [gitChangeScope()],
+    });
+
+    await act(async () => {
+      const outcome = await result.current.addPendingAttachment(
+        new File(["hello"], "notes.txt", { type: "text/plain" }),
+      );
+      expect(outcome).toEqual({ ok: true });
+    });
+    act(() => {
+      result.current.setDraft("Summarise this Git change.");
+    });
+    await act(async () => {
+      await result.current.sendMessage();
+    });
+
+    expect(result.current.error).toBe(GROUNDED_ATTACHMENT_NOTICE);
+    expect(askGrounded).not.toHaveBeenCalled();
   });
 
   // GEN-PERF-CHAT-008 (keiko-ui side) — a grounded turn must issue EXACTLY ONE messages fetch and

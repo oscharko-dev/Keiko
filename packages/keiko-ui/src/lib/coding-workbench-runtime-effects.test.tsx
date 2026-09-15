@@ -23,6 +23,14 @@ import {
   GATEWAY_CONFIG_UPDATED_EVENT,
   GATEWAY_MODEL_READINESS_UPDATED_EVENT,
 } from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
+import { fetchCodingWorkbenchSidecarGatewayProfile } from "./coding-workbench-provider-api";
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
 
 const manifestAccessMock = vi.hoisted(() => vi.fn());
 vi.mock("./workspace-manifest-api", async (importOriginal) => {
@@ -231,6 +239,74 @@ describe("useCodingWorkbenchRuntimeRefreshEffects", () => {
     unmount();
     window.dispatchEvent(new CustomEvent(GATEWAY_CONFIG_UPDATED_EVENT));
     expect(refreshSource).toHaveBeenCalledTimes(3);
+  });
+
+  it("does not recursively refresh the runtime when automatic tool verification fails", async () => {
+    window.dispatchEvent(new CustomEvent(GATEWAY_CONFIG_UPDATED_EVENT));
+    const unavailable = { status: "unavailable", reason: "no-tool-calling" };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(unavailable))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          models: [
+            {
+              id: "coding-chat-unsupported",
+              kind: "chat",
+              contextWindow: 128_000,
+              maxOutputTokens: 4_096,
+              toolCalling: false,
+              structuredOutput: true,
+              streaming: true,
+              supportsImageInput: false,
+              supportsDocumentInput: false,
+              workflowEligible: true,
+              costClass: "medium",
+              latencyClass: "standard",
+              throughputHint: "configured gateway",
+              preferredUseCases: ["Coding"],
+              knownLimitations: [],
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          modelId: "coding-chat-unsupported",
+          checkedAt: "2026-09-15T05:30:00.000Z",
+          overallStatus: "failed",
+          probes: [
+            {
+              name: "tool_calling",
+              status: "unsupported",
+              latencyMs: 12,
+              evidence: "Tool calling was not accepted.",
+            },
+          ],
+          verifiedCapabilities: { toolCalling: false },
+        }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
+    const refreshSource = vi.fn(async (): Promise<void> => {
+      await fetchCodingWorkbenchSidecarGatewayProfile();
+    });
+    const { unmount } = renderHook(() => {
+      useCodingWorkbenchRuntimeRefreshEffects({
+        state: createInitialCodingWorkbenchRuntimeState(),
+        refreshRuntime: vi.fn(() => Promise.resolve()),
+        refreshSource,
+        refreshRun: vi.fn(() => Promise.resolve()),
+      });
+    });
+
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(refreshSource).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.filter(([path]) => path === "/api/gateway/readiness")).toHaveLength(
+      1,
+    );
+    unmount();
+    vi.unstubAllGlobals();
+    window.dispatchEvent(new CustomEvent(GATEWAY_CONFIG_UPDATED_EVENT));
   });
 });
 

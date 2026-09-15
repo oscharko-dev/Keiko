@@ -368,6 +368,92 @@ function refreshFailureAlert(
   return null;
 }
 
+type StartReadinessResource = "modelSource" | "workspace" | "runtime" | "run";
+
+const START_BLOCKED_KEYS: Readonly<Record<StartReadinessResource, CodingWorkbenchMessageKey>> = {
+  modelSource: "codingWorkbench.composer.blocked.modelSource",
+  workspace: "codingWorkbench.composer.blocked.workspace",
+  runtime: "codingWorkbench.composer.blocked.runtime",
+  run: "codingWorkbench.composer.blocked.run",
+};
+
+const START_REFRESH_KEYS: Readonly<Record<StartReadinessResource, CodingWorkbenchMessageKey>> = {
+  modelSource: "codingWorkbench.alert.modelSourceRefreshFailed",
+  workspace: "codingWorkbench.alert.workspaceRefreshFailed",
+  runtime: "codingWorkbench.alert.runtimeRefreshFailed",
+  run: "codingWorkbench.alert.runRefreshFailed",
+};
+
+function resourceStartBlocker(
+  resource: StartReadinessResource,
+  status: CodingWorkbenchResourceStatus,
+  t: CodingWorkbenchTranslate,
+): string | null {
+  if (status === "ready") return null;
+  if (status === "error") return t(START_REFRESH_KEYS[resource]);
+  return t(START_BLOCKED_KEYS[resource]);
+}
+
+function sourceStartBlocker(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string | null {
+  const blocked = resourceStartBlocker("modelSource", state.source.status, t);
+  if (blocked !== null) return blocked;
+  const source = state.source.value;
+  const sourceReady =
+    source?.runtimePreference === state.runtimePreference &&
+    source.available &&
+    !gatewayVerificationContradictsReadiness(source.verification);
+  return sourceReady
+    ? null
+    : (sourceUnavailableReasonText(source, t) ?? t("codingWorkbench.composer.blocked.modelSource"));
+}
+
+function workspaceStartBlocker(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string | null {
+  const blocked = resourceStartBlocker("workspace", state.workspace.status, t);
+  if (blocked !== null) return blocked;
+  const workspace = state.workspace.value;
+  return workspace?.health === "healthy" && workspace.switching !== true
+    ? null
+    : t("codingWorkbench.composer.blocked.workspace");
+}
+
+function runtimeStartBlocker(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string | null {
+  const blocked = resourceStartBlocker("runtime", state.runtime.status, t);
+  if (blocked !== null) return blocked;
+  const runtime = state.runtime.value;
+  return runtime?.runtimeAvailable === true && runtime.requestedMode === state.requestedMode
+    ? null
+    : t("codingWorkbench.composer.blocked.runtime");
+}
+
+function runStartBlocker(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string | null {
+  return resourceStartBlocker("run", state.run.status, t);
+}
+
+function readinessStartBlocker(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string {
+  return (
+    sourceStartBlocker(state, t) ??
+    workspaceStartBlocker(state, t) ??
+    runtimeStartBlocker(state, t) ??
+    runStartBlocker(state, t) ??
+    t("codingWorkbench.composer.blocked.notReady")
+  );
+}
+
 // The standing conditions: properties of the selected source or of this installation, not a failed
 // action. They come after actionable refresh failures (one alert at a time — reporting a standing
 // condition first would swallow the recoverable error). Pairing remains in the lifecycle narration,
@@ -412,4 +498,19 @@ export function visibleAlert(
   if (refreshAlert !== null) return refreshAlert;
   if (!setupVisible && authorityError !== null) return authorityError;
   return standingConditionAlert(state, t, setupVisible);
+}
+
+export function startBlockedReason(
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+  setupVisible: boolean,
+  authorityError: string | null = null,
+): string | null {
+  if (state.canStart) return null;
+  if (state.mutation.status === "pending") return t("codingWorkbench.composer.blocked.busy");
+  const alert = visibleAlert(state, t, setupVisible, authorityError);
+  if (alert !== null) return alert;
+  if (state.pairing === "unknown") return t("codingWorkbench.composer.blocked.pairing");
+  if (state.pairing === "unpaired") return t("codingWorkbench.composer.blocked.unpaired");
+  return readinessStartBlocker(state, t);
 }

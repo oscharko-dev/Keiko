@@ -30,6 +30,7 @@ vi.mock("@/lib/coding-app-session-client", async (importOriginal) => {
 });
 
 const PAIR_PATH = "/api/coding-workbench/app-session/pair";
+const LOCAL_SESSION_PATH = "/api/coding-workbench/app-session/local-session";
 
 const PAIRING_FRAGMENT = encodeCodingAppSessionPairingFragment({
   requestId: "desktop-arrival",
@@ -140,11 +141,11 @@ describe("KeikoDesktop", () => {
 
       await waitFor(() => {
         expect(window.location.hash).toBe("");
-        expect(fetchMock).toHaveBeenCalledTimes(1);
+        expect(fetchMock).toHaveBeenCalledTimes(2);
       });
-      const [path, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-      expect(path).toBe(PAIR_PATH);
-      expect(init.method).toBe("POST");
+      const calls = fetchMock.mock.calls as unknown as [string, RequestInit][];
+      expect(calls.map(([path]) => path)).toEqual([PAIR_PATH, LOCAL_SESSION_PATH]);
+      expect(calls.map(([, init]) => init.method)).toEqual(["POST", "POST"]);
       expect(replace).not.toHaveBeenCalled();
     } finally {
       vi.unstubAllGlobals();

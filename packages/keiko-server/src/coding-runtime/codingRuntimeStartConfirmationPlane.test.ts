@@ -19,6 +19,7 @@ const FACTS = {
   runtimeSource: "keiko-sidecar",
   modelSource: "keiko-model-gateway",
   modelProfileId: "profile-1",
+  projectMemoryEnabled: true,
 } as const;
 
 function claimAt(

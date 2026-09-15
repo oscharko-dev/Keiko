@@ -64,6 +64,49 @@ describe("GitChangeScopePill", () => {
     expect(container.firstChild).toBeNull();
   });
 
+  it("renders a pending workspace connector confirmation before the server scope settles", () => {
+    render(
+      <GitChangeScopePill
+        chat={makeChat()}
+        pendingComparisons={[
+          {
+            connectionId: "git-1~chat-1",
+            baseRef: "main",
+            headRef: "feature/pending",
+            pending: true,
+          },
+        ]}
+        updateScopes={vi.fn()}
+        refreshScope={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("git-change-scope-pending")).toBeInTheDocument();
+    expect(screen.getByText("main...feature/pending")).toBeInTheDocument();
+    expect(screen.getByText("Connecting")).toBeInTheDocument();
+    expect(screen.getByText("Preparing Git change context")).toBeInTheDocument();
+  });
+
+  it("does not duplicate a pending connector once the same Git comparison is confirmed", () => {
+    const chat = makeChat({ gitChangeScopes: [makeGitChangeScope()] });
+    render(
+      <GitChangeScopePill
+        chat={chat}
+        pendingComparisons={[
+          {
+            connectionId: "git-1~chat-1",
+            baseRef: "main",
+            headRef: "feature/x",
+            pending: true,
+          },
+        ]}
+        updateScopes={vi.fn()}
+        refreshScope={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId("git-change-scope-pending")).toBeNull();
+    expect(screen.getAllByText("main...feature/x")).toHaveLength(1);
+  });
+
   it("renders the comparison label, status and counts", () => {
     const chat = makeChat({ gitChangeScopes: [makeGitChangeScope()] });
     render(<GitChangeScopePill chat={chat} updateScopes={vi.fn()} refreshScope={vi.fn()} />);

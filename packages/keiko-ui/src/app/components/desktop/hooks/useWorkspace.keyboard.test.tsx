@@ -5,6 +5,11 @@ import { useWorkspace, type UseWorkspaceOptions } from "./useWorkspace";
 import { MAX_WORKSPACE_WINDOWS } from "./workspace-persistence";
 import type { AppWindow, Connection } from "../windows/types";
 
+const reportClientDiagnosticMock = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/client-diagnostics", () => ({
+  reportClientDiagnostic: reportClientDiagnosticMock,
+}));
+
 const WORKSPACE_STORAGE_KEY = "keiko.workspace.v4";
 const CONNECTION_STORAGE_KEY = "keiko.conns.v1";
 
@@ -110,6 +115,12 @@ function Harness(options: UseWorkspaceOptions = {}): ReactElement {
       </button>
       <button type="button" onClick={() => workspace.api.replaceSelection(["files-1"])}>
         select files
+      </button>
+      <button type="button" onClick={() => workspace.api.activateWindow("files-1")}>
+        activate files
+      </button>
+      <button type="button" onClick={() => workspace.api.activateWindow("chat-1")}>
+        activate chat
       </button>
       <button
         type="button"
@@ -218,10 +229,42 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
   // whatever order the tests run in.
   beforeEach(() => {
     window.localStorage.clear();
+    reportClientDiagnosticMock.mockClear();
   });
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("atomically focuses and selects a primary-activated window", async () => {
+    persistWorkspace([filesWindow({ z: 1 }), appWindow({ id: "chat-1", z: 2 })]);
+    render(<Harness />);
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "select files and chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "activate files" }));
+
+    await waitFor(() =>
+      expect(readSelection()).toEqual({
+        focusedWindowId: "files-1",
+        selectedWindowIds: ["files-1", "chat-1"],
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "select files" }));
+    reportClientDiagnosticMock.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "activate chat" }));
+
+    await waitFor(() =>
+      expect(readSelection()).toEqual({
+        focusedWindowId: "chat-1",
+        selectedWindowIds: ["chat-1"],
+      }),
+    );
+    expect(readWins().find((win) => win.id === "chat-1")?.z).toBeGreaterThan(
+      readWins().find((win) => win.id === "files-1")?.z ?? 0,
+    );
+    expect(reportClientDiagnosticMock).not.toHaveBeenCalled();
   });
 
   it("reserves workspace capacity across editor allocations queued in one event", async () => {

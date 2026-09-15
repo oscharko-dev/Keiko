@@ -93,6 +93,7 @@ export interface WorkspaceLifecycleLogInput {
   // free-form API value, while workspaceId is the operation's deterministic opaque identity.
   readonly taskId: string;
   readonly correlationId: string | undefined;
+  readonly parentCorrelationId?: string | undefined;
   readonly attempt: number;
   readonly durationMs: number;
   readonly worktreeCount: number;
@@ -122,6 +123,7 @@ export interface WorkspaceLifecycleFailureInput {
   readonly operation: WorkspaceLifecycleOperation;
   readonly workspaceIdentitySeed: string;
   readonly correlationId: string | undefined;
+  readonly parentCorrelationId?: string | undefined;
   // Some operations persist and log a classified lifecycle failure before rethrowing the same
   // rejection. Their operation-local tracker suppresses a second, less-specific diagnostic line.
   readonly failureOutcomeAlreadyRecorded?: (() => boolean) | undefined;
@@ -131,6 +133,7 @@ export interface RecordWorkspaceLifecycleInput {
   readonly evidenceStore: EvidenceStore;
   readonly record: WorkspaceLifecycleEvidenceRecord;
   readonly redactString: (input: string) => string;
+  readonly parentCorrelationId?: string | undefined;
   readonly errorCode?: string | undefined;
   readonly error?: unknown;
   readonly driftMarker?: TaskWorkspaceDriftMarker | undefined;
@@ -164,6 +167,9 @@ export function logWorkspaceLifecycle(
   writeWorkspaceLog(seam, {
     level: errorKind === undefined ? "info" : "warn",
     correlationId: correlationIdOrUnknown(input.correlationId),
+    ...(input.parentCorrelationId === undefined
+      ? {}
+      : { parentCorrelationId: input.parentCorrelationId }),
     durationMs: input.durationMs,
     ...(errorKind === undefined ? {} : { errorKind }),
     extra: {
@@ -195,11 +201,13 @@ function workspaceLogIdentity(workspaceId: string): string {
 function logWorkspaceEvidencePersistenceFailure(
   seam: WorkspaceActivityLogSeam,
   record: WorkspaceLifecycleEvidenceRecord,
+  parentCorrelationId: string | undefined,
   error: unknown,
 ): void {
   writeWorkspaceLog(seam, {
     level: "error",
     correlationId: correlationIdOrUnknown(record.event.correlationId),
+    ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
     errorKind: EVIDENCE_PERSISTENCE_ERROR_KIND,
     extra: {
       operation: record.operation,
@@ -218,7 +226,7 @@ export function recordWorkspaceLifecycle(
 ): void {
   const { record } = input;
   appendWorkspaceLifecycleEvidence(input.evidenceStore, record, input.redactString, (error) => {
-    logWorkspaceEvidencePersistenceFailure(seam, record, error);
+    logWorkspaceEvidencePersistenceFailure(seam, record, input.parentCorrelationId, error);
   });
   logWorkspaceLifecycle(seam, {
     operation: record.operation,
@@ -226,6 +234,7 @@ export function recordWorkspaceLifecycle(
     workspaceId: record.event.workspaceId,
     taskId: record.event.taskId,
     correlationId: record.event.correlationId,
+    parentCorrelationId: input.parentCorrelationId,
     attempt: record.attempt,
     durationMs: record.durationMs,
     worktreeCount: record.worktreeCount,
@@ -243,6 +252,9 @@ export function logWorkspaceLifecycleFailure(
   writeWorkspaceLog(seam, {
     level: error.outcome === "failed" ? "error" : "warn",
     correlationId: correlationIdOrUnknown(input.correlationId),
+    ...(input.parentCorrelationId === undefined
+      ? {}
+      : { parentCorrelationId: input.parentCorrelationId }),
     errorKind: error.code,
     extra: {
       operation: input.operation,

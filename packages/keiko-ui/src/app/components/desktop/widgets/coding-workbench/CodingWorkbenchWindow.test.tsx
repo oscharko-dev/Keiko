@@ -25,6 +25,7 @@ import {
   type CodingWorkbenchRuntimeState,
 } from "@/lib/coding-workbench-live-state";
 import type { ProjectWithAvailability } from "@/lib/types";
+import type { RepositoryBranchState } from "../../hooks/useRepositoryBranchState";
 import { CodingWorkbenchWindow, type CodingWorkbenchGitTarget } from "./CodingWorkbenchWindow";
 import { resetClientDiagnosticWriter, setClientDiagnosticWriter } from "@/lib/client-diagnostics";
 import styles from "./CodingWorkbenchWindow.module.css";
@@ -43,6 +44,9 @@ const skillsHookMock = vi.hoisted(() => vi.fn());
 const approvalReviewHookMock = vi.hoisted(() => vi.fn());
 const autonomyHookMock = vi.hoisted(() => vi.fn());
 const editorBridgeHookMock = vi.hoisted(() => vi.fn());
+const repositoryBranchHookMock = vi.hoisted(() =>
+  vi.fn<(root: string | null) => RepositoryBranchState>(),
+);
 const chatCatalogMock = vi.hoisted(() => ({
   activeProject: undefined as ProjectWithAvailability | undefined,
   projects: [] as ProjectWithAvailability[],
@@ -58,18 +62,11 @@ const markReadyExecuteMock = vi.hoisted(() => vi.fn());
 const mergeExecuteMock = vi.hoisted(() => vi.fn());
 const prUpdateExecuteMock = vi.hoisted(() => vi.fn());
 // #3390 wave: the header's trust affordance (`CodingWorkbenchTrustAffordance`) reads live workspace
-// trust through the SAME client the Editor uses (`useWorkspaceTrust` → workspace-trust-api). Every
-// suite in this file that binds an active workspace would otherwise reach this real fetch; the
-// `beforeEach` below resolves it "trusted" by default so the affordance stays invisible and every
-// pre-existing assertion in this file is unaffected. The dedicated suite further down overrides it.
+// trust through the SAME client the Editor uses (`useWorkspaceTrust` → workspace-trust-api), but
+// only once a run is actually paused on `workspace-script-trust`. The default stays trusted so the
+// dedicated paused-state suite can opt into the exact branch it needs without reaching the network.
 const trustStatusMock = vi.hoisted(() => vi.fn());
 const trustMutateMock = vi.hoisted(() => vi.fn());
-// The affordance also reads the verification runner's own decision for the run's worktree through
-// the shared catalog client (ADR-0147 D3, 2026-09-10). Unreadable here — the suites in this file
-// exercise the repository-restricted branch and every other surface, never the worktree drift one.
-const verificationCatalogMock = vi.hoisted(() =>
-  vi.fn(() => Promise.reject(new Error("verification catalog rejected"))),
-);
 
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>();
@@ -120,11 +117,14 @@ vi.mock("@/lib/workspace-trust-api", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/workspace-trust-api")>()),
   fetchWorkspaceTrustStatus: trustStatusMock,
   mutateWorkspaceTrust: trustMutateMock,
-  fetchVerificationCatalog: verificationCatalogMock,
 }));
 
 vi.mock("@/lib/useCodingWorkbenchEditorBridge", () => ({
   useCodingWorkbenchEditorBridge: editorBridgeHookMock,
+}));
+
+vi.mock("../../hooks/useRepositoryBranchState", () => ({
+  useRepositoryBranchState: repositoryBranchHookMock,
 }));
 
 vi.mock("../../context/ChatSessionContext", async (importOriginal) => {
@@ -253,6 +253,24 @@ function liveState(
   };
 }
 
+function scriptTrustPausedState(
+  overrides: Partial<CodingWorkbenchRuntimeSnapshot> = {},
+): CodingWorkbenchRuntimeState {
+  return liveState({
+    run: {
+      status: "ready",
+      value: snapshot({
+        state: "paused",
+        runId: "run-script-trust",
+        revision: 2,
+        pauseReason: "workspace-script-trust",
+        ...overrides,
+      }),
+      error: null,
+    },
+  });
+}
+
 function renderWorkbench(
   state: CodingWorkbenchRuntimeState = liveState(),
   liveActions: CodingWorkbenchRuntimeActions = actions(),
@@ -278,6 +296,11 @@ function renderWorkbench(
     ),
   );
   return liveActions;
+}
+
+function openWorkbenchInformation(): HTMLElement {
+  fireEvent.click(screen.getByRole("button", { name: "Open Coding Workbench information" }));
+  return screen.getByRole("dialog", { name: "Coding Workbench information" });
 }
 
 function activeWorkspaceWithBinding(
@@ -380,6 +403,15 @@ beforeEach(() => {
   researchHookMock.mockReturnValue({ status: "idle", ask: null, grant: null, retry: vi.fn() });
   skillsHookMock.mockReturnValue({ status: "idle", skills: null, retry: vi.fn() });
   editorBridgeHookMock.mockReset();
+  repositoryBranchHookMock.mockReset().mockImplementation((root) => ({
+    root,
+    response: null,
+    loading: false,
+    error: null,
+    branches: [],
+    currentBranch: root === null ? null : "dev",
+    refresh: vi.fn(() => Promise.resolve()),
+  }));
   editorBridgeHookMock.mockReturnValue({
     pendingReview: null,
     approve: vi.fn(),
@@ -530,6 +562,7 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByRole("heading", { name: "Coding Workbench" })).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Keiko" })).toBeInTheDocument();
     expect(screen.queryByText("task-1")).not.toBeInTheDocument();
+    openWorkbenchInformation();
     expect(screen.getByText("task-1 · issue/2257 · healthy")).toBeInTheDocument();
     expect(screen.getAllByText("Keiko Gateway")).toHaveLength(2);
     expect(screen.getByRole("combobox", { name: "Run authority" })).toHaveTextContent(
@@ -542,7 +575,9 @@ describe("CodingWorkbenchWindow", () => {
     const taskInput = screen.getByLabelText("Task instructions");
     await user.type(taskInput, "Investigate the failing test");
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
-    expect(liveActions.start).toHaveBeenCalledWith("Investigate the failing test");
+    expect(liveActions.start).toHaveBeenCalledWith("Investigate the failing test", {
+      projectMemoryEnabled: true,
+    });
   });
 
   // Workbench audit, 2026-09-03: the draft used to persist after Start succeeded — indistinguishable
@@ -604,7 +639,9 @@ describe("CodingWorkbenchWindow", () => {
     const taskInput = screen.getByLabelText("Task instructions");
     await user.type(taskInput, "Investigate the failing test");
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
-    expect(liveActions.start).toHaveBeenCalledWith("Investigate the failing test");
+    expect(liveActions.start).toHaveBeenCalledWith("Investigate the failing test", {
+      projectMemoryEnabled: true,
+    });
 
     // The mutation queue starts the "start" mutation…
     runtimeHookMock.mockReturnValue({
@@ -697,7 +734,7 @@ describe("CodingWorkbenchWindow", () => {
     });
   });
 
-  it("opens Git on the active task worktree while a coding run is in progress", async (): Promise<void> => {
+  it("opens Git on the repository root while a coding run is in progress", async (): Promise<void> => {
     const user = userEvent.setup();
     const onOpenGit = vi.fn();
     chatCatalogMock.activeProject = {
@@ -725,11 +762,35 @@ describe("CodingWorkbenchWindow", () => {
 
     expect(screen.getByRole("button", { name: "Manage branch task-1" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Manage branch dev" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Manage repository active-task" }));
+    await user.click(screen.getByRole("button", { name: "Manage repository keiko" }));
     expect(onOpenGit).toHaveBeenCalledWith({
-      root: "/worktrees/active-task",
-      binding: "task-workspace",
+      root: "/repos/keiko",
+      binding: "repository",
     });
+  });
+
+  it("uses one bound repository root for the composer and information panel", () => {
+    chatCatalogMock.activeProject = {
+      path: "/repos/selected-elsewhere",
+      name: "Selected elsewhere",
+      favorite: false,
+      createdAt: 1,
+      lastOpenedAt: 1,
+      available: true,
+      workspaceAvailable: false,
+    };
+
+    renderWorkbench(
+      liveState(),
+      actions(),
+      undefined,
+      activeWorkspaceWithBinding("/repos/bound", "/worktrees/prior-task"),
+    );
+    openWorkbenchInformation();
+
+    expect(repositoryBranchHookMock).toHaveBeenCalledWith("/repos/bound");
+    expect(repositoryBranchHookMock).not.toHaveBeenCalledWith("/repos/selected-elsewhere");
+    expect(screen.getByRole("button", { name: "Manage repository bound" })).toBeInTheDocument();
   });
 
   // Epic #3384 live-flow defect (#3401 "Review description"): after a settled run the Workbench
@@ -818,6 +879,7 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByRole("combobox", { name: "Run authority" })).toHaveTextContent(
       "Full access",
     );
+    openWorkbenchInformation();
     expect(document.querySelectorAll("[data-mode]")).toHaveLength(1);
     expect(document.querySelector('[data-mode="governed-assist"]')).toBeInTheDocument();
   });
@@ -872,6 +934,7 @@ describe("CodingWorkbenchWindow", () => {
       }),
     );
 
+    openWorkbenchInformation();
     expect(screen.getByText("Awaiting server confirmation")).toBeInTheDocument();
     expect(document.querySelector("[data-mode]")).toBeNull();
   });
@@ -1015,6 +1078,7 @@ describe("CodingWorkbenchWindow", () => {
     );
 
     expect(screen.getByRole("status")).toHaveTextContent("Not ready to start");
+    openWorkbenchInformation();
     expect(screen.getByText(/Keiko Gateway — Unavailable/u)).toBeInTheDocument();
   });
 
@@ -1060,7 +1124,8 @@ describe("CodingWorkbenchWindow", () => {
     it("keeps runtime assurance in the lifecycle announcement", (): void => {
       renderWorkbench(evaluationState());
 
-      expect(screen.getByText("Coding runtime")).toBeInTheDocument();
+      openWorkbenchInformation();
+      expect(screen.getByText("Runtime verification")).toBeInTheDocument();
       expect(
         screen.getByText("Unverified evaluation runtime — no platform signature"),
       ).toBeInTheDocument();
@@ -1088,6 +1153,7 @@ describe("CodingWorkbenchWindow", () => {
 
       expect(screen.getByRole("status")).toHaveTextContent("Runtime ready");
       expect(document.querySelector('[data-assurance="evaluation"]')).toBeNull();
+      openWorkbenchInformation();
       expect(
         screen.getByText("Platform-verified — signed and notarized runtime"),
       ).toBeInTheDocument();
@@ -1116,6 +1182,7 @@ describe("CodingWorkbenchWindow", () => {
         }),
       );
 
+      openWorkbenchInformation();
       expect(screen.getByText("Coding runtime unavailable")).toBeInTheDocument();
       expect(
         screen.queryByText("Unverified evaluation runtime — no platform signature"),
@@ -1150,6 +1217,7 @@ describe("CodingWorkbenchWindow", () => {
         actions: liveActions,
       });
       const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+      openWorkbenchInformation();
       expect(screen.getByText("Coding runtime unavailable")).toBeInTheDocument();
 
       runtimeHookMock.mockReturnValue({
@@ -1179,6 +1247,7 @@ describe("CodingWorkbenchWindow", () => {
         }),
       );
 
+      openWorkbenchInformation();
       expect(screen.getByText("Coding runtime unavailable")).toBeInTheDocument();
     });
 
@@ -1189,6 +1258,7 @@ describe("CodingWorkbenchWindow", () => {
     it("claims neither verification nor evaluation while the first readiness read is in flight", (): void => {
       renderWorkbench(liveState({ runtime: { status: "loading", value: null, error: null } }));
 
+      openWorkbenchInformation();
       expect(
         screen.queryByText("Unverified evaluation runtime — no platform signature"),
       ).not.toBeInTheDocument();
@@ -1201,7 +1271,8 @@ describe("CodingWorkbenchWindow", () => {
     it("keeps the pending placeholder neutral rather than marking it a warning", (): void => {
       renderWorkbench(liveState({ runtime: { status: "idle", value: null, error: null } }));
 
-      const chip = screen.getByText("Checking coding runtime…").closest("[title]");
+      openWorkbenchInformation();
+      const chip = screen.getByText("Checking coding runtime…").closest("[data-tone]");
       expect(chip).not.toBeNull();
       expect(chip).not.toHaveAttribute("data-tone", "warning");
     });
@@ -1212,6 +1283,7 @@ describe("CodingWorkbenchWindow", () => {
       const liveActions = actions();
       runtimeHookMock.mockReturnValue({ state: liveState(), actions: liveActions });
       const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+      openWorkbenchInformation();
       expect(
         screen.getByText("Platform-verified — signed and notarized runtime"),
       ).toBeInTheDocument();
@@ -1252,33 +1324,61 @@ describe("CodingWorkbenchWindow", () => {
     );
 
     const alert = screen.getByRole("alert");
-    expect(alert).toHaveTextContent(/No chat model has verified tool calling/u);
-    expect(alert).toHaveTextContent(/Run the readiness check in Settings/u);
+    expect(alert).toHaveTextContent(/automatic tool-calling check did not confirm/u);
+    expect(alert).toHaveTextContent(/Review the model capability/u);
   });
 
-  // Workbench audit, 2026-09-03: every truncatable header chip carries a `title` equal to its OWN
-  // rendered value — before this fix, three of the four chips had no `title` at all, and the
-  // fourth (Task workspace) pointed at an unrelated raw filesystem path instead of its own text.
-  it("titles every header chip with its own rendered text", (): void => {
+  it("keeps dense session details behind one accessible information control", (): void => {
     renderWorkbench(liveState());
-    const itemClass = styles.contextItem;
-    const valueClass = styles.contextValue;
-    if (itemClass === undefined || valueClass === undefined) {
-      throw new Error("Coding Workbench context-bar classes are unavailable");
-    }
-    const items = Array.from(document.querySelectorAll(`.${itemClass}`));
-    expect(items).toHaveLength(4);
-    for (const item of items) {
-      const value = item.querySelector(`.${valueClass}`);
-      expect(value).not.toBeNull();
-      expect(item).toHaveAttribute("title", value?.textContent ?? "");
-    }
+    expect(screen.queryByText("task-1 · issue/2257 · healthy")).not.toBeInTheDocument();
+    const dialog = openWorkbenchInformation();
+    expect(dialog).toHaveTextContent("Task workspace");
+    expect(dialog).toHaveTextContent("task-1 · issue/2257 · healthy");
+    expect(dialog).toHaveTextContent("Runtime verification");
+    expect(dialog).toHaveTextContent("Not reported by runtime");
   });
 
-  // Finding 5: the workspace chip's `title` used to be wired to `activeBinding.activeRoot` — a
-  // raw filesystem path never shown anywhere else on the chip — instead of the composite text
-  // (`taskId · taskBranch · health`) actually rendered and truncated.
-  it("titles the workspace chip with its rendered text, not the raw root path", (): void => {
+  it("separates current context capacity from cumulative run input", (): void => {
+    renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({
+            contextUsage: {
+              state: "available",
+              source: "provider-reported",
+              capacityTokens: 100_000,
+              usedInputTokens: 70_000,
+              reservedOutputTokens: 10_000,
+              freeTokens: 20_000,
+              breakdown: {
+                conversationMessagesTokens: 60_000,
+                systemContextTokens: 6_000,
+                toolDefinitionTokens: 4_000,
+              },
+              cumulativePromptTokens: 180_000,
+              runPromptBudgetTokens: 500_000,
+              compaction: { count: 2, thresholdTokens: 90_000 },
+              updatedAt: AT,
+            },
+          }),
+        },
+      }),
+    );
+
+    const dialog = openWorkbenchInformation();
+    expect(dialog).toHaveTextContent("70,000 / 100,000 (70.0%)");
+    expect(dialog).toHaveTextContent("Conversation messages");
+    expect(dialog).toHaveTextContent("System and developer context");
+    expect(dialog).toHaveTextContent("Tool definitions");
+    expect(dialog).toHaveTextContent("Cumulative run input180,000");
+    expect(dialog).toHaveTextContent("Run input budget500,000");
+    expect(dialog).toHaveTextContent("Reported compactions2");
+    expect(dialog).not.toHaveTextContent(/Skills|Memory files|97%/u);
+  });
+
+  it("never exposes the raw task-workspace path in the information panel", (): void => {
     renderWorkbench(
       liveState(),
       actions(),
@@ -1286,23 +1386,15 @@ describe("CodingWorkbenchWindow", () => {
       activeWorkspaceWithBinding("/repos/keiko", "/worktrees/active-task"),
     );
 
-    const value = screen.getByText("task-1 · issue/2257 · healthy");
-    const itemClass = styles.contextItem;
-    if (itemClass === undefined) throw new Error("Coding Workbench context-item class unavailable");
-    const workspaceItem = value.closest(`.${itemClass}`);
-    expect(workspaceItem).toHaveAttribute("title", "task-1 · issue/2257 · healthy");
-    expect(workspaceItem).not.toHaveAttribute("title", "/worktrees/active-task");
+    const dialog = openWorkbenchInformation();
+    expect(dialog).toHaveTextContent("task-1 · issue/2257 · healthy");
+    expect(dialog).not.toHaveTextContent("/worktrees/active-task");
   });
 
-  // Finding 5: the reported screenshot's exact unbound case — no `title` at all used to exist
-  // over the very text ("No active task workspace") the CSS ellipsis was clipping.
-  it("titles the workspace chip even when no workspace is bound", (): void => {
+  it("states when no task workspace is bound", (): void => {
     renderWorkbench(createInitialCodingWorkbenchRuntimeState());
 
-    const value = screen.getByText("No active task workspace");
-    const itemClass = styles.contextItem;
-    if (itemClass === undefined) throw new Error("Coding Workbench context-item class unavailable");
-    expect(value.closest(`.${itemClass}`)).toHaveAttribute("title", "No active task workspace");
+    expect(openWorkbenchInformation()).toHaveTextContent("No active task workspace");
   });
 
   it("keeps a drifted worktree visible in the session context", (): void => {
@@ -1322,6 +1414,7 @@ describe("CodingWorkbenchWindow", () => {
       }),
     );
     expect(screen.getByRole("status")).toHaveTextContent("Workspace unavailable");
+    openWorkbenchInformation();
     expect(screen.getByText("task-1 · issue/2257 · drifted")).toBeInTheDocument();
   });
 
@@ -2117,7 +2210,9 @@ describe("CodingWorkbenchWindow", () => {
     await user.type(taskInput, "Continue after the restart");
     await user.click(screen.getByRole("button", { name: "Start coding run" }));
 
-    expect(liveActions.start).toHaveBeenCalledWith("Continue after the restart");
+    expect(liveActions.start).toHaveBeenCalledWith("Continue after the restart", {
+      projectMemoryEnabled: true,
+    });
   });
 
   it("keeps terminal result evidence out of the user-facing workbench", async () => {
@@ -2235,6 +2330,7 @@ describe("CodingWorkbenchWindow", () => {
     await user.click(screen.getByRole("button", { name: "Resume run" }));
 
     expect(liveActions.resume).toHaveBeenCalledWith("supervised-coding");
+    openWorkbenchInformation();
     expect(document.querySelector('[data-mode="autonomous-delivery"]')).toHaveTextContent(
       "Full access",
     );
@@ -2285,6 +2381,7 @@ describe("CodingWorkbenchWindow", () => {
       "supervised-coding",
     );
     expect(screen.queryByRole("option", { name: "Full access" })).not.toBeInTheDocument();
+    openWorkbenchInformation();
     expect(document.querySelector('[data-mode="supervised-coding"]')).toHaveTextContent(
       "Supervised workspace",
     );
@@ -2416,7 +2513,8 @@ describe("CodingWorkbenchWindow", () => {
 
     const timeline = screen.getByRole("list", { name: "Coding run event timeline" });
     expect(timeline).toHaveTextContent("Review the repository");
-    expect(timeline).toHaveTextContent("Tool activity: workspace.read");
+    expect(timeline).toHaveTextContent("Workspace Read");
+    expect(timeline).toHaveTextContent("workspace.read");
     expect(timeline).toHaveTextContent("Succeeded");
     expect(timeline).toHaveTextContent("Current plan");
     expect(timeline).toHaveTextContent("Output truncated");
@@ -2691,7 +2789,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
     trustMutateMock.mockResolvedValue(trustStatus("/repos/keiko", "trusted"));
     const user = userEvent.setup();
     renderWorkbench(
-      liveState(),
+      scriptTrustPausedState(),
       actions(),
       undefined,
       activeWorkspaceWithBinding("/repos/keiko", "/state/.keiko/task-workspaces/task-1"),
@@ -2704,7 +2802,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
     expect(trustStatusMock).toHaveBeenCalledExactlyOnceWith("/repos/keiko");
     expect(trustMutateMock).toHaveBeenCalledExactlyOnceWith("/repos/keiko", "grant");
     expect(diagnostic).toHaveBeenCalledWith("[keiko] coding workbench repository trust bound", {
-      correlationId: "correlation-1",
+      correlationId: "run-script-trust",
       workspaceTrustBinding: {
         repositoryId: "repository-1",
         workspaceId: "workspace-1",
@@ -2719,7 +2817,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
     { activeInstance: null },
     { activeBinding: null },
   ])("withholds trust while the workspace binding is unsettled: %j", (unsettled) => {
-    renderWorkbench(liveState(), actions(), undefined, {
+    renderWorkbench(scriptTrustPausedState(), actions(), undefined, {
       ...activeWorkspaceWithBinding("/repos/keiko", "/worktrees/task-1"),
       ...unsettled,
     });
@@ -2730,7 +2828,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
   it("shows the allow action once the bound workspace resolves as restricted", async () => {
     trustStatusMock.mockResolvedValue(trustStatus("/repos/keiko", "restricted"));
     renderWorkbench(
-      liveState(),
+      scriptTrustPausedState(),
       actions(),
       undefined,
       activeWorkspaceWithBinding("/repos/keiko", "/repos/keiko"),
@@ -2748,7 +2846,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
     trustMutateMock.mockResolvedValue(trustStatus("/repos/keiko", "trusted"));
     const user = userEvent.setup();
     renderWorkbench(
-      liveState(),
+      scriptTrustPausedState(),
       actions(),
       undefined,
       activeWorkspaceWithBinding("/repos/keiko", "/repos/keiko"),
@@ -2767,7 +2865,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
     );
   });
 
-  it("renders no affordance once the bound workspace resolves as trusted", async () => {
+  it("renders no affordance before a run is waiting, even when the bound workspace is trusted", () => {
     trustStatusMock.mockResolvedValue(trustStatus("/repos/keiko", "trusted"));
     renderWorkbench(
       liveState(),
@@ -2776,7 +2874,7 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
       activeWorkspaceWithBinding("/repos/keiko", "/repos/keiko"),
     );
 
-    await waitFor(() => expect(trustStatusMock).toHaveBeenCalledWith("/repos/keiko"));
+    expect(trustStatusMock).not.toHaveBeenCalled();
     expect(
       screen.queryByRole("button", { name: /Allow package scripts/u }),
     ).not.toBeInTheDocument();
@@ -2861,6 +2959,7 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     transitions: {
       readonly beforeStart?: () => Promise<void>;
       readonly onPendingSwitch?: () => Promise<void>;
+      readonly finalRun?: Partial<CodingWorkbenchRuntimeSnapshot>;
     } = {},
   ): Promise<void> {
     const user = userEvent.setup();
@@ -2889,10 +2988,13 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
 
     // The Start response lands only now, still attributed to A.
     runtimeHookMock.mockReturnValue({
-      state: stateIn(WORKSPACE_B, {
-        state: "running",
-        runId: "run-correlation-0001",
-      }),
+      state: stateIn(
+        WORKSPACE_B,
+        transitions.finalRun ?? {
+          state: "running",
+          runId: "run-correlation-0001",
+        },
+      ),
       actions: liveActions,
     });
     view.rerender(
@@ -2900,22 +3002,25 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     );
   }
 
-  it("keeps the composer, context bar and Git target on the run's own workspace", async () => {
+  it("keeps the composer and context bar on the run while Git opens the repository", async () => {
     const onOpenGit = vi.fn();
     await startInAThenSwitchToB(actions(), onOpenGit);
 
-    expect(screen.getByRole("button", { name: "Manage repository task-a" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Manage repository task-b" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Manage repository a" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Manage repository b" })).toBeNull();
     expect(
       screen.getByRole("button", { name: `Manage branch ${WORKSPACE_A.branch}` }),
     ).toBeInTheDocument();
+    const dialog = openWorkbenchInformation();
     expect(screen.getByText(`workspace-a · ${WORKSPACE_A.branch} · healthy`)).toBeInTheDocument();
-    expect(screen.queryByText(new RegExp(WORKSPACE_B.branch, "u"))).toBeNull();
+    const facts = dialog.querySelector(`.${styles.cmpInfoGrid ?? "missing-info-grid"}`);
+    expect(facts).not.toBeNull();
+    expect(facts).not.toHaveTextContent(WORKSPACE_B.branch);
 
-    await userEvent.setup().click(screen.getByRole("button", { name: "Manage repository task-a" }));
+    await userEvent.setup().click(screen.getByRole("button", { name: "Manage repository a" }));
     expect(onOpenGit).toHaveBeenCalledWith({
-      root: WORKSPACE_A.root,
-      binding: "task-workspace",
+      root: WORKSPACE_A.repositoryRoot,
+      binding: "repository",
     });
   });
 
@@ -2930,13 +3035,21 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     );
     await startInAThenSwitchToB(actions(), vi.fn(), {
       beforeStart: async () => {
-        await screen.findByRole("button", { name: "Allow package scripts for verification" });
+        expect(
+          screen.queryByRole("button", { name: "Allow package scripts for verification" }),
+        ).not.toBeInTheDocument();
       },
       onPendingSwitch: async () => {
         expect(
           screen.queryByRole("button", { name: "Allow package scripts for verification" }),
         ).not.toBeInTheDocument();
         expect(trustStatusMock).not.toHaveBeenCalledWith(WORKSPACE_B.repositoryRoot);
+      },
+      finalRun: {
+        state: "paused",
+        runId: "run-correlation-0001",
+        revision: 2,
+        pauseReason: "workspace-script-trust",
       },
     });
 
@@ -2995,7 +3108,7 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     expect(
       screen.queryByText(/This run keeps the authority of the workspace it started in/u),
     ).toBeNull();
-    expect(screen.getByRole("button", { name: "Manage repository task-a" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Manage repository a" })).toBeInTheDocument();
   });
 
   it("binds the editor bridge to the root the run was submitted against", async () => {

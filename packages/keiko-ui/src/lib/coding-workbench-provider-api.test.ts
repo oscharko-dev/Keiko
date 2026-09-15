@@ -4,6 +4,10 @@ import {
   fetchCodingWorkbenchCodexSubscriptionProfile,
   prepareCodingWorkbenchCodexSubscriptionSetup,
 } from "./coding-workbench-provider-api";
+import {
+  GATEWAY_CONFIG_UPDATED_EVENT,
+  GATEWAY_MODEL_READINESS_UPDATED_EVENT,
+} from "@/app/components/desktop/widgets/shared/gatewaySetupBus";
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -14,6 +18,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
   afterEach(() => {
+    window.dispatchEvent(new CustomEvent(GATEWAY_CONFIG_UPDATED_EVENT));
     vi.unstubAllGlobals();
   });
 
@@ -49,6 +54,258 @@ describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
         headers: expect.objectContaining({ Accept: "application/json" }),
       }),
     );
+  });
+
+  it("automatically verifies an unproven coding model and returns the refreshed profile", async () => {
+    const readinessUpdated = vi.fn();
+    window.addEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, readinessUpdated);
+    const available = {
+      status: "available",
+      profileId: "coding-safe-openai-compatible",
+      modelAlias: "coding-chat",
+      localEndpointPath: "/api/coding-sidecar/gateway",
+      supportsStreaming: false,
+      supportsToolCalling: true,
+      runMetadata: {
+        maxPromptTokens: 128_000,
+        maxOutputTokens: 4_096,
+        maxInputMessages: 64,
+        maxRequestBytes: 64_000,
+      },
+      verification: "verified",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ status: "unavailable", reason: "no-tool-calling" }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          models: [
+            {
+              id: "coding-chat",
+              kind: "chat",
+              contextWindow: 128_000,
+              maxOutputTokens: 4_096,
+              toolCalling: false,
+              structuredOutput: true,
+              streaming: true,
+              supportsImageInput: false,
+              supportsDocumentInput: false,
+              workflowEligible: true,
+              costClass: "medium",
+              latencyClass: "standard",
+              throughputHint: "configured gateway",
+              preferredUseCases: ["Coding"],
+              knownLimitations: [],
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          modelId: "coding-chat",
+          checkedAt: "2026-09-15T05:30:00.000Z",
+          overallStatus: "ready",
+          probes: [
+            { name: "chat", status: "passed", latencyMs: 10, evidence: "Chat answered." },
+            {
+              name: "tool_calling",
+              status: "passed",
+              latencyMs: 12,
+              evidence: "Tool calling answered.",
+            },
+          ],
+          verifiedCapabilities: { toolCalling: true },
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse(available));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchCodingWorkbenchSidecarGatewayProfile()).resolves.toMatchObject(available);
+    window.removeEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, readinessUpdated);
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      3,
+      "/api/gateway/readiness",
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          modelId: "coding-chat",
+          options: { probes: ["tool_calling"], purpose: "coding-workbench-auto" },
+        }),
+      }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      4,
+      "/api/coding-sidecar/gateway/profile",
+      expect.objectContaining({ cache: "no-store" }),
+    );
+    expect(readinessUpdated).toHaveBeenCalledOnce();
+  });
+
+  it("tries configured coding candidates in deterministic cost order until one verifies", async () => {
+    const readinessUpdated = vi.fn();
+    window.addEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, readinessUpdated);
+    const capability = (id: string, costClass: "medium" | "high"): Record<string, unknown> => ({
+      id,
+      kind: "chat",
+      contextWindow: 128_000,
+      maxOutputTokens: 4_096,
+      toolCalling: false,
+      structuredOutput: true,
+      streaming: true,
+      supportsImageInput: false,
+      supportsDocumentInput: false,
+      workflowEligible: true,
+      costClass,
+      latencyClass: "standard",
+      throughputHint: "configured gateway",
+      preferredUseCases: ["Coding"],
+      knownLimitations: [],
+    });
+    const report = (modelId: string, passed: boolean): Record<string, unknown> => ({
+      modelId,
+      checkedAt: "2026-09-15T05:30:00.000Z",
+      overallStatus: passed ? "ready" : "failed",
+      probes: [
+        {
+          name: "tool_calling",
+          status: passed ? "passed" : "unsupported",
+          latencyMs: 12,
+          evidence: "Readiness classification.",
+        },
+      ],
+      verifiedCapabilities: { toolCalling: passed },
+    });
+    const available = {
+      status: "available",
+      profileId: "coding-safe-openai-compatible",
+      modelAlias: "coding-high",
+      localEndpointPath: "/api/coding-sidecar/gateway",
+      supportsStreaming: true,
+      supportsToolCalling: true,
+      runMetadata: {
+        maxPromptTokens: 128_000,
+        maxOutputTokens: 4_096,
+        maxInputMessages: 64,
+        maxRequestBytes: 64_000,
+      },
+      verification: "verified",
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ status: "unavailable", reason: "tool-calling-unverified" }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          models: [capability("coding-high", "high"), capability("coding-low", "medium")],
+        }),
+      )
+      .mockResolvedValueOnce(jsonResponse(report("coding-low", false)))
+      .mockResolvedValueOnce(jsonResponse(report("coding-high", true)))
+      .mockResolvedValueOnce(jsonResponse(available));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchCodingWorkbenchSidecarGatewayProfile()).resolves.toMatchObject(available);
+    const readinessBodies = fetchMock.mock.calls
+      .filter(([path]) => path === "/api/gateway/readiness")
+      .map(
+        ([_path, init]) => JSON.parse(String((init as RequestInit).body)) as { modelId: string },
+      );
+
+    expect(readinessBodies.map((body) => body.modelId)).toEqual(["coding-low", "coding-high"]);
+    expect(readinessUpdated).toHaveBeenCalledOnce();
+    window.removeEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, readinessUpdated);
+  });
+
+  it.each([
+    ["non-array model list", { models: "coding-chat" }],
+    ["non-object capability", { models: [null] }],
+    [
+      "non-string use case",
+      {
+        models: [
+          {
+            id: "coding-chat",
+            kind: "chat",
+            workflowEligible: true,
+            costClass: "medium",
+            preferredUseCases: ["Coding", { injected: true }],
+          },
+        ],
+      },
+    ],
+  ] as const)("fails closed on a %s before issuing a readiness mutation", async (_name, models) => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ status: "unavailable", reason: "tool-calling-unverified" }),
+      )
+      .mockResolvedValueOnce(jsonResponse(models));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchCodingWorkbenchSidecarGatewayProfile()).rejects.toMatchObject({
+      code: "CONTRACT_VALIDATION_FAILED",
+      status: 502,
+    });
+    expect(fetchMock.mock.calls.some(([path]) => path === "/api/gateway/readiness")).toBe(false);
+  });
+
+  it("does not publish a refresh loop and cools down after every candidate fails", async () => {
+    const readinessUpdated = vi.fn();
+    window.addEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, readinessUpdated);
+    const unavailable = { status: "unavailable", reason: "no-tool-calling" };
+    const models = {
+      models: [
+        {
+          id: "coding-chat-failed",
+          kind: "chat",
+          contextWindow: 128_000,
+          maxOutputTokens: 4_096,
+          toolCalling: false,
+          structuredOutput: true,
+          streaming: true,
+          supportsImageInput: false,
+          supportsDocumentInput: false,
+          workflowEligible: true,
+          costClass: "medium",
+          latencyClass: "standard",
+          throughputHint: "configured gateway",
+          preferredUseCases: ["Coding"],
+          knownLimitations: [],
+        },
+      ],
+    };
+    const failed = {
+      modelId: "coding-chat-failed",
+      checkedAt: "2026-09-15T05:30:00.000Z",
+      overallStatus: "failed",
+      probes: [
+        {
+          name: "tool_calling",
+          status: "unsupported",
+          latencyMs: 12,
+          evidence: "Tool calling was not accepted.",
+        },
+      ],
+      verifiedCapabilities: { toolCalling: false },
+    };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(unavailable))
+      .mockResolvedValueOnce(jsonResponse(models))
+      .mockResolvedValueOnce(jsonResponse(failed))
+      .mockResolvedValueOnce(jsonResponse(unavailable))
+      .mockResolvedValueOnce(jsonResponse(models));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(fetchCodingWorkbenchSidecarGatewayProfile()).resolves.toEqual(unavailable);
+    await expect(fetchCodingWorkbenchSidecarGatewayProfile()).resolves.toEqual(unavailable);
+
+    expect(fetchMock.mock.calls.filter(([path]) => path === "/api/gateway/readiness")).toHaveLength(
+      1,
+    );
+    expect(readinessUpdated).not.toHaveBeenCalled();
+    window.removeEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, readinessUpdated);
   });
 
   it("rejects malformed sidecar gateway profile responses", async () => {
@@ -151,14 +408,15 @@ describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
     });
   });
 
-  // PR #3452 (F73): a coding model whose forced tool-call proof aged out is named for that, not
-  // mislabelled "non-coding-capable".
-  it("accepts the appended tool-calling-unverified reason", async () => {
+  // PR #3452 (F73): if no structurally eligible coding model exists to re-probe, the original
+  // unavailable reason remains visible instead of being mislabelled "non-coding-capable".
+  it("preserves tool-calling-unverified when automatic verification has no candidate", async () => {
     const fetchMock = vi
       .fn()
-      .mockResolvedValue(
+      .mockResolvedValueOnce(
         jsonResponse({ status: "unavailable", reason: "tool-calling-unverified" }),
-      );
+      )
+      .mockResolvedValueOnce(jsonResponse({ models: [] }));
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(fetchCodingWorkbenchSidecarGatewayProfile()).resolves.toMatchObject({

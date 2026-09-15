@@ -69,6 +69,23 @@ export function processServerLogSink(): ProcessServerLogSink {
 }
 
 /**
+ * Binds one operation correlation without capturing the process logger. Producer-owned ids win,
+ * so a domain operation that already carries a narrower request/run id is never relabelled as the
+ * surrounding bootstrap operation.
+ */
+export function processServerLogSinkFor(correlationId: string): ProcessServerLogSink {
+  const sink = processServerLogSink();
+  return {
+    write(event: ServerLogEvent): void {
+      sink.write({ ...event, correlationId: event.correlationId ?? correlationId });
+    },
+    enabled(level: ServerLogLevel): boolean {
+      return sink.enabled(level);
+    },
+  };
+}
+
+/**
  * The `keiko-memory-consolidation` package's log port, stamped with the caller's own
  * correlationId. `ConsolidationLogEvent` carries no jobId/run-id field of its own (see that
  * package's `log-port.ts`) and `ConsolidationOptions` deliberately stays a pure, caller-agnostic

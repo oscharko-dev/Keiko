@@ -1,3 +1,10 @@
+.cmpContextControls {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-2);
+}
+
 .gatewaySetupDialog {
   position: fixed;
   inset: 0;

@@ -118,6 +118,10 @@ export interface CodingWorkbenchRuntimeReadiness {
   readonly runtimeEvidenceClass?: CodingWorkbenchRuntimeEvidenceClass | undefined;
 }
 
+export interface CodingWorkbenchRuntimeProjectMemoryRequest {
+  readonly enabled: boolean;
+}
+
 export interface CodingWorkbenchRuntimeStartRequest {
   readonly requestId: string;
   /** Transient model input; no response, snapshot, SSE projection, or evidence may retain it. */
@@ -137,6 +141,12 @@ export interface CodingWorkbenchRuntimeStartRequest {
   readonly issueRef?: string | undefined;
   /** Optimistic precondition from the accepted preview; never authority. */
   readonly expectedIssueBindingDigest?: string | undefined;
+  /**
+   * Operator preference only. The browser can turn project memory context on/off for this run, but
+   * it cannot choose scopes, paths, user memory, or credentials. The server derives those from the
+   * active workspace binding and defaults an omitted field to enabled for older clients.
+   */
+  readonly projectMemory?: CodingWorkbenchRuntimeProjectMemoryRequest | undefined;
 }
 
 /** The retry route has the same fresh, transient intent shape as start. */
@@ -219,6 +229,41 @@ export interface CodingWorkbenchRuntimeResult {
   readonly error: CodingWorkbenchRuntimeProcessSummary;
 }
 
+export type CodingWorkbenchContextUsageSource = "estimated" | "provider-reported";
+
+/** Optional measured attribution. Omitted categories were not reported and must not be inferred. */
+export interface CodingWorkbenchContextUsageBreakdown {
+  readonly conversationMessagesTokens?: number | undefined;
+  readonly systemContextTokens?: number | undefined;
+  readonly toolDefinitionTokens?: number | undefined;
+  readonly providerAccountingAdjustmentTokens?: number | undefined;
+}
+
+export interface CodingWorkbenchContextCompaction {
+  readonly count: number;
+  readonly lastCompactedAt?: string | undefined;
+  readonly thresholdTokens?: number | undefined;
+}
+
+export type CodingWorkbenchContextUsage =
+  | {
+      readonly state: "unavailable";
+      readonly updatedAt: string;
+    }
+  | {
+      readonly state: "available";
+      readonly source: CodingWorkbenchContextUsageSource;
+      readonly capacityTokens: number;
+      readonly usedInputTokens: number;
+      readonly reservedOutputTokens: number;
+      readonly freeTokens: number;
+      readonly breakdown?: CodingWorkbenchContextUsageBreakdown | undefined;
+      readonly cumulativePromptTokens: number;
+      readonly runPromptBudgetTokens?: number | undefined;
+      readonly compaction?: CodingWorkbenchContextCompaction | undefined;
+      readonly updatedAt: string;
+    };
+
 /**
  * Content-free status projection. `runId` is intentionally optional for unbound availability
  * states; task/workspace/authority/process/model content never crosses this boundary.
@@ -236,6 +281,8 @@ export interface CodingWorkbenchRuntimeSnapshot {
   readonly runtimeSource?: CodingWorkbenchRuntimeSource | undefined;
   readonly modelSource?: CodingWorkbenchModelSource | undefined;
   readonly failureCode?: CodingWorkbenchRuntimeFailureCode | undefined;
+  /** Honest runtime/provider accounting; unavailable never implies a guessed model limit. */
+  readonly contextUsage?: CodingWorkbenchContextUsage | undefined;
   /** Present only when durable server truth records acknowledgement for a recovery-required run. */
   readonly recoveryAcknowledged?: true | undefined;
   /** Present exactly while the runtime is awaiting an operator decision. */
@@ -370,6 +417,16 @@ function validateIssueRef(value: unknown, errors: string[]): void {
   }
 }
 
+function validateProjectMemoryRequest(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    errors.push("projectMemory must be an object");
+    return;
+  }
+  errors.push(...exactKeys(value, ["enabled"], "projectMemory"));
+  if (typeof value.enabled !== "boolean") errors.push("projectMemory.enabled must be boolean");
+}
+
 export function parseCodingWorkbenchRuntimeStartRequest(
   value: unknown,
 ): CodingWorkbenchValidationResult<CodingWorkbenchRuntimeStartRequest> {
@@ -385,6 +442,7 @@ export function parseCodingWorkbenchRuntimeStartRequest(
       "reasoningEffort",
       "issueRef",
       "expectedIssueBindingDigest",
+      "projectMemory",
     ],
     "startRequest",
   );
@@ -397,6 +455,7 @@ export function parseCodingWorkbenchRuntimeStartRequest(
   validateRuntimeModelId(value.modelId, errors);
   validateReasoningEffort(value.reasoningEffort, errors);
   validateIssueRef(value.issueRef, errors);
+  validateProjectMemoryRequest(value.projectMemory, errors);
   if (
     value.expectedIssueBindingDigest !== undefined &&
     (value.issueRef === undefined ||
@@ -562,6 +621,7 @@ export function validateCodingWorkbenchRuntimeSnapshot(
       "runtimeSource",
       "modelSource",
       "failureCode",
+      "contextUsage",
       "recoveryAcknowledged",
       "pendingPermission",
       "pauseReason",
@@ -575,6 +635,7 @@ export function validateCodingWorkbenchRuntimeSnapshot(
     "runtimeSnapshot",
   );
   validateSnapshotFields(value, errors);
+  validateContextUsage(value.contextUsage, errors);
   validateIssueBinding(value.issueBinding, errors);
   validateSnapshotVerifiedCommit(value, errors);
   validateSnapshotDraftDelivery(value, errors);
@@ -588,6 +649,129 @@ export function validateCodingWorkbenchRuntimeSnapshot(
     errors.push("result is permitted only on a terminal snapshot");
   }
   return result(value, errors);
+}
+
+function validateContextUsage(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    errors.push("contextUsage must be an object");
+    return;
+  }
+  if (value.state === "unavailable") {
+    errors.push(...exactKeys(value, ["state", "updatedAt"], "contextUsage"));
+    validateStrictUtcInstant(value.updatedAt, "contextUsage.updatedAt", errors);
+    return;
+  }
+  validateAvailableContextUsage(value, errors);
+}
+
+function validateAvailableContextUsage(value: Record<string, unknown>, errors: string[]): void {
+  errors.push(
+    ...exactKeys(
+      value,
+      [
+        "state",
+        "source",
+        "capacityTokens",
+        "usedInputTokens",
+        "reservedOutputTokens",
+        "freeTokens",
+        "breakdown",
+        "cumulativePromptTokens",
+        "runPromptBudgetTokens",
+        "compaction",
+        "updatedAt",
+      ],
+      "contextUsage",
+    ),
+  );
+  if (value.state !== "available") errors.push("contextUsage.state is invalid");
+  if (value.source !== "estimated" && value.source !== "provider-reported") {
+    errors.push("contextUsage.source is invalid");
+  }
+  validateContextCounts(value, errors);
+  validateContextBreakdown(value.breakdown, Number(value.usedInputTokens), errors);
+  validateContextCompaction(value.compaction, errors);
+  validateStrictUtcInstant(value.updatedAt, "contextUsage.updatedAt", errors);
+}
+
+function validateContextCounts(value: Record<string, unknown>, errors: string[]): void {
+  const fields = [
+    "capacityTokens",
+    "usedInputTokens",
+    "reservedOutputTokens",
+    "freeTokens",
+    "cumulativePromptTokens",
+  ] as const;
+  for (const field of fields) {
+    if (!validBoundedCount(value[field], Number.MAX_SAFE_INTEGER)) {
+      errors.push(`contextUsage.${field} is invalid`);
+    }
+  }
+  if (
+    fields.every((field) => validBoundedCount(value[field], Number.MAX_SAFE_INTEGER)) &&
+    Number(value.capacityTokens) !==
+      Number(value.usedInputTokens) + Number(value.reservedOutputTokens) + Number(value.freeTokens)
+  ) {
+    errors.push("contextUsage token geometry is inconsistent");
+  }
+  if (
+    value.runPromptBudgetTokens !== undefined &&
+    (!validBoundedCount(value.runPromptBudgetTokens, Number.MAX_SAFE_INTEGER) ||
+      Number(value.runPromptBudgetTokens) < Number(value.cumulativePromptTokens))
+  ) {
+    errors.push("contextUsage.runPromptBudgetTokens is invalid");
+  }
+}
+
+function validateContextBreakdown(value: unknown, usedTokens: number, errors: string[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    errors.push("contextUsage.breakdown must be an object");
+    return;
+  }
+  const fields = [
+    "conversationMessagesTokens",
+    "systemContextTokens",
+    "toolDefinitionTokens",
+    "providerAccountingAdjustmentTokens",
+  ] as const;
+  errors.push(...exactKeys(value, fields, "contextUsage.breakdown"));
+  const reported: unknown[] = fields.flatMap((field) =>
+    value[field] === undefined ? [] : [value[field]],
+  );
+  if (!reported.every((count) => validBoundedCount(count, Number.MAX_SAFE_INTEGER))) {
+    errors.push("contextUsage.breakdown contains an invalid count");
+  } else if (reported.reduce<number>((sum, count) => sum + Number(count), 0) > usedTokens) {
+    errors.push("contextUsage.breakdown exceeds usedInputTokens");
+  }
+}
+
+function validateContextCompaction(value: unknown, errors: string[]): void {
+  if (value === undefined) return;
+  if (!isRecord(value)) {
+    errors.push("contextUsage.compaction must be an object");
+    return;
+  }
+  errors.push(
+    ...exactKeys(value, ["count", "lastCompactedAt", "thresholdTokens"], "contextUsage.compaction"),
+  );
+  if (!validBoundedCount(value.count, Number.MAX_SAFE_INTEGER)) {
+    errors.push("contextUsage.compaction.count is invalid");
+  }
+  if (value.lastCompactedAt !== undefined) {
+    validateStrictUtcInstant(
+      value.lastCompactedAt,
+      "contextUsage.compaction.lastCompactedAt",
+      errors,
+    );
+  }
+  if (
+    value.thresholdTokens !== undefined &&
+    !validBoundedCount(value.thresholdTokens, Number.MAX_SAFE_INTEGER)
+  ) {
+    errors.push("contextUsage.compaction.thresholdTokens is invalid");
+  }
 }
 
 function validateIssueBinding(value: unknown, errors: string[]): void {

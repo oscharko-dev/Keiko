@@ -378,9 +378,7 @@ describe("EditorWindowSessionHost managed task workspace access", () => {
 
     render(editorHost({ root: "/repo" }, ctx, activeRoot));
 
-    expect(
-      screen.getByRole("note", { name: "Task workspace unavailable in this browser" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("note", { name: "Browser session not paired" })).toBeInTheDocument();
     expect(screen.queryByTestId(`editor-${activeRoot}`)).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
   });
@@ -438,15 +436,15 @@ describe("EditorWindowSessionHost managed task workspace access", () => {
 
     expect(
       screen.getByRole("note", {
-        name: "Der Aufgabenarbeitsbereich ist in diesem Browser nicht verfügbar",
+        name: "Browsersitzung nicht gekoppelt",
       }),
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        "Starte Keiko über das Startprogramm neu. Alternativ kannst du oben im Arbeitskontext einen Ordner oder ein Repository auswählen.",
+        "Das ausgewählte Projekt ist verfügbar, aber dieser Browser hat keine Launcher-Berechtigung für private Task-Workspace-Inhalte. Starte Keiko über den Launcher neu.",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Erneut prüfen" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Erneut prüfen" })).toBeNull();
   });
 });
 
@@ -489,9 +487,7 @@ describe("FilesWindowSessionHost managed task workspace access (F-08)", () => {
 
     render(filesHost({ root: "/repo" }, managedContext(activeRoot), activeRoot));
 
-    expect(
-      screen.getByRole("note", { name: "Task workspace unavailable in this browser" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("note", { name: "Browser session not paired" })).toBeInTheDocument();
     expect(screen.queryByTestId("files-without-root-bar")).toBeNull();
     expect(screen.queryByRole("alert")).toBeNull();
   });

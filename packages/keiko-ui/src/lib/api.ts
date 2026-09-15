@@ -2846,6 +2846,7 @@ export async function fetchGitDeliveryLocalBranchCreate(
       branchName: input.branchName,
       baseBranchName: input.baseBranchName,
       startPointRefHash: input.startPointRefHash,
+      userInitiated: true,
       ...(input.approval === undefined ? {} : { approval: input.approval }),
     }),
     ...(signal === undefined ? {} : { signal }),
@@ -2868,8 +2869,31 @@ export async function fetchGitDeliveryLocalBranchSwitch(
       schemaVersion: "1",
       projectId: input.projectId,
       branchName: input.branchName,
+      userInitiated: true,
       ...(input.approval === undefined ? {} : { approval: input.approval }),
     }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export interface GitRepositoryInitializeInput {
+  readonly projectId: string;
+  readonly initialBranch: "main";
+}
+
+export interface GitRepositoryInitializeResponse {
+  readonly schemaVersion: "1";
+  readonly status: "succeeded";
+  readonly initialized: true;
+}
+
+export async function initializeGitRepository(
+  input: GitRepositoryInitializeInput,
+  signal?: AbortSignal,
+): Promise<GitRepositoryInitializeResponse> {
+  return fetchJson("/api/git-delivery/repository/initialize", {
+    method: "POST",
+    body: JSON.stringify(input),
     ...(signal === undefined ? {} : { signal }),
   });
 }
@@ -2892,6 +2916,7 @@ export async function fetchGitDeliveryStage(
       projectId: input.projectId,
       pathspecs: input.pathspecs,
       includeUntracked: input.includeUntracked,
+      userInitiated: true,
       ...(input.approval === undefined ? {} : { approval: input.approval }),
     }),
     ...(signal === undefined ? {} : { signal }),
@@ -2914,6 +2939,7 @@ export async function fetchGitDeliveryUnstage(
       schemaVersion: "1",
       projectId: input.projectId,
       pathspecs: input.pathspecs,
+      userInitiated: true,
       ...(input.approval === undefined ? {} : { approval: input.approval }),
     }),
     ...(signal === undefined ? {} : { signal }),
@@ -2932,6 +2958,14 @@ export interface GitDeliveryCommitPreviewResponse {
   readonly policyBlockReason?: string;
 }
 
+export interface GitDeliveryCommitDraftResponse {
+  readonly schemaVersion: "1";
+  readonly status: "succeeded";
+  readonly source: "model";
+  readonly suggestedMessage: string;
+  readonly summary: GitCommitChangeSummary;
+}
+
 export async function fetchGitDeliveryCommitPreview(
   input: { readonly projectId: string; readonly messageDraft?: string },
   signal?: AbortSignal,
@@ -2947,11 +2981,27 @@ export async function fetchGitDeliveryCommitPreview(
   });
 }
 
+export async function fetchGitDeliveryCommitDraft(
+  input: { readonly projectId: string; readonly instruction?: string },
+  signal?: AbortSignal,
+): Promise<GitDeliveryCommitDraftResponse> {
+  return fetchJson("/api/git-delivery/commit/draft", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      ...(input.instruction === undefined ? {} : { instruction: input.instruction }),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
 export interface GitDeliveryCommitExecuteInput {
   readonly projectId: string;
   readonly message: string;
   readonly allowEmpty?: boolean;
   readonly approval?: GitDeliveryApprovalClaim;
+  readonly userInitiated?: true | undefined;
 }
 
 export async function fetchGitDeliveryCommitExecute(
@@ -2966,6 +3016,7 @@ export async function fetchGitDeliveryCommitExecute(
       message: input.message,
       ...(input.allowEmpty === undefined ? {} : { allowEmpty: input.allowEmpty }),
       ...(input.approval === undefined ? {} : { approval: input.approval }),
+      ...(input.userInitiated === true ? { userInitiated: true } : {}),
     }),
     ...(signal === undefined ? {} : { signal }),
   });
@@ -3064,6 +3115,7 @@ export interface GitDeliverySyncInput {
   readonly projectId: string;
   readonly remote?: string | undefined;
   readonly approval?: GitDeliveryApprovalClaim;
+  readonly userInitiated?: true | undefined;
 }
 
 function gitDeliverySyncBody(input: GitDeliverySyncInput): string {
@@ -3072,6 +3124,7 @@ function gitDeliverySyncBody(input: GitDeliverySyncInput): string {
     projectId: input.projectId,
     ...(input.remote === undefined ? {} : { remote: input.remote }),
     ...(input.approval === undefined ? {} : { approval: input.approval }),
+    ...(input.userInitiated === true ? { userInitiated: true } : {}),
   });
 }
 
@@ -3119,7 +3172,7 @@ export interface GitDeliverySyncApproveResponse {
 }
 
 export async function fetchGitDeliverySyncApprove(
-  input: Omit<GitDeliverySyncInput, "approval">,
+  input: Omit<GitDeliverySyncInput, "approval" | "userInitiated">,
   signal?: AbortSignal,
 ): Promise<GitDeliverySyncApproveResponse> {
   return fetchJson(gitDeliverySyncPath(input.operation, "approve"), {
@@ -3130,15 +3183,14 @@ export async function fetchGitDeliverySyncApprove(
 }
 
 /**
- * Treats one explicit Fetch/Pull action as the approval-mint plus one-use execute sequence. The
- * server independently validates the same project, operation, and remote at both steps.
+ * Treats one explicit Fetch/Pull action as the local user's own request. Agent/background sync
+ * callers use the low-level approve/execute pair instead.
  */
 export async function proposeGitDeliverySync(
-  input: Omit<GitDeliverySyncInput, "approval">,
+  input: Omit<GitDeliverySyncInput, "approval" | "userInitiated">,
   signal?: AbortSignal,
 ): Promise<GitSyncExecuteResponse> {
-  const minted = await fetchGitDeliverySyncApprove(input, signal);
-  return fetchGitDeliverySyncExecute({ ...input, approval: minted.approval }, signal);
+  return fetchGitDeliverySyncExecute({ ...input, userInitiated: true }, signal);
 }
 
 // ─── Governed GitHub pull request command center (#477, ADR-0064) ────────────────────────────────────
@@ -3771,6 +3823,7 @@ export async function fetchGitDeliveryCommitApprove(
       projectId: input.projectId,
       message: input.message,
       ...(input.allowEmpty === undefined ? {} : { allowEmpty: input.allowEmpty }),
+      ...(input.userInitiated === true ? { userInitiated: true } : {}),
     }),
     ...(signal === undefined ? {} : { signal }),
   });
@@ -3821,8 +3874,9 @@ export async function proposeCommit(
   input: Omit<GitDeliveryCommitExecuteInput, "approval">,
   signal?: AbortSignal,
 ): Promise<GitDeliveryMutationResponse> {
-  const minted = await fetchGitDeliveryCommitApprove(input, signal);
-  return fetchGitDeliveryCommitExecute({ ...input, approval: minted.approval }, signal);
+  const localUserInput = { ...input, userInitiated: true as const };
+  const minted = await fetchGitDeliveryCommitApprove(localUserInput, signal);
+  return fetchGitDeliveryCommitExecute({ ...localUserInput, approval: minted.approval }, signal);
 }
 
 /**

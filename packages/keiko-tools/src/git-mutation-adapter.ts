@@ -247,7 +247,7 @@ export function buildUnstageArgv(req: GitUnstageExecRequest): GitMutationArgvPla
 }
 
 export function buildCommitArgv(req: GitCommitExecRequest): GitMutationArgvPlan {
-  const argv: string[] = ["commit"];
+  const argv: string[] = ["commit", "--gpg-sign"];
   if (req.allowEmpty) {
     argv.push("--allow-empty");
   }

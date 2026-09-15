@@ -250,6 +250,33 @@ const SCENARIOS: readonly Scenario[] = [
     actionHint: "resolve-conflicts",
   },
   {
+    name: "signature-failed",
+    result: lifecycle(
+      {
+        status: "recovery-required",
+        category: "recovery-required",
+        executionResult: {
+          schemaVersion: "1",
+          outcome: "failed",
+          durationMs: 8,
+          errorCode: "signature-failed",
+        },
+      },
+      "result",
+      {
+        executionResult: {
+          schemaVersion: "1",
+          outcome: "failed",
+          durationMs: 8,
+          errorCode: "signature-failed",
+        },
+      },
+    ),
+    outcomeClass: "recovery-required",
+    disposition: "user-fixable",
+    actionHint: "configure-signing",
+  },
+  {
     name: "recovery-required",
     result: lifecycle(
       {

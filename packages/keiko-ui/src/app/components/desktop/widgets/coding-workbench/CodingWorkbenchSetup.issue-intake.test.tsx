@@ -497,8 +497,11 @@ describe("CodingWorkbenchSetup issue intake (#3385)", () => {
     expect(start).not.toHaveAttribute("aria-disabled", "true");
     await user.click(start);
     expect(runtimeActions.start).toHaveBeenCalledWith("Implement the issue", {
-      issueRef: ISSUE_URL,
-      expectedIssueBindingDigest: "e".repeat(64),
+      issue: {
+        issueRef: ISSUE_URL,
+        expectedIssueBindingDigest: "e".repeat(64),
+      },
+      projectMemoryEnabled: true,
     });
     await expectAxeClean(container);
 

@@ -465,6 +465,15 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
     expect(result.body).toEqual({ status: "blocked", reason: "unborn-head" });
   });
 
+  it("blocks an identical base/head comparison before capture runs", async () => {
+    const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [] });
+    const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+    const body = { ...connectRequestBody(chat.id), baseRef: "feature/x" };
+    const result = asRouteResult(await connectHandler(makeCtx(body), deps));
+    expect(result.body).toEqual({ status: "blocked", reason: "identical-refs" });
+    expect(chatStore.findChatById(chat.id)?.gitChangeScopes ?? []).toHaveLength(0);
+  });
+
   // Only exit 1 from `git rev-parse -q --verify HEAD` means "no such ref". A sandbox preflight
   // refusal, a lock contention error or a crashed binary exits with another code on a repository
   // that has commits, and reporting that as "this repository has no commits yet" sends the

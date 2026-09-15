@@ -83,6 +83,28 @@ describe("ConnectToChatDialog", () => {
     expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled();
   });
 
+  it("does not allow the current branch to be selected as its own comparison base", async () => {
+    const connect = vi.fn();
+    const listChats = vi.fn(async (): Promise<ChatsResponse> => oneChat());
+    const user = userEvent.setup();
+    render(
+      <ConnectToChatDialog
+        {...baseProps()}
+        currentBranch="feature/x"
+        baseBranchName="feature/x"
+        baseBranchChoices={["feature/x"]}
+        listChats={listChats}
+        connect={connect}
+      />,
+    );
+    await selectFirstChat(user);
+    expect(
+      screen.getByText("Choose a different base branch before connecting this Git change."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled();
+    expect(connect).not.toHaveBeenCalled();
+  });
+
   it("connects an exact comparison using the default base branch", async () => {
     const onConnected = vi.fn();
     const scope = {

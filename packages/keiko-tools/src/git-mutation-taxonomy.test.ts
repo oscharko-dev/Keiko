@@ -80,6 +80,7 @@ describe("git mutation taxonomy — failure categories", () => {
     expect(gitMutationCategoryForExecutionError("network-failure")).toBe("provider-failure");
     expect(gitMutationCategoryForExecutionError("conflict")).toBe("recovery-required");
     expect(gitMutationCategoryForExecutionError("precondition-failed")).toBe("recovery-required");
+    expect(gitMutationCategoryForExecutionError("signature-failed")).toBe("recovery-required");
     expect(gitMutationCategoryForExecutionError("timeout")).toBe("execution-failure");
     expect(gitMutationCategoryForExecutionError("internal-error")).toBe("execution-failure");
   });

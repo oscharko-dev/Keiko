@@ -611,11 +611,12 @@ export async function readGitWorktreeSnapshot(
   deps: NodeGitWorktreeReaderDeps,
 ): Promise<GitWorktreeSnapshot> {
   const ctx = machineReadContext(deps);
+  const metadataCtx = metadataReadContext(deps);
   const [statusOut, branchOut, remoteOut, indexOut] = await Promise.all([
     runRead(ctx, ["status", "--porcelain=v2", "--branch"]),
     runRead(ctx, ["branch", "--list", "--format=%(refname:short)"]),
     runRead(ctx, ["remote"]),
-    runRead(ctx, ["ls-files", "--stage", "-z"]),
+    runRead(metadataCtx, ["ls-files", "--stage", "-z"]),
   ]);
   const c = parsePorcelain(statusOut);
   return {

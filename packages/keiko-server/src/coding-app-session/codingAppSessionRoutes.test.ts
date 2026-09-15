@@ -13,6 +13,7 @@ import {
 import {
   handleCodingAppSessionChannelSnapshot,
   handleCodingAppSessionChannelStream,
+  handleCodingAppSessionLocalSession,
   handleCodingAppSessionPair,
   handleCodingAppSessionRotate,
   handleCodingAppSessionSignOut,
@@ -85,6 +86,26 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
   it("pair without a composed channel acknowledges without issuing a cookie", async () => {
     const result = await handleCodingAppSessionPair(ctx(), deps());
     expect(result.headers).toBeUndefined();
+  });
+
+  it("local-session without a composed channel acknowledges without issuing a cookie", () => {
+    const result = handleCodingAppSessionLocalSession(ctx(), deps());
+    expect(result.headers).toBeUndefined();
+  });
+
+  it("local-session with launcher authority issues the app-session cookie", () => {
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const setCookie = handleCodingAppSessionLocalSession(ctx(), deps(channel)).headers?.[
+      "Set-Cookie"
+    ];
+
+    expect(setCookie).toHaveLength(11);
+    expect(String(setCookie)).toContain(APP_SESSION_COOKIE_NAME);
+    expect(String(setCookie)).toContain("Path=/api/coding-workbench");
+    expect(channel.sessionCount()).toBe(1);
   });
 
   it("rotate without a composed channel acknowledges without a cookie", () => {
@@ -189,6 +210,39 @@ describe("app-session lifecycle lines (F65)", () => {
         correlationId: "pair-correlation",
       },
     ]);
+  });
+
+  it("logs only a local-session issue, correlated and body-free", () => {
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const { deps: logDeps, events } = logged(channel);
+
+    handleCodingAppSessionLocalSession({ ...ctx(), correlationId: "local-correlation" }, logDeps);
+
+    expect(events).toEqual([
+      {
+        level: "info",
+        category: "http",
+        op: "coding-app-session.local-session.issued",
+        correlationId: "local-correlation",
+      },
+    ]);
+  });
+
+  it("does not log an already active local session", () => {
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const issued = handleCodingAppSessionLocalSession(ctx(), deps(channel)).headers?.["Set-Cookie"];
+    const { deps: logDeps, events } = logged(channel);
+
+    handleCodingAppSessionLocalSession(ctx(String(issued).split(";")[0] ?? ""), logDeps);
+
+    expect(events).toEqual([]);
+    expect(channel.sessionCount()).toBe(1);
   });
 
   it("writes no line of its own for a denied pairing; denials stay aggregated (KEIKO-0838)", async () => {

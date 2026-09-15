@@ -185,6 +185,36 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.header.eyebrow": "Coding",
   "codingWorkbench.header.summary":
     "Start and supervise one governed coding run. Authority and outcomes remain server-owned.",
+  "codingWorkbench.info.open": "Open Coding Workbench information",
+  "codingWorkbench.info.label": "Information",
+  "codingWorkbench.info.title": "Coding Workbench information",
+  "codingWorkbench.info.project": "Project",
+  "codingWorkbench.info.repositoryStatus": "Repository status",
+  "codingWorkbench.info.repository.git": "Git repository",
+  "codingWorkbench.info.repository.notGit": "Not a Git repository",
+  "codingWorkbench.info.repository.unavailable": "Not reported",
+  "codingWorkbench.info.repositoryBranch": "Repository branch",
+  "codingWorkbench.info.targetBranch": "Target branch",
+  "codingWorkbench.info.taskBranch": "Task branch",
+  "codingWorkbench.info.runState": "Run state",
+  "codingWorkbench.info.model": "Model",
+  "codingWorkbench.info.modelReadiness": "Model readiness",
+  "codingWorkbench.info.runtime": "Runtime verification",
+  "codingWorkbench.info.contextWindow": "Context window",
+  "codingWorkbench.info.context.meter": "Context window {percent}% used",
+  "codingWorkbench.info.context.used": "Used input",
+  "codingWorkbench.info.context.messages": "Conversation messages",
+  "codingWorkbench.info.context.system": "System and developer context",
+  "codingWorkbench.info.context.tools": "Tool definitions",
+  "codingWorkbench.info.context.adjustment": "Provider accounting adjustment",
+  "codingWorkbench.info.context.reserve": "Output reserve",
+  "codingWorkbench.info.context.free": "Free input space",
+  "codingWorkbench.info.context.current": "Current context input",
+  "codingWorkbench.info.context.cumulative": "Cumulative run input",
+  "codingWorkbench.info.context.runBudget": "Run input budget",
+  "codingWorkbench.info.context.compactions": "Reported compactions",
+  "codingWorkbench.info.notReported": "Not reported by runtime",
+  "codingWorkbench.info.none": "None",
   "codingWorkbench.mode.eyebrow": "Autonomy",
   "codingWorkbench.mode.unconfirmed": "Awaiting server confirmation",
   "codingWorkbench.mode.governed-assist.label": "Ask for approval",
@@ -232,10 +262,31 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.composer.projectMemory.label": "MemoriaViva",
   "codingWorkbench.composer.projectMemory.help":
     "MemoriaViva uses only the active project memory in Coding Workbench.",
+  "codingWorkbench.composer.projectMemory.help.enabled":
+    "Project Memory is active for the next coding run.",
+  "codingWorkbench.composer.projectMemory.help.disabled":
+    "Project Memory is disabled for the next coding run.",
+  "codingWorkbench.composer.projectMemory.enable": "Enable project memory for this run",
+  "codingWorkbench.composer.projectMemory.disable": "Disable project memory for this run",
   "codingWorkbench.composer.help":
     "Pause the active run to send a follow-up. A drafted follow-up is admitted only while paused and is never queued.",
   "codingWorkbench.composer.workspaceMismatch":
-    "This run keeps the authority of the workspace it started in, which is no longer the active one. The chips, Git and the run's changes stay on the run's workspace; switch back to it to review or edit those files.",
+    "This run keeps the authority of the workspace it started in, which is no longer the active one. The repository and branch chips keep describing that run; switch back to review or edit its files.",
+  "codingWorkbench.composer.blocked.busy": "Keiko is already processing a runtime action.",
+  "codingWorkbench.composer.blocked.emptyStart": "Describe what Keiko should do first.",
+  "codingWorkbench.composer.blocked.emptyFollowUp": "Write a follow-up first.",
+  "codingWorkbench.composer.blocked.pauseDecision":
+    "This paused run is waiting for a required decision. Use the decision action shown above.",
+  "codingWorkbench.composer.blocked.notReady":
+    "Keiko is not ready to start this coding run yet. Check the Workbench information above.",
+  "codingWorkbench.composer.blocked.pairing":
+    "Keiko is still checking whether this browser session is paired.",
+  "codingWorkbench.composer.blocked.unpaired":
+    "This browser session is not paired, so Keiko cannot start a coding run here. Open Keiko through the launcher and try again.",
+  "codingWorkbench.composer.blocked.modelSource": "Keiko is still checking the model source.",
+  "codingWorkbench.composer.blocked.workspace": "Keiko is still checking the task workspace.",
+  "codingWorkbench.composer.blocked.runtime": "Keiko is still checking the coding runtime.",
+  "codingWorkbench.composer.blocked.run": "Keiko is still checking the current run state.",
   "codingWorkbench.editorBridge.reconnecting": "Edits are paused: reconnecting the editor bridge.",
   "codingWorkbench.questions.sectionLabel": "Runtime questions",
   "codingWorkbench.questions.eyebrow": "Input needed",
@@ -399,6 +450,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.activity.role.user": "You",
   "codingWorkbench.activity.role.assistant": "Coding agent",
   "codingWorkbench.activity.tool": "Tool activity: {tool}",
+  "codingWorkbench.activity.toolCount": "{count} calls",
   "codingWorkbench.activity.toolState.pending": "Pending",
   "codingWorkbench.activity.toolState.running": "Running",
   "codingWorkbench.activity.toolState.succeeded": "Succeeded",
@@ -422,7 +474,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.unavailableReason.non-chat":
     "No configured model is a chat model. Add a chat-capable model in Settings → Models.",
   "codingWorkbench.source.unavailableReason.no-tool-calling":
-    "No chat model has verified tool calling. Run the readiness check in Settings → Models and apply the verified values.",
+    "The automatic tool-calling check did not confirm a compatible coding model. Review the model capability and latest readiness result in Settings → Models.",
   "codingWorkbench.source.unavailableReason.non-workflow-eligible":
     "The tool-calling chat model is not workflow-eligible. Enable workflow eligibility in Settings → Models.",
   "codingWorkbench.source.unavailableReason.non-coding-capable":
@@ -434,7 +486,7 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.source.unavailableReason.model-context-window-insufficient":
     "The configured model's context window is too small for a coding run (minimum 32,000 tokens). Increase the model's context window or choose a larger model in Settings → Models.",
   "codingWorkbench.source.unavailableReason.tool-calling-unverified":
-    "The coding model's tool-calling check is missing or older than 24 hours. Check tool calling again in Settings → Models.",
+    "The coding model's automatic tool-calling check did not complete successfully. Review the latest readiness result in Settings → Models.",
   "codingWorkbench.modelSource.gateway": "Keiko Gateway",
   "codingWorkbench.modelSource.openaiGateway": "OpenAI through Gateway",
   "codingWorkbench.modelSource.codexSubscription": "ChatGPT/Codex subscription",
@@ -841,9 +893,8 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.event.child-run-completed": "Child agent completed",
   "codingWorkbench.event.operator-decision": "Your decision needed",
   "codingWorkbench.event.failure-redacted": "Failure reported",
-  "codingWorkbench.event.detail": "Sequence {sequence}. Revision {revision}.",
-  "codingWorkbench.event.detailFailure":
-    "Sequence {sequence}. Revision {revision}. Failure: {failure}.",
+  "codingWorkbench.event.detail": "Seq. {sequence} · Rev. {revision}",
+  "codingWorkbench.event.detailFailure": "Seq. {sequence} · Rev. {revision} · Failure: {failure}",
   "codingWorkbench.event.detailOutcome": "Outcome: {outcome}.",
   "codingWorkbench.event.detailUntrustedContent":
     "Untrusted content: the fetched page was quarantined as data, not instructions.",

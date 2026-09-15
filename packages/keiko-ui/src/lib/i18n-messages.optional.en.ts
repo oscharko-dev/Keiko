@@ -338,6 +338,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "commitComposer.action.commitTo": "Commit to {branch}",
   "commitComposer.action.createBranchFirst": "Create branch first",
   "commitComposer.action.useDraft": "Use commit draft",
+  "commitComposer.action.generateDraft": "Generate with Keiko",
+  "commitComposer.action.generatingDraft": "Keiko is generating…",
   "commitComposer.action.copyDraft": "Copy commit draft",
   "commitComposer.field.summary": "Summary",
   "commitComposer.field.summaryPlaceholder": "Concise summary of the change",
@@ -362,6 +364,8 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "commitComposer.draft.detail": "Review or edit this message before committing.",
   "commitComposer.draft.subject": "Subject",
   "commitComposer.draft.body": "Body",
+  "commitComposer.draft.generateHint":
+    "Keiko reads the selected staged diff only when you click this button.",
   "commitComposer.draft.unavailable":
     "This repository policy needs details that Keiko cannot safely draft.",
   "commitComposer.copy.copied": "Copied",
@@ -383,6 +387,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "commitComposer.violation.subject-too-long": "The subject line is too long",
   "commitComposer.violation.missing-issue-key": "Missing the required issue key",
   "commitComposer.violation.missing-signoff": "Missing the Signed-off-by trailer",
+  "gitClientWindow.error.noRepository": "Select a repository first.",
   "promptEnhancer.error.cancelled": "Request cancelled.",
   "promptEnhancer.error.failed": "Prompt enhancement failed. Please try again.",
   "promptEnhancer.error.enterDraft": "Enter a prompt draft to enhance.",
@@ -665,6 +670,7 @@ export const OPTIONAL_WIDGET_EN_MESSAGES = {
   "gitDelivery.recoveryHint.retry": "Retry the action",
   "gitDelivery.recoveryHint.stage-changes": "Stage your changes",
   "gitDelivery.recoveryHint.configure-upstream": "Configure the upstream branch",
+  "gitDelivery.recoveryHint.configure-signing": "Configure commit signing",
   "gitDelivery.recoveryHint.resolve-conflicts": "Resolve the conflicts",
   "gitDelivery.recoveryHint.abort-in-progress-operation": "Abort the in-progress operation",
   "gitDelivery.recoveryHint.request-approval": "Request approval",

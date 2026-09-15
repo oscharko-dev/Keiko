@@ -684,6 +684,8 @@ export const EN_MESSAGES = {
     "Keiko could not connect that source. Check that it is still available and try again.",
   "chat.grounding.connectKnowledgeFailed":
     "Keiko could not connect that knowledge source. Check that it is still available and try again.",
+  "chat.grounding.connectGitChangeFailed":
+    "Keiko could not connect that Git change. Check that the repository and branches are still available and try again.",
   "chat.memory.panel": "Conversation memory",
   "chat.memory.enableForChat": "Enable MemoriaViva for this chat",
   "chat.memory.disableForChat": "Disable MemoriaViva for this chat",
@@ -1356,6 +1358,9 @@ export const EN_MESSAGES = {
   "gitChangeScope.status.fallback": "Fallback",
   "gitChangeScope.status.blocked": "Blocked",
   "gitChangeScope.status.failed": "Failed",
+  "gitChangeScope.status.connecting": "Connecting",
+  "gitChangeScope.pending.accessible": "Git change connection pending: {label}",
+  "gitChangeScope.pending.detail": "Preparing Git change context",
   "gitChangeScope.counts.file": "{count} file changed",
   "gitChangeScope.counts.files": "{count} files changed",
   "gitChangeScope.counts.withOmitted": "{shown} of {total} files shown",
@@ -1372,6 +1377,7 @@ export const EN_MESSAGES = {
   "gitChangeScope.blocked.detachedHead": "Blocked: the repository HEAD is detached.",
   "gitChangeScope.blocked.unbornHead": "Blocked: the repository has no commits yet.",
   "gitChangeScope.blocked.missingRef": "Blocked: the selected ref could not be resolved.",
+  "gitChangeScope.blocked.identicalRefs": "Blocked: base and head must be different branches.",
   "gitChangeScope.blocked.noPullRequest":
     "Blocked: no open pull request was found for this branch.",
   "gitChangeScope.blocked.ambiguousPullRequest":
@@ -1398,6 +1404,8 @@ export const EN_MESSAGES = {
   "gitChangeScope.connect.cancel": "Cancel",
   "gitChangeScope.connect.openButton": "Connect to Chat",
   "gitChangeScope.connect.noChats": "No chats are open for this repository yet.",
+  "gitChangeScope.connect.noBaseBranch":
+    "Choose a different base branch before connecting this Git change.",
   "gitChangeScope.connect.chatLoadError": "Unable to load chats for this repository.",
   "gitChangeScope.connect.error": "Unable to connect this Git change to the chat.",
   "gitChangeScope.description.preview": "Preview",
@@ -1528,6 +1536,9 @@ export const EN_MESSAGES = {
   "editor.taskWorkspaceAccess.checking": "Connecting to the task workspace…",
   "editor.taskWorkspaceAccess.checkingDescription":
     "Keiko is checking this browser's local workspace access.",
+  "editor.taskWorkspaceAccess.unpairedTitle": "Browser session not paired",
+  "editor.taskWorkspaceAccess.unpairedDescription":
+    "The selected project is available, but this browser has no launcher permission for private task-workspace content. Restart Keiko through its launcher.",
   "editor.taskWorkspaceAccess.title": "Task workspace unavailable in this browser",
   "editor.taskWorkspaceAccess.description":
     "Restart Keiko through the launcher, or choose a folder or repository from the workspace context above.",
@@ -2380,6 +2391,7 @@ export const EN_MESSAGES = {
   "gitClientWindow.sync.hint.retry": "Try again.",
   "gitClientWindow.sync.hint.stageChanges": "Stage the changes first.",
   "gitClientWindow.sync.hint.configureUpstream": "Configure an upstream branch first.",
+  "gitClientWindow.sync.hint.configureSigning": "Configure commit signing first.",
   "gitClientWindow.sync.hint.resolveConflicts": "Pull and resolve the difference first.",
   "gitClientWindow.sync.hint.abortInProgress": "Finish or abort the operation in progress first.",
   "gitClientWindow.sync.hint.requestApproval": "Request approval first.",

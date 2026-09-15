@@ -86,7 +86,7 @@ import {
 } from "./memory-capture-projection.js";
 import { refreshMemoryEmbeddingAfterBodyEdit } from "./memory-embedding.js";
 import { readJsonRequestBody } from "./bounded-request-body.js";
-import { processServerLogSink } from "./process-log-sink.js";
+import { processServerLogSink, processServerLogSinkFor } from "./process-log-sink.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { resolveMemoryTargetRecords } from "./memory-target-resolver.js";
 
@@ -2492,6 +2492,7 @@ export function createBffMemoryVault(
     events: readonly import("@oscharko-dev/keiko-memory-vault").MemoryEvent[],
   ) => void,
   env?: Readonly<Record<string, string | undefined>>,
+  bootstrapCorrelationId?: string,
 ): MemoryVaultStore {
   // Optional onMemoryEvent (#214) wires every successful vault mutation into the audit
   // ledger. When undefined, the vault still fires its internal NOOP sink, so the absence
@@ -2508,12 +2509,16 @@ export function createBffMemoryVault(
   // bounded macOS Keychain tier (`cipher.ts`'s `keyFromKeychain`) reports a fall-through to the
   // keyfile tier as `security.keychain.fallback` instead of failing silently. `keiko-memory-vault`
   // depends on `keiko-security` (ADR-0019), so importing the port's type here is legal.
+  const activityLog =
+    bootstrapCorrelationId === undefined
+      ? processServerLogSink()
+      : processServerLogSinkFor(bootstrapCorrelationId);
   return createMemoryVault({
     redactString,
     ...(onMemoryEvent === undefined ? {} : { onMemoryEvent }),
     ...(onDeleteEventsBeforeCommit === undefined ? {} : { onDeleteEventsBeforeCommit }),
     ...(env === undefined ? {} : { env }),
-    logSink: processServerLogSink(),
-    securityLogSink: processServerLogSink(),
+    logSink: activityLog,
+    securityLogSink: activityLog,
   });
 }

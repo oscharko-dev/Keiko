@@ -7,6 +7,7 @@ import { redeemCodingAppSessionPairingOnBoot } from "./coding-app-session-client
 import { fetchWorkspaceManifests } from "./workspace-manifest-api";
 
 const PAIR_PATH = "/api/coding-workbench/app-session/pair";
+const LOCAL_SESSION_PATH = "/api/coding-workbench/app-session/local-session";
 const MANIFEST_PATH = "/api/workspaces";
 
 function ManifestReader(): ReactNode {
@@ -43,6 +44,12 @@ describe("app-session manifest boot ordering", () => {
           };
         });
       }
+      if (path === LOCAL_SESSION_PATH) {
+        events.push("local-session-request");
+        return Promise.resolve(
+          new Response(JSON.stringify({ schemaVersion: "1" }), { status: 200 }),
+        );
+      }
       if (path === MANIFEST_PATH) {
         events.push("manifest-request");
         return Promise.resolve(
@@ -69,8 +76,13 @@ describe("app-session manifest boot ordering", () => {
 
     releasePairing();
     await waitFor(() =>
-      expect(events).toEqual(["pair-request", "pair-response", "manifest-request"]),
+      expect(events).toEqual([
+        "pair-request",
+        "pair-response",
+        "local-session-request",
+        "manifest-request",
+      ]),
     );
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });
