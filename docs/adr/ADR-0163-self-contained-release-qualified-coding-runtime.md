@@ -411,9 +411,9 @@ weaker honestly declared containment until optional native qualification exists.
 whenever `runtimeAvailable` is true, and the evaluation lane reports ADR-0140's existing
 `functional-not-platform-qualified`. Every server-side default along that path resolves to the weak
 value, so an unthreaded path degrades to "unverified" and never to "verified". The header pill, the
-session context bar, the spoken readiness announcement and the bootstrap setup screen all state
-plainly that the runtime is an unverified evaluation runtime; none of them renders it as plain
-green. This is the class audit finding F-01 closed, and it must not be reintroduced.
+Coding Workbench information panel, the spoken readiness announcement and the bootstrap setup
+screen all state plainly that the runtime is an unverified evaluation runtime; none of them renders
+it as plain green. This is the class audit finding F-01 closed, and it must not be reintroduced.
 
 ## Consequences
 

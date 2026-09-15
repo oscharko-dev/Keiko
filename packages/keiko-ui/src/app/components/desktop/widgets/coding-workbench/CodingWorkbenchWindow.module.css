@@ -138,6 +138,219 @@
   color: var(--text-accent);
 }
 
+.cmpInfoBar {
+  position: relative;
+  display: flex;
+  min-height: 2.5rem;
+  align-items: center;
+  border-bottom: 1px solid var(--border-subtle);
+  padding: var(--space-1) var(--space-4);
+  background: color-mix(in oklch, var(--surface-primary) 72%, transparent);
+}
+
+.cmpInfoTrigger {
+  display: inline-flex;
+  min-height: 2rem;
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid transparent;
+  border-radius: var(--radius-control);
+  padding: 0 var(--space-2);
+  background: transparent;
+  color: var(--text-secondary);
+  font: var(--weight-semibold) var(--text-caption) var(--font-ui);
+  cursor: pointer;
+}
+
+.cmpInfoTrigger:hover,
+.cmpInfoTrigger[aria-expanded="true"] {
+  border-color: var(--border-subtle);
+  background: var(--button-secondary-surface-hover);
+  color: var(--text-primary);
+}
+
+.cmpInfoTrigger:focus-visible {
+  outline: var(--focus-w) solid var(--focus-ring);
+  outline-offset: var(--space-1);
+}
+
+.cmpInfoPopover {
+  position: absolute;
+  z-index: 70;
+  inset-block-start: calc(100% + var(--space-2));
+  inset-inline-start: var(--space-4);
+  width: min(42rem, calc(100vw - 8rem));
+  max-height: min(40rem, calc(100vh - 10rem));
+  margin: 0;
+  overflow: auto;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  background: var(--surface-primary);
+  box-shadow: var(--shadow-pop);
+}
+
+.cmpInfoHeader {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  margin-block-end: var(--space-4);
+}
+
+.cmpInfoHeader h3 {
+  margin: 0;
+  font-size: var(--text-body);
+}
+
+.cmpInfoGrid {
+  display: grid;
+  margin: 0;
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-surface);
+  background: var(--border-subtle);
+}
+
+.cmpInfoRow {
+  display: grid;
+  grid-template-columns: minmax(9rem, 0.8fr) minmax(0, 1.2fr);
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface-secondary);
+}
+
+.cmpInfoRow dt {
+  color: var(--text-tertiary);
+}
+
+.cmpInfoRow dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.cmpInfoRow[data-tone="warning"] dd {
+  color: var(--feedback-warning);
+}
+
+.cmpContextUsage {
+  margin-block-start: var(--space-4);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-surface);
+  padding: var(--space-3);
+  background: var(--surface-secondary);
+}
+
+.cmpContextUsage h4,
+.cmpContextUsage p,
+.cmpContextUsage dl {
+  margin: 0;
+}
+
+.cmpContextUsageHeading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.cmpContextUsageHeading span {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+}
+
+.cmpContextMeter {
+  display: flex;
+  height: 0.5rem;
+  margin-block: var(--space-3);
+  overflow: hidden;
+  border-radius: var(--radius-pill);
+  background: var(--surface-inset);
+}
+
+.cmpContextMeter > span {
+  min-width: 0;
+}
+
+.cmpContextMeter > span[data-tone="messages"],
+.cmpContextSwatch[data-tone="messages"] {
+  background: var(--viz-1);
+}
+
+.cmpContextMeter > span[data-tone="system"],
+.cmpContextSwatch[data-tone="system"] {
+  background: var(--feedback-warning);
+}
+
+.cmpContextMeter > span[data-tone="tools"],
+.cmpContextSwatch[data-tone="tools"] {
+  background: var(--feedback-success);
+}
+
+.cmpContextMeter > span[data-tone="adjustment"],
+.cmpContextSwatch[data-tone="adjustment"] {
+  background: var(--text-tertiary);
+}
+
+.cmpContextMeter > span[data-tone="reserve"],
+.cmpContextSwatch[data-tone="reserve"] {
+  background: var(--viz-2);
+}
+
+.cmpContextMeter > span[data-tone="free"],
+.cmpContextSwatch[data-tone="free"] {
+  background: var(--surface-inset);
+}
+
+.cmpContextLegend,
+.cmpContextSummary {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.cmpContextLegend > div,
+.cmpContextSummary > div {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
+.cmpContextLegend dt {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.cmpContextLegend dd,
+.cmpContextSummary dd {
+  margin: 0;
+  font-family: var(--font-mono);
+}
+
+.cmpContextLegend dd span,
+.cmpContextUnavailable {
+  color: var(--text-tertiary);
+}
+
+.cmpContextSwatch {
+  display: inline-block;
+  width: 0.65rem;
+  height: 0.65rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-pill);
+}
+
+.cmpContextSummary {
+  margin-block-start: var(--space-3) !important;
+  border-block-start: 1px solid var(--border-subtle);
+  padding-block-start: var(--space-3);
+}
+
 .body {
   display: grid;
   min-width: 0;
@@ -361,6 +574,10 @@
   min-width: 0;
   text-overflow: ellipsis;
   overflow: hidden;
+}
+
+.composerContextChip > .cmpComposerContextKind {
+  color: var(--text-tertiary);
 }
 
 .composerContextChip svg {

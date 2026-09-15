@@ -1915,7 +1915,7 @@ describe("active workspace binding override (Issue #446)", () => {
       );
 
       expect(
-        await screen.findByRole("note", { name: "Task workspace unavailable in this browser" }),
+        await screen.findByRole("note", { name: "Browser session not paired" }),
       ).toBeInTheDocument();
       expect(screen.queryByTestId("git-client-window")).toBeNull();
     } finally {

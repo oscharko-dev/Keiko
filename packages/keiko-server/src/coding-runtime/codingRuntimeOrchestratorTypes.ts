@@ -1,6 +1,7 @@
 import type {
   CodingWorkbenchIssueBinding,
   CodingWorkbenchIssueBindingFailure,
+  CodingWorkbenchContextUsage,
   CodingWorkbenchRuntimeFailureCode,
   CodingWorkbenchRuntimeQuestionsResponse,
   CodingWorkbenchRuntimeSnapshot,
@@ -70,6 +71,7 @@ export interface CodingRuntimeOrchestratorDeps {
   readonly questionPort: CodingRuntimeQuestionPort;
   readonly permissionPort?: CodingRuntimePermissionPort | undefined;
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
+  readonly contextUsage?: ((runId: string) => CodingWorkbenchContextUsage | undefined) | undefined;
   readonly serverPrincipal: () => string | undefined;
   /**
    * Server-level read-only research grant registry (#2387). The grant is exposed only through the

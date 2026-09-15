@@ -92,6 +92,7 @@ interface TaskStartSectionProps {
   readonly startBusy: boolean;
   readonly repositoryLabel: string | null;
   readonly branchLabel: string | null;
+  readonly branchContext: "repository" | "task";
   readonly onOpenGit: () => void;
   readonly autonomyMode: CodingWorkbenchMode | null;
   readonly autonomyLabel: string;
@@ -207,11 +208,16 @@ function ComposerContext({ input, t }: ControlProps): ReactNode {
         <button
           className={`${styles.composerContextChip} ${styles.composerContextButton}`}
           type="button"
-          title={input.branchLabel}
-          aria-label={t("codingWorkbench.composer.branch.open", { branch: input.branchLabel })}
+          title={`${input.branchContext === "task" ? "Task branch" : "Repository branch"}: ${input.branchLabel}`}
+          aria-label={t("codingWorkbench.composer.branch.open", {
+            branch: `${input.branchContext === "task" ? "Task branch" : "Repository branch"} ${input.branchLabel}`,
+          })}
           onClick={input.onOpenGit}
         >
           <BranchIcon size={14} />
+          <span className={styles.cmpComposerContextKind}>
+            {input.branchContext === "task" ? "Task branch" : "Repository branch"}
+          </span>
           <span>{input.branchLabel}</span>
         </button>
       )}

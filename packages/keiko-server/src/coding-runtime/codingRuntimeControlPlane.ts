@@ -1,5 +1,6 @@
 import type {
   CodingWorkbenchMode,
+  CodingWorkbenchContextUsage,
   CodingWorkbenchRuntimeEvent,
   SkillDiscoveryResultV1,
 } from "@oscharko-dev/keiko-contracts";
@@ -72,6 +73,8 @@ export interface CodingRuntimeHost {
   readonly cancellationRegistry: {
     readonly signalFor: (runId: string) => AbortSignal | undefined;
   };
+  readonly contextUsage?:
+    { readonly read: (runId: string) => CodingWorkbenchContextUsage | undefined } | undefined;
   readonly runtimeCapabilityAuthenticator?:
     | {
         readonly authenticate: (
@@ -256,6 +259,9 @@ function createControlPlaneOrchestrator(
       : {}),
     ...(input.runtimeHost?.pendingResearchApprovals
       ? { pendingResearchApprovals: input.runtimeHost.pendingResearchApprovals }
+      : {}),
+    ...(input.runtimeHost?.contextUsage
+      ? { contextUsage: input.runtimeHost.contextUsage.read }
       : {}),
     ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
     ...(input.activityLog ? { activityLog: input.activityLog } : {}),

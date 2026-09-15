@@ -2028,7 +2028,7 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     expect(surface).not.toHaveAttribute("data-hand-tool");
   });
 
-  it("does not start marquee selection from embedded window surfaces", () => {
+  it("activates an embedded window without starting marquee selection", () => {
     const replaceSelection = vi.fn();
     const panBy = vi.fn();
     const focus = vi.fn();
@@ -2047,7 +2047,7 @@ describe("WC-01 — keyboard pan on the workspace surface (WCAG 2.1.1)", () => {
     fireEvent.pointerMove(window, { clientX: 180, clientY: 150 });
     fireEvent.pointerUp(window);
 
-    expect(replaceSelection).not.toHaveBeenCalled();
+    expect(replaceSelection).toHaveBeenCalledWith(["agents-1"]);
     expect(panBy).not.toHaveBeenCalled();
     expect(focus).toHaveBeenCalledWith("agents-1");
   });

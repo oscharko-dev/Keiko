@@ -95,8 +95,15 @@ import {
   useCodingWorkbenchEditorBridge,
   type CodingWorkbenchChangesetReview,
 } from "@/lib/useCodingWorkbenchEditorBridge";
-import { useOptionalActiveWorkspace } from "../../context/ActiveWorkspaceContext";
+import {
+  useOptionalActiveWorkspace,
+  type ActiveWorkspaceApi,
+} from "../../context/ActiveWorkspaceContext";
 import { useOptionalChatSessionCatalog } from "../../context/ChatSessionContext";
+import {
+  useRepositoryBranchState,
+  type RepositoryBranchState,
+} from "../../hooks/useRepositoryBranchState";
 import { DiffFileSection } from "../cards/shared/diffView";
 import {
   PanelTitle,
@@ -141,6 +148,7 @@ import {
   type AcceptedWorkbenchIssue,
 } from "./useCodingWorkbenchIssueIntake";
 import { CodingWorkbenchIssueChip } from "./CodingWorkbenchIssueChip";
+import { CodingWorkbenchInfoPanel, type CodingWorkbenchInfoFact } from "./CodingWorkbenchInfoPanel";
 
 const EMPTY_WORKSPACE = {
   activeBinding: null,
@@ -436,6 +444,13 @@ function workbenchRepositoryRoot(
 ): string | null {
   if (!runIsActive) return activeWorkspace.activeInstance?.repositoryRoot ?? selectedRoot ?? null;
   return runBoundRoot ?? activeWorkspace.activeBinding?.activeRoot ?? selectedRoot ?? null;
+}
+
+function repositoryBranchReadRoot(
+  runIsActive: boolean,
+  repositoryRoot: string | null,
+): string | null {
+  return runIsActive ? null : repositoryRoot;
 }
 
 // The bound task workspace's base branch when the setup card is seeded with its repository, so issue
@@ -932,6 +947,9 @@ function WorkbenchColumns({
     activeWorkspace,
     selectedRoot,
   );
+  const repositoryBranch = useRepositoryBranchState(
+    repositoryBranchReadRoot(runIsActive, repositoryRoot),
+  );
   const onProposeReady = useMarkReadyPropose(journey.outcome, repositoryRoot);
   const taskComposer = (
     <TaskStartSection
@@ -964,8 +982,9 @@ function WorkbenchColumns({
       branchLabel={
         runIsActive
           ? (runWorkspace.bound?.taskBranch ?? activeWorkspace.activeInstance?.taskBranch ?? null)
-          : (activeWorkspace.activeInstance?.baseBranch ?? null)
+          : repositoryBranch.currentBranch
       }
+      branchContext={runIsActive ? "task" : "repository"}
       onOpenGit={() =>
         onOpenGit({
           root: repositoryRoot,
@@ -1229,31 +1248,91 @@ function sessionSourceValue(
   return source.available ? label : `${label} — ${t("codingWorkbench.resourceStatus.unavailable")}`;
 }
 
-function RuntimeAssuranceContextItem({
-  state,
-  t,
-}: {
-  readonly state: CodingWorkbenchRuntimeState;
-  readonly t: CodingWorkbenchTranslate;
-}): ReactNode {
-  const posture = useRuntimeAssurancePosture(state);
-  const value = t(RUNTIME_ASSURANCE_MESSAGE_KEYS[posture]);
-  return (
-    <span
-      className={styles.contextItem}
-      title={value}
-      {...(NEUTRAL_RUNTIME_ASSURANCE_POSTURES.has(posture) ? {} : { "data-tone": "warning" })}
-    >
-      <span className={styles.contextLabel}>{t("codingWorkbench.readiness.runtime.label")}</span>
-      <span className={styles.contextValue}>{value}</span>
-    </span>
-  );
+function valueOrNone(value: string | null | undefined, none: string): string {
+  return value === undefined || value === null || value.length === 0 ? none : value;
 }
 
-// Workbench audit, 2026-09-03: every chip's `title` carries the SAME text as its truncatable
-// `.contextValue` — never a different, unrelated string (the workspace chip used to show the raw
-// filesystem root here) and never absent (the unbound case used to have none at all) — so a
-// sighted low-vision reader can always recover what the CSS ellipsis clipped.
+function repositoryStatusValue(
+  repository: RepositoryBranchState,
+  t: CodingWorkbenchTranslate,
+): string {
+  if (repository.response?.available === true) return t("codingWorkbench.info.repository.git");
+  if (repository.response?.reason === "not-a-repository") {
+    return t("codingWorkbench.info.repository.notGit");
+  }
+  return t("codingWorkbench.info.repository.unavailable");
+}
+
+function confirmedModeValue(
+  mode: CodingWorkbenchMode | null,
+  state: CodingWorkbenchRuntimeState,
+  t: CodingWorkbenchTranslate,
+): string {
+  return mode === null ? confirmedModeLabel(state, t) : modeLabel(mode, t);
+}
+
+interface SessionInfoSources {
+  readonly state: CodingWorkbenchRuntimeState;
+  readonly workspace: CodingWorkbenchWorkspaceProjection | null;
+  readonly projectName: string | undefined;
+  readonly activeWorkspace: ActiveWorkspaceApi | null;
+  readonly repository: RepositoryBranchState;
+  readonly mode: CodingWorkbenchMode | null;
+  readonly posture: CodingWorkbenchSetupRuntimePosture;
+  readonly t: CodingWorkbenchTranslate;
+}
+
+function sessionInfoFacts(input: SessionInfoSources): readonly CodingWorkbenchInfoFact[] {
+  const { activeWorkspace, mode, posture, projectName, repository, state, t, workspace } = input;
+  const none = t("codingWorkbench.info.none");
+  return [
+    { label: t("codingWorkbench.info.project"), value: valueOrNone(projectName, none) },
+    {
+      label: t("codingWorkbench.info.repositoryStatus"),
+      value: repositoryStatusValue(repository, t),
+    },
+    {
+      label: t("codingWorkbench.info.repositoryBranch"),
+      value: valueOrNone(repository.currentBranch, none),
+    },
+    {
+      label: t("codingWorkbench.info.targetBranch"),
+      value: valueOrNone(activeWorkspace?.activeInstance?.baseBranch, none),
+    },
+    {
+      label: t("codingWorkbench.info.taskBranch"),
+      value: valueOrNone(workspace?.taskBranch, none),
+    },
+    {
+      label: t("codingWorkbench.readiness.workspace.label"),
+      value: workspaceContextValue(workspace, t),
+    },
+    {
+      label: t("codingWorkbench.info.runState"),
+      value: valueOrNone(state.run.value?.state, "idle"),
+    },
+    {
+      label: t("codingWorkbench.readiness.modelSource.label"),
+      value: sessionSourceValue(state.source.value, t),
+    },
+    { label: t("codingWorkbench.info.model"), value: valueOrNone(state.selectedModelId, none) },
+    {
+      label: t("codingWorkbench.info.modelReadiness"),
+      value: valueOrNone(state.source.value?.verification, t("codingWorkbench.info.notReported")),
+    },
+    {
+      label: t("codingWorkbench.mode.eyebrow"),
+      value: confirmedModeValue(mode, state, t),
+      ...(mode === null ? {} : { mode }),
+    },
+    {
+      label: t("codingWorkbench.info.runtime"),
+      value: t(RUNTIME_ASSURANCE_MESSAGE_KEYS[posture]),
+      tone: NEUTRAL_RUNTIME_ASSURANCE_POSTURES.has(posture) ? "default" : "warning",
+    },
+  ];
+}
+
 function SessionContextBar({
   state,
   workspace,
@@ -1263,35 +1342,23 @@ function SessionContextBar({
   readonly workspace: CodingWorkbenchWorkspaceProjection | null;
 }): ReactNode {
   const t = useCodingWorkbenchTranslate();
+  const catalog = useOptionalChatSessionCatalog();
+  const activeWorkspace = useOptionalActiveWorkspace();
+  const projectRoot = catalog?.activeProject?.path ?? null;
+  const repository = useRepositoryBranchState(projectRoot);
   const mode = confirmedMode(state);
-  const workspaceValue = workspaceContextValue(workspace, t);
-  const sourceValue = sessionSourceValue(state.source.value, t);
-  const modeValue = confirmedModeLabel(state, t);
-  return (
-    <div className={styles.contextBar} aria-label={t("codingWorkbench.header.summary")}>
-      <span className={styles.contextItem} title={workspaceValue}>
-        <span className={styles.contextLabel}>
-          {t("codingWorkbench.readiness.workspace.label")}
-        </span>
-        <span className={styles.contextValue}>{workspaceValue}</span>
-      </span>
-      <span className={styles.contextItem} title={sourceValue}>
-        <span className={styles.contextLabel}>
-          {t("codingWorkbench.readiness.modelSource.label")}
-        </span>
-        <span className={styles.contextValue}>{sourceValue}</span>
-      </span>
-      <RuntimeAssuranceContextItem state={state} t={t} />
-      <span
-        className={styles.contextItem}
-        title={modeValue}
-        {...(mode === null ? {} : { "data-mode": mode })}
-      >
-        <span className={styles.contextLabel}>{t("codingWorkbench.mode.eyebrow")}</span>
-        <span className={styles.contextValue}>{modeValue}</span>
-      </span>
-    </div>
-  );
+  const posture = useRuntimeAssurancePosture(state);
+  const facts = sessionInfoFacts({
+    state,
+    workspace,
+    projectName: catalog?.activeProject?.name,
+    activeWorkspace,
+    repository,
+    mode,
+    posture,
+    t,
+  });
+  return <CodingWorkbenchInfoPanel facts={facts} contextUsage={state.run.value?.contextUsage} />;
 }
 
 interface LiveSectionProps {

@@ -58,6 +58,7 @@ function composerProps(
     startBusy: false,
     repositoryLabel: "Keiko",
     branchLabel: "dev",
+    branchContext: "repository",
     onOpenGit,
     autonomyMode: "supervised-coding",
     autonomyLabel: "Supervised workspace",
@@ -111,7 +112,9 @@ describe("Coding Workbench composer", () => {
 
     const context = screen.getByLabelText("Coding context");
     await user.click(within(context).getByRole("button", { name: "Manage repository Keiko" }));
-    await user.click(within(context).getByRole("button", { name: "Manage branch dev" }));
+    await user.click(
+      within(context).getByRole("button", { name: "Manage branch Repository branch dev" }),
+    );
 
     expect(onOpenGit).toHaveBeenCalledTimes(2);
     expect(within(context).getByText("MemoriaViva")).toBeInTheDocument();

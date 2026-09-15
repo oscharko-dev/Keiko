@@ -56,9 +56,7 @@ describe("ManagedTaskWorkspaceGate", () => {
     access.current = "unpaired";
     gate(managed(), ACTIVE_ROOT);
 
-    expect(
-      screen.getByRole("note", { name: "Task workspace unavailable in this browser" }),
-    ).toBeInTheDocument();
+    expect(screen.getByRole("note", { name: "Browser session not paired" })).toBeInTheDocument();
     expect(screen.queryByTestId("window-content")).toBeNull();
   });
 

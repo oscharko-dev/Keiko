@@ -14,6 +14,6 @@ describe("settings tab translations", () => {
 
   it("interpolates named values in settings messages", () => {
     const { result } = renderHook(useSettingsTranslate);
-    expect(result.current("settings.models.modelCount", { count: 3 })).toBe("3 models");
+    expect(result.current("settings.models.modelCount", { count: 3 })).toBe("3 configured models");
   });
 });

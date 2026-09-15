@@ -349,6 +349,75 @@ describe("Coding Workbench runtime API contracts", () => {
     }
   });
 
+  it("accepts exact context geometry and rejects invented or inconsistent accounting", () => {
+    const snapshot = {
+      schemaVersion: "1",
+      state: "running",
+      revision: 2,
+      updatedAt: AT,
+      runId: "run-1",
+      requestedMode: "supervised-coding",
+      contextUsage: {
+        state: "available",
+        source: "provider-reported",
+        capacityTokens: 128_000,
+        usedInputTokens: 72_000,
+        reservedOutputTokens: 8_000,
+        freeTokens: 48_000,
+        breakdown: {
+          conversationMessagesTokens: 60_000,
+          systemContextTokens: 7_000,
+          toolDefinitionTokens: 5_000,
+        },
+        cumulativePromptTokens: 190_000,
+        runPromptBudgetTokens: 500_000,
+        compaction: { count: 1, lastCompactedAt: AT, thresholdTokens: 120_000 },
+        updatedAt: AT,
+      },
+    };
+    expect(validateCodingWorkbenchRuntimeSnapshot(snapshot)).toMatchObject({ ok: true });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({
+        ...snapshot,
+        contextUsage: { ...snapshot.contextUsage, freeTokens: 47_999 },
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({
+        ...snapshot,
+        contextUsage: { ...snapshot.contextUsage, skillsTokens: 1 },
+      }),
+    ).toMatchObject({ ok: false });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({
+        ...snapshot,
+        contextUsage: {
+          ...snapshot.contextUsage,
+          breakdown: { conversationMessagesTokens: 72_001 },
+        },
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it("accepts an honest unavailable context projection without guessed capacity", () => {
+    const snapshot = {
+      schemaVersion: "1",
+      state: "running",
+      revision: 2,
+      updatedAt: AT,
+      runId: "run-1",
+      requestedMode: "supervised-coding",
+      contextUsage: { state: "unavailable", updatedAt: AT },
+    };
+    expect(validateCodingWorkbenchRuntimeSnapshot(snapshot)).toMatchObject({ ok: true });
+    expect(
+      validateCodingWorkbenchRuntimeSnapshot({
+        ...snapshot,
+        contextUsage: { ...snapshot.contextUsage, capacityTokens: 128_000 },
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
   it("accepts only bounded body-free terminal process summaries", () => {
     const result = {
       status: "failed",

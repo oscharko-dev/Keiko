@@ -1352,6 +1352,10 @@ export type {
 export type {
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimeApprovalDecisionRequest,
+  CodingWorkbenchContextCompaction,
+  CodingWorkbenchContextUsage,
+  CodingWorkbenchContextUsageBreakdown,
+  CodingWorkbenchContextUsageSource,
   CodingWorkbenchRuntimeEvidenceClass,
   CodingWorkbenchRuntimePendingPermission,
   CodingWorkbenchRuntimePreference,

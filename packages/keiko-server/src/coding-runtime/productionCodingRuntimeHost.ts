@@ -98,6 +98,7 @@ const OPTIONAL_RUNTIME_CAPABILITY_KEYS = [
   "attachRepositorySemanticSearch",
   "openCodeGatewayReadinessRegistry",
   "toolFacadeBridge",
+  "contextUsage",
 ] as const;
 
 type OptionalRuntimeCapabilities = Pick<

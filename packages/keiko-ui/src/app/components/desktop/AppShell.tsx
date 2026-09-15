@@ -207,8 +207,8 @@ const RepositoryFolderSwitcher = dynamic(
   () => import("./RepositoryFolderSwitcher").then((mod) => mod.RepositoryFolderSwitcher),
   { ssr: false, loading: () => null },
 );
-const TaskWorkspaceManager = dynamic(
-  () => import("./TaskWorkspaceManager").then((mod) => mod.TaskWorkspaceManager),
+const RepositoryBranchSwitcher = dynamic(
+  () => import("./RepositoryBranchSwitcher").then((mod) => mod.RepositoryBranchSwitcher),
   { ssr: false, loading: () => null },
 );
 
@@ -1377,14 +1377,14 @@ function AppShellInner(): ReactNode {
   const wsContextValue: WsContextValue = useMemo(() => ({ active, winCount }), [active, winCount]);
   // GEN-PERF-RENDER-002 — Header is memoized, but passing a freshly-constructed
   // Building the context controls inline defeated Header's memoization (new element identities on
-  // every AppShell render). The controls intentionally remain separate: the repository picker owns
-  // base-folder selection, while TaskWorkspaceManager owns the server-backed lifecycle inventory.
+  // every AppShell render). Project and repository branch stay distinct controls with one shared
+  // design-system gap; managed Task Workspace lifecycle belongs to Coding Workbench context.
   const contextControl = useMemo(
     () => (
-      <>
+      <div className={styles.cmpContextControls}>
         <RepositoryFolderSwitcher />
-        <TaskWorkspaceManager />
-      </>
+        <RepositoryBranchSwitcher />
+      </div>
     ),
     [],
   );

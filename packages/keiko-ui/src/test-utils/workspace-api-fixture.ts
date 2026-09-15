@@ -21,10 +21,9 @@ export function cutResult(
   return { ...capture, settled: Promise.resolve(settled) };
 }
 
-function activationSpies(patch: Partial<WorkspaceApi>): Pick<
-  WorkspaceApi,
-  "activateWindow" | "focus" | "replaceSelection"
-> {
+function activationSpies(
+  patch: Partial<WorkspaceApi>,
+): Pick<WorkspaceApi, "activateWindow" | "focus" | "replaceSelection"> {
   const focus = patch.focus ?? vi.fn();
   const replaceSelection = patch.replaceSelection ?? vi.fn();
   const activateWindow =

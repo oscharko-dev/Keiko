@@ -149,6 +149,14 @@ Runtime event contracts are content-free and closed. The shared event family inc
 
 These events carry ids, counts, digests, status enums, and safe labels only.
 
+The runtime snapshot may also carry optional, provider-reported context-window accounting. Current
+input occupancy, reserved output, free capacity, and cumulative run prompt usage remain distinct
+facts. Keiko validates exact token geometry and shows only breakdown or compaction fields supplied
+by the runtime; it never invents a model capacity, a compaction threshold, or attribution such as
+skills, memory files, or deferred tools. Missing telemetry is an explicit unavailable state rather
+than a guessed limit. The corresponding activity event contains only counts and an opaque sample
+digest.
+
 ### D5 — Runtime source and model source stay separate
 
 The runtime source and the model source are different contract axes and must not be conflated.

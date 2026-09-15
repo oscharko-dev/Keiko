@@ -1,6 +1,7 @@
 import type {
   CodingWorkbenchRuntimeEvent,
   CodingWorkbenchMode,
+  CodingWorkbenchContextUsage,
   CodingWorkbenchRuntimePendingPermission,
   CodingWorkbenchRuntimeSnapshot as PublicSnapshot,
 } from "@oscharko-dev/keiko-contracts";
@@ -39,6 +40,8 @@ export class CodingRuntimeOrchestratorState {
         runId: string,
       ) => CodingWorkbenchRuntimePendingPermission | undefined;
       readonly effectiveMode: (runId: string) => CodingWorkbenchMode | undefined;
+      readonly contextUsage?:
+        ((runId: string) => CodingWorkbenchContextUsage | undefined) | undefined;
     },
   ) {}
 
@@ -56,6 +59,7 @@ export class CodingRuntimeOrchestratorState {
       runtimeSource: snapshot.runtimeSource,
       modelSource: snapshot.modelSource,
       ...(snapshot.failureCode ? { failureCode: snapshot.failureCode } : {}),
+      ...contextUsageProjection(this.deps.contextUsage?.(snapshot.runId)),
       ...this.stateBoundDetail(snapshot),
       ...snapshotDetail(snapshot),
     };
@@ -127,6 +131,12 @@ export class CodingRuntimeOrchestratorState {
           },
     ).ok;
   }
+}
+
+function contextUsageProjection(
+  contextUsage: CodingWorkbenchContextUsage | undefined,
+): Partial<Pick<PublicSnapshot, "contextUsage">> {
+  return contextUsage === undefined ? {} : { contextUsage };
 }
 
 function snapshotDetail(snapshot: CodingRuntimeSnapshot): Partial<PublicSnapshot> {

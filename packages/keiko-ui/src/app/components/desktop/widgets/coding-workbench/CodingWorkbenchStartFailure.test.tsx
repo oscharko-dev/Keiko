@@ -210,7 +210,6 @@ describe("CodingWorkbenchWindow start failure surfacing (F-09a)", (): void => {
     render(<CodingWorkbenchWindow />);
 
     // Readiness resolves from the stubbed server truth; the composer unlocks.
-    await screen.findByText("task-1 · issue/2835 · healthy");
     await user.type(screen.getByLabelText("Task instructions"), "Fix the flaky retry loop");
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Start coding run" })).toHaveAttribute(

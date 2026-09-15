@@ -2874,6 +2874,28 @@ export async function fetchGitDeliveryLocalBranchSwitch(
   });
 }
 
+export interface GitRepositoryInitializeInput {
+  readonly projectId: string;
+  readonly initialBranch: "main";
+}
+
+export interface GitRepositoryInitializeResponse {
+  readonly schemaVersion: "1";
+  readonly status: "succeeded";
+  readonly initialized: true;
+}
+
+export async function initializeGitRepository(
+  input: GitRepositoryInitializeInput,
+  signal?: AbortSignal,
+): Promise<GitRepositoryInitializeResponse> {
+  return fetchJson("/api/git-delivery/repository/initialize", {
+    method: "POST",
+    body: JSON.stringify(input),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
 export interface GitDeliveryStageInput {
   readonly projectId: string;
   readonly pathspecs: readonly string[];

@@ -280,6 +280,11 @@ function renderWorkbench(
   return liveActions;
 }
 
+function openWorkbenchInformation(): HTMLElement {
+  fireEvent.click(screen.getByRole("button", { name: "Open Coding Workbench information" }));
+  return screen.getByRole("dialog", { name: "Coding Workbench information" });
+}
+
 function activeWorkspaceWithBinding(
   repositoryRoot: string,
   activeRoot: string,
@@ -530,6 +535,7 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByRole("heading", { name: "Coding Workbench" })).toBeInTheDocument();
     expect(screen.getByRole("img", { name: "Keiko" })).toBeInTheDocument();
     expect(screen.queryByText("task-1")).not.toBeInTheDocument();
+    openWorkbenchInformation();
     expect(screen.getByText("task-1 · issue/2257 · healthy")).toBeInTheDocument();
     expect(screen.getAllByText("Keiko Gateway")).toHaveLength(2);
     expect(screen.getByRole("combobox", { name: "Run authority" })).toHaveTextContent(
@@ -723,8 +729,12 @@ describe("CodingWorkbenchWindow", () => {
       activeWorkspaceWithBinding("/repos/keiko", "/worktrees/active-task"),
     );
 
-    expect(screen.getByRole("button", { name: "Manage branch task-1" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Manage branch dev" })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole("button", { name: "Manage branch Task branch task-1" }),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Manage branch Repository branch dev" }),
+    ).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Manage repository active-task" }));
     expect(onOpenGit).toHaveBeenCalledWith({
       root: "/worktrees/active-task",
@@ -818,6 +828,7 @@ describe("CodingWorkbenchWindow", () => {
     expect(screen.getByRole("combobox", { name: "Run authority" })).toHaveTextContent(
       "Full access",
     );
+    openWorkbenchInformation();
     expect(document.querySelectorAll("[data-mode]")).toHaveLength(1);
     expect(document.querySelector('[data-mode="governed-assist"]')).toBeInTheDocument();
   });
@@ -872,6 +883,7 @@ describe("CodingWorkbenchWindow", () => {
       }),
     );
 
+    openWorkbenchInformation();
     expect(screen.getByText("Awaiting server confirmation")).toBeInTheDocument();
     expect(document.querySelector("[data-mode]")).toBeNull();
   });
@@ -1015,6 +1027,7 @@ describe("CodingWorkbenchWindow", () => {
     );
 
     expect(screen.getByRole("status")).toHaveTextContent("Not ready to start");
+    openWorkbenchInformation();
     expect(screen.getByText(/Keiko Gateway — Unavailable/u)).toBeInTheDocument();
   });
 
@@ -1060,7 +1073,8 @@ describe("CodingWorkbenchWindow", () => {
     it("keeps runtime assurance in the lifecycle announcement", (): void => {
       renderWorkbench(evaluationState());
 
-      expect(screen.getByText("Coding runtime")).toBeInTheDocument();
+      openWorkbenchInformation();
+      expect(screen.getByText("Runtime verification")).toBeInTheDocument();
       expect(
         screen.getByText("Unverified evaluation runtime — no platform signature"),
       ).toBeInTheDocument();
@@ -1088,6 +1102,7 @@ describe("CodingWorkbenchWindow", () => {
 
       expect(screen.getByRole("status")).toHaveTextContent("Runtime ready");
       expect(document.querySelector('[data-assurance="evaluation"]')).toBeNull();
+      openWorkbenchInformation();
       expect(
         screen.getByText("Platform-verified — signed and notarized runtime"),
       ).toBeInTheDocument();
@@ -1116,6 +1131,7 @@ describe("CodingWorkbenchWindow", () => {
         }),
       );
 
+      openWorkbenchInformation();
       expect(screen.getByText("Coding runtime unavailable")).toBeInTheDocument();
       expect(
         screen.queryByText("Unverified evaluation runtime — no platform signature"),
@@ -1150,6 +1166,7 @@ describe("CodingWorkbenchWindow", () => {
         actions: liveActions,
       });
       const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+      openWorkbenchInformation();
       expect(screen.getByText("Coding runtime unavailable")).toBeInTheDocument();
 
       runtimeHookMock.mockReturnValue({
@@ -1179,6 +1196,7 @@ describe("CodingWorkbenchWindow", () => {
         }),
       );
 
+      openWorkbenchInformation();
       expect(screen.getByText("Coding runtime unavailable")).toBeInTheDocument();
     });
 
@@ -1189,6 +1207,7 @@ describe("CodingWorkbenchWindow", () => {
     it("claims neither verification nor evaluation while the first readiness read is in flight", (): void => {
       renderWorkbench(liveState({ runtime: { status: "loading", value: null, error: null } }));
 
+      openWorkbenchInformation();
       expect(
         screen.queryByText("Unverified evaluation runtime — no platform signature"),
       ).not.toBeInTheDocument();
@@ -1201,7 +1220,8 @@ describe("CodingWorkbenchWindow", () => {
     it("keeps the pending placeholder neutral rather than marking it a warning", (): void => {
       renderWorkbench(liveState({ runtime: { status: "idle", value: null, error: null } }));
 
-      const chip = screen.getByText("Checking coding runtime…").closest("[title]");
+      openWorkbenchInformation();
+      const chip = screen.getByText("Checking coding runtime…").closest("[data-tone]");
       expect(chip).not.toBeNull();
       expect(chip).not.toHaveAttribute("data-tone", "warning");
     });
@@ -1212,6 +1232,7 @@ describe("CodingWorkbenchWindow", () => {
       const liveActions = actions();
       runtimeHookMock.mockReturnValue({ state: liveState(), actions: liveActions });
       const view = render(<CodingWorkbenchWindow selectedRoot={undefined} />);
+      openWorkbenchInformation();
       expect(
         screen.getByText("Platform-verified — signed and notarized runtime"),
       ).toBeInTheDocument();
@@ -1256,29 +1277,57 @@ describe("CodingWorkbenchWindow", () => {
     expect(alert).toHaveTextContent(/Review the model capability/u);
   });
 
-  // Workbench audit, 2026-09-03: every truncatable header chip carries a `title` equal to its OWN
-  // rendered value — before this fix, three of the four chips had no `title` at all, and the
-  // fourth (Task workspace) pointed at an unrelated raw filesystem path instead of its own text.
-  it("titles every header chip with its own rendered text", (): void => {
+  it("keeps dense session details behind one accessible information control", (): void => {
     renderWorkbench(liveState());
-    const itemClass = styles.contextItem;
-    const valueClass = styles.contextValue;
-    if (itemClass === undefined || valueClass === undefined) {
-      throw new Error("Coding Workbench context-bar classes are unavailable");
-    }
-    const items = Array.from(document.querySelectorAll(`.${itemClass}`));
-    expect(items).toHaveLength(4);
-    for (const item of items) {
-      const value = item.querySelector(`.${valueClass}`);
-      expect(value).not.toBeNull();
-      expect(item).toHaveAttribute("title", value?.textContent ?? "");
-    }
+    expect(screen.queryByText("task-1 · issue/2257 · healthy")).not.toBeInTheDocument();
+    const dialog = openWorkbenchInformation();
+    expect(dialog).toHaveTextContent("Task workspace");
+    expect(dialog).toHaveTextContent("task-1 · issue/2257 · healthy");
+    expect(dialog).toHaveTextContent("Runtime verification");
+    expect(dialog).toHaveTextContent("Not reported by runtime");
   });
 
-  // Finding 5: the workspace chip's `title` used to be wired to `activeBinding.activeRoot` — a
-  // raw filesystem path never shown anywhere else on the chip — instead of the composite text
-  // (`taskId · taskBranch · health`) actually rendered and truncated.
-  it("titles the workspace chip with its rendered text, not the raw root path", (): void => {
+  it("separates current context capacity from cumulative run input", (): void => {
+    renderWorkbench(
+      liveState({
+        run: {
+          status: "ready",
+          error: null,
+          value: snapshot({
+            contextUsage: {
+              state: "available",
+              source: "provider-reported",
+              capacityTokens: 100_000,
+              usedInputTokens: 70_000,
+              reservedOutputTokens: 10_000,
+              freeTokens: 20_000,
+              breakdown: {
+                conversationMessagesTokens: 60_000,
+                systemContextTokens: 6_000,
+                toolDefinitionTokens: 4_000,
+              },
+              cumulativePromptTokens: 180_000,
+              runPromptBudgetTokens: 500_000,
+              compaction: { count: 2, thresholdTokens: 90_000 },
+              updatedAt: AT,
+            },
+          }),
+        },
+      }),
+    );
+
+    const dialog = openWorkbenchInformation();
+    expect(dialog).toHaveTextContent("70,000 / 100,000 (70.0%)");
+    expect(dialog).toHaveTextContent("Conversation messages");
+    expect(dialog).toHaveTextContent("System and developer context");
+    expect(dialog).toHaveTextContent("Tool definitions");
+    expect(dialog).toHaveTextContent("Cumulative run input180,000");
+    expect(dialog).toHaveTextContent("Run input budget500,000");
+    expect(dialog).toHaveTextContent("Reported compactions2");
+    expect(dialog).not.toHaveTextContent(/Skills|Memory files|97%/u);
+  });
+
+  it("never exposes the raw task-workspace path in the information panel", (): void => {
     renderWorkbench(
       liveState(),
       actions(),
@@ -1286,23 +1335,15 @@ describe("CodingWorkbenchWindow", () => {
       activeWorkspaceWithBinding("/repos/keiko", "/worktrees/active-task"),
     );
 
-    const value = screen.getByText("task-1 · issue/2257 · healthy");
-    const itemClass = styles.contextItem;
-    if (itemClass === undefined) throw new Error("Coding Workbench context-item class unavailable");
-    const workspaceItem = value.closest(`.${itemClass}`);
-    expect(workspaceItem).toHaveAttribute("title", "task-1 · issue/2257 · healthy");
-    expect(workspaceItem).not.toHaveAttribute("title", "/worktrees/active-task");
+    const dialog = openWorkbenchInformation();
+    expect(dialog).toHaveTextContent("task-1 · issue/2257 · healthy");
+    expect(dialog).not.toHaveTextContent("/worktrees/active-task");
   });
 
-  // Finding 5: the reported screenshot's exact unbound case — no `title` at all used to exist
-  // over the very text ("No active task workspace") the CSS ellipsis was clipping.
-  it("titles the workspace chip even when no workspace is bound", (): void => {
+  it("states when no task workspace is bound", (): void => {
     renderWorkbench(createInitialCodingWorkbenchRuntimeState());
 
-    const value = screen.getByText("No active task workspace");
-    const itemClass = styles.contextItem;
-    if (itemClass === undefined) throw new Error("Coding Workbench context-item class unavailable");
-    expect(value.closest(`.${itemClass}`)).toHaveAttribute("title", "No active task workspace");
+    expect(openWorkbenchInformation()).toHaveTextContent("No active task workspace");
   });
 
   it("keeps a drifted worktree visible in the session context", (): void => {
@@ -1322,6 +1363,7 @@ describe("CodingWorkbenchWindow", () => {
       }),
     );
     expect(screen.getByRole("status")).toHaveTextContent("Workspace unavailable");
+    openWorkbenchInformation();
     expect(screen.getByText("task-1 · issue/2257 · drifted")).toBeInTheDocument();
   });
 
@@ -2235,6 +2277,7 @@ describe("CodingWorkbenchWindow", () => {
     await user.click(screen.getByRole("button", { name: "Resume run" }));
 
     expect(liveActions.resume).toHaveBeenCalledWith("supervised-coding");
+    openWorkbenchInformation();
     expect(document.querySelector('[data-mode="autonomous-delivery"]')).toHaveTextContent(
       "Full access",
     );
@@ -2285,6 +2328,7 @@ describe("CodingWorkbenchWindow", () => {
       "supervised-coding",
     );
     expect(screen.queryByRole("option", { name: "Full access" })).not.toBeInTheDocument();
+    openWorkbenchInformation();
     expect(document.querySelector('[data-mode="supervised-coding"]')).toHaveTextContent(
       "Supervised workspace",
     );
@@ -2907,10 +2951,13 @@ describe("CodingWorkbenchWindow run workspace attribution", () => {
     expect(screen.getByRole("button", { name: "Manage repository task-a" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Manage repository task-b" })).toBeNull();
     expect(
-      screen.getByRole("button", { name: `Manage branch ${WORKSPACE_A.branch}` }),
+      screen.getByRole("button", { name: `Manage branch Task branch ${WORKSPACE_A.branch}` }),
     ).toBeInTheDocument();
+    const dialog = openWorkbenchInformation();
     expect(screen.getByText(`workspace-a · ${WORKSPACE_A.branch} · healthy`)).toBeInTheDocument();
-    expect(screen.queryByText(new RegExp(WORKSPACE_B.branch, "u"))).toBeNull();
+    const facts = dialog.querySelector(`.${styles.cmpInfoGrid ?? "missing-info-grid"}`);
+    expect(facts).not.toBeNull();
+    expect(facts).not.toHaveTextContent(WORKSPACE_B.branch);
 
     await userEvent.setup().click(screen.getByRole("button", { name: "Manage repository task-a" }));
     expect(onOpenGit).toHaveBeenCalledWith({

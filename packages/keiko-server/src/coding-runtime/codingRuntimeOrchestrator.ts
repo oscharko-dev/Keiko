@@ -691,6 +691,7 @@ export class CodingRuntimeOrchestrator {
         this.approvals.get(runId)?.permission,
       effectiveMode: (runId: string): CodingWorkbenchMode | undefined =>
         this.activeRunId === runId ? this.activeEffectiveMode : undefined,
+      ...(deps.contextUsage ? { contextUsage: deps.contextUsage } : {}),
     });
     this.operations = new CodingRuntimeOperationCoordinator({
       current: (): CodingRuntimeSnapshot | undefined => this.current(),

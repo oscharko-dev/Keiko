@@ -94,6 +94,39 @@ export function productionOpenCodeLoopbackEndpoints(
       };
 }
 
+function activatedPorts(
+  input: ProductionOpenCodeActivationInput,
+  portable: ResolvedPortableOpenCodeRuntime,
+  endpoints: ProductionOpenCodeLoopbackEndpoints,
+  secureWorkspaceTextRead: SecureWorkspaceTextReadPort,
+): ProductionOpenCodePorts {
+  return {
+    backend: createProductionOpenCodeBackend({
+      portable,
+      runtimeStateRoot: input.runtimeStateDir,
+      gatewayUrl: endpoints.gatewayUrl,
+      resolveGatewayRunMetadata:
+        input.resolveGatewayRunMetadata ??
+        ((): CodingWorkbenchSidecarGatewayRunMetadata | undefined => undefined),
+      // ADR-0043 D11-D14 (#3390): the SAME single attested loopback origin as the model
+      // gateway above, never a second listener's own port.
+      toolFacadeUrl: endpoints.toolFacadeUrl,
+      runtimeEvidence: input.runtimeEvidence,
+      gatewayReadiness: input.gatewayReadiness,
+      ...(input.activityLog ? { activityLog: input.activityLog } : {}),
+      ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
+      ...(input.fetch ? { fetch: input.fetch } : {}),
+    }),
+    secureWorkspaceTextRead,
+    editorAgentClient:
+      input.editorAgentClient ??
+      new EditorAgentHttpClient({
+        baseUrl: new URL(endpoints.gatewayUrl).origin,
+        transport: createFetchEditorAgentHttpTransport(input.fetch ?? fetch),
+      }),
+  };
+}
+
 /**
  * Assembles the production OpenCode runtime ports from a discovered runtime: the attested
  * packaged portable artifact where one exists, otherwise the explicitly opted-in supported dev-lane
@@ -118,30 +151,7 @@ export function resolveProductionOpenCodeActivation(
   }
   return {
     evidenceClass: runtimeEvidenceClass(runtime.portable),
-    ports: {
-      backend: createProductionOpenCodeBackend({
-        portable: runtime.portable,
-        runtimeStateRoot: input.runtimeStateDir,
-        gatewayUrl: endpoints.gatewayUrl,
-        resolveGatewayRunMetadata:
-          input.resolveGatewayRunMetadata ??
-          ((): CodingWorkbenchSidecarGatewayRunMetadata | undefined => undefined),
-        // ADR-0043 D11-D14 (#3390): the SAME single attested loopback origin as the model
-        // gateway above, never a second listener's own port.
-        toolFacadeUrl: endpoints.toolFacadeUrl,
-        runtimeEvidence: input.runtimeEvidence,
-        gatewayReadiness: input.gatewayReadiness,
-        ...(input.diagnostics ? { diagnostics: input.diagnostics } : {}),
-        ...(input.fetch ? { fetch: input.fetch } : {}),
-      }),
-      secureWorkspaceTextRead,
-      editorAgentClient:
-        input.editorAgentClient ??
-        new EditorAgentHttpClient({
-          baseUrl: new URL(endpoints.gatewayUrl).origin,
-          transport: createFetchEditorAgentHttpTransport(input.fetch ?? fetch),
-        }),
-    },
+    ports: activatedPorts(input, runtime.portable, endpoints, secureWorkspaceTextRead),
   };
 }
 

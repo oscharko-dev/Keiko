@@ -130,4 +130,15 @@ describe("production coding runtime host", () => {
     expect(host).not.toHaveProperty("mintDescriptionAuthority");
     expect(host).not.toHaveProperty("attachVerifiedHeadNotifier");
   });
+
+  it("forwards context usage only when the qualified runtime supplies it", () => {
+    const contextUsage = { read: vi.fn(() => undefined) };
+    const withUsage = createProductionCodingRuntimeHost({
+      resolve: () => ({ ...qualifiedRuntime(), contextUsage }),
+    });
+    const withoutUsage = createProductionCodingRuntimeHost({ resolve: () => qualifiedRuntime() });
+
+    expect(withUsage?.contextUsage).toBe(contextUsage);
+    expect(withoutUsage).not.toHaveProperty("contextUsage");
+  });
 });
