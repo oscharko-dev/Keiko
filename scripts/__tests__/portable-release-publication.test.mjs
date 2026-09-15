@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   checkPublishedManifestBinding,
+  checkRemotePortableAsset,
   createdDraftId,
   downloadPortableReleaseAsset,
   immutableReleaseRepairFailure,
@@ -810,5 +811,78 @@ describe("manifestBindingsFromAssets", () => {
       { assetName: "linux-x64-portable-manifest.json", commitSha: head, releaseTag: TAG },
       { assetName: "macos-arm64-portable-manifest.json", commitSha: head, releaseTag: TAG },
     ]);
+  });
+});
+
+describe("checkRemotePortableAsset", () => {
+  // The rerun path relies on this digest check: without it a same-size asset with different bytes
+  // would pass, because no download smoke runs after a published-release rerun (CodeRabbit
+  // finding, 2026-09-15). Also proves the original invariants (id, size, browser_download_url,
+  // asset missing) still fail closed.
+  const EXPECTED = {
+    assetName: "keiko-linux-x64.zip",
+    expectedSize: 1024,
+    expectedSha256: "c".repeat(64),
+  };
+  const REMOTE = {
+    id: 42,
+    size: EXPECTED.expectedSize,
+    digest: `sha256:${EXPECTED.expectedSha256}`,
+    browser_download_url:
+      "https://github.com/oscharko-dev/Keiko/releases/download/v1.0.1/keiko-linux-x64.zip",
+  };
+  const seams = {
+    isRecord: (value) => value !== null && typeof value === "object" && !Array.isArray(value),
+    validBrowserDownloadUrl: (value) => typeof value === "string" && value.startsWith("https://"),
+  };
+
+  it("accepts a released asset whose id, size, digest and download url match", () => {
+    expect(checkRemotePortableAsset(REMOTE, EXPECTED, seams)).toStrictEqual([]);
+  });
+
+  it("refuses an asset that is not on the release at all", () => {
+    expect(checkRemotePortableAsset(undefined, EXPECTED, seams)).toStrictEqual([
+      "keiko-linux-x64.zip is missing from the GitHub Release.",
+    ]);
+  });
+
+  it("refuses an asset with no non-zero asset id", () => {
+    const failures = checkRemotePortableAsset({ ...REMOTE, id: 0 }, EXPECTED, seams);
+    expect(failures.some((f) => f.includes("must have a non-zero GitHub asset id"))).toBe(true);
+  });
+
+  it("refuses an asset whose size does not match the reviewed local asset", () => {
+    const failures = checkRemotePortableAsset({ ...REMOTE, size: 2048 }, EXPECTED, seams);
+    expect(failures.some((f) => f.includes("size does not match"))).toBe(true);
+  });
+
+  it("refuses an asset whose SHA-256 digest does not match the reviewed local asset", () => {
+    const failures = checkRemotePortableAsset(
+      { ...REMOTE, digest: `sha256:${"d".repeat(64)}` },
+      EXPECTED,
+      seams,
+    );
+    expect(failures.some((f) => f.includes("SHA-256 digest on GitHub does not match"))).toBe(true);
+  });
+
+  it("refuses an asset carrying no digest, even when its size matches", () => {
+    const { digest: _digest, ...withoutDigest } = REMOTE;
+    const failures = checkRemotePortableAsset(withoutDigest, EXPECTED, seams);
+    expect(failures.some((f) => f.includes("SHA-256 digest on GitHub does not match"))).toBe(true);
+    expect(failures.some((f) => f.includes("size does not match"))).toBe(false);
+  });
+
+  it("refuses an asset with a non-string digest", () => {
+    const failures = checkRemotePortableAsset({ ...REMOTE, digest: 42 }, EXPECTED, seams);
+    expect(failures.some((f) => f.includes("SHA-256 digest on GitHub does not match"))).toBe(true);
+  });
+
+  it("refuses an asset without a browser_download_url", () => {
+    const failures = checkRemotePortableAsset(
+      { ...REMOTE, browser_download_url: "" },
+      EXPECTED,
+      seams,
+    );
+    expect(failures.some((f) => f.includes("HTTPS browser_download_url"))).toBe(true);
   });
 });

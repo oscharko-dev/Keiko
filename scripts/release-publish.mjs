@@ -62,18 +62,18 @@ import { resolveGithubRepository } from "./lib/github-repository.mjs";
 import { recordNpmPublishDeployment } from "./lib/npm-publish-deployment.mjs";
 import { checkReleaseAlignment, printAlignmentReport } from "./check-release-alignment.mjs";
 import {
-  checkPublishedManifestBinding,
-  downloadPortableReleaseAsset,
-  manifestBindingsFromAssets,
-  nonManifestEvidenceExpected,
+  checkRemotePortableAsset,
   openPortableRelease,
   publishVerifiedPortableRelease,
   refuseIncompletePublishedRelease,
   releaseSnapshotPath,
   releaseTagAtHeadFailure,
   uploadIntoDraft,
-  verifyPublishedPortableEvidence,
 } from "./lib/portable-release-publication.mjs";
+import {
+  makePublishedPortableSeams,
+  runVerifyPublishedPortableAssets,
+} from "./lib/portable-release-publish-helpers.mjs";
 import { proveReleaseSigningKeyBeforePublishing } from "./lib/portable-release-signing-key.mjs";
 import { createStagedPublishPackage } from "./stage-publish-package.mjs";
 
@@ -1261,7 +1261,6 @@ function ensurePortableRelease(rootPackage, options, notes) {
 function portablePublisher() {
   return {
     assertTagAtHead: (tag) => assertReleaseTagAtHead(githubRepository(), tag),
-    downloadReleaseAsset,
     evaluationManifestAssetName: PORTABLE_EVALUATION_MANIFEST_ASSET_NAME,
     fail,
     gh,
@@ -1270,33 +1269,12 @@ function portablePublisher() {
     runGh,
     snapshot: githubReleaseSnapshot,
     verifyAssets: verifyRemotePortableAssets,
-    verifyPublishedManifestBinding,
+    ...makePublishedPortableSeams({
+      runGh: (args) => commandResult("gh", args, { env: githubEnvironment() }),
+      verifyReleaseTrust: verifyPortableReleaseTrust,
+      trustedKeys: portableReleaseTrustedKeys(),
+    }),
   };
-}
-
-// Concrete seams that wire the portable-published verification helpers in
-// scripts/lib/portable-release-publication.mjs to this run's IO, git and crypto.
-const downloadSeams = {
-  mkdtemp: (prefix) => mkdtempSync(join(tmpdir(), prefix)),
-  runGh: (args) => commandResult("gh", args, { env: githubEnvironment() }),
-  pathJoin: join,
-  exists: existsSync,
-  readFile: readFileSync,
-  sha256,
-  toUtf8: (bytes) => bytes.toString("utf8"),
-  rm: rmSync,
-};
-
-function downloadReleaseAsset(releaseInfo, assetName) {
-  return downloadPortableReleaseAsset(downloadSeams, releaseInfo, assetName);
-}
-
-function verifyPublishedManifestBinding(manifest, expected) {
-  return checkPublishedManifestBinding(manifest, expected, {
-    verifyReleaseTrust: verifyPortableReleaseTrust,
-    now: new Date(),
-    trustedKeys: portableReleaseTrustedKeys(),
-  });
 }
 
 function publishPortableReleaseAssets(options, assets, releaseInfo) {
@@ -1320,7 +1298,14 @@ function publishPortableReleaseAssets(options, assets, releaseInfo) {
     );
     verifyRemotePortableAssets(archiveSnapshot.assets, archiveUpload.expected, releaseInfo);
     if (releaseInfo.published === true) {
-      verifyPublishedPortableAssets(publisher, releaseInfo, assets, archiveSnapshot);
+      runVerifyPublishedPortableAssets({
+        publisher,
+        releaseInfo,
+        assets,
+        archiveSnapshot,
+        verifyAssets: verifyRemotePortableAssets,
+        headOfCheckout: () => commandResult("git", ["rev-parse", "HEAD"]).stdout.trim(),
+      });
       return;
     }
     const boundAssets = bindPortableAssetsToRemoteRelease(assets, archiveSnapshot);
@@ -1339,28 +1324,6 @@ function publishPortableReleaseAssets(options, assets, releaseInfo) {
   } finally {
     rmSync(evidenceUpload.root, { recursive: true, force: true });
   }
-}
-
-// An already published release cannot receive an upload (immutable) and cannot have its bytes
-// changed. A rerun of the publish job therefore only verifies what is already on GitHub. The
-// non-manifest evidence files (SHA256SUMS, SBOM, license notice, signing summary, provenance
-// statement, sidecar SBOM/license) are copied verbatim from the assemble stage and are byte
-// reproducible; their digests are checked against GitHub. The four portable-manifest.json files
-// are re-signed by the publisher at release.created_at, and a rerun cannot reproduce those bytes
-// once the draft was signed at an earlier `created_at` than the release now reports (v1.0.1's
-// draft was signed 2026-09-14T20:38:54Z; the published release now carries `created_at`
-// 2026-09-14T23:19:18Z). Verify each manifest by its trusted Ed25519 signature and its commit/tag
-// binding instead.
-function verifyPublishedPortableAssets(publisher, releaseInfo, assets, archiveSnapshot) {
-  const evidenceExpected = nonManifestEvidenceExpected(assets, {
-    sha256File: sha256FileSync,
-    statFile: statSync,
-  });
-  verifyRemotePortableAssets(archiveSnapshot.assets, evidenceExpected, releaseInfo);
-  const head = commandResult("git", ["rev-parse", "HEAD"]).stdout.trim();
-  const bindings = manifestBindingsFromAssets(assets, head, releaseInfo.tag);
-  verifyPublishedPortableEvidence(publisher, releaseInfo, archiveSnapshot.assets, bindings);
-  console.log(`release-publish: portable assets verified on published ${releaseInfo.tag}.`);
 }
 
 function verifyPortableSetupAttestations(assets, releaseInfo) {
@@ -1616,19 +1579,9 @@ function verifyFirstClassArchiveSet(remoteAssets, failures) {
 }
 
 function verifyRemotePortableAsset(remote, expected, failures) {
-  if (!isRecord(remote)) {
-    failures.push(`${expected.assetName} is missing from the GitHub Release.`);
-    return;
-  }
-  if (!Number.isSafeInteger(remote.id) || remote.id <= 0) {
-    failures.push(`${expected.assetName} must have a non-zero GitHub asset id.`);
-  }
-  if (remote.size !== expected.expectedSize) {
-    failures.push(`${expected.assetName} size does not match the reviewed local asset.`);
-  }
-  if (!validBrowserDownloadUrl(remote.browser_download_url)) {
-    failures.push(`${expected.assetName} must expose an HTTPS browser_download_url.`);
-  }
+  failures.push(
+    ...checkRemotePortableAsset(remote, expected, { isRecord, validBrowserDownloadUrl }),
+  );
 }
 
 function validBrowserDownloadUrl(value) {

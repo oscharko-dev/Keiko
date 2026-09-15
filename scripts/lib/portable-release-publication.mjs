@@ -445,3 +445,36 @@ export function manifestBindingsFromAssets(assets, head, releaseTag) {
     releaseTag,
   }));
 }
+
+/**
+ * The failures for one GitHub release asset compared against the bytes this run built. Reports
+ * missing asset, missing/invalid asset id, size mismatch, SHA-256 digest mismatch (a same-size
+ * asset with different bytes must fail — this is what the release path relies on when no download
+ * smoke runs afterwards, e.g. on the published-release rerun), and an unusable
+ * `browser_download_url`.
+ *
+ * Seams: `isRecord(value)`, `validBrowserDownloadUrl(value)`.
+ */
+export function checkRemotePortableAsset(remote, expected, seams) {
+  const failures = [];
+  if (!seams.isRecord(remote)) {
+    failures.push(`${expected.assetName} is missing from the GitHub Release.`);
+    return failures;
+  }
+  if (!Number.isSafeInteger(remote.id) || remote.id <= 0) {
+    failures.push(`${expected.assetName} must have a non-zero GitHub asset id.`);
+  }
+  if (remote.size !== expected.expectedSize) {
+    failures.push(`${expected.assetName} size does not match the reviewed local asset.`);
+  }
+  const expectedDigest = `sha256:${expected.expectedSha256}`;
+  if (typeof remote.digest !== "string" || remote.digest !== expectedDigest) {
+    failures.push(
+      `${expected.assetName} SHA-256 digest on GitHub does not match the reviewed local asset.`,
+    );
+  }
+  if (!seams.validBrowserDownloadUrl(remote.browser_download_url)) {
+    failures.push(`${expected.assetName} must expose an HTTPS browser_download_url.`);
+  }
+  return failures;
+}
