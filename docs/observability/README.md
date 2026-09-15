@@ -147,6 +147,14 @@ keiko support analyze .keiko/logs/server.log --correlation-id 3f9a2b7c-1e44-4d21
 ```
 
 ```text
+Analyzed log: /workspace/.keiko/logs/server.log
+State directory: /workspace/.keiko
+Source: raw-log
+Newest event: 2026-08-21T09:14:02.901Z
+Newest instance: bbbbbbbb
+Freshness: current
+Process activity: apparently-active
+
 correlationId=3f9a2b7c-1e44-4d21-9a02-6b1c9e0a5f31 lines=4 durationMs=812
   2026-08-21T09:14:02.118Z 118 info http request [812ms]
   2026-08-21T09:14:02.204Z 119 info gateway gateway.chat.started
@@ -162,6 +170,17 @@ closes it out. `--json` emits the same reconstruction as a machine-readable `Log
 carried them — `frames`) instead of the human-rendered form above; omitting `--correlation-id`
 prints every timeline found in the file, plus the file-wide `processes[]`/`legacyLineCount`/
 `warnings` summary described above.
+
+The context header is part of the diagnostic contract, not decoration. For a raw
+`<state-dir>/logs/server*.log`, it reports the resolved input path and inferred state directory,
+the newest valid event timestamp, the instance id from the newest valid process observation, and a
+freshness/process-activity assessment. A raw log more than five minutes old — five expected
+heartbeat intervals — is marked `stale` and `inactive` with a machine-readable warning, so an old
+checkout log is not mistaken for the running instance. A fresh log is only
+`apparently-active` when its newest process has not recorded an exit and that PID still exists;
+otherwise the analyzer says `inactive` or `unknown`. Support bundles are historical artifacts, so
+their process activity is `not-applicable`. Missing or invalid observations remain `not reported`/
+`unknown`; file mtimes and guessed instance ids are never substituted.
 
 A line successfully parsed but missing the full `(pid, instanceId, seq)` triple is a **legacy
 line** — one written before this envelope shipped, still inside the log's 7-day retention window.

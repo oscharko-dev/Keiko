@@ -412,6 +412,15 @@ coherent noun groups the artifact producer and its own consumer under one verb s
   from the outcome discriminant alone; `retryAfterMs` rides along on the same line only when the
   provider supplied one, with no synthesized fallback.
 
+  The default and per-correlation analyzer reports also carry an `analysisContext` identifying the
+  resolved input file, an inferable state directory for raw `<state-dir>/logs/server*.log` inputs,
+  the newest valid event timestamp and newest observed process instance, plus explicit freshness
+  and process-activity states. A raw log older than five expected one-minute heartbeat intervals is
+  `stale`/`inactive` and contributes a warning; a fresh raw log is only `apparently-active` when the
+  newest process did not record an exit and its PID still exists. Bundles are historical artifacts
+  (`not-applicable` process activity), and missing or invalid data remains `unknown`. The analyzer
+  never replaces missing evidence with a file mtime, the current process, or a guessed state dir.
+
 ### D10 — Why Wave 1 ships the exporter and analyzer alongside `seq`, not after it
 
 The obvious sequencing — ship the ordering primitive first, add tooling once there is something
