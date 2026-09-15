@@ -237,6 +237,7 @@ describe("Workspace clipboard status pill under the German locale", () => {
       add: vi.fn(() => null),
       openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
       toggleTool: vi.fn(),
+      activateWindow: vi.fn(),
       focus: vi.fn(),
       currentSelection: vi.fn(() => ({ focusedWindowId: null, selectedWindowIds: [] })),
       replaceSelection: vi.fn(),

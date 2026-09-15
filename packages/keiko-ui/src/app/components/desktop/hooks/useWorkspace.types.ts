@@ -76,6 +76,9 @@ export interface WorkspaceApi {
   readonly add: (type: WindowType, cfg?: AppWindow["cfg"]) => string | null;
   readonly openEditorFile: (request: OpenEditorFileRequest) => OpenEditorFileResult;
   readonly toggleTool: (type: WindowType) => void;
+  /** Atomically raises, focuses, and selects a window for a primary user activation. */
+  readonly activateWindow: (id: string) => void;
+  /** Raises and focuses without changing an intentional workspace selection. */
   readonly focus: (id: string) => void;
   readonly currentWindowStack?: (() => readonly string[]) | undefined;
   readonly currentSelection: () => WorkspaceUiSelectionState;

@@ -21,6 +21,21 @@ export function cutResult(
   return { ...capture, settled: Promise.resolve(settled) };
 }
 
+function activationSpies(patch: Partial<WorkspaceApi>): Pick<
+  WorkspaceApi,
+  "activateWindow" | "focus" | "replaceSelection"
+> {
+  const focus = patch.focus ?? vi.fn();
+  const replaceSelection = patch.replaceSelection ?? vi.fn();
+  const activateWindow =
+    patch.activateWindow ??
+    vi.fn((id: string): void => {
+      focus(id);
+      replaceSelection([id]);
+    });
+  return { activateWindow, focus, replaceSelection };
+}
+
 /**
  * The one `WorkspaceApi` test double.
  *
@@ -32,13 +47,15 @@ export function cutResult(
  * TypeScript error in whichever copy was forgotten.
  */
 export function workspaceApiFixture(patch: Partial<WorkspaceApi> = {}): WorkspaceApi {
+  const activation = activationSpies(patch);
   return {
     add: vi.fn(() => null),
     openEditorFile: vi.fn(() => ({ ok: false as const, message: "Unable to open editor." })),
     toggleTool: vi.fn(),
-    focus: vi.fn(),
+    activateWindow: activation.activateWindow,
+    focus: activation.focus,
     currentSelection: vi.fn(() => ({ focusedWindowId: null, selectedWindowIds: [] })),
-    replaceSelection: vi.fn(),
+    replaceSelection: activation.replaceSelection,
     toggleWindowSelection: vi.fn(),
     clearSelection: vi.fn(),
     moveSelectedWindowsBy: vi.fn(() => ({ dx: 0, dy: 0 })),

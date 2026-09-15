@@ -2203,6 +2203,29 @@ export function useWorkspace(
     },
     [mutations, winsByIdRef, winsRef],
   );
+  const activateWindow = useCallback<WorkspaceApi["activateWindow"]>(
+    (id) => {
+      const target = winsByIdRef.current.get(id);
+      if (target !== undefined && isWorkspaceWindowSelectable(target)) {
+        const replacesSelection = !selectionRef.current.selectedWindowIds.includes(id);
+        setSelection((current) =>
+          replacesSelection
+            ? replaceWorkspaceSelection(winsRef.current, [id])
+            : normalizeWorkspaceSelection(winsRef.current, {
+                ...current,
+                focusedWindowId: id,
+              }),
+        );
+        if (replacesSelection) {
+          reportClientDiagnostic(
+            "workspace-window: primary activation synchronized focus and selection",
+          );
+        }
+      }
+      mutations.focus(id);
+    },
+    [mutations, selectionRef, winsByIdRef, winsRef],
+  );
   const currentWindowStack = useCallback(
     (): readonly string[] =>
       [...winsRef.current].sort((left, right) => right.z - left.z).map((window) => window.id),
@@ -2561,6 +2584,7 @@ export function useWorkspace(
       add: mutations.add,
       openEditorFile: mutations.openEditorFile,
       toggleTool: mutations.toggleTool,
+      activateWindow,
       focus: focusWindow,
       currentWindowStack,
       currentSelection,
@@ -2609,6 +2633,7 @@ export function useWorkspace(
       layout,
       connectActions,
       closeWithTeardown,
+      activateWindow,
       focusWindow,
       currentWindowStack,
       currentSelection,

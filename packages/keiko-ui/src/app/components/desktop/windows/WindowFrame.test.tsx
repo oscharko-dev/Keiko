@@ -540,6 +540,28 @@ describe("WindowFrame content zoom controls", () => {
     vi.useRealTimers();
   });
 
+  it("routes an open-area pointer activation through the atomic workspace operation", () => {
+    const activateWindow = vi.fn();
+    const focus = vi.fn();
+    const { container } = render(
+      <WindowFrame
+        win={appWindow()}
+        top={false}
+        connState={null}
+        linkRevision={0}
+        api={api({ activateWindow, focus })}
+        wsRef={createRef<HTMLElement>()}
+      />,
+    );
+
+    const body = container.querySelector<HTMLElement>(".win-body");
+    expect(body).not.toBeNull();
+    fireEvent.pointerDown(body as HTMLElement, { button: 0 });
+
+    expect(activateWindow).toHaveBeenCalledExactlyOnceWith("agents-1");
+    expect(focus).not.toHaveBeenCalled();
+  });
+
   it("defers focus long enough for selectable text drags to start", () => {
     vi.useFakeTimers();
     registerWindowRender("promptEnhancer", () => (

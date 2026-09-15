@@ -111,6 +111,12 @@ function Harness(options: UseWorkspaceOptions = {}): ReactElement {
       <button type="button" onClick={() => workspace.api.replaceSelection(["files-1"])}>
         select files
       </button>
+      <button type="button" onClick={() => workspace.api.activateWindow("files-1")}>
+        activate files
+      </button>
+      <button type="button" onClick={() => workspace.api.activateWindow("chat-1")}>
+        activate chat
+      </button>
       <button
         type="button"
         onClick={() => {
@@ -222,6 +228,35 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+  });
+
+  it("atomically focuses and selects a primary-activated window", async () => {
+    persistWorkspace([filesWindow({ z: 1 }), appWindow({ id: "chat-1", z: 2 })]);
+    render(<Harness />);
+    await waitFor(() => expect(readWins()).toHaveLength(2));
+
+    fireEvent.click(screen.getByRole("button", { name: "select files and chat" }));
+    fireEvent.click(screen.getByRole("button", { name: "activate files" }));
+
+    await waitFor(() =>
+      expect(readSelection()).toEqual({
+        focusedWindowId: "files-1",
+        selectedWindowIds: ["files-1", "chat-1"],
+      }),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "select files" }));
+    fireEvent.click(screen.getByRole("button", { name: "activate chat" }));
+
+    await waitFor(() =>
+      expect(readSelection()).toEqual({
+        focusedWindowId: "chat-1",
+        selectedWindowIds: ["chat-1"],
+      }),
+    );
+    expect(readWins().find((win) => win.id === "chat-1")?.z).toBeGreaterThan(
+      readWins().find((win) => win.id === "files-1")?.z ?? 0,
+    );
   });
 
   it("reserves workspace capacity across editor allocations queued in one event", async () => {

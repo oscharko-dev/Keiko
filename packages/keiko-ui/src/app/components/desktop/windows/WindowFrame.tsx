@@ -784,7 +784,7 @@ function booleanDataAttribute(value: boolean): "true" | undefined {
 // Raise counter across ALL frames: a pending delayed focus yields to any later interaction.
 let windowInteractionCount = 0;
 
-// EVERY direct window-raising interaction that bypasses focusWindowForTarget (resize grips,
+// EVERY direct window-raising interaction that bypasses activateWindowForTarget (resize grips,
 // the maximize control) must advance the counter AT PRESS TIME. Those handlers suppress or
 // bypass the browser's default focus move, so DOM focus can stay inside a previously armed
 // text-entry target — the token advance is then the only thing stopping that pending delayed
@@ -793,7 +793,7 @@ function noteWindowInteraction(): void {
   windowInteractionCount += 1;
 }
 
-// Direct user-interaction raises outside focusWindowForTarget (resize grips) count the
+// Direct user-interaction raises outside activateWindowForTarget (resize grips) count the
 // interaction and raise in one step, at the press that starts the gesture.
 function raiseWindowForInteraction(api: WorkspaceApi, id: string): void {
   noteWindowInteraction();
@@ -895,7 +895,7 @@ function WindowFrameImpl({
     (type: WindowType, cfg?: AppWindow["cfg"]): string | null => {
       const id = api.add(type, cfg);
       // #3390: a window opened from inside another window receives focus, as on any desktop. The
-      // opener's own deferred raise (see `focusWindowForTarget`) yields to wherever focus has
+      // opener's own deferred raise (see `activateWindowForTarget`) yields to wherever focus has
       // moved, so the new window also stays on top instead of landing behind its opener. Deferred
       // one frame: the element exists only after React has committed the added window.
       if (id !== null) {
@@ -1038,7 +1038,7 @@ function WindowFrameImpl({
     [],
   );
 
-  const focusWindowForTarget = useCallback(
+  const activateWindowForTarget = useCallback(
     (target: EventTarget | null): void => {
       windowInteractionCount += 1;
       if (isTextEntryTarget(target)) {
@@ -1048,7 +1048,7 @@ function WindowFrameImpl({
           // window. Never let this stale callback raise the old window over the user's new target.
           // The counter catches later interactions whose preventDefault() left DOM focus here.
           if (windowInteractionCount !== armedInteraction) return;
-          if (delayedFocusStillTargetsWindow(target)) api.focus(win.id);
+          if (delayedFocusStillTargetsWindow(target)) api.activateWindow(win.id);
         }, 180);
         return;
       }
@@ -1058,11 +1058,11 @@ function WindowFrameImpl({
           // took focus and the top of the stack in the meantime. Raising this window regardless
           // put the Coding Workbench back over the Pull Request window its own "Review exact
           // draft" had just opened, every time -- the same guard the text-entry branch applies.
-          if (delayedFocusStillTargetsWindow(target)) api.focus(win.id);
+          if (delayedFocusStillTargetsWindow(target)) api.activateWindow(win.id);
         }, 0);
         return;
       }
-      api.focus(win.id);
+      api.activateWindow(win.id);
     },
     [api, win.id],
   );
@@ -1089,10 +1089,7 @@ function WindowFrameImpl({
         attachGroupDragListeners(api, geo, e.clientX, e.clientY, () => setDraggingWindow(false));
         return;
       }
-      focusWindowForTarget(e.target);
-      if (!selected) {
-        api.replaceSelection([win.id]);
-      }
+      activateWindowForTarget(e.target);
       const wasMax = win.max;
       const restoredW = wasMax ? (win.prev?.w ?? 480) : win.w;
       const restoredH = wasMax ? (win.prev?.h ?? 360) : win.h;
@@ -1117,7 +1114,7 @@ function WindowFrameImpl({
       connState,
       selected,
       selectedWindowCount,
-      focusWindowForTarget,
+      activateWindowForTarget,
     ],
   );
 
@@ -1348,7 +1345,8 @@ function WindowFrameImpl({
       tabIndex={0}
       onPointerDown={(e) => {
         if (connState === "valid") api.confirmConnect(win.id, e);
-        focusWindowForTarget(e.target);
+        if (connState === "valid") api.focus(win.id);
+        else activateWindowForTarget(e.target);
       }}
       // GEN-UI-KEYBOARD-011 — Enter on a focused, highlighted valid target window
       // completes the connect (the section's keyboard counterpart to the pointer
@@ -1473,7 +1471,7 @@ function WindowFrameImpl({
                 onPointerDown={(e) => {
                   e.stopPropagation();
                   // Maximize IS a raise (makeMaximize bumps z), and this stopPropagation()
-                  // keeps focusWindowForTarget from counting the interaction — so invalidate
+                  // keeps activateWindowForTarget from counting the interaction — so invalidate
                   // at PRESS time. Click time is too late: a press-and-hold across the 180ms
                   // delay would let a pending delayed text-entry raise fire mid-hold, covering
                   // this window and even retargeting the release. The raise itself stays on
