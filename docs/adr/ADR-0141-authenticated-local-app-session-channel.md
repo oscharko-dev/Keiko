@@ -206,7 +206,8 @@ bearer-protection properties, and the BFF is the only receiver on every covered 
 
 ### F3 — Launcher-to-browser attestation delivery (D2 finalization)
 
-The trusted launcher (`keiko start --open`, and `npm run dev:start -- --open` for the dev lane)
+The trusted launcher (`keiko start --open`, and `npm run dev:start` by default for the dev lane;
+`--no-open` is the explicit headless opt-out)
 generates the process-scoped secret, provisions it to the BFF exclusively through the child's
 inherited environment, and hands the browser exactly one single-use, freshness-bounded attestation
 in the boot URL **fragment** (`#keiko-app-session=…`). The fragment never travels over HTTP; the
@@ -226,7 +227,7 @@ sessions, whereas a stolen attestation is one visible, time-bounded redemption) 
 assumption is load-bearing and why the native shell's direct injection remains the target
 posture. The Keiko Native shell replaces this hop with direct cookie injection and retires the
 residual risk; an already-running BFF cannot re-attest (its secret is private to its own
-launch), so `--open` against it opens an honestly unpaired window and says how to re-pair.
+launch), so another start against it reports that a restart is required to pair a fresh window.
 
 ### F4 — Contract promotion (the scheduled D12 batching)
 

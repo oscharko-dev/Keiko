@@ -1571,6 +1571,9 @@ export const DE_MESSAGES = {
   "editor.taskWorkspaceAccess.checking": "Verbindung zum Aufgabenarbeitsbereich wird hergestellt…",
   "editor.taskWorkspaceAccess.checkingDescription":
     "Keiko prüft, ob dieser Browser auf den lokalen Arbeitsbereich zugreifen kann.",
+  "editor.taskWorkspaceAccess.unpairedTitle": "Browsersitzung nicht gekoppelt",
+  "editor.taskWorkspaceAccess.unpairedDescription":
+    "Das ausgewählte Projekt ist verfügbar, aber dieser Browser hat keine Launcher-Berechtigung für private Task-Workspace-Inhalte. Starte Keiko über den Launcher neu.",
   "editor.taskWorkspaceAccess.title":
     "Der Aufgabenarbeitsbereich ist in diesem Browser nicht verfügbar",
   "editor.taskWorkspaceAccess.description":

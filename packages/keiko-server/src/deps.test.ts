@@ -1895,6 +1895,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
 
     expect(deps.preferredProjectPath).toBe(projectDir);
     expect(deps.store.listProjects().map((project) => project.path)).toEqual([projectDir]);
+    expect(deps.workspaceScriptTrust?.trustLevelForRoot(projectDir)).toBe("trusted");
     deps.store.close();
     deps.memoryVault?.close();
   });

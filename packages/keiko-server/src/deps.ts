@@ -119,7 +119,7 @@ import {
   type ServerDiagnosticSummary,
 } from "./diagnostics-log.js";
 import { evidenceRetentionObserver } from "./evidence-retention-log.js";
-import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { newCorrelationId, UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { logCommandTermination, processServerLogSink } from "./process-log-sink.js";
 import { currentOpenSseStreamCount, markServerShuttingDown } from "./sse-write.js";
 import type { ServerLogSink } from "./observability/index.js";
@@ -2723,13 +2723,17 @@ function seedInitialProject(
   store: UiStore,
   uiDbPath: string,
   initialProjectPath: string | undefined,
+  workspaceScriptTrust: WorkspaceScriptTrustService,
+  correlationId: string,
 ): string | undefined {
   if (initialProjectPath === undefined || initialProjectPath.trim().length === 0) {
     return undefined;
   }
   const normalizedPath = validateProjectPath(initialProjectPath, { mustExist: true });
   assertUiDbOutsideProject(uiDbPath, normalizedPath);
-  return store.createProject(normalizedPath).path;
+  const project = store.createProject(normalizedPath);
+  workspaceScriptTrust.grant(project.path, correlationId);
+  return project.path;
 }
 
 interface PeripheralManagers {
@@ -3737,16 +3741,9 @@ function buildPersistenceBundle(
   resolvedUiDbPath: string,
   redactString: (value: string) => string,
   evidenceStore: EvidenceStore,
+  bootstrapCorrelationId: string,
 ): PersistenceBundle {
-  const persistence = composePersistence(
-    options.store,
-    options.codingRuntimeSnapshotStore,
-    options.codingRuntimeDescriptionJobStore,
-    resolvedUiDbPath,
-    redactString,
-    options.env,
-    options.diagnostics,
-  );
+  const persistence = composeUiPersistence(options, resolvedUiDbPath, redactString);
   const { store, dispose, relationship } = persistence;
   try {
     const { workspaceScriptTrust, services } = composePersistenceTaskWorkspaceServices(
@@ -3756,11 +3753,6 @@ function buildPersistenceBundle(
       evidenceStore,
       redactString,
     );
-    const managedTaskWorkspaceRoot = composedManagedWorktreeRoot(
-      services.workspaceProvisioning,
-      resolvedUiDbPath,
-      options.diagnostics,
-    );
     return {
       uiStore: store,
       workspaceScriptTrust,
@@ -3769,13 +3761,39 @@ function buildPersistenceBundle(
       codingRuntimeSnapshotStore: persistence.codingRuntimeSnapshotStore,
       codingRuntimeDescriptionJobStore: persistence.codingRuntimeDescriptionJobStore,
       ...services,
-      managedTaskWorkspaceRoot,
-      preferredProjectPath: seedInitialProject(store, resolvedUiDbPath, options.initialProjectPath),
+      managedTaskWorkspaceRoot: composedManagedWorktreeRoot(
+        services.workspaceProvisioning,
+        resolvedUiDbPath,
+        options.diagnostics,
+      ),
+      preferredProjectPath: seedInitialProject(
+        store,
+        resolvedUiDbPath,
+        options.initialProjectPath,
+        workspaceScriptTrust,
+        bootstrapCorrelationId,
+      ),
     };
   } catch (error) {
     dispose?.();
     throw error;
   }
+}
+
+function composeUiPersistence(
+  options: BuildHandlerDepsOptions,
+  resolvedUiDbPath: string,
+  redactString: (value: string) => string,
+): ReturnType<typeof composePersistence> {
+  return composePersistence(
+    options.store,
+    options.codingRuntimeSnapshotStore,
+    options.codingRuntimeDescriptionJobStore,
+    resolvedUiDbPath,
+    redactString,
+    options.env,
+    options.diagnostics,
+  );
 }
 
 // The optional persistence services (relationship engine + the #445/#446/#447 task-workspace
@@ -5495,6 +5513,7 @@ function qualifiedProductionRuntimeComposition(
 }
 
 export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerDeps {
+  const bootstrapCorrelationId = newCorrelationId();
   const { resolvedUiDbPath, runtimeConfigPath } = runtimePathFields(options);
   const resolvedEvidenceDir = resolveEvidenceDirAndEnforceRetention(options);
   const { config, configPresent, storagePath } = loadRuntimeGatewayConfig(
@@ -5514,7 +5533,13 @@ export function buildUiHandlerDeps(options: BuildHandlerDepsOptions): UiHandlerD
     env: options.env,
     securityLogSink: processServerLogSink(),
   });
-  const bundle = buildPersistenceBundle(options, resolvedUiDbPath, redactString, evidenceStore);
+  const bundle = buildPersistenceBundle(
+    options,
+    resolvedUiDbPath,
+    redactString,
+    evidenceStore,
+    bootstrapCorrelationId,
+  );
   const contextProfileForModel = buildContextProfileResolver(() => runtimeConfig.current());
   reconcileNodeStoreAtStartup(options, bundle);
   const deps = assembleUiHandlerDeps({

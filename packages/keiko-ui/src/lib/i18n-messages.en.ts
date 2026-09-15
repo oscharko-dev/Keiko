@@ -1528,6 +1528,9 @@ export const EN_MESSAGES = {
   "editor.taskWorkspaceAccess.checking": "Connecting to the task workspace…",
   "editor.taskWorkspaceAccess.checkingDescription":
     "Keiko is checking this browser's local workspace access.",
+  "editor.taskWorkspaceAccess.unpairedTitle": "Browser session not paired",
+  "editor.taskWorkspaceAccess.unpairedDescription":
+    "The selected project is available, but this browser has no launcher permission for private task-workspace content. Restart Keiko through its launcher.",
   "editor.taskWorkspaceAccess.title": "Task workspace unavailable in this browser",
   "editor.taskWorkspaceAccess.description":
     "Restart Keiko through the launcher, or choose a folder or repository from the workspace context above.",

@@ -13,6 +13,7 @@ import {
   npmCommand,
   pairedDevBrowserUrl,
   prepareRunnerCriticalSection,
+  resolveOpenBrowserRequested,
   resolveDevPairingSecret,
   requiredRuntimeHealth,
   resolveDevGatewayConfigAction,
@@ -21,6 +22,19 @@ import {
   shouldShellNpmCommand,
   withDevStartLock,
 } from "../dev-start.mjs";
+
+describe("dev-start paired-browser default", () => {
+  it("opens by default, preserves --open, and fails closed for CI or --no-open", () => {
+    expect(resolveOpenBrowserRequested(["node", "dev-start.mjs"], {})).toBe(true);
+    expect(resolveOpenBrowserRequested(["node", "dev-start.mjs", "--open"], { CI: "true" })).toBe(
+      true,
+    );
+    expect(resolveOpenBrowserRequested(["node", "dev-start.mjs"], { CI: "true" })).toBe(false);
+    expect(
+      resolveOpenBrowserRequested(["node", "dev-start.mjs", "--no-open"], { CI: "false" }),
+    ).toBe(false);
+  });
+});
 
 // KEIKO-0286: a stale KEIKO_CONFIG_FILE inherited from a sourced operator .env used to suppress the
 // dev-config seed entirely. The server then started with zero providers and said nothing — the
