@@ -808,18 +808,25 @@ function installInto(tmp, tarballPath, options) {
  * this smoke pins that fix on every supported host — Linux, macOS, Windows — so the class of bug
  * cannot come back on any consumer platform.
  */
-function installIntoGlobalPrefix(prefixRoot, tarballPath) {
+/**
+ * The set of directories `npm install --global --prefix <prefix>` requires to exist before it
+ * writes anything. On POSIX hosts npm lstat's `<prefix>/lib` before populating it and dies with
+ * ENOENT when the caller's fresh prefix directory only exists at the root; on Windows npm writes
+ * directly into `<prefix>/node_modules/…`. Returning the paths rather than creating them lets a
+ * caller both drive `mkdirSync` on the live installer and assert on the layout in tests.
+ */
+export function globalPrefixLayoutPaths(prefixRoot, platform = process.platform) {
+  if (platform === "win32") {
+    return [join(prefixRoot, "node_modules")];
+  }
+  return [join(prefixRoot, "lib", "node_modules"), join(prefixRoot, "bin")];
+}
+
+export function installIntoGlobalPrefix(prefixRoot, tarballPath) {
   const timeoutMs = npmInstallTimeoutMs();
-  // npm's global install writes into `<prefix>/lib/node_modules/…` on POSIX and
-  // `<prefix>/node_modules/…` on Windows. On Linux/macOS it lstats `<prefix>/lib` before
-  // populating it and dies with ENOENT when the caller's fresh prefix directory only exists at
-  // the root, so pre-create the layout npm expects instead of relying on it to mkdir the parent
-  // itself.
-  if (process.platform !== "win32") {
-    mkdirSync(join(prefixRoot, "lib", "node_modules"), { recursive: true });
-    mkdirSync(join(prefixRoot, "bin"), { recursive: true });
-  } else {
-    mkdirSync(join(prefixRoot, "node_modules"), { recursive: true });
+  // Pre-create the layout npm expects so its own lstat/parent lookup never dies with ENOENT.
+  for (const dir of globalPrefixLayoutPaths(prefixRoot)) {
+    mkdirSync(dir, { recursive: true });
   }
   const installResult = run(
     "npm",
@@ -848,7 +855,7 @@ function installIntoGlobalPrefix(prefixRoot, tarballPath) {
  * writes into `<prefix>/lib/node_modules/…`; on Windows into `<prefix>/node_modules/…`. Both
  * layouts are npm's own conventions — the smoke has to tolerate both to stay portable.
  */
-function globallyInstalledPackageRoot(prefixRoot) {
+export function globallyInstalledPackageRoot(prefixRoot) {
   const posix = join(prefixRoot, "lib", "node_modules", "@oscharko-dev", "keiko");
   const win = join(prefixRoot, "node_modules", "@oscharko-dev", "keiko");
   if (existsSync(posix)) return posix;
@@ -866,7 +873,7 @@ function globallyInstalledPackageRoot(prefixRoot) {
  * `-g` bug left every external non-bundle dep (`ws`, `pdfjs-dist`, `typescript`, …) as an empty
  * directory, so this same invocation would die with `ERR_MODULE_NOT_FOUND` on the first import.
  */
-function assertGloballyInstalledKeiko(prefixRoot) {
+export function assertGloballyInstalledKeiko(prefixRoot) {
   const packageRoot = globallyInstalledPackageRoot(prefixRoot);
   const cliEntry = join(packageRoot, "dist", "cli", "index.js");
   if (!existsSync(cliEntry)) {
