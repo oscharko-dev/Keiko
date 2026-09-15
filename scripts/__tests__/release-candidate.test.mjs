@@ -242,19 +242,14 @@ describe("planReleaseCandidate", () => {
 });
 
 describe("applyReleaseCandidatePlan", () => {
-  function apply(
-    action,
-    { write = { status: 0, stdout: "{}", stderr: "" }, after = CANDIDATE } = {},
-  ) {
-    const github = fakeGithub({
-      [`repos/${REPO}/git/ref/tags/${TAG}`]: ok({ object: { sha: after, type: "commit" } }),
-    });
+  const writeBody = (sha) => ok({ ref: `refs/tags/${TAG}`, object: { sha, type: "commit" } });
+
+  function apply(action, { write = writeBody(CANDIDATE) } = {}) {
     const writes = [];
     const result = applyReleaseCandidatePlan({
       candidateSha: CANDIDATE,
       plan: { action, reason: "test", tag: TAG },
       repository: REPO,
-      runGh: github.runGh,
       runGhWithTagToken: (args) => {
         writes.push(args);
         return write;
@@ -263,7 +258,13 @@ describe("applyReleaseCandidatePlan", () => {
     return { result, writes };
   }
 
-  it("creates the tag ref with the tag token and reads it back", () => {
+  it("creates the tag ref with the tag token and verifies from the write response", () => {
+    // GitHub's git-refs API is eventually consistent for read-after-write: a POST that returns
+    // 201 can be invisible to the next GET for a short window. On 2026-09-15 the v1.0.2 tag was
+    // written correctly (the ref points at the candidate SHA), but the subsequent verify-read
+    // returned 404 and turned "Point the release tag at the candidate" red. The write response
+    // body carries the ref just written, atomic with the write — that is what proves the write,
+    // not a subsequent GET.
     const { result, writes } = apply("create");
     expect(result).toBe(true);
     expect(writes).toStrictEqual([
@@ -305,12 +306,36 @@ describe("applyReleaseCandidatePlan", () => {
     );
   });
 
-  it("fails when the tag does not point at the candidate afterwards", () => {
-    expect(() => apply("move", { after: OLDER })).toThrow(`does not point at ${CANDIDATE}`);
+  it("fails when the write response body reports a different SHA", () => {
+    expect(() => apply("move", { write: writeBody(OLDER) })).toThrow(
+      `points at ${OLDER} after the write (move), not ${CANDIDATE}`,
+    );
+  });
+
+  it("fails when the write response body is not JSON", () => {
+    expect(() => apply("create", { write: { status: 0, stdout: "not-json", stderr: "" } })).toThrow(
+      "write response (create) could not be parsed as JSON",
+    );
+  });
+
+  it("fails when the write response body points at an annotated tag instead of a commit", () => {
+    // The candidate flow writes the ref straight to the commit SHA (POST /git/refs with
+    // sha=<commit>), so the response object.type must be "commit". An object.type of "tag"
+    // means the server did something we did not ask for — refuse rather than trust it.
+    expect(() =>
+      apply("create", {
+        write: ok({ ref: `refs/tags/${TAG}`, object: { sha: CANDIDATE, type: "tag" } }),
+      }),
+    ).toThrow(`points at ? after the write (create), not ${CANDIDATE}`);
   });
 });
 
 describe("runReleaseCandidate", () => {
+  const writeResponse = ok({
+    ref: `refs/tags/${TAG}`,
+    object: { sha: CANDIDATE, type: "commit" },
+  });
+
   function run(mode, env = {}, github = fakeGithub()) {
     const appended = [];
     const writes = [];
@@ -330,7 +355,7 @@ describe("runReleaseCandidate", () => {
       runGh: github.runGh,
       runGhWithTagToken: (args) => {
         writes.push(args);
-        return { status: 0, stdout: "{}", stderr: "" };
+        return writeResponse;
       },
       runNpm: NPM_MISSING,
     });
@@ -348,12 +373,7 @@ describe("runReleaseCandidate", () => {
   });
 
   it("applies a create with the tag token and says so", () => {
-    let created = false;
     const github = fakeGithub();
-    const runGh = (args) =>
-      created && args.at(-1) === `repos/${REPO}/git/ref/tags/${TAG}`
-        ? ok({ object: { sha: CANDIDATE, type: "commit" } })
-        : github.runGh(args);
     const appended = [];
     const result = runReleaseCandidate({
       appendFile: (path, text) => appended.push([path, text]),
@@ -366,11 +386,9 @@ describe("runReleaseCandidate", () => {
       mode: "--apply",
       readText: (path) =>
         path === "package.json" ? JSON.stringify(ROOT_PACKAGE) : '{"entries":[]}',
-      runGh,
-      runGhWithTagToken: () => {
-        created = true;
-        return { status: 0, stdout: "{}", stderr: "" };
-      },
+      runGh: github.runGh,
+      runGhWithTagToken: () =>
+        ok({ ref: `refs/tags/${TAG}`, object: { sha: CANDIDATE, type: "commit" } }),
       runNpm: NPM_MISSING,
     });
     expect(result.line).toBe(
