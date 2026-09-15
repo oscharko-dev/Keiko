@@ -157,6 +157,7 @@ const ACTION_HINT_BY_EXECUTION_ERROR: Readonly<
   "network-failure": "wait-for-provider",
   conflict: "resolve-conflicts",
   "precondition-failed": "resolve-conflicts",
+  "signature-failed": "configure-signing",
   timeout: "retry",
   "internal-error": "retry",
 } as const;
@@ -194,6 +195,13 @@ function recoveryForRecoveryRequired(
   result: GitDeliveryExecutionResult,
   inputs: GitDeliveryResolvedInputs,
 ): GitDeliveryRecoveryMetadata {
+  if (result.errorCode === "signature-failed") {
+    return {
+      disposition: "user-fixable",
+      actionHint: ACTION_HINT_BY_EXECUTION_ERROR[result.errorCode],
+      executionErrorCode: result.errorCode,
+    };
+  }
   const strategy = inputs.kind === "recovery" ? inputs.recoveryStrategyHint : undefined;
   return {
     disposition: "user-fixable",

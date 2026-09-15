@@ -6,7 +6,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
@@ -80,9 +80,31 @@ import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
 import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
 
 let root: string;
+let signingRoot: string;
 
 function git(args: readonly string[]): string {
   return execFileSync("git", [...args], { cwd: root, encoding: "utf8" });
+}
+
+function configureSshCommitSigning(repoRoot: string, signingHome: string, email: string): void {
+  const keyPath = join(signingHome, "keiko-test-signing-key");
+  execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", email, "-f", keyPath], {
+    cwd: signingHome,
+  });
+  const publicKeyPath = `${keyPath}.pub`;
+  const publicKey = readFileSync(publicKeyPath, "utf8").trim();
+  const allowedSigners = join(signingHome, "keiko-test-allowed-signers");
+  writeFileSync(allowedSigners, `${email} ${publicKey}\n`, "utf8");
+  execFileSync("git", ["config", "gpg.format", "ssh"], { cwd: repoRoot });
+  execFileSync("git", ["config", "gpg.ssh.allowedSignersFile", allowedSigners], {
+    cwd: repoRoot,
+  });
+  execFileSync("git", ["config", "user.signingkey", publicKeyPath], { cwd: repoRoot });
+  execFileSync("git", ["config", "commit.gpgsign", "true"], { cwd: repoRoot });
+}
+
+function expectLastCommitSigned(): void {
+  expect(git(["log", "-1", "--format=%G?"]).trim()).toBe("G");
 }
 
 function workspaceInfo(rootPath: string): WorkspaceInfo {
@@ -170,9 +192,10 @@ const REAL_SEAMS: GitDeliveryExecutionSeams = { policyPacks: { repoPack: ALLOW_L
 
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-exec-")));
-  // The real adapter intentionally reads the invoking human's global signing policy. This suite
-  // exercises the default adapter but must not inherit a developer-machine ~/.gitconfig: a global
-  // `commit.gpgSign=true` would correctly block its deliberately unsigned disposable commits.
+  signingRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-signing-")));
+  // The real adapter intentionally reads the invoking human's identity lane. This suite exercises
+  // the default adapter but must not inherit a developer-machine ~/.gitconfig, so it installs a
+  // disposable SSH signing setup into this temporary repository.
   vi.stubEnv("HOME", root);
   vi.stubEnv("USERPROFILE", root);
   vi.stubEnv("XDG_CONFIG_HOME", root);
@@ -183,15 +206,17 @@ beforeEach(() => {
   git(["init", "-q", "-b", "main"]);
   git(["config", "user.email", "test@keiko.example"]);
   git(["config", "user.name", "Keiko Test"]);
-  git(["config", "commit.gpgsign", "false"]);
+  configureSshCommitSigning(root, signingRoot, "test@keiko.example");
   writeFileSync(join(root, "a.txt"), "v1\n", "utf8");
   git(["add", "a.txt"]);
   git(["commit", "-q", "-m", "base"]);
+  expectLastCommitSigned();
 });
 
 afterEach(() => {
   vi.unstubAllEnvs();
   rmSync(root, { recursive: true, force: true });
+  rmSync(signingRoot, { recursive: true, force: true });
 });
 
 describe("executeGovernedMutation — real git through the default seams", () => {
@@ -257,6 +282,7 @@ describe("executeGovernedMutation — real git through the default seams", () =>
     );
     expect(committed.outcome.status).toBe("succeeded");
     expect(git(["log", "--oneline"])).toContain("feat: add b");
+    expectLastCommitSigned();
     expect(cap.count()).toBe(3);
   });
 

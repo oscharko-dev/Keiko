@@ -228,6 +228,13 @@ function makeClient(overrides: Partial<GitClientSeam> = {}): GitClientSeam {
       actionKind: "unstage",
     })),
     commitPreview: vi.fn<GitClientSeam["commitPreview"]>(async () => makeCommitPreview()),
+    commitDraft: vi.fn<GitClientSeam["commitDraft"]>(async () => ({
+      schemaVersion: "1",
+      status: "succeeded",
+      source: "model",
+      suggestedMessage: "chore: update staged changes\n\nBody.",
+      summary: { stagedFileCount: 1, areaCount: 1, areas: ["src"], touchesTests: false },
+    })),
     commitExecute: vi.fn<GitClientSeam["commitExecute"]>(async () => ({
       schemaVersion: "1",
       status: "succeeded",

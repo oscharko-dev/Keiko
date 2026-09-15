@@ -53,13 +53,13 @@ describe("argv builders — fixed, governed argument vectors", () => {
 
   it("commit passes the message as a single `--message` token", () => {
     expect(buildCommitArgv({ message: "fix: thing", allowEmpty: false })).toEqual([
-      ["commit", "--message", "fix: thing"],
+      ["commit", "--gpg-sign", "--message", "fix: thing"],
     ]);
   });
 
   it("commit adds --allow-empty only when requested", () => {
     expect(buildCommitArgv({ message: "empty", allowEmpty: true })).toEqual([
-      ["commit", "--allow-empty", "--message", "empty"],
+      ["commit", "--gpg-sign", "--allow-empty", "--message", "empty"],
     ]);
   });
 
@@ -138,7 +138,7 @@ describe("operand validation — flag injection and malformed operands", () => {
 
   it("allows a commit message that begins with `-` (it is a flag value, not a flag)", () => {
     expect(buildCommitArgv({ message: "-not-a-flag", allowEmpty: false })).toEqual([
-      ["commit", "--message", "-not-a-flag"],
+      ["commit", "--gpg-sign", "--message", "-not-a-flag"],
     ]);
   });
 });

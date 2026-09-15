@@ -1527,6 +1527,12 @@ export function GitClientWindow({
     [client, commit, selectedPath],
   );
 
+  const generateCommitDraft = useCallback(async (): Promise<string> => {
+    if (selectedPath === null) throw new Error(optionalT("gitClientWindow.error.noRepository"));
+    const result = await client.commitDraft({ projectId: selectedPath });
+    return result.suggestedMessage;
+  }, [client, optionalT, selectedPath]);
+
   const switchBranch = useCallback(
     (branchName: string, trigger: HTMLButtonElement): void => {
       if (selectedPath === null) return;
@@ -1737,6 +1743,7 @@ export function GitClientWindow({
       onSummaryChange={setCommitSummary}
       onBodyChange={setCommitBody}
       onPreview={previewCommitDraft}
+      onGenerateDraft={generateCommitDraft}
       onCommit={commitChanges}
       onCreateBranch={openNewBranchDialog}
       onCreatePullRequest={() => openRightPane("pull-request")}

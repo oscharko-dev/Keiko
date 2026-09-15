@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import {
   createServer as createHttpServer,
   type IncomingMessage,
@@ -84,6 +84,23 @@ function git(root: string, args: readonly string[]): string {
       GIT_CONFIG_NOSYSTEM: "1",
     },
   }).trim();
+}
+
+function configureSshCommitSigning(repoRoot: string, signingHome: string, email: string): void {
+  const keyPath = join(signingHome, "keiko-test-signing-key");
+  execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", email, "-f", keyPath], {
+    cwd: signingHome,
+  });
+  const publicKeyPath = `${keyPath}.pub`;
+  const publicKey = readFileSync(publicKeyPath, "utf8").trim();
+  const allowedSigners = join(signingHome, "keiko-test-allowed-signers");
+  writeFileSync(allowedSigners, `${email} ${publicKey}\n`, "utf8");
+  execFileSync("git", ["config", "gpg.format", "ssh"], { cwd: repoRoot });
+  execFileSync("git", ["config", "gpg.ssh.allowedSignersFile", allowedSigners], {
+    cwd: repoRoot,
+  });
+  execFileSync("git", ["config", "user.signingkey", publicKeyPath], { cwd: repoRoot });
+  execFileSync("git", ["config", "commit.gpgsign", "true"], { cwd: repoRoot });
 }
 
 function passingReport(root: string): VerificationReport {
@@ -303,11 +320,13 @@ function toolResult(
 describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitService (#3386)", () => {
   function repo(): string {
     const root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-transcript-")));
+    const signingRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-git-transcript-signing-")));
     roots.push(root);
+    roots.push(signingRoot);
     git(root, ["init", "-qb", "dev"]);
     git(root, ["config", "user.name", "Keiko Test"]);
     git(root, ["config", "user.email", "keiko@example.test"]);
-    git(root, ["config", "commit.gpgsign", "false"]);
+    configureSshCommitSigning(root, signingRoot, "keiko@example.test");
     writeFileSync(join(root, "code.js"), "export const value = 1;\n");
     git(root, ["add", "code.js"]);
     git(root, ["commit", "-qm", "base"]);
@@ -550,6 +569,7 @@ describe("scripted OpenCode transcript reaches VerifiedCommitService/RuntimeGitS
       expect(git(root, ["log", "-1", "--format=%s"])).toBe(
         "feat: authorized scripted-transcript change",
       );
+      expect(git(root, ["log", "-1", "--format=%G?"])).toBe("G");
       await child.close();
     },
     SCRIPTED_TRANSCRIPT_INTEGRATION_TIMEOUT_MS,

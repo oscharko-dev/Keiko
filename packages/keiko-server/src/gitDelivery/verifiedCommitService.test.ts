@@ -22,6 +22,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   rmSync,
   writeFileSync,
@@ -83,6 +84,7 @@ vi.mock("@oscharko-dev/keiko-tools/internal/git-mutation", async (importOriginal
   };
 });
 let root: string;
+let signingRoot: string;
 let db: DatabaseSync;
 let live: boolean;
 let now: number;
@@ -102,6 +104,28 @@ function git(args: readonly string[]): string {
     },
   }).trim();
 }
+
+function configureSshCommitSigning(repoRoot: string, signingHome: string, email: string): void {
+  const keyPath = join(signingHome, "keiko-test-signing-key");
+  execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", email, "-f", keyPath], {
+    cwd: signingHome,
+  });
+  const publicKeyPath = `${keyPath}.pub`;
+  const publicKey = readFileSync(publicKeyPath, "utf8").trim();
+  const allowedSigners = join(signingHome, "keiko-test-allowed-signers");
+  writeFileSync(allowedSigners, `${email} ${publicKey}\n`, "utf8");
+  execFileSync("git", ["config", "gpg.format", "ssh"], { cwd: repoRoot });
+  execFileSync("git", ["config", "gpg.ssh.allowedSignersFile", allowedSigners], {
+    cwd: repoRoot,
+  });
+  execFileSync("git", ["config", "user.signingkey", publicKeyPath], { cwd: repoRoot });
+  execFileSync("git", ["config", "commit.gpgsign", "true"], { cwd: repoRoot });
+}
+
+function expectLastCommitSigned(): void {
+  expect(git(["log", "-1", "--format=%G?"])).toBe("G");
+}
+
 function report(passed = true): VerificationReport {
   if (passed) execFileSync(process.execPath, ["--check", "code.js"], { cwd: root });
   return {
@@ -164,10 +188,11 @@ function context(): VerifiedCommitRunContext {
 
 beforeEach(() => {
   root = realpathSync(mkdtempSync(join(tmpdir(), "keiko-commit-service-")));
+  signingRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-commit-service-signing-")));
   git(["init", "-qb", "dev"]);
   git(["config", "user.name", "Keiko Test"]);
   git(["config", "user.email", "keiko@example.test"]);
-  git(["config", "commit.gpgsign", "false"]);
+  configureSshCommitSigning(root, signingRoot, "keiko@example.test");
   writeFileSync(join(root, "code.js"), "export const value = 1;\n");
   git(["add", "code.js"]);
   git(["commit", "-qm", "base"]);
@@ -238,6 +263,7 @@ afterEach(() => {
   service.invalidate();
   db.close();
   rmSync(root, { recursive: true, force: true });
+  rmSync(signingRoot, { recursive: true, force: true });
 });
 
 function ticketOf(outcome: VerificationTicketOutcome): object | undefined {
@@ -372,6 +398,7 @@ describe("verified Code-task commit service", () => {
     expect(evidence.get(result?.verificationEvidenceId ?? "")).toBeDefined();
     expect(JSON.stringify([...evidence.values()])).not.toContain("code.js");
     expect(result?.headSha).toBe(git(["rev-parse", "HEAD"]));
+    expectLastCommitSigned();
     expect(options.snapshots.get("run-1")?.verifiedCommitResult).toEqual(result);
     expect(await service.execute(proposalId, approval)).toBeUndefined();
     expect(

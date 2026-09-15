@@ -1109,6 +1109,40 @@ interface ConnectionAttempt {
   readonly hadGitConnectionBeforeBind: boolean;
 }
 
+interface BindAcceptanceInput {
+  readonly chatWindowId: string | null;
+  readonly boundScope: ChatConnectedScope | null;
+  readonly connectorScope: ChatLocalKnowledgeScope | null;
+  readonly gitChangeSelection: GitChangeBindSelection | null;
+  readonly onScopeBind: ConnectArgs["onScopeBind"];
+  readonly onConnectorBind: ConnectArgs["onConnectorBind"];
+  readonly onGitChangeBind: ConnectArgs["onGitChangeBind"];
+  readonly target: ChatBindingTarget | undefined;
+}
+
+interface ConnectionUnbindAcceptanceInput {
+  readonly chatWindowId: string;
+  readonly boundScope: ChatConnectedScope | null;
+  readonly connectorScope: ChatLocalKnowledgeScope | null;
+  readonly gitChangeRelationshipId: string | null;
+  readonly target: ChatUnbindTarget | undefined;
+  readonly onScopeUnbind: ConnectArgs["onScopeUnbind"];
+  readonly onConnectorUnbind: ConnectArgs["onConnectorUnbind"];
+  readonly onGitChangeUnbind: ConnectArgs["onGitChangeUnbind"];
+  readonly onConnectionUnbindFailure: ConnectArgs["onConnectionUnbindFailure"];
+}
+
+interface ApplyConnectionInput {
+  readonly binding: BindAcceptance;
+  readonly fromId: string;
+  readonly toId: string;
+  readonly chatWindowId: string | null;
+  readonly chatConversationIdAtBind: string | undefined;
+  readonly boundScope: ChatConnectedScope | null;
+  readonly connectorScope: ChatLocalKnowledgeScope | null;
+  readonly gitChangeSelection: GitChangeBindSelection | null;
+}
+
 function isDuplicate(cs: readonly Connection[], a: string, b: string): boolean {
   return cs.some((c) => isConnectionBetween(c, a, b));
 }
@@ -1230,15 +1264,18 @@ function resolveGitChangeBindAcceptance(
 }
 
 function resolveBindAcceptance(
-  chatWindowId: string | null,
-  boundScope: ChatConnectedScope | null,
-  connectorScope: ChatLocalKnowledgeScope | null,
-  gitChangeSelection: GitChangeBindSelection | null,
-  onScopeBind: ConnectArgs["onScopeBind"],
-  onConnectorBind: ConnectArgs["onConnectorBind"],
-  onGitChangeBind: ConnectArgs["onGitChangeBind"],
-  target: ChatBindingTarget | undefined,
+  input: BindAcceptanceInput,
 ): BindAcceptance | Promise<BindAcceptance> {
+  const {
+    chatWindowId,
+    boundScope,
+    connectorScope,
+    gitChangeSelection,
+    onScopeBind,
+    onConnectorBind,
+    onGitChangeBind,
+    target,
+  } = input;
   try {
     if (boundScope !== null) {
       return resolveScopeBindAcceptance(chatWindowId, boundScope, onScopeBind, target);
@@ -1260,17 +1297,18 @@ function resolveBindAcceptance(
   }
 }
 
-async function connectionUnbindAccepted(
-  chatWindowId: string,
-  boundScope: ChatConnectedScope | null,
-  connectorScope: ChatLocalKnowledgeScope | null,
-  gitChangeRelationshipId: string | null,
-  target: ChatUnbindTarget | undefined,
-  onScopeUnbind: ConnectArgs["onScopeUnbind"],
-  onConnectorUnbind: ConnectArgs["onConnectorUnbind"],
-  onGitChangeUnbind: ConnectArgs["onGitChangeUnbind"],
-  onConnectionUnbindFailure: ConnectArgs["onConnectionUnbindFailure"],
-): Promise<boolean> {
+async function connectionUnbindAccepted(input: ConnectionUnbindAcceptanceInput): Promise<boolean> {
+  const {
+    chatWindowId,
+    boundScope,
+    connectorScope,
+    gitChangeRelationshipId,
+    target,
+    onScopeUnbind,
+    onConnectorUnbind,
+    onGitChangeUnbind,
+    onConnectionUnbindFailure,
+  } = input;
   try {
     const results: Promise<boolean>[] = [];
     if (boundScope !== null && onScopeUnbind !== undefined) {
@@ -1592,16 +1630,17 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   // are still live, appends the Connection (with its bind-time scope snapshot) unless it's a
   // duplicate, and focuses the target. Split out of confirmConnect so the promise continuation
   // doesn't add nested branches to confirmConnect's own complexity.
-  const applyConnection = (
-    binding: BindAcceptance,
-    fromId: string,
-    toId: string,
-    chatWindowId: string | null,
-    chatConversationIdAtBind: string | undefined,
-    boundScope: ChatConnectedScope | null,
-    connectorScope: ChatLocalKnowledgeScope | null,
-    gitChangeSelection: GitChangeBindSelection | null,
-  ): void => {
+  const applyConnection = (input: ApplyConnectionInput): void => {
+    const {
+      binding,
+      fromId,
+      toId,
+      chatWindowId,
+      chatConversationIdAtBind,
+      boundScope,
+      connectorScope,
+      gitChangeSelection,
+    } = input;
     if (!binding.accepted) return;
     if (!endpointsStillCurrent(fromId, toId, chatWindowId, chatConversationIdAtBind, winById))
       return;
@@ -1649,16 +1688,16 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     chatConversationIdAtBind: string | undefined,
     gitChangeSelection: GitChangeBindSelection,
   ): void => {
-    applyConnection(
-      { accepted: true },
+    applyConnection({
+      binding: { accepted: true },
       fromId,
       toId,
       chatWindowId,
       chatConversationIdAtBind,
-      null,
-      null,
+      boundScope: null,
+      connectorScope: null,
       gitChangeSelection,
-    );
+    });
   };
 
   const settleOptimisticGitConnection = (
@@ -1732,16 +1771,16 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       );
       return;
     }
-    applyConnection(
+    applyConnection({
       binding,
-      attempt.fromId,
-      attempt.toId,
-      attempt.chatWindowId,
-      attempt.chatConversationIdAtBind,
-      attempt.boundScope,
-      attempt.connectorScope,
-      null,
-    );
+      fromId: attempt.fromId,
+      toId: attempt.toId,
+      chatWindowId: attempt.chatWindowId,
+      chatConversationIdAtBind: attempt.chatConversationIdAtBind,
+      boundScope: attempt.boundScope,
+      connectorScope: attempt.connectorScope,
+      gitChangeSelection: null,
+    });
   };
 
   const rollbackRejectedConnectionAttempt = (attempt: ConnectionAttempt): void => {
@@ -1751,16 +1790,16 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
   };
 
   const resolveConnectionAttempt = (attempt: ConnectionAttempt): void => {
-    const accepted = resolveBindAcceptance(
-      attempt.chatWindowId,
-      attempt.boundScope,
-      attempt.connectorScope,
-      attempt.gitChangeSelection,
+    const accepted = resolveBindAcceptance({
+      chatWindowId: attempt.chatWindowId,
+      boundScope: attempt.boundScope,
+      connectorScope: attempt.connectorScope,
+      gitChangeSelection: attempt.gitChangeSelection,
       onScopeBind,
       onConnectorBind,
       onGitChangeBind,
-      attempt.bindingTarget,
-    );
+      target: attempt.bindingTarget,
+    });
     void Promise.resolve(accepted)
       .then((binding) => applyAcceptedConnectionAttempt(attempt, binding))
       .catch(() => rollbackRejectedConnectionAttempt(attempt));
@@ -1878,7 +1917,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     }
     if (pendingConnectionRemovals.has(id)) return;
     pendingConnectionRemovals.add(id);
-    void connectionUnbindAccepted(
+    void connectionUnbindAccepted({
       chatWindowId,
       boundScope,
       connectorScope,
@@ -1888,7 +1927,7 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       onConnectorUnbind,
       onGitChangeUnbind,
       onConnectionUnbindFailure,
-    ).then((accepted): void => {
+    }).then((accepted): void => {
       pendingConnectionRemovals.delete(id);
       if (accepted) removeStoredConnection(id);
     });

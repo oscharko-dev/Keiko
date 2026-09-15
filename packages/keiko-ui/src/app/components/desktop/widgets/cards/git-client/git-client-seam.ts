@@ -16,6 +16,7 @@ import {
   ApiError,
   cloneRepository as fetchCloneRepository,
   createProject,
+  fetchGitDeliveryCommitDraft,
   fetchGitBranches,
   fetchGitDeliverySyncPreview,
   fetchGitDeliveryCommitExecute,
@@ -82,6 +83,7 @@ export interface GitClientSeam {
   readonly stage: typeof fetchGitDeliveryStage;
   readonly unstage: typeof fetchGitDeliveryUnstage;
   readonly commitPreview: typeof fetchGitDeliveryCommitPreview;
+  readonly commitDraft: typeof fetchGitDeliveryCommitDraft;
   readonly commitExecute: typeof fetchGitDeliveryCommitExecute;
   // F3 (epic #3384 final audit): the standalone Git Client Window's commit/push actions must
   // satisfy the epic's unconditional approval requirement (correction 5) themselves — unlike
@@ -143,6 +145,7 @@ export const DEFAULT_GIT_CLIENT: GitClientSeam = {
   stage: fetchGitDeliveryStage,
   unstage: fetchGitDeliveryUnstage,
   commitPreview: fetchGitDeliveryCommitPreview,
+  commitDraft: fetchGitDeliveryCommitDraft,
   commitExecute: fetchGitDeliveryCommitExecute,
   commitPropose: proposeCommit,
   syncPreview: fetchGitDeliverySyncPreview,

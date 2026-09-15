@@ -96,6 +96,7 @@ describe("recovery-disposition derivations (AC3)", () => {
       "network-failure": "retryable",
       conflict: "user-fixable",
       "precondition-failed": "user-fixable",
+      "signature-failed": "user-fixable",
       timeout: "retryable",
       "internal-error": "retryable",
     };

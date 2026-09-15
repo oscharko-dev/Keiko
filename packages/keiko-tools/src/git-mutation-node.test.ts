@@ -25,11 +25,6 @@ function makeAdapter(rec: SpawnRecorder, signal?: AbortSignal): GitLocalMutation
   });
 }
 
-async function continuePastUnsignedSigningPolicy(rec: SpawnRecorder): Promise<void> {
-  rec.child.emit("close", 1, null);
-  await expect.poll(() => rec.calls()).toHaveLength(2);
-}
-
 // Every mutating command's FIRST spawn is the version-gated lazy-fetch/replace-objects guard's own
 // promisor-remote probe (`git config --get-regexp ^remote\..*\.(promisor|partialclonefilter)$`,
 // git-worktree-snapshot-node.ts, reviewer 3941836280 / 3941943601) — re-probed on every call, never
@@ -70,7 +65,9 @@ describe("node git mutation adapter — governed argv reaches the spawn boundary
       "-c",
       "alias.commit=",
       "-c",
-      "commit.gpgSign=false",
+      "gpg.program=gpg",
+      "-c",
+      "gpg.ssh.program=ssh-keygen",
       "-c",
       "protocol.ext.allow=never",
       "-c",
@@ -85,16 +82,16 @@ describe("node git mutation adapter — governed argv reaches the spawn boundary
 });
 
 describe("node git mutation adapter — failure-classification branches", () => {
-  it("maps a non-zero exit to a precondition-failed failure", async () => {
+  it("maps a signing failure to a signature-failed result", async () => {
     const rec = recordingSpawn();
     const ad = makeAdapter(rec);
     const pending = ad.commit({ message: "m", allowEmpty: false });
-    await continuePastUnsignedSigningPolicy(rec);
     await continuePastLazyFetchGuardProbe(rec);
+    rec.child.stderr.emit("data", Buffer.from("error: gpg failed to sign the data\n", "utf8"));
     rec.child.emit("close", 1, null);
     const result = await pending;
     expect(result.outcome).toBe("failed");
-    expect(result.errorCode).toBe("precondition-failed");
+    expect(result.errorCode).toBe("signature-failed");
   });
 
   it("maps a thrown spawn to an internal-error failure", async () => {
@@ -120,7 +117,7 @@ describe("node git mutation adapter — failure-classification branches", () => 
     expect(result.errorCode).toBeUndefined();
   });
 
-  it("maps cancellation during the signing-policy lookup to an aborted result", async () => {
+  it("maps cancellation during the commit guard to an aborted result", async () => {
     const controller = new AbortController();
     const rec = recordingSpawn();
     const ad = makeAdapter(rec, controller.signal);
@@ -211,16 +208,15 @@ async function identityLaneEnv(): Promise<Record<string, string>> {
   const rec = recordingSpawn();
   const ad = identityLaneAdapter(rec);
   const pending = ad.commit({ message: "feat: governed commit", allowEmpty: false });
-  await continuePastUnsignedSigningPolicy(rec);
   await continuePastLazyFetchGuardProbe(rec);
-  // calls: [0] signing-policy check, [1] lazy-fetch guard probe, [2] the real `commit` — the one
+  // calls: [0] lazy-fetch guard probe, [1] the real `commit` — the one
   // whose env this helper exists to inspect.
-  const commitEnv = rec.calls()[2]?.options.env ?? {};
+  const commitEnv = rec.calls()[1]?.options.env ?? {};
   rec.child.emit("close", 0, null);
   // The commit's success triggers a follow-up readGitRevision("HEAD"), which re-probes the guard
   // for itself (promisor status is deliberately never cached — see git-worktree-snapshot-node.ts)
   // before the real rev-parse: wait for that probe's OWN spawn to register before answering it.
-  await expect.poll(() => rec.calls()).toHaveLength(4);
+  await expect.poll(() => rec.calls()).toHaveLength(3);
   await continuePastLazyFetchGuardProbe(rec);
   rec.child.stdout.emit("data", Buffer.from(`${"a".repeat(40)}\n`));
   rec.child.emit("close", 0, null);

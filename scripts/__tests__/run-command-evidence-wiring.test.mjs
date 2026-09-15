@@ -592,16 +592,18 @@ describe("runCommand termination-evidence wiring (PR #3354, comment 3887021650)"
     );
   });
 
-  it("requires direct termination evidence for the signing-policy reads (#3386)", () => {
+  it("requires direct termination evidence for the stage-normalization config reads (#3386)", () => {
     const path = join(PACKAGES_ROOT, "keiko-tools", "src", "git-mutation-node.ts");
     const source = readFileSync(path, "utf8");
     const analysis = analyzeFile(path, source);
     expect(analysis.callSiteCount).toBeGreaterThanOrEqual(2);
-    expect(analysis.softlyWired.map((site) => site.fn)).not.toContain("configuredSigningRequired");
+    expect(analysis.softlyWired.map((site) => site.fn)).not.toContain(
+      "configuredStageNormalizationSupported",
+    );
     const mutation = source.replace("onTerminated: ctx.runDeps.onTerminated,", "");
     expect(mutation).not.toBe(source);
     expect(analyzeFile(path, mutation).softlyWired.map((site) => site.fn)).toContain(
-      "configuredSigningRequired",
+      "configuredStageNormalizationSupported",
     );
   });
 

@@ -91,6 +91,7 @@ interface CommitComposerProps {
   readonly onSummaryChange?: ((value: string) => void) | undefined;
   readonly onBodyChange?: ((value: string) => void) | undefined;
   readonly onPreview: (messageDraft: string) => void;
+  readonly onGenerateDraft?: (() => Promise<string>) | undefined;
   readonly onCommit: (message: string) => void;
   readonly onCreateBranch?: ((trigger: HTMLButtonElement) => void) | undefined;
   readonly onCreatePullRequest?: (() => void) | undefined;
@@ -131,23 +132,6 @@ function splitCommitMessageDraft(message: string): CommitDraftParts {
     summary: lines[0]?.trim() ?? "",
     body: lines.slice(1).join("\n").trim(),
   };
-}
-
-function commitDraftAutoApplyKey(previewRevision: number, message: string): string {
-  return `${previewRevision.toString()}\u0000${message}`;
-}
-
-function eligibleAutoCommitDraft(input: {
-  readonly summary: string;
-  readonly body: string;
-  readonly stagedFileCount: number;
-  readonly preview: GitDeliveryCommitPreviewResponse | null;
-  readonly previewDraft: string | null;
-  readonly previewFresh: boolean;
-}): string | null {
-  if (input.summary.trim() !== "" || input.body.trim() !== "") return null;
-  if (input.stagedFileCount <= 0 || !input.previewFresh || input.previewDraft !== "") return null;
-  return input.preview?.suggestedMessage ?? null;
 }
 
 function commitHint(
@@ -485,24 +469,64 @@ function CommitActionLayout({
   protectedBranchBlocked,
   action,
   description,
+  draftGenerationAction,
 }: {
   readonly protectedBranchBlocked: boolean;
   readonly action: ReactNode;
   readonly description: ReactNode;
+  readonly draftGenerationAction: ReactNode;
 }): ReactNode {
   if (protectedBranchBlocked) {
     return (
       <>
         {action}
         {description}
+        {draftGenerationAction}
       </>
     );
   }
   return (
     <>
       {description}
+      {draftGenerationAction}
       {action}
     </>
+  );
+}
+
+function GenerateCommitDraftAction({
+  state,
+  draftGeneration,
+  t,
+}: {
+  readonly state: CommitComposerState;
+  readonly draftGeneration: DraftGenerationController;
+  readonly t: OptionalWidgetTranslate;
+}): ReactNode {
+  if (draftGeneration.generate === undefined) return null;
+  const disabled = !state.hasRepository || !state.hasStaged || draftGeneration.busy;
+  return (
+    <div style={{ display: "grid", gap: 6 }}>
+      <button
+        type="button"
+        style={{ ...SECONDARY_BTN, width: "100%", ...disabledStyle(disabled) }}
+        disabled={disabled}
+        onClick={draftGeneration.generate}
+      >
+        <SparkIcon size={15} />
+        {draftGeneration.busy
+          ? t("commitComposer.action.generatingDraft")
+          : t("commitComposer.action.generateDraft")}
+      </button>
+      <p style={{ ...SUBTLE_TEXT_STYLE, fontSize: 11.5, color: "var(--fg-faint)" }}>
+        {t("commitComposer.draft.generateHint")}
+      </p>
+      {draftGeneration.error === null ? null : (
+        <p role="alert" style={{ ...SUBTLE_TEXT_STYLE, fontSize: 12, color: "var(--danger)" }}>
+          {draftGeneration.error}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -626,7 +650,7 @@ function emptyDraftPreviewFor(
   previewFresh: boolean,
 ): GitDeliveryCommitPreviewResponse | null {
   if (!subjectEmpty || preview === null || previewDraft !== "" || !previewFresh) return null;
-  return preview;
+  return preview.suggestedMessage === undefined ? null : preview;
 }
 
 function visiblePreviewFor(
@@ -903,6 +927,7 @@ function CommitMessageFields(props: CommitMessageFieldsProps): ReactNode {
 interface CommitEditorActionsProps {
   readonly state: CommitComposerState;
   readonly body: string;
+  readonly draftGeneration: DraftGenerationController;
   readonly layout: CommitComposerLayout;
   readonly hintId: string;
   readonly summary: string;
@@ -932,6 +957,9 @@ function CommitEditorActions(props: CommitEditorActionsProps): ReactNode {
             onCreateBranch={props.onCreateBranch}
             t={t}
           />
+        }
+        draftGenerationAction={
+          <GenerateCommitDraftAction state={state} draftGeneration={props.draftGeneration} t={t} />
         }
         description={
           <DescriptionField
@@ -984,12 +1012,19 @@ function CommitFeedback(props: CommitFeedbackProps): ReactNode {
   );
 }
 
+interface DraftGenerationController {
+  readonly busy: boolean;
+  readonly error: string | null;
+  readonly generate: (() => void) | undefined;
+}
+
 interface CommitComposerController {
   readonly state: CommitComposerState;
   readonly summary: string;
   readonly body: string;
   readonly hintId: string;
   readonly previewId: string;
+  readonly draftGeneration: DraftGenerationController;
   readonly setSummary: (value: string) => void;
   readonly setBody: (value: string) => void;
   readonly applyDraft: (message: string) => void;
@@ -1006,6 +1041,11 @@ interface CommitDraftFields {
   readonly setSummary: (value: string) => void;
   readonly setBody: (value: string) => void;
   readonly applyDraft: (message: string) => void;
+}
+
+function draftGenerationErrorText(error: unknown): string {
+  if (error instanceof Error && error.message.trim() !== "") return error.message;
+  return "Keiko could not generate a commit draft.";
 }
 
 function clearStaleAppliedDraft(
@@ -1056,55 +1096,6 @@ function useClearStaleCommitDraft({
   }, [appliedDraftRef, body, previewRevision, setBody, setSummary, summary]);
 }
 
-interface AutoApplyCommitDraftInput {
-  readonly summary: string;
-  readonly body: string;
-  readonly stagedFileCount: number;
-  readonly preview: GitDeliveryCommitPreviewResponse | null;
-  readonly previewDraft: string | null;
-  readonly previewFresh: boolean;
-  readonly previewRevision: number;
-  readonly applyDraft: (message: string) => void;
-}
-
-function useAutoApplyCommitDraft({
-  summary,
-  body,
-  stagedFileCount,
-  preview,
-  previewDraft,
-  previewFresh,
-  previewRevision,
-  applyDraft,
-}: AutoApplyCommitDraftInput): void {
-  const autoAppliedDraftKeyRef = useRef<string | null>(null);
-  useEffect(() => {
-    const message = eligibleAutoCommitDraft({
-      summary,
-      body,
-      stagedFileCount,
-      preview,
-      previewDraft,
-      previewFresh,
-    });
-    if (message === null) return;
-    const key = commitDraftAutoApplyKey(previewRevision, message);
-    if (autoAppliedDraftKeyRef.current === key) return;
-    autoAppliedDraftKeyRef.current = key;
-    applyDraft(message);
-    reportClientDiagnostic("git-client: generated commit draft applied to empty composer");
-  }, [
-    applyDraft,
-    body,
-    preview,
-    previewDraft,
-    previewFresh,
-    previewRevision,
-    stagedFileCount,
-    summary,
-  ]);
-}
-
 function useCommitDraftFields(props: CommitComposerProps): CommitDraftFields {
   const [summary, setSummary] = useControlledComposerField(
     props.summaryValue,
@@ -1143,17 +1134,37 @@ function useCommitDraftFields(props: CommitComposerProps): CommitDraftFields {
     },
     [setBody],
   );
-  useAutoApplyCommitDraft({
-    summary,
-    body,
-    stagedFileCount: props.stagedFileCount,
-    preview: props.preview,
-    previewDraft: props.previewDraft,
-    previewFresh: (props.previewRequestRevision ?? props.previewRevision) === props.previewRevision,
-    previewRevision: props.previewRevision,
-    applyDraft,
-  });
   return { summary, body, setSummary: updateSummary, setBody: updateBody, applyDraft };
+}
+
+function useCommitDraftGeneration(
+  onGenerateDraft: (() => Promise<string>) | undefined,
+  applyDraft: (message: string) => void,
+): DraftGenerationController {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const seqRef = useRef(0);
+  const generate = useCallback((): void => {
+    if (onGenerateDraft === undefined) return;
+    const seq = seqRef.current + 1;
+    seqRef.current = seq;
+    setBusy(true);
+    setError(null);
+    void onGenerateDraft().then(
+      (message) => {
+        if (seqRef.current !== seq) return;
+        applyDraft(message);
+        setBusy(false);
+        reportClientDiagnostic("git-client: model commit draft applied from explicit action");
+      },
+      (err: unknown) => {
+        if (seqRef.current !== seq) return;
+        setBusy(false);
+        setError(draftGenerationErrorText(err));
+      },
+    );
+  }, [applyDraft, onGenerateDraft]);
+  return { busy, error, generate: onGenerateDraft === undefined ? undefined : generate };
 }
 
 function useCommitPreviewRefresh(props: CommitComposerProps, state: CommitComposerState): void {
@@ -1178,6 +1189,7 @@ function useCommitComposerController(
   t: OptionalWidgetTranslate,
 ): CommitComposerController {
   const fields = useCommitDraftFields(props);
+  const draftGeneration = useCommitDraftGeneration(props.onGenerateDraft, fields.applyDraft);
   const previewFresh =
     (props.previewRequestRevision ?? props.previewRevision) === props.previewRevision;
   const baseId = useId();
@@ -1203,6 +1215,7 @@ function useCommitComposerController(
     body: fields.body,
     hintId,
     previewId,
+    draftGeneration,
     setSummary: fields.setSummary,
     setBody: fields.setBody,
     applyDraft: fields.applyDraft,
@@ -1233,6 +1246,7 @@ function CommitComposerContents({
       <CommitEditorActions
         state={controller.state}
         body={controller.body}
+        draftGeneration={controller.draftGeneration}
         layout={props.layout ?? "sidebar"}
         hintId={controller.hintId}
         summary={controller.summary}

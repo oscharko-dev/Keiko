@@ -437,6 +437,10 @@ export interface CodingWorkbenchGitTarget {
 
 function noopOpenGit(_target: CodingWorkbenchGitTarget): void {}
 
+function repositoryRootOrNull(root: string | null | undefined): string | null {
+  return typeof root === "string" && root.trim() !== "" ? root : null;
+}
+
 function runRepositoryRoot(
   runWorkspace: CodingWorkbenchRunWorkspaceBinding,
   activeWorkspace: WorkbenchWorkspaceApi,
@@ -444,10 +448,11 @@ function runRepositoryRoot(
 ): string | null {
   const bound = runWorkspace.bound;
   const trust = bound === null ? null : bound.trust;
-  if (trust !== null) return trust.repositoryRoot;
+  const trustedRoot = repositoryRootOrNull(trust?.repositoryRoot);
+  if (trustedRoot !== null) return trustedRoot;
   const activeInstance = activeWorkspace.activeInstance;
-  if (activeInstance !== null) return activeInstance.repositoryRoot;
-  return selectedRoot ?? null;
+  const activeRoot = repositoryRootOrNull(activeInstance?.repositoryRoot);
+  return activeRoot ?? repositoryRootOrNull(selectedRoot);
 }
 
 function idleRepositoryRoot(
@@ -455,21 +460,27 @@ function idleRepositoryRoot(
   selectedRoot: string | undefined,
 ): string | null {
   const activeInstance = activeWorkspace.activeInstance;
-  if (activeInstance !== null) return activeInstance.repositoryRoot;
-  if (selectedRoot !== undefined) return selectedRoot;
+  const activeRoot = repositoryRootOrNull(activeInstance?.repositoryRoot);
+  if (activeRoot !== null) return activeRoot;
+  const selectedRepositoryRoot = repositoryRootOrNull(selectedRoot);
+  if (selectedRepositoryRoot !== null) return selectedRepositoryRoot;
   const activeBinding = activeWorkspace.activeBinding;
-  return activeBinding === null ? null : activeBinding.activeRoot;
+  return repositoryRootOrNull(activeBinding?.activeRoot);
 }
 
-function workbenchRepositoryRoot(
+function activeWorkbenchRepositoryRoot(
   runWorkspace: CodingWorkbenchRunWorkspaceBinding,
   activeWorkspace: WorkbenchWorkspaceApi,
   selectedRoot: string | undefined,
-  runIsActive: boolean,
 ): string | null {
-  return runIsActive
-    ? runRepositoryRoot(runWorkspace, activeWorkspace, selectedRoot)
-    : idleRepositoryRoot(activeWorkspace, selectedRoot);
+  return runRepositoryRoot(runWorkspace, activeWorkspace, selectedRoot);
+}
+
+function inactiveWorkbenchRepositoryRoot(
+  activeWorkspace: WorkbenchWorkspaceApi,
+  selectedRoot: string | undefined,
+): string | null {
+  return idleRepositoryRoot(activeWorkspace, selectedRoot);
 }
 
 function repositoryBranchReadRoot(
@@ -654,12 +665,9 @@ export function CodingWorkbenchWindow({
     authority.errorMessage,
   );
   const runIsActive = activeRunState(state.run.value?.state);
-  const repositoryRoot = workbenchRepositoryRoot(
-    runWorkspace,
-    activeWorkspace,
-    selectedRoot,
-    runIsActive,
-  );
+  const repositoryRoot = runIsActive
+    ? activeWorkbenchRepositoryRoot(runWorkspace, activeWorkspace, selectedRoot)
+    : inactiveWorkbenchRepositoryRoot(activeWorkspace, selectedRoot);
 
   useEffect(() => {
     if (!approvalAction.current || pendingPermission !== undefined) return;
@@ -1242,8 +1250,8 @@ function runMatchesAcceptedIssue(
   );
 }
 
-function repositoryLabel(root: string | null): string | null {
-  if (root === null) return null;
+function repositoryLabel(root: string | null | undefined): string | null {
+  if (root === null || root === undefined) return null;
   const parts = root.split(/[\\/]/u);
   for (let index = parts.length - 1; index >= 0; index -= 1) {
     const part = parts.at(index);

@@ -956,7 +956,7 @@ describe("keiko-contracts package surface", () => {
     expect(GIT_DELIVERY_CHECKS_OVERALL_STATUSES).toHaveLength(4);
     expect(GIT_DELIVERY_PULL_REQUEST_STATUSES).toHaveLength(3);
     expect(GIT_DELIVERY_BRANCH_MATCH_KINDS).toHaveLength(2);
-    expect(GIT_DELIVERY_EXECUTION_ERROR_CODES).toHaveLength(6);
+    expect(GIT_DELIVERY_EXECUTION_ERROR_CODES).toHaveLength(7);
     expect(GIT_DELIVERY_EXECUTION_OUTCOMES).toHaveLength(4);
     expect(GIT_DELIVERY_MERGE_BLOCK_REASONS).toHaveLength(6);
 
@@ -996,7 +996,7 @@ describe("keiko-contracts package surface", () => {
     expect(GIT_DELIVERY_ACTION_SHEET_STATES).toHaveLength(3);
     expect(GIT_DELIVERY_APPROVAL_NECESSITIES).toHaveLength(3);
     expect(GIT_DELIVERY_BLOCKED_CAUSES).toHaveLength(3);
-    expect(GIT_DELIVERY_RECOVERY_ACTION_HINTS).toHaveLength(9);
+    expect(GIT_DELIVERY_RECOVERY_ACTION_HINTS).toHaveLength(10);
 
     expect(typeof isGitDeliveryActionSheet).toBe("function");
     expect(typeof buildGitDeliveryActionSheet).toBe("function");

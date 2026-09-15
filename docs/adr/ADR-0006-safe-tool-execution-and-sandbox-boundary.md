@@ -14,7 +14,7 @@ Accepted; module location superseded by ADR-0019 (monorepo split — code now un
 > own machine and their own remote (`GOVERNED_GIT_IDENTITY_SANDBOX_POLICY`,
 > `GOVERNED_GIT_REMOTE_SANDBOX_POLICY`, `packages/keiko-contracts/src/tools.ts`). Under the default
 > profile a governed `git commit` cannot read the user's identity or `commit.gpgsign`/
-> `user.signingkey` — it lands under an auto-detected author, unsigned, and reports success — and
+> `user.signingkey` — it would have to run without the local human's signing authority — and
 > `git push` / `gh api` have no SSH agent, no `~/.ssh`, no credential helper and no gh
 > configuration, so governed push, pull request and merge cannot authenticate at all. The two lanes
 > forward the account and agent state normal git credentials need, mirroring the grant
@@ -31,6 +31,12 @@ Accepted; module location superseded by ADR-0019 (monorepo split — code now un
 > packs and argv builders, not by the child's environment. The "no credential-bearing variable is
 > ever forwarded" and "no credential is available for exfiltration" statements below are therefore
 > to be read as scoped to the default profile and every lane except governed remote delivery.
+>
+> **Amended by the signed local-delivery repair (2026-09-15).** Governed local commit execution must
+> use the identity lane, invoke Git's configured signing flow, and fail visibly with
+> `signature-failed` when the user's signing key, SSH agent, verifier, or local Git signing
+> configuration cannot produce a verifiable commit. The product must not suppress signing, silently
+> fall back to unsigned commits, or report success for a commit GitHub branch protection will reject.
 
 ## Context
 

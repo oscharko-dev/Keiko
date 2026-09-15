@@ -2958,6 +2958,14 @@ export interface GitDeliveryCommitPreviewResponse {
   readonly policyBlockReason?: string;
 }
 
+export interface GitDeliveryCommitDraftResponse {
+  readonly schemaVersion: "1";
+  readonly status: "succeeded";
+  readonly source: "model";
+  readonly suggestedMessage: string;
+  readonly summary: GitCommitChangeSummary;
+}
+
 export async function fetchGitDeliveryCommitPreview(
   input: { readonly projectId: string; readonly messageDraft?: string },
   signal?: AbortSignal,
@@ -2968,6 +2976,21 @@ export async function fetchGitDeliveryCommitPreview(
       schemaVersion: "1",
       projectId: input.projectId,
       ...(input.messageDraft === undefined ? {} : { messageDraft: input.messageDraft }),
+    }),
+    ...(signal === undefined ? {} : { signal }),
+  });
+}
+
+export async function fetchGitDeliveryCommitDraft(
+  input: { readonly projectId: string; readonly instruction?: string },
+  signal?: AbortSignal,
+): Promise<GitDeliveryCommitDraftResponse> {
+  return fetchJson("/api/git-delivery/commit/draft", {
+    method: "POST",
+    body: JSON.stringify({
+      schemaVersion: "1",
+      projectId: input.projectId,
+      ...(input.instruction === undefined ? {} : { instruction: input.instruction }),
     }),
     ...(signal === undefined ? {} : { signal }),
   });

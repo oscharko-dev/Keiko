@@ -133,6 +133,7 @@ export type GitDeliveryRecoveryActionHint =
   | "retry"
   | "stage-changes"
   | "configure-upstream"
+  | "configure-signing"
   | "resolve-conflicts"
   | "abort-in-progress-operation"
   | "request-approval"
@@ -144,6 +145,7 @@ export const GIT_DELIVERY_RECOVERY_ACTION_HINTS: readonly GitDeliveryRecoveryAct
   "retry",
   "stage-changes",
   "configure-upstream",
+  "configure-signing",
   "resolve-conflicts",
   "abort-in-progress-operation",
   "request-approval",
