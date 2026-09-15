@@ -472,11 +472,17 @@ describe("commit preview — read-only verification context (AC3)", () => {
         "",
         "Update the staged selected files and documentation.",
         "Keep the commit limited to the selected staged files.",
+        "",
+        "Selected staged files:",
+        "- a (source change).",
+        "- b (documentation).",
+        "",
+        "🤖 Generated with [Keiko](https://github.com/oscharko-dev/Keiko)",
       ].join("\n"),
     );
   });
 
-  it("builds a repository-neutral commit draft from the selected staged files", async () => {
+  it("builds an attributed repository-neutral commit draft from the selected staged files", async () => {
     const handler = createHandleCommitPreview({
       execution: seams({
         stagedPathsReader: () =>
@@ -499,9 +505,15 @@ describe("commit preview — read-only verification context (AC3)", () => {
         "Update the staged cart service, test coverage, and configuration.",
         "Keep the commit limited to the selected staged files.",
         "Includes related test coverage.",
+        "",
+        "Selected staged files:",
+        "- cart service (source change).",
+        "- cart service test (test coverage).",
+        "- package (configuration).",
+        "",
+        "🤖 Generated with [Keiko](https://github.com/oscharko-dev/Keiko)",
       ].join("\n"),
     );
-    expect(body.suggestedMessage).not.toContain("Keiko");
   });
 
   it("classifies common config files and normalizes a repository scope", async () => {
@@ -526,6 +538,13 @@ describe("commit preview — read-only verification context (AC3)", () => {
         "",
         "Update the staged configuration.",
         "Keep the commit limited to the selected staged files.",
+        "",
+        "Selected staged files:",
+        "- tsconfig build (configuration).",
+        "- vite config (configuration).",
+        "- settings (configuration).",
+        "",
+        "🤖 Generated with [Keiko](https://github.com/oscharko-dev/Keiko)",
       ].join("\n"),
     );
   });
@@ -548,6 +567,33 @@ describe("commit preview — read-only verification context (AC3)", () => {
     expect((res.body as GitDeliveryCommitPreviewBody).suggestedMessage).toContain(
       "chore(payments):",
     );
+  });
+
+  it("keeps the selected-file draft notes bounded for large staged selections", async () => {
+    const handler = createHandleCommitPreview({
+      execution: seams({
+        stagedPathsReader: () =>
+          Promise.resolve([
+            "packages/keiko-ui/src/alpha.ts",
+            "packages/keiko-ui/src/beta.ts",
+            "packages/keiko-ui/src/gamma.ts",
+            "packages/keiko-ui/src/delta.ts",
+            "packages/keiko-ui/src/epsilon.ts",
+            "packages/keiko-ui/src/zeta.ts",
+            "packages/keiko-ui/src/eta.ts",
+          ]),
+      }),
+    });
+    const res = await handler(
+      ctxFor(PREVIEW, { schemaVersion: "1", projectId, messageDraft: "" }),
+      deps(),
+    );
+    const suggested = (res.body as GitDeliveryCommitPreviewBody).suggestedMessage ?? "";
+
+    expect(suggested).toContain("Selected staged files:");
+    expect(suggested).toContain("- alpha (source change).");
+    expect(suggested).toContain("- 1 more staged files.");
+    expect(suggested).not.toContain("- eta (source change).");
   });
 
   it("records a content-free preview summary and never the drafted message", async () => {
@@ -1188,6 +1234,75 @@ describe("commit approve (mints the approval execute consumes) — #3386, ADR-01
       deps({ gitDeliveryAuthority: { current: () => undefined } }),
     );
     expect(res.status).toBe(403);
+  });
+
+  it("admits a user-initiated Git widget commit without accepted run authority", async () => {
+    const adapter = recordingAdapter();
+    const events: ServerLogEvent[] = [];
+    const approvalStore = createInMemoryGitDeliveryApprovalStore();
+    const localUserDeps = deps({ gitDeliveryAuthority: { current: () => undefined } });
+    const execution = seams({
+      adapterFactory: () => adapter.adapter,
+      approvalStore,
+      activityLog: { write: (event) => events.push(event) },
+    });
+    const message = [
+      "chore: update generated commit footer",
+      "",
+      "Update the staged commit draft handling.",
+      "",
+      "🤖 Generated with [Keiko](https://github.com/oscharko-dev/Keiko)",
+    ].join("\n");
+    const request = { schemaVersion: "1", projectId, message, userInitiated: true } as const;
+    const approveHandler = createHandleCommitApprove({ execution });
+    const approveRes = await approveHandler(ctxFor(EXECUTE, request), localUserDeps);
+    expect(approveRes.status).toBe(200);
+    const approval = (approveRes.body as GitDeliveryCommitApproveResponseBody).approval;
+
+    const executeHandler = createHandleCommitExecute({ execution });
+    const executeRes = await executeHandler(
+      ctxFor(EXECUTE, { ...request, approval }),
+      localUserDeps,
+    );
+
+    expect((executeRes.body as { status: string }).status).toBe("succeeded");
+    expect(adapter.calls()).toEqual(["commit"]);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          op: "git.delivery.authority.admitted",
+          extra: { operation: "commit", phase: "admission", source: "local-user" },
+        }),
+        expect.objectContaining({
+          op: "git.delivery.commit.approval.minted",
+          extra: { operation: "commit", runId: "local-user-git-widget" },
+        }),
+      ]),
+    );
+    expect(JSON.stringify(events)).not.toContain("generated commit footer");
+  });
+
+  it("keeps managed task worktrees bound to run authority for user-initiated commits", async () => {
+    const managed = managedWorkspaceDeps();
+    const adapter = recordingAdapter();
+    try {
+      const approveHandler = createHandleCommitApprove({
+        execution: seams({ adapterFactory: () => adapter.adapter }),
+      });
+      const res = await approveHandler(
+        ctxFor(EXECUTE, {
+          schemaVersion: "1",
+          projectId: managed.instance.managedWorktreePath,
+          message: "feat(ui): add flow",
+          userInitiated: true,
+        }),
+        deps({ ...managed.override, gitDeliveryAuthority: { current: () => undefined } }),
+      );
+      expect(res.status).toBe(403);
+      expect(adapter.calls()).toEqual([]);
+    } finally {
+      managed.cleanup();
+    }
   });
 });
 
