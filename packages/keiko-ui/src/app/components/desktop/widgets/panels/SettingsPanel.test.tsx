@@ -869,7 +869,7 @@ describe("SettingsPanel gateway readiness checks", () => {
     view.rerender(<SettingsPanel />);
     expect(screen.getByRole("button", { name: "Run readiness check" })).toHaveFocus();
     fetchModelsMock.mockResolvedValue({ models: [updated] });
-    fireEvent.click(screen.getByRole("button", { name: "Apply values" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Apply values" }));
     await waitFor(() => {
       expect(applyGatewayVerifiedCapabilitiesMock).toHaveBeenCalledWith("test-chat-1", {
         toolCalling: false,
@@ -909,7 +909,7 @@ describe("SettingsPanel gateway readiness checks", () => {
       /Tools: configured no; verified yes/i,
     );
     fireEvent.click(screen.getByRole("button", { name: "Apply verified values" }));
-    fireEvent.click(screen.getByRole("button", { name: "Apply values" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Apply values" }));
     await waitFor(() => {
       expect(applyGatewayVerifiedCapabilitiesMock).toHaveBeenCalledWith("test-chat-1", {
         toolCalling: true,
@@ -970,7 +970,7 @@ describe("SettingsPanel gateway readiness checks", () => {
     render(<SettingsPanel />);
     fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
     fireEvent.click(await screen.findByRole("button", { name: "Apply verified values" }));
-    fireEvent.click(screen.getByRole("button", { name: "Apply values" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Apply values" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/were not applied/i);
