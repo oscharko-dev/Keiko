@@ -386,6 +386,49 @@ describe("release-impact governance", () => {
     );
   });
 
+  // Negative coverage for the `withoutApprovalReference` exception introduced when the manual
+  // approval-comment enforcement was retired: every other `review.*` field is still load-bearing
+  // and mutating it must still fail append-only, so the exception can never widen silently.
+  it.each([
+    ["reviewer", "some-other-owner"],
+    ["reviewedAt", "2020-01-01"],
+    ["rationale", "Rewritten after publication."],
+    ["humanApproved", false],
+    ["status", "pending"],
+  ])("still rejects an in-place change to review.%s on a published entry", (field, replacement) => {
+    const previousCatalog = catalog([oldEntry()]);
+    const mutated = oldEntry({ review: { ...oldEntry().review, [field]: replacement } });
+
+    const result = validateReleaseImpactCatalog(catalog([entry(), mutated]), rootManifest(), {
+      previousCatalog,
+    });
+
+    expect(result.ok).toBe(false);
+    expect(messages(result)).toContain(
+      "published entry 2026-05-01-keiko-0.2.10-baseline changed in place",
+    );
+  });
+
+  // Positive coverage for the same exception: a corrected `approvalReference` is legitimate audit
+  // metadata (the field is no longer format-enforced or GitHub-verified), so the append-only check
+  // must accept it as the sole allowed delta on a published entry.
+  it("accepts an in-place correction to review.approvalReference alone", () => {
+    const previousCatalog = catalog([oldEntry()]);
+    const corrected = oldEntry({
+      review: {
+        ...oldEntry().review,
+        approvalReference: "github-issue-comment:oscharko-dev/Keiko#1690#4242",
+      },
+    });
+
+    const result = validateReleaseImpactCatalog(catalog([entry(), corrected]), rootManifest(), {
+      previousCatalog,
+    });
+
+    expect(messages(result)).not.toContain("changed in place");
+    expect(result.ok).toBe(true);
+  });
+
   it("requires baseline supported-from coverage", () => {
     const result = validateReleaseImpactCatalog(
       catalog([entry({ supportedFrom: ["0.2.5"] })]),
