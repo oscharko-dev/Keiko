@@ -86,8 +86,15 @@ describe("GitChangeScopePill", () => {
     expect(screen.getByText("Preparing Git change context")).toBeInTheDocument();
   });
 
+  // #3506 review — `comparisonKey` now scopes same-repo collision by `remoteDigest` alongside
+  // `baseRef/headRef`, so the pending comparison must carry the SAME `remoteDigest` as the
+  // confirmed scope for the pending row to be recognized as a duplicate of the confirmed one on
+  // the same repository. Different (or undefined) digests keep the pending row visible even when
+  // refs match, because a chat may hold Git-change scopes across different repositories that
+  // happen to share base/head ref names.
   it("does not duplicate a pending connector once the same Git comparison is confirmed", () => {
-    const chat = makeChat({ gitChangeScopes: [makeGitChangeScope()] });
+    const confirmed = makeGitChangeScope();
+    const chat = makeChat({ gitChangeScopes: [confirmed] });
     render(
       <GitChangeScopePill
         chat={chat}
@@ -96,6 +103,7 @@ describe("GitChangeScopePill", () => {
             connectionId: "git-1~chat-1",
             baseRef: "main",
             headRef: "feature/x",
+            remoteDigest: confirmed.remoteDigest,
             pending: true,
           },
         ]}

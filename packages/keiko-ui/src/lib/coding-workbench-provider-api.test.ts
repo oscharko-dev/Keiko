@@ -217,6 +217,12 @@ describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
     window.removeEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, readinessUpdated);
   });
 
+  // #3506 review — `recoverUnverifiedGatewayProfile` now wraps each best-effort recovery step
+  // (`/api/models`, `requestAutomaticReadiness`, and the final sidecar re-read) in try/catch and
+  // returns the caller's known-good `{ status: "unavailable", reason }` on any failure so a
+  // transient sidecar or model-catalog hiccup cannot break Coding Workbench startup. The invariant
+  // these cases still protect is the mutation guard: a malformed `/api/models` body must never let
+  // the readiness POST fire on an unverified candidate.
   it.each([
     ["non-array model list", { models: "coding-chat" }],
     ["non-object capability", { models: [null] }],
@@ -235,18 +241,17 @@ describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
       },
     ],
   ] as const)("fails closed on a %s before issuing a readiness mutation", async (_name, models) => {
+    const unavailable = { status: "unavailable", reason: "tool-calling-unverified" };
     const fetchMock = vi
       .fn()
-      .mockResolvedValueOnce(
-        jsonResponse({ status: "unavailable", reason: "tool-calling-unverified" }),
-      )
+      .mockResolvedValueOnce(jsonResponse(unavailable))
       .mockResolvedValueOnce(jsonResponse(models));
     vi.stubGlobal("fetch", fetchMock);
 
-    await expect(fetchCodingWorkbenchSidecarGatewayProfile()).rejects.toMatchObject({
-      code: "CONTRACT_VALIDATION_FAILED",
-      status: 502,
-    });
+    // A malformed `/api/models` body is caught inside `recoverUnverifiedGatewayProfile`; the caller
+    // receives the original known-good unavailable profile from `readSidecarGatewayProfile()`.
+    await expect(fetchCodingWorkbenchSidecarGatewayProfile()).resolves.toEqual(unavailable);
+    // The load-bearing invariant: no readiness mutation was issued on an unverified candidate.
     expect(fetchMock.mock.calls.some(([path]) => path === "/api/gateway/readiness")).toBe(false);
   });
 

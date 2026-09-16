@@ -50,7 +50,7 @@ import {
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
-import { currentGatewayConfig, type UiHandlerDeps } from "../deps.js";
+import type { UiHandlerDeps } from "../deps.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { requiresConfiguredManagedWorkspaceAuthority } from "../task-workspace/workspace-root-access.js";
@@ -566,7 +566,12 @@ function validateDraftRequest(obj: Record<string, unknown>): CommitDraftRequest 
 }
 
 function resolveCommitDraftModel(deps: UiHandlerDeps): ResolvedCommitDraftModel | undefined {
-  const config = currentGatewayConfig(deps);
+  // #3506 cold-import — a value import from ../deps.js triggers the routes.js barrel through
+  // deps' transitive route imports and re-enters this module while its own GIT_DELIVERY_COMMIT_ROUTE_GROUP
+  // exports are still uninitialized. Inline the two-line lookup that lived in
+  // `currentGatewayConfig`; the shape is stable and this module now takes only type imports
+  // from ../deps.js.
+  const config = deps.gatewayConfig?.current() ?? deps.config;
   if (config === undefined) return undefined;
   const structuredModelId = selectConfiguredModel(config, { kind: "chat", structuredOutput: true });
   const modelId = structuredModelId ?? selectConfiguredModel(config, { kind: "chat" });

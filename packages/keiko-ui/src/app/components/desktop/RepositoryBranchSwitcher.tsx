@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { initializeGitRepository } from "@/lib/api";
 import { reportClientDiagnostic } from "@/lib/client-diagnostics";
 import { clientErrorSummary, correlationIdOf } from "@/lib/client-error-summary";
+import { useTranslate, type I18nTranslate } from "@/lib/i18n";
 import { useActiveWorkspace, type ActiveWorkspaceApi } from "./context/ActiveWorkspaceContext";
 import { useOptionalChatSessionCatalog } from "./context/ChatSessionContext";
 import { useDialogTabTrap } from "./hooks/useDialogTabTrap";
@@ -29,27 +30,27 @@ function InitializeRepositoryDialog(props: {
   readonly busy: boolean;
   readonly onCancel: () => void;
   readonly onConfirm: () => void;
+  readonly t: I18nTranslate;
 }): ReactNode {
   const dialogRef = useRef<HTMLDivElement>(null);
   useDialogTabTrap(dialogRef);
   useModalInteractionLock({ initialFocusRef: dialogRef });
+  const { t } = props;
   const dialog = (
     <div
       ref={dialogRef}
       role="alertdialog"
       aria-modal="true"
-      aria-label="Set up Git"
+      aria-label={t("repositoryBranchSwitcher.setUpGit")}
       tabIndex={-1}
       className={styles.cmpDialogBackdrop}
     >
       <section className={styles.cmpDialogCard}>
-        <h2>Set up Git</h2>
-        <p>
-          Initialize the selected project as a local Git repository with the initial branch main.
-        </p>
+        <h2>{t("repositoryBranchSwitcher.setUpGit")}</h2>
+        <p>{t("repositoryBranchSwitcher.initializeDescription")}</p>
         <div className={styles.cmpDialogActions}>
           <button type="button" className={styles.cmpSecondary} onClick={props.onCancel}>
-            Cancel
+            {t("repositoryBranchSwitcher.cancel")}
           </button>
           <button
             type="button"
@@ -57,7 +58,9 @@ function InitializeRepositoryDialog(props: {
             disabled={props.busy}
             onClick={props.onConfirm}
           >
-            {props.busy ? "Initializing…" : "Initialize repository"}
+            {props.busy
+              ? t("repositoryBranchSwitcher.initializing")
+              : t("repositoryBranchSwitcher.initializeRepository")}
           </button>
         </div>
       </section>
@@ -252,6 +255,7 @@ function BranchControl(props: {
   readonly flow: GitActionFlowState;
   readonly dialogs: DialogState;
   readonly initialization: InitializationController;
+  readonly t: I18nTranslate;
 }): ReactNode {
   if (props.state.response?.reason === "not-a-repository") {
     return (
@@ -261,7 +265,7 @@ function BranchControl(props: {
         disabled={props.initialization.busy}
         onClick={props.initialization.show}
       >
-        <BranchIcon size={14} /> Set up Git
+        <BranchIcon size={14} /> {props.t("repositoryBranchSwitcher.setUpGit")}
       </button>
     );
   }
@@ -283,8 +287,9 @@ function BranchDialogs(props: {
   readonly mutations: BranchMutationController;
   readonly dialogs: DialogState;
   readonly initialization: InitializationController;
+  readonly t: I18nTranslate;
 }): ReactNode {
-  const { branchState, dialogs, initialization, mutations } = props;
+  const { branchState, dialogs, initialization, mutations, t } = props;
   return (
     <>
       {dialogs.pendingSwitch === null ? null : (
@@ -314,6 +319,7 @@ function BranchDialogs(props: {
           busy={initialization.busy}
           onCancel={initialization.close}
           onConfirm={initialization.run}
+          t={t}
         />
       ) : null}
     </>
@@ -328,6 +334,7 @@ export function RepositoryBranchSwitcher(): ReactNode {
   const mutations = useBranchMutations(root, branchState.branches, guard);
   const dialogs = useBranchDialogs(root, guard);
   const initialization = useRepositoryInitialization(root);
+  const t = useTranslate();
   useEffect(() => {
     if (mutations.flow.outcome?.status === "succeeded") dialogs.closeNewBranch();
   }, [dialogs, mutations.flow.outcome?.status]);
@@ -341,6 +348,7 @@ export function RepositoryBranchSwitcher(): ReactNode {
         flow={mutations.flow}
         dialogs={dialogs}
         initialization={initialization}
+        t={t}
       />
       {feedback === null ? null : (
         <p role="alert" className={styles.cmpFeedback}>
@@ -352,6 +360,7 @@ export function RepositoryBranchSwitcher(): ReactNode {
         mutations={mutations}
         dialogs={dialogs}
         initialization={initialization}
+        t={t}
       />
     </div>
   );

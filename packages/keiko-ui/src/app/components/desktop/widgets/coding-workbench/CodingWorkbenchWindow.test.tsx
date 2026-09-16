@@ -2843,6 +2843,10 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
 
   it("grants trust for the bound root through the existing grant route and hides once trusted", async () => {
     trustStatusMock.mockResolvedValue(trustStatus("/repos/keiko", "restricted"));
+    // #3506 review — `visiblePendingTrustDecision` composes the pause key with the pending
+    // grant target, so accepting the repository grant does not suppress a still-required
+    // worktree grant (ADR-0147 D3 drift case). Both grants resolve to "trusted"; the load-bearing
+    // invariant is that BOTH grants route through the same server-owned client.
     trustMutateMock.mockResolvedValue(trustStatus("/repos/keiko", "trusted"));
     const user = userEvent.setup();
     renderWorkbench(
@@ -2852,12 +2856,25 @@ describe("CodingWorkbenchWindow #3390 verification trust affordance", () => {
       activeWorkspaceWithBinding("/repos/keiko", "/repos/keiko"),
     );
 
-    const action = await screen.findByRole("button", {
+    // Repository grant fires first while the repo is restricted...
+    const repositoryAction = await screen.findByRole("button", {
       name: "Allow package scripts for verification",
     });
-    await user.click(action);
+    await user.click(repositoryAction);
+    await waitFor(() =>
+      expect(trustMutateMock).toHaveBeenNthCalledWith(1, "/repos/keiko", "grant"),
+    );
 
-    expect(trustMutateMock).toHaveBeenCalledExactlyOnceWith("/repos/keiko", "grant");
+    // ...then the affordance stays visible for the drift-case worktree grant on the same bound
+    // root. Granting it too clears the affordance — proving each grant target is accepted
+    // independently rather than a single click masking the second decision.
+    const worktreeAction = await screen.findByRole("button", {
+      name: "Allow package scripts for verification",
+    });
+    await user.click(worktreeAction);
+    await waitFor(() =>
+      expect(trustMutateMock).toHaveBeenNthCalledWith(2, "/repos/keiko", "grant"),
+    );
     await waitFor(() =>
       expect(
         screen.queryByRole("button", { name: /Allow package scripts/u }),

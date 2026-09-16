@@ -2546,4 +2546,10 @@ export const DE_MESSAGES = {
     "Diese Vorschau ist veraltet — der Pull Request hat sich seit der Erstellung geändert. Vorschau erneut abrufen, bevor Sie genehmigen oder übernehmen.",
   "governedPullRequestCard.description.refreshHint.targetChanged":
     "Das Repository oder die Pull-Request-Nummer hat sich seit der letzten Vorschau geändert. Vorschau erneut abrufen, bevor Sie genehmigen oder übernehmen.",
+  "repositoryBranchSwitcher.setUpGit": "Git einrichten",
+  "repositoryBranchSwitcher.initializeDescription":
+    "Initialisiert das ausgewählte Projekt als lokales Git-Repository mit dem Startbranch main.",
+  "repositoryBranchSwitcher.cancel": "Abbrechen",
+  "repositoryBranchSwitcher.initializing": "Initialisieren…",
+  "repositoryBranchSwitcher.initializeRepository": "Repository initialisieren",
 } satisfies MessageCatalog;

@@ -15,6 +15,7 @@ import {
 } from "@oscharko-dev/keiko-git";
 import type { UiHandlerDeps } from "../deps.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "../diagnostics-log.js";
+import { observedGitRunner } from "../gitProcessActivity.js";
 import type { ServerLogSink } from "../observability/index.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { RouteContext, RouteDefinition, RouteResult } from "../routes.js";
@@ -238,10 +239,14 @@ function recordUnexpectedFailure(deps: UiHandlerDeps, correlationId: string, err
 export function createHandleGitRepositoryInitialize(
   seams: GitRepositoryInitializationSeams = {},
 ): (ctx: RouteContext, deps: UiHandlerDeps) => Promise<RouteResult> {
-  const runner = seams.runner ?? defaultGitProcessRunner;
   return async (ctx, deps): Promise<RouteResult> => {
     const log = seams.activityLog ?? deps.activityLog ?? processServerLogSink();
     const correlationId = ctx.correlationId ?? randomUUID();
+    // Wrap the git runner in the same observedGitRunner used by every other gitDelivery route
+    // so every process this route spawns reports its own activity line with the request's
+    // correlationId. Bind inside the closure so the log and correlationId are available
+    // (the git-runner-observation guard rejects raw runners bound at module scope).
+    const runner = observedGitRunner(seams.runner ?? defaultGitProcessRunner, log, correlationId);
     const parsed = await readParsed(ctx.req);
     if (!parsed.ok) {
       recordOutcome(log, correlationId, parsed.result.status, "invalid-request");

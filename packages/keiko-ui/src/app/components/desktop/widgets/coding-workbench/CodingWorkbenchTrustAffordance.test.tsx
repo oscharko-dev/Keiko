@@ -99,18 +99,30 @@ describe("CodingWorkbenchTrustAffordance", () => {
 
   it("grants the repository root while the paused run waits on an untrusted repository", async () => {
     fetchStatus.mockResolvedValue(status("/repo-a", "restricted"));
-    mutateTrust.mockResolvedValue(status("/repo-a", "trusted"));
+    // Both grant targets resolve the same "trusted" response — the load-bearing invariant is that
+    // the repository grant fires FIRST while the repo is restricted, and only then does the
+    // affordance offer the drift-case worktree grant (ADR-0147 D3).
+    mutateTrust
+      .mockResolvedValueOnce(status("/repo-a", "trusted"))
+      .mockResolvedValueOnce(status("/worktree-a", "trusted"));
     const user = userEvent.setup();
     render(
       <CodingWorkbenchTrustAffordance binding={binding()} pauseReason="workspace-script-trust" />,
     );
 
-    const action = await screen.findByRole("button", { name: ALLOW });
-    await user.click(action);
+    // #3506 review — `visiblePendingTrustDecision` composes the pause key as
+    // `${target.pauseKey}${pending.grantTarget}`, so accepting the repository grant no longer
+    // suppresses a still-required worktree grant. Click the repository grant first...
+    const repositoryAction = await screen.findByRole("button", { name: ALLOW });
+    await user.click(repositoryAction);
+    await waitFor(() => expect(mutateTrust).toHaveBeenNthCalledWith(1, "/repo-a", "grant"));
 
-    expect(mutateTrust).toHaveBeenCalledExactlyOnceWith("/repo-a", "grant");
-    // The grant response IS the re-read status: the affordance adopts it directly and, once
-    // trusted, removes the action rather than leaving a stale "restricted" button behind.
+    // ...the affordance stays visible for the drift-case worktree grant. Grant that too, and only
+    // then the affordance clears — proving the pause key IS bound to the grant target and each
+    // decision is accepted independently rather than the earlier repository acceptance masking it.
+    const worktreeAction = await screen.findByRole("button", { name: ALLOW });
+    await user.click(worktreeAction);
+    await waitFor(() => expect(mutateTrust).toHaveBeenNthCalledWith(2, "/worktree-a", "grant"));
     await waitFor(() =>
       expect(
         screen.queryByRole("button", { name: /Allow package scripts/u }),

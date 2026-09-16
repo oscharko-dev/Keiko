@@ -2466,6 +2466,12 @@ export const EN_MESSAGES = {
     "This preview is stale — the pull request changed since it was generated. Preview again before approving or applying.",
   "governedPullRequestCard.description.refreshHint.targetChanged":
     "The repository or Pull Request number changed since the last preview. Preview again before approving or applying.",
+  "repositoryBranchSwitcher.setUpGit": "Set up Git",
+  "repositoryBranchSwitcher.initializeDescription":
+    "Initialize the selected project as a local Git repository with the initial branch main.",
+  "repositoryBranchSwitcher.cancel": "Cancel",
+  "repositoryBranchSwitcher.initializing": "Initializing…",
+  "repositoryBranchSwitcher.initializeRepository": "Initialize repository",
 } as const;
 
 export type MessageKey = keyof typeof EN_MESSAGES;

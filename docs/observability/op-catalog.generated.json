@@ -1064,7 +1064,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/repositoryInitializationRoutes.ts:229",
+      "site": "packages/keiko-server/src/gitDelivery/repositoryInitializationRoutes.ts:230",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -2502,61 +2502,61 @@
     {
       "op": "git.commit.draft.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:711",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:713",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.draft.model",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:309",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:308",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.draft.worktree",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:295",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:294",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.execute.conflict-scan",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:323",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:322",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.execute.mutation",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:337",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:336",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.preview.branch-protection",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:267",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:266",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.preview.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:233",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:232",
       "package": "keiko-server"
     },
     {
       "op": "git.commit.preview.worktree",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:281",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:280",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.authority.admitted",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1001",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1003",
       "package": "keiko-server"
     },
     {
@@ -2592,13 +2592,13 @@
     {
       "op": "git.delivery.commit.approval.minted",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1141",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:1143",
       "package": "keiko-server"
     },
     {
       "op": "git.delivery.commit.approval.required",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:991",
+      "site": "packages/keiko-server/src/gitDelivery/commitRoutes.ts:993",
       "package": "keiko-server"
     },
     {
@@ -2856,7 +2856,7 @@
     {
       "op": "git.repository.initialize",
       "category": "security",
-      "site": "packages/keiko-server/src/gitDelivery/repositoryInitializationRoutes.ts:103",
+      "site": "packages/keiko-server/src/gitDelivery/repositoryInitializationRoutes.ts:104",
       "package": "keiko-server"
     },
     {
