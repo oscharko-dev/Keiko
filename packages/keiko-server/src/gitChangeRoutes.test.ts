@@ -471,7 +471,6 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
     // AFTER performing an unnecessary snapshot capture — the whole point of this rejection is that
     // no snapshot is worth taking when the two refs resolve to the same head.
     const base = fakeSnapshotService([]);
-    if (base === undefined) throw new TypeError("Fake snapshot service is required");
     const captureSpy = vi.fn((input: GitChangeSnapshotCaptureInput) => base.capture(input));
     const service: UiHandlerDeps["gitChangeSnapshotService"] = { ...base, capture: captureSpy };
     const { deps, chatStore } = buildHarness({
