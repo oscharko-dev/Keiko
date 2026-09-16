@@ -31,4 +31,15 @@ describe("release publish job token", () => {
       statuses: "read",
     });
   });
+
+  it("budgets npm trusted-publishing registry quarantine without a classic token", () => {
+    const publishJob = workflow.jobs.publish;
+    const publishStep = publishJob.steps.find((step) => step.name === "Publish package");
+
+    expect(publishJob["timeout-minutes"]).toBeGreaterThanOrEqual(75);
+    expect(publishStep.env.KEIKO_RELEASE_VERIFY_ATTEMPTS).toBe("30");
+    expect(publishStep.env.KEIKO_RELEASE_VERIFY_DELAY_MS).toBe("60000");
+    expect(publishStep.env.NODE_AUTH_TOKEN).toBeUndefined();
+    expect(publishStep.env.NPM_TOKEN).toBeUndefined();
+  });
 });

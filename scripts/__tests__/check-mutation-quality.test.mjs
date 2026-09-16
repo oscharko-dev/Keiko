@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   changedLineRanges,
   evaluateMutationBaseline,
+  evaluateStrictMutation,
   evaluateScopedMutation,
   executeMutationQualityCli,
   mutationFingerprint,
@@ -103,6 +104,29 @@ describe("mutation quality", () => {
         "Surviving mutant count regressed.",
         "No-coverage mutant count regressed.",
         expect.stringContaining("Unexpected mutant result"),
+      ]),
+    );
+  });
+
+  it("flags zero-kill reports as instrumentation failures before quality interpretation", () => {
+    expect(
+      evaluateMutationBaseline(report(mutant("Survived")), {
+        acceptedDebt: [mutationFingerprint("src/security.ts", mutant("Survived"))],
+        maximumNoCoverage: 0,
+        maximumSurvived: 1,
+        minimumScore: 0,
+      }).failures,
+    ).toContain(
+      "Mutation run detected zero killed or timed-out mutants; verify Stryker/Vitest instrumentation before interpreting the score.",
+    );
+  });
+
+  it("enforces strict mutation reports without a historical-debt allowance", () => {
+    expect(evaluateStrictMutation(report(mutant("Killed"))).failures).toEqual([]);
+    expect(evaluateStrictMutation(report(mutant("Killed"), mutant("Survived"))).failures).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("below 100.00%"),
+        "Surviving mutant count 1 exceeds 0.",
       ]),
     );
   });
@@ -250,6 +274,31 @@ describe("mutation quality", () => {
       run,
     });
     expect(run).toHaveBeenCalledWith({ base: "base", head: "head", mode: "scoped" });
+  });
+
+  it("passes strict report arguments to the runner", async () => {
+    const run = vi.fn(async () => undefined);
+    await executeMutationQualityCli({
+      args: [
+        "--strict",
+        "--report",
+        "debug.json",
+        "--minimum-score",
+        "100",
+        "--maximum-survived",
+        "0",
+        "--maximum-no-coverage",
+        "0",
+      ],
+      run,
+    });
+    expect(run).toHaveBeenCalledWith({
+      maximumNoCoverage: 0,
+      maximumSurvived: 0,
+      minimumScore: 100,
+      mode: "strict",
+      reportPath: "debug.json",
+    });
   });
 
   it("uses default CLI error adapters for non-Error failures", async () => {

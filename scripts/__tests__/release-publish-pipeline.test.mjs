@@ -33,9 +33,9 @@
 //      falsely report PASS.
 //   D. No npm registry token configured (the OIDC trusted-publishing CI shape) — a fresh
 //      publish must still succeed end-to-end on `npm publish` alone even through transient
-//      dist-tag read propagation lag (retried, not failed), and a dist-tag repair genuinely
-//      needed on an idempotent re-run must fail with an actionable error rather than a bare
-//      npm 401, because npm Trusted Publishing does not authorize `npm dist-tag add`.
+//      registry quarantine and dist-tag read propagation lag (retried, not failed), and a
+//      dist-tag repair genuinely needed on an idempotent re-run must fail with the real recovery
+//      path rather than a bare npm 401.
 
 import { Buffer } from "node:buffer";
 import { createHash, generateKeyPairSync } from "node:crypto";
@@ -859,10 +859,21 @@ function prepublishedEvaluationState() {
 
 function curlStubBody() {
   return [
-    "appendFileSync(LOG, 'curl ' + JSON.stringify([argv.at(-1)]) + '\\n');",
+    "const url = argv.at(-1);",
+    "appendFileSync(LOG, 'curl ' + JSON.stringify([url]) + '\\n');",
+    `const versionEndpointSuffix = "/" + VERSION;`,
+    "if (url.endsWith(versionEndpointSuffix)) {",
+    "  const s = state();",
+    "  if (!s.published) { process.stdout.write('404'); process.exit(0); }",
+    "  const attempts = s.versionEndpointAttempts ?? 0;",
+    "  setState({ versionEndpointAttempts: attempts + 1 });",
+    "  const visibleAfter = s.versionVisibleAfterAttempts ?? 0;",
+    "  process.stdout.write(attempts >= visibleAfter ? '200' : '404');",
+    "  process.exit(0);",
+    "}",
     'const outputIndex = argv.indexOf("--output");',
     'const output = outputIndex >= 0 ? argv[outputIndex + 1] : "";',
-    'const name = argv.at(-1).split("/").at(-1);',
+    'const name = url.split("/").at(-1);',
     "const asset = (state().uploadedAssets || []).find((entry) => entry.name === name);",
     "if (!asset || output.length === 0) process.exit(2);",
     'const bytes = Buffer.from(asset.content, "base64");',
@@ -1217,6 +1228,8 @@ const indexOfCall = (calls, predicate) => calls.findIndex(predicate);
 const isView = (line) => line.startsWith('npm ["view"');
 const isVersionView = (line) => isView(line) && line.includes('"version"');
 const isDistTagView = (line) => isView(line) && line.includes("dist-tags.");
+const isVersionEndpointCurl = (line) =>
+  line.startsWith("curl [") && line.includes(`/${RELEASE_VERSION}`);
 
 // The pipeline suite drives the real orchestrator against the CURRENT root package version
 // and models the stable latest flow (portable uploads, dist-tag resolution). With a prerelease
@@ -1779,9 +1792,9 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.calls.some((line) => line.startsWith('gh ["release","upload"'))).toBe(true);
     });
 
-    it("treats an E404 from `npm view … version` as unpublished and publishes, tags, then verifies", () => {
-      // `npm view <spec> version` fails with E404 until a publish has happened; the
-      // dist-tag view reports the wrong version until `npm dist-tag add` runs.
+    it("treats a 404 from the version-specific registry endpoint as unpublished and publishes, tags, then verifies", () => {
+      // The version endpoint stays 404 until a publish has happened; the dist-tag view reports the
+      // wrong version until `npm dist-tag add` runs.
       const viewBody = [
         "  const s = state();",
         '  if (argv.includes("version")) {',
@@ -1799,7 +1812,10 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         "  }",
       ].join("\n");
 
-      lastRun = runPublish({ npmBody: npmStub(viewBody), initState: { published: false } });
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody),
+        initState: { published: false },
+      });
 
       expect(lastRun.status, lastRun.stderr).toBe(0);
       expect(lastRun.stdout).toContain(`PUBLISH ${RELEASE_SPEC}`);
@@ -1809,12 +1825,12 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.stdout).not.toContain(`SKIP ${RELEASE_SPEC} already exists`);
 
       // Decision order: check existence -> publish -> add dist-tag -> re-verify existence -> re-verify dist-tag.
-      const firstVersionView = indexOfCall(lastRun.calls, isVersionView);
+      const firstVersionRead = indexOfCall(lastRun.calls, isVersionEndpointCurl);
       const publishCall = indexOfCall(lastRun.calls, (l) => l.startsWith('npm ["publish"'));
       const distTagAdd = indexOfCall(lastRun.calls, (l) => l.startsWith('npm ["dist-tag","add"'));
 
-      expect(firstVersionView).toBeGreaterThanOrEqual(0);
-      expect(publishCall).toBeGreaterThan(firstVersionView);
+      expect(firstVersionRead).toBeGreaterThanOrEqual(0);
+      expect(publishCall).toBeGreaterThan(firstVersionRead);
       expect(distTagAdd).toBeGreaterThan(publishCall);
 
       // Publish carries the release-safety flags on the real command line.
@@ -1831,7 +1847,7 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       // provider exists, and the unconditional flag killed every local operator publish (0.3.1).
 
       // The post-publish verification pass re-reads BOTH the version and the dist-tag.
-      const versionViews = lastRun.calls.filter(isVersionView).length;
+      const versionViews = lastRun.calls.filter(isVersionEndpointCurl).length;
       const distTagViews = lastRun.calls.filter(isDistTagView).length;
       expect(versionViews).toBeGreaterThanOrEqual(2);
       expect(distTagViews).toBeGreaterThanOrEqual(2);
@@ -2293,13 +2309,16 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
         "  }",
       ].join("\n");
 
-      lastRun = runPublish({ npmBody: npmStub(viewBody), initState: { published: false } });
+      lastRun = runPublish({
+        npmBody: npmStub(viewBody),
+        initState: { published: false, versionVisibleAfterAttempts: 1 },
+      });
 
       expect(lastRun.status).toBe(0);
       expect(lastRun.stdout).toContain(`PUBLISH ${RELEASE_SPEC}`);
       expect(lastRun.stdout).toContain(`VERIFY pending ${RELEASE_SPEC}`);
       expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
-      expect(lastRun.calls.filter(isVersionView).length).toBeGreaterThanOrEqual(3);
+      expect(lastRun.calls.filter(isVersionEndpointCurl).length).toBeGreaterThanOrEqual(3);
     });
 
     it("fails the release when the dist-tag never resolves to the published version", () => {
@@ -2455,6 +2474,55 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.calls.some((l) => l.startsWith('npm ["dist-tag","add"'))).toBe(false);
     });
 
+    it.each([5, 10, 15])(
+      "waits through a %i-minute trusted-publishing registry quarantine simulation",
+      (quarantineMinutes) => {
+        // The workflow's production delay is one minute. The test keeps delay at zero but makes
+        // the version-specific registry endpoint stay 404 for the same number of read cycles.
+        const npmBody = [
+          'log("npm");',
+          "const sub = argv[0];",
+          'if (sub === "config" && argv[1] === "get" && argv[2] === "strict-ssl") { process.stdout.write("true\\n"); process.exit(0); }',
+          'if (sub === "run") { process.exit(0); }',
+          ...npmPackStubLines(),
+          'if (sub === "view") {',
+          '  if (argv.includes("version")) { process.stderr.write("version reads use curl\\n"); process.exit(91); }',
+          '  if (argv.some((a) => a.startsWith("dist-tags."))) {',
+          "    const visible = (state().versionEndpointAttempts ?? 0) >= Number(process.env.KEIKO_TEST_QUARANTINE_MINUTES);",
+          '    process.stdout.write((visible ? VERSION : "0.0.0-stale") + "\\n");',
+          "    process.exit(0);",
+          "  }",
+          "}",
+          'if (sub === "publish") { setState({ published: true }); process.exit(0); }',
+          'process.stderr.write("stub npm: unhandled " + JSON.stringify(argv) + "\\n");',
+          "process.exit(3);",
+        ].join("\n");
+
+        lastRun = runPublish({
+          npmBody,
+          initState: {
+            published: false,
+            versionVisibleAfterAttempts: quarantineMinutes,
+          },
+          qualificationEnv: {
+            ...NO_REGISTRY_TOKEN_ENV,
+            KEIKO_RELEASE_VERIFY_ATTEMPTS: "30",
+            KEIKO_RELEASE_VERIFY_DELAY_MS: "0",
+            KEIKO_TEST_QUARANTINE_MINUTES: String(quarantineMinutes),
+          },
+        });
+
+        expect(lastRun.status).toBe(0);
+        expect(lastRun.stdout).toContain("TAG pending");
+        expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
+        expect(lastRun.calls.filter(isVersionEndpointCurl).length).toBeGreaterThan(
+          quarantineMinutes,
+        );
+        expect(lastRun.calls.some((l) => l.startsWith('npm ["dist-tag","add"'))).toBe(false);
+        expect(lastRun.calls.some(isVersionView)).toBe(false);
+      },
+    );
+
     it("fails with an actionable error, and never attempts an unauthenticated write, when a dist-tag repair needs a token that is not configured", () => {
       // Already published (idempotent re-run) with a stale dist-tag, and no token: this is
       // exactly the path npm Trusted Publishing does not cover (it authorizes `npm publish`
@@ -2474,8 +2542,9 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
 
       expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain(`${RELEASE_NAME}@latest points to 0.0.0-stale`);
-      expect(lastRun.stderr).toContain("Trusted Publishing does not cover");
-      expect(lastRun.stderr).toContain("NODE_AUTH_TOKEN");
+      expect(lastRun.stderr).toContain("version-specific registry endpoint");
+      expect(lastRun.stderr).toContain("re-mark the npm-publish deployment success");
+      expect(lastRun.stderr).not.toContain("NODE_AUTH_TOKEN");
       expect(lastRun.calls.some((l) => l.startsWith('npm ["dist-tag","add"'))).toBe(false);
       expect(lastRun.stdout).not.toContain("PASS -");
     });

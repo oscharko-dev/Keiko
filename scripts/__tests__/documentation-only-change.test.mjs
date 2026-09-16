@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { isDocumentationOnlyChange } from "../lib/documentation-only-change.mjs";
+import { isWindowsRelevantChange } from "../lib/windows-relevant-change.mjs";
 import { main, resolveVerdict, verdictLine } from "../check-documentation-only-change.mjs";
 
 describe("isDocumentationOnlyChange", () => {
@@ -62,16 +63,68 @@ describe("governance configuration is not documentation", () => {
   });
 });
 
+describe("isWindowsRelevantChange", () => {
+  it.each([
+    ["native sources", ["native/portable-launcher/keiko-portable-launcher.c"]],
+    ["Windows native quality gate", ["scripts/check-windows-native-quality.ps1"]],
+    ["Windows smoke fixture", ["scripts/__tests__/windows-cmd-spawn-smoke.mjs"]],
+    ["Windows shell wrapper", ["packages/keiko-tools/src/windows-shell.ts"]],
+    ["Git executable resolver", ["packages/keiko-git/src/git-executable.ts"]],
+    ["portable handoff plan", ["packages/keiko-server/src/update-portable-handoff-plan.ts"]],
+    [
+      "Windows portable generation",
+      ["packages/keiko-server/src/update-portable-windows-generation.ts"],
+    ],
+    ["Windows setup producer", ["scripts/build-windows-portable-setup.mjs"]],
+    ["shared Windows MSVC helper", ["scripts/lib/windows-msvc.mjs"]],
+    ["the CI workflow that owns the lane", [".github/workflows/ci.yml"]],
+  ])("reports Windows-relevant for %s", (_label, paths) => {
+    expect(isWindowsRelevantChange(paths)).toBe(true);
+  });
+
+  it.each([
+    ["documentation", ["README.md", "docs/qa/local-gates.md"]],
+    ["a version bump", ["package.json", "package-lock.json"]],
+    [
+      "UI window components that are not OS Windows",
+      ["packages/keiko-ui/src/app/components/desktop/windows/WindowFrame.tsx"],
+    ],
+    ["non-Windows package source", ["packages/keiko-server/src/correlation.ts"]],
+    ["e2e tests", ["tests/e2e/coding-workbench-1990.spec.ts"]],
+  ])("reports non-Windows-relevant for %s", (_label, paths) => {
+    expect(isWindowsRelevantChange(paths)).toBe(false);
+  });
+
+  it.each([
+    ["an unknown top-level file", ["new-tooling.toml"]],
+    ["an unknown script", ["scripts/new-release-helper.mjs"]],
+    ["an empty change set", []],
+    ["a malformed path", ["README.md", ""]],
+  ])("fails open for %s", (_label, paths) => {
+    expect(isWindowsRelevantChange(paths)).toBe(true);
+  });
+});
+
 describe("resolveVerdict", () => {
   it("reports documentation-only for a prose change set", () => {
     const verdict = resolveVerdict("base", "head", () => ["README.md", "docs/qa/local-gates.md"]);
     expect(verdict.documentationOnly).toBe(true);
+    expect(verdict.windowsRelevant).toBe(false);
     expect(verdict.reason).toContain("2 changed path(s)");
   });
 
   it("reports false when the change set contains code", () => {
     const verdict = resolveVerdict("base", "head", () => ["README.md", "src/index.ts"]);
     expect(verdict.documentationOnly).toBe(false);
+    expect(verdict.windowsRelevant).toBe(false);
+  });
+
+  it("reports Windows relevance independently from documentation-only", () => {
+    const verdict = resolveVerdict("base", "head", () => [
+      "packages/keiko-tools/src/windows-shell.ts",
+    ]);
+    expect(verdict.documentationOnly).toBe(false);
+    expect(verdict.windowsRelevant).toBe(true);
   });
 
   // Every way the decision can go wrong must land on "run everything".
@@ -79,6 +132,7 @@ describe("resolveVerdict", () => {
     expect(resolveVerdict("", "head", () => ["README.md"])).toEqual({
       documentationOnly: false,
       reason: "no base sha supplied",
+      windowsRelevant: true,
     });
   });
 
@@ -91,11 +145,13 @@ describe("resolveVerdict", () => {
       throw new TypeError("git exploded");
     });
     expect(verdict.documentationOnly).toBe(false);
+    expect(verdict.windowsRelevant).toBe(true);
     expect(verdict.reason).toContain("TypeError");
   });
 
   it("refuses on an empty change set rather than assuming prose", () => {
     expect(resolveVerdict("base", "head", () => []).documentationOnly).toBe(false);
+    expect(resolveVerdict("base", "head", () => []).windowsRelevant).toBe(true);
   });
 });
 
@@ -146,7 +202,9 @@ describe("the change-scope entry point", () => {
 
     main();
 
-    expect(readFileSync(outputPath, "utf8")).toBe("documentation-only=false\n");
+    expect(readFileSync(outputPath, "utf8")).toBe(
+      "documentation-only=false\nwindows-relevant=true\n",
+    );
   });
 
   it("stays silent when no step output is configured", () => {

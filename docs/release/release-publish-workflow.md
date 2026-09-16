@@ -468,17 +468,18 @@ The `publish` job authenticates to the npm registry with [npm Trusted Publishing
   file; the npmjs.com side still has to be edited by hand in the same change.
 - **No `NPM_TOKEN` Actions secret exists any more** (retired 2026-08-28, ADR-0130 D4): nothing in CI
   can publish with a classic token. The governed local publish reads its token from the operator's
-  own environment or a local `.env`, and the dist-tag repair below exports one for that single run.
+  own environment or a local `.env`; no workflow should reintroduce that credential.
 - **Scope limitation**: trusted publishing authorizes `npm publish` only, not `npm dist-tag add`.
   A fresh publish is unaffected, because `npm publish --tag <tag>` sets the dist-tag atomically as
   part of that same authenticated call; `ensurePackageDistTag` in `scripts/release-publish.mjs`
-  retries the follow-up `npm view` read (reusing the same attempt/delay settings as the post-publish
-  registry verification) before concluding anything is actually wrong, so ordinary registry CDN
-  propagation lag on a successful publish never fails the release. The only path that still needs a
-  registry-write credential is repairing a _genuinely_ stale dist-tag on an idempotent re-run over a
-  partially completed prior attempt. If that repair is ever needed, export `NODE_AUTH_TOKEN` (or
-  `NPM_TOKEN`) for that one-off manual run; the script fails with an explicit, actionable error once
-  its retry budget is exhausted and no token is configured, rather than an opaque npm 401.
+  verifies the version-specific registry endpoint and then the dist-tag with the same attempt/delay
+  settings as post-publish registry verification. The Actions workflow uses 30 total reads with one
+  minute between reads because npm Trusted Publishing can quarantine an OIDC/provenance publish
+  after the CLI reports success; v1.0.3 took roughly 14 minutes. If that budget is exhausted, do not
+  add a registry token to the workflow. Wait until
+  `https://registry.npmjs.org/@oscharko-dev/keiko/<version>` returns HTTP 200, re-run verification,
+  and manually mark the `npm-publish` deployment successful only once that endpoint is 200 and the
+  dist-tag has moved.
 
 The `prepack` and `prepublishOnly` gates also run `npm run check:workspace-supply-chain` and
 `npm run check:release-impact`, so a publish cannot bypass SBOM/license verification or missing,

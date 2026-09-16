@@ -216,6 +216,9 @@ const HTML_MANUAL_FIXTURE_IDS = [
 
 describe("CI test/gate wiring guard", () => {
   it("runs the portable handoff protocol fixture suite on a genuine Windows host", () => {
+    const windowsJobStart = ci.indexOf("  windows-cross-platform-smoke:");
+    const windowsJobEnd = ci.indexOf("\n  node-26-compatibility:", windowsJobStart);
+    const windowsJob = ci.slice(windowsJobStart, windowsJobEnd);
     const buildStep = ci.indexOf("      - name: Build packages for the Windows smokes");
     const fixtureStep = ci.indexOf(
       "      - name: Verify the Windows portable handoff protocol fixture",
@@ -224,11 +227,13 @@ describe("CI test/gate wiring guard", () => {
       "      - name: Verify Git executable Windows reparse containment",
       fixtureStep,
     );
+    expect(windowsJobStart).toBeGreaterThan(-1);
+    expect(windowsJob).toContain("runs-on: windows-latest");
     expect(buildStep).toBeGreaterThan(-1);
     expect(fixtureStep).toBeGreaterThan(buildStep);
+    expect(fixtureStep).toBeLessThan(windowsJobEnd);
     expect(nextStep).toBeGreaterThan(fixtureStep);
     const fixtureGate = ci.slice(fixtureStep, nextStep);
-    expect(fixtureGate).toContain("if: runner.os == 'Windows'");
     expect(fixtureGate).toContain(
       "node node_modules/vitest/vitest.mjs run packages/keiko-server/src/update-portable-handoff-plan.test.ts",
     );
@@ -439,27 +444,43 @@ describe("CI test/gate wiring guard", () => {
     // staging/qualification lanes; ADR-0177 adds the dev release-rehearsal readiness lane and the
     // standing release-alignment lane; ADR-0177 D8 adds the release-candidate plan and tag lanes and
     // the stable build's publish-request lane. Epic #3495 (#3498) retired the wait-for-checks
-    // release-verify lane. The load-bearing pairing below proves every lane verifies the governed
-    // toolchain, while the exact counts make a removed or unreviewed new lane fail.
-    expect(node24SetupCount).toBe(27);
+    // release-verify lane. Issue #3519 split the Windows cross-platform proof into its own lane.
+    // The load-bearing pairing below proves every lane verifies the governed toolchain, while the
+    // exact counts make a removed or unreviewed new lane fail.
+    expect(node24SetupCount).toBe(28);
     expect(node26SetupCount).toBe(1);
-    expect(nodeSetupCount).toBe(28);
+    expect(nodeSetupCount).toBe(29);
     expect(verificationCount).toBe(nodeSetupCount);
     expect(runtimeWorkflows).not.toMatch(/node-version: "22/u);
     expect(ci).toContain("NODE_26_COMPATIBILITY_RESULT");
   });
 
-  it("executes typecheck, build, and install smokes on every desktop OS", () => {
+  it("executes typecheck, build, and install smokes on Linux and macOS", () => {
     const start = ci.indexOf("  cross-platform-smoke:");
-    const end = ci.indexOf("\n  node-26-compatibility:", start);
+    const end = ci.indexOf("\n  windows-cross-platform-smoke:", start);
     const crossPlatform = ci.slice(start, end);
-    expect(crossPlatform).toContain("os: [ubuntu-latest, windows-latest, macos-latest]");
+    expect(crossPlatform).toContain("os: [ubuntu-latest, macos-latest]");
     expect(crossPlatform).toContain("Typecheck the complete package graph");
     expect(crossPlatform).toContain("- name: Build");
     expect(crossPlatform).toContain("Installable-package smoke with native optional dependencies");
     expect(crossPlatform).toContain("Verify productive native sources on macOS");
-    expect(crossPlatform).toContain("Verify productive native sources on Windows");
     expect(crossPlatform).not.toContain("npm test");
+  });
+
+  it("keeps the Windows smoke slim and Windows-specific", () => {
+    const start = ci.indexOf("  windows-cross-platform-smoke:");
+    const end = ci.indexOf("\n  node-26-compatibility:", start);
+    const windowsSmoke = ci.slice(start, end);
+    expect(windowsSmoke).toContain("name: Cross-platform smoke (windows-latest)");
+    expect(windowsSmoke).toContain("runs-on: windows-latest");
+    expect(windowsSmoke).toContain("needs.change-scope.outputs.windows-relevant == 'true'");
+    expect(windowsSmoke).toContain("Build packages for the Windows smokes");
+    expect(windowsSmoke).toContain("Verify productive native sources on Windows");
+    expect(windowsSmoke).toContain("Smoke the Windows setup bootstrap");
+    expect(windowsSmoke).not.toContain("npm run typecheck");
+    expect(windowsSmoke).not.toContain("npm run build\n");
+    expect(windowsSmoke).not.toContain("npm run prepare:bin");
+    expect(windowsSmoke).not.toContain("npm run build:ui");
   });
 
   for (const command of REQUIRED_CI_COMMANDS) {

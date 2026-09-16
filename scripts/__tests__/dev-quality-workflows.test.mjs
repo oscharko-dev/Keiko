@@ -44,11 +44,14 @@ function runCiAggregate(overrides = {}) {
       CROSS_PLATFORM_RESULT: "success",
       DOCUMENTATION_ONLY: "false",
       EDITOR_FAST_PR: "false",
+      FULL_MATRIX_REQUIRED: "false",
       NODE_26_COMPATIBILITY_RESULT: "success",
       PROTECTED_BRANCH_RESULT: "success",
       SECRET_SCAN_RESULT: "success",
       SEMANTIC_DUPLICATION_RESULT: "success",
       UI_RESULT: "success",
+      WINDOWS_CROSS_PLATFORM_RESULT: "success",
+      WINDOWS_RELEVANT: "true",
       ...overrides,
     },
   });
@@ -76,6 +79,8 @@ describe("dev quality workflows", () => {
     expect(mutation).toContain('node-version: "24.18.0"');
     expect(mutation).toContain("node scripts/check-runtime-toolchain.mjs --exact");
     expect(mutation).toContain("npm run test:mutation:security");
+    expect(mutation).toContain("second-order mutation proof");
+    expect(mutation).not.toContain("release-blocking");
     expect(mutation).not.toContain("check-mutation-scope.mjs");
     // KEIKO-0588: the mutation step now runs with continue-on-error so a failure files a
     // tracking issue (mirrors nightly-perf-evidence.yml). The lane must STILL fail — assert
@@ -83,8 +88,13 @@ describe("dev quality workflows", () => {
     expect(mutation).toContain("continue-on-error: true");
     expect(mutation).toMatch(/Fail the lane after reporting/u);
     expect(mutation).toMatch(/steps\.mutation\.outcome == 'failure'/u);
-    expect(packageJson.scripts["test:mutation:security"]).toContain(
-      "npm run test:mutation:debug-launch-security",
+    expect(packageJson.scripts["test:mutation:security"]).toBe(
+      "node scripts/run-security-mutation-suite.mjs",
+    );
+    expect(packageJson.scripts["check:mutation:debug-launch"]).toContain("--strict");
+    expect(packageJson.scripts["check:mutation:debug-launch"]).toContain("--minimum-score 100");
+    expect(packageJson.scripts["test:mutation:debug-launch-security"]).toContain(
+      "stryker.debug-launch.security.conf.json",
     );
 
     expect(mutationScope).toContain('"--diff-filter=ACMR"');
@@ -237,6 +247,7 @@ describe("dev quality workflows", () => {
       "build-scan-sbom-smoke",
       "cross-platform-smoke",
       "ui",
+      "windows-cross-platform-smoke",
     ];
 
     for (const jobName of candidateJobs) {
@@ -476,12 +487,15 @@ describe("dev quality workflows", () => {
     expect(aggregateJob).toContain("- cross-platform-smoke");
     expect(aggregateJob).toContain("- node-26-compatibility");
     expect(aggregateJob).toContain("- ui");
+    expect(aggregateJob).toContain("- windows-cross-platform-smoke");
     expect(aggregateJob).toContain("BUILD_SCAN_SBOM_SMOKE_RESULT");
     expect(aggregateJob).toContain("CHANGE_SCOPE_RESULT");
     expect(aggregateJob).toContain("CROSS_PLATFORM_RESULT");
     expect(aggregateJob).toContain("EDITOR_FAST_PR");
     expect(aggregateJob).toContain("NODE_26_COMPATIBILITY_RESULT");
     expect(aggregateJob).toContain("UI_RESULT");
+    expect(aggregateJob).toContain("WINDOWS_CROSS_PLATFORM_RESULT");
+    expect(aggregateJob).toContain("WINDOWS_RELEVANT");
     expect(aggregateJob).toContain('if [ "$result" != "success" ]');
   });
 
@@ -506,6 +520,29 @@ describe("dev quality workflows", () => {
 
     expect(result.status).not.toBe(0);
     expect(result.stdout).toContain("Required CI dependency did not succeed: failure");
+  });
+
+  it("allows the Windows smoke skip only for scoped non-Windows changes", () => {
+    const scoped = runCiAggregate({
+      WINDOWS_CROSS_PLATFORM_RESULT: "skipped",
+      WINDOWS_RELEVANT: "false",
+    });
+    const fullMatrix = runCiAggregate({
+      FULL_MATRIX_REQUIRED: "true",
+      WINDOWS_CROSS_PLATFORM_RESULT: "skipped",
+      WINDOWS_RELEVANT: "false",
+    });
+    const relevant = runCiAggregate({
+      WINDOWS_CROSS_PLATFORM_RESULT: "skipped",
+      WINDOWS_RELEVANT: "true",
+    });
+
+    expect(scoped.status).toBe(0);
+    expect(scoped.stdout).toContain("non-Windows-relevant change set");
+    expect(fullMatrix.status).not.toBe(0);
+    expect(fullMatrix.stdout).toContain("skipped without a scoped change set");
+    expect(relevant.status).not.toBe(0);
+    expect(relevant.stdout).toContain("skipped without a scoped change set");
   });
 
   it.each(["failure", "skipped", "cancelled", "", "unknown"])(
@@ -536,32 +573,40 @@ describe("dev quality workflows", () => {
   });
 
   it("runs native compensation on its owning platforms and aggregates it fail closed", () => {
-    const crossPlatform = ci.match(/ {2}cross-platform-smoke:\n[\s\S]*?(?=\n {2}ui:\n)/u)?.[0];
-    expect(crossPlatform).toBeDefined();
-    expect(crossPlatform).toContain(
-      "actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68",
-    );
-    expect(crossPlatform).toContain("npm run check:native:macos");
-    expect(crossPlatform).toContain("npm run check:native:windows");
+    const windowsSmoke = ci.match(
+      / {2}windows-cross-platform-smoke:\n[\s\S]*?(?=\n {2}node-26-compatibility:\n)/u,
+    )?.[0];
+    const macosLinuxSmoke = ci.match(
+      / {2}cross-platform-smoke:\n[\s\S]*?(?=\n {2}windows-cross-platform-smoke:\n)/u,
+    )?.[0];
+    expect(windowsSmoke).toBeDefined();
+    expect(macosLinuxSmoke).toBeDefined();
+    expect(windowsSmoke).toContain("name: Cross-platform smoke (windows-latest)");
+    expect(windowsSmoke).toContain("needs.change-scope.outputs.windows-relevant == 'true'");
+    expect(windowsSmoke).toContain("github.event_name == 'push'");
+    expect(windowsSmoke).toContain("github.event_name == 'workflow_dispatch'");
+    expect(windowsSmoke).toContain("actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68");
+    expect(macosLinuxSmoke).toContain("npm run check:native:macos");
+    expect(windowsSmoke).toContain("npm run check:native:windows");
     // #3350: the command-spawn wrapper smoke needs no MSVC, so it runs before the compiler config.
-    const cmdSpawnSmoke = ciWorkflow.jobs["cross-platform-smoke"].steps.find(
+    const cmdSpawnSmoke = ciWorkflow.jobs["windows-cross-platform-smoke"].steps.find(
       (step) => step.name === "Smoke the Windows command spawn wrapper",
     );
     expect(cmdSpawnSmoke, "command spawn wrapper smoke step must exist").toBeDefined();
-    expect(cmdSpawnSmoke.if).toBe("runner.os == 'Windows'");
+    expect(cmdSpawnSmoke.if).toBeUndefined();
     expect(cmdSpawnSmoke.run).toContain("node scripts/__tests__/windows-cmd-spawn-smoke.mjs");
     // A step-level `continue-on-error: true` soft-fails the step while the job (and therefore
-    // `needs.cross-platform-smoke.result` in the `ci` aggregate) still reports success, defeating
-    // the fail-closed aggregation the .if/.run pins above assume. Neither smoke step carries it
-    // today; this pin catches the one edit that would silently disarm them.
+    // `needs.windows-cross-platform-smoke.result` in the `ci` aggregate) still reports success,
+    // defeating the fail-closed aggregation the .if/.run pins above assume. Neither smoke step
+    // carries it today; this pin catches the one edit that would silently disarm them.
     expect(cmdSpawnSmoke["continue-on-error"]).toBeUndefined();
     // #2992: the setup bootstrap smoke compiles the C stub, so it MUST run after MSVC is configured.
-    const setupSteps = ciWorkflow.jobs["cross-platform-smoke"].steps;
+    const setupSteps = ciWorkflow.jobs["windows-cross-platform-smoke"].steps;
     const setupBootstrapSmoke = setupSteps.find(
       (step) => step.name === "Smoke the Windows setup bootstrap",
     );
     expect(setupBootstrapSmoke, "setup bootstrap smoke step must exist").toBeDefined();
-    expect(setupBootstrapSmoke.if).toBe("runner.os == 'Windows'");
+    expect(setupBootstrapSmoke.if).toBeUndefined();
     expect(setupBootstrapSmoke.run).toContain(
       "node scripts/__tests__/windows-setup-bootstrap-smoke.mjs",
     );
@@ -575,17 +620,17 @@ describe("dev quality workflows", () => {
     );
     expect(msvcIndex).toBeGreaterThanOrEqual(0);
     expect(setupSmokeIndex).toBeGreaterThan(msvcIndex);
-    expect(crossPlatform).toContain("Configure MSVC for native quality analysis");
-    expect(crossPlatform).toContain('Join-Path $env:RUNNER_TEMP "keiko-vcvars-env.cmd"');
-    expect(crossPlatform).toContain("$environment = & cmd.exe /d /c $vcvarsWrapper");
-    expect(crossPlatform).toContain("MSVC environment initialization failed");
-    expect(crossPlatform).not.toContain(
+    expect(windowsSmoke).toContain("Configure MSVC for native quality analysis");
+    expect(windowsSmoke).toContain('Join-Path $env:RUNNER_TEMP "keiko-vcvars-env.cmd"');
+    expect(windowsSmoke).toContain("$environment = & cmd.exe /d /c $vcvarsWrapper");
+    expect(windowsSmoke).toContain("MSVC environment initialization failed");
+    expect(windowsSmoke).not.toContain(
       "github.event_name == 'pull_request' && github.base_ref == 'feat/keiko-editor'",
     );
   });
 
   it("runs the Git executable reparse regression on the required Windows host", () => {
-    const steps = ciWorkflow.jobs["cross-platform-smoke"].steps;
+    const steps = ciWorkflow.jobs["windows-cross-platform-smoke"].steps;
     const buildIndex = steps.findIndex(
       (step) => step.name === "Build packages for the Windows smokes",
     );
@@ -595,7 +640,7 @@ describe("dev quality workflows", () => {
     const regression = steps[regressionIndex];
 
     expect(regression, "Windows Git reparse regression step must exist").toBeDefined();
-    expect(regression.if).toBe("runner.os == 'Windows'");
+    expect(regression.if).toBeUndefined();
     expect(regression.run).toBe("node scripts/__tests__/windows-git-reparse-smoke.mjs");
     expect(regression["continue-on-error"]).toBeUndefined();
     expect(buildIndex).toBeGreaterThanOrEqual(0);

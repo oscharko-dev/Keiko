@@ -74,22 +74,28 @@ talks to the public registry with write intent. The
 pin equals the repository-wide governed npm, so the publish job runs the same CLI every
 contributor and every other CI job already uses.
 
-### D3 — The classic-token fallback is kept, narrowly, for dist-tag repair only
+### D3 — Tokenless publish verification waits on the version endpoint before judging the dist-tag
 
 `createNpmEnvironment()` now also returns whether a token was configured (`hasToken`), threaded
-through `publishPackage()` into `ensurePackageDistTag()`. A dist-tag mismatch right after a fresh
-publish is usually the registry's own read replicas/CDN lagging the write, not a real problem — the
-same reality `verifyPackage()` already retries for — so on the tokenless path
-`ensurePackageDistTag()` retries the `npm view` read against the same `verifyAttempts`/
-`waitForRegistryPropagation()` budget before drawing any conclusion. Only once that budget is
-exhausted and the dist-tag still does not match the published version does the script fail, with an
-explicit message naming the mismatch, stating that trusted publishing does not cover
-`npm dist-tag add`, and telling the operator to supply `NODE_AUTH_TOKEN`/`NPM_TOKEN` for a one-off
-manual correction — instead of letting an unauthenticated `npm dist-tag add` fail deep inside a
-generic `run()` wrapper with a bare npm 401. This is the only place in the publish pipeline that
-still has a legitimate reason to accept a classic token, and it is inert (no behavior change) in
-the common fresh-publish case, which is proven by a dedicated regression test that publishes
-successfully with zero registry credentials configured.
+through `publishPackage()` into `ensurePackageDistTag()`. A fresh
+`npm publish --tag <tag>` still sets the dist-tag as part of the authenticated publish call, but
+npm Trusted Publishing can hold the version in server-side quarantine after the CLI has reported
+success. The tokenless path therefore polls the **version-specific registry endpoint** first
+(`registry.npmjs.org/<package>/<version>`, HTTP 200 is authoritative) and only treats the dist-tag as
+settled once that endpoint is visible and the tag names the same version.
+
+The workflow's retry budget is deliberately sized for that quarantine: 30 total reads, including the
+initial read, with one minute between reads. `ensurePackageDistTag()` and `verifyPackage()` share
+that exact attempt/delay budget, so the environment value is no longer off by one. If the budget is
+exhausted without visibility or with a stale tag, the script fails closed with the real recovery
+paths: wait for the version-specific endpoint to return 200 and re-run verification, or manually
+mark the `npm-publish` deployment successful once the endpoint is 200 and the dist-tag has moved.
+It no longer tells a workflow operator to provision `NODE_AUTH_TOKEN`/`NPM_TOKEN`; no Actions
+workflow carries such a token after secret retirement.
+
+A local operator environment may still contain a classic token, and `createNpmEnvironment()` keeps
+supporting it for governed local publishes. That compatibility is not an Actions recovery path and
+must not be reintroduced into `release.yml`.
 
 ### D4 — One-time npmjs.com configuration, and secret retirement, are manual maintainer actions
 
@@ -131,9 +137,8 @@ window described above (repository and filename registered without the environme
 **Secret retirement: done (2026-08-28).** The `NPM_TOKEN` GitHub Actions secret was deleted on the
 release owner's decision once the verified trusted publish above made it redundant; no workflow read
 it, and D5 pins that no workflow starts reading it. No publish path lost anything: the governed local publish reads
-its token from the operator's own environment, never from Actions, and the D3 dist-tag repair is a
-manual run that exports one for itself. Optionally disallowing classic tokens on the package
-entirely remains available to the release owner on npmjs.com.
+its token from the operator's own environment, never from Actions. Optionally disallowing classic
+tokens on the package entirely remains available to the release owner on npmjs.com.
 
 ### D5 — The repository half of the publisher binding is gated, not merely documented
 
@@ -189,9 +194,10 @@ land that rename unnoticed.
 - Trusted publishing requires GitHub-hosted runners; self-hosted runners cannot use it. The
   `publish` job already runs on `ubuntu-latest`, so this is not a present constraint, only a
   future one to remember if that job is ever moved.
-- The dist-tag repair path (D3) still depends on a classic token in the rare case it is needed.
-  This is a deliberate, narrow, documented exception, not a silent gap: it fails closed with an
-  actionable message rather than attempting an unauthenticated write.
+- Trusted-publishing visibility can lag `npm publish` success. The publish job now budgets 30
+  minutes for the version-specific endpoint and dist-tag to settle, so a genuinely stuck publish
+  fails later than before, but the failure now names the real recovery path instead of asking for a
+  workflow token that no longer exists.
 - The pinned publish npm is a minor/patch line ahead of the npm this repository otherwise bundles;
   it is scoped to one job specifically to avoid introducing an untested npm major version into
   every other CI job and every contributor's local environment.
@@ -242,9 +248,10 @@ land that rename unnoticed.
 
 ## Revision Policy
 
-If the classic-token fallback (D3) is later removed, widened, or replaced (for example if npm
-extends trusted publishing to cover `npm dist-tag`), or if the pinned npm version changes for a
-reason other than a routine bump, increment the version and record it below.
+If the tokenless verification model (D3) is later removed, widened, or replaced (for example if npm
+extends trusted publishing to expose an explicit post-quarantine completion signal), or if the
+pinned npm version changes for a reason other than a routine bump, increment the version and record
+it below.
 
 ## Version History
 
@@ -253,3 +260,4 @@ reason other than a routine bump, increment the version and record it below.
 | 1.0     | 2026-07-11 | Accepted: npm Trusted Publishing adopted for the release `publish` job. |
 | 1.1     | 2026-08-10 | Publish npm pin bound to the governed `EXPECTED_PACKAGE_MANAGER` (npm@11.16.0) with a lockstep test; stale 10.9.x/11.18.0 references removed. |
 | 1.2     | 2026-08-28 | Provisioning recorded as configured and verified (v0.3.8 attestation); `NPM_TOKEN` Actions secret retired; repository-side binding enforced by a new gate (D5); provenance-by-publish-path consequence recorded. |
+| 1.3     | 2026-09-16 | Tokenless publish verification moved to the version-specific registry endpoint, the Actions retry budget expanded to 30 minutes, and the dead workflow-token recovery hint was removed. |

@@ -8,6 +8,9 @@ import { isMainModule } from "./lib/is-main-module.mjs";
 
 const defaultReport = "reports/mutation/security/mutation-report.json";
 const defaultBaseline = "docs/qa/security-mutation-baseline.json";
+const defaultStrictMinimumScore = 100;
+const defaultStrictMaximumNoCoverage = 0;
+const defaultStrictMaximumSurvived = 0;
 
 export function mutationFingerprint(file, mutant) {
   const value = JSON.stringify({
@@ -118,7 +121,10 @@ export function evaluateMutationBaseline(report, baseline) {
   const current = summarizeMutationReport(report);
   const accepted = new Set(baseline.acceptedDebt ?? []);
   const newDebt = current.debt.filter((fingerprint) => !accepted.has(fingerprint));
-  const failures = [...current.errors.map((value) => `Unexpected mutant result: ${value}`)];
+  const failures = [
+    ...current.errors.map((value) => `Unexpected mutant result: ${value}`),
+    ...instrumentationFailures(current),
+  ];
   if (current.score + 1e-6 < baseline.minimumScore) {
     failures.push(
       `Mutation score ${current.score.toFixed(2)}% regressed below baseline ${baseline.minimumScore.toFixed(2)}%.`,
@@ -130,6 +136,33 @@ export function evaluateMutationBaseline(report, baseline) {
   if (current.summary.noCoverage > baseline.maximumNoCoverage)
     failures.push("No-coverage mutant count regressed.");
   return { current, failures, newDebt };
+}
+
+export function evaluateStrictMutation(report, options = {}) {
+  const current = summarizeMutationReport(report);
+  const minimumScore = options.minimumScore ?? defaultStrictMinimumScore;
+  const maximumNoCoverage = options.maximumNoCoverage ?? defaultStrictMaximumNoCoverage;
+  const maximumSurvived = options.maximumSurvived ?? defaultStrictMaximumSurvived;
+  const failures = [
+    ...current.errors.map((value) => `Unexpected mutant result: ${value}`),
+    ...instrumentationFailures(current),
+  ];
+  if (current.score + 1e-6 < minimumScore) {
+    failures.push(
+      `Mutation score ${current.score.toFixed(2)}% is below ${minimumScore.toFixed(2)}%.`,
+    );
+  }
+  if (current.summary.survived > maximumSurvived) {
+    failures.push(
+      `Surviving mutant count ${String(current.summary.survived)} exceeds ${String(maximumSurvived)}.`,
+    );
+  }
+  if (current.summary.noCoverage > maximumNoCoverage) {
+    failures.push(
+      `No-coverage mutant count ${String(current.summary.noCoverage)} exceeds ${String(maximumNoCoverage)}.`,
+    );
+  }
+  return { current, failures };
 }
 
 export function evaluateScopedMutation(report, options = {}) {
@@ -154,6 +187,14 @@ export function evaluateScopedMutation(report, options = {}) {
   return { current, failures };
 }
 
+function instrumentationFailures(current) {
+  const detected = current.summary.killed + current.summary.timeout;
+  if (current.summary.total === 0 || detected > 0 || current.summary.survived === 0) return [];
+  return [
+    "Mutation run detected zero killed or timed-out mutants; verify Stryker/Vitest instrumentation before interpreting the score.",
+  ];
+}
+
 function scopedChangedLines(input) {
   if (input.mode !== "scoped" || input.base === undefined || input.head === undefined) {
     return undefined;
@@ -164,6 +205,13 @@ function scopedChangedLines(input) {
 async function evaluateReport(input, report, read) {
   if (input.mode === "scoped") {
     return evaluateScopedMutation(report, { changedLines: scopedChangedLines(input) });
+  }
+  if (input.mode === "strict") {
+    return evaluateStrictMutation(report, {
+      maximumNoCoverage: input.maximumNoCoverage,
+      maximumSurvived: input.maximumSurvived,
+      minimumScore: input.minimumScore,
+    });
   }
   return evaluateMutationBaseline(
     report,
@@ -183,11 +231,20 @@ export async function runMutationQuality(input = {}) {
 }
 
 export function mutationQualityCliInput(args) {
-  const runInput = { mode: args.includes("--scoped") ? "scoped" : "baseline" };
+  const runInput = { mode: mutationQualityMode(args) };
   const base = option(args, "--base");
+  const baselinePath = option(args, "--baseline");
   const head = option(args, "--head");
+  const reportPath = option(args, "--report");
   if (base !== undefined) runInput.base = base;
+  if (baselinePath !== undefined) runInput.baselinePath = baselinePath;
   if (head !== undefined) runInput.head = head;
+  if (reportPath !== undefined) runInput.reportPath = reportPath;
+  if (runInput.mode === "strict") {
+    runInput.maximumNoCoverage = numericOption(args, "--maximum-no-coverage", 0);
+    runInput.maximumSurvived = numericOption(args, "--maximum-survived", 0);
+    runInput.minimumScore = numericOption(args, "--minimum-score", 100);
+  }
   return runInput;
 }
 
@@ -206,6 +263,24 @@ export async function executeMutationQualityCli(input = {}) {
 function option(argv, name) {
   const index = argv.indexOf(name);
   return index < 0 ? undefined : argv[index + 1];
+}
+
+function mutationQualityMode(args) {
+  const modes = [
+    args.includes("--scoped") ? "scoped" : undefined,
+    args.includes("--strict") ? "strict" : undefined,
+  ].filter((mode) => mode !== undefined);
+  if (modes.length > 1) throw new Error("choose only one mutation-quality mode");
+  return modes[0] ?? "baseline";
+}
+
+function numericOption(args, name, fallback) {
+  const value = option(args, name);
+  if (value === undefined) return fallback;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed < 0)
+    throw new Error(`${name} must be a non-negative number`);
+  return parsed;
 }
 
 if (isMainModule(import.meta.url)) await executeMutationQualityCli();

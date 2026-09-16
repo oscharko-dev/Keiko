@@ -213,7 +213,8 @@
     "test:mutation:security:run": "stryker run stryker.security.conf.json",
     "test:mutation:debug-launch-security": "stryker run stryker.debug-launch.security.conf.json",
     "check:mutation:baseline": "node scripts/check-mutation-quality.mjs",
-    "test:mutation:security": "npm run test:mutation:security:run && npm run test:mutation:debug-launch-security && npm run check:mutation:baseline",
+    "check:mutation:debug-launch": "node scripts/check-mutation-quality.mjs --strict --report reports/mutation/debug-launch-security/mutation-report.json --minimum-score 100 --maximum-survived 0 --maximum-no-coverage 0",
+    "test:mutation:security": "node scripts/run-security-mutation-suite.mjs",
     "check:publish-manifests": "node scripts/check-publish-manifests.mjs",
     "smoke:registry-install": "node scripts/registry-install-smoke.mjs",
     "provision:usearch": "node scripts/provision-usearch.mjs",
@@ -289,7 +290,7 @@
     "@types/yauzl": "^3.4.0",
     "@typescript/native": "npm:typescript@~7.0.2",
     "@vitejs/plugin-react": "6.1.1",
-    "@vitest/coverage-v8": "^5.0.0",
+    "@vitest/coverage-v8": "^4.1.11",
     "acorn": "^8.16.0",
     "corepack": "0.36.0",
     "dependency-cruiser": "^18.0.0",
@@ -303,7 +304,7 @@
     "semver": "^7.8.5",
     "sigstore": "^5.0.0",
     "typescript-eslint": "^8.69.0",
-    "vitest": "^5.0.0",
+    "vitest": "^4.1.11",
     "yaml": "2.9.0"
   },
   "dependencies": {

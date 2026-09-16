@@ -10,12 +10,12 @@
 // future accidental slowdown (e.g. a new detector added without checking existing scan patterns)
 // is *measurable* rather than silent — run it manually with `npm run bench:prompt-enhancer
 // --workspace @oscharko-dev/keiko-contracts` before/after a change to prompt-enhancer-analyzer.ts's
-// scan logic. It is not wired into any CI lane or npm test/typecheck/lint run (vitest's own
-// `include` glob never matches `*.bench.ts`, and they are plain `test()` bodies that only report timings),
-// so a slowdown will not surface on its own without that manual step. It asserts nothing — `vitest
-// bench` reports timings, it does not pass/fail on them.
+// scan logic. It is not wired into any CI lane or npm test/lint run (vitest's own `include` glob
+// never matches `*.bench.ts`), so a slowdown will not surface on its own without that manual step.
+// It has one fixture-shape assertion and no timing threshold — `vitest bench` reports timings, it
+// does not pass/fail on them.
 
-import { describe, expect, test } from "vitest";
+import { bench, describe, expect, test } from "vitest";
 import type { PromptEnhancementRequest } from "./index.js";
 import { analyzePrompt } from "./prompt-enhancer-analyzer.js";
 import {
@@ -60,15 +60,14 @@ const request: PromptEnhancementRequest = {
 };
 
 describe("analyzePrompt bench (KEIKO-1028, #3340)", () => {
-  test("100,000-char adversarial near-miss input (PROMPT_ANALYSIS_MAX_SCAN_CHARS ceiling)", async ({
-    bench,
-  }) => {
+  test("uses the full scan ceiling fixture", () => {
     // The measurement's own premise: earlier drafts of this fixture looked adversarial but were
     // literal substrings of real cues, so the scan short-circuited and the ceiling was never
     // reached. Assert that the analyzer really normalizes to the full ceiling before timing it.
     expect(analyzePrompt(request).normalizedInputLength).toBe(PROMPT_ANALYSIS_MAX_SCAN_CHARS);
-    await bench("analyzePrompt at the scan ceiling", () => {
-      analyzePrompt(request);
-    }).run();
+  });
+
+  bench("analyzePrompt at the scan ceiling", () => {
+    analyzePrompt(request);
   });
 });
