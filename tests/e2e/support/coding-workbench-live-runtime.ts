@@ -24,6 +24,7 @@ export interface LiveRuntimeFixtureOptions {
 
 export interface LiveRuntimeFixture {
   readonly open: () => Promise<void>;
+  readonly openInformation: () => Promise<void>;
   readonly requestMode: (label: RegExp) => Promise<void>;
   readonly workbench: ReturnType<Page["locator"]>;
   readonly autonomySettings: ReturnType<Page["locator"]>;
@@ -49,6 +50,17 @@ export async function installLiveCodingWorkbenchRuntime(
         await expect(launcher).toHaveAttribute("aria-pressed", "true", { timeout: 2_000 });
       }).toPass({ timeout: 15_000 });
       await expect(heading).toBeVisible({ timeout: 15_000 });
+    },
+    // The session context (task id · branch · health) and the server-confirmed effective mode
+    // moved into an information popover in #3494. Callers that need to assert either fact must
+    // reveal them first — this opens the popover and waits until the dialog is present.
+    openInformation: async (): Promise<void> => {
+      const trigger = page.getByRole("button", { name: "Open Coding Workbench information" });
+      await expect(trigger).toBeVisible();
+      if ((await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
+      await expect(
+        page.getByRole("dialog", { name: "Coding Workbench information" }),
+      ).toBeVisible();
     },
     // #2644 moved the product-wide autonomy modes out of the Workbench into Settings → Security.
     // A request made here must still be answered by the server's clamp, never by the surface that

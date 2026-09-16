@@ -1291,7 +1291,7 @@ export function runMigrations(db: DatabaseSync, activityLog?: ServerLogSink): vo
     activityLog === undefined
       ? undefined
       : {
-          write: (event) => {
+          write: (event): void => {
             try {
               activityLog.write(event);
             } catch {
