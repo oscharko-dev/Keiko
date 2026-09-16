@@ -483,9 +483,7 @@ describe("startBlockedReason readiness chain", () => {
 
   it("names the workspace as the blocker once the source resolved ready", () => {
     const state: CodingWorkbenchRuntimeState = { ...pairedState(), source: readySource };
-    expect(startBlockedReason(state, t, false)).toBe(
-      "codingWorkbench.composer.blocked.workspace",
-    );
+    expect(startBlockedReason(state, t, false)).toBe("codingWorkbench.composer.blocked.workspace");
   });
 
   it("names the runtime as the blocker once source and workspace are ready", () => {
@@ -494,9 +492,7 @@ describe("startBlockedReason readiness chain", () => {
       source: readySource,
       workspace: readyWorkspace,
     };
-    expect(startBlockedReason(state, t, false)).toBe(
-      "codingWorkbench.composer.blocked.runtime",
-    );
+    expect(startBlockedReason(state, t, false)).toBe("codingWorkbench.composer.blocked.runtime");
   });
 
   it("names the run resource as the blocker once source, workspace and runtime are ready", () => {
@@ -522,9 +518,7 @@ describe("startBlockedReason readiness chain", () => {
       runtime: readyRuntime,
       run: readyRun,
     };
-    expect(startBlockedReason(state, t, false)).toBe(
-      "codingWorkbench.composer.blocked.notReady",
-    );
+    expect(startBlockedReason(state, t, false)).toBe("codingWorkbench.composer.blocked.notReady");
   });
 
   // `pairing: "unknown"` is the boot-time default; it must return the "pairing" sentence, not the
