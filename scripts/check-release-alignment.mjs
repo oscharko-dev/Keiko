@@ -114,7 +114,19 @@ function parsedJson(result) {
 }
 
 function readNpmLatest({ packageName, registry, rows, runNpm }) {
-  const result = runNpm(["view", packageName, "dist-tags", "--json", "--registry", registry]);
+  // `--prefer-online` bypasses npm's Cloudflare CDN cache (max-age=300 on registry.npmjs.org) that
+  // serves the pre-publish packument for up to ~5 minutes after our own publish. Without it, the
+  // in-job alignment check runs right after a fresh publish and reads the previous latest — the
+  // v1.0.2 publish incident turned the deployment page red for this exact reason.
+  const result = runNpm([
+    "view",
+    packageName,
+    "dist-tags",
+    "--json",
+    "--prefer-online",
+    "--registry",
+    registry,
+  ]);
   const parsed = parsedJson(result);
   const latest = isRecord(parsed) ? parsed.latest : undefined;
   if (typeof latest !== "string" || latest.length === 0) {
