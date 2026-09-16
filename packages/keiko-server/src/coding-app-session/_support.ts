@@ -134,7 +134,6 @@ export async function startAppSessionTestServer(
 /** The channel route paths, so tests never hard-code and drift from the mounted group. */
 export const APP_SESSION_PATHS = {
   pair: "/api/coding-workbench/app-session/pair",
-  localSession: "/api/coding-workbench/app-session/local-session",
   channel: "/api/coding-workbench/app-session/channel",
   stream: "/api/coding-workbench/app-session/channel/stream",
   rotate: "/api/coding-workbench/app-session/rotate",

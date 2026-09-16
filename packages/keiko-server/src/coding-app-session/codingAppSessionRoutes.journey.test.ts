@@ -17,6 +17,11 @@ import {
 
 const CANARY = { kind: "transcript-probe", body: "milestone-1-bounded-canary" } as const;
 
+// The local-session route path lives here rather than in `_support.ts` because that file is a
+// pinned coding-runtime measurement input; adding a member there would change the harness ruler
+// digest and force a recalibration for every new session-route entry (issue #3494).
+const APP_SESSION_LOCAL_SESSION_PATH = "/api/coding-workbench/app-session/local-session";
+
 function startServer(): Promise<AppSessionTestServer> {
   return startAppSessionTestServer({
     sessionPairingPort: createFakeSessionPairingPort(),
@@ -48,7 +53,7 @@ async function pairSession(server: AppSessionTestServer): Promise<string> {
 }
 
 async function ensureLocalSession(server: AppSessionTestServer): Promise<string | undefined> {
-  const response = await fetch(`${server.baseUrl}${APP_SESSION_PATHS.localSession}`, {
+  const response = await fetch(`${server.baseUrl}${APP_SESSION_LOCAL_SESSION_PATH}`, {
     method: "POST",
     headers: postHeaders(),
   });
