@@ -116,8 +116,12 @@ describe("checkReleaseAlignment", () => {
     const runNpm = npmDistTags("0.3.15");
     const runGit = gitTags(["v0.3.14", "v0.3.15"]);
     checkReleaseAlignment(alignedSeams({ runNpm, runGit }));
+    // `--prefer-online` was added after the v1.0.2 publish incident: without it, the CDN edge
+    // cache (max-age=300) returned the pre-publish packument for up to five minutes after our own
+    // `npm publish`, so the in-job alignment check saw the previous `latest` and failed the job
+    // despite the publish itself succeeding.
     expect(runNpm.calls).toEqual([
-      ["view", PACKAGE_NAME, "dist-tags", "--json", "--registry", REGISTRY],
+      ["view", PACKAGE_NAME, "dist-tags", "--json", "--prefer-online", "--registry", REGISTRY],
     ]);
     expect(runGit.calls).toEqual([["tag", "--list", "v*"]]);
   });

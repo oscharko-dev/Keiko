@@ -220,4 +220,12 @@ jobs:
           KEIKO_PORTABLE_RELEASE_SIGNING_KEY: ${{ secrets.KEIKO_PORTABLE_RELEASE_SIGNING_KEY }}
           NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           KEIKO_RELEASE_OWNER_GITHUB_LOGINS: ${{ vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS }}
+          # `registry.npmjs.org` sits behind Cloudflare with `max-age=300` on the packument, so a
+          # bare `npm view … dist-tag/version` right after our own `npm publish` reads the CDN's
+          # pre-publish copy for up to ~5 minutes. The v1.0.2 publish job turned red exactly this
+          # way despite npm's own `+ @oscharko-dev/keiko@1.0.2` success line. Take the script's
+          # documented escape hatch here so ensurePackageDistTag/verifyPackage retry with waits
+          # until the CDN edge revalidates against origin.
+          KEIKO_RELEASE_VERIFY_ATTEMPTS: "6"
+          KEIKO_RELEASE_VERIFY_DELAY_MS: "30000"
         run: npm run release:publish -- --tag "$NPM_DIST_TAG"
