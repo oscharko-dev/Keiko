@@ -58,6 +58,8 @@ test("autonomous closeout narrow viewport has no horizontal overflow @smoke", as
     "data-mode",
     "autonomous-delivery",
   );
+  // The popover overlaps the composer at 390px; close it so the Start click reaches the button.
+  await fixture.closeInformation();
   await page.getByLabel("Task instructions").fill("Close out the autonomous run safely");
   await page.getByRole("button", { name: "Start coding run" }).click();
   await page.getByRole("button", { name: "Approve once" }).click();
