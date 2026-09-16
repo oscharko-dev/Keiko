@@ -89,7 +89,6 @@ describe("isWindowsRelevantChange", () => {
       "UI window components that are not OS Windows",
       ["packages/keiko-ui/src/app/components/desktop/windows/WindowFrame.tsx"],
     ],
-    ["non-Windows package source", ["packages/keiko-server/src/correlation.ts"]],
     ["e2e tests", ["tests/e2e/coding-workbench-1990.spec.ts"]],
   ])("reports non-Windows-relevant for %s", (_label, paths) => {
     expect(isWindowsRelevantChange(paths)).toBe(false);
@@ -98,6 +97,7 @@ describe("isWindowsRelevantChange", () => {
   it.each([
     ["an unknown top-level file", ["new-tooling.toml"]],
     ["an unknown script", ["scripts/new-release-helper.mjs"]],
+    ["an unknown package source", ["packages/keiko-server/src/correlation.ts"]],
     ["an empty change set", []],
     ["a malformed path", ["README.md", ""]],
   ])("fails open for %s", (_label, paths) => {

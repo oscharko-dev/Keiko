@@ -126,13 +126,14 @@ launcher with `/std:c17 /W4 /WX /analyze`; .NET builds the RFC3161 implementatio
 built-in analyzers and warnings-as-errors before the existing hermetic fixtures run.
 
 These checks are part of the cross-platform smoke estate, which is a mandatory dependency of the
-required `ci` aggregate. The Windows compensation runs in the split
-`windows-cross-platform-smoke` job so non-Windows-relevant pull requests and merge groups can skip
-allocating a Windows runner; the aggregate accepts that skip only when the trusted change-scope
-classifier reports `windows-relevant=false`, while pushes and manual dispatches still require full
-integration evidence. A failed, skipped outside that documented condition, cancelled, neutral,
-stale, or missing platform result blocks the merge. Release signing, notarization, and
-portable-asset evidence remain separate and are not replaced by these PR gates.
+required `ci` aggregate. Windows remains a full `cross-platform-smoke` matrix leg, so it runs the
+same typecheck, build, package preparation, UI build, install smoke, and optional-native install
+smoke as Linux and macOS before the Windows-native compensation steps. To avoid allocating a
+Windows runner for changes that cannot affect that platform, the matrix omits only the Windows leg
+when the trusted change-scope classifier reports `windows-relevant=false`; pushes and manual
+dispatches still include Windows. A failed, cancelled, neutral, stale, or missing platform result
+blocks the merge. Release signing, notarization, and portable-asset evidence remain separate and
+are not replaced by these PR gates.
 
 ### D6 — Count-aware Free-plan gate semantics
 

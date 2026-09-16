@@ -860,7 +860,7 @@ function prepublishedEvaluationState() {
 function curlStubBody() {
   return [
     "const url = argv.at(-1);",
-    "appendFileSync(LOG, 'curl ' + JSON.stringify([url]) + '\\n');",
+    "appendFileSync(LOG, 'curl ' + JSON.stringify(argv) + '\\n');",
     `const versionEndpointSuffix = "/" + VERSION;`,
     "if (url.endsWith(versionEndpointSuffix)) {",
     "  const s = state();",
@@ -1847,10 +1847,13 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       // provider exists, and the unconditional flag killed every local operator publish (0.3.1).
 
       // The post-publish verification pass re-reads BOTH the version and the dist-tag.
-      const versionViews = lastRun.calls.filter(isVersionEndpointCurl).length;
+      const versionEndpointReads = lastRun.calls.filter(isVersionEndpointCurl);
+      const versionViews = versionEndpointReads.length;
       const distTagViews = lastRun.calls.filter(isDistTagView).length;
       expect(versionViews).toBeGreaterThanOrEqual(2);
       expect(distTagViews).toBeGreaterThanOrEqual(2);
+      expect(versionEndpointReads[0]).toContain('"--connect-timeout","15"');
+      expect(versionEndpointReads[0]).toContain('"--max-time","60"');
 
       const uploadLine = lastRun.calls.find(
         (l) => l.startsWith('gh ["release","upload"') && l.includes("keiko-windows-x64.zip"),

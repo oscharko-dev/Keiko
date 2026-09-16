@@ -24,11 +24,20 @@ describe("security mutation suite runner", () => {
         expect.stringContaining("stryker.security.conf.json"),
         expect.stringContaining("stryker.debug-launch.security.conf.json"),
         "scripts/check-mutation-quality.mjs",
-        expect.stringContaining(
-          "--strict --report reports/mutation/debug-launch-security/mutation-report.json",
-        ),
       ]),
     );
+    expect(spawn.mock.calls[3]?.[1]).toEqual([
+      "scripts/check-mutation-quality.mjs",
+      "--strict",
+      "--report",
+      "reports/mutation/debug-launch-security/mutation-report.json",
+      "--minimum-score",
+      "100",
+      "--maximum-survived",
+      "0",
+      "--maximum-no-coverage",
+      "0",
+    ]);
     expect(log).toHaveBeenCalledWith(
       "mutation-security: PASS - debug-launch security mutation strict ratchet",
     );

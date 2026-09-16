@@ -1,4 +1,4 @@
-// Decides whether a change set can affect the Windows-only CI smoke lane (#3519).
+// Decides whether a change set can affect the Windows CI smoke matrix leg (#3519).
 //
 // Deliberately conservative and fail-open: paths that are unknown to this classifier are treated
 // as Windows-relevant. A path may return false only when it is part of a known surface already
@@ -51,7 +51,6 @@ const KNOWN_IRRELEVANT_PATTERNS = Object.freeze([
   /^tsconfig(?:\.[^/]+)?\.json$/u,
   /^vitest\.config\.ts$/u,
   /^packages\/keiko-ui\//u,
-  /^packages\/(?!keiko-git\/src\/git-executable)(?!keiko-security\/src\/windows-)(?!keiko-tools\/src\/windows-shell)(?!keiko-server\/src\/(?:update-portable|coding-runtime\/windows))[^/]+\//u,
   /^src\//u,
   /^tests\//u,
 ]);
@@ -61,8 +60,8 @@ function isRecognizedIrrelevantPath(path) {
 }
 
 /**
- * True when any changed path needs the Windows-only smoke lane. Empty or malformed change sets are
- * relevant because they mean detection failed.
+ * True when any changed path needs the Windows smoke matrix leg. Empty or malformed change sets
+ * are relevant because they mean detection failed.
  */
 export function isWindowsRelevantChange(changedPaths) {
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) return true;

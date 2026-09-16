@@ -102,6 +102,8 @@ const valueArgFields = new Map([
 // read; `verifyDelayMs` is the wait between reads.
 const verifyAttempts = positiveIntegerEnv("KEIKO_RELEASE_VERIFY_ATTEMPTS", 1);
 const verifyDelayMs = nonNegativeIntegerEnv("KEIKO_RELEASE_VERIFY_DELAY_MS", 0);
+const registryProbeConnectTimeoutSeconds = 15;
+const registryProbeMaxTimeSeconds = 60;
 
 function positiveIntegerEnv(name, fallback) {
   const raw = process.env[name];
@@ -1654,6 +1656,10 @@ function npmViewVersionResult(pkg, registry) {
       "--silent",
       "--show-error",
       "--location",
+      "--connect-timeout",
+      String(registryProbeConnectTimeoutSeconds),
+      "--max-time",
+      String(registryProbeMaxTimeSeconds),
       "--output",
       "/dev/null",
       "--write-out",

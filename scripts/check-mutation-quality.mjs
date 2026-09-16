@@ -11,6 +11,8 @@ const defaultBaseline = "docs/qa/security-mutation-baseline.json";
 const defaultStrictMinimumScore = 100;
 const defaultStrictMaximumNoCoverage = 0;
 const defaultStrictMaximumSurvived = 0;
+const strictMutationThresholdMessage =
+  "strict mode requires --minimum-score 100, --maximum-survived 0, and --maximum-no-coverage 0.";
 
 export function mutationFingerprint(file, mutant) {
   const value = JSON.stringify({
@@ -219,7 +221,22 @@ async function evaluateReport(input, report, read) {
   );
 }
 
+function assertStrictMutationThresholds(input) {
+  if (input.mode !== "strict") return;
+  const minimumScore = input.minimumScore ?? defaultStrictMinimumScore;
+  const maximumNoCoverage = input.maximumNoCoverage ?? defaultStrictMaximumNoCoverage;
+  const maximumSurvived = input.maximumSurvived ?? defaultStrictMaximumSurvived;
+  if (
+    minimumScore !== defaultStrictMinimumScore ||
+    maximumNoCoverage !== defaultStrictMaximumNoCoverage ||
+    maximumSurvived !== defaultStrictMaximumSurvived
+  ) {
+    throw new Error(strictMutationThresholdMessage);
+  }
+}
+
 export async function runMutationQuality(input = {}) {
+  assertStrictMutationThresholds(input);
   const read = input.read ?? ((path) => readFile(path, "utf8"));
   const report = JSON.parse(await read(input.reportPath ?? defaultReport));
   const result = await evaluateReport(input, report, read);
@@ -244,6 +261,7 @@ export function mutationQualityCliInput(args) {
     runInput.maximumNoCoverage = numericOption(args, "--maximum-no-coverage", 0);
     runInput.maximumSurvived = numericOption(args, "--maximum-survived", 0);
     runInput.minimumScore = numericOption(args, "--minimum-score", 100);
+    assertStrictMutationThresholds(runInput);
   }
   return runInput;
 }

@@ -129,6 +129,21 @@ describe("mutation quality", () => {
         "Surviving mutant count 1 exceeds 0.",
       ]),
     );
+    expect(evaluateStrictMutation(report(mutant("Killed"), mutant("NoCoverage"))).failures).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("below 100.00%"),
+        "No-coverage mutant count 1 exceeds 0.",
+      ]),
+    );
+    expect(evaluateStrictMutation(report()).failures).toEqual([
+      "Mutation score 0.00% is below 100.00%.",
+    ]);
+    expect(evaluateStrictMutation(report(mutant("CompileError"))).failures).toEqual(
+      expect.arrayContaining([
+        "Unexpected mutant result: src/security.ts:1:CompileError",
+        "Mutation score 0.00% is below 100.00%.",
+      ]),
+    );
   });
 
   it("requires scoped critical changes to have score, mutants, and zero debt", () => {
@@ -299,6 +314,41 @@ describe("mutation quality", () => {
       mode: "strict",
       reportPath: "debug.json",
     });
+  });
+
+  it("rejects weakened strict CLI thresholds before invoking the runner", async () => {
+    const error = vi.fn();
+    const run = vi.fn(async () => undefined);
+    const setExitCode = vi.fn();
+
+    await executeMutationQualityCli({
+      args: ["--strict", "--minimum-score", "0", "--maximum-no-coverage", "1"],
+      error,
+      run,
+      setExitCode,
+    });
+
+    expect(run).not.toHaveBeenCalled();
+    expect(error).toHaveBeenCalledWith(
+      "mutation-quality: FAIL - strict mode requires --minimum-score 100, --maximum-survived 0, and --maximum-no-coverage 0.",
+    );
+    expect(setExitCode).toHaveBeenCalledWith(1);
+  });
+
+  it("rejects weakened strict run input before reading the report", async () => {
+    const read = vi.fn(async () => JSON.stringify(report(mutant("Killed"))));
+
+    await expect(
+      runMutationQuality({
+        maximumNoCoverage: 1,
+        minimumScore: 0,
+        mode: "strict",
+        read,
+      }),
+    ).rejects.toThrow(
+      "strict mode requires --minimum-score 100, --maximum-survived 0, and --maximum-no-coverage 0.",
+    );
+    expect(read).not.toHaveBeenCalled();
   });
 
   it("uses default CLI error adapters for non-Error failures", async () => {

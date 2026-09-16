@@ -988,7 +988,6 @@ jobs:
       - secret-scan
       - semantic-duplication
       - ui
-      - windows-cross-platform-smoke
     runs-on: ubuntu-latest
     permissions: {}
     steps:
@@ -1001,14 +1000,11 @@ jobs:
           CROSS_PLATFORM_RESULT: ${{ needs.cross-platform-smoke.result }}
           DOCUMENTATION_ONLY: ${{ needs.change-scope.outputs.documentation-only }}
           EDITOR_FAST_PR: ${{ github.event_name == 'pull_request' && github.base_ref == 'feat/keiko-editor' }}
-          FULL_MATRIX_REQUIRED: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
           NODE_26_COMPATIBILITY_RESULT: ${{ needs.node-26-compatibility.result }}
           PROTECTED_BRANCH_RESULT: ${{ needs.protected-branch-gate.result }}
           SECRET_SCAN_RESULT: ${{ needs.secret-scan.result }}
           SEMANTIC_DUPLICATION_RESULT: ${{ needs.semantic-duplication.result }}
           UI_RESULT: ${{ needs.ui.result }}
-          WINDOWS_CROSS_PLATFORM_RESULT: ${{ needs.windows-cross-platform-smoke.result }}
-          WINDOWS_RELEVANT: ${{ needs.change-scope.outputs.windows-relevant || 'true' }}
         run: |
           for result in "$CHANGE_SCOPE_RESULT" "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT" "$UI_RESULT"; do
             if [ "$result" != "success" ]; then
@@ -1039,22 +1035,6 @@ jobs:
             echo "Cross-platform smoke skipped: documentation-only change set."
           elif [ "$CROSS_PLATFORM_RESULT" != "success" ]; then
             echo "Required CI dependency did not succeed: $CROSS_PLATFORM_RESULT"
-            exit 1
-          fi
-          # The Windows leg is split out so non-Windows-relevant PRs and merge groups do not even
-          # allocate a Windows runner. Push/manual integration evidence still runs the full matrix,
-          # and any classifier failure is caught above by CHANGE_SCOPE_RESULT.
-          if [ "$WINDOWS_CROSS_PLATFORM_RESULT" = "skipped" ]; then
-            if [ "$DOCUMENTATION_ONLY" = "true" ]; then
-              echo "Windows cross-platform smoke skipped: documentation-only change set."
-            elif [ "$WINDOWS_RELEVANT" = "false" ] && [ "$FULL_MATRIX_REQUIRED" != "true" ]; then
-              echo "Windows cross-platform smoke skipped: non-Windows-relevant change set."
-            else
-              echo "Windows cross-platform smoke was skipped without a scoped change set."
-              exit 1
-            fi
-          elif [ "$WINDOWS_CROSS_PLATFORM_RESULT" != "success" ]; then
-            echo "Required CI dependency did not succeed: $WINDOWS_CROSS_PLATFORM_RESULT"
             exit 1
           fi
           if [ "$NODE_26_COMPATIBILITY_RESULT" = "skipped" ]; then
@@ -1187,13 +1167,24 @@ jobs:
     # skip this matrix. The aggregate still fails closed on the classifier failure; running the matrix
     # preserves diagnostic evidence instead of hiding a second defect behind the first one.
     if: ${{ always() && needs.change-scope.outputs.documentation-only != 'true' }}
-    # Linux/macOS keep the full typecheck/build/install sweep. Windows has its own job below because
-    # its release-blocking proof is the Windows-native smoke set, and allocating a Windows runner for
-    # non-Windows-relevant PRs was the CI bottleneck tracked in #3519.
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        # Windows is part of the same full release proof as Linux and macOS. The matrix omits only
+        # the Windows leg for PRs that the fail-open classifier has positively identified as
+        # non-Windows-relevant; pushes and manual runs still produce full integration evidence.
+        os: >-
+          ${{
+            fromJSON(
+              (
+                needs.change-scope.outputs.windows-relevant != 'false'
+                || github.event_name == 'push'
+                || github.event_name == 'workflow_dispatch'
+              )
+              && '["ubuntu-latest","macos-latest","windows-latest"]'
+              || '["ubuntu-latest","macos-latest"]'
+            )
+          }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     permissions:
@@ -1250,72 +1241,30 @@ jobs:
         env:
           KEIKO_SMOKE_PACK_IGNORE_SCRIPTS: "1"
         run: npm run smoke:install:optional
-
-  windows-cross-platform-smoke:
-    name: Cross-platform smoke (windows-latest)
-    needs: change-scope
-    # A documentation-only change skips every cross-platform lane. A non-Windows-relevant PR or
-    # merge-group skips only this Windows job; pushes and manual runs still produce full integration
-    # evidence even for cheap version/catalog commits.
-    if: >-
-      ${{
-        always()
-        && needs.change-scope.outputs.documentation-only != 'true'
-        && (
-          needs.change-scope.outputs.windows-relevant != 'false'
-          || github.event_name == 'push'
-          || github.event_name == 'workflow_dispatch'
-        )
-      }}
-    runs-on: windows-latest
-    timeout-minutes: 45
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-          ref: ${{ github.sha }}
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: "24.18.0"
-          package-manager-cache: false
-      - name: Verify pull-request merge candidate consistency
-        if: ${{ github.event_name == 'pull_request' }}
-        env:
-          KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: node scripts/check-ci-merge-candidate.mjs
       - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        if: runner.os == 'Windows'
         with:
           dotnet-version: "8.0.x"
-      - name: Verify governed Node.js and npm toolchain
-        run: node scripts/check-runtime-toolchain.mjs --exact
-      - run: npm ci --ignore-scripts
-      # The spawn smoke imports `packages/keiko-tools/src/windows-shell.ts` as SOURCE (Node type
-      # stripping) so the escaping it exercises cannot drift from what ships. That source imports
-      # the shared trusted-System32 resolver from @oscharko-dev/keiko-security, which resolves
-      # through node_modules to that package's BUILT dist. Building packages first makes the
-      # source-import strategy hold.
-      - name: Build packages for the Windows smokes
-        timeout-minutes: 20
-        run: npm run build:packages
       - name: Verify the Windows portable handoff protocol fixture
+        if: runner.os == 'Windows'
         # KHP v3 uses Windows path semantics. Run the full plan suite on a genuine Windows host so
         # its native-consumer golden bytes cannot remain covered only by a skipped cross-host case.
         run: node node_modules/vitest/vitest.mjs run packages/keiko-server/src/update-portable-handoff-plan.test.ts packages/keiko-server/src/update-portable-handoff-receipts.test.ts
       - name: Verify Git executable Windows reparse containment
+        if: runner.os == 'Windows'
         # Direct execution is deliberate: Vitest exits zero when every selected test is skipped.
         # This smoke asserts the real host is Win32, creates a genuine directory junction, and calls
         # the production resolver, so the required Windows lane cannot pass without executing it.
         run: node scripts/__tests__/windows-git-reparse-smoke.mjs
       - name: Smoke the Windows command spawn wrapper
+        if: runner.os == 'Windows'
         # #3350: on modern Node a `.cmd`/`.bat` target spawned with shell:false raises EINVAL, so
         # every agent `npm`/`npx` call would fail. This exercises the real cmd.exe wrapper against
         # an adversarial argument matrix on genuine Windows.
         timeout-minutes: 10
         run: node scripts/__tests__/windows-cmd-spawn-smoke.mjs
       - name: Configure MSVC for native quality analysis
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
@@ -1332,8 +1281,10 @@ jobs:
             $line | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           }
       - name: Verify productive native sources on Windows
+        if: runner.os == 'Windows'
         run: npm run check:native:windows
       - name: Smoke the Windows setup bootstrap
+        if: runner.os == 'Windows'
         # #2992: build the real Keiko-owned native setup bootstrap and exercise fresh install,
         # existing-install revalidation, launch failure, tamper rejection, and adversarial arguments.
         timeout-minutes: 20
