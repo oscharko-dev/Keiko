@@ -74,10 +74,21 @@ function trustedCandidate(candidate, workspaceRoot, platform, groupIds, trustedR
 
 function runtimeTrustRoots() {
   try {
-    return [dirname(dirname(realpathSync(process.execPath)))];
+    const nodeRuntime = dirname(dirname(realpathSync(process.execPath)));
+    const roots = [nodeRuntime];
+    const homebrewPrefix = homebrewPrefixForCellarRuntime(nodeRuntime);
+    if (homebrewPrefix !== undefined) roots.push(homebrewPrefix);
+    return roots;
   } catch {
     return [];
   }
+}
+
+function homebrewPrefixForCellarRuntime(runtimeRoot) {
+  const packageRoot = dirname(runtimeRoot);
+  const cellarRoot = dirname(packageRoot);
+  if (cellarRoot.endsWith("/Cellar")) return dirname(cellarRoot);
+  return undefined;
 }
 
 export function resolveHostExecutable(

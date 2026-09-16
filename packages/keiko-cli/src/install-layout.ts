@@ -54,12 +54,12 @@ function builtLayoutAt(root: string): PreferredInstallLayout | undefined {
   };
 }
 
-function builtCheckoutLayout(cwd: string): PreferredInstallLayout | undefined {
+export function resolveBuiltCheckoutLayout(cwd: string): PreferredInstallLayout | undefined {
   if (readRootPackageName(cwd) !== ROOT_PACKAGE_NAME) return undefined;
   return builtLayoutAt(cwd);
 }
 
-function localPackageLayout(cwd: string): LocalPackageInstallLayout | undefined {
+export function resolveLocalPackageLayout(cwd: string): LocalPackageInstallLayout | undefined {
   const packageRoot = localPackageRoot(cwd);
   const preferred = builtLayoutAt(packageRoot);
   if (preferred === undefined) return undefined;
@@ -67,7 +67,7 @@ function localPackageLayout(cwd: string): LocalPackageInstallLayout | undefined 
 }
 
 export function resolvePreferredInstallLayout(cwd: string): PreferredInstallLayout | undefined {
-  return builtCheckoutLayout(cwd) ?? localPackageLayout(cwd);
+  return resolveBuiltCheckoutLayout(cwd) ?? resolveLocalPackageLayout(cwd);
 }
 
 export function resolveKeikoBinary(
@@ -87,8 +87,8 @@ export function resolveKeikoBinary(
       binPath: absoluteExistingPath(env.KEIKO_CLI_BIN_PATH),
     },
     { source: "argv", binPath: absoluteExistingPath(argv[1]) },
-    { source: "local-build", binPath: builtCheckoutLayout(cwd)?.binPath },
-    { source: "local-package", binPath: localPackageLayout(cwd)?.binPath },
+    { source: "local-build", binPath: resolveBuiltCheckoutLayout(cwd)?.binPath },
+    { source: "local-package", binPath: resolveLocalPackageLayout(cwd)?.binPath },
   ];
 
   for (const candidate of checks) {

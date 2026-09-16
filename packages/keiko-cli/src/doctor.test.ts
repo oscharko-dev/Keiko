@@ -37,7 +37,7 @@ describe("doctor", () => {
       argv: [process.execPath, "C:\\Users\\dev\\AppData\\Roaming\\npm\\keiko.cmd"],
     });
     expect(report.warning).toContain("different");
-    expect(report.warning).toContain("local build");
+    expect(report.warning).toContain("local install");
   });
 
   it("warns when a built checkout exists but the running entry points elsewhere", () => {

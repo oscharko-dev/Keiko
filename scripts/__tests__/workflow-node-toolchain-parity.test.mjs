@@ -207,8 +207,9 @@ describe("workflow Node toolchain parity", () => {
     // the wait-for-checks release-verify lane; the event-driven cross-workflow dispatch it
     // considered was withdrawn because default GITHUB_TOKEN dispatch attributes triggering_actor
     // to github-actions[bot] and would fail the dispatch guard silently, so the button on
-    // release.yml is the authoritative dispatch. Total: 28 lanes.
-    expect(withSetupNode).toHaveLength(28);
+    // release.yml is the authoritative dispatch. Issue #3519 split the Windows cross-platform
+    // proof into its own lane. Total: 29 lanes.
+    expect(withSetupNode).toHaveLength(29);
   });
 
   it("pins every actions/setup-node step to an approved exact Node version", () => {

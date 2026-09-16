@@ -474,20 +474,31 @@ function childEnv(env: EnvSource): NodeJS.ProcessEnv {
 }
 
 function cliEntryPath(cwd: string, env: EnvSource): string {
-  const preferredLayout = resolvePreferredInstallLayout(cwd);
-  if (preferredLayout !== undefined) return preferredLayout.binPath;
-  // The root bin entry (`dist/cli/index.js`) surfaces `KEIKO_CLI_BIN_PATH` so
-  // re-exec'd children spawned by `keiko start` invoke the published bin rather
-  // than the cli package barrel (which is not executable). Route through
-  // `absoluteExistingPath` — the same validation `install-layout.ts` applies to
-  // this variable — so a relative or non-existent value is refused instead of
-  // spawned (#KEIKO-0285). Read from the caller-supplied EnvSource only; the
-  // parameter itself defaults to `process.env` at the call site, so no per-key
-  // `?? process.env.X` fallback here — a test that passes `{}` must be able to
-  // suppress an ambient KEIKO_CLI_BIN_PATH (KEIKO-0553).
+  // The root bin entry (`dist/cli/index.js`) surfaces `KEIKO_CLI_BIN_PATH` so re-exec'd children
+  // spawned by `keiko start` keep using the active published package instead of falling back to a
+  // stale checkout build. `absoluteExistingPath` refuses relative or missing values (#KEIKO-0285).
   const fromEnv = absoluteExistingPath(env.KEIKO_CLI_BIN_PATH);
   if (fromEnv !== undefined) return fromEnv;
+  const preferredLayout = resolvePreferredInstallLayout(cwd);
+  if (preferredLayout !== undefined) return preferredLayout.binPath;
   return join(dirname(fileURLToPath(import.meta.url)), "index.js");
+}
+
+function uiChildInstallEnv(cwd: string, env: EnvSource): NodeJS.ProcessEnv {
+  const cliBinFromEnv = absoluteExistingPath(env.KEIKO_CLI_BIN_PATH);
+  if (cliBinFromEnv !== undefined) {
+    const staticRootFromEnv = absoluteExistingPath(env.KEIKO_UI_STATIC_ROOT);
+    return {
+      KEIKO_CLI_BIN_PATH: cliBinFromEnv,
+      ...(staticRootFromEnv === undefined ? {} : { KEIKO_UI_STATIC_ROOT: staticRootFromEnv }),
+    };
+  }
+  const preferredLayout = resolvePreferredInstallLayout(cwd);
+  if (preferredLayout === undefined) return {};
+  return {
+    KEIKO_CLI_BIN_PATH: preferredLayout.binPath,
+    KEIKO_UI_STATIC_ROOT: preferredLayout.staticRoot,
+  };
 }
 
 /**
@@ -624,7 +635,6 @@ function spawnUiProcess(
   launchId: string,
 ): { readonly child: ChildProcess; readonly logPath: string } {
   const logStdio = openUiLogStdio(options);
-  const preferredLayout = resolvePreferredInstallLayout(cwd);
   const uiEnv = childEnv({
     ...env,
     KEIKO_STATE_DIR: options.stateDir,
@@ -632,12 +642,7 @@ function spawnUiProcess(
     // ADR-0141 D2 / #2478: the launcher-provisioned pairing secret travels only through the
     // inherited environment of the spawned BFF.
     [CODING_APP_SESSION_LAUNCHER_SECRET_ENV]: pairingSecret,
-    ...(preferredLayout === undefined
-      ? {}
-      : {
-          KEIKO_CLI_BIN_PATH: preferredLayout.binPath,
-          KEIKO_UI_STATIC_ROOT: preferredLayout.staticRoot,
-        }),
+    ...uiChildInstallEnv(cwd, env),
   });
   try {
     return {

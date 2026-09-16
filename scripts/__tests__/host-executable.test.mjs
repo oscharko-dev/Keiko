@@ -144,6 +144,40 @@ describe("resolveHostExecutable", () => {
   );
 
   it.skipIf(process.platform === "win32")(
+    "accepts Homebrew-style symlinks anchored to the trusted package prefix",
+    () => {
+      const workspace = temporary("keiko-host-executable-workspace-");
+      const homebrew = temporary("keiko-host-executable-homebrew-");
+      const bin = join(homebrew, "bin");
+      const nodeBin = join(homebrew, "Cellar", "node", "26.8.1", "bin");
+      const ghBin = join(homebrew, "Cellar", "gh", "2.100.0", "bin");
+      mkdirSync(bin);
+      mkdirSync(nodeBin, { recursive: true });
+      mkdirSync(ghBin, { recursive: true });
+      writeFileSync(join(nodeBin, "npm"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      writeFileSync(join(ghBin, "gh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      symlinkSync("../Cellar/node/26.8.1/bin/npm", join(bin, "npm"));
+      symlinkSync("../Cellar/gh/2.100.0/bin/gh", join(bin, "gh"));
+      chmodSync(bin, 0o775);
+
+      expect(
+        resolveHostExecutable("npm", {
+          env: { PATH: bin },
+          trustedRoots: [homebrew],
+          workspaceRoot: workspace,
+        }),
+      ).toBe(realpathSync(join(nodeBin, "npm")));
+      expect(
+        resolveHostExecutable("gh", {
+          env: { PATH: bin },
+          trustedRoots: [homebrew],
+          workspaceRoot: workspace,
+        }),
+      ).toBe(realpathSync(join(ghBin, "gh")));
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
     "rejects a group-writable symlink that escapes its trusted runtime root",
     () => {
       const workspace = temporary("keiko-host-executable-workspace-");
