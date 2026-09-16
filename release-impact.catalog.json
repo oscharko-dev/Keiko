@@ -2045,7 +2045,7 @@
         "reviewer": "release-owner",
         "reviewedAt": "2026-09-15",
         "humanApproved": true,
-        "approvalReference": "github-pr-review:oscharko-dev/Keiko#3507",
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3507#5684274445",
         "rationale": "The release owner approved 1.0.2 as the acceptance test of the one-button release path delivered by Epic #3495 (PR #3507). No user-visible surface changes from 1.0.1; the version moves only to observe the new dispatch and publish behavior end to end.",
         "traceability": null
       },
@@ -2101,7 +2101,7 @@
         "reviewer": "release-owner",
         "reviewedAt": "2026-09-16",
         "humanApproved": true,
-        "approvalReference": "github-pr-review:oscharko-dev/Keiko#3506",
+        "approvalReference": "github-issue-comment:oscharko-dev/Keiko#3506#5698174908",
         "rationale": "The release owner accepted PR #3506 as the substantive proof-of-example of the one-button release path delivered by Epic #3495 \u2014 a 233-file coding-workbench stability rollup taking the deterministic release chain end to end with real user-visible content.",
         "traceability": null
       },
