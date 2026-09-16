@@ -230,7 +230,7 @@ describe("repository initialization route", () => {
     expect(diagnostics).toContainEqual(
       expect.objectContaining({
         correlationId: CORRELATION_ID,
-        operation: "POST /api/git-delivery/{id}/{id}",
+        operation: "POST /api/git-delivery/repository/initialize",
         source: "git-repository-initialization-route",
       }),
     );

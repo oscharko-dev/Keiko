@@ -1282,11 +1282,30 @@ export function runMigrations(db: DatabaseSync, activityLog?: ServerLogSink): vo
   }
   const pending = MIGRATIONS.filter((m) => m.version > start);
   if (pending.length === 0) return;
+  // Wrap the caller's sink so any migration write that throws is best-effort — a failing sink
+  // must not roll back a schema migration that already ran. The `store.opened` event has this
+  // same "fail-closed on database, best-effort on sink" contract in `emitUiStoreOpenedEvent`;
+  // apply the same guarantee to every migration event so `openNodeUiDatabase(path, sink)` still
+  // returns a working database when `sink.write` throws.
+  const safeLog: ServerLogSink | undefined =
+    activityLog === undefined
+      ? undefined
+      : {
+          write: (event) => {
+            try {
+              activityLog.write(event);
+            } catch {
+              // See emitUiStoreOpenedEvent: the process warning channel is the last one there is,
+              // and a report beyond that does not exist. A throwing sink is a caller defect that
+              // must not break schema evolution.
+            }
+          },
+        };
   db.exec("BEGIN");
   try {
     for (const m of pending) {
       db.exec(m.sql);
-      m.apply?.(db, activityLog);
+      m.apply?.(db, safeLog);
       setUserVersion(db, m.version);
     }
     db.exec("COMMIT");
