@@ -83,17 +83,32 @@ export const CONNECTABLE: Readonly<Partial<Record<WindowType, readonly WindowTyp
   figmaImage: ["quality"],
 };
 
-const CONNECTABLE_SETS: Readonly<Record<string, ReadonlySet<string>>> = Object.fromEntries(
-  Object.entries(CONNECTABLE).map(([type, peers]) => [type, new Set(peers)]),
+// #3506 review — a bare `Object.fromEntries(...)` result still resolves its prototype-chain keys
+// (`__proto__`, `constructor`, `toString`, …). `CONNECTABLE_SETS["__proto__"]` would then return
+// a non-Set value and the subsequent `.has()` would throw `TypeError: has is not a function`.
+// Compose the lookup on a null-prototype object so hostile inputs miss cleanly and `canConnect`
+// stays a pure predicate. `CONNECTABLE_PEERS` is a Set, which is prototype-safe by construction —
+// it only accepts strings that were EXPLICITLY inserted, so `__proto__` / `constructor` never
+// resolve to a peer.
+const CONNECTABLE_SETS: Readonly<Record<string, ReadonlySet<string>>> = Object.assign(
+  Object.create(null) as Record<string, ReadonlySet<string>>,
+  Object.fromEntries(Object.entries(CONNECTABLE).map(([type, peers]) => [type, new Set(peers)])),
 );
 const CONNECTABLE_PEERS = new Set<string>([
   ...Object.keys(CONNECTABLE),
   ...Object.values(CONNECTABLE).flat(),
 ]);
 
+function connectableSetFor(type: string): ReadonlySet<string> | undefined {
+  // Belt-and-braces alongside the null-prototype base: a caller-provided string that happens to
+  // match a Set-instance method (`has`, `add`, …) would still return a function via prototype
+  // lookup if we ever swapped the storage. `Object.hasOwn` reads only own keys.
+  return Object.hasOwn(CONNECTABLE_SETS, type) ? CONNECTABLE_SETS[type] : undefined;
+}
+
 export function canConnect(a: string | undefined, b: string | undefined): boolean {
   if (a === undefined || b === undefined || a === b) return false;
-  return CONNECTABLE_SETS[a]?.has(b) === true || CONNECTABLE_SETS[b]?.has(a) === true;
+  return connectableSetFor(a)?.has(b) === true || connectableSetFor(b)?.has(a) === true;
 }
 
 export function hasConnectablePeer(type: string | undefined): boolean {

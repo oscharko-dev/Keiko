@@ -106,6 +106,21 @@ describe("canConnect — Git change ↔ chat", () => {
     expect(canConnect("governedGit", "governedGit")).toBe(false);
     expect(canConnect("chat", "chat")).toBe(false);
   });
+
+  // #3506 review — CONNECTABLE_SETS was originally built with a plain `Object.fromEntries`, so
+  // its prototype-chain keys (`__proto__`, `constructor`, `toString`, `hasOwnProperty`, …) still
+  // resolved to non-Set values through the prototype. The subsequent `.has(...)` call then threw
+  // `TypeError: has is not a function` at runtime. Pin the exact hostile strings so a regression
+  // that drops the null-prototype base (or reintroduces plain-object lookup) fails here first,
+  // and the same-shape `hasConnectablePeer` is guarded by construction (its storage is a Set).
+  it("rejects prototype-chain keys as either side of the pair", () => {
+    for (const key of ["__proto__", "constructor", "toString", "hasOwnProperty"] as const) {
+      expect(canConnect(key, "chat")).toBe(false);
+      expect(canConnect("governedGit", key)).toBe(false);
+      expect(canConnect(key, key)).toBe(false);
+      expect(hasConnectablePeer(key)).toBe(false);
+    }
+  });
 });
 
 describe("relLabel — files ↔ quality (#270)", () => {
