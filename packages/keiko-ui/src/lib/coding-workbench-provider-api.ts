@@ -114,23 +114,7 @@ function validateSidecarRunMetadata(value: unknown, reasons: string[]): boolean 
   return reasons.length === 0;
 }
 
-function validateSidecarGatewayProfileResponse(
-  value: unknown,
-): CodingWorkbenchProviderValidation | CodingWorkbenchProviderValidationFailure {
-  const reasons: string[] = [];
-  if (!isObjectRecord(value)) return { ok: false, reasons: ["response must be an object"] };
-  if (value.status === "unavailable") {
-    if (
-      typeof value.reason !== "string" ||
-      !CODING_WORKBENCH_SIDECAR_UNAVAILABLE_REASONS.has(value.reason)
-    ) {
-      reasons.push("reason is invalid");
-    }
-    return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
-  }
-  if (value.status !== "available") {
-    return { ok: false, reasons: ["status is invalid"] };
-  }
+function collectSidecarAvailableReasons(value: Record<string, unknown>, reasons: string[]): void {
   if (typeof value.profileId !== "string" || value.profileId.length === 0) {
     reasons.push("profileId must be a non-empty string");
   }
@@ -153,6 +137,26 @@ function validateSidecarGatewayProfileResponse(
     reasons.push("verification must be a gateway verification state");
   }
   validateSidecarRunMetadata(value.runMetadata, reasons);
+}
+
+function validateSidecarGatewayProfileResponse(
+  value: unknown,
+): CodingWorkbenchProviderValidation | CodingWorkbenchProviderValidationFailure {
+  if (!isObjectRecord(value)) return { ok: false, reasons: ["response must be an object"] };
+  const reasons: string[] = [];
+  if (value.status === "unavailable") {
+    if (
+      typeof value.reason !== "string" ||
+      !CODING_WORKBENCH_SIDECAR_UNAVAILABLE_REASONS.has(value.reason)
+    ) {
+      reasons.push("reason is invalid");
+    }
+    return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
+  }
+  if (value.status !== "available") {
+    return { ok: false, reasons: ["status is invalid"] };
+  }
+  collectSidecarAvailableReasons(value, reasons);
   return reasons.length === 0 ? { ok: true } : { ok: false, reasons };
 }
 
@@ -267,18 +271,52 @@ function reportVerifiedToolCalling(report: GatewayReadinessReport): boolean {
   );
 }
 
+// #3506 review — every other bffFetchJson call in this file passes a validator that fails closed
+// with `CONTRACT_VALIDATION_FAILED`; without one, `bffFetchJson` returns a bare cast, and a
+// version-skewed BFF (rolling deploy) or a malformed body would flow straight into
+// `reportVerifiedToolCalling`'s `.some` on `report.probes` — a runtime `.some of undefined` crash
+// or a silent misclassification. Guard the exact shape this call site reads.
+function validateReadinessReportResponse(
+  value: unknown,
+): CodingWorkbenchProviderValidation | CodingWorkbenchProviderValidationFailure {
+  if (!isObjectRecord(value)) return { ok: false, reasons: ["response body must be an object"] };
+  const capabilities = value.verifiedCapabilities;
+  if (!isObjectRecord(capabilities)) {
+    return { ok: false, reasons: ["verifiedCapabilities must be an object"] };
+  }
+  if (typeof capabilities.toolCalling !== "boolean") {
+    return { ok: false, reasons: ["verifiedCapabilities.toolCalling must be a boolean"] };
+  }
+  if (!Array.isArray(value.probes)) {
+    return { ok: false, reasons: ["probes must be an array"] };
+  }
+  const malformed = value.probes.some(
+    (probe) =>
+      !isObjectRecord(probe) || typeof probe.name !== "string" || typeof probe.status !== "string",
+  );
+  return malformed
+    ? { ok: false, reasons: ["probes contains an entry with an invalid name/status"] }
+    : { ok: true };
+}
+
 async function probeAutomaticReadinessCandidates(
   candidates: readonly ModelCapability[],
 ): Promise<boolean> {
   for (const candidate of candidates) {
-    const report = await bffFetchJson<GatewayReadinessReport>("/api/gateway/readiness", {
-      method: "POST",
-      cache: "no-store",
-      body: JSON.stringify({
-        modelId: candidate.id,
-        options: { probes: ["tool_calling"], purpose: "coding-workbench-auto" },
-      }),
-    });
+    const report = await bffFetchJson<GatewayReadinessReport>(
+      "/api/gateway/readiness",
+      {
+        method: "POST",
+        cache: "no-store",
+        body: JSON.stringify({
+          modelId: candidate.id,
+          options: { probes: ["tool_calling"], purpose: "coding-workbench-auto" },
+        }),
+      },
+      {
+        validator: contractValidator<GatewayReadinessReport>(validateReadinessReportResponse),
+      },
+    );
     if (reportVerifiedToolCalling(report)) return true;
   }
   return false;
@@ -333,15 +371,36 @@ async function recoverUnverifiedGatewayProfile(
   if (profile.status !== "unavailable" || !AUTOMATIC_READINESS_REASONS.has(profile.reason)) {
     return profile;
   }
-  const response = await bffFetchJson<ModelListResponse>(
-    "/api/models",
-    { cache: "no-store", signal: readDeadlineSignal() },
-    { validator: contractValidator<ModelListResponse>(validateModelListResponse) },
-  );
+  // #3506 review — `profile` is an already-known-good result from `readSidecarGatewayProfile()`
+  // above. The three steps below are BEST-EFFORT healing (automatic-readiness retry). A network
+  // hiccup on `/api/models`, a rejected `requestAutomaticReadiness()`, or a failed re-read must
+  // not propagate: doing so would replace a valid `{status: "unavailable", reason}` with an
+  // exception, and the caller (`fetchCodingWorkbenchSidecarGatewayProfile`) would break Coding
+  // Workbench startup on any transient sidecar problem. Fall back to `profile` on any failure.
+  let response: ModelListResponse;
+  try {
+    response = await bffFetchJson<ModelListResponse>(
+      "/api/models",
+      { cache: "no-store", signal: readDeadlineSignal() },
+      { validator: contractValidator<ModelListResponse>(validateModelListResponse) },
+    );
+  } catch {
+    return profile;
+  }
   const candidates = listCodingWorkbenchReadinessCandidates(response.models);
   if (candidates.length === 0) return profile;
-  if (!(await requestAutomaticReadiness(candidates))) return profile;
-  return readSidecarGatewayProfile();
+  let ready = false;
+  try {
+    ready = await requestAutomaticReadiness(candidates);
+  } catch {
+    return profile;
+  }
+  if (!ready) return profile;
+  try {
+    return await readSidecarGatewayProfile();
+  } catch {
+    return profile;
+  }
 }
 
 export async function fetchCodingWorkbenchSidecarGatewayProfile(): Promise<CodingWorkbenchSidecarGatewayResult> {

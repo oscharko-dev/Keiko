@@ -133,10 +133,18 @@ function pauseDecisionKey(
   binding: CodingWorkbenchRepositoryTrustBinding,
   runRevision: number | undefined,
 ): string {
+  // #3506 review - the affordance is mounted once for the whole workbench window, so
+  // acceptedPauseKey survives run boundaries. Without the active run's identity in the key,
+  // a later, different run in the same task workspace that pauses on the same
+  // (workspaceId, repositoryId, worktreeRoot, runRevision) triple gets suppressed by the
+  // earlier acceptance. binding.correlationId already carries the active run's id
+  // (sessionRepositoryTrustBinding.correlationId = runId ?? bound.correlationId), so bind
+  // the pause key to it.
   return [
     binding.workspaceId,
     binding.repositoryId,
     binding.worktreeRoot ?? "no-worktree",
+    binding.correlationId,
     String(runRevision ?? "unversioned"),
   ].join("\u001F");
 }

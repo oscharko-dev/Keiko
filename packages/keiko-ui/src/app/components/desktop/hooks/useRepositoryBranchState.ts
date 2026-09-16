@@ -56,7 +56,12 @@ export function useRepositoryBranchState(root: string | null): RepositoryBranchS
       setState({ root: null, response: null, loading: false, error: null });
       return;
     }
-    setState((current) => ({ ...current, root, loading: true, error: null }));
+    // #3506 review — do NOT stamp the NEW `root` into state here. The stale-response guard at
+    // the bottom of this hook returns `{ ...state, response: null }` when `state.root !== root`;
+    // if we stamped `root` synchronously the guard's else branch would be unreachable while a
+    // fetch for the new root is in flight, so the previous repository's branch list would keep
+    // showing (BranchSelector reads `currentBranch` before `loading`).
+    setState((current) => ({ ...current, loading: true, error: null }));
     try {
       const response = await DEFAULT_GIT_CLIENT.listBranches(root);
       if (sequenceRef.current === sequence) {
