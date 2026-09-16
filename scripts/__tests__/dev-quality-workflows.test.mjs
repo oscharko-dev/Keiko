@@ -536,6 +536,10 @@ describe("dev quality workflows", () => {
       WINDOWS_CROSS_PLATFORM_RESULT: "skipped",
       WINDOWS_RELEVANT: "true",
     });
+    const missingLegacyClassifierOutput = runCiAggregate({
+      WINDOWS_CROSS_PLATFORM_RESULT: "skipped",
+      WINDOWS_RELEVANT: "",
+    });
 
     expect(scoped.status).toBe(0);
     expect(scoped.stdout).toContain("non-Windows-relevant change set");
@@ -543,6 +547,8 @@ describe("dev quality workflows", () => {
     expect(fullMatrix.stdout).toContain("skipped without a scoped change set");
     expect(relevant.status).not.toBe(0);
     expect(relevant.stdout).toContain("skipped without a scoped change set");
+    expect(missingLegacyClassifierOutput.status).not.toBe(0);
+    expect(missingLegacyClassifierOutput.stdout).toContain("skipped without a scoped change set");
   });
 
   it.each(["failure", "skipped", "cancelled", "", "unknown"])(
@@ -582,7 +588,7 @@ describe("dev quality workflows", () => {
     expect(windowsSmoke).toBeDefined();
     expect(macosLinuxSmoke).toBeDefined();
     expect(windowsSmoke).toContain("name: Cross-platform smoke (windows-latest)");
-    expect(windowsSmoke).toContain("needs.change-scope.outputs.windows-relevant == 'true'");
+    expect(windowsSmoke).toContain("needs.change-scope.outputs.windows-relevant != 'false'");
     expect(windowsSmoke).toContain("github.event_name == 'push'");
     expect(windowsSmoke).toContain("github.event_name == 'workflow_dispatch'");
     expect(windowsSmoke).toContain("actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68");

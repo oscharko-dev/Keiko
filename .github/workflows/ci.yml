@@ -149,6 +149,9 @@ jobs:
           set -euo pipefail
           if [ -f scripts/check-documentation-only-change.mjs ]; then
             node scripts/check-documentation-only-change.mjs
+            if ! grep -q '^windows-relevant=' "${GITHUB_OUTPUT}"; then
+              echo "windows-relevant=true" >> "${GITHUB_OUTPUT}"
+            fi
           else
             echo "documentation-only-change: false — the base revision has no classifier yet"
             echo "documentation-only=false" >> "${GITHUB_OUTPUT}"
@@ -1005,7 +1008,7 @@ jobs:
           SEMANTIC_DUPLICATION_RESULT: ${{ needs.semantic-duplication.result }}
           UI_RESULT: ${{ needs.ui.result }}
           WINDOWS_CROSS_PLATFORM_RESULT: ${{ needs.windows-cross-platform-smoke.result }}
-          WINDOWS_RELEVANT: ${{ needs.change-scope.outputs.windows-relevant }}
+          WINDOWS_RELEVANT: ${{ needs.change-scope.outputs.windows-relevant || 'true' }}
         run: |
           for result in "$CHANGE_SCOPE_RESULT" "$PROTECTED_BRANCH_RESULT" "$CORE_QUALITY_RESULT" "$COVERAGE_SONAR_RESULT" "$SECRET_SCAN_RESULT" "$SEMANTIC_DUPLICATION_RESULT" "$UI_RESULT"; do
             if [ "$result" != "success" ]; then
@@ -1259,7 +1262,7 @@ jobs:
         always()
         && needs.change-scope.outputs.documentation-only != 'true'
         && (
-          needs.change-scope.outputs.windows-relevant == 'true'
+          needs.change-scope.outputs.windows-relevant != 'false'
           || github.event_name == 'push'
           || github.event_name == 'workflow_dispatch'
         )

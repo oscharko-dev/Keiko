@@ -473,7 +473,7 @@ describe("CI test/gate wiring guard", () => {
     const windowsSmoke = ci.slice(start, end);
     expect(windowsSmoke).toContain("name: Cross-platform smoke (windows-latest)");
     expect(windowsSmoke).toContain("runs-on: windows-latest");
-    expect(windowsSmoke).toContain("needs.change-scope.outputs.windows-relevant == 'true'");
+    expect(windowsSmoke).toContain("needs.change-scope.outputs.windows-relevant != 'false'");
     expect(windowsSmoke).toContain("Build packages for the Windows smokes");
     expect(windowsSmoke).toContain("Verify productive native sources on Windows");
     expect(windowsSmoke).toContain("Smoke the Windows setup bootstrap");
