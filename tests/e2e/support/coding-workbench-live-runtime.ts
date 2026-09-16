@@ -70,9 +70,7 @@ export async function installLiveCodingWorkbenchRuntime(
     closeInformation: async (): Promise<void> => {
       const trigger = page.getByRole("button", { name: "Open Coding Workbench information" });
       if ((await trigger.getAttribute("aria-expanded")) === "true") await trigger.click();
-      await expect(
-        page.getByRole("dialog", { name: "Coding Workbench information" }),
-      ).toBeHidden();
+      await expect(page.getByRole("dialog", { name: "Coding Workbench information" })).toBeHidden();
     },
     // #2644 moved the product-wide autonomy modes out of the Workbench into Settings → Security.
     // A request made here must still be answered by the server's clamp, never by the surface that
