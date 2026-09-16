@@ -173,7 +173,7 @@ function fixtureSnapshot(overrides: Partial<GitChangeSnapshot> = {}): GitChangeS
 
 function fakeSnapshotService(
   results: readonly GitChangeSnapshotResult[],
-): UiHandlerDeps["gitChangeSnapshotService"] {
+): NonNullable<UiHandlerDeps["gitChangeSnapshotService"]> {
   let index = 0;
   return {
     capture: (): Promise<{ readonly snapshot: GitChangeSnapshotResult }> => {
@@ -215,7 +215,6 @@ function parkingSnapshotService(results: readonly GitChangeSnapshotResult[]): {
     markArrived = resolve;
   });
   const base = fakeSnapshotService(results);
-  if (base === undefined) throw new TypeError("Fake snapshot service is required");
   return {
     arrived,
     release: (): void => {
