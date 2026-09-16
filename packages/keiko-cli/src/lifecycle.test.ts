@@ -565,7 +565,13 @@ describe("runLifecycleCli", () => {
           spawned.push({ args, opts });
           return child;
         },
-        fetchImpl: () => Promise.resolve(Response.json({ version: SDK_VERSION }, { status: 200 })),
+        fetchImpl: () =>
+          Promise.resolve(
+            new Response(JSON.stringify({ version: SDK_VERSION }), {
+              headers: { "content-type": "application/json" },
+              status: 200,
+            }),
+          ),
         isProcessAlive: () => true,
         isPortAvailable: () => Promise.resolve(true),
         killProcess: vi.fn(),
@@ -706,7 +712,10 @@ describe("runLifecycleCli", () => {
       "start",
       [],
       c.io,
-      { KEIKO_CLI_BIN_PATH: "/nonexistent/keiko-bin-planted.js" },
+      {
+        KEIKO_CLI_BIN_PATH: "/nonexistent/keiko-bin-planted.js",
+        KEIKO_UI_STATIC_ROOT: "/nonexistent/keiko-ui-planted",
+      },
       {
         cwd: root,
         spawnFn: (command, args, opts) => {
@@ -725,6 +734,8 @@ describe("runLifecycleCli", () => {
     expect(spawned).toHaveLength(1);
     expect(spawned[0]?.args[0]).not.toBe("/nonexistent/keiko-bin-planted.js");
     expect(spawned[0]?.args[0]).toMatch(/index\.js$/u);
+    expect(spawned[0]?.opts.env).not.toHaveProperty("KEIKO_CLI_BIN_PATH");
+    expect(spawned[0]?.opts.env).not.toHaveProperty("KEIKO_UI_STATIC_ROOT");
   });
 
   it("prefers the built workspace checkout over a stale inherited global bin", async () => {

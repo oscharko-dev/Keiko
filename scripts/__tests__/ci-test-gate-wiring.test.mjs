@@ -215,6 +215,17 @@ const HTML_MANUAL_FIXTURE_IDS = [
 ];
 
 describe("CI test/gate wiring guard", () => {
+  it("keeps package coverage blob paths aligned with the governed Vitest 4 reporter", () => {
+    expect(rootManifest.scripts["test:coverage:packages:shard"]).toContain("--reporter=blob");
+    expect(rootManifest.scripts["test:coverage:packages:merge"]).toContain(
+      "--mergeReports=.vitest-reports",
+    );
+    expect(ci).toContain("path: .vitest-reports/");
+    expect(ci).toContain("path: .vitest-reports\n");
+    expect(ci).toContain("find .vitest-reports -maxdepth 1 -name 'blob-*.json'");
+    expect(ci).toContain("run: rm -rf .vitest-reports");
+  });
+
   it("runs the portable handoff protocol fixture suite on a genuine Windows host", () => {
     const windowsJobStart = ci.indexOf("  cross-platform-smoke:");
     const windowsJobEnd = ci.indexOf("\n  node-26-compatibility:", windowsJobStart);

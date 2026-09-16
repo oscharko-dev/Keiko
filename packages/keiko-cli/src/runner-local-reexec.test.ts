@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { runCli, type RunCliDeps } from "./runner.js";
 import { makeCapturedIo } from "./test-support/cli-io.js";
 
+vi.mock("./lifecycle.js", () => ({ runLifecycleCli: vi.fn(() => 0) }));
+
 const tempRoots: string[] = [];
 
 function makeRoot(): string {
@@ -88,7 +90,7 @@ describe("runCli local package re-exec", () => {
     const spawnSync = vi.fn<NonNullable<RunCliDeps["spawnSync"]>>();
 
     const code = await runCli(
-      ["start", "--help"],
+      ["start", "--port", "1984"],
       c.io,
       { KEIKO_LOCAL_PACKAGE_REEXEC: "1" },
       {
@@ -100,6 +102,5 @@ describe("runCli local package re-exec", () => {
 
     expect(code).toBe(0);
     expect(spawnSync).not.toHaveBeenCalled();
-    expect(c.out()).toContain("keiko start");
   });
 });

@@ -72,9 +72,9 @@ function trustedCandidate(candidate, workspaceRoot, platform, groupIds, trustedR
   }
 }
 
-function runtimeTrustRoots() {
+export function runtimeTrustRoots(runtimeExecutable = process.execPath) {
   try {
-    const nodeRuntime = dirname(dirname(realpathSync(process.execPath)));
+    const nodeRuntime = dirname(dirname(realpathSync(runtimeExecutable)));
     const roots = [nodeRuntime];
     const homebrewPrefix = homebrewPrefixForCellarRuntime(nodeRuntime);
     if (homebrewPrefix !== undefined) roots.push(homebrewPrefix);
@@ -97,7 +97,8 @@ export function resolveHostExecutable(
     env = process.env,
     groupIds = activeGroupIds(),
     platform = process.platform,
-    trustedRoots = runtimeTrustRoots(),
+    runtimeExecutable = process.execPath,
+    trustedRoots = runtimeTrustRoots(runtimeExecutable),
     workspaceRoot = repoRoot,
   } = {},
 ) {

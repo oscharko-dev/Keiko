@@ -587,9 +587,9 @@ jobs:
           # `--outputFile.blob` destroys: a set output path wins verbatim, so all three shards write
           # the one same file and `merge-multiple` keeps only the last of them -- two thirds of the
           # measurement, silently. The shard script therefore passes no output path and this follows
-          # the reporter default, which vitest 5 moved to `.vitest/blob` (PR #3452). `.vitest` is a
-          # dot directory and upload-artifact skips those unless told otherwise.
-          path: .vitest/blob/
+          # the reporter default. Vitest 4 writes `.vitest-reports`; the temporary Vitest 5 line
+          # used `.vitest/blob`, so this path is deliberately pinned to the governed major.
+          path: .vitest-reports/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
@@ -808,7 +808,7 @@ jobs:
           # `test:coverage:packages:merge` composes locally too, with no artifact relocation. Named
           # rather than pinned through `--outputFile.blob`: an explicit output path would collapse
           # the three per-shard blob names into one.
-          path: .vitest/blob
+          path: .vitest-reports
           pattern: coverage-blob-packages-*
           merge-multiple: true
       - name: Download keiko-ui coverage evidence
@@ -832,7 +832,7 @@ jobs:
         run: |
           set -euo pipefail
           expected=3
-          actual=$(find .vitest/blob -maxdepth 1 -name 'blob-*.json' -type f | wc -l | tr -d ' ')
+          actual=$(find .vitest-reports -maxdepth 1 -name 'blob-*.json' -type f | wc -l | tr -d ' ')
           if [ "$actual" -ne "$expected" ]; then
             echo "Expected $expected package coverage shard blobs, found $actual."
             echo "A merge over a partial shard set would under-report every per-file floor."
@@ -861,7 +861,7 @@ jobs:
         # closed (PR #3452). Removing them keeps the approved analysis scope untouched -- widening
         # `sonar.exclusions` would move a reviewed scope pin to hide a file that simply has no
         # business being there once the merge has run.
-        run: rm -rf .vitest
+        run: rm -rf .vitest-reports
       - name: Coverage quality gates
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run check:coverage:quality

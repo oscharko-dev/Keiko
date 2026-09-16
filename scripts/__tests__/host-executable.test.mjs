@@ -12,6 +12,7 @@ import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   resolveHostExecutable,
+  runtimeTrustRoots,
   shellCommandForTrustedExecutable,
 } from "../lib/host-executable.mjs";
 
@@ -171,6 +172,34 @@ describe("resolveHostExecutable", () => {
         resolveHostExecutable("gh", {
           env: { PATH: bin },
           trustedRoots: [homebrew],
+          workspaceRoot: workspace,
+        }),
+      ).toBe(realpathSync(join(ghBin, "gh")));
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "derives the Homebrew trust prefix from a Cellar-hosted Node runtime",
+    () => {
+      const workspace = temporary("keiko-host-executable-workspace-");
+      const homebrew = temporary("keiko-host-executable-homebrew-");
+      const bin = join(homebrew, "bin");
+      const nodeBin = join(homebrew, "Cellar", "node", "26.8.1", "bin");
+      const ghBin = join(homebrew, "Cellar", "gh", "2.100.0", "bin");
+      const nodeExecutable = join(nodeBin, "node");
+      mkdirSync(bin);
+      mkdirSync(nodeBin, { recursive: true });
+      mkdirSync(ghBin, { recursive: true });
+      writeFileSync(nodeExecutable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      writeFileSync(join(ghBin, "gh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      symlinkSync("../Cellar/gh/2.100.0/bin/gh", join(bin, "gh"));
+      chmodSync(bin, 0o775);
+
+      expect(runtimeTrustRoots(nodeExecutable)).toContain(realpathSync(homebrew));
+      expect(
+        resolveHostExecutable("gh", {
+          env: { PATH: bin },
+          runtimeExecutable: nodeExecutable,
           workspaceRoot: workspace,
         }),
       ).toBe(realpathSync(join(ghBin, "gh")));

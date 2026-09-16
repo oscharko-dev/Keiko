@@ -637,12 +637,14 @@ function spawnUiProcess(
   const logStdio = openUiLogStdio(options);
   const uiEnv = childEnv({
     ...env,
+    KEIKO_CLI_BIN_PATH: undefined,
+    KEIKO_UI_STATIC_ROOT: undefined,
+    ...uiChildInstallEnv(cwd, env),
     KEIKO_STATE_DIR: options.stateDir,
     [KEIKO_UI_LAUNCH_ID_ENV]: launchId,
     // ADR-0141 D2 / #2478: the launcher-provisioned pairing secret travels only through the
     // inherited environment of the spawned BFF.
     [CODING_APP_SESSION_LAUNCHER_SECRET_ENV]: pairingSecret,
-    ...uiChildInstallEnv(cwd, env),
   });
   try {
     return {

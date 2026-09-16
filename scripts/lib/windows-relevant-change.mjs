@@ -59,6 +59,10 @@ function isRecognizedIrrelevantPath(path) {
   return KNOWN_IRRELEVANT_PATTERNS.some((pattern) => pattern.test(path));
 }
 
+function hasTraversalComponent(path) {
+  return path.split("/").some((component) => component === "." || component === "..");
+}
+
 /**
  * True when any changed path needs the Windows smoke matrix leg. Empty or malformed change sets
  * are relevant because they mean detection failed.
@@ -67,6 +71,7 @@ export function isWindowsRelevantChange(changedPaths) {
   if (!Array.isArray(changedPaths) || changedPaths.length === 0) return true;
   return changedPaths.some((path) => {
     if (typeof path !== "string" || path.length === 0) return true;
+    if (hasTraversalComponent(path)) return true;
     if (WINDOWS_RELEVANT_PATTERNS.some((pattern) => pattern.test(path))) return true;
     return !isRecognizedIrrelevantPath(path);
   });

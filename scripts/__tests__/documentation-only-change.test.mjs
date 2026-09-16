@@ -98,6 +98,7 @@ describe("isWindowsRelevantChange", () => {
     ["an unknown top-level file", ["new-tooling.toml"]],
     ["an unknown script", ["scripts/new-release-helper.mjs"]],
     ["an unknown package source", ["packages/keiko-server/src/correlation.ts"]],
+    ["a traversal path", ["docs/../packages/keiko-server/src/update-portable.ts"]],
     ["an empty change set", []],
     ["a malformed path", ["README.md", ""]],
   ])("fails open for %s", (_label, paths) => {
