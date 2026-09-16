@@ -442,6 +442,101 @@ describe("activeRunState", () => {
   });
 });
 
+// The composer's `startBlockedReason` narrates why Start is not yet available. When no refresh
+// failure and no standing condition apply, it falls through to `readinessStartBlocker`, which
+// walks the four readiness resources in order (source → workspace → runtime → run) and returns
+// the first blocked key it finds. Each branch of this chain is a live composer sentence, so keep
+// coverage on the exact key the operator would read at that step.
+describe("startBlockedReason readiness chain", () => {
+  function pairedState(): CodingWorkbenchRuntimeState {
+    return { ...createInitialCodingWorkbenchRuntimeState(), pairing: "paired" };
+  }
+  const readySource = ready({
+    runtimePreference: "managed-gateway" as const,
+    modelSource: "keiko-model-gateway" as const,
+    runtimeSource: "keiko-sidecar" as const,
+    available: true,
+    verification: "verified" as const,
+  });
+  const readyWorkspace = ready({ health: "healthy" as const, switching: false } as never);
+  const readyRuntime = ready({
+    schemaVersion: "1" as const,
+    requestedMode: "supervised-coding" as const,
+    deploymentCeiling: "supervised-coding" as const,
+    effectiveMode: "supervised-coding" as const,
+    runtimeAvailable: true,
+    runtimeEvidenceClass: "platform-qualified" as const,
+  } as never);
+  const readyRun = ready({
+    schemaVersion: "1",
+    state: "idle",
+    revision: 1,
+    updatedAt: AT,
+    runId: "run-1",
+  } as CodingWorkbenchRuntimeSnapshot);
+
+  it("names the model source as the blocker while its resource has not settled", () => {
+    expect(startBlockedReason(pairedState(), t, false)).toBe(
+      "codingWorkbench.composer.blocked.modelSource",
+    );
+  });
+
+  it("names the workspace as the blocker once the source resolved ready", () => {
+    const state: CodingWorkbenchRuntimeState = { ...pairedState(), source: readySource };
+    expect(startBlockedReason(state, t, false)).toBe(
+      "codingWorkbench.composer.blocked.workspace",
+    );
+  });
+
+  it("names the runtime as the blocker once source and workspace are ready", () => {
+    const state: CodingWorkbenchRuntimeState = {
+      ...pairedState(),
+      source: readySource,
+      workspace: readyWorkspace,
+    };
+    expect(startBlockedReason(state, t, false)).toBe(
+      "codingWorkbench.composer.blocked.runtime",
+    );
+  });
+
+  it("names the run resource as the blocker once source, workspace and runtime are ready", () => {
+    const state: CodingWorkbenchRuntimeState = {
+      ...pairedState(),
+      requestedMode: "supervised-coding",
+      source: readySource,
+      workspace: readyWorkspace,
+      runtime: readyRuntime,
+    };
+    expect(startBlockedReason(state, t, false)).toBe("codingWorkbench.composer.blocked.run");
+  });
+
+  // The final fallthrough is only reachable when every resource read as ready but the composer
+  // still refuses to start — a state the reducer would not normally leave standing, but the
+  // sentence is the operator's escape hatch and must remain a real, translated string.
+  it("falls through to the generic not-ready sentence once every resource read as ready", () => {
+    const state: CodingWorkbenchRuntimeState = {
+      ...pairedState(),
+      requestedMode: "supervised-coding",
+      source: readySource,
+      workspace: readyWorkspace,
+      runtime: readyRuntime,
+      run: readyRun,
+    };
+    expect(startBlockedReason(state, t, false)).toBe(
+      "codingWorkbench.composer.blocked.notReady",
+    );
+  });
+
+  // `pairing: "unknown"` is the boot-time default; it must return the "pairing" sentence, not the
+  // "unpaired" one — the two differ semantically and are wired to different remedies (retry the
+  // workspaces read vs. re-pair the window).
+  it("reports the pairing sentence while the workspaces read has not confirmed", () => {
+    expect(startBlockedReason(createInitialCodingWorkbenchRuntimeState(), t, false)).toBe(
+      "codingWorkbench.composer.blocked.pairing",
+    );
+  });
+});
+
 /**
  * F-01 PIN, EXTENDED TO THE EVALUATION LANE (ADR-0163 D9). "Runtime ready." spoken over an
  * unverified evaluation runtime is the same false green in the assistive-technology channel that

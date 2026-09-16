@@ -377,20 +377,16 @@ const START_BLOCKED_KEYS: Readonly<Record<StartReadinessResource, CodingWorkbenc
   run: "codingWorkbench.composer.blocked.run",
 };
 
-const START_REFRESH_KEYS: Readonly<Record<StartReadinessResource, CodingWorkbenchMessageKey>> = {
-  modelSource: "codingWorkbench.alert.modelSourceRefreshFailed",
-  workspace: "codingWorkbench.alert.workspaceRefreshFailed",
-  runtime: "codingWorkbench.alert.runtimeRefreshFailed",
-  run: "codingWorkbench.alert.runRefreshFailed",
-};
-
+// `startBlockedReason` calls this only after `visibleAlert` returned null, and `visibleAlert`
+// already reports every `status === "error"` case through `refreshFailureAlert` — so the "error"
+// branch of this helper would be unreachable here. Keep it to two states: ready → null,
+// everything else → the blocked sentence.
 function resourceStartBlocker(
   resource: StartReadinessResource,
   status: CodingWorkbenchResourceStatus,
   t: CodingWorkbenchTranslate,
 ): string | null {
   if (status === "ready") return null;
-  if (status === "error") return t(START_REFRESH_KEYS[resource]);
   return t(START_BLOCKED_KEYS[resource]);
 }
 
