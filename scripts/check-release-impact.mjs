@@ -678,7 +678,8 @@ function validatePublishedEntryRetained(previousEntry, currentById, failures) {
 
 function withoutApprovalReference(entry) {
   if (!objectRecord(entry) || !objectRecord(entry.review)) return entry;
-  const { approvalReference: _approvalReference, ...rest } = entry.review;
+  const rest = { ...entry.review };
+  delete rest.approvalReference;
   return { ...entry, review: rest };
 }
 
