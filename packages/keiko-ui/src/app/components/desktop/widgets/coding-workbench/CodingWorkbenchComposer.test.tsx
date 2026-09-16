@@ -5,6 +5,12 @@ import type {
   CodingWorkbenchRuntimeStateName,
   ModelCapability,
 } from "@oscharko-dev/keiko-contracts";
+import {
+  I18N_STORAGE_KEY,
+  I18nProvider,
+  loadLocaleMessages,
+  resetLoadedMessageCatalogs,
+} from "@/lib/i18n";
 
 import { TaskStartSection, type TaskComposerActions } from "./CodingWorkbenchSections";
 import { operatorResumeAvailable } from "./CodingWorkbenchWindow";
@@ -56,9 +62,13 @@ function composerProps(
     runState,
     mutationPending: false,
     startBusy: false,
+    startBlockedReason: null,
     repositoryLabel: "Keiko",
     branchLabel: "dev",
+    branchContext: "repository",
     onOpenGit,
+    projectMemoryEnabled: true,
+    onProjectMemoryEnabledChange: vi.fn(),
     autonomyMode: "supervised-coding",
     autonomyLabel: "Supervised workspace",
     requestedMode: "supervised-coding",
@@ -95,7 +105,11 @@ function renderComposerWithOverrides(overrides: Partial<ComposerProps>): Compose
 }
 
 describe("Coding Workbench composer", () => {
-  afterEach(() => cleanup());
+  afterEach(() => {
+    cleanup();
+    window.localStorage.removeItem(I18N_STORAGE_KEY);
+    resetLoadedMessageCatalogs();
+  });
 
   it("uses the dedicated governed-coding glyph for the run-authority mode label (#2694)", () => {
     renderComposer("idle", composerActions());
@@ -114,7 +128,56 @@ describe("Coding Workbench composer", () => {
     await user.click(within(context).getByRole("button", { name: "Manage branch dev" }));
 
     expect(onOpenGit).toHaveBeenCalledTimes(2);
+    expect(within(context).queryByText("Repository branch")).toBeNull();
     expect(within(context).getByText("MemoriaViva")).toBeInTheDocument();
+  });
+
+  it("keeps project memory active by default and lets the operator toggle it per run", async () => {
+    const user = userEvent.setup();
+    const onProjectMemoryEnabledChange = vi.fn();
+    renderComposerWithOverrides({ onProjectMemoryEnabledChange });
+
+    const context = screen.getByLabelText("Coding context");
+    const toggle = within(context).getByRole("button", {
+      name: "Disable project memory for this run",
+    });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(within(toggle).queryByText("On")).toBeNull();
+    expect(within(toggle).queryByText("Off")).toBeNull();
+
+    await user.click(toggle);
+
+    expect(onProjectMemoryEnabledChange).toHaveBeenCalledExactlyOnceWith(false);
+  });
+
+  it("shows the disabled project memory state as a real toggle state", () => {
+    renderComposerWithOverrides({ projectMemoryEnabled: false });
+
+    const toggle = screen.getByRole("button", {
+      name: "Enable project memory for this run",
+    });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(within(toggle).getByText("MemoriaViva")).toBeInTheDocument();
+    expect(within(toggle).queryByText("On")).toBeNull();
+    expect(within(toggle).queryByText("Off")).toBeNull();
+  });
+
+  it("localizes the repository branch context in German", async () => {
+    await loadLocaleMessages("de");
+    window.localStorage.setItem(I18N_STORAGE_KEY, "de");
+
+    render(
+      <I18nProvider>
+        <TaskStartSection {...composerProps("idle", composerActions())} />
+      </I18nProvider>,
+    );
+
+    expect(
+      await screen.findByRole("button", {
+        name: "Branch dev in Git verwalten",
+      }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("Repository branch")).not.toBeInTheDocument();
   });
 
   it("shows Start while idle and calls the start handler", async () => {
@@ -263,6 +326,44 @@ describe("Coding Workbench composer", () => {
     expect(screen.getByRole("combobox", { name: "Run authority" })).not.toHaveAttribute(
       "aria-describedby",
     );
+  });
+
+  it("explains why a typed start request is blocked instead of swallowing the click", async () => {
+    const user = userEvent.setup();
+    const actions = composerActions();
+    renderComposerWithOverrides({
+      actions,
+      canStart: false,
+      startBlockedReason: "This browser session is not paired.",
+      taskIntent: "Can you answer a normal question?",
+    });
+
+    const start = screen.getByRole("button", { name: "Start coding run" });
+    await user.click(start);
+
+    const notice = screen.getByRole("alert");
+    expect(notice).toHaveTextContent("This browser session is not paired.");
+    expect(start).toHaveAttribute("aria-describedby", notice.id);
+    expect(actions.onStart).not.toHaveBeenCalled();
+  });
+
+  it("explains a decision-paused run when Enter cannot send a follow-up", () => {
+    const actions = composerActions();
+    renderComposerWithOverrides({
+      actions,
+      runState: "paused",
+      canResume: false,
+      taskIntent: "Please continue differently.",
+    });
+
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "Task instructions" }), {
+      key: "Enter",
+    });
+
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "This paused run is waiting for a required decision.",
+    );
+    expect(actions.onSend).not.toHaveBeenCalled();
   });
 
   it("marks only confirmed full access on the authority control", () => {

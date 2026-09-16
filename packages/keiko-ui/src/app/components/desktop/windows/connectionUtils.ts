@@ -45,7 +45,7 @@ export interface WinSnapshot {
 export const CONNECTABLE: Readonly<Partial<Record<WindowType, readonly WindowType[]>>> = {
   agents: ["files", "terminal", "plugins", "review", "browser", "agents"],
   // Epic #189 Slice 3 M3 — a Chat window can bind to a Connector window via a relationship edge.
-  chat: ["files", "browser", "plugins", "connector"],
+  chat: ["files", "browser", "plugins", "connector", "governedGit"],
   files: ["agents", "chat", "quality", "editor", "promptEnhancer"],
   // Issue #1199 — an Editor can bind to Files for focused file context and to Connector for
   // selected Local Knowledge scope. Completion still posts only to the governed BFF route.
@@ -58,6 +58,7 @@ export const CONNECTABLE: Readonly<Partial<Record<WindowType, readonly WindowTyp
   // Quality Intelligence hub (the selected capsule / capsule-set becomes the Generate source — Epic
   // #710, Issue #718).
   connector: ["chat", "quality", "editor"],
+  governedGit: ["chat"],
   // Epic #270 — Quality Intelligence binds to a Files window: the connected folder (or the active
   // file) becomes the source for "Generate test cases". Epic #710 — QI also binds to a Connector
   // window, adopting its selected capsule / capsule-set as the Generate source.
@@ -82,17 +83,32 @@ export const CONNECTABLE: Readonly<Partial<Record<WindowType, readonly WindowTyp
   figmaImage: ["quality"],
 };
 
-const CONNECTABLE_SETS: Readonly<Record<string, ReadonlySet<string>>> = Object.fromEntries(
-  Object.entries(CONNECTABLE).map(([type, peers]) => [type, new Set(peers)]),
+// #3506 review — a bare `Object.fromEntries(...)` result still resolves its prototype-chain keys
+// (`__proto__`, `constructor`, `toString`, …). `CONNECTABLE_SETS["__proto__"]` would then return
+// a non-Set value and the subsequent `.has()` would throw `TypeError: has is not a function`.
+// Compose the lookup on a null-prototype object so hostile inputs miss cleanly and `canConnect`
+// stays a pure predicate. `CONNECTABLE_PEERS` is a Set, which is prototype-safe by construction —
+// it only accepts strings that were EXPLICITLY inserted, so `__proto__` / `constructor` never
+// resolve to a peer.
+const CONNECTABLE_SETS: Readonly<Record<string, ReadonlySet<string>>> = Object.assign(
+  Object.create(null) as Record<string, ReadonlySet<string>>,
+  Object.fromEntries(Object.entries(CONNECTABLE).map(([type, peers]) => [type, new Set(peers)])),
 );
 const CONNECTABLE_PEERS = new Set<string>([
   ...Object.keys(CONNECTABLE),
   ...Object.values(CONNECTABLE).flat(),
 ]);
 
+function connectableSetFor(type: string): ReadonlySet<string> | undefined {
+  // Belt-and-braces alongside the null-prototype base: a caller-provided string that happens to
+  // match a Set-instance method (`has`, `add`, …) would still return a function via prototype
+  // lookup if we ever swapped the storage. `Object.hasOwn` reads only own keys.
+  return Object.hasOwn(CONNECTABLE_SETS, type) ? CONNECTABLE_SETS[type] : undefined;
+}
+
 export function canConnect(a: string | undefined, b: string | undefined): boolean {
   if (a === undefined || b === undefined || a === b) return false;
-  return CONNECTABLE_SETS[a]?.has(b) === true || CONNECTABLE_SETS[b]?.has(a) === true;
+  return connectableSetFor(a)?.has(b) === true || connectableSetFor(b)?.has(a) === true;
 }
 
 export function hasConnectablePeer(type: string | undefined): boolean {
@@ -178,17 +194,18 @@ type PairLabelResolver = (a: WinSnapshot, b: WinSnapshot) => string;
 const PAIR_LABEL_RESOLVERS: readonly (readonly [WindowType, PairLabelResolver])[] = [
   // A Connector edge (chat↔connector or quality↔connector) means the bound window draws on the
   // connector's selected capsule / capsule-set as knowledge (Epic #189 / Epic #710, Issue #718).
-  ["connector", () => "uses knowledge"],
-  ["figmaJson", () => "uses JSON"],
-  ["figmaImage", () => "uses image"],
-  ["figmaView", () => "uses view"],
+  ["connector", (): string => "uses knowledge"],
+  ["governedGit", (): string => "uses Git change"],
+  ["figmaJson", (): string => "uses JSON"],
+  ["figmaImage", (): string => "uses image"],
+  ["figmaView", (): string => "uses view"],
   ["figma", figmaRelLabel],
-  ["terminal", () => "runs in"],
+  ["terminal", (): string => "runs in"],
   // Every label must read as a mini-sentence predicate ("Chat uses tools Plugins");
   // bare "tools" / "linked" carried no relationship meaning (uiux-fix F048, C409).
-  ["plugins", () => "uses tools"],
-  ["review", () => "reviews"],
-  ["browser", () => "browses"],
+  ["plugins", (): string => "uses tools"],
+  ["review", (): string => "reviews"],
+  ["browser", (): string => "browses"],
 ];
 
 function pairRelLabel(a: WinSnapshot, b: WinSnapshot, pair: readonly [string, string]): string {

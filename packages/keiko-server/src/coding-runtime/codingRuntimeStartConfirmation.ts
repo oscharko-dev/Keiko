@@ -16,6 +16,7 @@ export interface CodingRuntimeStartConfirmationFacts {
   readonly runtimePreference?: CodingWorkbenchRuntimePreference | undefined;
   readonly modelId?: string | undefined;
   readonly reasoningEffort?: ModelReasoningEffort | undefined;
+  readonly projectMemoryEnabled: boolean;
   readonly operatorId: string;
   readonly taskId: string;
   readonly projectId: string;
@@ -71,6 +72,7 @@ export function codingRuntimeStartConfirmationClaim(
           runtimePreference: facts.runtimePreference,
           modelId: facts.modelId,
           reasoningEffort: facts.reasoningEffort,
+          projectMemoryEnabled: facts.projectMemoryEnabled,
         },
         operator: facts.operatorId,
         task: facts.taskId,

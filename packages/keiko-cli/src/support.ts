@@ -11,7 +11,7 @@
 // ./support-export.ts and ./support-analyze.ts, each independently unit-tested on data, not argv.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
@@ -37,6 +37,8 @@ import {
   renderHumanReproductionSeed,
   renderHumanTimeline,
   type AnalyzeAllResult,
+  type ProcessSummary,
+  type SourceKind,
   type SupportAnalyzeOptions,
   type LogTimeline,
   type OpCluster,
@@ -94,7 +96,11 @@ deep replay; a runId that does not exist under --state-dir contributes no sectio
 analyze reads FILE (a support bundle or a raw server.log — auto-detected), groups its lines by
 correlationId, and prints one reconstructed timeline per id. Each process lifetime is ordered by
 seq; lifetimes are ordered by the position of their first line in the file, because the log
-envelope promises no order across processes.
+envelope promises no order across processes. The default and per-correlation reports identify the
+resolved input file, an inferable raw-log state directory, newest valid event and instance, and
+whether the raw log is current and apparently active. A raw log more than five minutes behind the
+analysis clock is reported as stale; bundles are historical artifacts and are never presented as
+live processes.
 --correlation-id narrows to a single id; --json emits the machine-readable form. --clusters prints
 a whole-file view of every parsed line grouped by (category, op, errorKind), independent of
 --correlation-id: a count and up to 5 sample correlation ids per group. --seed (requires
@@ -113,7 +119,34 @@ export interface SupportCliDeps {
   readonly auditDeps?: AuditCliDeps | undefined;
   /** Test seam: bypasses real disk I/O for the evidence index count. */
   readonly evidenceStore?: EvidenceStore | undefined;
+  /** Test seam for determining whether the newest raw-log process still exists. */
+  readonly processIsRunning?: ((pid: number) => boolean) | undefined;
 }
+
+type SupportLogFreshness = "current" | "stale" | "unknown";
+type SupportProcessActivity = "apparently-active" | "inactive" | "unknown" | "not-applicable";
+
+interface SupportAnalysisContext {
+  readonly sourceKind: SourceKind;
+  readonly inputFile: string;
+  readonly stateDir?: string | undefined;
+  readonly latestTimestamp?: string | undefined;
+  readonly latestInstanceId?: string | undefined;
+  readonly freshness: SupportLogFreshness;
+  readonly processActivity: SupportProcessActivity;
+}
+
+interface SupportAnalysisReport extends AnalyzeAllResult {
+  readonly analysisContext: SupportAnalysisContext;
+}
+
+interface Assessment<T> {
+  readonly value: T;
+  readonly warning?: string | undefined;
+}
+
+const SUPPORT_LOG_STALE_AFTER_MS = 5 * 60_000;
+const SERVER_LOG_FILE_PATTERN = /^server(?:-\d{4}-\d{2}-\d{2})?\.log$/;
 
 interface ExportArgs {
   readonly out: string | undefined;
@@ -632,22 +665,162 @@ function reportMissingCorrelationId(correlationId: string, io: CliIo): number {
   return 1;
 }
 
+function inferAnalyzedStateDir(filePath: string, sourceKind: SourceKind): string | undefined {
+  const logDirectory = dirname(filePath);
+  return sourceKind === "raw-log" &&
+    basename(logDirectory) === "logs" &&
+    SERVER_LOG_FILE_PATTERN.test(basename(filePath))
+    ? dirname(logDirectory)
+    : undefined;
+}
+
+function assessFreshness(
+  latestTimestamp: string | undefined,
+  now: Date,
+): Assessment<SupportLogFreshness> {
+  if (latestTimestamp === undefined) return { value: "unknown" };
+  const latestMs = Date.parse(latestTimestamp);
+  const ageMs = now.getTime() - latestMs;
+  if (!Number.isFinite(latestMs) || ageMs < -SUPPORT_LOG_STALE_AFTER_MS) {
+    return {
+      value: "unknown",
+      warning: "analyzed log has no credible newest event timestamp",
+    };
+  }
+  return ageMs > SUPPORT_LOG_STALE_AFTER_MS
+    ? {
+        value: "stale",
+        warning: "analyzed log is stale: its newest valid event is older than 5 minutes",
+      }
+    : { value: "current" };
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) return undefined;
+  return typeof error.code === "string" ? error.code : undefined;
+}
+
+function processIsRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return errorCode(error) === "EPERM";
+  }
+}
+
+function newestProcess(result: AnalyzeAllResult): ProcessSummary | undefined {
+  if (result.latestInstanceId === undefined) return undefined;
+  return result.processes.find((candidate) => candidate.instanceId === result.latestInstanceId);
+}
+
+function assessProcessActivity(
+  result: AnalyzeAllResult,
+  freshness: SupportLogFreshness,
+  isRunning: (pid: number) => boolean,
+): Assessment<SupportProcessActivity> {
+  if (result.sourceKind === "bundle") return { value: "not-applicable" };
+  if (freshness === "stale") return { value: "inactive" };
+  const candidate = newestProcess(result);
+  if (candidate === undefined || freshness !== "current") return { value: "unknown" };
+  if (candidate.exitReason !== undefined) {
+    return {
+      value: "inactive",
+      warning: "analyzed raw log belongs to a process that recorded its exit",
+    };
+  }
+  if (!Number.isSafeInteger(candidate.pid) || candidate.pid <= 0) {
+    return {
+      value: "unknown",
+      warning: "analyzed raw log declares a non-positive process identifier",
+    };
+  }
+  return isRunning(candidate.pid)
+    ? { value: "apparently-active" }
+    : {
+        value: "inactive",
+        warning: "analyzed raw log does not belong to a running process",
+      };
+}
+
+function buildAnalysisContext(
+  result: AnalyzeAllResult,
+  filePath: string,
+  deps: SupportCliDeps,
+): { readonly context: SupportAnalysisContext; readonly warnings: readonly string[] } {
+  const freshness = assessFreshness(result.latestTimestamp, deps.now?.() ?? new Date());
+  const activity = assessProcessActivity(
+    result,
+    freshness.value,
+    deps.processIsRunning ?? processIsRunning,
+  );
+  const stateDir = inferAnalyzedStateDir(filePath, result.sourceKind);
+  const warnings = [freshness.warning, activity.warning].filter(
+    (warning): warning is string => warning !== undefined,
+  );
+  return {
+    context: {
+      sourceKind: result.sourceKind,
+      inputFile: filePath,
+      ...(stateDir === undefined ? {} : { stateDir }),
+      ...(result.latestTimestamp === undefined ? {} : { latestTimestamp: result.latestTimestamp }),
+      ...(result.latestInstanceId === undefined
+        ? {}
+        : { latestInstanceId: result.latestInstanceId }),
+      freshness: freshness.value,
+      processActivity: activity.value,
+    },
+    warnings,
+  };
+}
+
+function buildAnalysisReport(
+  result: AnalyzeAllResult,
+  filePath: string,
+  deps: SupportCliDeps,
+): SupportAnalysisReport {
+  const assessed = buildAnalysisContext(result, filePath, deps);
+  return {
+    ...result,
+    warnings: [...result.warnings, ...assessed.warnings],
+    analysisContext: assessed.context,
+  };
+}
+
+function renderAnalysisContext(context: SupportAnalysisContext): string {
+  const lines = [
+    `Analyzed log: ${context.inputFile}`,
+    `State directory: ${context.stateDir ?? "not inferred from input"}`,
+    `Source: ${context.sourceKind}`,
+    `Newest event: ${context.latestTimestamp ?? "not reported"}`,
+    `Newest instance: ${context.latestInstanceId ?? "not reported"}`,
+    `Freshness: ${context.freshness}`,
+    `Process activity: ${context.processActivity}`,
+  ];
+  return `${lines.join("\n")}\n\n`;
+}
+
 function emitSingleTimeline(
   timeline: LogTimeline,
   malformedLineCount: number,
+  context: SupportAnalysisContext,
   json: boolean,
   io: CliIo,
 ): number {
   if (json) {
-    io.out(`${JSON.stringify({ ...timeline, malformedLineCount })}\n`);
+    io.out(`${JSON.stringify({ ...timeline, malformedLineCount, analysisContext: context })}\n`);
   } else {
-    io.out(renderHumanTimeline(timeline));
+    io.out(`${renderAnalysisContext(context)}${renderHumanTimeline(timeline)}`);
   }
   return 0;
 }
 
-function emitAllTimelines(result: AnalyzeAllResult, json: boolean, io: CliIo): number {
-  io.out(json ? `${JSON.stringify(result)}\n` : renderHumanAllTimelines(result));
+function emitAllTimelines(result: SupportAnalysisReport, json: boolean, io: CliIo): number {
+  io.out(
+    json
+      ? `${JSON.stringify(result)}\n`
+      : `${renderAnalysisContext(result.analysisContext)}${renderHumanAllTimelines(result)}`,
+  );
   return 0;
 }
 
@@ -835,13 +1008,20 @@ async function runSupportAnalyze(
   if (args.seed || args.emitFixture !== undefined) {
     return runSeedAndFixture(text, args, cwd, io, options);
   }
+  const report = buildAnalysisReport(result, filePath, deps);
 
   if (args.correlationId === undefined) {
-    return emitAllTimelines(result, args.json, io);
+    return emitAllTimelines(report, args.json, io);
   }
   const timeline = findTimeline(result, args.correlationId);
   if (timeline === undefined) return reportMissingCorrelationId(args.correlationId, io);
-  return emitSingleTimeline(timeline, result.malformedLineCount, args.json, io);
+  return emitSingleTimeline(
+    timeline,
+    result.malformedLineCount,
+    report.analysisContext,
+    args.json,
+    io,
+  );
 }
 
 export async function runSupportCli(

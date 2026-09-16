@@ -20,6 +20,7 @@ import {
 } from "./opencodeLaunchProfile.js";
 import {
   createOpenCodeReconciler,
+  isOpenCodeProviderTokenUsage,
   isOpenCodeCompactionActivity,
   OPEN_CODE_EVENT_KINDS,
   type OpenCodeReconciliationEvent,
@@ -903,17 +904,24 @@ function validControl(value: unknown): value is OpenCodeLiveControl {
   );
 }
 
+function reconciliationEventKeys(event: OpenCodeReconciliationEvent): string[] {
+  const keys = ["id", "aggregateId", "sequence", "digest", "kind"];
+  if (event.compaction !== undefined) keys.push("compaction");
+  if (event.providerTokenUsage !== undefined) keys.push("providerTokenUsage");
+  return keys;
+}
+
 function validEvent(event: OpenCodeReconciliationEvent): boolean {
   return (
-    (exactRecord(event, ["id", "aggregateId", "sequence", "digest", "kind"]) ||
-      exactRecord(event, ["id", "aggregateId", "sequence", "digest", "kind", "compaction"])) &&
+    exactRecord(event, reconciliationEventKeys(event)) &&
     EVENT_ID.test(event.id) &&
     SESSION_ID.test(event.aggregateId) &&
     Number.isSafeInteger(event.sequence) &&
     event.sequence >= 0 &&
     DIGEST.test(event.digest) &&
     OPEN_CODE_EVENT_KINDS.includes(event.kind) &&
-    isOpenCodeCompactionActivity(event.compaction)
+    isOpenCodeCompactionActivity(event.compaction) &&
+    isOpenCodeProviderTokenUsage(event.providerTokenUsage)
   );
 }
 

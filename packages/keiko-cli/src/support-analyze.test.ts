@@ -1225,6 +1225,30 @@ const PROC_EXITING = line({
 });
 
 describe("analyzeLogText — process lifetimes", () => {
+  it("reports the newest valid event timestamp and its process instance", () => {
+    const newer = line({
+      ts: T2,
+      category: "process",
+      op: "process.heartbeat",
+      pid: 5252,
+      instanceId: "eeeeeeee",
+      seq: 2,
+    });
+    const invalid = line({
+      ts: "not-a-timestamp",
+      category: "process",
+      op: "process.heartbeat",
+      pid: 6262,
+      instanceId: "ffffffff",
+      seq: 3,
+    });
+
+    const result = analyzeLogText(`${newer}\n${PROC_STARTED}\n${invalid}\n`);
+
+    expect(result.latestTimestamp).toBe(T2);
+    expect(result.latestInstanceId).toBe("eeeeeeee");
+  });
+
   it("summarises a process lifetime across lifecycle lines that carry no correlationId", () => {
     const text = `${[PROC_STARTED, PROC_HEARTBEAT, PROC_EXITING].join("\n")}\n`;
 
@@ -1528,6 +1552,9 @@ describe("human-readable rendering", () => {
   it("renders a fallback line for zero timelines", () => {
     expect(
       renderHumanAllTimelines({
+        sourceKind: "raw-log",
+        latestTimestamp: undefined,
+        latestInstanceId: undefined,
         timelines: [],
         malformedLineCount: 0,
         processes: [],

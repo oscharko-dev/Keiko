@@ -518,11 +518,19 @@ vi.mock("./coding-workbench/CodingWorkbenchWindow", () => ({
 vi.mock("./cards/git-client/GitClientWindow", () => ({
   GitClientWindow: ({
     projectId,
+    lockedToActiveRoot,
+    lockedRepositoryLabel,
+    onOpenFiles,
+    onOpenEditor,
     onOpenEditorFile,
     initialRepositoryDialog,
     onRepositoryConnected,
   }: {
     readonly projectId?: string;
+    readonly lockedToActiveRoot?: boolean;
+    readonly lockedRepositoryLabel?: string;
+    readonly onOpenFiles?: (root: string) => void;
+    readonly onOpenEditor?: (root: string) => void;
     readonly initialRepositoryDialog?: string;
     readonly onRepositoryConnected?: (root: string) => void;
     readonly onOpenEditorFile?:
@@ -533,13 +541,20 @@ vi.mock("./cards/git-client/GitClientWindow", () => ({
         }) => void)
       | undefined;
   }): ReactNode => (
-    <div data-testid="git-client-window">
+    <div data-testid="git-client-window" data-locked={String(lockedToActiveRoot ?? false)}>
       {projectId ?? "unbound"}
+      {lockedRepositoryLabel ?? ""}
       {initialRepositoryDialog === "clone" ? (
         <button type="button" onClick={() => onRepositoryConnected?.("/repos/cloned")}>
           Complete issue clone
         </button>
       ) : null}
+      <button type="button" onClick={() => onOpenFiles?.(projectId ?? "")}>
+        Open Git files
+      </button>
+      <button type="button" onClick={() => onOpenEditor?.(projectId ?? "")}>
+        Open Git editor
+      </button>
       <button
         type="button"
         onClick={() =>
@@ -1816,9 +1831,10 @@ describe("workspace widget renderer registry", () => {
   });
 });
 
-// Issue #446 (ADR-0090) — prove the active-workspace root is actually WIRED into each bound-surface
-// renderer (not just the resolveBoundRoot helper): a mutation removing the override from a renderer
-// must fail here. Covers AC1/AC2 + the SC "no surface remains pointed at the previous workspace".
+// Issue #446 (ADR-0090) — prove the active-workspace root is actually WIRED into each task-bound
+// surface renderer (not just the resolveBoundRoot helper): a mutation removing the override from a
+// renderer must fail here. Repository-control Git is the deliberate exception: it must stay on the
+// selected repository and never borrow the managed task worktree.
 describe("active workspace binding override (Issue #446)", () => {
   function boundCtx(
     activeRoot: string | null,
@@ -1879,6 +1895,16 @@ describe("active workspace binding override (Issue #446)", () => {
       </>,
     );
     expect(await screen.findByTestId("git-client-window")).toHaveTextContent("/repos/keiko");
+    fireEvent.click(screen.getByRole("button", { name: "Open Git files" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("files", {
+      root: "/repos/keiko",
+      rootBinding: "coding-repository",
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Open Git editor" }));
+    expect(ctx.openWindow).toHaveBeenCalledWith("editor", {
+      root: "/repos/keiko",
+      rootBinding: "coding-repository",
+    });
     fireEvent.click(screen.getByRole("button", { name: "Reveal Git file" }));
     expect(ctx.openEditorFile).toHaveBeenCalledWith({
       root: "/repos/keiko",
@@ -1888,8 +1914,37 @@ describe("active workspace binding override (Issue #446)", () => {
   });
 
   // PR #3452 review: the Git window shares the editor's and Files' managed-access gate, so an
-  // unpaired browser on the bound managed task workspace is told why instead of shown raw denials.
-  it("shows the paired-session note, not the Git window, on an unpaired managed task workspace", async () => {
+  // explicitly task-worktree-bound browser on an unpaired managed workspace is told why instead of
+  // shown raw denials. A configured repository-root Git window is intentionally not in this case:
+  // repository Git is the central control surface and must not inherit a task worktree by accident.
+  it("shows the paired-session note, not the Git window, on an explicit managed task workspace", async () => {
+    const activeRoot = "/repos/keiko/.keiko/dev/ui/task-workspaces/repo/ws-1";
+    const ctx: WindowRenderContext = {
+      ...boundCtx(activeRoot, null),
+      activeBinding: {
+        schemaVersion: "1",
+        workspaceId: "workspace-1",
+        taskId: "task-1",
+        activeRoot,
+        boundSurfaces: ["git-delivery"],
+        gitDeliveryRoot: activeRoot,
+        editorProjectRoot: activeRoot,
+      },
+    };
+    manifestAccess.current = "unpaired";
+    try {
+      render(<>{WIN_TYPES.governedGit.render({ projectPath: activeRoot }, ctx)}</>);
+
+      expect(
+        await screen.findByRole("note", { name: "Browser session not paired" }),
+      ).toBeInTheDocument();
+      expect(screen.queryByTestId("git-client-window")).toBeNull();
+    } finally {
+      manifestAccess.current = "available";
+    }
+  });
+
+  it("uses the selected repository root before the active task worktree", async () => {
     const activeRoot = "/worktrees/active-task";
     const ctx: WindowRenderContext = {
       ...boundCtx(activeRoot, "/repos/keiko"),
@@ -1903,27 +1958,62 @@ describe("active workspace binding override (Issue #446)", () => {
         editorProjectRoot: activeRoot,
       },
     };
-    manifestAccess.current = "unpaired";
-    try {
-      render(
-        <>
-          {WIN_TYPES.governedGit.render(
-            { projectPath: "/repos/keiko", rootBinding: "coding-repository" },
-            ctx,
-          )}
-        </>,
-      );
 
-      expect(
-        await screen.findByRole("note", { name: "Task workspace unavailable in this browser" }),
-      ).toBeInTheDocument();
-      expect(screen.queryByTestId("git-client-window")).toBeNull();
-    } finally {
-      manifestAccess.current = "available";
-    }
+    render(<>{WIN_TYPES.governedGit.render({}, ctx)}</>);
+
+    expect(await screen.findByTestId("git-client-window")).toHaveTextContent("/repos/keiko");
+    expect(screen.getByTestId("git-client-window")).not.toHaveTextContent("/worktrees/active-task");
+    expect(screen.getByTestId("git-client-window")).toHaveAttribute("data-locked", "false");
   });
 
-  it("retargets a dormant Git window to the active task worktree", async () => {
+  it("repairs a persisted Git window that points at a managed task worktree", async () => {
+    const ctx = boundCtx(
+      "/repos/product/.keiko/dev/ui/task-workspaces/repo/ws-active",
+      "/repos/product",
+    );
+
+    render(
+      <>
+        {WIN_TYPES.governedGit.render(
+          { projectPath: "/repos/product/.keiko/dev/ui/task-workspaces/repo/ws-old" },
+          ctx,
+        )}
+      </>,
+    );
+
+    expect(await screen.findByTestId("git-client-window")).toHaveTextContent("/repos/product");
+    expect(screen.getByTestId("git-client-window")).not.toHaveTextContent("ws-old");
+    await waitFor(() =>
+      expect(ctx.updateCfg).toHaveBeenCalledWith({
+        projectPath: "/repos/product",
+        rootBinding: "coding-repository",
+      }),
+    );
+  });
+
+  it("keeps Git unbound instead of borrowing an active task worktree", async () => {
+    const activeRoot = "/worktrees/active-task";
+    const ctx: WindowRenderContext = {
+      ...boundCtx(activeRoot, null),
+      activeBinding: {
+        schemaVersion: "1",
+        workspaceId: "workspace-1",
+        taskId: "task-1",
+        activeRoot,
+        boundSurfaces: ["git-delivery"],
+        gitDeliveryRoot: activeRoot,
+        editorProjectRoot: activeRoot,
+      },
+    };
+
+    render(<>{WIN_TYPES.governedGit.render({}, ctx)}</>);
+
+    expect(await screen.findByTestId("git-client-window")).toHaveTextContent("unbound");
+    expect(screen.getByTestId("git-client-window")).not.toHaveTextContent("/worktrees/active-task");
+    expect(screen.getByTestId("git-client-window")).toHaveAttribute("data-locked", "false");
+  });
+
+  it("keeps an explicit Coding Workbench repository Git window on the repository during an active run", async () => {
     const activeRoot = "/worktrees/active-task";
     const ctx: WindowRenderContext = {
       ...boundCtx(activeRoot, "/repos/keiko"),
@@ -1947,14 +2037,78 @@ describe("active workspace binding override (Issue #446)", () => {
       </>,
     );
 
-    expect(await screen.findByTestId("git-client-window")).toHaveTextContent(
-      "/worktrees/active-task",
-    );
+    expect(await screen.findByTestId("git-client-window")).toHaveTextContent("/repos/keiko");
+    expect(screen.getByTestId("git-client-window")).not.toHaveTextContent("/worktrees/active-task");
+    expect(screen.getByTestId("git-client-window")).toHaveAttribute("data-locked", "false");
   });
 
   it("files renderer uses the active root, overriding the per-window cfg root", async () => {
     render(<>{WIN_TYPES.files.render({ root: "/cfg/old" }, boundCtx("/wt/active"))}</>);
     expect(await screen.findByTestId("files-root")).toHaveTextContent("/wt/active");
+  });
+
+  it("keeps repository-bound Files windows on the repository during an active run", async () => {
+    render(
+      <>
+        {WIN_TYPES.files.render(
+          { root: "/repos/keiko", rootBinding: "coding-repository" },
+          boundCtx("/wt/active"),
+        )}
+      </>,
+    );
+    expect(await screen.findByTestId("files-root")).toHaveTextContent("/repos/keiko");
+  });
+
+  it("repairs legacy repository Files windows with stale task-workspace resolved roots", async () => {
+    // The stale-resolvedRoot repair fires only in unbound mode. During an active bind the Files
+    // widget legitimately reports the managed task-workspace root as `resolvedRoot`, and treating
+    // that as drift would pin the window to the repository and disable the active-root override
+    // for the surface (#3506 review).
+    const ctx = boundCtx(null);
+    render(
+      <>
+        {WIN_TYPES.files.render(
+          {
+            root: "/repos/product",
+            resolvedRoot: "/repos/product/.keiko/dev/ui/task-workspaces/repo/ws-1",
+          },
+          ctx,
+        )}
+      </>,
+    );
+
+    expect(await screen.findByTestId("files-root")).toHaveTextContent("/repos/product");
+    await waitFor(() =>
+      expect(ctx.updateCfg).toHaveBeenCalledWith({
+        root: "/repos/product",
+        rootBinding: "coding-repository",
+      }),
+    );
+  });
+
+  it("does not treat an active-bind resolvedRoot as drift for repository Files windows", async () => {
+    // #3506 review — with an active task binding, `resolveBoundRoot` returns `ctx.activeRoot`,
+    // FilesWidget correctly persists that root as `resolvedRoot`, and the resulting cfg carries a
+    // managed-worktree resolvedRoot alongside a repository `root`. The drift repair must NOT
+    // interpret this legitimate state as stale — otherwise the window is pinned to the repository
+    // and the active-root override stops working for it.
+    const ctx = boundCtx("/wt/active");
+    render(
+      <>
+        {WIN_TYPES.files.render(
+          {
+            root: "/repos/product",
+            resolvedRoot: "/repos/product/.keiko/dev/ui/task-workspaces/repo/ws-1",
+          },
+          ctx,
+        )}
+      </>,
+    );
+
+    expect(await screen.findByTestId("files-root")).toHaveTextContent("/wt/active");
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith(
+      expect.objectContaining({ rootBinding: "coding-repository" }),
+    );
   });
 
   it("files renderer falls back to the cfg root in unbound mode", async () => {
@@ -2023,6 +2177,66 @@ describe("active workspace binding override (Issue #446)", () => {
       key: string | null;
     };
     expect(host.key).toBeNull();
+  });
+
+  it("keeps repository-bound editor windows on the repository during an active run", async () => {
+    editorWidgetMounts.length = 0;
+    editorWidgetUnmounts.length = 0;
+    render(
+      <>
+        {WIN_TYPES.editor.render(
+          { root: "/repos/keiko", rootBinding: "coding-repository" },
+          boundCtx("/wt/active"),
+        )}
+      </>,
+    );
+    expect(await screen.findByTestId("editor-widget")).toHaveTextContent("/repos/keiko:");
+  });
+
+  it("repairs legacy repository editor windows with stale task-workspace resolved roots", async () => {
+    // See the sibling Files test: the stale-resolvedRoot repair fires only in unbound mode.
+    const ctx = boundCtx(null);
+    render(
+      <>
+        {WIN_TYPES.editor.render(
+          {
+            root: "/repos/product",
+            resolvedRoot: "/repos/product/.keiko/dev/ui/task-workspaces/repo/ws-1",
+          },
+          ctx,
+        )}
+      </>,
+    );
+
+    expect(await screen.findByTestId("editor-widget")).toHaveTextContent("/repos/product:");
+    await waitFor(() =>
+      expect(ctx.updateCfg).toHaveBeenCalledWith({
+        root: "/repos/product",
+        rootBinding: "coding-repository",
+      }),
+    );
+  });
+
+  it("does not treat an active-bind resolvedRoot as drift for repository editor windows", async () => {
+    editorWidgetMounts.length = 0;
+    editorWidgetUnmounts.length = 0;
+    const ctx = boundCtx("/wt/active");
+    render(
+      <>
+        {WIN_TYPES.editor.render(
+          {
+            root: "/repos/product",
+            resolvedRoot: "/repos/product/.keiko/dev/ui/task-workspaces/repo/ws-1",
+          },
+          ctx,
+        )}
+      </>,
+    );
+
+    expect(await screen.findByTestId("editor-widget")).toHaveTextContent("/wt/active:");
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith(
+      expect.objectContaining({ rootBinding: "coding-repository" }),
+    );
   });
 
   it("search renderer uses the active root before linked or active-project fallbacks", async () => {

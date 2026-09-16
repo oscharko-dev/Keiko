@@ -19,6 +19,7 @@ import {
 } from "./gateway-readiness.js";
 import type { RouteContext } from "./routes.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "./diagnostics-log.js";
+import type { ServerLogEvent } from "./observability/server-log.js";
 import {
   QUALIFICATION_SPEND_BUDGET_USD_ENV,
   QUALIFICATION_SPEND_LEDGER_PATH_ENV,
@@ -188,6 +189,109 @@ afterEach(() => {
 });
 
 describe("gateway readiness route", () => {
+  it("automatically targets the structurally eligible Coding Workbench model and logs the run", async () => {
+    const generalChat = {
+      ...createDefaultChatCapability("general-chat"),
+      preferredUseCases: ["Chat"],
+      workflowEligible: true,
+    };
+    const codingChat = {
+      ...createDefaultChatCapability("coding-chat"),
+      preferredUseCases: ["Coding"],
+      workflowEligible: true,
+    };
+    const config: GatewayConfig = {
+      ...gatewayConfig("general-chat"),
+      providers: [
+        ...gatewayConfig("general-chat").providers,
+        {
+          modelId: "coding-chat",
+          baseUrl: "https://llm-gateway.internal/v1",
+          apiKey: "secret-token",
+          timeoutMs: 30_000,
+          maxRetries: 0,
+          retryBaseDelayMs: 0,
+        },
+      ],
+      capabilities: [generalChat, codingChat, embeddingCapability("text-embedding-3-small")],
+    };
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(chatPayload("OK")))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          choices: [
+            {
+              message: {
+                role: "assistant",
+                tool_calls: [
+                  {
+                    id: "call_1",
+                    type: "function",
+                    function: { name: "report_readiness", arguments: '{"status":"ok"}' },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+      ) as typeof fetch;
+    const events: ServerLogEvent[] = [];
+    const deps: UiHandlerDeps = {
+      ...depsWith(config, fetchImpl),
+      activityLog: { write: (event): void => void events.push(event) },
+    };
+
+    const result = await handleGatewayReadiness(
+      {
+        ...ctx({
+          options: { probes: ["tool_calling"], purpose: "coding-workbench-auto" },
+        }),
+        correlationId: "coding-readiness-0001",
+      },
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 200, body: { modelId: "coding-chat" } });
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({
+      op: "gateway.readiness.automatic.started",
+      correlationId: "coding-readiness-0001",
+      extra: { modelId: "coding-chat", probeCount: 2 },
+    });
+    expect(events[1]).toMatchObject({
+      op: "gateway.readiness.automatic.completed",
+      correlationId: "coding-readiness-0001",
+      extra: { modelId: "coding-chat", overallStatus: "ready", probeCount: 2 },
+    });
+    deps.store.close();
+  });
+
+  it("rejects an automatic probe for a non-coding model without dispatching or logging", async () => {
+    const fetchImpl = vi.fn() as unknown as typeof fetch;
+    const events: ServerLogEvent[] = [];
+    const deps: UiHandlerDeps = {
+      ...depsWith(gatewayConfig("general-chat"), fetchImpl),
+      activityLog: { write: (event): void => void events.push(event) },
+    };
+
+    const result = await handleGatewayReadiness(
+      {
+        ...ctx({
+          modelId: "general-chat",
+          options: { probes: ["tool_calling"], purpose: "coding-workbench-auto" },
+        }),
+        correlationId: "coding-readiness-0002",
+      },
+      deps,
+    );
+
+    expect(result).toMatchObject({ status: 400, body: { error: { code: "NO_MODEL" } } });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(events).toEqual([]);
+    deps.store.close();
+  });
+
   it("reserves the shared spend ceiling before chat probe dispatch", async () => {
     const stateDir = mkdtempSync(join(tmpdir(), "keiko-readiness-budget-"));
     const fetchImpl = vi.fn() as unknown as typeof fetch;

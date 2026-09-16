@@ -185,6 +185,27 @@ export async function handleCodingAppSessionPair(
   return ackResult(issuedCookie(ctx.req, result.cookieToken));
 }
 
+/**
+ * POST /local-session — ensure a usable local app-session for a Keiko server that was launched with
+ * launcher authority. This keeps normal reloads and reused browser tabs from depending on a fragile
+ * one-time URL fragment while preserving the fail-closed posture when no launcher-backed pairing
+ * authority exists.
+ */
+export function handleCodingAppSessionLocalSession(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): RouteResult {
+  const result = deps.codingAppSessionChannel?.ensureLocalSession(readSessionCookie(ctx.req));
+  if (result?.status !== "issued") return ackResult();
+  appSessionActivity(deps).write({
+    level: "info",
+    category: "http",
+    op: "coding-app-session.local-session.issued",
+    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
+  });
+  return ackResult(issuedCookie(ctx.req, result.cookieToken));
+}
+
 function currentSnapshot(
   deps: UiHandlerDeps,
   req: IncomingMessage,
@@ -342,6 +363,11 @@ export const CODING_APP_SESSION_ROUTE_GROUP: readonly RouteDefinition[] = [
     method: "POST",
     pattern: "/api/coding-workbench/app-session/pair",
     handler: handleCodingAppSessionPair,
+  },
+  {
+    method: "POST",
+    pattern: "/api/coding-workbench/app-session/local-session",
+    handler: handleCodingAppSessionLocalSession,
   },
   {
     method: "GET",

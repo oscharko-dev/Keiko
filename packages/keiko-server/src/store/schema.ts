@@ -3,6 +3,7 @@
 // runner applies migrations whose 1-based index > current user_version.
 
 import type { DatabaseSync } from "node:sqlite";
+import type { ServerLogSink } from "../observability/index.js";
 import { migrateJourneyOutcomeProjection } from "./journeyOutcomeMigration.js";
 import {
   migrateLegacyProjectManifests,
@@ -14,7 +15,7 @@ export const SCHEMA_VERSION = 34;
 interface Migration {
   readonly version: number;
   readonly sql: string;
-  readonly apply?: (db: DatabaseSync) => void;
+  readonly apply?: (db: DatabaseSync, activityLog?: ServerLogSink) => void;
 }
 
 export class UiStoreSchemaVersionError extends Error {
@@ -1274,18 +1275,37 @@ function setUserVersion(db: DatabaseSync, v: number): void {
 }
 
 // Applies pending migrations inside a single transaction. Throws (and rolls back) on any failure.
-export function runMigrations(db: DatabaseSync): void {
+export function runMigrations(db: DatabaseSync, activityLog?: ServerLogSink): void {
   const start = currentUserVersion(db);
   if (start > SCHEMA_VERSION) {
     throw new UiStoreSchemaVersionError(start, SCHEMA_VERSION);
   }
   const pending = MIGRATIONS.filter((m) => m.version > start);
   if (pending.length === 0) return;
+  // Wrap the caller's sink so any migration write that throws is best-effort — a failing sink
+  // must not roll back a schema migration that already ran. The `store.opened` event has this
+  // same "fail-closed on database, best-effort on sink" contract in `emitUiStoreOpenedEvent`;
+  // apply the same guarantee to every migration event so `openNodeUiDatabase(path, sink)` still
+  // returns a working database when `sink.write` throws.
+  const safeLog: ServerLogSink | undefined =
+    activityLog === undefined
+      ? undefined
+      : {
+          write: (event): void => {
+            try {
+              activityLog.write(event);
+            } catch {
+              // See emitUiStoreOpenedEvent: the process warning channel is the last one there is,
+              // and a report beyond that does not exist. A throwing sink is a caller defect that
+              // must not break schema evolution.
+            }
+          },
+        };
   db.exec("BEGIN");
   try {
     for (const m of pending) {
       db.exec(m.sql);
-      m.apply?.(db);
+      m.apply?.(db, safeLog);
       setUserVersion(db, m.version);
     }
     db.exec("COMMIT");

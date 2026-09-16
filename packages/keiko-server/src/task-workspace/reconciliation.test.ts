@@ -363,11 +363,16 @@ describe("healthy reconciliation (AC4)", () => {
   it("emits a task-workspace.lifecycle activity-log line for a healthy reconcile, no errorKind", async () => {
     const activityLog = createBufferedServerLogSink();
     const instance = await provisionTask("t-activity-healthy");
-    await reconciliation(activityLog).reconcile(undefined, "req-corr-reconcile-activity-1");
+    await reconciliation(activityLog).reconcile(
+      undefined,
+      "req-corr-reconcile-activity-1",
+      "bootstrap-parent-correlation-1",
+    );
     const line = lastActivityLogEvent(activityLog);
     expect(line.category).toBe("diagnostic");
     expect(line.op).toBe("task-workspace.lifecycle");
     expect(line.correlationId).toBe("req-corr-reconcile-activity-1");
+    expect(line.parentCorrelationId).toBe("bootstrap-parent-correlation-1");
     expect(line.level).toBe("info");
     expect(line.errorKind).toBeUndefined();
     const extra = line.extra ?? {};

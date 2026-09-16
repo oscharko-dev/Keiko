@@ -1,9 +1,10 @@
-import type { CodingWorkbenchIssueStartIntent } from "./coding-workbench-runtime-actions";
+import type { CodingWorkbenchStartOptions } from "./coding-workbench-runtime-actions";
 import type {
   CodingWorkbenchMode,
   CodingWorkbenchRuntimeApprovalDecision,
   CodingWorkbenchRuntimeResearchGrant,
   CodingWorkbenchRuntimeSnapshot,
+  CodingWorkbenchRuntimeStartRequest,
 } from "@oscharko-dev/keiko-contracts";
 import { isCodingWorkbenchModeWidening } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
@@ -42,6 +43,28 @@ function managedGatewayModelSelection(current: CodingWorkbenchRuntimeState): Run
   };
 }
 
+function startRequest(
+  id: string,
+  taskIntent: string,
+  current: CodingWorkbenchRuntimeState,
+  options: CodingWorkbenchStartOptions,
+): CodingWorkbenchRuntimeStartRequest {
+  const request = {
+    requestId: id,
+    taskIntent,
+    requestedMode: current.requestedMode,
+    runtimePreference: current.runtimePreference,
+    projectMemory: { enabled: options.projectMemoryEnabled },
+    ...managedGatewayModelSelection(current),
+  };
+  if (options.issue === undefined) return request;
+  return {
+    ...request,
+    issueRef: options.issue.issueRef,
+    expectedIssueBindingDigest: options.issue.expectedIssueBindingDigest,
+  };
+}
+
 export function mutationResultMatchesCurrentTruth(
   command: CodingWorkbenchMutationCommand,
   current: CodingWorkbenchRuntimeSnapshot | null,
@@ -57,7 +80,7 @@ export function mutationResultMatchesCurrentTruth(
 export function createStartMutation(
   taskIntent: string,
   current: CodingWorkbenchRuntimeState,
-  issue?: CodingWorkbenchIssueStartIntent,
+  options: CodingWorkbenchStartOptions,
 ): CodingWorkbenchMutationCommand {
   if (!current.canStart)
     throw codingWorkbenchRuntimeActionError("The runtime is not ready to start.");
@@ -65,15 +88,7 @@ export function createStartMutation(
   return {
     requestId: id,
     mayInstallNewRun: true,
-    run: () =>
-      startCodingWorkbenchRuntime({
-        requestId: id,
-        taskIntent,
-        requestedMode: current.requestedMode,
-        runtimePreference: current.runtimePreference,
-        ...managedGatewayModelSelection(current),
-        ...issue,
-      }),
+    run: () => startCodingWorkbenchRuntime(startRequest(id, taskIntent, current, options)),
   };
 }
 

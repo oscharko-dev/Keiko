@@ -867,11 +867,10 @@ function WorkspaceScene({
             />
           ))
         : null}
-      {/* Issue #2150 — selection rings render as sibling overlays above every
-          window (z above the topmost window's own z) instead of as styling on
-          each window, so an overlapping higher-z window can never paint over a
-          selected-but-lower-z window's ring. See WorkspaceSelection.module.css
-          .selectionRing. */}
+      {/* Selection rings render as sibling overlays on their own window's z-layer
+          instead of as extra styling inside each window. The ring stays visually
+          tied to the selected window, while a genuinely foreground window can
+          cover it where the two overlap. */}
       {visibleWins !== null
         ? visibleWins
             .filter((w) => selectedWindowIds.has(w.id))
@@ -884,7 +883,7 @@ function WorkspaceScene({
                 style={{
                   width: w.w,
                   height: w.h,
-                  zIndex: (top?.z ?? 0) + 1,
+                  zIndex: w.z,
                   transform: `translate3d(${String(w.x)}px, ${String(w.y)}px, 0)`,
                 }}
               />

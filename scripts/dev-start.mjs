@@ -68,11 +68,19 @@ function publicBrowserUrl(port) {
 
 // #2478 (ADR-0141 W1.5): `dev:start` is the trusted launcher of the dev BFF. It provisions a
 // process-scoped app-session pairing secret through the runner's inherited environment (never a
-// disk file, never a URL), and `npm run dev:start -- --open` opens the browser with one
-// single-use pairing attestation in the boot URL fragment so runtime question content is
-// readable in the dev lane. An operator-provisioned secret in the environment is respected.
+// disk file, never a URL), and opens the browser with one single-use pairing attestation in the
+// boot URL fragment so runtime question content is readable in the dev lane. `--no-open` is the
+// explicit headless opt-out; CI never opens a browser. An operator-provisioned secret in the
+// environment is respected.
 const APP_SESSION_SECRET_ENV = "KEIKO_CODING_APP_SESSION_LAUNCHER_SECRET";
-const openBrowserRequested = process.argv.includes("--open");
+
+export function resolveOpenBrowserRequested(argv = process.argv, env = process.env) {
+  if (argv.includes("--no-open")) return false;
+  if (argv.includes("--open")) return true;
+  return env.CI !== "1" && env.CI !== "true";
+}
+
+const openBrowserRequested = resolveOpenBrowserRequested();
 
 export function resolveDevPairingSecret(env = process.env) {
   const provisioned = env[APP_SESSION_SECRET_ENV];
@@ -501,7 +509,7 @@ async function restartExistingRunnerIfNeeded() {
       // The running BFF's pairing secret is private to its own launch, so no fresh attestation
       // can be minted here (fail closed): re-pairing needs a restart through this launcher.
       console.log(
-        "Pairing: the running dev UI keeps its existing app session; run `npm run dev:stop && npm run dev:start -- --open` to pair a fresh browser window.",
+        "Pairing: the running dev UI keeps its existing app session; run `npm run dev:stop && npm run dev:start` to pair a fresh browser window.",
       );
     }
     process.exit(0);
@@ -717,7 +725,7 @@ async function launchDevelopmentRunner() {
     console.log(`Stop: npm run dev:stop`);
     if (!openBrowserRequested) {
       console.log(
-        "Pairing: run `npm run dev:start -- --open` to open a browser window paired for coding question content.",
+        "Pairing: this headless start did not open a browser; restart without `--no-open` to open a paired session.",
       );
     }
     await maybeOpenPairedBrowser(pairingSecret);

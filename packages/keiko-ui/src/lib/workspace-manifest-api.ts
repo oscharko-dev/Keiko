@@ -11,7 +11,11 @@ import {
   validateWorkspaceManifest,
 } from "@oscharko-dev/keiko-contracts/runtime/workspace-manifest";
 import { bffFetchJson } from "./http";
-import { codingAppSessionPairingSettled } from "./coding-app-session-client";
+import {
+  codingAppSessionPairingSettled,
+  ensureLocalCodingAppSession,
+  notifyCodingAppSessionChanged,
+} from "./coding-app-session-client";
 
 const WORKSPACES_URL = "/api/workspaces";
 
@@ -67,6 +71,15 @@ export function workspaceManifestEventValue(event: Event): WorkspaceManifest | n
 
 export async function fetchWorkspaceManifestAccess(): Promise<WorkspaceManifestAccess> {
   await codingAppSessionPairingSettled();
+  const access = await readWorkspaceManifestAccess();
+  if (access.session !== "unpaired") return access;
+  if (!(await ensureLocalCodingAppSession())) return access;
+  const retried = await readWorkspaceManifestAccess();
+  if (retried.session === "paired") notifyCodingAppSessionChanged();
+  return retried;
+}
+
+function readWorkspaceManifestAccess(): Promise<WorkspaceManifestAccess> {
   return bffFetchJson(WORKSPACES_URL, undefined, {
     validator: manifestListValidator,
     parseFailureMessage: () => "workspace manifest request rejected",

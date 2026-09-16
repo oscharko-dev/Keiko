@@ -6,6 +6,9 @@ test("opens a live Coding Workbench and starts a server-bound run @smoke", async
   const fixture = await installLiveCodingWorkbenchRuntime(page);
   await fixture.open();
 
+  // #3494 moved the session context (task id · branch · health) and the effective-mode fact into
+  // an information popover so the composer stays uncluttered before a task starts.
+  await fixture.openInformation();
   await expect(page.getByText("task-2257 · issue/2257-live-runtime · healthy")).toBeVisible();
   // #2386 changed the workbench default from full access to the supervised middle mode. #2644 moved
   // the selector into Settings, so the Workbench now reports the server-confirmed effective mode in

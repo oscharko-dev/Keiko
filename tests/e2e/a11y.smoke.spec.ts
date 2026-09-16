@@ -240,6 +240,9 @@ const openCodingWorkbench: SurfaceOpener = async (page, _request, theme) => {
   const fixture = await installLiveCodingWorkbenchRuntime(page);
   await fixture.open();
   await expect(fixture.workbench).toBeVisible();
+  // #3494 moved the mode fact into an information popover. Open it here so the axe scan covers the
+  // context surface a paired session actually presents, and so `[data-mode]` is reachable.
+  await fixture.openInformation();
   await expect(fixture.workbench.locator("[data-mode]")).toBeVisible();
   return 'section[aria-label="Coding Workbench"][data-state]';
 };

@@ -131,6 +131,10 @@ import { PRODUCTION_SKILL_STATIC_FACTS } from "./productionAuxiliaryPorts.js";
 import type { WorkspaceRootAccess } from "../task-workspace/workspace-root-access.js";
 import type { WorkspaceScriptTrustService } from "../workspace-script-trust.js";
 import { isIdentityProofFailure } from "../task-workspace/errors.js";
+import {
+  createCodingRuntimeContextUsageRegistry,
+  type CodingRuntimeContextUsageRegistry,
+} from "./codingRuntimeContextUsage.js";
 
 type MintedRuntime = Extract<CodingRuntimeMintResult, { readonly ok: true }>;
 type LaunchMaterial = Omit<
@@ -154,6 +158,7 @@ export interface ProductionRuntimeBackendInput {
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly workspaceIsCurrent: () => boolean;
   readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
+  readonly contextUsage?: CodingRuntimeContextUsageRegistry | undefined;
 }
 
 export interface QualifiedProductionRuntimeRun {
@@ -237,6 +242,7 @@ interface RunComposition {
   readonly semanticSearch: { current: RepositorySemanticSearchResolver | undefined };
   readonly research: ResearchComposition;
   readonly skillCatalog: SkillCatalog;
+  readonly contextUsage: CodingRuntimeContextUsageRegistry;
 }
 
 /** Wraps the manager's approval issuance with the #2387 research grant minting hook. */
@@ -301,6 +307,7 @@ function sharedRunComposition(): RunComposition {
     research,
     skillCatalog: createServerApprovedSkillCatalog(),
     semanticSearch: { current: undefined },
+    contextUsage: createCodingRuntimeContextUsageRegistry(),
   };
 }
 
@@ -404,6 +411,7 @@ function composeRuntime(
     questionPort: createProductionRuntimeQuestionPort(runs),
     permissionPort: createProductionRuntimePermissionPort(runs),
     cancellationRegistry: { signalFor: (runId) => runs.get(runId)?.controller.signal },
+    contextUsage: { read: shared.contextUsage.read },
     runtimeCapabilityAuthenticator: runtimeCapabilityAuthenticatorFor(authority, runs),
     ...deliveryAuthorityPorts(authority, input),
     // #3401 CI-repair notify: the setter half of the `notifyVerifiedHeadAdvanced` slot above.
@@ -512,6 +520,16 @@ function repositoryPreparationFor(
       });
 }
 
+function launchContext(
+  input: ProductionCodingRuntimeResolverInput,
+  preparation: ReturnType<typeof createRuntimeGitPreparation> | undefined,
+  request: ProductionRuntimeBackendInput["request"],
+): CodingRuntimeTrustedContext {
+  return preparation === undefined
+    ? resolveProductionRuntimeContext(input.workspaceAuthority, request)
+    : preparation.consume(request);
+}
+
 function launchResolver(
   input: ProductionCodingRuntimeResolverInput,
   authority: CodingRuntimeAuthorityService,
@@ -525,10 +543,7 @@ function launchResolver(
   return {
     ...(preparation === undefined ? {} : { prepare: preparation.prepare }),
     resolve: (request): ReturnType<QualifiedProductionCodingRuntime["mintLaunch"]["resolve"]> => {
-      const context =
-        preparation === undefined
-          ? resolveProductionRuntimeContext(input.workspaceAuthority, request)
-          : preparation.consume(request);
+      const context = launchContext(input, preparation, request);
       const intent = startIntent(request, context);
       const nowIso = runtimeNow(input).toISOString();
       const approvalDigest = consumeStartConfirmation(input, request, context, nowIso);
@@ -550,6 +565,7 @@ function launchResolver(
           research: shared.research,
           skillCatalog: shared.skillCatalog,
           semanticSearch: shared.semanticSearch,
+          contextUsage: shared.contextUsage,
           onRuntimeEvent,
           notifyVerifiedHeadAdvanced,
         });
@@ -588,6 +604,7 @@ function confirmationFacts(
     ...(request.runtimePreference ? { runtimePreference: request.runtimePreference } : {}),
     ...(request.modelId ? { modelId: request.modelId } : {}),
     ...(request.reasoningEffort ? { reasoningEffort: request.reasoningEffort } : {}),
+    projectMemoryEnabled: request.projectMemoryEnabled ?? true,
     operatorId: context.operatorId,
     taskId: context.taskId,
     projectId: context.projectId,
@@ -772,6 +789,7 @@ interface RunToolSurfaceInput {
   // The server's late-bound repository semantic index (#3416). The SLOT travels, not a resolved
   // value: a run composed before `deps.ts` binds one still sees it the moment it is bound.
   readonly semanticSearch: { current: RepositorySemanticSearchResolver | undefined };
+  readonly contextUsage: CodingRuntimeContextUsageRegistry;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly signal: AbortSignal;
   readonly notifyVerifiedHeadAdvanced: (runId: string) => void;
@@ -879,6 +897,7 @@ function createRunRecord(args: Omit<RunToolSurfaceInput, "signal">): ResolverRun
     controller,
     research,
     onRuntimeEvent,
+    contextUsage: args.contextUsage,
   });
   const detachLease = attachedRuntimeMutationLease(input, surface, backend, request.runId);
   return {
@@ -1027,6 +1046,7 @@ interface CreateBackendRunInput {
   readonly research: ResearchComposition;
   readonly onRuntimeEvent: (event: CodingWorkbenchRuntimeEvent) => void;
   readonly resolveWorkspaceRootAccess: () => WorkspaceRootAccess | undefined;
+  readonly contextUsage: CodingRuntimeContextUsageRegistry;
 }
 
 function createBackendRun({
@@ -1043,6 +1063,7 @@ function createBackendRun({
   research,
   onRuntimeEvent,
   resolveWorkspaceRootAccess,
+  contextUsage,
 }: CreateBackendRunInput): QualifiedProductionRuntimeRun {
   const backend = input.backend.createRun({
     request,
@@ -1074,6 +1095,7 @@ function createBackendRun({
       }
     },
     resolveWorkspaceRootAccess,
+    contextUsage,
   });
   validateLaunchedBackend(backend, context, request.runId, input.diagnostics);
   return backend;

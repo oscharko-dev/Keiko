@@ -97,6 +97,7 @@ import {
   fetchCodingWorkbenchJourneyRefresh,
   connectGitChangeToChat,
   refreshGitChangeScope,
+  fetchGitDeliveryCommitDraft,
   fetchGitDeliveryCommitApprove,
   fetchGitDeliveryPushApprove,
   fetchGitDeliveryPrApprove,
@@ -1945,45 +1946,23 @@ describe("files API helpers", () => {
     );
   });
 
-  it("proposes sync by minting the exact approval before execute", async () => {
-    const approval = {
-      schemaVersion: "1" as const,
-      approvalId: "gda_sync_1",
-      approvalToken: "t".repeat(64),
-    };
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValueOnce(
-        jsonResponse({
-          schemaVersion: "1",
-          approval,
-          expiresAt: "2026-09-05T18:00:00.000Z",
-        }),
-      )
-      .mockResolvedValueOnce(
-        jsonResponse({
-          schemaVersion: "1",
-          operation: "pull",
-          status: "succeeded",
-          available: true,
-          truncated: false,
-        }),
-      );
+  it("proposes sync as an explicit local-user execute without minting a run approval", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      jsonResponse({
+        schemaVersion: "1",
+        operation: "pull",
+        status: "succeeded",
+        available: true,
+        truncated: false,
+      }),
+    );
     vi.stubGlobal("fetch", fetchMock);
 
     await proposeGitDeliverySync({ operation: "pull", projectId: "/repo", remote: "origin" });
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenNthCalledWith(
       1,
-      "/api/git-delivery/pull/approve",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ schemaVersion: "1", projectId: "/repo", remote: "origin" }),
-      }),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
       "/api/git-delivery/pull/execute",
       expect.objectContaining({
         method: "POST",
@@ -1991,7 +1970,7 @@ describe("files API helpers", () => {
           schemaVersion: "1",
           projectId: "/repo",
           remote: "origin",
-          approval,
+          userInitiated: true,
         }),
       }),
     );
@@ -3800,6 +3779,39 @@ describe("Git-to-Chat connect/refresh API (#3400)", () => {
   });
 });
 
+describe("Governed commit draft API", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("posts an explicit Keiko draft request with the optional operator instruction", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse({
+        schemaVersion: "1",
+        status: "succeeded",
+        source: "model",
+        suggestedMessage: "feat(ui): draft commits\n\nGenerated with Keiko",
+        summary: { stagedFileCount: 2, areaCount: 1, areas: ["ui"], touchesTests: true },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await fetchGitDeliveryCommitDraft({
+      projectId: "/repo",
+      instruction: "Write the draft in German.",
+    });
+
+    expect(result.source).toBe("model");
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("/api/git-delivery/commit/draft");
+    expect(JSON.parse(init.body as string)).toEqual({
+      schemaVersion: "1",
+      projectId: "/repo",
+      instruction: "Write the draft in German.",
+    });
+  });
+});
+
 // Failing-before: before this client existed, a card wanting to mint the approval
 // commit/push/pr-create/pr-update now require unconditionally (#3386 commit, #3387 push and pull
 // request; epic #3384 correction 5) had no BFF client to call, so `fetchGitDeliveryCommitApprove`
@@ -3843,6 +3855,25 @@ describe("Governed commit/push/pull-request approval mint (#3386/#3387)", () => 
       projectId: "/repo",
       message: "feat: x",
       allowEmpty: true,
+    });
+  });
+
+  it("can mark a commit approval request as user initiated", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonOk(approvalFixture()));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchGitDeliveryCommitApprove({
+      projectId: "/repo",
+      message: "feat: x",
+      userInitiated: true,
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({
+      schemaVersion: "1",
+      projectId: "/repo",
+      message: "feat: x",
+      userInitiated: true,
     });
   });
 
@@ -3960,12 +3991,19 @@ describe("Governed commit/push mint-then-execute (#3386/#3387, F3 epic #3384 fin
 
     expect(result.status).toBe("succeeded");
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    const [approveUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [approveUrl, approveInit] = fetchMock.mock.calls[0] as [string, RequestInit];
     const [executeUrl, executeInit] = fetchMock.mock.calls[1] as [string, RequestInit];
     expect(approveUrl).toBe("/api/git-delivery/commit/approve");
     expect(executeUrl).toBe("/api/git-delivery/commit/execute");
+    expect(JSON.parse(approveInit.body as string)).toEqual({
+      schemaVersion: "1",
+      projectId: "/repo",
+      message: "feat: x",
+      userInitiated: true,
+    });
     const executeBody = JSON.parse(executeInit.body as string) as Record<string, unknown>;
     expect(executeBody.approval).toEqual(approvalFixture("gda_commit_1").approval);
+    expect(executeBody.userInitiated).toBe(true);
   });
 
   it("proposeCommit surfaces a denied mint instead of relabelling it approval-required", async () => {
@@ -3978,8 +4016,9 @@ describe("Governed commit/push mint-then-execute (#3386/#3387, F3 epic #3384 fin
     });
     // The denied mint never reaches execute — only the approve endpoint was called.
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    const [approveUrl] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const [approveUrl, approveInit] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(approveUrl).toBe("/api/git-delivery/commit/approve");
+    expect(JSON.parse(approveInit.body as string)).toMatchObject({ userInitiated: true });
   });
 
   it("proposePush mints then redeems, in order, before reporting success", async () => {

@@ -17,6 +17,11 @@ import {
 
 const CANARY = { kind: "transcript-probe", body: "milestone-1-bounded-canary" } as const;
 
+// The local-session route path lives here rather than in `_support.ts` because that file is a
+// pinned coding-runtime measurement input; adding a member there would change the harness ruler
+// digest and force a recalibration for every new session-route entry (issue #3494).
+const APP_SESSION_LOCAL_SESSION_PATH = "/api/coding-workbench/app-session/local-session";
+
 function startServer(): Promise<AppSessionTestServer> {
   return startAppSessionTestServer({
     sessionPairingPort: createFakeSessionPairingPort(),
@@ -45,6 +50,15 @@ async function pairSession(server: AppSessionTestServer): Promise<string> {
   const cookie = extractSessionCookie(response);
   if (cookie === undefined) throw new Error("pairing did not issue a cookie");
   return cookie;
+}
+
+async function ensureLocalSession(server: AppSessionTestServer): Promise<string | undefined> {
+  const response = await fetch(`${server.baseUrl}${APP_SESSION_LOCAL_SESSION_PATH}`, {
+    method: "POST",
+    headers: postHeaders(),
+  });
+  expect(response.status).toBe(200);
+  return extractSessionCookie(response);
 }
 
 async function readStreamContent(
@@ -90,6 +104,28 @@ describe("authenticated app-session channel journey (ADR-0141, #2477)", () => {
       const cookie = await pairSession(server);
       expect(await snapshotContent(server, cookie)).toEqual(CANARY);
       expect(await readStreamContent(server, cookie)).toEqual(CANARY);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("a launcher-authorized local session reads the bounded payload without a URL fragment", async () => {
+    const server = await startServer();
+    try {
+      const cookie = await ensureLocalSession(server);
+      if (cookie === undefined) throw new TypeError("local session did not issue a cookie");
+      expect(await snapshotContent(server, cookie)).toEqual(CANARY);
+      expect(await readStreamContent(server, cookie)).toEqual(CANARY);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("local-session stays fail-closed when no pairing authority is composed", async () => {
+    const server = await startAppSessionTestServer();
+    try {
+      await expect(ensureLocalSession(server)).resolves.toBeUndefined();
+      expect(await snapshotContent(server)).toBeNull();
     } finally {
       await server.close();
     }

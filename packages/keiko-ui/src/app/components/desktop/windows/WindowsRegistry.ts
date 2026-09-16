@@ -4,7 +4,11 @@ import type {
   QualityIntelligenceImageSource,
   WorkspaceBinding,
 } from "@oscharko-dev/keiko-contracts";
-import type { OpenEditorFileRequest, OpenEditorFileResult } from "../hooks/useWorkspace.types";
+import type {
+  OpenEditorFileRequest,
+  OpenEditorFileResult,
+  WorkspaceLinkedGitChangeComparison,
+} from "../hooks/useWorkspace.types";
 import type { IconName } from "../Icons";
 import type { I18nTranslate } from "@/lib/i18n";
 import type { MessageKey } from "@/lib/i18n-messages.en";
@@ -150,6 +154,8 @@ export type WindowCfgByType = {
   };
   readonly governedGit: ProjectRootWindowCfg & {
     readonly rootBinding?: "coding-repository";
+    readonly gitChangeBaseRef?: string;
+    readonly gitChangeHeadRef?: string;
   };
   readonly governedPullRequest: ProjectRootWindowCfg & { readonly headBranchName?: string };
   readonly governedMerge: ProjectRootWindowCfg & { readonly headBranchName?: string };
@@ -231,6 +237,8 @@ export interface WindowRenderContext {
     readonly QualityIntelligenceFigmaSnapshotSource[] | undefined;
   /** Image-only sources connected to Quality Intelligence. */
   readonly linkedImageSources?: readonly QualityIntelligenceImageSource[] | undefined;
+  /** Git-change comparisons connected to this chat window through the workspace connector. */
+  readonly linkedGitChangeComparisons?: readonly WorkspaceLinkedGitChangeComparison[] | undefined;
   /**
    * The available folder/repository selected for the whole Workbench. This is the shared base
    * context below an optional managed task-workspace binding; it never grants task execution

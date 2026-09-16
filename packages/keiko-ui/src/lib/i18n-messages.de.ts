@@ -704,6 +704,8 @@ export const DE_MESSAGES = {
     "Keiko konnte diese Quelle nicht verbinden. Prüfe, ob sie noch verfügbar ist, und versuche es erneut.",
   "chat.grounding.connectKnowledgeFailed":
     "Keiko konnte diese Wissensquelle nicht verbinden. Prüfe, ob sie noch verfügbar ist, und versuche es erneut.",
+  "chat.grounding.connectGitChangeFailed":
+    "Keiko konnte diese Git-Änderung nicht verbinden. Prüfe, ob Repository und Branches noch verfügbar sind, und versuche es erneut.",
   "chat.memory.panel": "Konversationsspeicher",
   "chat.memory.enableForChat": "MemoriaViva für diesen Chat aktivieren",
   "chat.memory.disableForChat": "MemoriaViva für diesen Chat deaktivieren",
@@ -1391,6 +1393,9 @@ export const DE_MESSAGES = {
   "gitChangeScope.status.fallback": "Ersatzweise",
   "gitChangeScope.status.blocked": "Blockiert",
   "gitChangeScope.status.failed": "Fehlgeschlagen",
+  "gitChangeScope.status.connecting": "Verbindet",
+  "gitChangeScope.pending.accessible": "Git-Änderungsverbindung wird vorbereitet: {label}",
+  "gitChangeScope.pending.detail": "Git-Änderungskontext wird vorbereitet",
   "gitChangeScope.counts.file": "{count} geänderte Datei",
   "gitChangeScope.counts.files": "{count} geänderte Dateien",
   "gitChangeScope.counts.withOmitted": "{shown} von {total} Dateien angezeigt",
@@ -1410,6 +1415,8 @@ export const DE_MESSAGES = {
   "gitChangeScope.blocked.unbornHead": "Blockiert: Das Repository enthält noch keine Commits.",
   "gitChangeScope.blocked.missingRef":
     "Blockiert: Die ausgewählte Referenz konnte nicht aufgelöst werden.",
+  "gitChangeScope.blocked.identicalRefs":
+    "Blockiert: Basis- und Head-Branch müssen unterschiedlich sein.",
   "gitChangeScope.blocked.noPullRequest":
     "Blockiert: Für diesen Branch wurde kein offener Pull Request gefunden.",
   "gitChangeScope.blocked.ambiguousPullRequest":
@@ -1439,6 +1446,8 @@ export const DE_MESSAGES = {
   "gitChangeScope.connect.cancel": "Abbrechen",
   "gitChangeScope.connect.openButton": "Mit Chat verbinden",
   "gitChangeScope.connect.noChats": "Für dieses Repository sind noch keine Chats geöffnet.",
+  "gitChangeScope.connect.noBaseBranch":
+    "Wähle einen anderen Basis-Branch, bevor du diese Git-Änderung verbindest.",
   "gitChangeScope.connect.chatLoadError":
     "Die Chats für dieses Repository konnten nicht geladen werden.",
   "gitChangeScope.connect.error": "Diese Git-Änderung konnte nicht mit dem Chat verbunden werden.",
@@ -1571,6 +1580,9 @@ export const DE_MESSAGES = {
   "editor.taskWorkspaceAccess.checking": "Verbindung zum Aufgabenarbeitsbereich wird hergestellt…",
   "editor.taskWorkspaceAccess.checkingDescription":
     "Keiko prüft, ob dieser Browser auf den lokalen Arbeitsbereich zugreifen kann.",
+  "editor.taskWorkspaceAccess.unpairedTitle": "Browsersitzung nicht gekoppelt",
+  "editor.taskWorkspaceAccess.unpairedDescription":
+    "Das ausgewählte Projekt ist verfügbar, aber dieser Browser hat keine Launcher-Berechtigung für private Task-Workspace-Inhalte. Starte Keiko über den Launcher neu.",
   "editor.taskWorkspaceAccess.title":
     "Der Aufgabenarbeitsbereich ist in diesem Browser nicht verfügbar",
   "editor.taskWorkspaceAccess.description":
@@ -2452,6 +2464,7 @@ export const DE_MESSAGES = {
   "gitClientWindow.sync.hint.retry": "Versuchen Sie es erneut.",
   "gitClientWindow.sync.hint.stageChanges": "Stagen Sie die Änderungen zuerst.",
   "gitClientWindow.sync.hint.configureUpstream": "Konfigurieren Sie zuerst einen Upstream-Branch.",
+  "gitClientWindow.sync.hint.configureSigning": "Konfigurieren Sie zuerst die Commit-Signierung.",
   "gitClientWindow.sync.hint.resolveConflicts":
     "Pullen Sie zuerst und lösen Sie den Unterschied auf.",
   "gitClientWindow.sync.hint.abortInProgress":
@@ -2533,4 +2546,10 @@ export const DE_MESSAGES = {
     "Diese Vorschau ist veraltet — der Pull Request hat sich seit der Erstellung geändert. Vorschau erneut abrufen, bevor Sie genehmigen oder übernehmen.",
   "governedPullRequestCard.description.refreshHint.targetChanged":
     "Das Repository oder die Pull-Request-Nummer hat sich seit der letzten Vorschau geändert. Vorschau erneut abrufen, bevor Sie genehmigen oder übernehmen.",
+  "repositoryBranchSwitcher.setUpGit": "Git einrichten",
+  "repositoryBranchSwitcher.initializeDescription":
+    "Initialisiert das ausgewählte Projekt als lokales Git-Repository mit dem Startbranch main.",
+  "repositoryBranchSwitcher.cancel": "Abbrechen",
+  "repositoryBranchSwitcher.initializing": "Initialisieren…",
+  "repositoryBranchSwitcher.initializeRepository": "Repository initialisieren",
 } satisfies MessageCatalog;

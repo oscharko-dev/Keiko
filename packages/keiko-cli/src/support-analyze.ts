@@ -129,6 +129,12 @@ export interface ProcessSummary {
 }
 
 export interface AnalyzeAllResult {
+  readonly sourceKind: SourceKind;
+  // Whole-artifact observation metadata, derived from every valid log record whether it carries a
+  // correlation id or not. Undefined means the runtime did not report a usable value; callers
+  // must never infer one from file timestamps or timeline ordering.
+  readonly latestTimestamp: string | undefined;
+  readonly latestInstanceId: string | undefined;
   readonly timelines: readonly LogTimeline[];
   readonly malformedLineCount: number;
   readonly processes: readonly ProcessSummary[];
@@ -807,6 +813,47 @@ function buildWarnings(legacyLineCount: number): readonly string[] {
     : [];
 }
 
+interface LatestObservation {
+  readonly latestTimestamp: string | undefined;
+  readonly latestInstanceId: string | undefined;
+}
+
+function isLaterObservation(
+  candidateMs: number,
+  candidateIndex: number,
+  currentMs: number,
+  currentIndex: number,
+): boolean {
+  return candidateMs > currentMs || (candidateMs === currentMs && candidateIndex > currentIndex);
+}
+
+function latestObservation(lines: readonly ParsedLine[]): LatestObservation {
+  let latestTimestamp: string | undefined;
+  let latestTimestampMs = Number.NEGATIVE_INFINITY;
+  let latestTimestampIndex = -1;
+  let latestInstanceId: string | undefined;
+  let latestInstanceMs = Number.NEGATIVE_INFINITY;
+  let latestInstanceIndex = -1;
+  for (const line of lines) {
+    const parsedMs = Date.parse(line.view.ts);
+    if (!Number.isFinite(parsedMs)) continue;
+    if (isLaterObservation(parsedMs, line.fileIndex, latestTimestampMs, latestTimestampIndex)) {
+      latestTimestamp = line.view.ts;
+      latestTimestampMs = parsedMs;
+      latestTimestampIndex = line.fileIndex;
+    }
+    if (
+      line.view.instanceId !== undefined &&
+      isLaterObservation(parsedMs, line.fileIndex, latestInstanceMs, latestInstanceIndex)
+    ) {
+      latestInstanceId = line.view.instanceId;
+      latestInstanceMs = parsedMs;
+      latestInstanceIndex = line.fileIndex;
+    }
+  }
+  return { latestTimestamp, latestInstanceId };
+}
+
 // Parses `text` (the full content of a raw server.log OR a support bundle), groups every line
 // that carries a correlationId into one LogTimeline per id (first-occurrence order), and counts
 // every line that could not be read as a log record. A line with no correlationId at all
@@ -835,7 +882,10 @@ export function analyzeLogText(
   const warnings = buildWarnings(legacyLineCount);
   const clusters = buildOpClusters(parsedLines);
   const updateAttempts = buildUpdateAttempts(parsedLines);
+  const observation = latestObservation(parsedLines);
   return {
+    sourceKind: kind,
+    ...observation,
     timelines,
     malformedLineCount,
     processes,

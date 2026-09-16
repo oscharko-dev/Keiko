@@ -48,20 +48,20 @@
     "de": "Gateway-Prüfung fehlgeschlagen"
   },
   "settings.models.detailNotVerified": {
-    "en": "Configured, not verified: no readiness check has confirmed that this gateway answers. Run a readiness check below.",
-    "de": "Konfiguriert, nicht verifiziert: Keine Bereitschaftsprüfung hat bestätigt, dass dieses Gateway antwortet. Führe unten eine Bereitschaftsprüfung aus."
+    "en": "Models are configured. Keiko verifies the capabilities required by the Coding Workbench automatically when they are first needed; the checks below remain available for diagnostics.",
+    "de": "Modelle sind konfiguriert. Keiko verifiziert die von der Coding Workbench benötigten Fähigkeiten beim ersten Bedarf automatisch; die Prüfungen unten bleiben für Diagnosen verfügbar."
   },
   "settings.models.detailProbeFailed": {
     "en": "The last readiness check could not confirm this gateway. Model and agent features that need it stay unavailable until a check succeeds.",
     "de": "Die letzte Bereitschaftsprüfung konnte dieses Gateway nicht bestätigen. Modell- und Agent-Funktionen, die es benötigen, bleiben bis zu einer erfolgreichen Prüfung nicht verfügbar."
   },
   "settings.models.modelCount": {
-    "en": "{count} models",
-    "de": "{count} Modelle"
+    "en": "{count} configured models",
+    "de": "{count} konfigurierte Modelle"
   },
   "settings.models.chatCount": {
-    "en": "{count} chat",
-    "de": "{count} Chat"
+    "en": "{count} chat models",
+    "de": "{count} Chat-Modelle"
   },
   "settings.models.statusConfigured": {
     "en": "gateway configured",
@@ -72,8 +72,8 @@
     "de": "Einrichtung erforderlich"
   },
   "settings.models.statusNotVerified": {
-    "en": "configured, not verified",
-    "de": "konfiguriert, nicht verifiziert"
+    "en": "gateway configured; automatic verification pending",
+    "de": "Gateway konfiguriert; automatische Verifizierung ausstehend"
   },
   "settings.models.statusProbeFailed": {
     "en": "gateway check failed",

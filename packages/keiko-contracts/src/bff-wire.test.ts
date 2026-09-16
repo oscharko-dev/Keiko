@@ -864,14 +864,15 @@ describe("git-change Chat scope contract (#3400)", () => {
     }
   });
 
-  // F30 (epic #3384 final audit): the 11-member blocked-reason vocabulary is owned once here
+  // F30 (epic #3384 final audit): the blocked-reason vocabulary is owned once here
   // (keiko-contracts) rather than hand-restated in both the browser client and the server
   // route; this pin is the single source both importers are checked against.
-  it("pins the 11-member GitChangeBlockedReason vocabulary (F30)", () => {
+  it("pins the GitChangeBlockedReason vocabulary (F30)", () => {
     expect([...GIT_CHANGE_BLOCKED_REASONS]).toEqual([
       "detached-head",
       "unborn-head",
       "missing-ref",
+      "identical-refs",
       "no-pull-request",
       "ambiguous-pull-request",
       "reader-unauthorized",

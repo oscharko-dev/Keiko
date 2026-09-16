@@ -1030,7 +1030,7 @@ export function openNodeUiDatabase(dbPath: string, sink?: ServerLogSink): Databa
   try {
     db.exec("PRAGMA journal_mode = WAL");
     assertQuickCheckOk(db);
-    runMigrations(db);
+    runMigrations(db, sink);
     sqlRecoverInterruptedClientTurns(db);
   } catch (error) {
     db.close();
@@ -1041,7 +1041,7 @@ export function openNodeUiDatabase(dbPath: string, sink?: ServerLogSink): Databa
     db = preparedDatabase(dbPath);
     db.exec("PRAGMA journal_mode = WAL");
     assertQuickCheckOk(db);
-    runMigrations(db);
+    runMigrations(db, sink);
     sqlRecoverInterruptedClientTurns(db);
   }
   chmodIfPresent(dbPath, FILE_MODE);

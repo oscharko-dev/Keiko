@@ -9,6 +9,7 @@ import {
 
 import {
   codingAppSessionPairingSettled,
+  ensureLocalCodingAppSession,
   redeemCodingAppSessionPairingFragment,
   redeemCodingAppSessionPairingNavigation,
   redeemCodingAppSessionPairingOnBoot,
@@ -100,6 +101,26 @@ describe("redeemCodingAppSessionPairingFragment (#2478)", () => {
       replaceState.mockRestore();
       window.location.hash = "";
     }
+  });
+
+  it("ensures a local app-session through the injected browser seam", async () => {
+    const target = seams("");
+    const postLocalSession = vi.fn(() => Promise.resolve<unknown>({ schemaVersion: "1" }));
+
+    await expect(ensureLocalCodingAppSession({ ...target.seams, postLocalSession })).resolves.toBe(
+      true,
+    );
+
+    expect(postLocalSession).toHaveBeenCalledOnce();
+  });
+
+  it("fails closed when local app-session ensure cannot reach the BFF", async () => {
+    const target = seams("");
+    const postLocalSession = vi.fn(() => Promise.reject(new TypeError("offline")));
+
+    await expect(ensureLocalCodingAppSession({ ...target.seams, postLocalSession })).resolves.toBe(
+      false,
+    );
   });
 });
 

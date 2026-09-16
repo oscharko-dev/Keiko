@@ -44,6 +44,8 @@ import { CodingRuntimeLaunchRejectedError } from "./launchFailure.js";
 import { codingRuntimeFactDigest } from "./runtimeAuthorityService.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { resolveOpenCodeContextGeometry } from "./opencodeLaunchProfile.js";
+import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 
 const OPEN_CODE_START_TIMEOUT_MS = 120_000;
 
@@ -83,6 +85,7 @@ export interface ProductionOpenCodeBackendInput {
   >;
   readonly fetch?: typeof globalThis.fetch | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
   readonly safeActivityProjection?: CodingSafeActivityProjection | undefined;
   /** Explicit functional-test seam. Production composition never supplies this. */
   readonly createSupervisor?:
@@ -105,7 +108,7 @@ export function createProductionOpenCodeBackend(
     input.safeActivityProjection ??
     createCodingSafeActivityProjection({
       diagnostics: input.diagnostics,
-      activityLog: processServerLogSink(),
+      activityLog: input.activityLog ?? processServerLogSink(),
     });
   return {
     safeActivityProjection,
@@ -180,6 +183,9 @@ function composeOpenCodeRun(
       run.minted.authorityRef.runId,
       run.minted.authorityRef.envelopeDigest,
       input.runtimeEvidence,
+      run,
+      contextGeometry,
+      input.activityLog ?? processServerLogSink(),
     ),
     onQuestionObserved: liveQuestionSignal(
       run.minted.authorityRef.runId,
@@ -192,6 +198,7 @@ function composeOpenCodeRun(
     fetch: input.fetch ?? globalThis.fetch,
     supervisor: runtimeSupervisor(input, run),
     diagnostics: input.diagnostics,
+    activityLog: input.activityLog,
     onRuntimeEvent: run.onRuntimeEvent,
     authorityLifecycle: run.authorityLifecycle,
     codingToolApprovals: run.codingToolApprovals,
@@ -545,6 +552,9 @@ function idempotentEventSink(
   runId: string,
   authorityDigest: string,
   evidence: Pick<CodingRuntimeEvidenceAggregator, "observe">,
+  run: ProductionRuntimeBackendInput,
+  contextGeometry: OpenCodeRuntimeCompositionInput["contextGeometry"],
+  activityLog: ServerLogSink,
 ): OpenCodeRuntimeCompositionInput["governedEventSink"] {
   // KEIKO-0707: use the same bounded-correlation primitive the governed-tool call path uses so
   // idempotency identity retention is capped at MAX_SAFE_ACTIVITY_TOOL_CORRELATIONS instead of
@@ -562,10 +572,47 @@ function idempotentEventSink(
           state: "running",
           authorityDigest,
         });
+        recordContextTelemetry(run, event, contextGeometry, activityLog);
       }
       return Promise.resolve(duplicate ? "duplicate" : "applied");
     },
   };
+}
+
+function recordContextTelemetry(
+  run: ProductionRuntimeBackendInput,
+  event: OpenCodeReconciliationEvent,
+  contextGeometry: OpenCodeRuntimeCompositionInput["contextGeometry"],
+  activityLog: ServerLogSink,
+): void {
+  const registry = run.contextUsage;
+  if (registry === undefined) return;
+  const updatedAt = new Date().toISOString();
+  if (event.providerTokenUsage !== undefined) {
+    const accepted = registry.recordProviderSample(run.request.runId, {
+      sampleId: event.digest,
+      capacityTokens: contextGeometry.contextWindowTokens,
+      reservedOutputTokens: contextGeometry.maxOutputTokens,
+      inputTokens: event.providerTokenUsage.inputTokens,
+      updatedAt,
+    });
+    activityLog.write({
+      category: "process",
+      level: accepted ? "info" : "warn",
+      op: "coding-runtime.context-usage.observed",
+      correlationId: run.request.runId,
+      extra: {
+        state: accepted ? "accepted" : "rejected",
+        capacityTokens: contextGeometry.contextWindowTokens,
+        usedInputTokens: event.providerTokenUsage.inputTokens,
+        reservedOutputTokens: contextGeometry.maxOutputTokens,
+        sampleDigest: event.digest,
+      },
+    });
+  }
+  if (event.compaction?.event === "completed") {
+    registry.recordCompaction(run.request.runId, event.compaction.compactionIdSha256, updatedAt);
+  }
 }
 
 /**

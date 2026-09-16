@@ -1258,8 +1258,13 @@ describe("openNodeUiDatabase — store.opened activity log (Wave 4a, epic #3233 
     };
     const db = openNodeUiDatabase(dbPath, sink);
     try {
-      expect(events).toHaveLength(1);
-      const event = must(events[0]);
+      // #3506 (fix(observability): correlate server bootstrap d7542487a) — runMigrations now also
+      // receives the sink, so a fresh open can emit migration events alongside `store.opened`.
+      // The invariant this test pins is that EXACTLY ONE event carries op = "store.opened";
+      // other events on the sink are allowed and unrelated.
+      const openedEvents = events.filter((event) => event.op === "store.opened");
+      expect(openedEvents).toHaveLength(1);
+      const event = must(openedEvents[0]);
       expect(event.category).toBe("setup");
       expect(event.op).toBe("store.opened");
       expect(typeof event.durationMs).toBe("number");

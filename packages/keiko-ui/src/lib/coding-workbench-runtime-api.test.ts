@@ -262,10 +262,20 @@ describe("Coding Workbench runtime API endpoints", () => {
       taskIntent: "add a test",
       requestedMode: "governed-assist",
       runtimePreference: "managed-gateway",
+      projectMemory: { enabled: true },
     });
     expect(fetchMock).toHaveBeenLastCalledWith(
       "/api/coding-workbench/runtime/runs",
-      expect.objectContaining({ method: "POST" }),
+      expect.objectContaining({
+        method: "POST",
+        body: JSON.stringify({
+          requestId: "request-1",
+          taskIntent: "add a test",
+          requestedMode: "governed-assist",
+          runtimePreference: "managed-gateway",
+          projectMemory: { enabled: true },
+        }),
+      }),
     );
 
     await stopCodingWorkbenchRuntime("run-1", { requestId: "run-1" });

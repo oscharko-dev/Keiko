@@ -173,7 +173,7 @@ function fixtureSnapshot(overrides: Partial<GitChangeSnapshot> = {}): GitChangeS
 
 function fakeSnapshotService(
   results: readonly GitChangeSnapshotResult[],
-): UiHandlerDeps["gitChangeSnapshotService"] {
+): NonNullable<UiHandlerDeps["gitChangeSnapshotService"]> {
   let index = 0;
   return {
     capture: (): Promise<{ readonly snapshot: GitChangeSnapshotResult }> => {
@@ -215,7 +215,6 @@ function parkingSnapshotService(results: readonly GitChangeSnapshotResult[]): {
     markArrived = resolve;
   });
   const base = fakeSnapshotService(results);
-  if (base === undefined) throw new TypeError("Fake snapshot service is required");
   return {
     arrived,
     release: (): void => {
@@ -463,6 +462,27 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
     const ctx = makeCtx(connectRequestBody(chat.id));
     const result = asRouteResult(await connectHandler(ctx, deps));
     expect(result.body).toEqual({ status: "blocked", reason: "unborn-head" });
+  });
+
+  it("blocks an identical base/head comparison before capture runs", async () => {
+    // Reviewer thread (PR #3506): pin that the snapshot service is NEVER invoked for the
+    // identical-refs branch. Regression guard against a fix that returns identical-refs only
+    // AFTER performing an unnecessary snapshot capture — the whole point of this rejection is that
+    // no snapshot is worth taking when the two refs resolve to the same head.
+    const base = fakeSnapshotService([]);
+    const captureSpy = vi.fn((input: GitChangeSnapshotCaptureInput) => base.capture(input));
+    const service: UiHandlerDeps["gitChangeSnapshotService"] = { ...base, capture: captureSpy };
+    const { deps, chatStore } = buildHarness({
+      runnerScript: {},
+      snapshots: [],
+      snapshotService: service,
+    });
+    const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
+    const body = { ...connectRequestBody(chat.id), baseRef: "feature/x" };
+    const result = asRouteResult(await connectHandler(makeCtx(body), deps));
+    expect(result.body).toEqual({ status: "blocked", reason: "identical-refs" });
+    expect(chatStore.findChatById(chat.id)?.gitChangeScopes ?? []).toHaveLength(0);
+    expect(captureSpy).not.toHaveBeenCalled();
   });
 
   // Only exit 1 from `git rev-parse -q --verify HEAD` means "no such ref". A sandbox preflight

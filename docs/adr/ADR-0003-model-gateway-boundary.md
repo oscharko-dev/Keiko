@@ -309,8 +309,9 @@ export interface GatewayBrandingConfig {
 `config.ts`'s `resolvePrDescriptionBrandingFromConfig` is the sole place that turns
 `branding.logoUrl` into a `PrDescriptionBranding`, reusing `validatedPrDescriptionLogoUrl`
 (`prDescription/render.ts`) to decide whether it clears the immutable-public-HTTPS-SVG bar. An
-absent or invalid value never fails config load — it falls back to Keiko's text-only "by Keiko"
-attribution, since branding is decorative, never load-bearing.
+absent or invalid value never fails config load — it falls back to Keiko's text-only
+`Generated with [Keiko](https://github.com/oscharko-dev/Keiko)` attribution, since branding is
+decorative, never load-bearing.
 
 ```typescript
 // ─── Request / response ───────────────────────────────────────────────────────

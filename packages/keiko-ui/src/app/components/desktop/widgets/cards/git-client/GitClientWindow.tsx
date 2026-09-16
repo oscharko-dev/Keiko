@@ -163,6 +163,9 @@ export interface GitClientWindowProps {
   readonly onOpenFiles?: (root: string) => void;
   readonly onOpenEditor?: (root: string) => void;
   readonly onOpenEditorFile?: (request: OpenEditorFileRequest) => void;
+  /** Display-only repository name for a server-bound active task workspace that the normal recent
+   * repository list intentionally omits. It does not grant authority; `lockedToActiveRoot` does. */
+  readonly lockedRepositoryLabel?: string | undefined;
   /** Persists the selected repository into cfg.projectPath so resolveBoundRoot re-targets. */
   readonly updateCfg?: (patch: Record<string, WindowCfgValue>) => void;
   /** DI seam; defaults to the real BFF client. */
@@ -218,6 +221,16 @@ function inferOwnerAndRepo(remotes: readonly GitRemoteSummary[]): string | undef
 }
 
 const INTEGRATION_BRANCH_PREFERENCE = ["dev", "develop", "main", "master"] as const;
+
+function gitChangeConnectorCfg(
+  currentBranch: string | undefined,
+  baseBranch: string | undefined,
+): Record<string, WindowCfgValue> {
+  return {
+    gitChangeHeadRef: currentBranch ?? "",
+    gitChangeBaseRef: baseBranch ?? "",
+  };
+}
 
 function distinctUpstreamBranch(
   currentBranch: string | undefined,
@@ -807,6 +820,56 @@ function repositoryRootForMutation(
   return status.repositoryRoot ?? status.root;
 }
 
+function lastPathSegment(path: string): string {
+  let segment = "";
+  for (const part of path.split(/[\\/]/u)) {
+    if (part.length > 0) segment = part;
+  }
+  return segment.length > 0 ? segment : path;
+}
+
+function displayLabel(value: string | undefined): string | undefined {
+  const label = value?.trim();
+  return label === undefined || label.length === 0 ? undefined : label;
+}
+
+function lockedRepositoryName(path: string, label: string | undefined): string {
+  return displayLabel(label) ?? lastPathSegment(path);
+}
+
+function lockedRepositoryProjection(
+  selectedPath: string | null,
+  lockedToActiveRoot: boolean,
+  lockedRepositoryLabel: string | undefined,
+): ProjectWithAvailability | null {
+  if (!lockedToActiveRoot || selectedPath === null) return null;
+  return {
+    path: selectedPath,
+    name: lockedRepositoryName(selectedPath, lockedRepositoryLabel),
+    favorite: false,
+    createdAt: 0,
+    lastOpenedAt: 0,
+    available: true,
+    workspaceAvailable: true,
+  };
+}
+
+function repositoryToolbarList(
+  repositories: readonly ProjectWithAvailability[],
+  selectedPath: string | null,
+  lockedToActiveRoot: boolean,
+  lockedRepositoryLabel: string | undefined,
+): readonly ProjectWithAvailability[] {
+  const locked = lockedRepositoryProjection(
+    selectedPath,
+    lockedToActiveRoot,
+    lockedRepositoryLabel,
+  );
+  if (locked === null || repositories.some((repo) => repo.path === locked.path))
+    return repositories;
+  return [locked, ...repositories];
+}
+
 export function GitClientWindow({
   projectId,
   lockedToActiveRoot = false,
@@ -817,6 +880,7 @@ export function GitClientWindow({
   onOpenFiles,
   onOpenEditor,
   onOpenEditorFile,
+  lockedRepositoryLabel,
   updateCfg,
   client = DEFAULT_GIT_CLIENT,
   reconcileEditorBuffers = requestEditorBufferReconciliation,
@@ -908,6 +972,7 @@ export function GitClientWindow({
   const branchActions = useGitActions(client, projectKey, mutationRepositoryRoot);
   const staging = useGitActions(client, projectKey, mutationRepositoryRoot);
   const commit = useGitActions(client, projectKey, mutationRepositoryRoot);
+  const runCommitPreview = commit.runPreview;
   const resetBranchActions = branchActions.reset;
   const resetStaging = staging.reset;
   const resetCommit = commit.reset;
@@ -1306,24 +1371,33 @@ export function GitClientWindow({
 
   const onRepositoryAdded = useCallback(
     (project: ProjectWithAvailability): void => {
+      // A locked window is bound to the active task workspace; reconnecting to the newly-added
+      // repository would call `applyRepositorySelection` and rewrite `selectedPath`/`projectPath`,
+      // violating `lockedToActiveRoot`. Refresh the recents list so the new entry appears in the
+      // Repository menu (available for unlocked windows) without changing this window's binding.
+      if (lockedToActiveRoot) {
+        loadRepositories();
+        return;
+      }
       reconnectRepository(project.path);
     },
-    [reconnectRepository],
+    [loadRepositories, lockedToActiveRoot, reconnectRepository],
   );
 
   useEffect(() => {
-    if (reposLoading || reposError !== null) return;
     const configuredPath = projectId !== undefined && projectId !== "" ? projectId : null;
-    const requestedPath = selectedPath ?? configuredPath;
-    if (requestedPath === null) return;
     // A root the desktop locked to the active task workspace is a managed worktree: the server
     // registers it for trust, manifests and verification and keeps it out of the user-facing
     // repository list on purpose, so the recents-membership check below could only ever declare it
     // unavailable and strand the operator (#3390, rehearsal run-21). It is bound as-is.
-    if (lockedToActiveRoot && requestedPath === configuredPath) {
-      if (selectedPath !== requestedPath) setSelectedPath(requestedPath);
+    if (lockedToActiveRoot && configuredPath !== null) {
+      if (selectedPath !== configuredPath) setSelectedPath(configuredPath);
+      setReposError(null);
       return;
     }
+    if (reposLoading || reposError !== null) return;
+    const requestedPath = selectedPath ?? configuredPath;
+    if (requestedPath === null) return;
     const selected = repositories.find((repository) => repository.path === requestedPath);
     if (selected?.available === true && selected.workspaceAvailable === true) {
       if (selectedPath !== requestedPath) setSelectedPath(requestedPath);
@@ -1461,6 +1535,12 @@ export function GitClientWindow({
     [client, commit, selectedPath],
   );
 
+  const generateCommitDraft = useCallback(async (): Promise<string> => {
+    if (selectedPath === null) throw new Error(optionalT("gitClientWindow.error.noRepository"));
+    const result = await client.commitDraft({ projectId: selectedPath });
+    return result.suggestedMessage;
+  }, [client, optionalT, selectedPath]);
+
   const switchBranch = useCallback(
     (branchName: string, trigger: HTMLButtonElement): void => {
       if (selectedPath === null) return;
@@ -1529,6 +1609,12 @@ export function GitClientWindow({
   );
 
   const syncView = deriveSyncView(activeSummary, summaryLoading);
+  const toolbarRepositories = repositoryToolbarList(
+    repositories,
+    selectedPath,
+    lockedToActiveRoot,
+    lockedRepositoryLabel,
+  );
 
   const runSync = useGitSyncAction({
     activeSummary,
@@ -1600,6 +1686,9 @@ export function GitClientWindow({
   const currentBranch = activeStatus?.branch ?? activeSummary?.branch;
   const inferredOwnerAndRepo = inferOwnerAndRepo(activeRemotes);
   const inferredBaseBranch = inferBaseBranch(currentBranch, activeSummary, activeBranches);
+  useEffect(() => {
+    updateCfg?.(gitChangeConnectorCfg(currentBranch, inferredBaseBranch));
+  }, [currentBranch, inferredBaseBranch, updateCfg]);
   const useCommitWorkspace = shouldUseCommitWorkspace(rightPaneMode, tab, selectedChangePath);
   const showBranchOutcome = shouldShowBranchOutcome(
     newBranchOpen,
@@ -1638,6 +1727,10 @@ export function GitClientWindow({
     },
     [resizeSidebar, sidebarWidth],
   );
+  const previewCommitDraft = useCallback(
+    (messageDraft: string): void => runCommitPreview(messageDraft, statusRevision),
+    [runCommitPreview, statusRevision],
+  );
   const commitComposer = (
     <CommitComposer
       key={`${selectedPath ?? ""}:${commitNonce.toString()}`}
@@ -1649,6 +1742,7 @@ export function GitClientWindow({
       error={commit.flow.error}
       preview={commit.preview}
       previewDraft={commit.previewDraft}
+      previewRequestRevision={commit.previewRequestRevision}
       previewError={commit.previewError}
       previewRevision={statusRevision}
       layout={useCommitWorkspace ? "workspace" : "sidebar"}
@@ -1656,7 +1750,8 @@ export function GitClientWindow({
       bodyValue={commitBody}
       onSummaryChange={setCommitSummary}
       onBodyChange={setCommitBody}
-      onPreview={commit.runPreview}
+      onPreview={previewCommitDraft}
+      onGenerateDraft={generateCommitDraft}
       onCommit={commitChanges}
       onCreateBranch={openNewBranchDialog}
       onCreatePullRequest={() => openRightPane("pull-request")}
@@ -1681,8 +1776,9 @@ export function GitClientWindow({
         {rightPaneAnnouncement}
       </p>
       <RepositoryToolbar
-        repositories={repositories}
+        repositories={toolbarRepositories}
         selectedPath={selectedPath}
+        repositorySelectionLocked={lockedToActiveRoot}
         branches={activeBranches}
         branchesLoading={branchesLoading}
         status={activeStatus}

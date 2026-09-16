@@ -75,6 +75,54 @@ describe("canConnect — quality ↔ connector (#710 #718)", () => {
   });
 });
 
+describe("canConnect — Git change ↔ chat", () => {
+  it("allows a Git window to connect its current comparison to Chat in both orders", () => {
+    expect(canConnect("governedGit", "chat")).toBe(true);
+    expect(canConnect("chat", "governedGit")).toBe(true);
+  });
+
+  it("labels the edge as a Git-change context binding", () => {
+    expect(relLabel(snap("governedGit"), snap("chat"))).toBe("uses Git change");
+  });
+
+  // #3506 review — the Git↔Chat pair proof paired only the valid case. canConnect must reject
+  // absent, malformed, hostile, and self-pair inputs on the same edge too; drive the check
+  // through the public `canConnect` (the CONNECTABLE table is deliberately not re-derived here so
+  // the fixture cannot go green over a moved formula).
+  it("rejects Git↔Chat pairs whose inputs are absent, malformed, or self-referential", () => {
+    // Absent inputs.
+    expect(canConnect(undefined, "chat")).toBe(false);
+    expect(canConnect("governedGit", undefined)).toBe(false);
+    expect(canConnect("", "chat")).toBe(false);
+    expect(canConnect("governedGit", "")).toBe(false);
+    // Malformed / unknown window types — neither key is a real WindowType.
+    expect(canConnect("not-a-window", "chat")).toBe(false);
+    expect(canConnect("governedGit", "not-a-window")).toBe(false);
+    // Hostile inputs shaped like real names but not real WindowTypes: leading/trailing whitespace
+    // and casing that could pass a stringly-typed check.
+    expect(canConnect("  governedGit  ", "chat")).toBe(false);
+    expect(canConnect("GovernedGit", "Chat")).toBe(false);
+    // Self-pair: even a real connectable type must never bind to itself.
+    expect(canConnect("governedGit", "governedGit")).toBe(false);
+    expect(canConnect("chat", "chat")).toBe(false);
+  });
+
+  // #3506 review — CONNECTABLE_SETS was originally built with a plain `Object.fromEntries`, so
+  // its prototype-chain keys (`__proto__`, `constructor`, `toString`, `hasOwnProperty`, …) still
+  // resolved to non-Set values through the prototype. The subsequent `.has(...)` call then threw
+  // `TypeError: has is not a function` at runtime. Pin the exact hostile strings so a regression
+  // that drops the null-prototype base (or reintroduces plain-object lookup) fails here first,
+  // and the same-shape `hasConnectablePeer` is guarded by construction (its storage is a Set).
+  it("rejects prototype-chain keys as either side of the pair", () => {
+    for (const key of ["__proto__", "constructor", "toString", "hasOwnProperty"] as const) {
+      expect(canConnect(key, "chat")).toBe(false);
+      expect(canConnect("governedGit", key)).toBe(false);
+      expect(canConnect(key, key)).toBe(false);
+      expect(hasConnectablePeer(key)).toBe(false);
+    }
+  });
+});
+
 describe("relLabel — files ↔ quality (#270)", () => {
   // uiux-fix F008 C074 — the label shows the folder BASENAME (a full absolute path grew the
   // destructive remove badge to hundreds of pixels) and never invents the "src" sentinel.

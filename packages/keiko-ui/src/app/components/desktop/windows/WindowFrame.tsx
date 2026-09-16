@@ -45,7 +45,7 @@ import {
 } from "./WindowsRegistry";
 import { WindowBodyBoundary } from "./WindowBodyBoundary";
 import type { AppWindow, ConnState, View } from "./types";
-import type { WorkspaceApi } from "../hooks/useWorkspace.types";
+import type { WorkspaceApi, WorkspaceLinkedGitChangeComparison } from "../hooks/useWorkspace.types";
 import selectionStyles from "../WorkspaceSelection.module.css";
 import { clampWorkspaceWindowOrigin } from "../windowRecovery";
 
@@ -663,6 +663,9 @@ function attachResizeListeners(
 // yields the SAME array identity — required for the body useMemo below to hold
 // across re-renders (issue #1580).
 const EMPTY_STRINGS: readonly string[] = Object.freeze([]);
+const EMPTY_GIT_CHANGE_COMPARISONS: readonly WorkspaceLinkedGitChangeComparison[] = Object.freeze(
+  [],
+);
 
 interface LinkedContext {
   readonly linkedRoot: string | null;
@@ -674,6 +677,7 @@ interface LinkedContext {
   readonly linkedFigmaSnapshotSources:
     readonly QualityIntelligenceFigmaSnapshotSource[] | undefined;
   readonly linkedImageSources: readonly QualityIntelligenceImageSource[] | undefined;
+  readonly linkedGitChangeComparisons: readonly WorkspaceLinkedGitChangeComparison[] | undefined;
 }
 
 // Shared "no linked context" identity. A window with no connected sources resolves
@@ -689,19 +693,27 @@ const EMPTY_LINKED: LinkedContext = Object.freeze({
   linkedFigmaSnapshotRunIds: EMPTY_STRINGS,
   linkedFigmaSnapshotSources: undefined,
   linkedImageSources: undefined,
+  linkedGitChangeComparisons: undefined,
 });
 
 function isEmptyLinkedContext(c: LinkedContext): boolean {
-  return (
-    c.linkedRoot === null &&
-    c.linkedFilePath === undefined &&
-    c.linkedRoots.length === 0 &&
-    c.linkedCapsuleIds.length === 0 &&
-    c.linkedCapsuleSetIds.length === 0 &&
-    c.linkedFigmaSnapshotRunIds.length === 0 &&
-    (c.linkedFigmaSnapshotSources === undefined || c.linkedFigmaSnapshotSources.length === 0) &&
-    (c.linkedImageSources === undefined || c.linkedImageSources.length === 0)
-  );
+  return c.linkedRoot === null && c.linkedFilePath === undefined && !hasLinkedArrayContext(c);
+}
+
+function hasArrayItems(value: readonly unknown[] | undefined): boolean {
+  return value !== undefined && value.length > 0;
+}
+
+function hasLinkedArrayContext(c: LinkedContext): boolean {
+  return [
+    c.linkedRoots,
+    c.linkedCapsuleIds,
+    c.linkedCapsuleSetIds,
+    c.linkedFigmaSnapshotRunIds,
+    c.linkedFigmaSnapshotSources,
+    c.linkedImageSources,
+    c.linkedGitChangeComparisons,
+  ].some(hasArrayItems);
 }
 
 // Resolve linkedRoots per window type: the multi-root types read the full linked-roots
@@ -717,6 +729,56 @@ function resolveLinkedRoots(
   return EMPTY_STRINGS;
 }
 
+function resolveConnectorContext(
+  api: WorkspaceApi,
+  type: WindowType,
+  id: string,
+): {
+  readonly linkedCapsuleIds: readonly string[];
+  readonly linkedCapsuleSetIds: readonly string[];
+} {
+  if (type !== "quality" && type !== "editor") {
+    return { linkedCapsuleIds: EMPTY_STRINGS, linkedCapsuleSetIds: EMPTY_STRINGS };
+  }
+  return {
+    linkedCapsuleIds: api.linkedConnectorCapsuleIds(id),
+    linkedCapsuleSetIds: api.linkedConnectorCapsuleSetIds(id),
+  };
+}
+
+function resolveQualitySources(
+  api: WorkspaceApi,
+  type: WindowType,
+  id: string,
+): {
+  readonly linkedFigmaSnapshotRunIds: readonly string[];
+  readonly linkedFigmaSnapshotSources:
+    readonly QualityIntelligenceFigmaSnapshotSource[] | undefined;
+  readonly linkedImageSources: readonly QualityIntelligenceImageSource[] | undefined;
+} {
+  if (type !== "quality") {
+    return {
+      linkedFigmaSnapshotRunIds: EMPTY_STRINGS,
+      linkedFigmaSnapshotSources: undefined,
+      linkedImageSources: undefined,
+    };
+  }
+  return {
+    linkedFigmaSnapshotRunIds: api.linkedFigmaSnapshotRunIds(id),
+    linkedFigmaSnapshotSources: api.linkedFigmaSnapshotSources?.(id),
+    linkedImageSources: api.linkedImageSources?.(id),
+  };
+}
+
+function resolveGitChangeComparisons(
+  api: WorkspaceApi,
+  type: WindowType,
+  id: string,
+): readonly WorkspaceLinkedGitChangeComparison[] | undefined {
+  if (type !== "chat") return undefined;
+  return api.linkedGitChangeComparisons?.(id) ?? EMPTY_GIT_CHANGE_COMPARISONS;
+}
+
 // Resolve every cross-window linked* context a window of `type` reads. Pulled out
 // of the render body so it can be wrapped in a single useMemo keyed on the link
 // revision — the resolvers each scan conns+wins, so re-running them on every
@@ -724,32 +786,21 @@ function resolveLinkedRoots(
 function computeLinkedContext(api: WorkspaceApi, type: WindowType, id: string): LinkedContext {
   const readsFilesContext = receivesFilesContext(type);
   const readsFocusedFileContext = receivesFocusedFileContext(type);
-  const receivesConnectorContext = type === "quality" || type === "editor";
   const linkedRoot = readsFilesContext ? api.linkedFilesRoot(id) : null;
   const linkedFilePath = readsFocusedFileContext
     ? api.linkedFilesContext(id)?.activeFilePath
     : undefined;
   const linkedRoots = resolveLinkedRoots(type, linkedRoot, api, id);
-  const linkedCapsuleIds = receivesConnectorContext
-    ? api.linkedConnectorCapsuleIds(id)
-    : EMPTY_STRINGS;
-  const linkedCapsuleSetIds = receivesConnectorContext
-    ? api.linkedConnectorCapsuleSetIds(id)
-    : EMPTY_STRINGS;
-  const linkedFigmaSnapshotRunIds =
-    type === "quality" ? api.linkedFigmaSnapshotRunIds(id) : EMPTY_STRINGS;
-  const linkedFigmaSnapshotSources =
-    type === "quality" ? api.linkedFigmaSnapshotSources?.(id) : undefined;
-  const linkedImageSources = type === "quality" ? api.linkedImageSources?.(id) : undefined;
+  const connectorContext = resolveConnectorContext(api, type, id);
+  const qualitySources = resolveQualitySources(api, type, id);
+  const linkedGitChangeComparisons = resolveGitChangeComparisons(api, type, id);
   const resolved: LinkedContext = {
     linkedRoot,
     linkedFilePath,
     linkedRoots,
-    linkedCapsuleIds,
-    linkedCapsuleSetIds,
-    linkedFigmaSnapshotRunIds,
-    linkedFigmaSnapshotSources,
-    linkedImageSources,
+    ...connectorContext,
+    ...qualitySources,
+    linkedGitChangeComparisons,
   };
   return isEmptyLinkedContext(resolved) ? EMPTY_LINKED : resolved;
 }
@@ -784,7 +835,7 @@ function booleanDataAttribute(value: boolean): "true" | undefined {
 // Raise counter across ALL frames: a pending delayed focus yields to any later interaction.
 let windowInteractionCount = 0;
 
-// EVERY direct window-raising interaction that bypasses focusWindowForTarget (resize grips,
+// EVERY direct window-raising interaction that bypasses activateWindowForTarget (resize grips,
 // the maximize control) must advance the counter AT PRESS TIME. Those handlers suppress or
 // bypass the browser's default focus move, so DOM focus can stay inside a previously armed
 // text-entry target — the token advance is then the only thing stopping that pending delayed
@@ -793,7 +844,7 @@ function noteWindowInteraction(): void {
   windowInteractionCount += 1;
 }
 
-// Direct user-interaction raises outside focusWindowForTarget (resize grips) count the
+// Direct user-interaction raises outside activateWindowForTarget (resize grips) count the
 // interaction and raise in one step, at the press that starts the gesture.
 function raiseWindowForInteraction(api: WorkspaceApi, id: string): void {
   noteWindowInteraction();
@@ -895,7 +946,7 @@ function WindowFrameImpl({
     (type: WindowType, cfg?: AppWindow["cfg"]): string | null => {
       const id = api.add(type, cfg);
       // #3390: a window opened from inside another window receives focus, as on any desktop. The
-      // opener's own deferred raise (see `focusWindowForTarget`) yields to wherever focus has
+      // opener's own deferred raise (see `activateWindowForTarget`) yields to wherever focus has
       // moved, so the new window also stays on top instead of landing behind its opener. Deferred
       // one frame: the element exists only after React has committed the added window.
       if (id !== null) {
@@ -1038,7 +1089,7 @@ function WindowFrameImpl({
     [],
   );
 
-  const focusWindowForTarget = useCallback(
+  const activateWindowForTarget = useCallback(
     (target: EventTarget | null): void => {
       windowInteractionCount += 1;
       if (isTextEntryTarget(target)) {
@@ -1048,7 +1099,7 @@ function WindowFrameImpl({
           // window. Never let this stale callback raise the old window over the user's new target.
           // The counter catches later interactions whose preventDefault() left DOM focus here.
           if (windowInteractionCount !== armedInteraction) return;
-          if (delayedFocusStillTargetsWindow(target)) api.focus(win.id);
+          if (delayedFocusStillTargetsWindow(target)) api.activateWindow(win.id);
         }, 180);
         return;
       }
@@ -1058,11 +1109,11 @@ function WindowFrameImpl({
           // took focus and the top of the stack in the meantime. Raising this window regardless
           // put the Coding Workbench back over the Pull Request window its own "Review exact
           // draft" had just opened, every time -- the same guard the text-entry branch applies.
-          if (delayedFocusStillTargetsWindow(target)) api.focus(win.id);
+          if (delayedFocusStillTargetsWindow(target)) api.activateWindow(win.id);
         }, 0);
         return;
       }
-      api.focus(win.id);
+      api.activateWindow(win.id);
     },
     [api, win.id],
   );
@@ -1089,10 +1140,7 @@ function WindowFrameImpl({
         attachGroupDragListeners(api, geo, e.clientX, e.clientY, () => setDraggingWindow(false));
         return;
       }
-      focusWindowForTarget(e.target);
-      if (!selected) {
-        api.replaceSelection([win.id]);
-      }
+      activateWindowForTarget(e.target);
       const wasMax = win.max;
       const restoredW = wasMax ? (win.prev?.w ?? 480) : win.w;
       const restoredH = wasMax ? (win.prev?.h ?? 360) : win.h;
@@ -1117,7 +1165,7 @@ function WindowFrameImpl({
       connState,
       selected,
       selectedWindowCount,
-      focusWindowForTarget,
+      activateWindowForTarget,
     ],
   );
 
@@ -1236,6 +1284,11 @@ function WindowFrameImpl({
     restoreFocusAfterRemoval();
   }, [api, win.id, restoreFocusAfterRemoval]);
 
+  const maximizeWithActivation = useCallback((): void => {
+    api.activateWindow(win.id);
+    api.maximize(win.id);
+  }, [api, win.id]);
+
   // GEN-UI-KEYBOARD-011 — complete an in-flight connect from the keyboard when the
   // window SECTION itself holds focus (Tabbed to a highlighted valid target) and
   // Enter is pressed. The connection ports still own Enter/Space when focus is on a
@@ -1317,11 +1370,10 @@ function WindowFrameImpl({
     }),
     [ew, eh, zoom],
   );
-  // Issue #2150 — the selected-state ring is rendered by Workspace.tsx as a
-  // z-indexed overlay above every window (see WorkspaceSelection.module.css
-  // .selectionRing), not as styling here, so it stays visible regardless of
-  // window overlap. `data-selected` below remains the source of truth for a11y
-  // and for that overlay to find this window's geometry.
+  // The selected-state ring is rendered by Workspace.tsx as a z-indexed overlay
+  // on this window's stacking layer (see WorkspaceSelection.module.css
+  // .selectionRing), not as extra chrome here. `data-selected` below remains
+  // the source of truth for a11y and for that overlay to find this geometry.
   const windowClassName = `window ${selectionStyles.workspaceWindow}`;
 
   return (
@@ -1348,7 +1400,9 @@ function WindowFrameImpl({
       tabIndex={0}
       onPointerDown={(e) => {
         if (connState === "valid") api.confirmConnect(win.id, e);
-        focusWindowForTarget(e.target);
+        if (connState === "valid") api.focus(win.id);
+        else if (isPrimaryActivationPointer(e)) activateWindowForTarget(e.target);
+        else api.focus(win.id);
       }}
       // GEN-UI-KEYBOARD-011 — Enter on a focused, highlighted valid target window
       // completes the connect (the section's keyboard counterpart to the pointer
@@ -1472,18 +1526,17 @@ function WindowFrameImpl({
                 }
                 onPointerDown={(e) => {
                   e.stopPropagation();
-                  // Maximize IS a raise (makeMaximize bumps z), and this stopPropagation()
-                  // keeps focusWindowForTarget from counting the interaction — so invalidate
-                  // at PRESS time. Click time is too late: a press-and-hold across the 180ms
-                  // delay would let a pending delayed text-entry raise fire mid-hold, covering
-                  // this window and even retargeting the release. The raise itself stays on
-                  // click (traffic-button presses never reorder windows before the action).
+                  // This traffic-button press bypasses activateWindowForTarget via
+                  // stopPropagation(), so invalidate stale delayed raises at PRESS time. Click
+                  // time is too late: a press-and-hold across the 180ms delay would let a pending
+                  // text-entry raise fire mid-hold, covering this window and even retargeting the
+                  // release. The click still owns the intentional activation + maximize/restore.
                   if (isPrimaryActivationPointer(e)) noteWindowInteraction();
                 }}
                 onDoubleClick={(e) => {
                   e.stopPropagation();
                 }}
-                onClick={() => api.maximize(win.id)}
+                onClick={maximizeWithActivation}
               >
                 {win.max ? <RestoreIcon size={17} /> : <MaximizeIcon size={17} />}
               </button>

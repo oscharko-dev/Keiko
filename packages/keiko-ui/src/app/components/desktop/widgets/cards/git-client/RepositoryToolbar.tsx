@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import type { GitBranchListEntry } from "@/lib/api";
 import { useTranslate } from "@/lib/i18n";
 import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
@@ -31,6 +31,7 @@ const ChatIcon = Icons.newChat;
 export interface RepositoryToolbarProps {
   readonly repositories: readonly ProjectWithAvailability[];
   readonly selectedPath: string | null;
+  readonly repositorySelectionLocked?: boolean | undefined;
   readonly branches: readonly GitBranchListEntry[];
   readonly branchesLoading: boolean;
   readonly status: GitRepositoryStatusResponse | null;
@@ -81,13 +82,18 @@ function useAddRepositoryEntry(
 function repositorySections(
   repositories: readonly ProjectWithAvailability[],
   addRepositoryLabel: string | undefined,
+  selectedPath: string | null,
+  repositorySelectionLocked: boolean,
 ): RepositorySection[] {
   const sections: RepositorySection[] = [
     {
       options: repositories.map((repo) => ({
         value: repo.path,
         label: repo.name,
-        description: repo.path,
+        description:
+          repositorySelectionLocked && repo.path === selectedPath
+            ? "Bound active workspace"
+            : repo.path,
       })),
     },
   ];
@@ -245,6 +251,7 @@ function EmptyRepositoryToolbar({
 interface ConnectedToolbarCellsProps {
   readonly repositories: readonly ProjectWithAvailability[];
   readonly selectedPath: string | null;
+  readonly repositorySelectionLocked: boolean;
   readonly branches: readonly GitBranchListEntry[];
   readonly branchesLoading: boolean;
   readonly status: GitRepositoryStatusResponse | null;
@@ -266,17 +273,34 @@ interface ConnectedToolbarCellsProps {
 // RepositoryToolbar itself stays under the max-lines-per-function bar.
 // The Repository picker cell. Extracted so ConnectedToolbarCells stays under the
 // max-lines-per-function bar.
+const REPOSITORY_TRIGGER_STYLE: CSSProperties = {
+  minWidth: 0,
+  border: "none",
+  background: "transparent",
+  padding: 0,
+  height: "auto",
+  font: "600 14px var(--font-ui)",
+  color: "var(--fg)",
+};
+
 function RepositoryCell({
   repositories,
   selectedPath,
+  repositorySelectionLocked,
   addRepository,
   onSelectRepository,
 }: {
   readonly repositories: readonly ProjectWithAvailability[];
   readonly selectedPath: string | null;
+  readonly repositorySelectionLocked: boolean;
   readonly addRepository: AddRepositoryEntry | undefined;
   readonly onSelectRepository: (path: string) => void;
 }): ReactNode {
+  // The Repository menu is disabled in the locked state, so the "Add repository" option it
+  // carries is unclickable there. Only put the option in the menu when the picker is enabled;
+  // when locked, `LockedAddRepositoryButton` below exposes the action as a separate control that
+  // stays clickable without changing the bound project.
+  const menuAddRepositoryLabel = repositorySelectionLocked ? undefined : addRepository?.label;
   return (
     <ToolbarCell label="Repository" minWidth={248}>
       <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
@@ -288,137 +312,224 @@ function RepositoryCell({
           ariaLabel="Repository"
           menuTitle="Repository"
           placeholder="Select a repository"
-          triggerStyle={{
-            minWidth: 0,
-            border: "none",
-            background: "transparent",
-            padding: 0,
-            height: "auto",
-            font: "600 14px var(--font-ui)",
-            color: "var(--fg)",
-          }}
-          sections={repositorySections(repositories, addRepository?.label)}
+          disabled={repositorySelectionLocked}
+          triggerStyle={REPOSITORY_TRIGGER_STYLE}
+          sections={repositorySections(
+            repositories,
+            menuAddRepositoryLabel,
+            selectedPath,
+            repositorySelectionLocked,
+          )}
           onValueChange={(value) => {
             if (value === ADD_REPOSITORY_OPTION) addRepository?.onSelect();
-            else onSelectRepository(value);
+            else if (value !== selectedPath) onSelectRepository(value);
           }}
         />
+        {repositorySelectionLocked && addRepository !== undefined ? (
+          <LockedAddRepositoryButton addRepository={addRepository} />
+        ) : null}
       </span>
     </ToolbarCell>
   );
 }
 
-function ConnectedToolbarCells({
-  repositories,
-  selectedPath,
+// A separate, always-clickable Add repository control for the locked-workspace state. It stays
+// inside RepositoryCell so operators see the affordance next to the disabled picker, and its
+// caller is expected to register the repository without reconnecting the current window —
+// switching `selectedPath`/`projectPath` here would violate `lockedToActiveRoot`.
+function LockedAddRepositoryButton({
+  addRepository,
+}: {
+  readonly addRepository: AddRepositoryEntry;
+}): ReactNode {
+  return (
+    <button
+      type="button"
+      aria-label={addRepository.label}
+      title={addRepository.label}
+      style={TOOLBAR_ICON_BTN}
+      onClick={addRepository.onSelect}
+    >
+      <span aria-hidden="true" style={{ color: "var(--fg-dim)", fontWeight: 600 }}>
+        +
+      </span>
+    </button>
+  );
+}
+
+function BranchCell({
   branches,
   branchesLoading,
   status,
   branchBusy,
   branchValue,
+  onSwitchBranch,
+  onCreateBranch,
+}: {
+  readonly branches: readonly GitBranchListEntry[];
+  readonly branchesLoading: boolean;
+  readonly status: GitRepositoryStatusResponse | null;
+  readonly branchBusy: boolean;
+  readonly branchValue: string;
+  readonly onSwitchBranch: (branchName: string, trigger: HTMLButtonElement) => void;
+  readonly onCreateBranch: (trigger: HTMLButtonElement) => void;
+}): ReactNode {
+  return (
+    <ToolbarCell label="Current branch" minWidth={190}>
+      <BranchSelector
+        branches={branches}
+        currentBranch={branchValue}
+        loading={branchesLoading}
+        disabled={status?.available === false}
+        busy={branchBusy}
+        onSwitchBranch={onSwitchBranch}
+        onCreateBranch={onCreateBranch}
+      />
+    </ToolbarCell>
+  );
+}
+
+function SyncCell({
+  label,
   syncView,
   syncBusy,
   syncOutcome,
   syncError,
-  onSelectRepository,
-  addRepository,
-  onSwitchBranch,
-  onCreateBranch,
   onRunSync,
-  t,
-}: ConnectedToolbarCellsProps): ReactNode {
+}: {
+  readonly label: string;
+  readonly syncView: GitSyncView;
+  readonly syncBusy: boolean;
+  readonly syncOutcome: SyncOutcomeView | null;
+  readonly syncError: string | null;
+  readonly onRunSync: () => void;
+}): ReactNode {
+  return (
+    <ToolbarCell label={label} minWidth={196} last>
+      <SyncControl
+        view={syncView}
+        busy={syncBusy}
+        outcome={syncOutcome}
+        error={syncError}
+        onRun={onRunSync}
+      />
+    </ToolbarCell>
+  );
+}
+
+function ConnectedToolbarCells(props: ConnectedToolbarCellsProps): ReactNode {
   return (
     <>
       <RepositoryCell
-        repositories={repositories}
-        selectedPath={selectedPath}
-        addRepository={addRepository}
-        onSelectRepository={onSelectRepository}
+        repositories={props.repositories}
+        selectedPath={props.selectedPath}
+        repositorySelectionLocked={props.repositorySelectionLocked}
+        addRepository={props.addRepository}
+        onSelectRepository={props.onSelectRepository}
       />
-
-      <ToolbarCell label="Current branch" minWidth={190}>
-        <BranchSelector
-          branches={branches}
-          currentBranch={branchValue}
-          loading={branchesLoading}
-          disabled={status?.available === false}
-          busy={branchBusy}
-          onSwitchBranch={onSwitchBranch}
-          onCreateBranch={onCreateBranch}
-        />
-      </ToolbarCell>
-
-      <ToolbarCell label={t("gitClientWindow.toolbar.sync")} minWidth={196} last>
-        <SyncControl
-          view={syncView}
-          busy={syncBusy}
-          outcome={syncOutcome}
-          error={syncError}
-          onRun={onRunSync}
-        />
-      </ToolbarCell>
+      <BranchCell
+        branches={props.branches}
+        branchesLoading={props.branchesLoading}
+        status={props.status}
+        branchBusy={props.branchBusy}
+        branchValue={props.branchValue}
+        onSwitchBranch={props.onSwitchBranch}
+        onCreateBranch={props.onCreateBranch}
+      />
+      <SyncCell
+        label={props.t("gitClientWindow.toolbar.sync")}
+        syncView={props.syncView}
+        syncBusy={props.syncBusy}
+        syncOutcome={props.syncOutcome}
+        syncError={props.syncError}
+        onRunSync={props.onRunSync}
+      />
     </>
   );
 }
 
-export function RepositoryToolbar({
-  repositories,
-  selectedPath,
-  branches,
-  branchesLoading,
-  status,
-  branchBusy,
-  syncView,
-  syncBusy,
-  syncOutcome,
-  syncError,
-  onSelectRepository,
-  onSwitchBranch,
-  onCreateBranch,
-  onRunSync,
-  onOpenEditor,
-  onOpenFiles,
-  onConnectToChat,
-  onAddRepository,
-}: RepositoryToolbarProps): ReactNode {
-  const t = useTranslate();
-  const addRepository = useAddRepositoryEntry(onAddRepository);
-  const hasRepository = selectedPath !== null;
-  const branchValue = currentBranchName(branches, status);
+interface ConnectedToolbarDerivedProps {
+  readonly repositorySelectionLocked: boolean;
+  readonly addRepository: AddRepositoryEntry | undefined;
+  readonly branchValue: string;
+  readonly t: ReturnType<typeof useTranslate>;
+}
 
-  if (!hasRepository) return <EmptyRepositoryToolbar onOpenEditor={onOpenEditor} />;
+interface ConnectedRepositoryToolbarProps {
+  readonly cells: ConnectedToolbarCellsProps;
+  readonly actions: ToolbarActionsProps;
+}
 
+function connectedToolbarCellsProps(
+  props: RepositoryToolbarProps,
+  derived: ConnectedToolbarDerivedProps,
+): ConnectedToolbarCellsProps {
+  return {
+    repositories: props.repositories,
+    selectedPath: props.selectedPath,
+    repositorySelectionLocked: derived.repositorySelectionLocked,
+    branches: props.branches,
+    branchesLoading: props.branchesLoading,
+    status: props.status,
+    branchBusy: props.branchBusy,
+    branchValue: derived.branchValue,
+    syncView: props.syncView,
+    syncBusy: props.syncBusy,
+    syncOutcome: props.syncOutcome,
+    syncError: props.syncError,
+    onSelectRepository: props.onSelectRepository,
+    addRepository: derived.addRepository,
+    onSwitchBranch: props.onSwitchBranch,
+    onCreateBranch: props.onCreateBranch,
+    onRunSync: props.onRunSync,
+    t: derived.t,
+  };
+}
+
+function toolbarActionsProps(
+  props: RepositoryToolbarProps,
+  connectToChatLabel: string,
+): ToolbarActionsProps {
+  return {
+    selectedPath: props.selectedPath,
+    onOpenEditor: props.onOpenEditor,
+    onOpenFiles: props.onOpenFiles,
+    onConnectToChat: props.onConnectToChat,
+    connectToChatLabel,
+  };
+}
+
+function ConnectedRepositoryToolbar({
+  cells,
+  actions,
+}: ConnectedRepositoryToolbarProps): ReactNode {
   return (
     <header style={TOOLBAR_STYLE} aria-label="Repository toolbar">
-      <ConnectedToolbarCells
-        repositories={repositories}
-        selectedPath={selectedPath}
-        branches={branches}
-        branchesLoading={branchesLoading}
-        status={status}
-        branchBusy={branchBusy}
-        branchValue={branchValue}
-        syncView={syncView}
-        syncBusy={syncBusy}
-        syncOutcome={syncOutcome}
-        syncError={syncError}
-        onSelectRepository={onSelectRepository}
-        addRepository={addRepository}
-        onSwitchBranch={onSwitchBranch}
-        onCreateBranch={onCreateBranch}
-        onRunSync={onRunSync}
-        t={t}
-      />
-
+      <ConnectedToolbarCells {...cells} />
       <span style={{ flex: 1 }} />
-
-      <ToolbarActions
-        selectedPath={selectedPath}
-        onOpenEditor={onOpenEditor}
-        onOpenFiles={onOpenFiles}
-        onConnectToChat={onConnectToChat}
-        connectToChatLabel={t("gitChangeScope.connect.openButton")}
-      />
+      <ToolbarActions {...actions} />
     </header>
+  );
+}
+
+export function RepositoryToolbar(props: RepositoryToolbarProps): ReactNode {
+  const t = useTranslate();
+  const addRepository = useAddRepositoryEntry(props.onAddRepository);
+
+  if (props.selectedPath === null)
+    return <EmptyRepositoryToolbar onOpenEditor={props.onOpenEditor} />;
+
+  const derived = {
+    repositorySelectionLocked: props.repositorySelectionLocked ?? false,
+    addRepository,
+    branchValue: currentBranchName(props.branches, props.status),
+    t,
+  };
+
+  return (
+    <ConnectedRepositoryToolbar
+      cells={connectedToolbarCellsProps(props, derived)}
+      actions={toolbarActionsProps(props, t("gitChangeScope.connect.openButton"))}
+    />
   );
 }

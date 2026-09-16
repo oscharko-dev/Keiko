@@ -5,9 +5,10 @@
 // The active task workspace is a global singleton the operator can move at any moment, and a Code
 // task run's authority is not: the server binds a run to the workspace that was active when the
 // Start request arrived, and keeps that authority for the run's whole life. Everything the window
-// says ABOUT a run — the composer's repository/branch chips, the session context bar, the Git
-// target, and the root the headless editor bridge registers its session for — therefore has to be
-// answered from the run's own workspace, captured when Start was SUBMITTED. The live pointer is
+// says ABOUT a run — the composer's repository/branch chips, the session context bar, and the root
+// the headless editor bridge registers its session for — therefore has to be answered from the
+// run's own workspace, captured when Start was SUBMITTED. The normal Git target uses the run's
+// repository root from the same frozen binding, not the internal task worktree. The live pointer is
 // consulted for exactly one thing: telling the operator that it no longer names the run's
 // workspace, so the inert Changes panel and editor bridge have a stated cause.
 
@@ -32,7 +33,7 @@ export interface CodingWorkbenchRepositoryTrustBinding {
 
 /** The task-workspace identity one run is attributed to, frozen at that run's submission. */
 export interface CodingWorkbenchRunWorkspace {
-  /** The active root the run was submitted against: the Git target and the editor-bridge root. */
+  /** The active task-worktree root the run was submitted against: the editor-bridge root. */
   readonly root: string | null;
   /** The task branch of the instance the run was submitted against. */
   readonly taskBranch: string | null;

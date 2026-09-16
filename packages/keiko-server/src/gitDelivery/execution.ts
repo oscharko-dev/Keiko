@@ -32,6 +32,7 @@ import {
 } from "@oscharko-dev/keiko-tools";
 import {
   createNodeGitMutationAdapter,
+  readGitStagedDiff,
   readGitWorktreeSnapshot,
   readStagedConflictMarkerFileCount,
   readStagedPaths,
@@ -92,6 +93,7 @@ export interface GitDeliveryExecutionSeams {
     ((workspace: WorkspaceInfo) => Promise<GitWorktreeSnapshot>) | undefined;
   readonly stagedPathsReader?:
     ((workspace: WorkspaceInfo) => Promise<readonly string[]>) | undefined;
+  readonly stagedDiffReader?: ((workspace: WorkspaceInfo) => Promise<string>) | undefined;
   // Injectable seam for the staged-conflict-marker guard (see readStagedConflictMarkerFileCountFor).
   readonly conflictMarkerReader?: ((workspace: WorkspaceInfo) => Promise<number>) | undefined;
   readonly branchProtectionReader?: GitDeliveryBranchProtectionReader | undefined;
@@ -511,6 +513,21 @@ export function readStagedPathsFor(
 ): Promise<readonly string[]> {
   if (seams.stagedPathsReader !== undefined) return seams.stagedPathsReader(workspace);
   return readStagedPaths({
+    workspace,
+    processEnv: process.env,
+    now,
+    onTerminated: gitDeliveryTerminationHandler(seams, correlationId),
+  });
+}
+
+export function readStagedDiffFor(
+  workspace: WorkspaceInfo,
+  seams: GitDeliveryExecutionSeams,
+  now: () => number,
+  correlationId?: string,
+): Promise<string> {
+  if (seams.stagedDiffReader !== undefined) return seams.stagedDiffReader(workspace);
+  return readGitStagedDiff({
     workspace,
     processEnv: process.env,
     now,

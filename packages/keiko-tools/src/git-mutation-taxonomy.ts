@@ -100,7 +100,8 @@ export const GIT_MUTATION_STATUSES: readonly GitMutationStatus[] = [
 // string heuristic.
 //
 //   provider-rejected / network-failure → provider-failure   (the remote refused or was unreachable)
-//   conflict / precondition-failed      → recovery-required   (a guided fix path exists; re-resolve)
+//   conflict / precondition-failed /
+//   signature-failed                    → recovery-required   (a guided fix path exists; re-resolve)
 //   timeout / internal-error            → execution-failure   (transient or internal; safe to retry)
 
 const EXECUTION_ERROR_CATEGORY: Readonly<
@@ -110,6 +111,7 @@ const EXECUTION_ERROR_CATEGORY: Readonly<
   "network-failure": "provider-failure",
   conflict: "recovery-required",
   "precondition-failed": "recovery-required",
+  "signature-failed": "recovery-required",
   timeout: "execution-failure",
   "internal-error": "execution-failure",
 } as const;

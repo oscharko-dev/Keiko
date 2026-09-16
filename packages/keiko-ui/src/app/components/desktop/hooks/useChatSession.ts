@@ -773,7 +773,8 @@ function hasGroundingScope(chat: Chat): boolean {
     chat.connectedScope !== undefined ||
     (chat.connectedScopes !== undefined && chat.connectedScopes.length > 0) ||
     chat.localKnowledgeScope !== undefined ||
-    (chat.localKnowledgeScopes !== undefined && chat.localKnowledgeScopes.length > 0)
+    (chat.localKnowledgeScopes !== undefined && chat.localKnowledgeScopes.length > 0) ||
+    (chat.gitChangeScopes !== undefined && chat.gitChangeScopes.length > 0)
   );
 }
 

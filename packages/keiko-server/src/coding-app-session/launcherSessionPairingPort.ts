@@ -17,6 +17,7 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
+  LOCAL_APP_SESSION_PRINCIPAL_LABEL,
   SESSION_PAIRING_DENIED,
   isWellFormedSessionPairingAttestation,
   type SessionPairingAttestation,
@@ -30,7 +31,6 @@ export const SESSION_PAIRING_LAUNCHER_SECRET_ENV = CODING_APP_SESSION_LAUNCHER_S
 const MIN_LAUNCHER_SECRET_CHARS = CODING_APP_SESSION_LAUNCHER_SECRET_MIN_CHARS;
 const DEFAULT_CLAIM_FRESHNESS_MS = 30_000;
 const MAX_TRACKED_REQUEST_IDS = 4_096;
-const APPROVED_PRINCIPAL_LABEL = "local-app-session";
 
 export interface LauncherSessionPairingPortDeps {
   /** The launcher-provisioned process-scoped secret. */
@@ -126,7 +126,7 @@ export function createLauncherSessionPairingPort(
       if (consumedRequestIds.size >= MAX_TRACKED_REQUEST_IDS) return SESSION_PAIRING_DENIED;
       if (!claimMatches(secret, attestation)) return SESSION_PAIRING_DENIED;
       consumedRequestIds.set(attestation.requestId, attestation.issuedAtMs + freshnessMs);
-      return { outcome: "approved", principalLabel: APPROVED_PRINCIPAL_LABEL };
+      return { outcome: "approved", principalLabel: LOCAL_APP_SESSION_PRINCIPAL_LABEL };
     },
   };
 }

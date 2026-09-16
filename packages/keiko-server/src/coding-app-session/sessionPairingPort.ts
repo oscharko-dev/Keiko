@@ -31,6 +31,9 @@ export type SessionPairingDecision =
   | { readonly outcome: "approved"; readonly principalLabel: string }
   | { readonly outcome: "denied" };
 
+/** The bounded principal a launcher-authorized local Keiko app-session represents. */
+export const LOCAL_APP_SESSION_PRINCIPAL_LABEL = "local-app-session";
+
 /** The pairing authority seam. Synchronous, in-memory, and fail-closed by default. */
 export interface SessionPairingPort {
   readonly attest: (attestation: SessionPairingAttestation) => SessionPairingDecision;

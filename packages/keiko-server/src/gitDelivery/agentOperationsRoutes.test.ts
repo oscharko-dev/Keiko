@@ -191,6 +191,29 @@ describe("POST /api/git/agent/operations", () => {
     });
   });
 
+  it("rejects the local-user marker through the agent facade", async () => {
+    const result = await handleGitAgentOperation(
+      ctx(
+        request({
+          operation: "branch-switch",
+          mode: "execute",
+          idempotencyKey: "agent-branch-switch-1",
+          payload: { branchName: "main", userInitiated: true },
+        }),
+      ),
+      deps(),
+    );
+
+    expect(result).toMatchObject({
+      status: 400,
+      body: {
+        status: "delegated",
+        operation: "branch-switch",
+        response: { error: { code: "GIT_AGENT_OPERATION_BAD_REQUEST" } },
+      },
+    });
+  });
+
   it("delegates read operations to the existing Git read route", async () => {
     const runner = vi
       .fn<GitProcessRunner>()

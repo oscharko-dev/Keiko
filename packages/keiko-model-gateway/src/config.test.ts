@@ -1463,8 +1463,8 @@ describe("parseGatewayConfig", () => {
 
 // Issue #3398 (child correction 8): the config-level key never fails config load — only
 // `resolvePrDescriptionBrandingFromConfig`'s reuse of `validatedPrDescriptionLogoUrl` decides
-// whether the operator's declared logo actually renders. Every branch here proves the fallback
-// to text-only "by Keiko" attribution is real, not merely the absence of a throw.
+// whether the operator's declared logo actually renders. Every branch here proves the trusted
+// text-only attribution fallback is real, not merely the absence of a throw.
 describe("resolvePrDescriptionBrandingFromConfig (#3398)", () => {
   const immutable = `https://cdn.example.org/${"a".repeat(40)}/keiko-logo.svg`;
 

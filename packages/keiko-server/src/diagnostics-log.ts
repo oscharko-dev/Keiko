@@ -446,6 +446,7 @@ const SERVER_DIAGNOSTIC_SUMMARIES = [
   // swallowing that would leave the same class of leak with no diagnostic and no retry hook.
   "coding-runtime-backend-disposal-failed",
   "coding-runtime-operator-decision-event-rejected",
+  "coding-runtime-project-memory-context-failed",
   // #3416: the governed repository rerank threw -- an embedding-provider timeout, a corrupted index,
   // a bug in the ranking path. The one fallback reason that is a real failure rather than a clean
   // absence of capability, so it carries an error class, frames and a cause chain; the search itself
@@ -712,6 +713,7 @@ function describedErrorFields(
 // emit so callers can enrich the record (e.g. add a gatewayRequestId) before emitting.
 export function serverDiagnosticFromError(input: {
   readonly correlationId: string;
+  readonly parentCorrelationId?: string | undefined;
   readonly operation: string;
   readonly source: string;
   readonly error: unknown;
@@ -728,6 +730,9 @@ export function serverDiagnosticFromError(input: {
     DEFAULT_SERVER_DIAGNOSTIC_SUMMARY;
   return {
     correlationId: input.correlationId,
+    ...(input.parentCorrelationId === undefined
+      ? {}
+      : { parentCorrelationId: input.parentCorrelationId }),
     timestamp: new Date(millis).toISOString(),
     operation: diagnosticLabel(input.operation, OPERATION_LABEL_SHAPE, "server.operation"),
     source: diagnosticLabel(input.source, SOURCE_LABEL_SHAPE, "server.diagnostic"),

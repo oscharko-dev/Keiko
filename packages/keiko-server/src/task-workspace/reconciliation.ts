@@ -72,6 +72,9 @@ interface ReconcileCtx {
   // in each helper's signature: the ctx is already threaded everywhere the adapter is built, so this
   // needed no new parameter on any private function (PR #3355 review, P2).
   readonly correlationId: string;
+  // Present only when a detached operation was spawned by another operation, such as startup
+  // reconciliation spawned by server bootstrap. It never leaks onto request-driven reconciliations.
+  readonly parentCorrelationId?: string | undefined;
 }
 
 // The result of reconciling a single instance: the freshly persisted record plus the pure outcome.
@@ -295,10 +298,9 @@ interface ReconcileEvidenceInput {
   readonly outcome: WorkspaceReconciliationOutcome;
   readonly flaggedRecovery: boolean;
   readonly nowMs: number;
-  // The triggering request's own correlation id: the explicit-refresh route's ctx.correlationId, or
-  // undefined for the startup reconciliation pass, which has no HTTP request behind it at all — that
-  // is the one genuinely correlation-free call site in this module, so it alone falls back to
-  // UNKNOWN_CORRELATION_ID rather than the workspace's own persisted identity (AGENTS.md §8).
+  // The triggering operation's own correlation id: either the explicit-refresh request or the
+  // detached startup reconciliation job. Lower-level reusable callers may still omit it and receive
+  // the sanctioned UNKNOWN_CORRELATION_ID fallback rather than a persisted workspace identity.
   readonly correlationId: string | undefined;
   readonly measurement: ReconcileMeasurement;
 }
@@ -336,6 +338,7 @@ function emitReconcileEvidence(ctx: ReconcileCtx, input: ReconcileEvidenceInput)
       event,
     },
     redactString: ctx.deps.redactString,
+    parentCorrelationId: ctx.parentCorrelationId,
     errorCode: outcome.status === "healthy" ? undefined : outcome.status,
   });
 }
@@ -734,6 +737,7 @@ function adapterForRepository(
         operation: "reconcile",
         workspaceIdentitySeed: group[0]?.workspaceId ?? deriveRepositoryId(root),
         correlationId,
+        parentCorrelationId: ctx.parentCorrelationId,
       },
       repositoryUnreachable(error),
     );
@@ -758,7 +762,12 @@ async function reconcileOneOrCarryForward(
 ): Promise<WorkspaceInstance | undefined> {
   return runWithWorkspaceLifecycleFailureLogging(
     ctx.deps,
-    { operation: "reconcile", workspaceIdentitySeed: instance.workspaceId, correlationId },
+    {
+      operation: "reconcile",
+      workspaceIdentitySeed: instance.workspaceId,
+      correlationId,
+      parentCorrelationId: ctx.parentCorrelationId,
+    },
     () =>
       ctx.deps.mutex.runExclusive(
         [workspaceKey(instance.workspaceId)],
@@ -818,7 +827,12 @@ async function gatherFactsOrLogFailure(
     if (isRepositoryWideFailure(error)) reachability.markUnreachable();
     logWorkspaceLifecycleFailure(
       ctx.deps,
-      { operation: "reconcile", workspaceIdentitySeed: instance.workspaceId, correlationId },
+      {
+        operation: "reconcile",
+        workspaceIdentitySeed: instance.workspaceId,
+        correlationId,
+        parentCorrelationId: ctx.parentCorrelationId,
+      },
       classified,
     );
     return undefined;
@@ -829,12 +843,16 @@ export function createWorkspaceReconciliationService(
   deps: WorkspaceReconciliationServiceDeps,
 ): WorkspaceReconciliationService {
   const lockTtlMs = resolveLockTtl(deps.lockTtlMs);
-  // Built PER OPERATION, not once per service: the correlation id belongs to the request, and a
+  // Built PER OPERATION, not once per service: the ids belong to the request or detached job, and a
   // service-lifetime ctx is exactly what forced the previous UNKNOWN_CORRELATION_ID here.
-  const ctxFor = (correlationId: string | undefined): ReconcileCtx => ({
+  const ctxFor = (
+    correlationId: string | undefined,
+    parentCorrelationId?: string,
+  ): ReconcileCtx => ({
     deps,
     lockTtlMs,
     correlationId: correlationIdOrUnknown(correlationId),
+    ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
   });
   return {
     // Pure read over persisted rows — no child process, so no termination evidence to join.
@@ -843,7 +861,8 @@ export function createWorkspaceReconciliationService(
     reconcile: (
       repositoryRoot?: string,
       correlationId?: string,
+      parentCorrelationId?: string,
     ): Promise<WorkspaceReconciliationReport> =>
-      reconcileImpl(ctxFor(correlationId), repositoryRoot, correlationId),
+      reconcileImpl(ctxFor(correlationId, parentCorrelationId), repositoryRoot, correlationId),
   };
 }

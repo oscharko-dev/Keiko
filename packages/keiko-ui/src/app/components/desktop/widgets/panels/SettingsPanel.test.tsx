@@ -21,6 +21,7 @@ import {
 const fetchConfigMock = vi.fn();
 const fetchModelsMock = vi.fn();
 const runGatewayReadinessMock = vi.fn();
+const resetModelRequestCacheMock = vi.fn();
 const applyGatewayVerifiedCapabilitiesMock = vi.fn();
 const fetchManagedLspSettingsMock = vi.fn();
 const mutateManagedLspSettingsMock = vi.fn();
@@ -28,6 +29,7 @@ const mutateManagedLspSettingsMock = vi.fn();
 vi.mock("@/lib/api", () => ({
   fetchConfig: (): Promise<unknown> => fetchConfigMock(),
   fetchModels: (): Promise<unknown> => fetchModelsMock(),
+  resetModelRequestCache: (): void => resetModelRequestCacheMock(),
   runGatewayReadiness: (...args: readonly unknown[]): Promise<unknown> =>
     runGatewayReadinessMock(...args),
   applyGatewayVerifiedCapabilities: (...args: readonly unknown[]): Promise<unknown> =>
@@ -336,7 +338,7 @@ describe("SettingsPanel chat-count uses the eligibility helper (Issue #144 AC #1
     await waitFor(() => {
       expect(container.textContent ?? "").toContain("2 chat");
     });
-    expect(container.textContent ?? "").toContain("5 models");
+    expect(container.textContent ?? "").toContain("5 configured models");
   });
 });
 
@@ -493,7 +495,7 @@ describe("SettingsPanel gateway summary semantics", () => {
     primeFetches([embeddingCapability("test-embed-1")]);
     render(<SettingsPanel />);
     await waitFor(() => {
-      expect(screen.getByText("Not verified")).toBeInTheDocument();
+      expect(screen.getByText("Gateway configured")).toBeInTheDocument();
     });
     expect(screen.queryByText("Gateway connected")).toBeNull();
     expect(
@@ -510,15 +512,17 @@ describe("SettingsPanel gateway summary semantics", () => {
     const { container } = render(<SettingsPanel />);
 
     await waitFor(() => {
-      expect(screen.getByText("Not verified")).toBeInTheDocument();
+      expect(screen.getByText("Gateway configured")).toBeInTheDocument();
     });
     expect(screen.queryByText("Gateway connected")).toBeNull();
     expect(
-      screen.getByText(/no readiness check has confirmed that this gateway answers/i),
+      screen.getByText(/verifies the capabilities required by the Coding Workbench automatically/i),
     ).toBeInTheDocument();
     // Scoped to the gateway summary row's own dot: the per-model dot answers a different question
     // (is this model conversation-eligible by capability), and is not a health claim.
-    const summaryDot = container.querySelector('.ml-status[title="configured, not verified"]');
+    const summaryDot = container.querySelector(
+      '.ml-status[title="gateway configured; automatic verification pending"]',
+    );
     expect(summaryDot).not.toBeNull();
     expect(summaryDot?.className).toContain("untested");
     expect(container.querySelector('.ml-status[title="gateway configured"]')).toBeNull();
@@ -607,11 +611,11 @@ describe("SettingsPanel readiness evidence is scoped to the configuration it mea
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Not verified")).toBeInTheDocument();
+      expect(screen.getByText("Gateway configured")).toBeInTheDocument();
     });
     expect(screen.queryByText("Gateway connected")).toBeNull();
     expect(
-      screen.getByText(/no readiness check has confirmed that this gateway answers/i),
+      screen.getByText(/verifies the capabilities required by the Coding Workbench automatically/i),
     ).toBeInTheDocument();
     // Finding 2: the per-model readiness block must not outlive the configuration either — its
     // verified-capability badges and its copyable report describe the replaced gateway.
@@ -632,7 +636,7 @@ describe("SettingsPanel readiness evidence is scoped to the configuration it mea
       notifyGatewayConfigUpdated();
     });
     await waitFor(() => {
-      expect(screen.getByText("Not verified")).toBeInTheDocument();
+      expect(screen.getByText("Gateway configured")).toBeInTheDocument();
     });
 
     runGatewayReadinessMock.mockResolvedValue(readyReport("2026-07-30T10:00:00.000Z"));
@@ -708,7 +712,7 @@ describe("SettingsPanel readiness evidence is scoped to the configuration it mea
 
     fireEvent.click(await screen.findByRole("button", { name: "Modelle" }));
     await waitFor(() => {
-      expect(screen.getByText("Nicht verifiziert")).toBeInTheDocument();
+      expect(screen.getByText("Gateway konfiguriert")).toBeInTheDocument();
     });
     expect(screen.queryByText("Gateway verbunden")).toBeNull();
   });
@@ -865,7 +869,7 @@ describe("SettingsPanel gateway readiness checks", () => {
     view.rerender(<SettingsPanel />);
     expect(screen.getByRole("button", { name: "Run readiness check" })).toHaveFocus();
     fetchModelsMock.mockResolvedValue({ models: [updated] });
-    fireEvent.click(screen.getByRole("button", { name: "Apply values" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Apply values" }));
     await waitFor(() => {
       expect(applyGatewayVerifiedCapabilitiesMock).toHaveBeenCalledWith("test-chat-1", {
         toolCalling: false,
@@ -875,7 +879,8 @@ describe("SettingsPanel gateway readiness checks", () => {
       expect(screen.queryByTestId("capability-disagreements")).toBeNull();
     });
     await waitFor(() => {
-      expect(fetchModelsMock).toHaveBeenCalledTimes(2);
+      // Initial catalog load + readiness-event refresh + configuration-apply refresh.
+      expect(fetchModelsMock).toHaveBeenCalledTimes(3);
     });
   });
 
@@ -904,7 +909,7 @@ describe("SettingsPanel gateway readiness checks", () => {
       /Tools: configured no; verified yes/i,
     );
     fireEvent.click(screen.getByRole("button", { name: "Apply verified values" }));
-    fireEvent.click(screen.getByRole("button", { name: "Apply values" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Apply values" }));
     await waitFor(() => {
       expect(applyGatewayVerifiedCapabilitiesMock).toHaveBeenCalledWith("test-chat-1", {
         toolCalling: true,
@@ -965,7 +970,7 @@ describe("SettingsPanel gateway readiness checks", () => {
     render(<SettingsPanel />);
     fireEvent.click(await screen.findByRole("button", { name: "Run readiness check" }));
     fireEvent.click(await screen.findByRole("button", { name: "Apply verified values" }));
-    fireEvent.click(screen.getByRole("button", { name: "Apply values" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Apply values" }));
 
     const alert = await screen.findByRole("alert");
     expect(alert).toHaveTextContent(/were not applied/i);

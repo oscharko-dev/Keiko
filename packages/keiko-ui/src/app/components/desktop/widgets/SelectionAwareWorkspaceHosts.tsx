@@ -1099,6 +1099,7 @@ function BoundChatBody({
       workflowCompact={ctx.workflowCompact === true}
       linkedRoot={ctx.activeRoot ?? ctx.linkedRoot}
       linkedRoots={ctx.linkedRoots}
+      linkedGitChangeComparisons={ctx.linkedGitChangeComparisons}
       openEditorFile={ctx.openEditorFile}
       previewWindows={{ add: ctx.openWindow, focus: ctx.focusWindow, update: ctx.updateWindow }}
       onOpenRunResult={openRunResult}

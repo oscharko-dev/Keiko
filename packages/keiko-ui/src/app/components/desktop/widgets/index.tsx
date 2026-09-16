@@ -1,6 +1,6 @@
 import dynamic from "next/dynamic";
 import { gitObjectId } from "./gitObjectId";
-import { useMemo, type ReactNode } from "react";
+import { useEffect, useMemo, type ReactNode } from "react";
 import type {
   QualityIntelligenceInlineSource,
   QualityIntelligenceUiRegenerateResult,
@@ -219,6 +219,15 @@ function num(cfg: Record<string, unknown>, key: string): number | undefined {
 
 const CODING_REPOSITORY_BINDING = "coding-repository";
 
+function displayNameFromRoot(root: string | null | undefined): string | undefined {
+  if (root === null || root === undefined) return undefined;
+  let segment = "";
+  for (const part of root.split(/[\\/]/u)) {
+    if (part.length > 0) segment = part;
+  }
+  return segment.length > 0 ? segment : root;
+}
+
 function isCodingRepositoryBinding(
   cfg: Record<string, unknown>,
   configuredRoot: string | undefined,
@@ -226,17 +235,130 @@ function isCodingRepositoryBinding(
   return configuredRoot !== undefined && str(cfg, "rootBinding") === CODING_REPOSITORY_BINDING;
 }
 
+function isManagedTaskWorkspaceRoot(root: string | undefined): boolean {
+  if (root === undefined || root.length === 0) return false;
+  const normalized = root.replaceAll("\\", "/");
+  return normalized.includes("/.keiko/") && normalized.includes("/task-workspaces/");
+}
+
+function isNonEmptyRoot(root: string | undefined): root is string {
+  return root !== undefined && root.length > 0;
+}
+
+function hasManagedTaskWorkspaceDrift(
+  cfg: Record<string, unknown>,
+  configuredRoot: string | undefined,
+): boolean {
+  const resolvedRoot = str(cfg, "resolvedRoot");
+  return (
+    isNonEmptyRoot(configuredRoot) &&
+    !isManagedTaskWorkspaceRoot(configuredRoot) &&
+    isManagedTaskWorkspaceRoot(resolvedRoot)
+  );
+}
+
+function shouldUseConfiguredRepositoryRoot(
+  cfg: Record<string, unknown>,
+  configuredRoot: string | undefined,
+  activeRoot: string | null,
+): boolean {
+  if (isCodingRepositoryBinding(cfg, configuredRoot)) return true;
+  // #3506 review — `hasManagedTaskWorkspaceDrift` compares cfg.resolvedRoot (the root the Files
+  // widget last reported through onActiveFileChange) against cfg.root. When an active task
+  // binding is present, `resolveBoundRoot` returned ctx.activeRoot, so FilesWidget correctly
+  // persisted THAT as resolvedRoot. Treating this expected difference as drift pins the window
+  // to the repository via PersistRepositoryRootBinding and permanently disables the
+  // active-root override for the surface. Only apply the drift repair when no active binding is
+  // in effect (ctx.activeRoot === null) — the explicit `coding-repository` binding above stays
+  // untouched.
+  if (activeRoot !== null) return false;
+  return hasManagedTaskWorkspaceDrift(cfg, configuredRoot);
+}
+
+function gitRepositoryRoot(
+  cfg: Record<string, unknown>,
+  ctx: Pick<WindowRenderContext, "selectedRoot" | "linkedRoot">,
+  configuredRoot: string | undefined,
+): string | undefined {
+  if (isCodingRepositoryBinding(cfg, configuredRoot)) return configuredRoot;
+  if (isNonEmptyRoot(configuredRoot) && !isManagedTaskWorkspaceRoot(configuredRoot)) {
+    return configuredRoot;
+  }
+  const contextRoot = ctx.selectedRoot ?? ctx.linkedRoot ?? undefined;
+  return isManagedTaskWorkspaceRoot(contextRoot) ? undefined : contextRoot;
+}
+
+function PersistRepositoryRootBinding({
+  cfg,
+  ctx,
+  root,
+  rootKey,
+}: {
+  readonly cfg: Record<string, unknown>;
+  readonly ctx: WindowRenderContext;
+  readonly root: string | undefined;
+  readonly rootKey: "projectPath" | "root";
+}): null {
+  const needsRepair =
+    root !== undefined &&
+    root.length > 0 &&
+    !isManagedTaskWorkspaceRoot(root) &&
+    (str(cfg, rootKey) !== root || str(cfg, "rootBinding") !== CODING_REPOSITORY_BINDING);
+  useEffect((): void => {
+    if (!needsRepair || root === undefined) return;
+    const patch: Record<string, WindowCfgValue> = {
+      [rootKey]: root,
+      rootBinding: CODING_REPOSITORY_BINDING,
+    };
+    ctx.updateCfg(patch);
+  }, [ctx, needsRepair, root, rootKey]);
+  return null;
+}
+
+function codingRepositoryCfg(root: string): Record<string, WindowCfgValue> {
+  return { root, rootBinding: CODING_REPOSITORY_BINDING };
+}
+
+function completeRepositoryConnection(
+  cfg: Record<string, unknown>,
+  ctx: WindowRenderContext,
+  root: string,
+): void {
+  const returnWindow = str(cfg, "repositoryReturnWindow");
+  if (!returnWindow) return;
+  ctx.updateWindow(returnWindow, { cfg: { repositoryPath: root } });
+  ctx.focusWindow(returnWindow);
+  ctx.updateCfg({ repositoryReturnWindow: "" });
+}
+
 // Issue #446 (ADR-0090) — the single root-resolution choke point for bound surfaces. When a task
-// workspace is active, its managed-worktree root OVERRIDES the window's per-window cfg root and the
-// selected Workbench root and linked-window fallback, so a switch atomically retargets every
-// surface and none can keep executing against the previous workspace (AC1/AC2, SC1/SC3). In
-// unbound mode an explicit per-window root stays authoritative; the Workbench-wide selection is
-// only the default for windows without one.
+// workspace is active, its managed-worktree root overrides ordinary per-window roots so a switch
+// atomically retargets legacy task-bound surfaces. Windows that explicitly carry
+// `rootBinding: "coding-repository"` are not task-bound: they are repository control surfaces
+// opened from the central Git widget and must keep the configured repository root while a run's
+// managed worktree remains internal. In unbound mode an explicit per-window root stays
+// authoritative; the Workbench-wide selection is only the default for windows without one.
 export function resolveBoundRoot(
   ctx: Pick<WindowRenderContext, "activeRoot" | "selectedRoot" | "linkedRoot">,
   cfgRoot: string | undefined,
 ): string | undefined {
   return ctx.activeRoot ?? cfgRoot ?? ctx.selectedRoot ?? ctx.linkedRoot ?? undefined;
+}
+
+function boundRootFallback({
+  ctx,
+  configuredRoot,
+  honorConfiguredRoot,
+  ignoreActiveRoot,
+}: {
+  readonly ctx: Pick<WindowRenderContext, "activeRoot" | "selectedRoot" | "linkedRoot">;
+  readonly configuredRoot: string | undefined;
+  readonly honorConfiguredRoot: boolean;
+  readonly ignoreActiveRoot: boolean;
+}): string | undefined {
+  if (honorConfiguredRoot && configuredRoot !== undefined) return configuredRoot;
+  if (ignoreActiveRoot) return configuredRoot ?? ctx.selectedRoot ?? ctx.linkedRoot ?? undefined;
+  return resolveBoundRoot(ctx, configuredRoot);
 }
 
 // Issue #2619 — `surface` replaces the free-text label: it selects the window's entry in
@@ -249,6 +371,7 @@ function BoundRootSurface({
   onSelect,
   children,
   honorConfiguredRoot = false,
+  ignoreActiveRoot = false,
 }: {
   readonly ctx: WindowRenderContext;
   readonly configuredRoot: string | undefined;
@@ -256,16 +379,19 @@ function BoundRootSurface({
   readonly onSelect: (root: string) => void;
   readonly children: (root: string | undefined) => ReactNode;
   readonly honorConfiguredRoot?: boolean;
+  readonly ignoreActiveRoot?: boolean;
 }): ReactNode {
-  const fallbackRoot =
-    honorConfiguredRoot && configuredRoot !== undefined
-      ? configuredRoot
-      : resolveBoundRoot(ctx, configuredRoot);
+  const fallbackRoot = boundRootFallback({
+    ctx,
+    configuredRoot,
+    honorConfiguredRoot,
+    ignoreActiveRoot,
+  });
   return (
     <BoundRootTarget
       fallbackRoot={fallbackRoot}
       configuredRoot={configuredRoot}
-      lockedToActiveRoot={!honorConfiguredRoot && ctx.activeBinding !== null}
+      lockedToActiveRoot={!honorConfiguredRoot && !ignoreActiveRoot && ctx.activeBinding !== null}
       surface={surface}
       onSelect={onSelect}
     >
@@ -497,12 +623,38 @@ registerWindowRender("qiRun", (cfg, ctx) => {
 registerWindowRender("relationships", () => <RelationshipsView />);
 
 registerWindowRender("files", (cfg, ctx) => {
-  const root = resolveBoundRoot(ctx, str(cfg, "root"));
-  return <FilesWindowSessionHost cfg={cfg} ctx={ctx} root={root} />;
+  const configuredRoot = str(cfg, "root");
+  const honorConfiguredRoot = shouldUseConfiguredRepositoryRoot(
+    cfg,
+    configuredRoot,
+    ctx.activeRoot,
+  );
+  const root = honorConfiguredRoot ? configuredRoot : resolveBoundRoot(ctx, configuredRoot);
+  return (
+    <>
+      {honorConfiguredRoot ? (
+        <PersistRepositoryRootBinding cfg={cfg} ctx={ctx} root={configuredRoot} rootKey="root" />
+      ) : null}
+      <FilesWindowSessionHost cfg={cfg} ctx={ctx} root={root} />
+    </>
+  );
 });
 registerWindowRender("editor", (cfg, ctx) => {
-  const root = resolveBoundRoot(ctx, str(cfg, "root"));
-  return <EditorWindowSessionHost cfg={cfg} ctx={ctx} root={root} />;
+  const configuredRoot = str(cfg, "root");
+  const honorConfiguredRoot = shouldUseConfiguredRepositoryRoot(
+    cfg,
+    configuredRoot,
+    ctx.activeRoot,
+  );
+  const root = honorConfiguredRoot ? configuredRoot : resolveBoundRoot(ctx, configuredRoot);
+  return (
+    <>
+      {honorConfiguredRoot ? (
+        <PersistRepositoryRootBinding cfg={cfg} ctx={ctx} root={configuredRoot} rootKey="root" />
+      ) : null}
+      <EditorWindowSessionHost cfg={cfg} ctx={ctx} root={root} />
+    </>
+  );
 });
 registerWindowRender("browser", (cfg) => {
   const url = str(cfg, "url");
@@ -626,50 +778,53 @@ registerWindowRender("coding", (cfg, ctx) => (
     }}
   />
 ));
-// Epic #1571, Issue #1574 — Git client window shell. The active project root acts as the projectId.
-// Read it from cfg (projectPath / workspaceRoot, like terminal/agents) and fall back to a linked
-// Files/Editor window root; an empty state renders when none is available. The shell persists the
-// selected repository via ctx.updateCfg (so resolveBoundRoot re-targets) and opens the reused
-// governed Pull Request / Merge windows via ctx.openWindow.
+// Epic #1571, Issue #1574 — Git client window shell. The selected repository root acts as the
+// projectId. Read it from cfg (projectPath / workspaceRoot) and fall back to the global selected
+// repository; an empty state renders when none is available. The shell persists the selected
+// repository via ctx.updateCfg and opens the reused governed Pull Request / Merge windows via
+// ctx.openWindow.
 registerWindowRender("governedGit", (cfg, ctx) => {
-  // Issue #446 (AC3 / SC2) — the active workspace root is the projectId, so the read surface and the
-  // governed PR/merge windows run scoped to the active worktree and can never execute against the
-  // previous workspace after a switch.
   const configuredRoot = str(cfg, "projectPath") ?? str(cfg, "workspaceRoot");
-  // A dormant Coding Workbench has an explicit repository selection. Preserve that selection when
-  // it opens Git; active coding runs omit this marker and remain bound to their task worktree.
-  const honorConfiguredRoot =
-    ctx.activeBinding === null && isCodingRepositoryBinding(cfg, configuredRoot);
+  // Product rule (2026-09-15): Git is the repository's central control surface. A concrete
+  // repository root is authoritative per window, and the global selected repository is the fallback.
+  // The active task worktree is an internal run detail; it must not replace repository truth.
+  const repositoryRoot = gitRepositoryRoot(cfg, ctx, configuredRoot);
+  const honorConfiguredRoot = isNonEmptyRoot(repositoryRoot);
   const initialCommit = gitObjectId(str(cfg, "commit"));
   const initialPath = str(cfg, "path");
   const dialog = str(cfg, "repositoryDialog");
   const initialRepositoryDialog = dialog === "clone" || dialog === "open" ? dialog : undefined;
+  const lockedRepositoryLabel = displayNameFromRoot(repositoryRoot ?? ctx.selectedRoot);
   return (
     <BoundRootSurface
       ctx={ctx}
-      configuredRoot={configuredRoot}
+      configuredRoot={repositoryRoot ?? configuredRoot}
       surface="governedGit"
       onSelect={(root) => ctx.updateCfg({ projectPath: root })}
       honorConfiguredRoot={honorConfiguredRoot}
+      ignoreActiveRoot
     >
       {(projectId) => (
         <ManagedTaskWorkspaceGate ctx={ctx} root={projectId}>
+          {honorConfiguredRoot ? (
+            <PersistRepositoryRootBinding
+              cfg={cfg}
+              ctx={ctx}
+              root={repositoryRoot}
+              rootKey="projectPath"
+            />
+          ) : null}
           <GitClientWindow
             key={projectId ?? ""}
             projectId={projectId}
-            lockedToActiveRoot={!honorConfiguredRoot && ctx.activeBinding !== null}
+            lockedToActiveRoot={false}
+            lockedRepositoryLabel={lockedRepositoryLabel}
             initialPath={initialPath}
             initialCommit={initialCommit}
             initialRepositoryDialog={initialRepositoryDialog}
-            onRepositoryConnected={(root: string) => {
-              const returnWindow = str(cfg, "repositoryReturnWindow");
-              if (!returnWindow) return;
-              ctx.updateWindow(returnWindow, { cfg: { repositoryPath: root } });
-              ctx.focusWindow(returnWindow);
-              ctx.updateCfg({ repositoryReturnWindow: "" });
-            }}
-            onOpenFiles={(root: string) => ctx.openWindow("files", { root })}
-            onOpenEditor={(root: string) => ctx.openWindow("editor", { root })}
+            onRepositoryConnected={(root: string) => completeRepositoryConnection(cfg, ctx, root)}
+            onOpenFiles={(root: string) => ctx.openWindow("files", codingRepositoryCfg(root))}
+            onOpenEditor={(root: string) => ctx.openWindow("editor", codingRepositoryCfg(root))}
             onOpenEditorFile={ctx.openEditorFile}
             updateCfg={(patch: Record<string, WindowCfgValue>) => ctx.updateCfg(patch)}
           />

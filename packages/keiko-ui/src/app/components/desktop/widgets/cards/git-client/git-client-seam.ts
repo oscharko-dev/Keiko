@@ -16,6 +16,7 @@ import {
   ApiError,
   cloneRepository as fetchCloneRepository,
   createProject,
+  fetchGitDeliveryCommitDraft,
   fetchGitBranches,
   fetchGitDeliverySyncPreview,
   fetchGitDeliveryCommitExecute,
@@ -82,6 +83,7 @@ export interface GitClientSeam {
   readonly stage: typeof fetchGitDeliveryStage;
   readonly unstage: typeof fetchGitDeliveryUnstage;
   readonly commitPreview: typeof fetchGitDeliveryCommitPreview;
+  readonly commitDraft: typeof fetchGitDeliveryCommitDraft;
   readonly commitExecute: typeof fetchGitDeliveryCommitExecute;
   // F3 (epic #3384 final audit): the standalone Git Client Window's commit/push actions must
   // satisfy the epic's unconditional approval requirement (correction 5) themselves — unlike
@@ -143,6 +145,7 @@ export const DEFAULT_GIT_CLIENT: GitClientSeam = {
   stage: fetchGitDeliveryStage,
   unstage: fetchGitDeliveryUnstage,
   commitPreview: fetchGitDeliveryCommitPreview,
+  commitDraft: fetchGitDeliveryCommitDraft,
   commitExecute: fetchGitDeliveryCommitExecute,
   commitPropose: proposeCommit,
   syncPreview: fetchGitDeliverySyncPreview,
@@ -263,8 +266,9 @@ function useMutationFlow(projectId: string, repositoryRoot?: string): MutationFl
 interface CommitPreviewController {
   readonly preview: GitDeliveryCommitPreviewResponse | null;
   readonly previewDraft: string | null;
+  readonly previewRequestRevision: number | null;
   readonly previewError: string | null;
-  readonly runPreview: (messageDraft: string) => void;
+  readonly runPreview: (messageDraft: string, requestRevision?: number) => void;
   readonly resetPreview: () => void;
 }
 
@@ -273,26 +277,30 @@ interface CommitPreviewController {
 function useCommitPreviewFlow(client: GitClientSeam, projectId: string): CommitPreviewController {
   const [preview, setPreview] = useState<GitDeliveryCommitPreviewResponse | null>(null);
   const [previewDraft, setPreviewDraft] = useState<string | null>(null);
+  const [previewRequestRevision, setPreviewRequestRevision] = useState<number | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const previewSeqRef = useRef(0);
 
   const runPreview = useCallback(
-    (messageDraft: string): void => {
+    (messageDraft: string, requestRevision?: number): void => {
       const seq = previewSeqRef.current + 1;
       previewSeqRef.current = seq;
       setPreview(null);
       setPreviewDraft(null);
+      setPreviewRequestRevision(null);
       setPreviewError(null);
       void client.commitPreview({ projectId, messageDraft }).then(
         (res) => {
           if (previewSeqRef.current !== seq) return;
           setPreview(res);
           setPreviewDraft(messageDraft);
+          setPreviewRequestRevision(requestRevision ?? null);
         },
         (err: unknown) => {
           if (previewSeqRef.current !== seq) return;
           setPreview(null);
           setPreviewDraft(null);
+          setPreviewRequestRevision(null);
           setPreviewError(formatGitError(err));
         },
       );
@@ -304,10 +312,11 @@ function useCommitPreviewFlow(client: GitClientSeam, projectId: string): CommitP
     previewSeqRef.current += 1;
     setPreview(null);
     setPreviewDraft(null);
+    setPreviewRequestRevision(null);
     setPreviewError(null);
   }, []);
 
-  return { preview, previewDraft, previewError, runPreview, resetPreview };
+  return { preview, previewDraft, previewRequestRevision, previewError, runPreview, resetPreview };
 }
 
 export function useGitActions(
@@ -318,9 +327,10 @@ export function useGitActions(
   readonly flow: GitActionFlowState;
   readonly preview: GitDeliveryCommitPreviewResponse | null;
   readonly previewDraft: string | null;
+  readonly previewRequestRevision: number | null;
   readonly previewError: string | null;
   readonly runMutation: (op: () => Promise<GitMutationOutcome>) => void;
-  readonly runPreview: (messageDraft: string) => void;
+  readonly runPreview: (messageDraft: string, requestRevision?: number) => void;
   readonly reset: () => void;
 } {
   const mutationFlow = useMutationFlow(projectId, repositoryRoot);
@@ -340,6 +350,7 @@ export function useGitActions(
     flow: mutationFlow.flow,
     preview: commitPreview.preview,
     previewDraft: commitPreview.previewDraft,
+    previewRequestRevision: commitPreview.previewRequestRevision,
     previewError: commitPreview.previewError,
     runMutation: mutationFlow.runMutation,
     runPreview: commitPreview.runPreview,

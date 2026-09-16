@@ -108,6 +108,34 @@ describe("RepositoryToolbar — Connect to Chat", () => {
     expect(screen.queryByRole("option", { name: "Add repository" })).not.toBeInTheDocument();
   });
 
+  // A locked window keeps the Repository picker disabled so its bound task-workspace project cannot
+  // be swapped out. The Add repository action must still reach the operator — otherwise a locked
+  // window is the only surface and it hides that entry entirely (#3390 follow-up).
+  it("keeps Add repository clickable when the Repository picker is locked", async () => {
+    const user = userEvent.setup();
+    const onAddRepository = vi.fn();
+    const onSelectRepository = vi.fn();
+    render(
+      <RepositoryToolbar
+        {...baseProps()}
+        onSelectRepository={onSelectRepository}
+        repositorySelectionLocked
+        onAddRepository={onAddRepository}
+      />,
+    );
+
+    // The disabled KeikoSelect must not carry the Add repository option (it could not be clicked
+    // there anyway), and there must be a separate always-clickable button that fires the callback
+    // without switching the bound project.
+    const combobox = screen.getByRole("combobox", { name: "Repository" });
+    expect(combobox).toHaveAttribute("disabled");
+
+    const addButton = screen.getByRole("button", { name: "Add repository" });
+    await user.click(addButton);
+    expect(onAddRepository).toHaveBeenCalledTimes(1);
+    expect(onSelectRepository).not.toHaveBeenCalled();
+  });
+
   it("jest-axe: no violations with Connect to Chat, Open in Editor and Open Files all present", async () => {
     const { container } = render(
       <RepositoryToolbar

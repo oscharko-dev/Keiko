@@ -46,7 +46,10 @@ export type CodingSafeActivityToolState = (typeof CODING_SAFE_ACTIVITY_TOOL_STAT
 export type CodingSafeActivityPlanStepState =
   (typeof CODING_SAFE_ACTIVITY_PLAN_STEP_STATES)[number];
 
-/** Untrusted runtime text. Consumers must render this as text, never markup or executable content. */
+/**
+ * Untrusted runtime text. Consumers must render it through escaped text nodes or Keiko's vetted
+ * SafeMarkdown renderer; never inject raw markup or executable content.
+ */
 export interface CodingSafeActivityTextSegment {
   readonly kind: "text";
   readonly text: string;

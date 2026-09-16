@@ -19,7 +19,10 @@ import {
   isConfiguredVoiceProvider,
   isConversationEligibleModel,
   codingWorkbenchModelEligibility,
+  isCodingWorkbenchReadinessCandidate,
   isCodingWorkbenchModel,
+  listCodingWorkbenchReadinessCandidates,
+  selectCodingWorkbenchReadinessCandidate,
   isVoiceCapability,
   TOOL_CALLING_VERIFICATION_MAX_AGE_MS,
   listVoicePersonas,
@@ -94,6 +97,57 @@ describe("isCodingWorkbenchModel", () => {
     expect(isCodingWorkbenchModel(cap({ ...coding, kind: "embedding" }))).toBe(false);
     expect(isCodingWorkbenchModel(cap({ ...coding, toolCalling: false }))).toBe(false);
     expect(isCodingWorkbenchModel(cap({ ...coding, workflowEligible: false }))).toBe(false);
+  });
+
+  it("keeps an otherwise-qualified coding model eligible for automatic verification", () => {
+    const candidate = cap({
+      preferredUseCases: ["Coding"],
+      toolCalling: false,
+      toolCallingVerification: undefined,
+    });
+
+    expect(isCodingWorkbenchReadinessCandidate(candidate)).toBe(true);
+    expect(isCodingWorkbenchModel(candidate)).toBe(false);
+    expect(isCodingWorkbenchReadinessCandidate(cap({ preferredUseCases: ["Chat"] }))).toBe(false);
+  });
+
+  it("selects the cheapest structural candidate without trusting an unverified tool claim", () => {
+    const selected = selectCodingWorkbenchReadinessCandidate([
+      cap({ id: "chat-only", preferredUseCases: ["Chat"], costClass: "low" }),
+      cap({
+        id: "coding-expensive",
+        preferredUseCases: ["Coding"],
+        toolCalling: false,
+        toolCallingVerification: undefined,
+        costClass: "high",
+      }),
+      cap({
+        id: "coding-cheap",
+        preferredUseCases: ["Code review"],
+        toolCalling: false,
+        toolCallingVerification: undefined,
+        costClass: "medium",
+      }),
+    ]);
+
+    expect(selected?.id).toBe("coding-cheap");
+  });
+
+  it("orders every structural readiness candidate by cost and keeps configuration order on ties", () => {
+    const candidates = listCodingWorkbenchReadinessCandidates([
+      cap({ id: "coding-high", preferredUseCases: ["Coding"], costClass: "high" }),
+      cap({ id: "coding-medium-a", preferredUseCases: ["Coding"], costClass: "medium" }),
+      cap({ id: "chat-only", preferredUseCases: ["Chat"], costClass: "low" }),
+      cap({ id: "coding-low", preferredUseCases: ["Code review"], costClass: "low" }),
+      cap({ id: "coding-medium-b", preferredUseCases: ["Coding"], costClass: "medium" }),
+    ]);
+
+    expect(candidates.map((candidate) => candidate.id)).toEqual([
+      "coding-low",
+      "coding-medium-a",
+      "coding-medium-b",
+      "coding-high",
+    ]);
   });
 
   // A forced tool-call proof expires 24 h after its probe. Coding run 24 (2026-09-11) was admitted

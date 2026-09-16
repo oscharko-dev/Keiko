@@ -48,14 +48,18 @@ test("autonomous closeout narrow viewport has no horizontal overflow @smoke", as
 
   // #2644 moved the mode control into Settings → Security. Full access is genuinely granted here:
   // the ceiling allows it, so nothing is capped and the Workbench must run at that authority.
+  // #3494 moved the effective-mode fact into an information popover; reveal it before asserting.
   await fixture.requestMode(/Full access/u);
   await expect(fixture.autonomySettings.locator('[data-capped="true"]')).toHaveCount(0);
   await expect(page.getByRole("radio", { name: /Full access/u })).toBeChecked();
   await page.getByRole("button", { name: "Close Settings window" }).click();
+  await fixture.openInformation();
   await expect(fixture.workbench.locator("[data-mode]")).toHaveAttribute(
     "data-mode",
     "autonomous-delivery",
   );
+  // The popover overlaps the composer at 390px; close it so the Start click reaches the button.
+  await fixture.closeInformation();
   await page.getByLabel("Task instructions").fill("Close out the autonomous run safely");
   await page.getByRole("button", { name: "Start coding run" }).click();
   await page.getByRole("button", { name: "Approve once" }).click();

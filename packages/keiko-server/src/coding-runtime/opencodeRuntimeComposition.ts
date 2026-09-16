@@ -79,6 +79,7 @@ import type { RuntimeProcessSupervisor } from "./runtimeProcessSupervisor.js";
 import { OPENCODE_PINNED_VERSION } from "./opencodeToolSchemas.js";
 import { CodingRuntimeQuestionAnswerRejectedError } from "./codingRuntimeQuestionPort.js";
 import { openCodeCatalogSettlementBudgetMs } from "../tool-catalog/catalogToolFacadeBridge.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 
 const PINNED_RAW_SCHEMA_SHA256 = "00502bd13e9c86f3ca9e765e99a57e06fa9f434ca16f2a714766d1444f8d37f3";
 const DIGEST = /^[a-f0-9]{64}$/u;
@@ -149,6 +150,7 @@ export interface OpenCodeRuntimeCompositionInput {
   readonly supervisor: RuntimeProcessSupervisor;
   readonly resolveWorkspaceRootAccess?: (() => WorkspaceRootAccess | undefined) | undefined;
   readonly diagnostics?: ServerDiagnosticSink | undefined;
+  readonly activityLog?: ServerLogSink | undefined;
   readonly onRuntimeEvent?: ((event: CodingWorkbenchRuntimeEvent) => void) | undefined;
   /**
    * Live question observation for the fixed session (#2386). OpenCode publishes question
@@ -733,6 +735,7 @@ async function handshake(
     const adapter = createOpenCodeRuntimeAdapter({
       correlationId: request.runId,
       contextGeometry: input.contextGeometry,
+      ...(input.activityLog === undefined ? {} : { activityLog: input.activityLog }),
       readiness: readinessPorts(input, bridge, run, client, parsed.endpoint, request),
       governedSink: input.governedEventSink,
       ...(input.safeActivity

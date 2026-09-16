@@ -38,6 +38,9 @@ export type OpenCodeCompactionActivity =
       readonly errorKind: string;
       readonly finishReason: string;
     };
+export interface OpenCodeProviderTokenUsage {
+  readonly inputTokens: number;
+}
 export interface OpenCodeReconciliationEvent {
   readonly id: string;
   readonly aggregateId: string;
@@ -45,6 +48,7 @@ export interface OpenCodeReconciliationEvent {
   readonly digest: string;
   readonly kind: OpenCodeEventKind;
   readonly compaction?: OpenCodeCompactionActivity | undefined;
+  readonly providerTokenUsage?: OpenCodeProviderTokenUsage | undefined;
 }
 export interface OpenCodeProjection {
   readonly id: string;
@@ -53,6 +57,7 @@ export interface OpenCodeProjection {
   readonly kind: OpenCodeEventKind;
   readonly digest: string;
   readonly compaction?: OpenCodeCompactionActivity | undefined;
+  readonly providerTokenUsage?: OpenCodeProviderTokenUsage | undefined;
 }
 export type OpenCodeReconciliationResult =
   | {
@@ -330,7 +335,20 @@ function valid(event: OpenCodeReconciliationEvent): boolean {
     event.sequence >= 0 &&
     /^[0-9a-f]{64}$/u.test(event.digest) &&
     OPEN_CODE_EVENT_KINDS.includes(event.kind) &&
-    isOpenCodeCompactionActivity(event.compaction)
+    isOpenCodeCompactionActivity(event.compaction) &&
+    isOpenCodeProviderTokenUsage(event.providerTokenUsage)
+  );
+}
+
+export function isOpenCodeProviderTokenUsage(
+  value: unknown,
+): value is OpenCodeProviderTokenUsage | undefined {
+  if (value === undefined) return true;
+  return (
+    recordValue(value) &&
+    Object.keys(value).length === 1 &&
+    Number.isSafeInteger(value.inputTokens) &&
+    Number(value.inputTokens) >= 0
   );
 }
 
@@ -408,5 +426,8 @@ function project(event: OpenCodeReconciliationEvent): OpenCodeProjection {
     kind: event.kind,
     digest: event.digest,
     ...(event.compaction === undefined ? {} : { compaction: event.compaction }),
+    ...(event.providerTokenUsage === undefined
+      ? {}
+      : { providerTokenUsage: event.providerTokenUsage }),
   };
 }

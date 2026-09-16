@@ -13,6 +13,7 @@ import {
   cloneRepository as fetchCloneRepository,
   createProject,
   fetchGitBranches,
+  fetchGitDeliveryCommitDraft,
   fetchGitDeliverySyncPreview,
   fetchGitDeliveryCommitExecute,
   fetchGitDeliveryCommitPreview,
@@ -151,6 +152,10 @@ describe("DEFAULT_GIT_CLIENT — wires correct api functions", () => {
 
   it("commitPreview is fetchGitDeliveryCommitPreview", () => {
     expect(DEFAULT_GIT_CLIENT.commitPreview).toBe(fetchGitDeliveryCommitPreview);
+  });
+
+  it("commitDraft is fetchGitDeliveryCommitDraft", () => {
+    expect(DEFAULT_GIT_CLIENT.commitDraft).toBe(fetchGitDeliveryCommitDraft);
   });
 
   it("commitExecute is fetchGitDeliveryCommitExecute", () => {
@@ -444,6 +449,13 @@ describe("useGitActions", () => {
       // commitPreview/pushPreview are not driven by these tests (runPreview is never called);
       // a bare typed mock satisfies the seam type without fabricating a full preview envelope.
       commitPreview: vi.fn<GitClientSeam["commitPreview"]>(),
+      commitDraft: vi.fn<GitClientSeam["commitDraft"]>(async () => ({
+        schemaVersion: "1",
+        status: "succeeded",
+        source: "model",
+        suggestedMessage: "chore: update staged changes\n\nBody.",
+        summary: { stagedFileCount: 1, areaCount: 1, areas: ["src"], touchesTests: false },
+      })),
       commitExecute: vi.fn<GitClientSeam["commitExecute"]>(async () => ({
         schemaVersion: "1",
         status: "succeeded",

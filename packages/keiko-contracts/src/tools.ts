@@ -250,6 +250,8 @@ const GOVERNED_GIT_ACCOUNT_ENV: readonly string[] = Object.freeze([
 // signed FAILS instead of silently landing unsigned. No credential token: this lane never egresses.
 const GOVERNED_GIT_IDENTITY_ENV_ALLOWLIST: readonly string[] = Object.freeze([
   ...DEFAULT_ENV_ALLOWLIST,
+  "HOME",
+  "USERPROFILE",
   ...GOVERNED_GIT_ACCOUNT_ENV,
 ]);
 

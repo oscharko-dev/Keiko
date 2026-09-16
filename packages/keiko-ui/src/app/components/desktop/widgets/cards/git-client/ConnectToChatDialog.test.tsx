@@ -83,6 +83,28 @@ describe("ConnectToChatDialog", () => {
     expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled();
   });
 
+  it("does not allow the current branch to be selected as its own comparison base", async () => {
+    const connect = vi.fn();
+    const listChats = vi.fn(async (): Promise<ChatsResponse> => oneChat());
+    const user = userEvent.setup();
+    render(
+      <ConnectToChatDialog
+        {...baseProps()}
+        currentBranch="feature/x"
+        baseBranchName="feature/x"
+        baseBranchChoices={["feature/x"]}
+        listChats={listChats}
+        connect={connect}
+      />,
+    );
+    await selectFirstChat(user);
+    expect(
+      screen.getByText("Choose a different base branch before connecting this Git change."),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Connect" })).toBeDisabled();
+    expect(connect).not.toHaveBeenCalled();
+  });
+
   it("connects an exact comparison using the default base branch", async () => {
     const onConnected = vi.fn();
     const scope = {
@@ -241,6 +263,43 @@ describe("ConnectToChatDialog", () => {
     for (const pattern of forbidden) {
       expect(dialog.textContent ?? "").not.toMatch(pattern);
     }
+  });
+
+  // `inferBaseBranch` can hand us an upstream ref that is not among the local branch choices; the
+  // server accepts a safe resolvable ref regardless. The field must show that inferred value so
+  // the user can see (and confirm) what will be submitted — a placeholder-only trigger would let
+  // Connect fire with an invisible baseRef.
+  it("shows the inferred base branch in the field when it is not one of the local choices", async () => {
+    const connect = vi.fn(async (): Promise<GitChangeConnectResponse> => ({
+      status: "connected",
+      scope: {} as never,
+    }));
+    const listChats = vi.fn(async (): Promise<ChatsResponse> => oneChat());
+    const user = userEvent.setup();
+    render(
+      <ConnectToChatDialog
+        {...baseProps()}
+        baseBranchName="upstream/main"
+        baseBranchChoices={[]}
+        listChats={listChats}
+        connect={connect}
+      />,
+    );
+    await selectFirstChat(user);
+
+    // The trigger renders the resolved baseRef label rather than the empty-state placeholder.
+    const baseField = screen.getByRole("combobox", { name: "Base branch" });
+    expect(baseField.textContent).toContain("upstream/main");
+
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+    await waitFor(() => {
+      expect(connect).toHaveBeenCalledWith({
+        chatId: "chat-1",
+        mode: "comparison",
+        headRef: "feature/x",
+        baseRef: "upstream/main",
+      } satisfies ConnectGitChangeInput);
+    });
   });
 
   it("jest-axe: no violations with chats loaded", async () => {
