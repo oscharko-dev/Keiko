@@ -861,6 +861,58 @@ describe("workspace-persistence", () => {
     ]);
   });
 
+  // #3506 review — the server-side Git↔Chat relationship id is the ONLY handle disconnect can
+  // pass to `onGitChangeUnbind`. If persistence drops it, a reload leaves the visible edge in
+  // place but the remote relationship becomes unreachable from the UI — a leak. Keep the triplet
+  // (base ref, head ref, relationship id) across hydration.
+  it("preserves the Git↔Chat relationship snapshot across the persistence round trip", () => {
+    const wins = [
+      win({ id: "git-1", type: "governedGit", cfg: {} }),
+      win({ id: "chat-1", type: "chat", cfg: {} }),
+    ];
+    const conns: Connection[] = [
+      {
+        id: "c-1",
+        a: "git-1",
+        b: "chat-1",
+        boundChatWindowId: "chat-1",
+        boundGitChangeBaseRef: "dev",
+        boundGitChangeHeadRef: "feature/x",
+        boundGitChangeRelationshipId: "rel-git-1",
+      },
+    ];
+    expect(sanitizePersistedConnections(conns, wins)).toEqual([
+      {
+        id: "c-1",
+        a: "git-1",
+        b: "chat-1",
+        boundChatWindowId: "chat-1",
+        boundGitChangeBaseRef: "dev",
+        boundGitChangeHeadRef: "feature/x",
+        boundGitChangeRelationshipId: "rel-git-1",
+      },
+    ]);
+  });
+
+  it("drops malformed Git↔Chat snapshot fields instead of trusting the persisted blob", () => {
+    const wins = [
+      win({ id: "git-1", type: "governedGit", cfg: {} }),
+      win({ id: "chat-1", type: "chat", cfg: {} }),
+    ];
+    const raw = JSON.stringify([
+      // Wrong types and empty strings must all fall away — no half-snapshot survives.
+      {
+        id: "c-1",
+        a: "git-1",
+        b: "chat-1",
+        boundGitChangeBaseRef: 42,
+        boundGitChangeHeadRef: "",
+        boundGitChangeRelationshipId: null,
+      },
+    ]);
+    expect(parsePersistedConnections(raw, wins)).toEqual([{ id: "c-1", a: "git-1", b: "chat-1" }]);
+  });
+
   it("clamps hostile geometry magnitudes instead of trusting persisted numbers", () => {
     // Finite but absurd values passed the old Number.isFinite-only checks and
     // reached layout math; a z beyond safe-integer precision even froze focus

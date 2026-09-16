@@ -9,7 +9,7 @@
     "@oscharko-dev/keiko-tool-catalog",
     "ws"
   ],
-  "ignoreBinaries": ["pwsh", "mkfifo", "ldd", "sqlite3", "pgrep"],
+  "ignoreBinaries": ["pwsh", "mkfifo", "ldd", "sqlite3", "pgrep", "ssh-keygen"],
   "workspaces": {
     ".": {
       "playwright": false,

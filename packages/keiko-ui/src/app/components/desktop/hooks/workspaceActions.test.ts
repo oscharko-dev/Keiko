@@ -597,7 +597,7 @@ function makeConnectHarness(
   overrides: ConnectHarnessOverrides = {},
 ): ReturnType<typeof makeConnectActions> {
   const winsRef = ref(wins);
-  const connsRef = ref(conns);
+  const connsRef = ref<Connection[]>([...conns]);
   const connsByEndpoint = new Map<string, Connection[]>();
   for (const c of conns) {
     const a = connsByEndpoint.get(c.a);
@@ -607,6 +607,18 @@ function makeConnectHarness(
     if (b === undefined) connsByEndpoint.set(c.b, [c]);
     else b.push(c);
   }
+  // Keep `connsRef.current` in sync with every `setConns` call so `isDuplicate(connsRef.current,
+  // …)` inside the actions reflects the same live state React would carry through the ref in
+  // production (#3506 review — the deferred-bind cleanup depends on that read).
+  const providedSetConns = overrides.setConns;
+  const setConns: Dispatch<SetStateAction<Connection[]>> = (action) => {
+    const next =
+      typeof action === "function"
+        ? (action as (previous: Connection[]) => Connection[])(connsRef.current)
+        : action;
+    connsRef.current = next;
+    if (providedSetConns !== undefined) providedSetConns(next);
+  };
   return makeConnectActions({
     wsRef: { current: null } as RefObject<HTMLElement | null>,
     viewRef: ref<View>({ zoom: 1, x: 0, y: 0 }),
@@ -618,7 +630,7 @@ function makeConnectHarness(
     connectingRef: ref<ConnectingState | null>(overrides.connecting ?? null),
     connectCleanupRef: ref<(() => void) | null>(null),
     focus: () => undefined,
-    setConns: overrides.setConns ?? ((() => undefined) as Dispatch<SetStateAction<Connection[]>>),
+    setConns,
     setConnecting: (() => undefined) as Dispatch<SetStateAction<ConnectingState | null>>,
     onScopeBind: overrides.onScopeBind,
     onScopeUnbind: overrides.onScopeUnbind,
@@ -3007,6 +3019,101 @@ describe("confirmConnect — bind veto + bind-time snapshot (Release 0.2.0)", ()
     harness.confirmConnect("quality", evt);
     await flushAsyncBind();
     expect(store.conns).toHaveLength(1);
+  });
+
+  // #3506 review — rejecting a duplicate Git↔Chat bind at the source. Without this guard, a
+  // second confirm on an already-bound pair reached `onGitChangeBind`, the server minted a NEW
+  // relationship, and the edge's `boundGitChangeRelationshipId` was overwritten — the original
+  // relationship stayed active on the server but became unreachable through the UI.
+  it("does not re-invoke onGitChangeBind when the Git↔Chat pair is already bound", async () => {
+    const store = {
+      conns: [
+        {
+          id: "git-1~chat-1",
+          a: "git-1",
+          b: "chat-1",
+          boundChatWindowId: "chat-1",
+          boundGitChangeBaseRef: "dev",
+          boundGitChangeHeadRef: "feature/x",
+          boundGitChangeRelationshipId: "rel-git-1",
+        },
+      ] as Connection[],
+    };
+    const onGitChangeBind = vi.fn();
+    const harness = makeConnectHarness(
+      [
+        win("governedGit", { gitChangeBaseRef: "dev", gitChangeHeadRef: "feature/x" }, "git-1"),
+        win("chat", { chatId: "chat-private", projectPath: "/repo" }, "chat-1"),
+      ],
+      store.conns,
+      {
+        connecting: { from: "git-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onGitChangeBind,
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    await flushAsyncBind();
+    expect(onGitChangeBind).not.toHaveBeenCalled();
+    // The pre-existing edge (with its original relationship id) survives untouched — no new
+    // relationship replaces it.
+    expect(store.conns).toEqual([
+      {
+        id: "git-1~chat-1",
+        a: "git-1",
+        b: "chat-1",
+        boundChatWindowId: "chat-1",
+        boundGitChangeBaseRef: "dev",
+        boundGitChangeHeadRef: "feature/x",
+        boundGitChangeRelationshipId: "rel-git-1",
+      },
+    ]);
+  });
+
+  // #3506 review — a deferred bind whose optimistic edge is removed before it settles must
+  // hand the just-minted server relationship back through `onGitChangeUnbind`. Without this,
+  // the visible edge disappears while the remote relationship remains — a leak with no UI
+  // handle to release it.
+  it("unbinds a Git↔Chat relationship whose optimistic edge was removed before the bind settled", async () => {
+    const store = { conns: [] as Connection[] };
+    const deferredScope = deferredValue<ChatGitChangeScope>();
+    const onGitChangeUnbind = vi.fn(() => true);
+    const harness = makeConnectHarness(
+      [
+        win("governedGit", { gitChangeBaseRef: "dev", gitChangeHeadRef: "feature/x" }, "git-1"),
+        win("chat", { chatId: "chat-private", projectPath: "/repo" }, "chat-1"),
+      ],
+      [],
+      {
+        connecting: { from: "git-1", x: 0, y: 0 },
+        setConns: collectingSetConns(store),
+        onGitChangeBind: () => deferredScope.promise,
+        onGitChangeUnbind,
+      },
+    );
+    harness.confirmConnect("chat-1", evt);
+    // The optimistic edge is drawn immediately (no relationship id yet).
+    expect(store.conns).toHaveLength(1);
+    expect(store.conns[0]?.boundGitChangeRelationshipId).toBeUndefined();
+
+    // The operator disconnects before the bind resolves. The edge carries no relationship id,
+    // so removeConn has no unbind work to perform — the edge is removed locally at once.
+    harness.removeConn("git-1~chat-1");
+    expect(store.conns).toHaveLength(0);
+    expect(onGitChangeUnbind).not.toHaveBeenCalled();
+
+    // Server accept arrives with a valid relationship id; the settle path must release it.
+    deferredScope.resolve(gitScope("rel-deferred"));
+    await deferredScope.promise;
+    await flushAsyncBind();
+
+    expect(onGitChangeUnbind).toHaveBeenCalledOnce();
+    expect(onGitChangeUnbind).toHaveBeenCalledWith("chat-1", "rel-deferred", {
+      conversationId: "chat-private",
+      projectPath: "/repo",
+    });
+    // No zombie edge sneaks back into the store from the settle path.
+    expect(store.conns).toHaveLength(0);
   });
 });
 

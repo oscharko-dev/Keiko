@@ -729,6 +729,12 @@ function assessProcessActivity(
       warning: "analyzed raw log belongs to a process that recorded its exit",
     };
   }
+  if (!Number.isSafeInteger(candidate.pid) || candidate.pid <= 0) {
+    return {
+      value: "unknown",
+      warning: "analyzed raw log declares a non-positive process identifier",
+    };
+  }
   return isRunning(candidate.pid)
     ? { value: "apparently-active" }
     : {

@@ -84,6 +84,28 @@ describe("canConnect — Git change ↔ chat", () => {
   it("labels the edge as a Git-change context binding", () => {
     expect(relLabel(snap("governedGit"), snap("chat"))).toBe("uses Git change");
   });
+
+  // #3506 review — the Git↔Chat pair proof paired only the valid case. canConnect must reject
+  // absent, malformed, hostile, and self-pair inputs on the same edge too; drive the check
+  // through the public `canConnect` (the CONNECTABLE table is deliberately not re-derived here so
+  // the fixture cannot go green over a moved formula).
+  it("rejects Git↔Chat pairs whose inputs are absent, malformed, or self-referential", () => {
+    // Absent inputs.
+    expect(canConnect(undefined, "chat")).toBe(false);
+    expect(canConnect("governedGit", undefined)).toBe(false);
+    expect(canConnect("", "chat")).toBe(false);
+    expect(canConnect("governedGit", "")).toBe(false);
+    // Malformed / unknown window types — neither key is a real WindowType.
+    expect(canConnect("not-a-window", "chat")).toBe(false);
+    expect(canConnect("governedGit", "not-a-window")).toBe(false);
+    // Hostile inputs shaped like real names but not real WindowTypes: leading/trailing whitespace
+    // and casing that could pass a stringly-typed check.
+    expect(canConnect("  governedGit  ", "chat")).toBe(false);
+    expect(canConnect("GovernedGit", "Chat")).toBe(false);
+    // Self-pair: even a real connectable type must never bind to itself.
+    expect(canConnect("governedGit", "governedGit")).toBe(false);
+    expect(canConnect("chat", "chat")).toBe(false);
+  });
 });
 
 describe("relLabel — files ↔ quality (#270)", () => {

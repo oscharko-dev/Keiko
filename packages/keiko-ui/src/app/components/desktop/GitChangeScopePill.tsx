@@ -769,8 +769,15 @@ function ScopePillStatus({
   );
 }
 
-function comparisonKey(baseRef: string, headRef: string): string {
-  return `${baseRef}\u0000${headRef}`;
+// #3506 review - a chat can hold multiple Git-change scopes across DIFFERENT repositories
+// that happen to share the same base/head ref names. `remoteDigest` is the documented same-
+// repository key (bff-wire.ts correction 6): the filter must include it so a confirmed scope
+// on repo A does not hide a still-pending comparison on repo B just because they share
+// `baseRef/headRef`. A pending comparison carries `remoteDigest` only when its bound
+// connection has one; when it is undefined, the pending stays visible next to a same-refs
+// confirmed scope on a different repo.
+function comparisonKey(remoteDigest: string | undefined, baseRef: string, headRef: string): string {
+  return `${remoteDigest ?? ""}\u0000${baseRef}\u0000${headRef}`;
 }
 
 function pendingComparisonLabel(comparison: WorkspaceLinkedGitChangeComparison): string {
@@ -781,10 +788,15 @@ function pendingComparisonsWithoutConfirmed(
   pendingComparisons: readonly WorkspaceLinkedGitChangeComparison[],
   scopes: readonly ChatGitChangeScope[],
 ): readonly WorkspaceLinkedGitChangeComparison[] {
-  const confirmed = new Set(scopes.map((scope) => comparisonKey(scope.baseRef, scope.headRef)));
+  const confirmed = new Set(
+    scopes.map((scope) => comparisonKey(scope.remoteDigest, scope.baseRef, scope.headRef)),
+  );
   return pendingComparisons.filter(
     (comparison) =>
-      comparison.pending && !confirmed.has(comparisonKey(comparison.baseRef, comparison.headRef)),
+      comparison.pending &&
+      !confirmed.has(
+        comparisonKey(comparison.remoteDigest, comparison.baseRef, comparison.headRef),
+      ),
   );
 }
 

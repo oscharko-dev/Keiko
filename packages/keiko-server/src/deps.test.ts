@@ -1881,7 +1881,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     }
   });
 
-  it("seeds an ambient launch directory without inferring package-script trust", () => {
+  it("seeds an ambient launch directory without inferring package-script trust", async () => {
     const projectDir = tmp("launch-project-");
     const evidenceDir = tmp("ev-launch-");
     const dbPath = join(projectDir, ".keiko", "ui", "keiko-ui.db");
@@ -1896,11 +1896,13 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
     expect(deps.preferredProjectPath).toBe(projectDir);
     expect(deps.store.listProjects().map((project) => project.path)).toEqual([projectDir]);
     expect(deps.workspaceScriptTrust?.trustLevelForRoot(projectDir)).toBe("restricted");
-    deps.store.close();
-    deps.memoryVault?.close();
+    // Use the typed process-lifetime disposal contract instead of touching individual owned
+    // resources; `dispose` closes the shared sqlite handle that backs the store and the vault
+    // together (deps.ts PersistenceBundle.dispose).
+    await deps.dispose?.();
   });
 
-  it("grants package-script trust for an explicitly launcher-selected initial project", () => {
+  it("grants package-script trust for an explicitly launcher-selected initial project", async () => {
     const projectDir = tmp("launcher-selected-project-");
     const deps = buildUiHandlerDeps({
       configPath: undefined,
@@ -1913,8 +1915,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
 
     expect(deps.preferredProjectPath).toBe(projectDir);
     expect(deps.workspaceScriptTrust?.trustLevelForRoot(projectDir)).toBe("trusted");
-    deps.store.close();
-    deps.memoryVault?.close();
+    await deps.dispose?.();
   });
 
   // Relocated, not dropped. This asserted that assembly composes a GitHub port for the launch

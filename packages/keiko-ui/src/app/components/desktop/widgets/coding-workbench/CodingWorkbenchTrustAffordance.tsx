@@ -147,12 +147,19 @@ function visiblePendingTrustDecision(
   target: TrustTarget,
   acceptedPauseKey: string | undefined,
 ): PendingTrustDecision | undefined {
-  if (target.pauseKey === undefined || acceptedPauseKey === target.pauseKey) return undefined;
+  if (target.pauseKey === undefined) return undefined;
   const pending = pendingTrustDecision(repository, {
     ...worktreeGrant,
     available: target.worktreeRoot !== null,
   });
-  return pending === undefined ? undefined : { ...pending, pauseKey: target.pauseKey };
+  // The pause reason moves from repository to worktree once the repository grant lands (the
+  // worktree becomes a separate decision after that). Bind the pause key to the grant target so
+  // accepting the repository grant does not suppress a still-required worktree grant on the same
+  // paused run revision.
+  const pauseKey = `${target.pauseKey}${pending.grantTarget}`;
+  if (acceptedPauseKey === pauseKey) return undefined;
+  const { grantTarget: _grantTarget, ...decision } = pending;
+  return { ...decision, pauseKey };
 }
 
 function acceptDecision(
@@ -170,16 +177,19 @@ function acceptDecision(
 // the repository is already trusted, which is the drift case where the task workspace's manifest no
 // longer has the repository's trusted basis. A repository whose status does not resolve keeps the
 // pause visible but disables the button — no blind grant against an unknown trust subject.
+type TrustGrantTarget = "repository" | "worktree" | "unknown-repository";
+
 function pendingTrustDecision(
   repository: WorkspaceTrustView,
   worktreeGrant: WorktreeTrustGrant & { readonly available: boolean },
-): Omit<PendingTrustDecision, "pauseKey"> | undefined {
+): Omit<PendingTrustDecision, "pauseKey"> & { readonly grantTarget: TrustGrantTarget } {
   if (repository.status?.trust === "restricted") {
     return {
       notice: "codingWorkbench.trust.runWaitingNotice",
       granting: repository.mutating,
       available: true,
       onAllow: repository.grant,
+      grantTarget: "repository",
     };
   }
   if (repository.status?.trust === "trusted") {
@@ -188,6 +198,7 @@ function pendingTrustDecision(
       granting: worktreeGrant.granting,
       available: worktreeGrant.available,
       onAllow: worktreeGrant.grant,
+      grantTarget: "worktree",
     };
   }
   return {
@@ -195,6 +206,7 @@ function pendingTrustDecision(
     granting: false,
     available: false,
     onAllow: noopGrant,
+    grantTarget: "unknown-repository",
   };
 }
 

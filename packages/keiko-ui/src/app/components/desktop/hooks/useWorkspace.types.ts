@@ -49,6 +49,12 @@ export interface WorkspaceLinkedGitChangeComparison {
   readonly baseRef: string;
   readonly headRef: string;
   readonly pending: boolean;
+  // Repository identity: `connectionId` names the UI edge (`${fromId}~${toId}`), which is not
+  // enough on its own — a chat can hold multiple Git-change scopes across DIFFERENT repositories
+  // that happen to share the same base/head ref names. `remoteDigest` is the documented same-
+  // repository key, so the confirmed/pending comparison filter must include it (review on #3506).
+  // Optional because the projection precedes remote-digest hydration for some legacy edges.
+  readonly remoteDigest?: string | undefined;
 }
 
 // Issue #2150 follow-up — copy/cut/paste report counts so the workspace can

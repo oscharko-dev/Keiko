@@ -1716,6 +1716,31 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       if (removeIfRejected) removeStoredConnectionBetween(fromId, toId);
       return;
     }
+    // #3506 review — the operator can remove the optimistic edge before onGitChangeBind
+    // resolves; the edge disappears with no `boundGitChangeRelationshipId` yet, so `removeConn`
+    // cannot ask the server to release it. When the accept finally arrives, the edge is gone
+    // and no local update work remains — but the server just minted a relationship and unless
+    // we hand it back through `onGitChangeUnbind` the relationship leaks.
+    if (
+      binding.gitChangeRelationshipId !== undefined &&
+      chatWindowId !== null &&
+      !isDuplicate(connsRef.current, fromId, toId)
+    ) {
+      const target = chatUnbindTarget(winById(chatWindowId));
+      const relationshipId = binding.gitChangeRelationshipId;
+      if (onGitChangeUnbind !== undefined) {
+        try {
+          void Promise.resolve(onGitChangeUnbind(chatWindowId, relationshipId, target)).catch(
+            () => {
+              onConnectionUnbindFailure?.();
+            },
+          );
+        } catch {
+          onConnectionUnbindFailure?.();
+        }
+      }
+      return;
+    }
     updateConnectionScope(
       fromId,
       toId,
@@ -1739,6 +1764,12 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
     const selection = connectionBindingSelection(from, to);
     if (selection === null) return null;
     const { boundScope, chatWindowId, connectorScope, gitChangeSelection } = selection;
+    // #3506 review — a Git↔Chat pair already bound by an existing edge must not go through
+    // onGitChangeBind again: the server would mint a new relationship and the settle step would
+    // overwrite the edge's `boundGitChangeRelationshipId`, orphaning the original relationship
+    // on the server (disconnect only unbinds the id currently on the edge). One edge, one
+    // relationship — reject the duplicate before the callback is ever called.
+    if (gitChangeSelection !== null && isDuplicate(connsRef.current, fromId, toId)) return null;
     const chatConversationIdAtBind =
       chatWindowId === null ? undefined : chatConversationId(winById(chatWindowId));
     return {
@@ -1750,8 +1781,10 @@ export function makeConnectActions(args: ConnectArgs): ConnectApi {
       connectorScope,
       gitChangeSelection,
       bindingTarget: chatBindingTarget(chatWindowId, chatConversationIdAtBind, winById),
-      hadGitConnectionBeforeBind:
-        gitChangeSelection !== null && isDuplicate(connsRef.current, fromId, toId),
+      // With the duplicate-guard above, a Git↔Chat attempt that reaches this point never had a
+      // prior connection between the pair. `hadGitConnectionBeforeBind` therefore stays false
+      // for the Git case and always reflects a first-time bind.
+      hadGitConnectionBeforeBind: false,
     };
   };
 
@@ -2493,7 +2526,7 @@ function boundGitChangeRef(value: string | undefined): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value : null;
 }
 
-export function boundGitChangeComparisonOf(conn: {
+function boundGitChangeComparisonOf(conn: {
   readonly id: string;
   readonly boundGitChangeBaseRef?: string;
   readonly boundGitChangeHeadRef?: string;
@@ -2525,7 +2558,7 @@ export function gitChangeChatBind(a: AppWindow, b: AppWindow): GitChangeBindSele
   return { baseRef, headRef };
 }
 
-export function isGitChangeChatPair(a: AppWindow, b: AppWindow): boolean {
+function isGitChangeChatPair(a: AppWindow, b: AppWindow): boolean {
   return windowOfType(a, b, "governedGit") !== null && windowOfType(a, b, "chat") !== null;
 }
 

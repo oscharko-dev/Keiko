@@ -309,14 +309,18 @@ function requestAutomaticReadiness(candidates: readonly ModelCapability[]): Prom
       }
       return ready;
     })
-    .catch((error: unknown): never => {
+    .catch((): boolean => {
+      // A network error, non-2xx response, invalid JSON, or malformed readiness report reaches
+      // here. Rethrowing would reject `fetchCodingWorkbenchSidecarGatewayProfile()` and break
+      // Coding Workbench startup. Keep the cooldown so an automatic retry is bounded, but let
+      // the caller continue with the original unavailable profile.
       if (generation === automaticReadinessGeneration) {
         automaticReadinessRetryAt.set(
           requestKey,
           Date.now() + AUTOMATIC_READINESS_RETRY_COOLDOWN_MS,
         );
       }
-      throw error;
+      return false;
     });
   const tracked = request.finally(() => automaticReadinessRequests.delete(requestKey));
   automaticReadinessRequests.set(requestKey, tracked);

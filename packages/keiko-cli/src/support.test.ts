@@ -1027,6 +1027,54 @@ describe("runSupportCli analyze", () => {
     );
   });
 
+  it("reports unknown process activity when the newest raw-log record has a non-positive pid", async () => {
+    // Regression pin: `process.kill(0, 0)` on POSIX can succeed for the caller's process group, so
+    // a malformed raw-log line with `pid: 0` used to be reported as `apparently-active`. The pid
+    // guard must run BEFORE the running-process probe, and the probe must never be reached for a
+    // non-positive or non-safe-integer pid.
+    const stateDir = join(dir, ".keiko");
+    const logDir = join(stateDir, "logs");
+    mkdirSync(logDir, { recursive: true });
+    const filePath = join(logDir, "server.log");
+    writeFileSync(
+      filePath,
+      `${JSON.stringify({
+        ts: "2026-08-21T00:00:00.000Z",
+        category: "process",
+        op: "process.heartbeat",
+        pid: 0,
+        instanceId: "aaaaaaaa",
+        seq: 1,
+      })}\n`,
+    );
+
+    let probeCalls = 0;
+    const c = makeIo();
+    const code = await runSupportCli(
+      ["analyze", filePath, "--json"],
+      c.io,
+      {},
+      {
+        now: () => new Date("2026-08-21T00:00:01.000Z"),
+        processIsRunning: () => {
+          probeCalls += 1;
+          return true;
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    expect(probeCalls).toBe(0);
+    const parsed = JSON.parse(c.out()) as {
+      readonly analysisContext: { readonly processActivity: string };
+      readonly warnings: readonly string[];
+    };
+    expect(parsed.analysisContext.processActivity).toBe("unknown");
+    expect(parsed.warnings).toContain(
+      "analyzed raw log declares a non-positive process identifier",
+    );
+  });
+
   it("renders the analyzed log context before the human-readable timeline", async () => {
     const filePath = join(dir, "server.log");
     writeFileSync(

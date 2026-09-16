@@ -1371,9 +1371,17 @@ export function GitClientWindow({
 
   const onRepositoryAdded = useCallback(
     (project: ProjectWithAvailability): void => {
+      // A locked window is bound to the active task workspace; reconnecting to the newly-added
+      // repository would call `applyRepositorySelection` and rewrite `selectedPath`/`projectPath`,
+      // violating `lockedToActiveRoot`. Refresh the recents list so the new entry appears in the
+      // Repository menu (available for unlocked windows) without changing this window's binding.
+      if (lockedToActiveRoot) {
+        loadRepositories();
+        return;
+      }
       reconnectRepository(project.path);
     },
-    [reconnectRepository],
+    [loadRepositories, lockedToActiveRoot, reconnectRepository],
   );
 
   useEffect(() => {

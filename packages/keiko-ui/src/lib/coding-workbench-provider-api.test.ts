@@ -308,6 +308,78 @@ describe("fetchCodingWorkbenchSidecarGatewayProfile", () => {
     window.removeEventListener(GATEWAY_MODEL_READINESS_UPDATED_EVENT, readinessUpdated);
   });
 
+  // A `/api/gateway/readiness` transport failure — network error, non-2xx response, or a payload
+  // that fails validation — must not reject `fetchCodingWorkbenchSidecarGatewayProfile()`. The
+  // Coding Workbench needs the original unavailable profile so its UI stays functional; the
+  // cooldown bounds the retry so a flaky gateway cannot melt the client.
+  it.each([
+    ["network error", (): Promise<Response> => Promise.reject(new TypeError("network down"))],
+    [
+      "non-2xx response",
+      (): Promise<Response> => Promise.resolve(new Response("{}", { status: 502 })),
+    ],
+    [
+      "invalid JSON body",
+      (): Promise<Response> =>
+        Promise.resolve(
+          new Response("<html>oops</html>", {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          }),
+        ),
+    ],
+    [
+      "malformed readiness report",
+      (): Promise<Response> =>
+        Promise.resolve(
+          jsonResponse({
+            checkedAt: "2026-09-15T05:30:00.000Z",
+            overallStatus: "ready",
+            probes: "not-an-array",
+            verifiedCapabilities: { toolCalling: true },
+          }),
+        ),
+    ],
+  ] as const)(
+    "preserves the unavailable profile when automatic readiness fails with a %s",
+    async (_name, readinessResponse) => {
+      const unavailable = { status: "unavailable", reason: "no-tool-calling" };
+      const models = {
+        models: [
+          {
+            id: "coding-chat",
+            kind: "chat",
+            contextWindow: 128_000,
+            maxOutputTokens: 4_096,
+            toolCalling: false,
+            structuredOutput: true,
+            streaming: true,
+            supportsImageInput: false,
+            supportsDocumentInput: false,
+            workflowEligible: true,
+            costClass: "medium",
+            latencyClass: "standard",
+            throughputHint: "configured gateway",
+            preferredUseCases: ["Coding"],
+            knownLimitations: [],
+          },
+        ],
+      };
+      const fetchMock = vi.fn((input: RequestInfo | URL): Promise<Response> => {
+        const path = String(input);
+        if (path === "/api/coding-sidecar/gateway/profile") {
+          return Promise.resolve(jsonResponse(unavailable));
+        }
+        if (path === "/api/models") return Promise.resolve(jsonResponse(models));
+        if (path === "/api/gateway/readiness") return readinessResponse();
+        return Promise.reject(new TypeError(`Unexpected request: ${path}`));
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      await expect(fetchCodingWorkbenchSidecarGatewayProfile()).resolves.toEqual(unavailable);
+    },
+  );
+
   it("rejects malformed sidecar gateway profile responses", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       jsonResponse({

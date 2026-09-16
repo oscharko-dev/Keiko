@@ -2060,7 +2060,11 @@ describe("active workspace binding override (Issue #446)", () => {
   });
 
   it("repairs legacy repository Files windows with stale task-workspace resolved roots", async () => {
-    const ctx = boundCtx("/wt/active");
+    // The stale-resolvedRoot repair fires only in unbound mode. During an active bind the Files
+    // widget legitimately reports the managed task-workspace root as `resolvedRoot`, and treating
+    // that as drift would pin the window to the repository and disable the active-root override
+    // for the surface (#3506 review).
+    const ctx = boundCtx(null);
     render(
       <>
         {WIN_TYPES.files.render(
@@ -2079,6 +2083,31 @@ describe("active workspace binding override (Issue #446)", () => {
         root: "/repos/product",
         rootBinding: "coding-repository",
       }),
+    );
+  });
+
+  it("does not treat an active-bind resolvedRoot as drift for repository Files windows", async () => {
+    // #3506 review — with an active task binding, `resolveBoundRoot` returns `ctx.activeRoot`,
+    // FilesWidget correctly persists that root as `resolvedRoot`, and the resulting cfg carries a
+    // managed-worktree resolvedRoot alongside a repository `root`. The drift repair must NOT
+    // interpret this legitimate state as stale — otherwise the window is pinned to the repository
+    // and the active-root override stops working for it.
+    const ctx = boundCtx("/wt/active");
+    render(
+      <>
+        {WIN_TYPES.files.render(
+          {
+            root: "/repos/product",
+            resolvedRoot: "/repos/product/.keiko/dev/ui/task-workspaces/repo/ws-1",
+          },
+          ctx,
+        )}
+      </>,
+    );
+
+    expect(await screen.findByTestId("files-root")).toHaveTextContent("/wt/active");
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith(
+      expect.objectContaining({ rootBinding: "coding-repository" }),
     );
   });
 
@@ -2165,7 +2194,8 @@ describe("active workspace binding override (Issue #446)", () => {
   });
 
   it("repairs legacy repository editor windows with stale task-workspace resolved roots", async () => {
-    const ctx = boundCtx("/wt/active");
+    // See the sibling Files test: the stale-resolvedRoot repair fires only in unbound mode.
+    const ctx = boundCtx(null);
     render(
       <>
         {WIN_TYPES.editor.render(
@@ -2184,6 +2214,28 @@ describe("active workspace binding override (Issue #446)", () => {
         root: "/repos/product",
         rootBinding: "coding-repository",
       }),
+    );
+  });
+
+  it("does not treat an active-bind resolvedRoot as drift for repository editor windows", async () => {
+    editorWidgetMounts.length = 0;
+    editorWidgetUnmounts.length = 0;
+    const ctx = boundCtx("/wt/active");
+    render(
+      <>
+        {WIN_TYPES.editor.render(
+          {
+            root: "/repos/product",
+            resolvedRoot: "/repos/product/.keiko/dev/ui/task-workspaces/repo/ws-1",
+          },
+          ctx,
+        )}
+      </>,
+    );
+
+    expect(await screen.findByTestId("editor-widget")).toHaveTextContent("/wt/active:");
+    expect(ctx.updateCfg).not.toHaveBeenCalledWith(
+      expect.objectContaining({ rootBinding: "coding-repository" }),
     );
   });
 

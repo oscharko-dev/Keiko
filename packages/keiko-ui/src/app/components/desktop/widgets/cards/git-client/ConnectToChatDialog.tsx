@@ -535,6 +535,20 @@ function projectConnectedChat(
   };
 }
 
+// The server accepts a safe, resolvable ref even when it is not among the local
+// `baseBranchChoices` — `defaultBaseRef` preserves an inferred `baseBranchName` in that case.
+// Include the resolved ref in the field's own choices so the enabled `KeikoSelect` can display
+// the value that will be submitted (the trigger renders the placeholder for unknown values).
+function baseBranchChoicesWithResolved(
+  baseBranchChoices: readonly string[],
+  resolvedBaseRef: string,
+): readonly string[] {
+  if (resolvedBaseRef === "" || baseBranchChoices.includes(resolvedBaseRef)) {
+    return baseBranchChoices;
+  }
+  return [resolvedBaseRef, ...baseBranchChoices];
+}
+
 function ConnectDialogForm({
   dialogRef,
   state,
@@ -552,6 +566,7 @@ function ConnectDialogForm({
   readonly onClose: () => void;
   readonly t: I18nTranslate;
 }): ReactNode {
+  const fieldChoices = baseBranchChoicesWithResolved(baseBranchChoices, state.baseRef);
   return (
     <DialogChrome
       dialogRef={dialogRef}
@@ -571,8 +586,8 @@ function ConnectDialogForm({
         currentBranch={currentBranch}
         baseRef={state.baseRef}
         onBaseRefChange={state.setBaseRef}
-        baseBranchChoices={baseBranchChoices}
-        baseBranchDisabled={baseBranchChoices.length === 0}
+        baseBranchChoices={fieldChoices}
+        baseBranchDisabled={fieldChoices.length === 0}
         error={state.error}
         busy={state.busy}
         canSubmit={state.canSubmit}

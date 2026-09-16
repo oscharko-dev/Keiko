@@ -934,6 +934,60 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(JSON.stringify(captured.records)).not.toContain("design-system controls");
   });
 
+  // Reviewer thread (PR #3506): the `failed` outcome of projectMemoryInitialContext (the catch block
+  // at codingRuntimeOrchestrator.ts:2189) was uncovered. When `getContextForRun` rejects, the
+  // orchestrator must still emit the `coding-runtime.project-memory.context` activity line with
+  // outcome=failed on the run's correlation id AND route a redacted diagnostic through
+  // recordRuntimeProjectMemoryFailure (message `coding-runtime-project-memory-context-failed`).
+  it("emits a failed outcome and a redacted diagnostic when project memory reading rejects", async () => {
+    const captured = captureActivityLog();
+    const capturedDiag = captureDiagnostics();
+    const getContextForRun = vi.fn<CodingRuntimeProjectMemoryPort["getContextForRun"]>(() =>
+      Promise.reject(new Error("upstream memory port is unhappy")),
+    );
+    const f = fixture(
+      undefined,
+      undefined,
+      [],
+      capturedDiag.diagnostics,
+      captured.activityLog,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { getContextForRun },
+    );
+
+    await f.orchestrator.start(start);
+
+    expectProjectMemoryLog(captured.records, {
+      runId: "run-1",
+      outcome: "failed",
+      includedMemoryCount: 0,
+    });
+    const activityLine = captured.records.find(
+      (record) => record.op === "coding-runtime.project-memory.context",
+    );
+    expect(activityLine?.level).toBe("warn");
+    // Fresh dispatch must still fire; the failure never blocks the initial turn.
+    const dispatchRequest = firstTaskDispatchRequest(f.taskDispatcher.dispatch.mock.calls);
+    expect(dispatchRequest).not.toHaveProperty("initialContext");
+    // Diagnostic goes through recordRuntimeProjectMemoryFailure with the fixed body-free message;
+    // the underlying rejection reason must NOT surface in the diagnostic (redaction pin).
+    const diagnostic = capturedDiag.records.find(
+      (record) => record.message === "coding-runtime-project-memory-context-failed",
+    );
+    expect(diagnostic).toBeDefined();
+    expect(diagnostic?.operation).toBe("coding-runtime.project-memory");
+    expect(diagnostic?.source).toBe("coding-runtime-orchestrator.project-memory");
+    expect(diagnostic?.code).toBe("stage=start:reason=project-memory-context");
+    // The activity line and the diagnostic MUST share the same correlationId, so a
+    // `--correlation-id <run>` timeline pulls the failure and its diagnostic together.
+    expect(activityLine?.correlationId).toBe(diagnostic?.correlationId);
+    expect(JSON.stringify(capturedDiag.records)).not.toContain("upstream memory port is unhappy");
+  });
+
   it("does not read project memory when the operator disables it for the run", async () => {
     const captured = captureActivityLog();
     const getContextForRun = vi.fn<CodingRuntimeProjectMemoryPort["getContextForRun"]>();

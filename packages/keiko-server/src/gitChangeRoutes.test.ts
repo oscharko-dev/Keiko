@@ -466,12 +466,25 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
   });
 
   it("blocks an identical base/head comparison before capture runs", async () => {
-    const { deps, chatStore } = buildHarness({ runnerScript: {}, snapshots: [] });
+    // Reviewer thread (PR #3506): pin that the snapshot service is NEVER invoked for the
+    // identical-refs branch. Regression guard against a fix that returns identical-refs only
+    // AFTER performing an unnecessary snapshot capture — the whole point of this rejection is that
+    // no snapshot is worth taking when the two refs resolve to the same head.
+    const base = fakeSnapshotService([]);
+    if (base === undefined) throw new TypeError("Fake snapshot service is required");
+    const captureSpy = vi.fn((input: GitChangeSnapshotCaptureInput) => base.capture(input));
+    const service: UiHandlerDeps["gitChangeSnapshotService"] = { ...base, capture: captureSpy };
+    const { deps, chatStore } = buildHarness({
+      runnerScript: {},
+      snapshots: [],
+      snapshotService: service,
+    });
     const chat = chatStore.createChat(projectPath(chatStore), "t", "m");
     const body = { ...connectRequestBody(chat.id), baseRef: "feature/x" };
     const result = asRouteResult(await connectHandler(makeCtx(body), deps));
     expect(result.body).toEqual({ status: "blocked", reason: "identical-refs" });
     expect(chatStore.findChatById(chat.id)?.gitChangeScopes ?? []).toHaveLength(0);
+    expect(captureSpy).not.toHaveBeenCalled();
   });
 
   // Only exit 1 from `git rev-parse -q --verify HEAD` means "no such ref". A sandbox preflight

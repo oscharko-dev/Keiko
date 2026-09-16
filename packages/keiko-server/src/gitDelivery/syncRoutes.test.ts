@@ -7,14 +7,19 @@
 //   * a content-free sync evidence record lands after execute (no URLs / secrets).
 
 import { captureActivityLog } from "../activityLogCapture.test-support.js";
-import { mkdtempSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Readable } from "node:stream";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
-import type { GitSyncExecuteResponse, GitSyncPreview } from "@oscharko-dev/keiko-contracts";
+import type {
+  GitSyncExecuteResponse,
+  GitSyncPreview,
+  WorkspaceInstance,
+} from "@oscharko-dev/keiko-contracts";
 import { buildRedactor, createRunRegistry, type UiHandlerDeps } from "../index.js";
 import { createInMemoryUiStore, type UiStore } from "../store/index.js";
 import type { RouteContext } from "../routes.js";
@@ -28,6 +33,14 @@ import {
 import type { GitDeliverySyncSeams } from "./syncExecution.js";
 import { permittedGitDeliveryAuthority } from "./runBoundAuthority.test-support.js";
 import { createInMemoryGitDeliveryApprovalStore } from "./approvalStore.js";
+import {
+  deriveManagedWorktreePath,
+  deriveRepositoryId,
+  deriveTaskBranchName,
+  deriveWorkspaceId,
+} from "../task-workspace/naming.js";
+import { assertManagedRootOwned } from "../task-workspace/managed-root.js";
+import { inspectManagedGitdirIdentity } from "../task-workspace/gitdir-identity.js";
 
 const FETCH_PREVIEW = "/api/git-delivery/fetch/preview";
 const FETCH_APPROVE = "/api/git-delivery/fetch/approve";
@@ -200,6 +213,78 @@ function ctxFor(path: string, body: unknown): RouteContext {
 
 function syncBody(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return { schemaVersion: "1", projectId, ...overrides };
+}
+
+// A genuine `git worktree add` linkage rooted at `sourceRepo`; matches the fixture in
+// commitRoutes.test.ts / localMutationRoutes.test.ts so the sibling managed-worktree test uses the
+// same identity that the production managed-workspace resolver actually accepts (#3347).
+function buildManagedGitWorktree(
+  sourceRepo: string,
+  worktreePath: string,
+  taskBranch: string,
+): string {
+  execFileSync("git", ["init", "-q"], { cwd: sourceRepo });
+  execFileSync("git", ["config", "user.email", "test@example.invalid"], { cwd: sourceRepo });
+  execFileSync("git", ["config", "user.name", "Keiko Test"], { cwd: sourceRepo });
+  execFileSync("git", ["commit", "-q", "--allow-empty", "-m", "fixture"], { cwd: sourceRepo });
+  mkdirSync(dirname(worktreePath), { recursive: true });
+  execFileSync("git", ["worktree", "add", "-q", "-b", taskBranch, worktreePath, "HEAD"], {
+    cwd: sourceRepo,
+  });
+  const inspection = inspectManagedGitdirIdentity(worktreePath, sourceRepo);
+  if (inspection === undefined) {
+    throw new Error("fixture git worktree did not produce a resolvable gitdir identity");
+  }
+  return inspection.identity;
+}
+
+function managedWorkspaceDeps(taskId = "task-443"): {
+  readonly instance: WorkspaceInstance;
+  readonly override: Partial<UiHandlerDeps>;
+  readonly cleanup: () => void;
+} {
+  const managedRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-sync-managed-")));
+  const repoRoot = realpathSync(mkdtempSync(join(tmpdir(), "keiko-gd-sync-repo-")));
+  assertManagedRootOwned(managedRoot);
+  const repositoryId = deriveRepositoryId(repoRoot);
+  const workspaceId = deriveWorkspaceId({ repositoryId, taskId });
+  const managedWorktreePath = deriveManagedWorktreePath({ managedRoot, repositoryId, workspaceId });
+  const taskBranch = deriveTaskBranchName({ taskId });
+  const gitdirIdentity = buildManagedGitWorktree(repoRoot, managedWorktreePath, taskBranch);
+  const instance: WorkspaceInstance = {
+    schemaVersion: "1",
+    workspaceId,
+    taskId,
+    repositoryId,
+    repositoryRoot: repoRoot,
+    baseBranch: "main",
+    taskBranch,
+    managedWorktreePath,
+    gitdirIdentity,
+    lifecycleState: "active",
+    health: "healthy",
+    lock: null,
+    createdAt: "2026-06-26T00:00:00.000Z",
+    updatedAt: "2026-06-26T00:00:00.000Z",
+    driftMarkers: [],
+    recoveryHints: [],
+    auditCorrelationId: workspaceId,
+  };
+  return {
+    instance,
+    override: {
+      managedTaskWorkspaceRoot: managedRoot,
+      workspaceProvisioning: {
+        getInstance: (id: string) => (id === workspaceId ? instance : undefined),
+        provision: () => Promise.reject(new Error("not used")),
+        activate: () => Promise.reject(new Error("not used")),
+      },
+    },
+    cleanup: (): void => {
+      rmSync(repoRoot, { recursive: true, force: true });
+      rmSync(managedRoot, { recursive: true, force: true });
+    },
+  };
 }
 
 beforeEach(() => {
@@ -882,6 +967,48 @@ describe("sync execute — admission redemption below autonomous-delivery", () =
     expect(res.status).toBe(200);
     expect((res.body as GitSyncExecuteResponse).operation).toBe(operation);
     expect(scripted.calls()).toContain(operation);
+  });
+
+  // Reviewer thread (PR #3506): pin that the userInitiated bypass in syncRoutes.ts's
+  // requiresRunAuthority (line 521) does NOT extend to managed task worktrees — the code path
+  // matches the one in localMutationRoutes.ts:285 and commitRoutes.ts, whose route tests already
+  // pin this ("keeps managed task worktrees bound to their accepted run even for user-initiated
+  // local mutations" and "keeps managed task worktrees bound to run authority for user-initiated
+  // commits"). syncRoutes.test.ts only had the happy-path admission test before this.
+  it("keeps managed task worktrees bound to their accepted run even for user-initiated syncs", async () => {
+    const managed = managedWorkspaceDeps();
+    const scripted = scriptedRunner({});
+    try {
+      const handler = createHandleSyncExecute("fetch", {
+        execution: { runner: scripted.runner, now: () => 1_700_000_000_000 },
+      });
+      const modeDeps = deps({
+        ...managed.override,
+        gitDeliveryAuthority: permittedGitDeliveryAuthority(
+          () => projectId,
+          () => projectId,
+          "autonomous-delivery",
+        ),
+      });
+
+      const res = await handler(
+        ctxFor(
+          FETCH_EXECUTE,
+          syncBody({
+            projectId: managed.instance.managedWorktreePath,
+            remote: "origin",
+            userInitiated: true,
+          }),
+        ),
+        modeDeps,
+      );
+
+      expect(res.status).toBe(403);
+      expect(res.body).toMatchObject({ error: { code: "GIT_DELIVERY_AUTHORITY_DENIED" } });
+      expect(scripted.calls()).toEqual([]);
+    } finally {
+      managed.cleanup();
+    }
   });
 
   it("admits an explicit local-user fetch without minting a run approval", async () => {

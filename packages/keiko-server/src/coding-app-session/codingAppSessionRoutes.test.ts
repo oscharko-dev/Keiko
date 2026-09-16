@@ -108,6 +108,41 @@ describe("app-session route handlers (fail-closed defensive branches)", () => {
     expect(channel.sessionCount()).toBe(1);
   });
 
+  // Reviewer thread (PR #3506): pin the two cookie-value classes at the ROUTE handler.
+  // A forged/malformed cookie must not authenticate — the handler mints a fresh session under the
+  // pairing authority. A valid cookie must not mint anything — the handler leaves the response
+  // header-free and the session count unchanged.
+  it("local-session with a forged cookie value issues a fresh app-session cookie", () => {
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const before = channel.sessionCount();
+    const setCookie = handleCodingAppSessionLocalSession(
+      ctx(`${APP_SESSION_COOKIE_NAME}=sess_000000000000000000000000.forged`),
+      deps(channel),
+    ).headers?.["Set-Cookie"];
+
+    expect(setCookie).toHaveLength(11);
+    expect(String(setCookie)).toContain(APP_SESSION_COOKIE_NAME);
+    expect(channel.sessionCount()).toBe(before + 1);
+  });
+
+  it("local-session with a valid cookie stays active and issues no fresh Set-Cookie", () => {
+    const channel = createCodingAppSessionChannel({
+      registry: createSessionRegistry(),
+      pairingPort: createFakeSessionPairingPort(),
+    });
+    const issued = handleCodingAppSessionLocalSession(ctx(), deps(channel)).headers?.["Set-Cookie"];
+    const cookie = String(issued).split(";")[0] ?? "";
+    const before = channel.sessionCount();
+
+    const result = handleCodingAppSessionLocalSession(ctx(cookie), deps(channel));
+
+    expect(result.headers).toBeUndefined();
+    expect(channel.sessionCount()).toBe(before);
+  });
+
   it("rotate without a composed channel acknowledges without a cookie", () => {
     expect(handleCodingAppSessionRotate(ctx(), deps()).headers).toBeUndefined();
   });

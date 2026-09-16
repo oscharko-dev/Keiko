@@ -386,6 +386,10 @@ export const EN_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.timeline.instructions":
     "Focus the timeline, then use Arrow or Page Up and Page Down keys to scroll.",
   "codingWorkbench.timeline.listLabel": "Coding run event timeline",
+  "codingWorkbench.timeline.tool.git_status": "Git status",
+  "codingWorkbench.timeline.tool.repository_search": "Repository search",
+  "codingWorkbench.timeline.tool.workspace_discover": "Workspace discovery",
+  "codingWorkbench.timeline.tool.workspace_read": "Workspace read",
   "codingWorkbench.changes.eyebrow": "Files",
   "codingWorkbench.changes.title": "Changes",
   "codingWorkbench.changes.help": "Changed files appear here.",

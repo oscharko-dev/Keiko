@@ -406,6 +406,10 @@ export const DE_CODING_WORKBENCH_MESSAGES = {
   "codingWorkbench.timeline.instructions":
     "Zeitleiste fokussieren und dann mit Pfeil- oder Bild-auf- und Bild-ab-Tasten scrollen.",
   "codingWorkbench.timeline.listLabel": "Coding-Lauf-Ereigniszeitleiste",
+  "codingWorkbench.timeline.tool.git_status": "Git-Status",
+  "codingWorkbench.timeline.tool.repository_search": "Repository-Suche",
+  "codingWorkbench.timeline.tool.workspace_discover": "Workspace-Erkennung",
+  "codingWorkbench.timeline.tool.workspace_read": "Workspace-Zugriff",
   "codingWorkbench.changes.eyebrow": "Dateien",
   "codingWorkbench.changes.title": "Änderungen",
   "codingWorkbench.changes.help": "Geänderte Dateien erscheinen hier.",

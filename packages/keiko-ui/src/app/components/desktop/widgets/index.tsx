@@ -260,11 +260,19 @@ function hasManagedTaskWorkspaceDrift(
 function shouldUseConfiguredRepositoryRoot(
   cfg: Record<string, unknown>,
   configuredRoot: string | undefined,
+  activeRoot: string | null,
 ): boolean {
-  return (
-    isCodingRepositoryBinding(cfg, configuredRoot) ||
-    hasManagedTaskWorkspaceDrift(cfg, configuredRoot)
-  );
+  if (isCodingRepositoryBinding(cfg, configuredRoot)) return true;
+  // #3506 review — `hasManagedTaskWorkspaceDrift` compares cfg.resolvedRoot (the root the Files
+  // widget last reported through onActiveFileChange) against cfg.root. When an active task
+  // binding is present, `resolveBoundRoot` returned ctx.activeRoot, so FilesWidget correctly
+  // persisted THAT as resolvedRoot. Treating this expected difference as drift pins the window
+  // to the repository via PersistRepositoryRootBinding and permanently disables the
+  // active-root override for the surface. Only apply the drift repair when no active binding is
+  // in effect (ctx.activeRoot === null) — the explicit `coding-repository` binding above stays
+  // untouched.
+  if (activeRoot !== null) return false;
+  return hasManagedTaskWorkspaceDrift(cfg, configuredRoot);
 }
 
 function gitRepositoryRoot(
@@ -616,7 +624,11 @@ registerWindowRender("relationships", () => <RelationshipsView />);
 
 registerWindowRender("files", (cfg, ctx) => {
   const configuredRoot = str(cfg, "root");
-  const honorConfiguredRoot = shouldUseConfiguredRepositoryRoot(cfg, configuredRoot);
+  const honorConfiguredRoot = shouldUseConfiguredRepositoryRoot(
+    cfg,
+    configuredRoot,
+    ctx.activeRoot,
+  );
   const root = honorConfiguredRoot ? configuredRoot : resolveBoundRoot(ctx, configuredRoot);
   return (
     <>
@@ -629,7 +641,11 @@ registerWindowRender("files", (cfg, ctx) => {
 });
 registerWindowRender("editor", (cfg, ctx) => {
   const configuredRoot = str(cfg, "root");
-  const honorConfiguredRoot = shouldUseConfiguredRepositoryRoot(cfg, configuredRoot);
+  const honorConfiguredRoot = shouldUseConfiguredRepositoryRoot(
+    cfg,
+    configuredRoot,
+    ctx.activeRoot,
+  );
   const root = honorConfiguredRoot ? configuredRoot : resolveBoundRoot(ctx, configuredRoot);
   return (
     <>

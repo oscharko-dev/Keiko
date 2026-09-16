@@ -367,6 +367,75 @@ describe("CommitComposer — preview and outcomes", () => {
     expect(screen.getByLabelText("Description")).toHaveValue("Generated detail.");
   });
 
+  // A late draft response must NOT overwrite fields the user edited after clicking Generate.
+  // Fails before the token-snapshot guard is added.
+  it("discards a late generated draft that resolves after the user typed a new summary", async () => {
+    const user = userEvent.setup();
+    const diagnostics: string[] = [];
+    setClientDiagnosticWriter((message) => diagnostics.push(message));
+    let releaseDraft = (_message: string): void => undefined;
+    const onGenerateDraft = vi.fn(
+      (): Promise<string> =>
+        new Promise((resolve) => {
+          releaseDraft = resolve;
+        }),
+    );
+    renderComposer({
+      preview: makePreview(),
+      previewDraft: "",
+      onGenerateDraft,
+    });
+
+    await user.click(screen.getByRole("button", { name: "Generate with Keiko" }));
+    await user.type(screen.getByLabelText("Summary"), "docs: user typed this");
+
+    releaseDraft("chore: model draft\n\nGenerated body.");
+    await waitFor(() =>
+      expect(diagnostics).toContain(
+        "git-client: generated commit draft discarded (composer edited before response)",
+      ),
+    );
+    expect(screen.getByLabelText("Summary")).toHaveValue("docs: user typed this");
+    expect(screen.getByLabelText("Description")).toHaveValue("");
+  });
+
+  // The applied draft's stored representation must be canonical: a generated message with CRLF
+  // or trailing whitespace, once split and applied, has to compare equal to
+  // `composeCommitMessage(summary, body)` when the preview revision changes — otherwise
+  // `clearStaleAppliedDraft` never fires and the stale draft lingers.
+  it("clears a CRLF-normalized generated draft when the staged revision changes", async () => {
+    const user = userEvent.setup();
+    const diagnostics: string[] = [];
+    setClientDiagnosticWriter((message) => diagnostics.push(message));
+    const rawSuggested = "chore: crlf draft\r\n\r\nGenerated body.\r\n";
+    const props = {
+      projectId: "/repos/alpha",
+      stagedFileCount: 2,
+      busy: false,
+      outcome: null,
+      error: null,
+      preview: makePreview(),
+      previewDraft: "",
+      previewRequestRevision: 1,
+      previewError: null,
+      onPreview: vi.fn(),
+      onGenerateDraft: vi.fn(async () => rawSuggested),
+      onCommit: vi.fn(),
+    } as const;
+    const view = render(<CommitComposer {...props} previewRevision={1} />);
+
+    await user.click(screen.getByRole("button", { name: "Generate with Keiko" }));
+    await waitFor(() => expect(screen.getByLabelText("Summary")).toHaveValue("chore: crlf draft"));
+
+    view.rerender(<CommitComposer {...props} stagedFileCount={1} previewRevision={2} />);
+
+    await waitFor(() => expect(screen.getByLabelText("Summary")).toHaveValue(""));
+    expect(screen.getByLabelText("Description")).toHaveValue("");
+    expect(diagnostics).toContain(
+      "git-client: stale generated commit draft cleared (repository-revision-changed)",
+    );
+  });
+
   it("surfaces a Keiko draft generation failure without fabricating a fallback message", async () => {
     const user = userEvent.setup();
     renderComposer({

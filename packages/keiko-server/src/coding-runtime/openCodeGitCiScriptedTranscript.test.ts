@@ -91,15 +91,18 @@ function configureSshCommitSigning(repoRoot: string, signingHome: string, email:
   execFileSync("ssh-keygen", ["-q", "-t", "ed25519", "-N", "", "-C", email, "-f", keyPath], {
     cwd: signingHome,
   });
-  const publicKeyPath = `${keyPath}.pub`;
-  const publicKey = readFileSync(publicKeyPath, "utf8").trim();
+  const publicKey = readFileSync(`${keyPath}.pub`, "utf8").trim();
   const allowedSigners = join(signingHome, "keiko-test-allowed-signers");
   writeFileSync(allowedSigners, `${email} ${publicKey}\n`, "utf8");
   execFileSync("git", ["config", "gpg.format", "ssh"], { cwd: repoRoot });
   execFileSync("git", ["config", "gpg.ssh.allowedSignersFile", allowedSigners], {
     cwd: repoRoot,
   });
-  execFileSync("git", ["config", "user.signingkey", publicKeyPath], { cwd: repoRoot });
+  // Reviewer thread (PR #3506): the private-key path is what Git needs when no ssh-agent is wired
+  // up — Git can derive the pubkey from `<keyPath>.pub`, but pointing user.signingkey at the
+  // .pub file only works when an agent already holds the private key. These fixtures do not
+  // configure an ssh-agent, so point Git at the private key directly.
+  execFileSync("git", ["config", "user.signingkey", keyPath], { cwd: repoRoot });
   execFileSync("git", ["config", "commit.gpgsign", "true"], { cwd: repoRoot });
 }
 

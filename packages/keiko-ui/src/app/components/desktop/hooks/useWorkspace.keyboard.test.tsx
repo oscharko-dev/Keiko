@@ -66,6 +66,11 @@ function fakePointer(clientX = 100, clientY = 120): ReactPointerEvent<Element> {
   } as unknown as ReactPointerEvent<Element>;
 }
 
+// #3506 review — a module-scoped ref lets the non-matching-activation-id proof drive
+// `workspace.api.activateWindow` with an arbitrary id through the shared "activate arbitrary"
+// button without touching every other Harness caller in this file.
+const activationInputRef = { current: "" };
+
 function Harness(options: UseWorkspaceOptions = {}): ReactElement {
   const wsRef = useRef<HTMLDivElement>(null);
   const workspace = useWorkspace(wsRef, options);
@@ -90,6 +95,14 @@ function Harness(options: UseWorkspaceOptions = {}): ReactElement {
       </button>
       <button type="button" onClick={() => workspace.api.close("chat-1")}>
         close chat
+      </button>
+      {/* #3506 review — drive activateWindow with an arbitrary id so the non-matching-id proof
+          can exercise the API surface (empty, unknown, malformed, hostile) through one control. */}
+      <button
+        type="button"
+        onClick={() => workspace.api.activateWindow(activationInputRef.current)}
+      >
+        activate arbitrary
       </button>
       <button
         type="button"
@@ -230,6 +243,7 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
   beforeEach(() => {
     window.localStorage.clear();
     reportClientDiagnosticMock.mockClear();
+    activationInputRef.current = "";
   });
 
   afterEach(() => {
@@ -266,6 +280,50 @@ describe("useWorkspace keyboard and connection workflow hardening", () => {
     );
     expect(reportClientDiagnosticMock).not.toHaveBeenCalled();
   });
+
+  // #3506 review — `WorkspaceApi.activateWindow` accepts a `string`; useWorkspace only updates
+  // selection when the id maps to a selectable window, and `makeFocus` leaves the array untouched
+  // when no window matches. Prove that the no-op branch never touches focus, selection, or
+  // z-order — and never emits a client diagnostic — regardless of what the id looks like.
+  it.each<[string, string]>([
+    ["empty string", ""],
+    ["unknown id", "definitely-not-a-window-id"],
+    ["malformed id (whitespace)", "   "],
+    ["hostile id (path-like)", "../../etc/passwd"],
+    ["hostile id (prototype key)", "__proto__"],
+  ])(
+    "leaves focus, selection, and z-order untouched when activateWindow is called with %s",
+    async (_label, activationId) => {
+      persistWorkspace([filesWindow({ z: 1 }), appWindow({ id: "chat-1", z: 2 })]);
+      activationInputRef.current = activationId;
+      render(<Harness />);
+      await waitFor(() => expect(readWins()).toHaveLength(2));
+
+      // Establish a known selection + z-order + focused id before the non-matching activation.
+      fireEvent.click(screen.getByRole("button", { name: "activate chat" }));
+      await waitFor(() =>
+        expect(readSelection()).toEqual({
+          focusedWindowId: "chat-1",
+          selectedWindowIds: ["chat-1"],
+        }),
+      );
+      const zBefore = new Map(readWins().map((win) => [win.id, win.z]));
+      reportClientDiagnosticMock.mockClear();
+
+      fireEvent.click(screen.getByRole("button", { name: "activate arbitrary" }));
+
+      // Nothing changed: focus, selection, and each window's z stay where the previous activation
+      // put them, and the no-op path never reports a client diagnostic.
+      expect(readSelection()).toEqual({
+        focusedWindowId: "chat-1",
+        selectedWindowIds: ["chat-1"],
+      });
+      for (const win of readWins()) {
+        expect(win.z).toBe(zBefore.get(win.id));
+      }
+      expect(reportClientDiagnosticMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("reserves workspace capacity across editor allocations queued in one event", async () => {
     const onWindowLimitReached = vi.fn();

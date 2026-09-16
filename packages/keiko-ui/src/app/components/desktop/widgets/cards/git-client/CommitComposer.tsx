@@ -1035,6 +1035,15 @@ interface AppliedCommitDraft {
   readonly previewRevision: number;
 }
 
+// A snapshot of the composer state at the moment `Generate with Keiko` was clicked. A late
+// draft response must not overwrite fields the user edited (or a preview that revised) while
+// the generation was in flight.
+interface DraftGenerationToken {
+  readonly summary: string;
+  readonly body: string;
+  readonly previewRevision: number;
+}
+
 interface CommitDraftFields {
   readonly summary: string;
   readonly body: string;
@@ -1116,7 +1125,14 @@ function useCommitDraftFields(props: CommitComposerProps): CommitDraftFields {
       const draft = splitCommitMessageDraft(message);
       setSummary(draft.summary);
       setBody(draft.body);
-      appliedDraftRef.current = { message, previewRevision: props.previewRevision };
+      // Store the normalized composed message so `clearStaleAppliedDraft` compares canonical
+      // forms — a raw `message` with CRLF or trailing whitespace never equals the composer's
+      // own `composeCommitMessage(summary, body)`, so a stale draft would linger past a
+      // preview-revision bump.
+      appliedDraftRef.current = {
+        message: composeCommitMessage(draft.summary, draft.body),
+        previewRevision: props.previewRevision,
+      };
     },
     [props.previewRevision, setBody, setSummary],
   );
@@ -1137,9 +1153,14 @@ function useCommitDraftFields(props: CommitComposerProps): CommitDraftFields {
   return { summary, body, setSummary: updateSummary, setBody: updateBody, applyDraft };
 }
 
+function tokenMatches(a: DraftGenerationToken, b: DraftGenerationToken): boolean {
+  return a.summary === b.summary && a.body === b.body && a.previewRevision === b.previewRevision;
+}
+
 function useCommitDraftGeneration(
   onGenerateDraft: (() => Promise<string>) | undefined,
   applyDraft: (message: string) => void,
+  readToken: () => DraftGenerationToken,
 ): DraftGenerationController {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1148,13 +1169,23 @@ function useCommitDraftGeneration(
     if (onGenerateDraft === undefined) return;
     const seq = seqRef.current + 1;
     seqRef.current = seq;
+    // Snapshot the composer + preview-revision at the moment Generate was clicked. If the user
+    // edits Summary/Description or a new preview revision arrives before the draft resolves,
+    // the response is discarded rather than overwriting the newer input.
+    const startToken = readToken();
     setBusy(true);
     setError(null);
     void onGenerateDraft().then(
       (message) => {
         if (seqRef.current !== seq) return;
-        applyDraft(message);
         setBusy(false);
+        if (!tokenMatches(readToken(), startToken)) {
+          reportClientDiagnostic(
+            "git-client: generated commit draft discarded (composer edited before response)",
+          );
+          return;
+        }
+        applyDraft(message);
         reportClientDiagnostic("git-client: model commit draft applied from explicit action");
       },
       (err: unknown) => {
@@ -1163,7 +1194,7 @@ function useCommitDraftGeneration(
         setError(draftGenerationErrorText(err));
       },
     );
-  }, [applyDraft, onGenerateDraft]);
+  }, [applyDraft, onGenerateDraft, readToken]);
   return { busy, error, generate: onGenerateDraft === undefined ? undefined : generate };
 }
 
@@ -1184,12 +1215,37 @@ function useCommitPreviewRefresh(props: CommitComposerProps, state: CommitCompos
   ]);
 }
 
+// A stable reader that always returns the current composer + preview-revision token, so the late
+// draft check inside `useCommitDraftGeneration` compares against fresh values (a stale closure
+// would compare against the values captured when generation started and always match itself).
+function useDraftGenerationTokenReader(
+  fields: CommitDraftFields,
+  previewRevision: number,
+): () => DraftGenerationToken {
+  const tokenRef = useRef<DraftGenerationToken>({
+    summary: fields.summary,
+    body: fields.body,
+    previewRevision,
+  });
+  tokenRef.current = {
+    summary: fields.summary,
+    body: fields.body,
+    previewRevision,
+  };
+  return useCallback((): DraftGenerationToken => tokenRef.current, []);
+}
+
 function useCommitComposerController(
   props: CommitComposerProps,
   t: OptionalWidgetTranslate,
 ): CommitComposerController {
   const fields = useCommitDraftFields(props);
-  const draftGeneration = useCommitDraftGeneration(props.onGenerateDraft, fields.applyDraft);
+  const readToken = useDraftGenerationTokenReader(fields, props.previewRevision);
+  const draftGeneration = useCommitDraftGeneration(
+    props.onGenerateDraft,
+    fields.applyDraft,
+    readToken,
+  );
   const previewFresh =
     (props.previewRequestRevision ?? props.previewRevision) === props.previewRevision;
   const baseId = useId();

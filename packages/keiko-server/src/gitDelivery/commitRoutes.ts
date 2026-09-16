@@ -191,8 +191,7 @@ export interface GitDeliveryCommitPreviewBody {
   readonly policyBlockReason?: string;
 }
 
-function appendKeikoGeneratedFooter(message: string | undefined): string | undefined {
-  if (message === undefined) return undefined;
+function appendKeikoGeneratedFooter(message: string): string {
   if (message.includes(KEIKO_GENERATED_FOOTER)) return message;
   return `${message.trimEnd()}\n\n${KEIKO_GENERATED_FOOTER}`;
 }
@@ -667,9 +666,7 @@ function modelCommitMessage(
   const body = draftTextField(candidate, "body");
   if (subject === undefined || body === undefined) return undefined;
   const message = appendKeikoGeneratedFooter(`${subject}\n\n${body}`);
-  return message !== undefined && validateGitCommitMessage(message, policy).ok
-    ? message
-    : undefined;
+  return validateGitCommitMessage(message, policy).ok ? message : undefined;
 }
 
 async function generateModelCommitMessage(

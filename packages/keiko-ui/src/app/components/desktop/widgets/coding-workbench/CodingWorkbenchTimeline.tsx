@@ -25,6 +25,7 @@ import {
   useCodingWorkbenchTranslate,
   type CodingWorkbenchTranslate,
 } from "./coding-workbench-i18n";
+import type { CodingWorkbenchMessageKey } from "./coding-workbench-i18n.en";
 import { eventDetail, eventTitle } from "./codingWorkbenchLabels";
 import { CodingWorkbenchQuestionsSurface } from "./CodingWorkbenchQuestions";
 import { PanelTitle } from "./CodingWorkbenchPanelTitle";
@@ -33,11 +34,14 @@ import styles from "./CodingWorkbenchWindow.module.css";
 const VIRTUAL_THRESHOLD = 100;
 const VISIBLE_ROWS = 96;
 const OVERSCAN_ROWS = 8;
-const KNOWN_TOOL_LABELS: Readonly<Record<string, string>> = {
-  keiko_git_status: "Git status",
-  keiko_repository_search: "Repository search",
-  keiko_workspace_discover: "Workspace discovery",
-  keiko_workspace_read: "Workspace read",
+// Known tool identifiers map to Coding Workbench catalog message keys, not to English strings —
+// otherwise a German session would render English labels in the localized timeline. The keys are
+// resolved through `t(...)` inside `ToolRow`.
+const KNOWN_TOOL_LABEL_KEYS: Readonly<Record<string, CodingWorkbenchMessageKey>> = {
+  keiko_git_status: "codingWorkbench.timeline.tool.git_status",
+  keiko_repository_search: "codingWorkbench.timeline.tool.repository_search",
+  keiko_workspace_discover: "codingWorkbench.timeline.tool.workspace_discover",
+  keiko_workspace_read: "codingWorkbench.timeline.tool.workspace_read",
 };
 // Per-kind default heights used until a row has been rendered and measured. A single 64 px
 // estimate (the pre-fix value) is 4–20x too small for plan cards and multi-segment messages,
@@ -635,7 +639,7 @@ function ToolRow({
       <article className={styles.toolCard} data-tool-state={item.tool.state}>
         <span className={styles.toolIcon} aria-hidden="true" />
         <div className={styles.toolMeta}>
-          <p className={styles.timelineTitle}>{humanizeToolName(item.tool.tool)}</p>
+          <p className={styles.timelineTitle}>{humanizeToolName(item.tool.tool, t)}</p>
           <code className={styles.toolName}>{item.tool.tool}</code>
         </div>
         {item.count > 1 ? (
@@ -651,9 +655,9 @@ function ToolRow({
   );
 }
 
-function humanizeToolName(tool: string): string {
-  const known = KNOWN_TOOL_LABELS[tool];
-  if (known !== undefined) return known;
+function humanizeToolName(tool: string, t: CodingWorkbenchTranslate): string {
+  const knownKey = KNOWN_TOOL_LABEL_KEYS[tool];
+  if (knownKey !== undefined) return t(knownKey);
   return tool
     .replace(/^keiko[_-]/u, "")
     .split(/[_\-.]+/u)

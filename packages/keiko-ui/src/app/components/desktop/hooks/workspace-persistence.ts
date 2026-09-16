@@ -939,6 +939,32 @@ function sanitizedBoundConnector(
   return { boundConnectorKind: kind, boundConnectorId: conn.boundConnectorId };
 }
 
+// #3506 review — the Git↔Chat bind's server-side relationship id must survive a reload. Without
+// it, `removeConn` cannot unbind the remote relationship (it falls through to "no unbind work"),
+// and the operator's disconnect click leaks the relationship. The two ref fields are the pair
+// snapshot the relationship was minted from, so the whole triplet is either kept or dropped.
+function sanitizedBoundGitChange(
+  conn: Readonly<Record<string, unknown>>,
+): Pick<
+  Connection,
+  "boundGitChangeBaseRef" | "boundGitChangeHeadRef" | "boundGitChangeRelationshipId"
+> {
+  const baseRef = conn.boundGitChangeBaseRef;
+  const headRef = conn.boundGitChangeHeadRef;
+  const relationshipId = conn.boundGitChangeRelationshipId;
+  return {
+    ...(typeof baseRef === "string" && baseRef.length > 0
+      ? { boundGitChangeBaseRef: baseRef }
+      : {}),
+    ...(typeof headRef === "string" && headRef.length > 0
+      ? { boundGitChangeHeadRef: headRef }
+      : {}),
+    ...(typeof relationshipId === "string" && relationshipId.length > 0
+      ? { boundGitChangeRelationshipId: relationshipId }
+      : {}),
+  };
+}
+
 function sanitizeConnection(
   conn: unknown,
   aliases: ReadonlyMap<string, string>,
@@ -949,6 +975,7 @@ function sanitizeConnection(
   if (endpoints === null) return null;
   const boundChatWindowId = remappedBoundChatWindowId(conn, aliases, windowIds);
   const boundConnector = sanitizedBoundConnector(conn);
+  const boundGitChange = sanitizedBoundGitChange(conn);
   return {
     endpointRemapped: endpoints.remapped,
     connection: {
@@ -958,6 +985,7 @@ function sanitizeConnection(
       ...(boundChatWindowId === undefined ? {} : { boundChatWindowId }),
       ...(hasElidedScopeSnapshot(conn) ? { boundScopeElided: true } : {}),
       ...boundConnector,
+      ...boundGitChange,
     },
   };
 }

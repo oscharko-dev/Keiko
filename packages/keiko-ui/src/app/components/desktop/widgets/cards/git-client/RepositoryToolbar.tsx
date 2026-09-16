@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import type { GitBranchListEntry } from "@/lib/api";
 import { useTranslate } from "@/lib/i18n";
 import { useOptionalWidgetTranslate } from "@/lib/optional-widget-i18n";
@@ -273,6 +273,16 @@ interface ConnectedToolbarCellsProps {
 // RepositoryToolbar itself stays under the max-lines-per-function bar.
 // The Repository picker cell. Extracted so ConnectedToolbarCells stays under the
 // max-lines-per-function bar.
+const REPOSITORY_TRIGGER_STYLE: CSSProperties = {
+  minWidth: 0,
+  border: "none",
+  background: "transparent",
+  padding: 0,
+  height: "auto",
+  font: "600 14px var(--font-ui)",
+  color: "var(--fg)",
+};
+
 function RepositoryCell({
   repositories,
   selectedPath,
@@ -286,6 +296,11 @@ function RepositoryCell({
   readonly addRepository: AddRepositoryEntry | undefined;
   readonly onSelectRepository: (path: string) => void;
 }): ReactNode {
+  // The Repository menu is disabled in the locked state, so the "Add repository" option it
+  // carries is unclickable there. Only put the option in the menu when the picker is enabled;
+  // when locked, `LockedAddRepositoryButton` below exposes the action as a separate control that
+  // stays clickable without changing the bound project.
+  const menuAddRepositoryLabel = repositorySelectionLocked ? undefined : addRepository?.label;
   return (
     <ToolbarCell label="Repository" minWidth={248}>
       <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
@@ -298,18 +313,10 @@ function RepositoryCell({
           menuTitle="Repository"
           placeholder="Select a repository"
           disabled={repositorySelectionLocked}
-          triggerStyle={{
-            minWidth: 0,
-            border: "none",
-            background: "transparent",
-            padding: 0,
-            height: "auto",
-            font: "600 14px var(--font-ui)",
-            color: "var(--fg)",
-          }}
+          triggerStyle={REPOSITORY_TRIGGER_STYLE}
           sections={repositorySections(
             repositories,
-            addRepository?.label,
+            menuAddRepositoryLabel,
             selectedPath,
             repositorySelectionLocked,
           )}
@@ -318,8 +325,35 @@ function RepositoryCell({
             else if (value !== selectedPath) onSelectRepository(value);
           }}
         />
+        {repositorySelectionLocked && addRepository !== undefined ? (
+          <LockedAddRepositoryButton addRepository={addRepository} />
+        ) : null}
       </span>
     </ToolbarCell>
+  );
+}
+
+// A separate, always-clickable Add repository control for the locked-workspace state. It stays
+// inside RepositoryCell so operators see the affordance next to the disabled picker, and its
+// caller is expected to register the repository without reconnecting the current window —
+// switching `selectedPath`/`projectPath` here would violate `lockedToActiveRoot`.
+function LockedAddRepositoryButton({
+  addRepository,
+}: {
+  readonly addRepository: AddRepositoryEntry;
+}): ReactNode {
+  return (
+    <button
+      type="button"
+      aria-label={addRepository.label}
+      title={addRepository.label}
+      style={TOOLBAR_ICON_BTN}
+      onClick={addRepository.onSelect}
+    >
+      <span aria-hidden="true" style={{ color: "var(--fg-dim)", fontWeight: 600 }}>
+        +
+      </span>
+    </button>
   );
 }
 
