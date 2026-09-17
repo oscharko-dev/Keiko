@@ -45,10 +45,15 @@ function expectSearchLifecycle(
   activityLog: BufferedActivityLog,
   terminalOp: "search.connected-context.completed" | "search.connected-context.failed",
 ): void {
-  expect(activityLog.events.map((event) => event.op)).toEqual([
-    "search.connected-context.started",
-    terminalOp,
-  ]);
+  expect(activityLog.events.map((event) => event.op)).toEqual(
+    terminalOp === "search.connected-context.completed"
+      ? [
+          "search.connected-context.started",
+          "search.connected-context.completion-details",
+          terminalOp,
+        ]
+      : ["search.connected-context.started", terminalOp],
+  );
   expect(activityLog.events.every((event) => event.correlationId === CORRELATION_ID)).toBe(true);
 }
 

@@ -291,14 +291,25 @@ function lifecycleEvents(
   activityLog: BufferedServerLogSink,
   terminalOp: "search.connected-context.completed" | "search.connected-context.failed",
 ): readonly [ServerLogEvent, ServerLogEvent] {
-  expect(activityLog.events).toHaveLength(2);
-  const [started, terminal] = activityLog.events;
+  expect(activityLog.events).toHaveLength(
+    terminalOp === "search.connected-context.completed" ? 3 : 2,
+  );
+  const started = activityLog.events[0];
+  const terminal = activityLog.events.at(-1);
   if (started === undefined || terminal === undefined) {
     throw new Error("expected connected-context start and terminal activity events");
   }
   expect(started.op).toBe("search.connected-context.started");
   expect(terminal.op).toBe(terminalOp);
   expect(terminal.correlationId).toBe(started.correlationId);
+  if (terminalOp === "search.connected-context.completed") {
+    const details = activityLog.events[1];
+    expect(details?.op).toBe("search.connected-context.completion-details");
+    expect(details?.correlationId).toBe(started.correlationId);
+    expect(
+      activityLogEventRegistration(details as unknown as Readonly<Record<PropertyKey, unknown>>),
+    ).toBeDefined();
+  }
   expect(
     activityLogEventRegistration(started as unknown as Readonly<Record<PropertyKey, unknown>>),
   ).toBeDefined();
@@ -306,6 +317,14 @@ function lifecycleEvents(
     activityLogEventRegistration(terminal as unknown as Readonly<Record<PropertyKey, unknown>>),
   ).toBeDefined();
   return [started, terminal];
+}
+
+function completionDetailsEvent(activityLog: BufferedServerLogSink): ServerLogEvent {
+  const details = activityLog.events.find(
+    (event) => event.op === "search.connected-context.completion-details",
+  );
+  if (details === undefined) throw new Error("expected connected-context completion details");
+  return details;
 }
 
 function expectedRequestExtra(input: OrchestratorInput): Readonly<Record<string, unknown>> {
@@ -481,10 +500,10 @@ describe("retrieveConnectedContextPack activity log", () => {
 
       const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
       const persisted = producerLogLines(raw);
-      expect(persisted).toHaveLength(2);
-      const [started, completed] = persisted;
-      if (started === undefined || completed === undefined) {
-        throw new Error("expected persisted connected-context start and completion lines");
+      expect(persisted).toHaveLength(3);
+      const [started, details, completed] = persisted;
+      if (started === undefined || details === undefined || completed === undefined) {
+        throw new Error("expected persisted connected-context lifecycle lines");
       }
       expect(started).toMatchObject({
         category: "search",
@@ -507,10 +526,20 @@ describe("retrieveConnectedContextPack activity log", () => {
         retrievalElapsedBudgetBlocked: false,
         retrievalWorkspaceIndexProviderStatus: "unavailable",
       });
+      expect(details).toMatchObject({
+        category: "search",
+        op: "search.connected-context.completion-details",
+        correlationId: CORRELATION_ID,
+        scopeIdentitySha256: started.scopeIdentitySha256,
+        queryIdentitySha256: started.queryIdentitySha256,
+        activityDetailStatus: "complete",
+        completeness: "complete",
+        loss: "none",
+      });
       expectSha256(started.scopeIdentitySha256);
       expectSha256(started.queryIdentitySha256);
       expectNonNegativeNumberFields(completed, ["durationMs"]);
-      expectNonNegativeNumberFields(nestedExtra(completed, "structural"), [
+      expectNonNegativeNumberFields(nestedExtra(details, "structural"), [
         "contextCount",
         "candidateInventoryBuildCount",
         "textSearchCount",
@@ -531,9 +560,9 @@ describe("retrieveConnectedContextPack activity log", () => {
         "coverageDepthPruned",
         "coverageMaxFilesPruned",
       ]);
-      expectWorkspaceIndexCounters(completed);
-      expectWorkspaceIoCounters(completed);
-      const workspaceIndex = nestedExtra(completed, "workspaceIndex");
+      expectWorkspaceIndexCounters(details);
+      expectWorkspaceIoCounters(details);
+      const workspaceIndex = nestedExtra(details, "workspaceIndex");
       expect(workspaceIndex).toMatchObject({
         providerStatus: "unavailable",
         loadStatus: "not-attempted",
@@ -555,6 +584,7 @@ describe("retrieveConnectedContextPack activity log", () => {
         workspaceIndexProviderStatus: "unavailable",
       });
       expect(completed).not.toHaveProperty("_truncatedFieldCount");
+      expect(details).not.toHaveProperty("_truncatedFieldCount");
       for (const secret of privateFixtureValues()) expect(raw).not.toContain(secret);
     } finally {
       activityLog.close?.();
@@ -591,11 +621,11 @@ describe("retrieveConnectedContextPack activity log", () => {
       activityLog.close?.();
 
       const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
-      const completed = parsePersistedLogLines(raw).filter(
-        (entry) => entry.op === "search.connected-context.completed",
+      const completedDetails = parsePersistedLogLines(raw).filter(
+        (entry) => entry.op === "search.connected-context.completion-details",
       );
-      expect(completed).toHaveLength(3);
-      const [cold, warm, stale] = completed;
+      expect(completedDetails).toHaveLength(3);
+      const [cold, warm, stale] = completedDetails;
       if (cold === undefined || warm === undefined || stale === undefined) {
         throw new Error("expected cold, warm, and stale connected-context completion lines");
       }
@@ -655,21 +685,23 @@ describe("retrieveConnectedContextPack activity log", () => {
       activityLog.close?.();
 
       const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
-      const completed = parsePersistedLogLines(raw).find(
-        (entry) => entry.op === "search.connected-context.completed",
+      const completedDetails = parsePersistedLogLines(raw).find(
+        (entry) => entry.op === "search.connected-context.completion-details",
       );
-      if (completed === undefined) throw new Error("expected connected-context completion line");
-      expectWorkspaceIndexCounters(completed);
-      expect(nestedExtra(completed, "workspaceIndex")).toMatchObject({
+      if (completedDetails === undefined) {
+        throw new Error("expected connected-context completion details");
+      }
+      expectWorkspaceIndexCounters(completedDetails);
+      expect(nestedExtra(completedDetails, "workspaceIndex")).toMatchObject({
         providerStatus: "available",
         loadStatus: "failed",
         saveStatus: "failed",
       });
       expect(["request-local-cold", "request-local-warm", "request-local-reconciled"]).toContain(
-        nestedExtra(completed, "workspaceIndex").searchMode,
+        nestedExtra(completedDetails, "workspaceIndex").searchMode,
       );
-      expect(nestedExtra(completed, "workspaceIndex").loadFailures).toBeGreaterThan(0);
-      expect(nestedExtra(completed, "workspaceIndex").saveFailures).toBeGreaterThan(0);
+      expect(nestedExtra(completedDetails, "workspaceIndex").loadFailures).toBeGreaterThan(0);
+      expect(nestedExtra(completedDetails, "workspaceIndex").saveFailures).toBeGreaterThan(0);
       for (const secret of privateFixtureValues()) expect(raw).not.toContain(secret);
       expect(raw).not.toContain("private index");
     } finally {
@@ -731,6 +763,7 @@ describe("retrieveConnectedContextPack activity log", () => {
     );
 
     const [started, completed] = lifecycleEvents(activityLog, "search.connected-context.completed");
+    const details = completionDetailsEvent(activityLog);
     expect(completed).toMatchObject({
       category: "search",
       op: "search.connected-context.completed",
@@ -740,7 +773,7 @@ describe("retrieveConnectedContextPack activity log", () => {
     expect(completed.extra).toMatchObject({
       ...expectedExtra(output, false),
     });
-    expectNonNegativeNumberFields(nestedExtra(completed.extra, "structural"), [
+    expectNonNegativeNumberFields(nestedExtra(details.extra, "structural"), [
       "contextCount",
       "candidateInventoryBuildCount",
       "textSearchCount",
@@ -769,8 +802,20 @@ describe("retrieveConnectedContextPack activity log", () => {
       "unsupportedClaimUncertaintyCount",
       "entailmentUnavailableUncertaintyCount",
     ]);
-    expectWorkspaceIndexCounters(completed.extra ?? {});
-    expectWorkspaceIoCounters(completed.extra ?? {});
+    expectWorkspaceIndexCounters(details.extra ?? {});
+    expectWorkspaceIoCounters(details.extra ?? {});
+    expect(details).toMatchObject({
+      category: "search",
+      op: "search.connected-context.completion-details",
+      correlationId: completed.correlationId,
+      extra: {
+        scopeIdentitySha256: started.extra?.scopeIdentitySha256,
+        queryIdentitySha256: started.extra?.queryIdentitySha256,
+        activityDetailStatus: "complete",
+        completeness: "complete",
+        loss: "none",
+      },
+    });
     expectCommonExtra(started, completed, input);
     expectBodyFree(activityLog);
   });
@@ -854,6 +899,7 @@ describe("retrieveConnectedContextPack activity log", () => {
     const output = await retrieveConnectedContextPack(input, fixtureDeps(activityLog, undefined));
 
     const [started, completed] = lifecycleEvents(activityLog, "search.connected-context.completed");
+    const details = completionDetailsEvent(activityLog);
     expect(completed).toMatchObject({
       category: "search",
       op: "search.connected-context.completed",
@@ -862,6 +908,8 @@ describe("retrieveConnectedContextPack activity log", () => {
     expect(completed.durationMs).toBeGreaterThanOrEqual(0);
     expect(completed.extra).toMatchObject({
       ...expectedExtra(output, true),
+    });
+    expect(details.extra).toMatchObject({
       structuralContextCount: 0,
       structuralCandidateInventoryBuildCount: 0,
       indexProviderStatus: "not-evaluated",
@@ -869,12 +917,11 @@ describe("retrieveConnectedContextPack activity log", () => {
       indexLoadStatus: "not-attempted",
       indexSaveStatus: "not-attempted",
     });
-    expectWorkspaceIndexCounters(completed.extra ?? {});
-    expectWorkspaceIoCounters(completed.extra ?? {});
-    expect(nestedExtra(completed.extra, "workspaceIo")).toEqual({
-      contentReadCalls: 0,
-      contentReadBytes: 0,
-    });
+    expectWorkspaceIndexCounters(details.extra ?? {});
+    expectWorkspaceIoCounters(details.extra ?? {});
+    expect(nestedExtra(details.extra, "workspaceIo")).toEqual(
+      admissionOnlyExpectedWorkspaceIoActivity(),
+    );
     expectCommonExtra(started, completed, input);
     expectBodyFree(activityLog);
   });
@@ -891,16 +938,16 @@ describe("retrieveConnectedContextPack activity log", () => {
     );
 
     const [started, completed] = lifecycleEvents(activityLog, "search.connected-context.completed");
+    const details = completionDetailsEvent(activityLog);
     expect(completed.extra).toMatchObject({ ...expectedExtra(output, false, true) });
     expect(nestedExtra(completed.extra, "retrievalStatus")).toEqual({
       readBudgetBlocked: false,
       elapsedBudgetBlocked: true,
       workspaceIndexProviderStatus: "not-evaluated",
     });
-    expect(nestedExtra(completed.extra, "workspaceIo")).toEqual({
-      contentReadCalls: 0,
-      contentReadBytes: 0,
-    });
+    expect(nestedExtra(details.extra, "workspaceIo")).toEqual(
+      admissionOnlyExpectedWorkspaceIoActivity(),
+    );
     expectCommonExtra(started, completed, input);
     expectBodyFree(activityLog);
   });
@@ -930,8 +977,9 @@ describe("retrieveConnectedContextPack activity log", () => {
       },
     );
 
-    const [, completed] = lifecycleEvents(activityLog, "search.connected-context.completed");
-    const workspaceIndex = nestedExtra(completed.extra, "workspaceIndex");
+    lifecycleEvents(activityLog, "search.connected-context.completed");
+    const details = completionDetailsEvent(activityLog);
+    const workspaceIndex = nestedExtra(details.extra, "workspaceIndex");
     expect(workspaceIndex).toMatchObject({
       providerStatus: "unavailable",
       searchMode: "unused",

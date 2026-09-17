@@ -159,6 +159,7 @@ import {
   reportServerLogFailure,
   startLogTimer,
   type ServerLogEvent,
+  type ServerLogger,
   type ServerLogSink,
 } from "./observability/index.js";
 import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
@@ -274,6 +275,33 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
       required: false,
       values: ["not-evaluated", "available", "unavailable"],
     },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["connected-context-retrieval"],
+  proofIds: ["search.connected-context.completed.line"],
+  releaseImpact: "patch",
+});
+
+const SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.connected-context.completion-details",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "grounded-orchestrator.createConnectedContextActivity.completionDetails",
+  fields: {
+    scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    activityDetailStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["complete", "unavailable"],
+    },
     structuralContextCount: { type: "integer", dataClass: "count", required: false },
     structuralCandidateInventoryBuildCount: {
       type: "integer",
@@ -341,10 +369,10 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
     loss: { type: "string", dataClass: "loss-state", required: true },
   },
   causal: "correlation",
-  lifecycle: "end",
+  lifecycle: "state",
   analyzerProjection: "timeline",
   failureClasses: ["connected-context-retrieval"],
-  proofIds: ["search.connected-context.completed.line"],
+  proofIds: ["search.connected-context.completion-details.line"],
   releaseImpact: "patch",
 });
 
@@ -5262,6 +5290,9 @@ function uncertaintyActivityExtra(
 type ConnectedContextCompletedActivityFields = ActivityLogFields<
   typeof SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION
 >;
+type ConnectedContextCompletionDetailsActivityFields = ActivityLogFields<
+  typeof SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION
+>;
 type ConnectedContextFailedActivityFields = ActivityLogFields<
   typeof SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION
 >;
@@ -5324,7 +5355,7 @@ function coverageActivityExtra(
 
 function structuralActivityExtra(
   structural: StructuralRequestContextPoolDiagnostics,
-): Partial<ConnectedContextCompletedActivityFields> {
+): Partial<ConnectedContextCompletionDetailsActivityFields> {
   return {
     structuralContextCount: structural.contextCount,
     structuralCandidateInventoryBuildCount: structural.candidateInventoryBuildCount,
@@ -5341,7 +5372,7 @@ function structuralActivityExtra(
 
 function workspaceIndexActivityExtra(
   index: WorkspaceIndexActivityDiagnostics,
-): Partial<ConnectedContextCompletedActivityFields> {
+): Partial<ConnectedContextCompletionDetailsActivityFields> {
   return {
     indexProviderStatus: index.providerStatus,
     indexSearchMode: index.searchMode,
@@ -5360,7 +5391,7 @@ function workspaceIndexActivityExtra(
 
 function workspaceIoActivityExtra(
   io: WorkspaceIoActivityDiagnostics,
-): Partial<ConnectedContextCompletedActivityFields> {
+): Partial<ConnectedContextCompletionDetailsActivityFields> {
   return {
     workspaceIoReadDirCalls: io.readDirCalls,
     workspaceIoReadDirEntries: io.readDirEntries,
@@ -5445,6 +5476,19 @@ function completionActivityExtra(
     retrievalReadBudgetBlocked: execution.status.readBudgetBlocked,
     retrievalElapsedBudgetBlocked: execution.status.elapsedBudgetBlocked,
     retrievalWorkspaceIndexProviderStatus: execution.status.workspaceIndexProviderStatus,
+    completeness: "complete",
+    loss: "none",
+  };
+}
+
+function completionDetailsActivityExtra(
+  identity: ConnectedContextActivityIdentity,
+  execution: ConnectedContextExecution,
+): ConnectedContextCompletionDetailsActivityFields {
+  return {
+    scopeIdentitySha256: identity.scopeIdentitySha256,
+    queryIdentitySha256: identity.queryIdentitySha256,
+    activityDetailStatus: "complete",
     ...structuralActivityExtra(execution.structural),
     ...workspaceIndexActivityExtra(execution.workspaceIndex),
     ...workspaceIoActivityExtra(execution.workspaceIo),
@@ -5528,8 +5572,20 @@ function unavailableFailureActivityExtra(
 
 function unavailableCompletionActivityExtra(
   identity: ConnectedContextActivityIdentity,
-  workspaceIo: WorkspaceIoActivityDiagnostics,
 ): ConnectedContextCompletedActivityFields {
+  return {
+    scopeIdentitySha256: identity.scopeIdentitySha256,
+    queryIdentitySha256: identity.queryIdentitySha256,
+    activityDetailStatus: "unavailable",
+    completeness: "complete",
+    loss: "none",
+  };
+}
+
+function unavailableCompletionDetailsActivityExtra(
+  identity: ConnectedContextActivityIdentity,
+  workspaceIo: WorkspaceIoActivityDiagnostics,
+): ConnectedContextCompletionDetailsActivityFields {
   return {
     scopeIdentitySha256: identity.scopeIdentitySha256,
     queryIdentitySha256: identity.queryIdentitySha256,
@@ -5549,7 +5605,23 @@ function safeCompletionActivityExtra(
     return completionActivityExtra(identity, execution);
   } catch (error) {
     reportServerLogFailure(error, { op: "search.connected-context.completed", correlationId });
-    return unavailableCompletionActivityExtra(identity, execution.workspaceIo);
+    return unavailableCompletionActivityExtra(identity);
+  }
+}
+
+function safeCompletionDetailsActivityExtra(
+  identity: ConnectedContextActivityIdentity,
+  execution: ConnectedContextExecution,
+  correlationId: string,
+): ConnectedContextCompletionDetailsActivityFields {
+  try {
+    return completionDetailsActivityExtra(identity, execution);
+  } catch (error) {
+    reportServerLogFailure(error, {
+      op: "search.connected-context.completion-details",
+      correlationId,
+    });
+    return unavailableCompletionDetailsActivityExtra(identity, execution.workspaceIo);
   }
 }
 
@@ -5569,6 +5641,29 @@ function safeFailureActivityExtra(
     });
     return unavailableFailureActivityExtra(identity, progress, cancelled);
   }
+}
+
+function logConnectedContextCompletion(
+  logger: ServerLogger,
+  identity: ConnectedContextActivityIdentity,
+  execution: ConnectedContextExecution,
+  correlationId: string,
+  durationMs: number,
+): void {
+  logger.info(() =>
+    activityLogEvent(
+      SEARCH_CONNECTED_CONTEXT_COMPLETION_DETAILS_OPERATION,
+      { correlationId },
+      safeCompletionDetailsActivityExtra(identity, execution, correlationId),
+    ),
+  );
+  logger.info(() =>
+    activityLogEvent(
+      SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION,
+      { correlationId, durationMs },
+      safeCompletionActivityExtra(identity, execution, correlationId),
+    ),
+  );
 }
 
 function createConnectedContextActivity(
@@ -5594,13 +5689,7 @@ function createConnectedContextActivity(
       );
     },
     completed: (execution): void => {
-      logger.info(() =>
-        activityLogEvent(
-          SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION,
-          { correlationId, durationMs: logElapsed() },
-          safeCompletionActivityExtra(identity, execution, correlationId),
-        ),
-      );
+      logConnectedContextCompletion(logger, identity, execution, correlationId, logElapsed());
     },
     failed: (error, progress): void => {
       const errorKind = safeConnectedContextErrorKind(error);
