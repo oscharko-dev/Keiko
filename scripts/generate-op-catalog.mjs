@@ -473,7 +473,9 @@ function validFieldContractShape(contract) {
 }
 
 function validFieldContractValues(contract) {
-  if (contract.values === undefined) return contract.dataClass !== "closed-enum";
+  if (contract.values === undefined) {
+    return contract.dataClass !== "closed-enum" || contract.type === "boolean";
+  }
   return !invalidClosedStringArray(contract.values);
 }
 

@@ -33,6 +33,11 @@ import type { IncomingMessage } from "node:http";
 
 import type { ClientDiagnosticIngestRequest } from "@oscharko-dev/keiko-contracts";
 import { isClientDiagnosticIngestRequest } from "@oscharko-dev/keiko-contracts/runtime/diagnostics";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogFields,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
   RequestBodyCancelledError,
@@ -56,6 +61,76 @@ const MAX_CLIENT_DIAGNOSTIC_BODY_BYTES = 4_096;
 // page. `minIntervalMs: 0` disables the limiter's own burst/cooldown gate, so only the sliding
 // window cap below applies.
 const CLIENT_DIAGNOSTIC_RATE_LIMIT_KEY = "client-diagnostics";
+
+const CLIENT_DIAGNOSTIC_RATE_LIMITED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.diagnostic.rate-limited",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.noticeRateLimitedDrop",
+  fields: {
+    suppressedDrops: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "loss",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["client-diagnostic-rate-limit"],
+  proofIds: ["client.diagnostic.rate-limited.line"],
+  releaseImpact: "patch",
+});
+
+const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "client.diagnostic",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "client-diagnostics-routes.logClientDiagnostic",
+  fields: {
+    clientNote: { type: "string", dataClass: "opaque-id", required: true, maxLength: 200 },
+    readyState: { type: "integer", dataClass: "count", required: false },
+    clientKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["boundary", "unhandled-rejection", "sse-error", "other"],
+    },
+    action: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["review", "approve", "apply"],
+    },
+    disposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["accepted", "discarded"],
+    },
+    relationshipId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    snapshotDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    proposalId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["preview", "approved", "observed", "blocked"],
+    },
+    repositoryId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    workspaceId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["client-diagnostic"],
+  proofIds: ["client.diagnostic.line"],
+  releaseImpact: "patch",
+});
 
 // One declaration for production and the test reset below — duplicating these three literals let
 // them drift, so the test reset silently exercised a limiter with different bounds than production.
@@ -99,12 +174,17 @@ function noticeRateLimitedDrop(now: number, correlationId: string | undefined): 
   }
   const suppressed = dropNotice.suppressed;
   dropNotice = { lastAt: now, suppressed: 0 };
-  getServerLogger().warn({
-    category: "diagnostic",
-    op: "client.diagnostic.rate-limited",
-    correlationId: correlationIdOrUnknown(correlationId),
-    ...(suppressed > 0 ? { extra: { suppressedDrops: suppressed } } : {}),
-  });
+  getServerLogger().warn(
+    activityLogEvent(
+      CLIENT_DIAGNOSTIC_RATE_LIMITED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId), errorKind: "rate-limited" },
+      {
+        ...(suppressed > 0 ? { suppressedDrops: suppressed } : {}),
+        completeness: "complete",
+        loss: "event-dropped",
+      },
+    ),
+  );
 }
 
 // Projects the validated request onto the activity log. `message` is admitted only as
@@ -133,13 +213,15 @@ function logClientDiagnostic(
     request.correlationId !== undefined && isValidCorrelationId(request.correlationId)
       ? request.correlationId
       : correlationIdOrUnknown(ingestCorrelationId);
-  getServerLogger().warn({
-    category: "diagnostic",
-    op: "client.diagnostic",
-    correlationId,
-    ...(request.kind === undefined ? {} : { errorKind: request.kind }),
-    extra,
-  });
+  extra.completeness = "complete";
+  extra.loss = "none";
+  getServerLogger().warn(
+    activityLogEvent(
+      CLIENT_DIAGNOSTIC_OPERATION,
+      { correlationId, errorKind: "internal" },
+      extra as ActivityLogFields<typeof CLIENT_DIAGNOSTIC_OPERATION>,
+    ),
+  );
 }
 
 // Discriminates a rejected read (already a fully-formed `RouteResult`) from a successfully parsed

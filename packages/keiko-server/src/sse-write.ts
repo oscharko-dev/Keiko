@@ -13,6 +13,10 @@
 
 import { randomUUID } from "node:crypto";
 import type { ServerResponse } from "node:http";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { emitServerDiagnostic, type ServerDiagnosticSink } from "./diagnostics-log.js";
 import { getServerLogger } from "./observability/index.js";
 
@@ -29,6 +33,37 @@ export interface SseBackpressureSignal {
 
 type SseStreamCloseReason =
   "completed" | "client-disconnected" | "backpressure-killed" | "server-error" | "server-shutdown";
+
+const SSE_STREAM_CLOSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "sse.stream.closed",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "sse-write.emitSseStreamClosed",
+  fields: {
+    frameCount: { type: "integer", dataClass: "count", required: true },
+    bytesStreamed: { type: "integer", dataClass: "count", required: true },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "completed",
+        "client-disconnected",
+        "backpressure-killed",
+        "server-error",
+        "server-shutdown",
+      ],
+    },
+  },
+  causal: "none",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["sse-stream"],
+  proofIds: ["sse.stream.closed.line"],
+  releaseImpact: "patch",
+});
 
 // A server that is shutting down closes every live connection at once. Without this, the streams it
 // tears down are reported as the shapes they LOOK like from the socket — `backpressure-killed` for a
@@ -98,17 +133,20 @@ function emitSseStreamClosed(res: ServerResponse, state: SseStreamCounterState):
   if (state.emitted) return;
   state.emitted = true;
   openSseStreamCount = Math.max(0, openSseStreamCount - 1);
-  getServerLogger().info({
-    category: "http",
-    op: "sse.stream.closed",
-    ...(state.correlationId === undefined ? {} : { correlationId: state.correlationId }),
-    durationMs: Date.now() - state.startedAt,
-    extra: {
+  getServerLogger().info(
+    activityLogEvent(
+      SSE_STREAM_CLOSED_OPERATION,
+      {
+        ...(state.correlationId === undefined ? {} : { correlationId: state.correlationId }),
+        durationMs: Date.now() - state.startedAt,
+      },
+      {
       frameCount: state.frameCount,
       bytesStreamed: state.bytesStreamed,
       reason: sseStreamReason(res, state),
-    },
-  });
+      },
+    ),
+  );
 }
 
 // Lazily creates and attaches the terminal-line listeners the first time a frame is recorded for

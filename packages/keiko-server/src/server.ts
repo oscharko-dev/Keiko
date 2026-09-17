@@ -6,6 +6,11 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { extname, join } from "node:path";
 import { Readable } from "node:stream";
 import { createGzip } from "node:zlib";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogFields,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { applySecurityHeaders } from "./headers.js";
 import { isAllowedHost } from "./host-check.js";
 import { requestAlreadyClosed } from "./request-cancellation.js";
@@ -462,16 +467,52 @@ interface HttpRequestOutcome {
   readonly responseBytes: number;
 }
 
+const HTTP_REQUEST_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "request",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "server.logRequestOnClose",
+  fields: {
+    method: { type: "string", dataClass: "opaque-id", required: true, maxLength: 64 },
+    path: { type: "string", dataClass: "opaque-id", required: true, maxLength: 8192 },
+    routeTemplate: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 8192,
+    },
+    queryParamNames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: true,
+      maxItems: 16,
+    },
+    queryParamDroppedCount: { type: "integer", dataClass: "count", required: false },
+    responseBytes: { type: "integer", dataClass: "count", required: true },
+    aborted: { type: "boolean", dataClass: "closed-enum", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["http-request"],
+  proofIds: ["http-request.close-line"],
+  releaseImpact: "patch",
+});
+
 function buildHttpRequestExtra(
   outcome: HttpRequestOutcome,
   context: RequestLogContext,
-): Record<string, unknown> {
+): ActivityLogFields<typeof HTTP_REQUEST_OPERATION> {
   return {
     method: outcome.method,
     path: outcome.path,
-    routeTemplate: context.routeTemplate,
+    ...(context.routeTemplate === undefined ? {} : { routeTemplate: context.routeTemplate }),
     queryParamNames: context.queryParamNames ?? [],
-    queryParamDroppedCount: context.queryParamDroppedCount,
+    ...(context.queryParamDroppedCount === undefined
+      ? {}
+      : { queryParamDroppedCount: context.queryParamDroppedCount }),
     responseBytes: outcome.responseBytes,
     aborted: outcome.aborted,
   };
@@ -518,17 +559,20 @@ export function logRequestOnClose(
     const aborted = requestAlreadyClosed({ req, res });
     const status = aborted && !res.headersSent ? 0 : res.statusCode;
     const responseBytes = Math.max(0, req.socket.bytesWritten - socketBytesAtStart);
-    activityLog.write({
-      category: "http",
-      op: "request",
-      correlationId,
-      status,
-      durationMs: Date.now() - startedAt,
-      extra: buildHttpRequestExtra(
-        { method, path: requestUrl.split("?")[0] ?? "", aborted, responseBytes },
-        context,
+    activityLog.write(
+      activityLogEvent(
+        HTTP_REQUEST_OPERATION,
+        {
+          correlationId,
+          status,
+          durationMs: Date.now() - startedAt,
+        },
+        buildHttpRequestExtra(
+          { method, path: requestUrl.split("?")[0] ?? "", aborted, responseBytes },
+          context,
+        ),
       ),
-    });
+    );
   });
 }
 
