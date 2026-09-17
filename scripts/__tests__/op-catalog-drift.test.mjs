@@ -491,6 +491,15 @@ describe("op catalog drift", () => {
     expect(regenerated).toEqual(checkedIn);
   });
 
+  it("does not recursively rediscover the generated runtime registry", () => {
+    const catalog = generateCurrentOpCatalog();
+    expect(
+      catalog.entries.some((entry) =>
+        entry.site.startsWith("packages/keiko-contracts/src/activity-log-registry.generated.ts:"),
+      ),
+    ).toBe(false);
+  });
+
   // The generator's own audit is expected to be empty today (verified in the generator's
   // docstring against every current literal) — this is the assertion AGENTS.md's addenda calls
   // for: red only when a violation genuinely exists, never widened to accept one.

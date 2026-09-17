@@ -1862,6 +1862,7 @@ export function generateOpCatalog(repoRoot = REPO_ROOT) {
     const absRoot = join(repoRoot, ...root.split("/"));
     for (const absPath of walkTsFiles(absRoot)) {
       const relPath = relative(repoRoot, absPath).replaceAll("\\", "/");
+      if (relPath === RUNTIME_REGISTRY_RELATIVE_PATH) continue;
       for (const entry of entriesForFile(absPath, relPath)) {
         entries.push({ ...entry, package: pkg });
       }
@@ -1901,12 +1902,17 @@ async function main() {
     printWidth: 100,
     tabWidth: 2,
   });
+  const runtimeRegistryBytes = await format(runtimeRegistryModule(catalog.typedRegistry), {
+    parser: "typescript",
+    printWidth: 100,
+    tabWidth: 2,
+  });
   const outPath = join(REPO_ROOT, ...OUTPUT_RELATIVE_PATH.split("/"));
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, catalogBytes, "utf8");
   writeFileSync(
     join(REPO_ROOT, ...RUNTIME_REGISTRY_RELATIVE_PATH.split("/")),
-    runtimeRegistryModule(catalog.typedRegistry),
+    runtimeRegistryBytes,
     "utf8",
   );
   writeFileSync(join(REPO_ROOT, TOOL_CATALOG_OPERATIONS_PATH), operationsBytes, "utf8");
