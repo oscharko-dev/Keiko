@@ -58,23 +58,25 @@ describe("authoritative install layout", () => {
 
   it("writes one correlated, body-free normalization event", () => {
     const env: NodeJS.ProcessEnv = { KEIKO_CLI_BIN_PATH: "/stale/cli.js" };
-    type LayoutEvent = Parameters<
-      Parameters<typeof writeInstallLayoutOverrideEvidence>[0]["write"]
-    >[0];
-    const events: LayoutEvent[] = [];
+    const events: unknown[] = [];
     applyAuthoritativeInstallLayout(env, LAYOUT);
+    const evidence = installLayoutOverrideEvidence(env);
 
     expect(writeInstallLayoutOverrideEvidence({ write: (event) => events.push(event) }, env)).toBe(
       true,
     );
     expect(events).toHaveLength(1);
-    expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
     expect(events[0]).toMatchObject({
       level: "info",
       category: "diagnostic",
       op: "cli.install-layout.normalized",
+      correlationId: evidence?.correlationId,
       extra: { overriddenCount: 1, overriddenKinds: ["cli-bin"] },
     });
+    expect(installLayoutOverrideEvidence(env)).toBeUndefined();
+    expect(writeInstallLayoutOverrideEvidence({ write: (event) => events.push(event) }, env)).toBe(
+      false,
+    );
     expect(writeInstallLayoutOverrideEvidence({ write: (event) => events.push(event) }, {})).toBe(
       false,
     );
@@ -83,6 +85,12 @@ describe("authoritative install layout", () => {
 
   it("rejects malformed, duplicate, and unknown evidence", () => {
     const correlationId = "00000000-0000-4000-8000-000000000001";
+    expect(
+      installLayoutOverrideEvidence({
+        [INSTALL_LAYOUT_OVERRIDES_ENV]: "",
+        [INSTALL_LAYOUT_CORRELATION_ID_ENV]: correlationId,
+      }),
+    ).toBeUndefined();
     expect(
       installLayoutOverrideEvidence({
         [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin,cli-bin",

@@ -20,6 +20,7 @@ import { runUpdateCli } from "./update.js";
 import { emitDoctorWarning, runDoctorCli } from "./doctor.js";
 import { runAuditCli } from "./audit.js";
 import { runSupportCli } from "./support.js";
+import { installLayoutOverrideEvidence } from "./install-layout.js";
 import { loadServer } from "./lazy-modules.js";
 import type { CliSecurityLogSinkFactory } from "./security-log.js";
 import {
@@ -189,7 +190,11 @@ function runRepairCommand(
 ): number | Promise<number> {
   // Keep repair's established synchronous return on hosts that cannot invoke the Windows shortcut
   // helper. Windows loads the existing file sink only after dispatch, never on `keiko --version`.
-  if (process.platform !== "win32" || rest[0] === "--help" || rest[0] === "-h") {
+  const needsLayoutEvidence = installLayoutOverrideEvidence(env) !== undefined;
+  if (
+    !needsLayoutEvidence &&
+    (process.platform !== "win32" || rest[0] === "--help" || rest[0] === "-h")
+  ) {
     return runRepairCli(rest, io, env);
   }
   return runWithDeferredSecurityLog((securityLogSinkFactory) =>
@@ -211,15 +216,28 @@ function runLauncherCommand(
 }
 
 function runLifecycleCommand(
-  command: "start" | "restart",
+  command: "start" | "stop" | "status" | "restart",
   rest: readonly string[],
   io: CliIo,
   env: EnvSource,
 ): number | Promise<number> {
-  const needsWindowsOpener = process.platform === "win32" && rest.includes("--open");
-  if (!needsWindowsOpener) return runLifecycleCli(command, rest, io, env);
+  const needsDeferredLog =
+    (process.platform === "win32" && rest.includes("--open")) ||
+    installLayoutOverrideEvidence(env) !== undefined;
+  if (!needsDeferredLog) return runLifecycleCli(command, rest, io, env);
   return runWithDeferredSecurityLog((securityLogSinkFactory) =>
     runLifecycleCli(command, rest, io, env, { securityLogSinkFactory }),
+  );
+}
+
+function runAuditCommand(
+  rest: readonly string[],
+  io: CliIo,
+  env: EnvSource,
+): number | Promise<number> {
+  if (installLayoutOverrideEvidence(env) === undefined) return runAuditCli(rest, io, env);
+  return runWithDeferredSecurityLog((activityLogSinkFactory) =>
+    runAuditCli(rest, io, env, { activityLogSinkFactory }),
   );
 }
 
@@ -270,7 +288,7 @@ const COMMAND_HANDLERS: ReadonlyMap<string, CommandHandler> = new Map<string, Co
   ["task-workspace", runTaskWorkspaceCli],
   ["init", runInitCli],
   ["doctor", runDoctorCli],
-  ["audit", (rest, io, env): Promise<number> => runAuditCli(rest, io, env)],
+  ["audit", runAuditCommand],
   ["support", (rest, io, env): Promise<number> => runSupportCli(rest, io, env)],
   ["repair", runRepairCommand],
   ["uninstall", runUninstallCommand],
@@ -279,8 +297,11 @@ const COMMAND_HANDLERS: ReadonlyMap<string, CommandHandler> = new Map<string, Co
     "start",
     (rest, io, env): number | Promise<number> => runLifecycleCommand("start", rest, io, env),
   ],
-  ["stop", (rest, io, env): number | Promise<number> => runLifecycleCli("stop", rest, io, env)],
-  ["status", (rest, io, env): number | Promise<number> => runLifecycleCli("status", rest, io, env)],
+  ["stop", (rest, io, env): number | Promise<number> => runLifecycleCommand("stop", rest, io, env)],
+  [
+    "status",
+    (rest, io, env): number | Promise<number> => runLifecycleCommand("status", rest, io, env),
+  ],
   [
     "restart",
     (rest, io, env): number | Promise<number> => runLifecycleCommand("restart", rest, io, env),

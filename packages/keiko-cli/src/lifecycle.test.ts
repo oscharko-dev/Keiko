@@ -29,6 +29,10 @@ import {
 } from "@oscharko-dev/keiko-security";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
 import { resolveExternalOpener, runLifecycleCli, safeKillProcess } from "./lifecycle.js";
+import {
+  INSTALL_LAYOUT_CORRELATION_ID_ENV,
+  INSTALL_LAYOUT_OVERRIDES_ENV,
+} from "./install-layout.js";
 import type { CliIo } from "./runner.js";
 
 const TEST_LAUNCH_ID = "ab".repeat(16);
@@ -1357,6 +1361,36 @@ describe("runLifecycleCli", () => {
       expect(JSON.stringify(events)).not.toContain("attacker");
     },
   );
+
+  it("records normalized layout evidence before evaluating lifecycle state", async () => {
+    const root = makeRoot();
+    const c = makeIo();
+    const events: SecurityLogEvent[] = [];
+    const env = {
+      [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin,ui-static-root",
+      [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+    };
+
+    await runLifecycle("status", [], c.io, env, {
+      cwd: root,
+      securityLogSinkFactory: () => ({
+        write: (event): void => {
+          events.push(event);
+        },
+      }),
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        op: "cli.install-layout.normalized",
+        correlationId: "00000000-0000-4000-8000-000000000001",
+        extra: {
+          overriddenCount: 2,
+          overriddenKinds: ["cli-bin", "ui-static-root"],
+        },
+      }),
+    ]);
+  });
 
   it("escalates stop to SIGKILL when the process misses the graceful deadline", async () => {
     const root = makeRoot();

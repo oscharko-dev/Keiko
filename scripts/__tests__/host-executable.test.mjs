@@ -5,6 +5,7 @@ import {
   realpathSync,
   rmSync,
   symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -145,7 +146,7 @@ describe("resolveHostExecutable", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "does not extend runtime trust to a writable Homebrew prefix",
+    "accepts formula-specific Homebrew links without trusting the writable prefix",
     () => {
       const workspace = temporary("keiko-host-executable-workspace-");
       const homebrew = temporary("keiko-host-executable-homebrew-");
@@ -169,13 +170,13 @@ describe("resolveHostExecutable", () => {
       expect(runtimeTrustRoots(nodeExecutable)).toEqual([
         realpathSync(join(homebrew, "Cellar", "node", "26.8.1")),
       ]);
-      expect(() =>
+      expect(
         resolveHostExecutable("gh", {
           env: { PATH: bin },
           runtimeExecutable: nodeExecutable,
           workspaceRoot: workspace,
         }),
-      ).toThrow("trusted host executable is unavailable");
+      ).toBe(realpathSync(join(ghBin, "gh")));
       expect(
         resolveHostExecutable("npm", {
           env: { PATH: bin },
@@ -184,14 +185,17 @@ describe("resolveHostExecutable", () => {
         }),
       ).toBe(realpathSync(join(npmBin, "npm-cli.js")));
 
-      chmodSync(bin, 0o755);
-      expect(
+      const outside = temporary("keiko-host-executable-homebrew-outside-");
+      writeFileSync(join(outside, "gh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      unlinkSync(join(bin, "gh"));
+      symlinkSync(join(outside, "gh"), join(bin, "gh"));
+      expect(() =>
         resolveHostExecutable("gh", {
           env: { PATH: bin },
           runtimeExecutable: nodeExecutable,
           workspaceRoot: workspace,
         }),
-      ).toBe(realpathSync(join(ghBin, "gh")));
+      ).toThrow("trusted host executable is unavailable");
     },
   );
 

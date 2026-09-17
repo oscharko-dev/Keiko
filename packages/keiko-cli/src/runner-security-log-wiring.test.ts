@@ -4,6 +4,11 @@ import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { runDetachedWindowsAlert } from "./portable-launch-notifier.js";
 import type { CliIo } from "./runner.js";
 import { createCliSecurityLogSink } from "./security-log.js";
+import {
+  INSTALL_LAYOUT_CORRELATION_ID_ENV,
+  INSTALL_LAYOUT_OVERRIDES_ENV,
+  writeInstallLayoutOverrideEvidence,
+} from "./install-layout.js";
 
 type CliSecurityLogSinkFactory = (stateDir: string) => SecurityLogSink;
 interface SecurityAwareCommandDeps {
@@ -14,6 +19,12 @@ type SecurityAwareCommand = (
   io: CliIo,
   env: EnvSource,
   deps?: SecurityAwareCommandDeps,
+) => number | Promise<number>;
+type ActivityAwareCommand = (
+  args: readonly string[],
+  io: CliIo,
+  env: EnvSource,
+  deps?: { readonly activityLogSinkFactory?: CliSecurityLogSinkFactory | undefined },
 ) => number | Promise<number>;
 type SecurityAwareLifecycleCommand = (
   command: "start" | "stop" | "status" | "restart",
@@ -29,6 +40,7 @@ type PersistedServerLogEvent = Parameters<
 
 const commandMocks = vi.hoisted(() => ({
   loadServer: vi.fn<() => Promise<ServerModule>>(),
+  audit: vi.fn<ActivityAwareCommand>(),
   launcher: vi.fn<SecurityAwareCommand>(),
   lifecycle: vi.fn<SecurityAwareLifecycleCommand>(),
   portable: vi.fn<SecurityAwareCommand>(),
@@ -41,6 +53,7 @@ vi.mock("./lazy-modules.js", async (importOriginal) => {
   return { ...actual, loadServer: commandMocks.loadServer };
 });
 vi.mock("./portable.js", () => ({ runPortableCli: commandMocks.portable }));
+vi.mock("./audit.js", () => ({ runAuditCli: commandMocks.audit }));
 vi.mock("./launcher.js", () => ({ runLauncherCli: commandMocks.launcher }));
 vi.mock("./lifecycle.js", () => ({ runLifecycleCli: commandMocks.lifecycle }));
 vi.mock("./repair.js", () => ({ runRepairCli: commandMocks.repair }));
@@ -87,6 +100,7 @@ function capturedSecurityFactories(): {
 beforeEach(() => {
   Object.defineProperty(process, "platform", { ...platform, value: "win32" });
   commandMocks.loadServer.mockReset();
+  commandMocks.audit.mockReset().mockResolvedValue(46);
   commandMocks.launcher.mockReset().mockReturnValue(44);
   commandMocks.lifecycle.mockReset().mockResolvedValue(45);
   commandMocks.portable.mockReset().mockResolvedValue(43);
@@ -100,6 +114,39 @@ afterEach(() => {
 });
 
 describe("Windows CLI security-log production wiring", () => {
+  it("persists normalized layout evidence for audit and repair on non-Windows hosts", async () => {
+    Object.defineProperty(process, "platform", { ...platform, value: "darwin" });
+    const written: PersistedServerLogEvent[] = [];
+    const createFileServerLogSink = vi.fn<ServerModule["createFileServerLogSink"]>(() => ({
+      write: (event): void => {
+        written.push(event);
+      },
+    }));
+    commandMocks.loadServer.mockResolvedValue({ createFileServerLogSink });
+    commandMocks.audit.mockImplementation((_args, _io, env, deps) => {
+      writeInstallLayoutOverrideEvidence(deps?.activityLogSinkFactory?.("/state"), env);
+      return 46;
+    });
+    commandMocks.repair.mockImplementation((_args, _io, env, deps) => {
+      writeInstallLayoutOverrideEvidence(deps?.securityLogSinkFactory?.("/state"), env);
+      return 41;
+    });
+    const evidenceEnv = (): EnvSource => ({
+      [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin",
+      [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+    });
+
+    await expect(
+      Promise.resolve(runCli(["audit", "local-state"], io(), evidenceEnv())),
+    ).resolves.toBe(46);
+    await expect(Promise.resolve(runCli(["repair"], io(), evidenceEnv()))).resolves.toBe(41);
+
+    expect(commandMocks.loadServer).toHaveBeenCalledTimes(2);
+    expect(createFileServerLogSink).toHaveBeenCalledTimes(2);
+    expect(written).toHaveLength(2);
+    expect(written.every(({ op }) => op === "cli.install-layout.normalized")).toBe(true);
+  });
+
   it("supplies a deferred sink to every Windows security command without loading the server graph", async () => {
     const commandIo = io();
     const env = { KEIKO_STATE_DIR: String.raw`C:\Keiko\state` };

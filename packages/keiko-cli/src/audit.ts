@@ -1,7 +1,9 @@
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { writeInstallLayoutOverrideEvidence } from "./install-layout.js";
 import type { CliIo } from "./runner.js";
+import type { CliSecurityLogSinkFactory } from "./security-log.js";
 
 // `keiko audit local-state` — the at-rest self-verification the local-at-rest contract
 // (docs/local-runtime-state-contract.md) names as its compensating control, reachable from a real
@@ -119,10 +121,20 @@ function renderReport(result: AuditResult, io: CliIo): void {
   io.out(`  => ${result.ok ? "PASS" : "FAIL"}\n`);
 }
 
+function writeAuditInstallLayoutEvidence(
+  stateDir: string,
+  env: Readonly<Record<string, string | undefined>>,
+  factory: CliSecurityLogSinkFactory | undefined,
+): void {
+  if (factory === undefined) return;
+  writeInstallLayoutOverrideEvidence(factory(stateDir), env);
+}
+
 export interface AuditCliDeps {
   /** Injection seam for tests; production resolves the path from the environment. */
   readonly loadAuditor?: (specifier: string) => Promise<AuditorModule>;
   readonly cwd?: string;
+  readonly activityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
 }
 
 function importAuditor(specifier: string): Promise<AuditorModule> {
@@ -344,5 +356,6 @@ export async function runAuditCli(
       ? configuredStateDir
       : join(deps.cwd ?? process.cwd(), ".keiko");
   const stateDir = parsed.stateDir ?? defaultStateDir;
+  writeAuditInstallLayoutEvidence(stateDir, env, deps.activityLogSinkFactory);
   return runLocalStateAudit(stateDir, auditorPath, io, parsed.json, deps);
 }

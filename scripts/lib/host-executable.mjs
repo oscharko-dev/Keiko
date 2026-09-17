@@ -1,5 +1,5 @@
-import { constants, accessSync, realpathSync, statSync } from "node:fs";
-import { delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { constants, accessSync, lstatSync, realpathSync, statSync } from "node:fs";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -50,21 +50,74 @@ function isRuntimeAnchored(candidate, real, trustedRoots) {
   );
 }
 
-function hasTrustedPermissions(candidate, real, platform, groupIds, trustedRoots) {
+function ancestorNamed(path, name) {
+  let current = dirname(path);
+  while (dirname(current) !== current) {
+    if (basename(current) === name) return current;
+    current = dirname(current);
+  }
+  return undefined;
+}
+
+function protectedFormulaPaths(formulaRoot, real) {
+  const paths = [real];
+  let current = dirname(real);
+  while (isContained(formulaRoot, current)) {
+    paths.push(current);
+    if (current === formulaRoot) break;
+    current = dirname(current);
+  }
+  return paths;
+}
+
+function isHomebrewFormulaTarget(candidate, real, runtimeExecutable, platform, groupIds) {
+  if (platform === "win32" || !lstatSync(candidate).isSymbolicLink()) return false;
+  const cellar = ancestorNamed(realpathSync(runtimeExecutable), "Cellar");
+  if (cellar === undefined || basename(real) !== basename(candidate)) return false;
+  const formulaRoot = realpathSync(join(cellar, basename(candidate)));
+  return (
+    isContained(formulaRoot, real) &&
+    protectedFormulaPaths(formulaRoot, real).every((path) => !isWritableByCaller(path, groupIds))
+  );
+}
+
+function hasTrustedPermissions(
+  candidate,
+  real,
+  runtimeExecutable,
+  platform,
+  groupIds,
+  trustedRoots,
+) {
   if (platform === "win32") return true;
   const protectedPaths = [dirname(candidate), real, dirname(real)];
   return (
     protectedPaths.every((path) => !isWritableByCaller(path, groupIds)) ||
-    isRuntimeAnchored(candidate, real, trustedRoots)
+    isRuntimeAnchored(candidate, real, trustedRoots) ||
+    isHomebrewFormulaTarget(candidate, real, runtimeExecutable, platform, groupIds)
   );
 }
 
-function trustedCandidate(candidate, workspaceRoot, platform, groupIds, trustedRoots) {
+function trustedCandidate(
+  candidate,
+  workspaceRoot,
+  runtimeExecutable,
+  platform,
+  groupIds,
+  trustedRoots,
+) {
   try {
     accessSync(candidate, constants.X_OK);
     const real = realpathSync(candidate);
     if (isContained(realpathSync(workspaceRoot), real)) return undefined;
-    return hasTrustedPermissions(candidate, real, platform, groupIds, trustedRoots)
+    return hasTrustedPermissions(
+      candidate,
+      real,
+      runtimeExecutable,
+      platform,
+      groupIds,
+      trustedRoots,
+    )
       ? real
       : undefined;
   } catch {
@@ -129,7 +182,15 @@ function resolveTrustedExecutable(
     trustedRoots,
   );
   if (runtimeResolved !== undefined) return runtimeResolved;
-  return resolveFromPath(path, names, workspaceRoot, platform, groupIds, trustedRoots);
+  return resolveFromPath(
+    path,
+    names,
+    workspaceRoot,
+    runtimeExecutable,
+    platform,
+    groupIds,
+    trustedRoots,
+  );
 }
 
 function runtimeExecutableFromPath(
@@ -147,6 +208,7 @@ function runtimeExecutableFromPath(
     nodeRuntimeBin,
     names,
     workspaceRoot,
+    runtimeExecutable,
     platform,
     groupIds,
     trustedRoots,
@@ -174,12 +236,21 @@ export function shellCommandForTrustedExecutable(executable, platform = process.
   return platform === "win32" ? `"${executable}"` : executable;
 }
 
-function resolveFromPath(path, names, workspaceRoot, platform, groupIds, trustedRoots) {
+function resolveFromPath(
+  path,
+  names,
+  workspaceRoot,
+  runtimeExecutable,
+  platform,
+  groupIds,
+  trustedRoots,
+) {
   for (const entry of (path ?? "").split(delimiter)) {
     const resolved = resolveFromEntry(
       entry,
       names,
       workspaceRoot,
+      runtimeExecutable,
       platform,
       groupIds,
       trustedRoots,
@@ -197,12 +268,21 @@ function runtimeBin(runtimeExecutable) {
   }
 }
 
-function resolveFromEntry(entry, names, workspaceRoot, platform, groupIds, trustedRoots) {
+function resolveFromEntry(
+  entry,
+  names,
+  workspaceRoot,
+  runtimeExecutable,
+  platform,
+  groupIds,
+  trustedRoots,
+) {
   if (!isAbsolute(entry)) return undefined;
   for (const name of names) {
     const resolved = trustedCandidate(
       join(entry, name),
       workspaceRoot,
+      runtimeExecutable,
       platform,
       groupIds,
       trustedRoots,

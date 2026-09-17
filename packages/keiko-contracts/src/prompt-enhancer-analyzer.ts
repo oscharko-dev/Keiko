@@ -860,6 +860,8 @@ const OUTPUT_HINT_RULES: readonly OutputHintRule[] = [
   { hint: "explicit-markdown", format: "markdown", keywords: ["in markdown", "as markdown"] },
 ];
 
+const OUTPUT_SCHEMA_CUES: readonly string[] = ["schema", "the fields", "format:"];
+
 const DEFAULT_FORMAT_BY_CLASS: Readonly<Partial<Record<PromptTaskClass, OutputFormat>>> = {
   "code-generation": "code",
   "code-debugging": "code",
@@ -890,7 +892,7 @@ function detectOutputSchema(lower: string, taskClass: PromptTaskClass): OutputSc
       format ??= rule.format;
     }
   }
-  if (containsAny(lower, ["schema", "the fields", "format:"])) hints.push("schema-keyword");
+  if (containsAny(lower, OUTPUT_SCHEMA_CUES)) hints.push("schema-keyword");
   const resolved: OutputFormat = format ?? DEFAULT_FORMAT_BY_CLASS[taskClass] ?? "unspecified";
   return {
     format: resolved,
@@ -943,6 +945,8 @@ const PROMPT_ANALYZER_CUE_GROUPS = Object.freeze({
   marketPrice: MARKET_PRICE_CUES,
   suppliedContext: SUPPLIED_CONTEXT_CUES,
   retrieval: RETRIEVAL_CUES,
+  outputHint: OUTPUT_HINT_RULES.flatMap((rule) => rule.keywords),
+  outputSchema: OUTPUT_SCHEMA_CUES,
   scopeReference: SCOPE_REFERENCE_CUES,
   audience: AUDIENCE_CUES,
   constraint: CONSTRAINT_CUES,

@@ -68,11 +68,11 @@ export function installLayoutOverrideEvidence(
 }
 
 export function writeInstallLayoutOverrideEvidence(
-  sink: InstallLayoutEvidenceSink,
+  sink: InstallLayoutEvidenceSink | undefined,
   env: EnvSource,
 ): boolean {
   const evidence = installLayoutOverrideEvidence(env);
-  if (evidence === undefined) return false;
+  if (sink === undefined || evidence === undefined) return false;
   sink.write({
     level: "info",
     category: "diagnostic",
@@ -83,6 +83,8 @@ export function writeInstallLayoutOverrideEvidence(
       overriddenKinds: evidence.overriddenKinds,
     },
   });
+  Reflect.deleteProperty(env, INSTALL_LAYOUT_OVERRIDES_ENV);
+  Reflect.deleteProperty(env, INSTALL_LAYOUT_CORRELATION_ID_ENV);
   return true;
 }
 

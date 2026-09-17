@@ -23,7 +23,11 @@ import {
   encodeCodingAppSessionPairingFragment,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-app-session";
 import { KEIKO_PRODUCT_VERSION as SDK_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
-import { absoluteExistingPath, resolvePreferredInstallLayout } from "./install-layout.js";
+import {
+  absoluteExistingPath,
+  resolvePreferredInstallLayout,
+  writeInstallLayoutOverrideEvidence,
+} from "./install-layout.js";
 import { LauncherError } from "./launcher-platforms.js";
 import { resolveLoopbackEndpoint } from "./loopback-endpoint.js";
 import type { CliIo } from "./runner.js";
@@ -1046,6 +1050,7 @@ export async function runLifecycleCli(
   }
 
   const options = outcome.value;
+  writeInstallLayoutOverrideEvidence(deps.securityLogSinkFactory?.(options.stateDir), env);
   const securityLogSink =
     deps.securityLogSink ?? createCliSecurityLogSink(options.stateDir, deps.securityLogSinkFactory);
   const fullDeps = runtimeDeps(deps, env, securityLogSink);

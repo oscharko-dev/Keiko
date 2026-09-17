@@ -4,6 +4,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { AuditLoadError, auditLocalStateResult, parseAuditArgs, runAuditCli } from "./audit.js";
+import {
+  INSTALL_LAYOUT_CORRELATION_ID_ENV,
+  INSTALL_LAYOUT_OVERRIDES_ENV,
+} from "./install-layout.js";
 import type { CliIo } from "./runner.js";
 
 function makeIo(): { io: CliIo; out: () => string; err: () => string } {
@@ -147,6 +151,41 @@ describe("runAuditCli", () => {
         }),
     });
     expect(audited?.replaceAll("\\", "/")).toBe("/home/operator/.keiko");
+  });
+
+  it("records install-layout normalization in the selected state directory before auditing", async () => {
+    const c = makeIo();
+    const events: unknown[] = [];
+    let evidencePresentBeforeAudit = false;
+    const stateDir = "/srv/keiko-state";
+    const runtimeEnv: NodeJS.ProcessEnv = {
+      ...env,
+      [INSTALL_LAYOUT_OVERRIDES_ENV]: "local-state-auditor",
+      [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+    };
+
+    await runAuditCli(["local-state", "--state-dir", stateDir], c.io, runtimeEnv, {
+      activityLogSinkFactory: (selectedStateDir) => {
+        expect(selectedStateDir).toBe(stateDir);
+        return { write: (event): void => void events.push(event) };
+      },
+      loadAuditor: () =>
+        Promise.resolve({
+          auditLocalState: () => {
+            evidencePresentBeforeAudit = events.length === 1;
+            return HEALTHY;
+          },
+        }),
+    });
+
+    expect(evidencePresentBeforeAudit).toBe(true);
+    expect(events).toEqual([
+      expect.objectContaining({
+        op: "cli.install-layout.normalized",
+        correlationId: "00000000-0000-4000-8000-000000000001",
+        extra: { overriddenCount: 1, overriddenKinds: ["local-state-auditor"] },
+      }),
+    ]);
   });
 
   // Review findings on #3159: the guard branches below were all reachable and none was covered.

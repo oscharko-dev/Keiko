@@ -468,7 +468,11 @@ describe("runUiCli", () => {
       runUiCli(
         ["--port", "4399"],
         io,
-        { KEIKO_UI_LAUNCH_ID: "a".repeat(32) },
+        {
+          KEIKO_UI_LAUNCH_ID: "a".repeat(32),
+          [INSTALL_LAYOUT_OVERRIDES_ENV]: "ui-static-root",
+          [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+        },
         {
           staticRoot,
           hashesFile: join(staticRoot, "csp-hashes.json"),
@@ -487,6 +491,15 @@ describe("runUiCli", () => {
       ),
     ).rejects.toThrow("Portable update startup recovery is required before listening.");
     expect(createServer).not.toHaveBeenCalled();
+    expect(sink.events.map(({ op }) => op)).toEqual([
+      "cli.install-layout.normalized",
+      "process.fatal",
+    ]);
+    expect(sink.events[0]).toMatchObject({
+      correlationId: "00000000-0000-4000-8000-000000000001",
+      extra: { overriddenCount: 1, overriddenKinds: ["ui-static-root"] },
+    });
+    expect(sink.closeCallCount).toBe(1);
     const event = sink.events.find(({ op }) => op === "process.fatal");
     expect(event?.errorKind).toBe("PORTABLE_UPDATE_RECOVERY_CORRUPT");
     expect(extraOf(event)).toMatchObject({

@@ -40,7 +40,10 @@ import {
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { CliIo } from "./runner.js";
 import { collectDoctorReport } from "./doctor.js";
-import { resolvePreferredInstallLayout } from "./install-layout.js";
+import {
+  resolvePreferredInstallLayout,
+  writeInstallLayoutOverrideEvidence,
+} from "./install-layout.js";
 import { resolveConfigPathFromArgs } from "./gateway-config.js";
 import {
   hashContent,
@@ -962,6 +965,7 @@ function collectRepairResults(
   resolved: ResolvedRepairDeps,
 ): readonly CheckResult[] {
   const stateDir = resolveStateDir(resolved.cwd, env, parsed.stateDirArg);
+  writeInstallLayoutOverrideEvidence(resolved.securityLogSinkFactory?.(stateDir), env);
   const securityLogSink = createCliSecurityLogSink(stateDir, resolved.securityLogSinkFactory);
   const defaultConfigCandidates = defaultLocalGatewayConfigCandidates(
     env,
