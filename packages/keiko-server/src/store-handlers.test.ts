@@ -794,7 +794,7 @@ describe("PATCH /api/projects", () => {
           category: "setup",
           op: "project.workspace.reconnect",
           status: 200,
-          extra: { outcome: "available" },
+          extra: { outcome: "available", completeness: "complete", loss: "none" },
         }),
       );
       expect(JSON.stringify(sink.events)).not.toContain(projDir);

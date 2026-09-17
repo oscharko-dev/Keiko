@@ -6,6 +6,10 @@ import type { IncomingMessage } from "node:http";
 import { randomUUID } from "node:crypto";
 import { realpathSync, statSync } from "node:fs";
 import { dirname, relative, resolve } from "node:path";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ProjectWithAvailability } from "@oscharko-dev/keiko-contracts/bff-wire";
 import type { RouteContext, RouteResult } from "./routes.js";
 import { errorBody } from "./routes.js";
@@ -73,6 +77,31 @@ export const DEFAULT_CHAT_LIST_LIMIT = 100;
 const MAX_CHAT_LIST_LIMIT = 200;
 const DEFAULT_MESSAGE_LIST_LIMIT = 200;
 const MAX_MESSAGE_LIST_LIMIT = 500;
+
+const PROJECT_WORKSPACE_RECONNECT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "project.workspace.reconnect",
+  category: "setup",
+  owner: "keiko-server",
+  emitter: "store-handlers.reconnectExistingProject",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["available", "unavailable"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["workspace-reconnect"],
+  proofIds: ["project.workspace.reconnect.outcome"],
+  releaseImpact: "patch",
+});
 
 class BodyTooLargeError extends Error {
   public constructor() {
@@ -475,13 +504,17 @@ function reconnectExistingProject(
       deps.store,
       deps.store.reconnectProject(targetPath),
     );
-    processServerLogSink().write({
-      category: "setup",
-      op: "project.workspace.reconnect",
-      correlationId,
-      status: 200,
-      extra: { outcome: project.workspaceAvailable ? "available" : "unavailable" },
-    });
+    processServerLogSink().write(
+      activityLogEvent(
+        PROJECT_WORKSPACE_RECONNECT_OPERATION,
+        { correlationId, status: 200 },
+        {
+          outcome: project.workspaceAvailable ? "available" : "unavailable",
+          completeness: "complete",
+          loss: "none",
+        },
+      ),
+    );
     return project;
   } catch (error) {
     emitServerDiagnostic(
