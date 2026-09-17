@@ -5085,8 +5085,8 @@ describe("CodingRuntimeOrchestrator — automatic description dispatch (#3401)",
     );
     expect(blocked).toMatchObject({
       correlationId: "run-00000001",
-      errorKind: "Error",
-      extra: { runId: "run-00000001", reason: "provider-failed" },
+      errorKind: "unavailable",
+      extra: { runId: "run-00000001", reason: "provider-failed", errorClass: "Error" },
     });
     expect(f.orchestrator.status()).toMatchObject({
       descriptionStatus: { state: "failed", reason: "provider-failed" },
