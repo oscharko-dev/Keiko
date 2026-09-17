@@ -31,6 +31,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-policy";
 import { GIT_DELIVERY_RISK_CLASS_SEVERITY } from "@oscharko-dev/keiko-contracts/runtime/git-delivery";
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   evaluateGitMergeEffectivePolicy,
   runGitMerge,
   type GitMergeAdapter,
@@ -44,10 +48,52 @@ import { createNodeGitMergeAdapter } from "@oscharko-dev/keiko-tools/internal/gi
 import type { UiHandlerDeps } from "../deps.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 import { describeError } from "../diagnostics-log.js";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { correlationIdOrUnknown } from "../correlation.js";
 import type { GitDeliveryApprovalStore } from "./approvalStore.js";
 import type { GitDeliveryTrustedPolicyPacks } from "./actionSheetProjection.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
+
+const READINESS_OBSERVED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.delivery.readiness.observed",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/mergeExecution.logReadinessObservation",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["observed", "unknown"],
+    },
+    providerError: { type: "boolean", dataClass: "closed-enum", required: true },
+    count: { type: "integer", dataClass: "count", required: true },
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    code: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    gatewayRequestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    httpStatus: { type: "integer", dataClass: "count", required: false },
+    retryAfterMs: { type: "integer", dataClass: "duration", required: false },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-delivery-readiness-provider"],
+  proofIds: ["git.delivery.readiness.observed"],
+  releaseImpact: "patch",
+});
 import {
   defaultGitDeliveryActionId,
   gitDeliveryMutationResponse,
@@ -159,18 +205,34 @@ function logReadinessObservation(
   correlationId: string | undefined,
   failure: { readonly error: unknown } | undefined,
 ): void {
-  (seams.activityLog ?? processServerLogSink()).write({
-    category: "process",
-    op: "git.delivery.readiness.observed",
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-    ...(failure === undefined ? {} : { level: "warn", errorKind: "internal" }),
-    extra: {
-      state: result.providerError === true ? "unknown" : "observed",
-      providerError: result.providerError === true,
-      count: result.checks?.total ?? 0,
-      ...(failure === undefined ? {} : describeError(failure.error)),
-    },
-  });
+  const error = failure === undefined ? undefined : describeError(failure.error);
+  (seams.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      READINESS_OBSERVED_OPERATION,
+      {
+        correlationId: correlationIdOrUnknown(correlationId),
+        ...(failure === undefined ? {} : { level: "warn", errorKind: "internal" }),
+      },
+      {
+        state: result.providerError === true ? "unknown" : "observed",
+        providerError: result.providerError === true,
+        count: result.checks?.total ?? 0,
+        ...(error === undefined
+          ? {}
+          : {
+              errorClass: error.errorClass,
+              ...(error.code === undefined ? {} : { code: error.code }),
+              ...(error.gatewayRequestId === undefined
+                ? {}
+                : { gatewayRequestId: error.gatewayRequestId }),
+              ...(error.httpStatus === undefined ? {} : { httpStatus: error.httpStatus }),
+              ...(error.retryAfterMs === undefined ? {} : { retryAfterMs: error.retryAfterMs }),
+              ...(error.frames === undefined ? {} : { frames: error.frames }),
+              ...(error.causeChain === undefined ? {} : { causeChain: error.causeChain }),
+            }),
+      },
+    ),
+  );
 }
 
 /**
