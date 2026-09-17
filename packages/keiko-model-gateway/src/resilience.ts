@@ -46,7 +46,6 @@ const GATEWAY_RETRY_BUDGET_EXHAUSTED_OPERATION = defineActivityLogOperation({
       type: "boolean",
       dataClass: "closed-enum",
       required: true,
-      values: ["true", "false"],
     },
     httpStatus: { type: "integer", dataClass: "count", required: false },
     retryAfterMs: { type: "number", dataClass: "duration", required: false },

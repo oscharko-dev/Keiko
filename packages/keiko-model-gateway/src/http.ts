@@ -64,7 +64,6 @@ const HTTP_GATEWAY_TLS_TRUST_FAILED_OPERATION = defineActivityLogOperation({
       type: "boolean",
       dataClass: "closed-enum",
       required: true,
-      values: ["true", "false"],
     },
   },
   causal: "none",
@@ -106,7 +105,6 @@ const HTTP_GATEWAY_EGRESS_PLANNED_OPERATION = defineActivityLogOperation({
       type: "boolean",
       dataClass: "closed-enum",
       required: true,
-      values: ["true", "false"],
     },
     proxyEndpointDigest: {
       type: "string",
@@ -1530,9 +1528,7 @@ function planGatewayProxy(
         HTTP_GATEWAY_EGRESS_PLANNED_OPERATION,
         {
           level: "debug",
-          ...(logCorrelationId(log) === undefined
-            ? {}
-            : { correlationId: logCorrelationId(log) }),
+          ...(logCorrelationId(log) === undefined ? {} : { correlationId: logCorrelationId(log) }),
         },
         {
           ...(endpointDigest === undefined ? {} : { endpointDigest }),
@@ -1722,9 +1718,7 @@ export async function gatewayFetch(
         HTTP_GATEWAY_FETCH_FAILED_OPERATION,
         {
           level: "warn",
-          ...(logCorrelationId(log) === undefined
-            ? {}
-            : { correlationId: logCorrelationId(log) }),
+          ...(logCorrelationId(log) === undefined ? {} : { correlationId: logCorrelationId(log) }),
           durationMs: elapsed(),
           errorKind: activityLogErrorKind(error),
         },

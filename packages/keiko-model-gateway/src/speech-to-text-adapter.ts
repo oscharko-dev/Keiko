@@ -45,7 +45,6 @@ const SPEECH_STT_LANGUAGE_NORMALIZED_OPERATION = defineActivityLogOperation({
       type: "boolean",
       dataClass: "closed-enum",
       required: true,
-      values: ["true"],
     },
   },
   causal: "none",

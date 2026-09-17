@@ -67,7 +67,6 @@ const PR_DESCRIPTION_MODEL_STARTED_OPERATION = defineActivityLogOperation({
       type: "boolean",
       dataClass: "closed-enum",
       required: true,
-      values: ["true", "false"],
     },
     responseSchemaProfile: {
       type: "string",
@@ -154,7 +153,6 @@ const PR_DESCRIPTION_MODEL_COMPLETED_OPERATION = defineActivityLogOperation({
       type: "boolean",
       dataClass: "closed-enum",
       required: true,
-      values: ["true", "false"],
     },
     reason: {
       type: "string",
