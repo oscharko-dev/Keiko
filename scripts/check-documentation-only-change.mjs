@@ -63,12 +63,14 @@ export function crossPlatformOsForEvent(windowsRelevant, eventName) {
     : FULL_CROSS_PLATFORM_OS;
 }
 
+function matrixDescription(documentationOnly, windowsRelevant) {
+  if (documentationOnly) return "cross-platform matrix skipped";
+  if (windowsRelevant === false) return "running the Linux/macOS matrix";
+  return "running the full matrix";
+}
+
 export function verdictLine({ documentationOnly, reason, windowsRelevant }) {
-  const matrix = documentationOnly
-    ? "cross-platform matrix skipped"
-    : windowsRelevant === false
-      ? "running the Linux/macOS matrix"
-      : "running the full matrix";
+  const matrix = matrixDescription(documentationOnly, windowsRelevant);
   return (
     `documentation-only-change: ${String(documentationOnly)} — ${reason}; ` +
     `windows-relevant=${String(windowsRelevant)} (${matrix})`

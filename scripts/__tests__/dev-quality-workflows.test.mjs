@@ -326,6 +326,8 @@ describe("dev quality workflows", () => {
       'empty_test_inclusion=".keiko/local-sonar-empty-test-${checkout_id}"',
     );
     expect(localSonar).not.toContain('"-Dsonar.test.inclusions=${inclusions}"');
+    expect(localSonar).toContain('"${compose[@]}" run --rm --no-deps scanner');
+    expect(localSonar).not.toContain('"${compose[@]}" run --rm scanner');
     expect(localSonarCompose).toContain('"127.0.0.1:${KEIKO_LOCAL_SONAR_PORT:-9234}:9000"');
     expect(localSonarCompose).toContain('SONAR_SCANNER_OPTS: "-Xmx768m"');
     expect(packageJson.scripts["gates:sonar:stop"]).toBe("./docker/gates/run-sonar.sh --stop");
