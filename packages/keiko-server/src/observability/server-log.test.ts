@@ -168,8 +168,17 @@ function createFileServerLogSink(
   options?: FileServerLogSinkOptions,
 ): ServerLogSink {
   const sink = createStrictFileServerLogSink(stateDir, options);
-  const write = (event: ServerLogEvent): void => sink.write(registeredTestEvent(event));
-  return sink.close === undefined ? { write } : { write, close: (): void => sink.close?.() };
+  const write = (event: ServerLogEvent): void => {
+    sink.write(registeredTestEvent(event));
+  };
+  return sink.close === undefined
+    ? { write }
+    : {
+        write,
+        close: (): void => {
+          sink.close?.();
+        },
+      };
 }
 
 function appendDurableServerLogBatch(
@@ -710,8 +719,11 @@ describe("server activity log", () => {
     sink.write({ category: "http", op: "one" });
     sink.write({ category: "http", op: "two" });
     const lines = readCallerLines(stateDir);
+    const first = lines[0];
+    const second = lines[1];
+    if (first === undefined || second === undefined) throw new Error("expected two log lines");
 
-    expect(lines[0]).toMatchObject({
+    expect(first).toMatchObject({
       schemaVersion: SERVER_LOG_SCHEMA_VERSION,
       registryVersion: ACTIVITY_LOG_REGISTRY_VERSION,
       schemaDigest: ACTIVITY_LOG_SCHEMA_DIGEST,
@@ -723,11 +735,11 @@ describe("server activity log", () => {
       writerCapability: "active",
       pid: process.pid,
     });
-    expect(String(lines[0]?.platformClass)).toMatch(
+    expect(String(first.platformClass)).toMatch(
       /^(?:darwin|linux|win32|other)-(?:arm64|x64|other)$/u,
     );
-    expect(lines[0]?.instanceId).toBe(serverLogInstanceId());
-    expect(String(lines[0]?.instanceId)).toMatch(/^[0-9a-f]{8}$/);
+    expect(first.instanceId).toBe(serverLogInstanceId());
+    expect(String(first.instanceId)).toMatch(/^[0-9a-f]{8}$/);
     // Monotonic PER PROCESS, not per file and not starting at a fixed value: the allocator is
     // shared by every ActiveLog this process ever resolves, so an earlier test's sink may already
     // have claimed numbers below this one — an absolute starting value is exactly what a
@@ -735,10 +747,12 @@ describe("server activity log", () => {
     // two lines written back to back by the SAME sink are exactly one apart, and carry the SAME
     // instanceId/pid — two different process lifetimes are told apart by instanceId, never pid
     // alone, since the OS reuses pids across restarts.
-    expect(typeof lines[0]?.seq).toBe("number");
-    expect(lines[1]?.seq).toBe((lines[0]?.seq as number) + 1);
-    expect(lines[1]?.instanceId).toBe(lines[0]?.instanceId);
-    expect(lines[1]?.pid).toBe(lines[0]?.pid);
+    if (typeof first.seq !== "number" || typeof second.seq !== "number") {
+      throw new TypeError("expected numeric sequence values");
+    }
+    expect(second.seq).toBe(first.seq + 1);
+    expect(second.instanceId).toBe(first.instanceId);
+    expect(second.pid).toBe(first.pid);
   });
 
   // The reserved-field defense-in-depth this envelope depends on: `RESERVED_FIELD_NAMES` in

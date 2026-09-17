@@ -31,7 +31,12 @@ const WINDOWS_LAUNCHER_ROOT_REFUSED_OPERATION = defineActivityLogOperation({
   owner: "keiko-cli",
   emitter: "security-log.emitWindowsSystemRootRefusal",
   fields: {
-    surface: { type: "string", dataClass: "closed-enum", required: true, values: ["launcher-install"] },
+    surface: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["launcher-install"],
+    },
     failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
   },
   causal: "none",
@@ -122,7 +127,12 @@ const WINDOWS_LAUNCHER_BINARY_MISSING_OPERATION = defineActivityLogOperation({
   owner: "keiko-cli",
   emitter: "security-log.emitWindowsSystemBinaryMissing",
   fields: {
-    surface: { type: "string", dataClass: "closed-enum", required: true, values: ["launcher-install"] },
+    surface: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["launcher-install"],
+    },
     failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
   },
   causal: "none",
@@ -350,9 +360,7 @@ export function createCliSecurityLogSink(
       // also mutate an otherwise read-only command that emits nothing.
       downstream ??= factory(stateDir);
       const forwarded = { ...event, correlationId };
-      const registration = activityLogEventRegistration(
-        event as unknown as Readonly<Record<PropertyKey, unknown>>,
-      );
+      const registration = activityLogEventRegistration(event);
       if (registration !== undefined) {
         Object.defineProperty(forwarded, ACTIVITY_LOG_EVENT_REGISTRATION, {
           value: registration,

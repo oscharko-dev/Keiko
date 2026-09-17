@@ -34,7 +34,9 @@ import type {
 } from "@oscharko-dev/keiko-memory-consolidation";
 import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-contracts";
 import {
+  ACTIVITY_LOG_EVENT_REGISTRATION,
   activityLogEvent,
+  activityLogEventRegistration,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
@@ -72,6 +74,23 @@ export function processServerLogSink(): ProcessServerLogSink {
   return PROCESS_SERVER_LOG_SINK;
 }
 
+function withCorrelation<Event extends object>(
+  event: Event,
+  correlationId: string,
+): Event & { readonly correlationId: string } {
+  const forwarded = { ...event, correlationId };
+  const registration = activityLogEventRegistration(event);
+  if (registration !== undefined) {
+    Object.defineProperty(forwarded, ACTIVITY_LOG_EVENT_REGISTRATION, {
+      value: registration,
+      enumerable: false,
+      configurable: false,
+      writable: false,
+    });
+  }
+  return forwarded;
+}
+
 /**
  * Binds one operation correlation without capturing the process logger. Producer-owned ids win,
  * so a domain operation that already carries a narrower request/run id is never relabelled as the
@@ -81,7 +100,7 @@ export function processServerLogSinkFor(correlationId: string): ProcessServerLog
   const sink = processServerLogSink();
   return {
     write(event: ServerLogEvent): void {
-      sink.write({ ...event, correlationId: event.correlationId ?? correlationId });
+      sink.write(withCorrelation(event, event.correlationId ?? correlationId));
     },
     enabled(level: ServerLogLevel): boolean {
       return sink.enabled(level);
@@ -102,7 +121,7 @@ export function consolidationLogSinkFor(correlationId: string): ConsolidationLog
   const sink = processServerLogSink();
   return {
     write(event: ConsolidationLogEvent): void {
-      sink.write({ ...event, correlationId: event.correlationId ?? correlationId });
+      sink.write(withCorrelation(event, event.correlationId ?? correlationId));
     },
   };
 }
@@ -185,14 +204,14 @@ export function logCommandTermination(
       COMMAND_TERMINATED_OPERATION,
       { correlationId },
       {
-      reason: evidence.reason,
-      childPid: evidence.childPid,
-      windowsTreeKill: evidence.windowsTreeKill,
-      // Only the SIGKILL-escalation line carries this, and it is what separates the two lines a
-      // single termination can emit: without it, "SIGTERM was enough" and "we escalated and the
-      // tree-kill still failed" reach the log looking identical. Body-free — a closed-vocabulary
-      // disposition, never a pid, path or command.
-      ...(evidence.escalation === undefined ? {} : { escalation: evidence.escalation }),
+        reason: evidence.reason,
+        childPid: evidence.childPid,
+        windowsTreeKill: evidence.windowsTreeKill,
+        // Only the SIGKILL-escalation line carries this, and it is what separates the two lines a
+        // single termination can emit: without it, "SIGTERM was enough" and "we escalated and the
+        // tree-kill still failed" reach the log looking identical. Body-free — a closed-vocabulary
+        // disposition, never a pid, path or command.
+        ...(evidence.escalation === undefined ? {} : { escalation: evidence.escalation }),
       },
     ),
   );

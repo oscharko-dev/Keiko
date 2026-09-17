@@ -399,29 +399,40 @@ function isBodyFreeMachineValue(value: string): boolean {
   return true;
 }
 
+function vocabularyFailure(valid: boolean): ActivityLogEventFailureKind | undefined {
+  return valid ? undefined : "invalid-field-vocabulary";
+}
+
+function bodyFreeStringFailure(value: string): ActivityLogEventFailureKind | undefined {
+  return vocabularyFailure(
+    ACTIVITY_LOG_REDACTION_MARKER.test(value) || isBodyFreeMachineValue(value),
+  );
+}
+
 function semanticStringFailure(
   name: string,
   contract: ActivityLogFieldContract,
   value: string,
 ): ActivityLogEventFailureKind | undefined {
-  if (contract.dataClass === "completeness-state")
-    return (ACTIVITY_LOG_COMPLETENESS_STATES as readonly string[]).includes(value)
-      ? undefined
-      : "invalid-field-vocabulary";
-  if (contract.dataClass === "loss-state")
-    return (ACTIVITY_LOG_LOSS_STATES as readonly string[]).includes(value)
-      ? undefined
-      : "invalid-field-vocabulary";
-  if (contract.dataClass === "digest")
-    return ACTIVITY_LOG_DIGEST_VALUE.test(value) ? undefined : "invalid-field-vocabulary";
-  if (contract.dataClass === "error-kind" && name !== "frames")
-    return ERROR_KIND_PATTERN.test(value) ? undefined : "invalid-field-vocabulary";
-  if (ACTIVITY_LOG_REDUCER_OWNED_FIELDS.has(name)) return undefined;
-  if (contract.dataClass === "closed-enum")
-    return contract.values === undefined ? "invalid-field-vocabulary" : undefined;
-  const bodyFree = ACTIVITY_LOG_REDACTION_MARKER.test(value) || isBodyFreeMachineValue(value);
-  if (!bodyFree) return "invalid-field-vocabulary";
-  return undefined;
+  switch (contract.dataClass) {
+    case "completeness-state":
+      return vocabularyFailure(
+        (ACTIVITY_LOG_COMPLETENESS_STATES as readonly string[]).includes(value),
+      );
+    case "loss-state":
+      return vocabularyFailure((ACTIVITY_LOG_LOSS_STATES as readonly string[]).includes(value));
+    case "digest":
+      return vocabularyFailure(ACTIVITY_LOG_DIGEST_VALUE.test(value));
+    case "error-kind":
+      return name === "frames"
+        ? bodyFreeStringFailure(value)
+        : vocabularyFailure(ERROR_KIND_PATTERN.test(value));
+    case "closed-enum":
+      return vocabularyFailure(contract.values !== undefined);
+    default:
+      if (ACTIVITY_LOG_REDUCER_OWNED_FIELDS.has(name)) return undefined;
+      return bodyFreeStringFailure(value);
+  }
 }
 
 function stringFieldFailure(
@@ -572,13 +583,10 @@ function normalizeActivityLogEnvelope(
   };
 }
 
-function validateActivityLogEnvelope(
+function validateActivityLogCorrelations(
   registration: ActivityLogOperationRegistration,
   envelope: ActivityLogEventEnvelope,
 ): void {
-  if (Object.keys(envelope).some((key) => !ACTIVITY_LOG_ENVELOPE_KEYS.has(key))) {
-    throw new ActivityLogEventValidationError("unknown-field");
-  }
   if (!validOptionalCorrelationId(envelope.correlationId)) {
     throw new ActivityLogEventValidationError("invalid-field-bound");
   }
@@ -591,6 +599,9 @@ function validateActivityLogEnvelope(
   if (registration.causal === "parent-correlation" && envelope.parentCorrelationId === undefined) {
     throw new ActivityLogEventValidationError("missing-field");
   }
+}
+
+function validateActivityLogOutcome(envelope: ActivityLogEventEnvelope): void {
   if (envelope.errorKind !== undefined && !isActivityLogErrorKind(envelope.errorKind)) {
     throw new ActivityLogEventValidationError("invalid-field-vocabulary");
   }
@@ -603,6 +614,17 @@ function validateActivityLogEnvelope(
   if (envelope.status !== undefined && !Number.isInteger(envelope.status)) {
     throw new ActivityLogEventValidationError("invalid-field-type");
   }
+}
+
+function validateActivityLogEnvelope(
+  registration: ActivityLogOperationRegistration,
+  envelope: ActivityLogEventEnvelope,
+): void {
+  if (Object.keys(envelope).some((key) => !ACTIVITY_LOG_ENVELOPE_KEYS.has(key))) {
+    throw new ActivityLogEventValidationError("unknown-field");
+  }
+  validateActivityLogCorrelations(registration, envelope);
+  validateActivityLogOutcome(envelope);
 }
 
 export function validateActivityLogOperationRecord(
@@ -645,38 +667,50 @@ const ACTIVITY_LOG_EVENT_KEYS: ReadonlySet<string> = new Set([
 
 const ACTIVITY_LOG_LEVELS: ReadonlySet<string> = new Set(["debug", "info", "warn", "error"]);
 
+function registeredOptionalString(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string") throw new ActivityLogEventValidationError("invalid-field-type");
+  return value;
+}
+
+function registeredOptionalNumber(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "number") throw new ActivityLogEventValidationError("invalid-field-type");
+  return value;
+}
+
+function registeredLevel(value: unknown): ActivityLogEventEnvelope["level"] {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !ACTIVITY_LOG_LEVELS.has(value)) {
+    throw new ActivityLogEventValidationError("invalid-field-vocabulary");
+  }
+  return value as ActivityLogEventEnvelope["level"];
+}
+
+function registeredErrorKind(value: unknown): ActivityLogErrorKind | undefined {
+  if (value === undefined) return undefined;
+  if (!isActivityLogErrorKind(value)) {
+    throw new ActivityLogEventValidationError("invalid-field-vocabulary");
+  }
+  return value;
+}
+
 function registeredEventEnvelope(
   event: Readonly<Record<PropertyKey, unknown>>,
 ): ActivityLogEventEnvelope {
-  if (event.correlationId !== undefined && typeof event.correlationId !== "string") {
-    throw new ActivityLogEventValidationError("invalid-field-type");
-  }
-  if (event.parentCorrelationId !== undefined && typeof event.parentCorrelationId !== "string") {
-    throw new ActivityLogEventValidationError("invalid-field-type");
-  }
-  if (event.level !== undefined && !ACTIVITY_LOG_LEVELS.has(String(event.level))) {
-    throw new ActivityLogEventValidationError("invalid-field-vocabulary");
-  }
-  if (event.errorKind !== undefined && !isActivityLogErrorKind(event.errorKind)) {
-    throw new ActivityLogEventValidationError("invalid-field-vocabulary");
-  }
-  if (event.durationMs !== undefined && typeof event.durationMs !== "number") {
-    throw new ActivityLogEventValidationError("invalid-field-type");
-  }
-  if (event.status !== undefined && typeof event.status !== "number") {
-    throw new ActivityLogEventValidationError("invalid-field-type");
-  }
+  const level = registeredLevel(event.level);
+  const correlationId = registeredOptionalString(event.correlationId);
+  const parentCorrelationId = registeredOptionalString(event.parentCorrelationId);
+  const durationMs = registeredOptionalNumber(event.durationMs);
+  const status = registeredOptionalNumber(event.status);
+  const errorKind = registeredErrorKind(event.errorKind);
   return {
-    ...(event.level !== undefined
-      ? { level: event.level as ActivityLogEventEnvelope["level"] }
-      : {}),
-    ...(typeof event.correlationId === "string" ? { correlationId: event.correlationId } : {}),
-    ...(typeof event.parentCorrelationId === "string"
-      ? { parentCorrelationId: event.parentCorrelationId }
-      : {}),
-    ...(typeof event.durationMs === "number" ? { durationMs: event.durationMs } : {}),
-    ...(typeof event.status === "number" ? { status: event.status } : {}),
-    ...(isActivityLogErrorKind(event.errorKind) ? { errorKind: event.errorKind } : {}),
+    ...(level === undefined ? {} : { level }),
+    ...(correlationId === undefined ? {} : { correlationId }),
+    ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
+    ...(durationMs === undefined ? {} : { durationMs }),
+    ...(status === undefined ? {} : { status }),
+    ...(errorKind === undefined ? {} : { errorKind }),
   };
 }
 
@@ -725,30 +759,71 @@ function sameRegistrationFields(
   });
 }
 
+function runtimeProperty(value: object, key: PropertyKey): unknown {
+  const property: unknown = Reflect.get(value, key);
+  return property;
+}
+
 function registrationMatchesCanonical(
   registration: ActivityLogOperationRegistration,
   canonical: ActivityLogOperationRegistration,
 ): boolean {
   try {
-    return (
-      hasExactOwnKeys(registration, canonical) &&
-      registration.contractKind === canonical.contractKind &&
-      registration.schemaVersion === canonical.schemaVersion &&
-      registration.op === canonical.op &&
-      registration.category === canonical.category &&
-      registration.owner === canonical.owner &&
-      registration.emitter === canonical.emitter &&
-      sameRegistrationFields(registration.fields, canonical.fields) &&
-      registration.causal === canonical.causal &&
-      registration.lifecycle === canonical.lifecycle &&
-      registration.analyzerProjection === canonical.analyzerProjection &&
+    const fixedIdentityMatches =
+      runtimeProperty(registration, "contractKind") ===
+        runtimeProperty(canonical, "contractKind") &&
+      runtimeProperty(registration, "schemaVersion") ===
+        runtimeProperty(canonical, "schemaVersion");
+    return [
+      hasExactOwnKeys(registration, canonical) && fixedIdentityMatches,
+      registration.op === canonical.op,
+      registration.category === canonical.category,
+      registration.owner === canonical.owner,
+      registration.emitter === canonical.emitter,
+      sameRegistrationFields(registration.fields, canonical.fields),
+      registration.causal === canonical.causal,
+      registration.lifecycle === canonical.lifecycle,
+      registration.analyzerProjection === canonical.analyzerProjection,
       sameStringArray(registration.failureClasses, canonical.failureClasses) &&
-      sameStringArray(registration.proofIds, canonical.proofIds) &&
-      registration.releaseImpact === canonical.releaseImpact
-    );
+        sameStringArray(registration.proofIds, canonical.proofIds),
+      registration.releaseImpact === canonical.releaseImpact,
+    ].every(Boolean);
   } catch {
     return false;
   }
+}
+
+function canonicalRegistrationForEvent(
+  event: Readonly<Record<PropertyKey, unknown>>,
+): ActivityLogOperationRegistration {
+  const canonical = typeof event.op === "string" ? activityLogOperationSchema(event.op) : undefined;
+  if (canonical === undefined) {
+    throw new ActivityLogEventValidationError("unregistered-operation");
+  }
+  return canonical;
+}
+
+function validateCanonicalRegistration(
+  event: Readonly<Record<PropertyKey, unknown>>,
+  registration: ActivityLogOperationRegistration,
+  canonical: ActivityLogOperationRegistration,
+): void {
+  if (
+    !registrationMatchesCanonical(registration, canonical) ||
+    event.op !== canonical.op ||
+    event.category !== canonical.category
+  ) {
+    throw new ActivityLogEventValidationError("registration-mismatch");
+  }
+}
+
+function registeredEventFields(
+  event: Readonly<Record<PropertyKey, unknown>>,
+): Readonly<Record<string, unknown>> {
+  if (typeof event.extra !== "object" || event.extra === null || Array.isArray(event.extra)) {
+    throw new ActivityLogEventValidationError("fields-not-object");
+  }
+  return event.extra as Readonly<Record<string, unknown>>;
 }
 
 export function validateRegisteredActivityLogEvent(
@@ -758,25 +833,13 @@ export function validateRegisteredActivityLogEvent(
   if (registration === undefined) {
     throw new ActivityLogEventValidationError("unregistered-operation");
   }
-  const canonical = typeof event.op === "string" ? activityLogOperationSchema(event.op) : undefined;
-  if (canonical === undefined) {
-    throw new ActivityLogEventValidationError("unregistered-operation");
-  }
-  if (
-    !registrationMatchesCanonical(registration, canonical) ||
-    event.op !== canonical.op ||
-    event.category !== canonical.category
-  ) {
-    throw new ActivityLogEventValidationError("registration-mismatch");
-  }
+  const canonical = canonicalRegistrationForEvent(event);
+  validateCanonicalRegistration(event, registration, canonical);
   if (Object.keys(event).some((key) => !ACTIVITY_LOG_EVENT_KEYS.has(key))) {
     throw new ActivityLogEventValidationError("unknown-field");
   }
   validateActivityLogEnvelope(canonical, registeredEventEnvelope(event));
-  if (typeof event.extra !== "object" || event.extra === null || Array.isArray(event.extra)) {
-    throw new ActivityLogEventValidationError("fields-not-object");
-  }
-  validateActivityLogFields(canonical, event.extra as Readonly<Record<string, unknown>>);
+  validateActivityLogFields(canonical, registeredEventFields(event));
   return canonical;
 }
 

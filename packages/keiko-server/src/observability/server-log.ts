@@ -194,24 +194,63 @@ const ACTIVITY_LOG_DIGEST = /^[a-f0-9]{64}$/u;
 const ACTIVITY_LOG_INSTANCE_ID = /^[a-f0-9]{8}$/u;
 const ACTIVITY_LOG_PLATFORM_CLASS = /^(?:darwin|linux|win32|other)-(?:arm64|x64|other)$/u;
 const ACTIVITY_LOG_PRODUCT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
+const ACTIVITY_LOG_RELEASE_CLASSES: ReadonlySet<unknown> = new Set(["stable", "prerelease"]);
+
+function validRegistryIdentity(identity: ServerLogIdentity): boolean {
+  return (
+    identity.schemaVersion === SERVER_LOG_SCHEMA_VERSION &&
+    identity.registryVersion === ACTIVITY_LOG_REGISTRY_VERSION
+  );
+}
+
+function validDigestIdentity(identity: ServerLogIdentity): boolean {
+  return (
+    ACTIVITY_LOG_DIGEST.test(identity.schemaDigest) &&
+    identity.schemaDigest === ACTIVITY_LOG_SCHEMA_DIGEST &&
+    ACTIVITY_LOG_DIGEST.test(identity.catalogDigest) &&
+    identity.catalogDigest === ACTIVITY_LOG_CATALOG_DIGEST
+  );
+}
+
+function validBuildIdentity(identity: ServerLogIdentity): boolean {
+  const buildClass: unknown = Reflect.get(identity, "buildClass");
+  const releaseClass: unknown = Reflect.get(identity, "releaseClass");
+  const platformClass: unknown = Reflect.get(identity, "platformClass");
+  return (
+    buildClass === "node-esm" &&
+    ACTIVITY_LOG_RELEASE_CLASSES.has(releaseClass) &&
+    typeof platformClass === "string" &&
+    ACTIVITY_LOG_PLATFORM_CLASS.test(platformClass)
+  );
+}
+
+function validProductIdentity(identity: ServerLogIdentity): boolean {
+  return (
+    ACTIVITY_LOG_PRODUCT_VERSION.test(identity.productVersion) &&
+    identity.productVersion === KEIKO_PRODUCT_VERSION
+  );
+}
+
+function validWriterIdentity(identity: ServerLogIdentity): boolean {
+  const compatibilityState: unknown = Reflect.get(identity, "compatibilityState");
+  const writerCapability: unknown = Reflect.get(identity, "writerCapability");
+  return compatibilityState === "supported" && writerCapability === "active";
+}
+
+function validPositiveInteger(value: number): boolean {
+  return Number.isInteger(value) && value > 0;
+}
 
 function validServerLogIdentity(identity: ServerLogIdentity): boolean {
   return [
-    identity.schemaVersion === SERVER_LOG_SCHEMA_VERSION &&
-      identity.registryVersion === ACTIVITY_LOG_REGISTRY_VERSION,
-    ACTIVITY_LOG_DIGEST.test(identity.schemaDigest) &&
-      identity.schemaDigest === ACTIVITY_LOG_SCHEMA_DIGEST &&
-      ACTIVITY_LOG_DIGEST.test(identity.catalogDigest) &&
-      identity.catalogDigest === ACTIVITY_LOG_CATALOG_DIGEST,
-    identity.buildClass === "node-esm" &&
-      (identity.releaseClass === "stable" || identity.releaseClass === "prerelease") &&
-      ACTIVITY_LOG_PLATFORM_CLASS.test(identity.platformClass),
-    ACTIVITY_LOG_PRODUCT_VERSION.test(identity.productVersion) &&
-      identity.productVersion === KEIKO_PRODUCT_VERSION,
-    identity.compatibilityState === "supported" && identity.writerCapability === "active",
-    Number.isInteger(identity.pid) && identity.pid > 0,
+    validRegistryIdentity(identity),
+    validDigestIdentity(identity),
+    validBuildIdentity(identity),
+    validProductIdentity(identity),
+    validWriterIdentity(identity),
+    validPositiveInteger(identity.pid),
     ACTIVITY_LOG_INSTANCE_ID.test(identity.instanceId),
-    Number.isInteger(identity.seq) && identity.seq > 0,
+    validPositiveInteger(identity.seq),
   ].every(Boolean);
 }
 
