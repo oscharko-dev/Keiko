@@ -39,6 +39,8 @@ export type {
   SafeArtifactPublicationEntry,
   SafeArtifactPublicationOptions,
   SafeArtifactPublicationResult,
+  SafeArtifactRecoveryOptions,
+  SafeArtifactRecoveryResult,
 } from "./fs-hardening.js";
 export {
   DIR_MODE,
@@ -50,9 +52,11 @@ export {
   chmodIfPresent,
   openSafeArtifactFile,
   publishSafeArtifactFileSet,
+  recoverSafeArtifactFileSet,
   replaceSafeArtifactFile,
   safeArtifactContainmentAssurance,
   safeArtifactPermissionAssurance,
+  safeArtifactPublicationSlot,
   verifySafeArtifactFileDescriptor,
 } from "./fs-hardening.js";
 

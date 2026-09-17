@@ -44,9 +44,11 @@ import {
   chmodIfPresent,
   openSafeArtifactFile,
   publishSafeArtifactFileSet,
+  recoverSafeArtifactFileSet,
   replaceSafeArtifactFile,
   safeArtifactContainmentAssurance,
   safeArtifactPermissionAssurance,
+  safeArtifactPublicationSlot,
   verifySafeArtifactFileDescriptor,
   bindSecurityLogCorrelation,
   WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
@@ -152,6 +154,8 @@ describe("keiko-security package surface", () => {
     expect(typeof openSafeArtifactFile).toBe("function");
     expect(typeof verifySafeArtifactFileDescriptor).toBe("function");
     expect(typeof publishSafeArtifactFileSet).toBe("function");
+    expect(typeof recoverSafeArtifactFileSet).toBe("function");
+    expect(typeof safeArtifactPublicationSlot).toBe("function");
     expect(typeof replaceSafeArtifactFile).toBe("function");
     expect(typeof safeArtifactContainmentAssurance).toBe("function");
     expect(typeof safeArtifactPermissionAssurance).toBe("function");

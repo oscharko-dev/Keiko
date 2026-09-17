@@ -689,23 +689,39 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function isIntentName(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value !== "." &&
+    value !== ".." &&
+    basename(value) === value &&
+    !value.startsWith(".keiko-publish-")
+  );
+}
+
+function isIntentByteCount(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= MAX_RECOVERY_ARTIFACT_BYTES
+  );
+}
+
 function isIntentEntry(value: unknown): value is PublicationIntentEntry {
   if (!isRecord(value)) return false;
-  const name = value.name;
-  const byteCount = value.byteCount;
   return (
-    typeof name === "string" &&
-    name !== "." &&
-    name !== ".." &&
-    basename(name) === name &&
-    !name.startsWith(".keiko-publish-") &&
+    isIntentName(value.name) &&
     isSafeArtifactClass(value.artifactClass) &&
-    typeof byteCount === "number" &&
-    Number.isSafeInteger(byteCount) &&
-    byteCount >= 0 &&
-    byteCount <= MAX_RECOVERY_ARTIFACT_BYTES &&
+    isIntentByteCount(value.byteCount) &&
     typeof value.sha256 === "string" &&
     PUBLICATION_DIGEST_PATTERN.test(value.sha256)
+  );
+}
+
+function isCommitIndex(value: unknown, entryCount: number): value is number {
+  return (
+    typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value < entryCount
   );
 }
 
@@ -713,16 +729,10 @@ function parsedPublicationIntent(value: unknown): PublicationIntent | undefined 
   if (!isRecord(value) || value.schemaVersion !== 1 || !Array.isArray(value.entries)) {
     return undefined;
   }
-  if (value.entries.length === 0 || value.entries.length > MAX_PUBLICATION_ENTRIES) return undefined;
-  if (!value.entries.every(isIntentEntry)) return undefined;
-  if (
-    typeof value.commitIndex !== "number" ||
-    !Number.isSafeInteger(value.commitIndex) ||
-    value.commitIndex < 0 ||
-    value.commitIndex >= value.entries.length
-  ) {
+  if (value.entries.length === 0 || value.entries.length > MAX_PUBLICATION_ENTRIES)
     return undefined;
-  }
+  if (!value.entries.every(isIntentEntry)) return undefined;
+  if (!isCommitIndex(value.commitIndex, value.entries.length)) return undefined;
   const comparisonNames = value.entries.map((entry) =>
     filesystemComparisonPath(join("/", entry.name)),
   );
@@ -761,13 +771,20 @@ function validatePublication(
   if (entries.length > MAX_PUBLICATION_ENTRIES) {
     throw safeFileError(fallbackClass, "invalid-publication");
   }
-  if (options.publicationSlot !== undefined) {
-    validatePublicationSlot(options.publicationSlot, fallbackClass);
-    if (!sameFilesystemPath(dirname(resolvedCommit), resolve(options.trustedRoot))) {
-      throw safeFileError(fallbackClass, "invalid-publication");
-    }
-  }
+  validatePublicationSlotOption(options, resolvedCommit, fallbackClass);
   for (const path of paths) containedDirectories(options.trustedRoot, path, fallbackClass);
+}
+
+function validatePublicationSlotOption(
+  options: SafeArtifactPublicationOptions,
+  resolvedCommit: string,
+  artifactClass: SafeArtifactClass,
+): void {
+  if (options.publicationSlot === undefined) return;
+  validatePublicationSlot(options.publicationSlot, artifactClass);
+  if (!sameFilesystemPath(dirname(resolvedCommit), resolve(options.trustedRoot))) {
+    throw safeFileError(artifactClass, "invalid-publication");
+  }
 }
 
 function writeAll(descriptor: number, bytes: Buffer, artifactClass: SafeArtifactClass): void {
@@ -990,6 +1007,22 @@ function sameRecoveryIdentity(left: BigIntStats, right: BigIntStats): boolean {
   return left.dev === right.dev && left.ino === right.ino && left.nlink === right.nlink;
 }
 
+function recoveryReadMatches(
+  bytes: Buffer,
+  count: number,
+  expected: PublicationIntentEntry,
+  before: BigIntStats,
+  after: BigIntStats,
+  guards: readonly DirectoryGuard[],
+): boolean {
+  return (
+    count === expected.byteCount &&
+    publicationDigest(bytes.subarray(0, count)) === expected.sha256 &&
+    sameRecoveryIdentity(before, after) &&
+    guards.every(directoryGuardStillMatches)
+  );
+}
+
 function readRecoveryBytes(
   path: string,
   expected: PublicationIntentEntry,
@@ -1009,11 +1042,8 @@ function readRecoveryBytes(
     const after = recoveryPathStat(path, expected.artifactClass);
     const finalOpened = fstatSync(descriptor, { bigint: true });
     if (
-      count !== expected.byteCount ||
-      publicationDigest(bytes.subarray(0, count)) !== expected.sha256 ||
-      !sameRecoveryIdentity(opened, finalOpened) ||
-      !sameRecoveryIdentity(finalOpened, after) ||
-      !guards.every(directoryGuardStillMatches)
+      !recoveryReadMatches(bytes, count, expected, opened, finalOpened, guards) ||
+      !sameRecoveryIdentity(finalOpened, after)
     ) {
       throw safeFileError(expected.artifactClass, "recovery-conflict");
     }
@@ -1396,7 +1426,9 @@ function removeIntentPublicationStages(
   const assurances: SafeArtifactDurabilityAssurance[] = [];
   for (const entry of prepared) {
     if (!pathExists(entry.stagePath, entry.artifactClass)) continue;
-    if (!readExactPrivateFile(entry.stagePath, entry.bytes, entry.artifactClass, entry.trustedRoot)) {
+    if (
+      !readExactPrivateFile(entry.stagePath, entry.bytes, entry.artifactClass, entry.trustedRoot)
+    ) {
       throw safeFileError(entry.artifactClass, "recovery-conflict");
     }
     removeVerifiedStage(entry);
@@ -1481,7 +1513,10 @@ function preparedRecoveryEntries(
   if (targetPresence.some(Boolean) && !allTargetsPresent) {
     for (let index = 0; index < intent.entries.length; index += 1) {
       if (!targetPresence[index] && !stagePresence[index]) {
-        throw safeFileError(intent.entries[index]?.artifactClass ?? "manifest", "recovery-conflict");
+        throw safeFileError(
+          intent.entries[index]?.artifactClass ?? "manifest",
+          "recovery-conflict",
+        );
       }
     }
   }
@@ -1511,39 +1546,40 @@ function rollbackIncompleteIntent(
     const stagePath = join(root, `.keiko-publish-${slot}-${String(index)}.stage`);
     if (!pathExists(stagePath, entry.artifactClass)) return [];
     const bytes = readRecoveryBytes(stagePath, entry, root);
-    return [{ path: join(root, entry.name), stagePath, bytes, artifactClass: entry.artifactClass, trustedRoot: root }];
+    return [
+      {
+        path: join(root, entry.name),
+        stagePath,
+        bytes,
+        artifactClass: entry.artifactClass,
+        trustedRoot: root,
+      },
+    ];
   });
   return rollbackIntentPublication(present, markerPath);
 }
 
-/** Recovers or safely rolls back the bounded transaction named by a durable publication slot. */
-export function recoverSafeArtifactFileSet(
+function countIntentPaths(
+  intent: PublicationIntent,
+  root: string,
+  slot: string,
+  kind: "stage" | "target",
+): number {
+  return intent.entries.filter((entry, index) => {
+    const path =
+      kind === "target"
+        ? join(root, entry.name)
+        : join(root, `.keiko-publish-${slot}-${String(index)}.stage`);
+    return pathExists(path, entry.artifactClass);
+  }).length;
+}
+
+function completeIntentRecovery(
+  intent: PublicationIntent,
   options: SafeArtifactRecoveryOptions,
+  root: string,
+  markerPath: string,
 ): SafeArtifactRecoveryResult {
-  validatePublicationSlot(options.publicationSlot, "manifest");
-  const root = resolve(options.trustedRoot);
-  const markerPath = intentPath(root, options.publicationSlot);
-  if (!pathExists(markerPath, "manifest")) return { status: "none" };
-  const intent = readPublicationIntent(markerPath, root);
-  const targetCount = intent.entries.filter((entry) =>
-    pathExists(join(root, entry.name), entry.artifactClass),
-  ).length;
-  const stageCount = intent.entries.filter((entry, index) =>
-    pathExists(join(root, `.keiko-publish-${options.publicationSlot}-${String(index)}.stage`), entry.artifactClass),
-  ).length;
-  if (targetCount === 0 && stageCount < intent.entries.length) {
-    const durabilityAssurance = rollbackIncompleteIntent(
-      intent,
-      root,
-      options.publicationSlot,
-      markerPath,
-    );
-    return {
-      status: "rolled-back",
-      permissionAssurance: safeArtifactPermissionAssurance(),
-      durabilityAssurance,
-    };
-  }
   const prepared = preparedRecoveryEntries(intent, root, options.publicationSlot);
   const commit = prepared[intent.commitIndex];
   if (commit === undefined) throw safeFileError("manifest", "recovery-conflict");
@@ -1566,11 +1602,35 @@ export function recoverSafeArtifactFileSet(
     commitPath: commit.path,
     artifactCount: prepared.length,
     permissionAssurance: result.permissionAssurance,
-    durabilityAssurance: combineDurabilityAssurance(
-      result.durabilityAssurance,
-      intentCleanup,
-    ),
+    durabilityAssurance: combineDurabilityAssurance(result.durabilityAssurance, intentCleanup),
   };
+}
+
+/** Recovers or safely rolls back the bounded transaction named by a durable publication slot. */
+export function recoverSafeArtifactFileSet(
+  options: SafeArtifactRecoveryOptions,
+): SafeArtifactRecoveryResult {
+  validatePublicationSlot(options.publicationSlot, "manifest");
+  const root = resolve(options.trustedRoot);
+  const markerPath = intentPath(root, options.publicationSlot);
+  if (!pathExists(markerPath, "manifest")) return { status: "none" };
+  const intent = readPublicationIntent(markerPath, root);
+  const targetCount = countIntentPaths(intent, root, options.publicationSlot, "target");
+  const stageCount = countIntentPaths(intent, root, options.publicationSlot, "stage");
+  if (targetCount === 0 && stageCount < intent.entries.length) {
+    const durabilityAssurance = rollbackIncompleteIntent(
+      intent,
+      root,
+      options.publicationSlot,
+      markerPath,
+    );
+    return {
+      status: "rolled-back",
+      permissionAssurance: safeArtifactPermissionAssurance(),
+      durabilityAssurance,
+    };
+  }
+  return completeIntentRecovery(intent, options, root, markerPath);
 }
 
 /**
