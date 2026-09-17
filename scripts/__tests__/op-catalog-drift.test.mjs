@@ -6,6 +6,8 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 import {
+  activityLogSchemaDigest,
+  activityLogSchemaDigestMaterial,
   generateOpCatalog,
   generateTypedActivityLogRegistry,
   validateActivityLogRegistryExemptions,
@@ -145,6 +147,87 @@ describe("Activity Log registry exemptions", () => {
 });
 
 describe("op catalog drift", () => {
+  it("binds the schema digest to the complete persisted envelope and closed vocabularies", () => {
+    const material = activityLogSchemaDigestMaterial();
+
+    expect(Object.keys(material.persistedEnvelope)).toEqual([
+      "ts",
+      "schemaVersion",
+      "registryVersion",
+      "schemaDigest",
+      "catalogDigest",
+      "buildClass",
+      "releaseClass",
+      "platformClass",
+      "productVersion",
+      "compatibilityState",
+      "writerCapability",
+      "pid",
+      "instanceId",
+      "seq",
+      "level",
+      "category",
+      "op",
+      "correlationId",
+      "parentCorrelationId",
+      "durationMs",
+      "status",
+      "errorKind",
+    ]);
+    expect(material.persistedEnvelope).toMatchObject({
+      schemaVersion: { type: "integer", required: true, values: [2] },
+      schemaDigest: { type: "string", required: true, format: "sha256-hex" },
+      catalogDigest: { type: "string", required: true, format: "sha256-hex" },
+      buildClass: { values: ["node-esm"] },
+      releaseClass: { values: ["stable", "prerelease"] },
+      platformClass: {
+        pattern: "^(?:darwin|linux|win32|other)-(?:arm64|x64|other)$",
+      },
+      status: { type: "integer", required: false },
+      errorKind: { values: material.vocabularies.errorKinds },
+    });
+    expect(material.vocabularies).toMatchObject({
+      completenessStates: ["complete", "partial", "unknown"],
+      lossStates: ["none", "event-dropped", "event-location-unknown", "publication-unavailable"],
+      errorKinds: [
+        "unknown",
+        "internal",
+        "invalid-request",
+        "validation-failed",
+        "permission-denied",
+        "authority-denied",
+        "unavailable",
+        "timeout",
+        "cancelled",
+        "rate-limited",
+        "conflict",
+        "unsafe-target",
+        "target-exists",
+        "target-mutated",
+        "open-failed",
+        "read-failed",
+        "write-failed",
+        "durability-failed",
+        "publish-unsupported",
+      ],
+      compatibilityStates: [
+        "supported",
+        "legacy-supported",
+        "unsupported-version",
+        "corrupt",
+        "truncated",
+        "incomplete",
+      ],
+      writerCapabilityStates: ["active", "degraded", "unavailable"],
+      levels: ["debug", "info", "warn", "error"],
+      buildClasses: ["node-esm"],
+      releaseClasses: ["stable", "prerelease"],
+    });
+    expect(activityLogSchemaDigest()).toBe(
+      "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
+    );
+  });
+
   it("discovers a typed registration and emission with its exact owning source sites", () => {
     withTypedRegistryFixture(
       "zzz-fixture-typed-registry",
