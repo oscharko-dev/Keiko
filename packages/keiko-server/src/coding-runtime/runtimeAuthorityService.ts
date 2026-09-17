@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
-import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 // KEIKO-0577: replace the file-local digest()/canonicalJson() with the shared, architecturally
 // correct helpers from @oscharko-dev/keiko-security so a second silently-diverging
@@ -38,6 +38,11 @@ import {
   validateCodingWorkbenchRuntimeMintConfirmation,
   validateCodingWorkbenchRuntimeState,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   codingWorkbenchPolicyEffectFor,
   isCodingWorkbenchModeWidening,
@@ -114,14 +119,14 @@ type RuntimeAuthorityMintFailureReason =
   | "registration-refused"
   | "capability-issuance-refused";
 
-const MINT_FAILURE_ERROR_KIND: Readonly<Record<RuntimeAuthorityMintFailureReason, string>> = {
-  "model-source-mismatch": "CodingRuntimeAuthorityBindingFailure",
-  "approval-digest-invalid": "CodingRuntimeAuthorityValidationFailure",
-  "confirmation-refused": "CodingRuntimeAuthorityConfirmationFailure",
-  "envelope-invalid": "CodingRuntimeAuthorityValidationFailure",
-  "registration-refused": "CodingRuntimeAuthorityRegistrationFailure",
-  "capability-issuance-refused": "CodingRuntimeAuthorityCapabilityFailure",
-};
+const MINT_FAILURE_ERROR_KIND = {
+  "model-source-mismatch": "authority-denied",
+  "approval-digest-invalid": "validation-failed",
+  "confirmation-refused": "authority-denied",
+  "envelope-invalid": "validation-failed",
+  "registration-refused": "authority-denied",
+  "capability-issuance-refused": "authority-denied",
+} satisfies Readonly<Record<RuntimeAuthorityMintFailureReason, ActivityLogErrorKind>>;
 
 /**
  * The closed conditions a tool-path capability recheck can be refused for, and the error class each
@@ -137,15 +142,277 @@ type RevalidationRefusalCondition =
   | "audience-mismatch"
   | "capability-invalid"
   | "registry-refused";
-const REVALIDATION_REFUSAL_ERROR_KIND: Readonly<Record<RevalidationRefusalCondition, string>> = {
-  "state-not-admissible": "CodingRuntimeAuthorityStateRefusal",
-  "tree-binding-missing": "CodingRuntimeAuthorityBindingFailure",
-  "run-mismatch": "CodingRuntimeAuthorityBindingFailure",
-  "delegation-mismatch": "CodingRuntimeAuthorityDelegationFailure",
-  "audience-mismatch": "CodingRuntimeAuthorityCapabilityFailure",
-  "capability-invalid": "CodingRuntimeAuthorityCapabilityFailure",
-  "registry-refused": "CodingRuntimeAuthorityRegistrationFailure",
-};
+const REVALIDATION_REFUSAL_ERROR_KIND = {
+  "state-not-admissible": "authority-denied",
+  "tree-binding-missing": "authority-denied",
+  "run-mismatch": "authority-denied",
+  "delegation-mismatch": "authority-denied",
+  "audience-mismatch": "authority-denied",
+  "capability-invalid": "authority-denied",
+  "registry-refused": "authority-denied",
+} satisfies Readonly<Record<RevalidationRefusalCondition, ActivityLogErrorKind>>;
+
+const CODING_RUNTIME_AUTHORITY_MINT_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.authority.mint-failed",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-runtime.runtimeAuthorityService.refuseMint",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    stage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "intent-binding",
+        "approval-digest",
+        "confirmation-consumption",
+        "envelope-validation",
+        "authority-registration",
+        "capability-issuance",
+      ],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "model-source-mismatch",
+        "approval-digest-invalid",
+        "confirmation-refused",
+        "envelope-invalid",
+        "registration-refused",
+        "capability-issuance-refused",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-runtime-authority-mint"],
+  proofIds: ["coding-runtime.authority.mint-failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_AUTHORITY_MINTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.authority.minted",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-runtime.runtimeAuthorityService.activateMintedRuntime",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    effectiveMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
+    },
+    actionClasses: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: true,
+      maxItems: 7,
+      values: [
+        "workspace-read",
+        "workspace-write",
+        "command-execution",
+        "verification",
+        "connector-access",
+        "network-egress",
+        "delivery-substrate",
+      ],
+    },
+    connectorScopes: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: true,
+      maxItems: 6,
+      values: [
+        "source-control.read",
+        "source-control.write",
+        "issue-tracker.read",
+        "issue-tracker.write",
+        "knowledge-base.read",
+        "knowledge-base.write",
+      ],
+    },
+    networkPolicyMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["deny-all", "governed-egress", "connector-scoped-egress"],
+    },
+    maxPromptTokens: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "capability",
+  failureClasses: ["coding-runtime-authority-mint"],
+  proofIds: ["coding-runtime.authority.minted.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_DESCRIPTION_AUTHORITY_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.description-authority",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-runtime.runtimeAuthorityService.logDescriptionAuthority",
+  fields: {
+    event: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["minted", "narrowed", "rejected"],
+    },
+    scopeDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    requestedMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
+    },
+    deploymentCeiling: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
+    },
+    effectiveMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
+    },
+    expiresAtMs: { type: "integer", dataClass: "count", required: false },
+    evictedCount: { type: "integer", dataClass: "count", required: false },
+    retainedCount: { type: "integer", dataClass: "count", required: false },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["coding-runtime-description-authority"],
+  proofIds: ["coding-runtime.description-authority.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_AUTHORITY_REVALIDATION_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.authority.revalidation-refused",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-runtime.runtimeAuthorityService.recordRevalidationRefused",
+  fields: {
+    condition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "state-not-admissible",
+        "tree-binding-missing",
+        "run-mismatch",
+        "delegation-mismatch",
+        "audience-mismatch",
+        "capability-invalid",
+        "registry-refused",
+      ],
+    },
+    runtimeState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "idle",
+        "starting",
+        "ready",
+        "running",
+        "paused",
+        "awaiting-approval",
+        "stopping",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "taken-over",
+        "recovery-required",
+      ],
+    },
+    admissibleStates: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: true,
+      maxItems: 12,
+      values: [
+        "idle",
+        "starting",
+        "ready",
+        "running",
+        "paused",
+        "awaiting-approval",
+        "stopping",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "taken-over",
+        "recovery-required",
+      ],
+    },
+    registryReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "runtime-unavailable",
+        "active-run-conflict",
+        "invalid-intent",
+        "approval-activation-failed",
+        "authority-resolution-failed",
+        "authority-expired",
+        "authority-replayed",
+        "task-drift",
+        "workspace-drift",
+        "project-drift",
+        "branch-drift",
+        "scope-drift",
+        "budget-drift",
+        "authority-budget-exceeded",
+        "source-drift",
+        "runtime-failed",
+        "revoked",
+        "recovery-required",
+        "replay-cap-exhausted",
+        "issue-context-unavailable",
+        "question-answer-rejected",
+        "delivery-not-evidenced",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-runtime-authority-revalidation"],
+  proofIds: ["coding-runtime.authority.revalidation-refused.emitted-line"],
+  releaseImpact: "patch",
+});
 
 function deliveryScopeGranted(mode: CodingWorkbenchMode): boolean {
   return codingWorkbenchPolicyEffectFor(mode, "delivery", "medium") !== "denied";
@@ -348,6 +615,12 @@ interface StoredDescriptionAuthority {
   readonly effectiveMode: CodingWorkbenchMode;
   readonly expiresAtMs: number;
 }
+interface DescriptionAuthorityEvidence {
+  readonly effectiveMode?: CodingWorkbenchMode;
+  readonly expiresAtMs?: number;
+  readonly evictedCount?: number;
+  readonly retainedCount?: number;
+}
 export interface MintGitDeliveryDescriptionAuthorityInput {
   readonly scope: GitDeliveryDescriptionAuthorityScope;
   readonly requestedMode: CodingWorkbenchMode;
@@ -523,14 +796,13 @@ export class CodingRuntimeAuthorityService {
     stage: RuntimeAuthorityMintFailureStage,
     reason: RuntimeAuthorityMintFailureReason,
   ): CodingRuntimeMintResult {
-    (this.activityLog ?? processServerLogSink()).write({
-      category: "security",
-      op: "coding-runtime.authority.mint-failed",
-      correlationId: runId,
-      level: "warn",
-      errorKind: MINT_FAILURE_ERROR_KIND[reason],
-      extra: { runId, stage, reason },
-    });
+    (this.activityLog ?? processServerLogSink()).write(
+      activityLogEvent(
+        CODING_RUNTIME_AUTHORITY_MINT_FAILED_OPERATION,
+        { correlationId: runId, level: "warn", errorKind: MINT_FAILURE_ERROR_KIND[reason] },
+        { runId, stage, reason },
+      ),
+    );
     return { ok: false, reason: "authority-resolution-failed" };
   }
 
@@ -568,20 +840,20 @@ export class CodingRuntimeAuthorityService {
     this.activeTreeBindingId = treeBindingId;
     this.activeEffectiveMode = envelope.authority.effectiveMode;
     this.runtimeState = stateForMint(this.runtimeState, envelope, nowIso);
-    (this.activityLog ?? processServerLogSink()).write({
-      category: "security",
-      op: "coding-runtime.authority.minted",
-      correlationId: runId,
-      level: "info",
-      extra: {
-        runId,
-        effectiveMode: envelope.authority.effectiveMode,
-        actionClasses: envelope.authority.actionClasses,
-        connectorScopes: envelope.authority.connectorScopes,
-        networkPolicyMode: envelope.authority.networkPolicy.mode,
-        maxPromptTokens: envelope.authority.budget.maxPromptTokens,
-      },
-    });
+    (this.activityLog ?? processServerLogSink()).write(
+      activityLogEvent(
+        CODING_RUNTIME_AUTHORITY_MINTED_OPERATION,
+        { correlationId: runId, level: "info" },
+        {
+          runId,
+          effectiveMode: envelope.authority.effectiveMode,
+          actionClasses: envelope.authority.actionClasses,
+          connectorScopes: envelope.authority.connectorScopes,
+          networkPolicyMode: envelope.authority.networkPolicy.mode,
+          maxPromptTokens: envelope.authority.budget.maxPromptTokens,
+        },
+      ),
+    );
     return {
       ok: true,
       authorityRef,
@@ -675,26 +947,29 @@ export class CodingRuntimeAuthorityService {
   private logDescriptionAuthority(
     input: MintGitDeliveryDescriptionAuthorityInput,
     event: "minted" | "narrowed" | "rejected",
-    extra: Readonly<Record<string, string | number>>,
+    extra: DescriptionAuthorityEvidence,
     error?: unknown,
   ): void {
-    (this.activityLog ?? processServerLogSink()).write({
-      category: "security",
-      op: "coding-runtime.description-authority",
-      correlationId: input.correlationId ?? UNKNOWN_CORRELATION_ID,
-      level: event === "rejected" ? "warn" : "info",
-      ...(error === undefined ? {} : { errorKind: errorKindOf(error) }),
-      extra: {
-        event,
-        scopeDigest: descriptionAuthorityScopeDigest(input.scope),
-        requestedMode: input.requestedMode,
-        deploymentCeiling: input.deploymentCeiling,
-        ...extra,
-        ...(error === undefined
-          ? {}
-          : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
-      },
-    });
+    (this.activityLog ?? processServerLogSink()).write(
+      activityLogEvent(
+        CODING_RUNTIME_DESCRIPTION_AUTHORITY_OPERATION,
+        {
+          correlationId: input.correlationId ?? UNKNOWN_CORRELATION_ID,
+          level: event === "rejected" ? "warn" : "info",
+          ...(error === undefined ? {} : { errorKind: "validation-failed" }),
+        },
+        {
+          event,
+          scopeDigest: descriptionAuthorityScopeDigest(input.scope),
+          requestedMode: input.requestedMode,
+          deploymentCeiling: input.deploymentCeiling,
+          ...extra,
+          ...(error === undefined
+            ? {}
+            : { frames: keikoStackFrames(error), causeChain: causeChain(error) }),
+        },
+      ),
+    );
   }
 
   /**
@@ -1059,21 +1334,24 @@ export class CodingRuntimeAuthorityService {
   private recordRevalidationRefused(
     admissibleStates: ReadonlySet<CodingWorkbenchRuntimeStateName>,
     condition: RevalidationRefusalCondition,
-    registryReason?: string,
+    registryReason?: CodingWorkbenchRuntimeFailureCode,
   ): void {
-    (this.activityLog ?? processServerLogSink()).write({
-      category: "security",
-      op: "coding-runtime.authority.revalidation-refused",
-      correlationId: this.runtimeState.runId ?? UNKNOWN_CORRELATION_ID,
-      level: "warn",
-      errorKind: REVALIDATION_REFUSAL_ERROR_KIND[condition],
-      extra: {
-        condition,
-        runtimeState: this.runtimeState.state,
-        admissibleStates: [...admissibleStates],
-        ...(registryReason === undefined ? {} : { registryReason }),
-      },
-    });
+    (this.activityLog ?? processServerLogSink()).write(
+      activityLogEvent(
+        CODING_RUNTIME_AUTHORITY_REVALIDATION_REFUSED_OPERATION,
+        {
+          correlationId: this.runtimeState.runId ?? UNKNOWN_CORRELATION_ID,
+          level: "warn",
+          errorKind: REVALIDATION_REFUSAL_ERROR_KIND[condition],
+        },
+        {
+          condition,
+          runtimeState: this.runtimeState.state,
+          admissibleStates: [...admissibleStates],
+          ...(registryReason === undefined ? {} : { registryReason }),
+        },
+      ),
+    );
   }
 
   // KEIKO-0737: the combined revoke(runId, nowIso) was only ever exercised by its own unit test

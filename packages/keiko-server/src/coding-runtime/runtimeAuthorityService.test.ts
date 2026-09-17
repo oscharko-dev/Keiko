@@ -949,7 +949,7 @@ describe("CodingRuntimeAuthorityService", () => {
     ).toEqual([
       expect.objectContaining({
         level: "warn",
-        errorKind: "CodingRuntimeAuthorityStateRefusal",
+        errorKind: "authority-denied",
         correlationId: minted.authorityRef.runId,
         extra: {
           condition: "state-not-admissible",
@@ -1604,49 +1604,49 @@ describe("CodingRuntimeAuthorityService fail-closed mint and release guards", ()
         correlationId: "run-source",
         stage: "intent-binding",
         reason: "model-source-mismatch",
-        errorKind: "CodingRuntimeAuthorityBindingFailure",
+        errorKind: "authority-denied",
       },
       {
         op: "coding-runtime.authority.mint-failed",
         correlationId: "run-confirmation",
         stage: "confirmation-consumption",
         reason: "confirmation-refused",
-        errorKind: "CodingRuntimeAuthorityConfirmationFailure",
+        errorKind: "authority-denied",
       },
       {
         op: "coding-runtime.authority.mint-failed",
         correlationId: "run-model",
         stage: "intent-binding",
         reason: "model-source-mismatch",
-        errorKind: "CodingRuntimeAuthorityBindingFailure",
+        errorKind: "authority-denied",
       },
       {
         op: "coding-runtime.authority.mint-failed",
         correlationId: "run-digest",
         stage: "approval-digest",
         reason: "approval-digest-invalid",
-        errorKind: "CodingRuntimeAuthorityValidationFailure",
+        errorKind: "validation-failed",
       },
       {
         op: "coding-runtime.authority.mint-failed",
         correlationId: "run-envelope",
         stage: "envelope-validation",
         reason: "envelope-invalid",
-        errorKind: "CodingRuntimeAuthorityValidationFailure",
+        errorKind: "validation-failed",
       },
       {
         op: "coding-runtime.authority.mint-failed",
         correlationId: "run-1",
         stage: "authority-registration",
         reason: "registration-refused",
-        errorKind: "CodingRuntimeAuthorityRegistrationFailure",
+        errorKind: "authority-denied",
       },
       {
         op: "coding-runtime.authority.mint-failed",
         correlationId: "run-1",
         stage: "capability-issuance",
         reason: "capability-issuance-refused",
-        errorKind: "CodingRuntimeAuthorityCapabilityFailure",
+        errorKind: "authority-denied",
       },
     ]);
   });
