@@ -6,6 +6,10 @@ import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { existsSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 // Shared fs-hardening owner [GEN-MAINT-COUPLING-005]. Re-exported below so cipher.ts and vault.ts
 // keep importing these from "./db.js" unchanged while the single hardening implementation lives in
 // keiko-security.
@@ -30,6 +34,25 @@ import {
   memoryVaultErrorKind,
   type MemoryVaultLogSink,
 } from "./vault-log.js";
+
+const MEMORY_VAULT_STORE_QUARANTINED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "memory-vault.store.quarantined",
+  category: "diagnostic",
+  owner: "keiko-memory-vault",
+  emitter: "db.logStoreQuarantined",
+  fields: {
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    reopened: { type: "boolean", dataClass: "closed-enum", required: true },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["memory-vault-corruption", "memory-vault-reopen"],
+  proofIds: ["memory-vault.store.quarantined.recovery"],
+  releaseImpact: "patch",
+});
 
 export { chmodIfPresent, ensureDirHardened };
 
@@ -122,13 +145,14 @@ function logStoreQuarantined(
   cause: unknown,
   reopened: boolean,
 ): void {
-  emitMemoryVaultLogEvent(sink, {
-    level: "error",
-    category: "diagnostic",
-    op: "memory-vault.store.quarantined",
-    errorKind: memoryVaultErrorKind(cause),
-    extra: { reopened },
-  });
+  emitMemoryVaultLogEvent(
+    sink,
+    activityLogEvent(
+      MEMORY_VAULT_STORE_QUARANTINED_OPERATION,
+      { level: "error", errorKind: "internal" },
+      { failureKind: memoryVaultErrorKind(cause), reopened },
+    ),
+  );
 }
 
 export function openMemoryDatabase(

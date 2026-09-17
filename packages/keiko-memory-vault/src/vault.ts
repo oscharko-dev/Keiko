@@ -20,6 +20,10 @@ import type {
   MemoryScope,
   MemoryStatus,
 } from "@oscharko-dev/keiko-contracts/memory";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import { chmodIfPresent, openMemoryDatabase } from "./db.js";
 import { resolveMemoryDir, resolveMemoryDbPath } from "./paths.js";
@@ -114,6 +118,29 @@ import type {
   MemoryVaultFactoryOptions,
   MemoryVaultStore,
 } from "./types.js";
+
+const MEMORY_VAULT_STORE_OPENED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "memory-vault.store.opened",
+  category: "memory",
+  owner: "keiko-memory-vault",
+  emitter: "vault.emitVaultOpened",
+  fields: {
+    keySource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["env", "keychain", "keyfile"],
+    },
+  },
+  causal: "none",
+  lifecycle: "end",
+  analyzerProjection: "capability",
+  failureClasses: ["memory-vault-open"],
+  proofIds: ["memory-vault.store.opened.key-source"],
+  releaseImpact: "patch",
+});
 
 interface ResolvedOptions {
   readonly now: () => number;
@@ -417,12 +444,14 @@ function emitVaultOpened(
   keySource: VaultKeySource | undefined,
   durationMs: number,
 ): void {
-  emitMemoryVaultLogEvent(sink, {
-    category: "memory",
-    op: "memory-vault.store.opened",
-    durationMs,
-    ...(keySource === undefined ? {} : { extra: { keySource } }),
-  });
+  emitMemoryVaultLogEvent(
+    sink,
+    activityLogEvent(
+      MEMORY_VAULT_STORE_OPENED_OPERATION,
+      { durationMs },
+      keySource === undefined ? {} : { keySource },
+    ),
+  );
 }
 
 // Validate-then-redact for inserts. The validator runs on the CALLER-SUPPLIED record so a

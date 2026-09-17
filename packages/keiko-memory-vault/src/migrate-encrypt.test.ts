@@ -1,4 +1,5 @@
-// Regression tests for the `store.encryption-migrated` activity-log event (w4a-memory-vault-fingerprint,
+// Regression tests for the `memory-vault.store.encryption-migrated` activity-log event
+// (w4a-memory-vault-fingerprint,
 // epic #3233 §8/g19). Before this change `encryptExistingContent` re-sealed plaintext content
 // completely silently — an operator had no way to see, from `server.log`, that a vault had just
 // undergone the one-way v1 -> v2 encryption sweep.
@@ -39,7 +40,7 @@ function overwriteBodyWithPlaintext(
   db.prepare("UPDATE memories SET body = ? WHERE id = ?").run(body, id);
 }
 
-describe("encryptExistingContent — store.encryption-migrated event", () => {
+describe("encryptExistingContent — memory-vault.store.encryption-migrated event", () => {
   it("does not emit on a fresh DB with no rows to migrate", () => {
     const db = openTestDb();
     const { sink, events } = recordingSink();
@@ -64,7 +65,7 @@ describe("encryptExistingContent — store.encryption-migrated event", () => {
     const event = events[0];
     expect(event).toMatchObject({
       category: "diagnostic",
-      op: "store.encryption-migrated",
+      op: "memory-vault.store.encryption-migrated",
     });
     expect(event?.extra).toMatchObject({ fromScope: "plaintext", toScope: "encrypted" });
     const rowsMigrated = (event?.extra as { rowsMigrated?: unknown } | undefined)?.rowsMigrated;
@@ -136,11 +137,11 @@ describe("encryptExistingContent — store.encryption-migrated event", () => {
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const [message, options] = warnSpy.mock.calls[0] ?? [];
     expect(message).toBe("Keiko memory-vault log sink is failing; log lines are being dropped.");
-    // Redacted context only: the dropped op name and a shape-gated error kind — never the sink's
+    // Redacted context only: the dropped op digest and a shape-gated error kind — never the sink's
     // thrown message ("sink is down"), which could carry caller-supplied detail.
     expect(options).toMatchObject({ type: "KeikoActivityLog", code: "KEIKO_LOG_SINK_FAILED" });
     expect((options as { detail?: string } | undefined)?.detail).toBe(
-      "op=store.encryption-migrated errorKind=Error",
+      "opDigest=6f1dbe425a9b260c errorKind=Error",
     );
     db.close();
   });

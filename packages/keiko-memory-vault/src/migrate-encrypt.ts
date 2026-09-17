@@ -8,6 +8,12 @@
 // That keeps the sweep idempotent for a genuinely sealed value without the prefix false-positive.
 
 import type { DatabaseSync } from "node:sqlite";
+
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+
 import type { MemoryContentCipher } from "./cipher.js";
 import {
   emitMemoryVaultLogEvent,
@@ -24,6 +30,36 @@ interface EmbeddingBlobRow {
   readonly memory_id: string;
   readonly vector: Uint8Array;
 }
+
+const STORE_ENCRYPTION_MIGRATED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "memory-vault.store.encryption-migrated",
+  category: "diagnostic",
+  owner: "keiko-memory-vault",
+  emitter: "migrate-encrypt.emitEncryptionMigrated",
+  fields: {
+    fromScope: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["plaintext"],
+    },
+    toScope: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["encrypted"],
+    },
+    rowsMigrated: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "none",
+  lifecycle: "end",
+  analyzerProjection: "capability",
+  failureClasses: ["memory-vault-encryption-migration"],
+  proofIds: ["memory-vault.store.encryption-migrated.rows"],
+  releaseImpact: "patch",
+});
 
 // (table, column) pairs whose TEXT values are sealed as kv1 string envelopes.
 const STRING_TARGETS: readonly { readonly table: string; readonly column: string }[] = [
@@ -54,7 +90,8 @@ function isAlreadySealed(cipher: MemoryContentCipher, value: string): boolean {
 
 // Returns the count of rows actually sealed in THIS call (rows that were plaintext and are now
 // sealed) — never rows merely visited. This is the signal `encryptExistingContent` uses to decide
-// whether a `store.encryption-migrated` event describes a real transition: a fresh, empty table
+// whether a `memory-vault.store.encryption-migrated` event describes a real transition: a fresh,
+// empty table
 // (every column skipped as "already sealed" trivially, zero rows) and a re-run against an
 // already-encrypted DB (every row already sealed) both correctly report zero.
 function sweepStringColumn(
@@ -97,7 +134,8 @@ function sweepEmbeddingVectors(db: DatabaseSync, cipher: MemoryContentCipher): n
 }
 
 /**
- * Emits `store.encryption-migrated` for a genuine transition (`rowsMigrated > 0`); a no-op
+ * Emits `memory-vault.store.encryption-migrated` for a genuine transition
+ * (`rowsMigrated > 0`); a no-op
  * otherwise. Exported so `schema.ts`'s `runMigrations` can call it AFTER its own transaction
  * commits (see that file): the sweep runs inside `BEGIN`/`COMMIT` and can still roll back, so
  * emitting from inside the sweep itself — as this package used to — could log a migration that
@@ -109,15 +147,14 @@ export function emitEncryptionMigrated(
   durationMs: number,
 ): void {
   if (rowsMigrated <= 0) return;
-  emitMemoryVaultLogEvent(sink, {
-    // "diagnostic", matching the same op emitted by Local Knowledge's
-    // `store-content-encryption.ts` for the identical event — one shared op name should carry one
-    // shared category so an analyzer grouping by (category, op) sees one cluster, not two.
-    category: "diagnostic",
-    op: "store.encryption-migrated",
-    durationMs,
-    extra: { fromScope: "plaintext", toScope: "encrypted", rowsMigrated },
-  });
+  emitMemoryVaultLogEvent(
+    sink,
+    activityLogEvent(
+      STORE_ENCRYPTION_MIGRATED_OPERATION,
+      { durationMs },
+      { fromScope: "plaintext", toScope: "encrypted", rowsMigrated },
+    ),
+  );
 }
 
 /**
@@ -138,7 +175,8 @@ export function sweepExistingContent(db: DatabaseSync, cipher: MemoryContentCiph
 
 /**
  * Convenience wrapper over {@link sweepExistingContent} that also emits
- * `store.encryption-migrated` itself, timed around the sweep. `sink` is optional (ADR-0019 — this
+ * `memory-vault.store.encryption-migrated` itself, timed around the sweep. `sink` is optional
+ * (ADR-0019 — this
  * package declares its own `MemoryVaultLogSink` port rather than importing the server's logger).
  * Kept for callers that sweep OUTSIDE a transaction they do not otherwise control (this package's
  * own direct tests); `schema.ts`'s `runMigrations` does NOT use this — see {@link sweepExistingContent}.

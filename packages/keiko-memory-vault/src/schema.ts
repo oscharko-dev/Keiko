@@ -18,6 +18,12 @@
 // require a schema change every time a payload kind landed (#205 ships only two kinds today).
 
 import type { DatabaseSync } from "node:sqlite";
+
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+
 import type { MemoryContentCipher } from "./cipher.js";
 import { emitEncryptionMigrated, sweepExistingContent } from "./migrate-encrypt.js";
 import {
@@ -59,6 +65,26 @@ import {
 export const MEMORY_VAULT_SCHEMA_VERSION = 11;
 
 const ENCRYPTION_VERSION = 2;
+
+const STORE_ENCRYPTION_CHECKPOINT_DEGRADED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "memory-vault.store.encryption-checkpoint-degraded",
+  category: "diagnostic",
+  owner: "keiko-memory-vault",
+  emitter: "schema.emitCheckpointDegraded",
+  fields: {
+    attempts: { type: "integer", dataClass: "count", required: true },
+    busy: { type: "boolean", dataClass: "closed-enum", required: true },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["memory-vault-encryption-checkpoint"],
+  proofIds: ["memory-vault.store.encryption-checkpoint-degraded.state"],
+  releaseImpact: "patch",
+});
 
 interface Migration {
   readonly version: number;
@@ -382,14 +408,16 @@ function emitCheckpointDegraded(
   attempts: number,
   outcome: WalCheckpointAttempt,
 ): void {
-  emitMemoryVaultLogEvent(sink, {
-    level: "warn",
-    category: "diagnostic",
-    op: "store.encryption-checkpoint-degraded",
-    ...(outcome.kind === "threw" ? { errorKind: outcome.errorKind } : {}),
-    extra: {
-      attempts,
-      busy: outcome.kind === "ok" ? outcome.result.busy === 1 : true,
-    },
-  });
+  emitMemoryVaultLogEvent(
+    sink,
+    activityLogEvent(
+      STORE_ENCRYPTION_CHECKPOINT_DEGRADED_OPERATION,
+      { level: "warn", errorKind: "durability-failed" },
+      {
+        attempts,
+        busy: outcome.kind === "ok" ? outcome.result.busy === 1 : true,
+        failureKind: outcome.kind === "threw" ? outcome.errorKind : "unknown",
+      },
+    ),
+  );
 }

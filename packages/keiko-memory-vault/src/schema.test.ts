@@ -274,7 +274,9 @@ describe("flushPlaintextResidueWithRetry", () => {
       flushPlaintextResidueWithRetry(fake.db, sink);
     }).not.toThrow();
     expect(fake.calls.count).toBe(1);
-    expect(events.find((e) => e.op === "store.encryption-checkpoint-degraded")).toBeUndefined();
+    expect(
+      events.find((e) => e.op === "memory-vault.store.encryption-checkpoint-degraded"),
+    ).toBeUndefined();
   });
 
   it("does not propagate a checkpoint-statement exception out of the flush", () => {
@@ -286,10 +288,14 @@ describe("flushPlaintextResidueWithRetry", () => {
     expect(() => {
       flushPlaintextResidueWithRetry(fake.db, sink);
     }).not.toThrow();
-    const degraded = events.find((e) => e.op === "store.encryption-checkpoint-degraded");
+    const degraded = events.find(
+      (e) => e.op === "memory-vault.store.encryption-checkpoint-degraded",
+    );
     expect(degraded).toBeDefined();
+    expect(degraded?.errorKind).toBe("durability-failed");
     expect(degraded?.extra?.attempts).toBe(3);
     expect(degraded?.extra?.busy).toBe(true);
+    expect(degraded?.extra?.failureKind).toBe("Error");
     expect(fake.calls.count).toBe(3);
   });
 
@@ -298,10 +304,14 @@ describe("flushPlaintextResidueWithRetry", () => {
     const { sink, events } = collectingSink();
     flushPlaintextResidueWithRetry(fake.db, sink);
     expect(fake.calls.count).toBe(3);
-    const degraded = events.find((e) => e.op === "store.encryption-checkpoint-degraded");
+    const degraded = events.find(
+      (e) => e.op === "memory-vault.store.encryption-checkpoint-degraded",
+    );
     expect(degraded).toBeDefined();
+    expect(degraded?.errorKind).toBe("durability-failed");
     expect(degraded?.extra?.attempts).toBe(3);
     expect(degraded?.extra?.busy).toBe(true);
+    expect(degraded?.extra?.failureKind).toBe("unknown");
   });
 
   it("stops retrying after the first non-busy success (busy=1 then busy=0)", () => {
@@ -315,7 +325,9 @@ describe("flushPlaintextResidueWithRetry", () => {
     const { sink, events } = collectingSink();
     flushPlaintextResidueWithRetry(fake.db, sink);
     expect(fake.calls.count).toBe(2);
-    expect(events.find((e) => e.op === "store.encryption-checkpoint-degraded")).toBeUndefined();
+    expect(
+      events.find((e) => e.op === "memory-vault.store.encryption-checkpoint-degraded"),
+    ).toBeUndefined();
   });
 
   // #2906 KEIKO-0877 follow-up: SQLite can report busy=0 for a PARTIAL checkpoint -- fewer frames
@@ -328,8 +340,11 @@ describe("flushPlaintextResidueWithRetry", () => {
     const { sink, events } = collectingSink();
     flushPlaintextResidueWithRetry(fake.db, sink);
     expect(fake.calls.count).toBe(3);
-    const degraded = events.find((e) => e.op === "store.encryption-checkpoint-degraded");
+    const degraded = events.find(
+      (e) => e.op === "memory-vault.store.encryption-checkpoint-degraded",
+    );
     expect(degraded).toBeDefined();
+    expect(degraded?.errorKind).toBe("durability-failed");
     expect(degraded?.extra?.attempts).toBe(3);
     // busy===0 on every attempt, so the degraded report's own "busy" summary must reflect that
     // (not misreport a partial checkpoint as a busy-contention one).
@@ -345,9 +360,13 @@ describe("flushPlaintextResidueWithRetry", () => {
     const { sink, events } = collectingSink();
     flushPlaintextResidueWithRetry(fake.db, sink);
     expect(fake.calls.count).toBe(3);
-    const degraded = events.find((e) => e.op === "store.encryption-checkpoint-degraded");
+    const degraded = events.find(
+      (e) => e.op === "memory-vault.store.encryption-checkpoint-degraded",
+    );
     expect(degraded).toBeDefined();
+    expect(degraded?.errorKind).toBe("durability-failed");
     expect(degraded?.extra?.attempts).toBe(3);
     expect(degraded?.extra?.busy).toBe(true);
+    expect(degraded?.extra?.failureKind).toBe("unknown");
   });
 });

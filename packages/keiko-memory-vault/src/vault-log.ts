@@ -32,7 +32,13 @@
 // interface is still assignable to `ServerLogEvent`'s `op: string` / `extra?: Record<string,
 // unknown>`, so `processServerLogSink()` remains a valid `MemoryVaultLogSink` with no adapter.
 
-import { classifyErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { createHash } from "node:crypto";
+
+import {
+  activityLogEvent,
+  classifyErrorKind,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 export type MemoryVaultLogLevel = "debug" | "info" | "warn" | "error";
 
@@ -42,8 +48,8 @@ export type MemoryVaultLogCategory = "memory" | "diagnostic";
 export type MemoryVaultLogOp =
   | "memory-vault.store.opened"
   | "memory-vault.store.quarantined"
-  | "store.encryption-migrated"
-  | "store.encryption-checkpoint-degraded"
+  | "memory-vault.store.encryption-migrated"
+  | "memory-vault.store.encryption-checkpoint-degraded"
   | "memory-vault.log.sink-failed";
 
 // A closed mirror of cipher.ts's `VaultKeySource` ("env" | "keychain" | "keyfile"), duplicated
@@ -55,7 +61,7 @@ export type MemoryVaultLogKeySource = "env" | "keychain" | "keyfile";
 
 // The closed, body-free `extra` schema: every field this package's producers have ever needed —
 // the retained key-resolution tier, whether a quarantine reopen succeeded, the encryption sweep's
-// scope transition and row count, the op name a failed sink dropped, and the bounded-retry
+// scope transition and row count, the digest of an op a failed sink dropped, and the bounded-retry
 // attempts + busy signal from a post-migration WAL checkpoint that could not fully truncate
 // (#2906 KEIKO-0713 / KEIKO-0877). Never a memory body, a tag, a scope coordinate, a vault
 // key, or a filesystem path.
@@ -65,7 +71,8 @@ export interface MemoryVaultLogExtra {
   readonly fromScope?: "plaintext" | undefined;
   readonly toScope?: "encrypted" | undefined;
   readonly rowsMigrated?: number | undefined;
-  readonly droppedOp?: MemoryVaultLogOp | undefined;
+  readonly droppedOpDigest?: string | undefined;
+  readonly failureKind?: string | undefined;
   readonly attempts?: number | undefined;
   readonly busy?: boolean | undefined;
 }
@@ -152,6 +159,29 @@ export function memoryVaultErrorKind(error: unknown): string {
 // sink is reported again.
 const REPORTED_FAILED_SINKS = new WeakSet<MemoryVaultLogSink>();
 
+const MEMORY_VAULT_LOG_SINK_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "memory-vault.log.sink-failed",
+  category: "diagnostic",
+  owner: "keiko-memory-vault",
+  emitter: "vault-log.reportFailedMemoryVaultLogSink",
+  fields: {
+    droppedOpDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "loss",
+  analyzerProjection: "capability",
+  failureClasses: ["activity-log-sink"],
+  proofIds: ["memory-vault.log.sink-failed.body-free"],
+  releaseImpact: "patch",
+});
+
+function operationDigest(op: MemoryVaultLogOp): string {
+  return createHash("sha256").update(op).digest("hex").slice(0, 16);
+}
+
 export function emitMemoryVaultLogEvent(
   sink: MemoryVaultLogSink | undefined,
   event: MemoryVaultLogEvent,
@@ -172,28 +202,29 @@ function reportFailedMemoryVaultLogSink(
   if (REPORTED_FAILED_SINKS.has(sink)) return;
   REPORTED_FAILED_SINKS.add(sink);
   const errorKind = memoryVaultErrorKind(cause);
+  const droppedOpDigest = operationDigest(droppedOp);
   try {
-    sink.write({
-      level: "error",
-      category: "diagnostic",
-      op: "memory-vault.log.sink-failed",
-      errorKind,
-      extra: { droppedOp },
-    });
+    sink.write(
+      activityLogEvent(
+        MEMORY_VAULT_LOG_SINK_FAILED_OPERATION,
+        { level: "error", errorKind: "unavailable" },
+        { droppedOpDigest, failureKind: errorKind },
+      ),
+    );
     return;
   } catch {
     // The transport refuses this shape too, so it is the transport that is down — fall through to
     // the only channel left.
   }
-  warnFailedMemoryVaultLogSink(droppedOp, errorKind);
+  warnFailedMemoryVaultLogSink(droppedOpDigest, errorKind);
 }
 
-function warnFailedMemoryVaultLogSink(droppedOp: MemoryVaultLogOp, errorKind: string): void {
+function warnFailedMemoryVaultLogSink(droppedOpDigest: string, errorKind: string): void {
   try {
     process.emitWarning("Keiko memory-vault log sink is failing; log lines are being dropped.", {
       type: "KeikoActivityLog",
       code: "KEIKO_LOG_SINK_FAILED",
-      detail: `op=${droppedOp} errorKind=${errorKind}`,
+      detail: `opDigest=${droppedOpDigest} errorKind=${errorKind}`,
     });
   } catch {
     // The process warning channel is the last one there is; a report beyond it does not exist.
