@@ -63,6 +63,12 @@ import type {
   UnsupportedDocumentGuidanceCode,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  isActivityLogErrorKind,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   DEFAULT_DISCOVERY_OPTIONS,
   KnowledgeNotFoundError,
   KnowledgeStoreError,
@@ -74,7 +80,7 @@ import {
 } from "./local-knowledge-store-open.js";
 import { runLocalTesseractCommand } from "./local-knowledge-ocr-runtime.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
-import { newCorrelationId } from "./correlation.js";
+import { correlationIdOrUnknown, newCorrelationId } from "./correlation.js";
 import { errorKindOf, getServerLogger, type ServerLogger } from "./observability/index.js";
 import { processServerLogSink } from "./process-log-sink.js";
 import { CAPSULE_SET_MAX_MEMBERS } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge";
@@ -2849,6 +2855,175 @@ export async function handleGetLocalKnowledgeCapsule(
 // exists only in the 202 response body, and the operator's request joins to no later line at all.
 const INDEXING_LOG_DIGEST_LENGTH = 16;
 
+const INDEXING_START_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "indexing.start.refused",
+  category: "indexing",
+  owner: "keiko-server",
+  emitter: "local-knowledge-handlers.refuseIndexingStart",
+  fields: {
+    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "capsule-not-found",
+        "capsule-has-no-sources",
+        "no-embedding-capable-model",
+        "job-already-running",
+        "run-already-starting",
+      ],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["indexing-route"],
+  proofIds: ["indexing.start.refused.line"],
+  releaseImpact: "patch",
+});
+
+const INDEXING_DETACHED_RUN_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "indexing.detached-run.failed",
+  category: "indexing",
+  owner: "keiko-server",
+  emitter: "local-knowledge-handlers.reportDetachedIndexingFailure",
+  fields: {
+    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    stage: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["pre-orchestrator"],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["indexing-detached-run"],
+  proofIds: ["indexing.detached-run.failed.line"],
+  releaseImpact: "patch",
+});
+
+const INDEXING_DETACHED_RUN_LAUNCHED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "indexing.detached-run.launched",
+  category: "indexing",
+  owner: "keiko-server",
+  emitter: "local-knowledge-handlers.launchDetachedCapsuleIndexing",
+  fields: {
+    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    jobIdMinted: { type: "boolean", dataClass: "closed-enum", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["indexing-detached-run"],
+  proofIds: ["indexing.detached-run.launched.line"],
+  releaseImpact: "patch",
+});
+
+const INDEXING_START_ACCEPTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "indexing.start.accepted",
+  category: "indexing",
+  owner: "keiko-server",
+  emitter: "local-knowledge-handlers.acceptDetachedIndexingStart",
+  fields: {
+    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    jobIdMinted: { type: "boolean", dataClass: "closed-enum", required: true },
+    sourceCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["indexing-route"],
+  proofIds: ["indexing.start.accepted.line"],
+  releaseImpact: "patch",
+});
+
+const INDEXING_CANCEL_REQUESTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "indexing.cancel.requested",
+  category: "indexing",
+  owner: "keiko-server",
+  emitter: "local-knowledge-handlers.handleCancelLocalKnowledgeCapsuleIndexing",
+  fields: {
+    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["indexing-cancellation"],
+  proofIds: ["indexing.cancel.requested.line"],
+  releaseImpact: "patch",
+});
+
+const INDEXING_CANCEL_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "indexing.cancel.refused",
+  category: "indexing",
+  owner: "keiko-server",
+  emitter: "local-knowledge-handlers.handleCancelLocalKnowledgeCapsuleIndexing.refused",
+  fields: {
+    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["capsule-not-found", "no-running-job"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["indexing-cancellation"],
+  proofIds: ["indexing.cancel.refused.line"],
+  releaseImpact: "patch",
+});
+
+const INDEXING_CANCEL_ACCEPTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "indexing.cancel.accepted",
+  category: "indexing",
+  owner: "keiko-server",
+  emitter: "local-knowledge-handlers.handleCancelLocalKnowledgeCapsuleIndexing.accepted",
+  fields: {
+    capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
+    cancellationRequested: { type: "boolean", dataClass: "closed-enum", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["indexing-cancellation"],
+  proofIds: ["indexing.cancel.accepted.line"],
+  releaseImpact: "patch",
+});
+
 // The raw capsule id is a customer-chosen handle, so it is never written; the digest is one-way,
 // stable across every line of a run, and exempt from the opaque-token guard for exactly this use.
 function capsuleLogDigest(capsuleId: KnowledgeCapsule["id"]): string {
@@ -2858,12 +3033,34 @@ function capsuleLogDigest(capsuleId: KnowledgeCapsule["id"]): string {
     .slice(0, INDEXING_LOG_DIGEST_LENGTH);
 }
 
-function indexingRouteLog(capsuleId: KnowledgeCapsule["id"], jobId?: string): ServerLogger {
-  return getServerLogger().child({
-    category: "indexing",
+interface IndexingRouteLog {
+  readonly logger: ServerLogger;
+  readonly capsuleIdDigest: string;
+  readonly correlationId: string;
+}
+
+function indexingRouteLog(capsuleId: KnowledgeCapsule["id"], jobId?: string): IndexingRouteLog {
+  return {
+    logger: getServerLogger(),
     capsuleIdDigest: capsuleLogDigest(capsuleId),
-    ...(jobId !== undefined ? { correlationId: jobId } : {}),
-  });
+    correlationId: correlationIdOrUnknown(jobId),
+  };
+}
+
+function indexingLogWithCorrelation(
+  log: IndexingRouteLog,
+  correlationId: string | undefined,
+): IndexingRouteLog {
+  return { ...log, correlationId: correlationIdOrUnknown(correlationId) };
+}
+
+function closedIndexingErrorKind(errorKind: string): ActivityLogErrorKind {
+  return isActivityLogErrorKind(errorKind) ? errorKind : "internal";
+}
+
+function indexingFailureKind(error: unknown): string {
+  const errorKind = errorKindOf(error);
+  return errorKind.length <= 64 ? errorKind : "unknown";
 }
 
 // The five ways the start route can say no. The status number cannot tell them apart — three of
@@ -2879,11 +3076,22 @@ type IndexingStartRefusal =
 // Warn, not info: a refused index is the operator's own click coming back rejected, and it must
 // survive the level an operator filters to when a pod will not build.
 function refuseIndexingStart(
-  log: ServerLogger,
+  log: IndexingRouteLog,
   reason: IndexingStartRefusal,
   response: RouteResult,
 ): RouteResult {
-  log.warn({ op: "indexing.start.refused", status: response.status, extra: { reason } });
+  log.logger.warn(
+    activityLogEvent(
+      INDEXING_START_REFUSED_OPERATION,
+      { correlationId: log.correlationId, status: response.status },
+      {
+        capsuleIdDigest: log.capsuleIdDigest,
+        reason,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
   return response;
 }
 
@@ -2912,7 +3120,7 @@ interface ResolvedIndexingProvider {
 
 function reportDetachedIndexingFailure(
   deps: UiHandlerDeps,
-  log: ServerLogger,
+  log: IndexingRouteLog,
   correlationId: string,
   error: unknown,
 ): void {
@@ -2921,11 +3129,20 @@ function reportDetachedIndexingFailure(
   // launch line and then nothing, forever, for a run that died before the orchestrator ever wrote
   // `indexing.job.started`. `errorKindOf` reads only a coded `code`/`name` — never the message,
   // which can carry a path or a body fragment.
-  log.error({
-    op: "indexing.detached-run.failed",
-    errorKind: errorKindOf(error),
-    extra: { stage: "pre-orchestrator" },
-  });
+  const failureKind = indexingFailureKind(error);
+  log.logger.error(
+    activityLogEvent(
+      INDEXING_DETACHED_RUN_FAILED_OPERATION,
+      { correlationId: log.correlationId, errorKind: closedIndexingErrorKind(failureKind) },
+      {
+        capsuleIdDigest: log.capsuleIdDigest,
+        stage: "pre-orchestrator",
+        failureKind,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
   // The job row already carries the terminal state for orchestrated failures; this is the backstop
   // for failures BEFORE the orchestrator owns the run. Never silent.
   emitServerDiagnostic(
@@ -2956,7 +3173,18 @@ function launchDetachedCapsuleIndexing(
   // Item 3: the launch itself. Everything between the 202 and the orchestrator's first line — the
   // store open and its migrations — used to be unwitnessed, so a throw there surfaced as a
   // context-free diagnostic and a HANG there was indistinguishable from a run never launched.
-  log.info({ op: "indexing.detached-run.launched", extra: { jobIdMinted: jobId !== undefined } });
+  log.logger.info(
+    activityLogEvent(
+      INDEXING_DETACHED_RUN_LAUNCHED_OPERATION,
+      { correlationId: log.correlationId },
+      {
+        capsuleIdDigest: log.capsuleIdDigest,
+        jobIdMinted: jobId !== undefined,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
   const run = (async (): Promise<void> => {
     // The store open lives INSIDE the try: openKnowledgeStore throws on open/migration failure,
     // and a throw before the handler would leave the rejection unhandled (production never awaits
@@ -2984,7 +3212,7 @@ function acceptDetachedIndexingStart(
   deps: UiHandlerDeps,
   store: ReturnType<typeof openKnowledgeStore>,
   resolved: ResolvedIndexingProvider,
-  log: ServerLogger,
+  log: IndexingRouteLog,
 ): RouteResult {
   // Trust-boundary validation stays SYNCHRONOUS, before the 202: the deny-list is
   // re-validated against the canonical (realpath-resolved) roots at index time, and a
@@ -3001,11 +3229,20 @@ function acceptDetachedIndexingStart(
   // field that lets an operator grep the six blank minutes back to the request that opened them.
   // `sourceCount` is the shape the run was admitted with: "0 of 1 documents" is only diagnosable
   // against what the route believed it was starting.
-  (jobId === undefined ? log : log.child({ correlationId: jobId })).info({
-    op: "indexing.start.accepted",
-    status: 202,
-    extra: { jobIdMinted: jobId !== undefined, sourceCount: resolved.capsule.sourceIds.length },
-  });
+  const acceptedLog = indexingLogWithCorrelation(log, jobId);
+  acceptedLog.logger.info(
+    activityLogEvent(
+      INDEXING_START_ACCEPTED_OPERATION,
+      { correlationId: acceptedLog.correlationId, status: 202 },
+      {
+        capsuleIdDigest: acceptedLog.capsuleIdDigest,
+        jobIdMinted: jobId !== undefined,
+        sourceCount: resolved.capsule.sourceIds.length,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
   launchDetachedCapsuleIndexing(deps, resolved, jobId);
   return {
     status: 202,
@@ -3051,7 +3288,7 @@ export async function handleStartLocalKnowledgeCapsuleIndexing(
         // Correlated to the job that is BLOCKING this request, not to the refused one: "which run
         // is holding the capsule" is the only useful next question after this 409.
         return refuseIndexingStart(
-          log.child({ correlationId: runningJobId }),
+          indexingLogWithCorrelation(log, runningJobId),
           "job-already-running",
           runningIndexingJobConflict(resolved.capsule.id, runningJobId),
         );
@@ -3080,36 +3317,64 @@ export async function handleCancelLocalKnowledgeCapsuleIndexing(
     // observes the flag — but a run wedged BEFORE that observation never does, which is precisely
     // the state under investigation. This line is written on arrival, so the operator's action is
     // on the record even when the run it targets never reacts to it.
-    log.info({ op: "indexing.cancel.requested" });
+    log.logger.info(
+      activityLogEvent(
+        INDEXING_CANCEL_REQUESTED_OPERATION,
+        { correlationId: log.correlationId },
+        { capsuleIdDigest: log.capsuleIdDigest, completeness: "complete", loss: "none" },
+      ),
+    );
     const env = openStoreForDeps(deps);
     try {
       const capsule = getCapsule(env.store, capsuleId);
       if (capsule === undefined) {
-        log.warn({
-          op: "indexing.cancel.refused",
-          status: 404,
-          extra: { reason: "capsule-not-found" },
-        });
+        log.logger.warn(
+          activityLogEvent(
+            INDEXING_CANCEL_REFUSED_OPERATION,
+            { correlationId: log.correlationId, status: 404 },
+            {
+              capsuleIdDigest: log.capsuleIdDigest,
+              reason: "capsule-not-found",
+              completeness: "complete",
+              loss: "none",
+            },
+          ),
+        );
         return notFound(`Capsule not found: ${capsuleId}`);
       }
       // Read before requesting: `requestRunningJobCancellation` answers only yes/no, and the id of
       // the job the flag was set on is what joins this line to the run's own lines.
       const runningJobId = latestRunningJobId(env.store, capsule.id);
       if (!requestRunningJobCancellation(env.store, capsule.id)) {
-        log.warn({
-          op: "indexing.cancel.refused",
-          status: 409,
-          extra: { reason: "no-running-job" },
-        });
+        log.logger.warn(
+          activityLogEvent(
+            INDEXING_CANCEL_REFUSED_OPERATION,
+            { correlationId: log.correlationId, status: 409 },
+            {
+              capsuleIdDigest: log.capsuleIdDigest,
+              reason: "no-running-job",
+              completeness: "complete",
+              loss: "none",
+            },
+          ),
+        );
         return conflict("No running indexing job was found for this capsule.");
       }
       // Warn, matching the orchestrator's own level for a cancelled job: a cancellation is a run
       // that did not deliver, and the two lines must survive the same operator filter.
-      log.child({ correlationId: runningJobId }).warn({
-        op: "indexing.cancel.accepted",
-        status: 200,
-        extra: { cancellationRequested: true },
-      });
+      const acceptedLog = indexingLogWithCorrelation(log, runningJobId);
+      acceptedLog.logger.warn(
+        activityLogEvent(
+          INDEXING_CANCEL_ACCEPTED_OPERATION,
+          { correlationId: acceptedLog.correlationId, status: 200 },
+          {
+            capsuleIdDigest: acceptedLog.capsuleIdDigest,
+            cancellationRequested: true,
+            completeness: "complete",
+            loss: "none",
+          },
+        ),
+      );
       return actionResponse(capsule.id);
     } finally {
       env.close();

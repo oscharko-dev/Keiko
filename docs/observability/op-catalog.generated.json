@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "205b1dc41337fe3b2841dca3dee729eb51c7027de380f8bf8b1f1391d61fd2a3",
-    "catalogDigest": "9d3aa567bfedcc965beddeb0f6a550208070948a6f770a1da95c810e58165041",
+    "catalogDigest": "38ec2ae51df325444a49d63b97c8e896112a811e8bfa2009114743909e8e4adf",
     "operations": [
       {
         "contractKind": "activity-log-operation",
@@ -1288,6 +1288,297 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:120",
         "emitterSites": ["packages/keiko-server/src/gitChangeSnapshotRegistry.ts:261"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "indexing.cancel.accepted",
+        "category": "indexing",
+        "owner": "keiko-server",
+        "emitter": "local-knowledge-handlers.handleCancelLocalKnowledgeCapsuleIndexing.accepted",
+        "fields": {
+          "capsuleIdDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 16
+          },
+          "cancellationRequested": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["indexing-cancellation"],
+        "proofIds": ["indexing.cancel.accepted.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/local-knowledge-handlers.ts:3006",
+        "emitterSites": ["packages/keiko-server/src/local-knowledge-handlers.ts:3367"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "indexing.cancel.refused",
+        "category": "indexing",
+        "owner": "keiko-server",
+        "emitter": "local-knowledge-handlers.handleCancelLocalKnowledgeCapsuleIndexing.refused",
+        "fields": {
+          "capsuleIdDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 16
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["capsule-not-found", "no-running-job"]
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["indexing-cancellation"],
+        "proofIds": ["indexing.cancel.refused.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/local-knowledge-handlers.ts:2980",
+        "emitterSites": [
+          "packages/keiko-server/src/local-knowledge-handlers.ts:3332",
+          "packages/keiko-server/src/local-knowledge-handlers.ts:3350"
+        ]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "indexing.cancel.requested",
+        "category": "indexing",
+        "owner": "keiko-server",
+        "emitter": "local-knowledge-handlers.handleCancelLocalKnowledgeCapsuleIndexing",
+        "fields": {
+          "capsuleIdDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 16
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "start",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["indexing-cancellation"],
+        "proofIds": ["indexing.cancel.requested.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/local-knowledge-handlers.ts:2960",
+        "emitterSites": ["packages/keiko-server/src/local-knowledge-handlers.ts:3321"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "indexing.detached-run.failed",
+        "category": "indexing",
+        "owner": "keiko-server",
+        "emitter": "local-knowledge-handlers.reportDetachedIndexingFailure",
+        "fields": {
+          "capsuleIdDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 16
+          },
+          "stage": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["pre-orchestrator"]
+          },
+          "failureKind": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": true,
+            "maxLength": 64
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["indexing-detached-run"],
+        "proofIds": ["indexing.detached-run.failed.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/local-knowledge-handlers.ts:2890",
+        "emitterSites": ["packages/keiko-server/src/local-knowledge-handlers.ts:3134"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "indexing.detached-run.launched",
+        "category": "indexing",
+        "owner": "keiko-server",
+        "emitter": "local-knowledge-handlers.launchDetachedCapsuleIndexing",
+        "fields": {
+          "capsuleIdDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 16
+          },
+          "jobIdMinted": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "start",
+        "analyzerProjection": "process-lifecycle",
+        "failureClasses": ["indexing-detached-run"],
+        "proofIds": ["indexing.detached-run.launched.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/local-knowledge-handlers.ts:2917",
+        "emitterSites": ["packages/keiko-server/src/local-knowledge-handlers.ts:3177"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "indexing.start.accepted",
+        "category": "indexing",
+        "owner": "keiko-server",
+        "emitter": "local-knowledge-handlers.acceptDetachedIndexingStart",
+        "fields": {
+          "capsuleIdDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 16
+          },
+          "jobIdMinted": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "sourceCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "start",
+        "analyzerProjection": "process-lifecycle",
+        "failureClasses": ["indexing-route"],
+        "proofIds": ["indexing.start.accepted.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/local-knowledge-handlers.ts:2938",
+        "emitterSites": ["packages/keiko-server/src/local-knowledge-handlers.ts:3234"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "indexing.start.refused",
+        "category": "indexing",
+        "owner": "keiko-server",
+        "emitter": "local-knowledge-handlers.refuseIndexingStart",
+        "fields": {
+          "capsuleIdDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 16
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "capsule-not-found",
+              "capsule-has-no-sources",
+              "no-embedding-capable-model",
+              "job-already-running",
+              "run-already-starting"
+            ]
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["indexing-route"],
+        "proofIds": ["indexing.start.refused.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/local-knowledge-handlers.ts:2858",
+        "emitterSites": ["packages/keiko-server/src/local-knowledge-handlers.ts:3084"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -5338,49 +5629,43 @@
     {
       "op": "indexing.cancel.accepted",
       "category": "indexing",
-      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:3109",
+      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:3009",
       "package": "keiko-server"
     },
     {
       "op": "indexing.cancel.refused",
       "category": "indexing",
-      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:3089",
-      "package": "keiko-server"
-    },
-    {
-      "op": "indexing.cancel.refused",
-      "category": "indexing",
-      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:3100",
+      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:2983",
       "package": "keiko-server"
     },
     {
       "op": "indexing.cancel.requested",
       "category": "indexing",
-      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:3083",
+      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:2963",
       "package": "keiko-server"
     },
     {
       "op": "indexing.detached-run.failed",
       "category": "indexing",
-      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:2925",
+      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:2893",
       "package": "keiko-server"
     },
     {
       "op": "indexing.detached-run.launched",
       "category": "indexing",
-      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:2959",
+      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:2920",
       "package": "keiko-server"
     },
     {
       "op": "indexing.start.accepted",
       "category": "indexing",
-      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:3005",
+      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:2941",
       "package": "keiko-server"
     },
     {
       "op": "indexing.start.refused",
       "category": "indexing",
-      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:2886",
+      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:2861",
       "package": "keiko-server"
     },
     {
@@ -5392,7 +5677,7 @@
     {
       "op": "local-knowledge.indexing",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:2935",
+      "site": "packages/keiko-server/src/local-knowledge-handlers.ts:3152",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
