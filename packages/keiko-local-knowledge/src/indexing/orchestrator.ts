@@ -114,12 +114,7 @@ import {
   type JobCounters,
 } from "./job-persist.js";
 import { embedChunkBatch, embeddingEndpointHost } from "./embedding-batcher.js";
-import {
-  emitKnowledgeLogEvent,
-  knowledgeErrorKind,
-  startKnowledgeLogTimer,
-  type KnowledgeLogEvent,
-} from "../knowledge-log.js";
+import { knowledgeErrorKind, startKnowledgeLogTimer } from "../knowledge-log.js";
 import {
   countVectorsForCapsule,
   countVectorsForDocument,
@@ -144,6 +139,11 @@ import {
   type IndexingResult,
 } from "./types.js";
 import { emitIndexingActivity } from "./orchestrator-activity-log.js";
+import {
+  emitPreflightActivity,
+  type PreflightActivity,
+  type PreflightProbeFields,
+} from "./preflight-activity-log.js";
 import {
   boundedDocumentContext,
   contextualizeChunk,
@@ -344,13 +344,6 @@ function logDigest(value: string): string {
   return createHash("sha256").update(value).digest("hex").slice(0, LOG_DIGEST_LENGTH);
 }
 
-// `scheme://host` for the configured embedding gateway, omitted when the endpoint does not
-// parse. Never the path or the query — see `embeddingEndpointHost`.
-function endpointHostExtra(state: RunState): Readonly<Record<string, unknown>> {
-  const host = embeddingEndpointHost(state.options.embeddingAdapter.endpoint);
-  return host === undefined ? {} : { endpointHost: host };
-}
-
 function endpointDigestExtra(state: RunState): { readonly endpointDigest?: string } {
   const host = embeddingEndpointHost(state.options.embeddingAdapter.endpoint);
   return host === undefined ? {} : { endpointDigest: logDigest(host) };
@@ -376,62 +369,11 @@ function chunkerConfigExtra(state: RunState): {
   };
 }
 
-function documentLogContext(state: RunState, documentId: DocumentId): IndexingLogContext {
-  return { ...state.logContext, documentIdDigest: logDigest(String(documentId)) };
-}
-
-// Routed through `emitKnowledgeLogEvent` for the same reason `emitProgress` above wraps the
-// progress callback: the sink is caller-supplied code, and a run's correctness may not depend on
-// it. Without the guard a throwing sink would abort whichever step happened to be logging —
-// mid-document, inside a retry ladder, or in the failure path that is about to report the real
-// cause — and a logging defect would be indistinguishable from an indexing failure. The seam also
-// keeps a broken sink from going unnoticed; see `knowledge-log.ts`.
-function writeKnowledgeLog(
-  state: RunState,
-  context: IndexingLogContext,
-  event: Omit<KnowledgeLogEvent, "correlationId">,
-): void {
-  emitKnowledgeLogEvent(state.options.logSink, {
-    ...event,
-    correlationId: context.jobId,
-    extra: {
-      capsuleIdDigest: context.capsuleIdDigest,
-      ...(context.documentIdDigest !== undefined
-        ? { documentIdDigest: context.documentIdDigest }
-        : {}),
-      ...event.extra,
-    },
-  });
-}
-
-// Job-scoped lifecycle line.
-function logIndexing(
-  state: RunState,
-  event: Omit<KnowledgeLogEvent, "category" | "correlationId">,
-): void {
-  writeKnowledgeLog(state, state.logContext, { ...event, category: "indexing" });
-}
-
-// Job-scoped line about the embedding gateway rather than the corpus. The category has to match
-// the op prefix: an `embedding.*` op filed under `indexing` is invisible to the grep an operator
-// runs when the gateway is the suspect.
-function logEmbeddingRun(
-  state: RunState,
-  event: Omit<KnowledgeLogEvent, "category" | "correlationId">,
-): void {
-  writeKnowledgeLog(state, state.logContext, { ...event, category: "embedding" });
-}
-
-// Document-scoped lifecycle line — same shape, plus the document digest.
-function logDocument(
+function documentLogContext(
   state: RunState,
   documentId: DocumentId,
-  event: Omit<KnowledgeLogEvent, "category" | "correlationId">,
-): void {
-  writeKnowledgeLog(state, documentLogContext(state, documentId), {
-    ...event,
-    category: "indexing",
-  });
+): IndexingLogContext & { readonly documentIdDigest: string } {
+  return { ...state.logContext, documentIdDigest: logDigest(String(documentId)) };
 }
 
 function clearDocumentArtifacts(
@@ -2632,23 +2574,23 @@ function cacheSuccessfulEmbeddingPreflight(
 //
 // The log arrives as a callback rather than the RunState because the preflight cache is
 // deliberately shared across runs and must not gain a dependency on any one of them.
-type PreflightLog = (event: Omit<KnowledgeLogEvent, "category" | "correlationId">) => void;
+type PreflightLog = (event: PreflightActivity) => void;
 
 // Provider and model id are gateway configuration, not customer data, and they are the pair that
 // makes a preflight failure actionable. The endpoint is reduced to `scheme://host`.
 function preflightProbeExtra(
   adapter: OpenAIEmbeddingAdapter,
   options: EmbeddingProbeOptions,
-): Readonly<Record<string, unknown>> {
+): PreflightProbeFields {
   const host = embeddingEndpointHost(adapter.endpoint);
   return {
-    provider: options.provider,
-    modelId: options.modelId,
+    providerDigest: logDigest(options.provider),
+    modelIdDigest: logDigest(options.modelId),
     ...(options.expectedDimensions !== undefined
       ? { expectedDimensions: options.expectedDimensions }
       : {}),
     fingerprinted: options.includeSpaceFingerprint === true,
-    ...(host === undefined ? {} : { endpointHost: host }),
+    ...(host === undefined ? {} : { endpointDigest: logDigest(host) }),
   };
 }
 
@@ -2658,25 +2600,25 @@ async function probeEmbeddingCapability(
   log: PreflightLog,
 ): Promise<EmbeddingCapabilityCheck> {
   const probe = preflightProbeExtra(adapter, options);
-  log({ level: "info", op: "embedding.preflight.started", extra: { ...probe, cached: false } });
+  log({ op: "embedding.preflight.started", ...probe, cached: false });
   const elapsed = startKnowledgeLogTimer();
   const result = await verifyEmbeddingCapability(adapter, options);
   const durationMs = elapsed();
   if (!result.ok) {
     log({
-      level: "error",
       op: "embedding.preflight.failed",
-      errorKind: result.reason,
+      failureKind: result.reason,
+      failureSource: "result",
       durationMs,
-      extra: probe,
+      ...probe,
     });
     return result;
   }
   log({
-    level: "info",
     op: "embedding.preflight.completed",
     durationMs,
-    extra: { ...probe, observedDimensions: result.identity.vectorDimensions },
+    ...probe,
+    observedDimensions: result.identity.vectorDimensions,
   });
   return result;
 }
@@ -2692,9 +2634,9 @@ async function verifyEmbeddingPreflightCapability(
   const cached = cache?.get(embeddingPreflightCacheKey(options));
   if (cached !== undefined && cached.expiresAt > now()) {
     log({
-      level: "info",
       op: "embedding.preflight.cache-hit",
-      extra: { ...preflightProbeExtra(adapter, options), cached: true },
+      ...preflightProbeExtra(adapter, options),
+      cached: true,
     });
     return cached.result;
   }
@@ -2708,31 +2650,28 @@ async function verifyEmbeddingPreflightCapability(
 // an operator most often mistakes for an outage, so it gets its own line carrying both
 // dimensions — the whole diagnosis, and none of the safe message's prose.
 function logPreflightIdentityRejected(state: RunState, observed: EmbeddingModelIdentity): void {
-  logEmbeddingRun(state, {
-    level: "error",
+  emitPreflightActivity(state.options.logSink, state.logContext, {
     op: "embedding.preflight.identity-rejected",
-    errorKind: "INCOMPATIBLE_EMBEDDING_IDENTITY",
-    extra: {
-      pinnedDimensions: state.capsule.embeddingModelIdentity.vectorDimensions,
-      observedDimensions: observed.vectorDimensions,
-    },
+    failureKind: "INCOMPATIBLE_EMBEDDING_IDENTITY",
+    pinnedDimensions: state.capsule.embeddingModelIdentity.vectorDimensions,
+    observedDimensions: observed.vectorDimensions,
   });
 }
 
 function adoptPreflightIdentity(
   state: RunState,
   identity: EmbeddingModelIdentity,
-  op: string,
+  op: "embedding.preflight.identity-adopted" | "embedding.preflight.identity-refreshed",
 ): void {
   state.capsule = updateCapsuleEmbeddingModelIdentity(
     state.options.store,
     state.capsule.id,
     identity,
   );
-  logEmbeddingRun(state, {
-    level: "info",
+  emitPreflightActivity(state.options.logSink, state.logContext, {
     op,
-    extra: { observedDimensions: identity.vectorDimensions, provider: identity.provider },
+    observedDimensions: identity.vectorDimensions,
+    providerDigest: logDigest(identity.provider),
   });
 }
 
@@ -2803,10 +2742,10 @@ function preflightThrowFailure(
   const cancelled =
     cancellationRequested(state) || (cause instanceof DOMException && cause.name === "AbortError");
   log({
-    level: cancelled ? "warn" : "error",
     op: "embedding.preflight.failed",
-    errorKind: cancelled ? "CANCELLED" : knowledgeErrorKind(cause),
-    extra: { threw: true, ...endpointHostExtra(state) },
+    failureKind: cancelled ? "CANCELLED" : knowledgeErrorKind(cause),
+    failureSource: "throw",
+    ...endpointDigestExtra(state),
   });
   if (cancelled) {
     return { code: "CANCELLED", message: "indexing aborted via AbortSignal" };
@@ -2819,7 +2758,7 @@ function preflightThrowFailure(
 
 async function verifyEmbeddingPreflight(state: RunState): Promise<IndexingJobError | undefined> {
   const log: PreflightLog = (event): void => {
-    logEmbeddingRun(state, event);
+    emitPreflightActivity(state.options.logSink, state.logContext, event);
   };
   try {
     const result = await verifyEmbeddingPreflightCapability(
