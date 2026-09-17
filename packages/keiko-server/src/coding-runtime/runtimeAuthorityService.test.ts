@@ -249,7 +249,7 @@ function mintFailureService(
 ): CodingRuntimeAuthorityService {
   return new CodingRuntimeAuthorityService(
     registry,
-    () => "run-1",
+    () => "run-0001",
     () => "nonce-1",
     createInMemorySupervisedCodingApprovalStore(),
     capabilities,
@@ -329,7 +329,7 @@ describe("CodingRuntimeAuthorityService", () => {
     const activity: ServerLogEvent[] = [];
     const authority = new CodingRuntimeAuthorityService(
       new EditorAgentAuthorityRegistry(),
-      () => "run-1",
+      () => "run-0001",
       () => "nonce-1",
       createInMemorySupervisedCodingApprovalStore(),
       createInMemoryRuntimeCapabilityStore({ nowMs: () => Date.parse(NOW) }),
@@ -354,10 +354,12 @@ describe("CodingRuntimeAuthorityService", () => {
     expect(activity).toContainEqual({
       category: "security",
       op: "coding-runtime.authority.minted",
-      correlationId: "run-1",
+      correlationId: "run-0001",
       level: "info",
       extra: {
-        runId: "run-1",
+        completeness: "complete",
+        loss: "none",
+        runId: "run-0001",
         effectiveMode: "supervised-coding",
         actionClasses: trusted.actionClasses,
         connectorScopes: trusted.connectorScopes,
@@ -952,6 +954,8 @@ describe("CodingRuntimeAuthorityService", () => {
         errorKind: "authority-denied",
         correlationId: minted.authorityRef.runId,
         extra: {
+          completeness: "complete",
+          loss: "none",
           condition: "state-not-admissible",
           runtimeState: "paused",
           admissibleStates: ["running"],
@@ -1573,7 +1577,9 @@ describe("CodingRuntimeAuthorityService fail-closed mint and release guards", ()
       reason: "invalid",
     });
     const registration = mintFailureService(events, refusingRegistry);
-    expect(registration.mintConfirmedStartForRun("run-1", intent, context(), DIGEST, NOW)).toEqual({
+    expect(
+      registration.mintConfirmedStartForRun("run-0001", intent, context(), DIGEST, NOW),
+    ).toEqual({
       ok: false,
       reason: "authority-resolution-failed",
     });
@@ -1587,7 +1593,7 @@ describe("CodingRuntimeAuthorityService fail-closed mint and release guards", ()
       }),
     );
     expect(
-      capabilityIssuance.mintConfirmedStartForRun("run-1", intent, context(), DIGEST, NOW),
+      capabilityIssuance.mintConfirmedStartForRun("run-0001", intent, context(), DIGEST, NOW),
     ).toEqual({ ok: false, reason: "authority-resolution-failed" });
 
     expect(
@@ -1636,14 +1642,14 @@ describe("CodingRuntimeAuthorityService fail-closed mint and release guards", ()
       },
       {
         op: "coding-runtime.authority.mint-failed",
-        correlationId: "run-1",
+        correlationId: "run-0001",
         stage: "authority-registration",
         reason: "registration-refused",
         errorKind: "authority-denied",
       },
       {
         op: "coding-runtime.authority.mint-failed",
-        correlationId: "run-1",
+        correlationId: "run-0001",
         stage: "capability-issuance",
         reason: "capability-issuance-refused",
         errorKind: "authority-denied",

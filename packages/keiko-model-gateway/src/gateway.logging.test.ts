@@ -552,13 +552,13 @@ describe("Gateway — caller correlation", () => {
       },
       log,
     );
-    const response = await gateway.chat({ ...REQUEST, logContext: { correlationId: "run-77" } });
+    const response = await gateway.chat({ ...REQUEST, logContext: { correlationId: "run-0077" } });
     for (const op of ["gateway.chat.started", "gateway.chat.completed"]) {
       const event = eventFor(log.events, op);
-      expect(event.correlationId).toBe("run-77");
+      expect(event.correlationId).toBe("run-0077");
       expect(event.extra).toMatchObject({ requestId: response.usage.requestId });
     }
-    expect(response.usage.requestId).not.toBe("run-77");
+    expect(response.usage.requestId).not.toBe("run-0077");
   });
 
   it("tags a failed call and a streaming call the same way", async () => {
@@ -568,9 +568,9 @@ describe("Gateway — caller correlation", () => {
       failing,
     );
     await expect(
-      failingGateway.chat({ ...REQUEST, logContext: { correlationId: "run-78" } }),
+      failingGateway.chat({ ...REQUEST, logContext: { correlationId: "run-0078" } }),
     ).rejects.toBeInstanceOf(TransportError);
-    expect(eventFor(failing.events, "gateway.chat.failed").correlationId).toBe("run-78");
+    expect(eventFor(failing.events, "gateway.chat.failed").correlationId).toBe("run-0078");
 
     const streaming = recorder();
     const streamingGateway = gatewayWith(
@@ -580,7 +580,7 @@ describe("Gateway — caller correlation", () => {
       streaming,
     );
     await drainStream(
-      streamingGateway.chatStream({ ...REQUEST, logContext: { correlationId: "run-79" } }),
+      streamingGateway.chatStream({ ...REQUEST, logContext: { correlationId: "run-0079" } }),
     );
     // The buffered-fallback degradation is emitted from the deepest frame of the stream path; it
     // must be attributable too.
@@ -589,7 +589,7 @@ describe("Gateway — caller correlation", () => {
       "gateway.stream.buffered-fallback",
       "gateway.stream.completed",
     ]) {
-      expect(eventFor(streaming.events, op).correlationId).toBe("run-79");
+      expect(eventFor(streaming.events, op).correlationId).toBe("run-0079");
     }
   });
 
@@ -606,11 +606,11 @@ describe("Gateway — caller correlation", () => {
       gateway.chat({
         ...REQUEST,
         modelId: "not-configured",
-        logContext: { correlationId: "run-80" },
+        logContext: { correlationId: "run-0080" },
       }),
     ).rejects.toThrow();
     const rejected = eventFor(log.events, "gateway.route.rejected");
-    expect(rejected.correlationId).toBe("run-80");
+    expect(rejected.correlationId).toBe("run-0080");
     expect(rejected.extra).not.toHaveProperty("requestId");
   });
 
@@ -647,8 +647,8 @@ describe("Gateway — caller correlation", () => {
       clock: stubClock(),
       log: log.sink,
     });
-    await gateway.chat({ ...REQUEST, logContext: { correlationId: "run-81" } });
+    await gateway.chat({ ...REQUEST, logContext: { correlationId: "run-0081" } });
     expect(ops(log.events)).toContain("gateway.retry.scheduled");
-    expect(eventFor(log.events, "gateway.retry.scheduled").correlationId).toBe("run-81");
+    expect(eventFor(log.events, "gateway.retry.scheduled").correlationId).toBe("run-0081");
   });
 });
