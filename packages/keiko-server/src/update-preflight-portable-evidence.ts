@@ -14,7 +14,12 @@ import {
 } from "@oscharko-dev/keiko-contracts";
 import type { UiHandlerDeps } from "./deps.js";
 import { currentGatewayEgressConfig } from "./deps.js";
-import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import {
+  recordPortableFetchFailure,
+  recordPortableRedirectRefusal,
+  recordReleaseTrustFailure as writeReleaseTrustFailure,
+  recordReleaseTrustSuccess as writeReleaseTrustSuccess,
+} from "./update-preflight-activity.js";
 import {
   type GitHubAsset,
   PortableAssetRedirectError,
@@ -360,22 +365,14 @@ async function readAssetSafely(
     return await fetchTextAsset(deps, asset, maxBytes, deadlineAt);
   } catch (error) {
     if (error instanceof PortableAssetRedirectError) {
-      deps.activityLog?.write({
-        category: "security",
-        correlationId: UNKNOWN_CORRELATION_ID,
-        level: "warn",
-        op: "update.portable-asset.redirect-refused",
-        extra: { assetKind, reason: error.reason, target },
-      });
+      recordPortableRedirectRefusal(deps.activityLog, target, assetKind, error.reason);
     } else {
-      deps.activityLog?.write({
-        category: "diagnostic",
-        correlationId: UNKNOWN_CORRELATION_ID,
-        errorKind: "PORTABLE_FETCH_FAILURE",
-        level: "warn",
-        op: "update.portable-fetch.failed",
-        extra: { assetKind, reason: portableFetchFailureReason(error), target },
-      });
+      recordPortableFetchFailure(
+        deps.activityLog,
+        target,
+        assetKind,
+        portableFetchFailureReason(error),
+      );
     }
     return undefined;
   }
@@ -497,13 +494,7 @@ function recordReleaseTrustFailure(
   manifest: Record<string, unknown> | undefined,
 ): void {
   if (manifest?.releaseTrust === undefined) return;
-  deps.activityLog?.write({
-    category: "security",
-    correlationId: UNKNOWN_CORRELATION_ID,
-    level: "warn",
-    op: "update.release-trust.verify",
-    extra: { reason, status: "failed", target },
-  });
+  writeReleaseTrustFailure(deps.activityLog, target, reason);
 }
 
 function recordReleaseTrustSuccess(
@@ -512,12 +503,7 @@ function recordReleaseTrustSuccess(
   trust: ValidatedPortableManifest["releaseTrust"],
 ): void {
   if (trust === undefined) return;
-  deps.activityLog?.write({
-    category: "security",
-    correlationId: UNKNOWN_CORRELATION_ID,
-    op: "update.release-trust.verify",
-    extra: { ...trust, status: "succeeded", target },
-  });
+  writeReleaseTrustSuccess(deps.activityLog, target, trust);
 }
 
 function validateManifestSafely(

@@ -769,6 +769,8 @@ describe("update preflight service", () => {
           metadataVersion: 987_654_321,
           status: "succeeded",
           target,
+          completeness: "complete",
+          loss: "none",
         },
       }),
     );
@@ -814,9 +816,16 @@ describe("update preflight service", () => {
       expect.objectContaining({
         category: "security",
         correlationId: UNKNOWN_CORRELATION_ID,
+        errorKind: "unsafe-target",
         level: "warn",
         op: "update.portable-asset.redirect-refused",
-        extra: { assetKind: "manifest", reason: "unsafe-target", target },
+        extra: {
+          assetKind: "manifest",
+          reason: "unsafe-target",
+          target,
+          completeness: "complete",
+          loss: "none",
+        },
       }),
     );
     deps.store.close();
@@ -859,10 +868,16 @@ describe("update preflight service", () => {
         expect.objectContaining({
           category: "diagnostic",
           correlationId: UNKNOWN_CORRELATION_ID,
-          errorKind: "PORTABLE_FETCH_FAILURE",
+          errorKind: "timeout",
           level: "warn",
           op: "update.portable-fetch.failed",
-          extra: { assetKind: "manifest", reason: "deadline-exceeded", target },
+          extra: {
+            assetKind: "manifest",
+            reason: "deadline-exceeded",
+            target,
+            completeness: "complete",
+            loss: "none",
+          },
         }),
       );
       expect(JSON.stringify(events)).not.toContain("sensitive timeout detail");
