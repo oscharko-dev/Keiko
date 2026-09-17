@@ -60,6 +60,7 @@ import {
   isActivityLogErrorKind,
   type ActivityLogCompatibilityState,
   type ActivityLogErrorKind,
+  type ActivityLogEventFailureKind,
   type ActivityLogWriterCapabilityState,
   validateRegisteredActivityLogEvent,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -313,6 +314,62 @@ function safeArtifactErrorKind(error: unknown): string | undefined {
 const LOG_FAILURE_NOTICE_OP = "server-log.write-failed";
 export const LOG_FAILURE_NOTICE_WINDOW_MS = 60_000;
 
+const SERVER_LOG_FAILURE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "server-log.write-failed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "observability/server-log.failureNoticeEvent",
+  fields: {
+    failedOp: { type: "string", dataClass: "opaque-id", required: false, maxLength: 160 },
+    rejectionKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "unregistered-operation",
+        "registration-mismatch",
+        "missing-identity",
+        "invalid-identity",
+        "fields-not-object",
+        "missing-field",
+        "unknown-field",
+        "invalid-field-type",
+        "invalid-field-bound",
+        "invalid-field-vocabulary",
+      ],
+    },
+    writerCapability: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["unavailable"],
+    },
+    compatibilityState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["incomplete"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["shutdown-flush"],
+    },
+    suppressedNotices: { type: "integer", dataClass: "count", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "loss",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["activity-log-persistence", "activity-log-contract"],
+  proofIds: ["server-log.write-failed.stderr-line"],
+  releaseImpact: "patch",
+});
+
 export interface ServerLogFailureContext {
   readonly op?: string | undefined;
   readonly correlationId?: string | undefined;
@@ -414,27 +471,79 @@ function emitFailureNotice(
   now: number,
   identity: ServerLogIdentity,
 ): void {
-  const validationFailure = activityLogValidationFailure(error);
-  const notice: Record<string, unknown> = {
+  try {
+    const validationFailure = activityLogValidationFailure(error);
+    const event = failureNoticeEvent(error, context, suppressed, validationFailure);
+    writeStderrNotice(stderrEventRecord(event, identity, now));
+  } catch {
+    writeStderrNotice(emergencyFailureNotice(identity, now));
+  }
+}
+
+function emergencyFailureNotice(
+  identity: ServerLogIdentity,
+  now: number,
+): Record<string, unknown> {
+  return {
     ts: new Date(now).toISOString(),
     ...failureNoticeIdentity(identity),
     level: "error",
     category: "diagnostic",
     op: LOG_FAILURE_NOTICE_OP,
-    errorKind: closedFailureNoticeErrorKind(error),
-    correlationId: correlationIdOrUnknown(context.correlationId),
+    correlationId: correlationIdOrUnknown(undefined),
+    errorKind: "internal",
     compatibilityState: "incomplete",
     writerCapability: "unavailable",
     completeness: "unknown",
-    loss: context.loss ?? "event-dropped",
+    loss: "event-dropped",
   };
-  if (validationFailure !== undefined) notice.rejectionKind = validationFailure;
-  else if (context.op !== undefined) notice.failedOp = redactLogLabel(context.op);
-  if (suppressed > 0) notice.suppressedNotices = suppressed;
-  writeStderrNotice(notice);
 }
 
-function activityLogValidationFailure(error: unknown): string | undefined {
+function failureNoticeEvent(
+  error: unknown,
+  context: ServerLogFailureContext,
+  suppressed: number,
+  rejectionKind: ActivityLogEventFailureKind | undefined,
+): ServerLogEvent {
+  return activityLogEvent(
+    SERVER_LOG_FAILURE_OPERATION,
+    {
+      level: "error",
+      correlationId: correlationIdOrUnknown(context.correlationId),
+      errorKind: closedFailureNoticeErrorKind(error),
+    },
+    {
+      ...(rejectionKind === undefined && context.op !== undefined
+        ? { failedOp: redactLogLabel(context.op) }
+        : {}),
+      ...(rejectionKind === undefined ? {} : { rejectionKind }),
+      writerCapability: "unavailable",
+      compatibilityState: "incomplete",
+      completeness: "unknown",
+      loss: context.loss ?? "event-dropped",
+      ...(suppressed > 0 ? { suppressedNotices: suppressed } : {}),
+    },
+  );
+}
+
+function stderrEventRecord(
+  event: ServerLogEvent,
+  identity: ServerLogIdentity,
+  now: number,
+): Record<string, unknown> {
+  return {
+    ts: new Date(now).toISOString(),
+    ...failureNoticeIdentity(identity),
+    level: event.level,
+    category: event.category,
+    ["op"]: event.op,
+    correlationId: event.correlationId,
+    errorKind: event.errorKind,
+    ...event.extra,
+  };
+}
+
+function activityLogValidationFailure(error: unknown): ActivityLogEventFailureKind | undefined {
   return error instanceof ActivityLogEventValidationError ? error.kind : undefined;
 }
 
@@ -472,21 +581,27 @@ function failureNoticeIdentity(identity: ServerLogIdentity): Record<string, unkn
 // only the count of how many is not recoverable after that kind of exit.
 function emitShutdownFlushNotice(suppressed: number, now: number): void {
   const identity = allocateServerLogIdentity();
-  writeStderrNotice({
-    ts: new Date(now).toISOString(),
-    ...failureNoticeIdentity(identity),
-    level: "error",
-    category: "diagnostic",
-    op: LOG_FAILURE_NOTICE_OP,
-    correlationId: correlationIdOrUnknown(undefined),
-    errorKind: "unknown",
-    compatibilityState: "incomplete",
-    writerCapability: "unavailable",
-    completeness: "unknown",
-    loss: "event-dropped",
-    reason: "shutdown-flush",
-    suppressedNotices: suppressed,
-  });
+  try {
+    const event = activityLogEvent(
+      SERVER_LOG_FAILURE_OPERATION,
+      {
+        level: "error",
+        correlationId: correlationIdOrUnknown(undefined),
+        errorKind: "unknown",
+      },
+      {
+        writerCapability: "unavailable",
+        compatibilityState: "incomplete",
+        completeness: "unknown",
+        loss: "event-dropped",
+        reason: "shutdown-flush",
+        suppressedNotices: suppressed,
+      },
+    );
+    writeStderrNotice(stderrEventRecord(event, identity, now));
+  } catch {
+    writeStderrNotice(emergencyFailureNotice(identity, now));
+  }
 }
 
 function eventLevel(event: ServerLogEvent): ServerLogLevel {
@@ -852,6 +967,61 @@ const SERVER_LOG_SAFE_OPEN_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const SERVER_LOG_ROTATION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "server-log.rotation",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "observability/server-log.rotationEvidence",
+  fields: {
+    artifactClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["activity-log"],
+    },
+    persistenceStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["deferred"],
+    },
+    durabilityAssurance: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["unchanged"],
+    },
+    rotationAssurance: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["append-only-current"],
+    },
+    retentionStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["deferred"],
+    },
+    retentionReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["segment-retention-owned-by-3530"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["activity-log-rotation-deferred"],
+  proofIds: ["server-log.rotation.emitted-line"],
+  releaseImpact: "patch",
+});
+
 function safeOpenEvidence(): ServerLogEvent {
   return activityLogEvent(SERVER_LOG_SAFE_OPEN_OPERATION, {
     correlationId: correlationIdOrUnknown(undefined),
@@ -869,13 +1039,14 @@ function rotationEvidence(
   outcome: RotationOutcome,
   correlationId: string | undefined,
 ): ServerLogEvent {
-  return {
-    level: "warn",
-    category: "diagnostic",
-    op: "server-log.rotation",
-    correlationId: correlationIdOrUnknown(correlationId),
-    errorKind: "publish-unsupported",
-    extra: {
+  return activityLogEvent(
+    SERVER_LOG_ROTATION_OPERATION,
+    {
+      level: "warn",
+      correlationId: correlationIdOrUnknown(correlationId),
+      errorKind: "publish-unsupported",
+    },
+    {
       artifactClass: "activity-log",
       persistenceStatus: outcome.status,
       durabilityAssurance: outcome.durability,
@@ -885,7 +1056,7 @@ function rotationEvidence(
       completeness: "partial",
       loss: "none",
     },
-  };
+  );
 }
 
 function pendingPersistenceEvents(

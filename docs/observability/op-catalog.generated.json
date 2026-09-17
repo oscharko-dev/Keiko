@@ -9,8 +9,72 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "205b1dc41337fe3b2841dca3dee729eb51c7027de380f8bf8b1f1391d61fd2a3",
-    "catalogDigest": "687d627087ccb685754e1b8ae77a09c225940c56848ce409323e7bacd390da83",
+    "catalogDigest": "cdb40fb34dcfa2e87e28472aebec79b02e6205cdd3d397b2d6c37d435e111cbe",
     "operations": [
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "server-log.rotation",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "observability/server-log.rotationEvidence",
+        "fields": {
+          "artifactClass": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["activity-log"]
+          },
+          "persistenceStatus": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["deferred"]
+          },
+          "durabilityAssurance": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["unchanged"]
+          },
+          "rotationAssurance": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["append-only-current"]
+          },
+          "retentionStatus": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["deferred"]
+          },
+          "retentionReason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["segment-retention-owned-by-3530"]
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "capability",
+        "failureClasses": ["activity-log-rotation-deferred"],
+        "proofIds": ["server-log.rotation.emitted-line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:970",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1042"]
+      },
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
@@ -60,8 +124,85 @@
         "failureClasses": ["activity-log-persistence"],
         "proofIds": ["server-log.safe-open.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:812",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:856"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:927",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:1026"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "server-log.write-failed",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "observability/server-log.failureNoticeEvent",
+        "fields": {
+          "failedOp": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxLength": 160
+          },
+          "rejectionKind": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "unregistered-operation",
+              "registration-mismatch",
+              "missing-identity",
+              "invalid-identity",
+              "fields-not-object",
+              "missing-field",
+              "unknown-field",
+              "invalid-field-type",
+              "invalid-field-bound",
+              "invalid-field-vocabulary"
+            ]
+          },
+          "writerCapability": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["unavailable"]
+          },
+          "compatibilityState": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["incomplete"]
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["shutdown-flush"]
+          },
+          "suppressedNotices": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "loss",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["activity-log-persistence", "activity-log-contract"],
+        "proofIds": ["server-log.write-failed.stderr-line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:317",
+        "emitterSites": [
+          "packages/keiko-server/src/observability/server-log.ts:508",
+          "packages/keiko-server/src/observability/server-log.ts:585"
+        ]
       }
     ],
     "violations": []
@@ -1186,7 +1327,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1514",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1685",
       "package": "keiko-server"
     },
     {
@@ -3516,31 +3657,31 @@
     {
       "op": "server-log.rotation",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:875",
+      "site": "packages/keiko-server/src/observability/server-log.ts:973",
       "package": "keiko-server"
     },
     {
       "op": "server-log.safe-open",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:815",
+      "site": "packages/keiko-server/src/observability/server-log.ts:930",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:423",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1115",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:480",
+      "site": "packages/keiko-server/src/observability/server-log.ts:320",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:944",
+      "site": "packages/keiko-server/src/observability/server-log.ts:492",
       "package": "keiko-server"
     },
     {
