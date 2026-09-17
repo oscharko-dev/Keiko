@@ -5136,19 +5136,19 @@ function runtimeShutdownStartState(services: UiHandlerRuntimeServices): {
 
 function buildDapDebugDependency(
   dapRuntime: DapRuntimeReference,
-): Pick<UiHandlerDeps, "dapDebug"> | Record<never, never> {
+): Partial<Pick<UiHandlerDeps, "dapDebug">> {
   return dapRuntime.current === undefined ? {} : { dapDebug: dapRuntime.current };
 }
 
 function buildWorkspaceLifecycleDependency(
   workspaceLifecycle: WorkspaceLifecycleService | undefined,
-): Pick<UiHandlerDeps, "workspaceLifecycle"> | Record<never, never> {
+): Partial<Pick<UiHandlerDeps, "workspaceLifecycle">> {
   return workspaceLifecycle === undefined ? {} : { workspaceLifecycle };
 }
 
 function buildMemoryDeniedCategoryMatchersDependency(
   options: BuildHandlerDepsOptions,
-): Pick<UiHandlerDeps, "memoryDeniedCategoryMatchers"> | Record<never, never> {
+): Partial<Pick<UiHandlerDeps, "memoryDeniedCategoryMatchers">> {
   return options.memoryDeniedCategoryMatchers === undefined
     ? {}
     : { memoryDeniedCategoryMatchers: options.memoryDeniedCategoryMatchers };
@@ -5239,7 +5239,7 @@ function buildCodingRuntimeControlPlaneDeps(
 function buildRuntimeMutationLeaseDependency(
   options: BuildHandlerDepsOptions,
   runtimeComposition: ReturnType<typeof productionRuntimeResolver>,
-): Pick<UiHandlerDeps, "runtimeMutationLease"> | Record<never, never> {
+): Partial<Pick<UiHandlerDeps, "runtimeMutationLease">> {
   if (options.codingRuntimeResolver !== undefined) return {};
   if (runtimeComposition.runtimeMutationLease === undefined) return {};
   return { runtimeMutationLease: runtimeComposition.runtimeMutationLease };

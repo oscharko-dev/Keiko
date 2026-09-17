@@ -14,7 +14,7 @@
 // integration suites cover parser, turn-manager, and BFF persistence behavior; this smoke proves the
 // user-facing surface is a single Realtime dialogue mode and the composer stays text-capable.
 
-import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -407,6 +407,17 @@ test.afterEach(() => {
   }
 });
 
+async function composerCentreDelta(composer: Locator): Promise<number> {
+  return composer.evaluate((element) => {
+    const box = element.getBoundingClientRect();
+    const cluster = element.querySelector(".cmp-bar-main-voice-dialog")?.getBoundingClientRect();
+    if (cluster === undefined) return Number.POSITIVE_INFINITY;
+    const x = cluster.x + cluster.width / 2 - (box.x + box.width / 2);
+    const y = cluster.y + cluster.height / 2 - (box.y + box.height / 2);
+    return Math.max(Math.abs(x), Math.abs(y));
+  });
+}
+
 async function expectActiveComposerSettled(page: Page): Promise<void> {
   const composer = page.locator(".cmp-box");
   const normalLayer = composer.locator('[data-composer-layer="normal"]');
@@ -415,19 +426,9 @@ async function expectActiveComposerSettled(page: Page): Promise<void> {
   await expect(voiceLayer).toHaveCSS("opacity", "1");
   await expect(normalLayer).toHaveAttribute("aria-hidden", "true");
   await expect(normalLayer).toHaveAttribute("inert", "");
-
-  const centreOffset = await composer.evaluate((element) => {
-    const box = element.getBoundingClientRect();
-    const cluster = element.querySelector(".cmp-bar-main-voice-dialog")?.getBoundingClientRect();
-    if (cluster === undefined) return undefined;
-    return {
-      x: cluster.x + cluster.width / 2 - (box.x + box.width / 2),
-      y: cluster.y + cluster.height / 2 - (box.y + box.height / 2),
-    };
-  });
-  expect(centreOffset).toBeDefined();
-  expect(Math.abs(centreOffset?.x ?? Number.POSITIVE_INFINITY)).toBeLessThan(1);
-  expect(Math.abs(centreOffset?.y ?? Number.POSITIVE_INFINITY)).toBeLessThan(1);
+  // Opacity settles before the longer transform transition. Poll the governed visual invariant
+  // itself so a fast WebKit runner cannot sample the final sub-pixel of an in-flight animation.
+  await expect.poll(() => composerCentreDelta(composer)).toBeLessThan(1);
 }
 
 interface VoiceChatSendCapture {

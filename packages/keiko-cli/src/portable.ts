@@ -4,6 +4,10 @@ import { arch as hostArch, homedir as defaultHomedir } from "node:os";
 import { isAbsolute, join, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { loadServer } from "./lazy-modules.js";
+import {
+  installLayoutOverrideEvidence,
+  writeInstallLayoutOverrideEvidenceWithFactory,
+} from "./install-layout.js";
 import { runLifecycleCli } from "./lifecycle.js";
 import {
   activateMacosPortableRuntime,
@@ -46,6 +50,7 @@ import { hasPortableInstallRegistration } from "./portable-registration.js";
 import { assertManagedRootAllowed } from "./portable-root-policy.js";
 import type { CliIo } from "./runner.js";
 import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
+import { inspectStateRoot } from "./state-paths.js";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 
 type LifecycleFn = (
@@ -703,6 +708,17 @@ function notifyPortableFailureIfNeeded(
   notify(message, env);
 }
 
+function writePortableInstallLayoutEvidence(
+  options: PortableCliOptions,
+  env: EnvSource,
+  factory: CliSecurityLogSinkFactory | undefined,
+): void {
+  if (installLayoutOverrideEvidence(env) === undefined) return;
+  const stateRoot = inspectStateRoot(options.stateDir);
+  if (stateRoot.status !== "absent" && stateRoot.status !== "directory") return;
+  writeInstallLayoutOverrideEvidenceWithFactory(factory, options.stateDir, env);
+}
+
 export async function runPortableCli(
   args: readonly string[],
   io: CliIo,
@@ -720,6 +736,7 @@ export async function runPortableCli(
     return 2;
   }
   if (options.command === "status") return statusPortable(options, io);
+  writePortableInstallLayoutEvidence(options, env, deps.securityLogSinkFactory);
   const commandOptions: PortableCliOptions = {
     ...options,
     securityLogSink: createCliSecurityLogSink(options.stateDir, deps.securityLogSinkFactory),

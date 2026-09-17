@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "456c4c5157c84c0c8cdc0c48ba1b697375c51c86f00a5c3f060029294f86980b",
+    "catalogDigest": "61f17761f4b9df46968312cfacaa339e2abbf53b935a781677da88038e528718",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -422,6 +422,46 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "cli.install-layout.normalized",
+        "category": "diagnostic",
+        "owner": "keiko-cli",
+        "emitter": "support.writeTypedInstallLayoutOverrideEvidence",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "overriddenCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "overriddenKinds": {
+            "type": "string-array",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["cli-bin", "ui-static-root", "local-state-auditor"],
+            "maxItems": 3
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["cli-install-layout-normalization"],
+        "proofIds": ["cli.install-layout.normalized-before-support-snapshot"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-cli/src/support.ts:187",
+        "emitterSites": ["packages/keiko-cli/src/support.ts:303"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "cli.lifecycle.stop-escalated",
         "category": "diagnostic",
         "owner": "keiko-cli",
@@ -563,6 +603,56 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-cli/src/ui-process-stop.ts:34",
         "emitterSites": ["packages/keiko-cli/src/ui-process-stop.ts:240"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "cli.support.export.failed",
+        "category": "diagnostic",
+        "owner": "keiko-cli",
+        "emitter": "support.emitSupportInstallLayoutRefusal",
+        "fields": {
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "unsafe-state-root",
+              "activity-log-unavailable",
+              "state-root-validation-failed"
+            ]
+          },
+          "targetSha256": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "failureKind": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": true,
+            "maxLength": 64
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["cli-support-export"],
+        "proofIds": ["cli.support.export.install-layout-refusal"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-cli/src/support.ts:212",
+        "emitterSites": ["packages/keiko-cli/src/support.ts:264"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -1868,7 +1958,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:56",
         "emitterSites": [
-          "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:631"
+          "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:651"
         ]
       },
       {
@@ -18755,8 +18845,8 @@
         "failureClasses": ["shutdown-hook-failed", "process-shutdown"],
         "proofIds": ["process.exiting.reason", "process.exiting.uptime"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/ui.ts:70",
-        "emitterSites": ["packages/keiko-cli/src/ui.ts:947"]
+        "registrationSite": "packages/keiko-cli/src/ui.ts:75",
+        "emitterSites": ["packages/keiko-cli/src/ui.ts:953"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -18880,8 +18970,8 @@
         "failureClasses": ["process-stall", "memory-pressure"],
         "proofIds": ["process.heartbeat.resources", "process.heartbeat.event-loop"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/ui.ts:100",
-        "emitterSites": ["packages/keiko-cli/src/ui.ts:1184"]
+        "registrationSite": "packages/keiko-cli/src/ui.ts:105",
+        "emitterSites": ["packages/keiko-cli/src/ui.ts:1190"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -19003,8 +19093,8 @@
         "failureClasses": ["process-startup", "install-mode-probe-failed"],
         "proofIds": ["process.started.runtime", "process.started.configuration"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/ui.ts:122",
-        "emitterSites": ["packages/keiko-cli/src/ui.ts:1300"]
+        "registrationSite": "packages/keiko-cli/src/ui.ts:127",
+        "emitterSites": ["packages/keiko-cli/src/ui.ts:1306"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -22374,8 +22464,8 @@
         "failureClasses": ["support-analysis"],
         "proofIds": ["support.analyze.classification-evidence"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/support.ts:747",
-        "emitterSites": ["packages/keiko-cli/src/support.ts:893"]
+        "registrationSite": "packages/keiko-cli/src/support.ts:962",
+        "emitterSites": ["packages/keiko-cli/src/support.ts:1108"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -22511,12 +22601,12 @@
         "failureClasses": ["support-publication", "support-publication-acknowledgement"],
         "proofIds": ["support.export.publication-evidence", "support.export.commit-last"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/support.ts:635",
+        "registrationSite": "packages/keiko-cli/src/support.ts:850",
         "emitterSites": [
-          "packages/keiko-cli/src/support.ts:923",
-          "packages/keiko-cli/src/support.ts:949",
-          "packages/keiko-cli/src/support.ts:975",
-          "packages/keiko-cli/src/support.ts:989"
+          "packages/keiko-cli/src/support.ts:1138",
+          "packages/keiko-cli/src/support.ts:1164",
+          "packages/keiko-cli/src/support.ts:1190",
+          "packages/keiko-cli/src/support.ts:1204"
         ]
       },
       {
@@ -24014,8 +24104,8 @@
         "failureClasses": ["legacy-update-audit-import"],
         "proofIds": ["update.runtime.legacy-import-deferred.reason"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-cli/src/ui.ts:216",
-        "emitterSites": ["packages/keiko-cli/src/ui.ts:1507"]
+        "registrationSite": "packages/keiko-cli/src/ui.ts:221",
+        "emitterSites": ["packages/keiko-cli/src/ui.ts:1513"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -24674,8 +24764,8 @@
     "failureClassCoverage": {
       "schemaVersion": 1,
       "releaseExpectation": "100%-complete",
-      "supportedClassCount": 297,
-      "completeClassCount": 297,
+      "supportedClassCount": 299,
+      "completeClassCount": 299,
       "completeness": "complete",
       "classes": [
         {
@@ -25455,6 +25545,110 @@
                 "causeChain": false
               },
               "proofIds": ["chat.turn.started.shape"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
+          "failureClass": "cli-install-layout-normalization",
+          "productSurfaces": ["keiko-cli"],
+          "lifecycleTransitions": ["state"],
+          "causalEdges": [
+            {
+              "op": "cli.install-layout.normalized",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": ["cli.install-layout.normalized"],
+          "operations": [
+            {
+              "op": "cli.install-layout.normalized",
+              "owner": "keiko-cli",
+              "category": "diagnostic",
+              "lifecycle": "state",
+              "causal": "correlation",
+              "analyzerProjection": "timeline",
+              "safeContextFields": [
+                {
+                  "name": "overriddenCount",
+                  "type": "integer",
+                  "dataClass": "count",
+                  "required": true
+                },
+                {
+                  "name": "overriddenKinds",
+                  "type": "string-array",
+                  "dataClass": "closed-enum",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": ["closed-enum", "completeness-state", "count", "loss-state"],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["cli.install-layout.normalized-before-support-snapshot"],
+              "replayReferences": [],
+              "missingObligations": []
+            }
+          ],
+          "missingObligations": [],
+          "completeness": "complete"
+        },
+        {
+          "failureClass": "cli-support-export",
+          "productSurfaces": ["keiko-cli"],
+          "lifecycleTransitions": ["failure"],
+          "causalEdges": [
+            {
+              "op": "cli.support.export.failed",
+              "mode": "correlation"
+            }
+          ],
+          "lossSignals": ["cli.support.export.failed"],
+          "operations": [
+            {
+              "op": "cli.support.export.failed",
+              "owner": "keiko-cli",
+              "category": "diagnostic",
+              "lifecycle": "failure",
+              "causal": "correlation",
+              "analyzerProjection": "failure-cluster",
+              "safeContextFields": [
+                {
+                  "name": "failureKind",
+                  "type": "string",
+                  "dataClass": "error-kind",
+                  "required": true
+                },
+                {
+                  "name": "reason",
+                  "type": "string",
+                  "dataClass": "closed-enum",
+                  "required": true
+                },
+                {
+                  "name": "targetSha256",
+                  "type": "string",
+                  "dataClass": "digest",
+                  "required": true
+                }
+              ],
+              "evidenceClasses": [
+                "closed-enum",
+                "completeness-state",
+                "digest",
+                "error-kind",
+                "loss-state"
+              ],
+              "frameCauseEvidence": {
+                "frames": false,
+                "causeChain": false
+              },
+              "proofIds": ["cli.support.export.install-layout-refusal"],
               "replayReferences": [],
               "missingObligations": []
             }
@@ -51052,6 +51246,48 @@
       "package": "keiko-cli"
     },
     {
+      "op": "cli.audit.completed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/audit.ts:324",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.audit.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/audit.ts:313",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.audit.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/audit.ts:394",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.audit.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/audit.ts:514",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.audit.started",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/audit.ts:447",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.install-layout.normalized",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/install-layout.ts:81",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.install-layout.normalized",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/support.ts:190",
+      "package": "keiko-cli"
+    },
+    {
       "op": "cli.lifecycle.stop-escalated",
       "category": "diagnostic",
       "site": "packages/keiko-cli/src/ui-process-stop.ts:60",
@@ -51076,6 +51312,36 @@
       "package": "keiko-cli"
     },
     {
+      "op": "cli.support.export.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/support.ts:215",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.uninstall.completed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/uninstall.ts:885",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.uninstall.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/uninstall.ts:714",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.uninstall.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/uninstall.ts:845",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.uninstall.started",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/uninstall.ts:775",
+      "package": "keiko-cli"
+    },
+    {
       "op": "portable.windows-alert.spawn-failed",
       "category": "diagnostic",
       "site": "packages/keiko-cli/src/portable-launch-notifier.ts:42",
@@ -51084,7 +51350,7 @@
     {
       "op": "process.exiting",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:73",
+      "site": "packages/keiko-cli/src/ui.ts:78",
       "package": "keiko-cli"
     },
     {
@@ -51096,13 +51362,13 @@
     {
       "op": "process.heartbeat",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:103",
+      "site": "packages/keiko-cli/src/ui.ts:108",
       "package": "keiko-cli"
     },
     {
       "op": "process.started",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:125",
+      "site": "packages/keiko-cli/src/ui.ts:130",
       "package": "keiko-cli"
     },
     {
@@ -51156,19 +51422,19 @@
     {
       "op": "support.analyze.classified",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/support.ts:750",
+      "site": "packages/keiko-cli/src/support.ts:965",
       "package": "keiko-cli"
     },
     {
       "op": "support.export.publication",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/support.ts:638",
+      "site": "packages/keiko-cli/src/support.ts:853",
       "package": "keiko-cli"
     },
     {
       "op": "update.runtime.legacy-import-deferred",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/ui.ts:219",
+      "site": "packages/keiko-cli/src/ui.ts:224",
       "package": "keiko-cli"
     },
     {
@@ -55095,10 +55361,18 @@
     "chat.response.streamed",
     "chat.send.rejected",
     "chat.turn.started",
+    "cli.audit.completed",
+    "cli.audit.failed",
+    "cli.audit.started",
+    "cli.install-layout.normalized",
     "cli.lifecycle.stop-escalated",
     "cli.lifecycle.stop-escalation-failed",
     "cli.lifecycle.stop-request-failed",
     "cli.lifecycle.stop-requested",
+    "cli.support.export.failed",
+    "cli.uninstall.completed",
+    "cli.uninstall.failed",
+    "cli.uninstall.started",
     "client.diagnostic",
     "client.diagnostic.rate-limited",
     "coding-app-session.channel.closed",

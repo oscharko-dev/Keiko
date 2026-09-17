@@ -836,6 +836,14 @@ describe("SettingsPanel gateway readiness checks", () => {
     const configured = chatCapability("test-chat-1");
     const updated = { ...configured, toolCalling: false };
     primeFetches([configured]);
+    let resolveCatalogRefresh:
+      ((value: { models: readonly ModelCapability[] }) => void) | undefined;
+    fetchModelsMock.mockResolvedValueOnce({ models: [configured] }).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveCatalogRefresh = resolve;
+        }),
+    );
     runGatewayReadinessMock.mockResolvedValue({
       modelId: "test-chat-1",
       checkedAt: "2026-08-02T08:00:00.000Z",
@@ -860,14 +868,18 @@ describe("SettingsPanel gateway readiness checks", () => {
     expect(await screen.findByTestId("capability-disagreements")).toHaveTextContent(
       /Tools: configured yes; verified no/i,
     );
+    await waitFor(() => {
+      expect(fetchModelsMock).toHaveBeenCalledTimes(2);
+    });
     fireEvent.click(screen.getByRole("button", { name: "Apply verified values" }));
     expect(
-      screen.getByRole("alertdialog", { name: "Apply verified model capabilities?" }),
+      await screen.findByRole("alertdialog", { name: "Apply verified model capabilities?" }),
     ).toBeInTheDocument();
     const readinessButton = screen.getByRole("button", { name: "Run readiness check" });
     readinessButton.focus();
     view.rerender(<SettingsPanel />);
     expect(screen.getByRole("button", { name: "Run readiness check" })).toHaveFocus();
+    resolveCatalogRefresh?.({ models: [configured] });
     fetchModelsMock.mockResolvedValue({ models: [updated] });
     fireEvent.click(await screen.findByRole("button", { name: "Apply values" }));
     await waitFor(() => {

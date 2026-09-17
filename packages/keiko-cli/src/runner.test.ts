@@ -1,8 +1,22 @@
 import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SDK_VERSION } from "@oscharko-dev/keiko-sdk";
+
+vi.mock("./lazy-modules.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./lazy-modules.js")>();
+  return {
+    ...actual,
+    loadServer: (): Promise<{
+      createFileServerLogSink: () => { write: () => void };
+    }> =>
+      Promise.resolve({
+        createFileServerLogSink: () => ({ write: (): void => undefined }),
+      }),
+  };
+});
+
 import { runCli, type CliIo } from "./runner.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));

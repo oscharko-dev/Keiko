@@ -30,7 +30,7 @@ export const REVIEWED_INSTALL_SCRIPTS = new Map([
   [
     "fsevents",
     {
-      versions: ["2.3.2", "2.3.3"],
+      version: "2.3.3",
       reason:
         "Transitive devDependency of playwright/vite for macOS file watching. npm registry " +
         "metadata marks its install action as `node-gyp rebuild`; the reviewed tarballs are " +

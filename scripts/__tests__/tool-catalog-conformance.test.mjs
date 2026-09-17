@@ -40,14 +40,22 @@ import {
   measureToolCatalogOverflowRejection,
   measureToolCatalogPerformance,
   measureToolCatalogPerformanceInFreshProcess,
+  recalibrateToolCatalogPerformance,
+  ratchetToolCatalogPerformanceBudgets,
   toolCatalogPerformanceBudgets,
+  TOOL_CATALOG_PERFORMANCE_FILES,
   TOOL_CATALOG_OVERFLOW_TOOL_COUNT,
   TOOL_CATALOG_SYNTHETIC_TOOL_COUNT,
   producerShippedSourceSha256,
   TOOL_CATALOG_REFERENCE_IMAGE,
   validateToolCatalogPerformanceSamples,
+  writeToolCatalogPerformanceCalibration,
+  writeToolCatalogPerformanceMeasurement,
 } from "../check-tool-catalog-performance.mjs";
-import { regenerateArguments } from "../regenerate-tool-catalog-perf-evidence.mjs";
+import {
+  regenerateArguments,
+  regenerateToolCatalogPerformanceEvidence,
+} from "../regenerate-tool-catalog-perf-evidence.mjs";
 import * as sharedNegativeFixture from "../../tests/architecture/fixtures/tool-catalog-negatives/_shared.mjs";
 
 const ROOT = process.cwd();
@@ -238,11 +246,70 @@ describe("compiler measurements reuse the existing sample and percentile convent
     const args = regenerateArguments("/repo-root");
     expect(args).toContain(TOOL_CATALOG_REFERENCE_IMAGE);
     expect(args).toContain(`KEIKO_TOOL_CATALOG_REFERENCE_IMAGE=${TOOL_CATALOG_REFERENCE_IMAGE}`);
-    expect(args.slice(-2)).toEqual([
-      "scripts/check-tool-catalog-performance.mjs",
-      "--write-reference",
-    ]);
     expect(args).toContain("/repo-root:/repo");
+    expect(args).toContain("linux/arm64");
+    expect(args.at(-1)).toContain("npm ci --ignore-scripts --no-audit --no-fund");
+    expect(args.at(-1)).toContain("npm run build:packages");
+    expect(args.at(-1)).toContain(
+      "node scripts/check-tool-catalog-performance.mjs --write-measurement",
+    );
+    expect(args.at(-1)).not.toContain("--recalibrate");
+  });
+
+  it("uses a clean disposable clone and copies only candidate evidence by default", () => {
+    const calls = [];
+    const copies = [];
+    const result = regenerateToolCatalogPerformanceEvidence({
+      status: () => "",
+      makeWorkdir: () => "/work",
+      run: (...args) => calls.push(args),
+      copyFile: (...args) => copies.push(args),
+    });
+
+    expect(calls[0]).toEqual([
+      "git",
+      ["clone", "--no-local", "--quiet", ROOT, "/work/repo.noindex"],
+    ]);
+    expect(calls[1][0]).toBe("docker");
+    expect(calls[1][1].at(-1)).toContain("--write-measurement");
+    expect(copies).toEqual([
+      [
+        "/work/repo.noindex/docs/release/3415-tool-catalog-perf-evidence.json",
+        join(ROOT, "docs/release/3415-tool-catalog-perf-evidence.json"),
+      ],
+    ]);
+    expect(result.recalibrate).toBe(false);
+  });
+
+  it("makes recalibration explicit, non-default, and copies all governed documents", () => {
+    const copies = [];
+    const args = regenerateArguments("/repo-root", { recalibrate: true });
+    expect(args.at(-1)).toContain("--recalibrate");
+    expect(args.at(-1)).toContain("--write-measurement");
+
+    regenerateToolCatalogPerformanceEvidence({
+      recalibrate: true,
+      status: () => "",
+      makeWorkdir: () => "/work",
+      run: () => undefined,
+      copyFile: (...values) => copies.push(values),
+    });
+    expect(copies.map((values) => values[1])).toEqual([
+      join(ROOT, "docs/release/3415-tool-catalog-calibration.json"),
+      join(ROOT, "scripts/tool-catalog-performance-budget.json"),
+      join(ROOT, "docs/release/3415-tool-catalog-perf-evidence.json"),
+    ]);
+  });
+
+  it("refuses to measure a working tree that the clean clone cannot reproduce", () => {
+    expect(() =>
+      regenerateToolCatalogPerformanceEvidence({
+        status: () => " M package-lock.json",
+        run: () => {
+          throw new TypeError("must not run");
+        },
+      }),
+    ).toThrow("tool-catalog measurement requires a clean working tree");
   });
 
   it("binds the performance subject to shipped producer source, not to its tests", () => {
@@ -312,12 +379,9 @@ describe("compiler measurements reuse the existing sample and percentile convent
   }, 45_000);
   it("isolates calibration and candidate measurements in separate fresh processes", async () => {
     const source = readFileSync(join(ROOT, "scripts/check-tool-catalog-performance.mjs"), "utf8");
-    expect(source).toContain(
-      "const calibrationRaw = await measureToolCatalogPerformanceInFreshProcess(root);",
-    );
-    expect(source).toContain(
-      "const measurementRaw = await measureToolCatalogPerformanceInFreshProcess(root);",
-    );
+    expect(source).toContain("measure: measureToolCatalogPerformanceInFreshProcess,");
+    expect(source.match(/const calibrationRaw = await deps\.measure\(root\);/gu)).toHaveLength(2);
+    expect(source).toContain("const measurementRaw = await deps.measure(root);");
 
     const evidence = await measureToolCatalogPerformanceInFreshProcess(ROOT);
     expect(evidence.environment).toEqual({
@@ -409,7 +473,21 @@ describe("compiler measurements reuse the existing sample and percentile convent
     alteredBudget.maximumP95Ms["legacy-native-6-tool"].coldCompileMs += 1;
     expect(
       evaluateToolCatalogPerformanceEvidence(withinBudget, calibration, alteredBudget).defects,
-    ).toEqual(["catalog performance budget differs from calibration"]);
+    ).toEqual(["legacy-native-6-tool coldCompileMs budget exceeds its reviewed ceiling"]);
+    const ratcheted = ratchetToolCatalogPerformanceBudgets(calibration, {
+      ...budget,
+      maximumP95Ms: {
+        ...budget.maximumP95Ms,
+        "legacy-native-6-tool": {
+          ...budget.maximumP95Ms["legacy-native-6-tool"],
+          coldCompileMs: budget.maximumP95Ms["legacy-native-6-tool"].coldCompileMs / 2,
+        },
+      },
+    });
+    expect(ratcheted.maximumP95Ms["legacy-native-6-tool"].coldCompileMs).toBe(
+      budget.maximumP95Ms["legacy-native-6-tool"].coldCompileMs / 2,
+    );
+    expect(ratcheted.ceilingP95Ms).toEqual(ratcheted.maximumP95Ms);
     const renamedRaw = structuredClone(calibrationRaw);
     renamedRaw.cases = {
       renamed: renamedRaw.cases["legacy-native-6-tool"],
@@ -453,9 +531,10 @@ describe("compiler measurements reuse the existing sample and percentile convent
       calibrationSha256: calibration.documentSha256,
       environment,
     });
-    expect(
-      evaluateToolCatalogPerformanceEvidence(sourceDrift, calibration, budget).defects,
-    ).toContain("catalog performance subject differs from calibration");
+    expect(evaluateToolCatalogPerformanceEvidence(sourceDrift, calibration, budget)).toEqual({
+      defects: [],
+      verdicts: [],
+    });
     const rulerDrift = buildToolCatalogPerformanceDocument(calibrationRaw, {
       role: "measurement",
       measuredAtIso: "2026-09-06T00:01:00.000Z",
@@ -465,7 +544,7 @@ describe("compiler measurements reuse the existing sample and percentile convent
     });
     expect(
       evaluateToolCatalogPerformanceEvidence(rulerDrift, calibration, budget).defects,
-    ).toContain("catalog performance subject differs from calibration");
+    ).toContain("catalog performance measurement ruler differs from calibration");
     const environmentDrift = buildToolCatalogPerformanceDocument(calibrationRaw, {
       role: "measurement",
       measuredAtIso: "2026-09-06T00:01:00.000Z",
@@ -494,6 +573,78 @@ describe("compiler measurements reuse the existing sample and percentile convent
       ],
       verdicts: [],
     });
+  }, 45_000);
+
+  it("writes, ratchets, and validates governed reference artifacts through hermetic dependencies", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-catalog-writer-"));
+    mkdirSync(join(root, "docs", "release"), { recursive: true });
+    mkdirSync(join(root, "scripts"), { recursive: true });
+    let clock = 0;
+    const raw = await measureToolCatalogPerformance(ROOT, () => ++clock);
+    const environment = {
+      platform: "linux",
+      architecture: "arm64",
+      nodeVersion: "v24.18.0",
+      logicalCores: 16,
+      totalMemoryBytes: 24_000_000_000,
+      containerImage: TOOL_CATALOG_REFERENCE_IMAGE,
+    };
+    let rulerDigest = "a".repeat(64);
+    let measuredAtIso = "2026-09-06T00:00:00.000Z";
+    const dependencies = {
+      environment: () => environment,
+      measure: async () => structuredClone(raw),
+      now: () => measuredAtIso,
+      rulerDigest: () => rulerDigest,
+    };
+    try {
+      const initial = await writeToolCatalogPerformanceCalibration(root, dependencies);
+      await expect(writeToolCatalogPerformanceCalibration(root, dependencies)).rejects.toThrow(
+        "catalog calibration is immutable",
+      );
+
+      rulerDigest = "b".repeat(64);
+      measuredAtIso = "2026-09-06T00:01:00.000Z";
+      const recalibrated = await recalibrateToolCatalogPerformance(root, dependencies);
+      expect(recalibrated.budget.maximumP95Ms).toEqual(initial.budget.maximumP95Ms);
+
+      measuredAtIso = "2026-09-06T00:02:00.000Z";
+      await expect(
+        writeToolCatalogPerformanceMeasurement(root, {
+          ...dependencies,
+          environment: () => ({ ...environment, totalMemoryBytes: 1 }),
+        }),
+      ).rejects.toThrow("catalog performance environment differs from calibration");
+      const candidate = await writeToolCatalogPerformanceMeasurement(root, dependencies);
+      expect(candidate.result).toEqual({ defects: [], verdicts: [] });
+
+      await expect(
+        recalibrateToolCatalogPerformance(root, {
+          ...dependencies,
+          environment: () => ({ ...environment, totalMemoryBytes: 1 }),
+        }),
+      ).rejects.toThrow("catalog recalibration reference environment differs");
+
+      const identityDrift = structuredClone(raw);
+      for (const sample of identityDrift.cases["legacy-native-6-tool"].samples)
+        sample.projectionDigest = "f".repeat(64);
+      await expect(
+        recalibrateToolCatalogPerformance(root, {
+          ...dependencies,
+          measure: async () => identityDrift,
+        }),
+      ).rejects.toThrow("legacy-native-6-tool case identity differs from calibration");
+
+      const budgetPath = join(root, TOOL_CATALOG_PERFORMANCE_FILES.budget);
+      const invalidBudget = JSON.parse(readFileSync(budgetPath, "utf8"));
+      invalidBudget.maximumP95Ms["legacy-native-6-tool"].coldCompileMs += 1;
+      writeFileSync(budgetPath, `${JSON.stringify(invalidBudget, null, 2)}\n`);
+      await expect(recalibrateToolCatalogPerformance(root, dependencies)).rejects.toThrow(
+        "budget exceeds its reviewed ceiling",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   }, 45_000);
 });
 describe("#3415 catalog-semantic negative-fixture matrix", () => {

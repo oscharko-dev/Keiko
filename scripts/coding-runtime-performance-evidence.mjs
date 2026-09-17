@@ -248,13 +248,59 @@ export function calibrationBudgets(calibration) {
   };
 }
 
+export function validateCodingPerformanceBudget(budget) {
+  exact(
+    budget,
+    ["schemaVersion", "target", "policy", "calibrationSha256", "maximumP95Ms"],
+    "budget",
+  );
+  assert(
+    budget.schemaVersion === 1 && budget.target === "coding-runtime",
+    "invalid budget version or target",
+  );
+  assert(budget.policy === CODING_PERFORMANCE_BUDGET_POLICY, "invalid budget policy");
+  assert(SHA256.test(budget.calibrationSha256), "invalid budget calibration binding");
+  exact(budget.maximumP95Ms, CODING_PERFORMANCE_METRICS, "budget metrics");
+  for (const metric of CODING_PERFORMANCE_METRICS) {
+    positive(budget.maximumP95Ms[metric], "budget ceiling");
+  }
+}
+
+export function codingPerformanceBudgetDefects(calibration, budget) {
+  try {
+    validateDocument(calibration);
+    assert(calibration.role === "calibration", "budget requires calibration evidence");
+    validateCodingPerformanceBudget(budget);
+    const derived = calibrationBudgets(calibration);
+    const defects = [];
+    if (calibration.documentSha256 !== budget.calibrationSha256)
+      defects.push("calibration anchor differs from reviewed budget");
+    for (const metric of CODING_PERFORMANCE_METRICS) {
+      if (budget.maximumP95Ms[metric] > derived.maximumP95Ms[metric])
+        defects.push(`${metric} budget exceeds its calibrated ceiling`);
+    }
+    return defects;
+  } catch (error) {
+    return [error instanceof TypeError ? error.message : "invalid performance budget"];
+  }
+}
+
+export function ratchetCodingPerformanceBudgets(calibration, previousBudget) {
+  validateCodingPerformanceBudget(previousBudget);
+  const next = calibrationBudgets(calibration);
+  for (const metric of CODING_PERFORMANCE_METRICS) {
+    next.maximumP95Ms[metric] = Math.min(
+      next.maximumP95Ms[metric],
+      previousBudget.maximumP95Ms[metric],
+    );
+  }
+  return next;
+}
+
 function validatePair(evidence, calibration, budget, defects) {
   if (evidence.role !== "measurement" || calibration.role !== "calibration")
     defects.push("evidence roles differ");
-  if (calibration.documentSha256 !== budget.calibrationSha256)
-    defects.push("calibration anchor differs from reviewed budget");
-  if (!isDeepStrictEqual(budget, calibrationBudgets(calibration)))
-    defects.push("budgets differ from measured calibration");
+  defects.push(...codingPerformanceBudgetDefects(calibration, budget));
   if (evidence.calibrationSha256 !== calibration.documentSha256)
     defects.push("measurement calibration binding differs");
   if (evidence.measurementHarnessSha256 !== calibration.measurementHarnessSha256)
@@ -277,7 +323,7 @@ export function evaluateCodingPerformanceEvidence(evidence, calibration, budget)
   // A valid slow sample is evidence, not a producer failure. Integrity defects remain separate
   // discriminants and cannot be downgraded by resembling a performance-verdict message.
   for (const metric of CODING_PERFORMANCE_METRICS) {
-    if (evidence.aggregates[metric].p95 > calibrationBudgets(calibration).maximumP95Ms[metric]) {
+    if (evidence.aggregates[metric].p95 > budget.maximumP95Ms[metric]) {
       verdicts.push(`${metric} exceeds the calibrated p95 budget`);
     }
   }

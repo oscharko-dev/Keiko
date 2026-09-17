@@ -1,8 +1,126 @@
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 
 const ROOT_PACKAGE_NAME = "@oscharko-dev/keiko";
+export const INSTALL_LAYOUT_OVERRIDES_ENV = "KEIKO_INSTALL_LAYOUT_OVERRIDES";
+export const INSTALL_LAYOUT_CORRELATION_ID_ENV = "KEIKO_INSTALL_LAYOUT_CORRELATION_ID";
+
+const INSTALL_LAYOUT_OVERRIDE_KINDS = ["cli-bin", "ui-static-root", "local-state-auditor"] as const;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
+export type InstallLayoutOverrideKind = (typeof INSTALL_LAYOUT_OVERRIDE_KINDS)[number];
+
+export interface AuthoritativeInstallLayout {
+  readonly cliBinPath: string;
+  readonly uiStaticRoot: string;
+  readonly localStateAuditor: string;
+}
+
+export interface InstallLayoutOverrideEvidence {
+  readonly correlationId: string;
+  readonly overriddenKinds: readonly InstallLayoutOverrideKind[];
+}
+
+interface InstallLayoutEvidenceSink {
+  readonly write: (event: {
+    readonly level: "info";
+    readonly category: "diagnostic";
+    readonly op: string;
+    readonly correlationId: string;
+    readonly extra: Readonly<Record<string, unknown>>;
+  }) => void;
+}
+
+type InstallLayoutEvidenceSinkFactory = (stateDir: string) => InstallLayoutEvidenceSink;
+
+interface InstallLayoutEntry {
+  readonly envName: string;
+  readonly kind: InstallLayoutOverrideKind;
+  readonly value: string;
+}
+
+function installLayoutEntries(layout: AuthoritativeInstallLayout): readonly InstallLayoutEntry[] {
+  return [
+    { envName: "KEIKO_CLI_BIN_PATH", kind: "cli-bin", value: layout.cliBinPath },
+    { envName: "KEIKO_UI_STATIC_ROOT", kind: "ui-static-root", value: layout.uiStaticRoot },
+    {
+      envName: "KEIKO_LOCAL_STATE_AUDITOR",
+      kind: "local-state-auditor",
+      value: layout.localStateAuditor,
+    },
+  ];
+}
+
+export function installLayoutOverrideEvidence(
+  env: EnvSource,
+): InstallLayoutOverrideEvidence | undefined {
+  const correlationId = env[INSTALL_LAYOUT_CORRELATION_ID_ENV];
+  const rawKinds = env[INSTALL_LAYOUT_OVERRIDES_ENV]?.split(",") ?? [];
+  if (correlationId === undefined || !UUID.test(correlationId) || rawKinds.length === 0) {
+    return undefined;
+  }
+  const requested = new Set(rawKinds);
+  const overriddenKinds = INSTALL_LAYOUT_OVERRIDE_KINDS.filter((kind) => requested.has(kind));
+  if (requested.size !== rawKinds.length || overriddenKinds.length !== requested.size) {
+    return undefined;
+  }
+  return { correlationId, overriddenKinds };
+}
+
+export function writeInstallLayoutOverrideEvidence(
+  sink: InstallLayoutEvidenceSink | undefined,
+  env: EnvSource,
+): boolean {
+  const evidence = installLayoutOverrideEvidence(env);
+  if (sink === undefined || evidence === undefined) return false;
+  sink.write({
+    level: "info",
+    category: "diagnostic",
+    op: "cli.install-layout.normalized",
+    correlationId: evidence.correlationId,
+    extra: {
+      overriddenCount: evidence.overriddenKinds.length,
+      overriddenKinds: evidence.overriddenKinds,
+    },
+  });
+  Reflect.deleteProperty(env, INSTALL_LAYOUT_OVERRIDES_ENV);
+  Reflect.deleteProperty(env, INSTALL_LAYOUT_CORRELATION_ID_ENV);
+  return true;
+}
+
+export function writeInstallLayoutOverrideEvidenceWithFactory(
+  factory: InstallLayoutEvidenceSinkFactory | undefined,
+  stateDir: string,
+  env: EnvSource,
+): boolean {
+  if (factory === undefined || installLayoutOverrideEvidence(env) === undefined) return false;
+  return writeInstallLayoutOverrideEvidence(factory(stateDir), env);
+}
+
+export function applyAuthoritativeInstallLayout(
+  env: NodeJS.ProcessEnv,
+  layout: AuthoritativeInstallLayout,
+): void {
+  const entries = installLayoutEntries(layout);
+  const inherited = entries.every((entry) => env[entry.envName] === entry.value)
+    ? installLayoutOverrideEvidence(env)
+    : undefined;
+  const overriddenKinds =
+    inherited?.overriddenKinds ??
+    entries
+      .filter((entry) => env[entry.envName] !== undefined && env[entry.envName] !== entry.value)
+      .map((entry) => entry.kind);
+  for (const entry of entries) env[entry.envName] = entry.value;
+  if (overriddenKinds.length === 0) {
+    Reflect.deleteProperty(env, INSTALL_LAYOUT_OVERRIDES_ENV);
+    Reflect.deleteProperty(env, INSTALL_LAYOUT_CORRELATION_ID_ENV);
+    return;
+  }
+  env[INSTALL_LAYOUT_OVERRIDES_ENV] = overriddenKinds.join(",");
+  env[INSTALL_LAYOUT_CORRELATION_ID_ENV] = inherited?.correlationId ?? randomUUID();
+}
 
 export interface PreferredInstallLayout {
   readonly binPath: string;

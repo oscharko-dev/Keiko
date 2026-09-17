@@ -40,7 +40,11 @@ import type {
   UpdateStartupRecoveryPort,
 } from "@oscharko-dev/keiko-server";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import { resolvePreferredInstallLayout } from "./install-layout.js";
+import {
+  resolvePreferredInstallLayout,
+  writeInstallLayoutOverrideEvidence,
+  writeInstallLayoutOverrideEvidenceWithFactory,
+} from "./install-layout.js";
 // GEN-PERF-CLI-001 — the server module graph (routes, local-knowledge/sqlite wiring,
 // ws, …) loads on FIRST USE, not when this module is parsed. The CLI barrel evaluates
 // ui.ts on every `keiko` invocation, and this one eager import accounted for most of
@@ -49,6 +53,7 @@ import { resolvePreferredInstallLayout } from "./install-layout.js";
 import { loadServer as loadServerModule } from "./lazy-modules.js";
 import { processFatalActivityLogEvent } from "./process-activity-log.js";
 import type { CliIo } from "./runner.js";
+import type { CliSecurityLogSinkFactory } from "./security-log.js";
 import {
   defaultUiDataDir,
   isKeikoUiLaunchId,
@@ -312,6 +317,7 @@ export interface UiCliDeps {
   // here lets a test assert on the lifecycle events without loading the real server module graph
   // or writing outside its own fixture.
   readonly activityLog?: ServerLogSink | undefined;
+  readonly activityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
   // Test seam for `process.started`'s install-mode probe (ADR-0173). On the real CLI launch path
   // this defaults to the real filesystem-based detector; injecting an override here — including
   // one that throws — drives `probeInstallModeKind`'s try/catch contract through `runUiCli` itself
@@ -1647,18 +1653,6 @@ async function launchUiFromDeps(
   deps: UiCliDeps,
 ): Promise<number> {
   const stateDir = resolveRuntimeStateDir(cwd, effectiveEnv);
-  // process-guards.ts's fatal-crash handler is installed before any CLI parsing happens and reads
-  // the REAL process.env directly (it cannot receive this value any other way) -- without this
-  // assignment, a direct `keiko ui` launch (no --state-dir / KEIKO_STATE_DIR from the operator)
-  // never has process.env.KEIKO_STATE_DIR set, so a crash inside startUiServer/the real server
-  // factory below writes only the generic stderr line and silently drops the structured
-  // process.fatal record. Mirrors what lifecycle.ts's spawnUiProcess already gives the CHILD
-  // `keiko ui` process for free. Gated on the same "real launch" condition `startUiServer`
-  // computes (`deps.createServer === undefined`) so injected-server unit tests never mutate the
-  // real process.env.
-  if (deps.createServer === undefined) {
-    process.env.KEIKO_STATE_DIR = stateDir;
-  }
   // Captured from the ORIGINAL env, before `withDefaultLocalRuntimeStateEnv` unconditionally sets
   // `KEIKO_STATE_DIR` on the derived copy below — otherwise every launch would read back as
   // `env-override` regardless of what the operator actually configured.
@@ -1717,6 +1711,7 @@ export async function runUiCli(
   if (typeof parsed === "number") return parsed;
   const reExec = await maybeReExecForSqlite(effectiveEnv, deps, cwd);
   if (reExec !== undefined) return reExec;
+  prepareUiInstallLayoutEvidence(cwd, effectiveEnv, deps);
   const staticRoot = deps.staticRoot ?? defaultStaticRoot(cwd);
   if (!ensureStaticRoot(staticRoot, io)) {
     return 1;
@@ -1744,4 +1739,16 @@ export async function runUiCli(
   } finally {
     cspRuntime.dispose();
   }
+}
+
+function prepareUiInstallLayoutEvidence(cwd: string, env: EnvSource, deps: UiCliDeps): void {
+  const stateDir = resolveRuntimeStateDir(cwd, env);
+  // Persist normalization before static-export and CSP reads can fail. The process-level fatal
+  // guard consumes the same resolved path on a real launch.
+  if (deps.createServer === undefined) process.env.KEIKO_STATE_DIR = stateDir;
+  if (deps.activityLog !== undefined) {
+    writeInstallLayoutOverrideEvidence(deps.activityLog, env);
+    return;
+  }
+  writeInstallLayoutOverrideEvidenceWithFactory(deps.activityLogSinkFactory, stateDir, env);
 }

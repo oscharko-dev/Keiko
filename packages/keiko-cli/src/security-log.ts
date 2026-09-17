@@ -348,9 +348,9 @@ export function emitCliWindowsSystemFailure(
 export function createCliSecurityLogSink(
   stateDir: string,
   factory: CliSecurityLogSinkFactory | undefined,
+  invocationCorrelationId: string = randomUUID(),
 ): SecurityLogSink | undefined {
   if (factory === undefined) return undefined;
-  const correlationId = randomUUID();
   let downstream: SecurityLogSink | undefined;
   return {
     write(event: SecurityLogEvent): void {
@@ -359,7 +359,7 @@ export function createCliSecurityLogSink(
       // eagerly creating `<stateDir>/logs` here would run before those fail-closed checks and would
       // also mutate an otherwise read-only command that emits nothing.
       downstream ??= factory(stateDir);
-      const forwarded = { ...event, correlationId };
+      const forwarded = { ...event, correlationId: invocationCorrelationId };
       const registration = activityLogEventRegistration(event);
       if (registration !== undefined) {
         Object.defineProperty(forwarded, ACTIVITY_LOG_EVENT_REGISTRATION, {

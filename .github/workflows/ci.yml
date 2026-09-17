@@ -127,6 +127,8 @@ jobs:
       contents: read
     outputs:
       documentation-only: ${{ steps.classify.outputs.documentation-only }}
+      windows-relevant: ${{ steps.classify.outputs.windows-relevant }}
+      cross-platform-os: ${{ steps.classify.outputs.cross-platform-os }}
     steps:
       # The classifier decides whether the cross-platform matrix runs, so a pull request must not be
       # able to edit its own classifier and suppress the native install checks (CWE-807). The code
@@ -148,9 +150,29 @@ jobs:
           set -euo pipefail
           if [ -f scripts/check-documentation-only-change.mjs ]; then
             node scripts/check-documentation-only-change.mjs
+            missing_windows_relevant=false
+            missing_cross_platform_os=false
+            if ! grep -q '^windows-relevant=' "${GITHUB_OUTPUT}"; then
+              missing_windows_relevant=true
+            fi
+            if ! grep -q '^cross-platform-os=' "${GITHUB_OUTPUT}"; then
+              missing_cross_platform_os=true
+            fi
+            {
+              if [[ "${missing_windows_relevant}" == "true" ]]; then
+                echo "windows-relevant=true"
+              fi
+              if [[ "${missing_cross_platform_os}" == "true" ]]; then
+                echo 'cross-platform-os=["ubuntu-latest","macos-latest","windows-latest"]'
+              fi
+            } >> "${GITHUB_OUTPUT}"
           else
             echo "documentation-only-change: false — the base revision has no classifier yet"
-            echo "documentation-only=false" >> "${GITHUB_OUTPUT}"
+            {
+              echo "documentation-only=false"
+              echo "windows-relevant=true"
+              echo 'cross-platform-os=["ubuntu-latest","macos-latest","windows-latest"]'
+            } >> "${GITHUB_OUTPUT}"
           fi
 
   # Zero-tolerance semantic-clone gate. Fallow compares only files changed since the immutable
@@ -582,9 +604,9 @@ jobs:
           # `--outputFile.blob` destroys: a set output path wins verbatim, so all three shards write
           # the one same file and `merge-multiple` keeps only the last of them -- two thirds of the
           # measurement, silently. The shard script therefore passes no output path and this follows
-          # the reporter default, which vitest 5 moved to `.vitest/blob` (PR #3452). `.vitest` is a
-          # dot directory and upload-artifact skips those unless told otherwise.
-          path: .vitest/blob/
+          # the reporter default. Vitest 4 writes `.vitest-reports`; the temporary Vitest 5 line
+          # used `.vitest/blob`, so this path is deliberately pinned to the governed major.
+          path: .vitest-reports/
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
@@ -803,7 +825,7 @@ jobs:
           # `test:coverage:packages:merge` composes locally too, with no artifact relocation. Named
           # rather than pinned through `--outputFile.blob`: an explicit output path would collapse
           # the three per-shard blob names into one.
-          path: .vitest/blob
+          path: .vitest-reports
           pattern: coverage-blob-packages-*
           merge-multiple: true
       - name: Download keiko-ui coverage evidence
@@ -827,7 +849,7 @@ jobs:
         run: |
           set -euo pipefail
           expected=3
-          actual=$(find .vitest/blob -maxdepth 1 -name 'blob-*.json' -type f | wc -l | tr -d ' ')
+          actual=$(find .vitest-reports -maxdepth 1 -name 'blob-*.json' -type f | wc -l | tr -d ' ')
           if [ "$actual" -ne "$expected" ]; then
             echo "Expected $expected package coverage shard blobs, found $actual."
             echo "A merge over a partial shard set would under-report every per-file floor."
@@ -856,7 +878,7 @@ jobs:
         # closed (PR #3452). Removing them keeps the approved analysis scope untouched -- widening
         # `sonar.exclusions` would move a reviewed scope pin to hide a file that simply has no
         # business being there once the merge has run.
-        run: rm -rf .vitest
+        run: rm -rf .vitest-reports
       - name: Coverage quality gates
         if: ${{ github.event_name != 'pull_request' || github.base_ref != 'feat/keiko-editor' }}
         run: npm run check:coverage:quality
@@ -1162,14 +1184,13 @@ jobs:
     # skip this matrix. The aggregate still fails closed on the classifier failure; running the matrix
     # preserves diagnostic evidence instead of hiding a second defect behind the first one.
     if: ${{ always() && needs.change-scope.outputs.documentation-only != 'true' }}
-    # The Node.js 24 baseline must execute, typecheck, build, and install on every supported desktop
-    # OS. The complete hermetic suite remains in the Linux `ci` job because many security fixtures
-    # intentionally model POSIX paths, Bash, and symlinks. Keep fail-fast:false so one platform
-    # result never masks another.
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        # Windows is part of the same full release proof as Linux and macOS. The matrix omits only
+        # the Windows leg for PRs that the trusted base-revision classifier has positively identified
+        # as non-Windows-relevant. Every non-PR event receives the full fail-open matrix.
+        os: ${{ fromJSON(needs.change-scope.outputs.cross-platform-os) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     permissions:
@@ -1189,74 +1210,12 @@ jobs:
           KEIKO_CANDIDATE_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           KEIKO_CANDIDATE_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: node scripts/check-ci-merge-candidate.mjs
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
-        if: runner.os == 'Windows'
-        with:
-          dotnet-version: "8.0.x"
       - name: Verify governed Node.js and npm toolchain
         run: node scripts/check-runtime-toolchain.mjs --exact
       - run: npm ci --ignore-scripts
-      # The spawn smoke imports `packages/keiko-tools/src/windows-shell.ts` as SOURCE (Node type
-      # stripping) so the escaping it exercises cannot drift from what ships. That source now
-      # imports the shared trusted-System32 resolver from @oscharko-dev/keiko-security, which
-      # resolves through node_modules to that package's BUILT dist — absent after a bare
-      # `npm ci --ignore-scripts`. Building the packages first is what makes the source-import
-      # strategy hold; without it the smoke dies with ERR_MODULE_NOT_FOUND before testing anything.
-      - name: Build packages for the Windows smokes
-        if: runner.os == 'Windows'
-        timeout-minutes: 20
-        run: npm run build:packages
-      - name: Verify the Windows portable handoff protocol fixture
-        # KHP v3 uses Windows path semantics. Run the full plan suite on a genuine Windows host so
-        # its native-consumer golden bytes cannot remain covered only by a skipped cross-host case.
-        if: runner.os == 'Windows'
-        run: node node_modules/vitest/vitest.mjs run packages/keiko-server/src/update-portable-handoff-plan.test.ts packages/keiko-server/src/update-portable-handoff-receipts.test.ts
-      - name: Verify Git executable Windows reparse containment
-        # Direct execution is deliberate: Vitest exits zero when every selected test is skipped.
-        # This smoke asserts the real host is Win32, creates a genuine directory junction, and calls
-        # the production resolver, so the required Windows lane cannot pass without executing it.
-        if: runner.os == 'Windows'
-        run: node scripts/__tests__/windows-git-reparse-smoke.mjs
-      - name: Smoke the Windows command spawn wrapper
-        # #3350: on modern Node a `.cmd`/`.bat` target spawned with shell:false raises EINVAL, so
-        # every agent `npm`/`npx` call would fail. This exercises the real cmd.exe wrapper against
-        # an adversarial argument matrix on genuine Windows — the one place the escaping is proven
-        # against the OS rather than against golden vectors. Needs no MSVC, so it runs here.
-        if: runner.os == 'Windows'
-        timeout-minutes: 10
-        run: node scripts/__tests__/windows-cmd-spawn-smoke.mjs
-      - name: Configure MSVC for native quality analysis
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
-          $installation = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-          if (-not $installation) { throw "Visual Studio C++ tools were not found" }
-          $vcvars = Join-Path $installation "VC/Auxiliary/Build/vcvars64.bat"
-          $vcvarsWrapper = Join-Path $env:RUNNER_TEMP "keiko-vcvars-env.cmd"
-          Set-Content -LiteralPath $vcvarsWrapper -Encoding ascii -Value "@call `"$vcvars`" >nul`r`n@set"
-          $environment = & cmd.exe /d /c $vcvarsWrapper
-          if ($LASTEXITCODE -ne 0) { throw "MSVC environment initialization failed" }
-          foreach ($name in @("PATH", "INCLUDE", "LIB", "LIBPATH")) {
-            $line = $environment | Where-Object { $_ -match "^$name=" } | Select-Object -First 1
-            if (-not $line) { throw "MSVC environment did not define $name" }
-            $line | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          }
       - name: Verify productive native sources on macOS
         if: runner.os == 'macOS'
         run: npm run check:native:macos
-      - name: Verify productive native sources on Windows
-        if: runner.os == 'Windows'
-        run: npm run check:native:windows
-      - name: Smoke the Windows setup bootstrap
-        # #2992: build the real Keiko-owned native setup bootstrap (MSVC-compiled, archive appended
-        # as a hash-bound overlay) and exercise the actual install-command path — fresh install,
-        # existing-install revalidation, launch-failure, a tampered/truncated overlay, and the
-        # adversarial argument matrix that proves the closed `/quiet`-only allowlist rejects every
-        # `/C:`-style override. Runs after MSVC configuration because it compiles the C stub.
-        if: runner.os == 'Windows'
-        timeout-minutes: 20
-        run: node scripts/__tests__/windows-setup-bootstrap-smoke.mjs
       - name: Setup Linux sandbox isolation
         if: runner.os == 'Linux'
         uses: ./.github/actions/setup-sandbox-isolation
@@ -1288,6 +1247,54 @@ jobs:
         env:
           KEIKO_SMOKE_PACK_IGNORE_SCRIPTS: "1"
         run: npm run smoke:install:optional
+      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        if: runner.os == 'Windows'
+        with:
+          dotnet-version: "8.0.x"
+      - name: Verify the Windows portable handoff protocol fixture
+        if: runner.os == 'Windows'
+        # KHP v3 uses Windows path semantics. Run the full plan suite on a genuine Windows host so
+        # its native-consumer golden bytes cannot remain covered only by a skipped cross-host case.
+        run: node node_modules/vitest/vitest.mjs run packages/keiko-server/src/update-portable-handoff-plan.test.ts packages/keiko-server/src/update-portable-handoff-receipts.test.ts
+      - name: Verify Git executable Windows reparse containment
+        if: runner.os == 'Windows'
+        # Direct execution is deliberate: Vitest exits zero when every selected test is skipped.
+        # This smoke asserts the real host is Win32, creates a genuine directory junction, and calls
+        # the production resolver, so the required Windows lane cannot pass without executing it.
+        run: node scripts/__tests__/windows-git-reparse-smoke.mjs
+      - name: Smoke the Windows command spawn wrapper
+        if: runner.os == 'Windows'
+        # #3350: on modern Node a `.cmd`/`.bat` target spawned with shell:false raises EINVAL, so
+        # every agent `npm`/`npx` call would fail. This exercises the real cmd.exe wrapper against
+        # an adversarial argument matrix on genuine Windows.
+        timeout-minutes: 10
+        run: node scripts/__tests__/windows-cmd-spawn-smoke.mjs
+      - name: Configure MSVC for native quality analysis
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio/Installer/vswhere.exe"
+          $installation = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $installation) { throw "Visual Studio C++ tools were not found" }
+          $vcvars = Join-Path $installation "VC/Auxiliary/Build/vcvars64.bat"
+          $vcvarsWrapper = Join-Path $env:RUNNER_TEMP "keiko-vcvars-env.cmd"
+          Set-Content -LiteralPath $vcvarsWrapper -Encoding ascii -Value "@call `"$vcvars`" >nul`r`n@set"
+          $environment = & cmd.exe /d /c $vcvarsWrapper
+          if ($LASTEXITCODE -ne 0) { throw "MSVC environment initialization failed" }
+          foreach ($name in @("PATH", "INCLUDE", "LIB", "LIBPATH")) {
+            $line = $environment | Where-Object { $_ -match "^$name=" } | Select-Object -First 1
+            if (-not $line) { throw "MSVC environment did not define $name" }
+            $line | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          }
+      - name: Verify productive native sources on Windows
+        if: runner.os == 'Windows'
+        run: npm run check:native:windows
+      - name: Smoke the Windows setup bootstrap
+        if: runner.os == 'Windows'
+        # #2992: build the real Keiko-owned native setup bootstrap and exercise fresh install,
+        # existing-install revalidation, launch failure, tamper rejection, and adversarial arguments.
+        timeout-minutes: 20
+        run: node scripts/__tests__/windows-setup-bootstrap-smoke.mjs
 
   node-26-compatibility:
     name: Node 26 compatibility
@@ -1380,6 +1387,29 @@ jobs:
         uses: ./.github/actions/setup-sandbox-isolation
       - name: Build internal packages so contracts dist resolves for UI tsc
         run: npm run build:packages
+      # Provenance checks are deterministic and do not need browsers. Keep them before audits,
+      # lint, UI compilation, and every E2E so stale evidence fails in minutes rather than after
+      # the complete Chromium/Firefox/WebKit sequence.
+      - name: Validate tool-catalog performance evidence
+        run: npm run check:tool-catalog-performance
+      - name: Validate immutable editor D12 performance evidence
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+        env:
+          KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: npm run check:perf-evidence:editor
+      - name: Validate workspace performance evidence freshness
+        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+        env:
+          KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: npm run check:perf-evidence:workspace
+      - name: Validate coding runtime performance evidence
+        if: >-
+          hashFiles('docs/release/2952-coding-runtime-calibration.json',
+          'docs/release/2952-coding-runtime-perf-evidence.json',
+          'scripts/coding-runtime-performance-budget.json') != ''
+        env:
+          KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+        run: npm run check:perf-evidence:coding-runtime
       - name: Security audit UI dependencies (moderate and above)
         # Same shipped-graph scope as the audit in the build job; the UI's dev toolchain (eslint,
         # next lint plugins) is not part of the static export this job builds.
@@ -1461,43 +1491,6 @@ jobs:
         run: |
           rm -f docs/release/1580-workspace-perf-evidence.json
           npm run test:e2e:workspace-perf
-      # The editor document is the immutable D12 baseline/candidate comparison measured on the PR
-      # candidate. Its source-tree and toolchain bindings (ADR-0139 D2: measured surfaces only)
-      # make it valid across the signed squash and across merge-queue integration.
-      - name: Validate immutable editor D12 performance evidence
-        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
-        # The base ref scopes the measurement-toolchain freshness check to diffs that actually move
-        # the ruler. Integrity, budgets and the pinned-baseline anchor are checked unconditionally;
-        # only the "was this measured with the current toolchain" question is the responsibility of
-        # the change that altered it, not of every other open pull request (ADR-0139 D10).
-        env:
-          # merge_group carries no pull_request payload; its base sha lives under merge_group.
-          # Without this the merge queue would see an empty base ref, fall back to evaluating the
-          # digest unconditionally, and reintroduce exactly the cross-PR blocking this removes.
-          KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-        run: npm run check:perf-evidence:editor
-      # The post-push workspace browser run above remains the runtime-regression detector. This
-      # deterministic check is intentionally narrower: it validates the committed document's
-      # provenance and makes a workspace measurement-ruler change carry its own re-measurement.
-      - name: Validate workspace performance evidence freshness
-        if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
-        env:
-          KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-        run: npm run check:perf-evidence:workspace
-      # Coding-runtime samples are produced only on the declared native reference host.
-      # Hosted CI checks their closed schema, derived budgets and measurement-toolchain binding.
-      # The #2952 calibration/measurement/budget documents are not committed yet, so this step
-      # would fail every run before that evidence lands; gate it on the documents' presence the
-      # same way the sibling editor/workspace steps are gated on their event, and wire it
-      # unconditionally once #2952 commits the evidence.
-      - name: Validate coding runtime performance evidence
-        if: >-
-          hashFiles('docs/release/2952-coding-runtime-calibration.json',
-          'docs/release/2952-coding-runtime-perf-evidence.json',
-          'scripts/coding-runtime-performance-budget.json') != ''
-        env:
-          KEIKO_PERF_EVIDENCE_BASE_REF: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-        run: npm run check:perf-evidence:coding-runtime
       - name: Performance evidence freshness + budget gate
         if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}
         run: npm run check:perf-evidence

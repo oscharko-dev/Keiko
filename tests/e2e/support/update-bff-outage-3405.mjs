@@ -1,11 +1,17 @@
 #!/usr/bin/env node
 
-import { runUiCli } from "../../../packages/keiko-cli/dist/index.js";
+import { runCli, runUiCli } from "../../../packages/keiko-cli/dist/index.js";
 import { buildUiHandlerDeps } from "../../../packages/keiko-server/dist/index.js";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 
 const PACKAGE_NAME = "@oscharko-dev/keiko";
 const FIXTURE_INSTALL_ROOT = `/usr/local/lib/node_modules/${PACKAGE_NAME}`;
+const LIFECYCLE_COMMANDS = new Set(["start", "stop", "restart"]);
+
+const io = {
+  out: (text) => process.stdout.write(text),
+  err: (text) => process.stderr.write(text),
+};
 
 function nextPatchVersion(version) {
   const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/u.exec(version);
@@ -126,18 +132,21 @@ function createHarnessHandlerDeps(options) {
   };
 }
 
-if (process.env.KEIKO_E2E_UPDATE_OUTAGE !== "1" || process.argv[2] !== "ui") {
+const command = process.argv[2];
+if (
+  process.env.KEIKO_E2E_UPDATE_OUTAGE !== "1" ||
+  (command !== "ui" && !LIFECYCLE_COMMANDS.has(command))
+) {
   process.stderr.write("update-bff-outage-3405: refused unsupported invocation\n");
   process.exitCode = 2;
+} else if (command !== "ui") {
+  // Run the compiled production lifecycle directly so its controlled re-exec can target this
+  // fixture. The root package bin deliberately normalizes inherited install paths and therefore
+  // cannot serve as an injection seam for this real-BFF outage journey.
+  process.exitCode = await runCli(process.argv.slice(2), io, process.env);
 } else {
   process.stdout.write("KEIKO_E2E_UPDATE_OUTAGE_BFF\n");
-  process.exitCode = await runUiCli(
-    process.argv.slice(3),
-    {
-      out: (text) => process.stdout.write(text),
-      err: (text) => process.stderr.write(text),
-    },
-    process.env,
-    { buildHandlerDeps: createHarnessHandlerDeps },
-  );
+  process.exitCode = await runUiCli(process.argv.slice(3), io, process.env, {
+    buildHandlerDeps: createHarnessHandlerDeps,
+  });
 }

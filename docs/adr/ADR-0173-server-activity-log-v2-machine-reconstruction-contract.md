@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted (Epic #3233, Wave 6 closeout, 2026-08-22).
+Accepted (Epic #3233, Wave 6 closeout, 2026-08-22). Amended 2026-09-17 to define
+the durable CLI control-state boundary for commands that audit or remove runtime state.
 
 Drafted in Wave 1 alongside the envelope's ordering primitive (`seq`) and the minimal exporter/
 analyzer, and finalized here once all seven waves of the epic had landed: envelope v2 (D1–D2),
@@ -170,6 +171,39 @@ process lifetime. Cross-process causality, when it ever matters, is established 
 This limit is stated here rather than discovered later because the alternative considered — a
 pre-ordering heuristic that guesses order from timestamps and file-append position — would have
 papered over exactly this gap; naming the limit explicitly is what lets Wave 1 avoid needing one.
+
+### D2a — Destructive and read-only CLI commands use a stable control-state root
+
+An operator-selected runtime-state directory cannot be the durable evidence owner for a command
+whose contract is to leave that directory untouched or remove it. `keiko audit local-state` and
+every operational `keiko uninstall` invocation therefore use a fixed per-user CLI control-state
+root: `~/.local/state/keiko/control` on Linux,
+`~/Library/Application Support/Keiko/control` on macOS, and
+`%USERPROFILE%\AppData\Local\Keiko\control` on Windows. Environment variables cannot redirect this
+root. The command resolves existing symlinks before use and refuses when the control root and
+selected target contain one another in either direction. It never opens a second durable log. A
+control-root overlap or canonicalization failure exits non-zero with a body-free terminal refusal
+before any sink is opened: no durable path can simultaneously stay outside an arbitrarily selected
+protected target and preserve the single-log contract. Once isolation has been proved, a transient
+open failure is retried only through the established control-state log.
+
+This is a placement rule, not a second logging system. The control root receives the existing
+`ServerLogSink` at `logs/server.log`, so D1-D13, correlation, redaction, rotation, retention, and
+the generated op vocabulary apply unchanged. Install-layout normalization is persisted there
+before a corrected internal path is consumed, and its correlation id joins the complete command
+lifecycle. Audit records start and completion/failure without writing into the audited tree.
+Uninstall records start, forced-stop activity, and completion/failure without losing the record when
+target state is removed; this includes dry runs and scripts-only operations. Package read and parse
+failures are terminal failures, never successful zero-removal outcomes. Events identify selected
+state and package targets only by SHA-256, and completion records whether state was absent, removed,
+retained, or would be removed/retained plus body-free affected/retained counts.
+
+`keiko support export` keeps successful install-layout normalization in the selected runtime log so
+the resulting bundle contains that evidence. When a pending normalization meets a symlink or
+non-directory state root, the export refuses before reading or exporting the target and emits
+`cli.support.export.failed` through the same fixed control-state log, provided canonical isolation
+from the selected target can be proved. If isolation itself cannot be proved, the same terminal-only
+limit above applies; the command never guesses at a writable evidence location.
 
 ### D3 — Keiko-code stack frames: dist-anchored, and why no source maps
 

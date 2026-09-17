@@ -32,6 +32,7 @@ describe("lint heap ceiling", () => {
     const [scriptCeiling, ...otherScriptCeilings] = heapCeilings(script);
     const stepCeilings = heapCeilings(steps[0]?.step.env?.NODE_OPTIONS);
 
+    expect(script).toMatch(/^npm run build:packages && /u);
     expect(otherScriptCeilings).toStrictEqual([]);
     expect(stepCeilings).toStrictEqual([scriptCeiling]);
     expect(scriptCeiling).toBeLessThanOrEqual(RUNNER_HEAP_LIMIT_MIB);

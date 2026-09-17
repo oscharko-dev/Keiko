@@ -1,7 +1,23 @@
+import { homedir as defaultHomedir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import {
+  emitSecurityLogEvent,
+  securityErrorKind,
+  type SecurityLogSink,
+} from "@oscharko-dev/keiko-security";
 
+import {
+  cliControlStateConflictsWithTarget,
+  cliTargetIdentitySha256,
+  resolveCliControlStateDir,
+} from "./cli-control-state.js";
+import {
+  installLayoutOverrideEvidence,
+  writeInstallLayoutOverrideEvidenceWithFactory,
+} from "./install-layout.js";
 import type { CliIo } from "./runner.js";
+import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
 
 // `keiko audit local-state` — the at-rest self-verification the local-at-rest contract
 // (docs/local-runtime-state-contract.md) names as its compensating control, reachable from a real
@@ -123,6 +139,10 @@ export interface AuditCliDeps {
   /** Injection seam for tests; production resolves the path from the environment. */
   readonly loadAuditor?: (specifier: string) => Promise<AuditorModule>;
   readonly cwd?: string;
+  readonly homedir?: () => string;
+  readonly platform?: NodeJS.Platform;
+  readonly activityStateDir?: string;
+  readonly activityLogSinkFactory?: CliSecurityLogSinkFactory;
 }
 
 function importAuditor(specifier: string): Promise<AuditorModule> {
@@ -279,15 +299,36 @@ async function runLocalStateAudit(
   io: CliIo,
   json: boolean,
   deps: AuditCliDeps,
+  activityLogSink: SecurityLogSink | undefined,
+  targetSha256: string,
 ): Promise<number> {
   let result: AuditResult;
   try {
     result = await loadAuditResult(stateDir, auditorPath, deps);
   } catch (error) {
     if (!(error instanceof AuditLoadError)) throw error;
+    emitSecurityLogEvent(activityLogSink, {
+      level: "error",
+      category: "diagnostic",
+      op: "cli.audit.failed",
+      errorKind: securityErrorKind(error),
+      extra: { reason: error.reason, targetSha256 },
+    });
     reportLoadFailure(error, io);
     return 1;
   }
+
+  emitSecurityLogEvent(activityLogSink, {
+    level: "info",
+    category: "diagnostic",
+    op: "cli.audit.completed",
+    extra: {
+      healthy: result.ok,
+      classCount: result.classes.length,
+      findingCount: result.classes.reduce((count, entry) => count + entry.findings.length, 0),
+      targetSha256,
+    },
+  });
 
   if (json) {
     // Exactly the serialized result plus a newline, nothing else on stdout: a consumer piping
@@ -306,6 +347,136 @@ async function runLocalStateAudit(
   return 1;
 }
 
+function resolveAuditorPath(
+  env: Readonly<Record<string, string | undefined>>,
+  io: CliIo,
+): string | undefined {
+  const auditorPath = env.KEIKO_LOCAL_STATE_AUDITOR;
+  if (auditorPath !== undefined && auditorPath !== "") return auditorPath;
+  // Fail closed and say why. A silent skip here would read as "audited, nothing wrong" for the
+  // one control that is supposed to prove the at-rest claims.
+  io.err(
+    "keiko audit: the local-state auditor was not located in this installation " +
+      "(KEIKO_LOCAL_STATE_AUDITOR is unset). Reinstall the package, or run " +
+      "`npm run audit:local-state -- --state-dir <path>` from a repository checkout.\n",
+  );
+  return undefined;
+}
+
+type PreparedAuditActivity =
+  | {
+      readonly kind: "ready";
+      readonly sink: SecurityLogSink | undefined;
+      readonly targetSha256: string;
+    }
+  | { readonly kind: "refused" };
+
+interface AuditActivityContext {
+  readonly activityStateDir: string;
+  readonly targetSha256: string;
+  readonly correlationId: string | undefined;
+  readonly factory: CliSecurityLogSinkFactory | undefined;
+}
+
+function emitAuditPreparationFailure(
+  context: AuditActivityContext,
+  errorKind: string,
+  reason: string,
+): void {
+  const sink = createCliSecurityLogSink(
+    context.activityStateDir,
+    context.factory,
+    context.correlationId,
+  );
+  emitSecurityLogEvent(sink, {
+    level: "error",
+    category: "diagnostic",
+    op: "cli.audit.failed",
+    errorKind,
+    extra: { reason, targetSha256: context.targetSha256 },
+  });
+}
+
+function resolveAuditActivityContext(
+  stateDir: string,
+  env: Readonly<Record<string, string | undefined>>,
+  deps: AuditCliDeps,
+): AuditActivityContext {
+  const home = (deps.homedir ?? defaultHomedir)();
+  const platform = deps.platform ?? process.platform;
+  const layoutEvidence = installLayoutOverrideEvidence(env);
+  return {
+    activityStateDir: deps.activityStateDir ?? resolveCliControlStateDir(platform, home),
+    targetSha256: cliTargetIdentitySha256(stateDir),
+    correlationId: layoutEvidence?.correlationId,
+    factory: deps.activityLogSinkFactory,
+  };
+}
+
+function openAuditActivity(
+  context: AuditActivityContext,
+  env: Readonly<Record<string, string | undefined>>,
+  io: CliIo,
+): PreparedAuditActivity {
+  const pendingLayoutEvidence = installLayoutOverrideEvidence(env) !== undefined;
+  const layoutEvidenceWritten = writeInstallLayoutOverrideEvidenceWithFactory(
+    context.factory,
+    context.activityStateDir,
+    env,
+  );
+  if (pendingLayoutEvidence && !layoutEvidenceWritten) {
+    emitAuditPreparationFailure(
+      context,
+      "AuditActivityLogUnavailableError",
+      "activity-log-unavailable",
+    );
+    io.err(
+      "keiko audit: refusing to consume a normalized install path because durable activity " +
+        "logging is unavailable.\n",
+    );
+    return { kind: "refused" };
+  }
+  const sink = createCliSecurityLogSink(
+    context.activityStateDir,
+    context.factory,
+    context.correlationId,
+  );
+  emitSecurityLogEvent(sink, {
+    level: "info",
+    category: "diagnostic",
+    op: "cli.audit.started",
+    extra: { targetSha256: context.targetSha256 },
+  });
+  return { kind: "ready", sink, targetSha256: context.targetSha256 };
+}
+
+function prepareAuditActivity(
+  stateDir: string,
+  env: Readonly<Record<string, string | undefined>>,
+  io: CliIo,
+  deps: AuditCliDeps,
+): PreparedAuditActivity {
+  const context = resolveAuditActivityContext(stateDir, env, deps);
+  let controlStateValidated = false;
+  try {
+    if (cliControlStateConflictsWithTarget(context.activityStateDir, stateDir)) {
+      io.err(
+        "keiko audit: refusing to run because the reserved CLI control state overlaps the " +
+          "audited tree. Select a different --state-dir.\n",
+      );
+      return { kind: "refused" };
+    }
+    controlStateValidated = true;
+    return openAuditActivity(context, env, io);
+  } catch (error) {
+    if (controlStateValidated) {
+      emitAuditPreparationFailure(context, securityErrorKind(error), "activity-log-open-failed");
+    }
+    io.err("keiko audit: the reserved CLI control state could not be validated or opened.\n");
+    return { kind: "refused" };
+  }
+}
+
 export async function runAuditCli(
   rest: readonly string[],
   io: CliIo,
@@ -322,18 +493,6 @@ export async function runAuditCli(
     return 2;
   }
 
-  const auditorPath = env.KEIKO_LOCAL_STATE_AUDITOR;
-  if (auditorPath === undefined || auditorPath === "") {
-    // Fail closed and say why. A silent skip here would read as "audited, nothing wrong" for the
-    // one control that is supposed to prove the at-rest claims.
-    io.err(
-      "keiko audit: the local-state auditor was not located in this installation " +
-        "(KEIKO_LOCAL_STATE_AUDITOR is unset). Reinstall the package, or run " +
-        "`npm run audit:local-state -- --state-dir <path>` from a repository checkout.\n",
-    );
-    return 1;
-  }
-
   // KEIKO_STATE_DIR is where the product actually keeps its state when the operator moved it, so
   // defaulting to <cwd>/.keiko while that is set audits a directory the runtime does not use —
   // and a PASS on the wrong tree is worse than no answer (review finding on #3159). An explicit
@@ -344,5 +503,27 @@ export async function runAuditCli(
       ? configuredStateDir
       : join(deps.cwd ?? process.cwd(), ".keiko");
   const stateDir = parsed.stateDir ?? defaultStateDir;
-  return runLocalStateAudit(stateDir, auditorPath, io, parsed.json, deps);
+  const activity = prepareAuditActivity(stateDir, env, io, deps);
+  if (activity.kind === "refused") return 1;
+
+  const auditorPath = resolveAuditorPath(env, io);
+  if (auditorPath === undefined) {
+    emitSecurityLogEvent(activity.sink, {
+      level: "error",
+      category: "diagnostic",
+      op: "cli.audit.failed",
+      errorKind: "AuditConfigurationError",
+      extra: { reason: "auditor-unavailable", targetSha256: activity.targetSha256 },
+    });
+    return 1;
+  }
+  return runLocalStateAudit(
+    stateDir,
+    auditorPath,
+    io,
+    parsed.json,
+    deps,
+    activity.sink,
+    activity.targetSha256,
+  );
 }

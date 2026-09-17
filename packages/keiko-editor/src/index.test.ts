@@ -304,10 +304,10 @@ describe("@oscharko-dev/keiko-editor dependency boundary (Issue #1191 acceptance
       expect(manifest.dependencies?.[packageName]).toBeUndefined();
       // KEIKO-1008: the package DOES declare react/react-dom as devDependencies so its own
       // @testing-library/react-based tests do not depend solely on incidental hoisting from the
-      // keiko-ui sibling. When present, the devDep floor MUST match the peer floor (`19.2.8`) so
-      // the workspace hoist never resolves a divergent React version.
+      // keiko-ui sibling. The exact dev pin tracks the product's React version and remains inside
+      // the compatible peer range, so the workspace hoist never resolves a divergent version.
       const devPin = manifest.devDependencies?.[packageName];
-      expect(devPin).toBe("19.2.8");
+      expect(devPin).toBe("19.3.0");
     }
   });
 

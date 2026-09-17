@@ -76,6 +76,8 @@ describe("dev quality workflows", () => {
     expect(mutation).toContain('node-version: "24.18.0"');
     expect(mutation).toContain("node scripts/check-runtime-toolchain.mjs --exact");
     expect(mutation).toContain("npm run test:mutation:security");
+    expect(mutation).toContain("second-order mutation proof");
+    expect(mutation).not.toContain("release-blocking");
     expect(mutation).not.toContain("check-mutation-scope.mjs");
     // KEIKO-0588: the mutation step now runs with continue-on-error so a failure files a
     // tracking issue (mirrors nightly-perf-evidence.yml). The lane must STILL fail — assert
@@ -83,8 +85,13 @@ describe("dev quality workflows", () => {
     expect(mutation).toContain("continue-on-error: true");
     expect(mutation).toMatch(/Fail the lane after reporting/u);
     expect(mutation).toMatch(/steps\.mutation\.outcome == 'failure'/u);
-    expect(packageJson.scripts["test:mutation:security"]).toContain(
-      "npm run test:mutation:debug-launch-security",
+    expect(packageJson.scripts["test:mutation:security"]).toBe(
+      "node scripts/run-security-mutation-suite.mjs",
+    );
+    expect(packageJson.scripts["check:mutation:debug-launch"]).toContain("--strict");
+    expect(packageJson.scripts["check:mutation:debug-launch"]).toContain("--minimum-score 100");
+    expect(packageJson.scripts["test:mutation:debug-launch-security"]).toContain(
+      "stryker.debug-launch.security.conf.json",
     );
 
     expect(mutationScope).toContain('"--diff-filter=ACMR"');
@@ -164,6 +171,9 @@ describe("dev quality workflows", () => {
 
   it("keeps functional UI checks blocking and moves hosted performance to post-merge evidence", () => {
     const uiJob = ci.match(/ {2}ui:\n[\s\S]*$/u)?.[0];
+    const evidenceStep = uiJob?.match(
+      /- name: Build internal packages[\s\S]*?(?=\n\s+- name: Security audit UI dependencies)/u,
+    )?.[0];
     const performanceStep = uiJob?.match(
       /- name: Refresh workspace performance evidence\n[\s\S]*?(?=\n\s+- name: Performance evidence freshness)/u,
     )?.[0];
@@ -187,14 +197,19 @@ describe("dev quality workflows", () => {
     expect(performanceStep).not.toContain("rm -f docs/release/1209-perf-evidence.json");
     expect(performanceStep).toContain("rm -f docs/release/1580-workspace-perf-evidence.json");
     expect(performanceStep).toContain("npm run test:e2e:workspace-perf");
-    expect(performanceStep).toContain("immutable D12 baseline/candidate comparison");
-    expect(performanceStep).toContain("Validate immutable editor D12 performance evidence");
-    expect(performanceStep).toContain(
+    expect(evidenceStep).toContain("Validate tool-catalog performance evidence");
+    expect(evidenceStep).toContain("npm run check:tool-catalog-performance");
+    expect(evidenceStep).toContain("Validate immutable editor D12 performance evidence");
+    expect(evidenceStep).toContain(
       "if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}",
     );
-    expect(performanceStep).toContain("npm run check:perf-evidence:editor");
-    expect(performanceStep).toContain("Validate workspace performance evidence freshness");
-    expect(performanceStep).toContain("npm run check:perf-evidence:workspace");
+    expect(evidenceStep).toContain("npm run check:perf-evidence:editor");
+    expect(evidenceStep).toContain("Validate workspace performance evidence freshness");
+    expect(evidenceStep).toContain("npm run check:perf-evidence:workspace");
+    expect(evidenceStep).toContain("Validate coding runtime performance evidence");
+    expect(uiJob.indexOf("Validate tool-catalog performance evidence")).toBeLessThan(
+      uiJob.indexOf("Install Playwright browser"),
+    );
     expect(freshnessStep).toContain(
       "if: ${{ github.event_name == 'push' || github.event_name == 'workflow_dispatch' }}",
     );
@@ -319,6 +334,8 @@ describe("dev quality workflows", () => {
       'empty_test_inclusion=".keiko/local-sonar-empty-test-${checkout_id}"',
     );
     expect(localSonar).not.toContain('"-Dsonar.test.inclusions=${inclusions}"');
+    expect(localSonar).toContain('"${compose[@]}" run --rm --no-deps scanner');
+    expect(localSonar).not.toContain('"${compose[@]}" run --rm scanner');
     expect(localSonarCompose).toContain('"127.0.0.1:${KEIKO_LOCAL_SONAR_PORT:-9234}:9000"');
     expect(localSonarCompose).toContain('SONAR_SCANNER_OPTS: "-Xmx768m"');
     expect(packageJson.scripts["gates:sonar:stop"]).toBe("./docker/gates/run-sonar.sh --stop");
@@ -508,6 +525,15 @@ describe("dev quality workflows", () => {
     expect(result.stdout).toContain("Required CI dependency did not succeed: failure");
   });
 
+  it("omits the Windows matrix leg only for positively scoped non-Windows changes", () => {
+    const osExpression = String(ciWorkflow.jobs["cross-platform-smoke"].strategy.matrix.os);
+
+    expect(osExpression).toBe("${{ fromJSON(needs.change-scope.outputs.cross-platform-os) }}");
+    expect(ciWorkflow.jobs["change-scope"].outputs["cross-platform-os"]).toBe(
+      "${{ steps.classify.outputs.cross-platform-os }}",
+    );
+  });
+
   it.each(["failure", "skipped", "cancelled", "", "unknown"])(
     "fails the aggregate when the UI result is %s",
     (uiResult) => {
@@ -536,8 +562,11 @@ describe("dev quality workflows", () => {
   });
 
   it("runs native compensation on its owning platforms and aggregates it fail closed", () => {
-    const crossPlatform = ci.match(/ {2}cross-platform-smoke:\n[\s\S]*?(?=\n {2}ui:\n)/u)?.[0];
+    const crossPlatform = ci.match(
+      / {2}cross-platform-smoke:\n[\s\S]*?(?=\n {2}node-26-compatibility:\n)/u,
+    )?.[0];
     expect(crossPlatform).toBeDefined();
+    expect(crossPlatform).toContain("fromJSON(needs.change-scope.outputs.cross-platform-os)");
     expect(crossPlatform).toContain(
       "actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68",
     );
@@ -551,9 +580,9 @@ describe("dev quality workflows", () => {
     expect(cmdSpawnSmoke.if).toBe("runner.os == 'Windows'");
     expect(cmdSpawnSmoke.run).toContain("node scripts/__tests__/windows-cmd-spawn-smoke.mjs");
     // A step-level `continue-on-error: true` soft-fails the step while the job (and therefore
-    // `needs.cross-platform-smoke.result` in the `ci` aggregate) still reports success, defeating
-    // the fail-closed aggregation the .if/.run pins above assume. Neither smoke step carries it
-    // today; this pin catches the one edit that would silently disarm them.
+    // the cross-platform matrix result in the `ci` aggregate) still reports success,
+    // defeating the fail-closed aggregation the .if/.run pins above assume. Neither smoke step
+    // carries it today; this pin catches the one edit that would silently disarm them.
     expect(cmdSpawnSmoke["continue-on-error"]).toBeUndefined();
     // #2992: the setup bootstrap smoke compiles the C stub, so it MUST run after MSVC is configured.
     const setupSteps = ciWorkflow.jobs["cross-platform-smoke"].steps;
@@ -586,9 +615,7 @@ describe("dev quality workflows", () => {
 
   it("runs the Git executable reparse regression on the required Windows host", () => {
     const steps = ciWorkflow.jobs["cross-platform-smoke"].steps;
-    const buildIndex = steps.findIndex(
-      (step) => step.name === "Build packages for the Windows smokes",
-    );
+    const buildIndex = steps.findIndex((step) => step.name === "Build");
     const regressionIndex = steps.findIndex(
       (step) => step.name === "Verify Git executable Windows reparse containment",
     );

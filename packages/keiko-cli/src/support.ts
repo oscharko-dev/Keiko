@@ -12,6 +12,7 @@
 
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir as defaultHomedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import {
   activityLogEvent,
@@ -22,6 +23,7 @@ import {
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { emitSecurityLogEvent, securityErrorKind } from "@oscharko-dev/keiko-security";
 import {
   SAFE_ARTIFACT_CLASSES,
   SAFE_ARTIFACT_FILE_FAILURE_KINDS,
@@ -35,6 +37,16 @@ import {
 import { type AuditCliDeps, AuditLoadError, auditLocalStateResult } from "./audit.js";
 // KEIKO-0655: shared argv-parsing helper replaces the byte-identical flagValue copy this file held.
 import { flagValue } from "./cli-arg-parsing.js";
+import {
+  cliControlStateConflictsWithTarget,
+  cliTargetIdentitySha256,
+  resolveCliControlStateDir,
+} from "./cli-control-state.js";
+import {
+  installLayoutOverrideEvidence,
+  writeInstallLayoutOverrideEvidenceWithFactory,
+  type InstallLayoutOverrideEvidence,
+} from "./install-layout.js";
 // GEN-PERF-CLI-001 — the evidence graph (and, below, the server module graph) load at dispatch,
 // and only for `export`; tool-lifecycle analysis lazily loads its narrow validator subpath. Store-fingerprint collection (ui,
 // local-knowledge, memory-vault) is owned by keiko-server (ADR-0019 direction rule 7: keiko-cli
@@ -42,7 +54,8 @@ import { flagValue } from "./cli-arg-parsing.js";
 // same lazily-loaded server module, via `server.collectStoreFingerprints`.
 import { loadEvidence, loadServer, loadToolLifecycle } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
-import { resolveStateDir } from "./state-paths.js";
+import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
+import { inspectStateRoot, resolveStateDir } from "./state-paths.js";
 import {
   analyzeLogText,
   buildReproductionSeed,
@@ -143,6 +156,10 @@ export interface SupportCliDeps {
   readonly evidenceStore?: EvidenceStore | undefined;
   /** Test seam for determining whether the newest raw-log process still exists. */
   readonly processIsRunning?: ((pid: number) => boolean) | undefined;
+  readonly activityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
+  readonly controlActivityStateDir?: string | undefined;
+  readonly homedir?: (() => string) | undefined;
+  readonly platform?: NodeJS.Platform | undefined;
 }
 
 type SupportLogFreshness = "current" | "stale" | "unknown";
@@ -165,6 +182,204 @@ interface SupportAnalysisReport extends AnalyzeAllResult {
 interface Assessment<T> {
   readonly value: T;
   readonly warning?: string | undefined;
+}
+
+const CLI_INSTALL_LAYOUT_NORMALIZED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "cli.install-layout.normalized",
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "support.writeTypedInstallLayoutOverrideEvidence",
+  fields: {
+    overriddenCount: { type: "integer", dataClass: "count", required: true },
+    overriddenKinds: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["cli-bin", "ui-static-root", "local-state-auditor"],
+      maxItems: 3,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["cli-install-layout-normalization"],
+  proofIds: ["cli.install-layout.normalized-before-support-snapshot"],
+  releaseImpact: "patch",
+});
+
+const CLI_SUPPORT_EXPORT_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "cli.support.export.failed",
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "support.emitSupportInstallLayoutRefusal",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["unsafe-state-root", "activity-log-unavailable", "state-root-validation-failed"],
+    },
+    targetSha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["cli-support-export"],
+  proofIds: ["cli.support.export.install-layout-refusal"],
+  releaseImpact: "patch",
+});
+
+type SupportInstallLayoutFailureReason =
+  "unsafe-state-root" | "activity-log-unavailable" | "state-root-validation-failed";
+
+interface SupportRefusalContext {
+  readonly stateDir: string;
+  readonly controlStateDir: string;
+  readonly correlationId: string;
+  readonly factory: CliSecurityLogSinkFactory | undefined;
+}
+
+function emitSupportInstallLayoutRefusal(
+  context: SupportRefusalContext,
+  failureKind: string,
+  reason: SupportInstallLayoutFailureReason,
+): void {
+  try {
+    if (cliControlStateConflictsWithTarget(context.controlStateDir, context.stateDir)) return;
+  } catch {
+    return;
+  }
+  const sink = createCliSecurityLogSink(
+    context.controlStateDir,
+    context.factory,
+    context.correlationId,
+  );
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(
+      CLI_SUPPORT_EXPORT_FAILED_OPERATION,
+      {
+        level: "error",
+        correlationId: context.correlationId,
+        errorKind: reason === "unsafe-state-root" ? "unsafe-target" : "unavailable",
+      },
+      {
+        reason,
+        targetSha256: cliTargetIdentitySha256(context.stateDir),
+        failureKind,
+      },
+    ),
+  );
+}
+
+function refuseSupportInstallLayout(
+  context: SupportRefusalContext,
+  failureKind: string,
+  reason: SupportInstallLayoutFailureReason,
+): "refused" {
+  emitSupportInstallLayoutRefusal(context, failureKind, reason);
+  return "refused";
+}
+
+function writeTypedInstallLayoutOverrideEvidence(
+  stateDir: string,
+  env: EnvSource,
+  deps: SupportCliDeps,
+  evidence: InstallLayoutOverrideEvidence,
+): boolean {
+  const factory = deps.activityLogSinkFactory;
+  if (factory === undefined) return false;
+  return writeInstallLayoutOverrideEvidenceWithFactory(
+    (selectedStateDir) => {
+      const sink = factory(selectedStateDir);
+      return {
+        write: (): void => {
+          sink.write(
+            activityLogEvent(
+              CLI_INSTALL_LAYOUT_NORMALIZED_OPERATION,
+              { correlationId: evidence.correlationId },
+              {
+                overriddenCount: evidence.overriddenKinds.length,
+                overriddenKinds: evidence.overriddenKinds,
+              },
+            ),
+          );
+        },
+      };
+    },
+    stateDir,
+    env,
+  );
+}
+
+function writeSupportInstallLayoutEvidence(
+  stateDir: string,
+  env: EnvSource,
+  deps: SupportCliDeps,
+): "ready" | "refused" {
+  const evidence = installLayoutOverrideEvidence(env);
+  if (evidence === undefined) return "ready";
+  const controlStateDir =
+    deps.controlActivityStateDir ??
+    resolveCliControlStateDir(
+      deps.platform ?? process.platform,
+      (deps.homedir ?? defaultHomedir)(),
+    );
+  const context: SupportRefusalContext = {
+    stateDir,
+    controlStateDir,
+    correlationId: evidence.correlationId,
+    factory: deps.activityLogSinkFactory,
+  };
+  try {
+    const stateRoot = inspectStateRoot(stateDir);
+    if (stateRoot.status === "symlink") {
+      return refuseSupportInstallLayout(
+        context,
+        "SupportStateRootSymlinkError",
+        "unsafe-state-root",
+      );
+    }
+    if (stateRoot.status === "not-directory") {
+      return refuseSupportInstallLayout(
+        context,
+        "SupportStateRootNotDirectoryError",
+        "unsafe-state-root",
+      );
+    }
+    return writeTypedInstallLayoutOverrideEvidence(stateDir, env, deps, evidence)
+      ? "ready"
+      : refuseSupportInstallLayout(
+          context,
+          "SupportActivityLogUnavailableError",
+          "activity-log-unavailable",
+        );
+  } catch (error) {
+    return refuseSupportInstallLayout(
+      context,
+      securityErrorKind(error),
+      "state-root-validation-failed",
+    );
+  }
+}
+
+function prepareSupportInstallLayoutEvidence(
+  stateDir: string,
+  env: EnvSource,
+  deps: SupportCliDeps,
+  io: CliIo,
+): boolean {
+  if (writeSupportInstallLayoutEvidence(stateDir, env, deps) === "ready") return true;
+  io.err(
+    "keiko support export: refusing to consume a normalized install path because durable " +
+      "activity logging is unavailable.\n",
+  );
+  return false;
 }
 
 const SUPPORT_LOG_STALE_AFTER_MS = 5 * 60_000;
@@ -1387,6 +1602,7 @@ async function runSupportExport(
   const cwd = deps.cwd ?? process.cwd();
   const now = deps.now ?? ((): Date => new Date());
   const stateDir = resolveStateDir(cwd, env, args.stateDir);
+  if (!prepareSupportInstallLayoutEvidence(stateDir, env, deps, io)) return 1;
   const stateDirSource = resolveStateDirSource(env, args.stateDir);
   if (supportDestinationCollidesWithActivityLog(cwd, stateDir, args.out)) {
     io.err("keiko support export: destination collides with the Activity Log\n");

@@ -23,6 +23,10 @@ import { runLauncherCli } from "./launcher.js";
 import { loadState } from "./launcher-state.js";
 import { runPortableCli } from "./portable.js";
 import type { CliIo } from "./runner.js";
+import {
+  INSTALL_LAYOUT_CORRELATION_ID_ENV,
+  INSTALL_LAYOUT_OVERRIDES_ENV,
+} from "./install-layout.js";
 
 // Seeds the encrypted credential vault index next to a config so apiKeySecretRef references are not
 // flagged as orphaned. The repair check reads only the non-secret reference keys (no decryption), so
@@ -573,6 +577,34 @@ describe("runRepairCli — install layout", () => {
     // No local layout seeded — the install-layout check must resolve via the env var.
     expect(runRepairCli([], c.io, { KEIKO_UI_STATIC_ROOT: staticRoot }, healthyDeps(root))).toBe(0);
     expect(c.out()).toContain("UI static export present");
+  });
+
+  it("records normalized layout evidence before inspecting the install", () => {
+    const root = makeRoot();
+    seedInstalledLayout(root);
+    const events: unknown[] = [];
+    const c = makeIo();
+    const env: NodeJS.ProcessEnv = {
+      [INSTALL_LAYOUT_OVERRIDES_ENV]: "ui-static-root",
+      [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+    };
+
+    expect(
+      runRepairCli([], c.io, env, {
+        ...healthyDeps(root),
+        securityLogSinkFactory: (stateDir) => {
+          expect(stateDir).toBe(join(root, ".keiko"));
+          return { write: (event): void => void events.push(event) };
+        },
+      }),
+    ).toBe(0);
+    expect(events).toEqual([
+      expect.objectContaining({
+        op: "cli.install-layout.normalized",
+        correlationId: "00000000-0000-4000-8000-000000000001",
+        extra: { overriddenCount: 1, overriddenKinds: ["ui-static-root"] },
+      }),
+    ]);
   });
 });
 
@@ -1310,11 +1342,26 @@ describe("runRepairCli — runtime state artifacts", () => {
     chmodSync(target, 0o755);
     chmodSync(outsideDb, 0o644);
     symlinkSync(target, stateDir, "dir");
+    let sinkFactoryCalls = 0;
+    const env: NodeJS.ProcessEnv = {
+      [INSTALL_LAYOUT_OVERRIDES_ENV]: "ui-static-root",
+      [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+    };
 
     const c = makeIo();
-    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(1);
+    expect(
+      runRepairCli([], c.io, env, {
+        ...healthyDeps(root),
+        securityLogSinkFactory: () => {
+          sinkFactoryCalls += 1;
+          return { write: (): void => undefined };
+        },
+      }),
+    ).toBe(1);
     expect(c.out()).toContain("[action] State directory");
     expect(c.out()).toContain("refusing to inspect symlinked state directory");
+    expect(sinkFactoryCalls).toBe(0);
+    expect(existsSync(join(target, "logs"))).toBe(false);
     expect(modeOf(target)).toBe(0o755);
     expect(modeOf(outsideDb)).toBe(0o644);
   });

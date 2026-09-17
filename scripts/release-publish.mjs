@@ -60,6 +60,18 @@ import { sha256 } from "./lib/digest.mjs";
 import { readJsonFile } from "./lib/json.mjs";
 import { resolveGithubRepository } from "./lib/github-repository.mjs";
 import { recordNpmPublishDeployment } from "./lib/npm-publish-deployment.mjs";
+import {
+  classifyDistTagResult,
+  classifyRegistryVersionResult,
+  REGISTRY_OBSERVATION_TIMEOUT_MS,
+  registryVersionProbeArgs,
+  resolveDistTagAction,
+  resolveVersionExistence,
+  verificationFailure,
+  verificationObservation,
+  verificationSucceeded,
+  waitForVerifiedPackageState as waitForVerifiedState,
+} from "./lib/npm-registry-observation.mjs";
 import { checkReleaseAlignment, printAlignmentReport } from "./check-release-alignment.mjs";
 import {
   checkRemotePortableAsset,
@@ -97,14 +109,12 @@ const valueArgFields = new Map([
   ["--registry", "registry"],
   ["--tag", "tag"],
 ]);
-// #3499 (Epic #3495): the wait-for-npm confirmation loop is retired. `npm publish` returning
-// success IS the publish confirmation. The registry install smoke, dist-tag verification and
-// alignment checks that used to poll npm from inside the publish job move to a nightly lane so a
-// six-minute registry lag never turns the publish job red again (v1.0.1 lost that way). The env
-// vars stay as an escape hatch for a local operator on a slow registry: the defaults are one shot
-// with no wait, and everything above 1 is documented as an incident bypass, not the normal path.
+// npm Trusted Publishing can acknowledge `npm publish` before the version-specific registry
+// endpoint becomes visible. `verifyAttempts` is the total number of reads, including the initial
+// read; `verifyDelayMs` is the wait between reads.
 const verifyAttempts = positiveIntegerEnv("KEIKO_RELEASE_VERIFY_ATTEMPTS", 1);
 const verifyDelayMs = nonNegativeIntegerEnv("KEIKO_RELEASE_VERIFY_DELAY_MS", 0);
+const prePublishProbeAttempts = 3;
 
 function positiveIntegerEnv(name, fallback) {
   const raw = process.env[name];
@@ -272,6 +282,8 @@ function commandResult(cmd, args, options = {}) {
     input: options.input,
     stdio: options.stdio ?? "pipe",
     env: options.env ?? process.env,
+    killSignal: options.killSignal,
+    timeout: options.timeout,
   });
 }
 
@@ -1632,31 +1644,13 @@ function smokePortableDownloadUrl(expected, url) {
   }
 }
 
-function npmViewVersion(pkg, npmEnv, registry) {
-  const result = npmViewVersionResult(pkg, npmEnv, registry);
-  return result.kind === "available" && result.version === pkg.version;
-}
-
-function npmViewVersionResult(pkg, npmEnv, registry) {
-  const result = commandResult("npm", ["view", pkg.spec, "version", "--registry", registry], {
-    env: npmEnv,
+function npmViewVersionResult(pkg, registry) {
+  const result = commandResult("curl", registryVersionProbeArgs(pkg, registry), {
+    env: networkEnvironment(),
   });
-  if (result.status === 0) {
-    return { kind: "available", version: result.stdout.trim() };
-  }
-  const viewOutput = `${result.stdout}\n${result.stderr}`;
-  if (viewOutput.includes("E404") || viewOutput.includes("No match found")) {
-    return { kind: "missing", version: "" };
-  }
-  fail(
-    `could not inspect ${pkg.spec} in ${registry}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
-  );
-}
-
-function npmViewDistTag(pkg, npmEnv, registry, tag) {
-  const result = npmViewDistTagResult(pkg, npmEnv, registry, tag);
-  if (result.kind === "available") return result.version;
-  return "";
+  const observation = classifyRegistryVersionResult(pkg, result);
+  if (observation.kind === "fatal") fail(observation.message);
+  return observation;
 }
 
 function npmViewDistTagResult(pkg, npmEnv, registry, tag) {
@@ -1665,17 +1659,30 @@ function npmViewDistTagResult(pkg, npmEnv, registry, tag) {
     ["view", pkg.name, `dist-tags.${tag}`, "--registry", registry],
     {
       env: npmEnv,
+      killSignal: "SIGKILL",
+      timeout: REGISTRY_OBSERVATION_TIMEOUT_MS,
     },
   );
-  if (result.status === 0) {
-    return { kind: "available", version: result.stdout.trim() };
-  }
-  const viewOutput = `${result.stdout}\n${result.stderr}`;
-  if (viewOutput.includes("E404") || viewOutput.includes("No match found")) {
-    return { kind: "missing", version: "" };
-  }
+  return classifyDistTagResult(result);
+}
+
+function versionExistsBeforePublish(pkg, registry) {
+  const decision = resolveVersionExistence({
+    attempts: prePublishProbeAttempts,
+    onPending(result, attempt) {
+      console.log(
+        `release-publish: PREPUBLISH pending ${pkg.spec} ` +
+          `(attempt ${String(attempt)}/${String(prePublishProbeAttempts)}; ` +
+          `version=${result.reason ?? result.kind}).`,
+      );
+    },
+    read: () => npmViewVersionResult(pkg, registry),
+    wait: waitForRegistryPropagation,
+  });
+  if (decision.exists !== undefined) return decision.exists;
   fail(
-    `could not inspect ${pkg.name} dist-tag ${tag}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    `${pkg.spec} registry availability remained transient after ${String(prePublishProbeAttempts)} probes. ` +
+      "Refusing to publish because package existence could not be established safely.",
   );
 }
 
@@ -1694,7 +1701,7 @@ function publishPackage(pkg, npmEnv, options, hasToken) {
     return;
   }
 
-  if (npmViewVersion(pkg, npmEnv, options.registry)) {
+  if (versionExistsBeforePublish(pkg, options.registry)) {
     console.log(`release-publish: SKIP ${pkg.spec} already exists.`);
   } else {
     publishPackageToRegistry(pkg, npmEnv, options);
@@ -1743,39 +1750,23 @@ function publishPackageToRegistry(pkg, npmEnv, options) {
 }
 
 function ensurePackageDistTag(pkg, npmEnv, options, hasToken) {
-  let currentTag = npmViewDistTag(pkg, npmEnv, options.registry, options.tag);
-  if (currentTag === pkg.version) {
+  const currentTag = npmViewDistTagResult(pkg, npmEnv, options.registry, options.tag);
+  const action = resolveDistTagAction({
+    currentTag,
+    hasToken,
+    pkg,
+    verify: () => waitForVerifiedPackageState(pkg, npmEnv, options.registry, options.tag, "TAG"),
+  });
+  if (action.kind === "verified") {
     console.log(`release-publish: TAG ${pkg.name}@${options.tag} -> ${pkg.version}.`);
     return;
   }
   // npm Trusted Publishing (OIDC) authorizes `npm publish` only, not `npm dist-tag add`. A
   // fresh `npm publish --tag` already sets the tag atomically at the source, but the very
-  // next `npm view` can still race the registry's own read replicas/CDN, so a mismatch here
-  // is usually transient propagation lag rather than a real problem — the same reality
-  // verifyPackage() below already retries for. Only after that same retry budget is
-  // exhausted do we treat it as a genuine idempotent-re-run repair and fail with a recovery
-  // hint, instead of letting an unauthenticated `npm dist-tag add` 401 confusingly.
-  if (!hasToken) {
-    for (let attempt = 2; attempt <= verifyAttempts && currentTag !== pkg.version; attempt += 1) {
-      console.log(
-        `release-publish: TAG pending ${pkg.name}@${options.tag} ` +
-          `(attempt ${String(attempt)}/${String(verifyAttempts)}; observed ${currentTag || "no published version"}).`,
-      );
-      waitForRegistryPropagation();
-      currentTag = npmViewDistTag(pkg, npmEnv, options.registry, options.tag);
-    }
-    if (currentTag === pkg.version) {
-      console.log(`release-publish: TAG ${pkg.name}@${options.tag} -> ${pkg.version}.`);
-      return;
-    }
-    fail(
-      `${pkg.name}@${options.tag} points to ${currentTag || "no published version"}, expected ` +
-        `${pkg.version}, and no registry credential is configured to correct it. npm Trusted ` +
-        "Publishing does not cover `npm dist-tag add`. Supply NODE_AUTH_TOKEN (or NPM_TOKEN) " +
-        "for a one-off manual fix, or confirm the earlier publish attempt actually completed " +
-        "before retrying.",
-    );
-  }
+  // next registry read can still race npm Trusted Publishing's server-side quarantine, so a
+  // mismatch here is usually transient propagation lag rather than a real problem. Only after the
+  // same total read budget verifyPackage() uses is exhausted do we treat it as actionable.
+  if (action.kind === "failed") failVerification(pkg, action.state, options.registry, options.tag);
   console.log(`release-publish: DIST-TAG ${pkg.name}@${options.tag} -> ${pkg.version}.`);
   run("npm", ["dist-tag", "add", pkg.spec, options.tag, "--registry", options.registry], {
     env: npmEnv,
@@ -1786,44 +1777,37 @@ function ensurePackageDistTag(pkg, npmEnv, options, hasToken) {
 function readVerificationState(pkg, npmEnv, registry, tag) {
   return {
     tag: npmViewDistTagResult(pkg, npmEnv, registry, tag),
-    version: npmViewVersionResult(pkg, npmEnv, registry),
+    version: npmViewVersionResult(pkg, registry),
   };
 }
 
-function verificationSucceeded(pkg, state) {
-  return state.version.version === pkg.version && state.tag.version === pkg.version;
-}
-
-function logPendingVerification(pkg, state, tag, attempt) {
+function logPendingVerification(pkg, state, tag, attempt, label) {
   console.log(
-    `release-publish: VERIFY pending ${pkg.spec} ` +
+    `release-publish: ${label} pending ${pkg.spec} ` +
       `(attempt ${String(attempt)}/${String(verifyAttempts)}; ` +
-      `version=${state.version.version || state.version.kind}; ` +
-      `${tag}=${state.tag.version || state.tag.kind}).`,
+      `version=${verificationObservation(state.version)}; ` +
+      `${tag}=${verificationObservation(state.tag)}).`,
   );
 }
 
 function failVerification(pkg, state, registry, tag) {
-  if (state.version.version !== pkg.version) {
-    const observed = state.version.version || state.version.kind;
-    fail(`${pkg.spec} is not available in ${registry} after publish (observed ${observed}).`);
-  }
-  if (state.tag.version !== pkg.version) {
-    const observed = state.tag.version || state.tag.kind;
-    fail(`${pkg.name}@${tag} points to ${observed}, expected ${pkg.version}.`);
-  }
+  const failure = verificationFailure(pkg, state, registry, tag);
+  if (failure !== undefined) fail(failure);
+}
+
+function waitForVerifiedPackageState(pkg, npmEnv, registry, tag, label) {
+  return waitForVerifiedState({
+    attempts: verifyAttempts,
+    onPending: (state, attempt) => logPendingVerification(pkg, state, tag, attempt, label),
+    pkg,
+    read: () => readVerificationState(pkg, npmEnv, registry, tag),
+    wait: waitForRegistryPropagation,
+  });
 }
 
 function verifyPackage(pkg, npmEnv, registry, tag) {
-  let state = readVerificationState(pkg, npmEnv, registry, tag);
-  for (let attempt = 1; attempt <= verifyAttempts; attempt += 1) {
-    if (verificationSucceeded(pkg, state)) return;
-    if (attempt < verifyAttempts) {
-      logPendingVerification(pkg, state, tag, attempt);
-      waitForRegistryPropagation();
-      state = readVerificationState(pkg, npmEnv, registry, tag);
-    }
-  }
+  const state = waitForVerifiedPackageState(pkg, npmEnv, registry, tag, "VERIFY");
+  if (verificationSucceeded(pkg, state)) return;
   failVerification(pkg, state, registry, tag);
 }
 

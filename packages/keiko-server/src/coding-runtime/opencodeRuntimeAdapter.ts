@@ -1078,11 +1078,24 @@ function validControl(value: unknown): value is OpenCodeLiveControl {
   );
 }
 
-function reconciliationEventKeys(event: OpenCodeReconciliationEvent): string[] {
-  const keys = ["id", "aggregateId", "sequence", "digest", "kind"];
-  if (event.compaction !== undefined) keys.push("compaction");
-  if (event.providerTokenUsage !== undefined) keys.push("providerTokenUsage");
-  return keys;
+const RECONCILIATION_EVENT_KEYS = ["id", "aggregateId", "sequence", "digest", "kind"];
+const RECONCILIATION_EVENT_COMPACTION_KEYS = [...RECONCILIATION_EVENT_KEYS, "compaction"];
+const RECONCILIATION_EVENT_USAGE_KEYS = [...RECONCILIATION_EVENT_KEYS, "providerTokenUsage"];
+const RECONCILIATION_EVENT_COMPACTION_USAGE_KEYS = [
+  ...RECONCILIATION_EVENT_KEYS,
+  "compaction",
+  "providerTokenUsage",
+];
+
+function reconciliationEventKeys(event: OpenCodeReconciliationEvent): readonly string[] {
+  if (event.compaction !== undefined) {
+    return event.providerTokenUsage === undefined
+      ? RECONCILIATION_EVENT_COMPACTION_KEYS
+      : RECONCILIATION_EVENT_COMPACTION_USAGE_KEYS;
+  }
+  return event.providerTokenUsage === undefined
+    ? RECONCILIATION_EVENT_KEYS
+    : RECONCILIATION_EVENT_USAGE_KEYS;
 }
 
 function validEvent(event: OpenCodeReconciliationEvent): boolean {

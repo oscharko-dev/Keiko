@@ -3,7 +3,7 @@ export const ACTIVITY_LOG_REGISTRY_VERSION = 1 as const;
 export const ACTIVITY_LOG_SCHEMA_DIGEST =
   "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba" as const;
 export const ACTIVITY_LOG_CATALOG_DIGEST =
-  "456c4c5157c84c0c8cdc0c48ba1b697375c51c86f00a5c3f060029294f86980b" as const;
+  "61f17761f4b9df46968312cfacaa339e2abbf53b935a781677da88038e528718" as const;
 export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
@@ -389,6 +389,44 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
   {
     contractKind: "activity-log-operation",
     schemaVersion: 1,
+    op: "cli.install-layout.normalized",
+    category: "diagnostic",
+    owner: "keiko-cli",
+    emitter: "support.writeTypedInstallLayoutOverrideEvidence",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      overriddenCount: {
+        type: "integer",
+        dataClass: "count",
+        required: true,
+      },
+      overriddenKinds: {
+        type: "string-array",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["cli-bin", "ui-static-root", "local-state-auditor"],
+        maxItems: 3,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["cli-install-layout-normalization"],
+    proofIds: ["cli.install-layout.normalized-before-support-snapshot"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
     op: "cli.lifecycle.stop-escalated",
     category: "diagnostic",
     owner: "keiko-cli",
@@ -521,6 +559,50 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
     analyzerProjection: "process-lifecycle",
     failureClasses: ["ui-process-stop"],
     proofIds: ["cli.lifecycle.stop-requested.channel"],
+    releaseImpact: "patch",
+  },
+  {
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "cli.support.export.failed",
+    category: "diagnostic",
+    owner: "keiko-cli",
+    emitter: "support.emitSupportInstallLayoutRefusal",
+    fields: {
+      completeness: {
+        type: "string",
+        dataClass: "completeness-state",
+        required: true,
+      },
+      loss: {
+        type: "string",
+        dataClass: "loss-state",
+        required: true,
+      },
+      reason: {
+        type: "string",
+        dataClass: "closed-enum",
+        required: true,
+        values: ["unsafe-state-root", "activity-log-unavailable", "state-root-validation-failed"],
+      },
+      targetSha256: {
+        type: "string",
+        dataClass: "digest",
+        required: true,
+        maxLength: 64,
+      },
+      failureKind: {
+        type: "string",
+        dataClass: "error-kind",
+        required: true,
+        maxLength: 64,
+      },
+    },
+    causal: "correlation",
+    lifecycle: "failure",
+    analyzerProjection: "failure-cluster",
+    failureClasses: ["cli-support-export"],
+    proofIds: ["cli.support.export.install-layout-refusal"],
     releaseImpact: "patch",
   },
   {
@@ -23516,8 +23598,8 @@ export const ACTIVITY_LOG_OPERATION_REGISTRY = [
 export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
   schemaVersion: 1,
   releaseExpectation: "100%-complete",
-  supportedClassCount: 297,
-  completeClassCount: 297,
+  supportedClassCount: 299,
+  completeClassCount: 299,
   completeness: "complete",
   classes: [
     {
@@ -24289,6 +24371,110 @@ export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = {
             causeChain: false,
           },
           proofIds: ["chat.turn.started.shape"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "cli-install-layout-normalization",
+      productSurfaces: ["keiko-cli"],
+      lifecycleTransitions: ["state"],
+      causalEdges: [
+        {
+          op: "cli.install-layout.normalized",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: ["cli.install-layout.normalized"],
+      operations: [
+        {
+          op: "cli.install-layout.normalized",
+          owner: "keiko-cli",
+          category: "diagnostic",
+          lifecycle: "state",
+          causal: "correlation",
+          analyzerProjection: "timeline",
+          safeContextFields: [
+            {
+              name: "overriddenCount",
+              type: "integer",
+              dataClass: "count",
+              required: true,
+            },
+            {
+              name: "overriddenKinds",
+              type: "string-array",
+              dataClass: "closed-enum",
+              required: true,
+            },
+          ],
+          evidenceClasses: ["closed-enum", "completeness-state", "count", "loss-state"],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["cli.install-layout.normalized-before-support-snapshot"],
+          replayReferences: [],
+          missingObligations: [],
+        },
+      ],
+      missingObligations: [],
+      completeness: "complete",
+    },
+    {
+      failureClass: "cli-support-export",
+      productSurfaces: ["keiko-cli"],
+      lifecycleTransitions: ["failure"],
+      causalEdges: [
+        {
+          op: "cli.support.export.failed",
+          mode: "correlation",
+        },
+      ],
+      lossSignals: ["cli.support.export.failed"],
+      operations: [
+        {
+          op: "cli.support.export.failed",
+          owner: "keiko-cli",
+          category: "diagnostic",
+          lifecycle: "failure",
+          causal: "correlation",
+          analyzerProjection: "failure-cluster",
+          safeContextFields: [
+            {
+              name: "failureKind",
+              type: "string",
+              dataClass: "error-kind",
+              required: true,
+            },
+            {
+              name: "reason",
+              type: "string",
+              dataClass: "closed-enum",
+              required: true,
+            },
+            {
+              name: "targetSha256",
+              type: "string",
+              dataClass: "digest",
+              required: true,
+            },
+          ],
+          evidenceClasses: [
+            "closed-enum",
+            "completeness-state",
+            "digest",
+            "error-kind",
+            "loss-state",
+          ],
+          frameCauseEvidence: {
+            frames: false,
+            causeChain: false,
+          },
+          proofIds: ["cli.support.export.install-layout-refusal"],
           replayReferences: [],
           missingObligations: [],
         },

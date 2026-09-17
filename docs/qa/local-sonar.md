@@ -41,6 +41,8 @@ single MINOR of this class fails the required `ci` context.
    start reuses the cached volumes and takes seconds. Worktrees of one repository share that
    server, its persisted administrator credential, and its cache.
 2. Provisions a local analysis token. There is no account, no secret and no network dependency.
+   The scanner then joins that already-verified service with Compose dependency startup disabled,
+   so Compose cannot recreate SonarQube between the readiness check and report submission.
 3. Partitions committed branch changes plus staged, unstaged, and untracked working-tree files into
    disjoint main-code and test inventories before analysis. A production path is never also passed
    through `sonar.test.inclusions`, because that would suppress main-code rules on the file.

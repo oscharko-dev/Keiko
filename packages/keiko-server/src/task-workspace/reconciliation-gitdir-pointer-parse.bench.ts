@@ -41,44 +41,34 @@
 // approach can detect) — just not as proof that THIS historical before/after pair diverges.
 //
 // Sibling precedent: packages/keiko-contracts/src/prompt-enhancer-analyzer.bench.ts (KEIKO-1028, #3340).
-// Same caveat applies here: this is NOT wired into any CI lane or npm test/typecheck/lint run (vitest's
-// own `include` glob never matches `*.bench.ts`, and they are plain `test()` bodies that only report timings), so
-// a slowdown will not surface on its own without the manual step below. It asserts nothing — `vitest
-// bench` reports timings, it does not pass/fail on them. Run manually with
+// Same caveat applies here: this is NOT wired into any CI lane or npm test/lint run (vitest's own
+// `include` glob never matches `*.bench.ts`), so a slowdown will not surface on its own without the
+// manual step below. A normal companion test proves the shared fixture shape; this benchmark has no
+// correctness test or timing threshold because `vitest bench` only reports timings. Run manually with
 // `npm run bench:reconciliation-gitdir-pointer --workspace @oscharko-dev/keiko-server` before/after a
 // change to the shared `parseGitdirPointerTarget` logic.
 
-import { describe, expect, test } from "vitest";
+import { bench, describe } from "vitest";
 import { parseGitdirPointerTarget } from "./gitdir-identity.js";
-
-const TARGET = "/managed/root/some-repo-abc123/.git/worktrees/keiko-task-def456";
+import { benchmarkGitdirPointer } from "./reconciliation-gitdir-pointer-benchmark-fixture.js";
 
 // Mirrors reconciliation.test.ts's adversarial pointer-drift fixture shape: `gitdir:` followed by a
 // large whitespace run, the real target, then a second whitespace run — a successfully-matching
 // single-line input padded on both sides of the capture group.
-function paddedPointer(leadingSpaces: number, trailingSpaces: number): string {
-  return `gitdir:${" ".repeat(leadingSpaces)}${TARGET}${" ".repeat(trailingSpaces)}\n`;
-}
-
 describe("parseGitdirPointerTarget bench (S8786, shared Git identity)", () => {
-  test("whitespace-padding ladder", async ({ bench }) => {
-    // The measurement's own premise: padding on both sides of the capture group must still yield
-    // the exact target. A parser that mis-extracts under padding would be timed on a wrong answer.
-    expect(parseGitdirPointerTarget(paddedPointer(2_500, 2_500))).toBe(TARGET);
-    await bench("5,000-char whitespace padding", () => {
-      parseGitdirPointerTarget(paddedPointer(2_500, 2_500));
-    }).run();
-    await bench(
-      "20,000+5,000-char whitespace padding (reconciliation.test.ts fixture size)",
-      () => {
-        parseGitdirPointerTarget(paddedPointer(20_000, 5_000));
-      },
-    ).run();
-    await bench("100,000-char whitespace padding", () => {
-      parseGitdirPointerTarget(paddedPointer(50_000, 50_000));
-    }).run();
-    await bench("200,000-char whitespace padding", () => {
-      parseGitdirPointerTarget(paddedPointer(100_000, 100_000));
-    }).run();
+  bench("5,000-char whitespace padding", () => {
+    parseGitdirPointerTarget(benchmarkGitdirPointer(2_500, 2_500));
+  });
+
+  bench("20,000+5,000-char whitespace padding (reconciliation.test.ts fixture size)", () => {
+    parseGitdirPointerTarget(benchmarkGitdirPointer(20_000, 5_000));
+  });
+
+  bench("100,000-char whitespace padding", () => {
+    parseGitdirPointerTarget(benchmarkGitdirPointer(50_000, 50_000));
+  });
+
+  bench("200,000-char whitespace padding", () => {
+    parseGitdirPointerTarget(benchmarkGitdirPointer(100_000, 100_000));
   });
 });

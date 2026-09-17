@@ -40,7 +40,10 @@ import {
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import type { CliIo } from "./runner.js";
 import { collectDoctorReport } from "./doctor.js";
-import { resolvePreferredInstallLayout } from "./install-layout.js";
+import {
+  resolvePreferredInstallLayout,
+  writeInstallLayoutOverrideEvidenceWithFactory,
+} from "./install-layout.js";
 import { resolveConfigPathFromArgs } from "./gateway-config.js";
 import {
   hashContent,
@@ -962,7 +965,6 @@ function collectRepairResults(
   resolved: ResolvedRepairDeps,
 ): readonly CheckResult[] {
   const stateDir = resolveStateDir(resolved.cwd, env, parsed.stateDirArg);
-  const securityLogSink = createCliSecurityLogSink(stateDir, resolved.securityLogSinkFactory);
   const defaultConfigCandidates = defaultLocalGatewayConfigCandidates(
     env,
     resolved.homedir(),
@@ -970,6 +972,13 @@ function collectRepairResults(
   );
   const stateRoot = inspectStateRoot(stateDir);
   const stateRootAction = stateRootRefusal(stateRoot);
+  if (stateRootAction === undefined) {
+    writeInstallLayoutOverrideEvidenceWithFactory(resolved.securityLogSinkFactory, stateDir, env);
+  }
+  const securityLogSink =
+    stateRootAction === undefined
+      ? createCliSecurityLogSink(stateDir, resolved.securityLogSinkFactory)
+      : undefined;
   const stateResults =
     stateRootAction === undefined
       ? [

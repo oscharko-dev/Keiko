@@ -30,7 +30,7 @@ export const CONTAINER_IMAGE = "node:24.18.0-bookworm";
 // installs browser binaries with this pin and then drives them with the locked test runner, so a
 // drift here pairs one version's browsers with another's driver.
 // `scripts/__tests__/regenerate-d12-evidence.test.mjs` compares the two and fails on a mismatch.
-export const PLAYWRIGHT_PIN = "playwright@1.62.1";
+export const PLAYWRIGHT_PIN = "playwright@1.63.0";
 
 // The one command the container runs. `safe.directory` is not optional: the bind mount is owned by
 // the host user and git refuses a repository it does not own, which otherwise fails the clone step
