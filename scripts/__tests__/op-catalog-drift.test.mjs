@@ -26,7 +26,12 @@ import {
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CATALOG_PATH = join(repoRoot, "docs", "observability", "op-catalog.generated.json");
+// Coverage instrumentation makes a complete repository scan take about 90 seconds in CI. This is
+// a harness deadline, not a product latency budget; cache the immutable result and keep the two
+// unavoidable first scans bounded without letting the global 15-second test limit abort them.
+const REPOSITORY_SCAN_TEST_TIMEOUT_MS = 2 * 60_000;
 let currentCatalog;
+let currentTypedRegistry;
 
 const ACTIVITY_FIELD_TYPES_BY_DATA_CLASS = {
   "closed-enum": new Set(["boolean", "string", "string-array"]),
@@ -44,6 +49,11 @@ const ACTIVITY_FIELD_TYPES_BY_DATA_CLASS = {
 function generateCurrentOpCatalog() {
   currentCatalog ??= generateOpCatalog(repoRoot);
   return currentCatalog;
+}
+
+function generateCurrentTypedRegistry() {
+  currentTypedRegistry ??= generateTypedActivityLogRegistry(repoRoot);
+  return currentTypedRegistry;
 }
 
 function readCheckedInCatalog() {
@@ -478,13 +488,17 @@ describe("op catalog drift", () => {
     );
   });
 
-  it("pins the separate future lifecycle contract without inventing runtime source sites", async () => {
-    const catalog = generateCurrentOpCatalog();
-    const bytes = readFileSync(join(repoRoot, TOOL_CATALOG_OPERATIONS_PATH), "utf8");
-    expect(catalog.operationContracts).toEqual([TOOL_CATALOG_OPERATIONS_PATH]);
-    expect(bytes).toBe(await toolCatalogOperationsBytes(repoRoot));
-    expect(JSON.parse(bytes)).toEqual(generateToolCatalogOperations(repoRoot));
-  });
+  it(
+    "pins the separate future lifecycle contract without inventing runtime source sites",
+    async () => {
+      const catalog = generateCurrentOpCatalog();
+      const bytes = readFileSync(join(repoRoot, TOOL_CATALOG_OPERATIONS_PATH), "utf8");
+      expect(catalog.operationContracts).toEqual([TOOL_CATALOG_OPERATIONS_PATH]);
+      expect(bytes).toBe(await toolCatalogOperationsBytes(repoRoot));
+      expect(JSON.parse(bytes)).toEqual(generateToolCatalogOperations(repoRoot));
+    },
+    REPOSITORY_SCAN_TEST_TIMEOUT_MS,
+  );
   it("matches the checked-in file exactly, by value, in the same order", () => {
     const regenerated = generateCurrentOpCatalog();
     const checkedIn = readCheckedInCatalog();
@@ -512,17 +526,21 @@ describe("op catalog drift", () => {
     expect(readCheckedInCatalog().typedRegistry.violations).toEqual([]);
   });
 
-  it("generates only primitive types whose data-class semantics can validate them", () => {
-    const registry = generateTypedActivityLogRegistry(repoRoot);
-    for (const operation of registry.operations) {
-      for (const [name, contract] of Object.entries(operation.fields)) {
-        expect(
-          ACTIVITY_FIELD_TYPES_BY_DATA_CLASS[contract.dataClass],
-          `${operation.op}.${name} has incompatible ${contract.type}/${contract.dataClass}`,
-        ).toContain(contract.type);
+  it(
+    "generates only primitive types whose data-class semantics can validate them",
+    () => {
+      const registry = generateCurrentTypedRegistry();
+      for (const operation of registry.operations) {
+        for (const [name, contract] of Object.entries(operation.fields)) {
+          expect(
+            ACTIVITY_FIELD_TYPES_BY_DATA_CLASS[contract.dataClass],
+            `${operation.op}.${name} has incompatible ${contract.type}/${contract.dataClass}`,
+          ).toContain(contract.type);
+        }
       }
-    }
-  });
+    },
+    REPOSITORY_SCAN_TEST_TIMEOUT_MS,
+  );
 
   it("carries the schema and generator identity the catalog contract promises", () => {
     const checkedIn = readCheckedInCatalog();
@@ -608,7 +626,7 @@ describe("op catalog drift", () => {
   // owning typed registrations. Pin the authoritative category instead of requiring the legacy
   // scanner to infer through a cross-module emitter.
   it("retains deterministic categories after indexing operations migrate to typed emitters", () => {
-    const registry = generateTypedActivityLogRegistry(repoRoot);
+    const registry = generateCurrentTypedRegistry();
     const byOp = (op) => registry.operations.find((entry) => entry.op === op);
     expect(byOp("indexing.document.failed")?.category).toBe("indexing");
     expect(byOp("embedding.preflight.identity-rejected")?.category).toBe("embedding");

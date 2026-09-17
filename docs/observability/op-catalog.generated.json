@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "9740e94c6279e425140dbc63d6f27a04f7c7cc68f18c091d2fd96c3201e217ba",
-    "catalogDigest": "a63bbd81557f024e328cd71a825ee177631c74fb8d3854ef97209caed71a8b27",
+    "catalogDigest": "456c4c5157c84c0c8cdc0c48ba1b697375c51c86f00a5c3f060029294f86980b",
     "obligationCategories": [
       "typed-operation-registration",
       "closed-bounded-fields",
@@ -1812,7 +1812,7 @@
         "proofIds": ["coding-runtime.compaction.emitted-line"],
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:148",
-        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:892"]
+        "emitterSites": ["packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.ts:897"]
       },
       {
         "contractKind": "activity-log-operation",

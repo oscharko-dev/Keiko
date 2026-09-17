@@ -3370,10 +3370,16 @@ describe("installable package smoke optional-dependency coverage", () => {
     expect(names).not.toContain(bundled[0]);
     expect(names.length).toBeGreaterThan(0);
 
-    const { packages, missing } = resolveVendorClosure(join(ROOT, "node_modules"), ROOT_MANIFEST);
+    const { packages, stubs, missing } = resolveVendorClosure(
+      join(ROOT, "node_modules"),
+      ROOT_MANIFEST,
+    );
     expect(missing).toEqual([]);
     const resolvedNames = packages.map((entry) => entry.name);
-    for (const name of names) expect(resolvedNames).toContain(name);
+    const availableNames = [...packages, ...stubs].map((entry) => entry.name);
+    // A clean npm install may omit a portable package when its platform binding is unavailable.
+    // The closure remains complete only when that optional descriptor has an inert registry stub.
+    for (const name of names) expect(availableNames).toContain(name);
     // Transitive runtime dependencies are included, so the registry can answer the whole graph.
     // `pend` is reachable only through `yauzl`, so it proves the walk is genuinely transitive.
     const transitive = resolvedNames.filter((name) => !names.includes(name));

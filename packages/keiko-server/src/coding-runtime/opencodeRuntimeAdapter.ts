@@ -879,9 +879,14 @@ async function applyHistoryPlan(
   }
 }
 
-function recordCompactionActivity(
-  ports: OpenCodeRuntimeAdapterPorts,
-  projections: readonly import("./opencodeReconciler.js").OpenCodeProjection[],
+interface CompactionActivityLogPorts {
+  readonly activityLog?: ServerLogSink | undefined;
+  readonly correlationId?: string | undefined;
+}
+
+export function recordCompactionActivity(
+  ports: CompactionActivityLogPorts,
+  projections: readonly Pick<import("./opencodeReconciler.js").OpenCodeProjection, "compaction">[],
 ): void {
   const activityLog = ports.activityLog ?? processServerLogSink();
   for (const projection of projections) {

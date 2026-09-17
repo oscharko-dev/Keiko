@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { analyzeLogText, findTimeline } from "../packages/keiko-cli/src/support-analyze.js";
+import { recordCompactionActivity } from "../packages/keiko-server/src/coding-runtime/opencodeRuntimeAdapter.js";
 import { createFileServerLogSink } from "../packages/keiko-server/src/observability/server-log.js";
 
 describe("native coding-runtime compaction support reconstruction", () => {
@@ -17,61 +18,45 @@ describe("native coding-runtime compaction support reconstruction", () => {
     const tailStartIdSha256 = "c".repeat(64);
     const bodyCanary = "SENTINEL_NATIVE_COMPACTION_BODY";
     try {
-      activityLog.write({
-        category: "process",
-        op: "coding-runtime.compaction",
-        correlationId: runId,
-        extra: { event: "completed", compactionIdSha256 },
-      });
-      activityLog.write({
-        category: "process",
-        op: "coding-runtime.compaction",
-        correlationId: runId,
-        extra: {
-          event: "started",
-          compactionIdSha256,
-          auto: true,
-          overflow: true,
-          retainedTail: false,
+      recordCompactionActivity({ activityLog, correlationId: runId }, [
+        { compaction: { event: "completed", compactionIdSha256 } },
+        {
+          compaction: {
+            event: "started",
+            compactionIdSha256,
+            auto: true,
+            overflow: true,
+            retainedTail: false,
+          },
         },
-      });
-      activityLog.write({
-        category: "process",
-        op: "coding-runtime.compaction",
-        correlationId: runId,
-        extra: {
-          event: "tail-retained",
-          compactionIdSha256,
-          tailStartIdSha256,
-          auto: true,
-          overflow: true,
-          retainedTail: true,
+        {
+          compaction: {
+            event: "tail-retained",
+            compactionIdSha256,
+            tailStartIdSha256,
+            auto: true,
+            overflow: true,
+            retainedTail: true,
+          },
         },
-      });
-      activityLog.write({
-        category: "process",
-        op: "coding-runtime.compaction",
-        correlationId: runId,
-        extra: {
-          event: "started",
-          compactionIdSha256: failedCompactionIdSha256,
-          auto: true,
-          overflow: false,
-          retainedTail: false,
+        {
+          compaction: {
+            event: "started",
+            compactionIdSha256: failedCompactionIdSha256,
+            auto: true,
+            overflow: false,
+            retainedTail: false,
+          },
         },
-      });
-      activityLog.write({
-        category: "process",
-        level: "error",
-        op: "coding-runtime.compaction",
-        correlationId: runId,
-        errorKind: "ContextOverflowError",
-        extra: {
-          event: "failed",
-          compactionIdSha256: failedCompactionIdSha256,
-          finishReason: "error",
+        {
+          compaction: {
+            event: "failed",
+            compactionIdSha256: failedCompactionIdSha256,
+            errorKind: "ContextOverflowError",
+            finishReason: "error",
+          },
         },
-      });
+      ]);
       activityLog.close?.();
 
       const serialized = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
@@ -82,12 +67,19 @@ describe("native coding-runtime compaction support reconstruction", () => {
           {
             op: "coding-runtime.compaction",
             errorKind: undefined,
-            extra: { event: "completed", compactionIdSha256 },
+            extra: {
+              completeness: "complete",
+              loss: "none",
+              event: "completed",
+              compactionIdSha256,
+            },
           },
           {
             op: "coding-runtime.compaction",
             errorKind: undefined,
             extra: {
+              completeness: "complete",
+              loss: "none",
               event: "started",
               compactionIdSha256,
               auto: true,
@@ -99,6 +91,8 @@ describe("native coding-runtime compaction support reconstruction", () => {
             op: "coding-runtime.compaction",
             errorKind: undefined,
             extra: {
+              completeness: "complete",
+              loss: "none",
               event: "tail-retained",
               compactionIdSha256,
               tailStartIdSha256,
@@ -111,6 +105,8 @@ describe("native coding-runtime compaction support reconstruction", () => {
             op: "coding-runtime.compaction",
             errorKind: undefined,
             extra: {
+              completeness: "complete",
+              loss: "none",
               event: "started",
               compactionIdSha256: failedCompactionIdSha256,
               auto: true,
@@ -120,10 +116,13 @@ describe("native coding-runtime compaction support reconstruction", () => {
           },
           {
             op: "coding-runtime.compaction",
-            errorKind: "ContextOverflowError",
+            errorKind: "internal",
             extra: {
+              completeness: "complete",
+              loss: "none",
               event: "failed",
               compactionIdSha256: failedCompactionIdSha256,
+              compactionErrorKind: "ContextOverflowError",
               finishReason: "error",
             },
           },
