@@ -8,6 +8,10 @@
 
 import type { IncomingMessage, ServerResponse } from "node:http";
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   codingAppSessionAcknowledgement,
   contentFreeCodingAppSessionChannelSnapshot,
   type CodingAppSessionChannelSnapshot,
@@ -41,6 +45,102 @@ import {
 
 const MAX_PAIRING_BODY_BYTES = 8 * 1_024;
 export const CODING_APP_SESSION_STREAM_DRAIN_TIMEOUT_MS = 1_000;
+
+const CODING_APP_SESSION_CHANNEL_OPENED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-app-session.channel.opened",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "coding-app-session.codingAppSessionRoutes.channelOpened",
+  fields: { live: { type: "boolean", dataClass: "closed-enum", required: true } },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-app-session-channel"],
+  proofIds: ["coding-app-session.channel.opened.live"],
+  releaseImpact: "patch",
+});
+
+const CODING_APP_SESSION_CHANNEL_CLOSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-app-session.channel.closed",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "coding-app-session.codingAppSessionRoutes.channelOpened.close",
+  fields: {},
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-app-session-channel"],
+  proofIds: ["coding-app-session.channel.closed.duration"],
+  releaseImpact: "patch",
+});
+
+const CODING_APP_SESSION_PAIRED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-app-session.paired",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "coding-app-session.codingAppSessionRoutes.handleCodingAppSessionPair",
+  fields: {},
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-app-session-pairing"],
+  proofIds: ["coding-app-session.paired.request"],
+  releaseImpact: "patch",
+});
+
+const CODING_APP_SESSION_LOCAL_SESSION_ISSUED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-app-session.local-session.issued",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "coding-app-session.codingAppSessionRoutes.handleCodingAppSessionLocalSession",
+  fields: {},
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-app-session-pairing"],
+  proofIds: ["coding-app-session.local-session.issued.request"],
+  releaseImpact: "patch",
+});
+
+const CODING_APP_SESSION_ROTATED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-app-session.rotated",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "coding-app-session.codingAppSessionRoutes.handleCodingAppSessionRotate",
+  fields: {},
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-app-session-rotation"],
+  proofIds: ["coding-app-session.rotated.request"],
+  releaseImpact: "patch",
+});
+
+const CODING_APP_SESSION_SIGNED_OUT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-app-session.signed-out",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "coding-app-session.codingAppSessionRoutes.handleCodingAppSessionSignOut",
+  fields: {},
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-app-session-sign-out"],
+  proofIds: ["coding-app-session.signed-out.request"],
+  releaseImpact: "patch",
+});
 
 // KEIKO-0838: rate-limited aggregate diagnostic for pairing/rotate denials so an operator can
 // notice a systemic launcher-pairing failure without turning each attempt into a pairing-attempt
@@ -86,21 +186,25 @@ function channelOpened(
 ): () => void {
   const openedAt = Date.now();
   const correlation = correlationId ?? UNKNOWN_CORRELATION_ID;
-  activityLog.write({
-    level: "info",
-    category: "http",
-    op: "coding-app-session.channel.opened",
-    correlationId: correlation,
-    extra: { live },
-  });
+  activityLog.write(
+    activityLogEvent(
+      CODING_APP_SESSION_CHANNEL_OPENED_OPERATION,
+      { level: "info", correlationId: correlation },
+      { live },
+    ),
+  );
   return (): void => {
-    activityLog.write({
-      level: "info",
-      category: "http",
-      op: "coding-app-session.channel.closed",
-      correlationId: correlation,
-      durationMs: Date.now() - openedAt,
-    });
+    activityLog.write(
+      activityLogEvent(
+        CODING_APP_SESSION_CHANNEL_CLOSED_OPERATION,
+        {
+          level: "info",
+          correlationId: correlation,
+          durationMs: Date.now() - openedAt,
+        },
+        {},
+      ),
+    );
   };
 }
 
@@ -176,12 +280,13 @@ export async function handleCodingAppSessionPair(
     });
     return ackResult();
   }
-  appSessionActivity(deps).write({
-    level: "info",
-    category: "http",
-    op: "coding-app-session.paired",
-    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-  });
+  appSessionActivity(deps).write(
+    activityLogEvent(
+      CODING_APP_SESSION_PAIRED_OPERATION,
+      { level: "info", correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
+      {},
+    ),
+  );
   return ackResult(issuedCookie(ctx.req, result.cookieToken));
 }
 
@@ -197,12 +302,13 @@ export function handleCodingAppSessionLocalSession(
 ): RouteResult {
   const result = deps.codingAppSessionChannel?.ensureLocalSession(readSessionCookie(ctx.req));
   if (result?.status !== "issued") return ackResult();
-  appSessionActivity(deps).write({
-    level: "info",
-    category: "http",
-    op: "coding-app-session.local-session.issued",
-    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-  });
+  appSessionActivity(deps).write(
+    activityLogEvent(
+      CODING_APP_SESSION_LOCAL_SESSION_ISSUED_OPERATION,
+      { level: "info", correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
+      {},
+    ),
+  );
   return ackResult(issuedCookie(ctx.req, result.cookieToken));
 }
 
@@ -333,12 +439,13 @@ export function handleCodingAppSessionRotate(ctx: RouteContext, deps: UiHandlerD
     });
     return ackResult();
   }
-  appSessionActivity(deps).write({
-    level: "info",
-    category: "http",
-    op: "coding-app-session.rotated",
-    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-  });
+  appSessionActivity(deps).write(
+    activityLogEvent(
+      CODING_APP_SESSION_ROTATED_OPERATION,
+      { level: "info", correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
+      {},
+    ),
+  );
   return ackResult(issuedCookie(ctx.req, result.cookieToken));
 }
 
@@ -348,12 +455,13 @@ export function handleCodingAppSessionSignOut(ctx: RouteContext, deps: UiHandler
   // absent or unknown cookie, or a repeated sign-out from a stale tab, revoked nothing, and the
   // response is the same either way (PR #3452 review).
   if (deps.codingAppSessionChannel?.signOut(readSessionCookie(ctx.req)) === true) {
-    appSessionActivity(deps).write({
-      level: "info",
-      category: "http",
-      op: "coding-app-session.signed-out",
-      correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-    });
+    appSessionActivity(deps).write(
+      activityLogEvent(
+        CODING_APP_SESSION_SIGNED_OUT_OPERATION,
+        { level: "info", correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID },
+        {},
+      ),
+    );
   }
   return ackResult({ "Set-Cookie": clearSessionCookies(requestIsSecure(ctx.req)) });
 }
