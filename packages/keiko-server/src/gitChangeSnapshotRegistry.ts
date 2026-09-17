@@ -1,5 +1,9 @@
 import { randomBytes } from "node:crypto";
 import type { GitChangeSnapshot } from "@oscharko-dev/keiko-contracts";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { GitSnapshotContentFile } from "./gitChangeSnapshotEntries.js";
 import type { ServerLogSink } from "./observability/server-log.js";
 
@@ -23,6 +27,127 @@ interface SnapshotRecord {
 // unreserved candidate to reclaim; a reservation request beyond the cap is refused (fail-closed)
 // rather than silently starving unrelated captures of every slot.
 const MAX_RESERVED = 24;
+
+const GIT_SNAPSHOT_CAPACITY_DENIED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.snapshot.capacity-denied",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitChangeSnapshotRegistry.put",
+  fields: {
+    reservedCount: { type: "integer", dataClass: "count", required: true },
+    recordCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["git-snapshot-capacity"],
+  proofIds: ["git.snapshot.capacity-denied.line"],
+  releaseImpact: "patch",
+});
+
+const GIT_SNAPSHOT_EXPIRED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.snapshot.expired",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitChangeSnapshotRegistry.put.expiry",
+  fields: {
+    snapshotDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-snapshot-expiry"],
+  proofIds: ["git.snapshot.expired.line"],
+  releaseImpact: "patch",
+});
+
+const GIT_SNAPSHOT_READ_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.snapshot.read",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "gitChangeSnapshotRegistry.get",
+  fields: {
+    allowed: { type: "boolean", dataClass: "closed-enum", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-snapshot-access"],
+  proofIds: ["git.snapshot.read.line"],
+  releaseImpact: "patch",
+});
+
+const GIT_SNAPSHOT_INVALIDATED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.snapshot.invalidated",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "gitChangeSnapshotRegistry.revoke",
+  fields: {},
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-snapshot-access"],
+  proofIds: ["git.snapshot.invalidated.line"],
+  releaseImpact: "patch",
+});
+
+const GIT_SNAPSHOT_RESERVE_DENIED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.snapshot.reserve-denied",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitChangeSnapshotRegistry.reserve.denied",
+  fields: {
+    reservedCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["git-snapshot-reservation"],
+  proofIds: ["git.snapshot.reserve-denied.line"],
+  releaseImpact: "patch",
+});
+
+const GIT_SNAPSHOT_RESERVED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.snapshot.reserved",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitChangeSnapshotRegistry.reserve",
+  fields: {},
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-snapshot-reservation"],
+  proofIds: ["git.snapshot.reserved.line"],
+  releaseImpact: "patch",
+});
+
+const GIT_SNAPSHOT_RELEASED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.snapshot.released",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitChangeSnapshotRegistry.release",
+  fields: {},
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-snapshot-reservation"],
+  proofIds: ["git.snapshot.released.line"],
+  releaseImpact: "patch",
+});
 
 /** Process-local, bounded content handles. No store, filesystem, or browser serialization path. */
 export class GitChangeSnapshotRegistry {
@@ -52,12 +177,13 @@ export class GitChangeSnapshotRegistry {
     // against the 67,108,864-byte cap). Re-check both limits after eviction and fail closed
     // instead of inserting past either one.
     if (this.records.size >= 32 || this.bytes + bytes > 64 * 1024 * 1024) {
-      this.log.write({
-        category: "process",
-        op: "git.snapshot.capacity-denied",
-        correlationId,
-        extra: { reservedCount: this.reserved.size, recordCount: this.records.size },
-      });
+      this.log.write(
+        activityLogEvent(
+          GIT_SNAPSHOT_CAPACITY_DENIED_OPERATION,
+          { correlationId, errorKind: "conflict" },
+          { reservedCount: this.reserved.size, recordCount: this.records.size },
+        ),
+      );
       throw new RangeError("Snapshot registry capacity exceeded");
     }
     const reference = `gcs_${randomBytes(16).toString("hex")}`;
@@ -65,12 +191,13 @@ export class GitChangeSnapshotRegistry {
       () => {
         this.rememberExpired(reference, scope);
         this.remove(reference);
-        this.log.write({
-          category: "process",
-          op: "git.snapshot.expired",
-          correlationId,
-          extra: { snapshotDigest: content.snapshot.snapshotDigest },
-        });
+        this.log.write(
+          activityLogEvent(
+            GIT_SNAPSHOT_EXPIRED_OPERATION,
+            { correlationId },
+            { snapshotDigest: content.snapshot.snapshotDigest },
+          ),
+        );
       },
       Math.max(1, Date.parse(content.snapshot.expiresAt) - this.now()),
     );
@@ -88,12 +215,9 @@ export class GitChangeSnapshotRegistry {
     this.prune();
     const entry = this.records.get(reference);
     const allowed = entry?.scope === scope;
-    this.log.write({
-      category: "security",
-      op: "git.snapshot.read",
-      correlationId,
-      extra: { allowed },
-    });
+    this.log.write(
+      activityLogEvent(GIT_SNAPSHOT_READ_OPERATION, { correlationId }, { allowed }),
+    );
     return allowed ? structuredClone(entry.content) : undefined;
   }
 
@@ -109,7 +233,7 @@ export class GitChangeSnapshotRegistry {
   public revoke(reference: string, scope: object, correlationId: string): void {
     if (this.records.get(reference)?.scope !== scope) return;
     this.remove(reference);
-    this.log.write({ category: "security", op: "git.snapshot.invalidated", correlationId });
+    this.log.write(activityLogEvent(GIT_SNAPSHOT_INVALIDATED_OPERATION, { correlationId }, {}));
   }
 
   /**
@@ -124,16 +248,17 @@ export class GitChangeSnapshotRegistry {
     const record = this.records.get(reference);
     if (record?.scope !== scope) return false;
     if (!this.reserved.has(reference) && this.reserved.size >= MAX_RESERVED) {
-      this.log.write({
-        category: "process",
-        op: "git.snapshot.reserve-denied",
-        correlationId,
-        extra: { reservedCount: this.reserved.size },
-      });
+      this.log.write(
+        activityLogEvent(
+          GIT_SNAPSHOT_RESERVE_DENIED_OPERATION,
+          { correlationId, errorKind: "conflict" },
+          { reservedCount: this.reserved.size },
+        ),
+      );
       return false;
     }
     this.reserved.add(reference);
-    this.log.write({ category: "process", op: "git.snapshot.reserved", correlationId, extra: {} });
+    this.log.write(activityLogEvent(GIT_SNAPSHOT_RESERVED_OPERATION, { correlationId }, {}));
     return true;
   }
 
@@ -141,12 +266,7 @@ export class GitChangeSnapshotRegistry {
   public release(reference: string, scope: object, correlationId: string): void {
     if (this.records.get(reference)?.scope !== scope) return;
     if (this.reserved.delete(reference)) {
-      this.log.write({
-        category: "process",
-        op: "git.snapshot.released",
-        correlationId,
-        extra: {},
-      });
+      this.log.write(activityLogEvent(GIT_SNAPSHOT_RELEASED_OPERATION, { correlationId }, {}));
     }
   }
 

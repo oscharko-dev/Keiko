@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "205b1dc41337fe3b2841dca3dee729eb51c7027de380f8bf8b1f1391d61fd2a3",
-    "catalogDigest": "b865444a9e74cdf2e2ae18f2b25e5ab3c45472ef51a1b96b0ae9190e68a648b8",
+    "catalogDigest": "d3b7163b2df0764d030eb7bbc659415de4fbbab457b723f7b75acbb699d8c9a0",
     "operations": [
       {
         "contractKind": "activity-log-operation",
@@ -241,6 +241,155 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/evidence-retention-log.ts:29",
         "emitterSites": ["packages/keiko-server/src/evidence-retention-log.ts:75"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "git.snapshot.capacity-denied",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "gitChangeSnapshotRegistry.put",
+        "fields": {
+          "reservedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "recordCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["git-snapshot-capacity"],
+        "proofIds": ["git.snapshot.capacity-denied.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:31",
+        "emitterSites": ["packages/keiko-server/src/gitChangeSnapshotRegistry.ts:181"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "git.snapshot.expired",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "gitChangeSnapshotRegistry.put.expiry",
+        "fields": {
+          "snapshotDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["git-snapshot-expiry"],
+        "proofIds": ["git.snapshot.expired.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:50",
+        "emitterSites": ["packages/keiko-server/src/gitChangeSnapshotRegistry.ts:195"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "git.snapshot.invalidated",
+        "category": "security",
+        "owner": "keiko-server",
+        "emitter": "gitChangeSnapshotRegistry.revoke",
+        "fields": {},
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["git-snapshot-access"],
+        "proofIds": ["git.snapshot.invalidated.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:86",
+        "emitterSites": ["packages/keiko-server/src/gitChangeSnapshotRegistry.ts:236"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "git.snapshot.read",
+        "category": "security",
+        "owner": "keiko-server",
+        "emitter": "gitChangeSnapshotRegistry.get",
+        "fields": {
+          "allowed": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["git-snapshot-access"],
+        "proofIds": ["git.snapshot.read.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:68",
+        "emitterSites": ["packages/keiko-server/src/gitChangeSnapshotRegistry.ts:219"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "git.snapshot.released",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "gitChangeSnapshotRegistry.release",
+        "fields": {},
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["git-snapshot-reservation"],
+        "proofIds": ["git.snapshot.released.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:136",
+        "emitterSites": ["packages/keiko-server/src/gitChangeSnapshotRegistry.ts:269"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "git.snapshot.reserve-denied",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "gitChangeSnapshotRegistry.reserve.denied",
+        "fields": {
+          "reservedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["git-snapshot-reservation"],
+        "proofIds": ["git.snapshot.reserve-denied.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:102",
+        "emitterSites": ["packages/keiko-server/src/gitChangeSnapshotRegistry.ts:252"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "git.snapshot.reserved",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "gitChangeSnapshotRegistry.reserve",
+        "fields": {},
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["git-snapshot-reservation"],
+        "proofIds": ["git.snapshot.reserved.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:120",
+        "emitterSites": ["packages/keiko-server/src/gitChangeSnapshotRegistry.ts:261"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3772,7 +3921,7 @@
     {
       "op": "git.snapshot.capacity-denied",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:57",
+      "site": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:34",
       "package": "keiko-server"
     },
     {
@@ -3784,19 +3933,19 @@
     {
       "op": "git.snapshot.expired",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:70",
+      "site": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:53",
       "package": "keiko-server"
     },
     {
       "op": "git.snapshot.invalidated",
       "category": "security",
-      "site": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:112",
+      "site": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:89",
       "package": "keiko-server"
     },
     {
       "op": "git.snapshot.read",
       "category": "security",
-      "site": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:93",
+      "site": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:71",
       "package": "keiko-server"
     },
     {
@@ -3808,19 +3957,19 @@
     {
       "op": "git.snapshot.released",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:146",
+      "site": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:139",
       "package": "keiko-server"
     },
     {
       "op": "git.snapshot.reserve-denied",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:129",
+      "site": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:105",
       "package": "keiko-server"
     },
     {
       "op": "git.snapshot.reserved",
       "category": "process",
-      "site": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:136",
+      "site": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:123",
       "package": "keiko-server"
     },
     {
