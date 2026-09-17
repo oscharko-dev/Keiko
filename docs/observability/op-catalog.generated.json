@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "205b1dc41337fe3b2841dca3dee729eb51c7027de380f8bf8b1f1391d61fd2a3",
-    "catalogDigest": "379c1b028ef1a83fbb11e77ffc4f8d04b5fb339c0041a89c552cb364d0aa9105",
+    "catalogDigest": "50bf57ac6aa8bb297df54798b3f938127e5e125a451eba6db6d146c535ee1bb6",
     "operations": [
       {
         "contractKind": "activity-log-operation",
@@ -136,6 +136,111 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:65",
         "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:178"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "command.terminated",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "process-log-sink.logCommandTermination",
+        "fields": {
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "timeout",
+              "abort",
+              "output-cap",
+              "spawn-callback-error",
+              "child-process-error"
+            ]
+          },
+          "childPid": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "windowsTreeKill": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "succeeded",
+              "failed",
+              "unknown",
+              "budget-exhausted",
+              "blocked-untrusted-system-root",
+              "refused-self-pid",
+              "root-not-found",
+              "not-attempted"
+            ]
+          },
+          "escalation": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "succeeded",
+              "failed",
+              "unknown",
+              "budget-exhausted",
+              "blocked-untrusted-system-root",
+              "refused-self-pid",
+              "root-not-found",
+              "not-attempted"
+            ]
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["command-termination"],
+        "proofIds": ["command.terminated.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/process-log-sink.ts:110",
+        "emitterSites": ["packages/keiko-server/src/process-log-sink.ts:184"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "evidence.retention",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "evidence-retention-log.evidenceRetentionObserver",
+        "fields": {
+          "source": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "browser-capture",
+              "chat-compaction-evidence",
+              "command-runner",
+              "container-runner",
+              "editor-verification-run",
+              "grounded-qa",
+              "grounded-qa-hybrid",
+              "grounded-qa-multi-source",
+              "run-engine",
+              "terminal-execution"
+            ]
+          },
+          "deletedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["evidence-retention"],
+        "proofIds": ["evidence.retention.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/evidence-retention-log.ts:29",
+        "emitterSites": ["packages/keiko-server/src/evidence-retention-log.ts:75"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -2718,7 +2823,7 @@
     {
       "op": "command.terminated",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/process-log-sink.ts:127",
+      "site": "packages/keiko-server/src/process-log-sink.ts:113",
       "package": "keiko-server"
     },
     {
@@ -2922,7 +3027,7 @@
     {
       "op": "evidence.retention",
       "category": "process",
-      "site": "packages/keiko-server/src/evidence-retention-log.ts:37",
+      "site": "packages/keiko-server/src/evidence-retention-log.ts:32",
       "package": "keiko-server"
     },
     {

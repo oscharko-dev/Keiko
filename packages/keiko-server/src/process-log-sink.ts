@@ -34,6 +34,10 @@ import type {
 } from "@oscharko-dev/keiko-memory-consolidation";
 import type { CommandTerminationEvidence } from "@oscharko-dev/keiko-contracts";
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   DEFAULT_SERVER_LOG_LEVEL,
   getServerLogger,
   type ServerLogEvent,
@@ -103,6 +107,60 @@ export function consolidationLogSinkFor(correlationId: string): ConsolidationLog
   };
 }
 
+const COMMAND_TERMINATED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "command.terminated",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "process-log-sink.logCommandTermination",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["timeout", "abort", "output-cap", "spawn-callback-error", "child-process-error"],
+    },
+    childPid: { type: "integer", dataClass: "count", required: true },
+    windowsTreeKill: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "succeeded",
+        "failed",
+        "unknown",
+        "budget-exhausted",
+        "blocked-untrusted-system-root",
+        "refused-self-pid",
+        "root-not-found",
+        "not-attempted",
+      ],
+    },
+    escalation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "succeeded",
+        "failed",
+        "unknown",
+        "budget-exhausted",
+        "blocked-untrusted-system-root",
+        "refused-self-pid",
+        "root-not-found",
+        "not-attempted",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["command-termination"],
+  proofIds: ["command.terminated.line"],
+  releaseImpact: "patch",
+});
+
 /**
  * Writes ONE body-free line for a keiko-tools `runCommand` termination decision (the optional
  * `onTerminated` seam on `RunCommandInput`, exec.ts) — in particular the VERIFIED win32
@@ -122,11 +180,11 @@ export function logCommandTermination(
   correlationId: string,
   evidence: CommandTerminationEvidence,
 ): void {
-  sink.write({
-    category: "diagnostic",
-    op: "command.terminated",
-    correlationId,
-    extra: {
+  sink.write(
+    activityLogEvent(
+      COMMAND_TERMINATED_OPERATION,
+      { correlationId },
+      {
       reason: evidence.reason,
       childPid: evidence.childPid,
       windowsTreeKill: evidence.windowsTreeKill,
@@ -135,6 +193,7 @@ export function logCommandTermination(
       // tree-kill still failed" reach the log looking identical. Body-free — a closed-vocabulary
       // disposition, never a pid, path or command.
       ...(evidence.escalation === undefined ? {} : { escalation: evidence.escalation }),
-    },
-  });
+      },
+    ),
+  );
 }
