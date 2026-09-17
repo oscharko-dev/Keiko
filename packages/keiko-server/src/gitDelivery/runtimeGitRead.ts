@@ -11,6 +11,10 @@ import {
   GIT_EDITOR_DIFF_MAX_FILES,
 } from "@oscharko-dev/keiko-contracts/runtime/git-editor";
 import { CODING_RUNTIME_GIT_MAX_PATHS } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-git";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { boundWorkspaceFs, type WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 import { nodeWorkspaceFs } from "@oscharko-dev/keiko-workspace/internal/fs";
 import { readGitStageFile } from "@oscharko-dev/keiko-workspace/internal/git-index";
@@ -32,7 +36,7 @@ import {
   type LineChangeBlock,
   type LineDiffSide,
 } from "./lineDiff.js";
-import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import { correlationIdOrUnknown } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
   gitDeliveryTerminationHandler,
@@ -41,6 +45,47 @@ import {
 } from "./execution.js";
 import type { VerifiedCommitRunContext } from "./verifiedCommitTypes.js";
 import { runtimeGitPaths } from "../coding-runtime/codingRuntimeGitIpc.js";
+
+const DENIED_PATHS_EXCLUDED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.raw-status.denied-paths-excluded",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "gitDelivery/runtimeGitRead.logDeniedPathExclusion",
+  fields: { deniedPathCount: { type: "integer", dataClass: "count", required: true } },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-denied-path-exclusion"],
+  proofIds: ["git.raw-status.denied-paths-excluded"],
+  releaseImpact: "patch",
+});
+
+const DIFF_SEARCH_BOUNDED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.runtime-diff.search-bounded",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/runtimeGitRead.searchLoggedLineChanges",
+  fields: {
+    bound: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["distance", "work"],
+    },
+    oldLines: { type: "integer", dataClass: "count", required: true },
+    newLines: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "loss",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-diff-search-bounded"],
+  proofIds: ["git.runtime-diff.search-bounded"],
+  releaseImpact: "patch",
+});
 /**
  * The port a run's filesystem reads resolve containment through: the owned-root port the managed
  * prover bound to the run's WorkspaceInfo, else the plain node port. A managed task worktree below
@@ -62,12 +107,13 @@ export function logDeniedPathExclusion(
   deniedPathCount: number | undefined,
 ): void {
   if (deniedPathCount === undefined || deniedPathCount === 0) return;
-  (seams.activityLog ?? processServerLogSink()).write({
-    category: "security",
-    op: "git.raw-status.denied-paths-excluded",
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-    extra: { deniedPathCount },
-  });
+  (seams.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      DENIED_PATHS_EXCLUDED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      { deniedPathCount },
+    ),
+  );
 }
 /** Where a diff search that stopped at a bound is recorded, and under which operation. */
 interface DiffSearchLog {
@@ -86,12 +132,13 @@ function searchLoggedLineChanges(
 ): readonly LineChangeBlock[] {
   const search = searchLineChanges(before, after);
   if (search.bound !== undefined) {
-    (log.seams.activityLog ?? processServerLogSink()).write({
-      category: "process",
-      op: "git.runtime-diff.search-bounded",
-      correlationId: log.correlationId ?? UNKNOWN_CORRELATION_ID,
-      extra: { bound: search.bound, oldLines: before.lines.length, newLines: after.lines.length },
-    });
+    (log.seams.activityLog ?? processServerLogSink()).write(
+      activityLogEvent(
+        DIFF_SEARCH_BOUNDED_OPERATION,
+        { correlationId: correlationIdOrUnknown(log.correlationId) },
+        { bound: search.bound, oldLines: before.lines.length, newLines: after.lines.length },
+      ),
+    );
   }
   return search.blocks;
 }
