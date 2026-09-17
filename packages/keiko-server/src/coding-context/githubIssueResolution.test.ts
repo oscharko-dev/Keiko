@@ -132,7 +132,13 @@ describe("server-resolved issue intake", () => {
       expect.objectContaining({
         op: "coding-workbench.issue.resolved",
         correlationId: "issue-test",
-        extra: { outcome: "resolved", issueNumber: 42, repositoryId: deriveRepositoryId(f.root) },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          outcome: "resolved",
+          issueNumber: 42,
+          repositoryId: deriveRepositoryId(f.root),
+        },
       }),
     );
     for (const content of [f.root, f.object.title, f.object.body, f.object.url]) {

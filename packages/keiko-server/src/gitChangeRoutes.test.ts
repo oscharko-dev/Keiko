@@ -576,7 +576,12 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
     expect(events).toContainEqual(
       expect.objectContaining({
         op: "git-change.chat.blocked",
-        extra: { reason: "GIT_CHANGE_SCOPE_LIMIT_REACHED" },
+        errorKind: "unavailable",
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          reason: "GIT_CHANGE_SCOPE_LIMIT_REACHED",
+        },
       }),
     );
   });
@@ -598,7 +603,12 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
     expect(events).toContainEqual(
       expect.objectContaining({
         op: "git-change.chat.blocked",
-        extra: { reason: "GIT_CHANGE_CHAT_NOT_FOUND" },
+        errorKind: "unavailable",
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          reason: "GIT_CHANGE_CHAT_NOT_FOUND",
+        },
       }),
     );
   });
@@ -629,7 +639,12 @@ describe("POST /api/git-change/connect (Issue #3400)", () => {
     expect(events).toContainEqual(
       expect.objectContaining({
         op: "git-change.chat.blocked",
-        extra: { reason: "GIT_CHANGE_SCOPE_PERSIST_FAILED" },
+        errorKind: "unavailable",
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          reason: "GIT_CHANGE_SCOPE_PERSIST_FAILED",
+        },
       }),
     );
   });
@@ -891,7 +906,12 @@ describe("POST /api/git-change/refresh (Issue #3400)", () => {
     expect(events).toContainEqual(
       expect.objectContaining({
         op: "git-change.chat.blocked",
-        extra: { reason: "relationship-conflict" },
+        errorKind: "unavailable",
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          reason: "relationship-conflict",
+        },
       }),
     );
   });

@@ -95,7 +95,11 @@ describe("issue preview request lifecycle", () => {
       expect.objectContaining({
         op: "coding-workbench.issue.previewed",
         status,
-        extra: { outcome: status === 413 ? "request-too-large" : "invalid-request" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          outcome: status === 413 ? "request-too-large" : "invalid-request",
+        },
       }),
     );
   });
@@ -112,7 +116,11 @@ describe("issue preview request lifecycle", () => {
       expect.objectContaining({
         op: "coding-workbench.issue.previewed",
         status: 409,
-        extra: { outcome: "unknown-repository" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          outcome: "unknown-repository",
+        },
       }),
     );
   });
@@ -154,7 +162,11 @@ describe("issue preview request lifecycle", () => {
       expect.objectContaining({
         op: "coding-workbench.issue.previewed",
         correlationId: "preview-cancel",
-        extra: { outcome: "cancelled" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          outcome: "cancelled",
+        },
       }),
     );
     expect(f.ctx.req.listenerCount("aborted")).toBe(0);
@@ -218,7 +230,11 @@ describe("issue preview request lifecycle", () => {
         op: "coding-workbench.issue.previewed",
         correlationId: f.ctx.correlationId,
         status: 403,
-        extra: { outcome: "authority-denied" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          outcome: "authority-denied",
+        },
       }),
     );
   });
