@@ -94,7 +94,12 @@ describe("POST /api/diagnostics/client", () => {
     const [event] = events;
     expect(event?.category).toBe("diagnostic");
     expect(event?.correlationId).toBe("original-request-correlation-id");
-    expect(event?.errorKind).toBe("boundary");
+    expect(event?.errorKind).toBe("internal");
+    expect(event?.extra).toMatchObject({
+      clientKind: "boundary",
+      completeness: "complete",
+      loss: "none",
+    });
   });
 
   // FATAL-FLAW FIX #2 (graft from the reuse-maximal design): `"message"` is on
@@ -301,5 +306,8 @@ describe("POST /api/diagnostics/client", () => {
     expect(
       sink.events.find((event) => event.op === "client.diagnostic.rate-limited")?.correlationId,
     ).toBe(CORRELATION_ID);
+    expect(
+      sink.events.find((event) => event.op === "client.diagnostic.rate-limited")?.extra,
+    ).toMatchObject({ completeness: "complete", loss: "event-dropped" });
   });
 });

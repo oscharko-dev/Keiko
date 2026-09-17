@@ -9,8 +9,191 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "205b1dc41337fe3b2841dca3dee729eb51c7027de380f8bf8b1f1391d61fd2a3",
-    "catalogDigest": "11ca008937db3f84ecd1fa0e518137cd14c0a9a8b669034a54e0805c62c83b80",
+    "catalogDigest": "379c1b028ef1a83fbb11e77ffc4f8d04b5fb339c0041a89c552cb364d0aa9105",
     "operations": [
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "client.diagnostic",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "client-diagnostics-routes.logClientDiagnostic",
+        "fields": {
+          "clientNote": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": true,
+            "maxLength": 200
+          },
+          "readyState": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "clientKind": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["boundary", "unhandled-rejection", "sse-error", "other"]
+          },
+          "action": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["review", "approve", "apply"]
+          },
+          "disposition": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["accepted", "discarded"]
+          },
+          "relationshipId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxLength": 128
+          },
+          "snapshotDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "proposalId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxLength": 128
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["preview", "approved", "observed", "blocked"]
+          },
+          "repositoryId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxLength": 256
+          },
+          "workspaceId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxLength": 256
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["client-diagnostic"],
+        "proofIds": ["client.diagnostic.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:85",
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:219"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "client.diagnostic.rate-limited",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "client-diagnostics-routes.noticeRateLimitedDrop",
+        "fields": {
+          "suppressedDrops": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "loss",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["client-diagnostic-rate-limit"],
+        "proofIds": ["client.diagnostic.rate-limited.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/client-diagnostics-routes.ts:65",
+        "emitterSites": ["packages/keiko-server/src/client-diagnostics-routes.ts:178"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "request",
+        "category": "http",
+        "owner": "keiko-server",
+        "emitter": "server.logRequestOnClose",
+        "fields": {
+          "method": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": true,
+            "maxLength": 64
+          },
+          "path": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": true,
+            "maxLength": 8192
+          },
+          "routeTemplate": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxLength": 8192
+          },
+          "queryParamNames": {
+            "type": "string-array",
+            "dataClass": "opaque-id",
+            "required": true,
+            "maxItems": 16
+          },
+          "queryParamDroppedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "responseBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "aborted": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["http-request"],
+        "proofIds": ["http-request.close-line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/server.ts:470",
+        "emitterSites": ["packages/keiko-server/src/server.ts:563"]
+      },
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
@@ -380,6 +563,46 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/diagnostics-log.ts:27",
         "emitterSites": ["packages/keiko-server/src/diagnostics-log.ts:415"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "sse.stream.closed",
+        "category": "http",
+        "owner": "keiko-server",
+        "emitter": "sse-write.emitSseStreamClosed",
+        "fields": {
+          "frameCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "bytesStreamed": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "completed",
+              "client-disconnected",
+              "backpressure-killed",
+              "server-error",
+              "server-shutdown"
+            ]
+          }
+        },
+        "causal": "none",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["sse-stream"],
+        "proofIds": ["sse.stream.closed.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/sse-write.ts:37",
+        "emitterSites": ["packages/keiko-server/src/sse-write.ts:137"]
       }
     ],
     "violations": []
@@ -1529,7 +1752,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/sse-write.ts:243",
+      "site": "packages/keiko-server/src/sse-write.ts:281",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -1775,13 +1998,13 @@
     {
       "op": "client.diagnostic",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:138",
+      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:88",
       "package": "keiko-server"
     },
     {
       "op": "client.diagnostic.rate-limited",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:104",
+      "site": "packages/keiko-server/src/client-diagnostics-routes.ts:68",
       "package": "keiko-server"
     },
     {
@@ -3737,7 +3960,7 @@
     {
       "op": "request",
       "category": "http",
-      "site": "packages/keiko-server/src/server.ts:523",
+      "site": "packages/keiko-server/src/server.ts:473",
       "package": "keiko-server"
     },
     {
@@ -3871,7 +4094,7 @@
     {
       "op": "server.request",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/server.ts:551",
+      "site": "packages/keiko-server/src/server.ts:595",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
@@ -3890,7 +4113,7 @@
     {
       "op": "sse.stream.closed",
       "category": "http",
-      "site": "packages/keiko-server/src/sse-write.ts:103",
+      "site": "packages/keiko-server/src/sse-write.ts:40",
       "package": "keiko-server"
     },
     {
