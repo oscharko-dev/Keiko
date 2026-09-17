@@ -4,6 +4,10 @@ import type {
   ToolDescriptor,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-catalog";
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { captureCatalogJson, lookupCatalogTool } from "@oscharko-dev/keiko-tool-catalog";
 import type { CodingToolActionRequest, CodingToolResult } from "../coding-runtime/codingToolIpc.js";
 import type {
@@ -54,6 +58,43 @@ const OPENCODE_CATALOG_DESCRIPTORS = OPENCODE_CATALOG_ADVERTISEMENT.projection.t
 const OPENCODE_DESCRIPTOR_BY_ID: ReadonlyMap<string, ToolDescriptor> = new Map(
   OPENCODE_CATALOG_DESCRIPTORS.map((descriptor) => [descriptor.toolRef.canonicalId, descriptor]),
 );
+
+const TOOL_CATALOG_DISPATCH_UNBOUND_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "tool-catalog.dispatch-unbound",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "tool-catalog.catalogToolFacadeBridge.recordUnbound",
+  fields: {
+    action: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "read",
+        "discover",
+        "search",
+        "edit",
+        "command",
+        "verification",
+        "git",
+        "delivery",
+        "connector",
+        "egress",
+        "skill",
+        "skill-discover",
+        "child-agent",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["tool-catalog-dispatch-unbound"],
+  proofIds: ["tool-catalog.dispatch-unbound.emitted-line"],
+  releaseImpact: "patch",
+});
 
 export interface CanonicalCatalogContext {
   readonly runId: string;
@@ -700,12 +741,17 @@ function recordUnbound(
   request: CodingToolActionRequest,
 ): void {
   const context = bridgeInput.context();
-  bridgeInput.logPort.primary.write({
-    category: "security",
-    op: "tool-catalog.dispatch-unbound",
-    correlationId: context?.correlationId ?? UNKNOWN_CORRELATION_ID,
-    extra: { action: request.action },
-  });
+  bridgeInput.logPort.primary.write(
+    activityLogEvent(
+      TOOL_CATALOG_DISPATCH_UNBOUND_OPERATION,
+      {
+        level: "warn",
+        correlationId: context?.correlationId ?? UNKNOWN_CORRELATION_ID,
+        errorKind: "unavailable",
+      },
+      { action: request.action },
+    ),
+  );
 }
 
 export function createCanonicalCatalogFacadeBridge(

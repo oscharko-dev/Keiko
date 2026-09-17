@@ -409,6 +409,7 @@ describe("canonical catalog facade bridge", () => {
     expect(log.events[0]).toMatchObject({
       op: "tool-catalog.dispatch-unbound",
       correlationId: context.correlationId,
+      errorKind: "unavailable",
       extra: { action: "command" },
     });
   });
