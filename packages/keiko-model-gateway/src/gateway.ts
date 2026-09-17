@@ -5,6 +5,11 @@
 
 import { randomUUID } from "node:crypto";
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security/hashing";
+import {
   CancelledError,
   ConfigInvalidError,
   ContextOverflowError,
@@ -15,14 +20,12 @@ import {
 import { deriveContextProfileFromCapability } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
 import { findConfiguredCapability } from "./model-selection.js";
 import {
+  activityLogErrorKind,
   logEndpointHost,
-  logErrorKind,
   logLevelEnabled,
   logTimer,
   resolveLogSink,
   type ModelGatewayLogContext,
-  type ModelGatewayLogEvent,
-  type ModelGatewayLogLevel,
   type ModelGatewayLogSink,
 } from "./observability.js";
 import { OpenAiAdapter, ResponseRedactionError } from "./openai-adapter.js";
@@ -113,7 +116,7 @@ function callIds(requestId: string, request: GatewayCallRequest): CallIds {
   return { requestId, correlationId: request.logContext?.correlationId ?? requestId };
 }
 
-function callIdFields(ids: CallIds): Readonly<Record<string, unknown>> {
+function callIdFields(ids: CallIds): { readonly requestId?: string } {
   return ids.correlationId === ids.requestId ? {} : { requestId: ids.requestId };
 }
 
@@ -143,16 +146,381 @@ function measuredCatalogFailureUsage(
   };
 }
 
-function gatewayEvent(
-  level: ModelGatewayLogLevel,
-  op: string,
-  correlationId: string | undefined,
-  extra: Readonly<Record<string, unknown>>,
-  durationMs?: number,
-  errorKind?: string,
-): ModelGatewayLogEvent {
-  return { level, category: "gateway", op, correlationId, durationMs, errorKind, extra };
-}
+const GATEWAY_CONFIG_RESOLVED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.config.resolved",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "gateway.logConfigResolved",
+  fields: {
+    providerCount: { type: "integer", dataClass: "count", required: true },
+    providerConfigDigest: {
+      type: "string",
+      dataClass: "digest",
+      required: true,
+      maxLength: 64,
+    },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["gateway-configuration"],
+  proofIds: ["gateway.config-resolved.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_TOOL_CATALOG_REPAIR_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.tool-catalog.repair",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "gateway.logToolSchemaRepair",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["denied", "scheduled"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["context-window-exceeded", "invalid-shape"],
+    },
+    toolCallId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    offeredAlias: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    missingRequiredCount: { type: "integer", dataClass: "count", required: false },
+    invalidPathCount: { type: "integer", dataClass: "count", required: false },
+    unexpectedPropertyCount: { type: "integer", dataClass: "count", required: false },
+    droppedPathCount: { type: "integer", dataClass: "count", required: false },
+    promptTokens: { type: "integer", dataClass: "count", required: true },
+    maxPromptTokens: { type: "integer", dataClass: "count", required: true },
+    maxOutputTokens: { type: "integer", dataClass: "count", required: true },
+    safetyMarginTokens: { type: "integer", dataClass: "count", required: true },
+    correctionMessageCount: { type: "integer", dataClass: "count", required: true },
+    effectStarted: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true", "false"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-tool-schema-rejection"],
+  proofIds: ["gateway.tool-catalog-repair.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_CHAT_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.chat.started",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "gateway.logCallStarted",
+  fields: {
+    requestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    endpoint: { type: "string", dataClass: "opaque-id", required: false, maxLength: 512 },
+    costClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["low", "medium", "high"],
+    },
+    timeoutMs: { type: "number", dataClass: "duration", required: true },
+    maxRetries: { type: "integer", dataClass: "count", required: true },
+    requestBudgetMs: { type: "number", dataClass: "duration", required: true },
+    upstreamStreaming: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true", "false"],
+    },
+    reasoningEffort: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["minimal", "low", "medium", "high", "xhigh"],
+    },
+    streaming: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["false"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-chat-call"],
+  proofIds: ["gateway.chat-started.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_STREAM_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.stream.started",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "gateway.logCallStarted",
+  fields: {
+    requestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    endpoint: { type: "string", dataClass: "opaque-id", required: false, maxLength: 512 },
+    costClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["low", "medium", "high"],
+    },
+    timeoutMs: { type: "number", dataClass: "duration", required: true },
+    maxRetries: { type: "integer", dataClass: "count", required: true },
+    reasoningEffort: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["minimal", "low", "medium", "high", "xhigh"],
+    },
+    streaming: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-stream-call"],
+  proofIds: ["gateway.stream-started.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_CHAT_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.chat.failed",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "gateway.logCallFailed",
+  fields: {
+    requestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    streaming: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["false"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["gateway-chat-call"],
+  proofIds: ["gateway.chat-failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_STREAM_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.stream.completed",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "gateway.logStreamCompleted",
+  fields: {
+    requestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    costClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["low", "medium", "high"],
+    },
+    chunkCount: { type: "integer", dataClass: "count", required: true },
+    firstTokenMs: { type: "number", dataClass: "duration", required: false },
+    promptTokens: { type: "integer", dataClass: "count", required: false },
+    completionTokens: { type: "integer", dataClass: "count", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-stream-call"],
+  proofIds: ["gateway.stream-completed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_STREAM_ABANDONED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.stream.abandoned",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "gateway.logStreamAbandoned",
+  fields: {
+    requestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    costClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["low", "medium", "high"],
+    },
+    streaming: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true"],
+    },
+    chunkCount: { type: "integer", dataClass: "count", required: true },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["consumer-stopped-iterating"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-stream-call"],
+  proofIds: ["gateway.stream-abandoned.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_STREAM_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.stream.failed",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "gateway.logStreamFailed",
+  fields: {
+    requestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    streaming: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true"],
+    },
+    chunkCount: { type: "integer", dataClass: "count", required: true },
+    afterFirstChunk: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true", "false"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["gateway-stream-call"],
+  proofIds: ["gateway.stream-failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_CHAT_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.chat.completed",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "gateway.logCallCompleted",
+  fields: {
+    requestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    costClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["low", "medium", "high"],
+    },
+    finishReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["stop", "tool_calls", "length", "content_filter", "error", "cancelled"],
+    },
+    toolCallCount: { type: "integer", dataClass: "count", required: true },
+    promptTokens: { type: "integer", dataClass: "count", required: true },
+    completionTokens: { type: "integer", dataClass: "count", required: true },
+    streaming: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["false"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-chat-call"],
+  proofIds: ["gateway.chat-completed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_STREAM_BUFFERED_FALLBACK_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.stream.buffered-fallback",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "gateway.streamFrom",
+  fields: {
+    requestId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["adapter-has-no-stream"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-stream-call"],
+  proofIds: ["gateway.stream-buffered-fallback.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_ROUTE_REJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.route.rejected",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "gateway.logRouteRejected",
+  fields: {
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["no-provider-configured", "no-capability-metadata", "wrong-model-kind"],
+    },
+    kind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["chat", "embedding", "ocr-vision", "voice"],
+    },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["gateway-route-rejection"],
+  proofIds: ["gateway.route-rejected.emitted-line"],
+  releaseImpact: "patch",
+});
 
 // RB-6 (GEN-OBS-CORRELATION-503): tag a thrown GatewayError with the gateway's per-call request id
 // so a failed model call is traceable to the gateway record (mirrors the id already carried by a
@@ -390,16 +758,28 @@ export class Gateway {
   // or `apiKey`: `endpointHost` is the bare hostname a misconfigured entry cannot turn into a path
   // or embedded-credential leak.
   private logConfigResolved(): void {
-    this.log.write(
-      gatewayEvent("info", "gateway.config.resolved", this.configurationCorrelationId, {
-        providers: this.config.providers.map((provider) => ({
+    const providerConfigDigest = sha256Hex(
+      canonicalise(
+        this.config.providers.map((provider) => ({
           modelId: provider.modelId,
           endpointHost: providerEndpointHost(provider.baseUrl),
           timeoutMs: provider.timeoutMs,
           maxRetries: provider.maxRetries,
           retryBaseDelayMs: provider.retryBaseDelayMs,
         })),
-      }),
+      ),
+    );
+    this.log.write(
+      activityLogEvent(
+        GATEWAY_CONFIG_RESOLVED_OPERATION,
+        {
+          level: "info",
+          ...(this.configurationCorrelationId === undefined
+            ? {}
+            : { correlationId: this.configurationCorrelationId }),
+        },
+        { providerCount: this.config.providers.length, providerConfigDigest },
+      ),
     );
   }
 
@@ -532,23 +912,27 @@ export class Gateway {
   ): void {
     if (repair === undefined) return;
     this.log.write(
-      gatewayEvent("warn", "gateway.tool-catalog.repair", correlationId, {
-        state,
-        reason: state === "denied" ? "context-window-exceeded" : "invalid-shape",
-        toolCallId: repair.toolCallId,
-        offeredAlias: repair.offeredAlias,
-        ...(repair.shape === undefined
-          ? {}
-          : {
-              missingRequiredCount: repair.shape.missingRequired.length,
-              invalidPathCount: repair.shape.invalidPaths.length,
-              unexpectedPropertyCount: repair.shape.unexpectedPropertyCount,
-              droppedPathCount: repair.shape.droppedPathCount,
-            }),
-        ...budget,
-        correctionMessageCount: 1,
-        effectStarted: false,
-      }),
+      activityLogEvent(
+        GATEWAY_TOOL_CATALOG_REPAIR_OPERATION,
+        { level: "warn", correlationId },
+        {
+          state,
+          reason: state === "denied" ? "context-window-exceeded" : "invalid-shape",
+          toolCallId: repair.toolCallId,
+          offeredAlias: repair.offeredAlias,
+          ...(repair.shape === undefined
+            ? {}
+            : {
+                missingRequiredCount: repair.shape.missingRequired.length,
+                invalidPathCount: repair.shape.invalidPaths.length,
+                unexpectedPropertyCount: repair.shape.unexpectedPropertyCount,
+                droppedPathCount: repair.shape.droppedPathCount,
+              }),
+          ...budget,
+          correctionMessageCount: 1,
+          effectStarted: false,
+        },
+      ),
     );
   }
 
@@ -643,26 +1027,35 @@ export class Gateway {
     upstreamStreaming = false,
   ): void {
     if (!logLevelEnabled(this.log, "info")) return;
+    const endpoint = logEndpointHost(route.provider.baseUrl);
+    const commonFields = {
+      ...callIdFields(ids),
+      modelId: route.provider.modelId,
+      ...(endpoint === undefined ? {} : { endpoint }),
+      costClass: route.capability.costClass,
+      timeoutMs: route.provider.timeoutMs,
+      maxRetries: route.provider.maxRetries,
+      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
+    };
+    if (streaming) {
+      this.log.write(
+        activityLogEvent(
+          GATEWAY_STREAM_STARTED_OPERATION,
+          { level: "info", correlationId: ids.correlationId },
+          { ...commonFields, streaming: true },
+        ),
+      );
+      return;
+    }
     this.log.write(
-      gatewayEvent(
-        "info",
-        streaming ? "gateway.stream.started" : "gateway.chat.started",
-        ids.correlationId,
+      activityLogEvent(
+        GATEWAY_CHAT_STARTED_OPERATION,
+        { level: "info", correlationId: ids.correlationId },
         {
-          ...callIdFields(ids),
-          modelId: route.provider.modelId,
-          endpoint: logEndpointHost(route.provider.baseUrl),
-          costClass: route.capability.costClass,
-          timeoutMs: route.provider.timeoutMs,
-          maxRetries: route.provider.maxRetries,
-          // A buffered call's bound across all its attempts, and whether its attempts read the
-          // answer over the provider's stream, where `timeoutMs` bounds the provider's silence
-          // (ADR-0003); a stream is one attempt, bounded by `timeoutMs` alone.
-          ...(streaming
-            ? {}
-            : { requestBudgetMs: providerRequestBudgetMs(route.provider), upstreamStreaming }),
-          ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
-          streaming,
+          ...commonFields,
+          requestBudgetMs: providerRequestBudgetMs(route.provider),
+          upstreamStreaming,
+          streaming: false,
         },
       ),
     );
@@ -670,13 +1063,15 @@ export class Gateway {
 
   private logCallFailed(ids: CallIds, route: RoutedCall, durationMs: number, error: unknown): void {
     this.log.write(
-      gatewayEvent(
-        "warn",
-        "gateway.chat.failed",
-        ids.correlationId,
+      activityLogEvent(
+        GATEWAY_CHAT_FAILED_OPERATION,
+        {
+          level: "warn",
+          correlationId: ids.correlationId,
+          durationMs,
+          errorKind: activityLogErrorKind(error),
+        },
         { ...callIdFields(ids), modelId: route.provider.modelId, streaming: false },
-        durationMs,
-        logErrorKind(error),
       ),
     );
   }
@@ -690,10 +1085,9 @@ export class Gateway {
     usage: StreamTerminalUsage | undefined,
   ): void {
     this.log.write(
-      gatewayEvent(
-        "info",
-        "gateway.stream.completed",
-        ids.correlationId,
+      activityLogEvent(
+        GATEWAY_STREAM_COMPLETED_OPERATION,
+        { level: "info", correlationId: ids.correlationId, durationMs },
         {
           ...callIdFields(ids),
           modelId: route.provider.modelId,
@@ -702,7 +1096,6 @@ export class Gateway {
           ...(firstTokenMs === undefined ? {} : { firstTokenMs }),
           ...usage,
         },
-        durationMs,
       ),
     );
   }
@@ -718,10 +1111,9 @@ export class Gateway {
     durationMs: number,
   ): void {
     this.log.write(
-      gatewayEvent(
-        "info",
-        "gateway.stream.abandoned",
-        ids.correlationId,
+      activityLogEvent(
+        GATEWAY_STREAM_ABANDONED_OPERATION,
+        { level: "info", correlationId: ids.correlationId, durationMs },
         {
           ...callIdFields(ids),
           modelId: route.provider.modelId,
@@ -730,7 +1122,6 @@ export class Gateway {
           chunkCount,
           reason: "consumer-stopped-iterating",
         },
-        durationMs,
       ),
     );
   }
@@ -743,10 +1134,14 @@ export class Gateway {
     error: unknown,
   ): void {
     this.log.write(
-      gatewayEvent(
-        "warn",
-        "gateway.stream.failed",
-        ids.correlationId,
+      activityLogEvent(
+        GATEWAY_STREAM_FAILED_OPERATION,
+        {
+          level: "warn",
+          correlationId: ids.correlationId,
+          durationMs,
+          errorKind: activityLogErrorKind(error),
+        },
         {
           ...callIdFields(ids),
           modelId: route.provider.modelId,
@@ -756,8 +1151,6 @@ export class Gateway {
           // (chatStream is deliberately outside executeWithRetry); the count is how far it got.
           afterFirstChunk: chunkCount > 0,
         },
-        durationMs,
-        logErrorKind(error),
       ),
     );
   }
@@ -773,10 +1166,9 @@ export class Gateway {
     durationMs: number,
   ): void {
     this.log.write(
-      gatewayEvent(
-        "info",
-        "gateway.chat.completed",
-        ids.correlationId,
+      activityLogEvent(
+        GATEWAY_CHAT_COMPLETED_OPERATION,
+        { level: "info", correlationId: ids.correlationId, durationMs },
         {
           ...callIdFields(ids),
           modelId: route.provider.modelId,
@@ -787,7 +1179,6 @@ export class Gateway {
           completionTokens: result.usage.completionTokens,
           streaming: false,
         },
-        durationMs,
       ),
     );
   }
@@ -806,11 +1197,15 @@ export class Gateway {
     // after the full buffered latency instead of incremental tokens. Silently, that reads to an
     // operator as a provider that took seconds to emit its first token.
     this.log.write(
-      gatewayEvent("warn", "gateway.stream.buffered-fallback", ids.correlationId, {
-        ...callIdFields(ids),
-        modelId: provider.modelId,
-        reason: "adapter-has-no-stream",
-      }),
+      activityLogEvent(
+        GATEWAY_STREAM_BUFFERED_FALLBACK_OPERATION,
+        { level: "warn", correlationId: ids.correlationId },
+        {
+          ...callIdFields(ids),
+          modelId: provider.modelId,
+          reason: "adapter-has-no-stream",
+        },
+      ),
     );
     const response = await adapter.call(request, provider);
     yield { type: "delta", token: response.content };
@@ -894,11 +1289,18 @@ export class Gateway {
   private logRouteRejected(
     modelId: string,
     correlationId: string | undefined,
-    reason: string,
-    kind?: string,
+    reason: "no-provider-configured" | "no-capability-metadata" | "wrong-model-kind",
+    kind?: ModelCapability["kind"],
   ): void {
     this.log.write(
-      gatewayEvent("warn", "gateway.route.rejected", correlationId, { modelId, reason, kind }),
+      activityLogEvent(
+        GATEWAY_ROUTE_REJECTED_OPERATION,
+        {
+          level: "warn",
+          ...(correlationId === undefined ? {} : { correlationId }),
+        },
+        { modelId, reason, ...(kind === undefined ? {} : { kind }) },
+      ),
     );
   }
 

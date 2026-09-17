@@ -110,7 +110,7 @@ async function drainStream(stream: AsyncGenerator<GatewayStreamChunk>): Promise<
 // The ONE-TIME configuration snapshot, written by the constructor itself — before any call has
 // happened, and never repeated for a Gateway instance that goes on to serve many calls.
 describe("Gateway construction — activity log", () => {
-  it("logs a config-resolved line naming every provider's safe fields, once", () => {
+  it("logs one bounded digest of the resolved provider configuration", () => {
     const log = recorder();
     const providers = [
       provider({
@@ -133,27 +133,12 @@ describe("Gateway construction — activity log", () => {
     const resolved = eventFor(log.events, "gateway.config.resolved");
     expect(resolved.level).toBe("info");
     expect(resolved.category).toBe("gateway");
-    expect(resolved.extra?.providers).toEqual([
-      {
-        modelId: "chat-a",
-        endpointHost: "provider-a.example",
-        timeoutMs: 5000,
-        maxRetries: 2,
-        retryBaseDelayMs: 250,
-      },
-      {
-        modelId: "chat-b",
-        endpointHost: "provider-b.example",
-        timeoutMs: 9000,
-        maxRetries: 0,
-        retryBaseDelayMs: 100,
-      },
-    ]);
+    expect(resolved.extra?.providerCount).toBe(2);
+    expect(resolved.extra?.providerConfigDigest).toMatch(/^[a-f0-9]{64}$/u);
   });
 
   // AUDIT-SEC-002-adjacent: a misconfigured provider entry can carry a bare token as URL userinfo
-  // or a deployment id in the path. `endpointHost` must survive that — reducing to the bare
-  // hostname, never the baseUrl the operator actually typed.
+  // or a deployment id in the path. The registry permits only the digest, never any endpoint.
   it("never lets a provider's baseUrl, embedded credentials, or path reach the config-resolved line", () => {
     const log = recorder();
     const leaky = provider({
@@ -162,9 +147,8 @@ describe("Gateway construction — activity log", () => {
     });
     new Gateway(config([leaky]), { clock: stubClock(), log: log.sink });
     const resolved = eventFor(log.events, "gateway.config.resolved");
-    expect(resolved.extra?.providers).toMatchObject([
-      { modelId: "chat-leaky", endpointHost: "leaky.example" },
-    ]);
+    expect(resolved.extra?.providerCount).toBe(1);
+    expect(resolved.extra?.providerConfigDigest).toMatch(/^[a-f0-9]{64}$/u);
     const serialized = JSON.stringify(resolved);
     expect(serialized).not.toContain("sk-embedded-secret-9876543210");
     expect(serialized).not.toContain("secret-path");
@@ -349,7 +333,7 @@ describe("Gateway.chat — activity log", () => {
     await expect(gateway.chat(REQUEST)).rejects.toBeInstanceOf(TransportError);
     const failed = eventFor(log.events, "gateway.chat.failed");
     expect(failed.level).toBe("warn");
-    expect(failed.errorKind).toBe("GATEWAY_TRANSPORT");
+    expect(failed.errorKind).toBe("internal");
     expect(JSON.stringify(failed)).not.toContain("sk-leak-me");
     expect(ops(log.events)).not.toContain("gateway.chat.completed");
   });
@@ -442,7 +426,7 @@ describe("Gateway.chatStream — activity log", () => {
       TransportError,
     );
     const failed = eventFor(log.events, "gateway.stream.failed");
-    expect(failed.errorKind).toBe("GATEWAY_TRANSPORT");
+    expect(failed.errorKind).toBe("internal");
     expect(failed.extra).toMatchObject({ chunkCount: 1, afterFirstChunk: true, streaming: true });
     expect(ops(log.events)).not.toContain("gateway.stream.completed");
   });
