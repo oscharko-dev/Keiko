@@ -1312,6 +1312,7 @@ describe("runLifecycleCli", () => {
       undefined,
       "security",
       "security.windows-lifecycle-opener.system-root-refused",
+      "unsafe-target",
       "WindowsSystemDirectoryError",
     ],
     [
@@ -1322,11 +1323,12 @@ describe("runLifecycleCli", () => {
       },
       "diagnostic",
       "security.windows-lifecycle-opener.system-binary-missing",
+      "unavailable",
       "WINDOWS_SYSTEM_BINARY_MISSING",
     ],
   ] as const)(
     "keeps start successful and logs a body-free Windows opener %s failure",
-    async (_label, env, openExternal, category, op, errorKind) => {
+    async (_label, env, openExternal, category, op, errorKind, failureKind) => {
       const root = makeRoot();
       const c = makeIo();
       const events: SecurityLogEvent[] = [];
@@ -1352,7 +1354,7 @@ describe("runLifecycleCli", () => {
       expect(code).toBe(0);
       expect(c.err()).toContain("failed to open http://127.0.0.1:1983");
       expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({ category, op, errorKind });
+      expect(events[0]).toMatchObject({ category, op, errorKind, extra: { failureKind } });
       expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
       expect(JSON.stringify(events)).not.toContain("attacker");
     },

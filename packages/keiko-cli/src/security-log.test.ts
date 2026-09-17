@@ -121,14 +121,24 @@ describe("emitCliWindowsSystemFailure", () => {
         {
           category: "security",
           errorKind: "unsafe-target",
-          extra: { surface, failureKind: "WindowsSystemDirectoryError" },
+          extra: {
+            surface,
+            failureKind: "WindowsSystemDirectoryError",
+            completeness: "complete",
+            loss: "none",
+          },
           level: "warn",
           op: rootRefused,
         },
         {
           category: "diagnostic",
           errorKind: "unavailable",
-          extra: { surface, failureKind: "WINDOWS_SYSTEM_BINARY_MISSING" },
+          extra: {
+            surface,
+            failureKind: "WINDOWS_SYSTEM_BINARY_MISSING",
+            completeness: "complete",
+            loss: "none",
+          },
           level: "error",
           op: binaryMissing,
         },

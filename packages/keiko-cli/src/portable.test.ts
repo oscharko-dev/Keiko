@@ -836,8 +836,8 @@ describe("runPortableCli", () => {
       expect(events[0]).toMatchObject({
         category: "security",
         op: "security.windows-shortcut.system-root-refused",
-        errorKind: "WindowsSystemDirectoryError",
-        extra: { mode: "create" },
+        errorKind: "unsafe-target",
+        extra: { mode: "create", failureKind: "WindowsSystemDirectoryError" },
       });
       expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
       expect(JSON.stringify(events)).not.toContain("attacker");
