@@ -26,7 +26,9 @@
 import { createHash } from "node:crypto";
 
 import {
+  ACTIVITY_LOG_EVENT_REGISTRATION,
   activityLogEvent,
+  activityLogEventRegistration,
   classifyErrorKind,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -164,7 +166,17 @@ export function bindSecurityLogCorrelation(
   if (sink === undefined) return undefined;
   const bound: SecurityLogSink = {
     write(event): void {
-      sink.write({ ...event, correlationId });
+      const forwarded = { ...event, correlationId };
+      const registration = activityLogEventRegistration(event);
+      if (registration !== undefined) {
+        Object.defineProperty(forwarded, ACTIVITY_LOG_EVENT_REGISTRATION, {
+          value: registration,
+          enumerable: false,
+          configurable: false,
+          writable: false,
+        });
+      }
+      sink.write(forwarded);
     },
   };
   BOUND_SINK_UNDERLYING.set(bound, sinkIdentity(sink));

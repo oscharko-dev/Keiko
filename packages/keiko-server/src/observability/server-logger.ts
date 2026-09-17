@@ -163,9 +163,7 @@ function buildEvent(
     errorKind: input.errorKind,
     extra: mergeExtra(binding, input),
   };
-  const registration = activityLogEventRegistration(
-    input as unknown as Readonly<Record<PropertyKey, unknown>>,
-  );
+  const registration = activityLogEventRegistration(input);
   if (registration !== undefined) {
     Object.defineProperty(event, ACTIVITY_LOG_EVENT_REGISTRATION, {
       value: registration,

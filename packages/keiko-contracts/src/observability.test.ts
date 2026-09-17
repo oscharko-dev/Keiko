@@ -132,10 +132,11 @@ describe("typed Activity Log operation registration", () => {
       reasons: ["first", "second"],
     });
 
-    if (false) {
+    const assertInvalidArrayMember = (): void => {
       // @ts-expect-error each array member stays inside the registered vocabulary
       activityLogEvent(operation, {}, { reasons: ["third"] });
-    }
+    };
+    expect(assertInvalidArrayMember).toBeTypeOf("function");
   });
 
   it("binds an emitted field set to one immutable operation identity", () => {
@@ -170,7 +171,7 @@ describe("typed Activity Log operation registration", () => {
       extra: { completeness: "complete", loss: "none", itemCount: 2 },
     });
 
-    if (false) {
+    const assertInvalidFieldTypes = (): void => {
       const rawFields = { itemCount: 2, rawBody: "forbidden" };
       // @ts-expect-error required registered field is missing
       activityLogEvent(operation, {}, {});
@@ -180,7 +181,8 @@ describe("typed Activity Log operation registration", () => {
       activityLogEvent(operation, {}, rawFields);
       // @ts-expect-error registered count fields are numeric
       activityLogEvent(operation, {}, { itemCount: "two" });
-    }
+    };
+    expect(assertInvalidFieldTypes).toBeTypeOf("function");
 
     expect(() =>
       activityLogEvent(operation, { correlationId: "registry-fixture-correlation" }, {
@@ -302,7 +304,9 @@ describe("Activity Log data-class validation", () => {
       "1.2.3-beta.1+build.4",
     ],
   ] as const)("accepts a body-free %s", (_label, contract, value) => {
-    expect(() => emitFixtureValue(contract, value)).not.toThrow();
+    expect(() => {
+      emitFixtureValue(contract, value);
+    }).not.toThrow();
   });
 
   it.each([
@@ -332,9 +336,9 @@ describe("Activity Log data-class validation", () => {
       "release candidate one",
     ],
   ] as const)("rejects prose carried as a %s", (_label, contract, value) => {
-    expect(() => emitFixtureValue(contract, value)).toThrow(
-      new ActivityLogEventValidationError("invalid-field-vocabulary"),
-    );
+    expect(() => {
+      emitFixtureValue(contract, value);
+    }).toThrow(new ActivityLogEventValidationError("invalid-field-vocabulary"));
   });
 
   it("applies semantic validation to each array member", () => {
@@ -346,22 +350,24 @@ describe("Activity Log data-class validation", () => {
       maxItems: 2,
     } as const;
 
-    expect(() => emitFixtureValue(contract, ["a".repeat(64), "b".repeat(16)])).not.toThrow();
-    expect(() => emitFixtureValue(contract, ["a".repeat(64), "raw customer body"])).toThrow(
-      new ActivityLogEventValidationError("invalid-field-vocabulary"),
-    );
+    expect(() => {
+      emitFixtureValue(contract, ["a".repeat(64), "b".repeat(16)]);
+    }).not.toThrow();
+    expect(() => {
+      emitFixtureValue(contract, ["a".repeat(64), "raw customer body"]);
+    }).toThrow(new ActivityLogEventValidationError("invalid-field-vocabulary"));
   });
 
   it("rejects unsafe integer counts and versions", () => {
     const count = { type: "integer", dataClass: "count", required: true } as const;
     const version = { type: "integer", dataClass: "safe-version", required: true } as const;
 
-    expect(() => emitFixtureValue(count, Number.MAX_SAFE_INTEGER + 1)).toThrow(
-      new ActivityLogEventValidationError("invalid-field-type"),
-    );
-    expect(() => emitFixtureValue(version, -1)).toThrow(
-      new ActivityLogEventValidationError("invalid-field-bound"),
-    );
+    expect(() => {
+      emitFixtureValue(count, Number.MAX_SAFE_INTEGER + 1);
+    }).toThrow(new ActivityLogEventValidationError("invalid-field-type"));
+    expect(() => {
+      emitFixtureValue(version, -1);
+    }).toThrow(new ActivityLogEventValidationError("invalid-field-bound"));
   });
 });
 

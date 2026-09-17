@@ -9,6 +9,11 @@
 //   * the timer is monotonic and never reports a negative duration.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  activityLogEvent,
+  activityLogEventRegistration,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
   bindSecurityLogCorrelation,
@@ -19,6 +24,22 @@ import {
   type SecurityLogEvent,
   type SecurityLogSink,
 } from "./log-port.js";
+
+const CORRELATION_WRAPPER_FIXTURE = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "test.security-correlation-wrapper",
+  category: "security",
+  owner: "keiko-security",
+  emitter: "log-port.test.security-correlation-wrapper",
+  fields: {},
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["test-fixture"],
+  proofIds: ["test.security-correlation-wrapper.registration"],
+  releaseImpact: "none",
+});
 
 // The specs below replace platform functions — `performance.now`, `process.emitWarning`. A spy
 // restored on the last line of its own test is only restored when that test PASSES: an assertion
@@ -57,6 +78,19 @@ describe("bindSecurityLogCorrelation", () => {
 
   it("returns undefined when no sink is wired", () => {
     expect(bindSecurityLogCorrelation(undefined, "corr-1")).toBeUndefined();
+  });
+
+  it("preserves typed registration while binding correlation", () => {
+    const events: SecurityLogEvent[] = [];
+    const bound = bindSecurityLogCorrelation(
+      { write: (event): void => void events.push(event) },
+      "security-correlation-1",
+    );
+    const event = activityLogEvent(CORRELATION_WRAPPER_FIXTURE, {}, {});
+
+    bound?.write(event);
+
+    expect(activityLogEventRegistration(events[0] ?? {})).toBe(CORRELATION_WRAPPER_FIXTURE);
   });
 
   it("deduplicates sink-failed reports across correlation wrappers of the same sink", () => {
@@ -195,7 +229,12 @@ describe("emitSecurityLogEvent", () => {
       category: "diagnostic",
       op: "security.log.sink-failed",
       errorKind: "unavailable",
-      extra: { droppedOpDigest: "764c7a89e99dae45", failureKind: "ENOSPC" },
+      extra: {
+        completeness: "complete",
+        loss: "none",
+        droppedOpDigest: "764c7a89e99dae45",
+        failureKind: "ENOSPC",
+      },
     });
   });
 
