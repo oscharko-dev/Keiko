@@ -49,9 +49,9 @@ import {
 } from "@oscharko-dev/keiko-security/fs-hardening";
 
 import {
-  activityLogEvent,
-  classifyErrorKind,
-  defineActivityLogOperation,
+  activityLogEvent, activityLogEventRegistration,
+  classifyErrorKind, defineActivityLogOperation,
+  validateRegisteredActivityLogEvent,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { correlationIdOrUnknown, isValidCorrelationId } from "../correlation.js";
@@ -447,6 +447,35 @@ export function formatServerLogLine(
   return serverLogLineWithinCap(line) ? line : oversizedLine(record, serverLogLineBytes(line));
 }
 
+export function formatRegisteredServerLogLine(
+  event: ServerLogEvent,
+  now: Date = new Date(),
+  identity?: ServerLogIdentity,
+): string {
+  validateRegisteredActivityLogEvent(
+    event as unknown as Readonly<Record<PropertyKey, unknown>>,
+  );
+  return formatServerLogLine(event, now, identity);
+}
+
+function eventHasTypedRegistration(event: ServerLogEvent): boolean {
+  return (
+    activityLogEventRegistration(
+      event as unknown as Readonly<Record<PropertyKey, unknown>>,
+    ) !== undefined
+  );
+}
+
+function formatEventLine(
+  event: ServerLogEvent,
+  now?: Date,
+  identity?: ServerLogIdentity,
+): string {
+  return eventHasTypedRegistration(event)
+    ? formatRegisteredServerLogLine(event, now, identity)
+    : formatServerLogLine(event, now, identity);
+}
+
 // The cap is a cap on BYTES, because the write below encodes UTF-8 and a log shipper's line limit
 // counts bytes. `line.length` counts UTF-16 code units, so comparing it against the cap admitted a
 // line up to three times the stated size — and multi-byte text is exactly what makes a line
@@ -635,7 +664,7 @@ function writeEventRecord(
   event: ServerLogEvent,
   identity: ServerLogIdentity = allocateServerLogIdentity(),
 ): void {
-  writeRecord(active, handle, formatServerLogLine(event, undefined, identity));
+  writeRecord(active, handle, formatEventLine(event, undefined, identity));
 }
 
 const SERVER_LOG_SAFE_OPEN_OPERATION = defineActivityLogOperation({
@@ -1009,7 +1038,7 @@ function closeLogDirectoryGuards(guards: readonly LogDirectoryGuard[]): void {
 function batchLines(events: readonly ServerLogEvent[]): readonly string[] | undefined {
   const lines: string[] = [];
   for (const event of events) {
-    const line = formatServerLogLine(event, undefined, allocateServerLogIdentity());
+    const line = formatEventLine(event, undefined, allocateServerLogIdentity());
     if (Buffer.byteLength(line, "utf8") > MAX_LOG_LINE_BYTES) return undefined;
     lines.push(line);
   }
@@ -1381,7 +1410,7 @@ export function createBufferedServerLogSink(): BufferedServerLogSink {
       events.push(event);
     },
     lines(): readonly string[] {
-      return events.map((event) => formatServerLogLine(event));
+      return events.map((event) => formatEventLine(event));
     },
     clear(): void {
       events.length = 0;

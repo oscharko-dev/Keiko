@@ -311,12 +311,11 @@ function canonicalActivityLogApiName(checker, node) {
 function typedCallKind(checker, node) {
   if (!ts.isCallExpression(node)) return undefined;
   const apiName = canonicalActivityLogApiName(checker, node);
+  if (apiName === "activityLogEvent") return "activity-log-event";
   const expectedKind =
     apiName === "defineActivityLogOperation"
       ? "activity-log-operation"
-      : apiName === "activityLogEvent"
-        ? "activity-log-event"
-        : undefined;
+      : undefined;
   return stringLiteralType(checker, node, "contractKind") === expectedKind
     ? expectedKind
     : undefined;
