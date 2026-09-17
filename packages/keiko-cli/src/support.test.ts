@@ -279,6 +279,7 @@ describe("runSupportCli export", () => {
 
   afterEach(() => {
     vi.doUnmock("node:fs");
+    vi.doUnmock("@oscharko-dev/keiko-security/fs-hardening");
     vi.resetModules();
     rmSync(stateDir, { recursive: true, force: true });
     rmSync(outDir, { recursive: true, force: true });
@@ -1196,6 +1197,54 @@ describe("runSupportCli export", () => {
     });
     expect(String(publication?.correlationId)).toMatch(/^[0-9a-f-]{36}$/);
     expect(JSON.stringify(publication)).not.toContain(outPath);
+  });
+
+  it("records acknowledgement failure as the sole terminal publication evidence", async () => {
+    vi.resetModules();
+    vi.doMock("@oscharko-dev/keiko-security/fs-hardening", async () => {
+      const actual = await vi.importActual<
+        typeof import("@oscharko-dev/keiko-security/fs-hardening")
+      >("@oscharko-dev/keiko-security/fs-hardening");
+      return {
+        ...actual,
+        acknowledgeSafeArtifactFileSet: (): never => {
+          throw new actual.SafeArtifactFileError("manifest", "durability-failed");
+        },
+      };
+    });
+    const isolated = await import("./support.js");
+    const c = makeIo();
+    const outPath = join(outDir, "ack-failure.jsonl");
+
+    expect(
+      await isolated.runSupportCli(
+        ["export", "--state-dir", stateDir, "--out", outPath],
+        c.io,
+        AUDIT_ENV,
+        { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+      ),
+    ).toBe(1);
+    expect(c.out()).toContain("Wrote ");
+    expect(c.err()).toContain("could not acknowledge publication: durability-failed");
+    const records = readFileSync(join(stateDir, "logs", "server.log"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((record) => record.op === "support.export.publication");
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      level: "error",
+      errorKind: "durability-failed",
+      publicationPersistenceStatus: "acknowledgement-failed",
+      publicationStatus: "published",
+      receiptState: "acknowledgement-uncertain",
+      publicationCompleteness: "complete",
+      publicationLoss: "none",
+      visibleArtifactCount: 2,
+      failedArtifactClass: "manifest",
+    });
+    expect(String(records[0]?.correlationId)).toMatch(/^[0-9a-f-]{36}$/);
+    expect(JSON.stringify(records[0])).not.toContain(outPath);
   });
 
   // `readUiLogContentOrUndefined`'s catch path: BOTH consent flags are given, but no ui.log file

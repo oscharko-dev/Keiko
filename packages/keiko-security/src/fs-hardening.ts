@@ -1941,6 +1941,9 @@ function transitionalReceiptState(
   complete: boolean,
   consumed: boolean,
 ): RecoveredReceiptState | undefined {
+  if (Number(active) + Number(complete) + Number(consumed) === 3) {
+    throw safeFileError("manifest", "recovery-conflict");
+  }
   if (complete && consumed) {
     finishLinkedPublicationReceipt(root, slot, "complete", "consumed");
     return { status: "none" };
@@ -2053,9 +2056,9 @@ export function acknowledgeSafeArtifactFileSet(
 /**
  * Publishes related files without replacement; the designated commit artifact appears last.
  * Filesystems without same-directory hard links fail closed as `publish-unsupported`.
- * A complete target-only state after loss of the final marker remains intact but is deliberately
- * ambiguous and therefore fails `target-exists`; only a durable deterministic stage authorizes
- * automatic recovery.
+ * Fixed-slot publication retains a bounded active/complete/consumed receipt: complete receipts
+ * authorize exact recovery until the consumer acknowledges them, and a consumed receipt is
+ * retired only after its next active successor is durable. Targets alone never authorize replay.
  */
 export function publishSafeArtifactFileSet(
   entries: readonly SafeArtifactPublicationEntry[],

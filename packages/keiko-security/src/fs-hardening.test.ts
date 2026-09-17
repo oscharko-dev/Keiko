@@ -99,6 +99,18 @@ function publicationStages(base: string): readonly string[] {
   return readdirSync(base).filter((name) => name.startsWith(".keiko-publish-"));
 }
 
+function artifactDirectorySnapshot(
+  base: string,
+): readonly { readonly name: string; readonly bytes: string; readonly mode: number }[] {
+  return readdirSync(base)
+    .sort()
+    .map((name) => ({
+      name,
+      bytes: readFileSync(join(base, name)).toString("base64"),
+      mode: statSync(join(base, name)).mode & 0o777,
+    }));
+}
+
 async function failPublicationFsyncAt(base: string, path: string, failAt: number): Promise<void> {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   let calls = 0;
@@ -1013,6 +1025,54 @@ describe("publishSafeArtifactFileSet", () => {
     expect(readFileSync(report, "utf8")).toBe("before-crash");
     expect(publicationStages(base)).toHaveLength(1);
   });
+
+  it("rejects a hostile triple receipt state without mutating names, bytes, or modes", () => {
+    const base = freshDir();
+    const report = join(base, "support.jsonl");
+    const slot = safeArtifactPublicationSlot("support-export", report);
+    publishSafeArtifactFileSet(
+      [{ path: report, contents: "report", artifactClass: "support-report" }],
+      { commitPath: report, trustedRoot: base, publicationSlot: slot },
+    );
+    const complete = join(base, `.keiko-publish-${slot}.complete`);
+    const consumed = join(base, `.keiko-publish-${slot}.consumed`);
+    const active = join(base, `.keiko-publish-${slot}.active`);
+    linkSync(complete, consumed);
+    writeFileSync(active, readFileSync(complete), { mode: FILE_MODE });
+    const before = artifactDirectorySnapshot(base);
+
+    expect(() => recoverSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base })).toThrow(
+      expect.objectContaining({ kind: "recovery-conflict" }),
+    );
+    expect(artifactDirectorySnapshot(base)).toEqual(before);
+  });
+
+  it.each([
+    ["active", "complete"],
+    ["complete", "consumed"],
+  ] as const)(
+    "rejects unrelated %s + %s receipt inodes without mutation",
+    (extraState, retainedState) => {
+      const base = freshDir();
+      const report = join(base, "support.jsonl");
+      const slot = safeArtifactPublicationSlot("support-export", report);
+      publishSafeArtifactFileSet(
+        [{ path: report, contents: "report", artifactClass: "support-report" }],
+        { commitPath: report, trustedRoot: base, publicationSlot: slot },
+      );
+      const complete = join(base, `.keiko-publish-${slot}.complete`);
+      const extra = join(base, `.keiko-publish-${slot}.${extraState}`);
+      const retained = join(base, `.keiko-publish-${slot}.${retainedState}`);
+      if (retained !== complete) renameSync(complete, retained);
+      writeFileSync(extra, readFileSync(retained), { mode: FILE_MODE });
+      const before = artifactDirectorySnapshot(base);
+
+      expect(() =>
+        recoverSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base }),
+      ).toThrow(expect.objectContaining({ kind: "recovery-conflict" }));
+      expect(artifactDirectorySnapshot(base)).toEqual(before);
+    },
+  );
 
   it.each([
     ["malformed", "not-json\n"],

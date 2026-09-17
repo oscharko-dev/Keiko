@@ -429,6 +429,19 @@ type BundlePublicationOutcome =
       readonly recoveryState: "conflict" | "none" | "rolled-back";
     };
 
+type CompletedBundlePublicationOutcome = Extract<
+  BundlePublicationOutcome,
+  { readonly status: "published" | "recovered" }
+>;
+
+interface AcknowledgementFailedOutcome {
+  readonly status: "acknowledgement-failed";
+  readonly errorKind: SafeArtifactFileFailureKind | "unknown";
+  readonly publication: CompletedBundlePublicationOutcome;
+}
+
+type SupportPublicationEvidenceOutcome = BundlePublicationOutcome | AcknowledgementFailedOutcome;
+
 export function supportPublicationErrorKind(
   error: unknown,
 ): SafeArtifactFileFailureKind | "unknown" {
@@ -523,68 +536,109 @@ function recoverSupportBundle(
   }
 }
 
-function acknowledgeSupportPublication(context: SupportPublicationContext, io: CliIo): boolean {
+function acknowledgeSupportPublication(
+  context: SupportPublicationContext,
+  io: CliIo,
+): SafeArtifactFileFailureKind | "unknown" | undefined {
   try {
     acknowledgeSafeArtifactFileSet({
       publicationSlot: context.slot,
       trustedRoot: context.root,
     });
-    return true;
+    return undefined;
   } catch (error) {
-    io.err(
-      `keiko support export: could not acknowledge publication: ${supportPublicationErrorKind(error)}\n`,
-    );
-    return false;
+    const errorKind = supportPublicationErrorKind(error);
+    io.err(`keiko support export: could not acknowledge publication: ${errorKind}\n`);
+    return errorKind;
   }
 }
 
 type LoadedServer = Awaited<ReturnType<typeof loadServer>>;
 
+function completedPublicationEvidenceFields(
+  publication: CompletedBundlePublicationOutcome,
+  persistenceStatus: "published" | "recovered" | "acknowledgement-failed",
+  receiptState: "consumed" | "acknowledgement-uncertain",
+): Readonly<Record<string, unknown>> {
+  return {
+    publicationArtifactClass: "support-report",
+    artifactCount: 2,
+    visibleArtifactCount: 2,
+    persistenceStatus,
+    publicationPersistenceStatus: persistenceStatus,
+    completeness: "complete",
+    publicationCompleteness: "complete",
+    loss: "none",
+    publicationLoss: "none",
+    recoveryState: publication.recoveryState,
+    publicationStatus: publication.result.status,
+    permissionAssurance: publication.result.permissionAssurance,
+    durabilityAssurance: publication.result.durabilityAssurance,
+    reportBytes: publication.reportBytes,
+    reportSha256: publication.reportSha256,
+    receiptState,
+  };
+}
+
+function failedPublicationEvidenceFields(
+  outcome: Extract<BundlePublicationOutcome, { readonly status: "failed" }>,
+): Readonly<Record<string, unknown>> {
+  return {
+    publicationArtifactClass: "support-report",
+    artifactCount: 2,
+    visibleArtifactCount: "unknown",
+    persistenceStatus: "failed",
+    publicationPersistenceStatus: "failed",
+    completeness: "unknown",
+    publicationCompleteness: "unknown",
+    loss: "publication-unavailable",
+    publicationLoss: "publication-unavailable",
+    recoveryState: outcome.recoveryState,
+    receiptState: "unknown",
+    failedArtifactClass: "support-report",
+  };
+}
+
 function emitSupportPublicationEvidence(
   server: LoadedServer,
   stateDir: string,
   correlationId: string,
-  outcome: BundlePublicationOutcome,
+  outcome: SupportPublicationEvidenceOutcome,
 ): void {
   const activityLog = server.createFileServerLogSink(stateDir);
   try {
-    const complete = outcome.status !== "failed";
-    const loss = complete ? "none" : "publication-unavailable";
-    const common = {
-      publicationArtifactClass: "support-report",
-      artifactCount: 2,
-      visibleArtifactCount: complete ? 2 : "unknown",
-      persistenceStatus: outcome.status,
-      publicationPersistenceStatus: outcome.status,
-      completeness: complete ? "complete" : "unknown",
-      publicationCompleteness: complete ? "complete" : "unknown",
-      loss,
-      publicationLoss: loss,
-      recoveryState: outcome.recoveryState,
-    };
     activityLog.write(
-      outcome.status !== "failed"
+      outcome.status === "acknowledgement-failed"
         ? {
-            category: "diagnostic",
-            op: "support.export.publication",
-            correlationId,
-            extra: {
-              ...common,
-              publicationStatus: outcome.result.status,
-              permissionAssurance: outcome.result.permissionAssurance,
-              durabilityAssurance: outcome.result.durabilityAssurance,
-              reportBytes: outcome.reportBytes,
-              reportSha256: outcome.reportSha256,
-            },
-          }
-        : {
             level: "error",
             category: "diagnostic",
             op: "support.export.publication",
             correlationId,
             errorKind: outcome.errorKind,
-            extra: { ...common, failedArtifactClass: "support-report" },
-          },
+            extra: {
+              ...completedPublicationEvidenceFields(
+                outcome.publication,
+                "acknowledgement-failed",
+                "acknowledgement-uncertain",
+              ),
+              failedArtifactClass: "manifest",
+            },
+          }
+        : outcome.status !== "failed"
+          ? {
+              category: "diagnostic",
+              op: "support.export.publication",
+              correlationId,
+              extra: completedPublicationEvidenceFields(outcome, outcome.status, "consumed"),
+            }
+          : {
+              level: "error",
+              category: "diagnostic",
+              op: "support.export.publication",
+              correlationId,
+              errorKind: outcome.errorKind,
+              extra: failedPublicationEvidenceFields(outcome),
+            },
     );
   } finally {
     activityLog.close?.();
@@ -799,10 +853,41 @@ async function recoveredSupportExportExitCode(
 ): Promise<number | undefined> {
   if (recovery.status === "none" || recovery.status === "rolled-back") return undefined;
   const server = await loadServer();
-  emitSupportPublicationEvidence(server, stateDir, randomUUID(), recovery);
-  if (recovery.status === "failed") return 1;
-  io.out(`Recovered support report at ${recovery.result.commitPath}\n`);
-  return acknowledgeSupportPublication(context, io) ? 0 : 1;
+  if (recovery.status === "failed") {
+    emitSupportPublicationEvidence(server, stateDir, randomUUID(), recovery);
+    return 1;
+  }
+  return completeSupportPublication(
+    recovery,
+    server,
+    stateDir,
+    io,
+    context,
+    `Recovered support report at ${recovery.result.commitPath}\n`,
+  );
+}
+
+function completeSupportPublication(
+  publication: CompletedBundlePublicationOutcome,
+  server: LoadedServer,
+  stateDir: string,
+  io: CliIo,
+  context: SupportPublicationContext,
+  successLine: string,
+): number {
+  const correlationId = randomUUID();
+  io.out(successLine);
+  const errorKind = acknowledgeSupportPublication(context, io);
+  if (errorKind === undefined) {
+    emitSupportPublicationEvidence(server, stateDir, correlationId, publication);
+    return 0;
+  }
+  emitSupportPublicationEvidence(server, stateDir, correlationId, {
+    status: "acknowledgement-failed",
+    errorKind,
+    publication,
+  });
+  return 1;
 }
 
 function publishedSupportExportExitCode(
@@ -814,10 +899,18 @@ function publishedSupportExportExitCode(
   io: CliIo,
   context: SupportPublicationContext,
 ): number {
-  emitSupportPublicationEvidence(server, stateDir, randomUUID(), publication);
-  if (publication.status === "failed") return 1;
-  io.out(`Wrote ${String(lineCount)} lines to ${outPath}\n`);
-  return acknowledgeSupportPublication(context, io) ? 0 : 1;
+  if (publication.status === "failed") {
+    emitSupportPublicationEvidence(server, stateDir, randomUUID(), publication);
+    return 1;
+  }
+  return completeSupportPublication(
+    publication,
+    server,
+    stateDir,
+    io,
+    context,
+    `Wrote ${String(lineCount)} lines to ${outPath}\n`,
+  );
 }
 
 interface FreshSupportExportContext {
