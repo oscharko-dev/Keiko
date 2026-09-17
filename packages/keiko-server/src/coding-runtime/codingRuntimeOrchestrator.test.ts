@@ -1541,6 +1541,7 @@ describe("CodingRuntimeOrchestrator", () => {
       captured.records.find((candidate) => candidate.op === "coding-runtime.event.dropped"),
     ).toMatchObject({
       level: "warn",
+      errorKind: "conflict",
       extra: {
         eventKind: "operator-decision",
         eventRunId: "run-foreign",
@@ -1565,7 +1566,11 @@ describe("CodingRuntimeOrchestrator", () => {
     const line = captured.records.find(
       (candidate) => candidate.op === "coding-runtime.run.operator-decision",
     );
-    expect(line).toMatchObject({ level: "warn", extra: { state: "not-admissible" } });
+    expect(line).toMatchObject({
+      level: "warn",
+      errorKind: "permission-denied",
+      extra: { state: "not-admissible" },
+    });
   });
 
   // An ad-hoc task legitimately ends with no commit: inferring delivery intent from free text would

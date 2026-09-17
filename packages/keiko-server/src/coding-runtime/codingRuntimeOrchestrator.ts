@@ -212,6 +212,176 @@ const CODING_RUNTIME_PROJECT_MEMORY_CONTEXT_OPERATION = defineActivityLogOperati
   releaseImpact: "patch",
 });
 
+const CODING_RUNTIME_APPROVAL_WAITING_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.approval.waiting",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeOrchestrator.recordRuntimeApprovalWaiting",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    revision: { type: "integer", dataClass: "count", required: true },
+    requestId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    permissionKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "workspace-write",
+        "command-execution",
+        "network-egress",
+        "connector-access",
+        "delivery-substrate",
+      ],
+    },
+    actionClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "workspace-read",
+        "workspace-write",
+        "command-execution",
+        "verification",
+        "connector-access",
+        "network-egress",
+        "delivery-substrate",
+      ],
+    },
+    actionKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "file-edit",
+        "git-stage",
+        "verification-command",
+        "ci-observe",
+        "connector-read",
+        "research",
+        "commit",
+        "push",
+        "pull-request",
+        "merge",
+        "connector-write",
+        "external-write",
+        "system-mutation",
+      ],
+    },
+    queuePosition: { type: "integer", dataClass: "count", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "wait",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-approval-wait"],
+  proofIds: ["coding-runtime.approval.waiting.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_RUN_OPERATOR_DECISION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.run.operator-decision",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeOrchestrator.recordRuntimeOperatorDecision",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    revision: { type: "integer", dataClass: "count", required: true },
+    runState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "idle",
+        "starting",
+        "ready",
+        "running",
+        "paused",
+        "awaiting-approval",
+        "stopping",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "taken-over",
+        "recovery-required",
+      ],
+    },
+    decision: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["workspace-script-trust"],
+    },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["waiting", "settled", "not-admissible"],
+    },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["accepted", "denied", "unavailable", "limit-reached", "stopped"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-operator-decision"],
+  proofIds: ["coding-runtime.run.operator-decision.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_EVENT_DROPPED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.event.dropped",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeOrchestrator.recordRuntimeEventDropped",
+  fields: {
+    eventKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "runtime-started",
+        "runtime-stopped",
+        "runtime-health",
+        "task-submitted",
+        "observation-streamed",
+        "permission-requested",
+        "diff-summarized",
+        "verification-summarized",
+        "artifact-produced",
+        "research-performed",
+        "skill-invoked",
+        "child-run-started",
+        "child-run-completed",
+        "operator-decision",
+        "failure-redacted",
+      ],
+    },
+    eventRunId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["no-live-run", "run-mismatch"],
+    },
+    liveRunId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-runtime-event-drop"],
+  proofIds: ["coding-runtime.event.dropped.emitted-line"],
+  releaseImpact: "patch",
+});
+
 function descriptionGenerationBinding(
   snapshot: CodingRuntimeSnapshot,
 ): WorkbenchDescriptionGenerationBinding {
@@ -563,20 +733,21 @@ function recordRuntimeApprovalWaiting(
   permission: CodingWorkbenchRuntimePendingPermission,
   queuePosition?: number,
 ): void {
-  activityLog?.write({
-    category: "process",
-    op: "coding-runtime.approval.waiting",
-    correlationId: runtimeDiagnosticCorrelationId(runId),
-    extra: {
-      runId,
-      revision,
-      requestId: permission.requestId,
-      permissionKind: permission.kind,
-      actionClass: permission.actionClass,
-      actionKind: permission.actionKind,
-      ...(queuePosition === undefined ? {} : { queuePosition }),
-    },
-  });
+  activityLog?.write(
+    activityLogEvent(
+      CODING_RUNTIME_APPROVAL_WAITING_OPERATION,
+      { correlationId: runtimeDiagnosticCorrelationId(runId) },
+      {
+        runId,
+        revision,
+        requestId: permission.requestId,
+        permissionKind: permission.kind,
+        actionClass: permission.actionClass,
+        ...(permission.actionKind === undefined ? {} : { actionKind: permission.actionKind }),
+        ...(queuePosition === undefined ? {} : { queuePosition }),
+      },
+    ),
+  );
 }
 
 /**
@@ -596,20 +767,24 @@ function recordRuntimeOperatorDecision(
   state: "waiting" | "settled" | "not-admissible",
   outcome?: CodingWorkbenchAuxiliaryStatus,
 ): void {
-  activityLog?.write({
-    level: state === "not-admissible" ? "warn" : "info",
-    category: "process",
-    op: "coding-runtime.run.operator-decision",
-    correlationId: runtimeDiagnosticCorrelationId(snapshot.runId),
-    extra: {
-      runId: snapshot.runId,
-      revision: snapshot.revision,
-      runState: snapshot.state,
-      decision,
-      state,
-      ...(outcome === undefined ? {} : { outcome }),
-    },
-  });
+  activityLog?.write(
+    activityLogEvent(
+      CODING_RUNTIME_RUN_OPERATOR_DECISION_OPERATION,
+      {
+        level: state === "not-admissible" ? "warn" : "info",
+        correlationId: runtimeDiagnosticCorrelationId(snapshot.runId),
+        ...(state === "not-admissible" ? { errorKind: "permission-denied" as const } : {}),
+      },
+      {
+        runId: snapshot.runId,
+        revision: snapshot.revision,
+        runState: snapshot.state,
+        decision,
+        state,
+        ...(outcome === undefined ? {} : { outcome }),
+      },
+    ),
+  );
 }
 
 /**
@@ -623,18 +798,22 @@ function recordRuntimeEventDropped(
   event: CodingWorkbenchRuntimeEvent,
   current: CodingRuntimeSnapshot | undefined,
 ): void {
-  activityLog?.write({
-    level: "warn",
-    category: "process",
-    op: "coding-runtime.event.dropped",
-    correlationId: runtimeDiagnosticCorrelationId(event.runId),
-    extra: {
-      eventKind: event.kind,
-      eventRunId: event.runId,
-      reason: current === undefined ? "no-live-run" : "run-mismatch",
-      ...(current === undefined ? {} : { liveRunId: current.runId }),
-    },
-  });
+  activityLog?.write(
+    activityLogEvent(
+      CODING_RUNTIME_EVENT_DROPPED_OPERATION,
+      {
+        level: "warn",
+        correlationId: runtimeDiagnosticCorrelationId(event.runId),
+        errorKind: "conflict",
+      },
+      {
+        eventKind: event.kind,
+        eventRunId: event.runId,
+        reason: current === undefined ? "no-live-run" : "run-mismatch",
+        ...(current === undefined ? {} : { liveRunId: current.runId }),
+      },
+    ),
+  );
 }
 
 function recordRuntimeVerificationSummary(
