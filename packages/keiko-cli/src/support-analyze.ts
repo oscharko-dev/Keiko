@@ -522,33 +522,64 @@ function registeredFields(
 ): Readonly<Record<string, unknown>> {
   const fields: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
   for (const name of Object.keys(registration.fields)) {
+    if (name === "status" && typeof record.status === "number") continue;
     if (record[name] !== undefined) fields[name] = record[name];
   }
   return fields;
 }
 
-function recordEnvelope(record: Record<string, unknown>): ActivityLogEventEnvelope | undefined {
-  const level = record.level;
-  const correlationId = record.correlationId;
-  const parentCorrelationId = record.parentCorrelationId;
-  const durationMs = record.durationMs;
-  const status = record.status;
-  const errorKind = record.errorKind;
-  if (level !== undefined && !["debug", "info", "warn", "error"].includes(String(level))) {
-    return undefined;
-  }
-  if (correlationId !== undefined && typeof correlationId !== "string") return undefined;
-  if (parentCorrelationId !== undefined && typeof parentCorrelationId !== "string")
-    return undefined;
-  if (durationMs !== undefined && typeof durationMs !== "number") return undefined;
-  if (status !== undefined && typeof status !== "number") return undefined;
-  if (errorKind !== undefined && !isActivityLogErrorKind(errorKind)) return undefined;
+const ACTIVITY_LOG_LEVELS: ReadonlySet<string> = new Set(["debug", "info", "warn", "error"]);
+
+function validOptionalType(value: unknown, expected: "string" | "number"): boolean {
+  return value === undefined || typeof value === expected;
+}
+
+function validRecordLevel(value: unknown): boolean {
+  return value === undefined || (typeof value === "string" && ACTIVITY_LOG_LEVELS.has(value));
+}
+
+function validRecordStatus(
+  value: unknown,
+  registration: ActivityLogOperationRegistration,
+): boolean {
+  return (
+    value === undefined ||
+    typeof value === "number" ||
+    (typeof value === "string" && registration.fields.status?.type === "string")
+  );
+}
+
+function validRecordEnvelopeFields(
+  record: Record<string, unknown>,
+  registration: ActivityLogOperationRegistration,
+): boolean {
+  return (
+    validRecordLevel(record.level) &&
+    validOptionalType(record.correlationId, "string") &&
+    validOptionalType(record.parentCorrelationId, "string") &&
+    validOptionalType(record.durationMs, "number") &&
+    validRecordStatus(record.status, registration) &&
+    (record.errorKind === undefined || isActivityLogErrorKind(record.errorKind))
+  );
+}
+
+function recordEnvelope(
+  record: Record<string, unknown>,
+  registration: ActivityLogOperationRegistration,
+): ActivityLogEventEnvelope | undefined {
+  if (!validRecordEnvelopeFields(record, registration)) return undefined;
+  const level = optionalString(record, "level") as ActivityLogEventEnvelope["level"];
+  const correlationId = optionalString(record, "correlationId");
+  const parentCorrelationId = optionalString(record, "parentCorrelationId");
+  const durationMs = optionalNumber(record, "durationMs");
+  const status = optionalNumber(record, "status");
+  const errorKind = isActivityLogErrorKind(record.errorKind) ? record.errorKind : undefined;
   return {
     ...(level === undefined ? {} : { level: level as ActivityLogEventEnvelope["level"] }),
     ...(correlationId === undefined ? {} : { correlationId }),
     ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
     ...(durationMs === undefined ? {} : { durationMs }),
-    ...(status === undefined ? {} : { status }),
+    ...(typeof status === "number" ? { status } : {}),
     ...(errorKind === undefined ? {} : { errorKind }),
   };
 }
@@ -567,8 +598,9 @@ function registeredRecordClassification(
   op: string,
 ): ActivityLogEvidenceClassification {
   const registration = activityLogOperationSchema(op);
-  const envelope = recordEnvelope(record);
-  if (registration === undefined || envelope === undefined) return "corrupt";
+  if (registration === undefined) return "corrupt";
+  const envelope = recordEnvelope(record, registration);
+  if (envelope === undefined) return "corrupt";
   if (hasUnknownRegisteredField(record, registration)) return "corrupt";
   try {
     validateActivityLogOperationRecord(
