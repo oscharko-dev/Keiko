@@ -970,6 +970,7 @@ describe("CodingRuntimeOrchestrator", () => {
       (record) => record.op === "coding-runtime.project-memory.context",
     );
     expect(activityLine?.level).toBe("warn");
+    expect(activityLine?.errorKind).toBe("unavailable");
     // Fresh dispatch must still fire; the failure never blocks the initial turn.
     const dispatchRequest = firstTaskDispatchRequest(f.taskDispatcher.dispatch.mock.calls);
     expect(dispatchRequest).not.toHaveProperty("initialContext");

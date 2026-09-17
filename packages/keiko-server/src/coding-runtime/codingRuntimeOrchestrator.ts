@@ -96,7 +96,121 @@ import {
   type WorkbenchDescriptionStatus,
   type WorkbenchDescriptionGenerationBinding,
 } from "@oscharko-dev/keiko-contracts/runtime/workbench-description-status";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 export type { CodingRuntimeIssueIntake } from "./codingRuntimeIssueIntake.js";
+
+const CODING_RUNTIME_RUN_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.run.started",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeOrchestrator.recordRuntimeRunStarted",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "idle",
+        "starting",
+        "ready",
+        "running",
+        "paused",
+        "awaiting-approval",
+        "stopping",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "taken-over",
+        "recovery-required",
+      ],
+    },
+    revision: { type: "integer", dataClass: "count", required: true },
+    requestedMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
+    },
+    effectiveMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
+    },
+    runtimeSource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["keiko-sidecar", "codex-cli-adapter", "delivery-runner"],
+    },
+    modelSource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "keiko-model-gateway",
+        "openai-api-key-through-gateway",
+        "chatgpt-codex-subscription-profile",
+      ],
+    },
+    hasPredecessor: { type: "boolean", dataClass: "closed-enum", required: true },
+    predecessorSelectionReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "acknowledged-recovery",
+        "failed-successor-lineage",
+        "historical-local-draft",
+        "no-bounded-lineage",
+      ],
+    },
+    predecessorRunId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 128,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-run-start"],
+  proofIds: ["coding-runtime.run.started.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_PROJECT_MEMORY_CONTEXT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.project-memory.context",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeOrchestrator.recordRuntimeProjectMemoryContext",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["disabled", "empty", "failed", "included", "unavailable"],
+    },
+    includedMemoryCount: { type: "integer", dataClass: "count", required: true },
+    scopeKindCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-project-memory"],
+  proofIds: ["coding-runtime.project-memory.context.emitted-line"],
+  releaseImpact: "patch",
+});
 
 function descriptionGenerationBinding(
   snapshot: CodingRuntimeSnapshot,
@@ -349,25 +463,26 @@ function recordRuntimeRunStarted(
   effectiveMode: CodingWorkbenchMode,
   predecessorSelectionReason: PredecessorSelectionReason,
 ): void {
-  activityLog?.write({
-    category: "process",
-    op: "coding-runtime.run.started",
-    correlationId: runtimeDiagnosticCorrelationId(snapshot.runId),
-    extra: {
-      runId: snapshot.runId,
-      state: snapshot.state,
-      revision: snapshot.revision,
-      requestedMode: snapshot.requestedMode,
-      effectiveMode,
-      runtimeSource: snapshot.runtimeSource,
-      modelSource: snapshot.modelSource,
-      hasPredecessor: snapshot.predecessorRunId !== undefined,
-      predecessorSelectionReason,
-      ...(snapshot.predecessorRunId === undefined
-        ? {}
-        : { predecessorRunId: snapshot.predecessorRunId }),
-    },
-  });
+  activityLog?.write(
+    activityLogEvent(
+      CODING_RUNTIME_RUN_STARTED_OPERATION,
+      { correlationId: runtimeDiagnosticCorrelationId(snapshot.runId) },
+      {
+        runId: snapshot.runId,
+        state: snapshot.state,
+        revision: snapshot.revision,
+        requestedMode: snapshot.requestedMode,
+        effectiveMode,
+        runtimeSource: snapshot.runtimeSource,
+        modelSource: snapshot.modelSource,
+        hasPredecessor: snapshot.predecessorRunId !== undefined,
+        predecessorSelectionReason,
+        ...(snapshot.predecessorRunId === undefined
+          ? {}
+          : { predecessorRunId: snapshot.predecessorRunId }),
+      },
+    ),
+  );
 }
 
 type ProjectMemoryContextOutcome = "disabled" | "empty" | "failed" | "included" | "unavailable";
@@ -378,18 +493,17 @@ function recordRuntimeProjectMemoryContext(
   outcome: ProjectMemoryContextOutcome,
   includedMemoryCount = 0,
 ): void {
-  activityLog?.write({
-    level: outcome === "failed" ? "warn" : "info",
-    category: "process",
-    op: "coding-runtime.project-memory.context",
-    correlationId: runtimeDiagnosticCorrelationId(runId),
-    extra: {
-      runId,
-      outcome,
-      includedMemoryCount,
-      scopeKindCount: 2,
-    },
-  });
+  activityLog?.write(
+    activityLogEvent(
+      CODING_RUNTIME_PROJECT_MEMORY_CONTEXT_OPERATION,
+      {
+        level: outcome === "failed" ? "warn" : "info",
+        correlationId: runtimeDiagnosticCorrelationId(runId),
+        ...(outcome === "failed" ? { errorKind: "unavailable" as const } : {}),
+      },
+      { runId, outcome, includedMemoryCount, scopeKindCount: 2 },
+    ),
+  );
 }
 
 function recordRuntimeProjectMemoryFailure(
