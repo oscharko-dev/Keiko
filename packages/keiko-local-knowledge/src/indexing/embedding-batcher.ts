@@ -136,7 +136,7 @@ function logEmbeddingRetry(
       ...failure,
       attempt: extra.attempt,
       maxRetries: extra.maxRetries,
-      delayMs: extra.delayMs,
+      delayMs: extra.delayMs ?? 0,
       transport: "scalar",
     });
     return;

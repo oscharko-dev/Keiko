@@ -4,7 +4,11 @@ import {
   type ActivityLogErrorKind,
   type ActivityLogEventEnvelope,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
-import { emitKnowledgeLogEvent, type KnowledgeLogSink } from "../knowledge-log.js";
+import {
+  emitKnowledgeLogEvent,
+  knowledgeLogCorrelationId,
+  type KnowledgeLogSink,
+} from "../knowledge-log.js";
 import type { IndexingLogContext } from "./types.js";
 
 const CHUNK_RETRY_OPERATION = defineActivityLogOperation({
@@ -495,7 +499,9 @@ function correlatedEnvelope(
   context: IndexingLogContext | undefined,
   envelope: ActivityLogEventEnvelope,
 ): ActivityLogEventEnvelope {
-  return context === undefined ? envelope : { ...envelope, correlationId: context.jobId };
+  return context === undefined
+    ? envelope
+    : { ...envelope, correlationId: knowledgeLogCorrelationId(context.jobId) };
 }
 
 function emitRetryActivity(

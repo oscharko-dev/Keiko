@@ -1088,9 +1088,10 @@ describe("flushPlaintextResidue (KEIKO-0877)", () => {
     expect(degraded).toBeDefined();
     expect(degraded?.level).toBe("error");
     expect(degraded?.extra?.attempts).toBe(3);
-    expect(degraded?.extra?.busy).toBe(true);
+    expect(degraded?.extra?.checkpointState).toBe("busy");
     // #2906 round-3 review: persistent busy is now classified, not just thrown-PRAGMA failures.
-    expect(degraded?.errorKind).toBe("checkpoint-busy");
+    expect(degraded?.errorKind).toBe("durability-failed");
+    expect(degraded?.extra?.failureKind).toBe("checkpoint-busy");
   });
 
   it("throws KnowledgeStoreError when the checkpoint reports a partial checkpoint (busy=0, checkpointed < log)", () => {
@@ -1104,7 +1105,9 @@ describe("flushPlaintextResidue (KEIKO-0877)", () => {
     const degraded = events.find((e) => e.op === "store.encryption-checkpoint-degraded");
     expect(degraded).toBeDefined();
     // #2906 round-3 review: a partial checkpoint is now classified too, distinctly from busy.
-    expect(degraded?.errorKind).toBe("checkpoint-partial");
+    expect(degraded?.errorKind).toBe("durability-failed");
+    expect(degraded?.extra?.checkpointState).toBe("partial");
+    expect(degraded?.extra?.failureKind).toBe("checkpoint-partial");
   });
 
   // #2906 round-3 review (P1): an undefined row, `{}`, or non-numeric columns were previously
@@ -1128,8 +1131,9 @@ describe("flushPlaintextResidue (KEIKO-0877)", () => {
       expect(fake.vacuumCalls.count).toBe(0);
       const degraded = events.find((e) => e.op === "store.encryption-checkpoint-degraded");
       expect(degraded).toBeDefined();
-      expect(degraded?.errorKind).toBe("checkpoint-malformed");
-      expect(degraded?.extra?.busy).toBe(true);
+      expect(degraded?.errorKind).toBe("durability-failed");
+      expect(degraded?.extra?.checkpointState).toBe("malformed");
+      expect(degraded?.extra?.failureKind).toBe("checkpoint-malformed");
     },
   );
 
@@ -1151,6 +1155,8 @@ describe("flushPlaintextResidue (KEIKO-0877)", () => {
     expect(fake.vacuumCalls.count).toBe(0);
     const degraded = events.find((e) => e.op === "store.encryption-checkpoint-degraded");
     expect(degraded).toBeDefined();
-    expect(degraded?.extra?.busy).toBe(true);
+    expect(degraded?.errorKind).toBe("durability-failed");
+    expect(degraded?.extra?.checkpointState).toBe("threw");
+    expect(degraded?.extra?.failureKind).toBe("Error");
   });
 });

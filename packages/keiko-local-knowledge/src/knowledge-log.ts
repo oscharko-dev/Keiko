@@ -66,6 +66,16 @@ export function startKnowledgeLogTimer(): () => number {
   return (): number => Math.round((performance.now() - startedAt) * 1000) / 1000;
 }
 
+const ACTIVITY_CORRELATION_ID = /^[A-Za-z0-9._-]{8,128}$/u;
+
+// Injected test and embedding-job id sources predate the v2 envelope bound. Preserve valid ids
+// verbatim and reduce every legacy/out-of-range value to one stable, body-free correlation key.
+export function knowledgeLogCorrelationId(value: string): string {
+  return ACTIVITY_CORRELATION_ID.test(value)
+    ? value
+    : createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
 // The shape an error KIND may have is `classifyErrorKind` (ADR-0173 D11), imported from
 // `keiko-contracts` rather than declared here, so this reducer and the ones in
 // `keiko-server/src/observability/server-log.ts` and `keiko-model-gateway/src/observability.ts`

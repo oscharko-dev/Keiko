@@ -5,7 +5,11 @@ import {
   type ActivityLogEventEnvelope,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
-import { emitKnowledgeLogEvent, type KnowledgeLogSink } from "../knowledge-log.js";
+import {
+  emitKnowledgeLogEvent,
+  knowledgeLogCorrelationId,
+  type KnowledgeLogSink,
+} from "../knowledge-log.js";
 import type { IndexingLogContext } from "./types.js";
 
 const CHUNKING_FAILED_OPERATION = defineActivityLogOperation({
@@ -25,8 +29,18 @@ const CHUNKING_FAILED_OPERATION = defineActivityLogOperation({
       values: ["standard", "standard-chunker", "bounded"],
     },
     sourceTextLength: { type: "integer", dataClass: "count", required: false },
-    cancelled: { type: "boolean", dataClass: "closed-enum", required: false },
-    policyRejection: { type: "boolean", dataClass: "closed-enum", required: false },
+    cancelled: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["true", "false"],
+    },
+    policyRejection: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["true", "false"],
+    },
     failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
   },
   causal: "correlation",
@@ -232,7 +246,12 @@ const DISCOVERY_SCOPE_ERROR_OPERATION = defineActivityLogOperation({
   emitter: "indexing/orchestrator-activity-log.emitIndexingActivity",
   fields: {
     capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
-    scopedToFile: { type: "boolean", dataClass: "closed-enum", required: true },
+    scopedToFile: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true", "false"],
+    },
     discoveryFailedDocuments: { type: "integer", dataClass: "count", required: true },
     failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
   },
@@ -281,9 +300,24 @@ const SOURCE_COMPLETED_OPERATION = defineActivityLogOperation({
     sourceIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     discoveredCount: { type: "integer", dataClass: "count", required: true },
     failedCount: { type: "integer", dataClass: "count", required: true },
-    walkCompleted: { type: "boolean", dataClass: "closed-enum", required: true },
-    cancelled: { type: "boolean", dataClass: "closed-enum", required: true },
-    sawScopeError: { type: "boolean", dataClass: "closed-enum", required: true },
+    walkCompleted: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true", "false"],
+    },
+    cancelled: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true", "false"],
+    },
+    sawScopeError: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true", "false"],
+    },
   },
   causal: "correlation",
   lifecycle: "end",
@@ -326,9 +360,24 @@ const JOB_STARTED_OPERATION = defineActivityLogOperation({
     sourceCount: { type: "integer", dataClass: "count", required: true },
     batchSize: { type: "integer", dataClass: "count", required: true },
     concurrency: { type: "integer", dataClass: "count", required: true },
-    force: { type: "boolean", dataClass: "closed-enum", required: true },
-    resume: { type: "boolean", dataClass: "closed-enum", required: true },
-    contextualRetrieval: { type: "boolean", dataClass: "closed-enum", required: true },
+    force: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true", "false"],
+    },
+    resume: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true", "false"],
+    },
+    contextualRetrieval: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true", "false"],
+    },
     minChunkTokens: { type: "integer", dataClass: "count", required: true },
     maxChunkTokens: { type: "integer", dataClass: "count", required: true },
     overlapTokens: { type: "integer", dataClass: "count", required: true },
@@ -358,8 +407,18 @@ const JOB_RECEIVED_OPERATION = defineActivityLogOperation({
   fields: {
     capsuleIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     sourceIdFilterCount: { type: "integer", dataClass: "count", required: true },
-    force: { type: "boolean", dataClass: "closed-enum", required: true },
-    resume: { type: "boolean", dataClass: "closed-enum", required: true },
+    force: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true", "false"],
+    },
+    resume: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true", "false"],
+    },
   },
   causal: "correlation",
   lifecycle: "start",
@@ -534,6 +593,10 @@ export type IndexingActivity =
 function failureErrorKind(kind: string): ActivityLogErrorKind {
   if (kind === "CANCELLED") return "cancelled";
   if (kind === "POLICY_DENIED") return "authority-denied";
+  if (kind === "READ_FAILED") return "read-failed";
+  if (kind === "PATH_ESCAPE") return "unsafe-target";
+  if (kind === "PERMISSION_DENIED") return "permission-denied";
+  if (kind === "LIMIT_REACHED" || kind === "INVALID_SCOPE") return "validation-failed";
   if (kind.includes("TIMEOUT")) return "timeout";
   if (kind.includes("INVALID") || kind.includes("INCOMPATIBLE")) return "validation-failed";
   return "internal";
@@ -547,7 +610,7 @@ function envelope(
 ): ActivityLogEventEnvelope {
   return {
     level,
-    correlationId: context.jobId,
+    correlationId: knowledgeLogCorrelationId(context.jobId),
     ...(failureKind === undefined ? {} : { errorKind: failureErrorKind(failureKind) }),
     ...(durationMs === undefined ? {} : { durationMs }),
   };

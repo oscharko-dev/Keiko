@@ -45,7 +45,11 @@ import {
 } from "./indexing/repository-fingerprints.js";
 import type { ContextualRetrievalOptions } from "./indexing/contextual-retrieval.js";
 import { runIndexingJob, type IndexingEvent, type IndexingResult } from "./indexing/index.js";
-import { emitKnowledgeLogEvent, type KnowledgeLogSink } from "./knowledge-log.js";
+import {
+  emitKnowledgeLogEvent,
+  knowledgeLogCorrelationId,
+  type KnowledgeLogSink,
+} from "./knowledge-log.js";
 import { buildKnowledgePodSummary } from "./knowledge-pods.js";
 import type { ParserRegistry } from "./parsers/index.js";
 import type { AuditEventSink } from "./privacy/index.js";
@@ -366,13 +370,13 @@ function logFingerprintDiffCompleted(
     deps.logSink,
     activityLogEvent(
       REPOSITORY_FINGERPRINT_DIFF_COMPLETED_OPERATION,
-      { correlationId: runId },
+      { correlationId: knowledgeLogCorrelationId(runId) },
       {
-      added: delta.added,
-      changed: delta.changed,
-      removed: delta.removed,
-      moved: delta.moved,
-      unchanged: delta.unchanged,
+        added: delta.added,
+        changed: delta.changed,
+        removed: delta.removed,
+        moved: delta.moved,
+        unchanged: delta.unchanged,
       },
     ),
   );

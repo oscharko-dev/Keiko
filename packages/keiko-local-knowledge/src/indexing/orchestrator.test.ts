@@ -2961,10 +2961,10 @@ describe("runIndexingJob — activity log", () => {
       expect(started?.level).toBe("info");
       expect(started?.category).toBe("embedding");
       expect(started?.extra).toMatchObject({
-        provider: DEFAULT_EMBEDDING.provider,
-        modelId: DEFAULT_EMBEDDING.modelId,
+        providerDigest: expect.stringMatching(HEX_DIGEST),
+        modelIdDigest: expect.stringMatching(HEX_DIGEST),
         cached: false,
-        endpointHost: "https://example.test",
+        endpointDigest: expect.stringMatching(HEX_DIGEST),
       });
 
       const completed = log.find("embedding.preflight.completed");
@@ -3015,7 +3015,10 @@ describe("runIndexingJob — activity log", () => {
       expect(hit?.level).toBe("info");
       expect(hit?.category).toBe("embedding");
       expect(hit?.correlationId).toBe("job-pf-2");
-      expect(hit?.extra).toMatchObject({ cached: true, modelId: DEFAULT_EMBEDDING.modelId });
+      expect(hit?.extra).toMatchObject({
+        cached: true,
+        modelIdDigest: expect.stringMatching(HEX_DIGEST),
+      });
       // The short-circuit is the whole point: no probe was issued on the second run.
       expect(second.ops()).not.toContain("embedding.preflight.started");
     } finally {
@@ -3023,7 +3026,7 @@ describe("runIndexingJob — activity log", () => {
     }
   });
 
-  it("records a refused preflight with its reason, duration, and gateway host", async () => {
+  it("records a refused preflight with its reason, duration, and gateway digest", async () => {
     const fixture = buildFixture({ "alpha.txt": "Alpha body text. ".repeat(12) });
     const log = recordingSink();
     try {
@@ -3044,7 +3047,10 @@ describe("runIndexingJob — activity log", () => {
       expect(failed?.level).toBe("error");
       expect(failed?.errorKind).toBeDefined();
       expect(failed?.durationMs).toBeGreaterThanOrEqual(0);
-      expect(failed?.extra).toMatchObject({ endpointHost: "https://example.test" });
+      expect(failed?.extra).toMatchObject({
+        endpointDigest: expect.stringMatching(HEX_DIGEST),
+        failureSource: "result",
+      });
       // A failed run must close at a level an operator filters TO, not one they filter out.
       const finished = log.find("indexing.job.finished");
       expect(finished?.level).toBe("error");
@@ -3089,13 +3095,17 @@ describe("runIndexingJob — activity log", () => {
       expect(line.category).toBe("indexing");
       // The document error is the flattened CHUNKING_FAILED; the log line names the class that
       // actually threw, which is the gap this line exists to close.
-      expect(line.errorKind).toBe("ChunkingError");
-      expect(extraOf(line)).toMatchObject({ lane: "standard-chunker" });
+      expect(line.errorKind).toBe("internal");
+      expect(extraOf(line)).toMatchObject({
+        lane: "standard-chunker",
+        failureKind: "ChunkingError",
+      });
       expect(extraOf(line).documentIdDigest).toMatch(HEX_DIGEST);
       // And the per-document failure is on the record with its code.
       const documentFailed = requireLine(log, "indexing.document.failed");
       expect(documentFailed.level).toBe("warn");
-      expect(documentFailed.errorKind).toBe("CHUNKING_FAILED");
+      expect(documentFailed.errorKind).toBe("internal");
+      expect(extraOf(documentFailed).failureKind).toBe("CHUNKING_FAILED");
 
       const serialized = JSON.stringify(log.events);
       expect(serialized).not.toContain("token estimator exploded");
@@ -3145,9 +3155,12 @@ describe("runIndexingJob — activity log", () => {
       expect(bounded?.level).toBe("warn");
       expect(bounded?.category).toBe("indexing");
       expect(bounded?.correlationId).toBe("job-bounded-fail");
-      expect(bounded?.errorKind).toBeDefined();
-      expect(bounded?.errorKind).not.toBe("unknown");
-      expect(bounded?.extra).toMatchObject({ cancelled: false, policyRejection: false });
+      expect(bounded?.errorKind).toBe("internal");
+      expect(bounded?.extra).toMatchObject({
+        cancelled: false,
+        policyRejection: false,
+        failureKind: "ChunkingError",
+      });
       expect(bounded?.extra?.documentIdDigest).toMatch(HEX_DIGEST);
 
       const serialized = JSON.stringify(log.events);
@@ -3299,8 +3312,8 @@ describe("runIndexingJob — activity log", () => {
       expect(line.correlationId).toBe("job-extract-fail");
       // The code is the whole point: READ_FAILED, STAT_FAILED and a parse failure are three
       // different repairs and were previously one silence.
-      expect(line.errorKind).toBe("READ_FAILED");
-      expect(extraOf(line)).toMatchObject({ failedDocuments: 1 });
+      expect(line.errorKind).toBe("read-failed");
+      expect(extraOf(line)).toMatchObject({ failedDocuments: 1, failureKind: "READ_FAILED" });
       expect(extraOf(line).documentIdDigest).toMatch(HEX_DIGEST);
 
       // This lane does NOT funnel through `appendDocumentFailure` — the corrected comment there
@@ -3341,7 +3354,8 @@ describe("runIndexingJob — activity log", () => {
         .find((event) => extraOf(event).reason === "transient-read-failure");
       if (downgrade === undefined) throw new Error("missing transient re-read downgrade line");
       expect(downgrade.level).toBe("warn");
-      expect(downgrade.errorKind).toBe("READ_FAILED");
+      expect(downgrade.errorKind).toBe("read-failed");
+      expect(extraOf(downgrade).failureKind).toBe("READ_FAILED");
       expect(Number(extraOf(downgrade).preservedChunkCount)).toBeGreaterThan(0);
       expect(extraOf(downgrade).documentIdDigest).toMatch(HEX_DIGEST);
       // Not a failure, and not a destroyed index: the document was simply not refreshed.
@@ -3370,8 +3384,11 @@ describe("runIndexingJob — activity log", () => {
       expect(line.level).toBe("warn");
       expect(line.category).toBe("indexing");
       expect(line.correlationId).toBe("job-scope");
-      expect(line.errorKind).toBe("READ_FAILED");
-      expect(extraOf(line)).toMatchObject({ discoveryFailedDocuments: 1 });
+      expect(line.errorKind).toBe("read-failed");
+      expect(extraOf(line)).toMatchObject({
+        discoveryFailedDocuments: 1,
+        failureKind: "READ_FAILED",
+      });
       // A walk that never yielded a file: the scope-error line is the ONLY thing that says why.
       expect(log.ops()).not.toContain("indexing.document.extraction-started");
 
@@ -3405,7 +3422,8 @@ describe("runIndexingJob — activity log", () => {
       // LIMIT_REACHED surfaces once per ancestor frame; the truncation line is written once.
       expect(log.all("indexing.discovery.scope-error").length).toBeGreaterThan(1);
       for (const event of log.all("indexing.discovery.scope-error")) {
-        expect(event.errorKind).toBe("LIMIT_REACHED");
+        expect(event.errorKind).toBe("validation-failed");
+        expect(extraOf(event).failureKind).toBe("LIMIT_REACHED");
       }
       const limit = requireLine(log, "indexing.discovery.limit-reached");
       expect(log.all("indexing.discovery.limit-reached")).toHaveLength(1);
@@ -3463,7 +3481,7 @@ describe("runIndexingJob — activity log", () => {
       expect(received.level).toBe("info");
       expect(received.category).toBe("indexing");
       // Correlated to the same job as every later line, before the job row exists.
-      expect(received.correlationId).toBe("job-pro");
+      expect(received.correlationId).toMatch(HEX_DIGEST);
       expect(extraOf(received).capsuleIdDigest).toMatch(HEX_DIGEST);
       expect(extraOf(received)).toMatchObject({ sourceIdFilterCount: 0, force: false });
       expect(extraOf(received)).not.toHaveProperty("documentIdDigest");
