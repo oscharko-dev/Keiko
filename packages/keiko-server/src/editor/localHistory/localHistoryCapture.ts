@@ -5,10 +5,15 @@ import type {
   WorkspaceRootRef,
 } from "@oscharko-dev/keiko-contracts";
 import type { FilesContentResponse } from "@oscharko-dev/keiko-contracts/bff-wire";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { UiHandlerDeps } from "../../deps.js";
 import { UNKNOWN_CORRELATION_ID } from "../../correlation.js";
 import { emitServerDiagnostic } from "../../diagnostics-log.js";
-import { errorKindOf, type ServerLogSink } from "../../observability/index.js";
+import type { ServerLogSink } from "../../observability/index.js";
 import { processServerLogSink } from "../../process-log-sink.js";
 import {
   resolveCurrentWorkspaceRootMembership,
@@ -27,6 +32,60 @@ export type EditorLocalHistoryDiagnosticOrigin =
   EditorLocalHistoryOrigin | "editor.local-history.rekey";
 
 const REKEY_DIAGNOSTIC_ORIGIN: EditorLocalHistoryDiagnosticOrigin = "editor.local-history.rekey";
+
+const EDITOR_LOCAL_HISTORY_REKEY_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "editor.local-history.rekey.failed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "editor.localHistory.localHistoryCapture.reKeyFailureOutcome",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["failed"],
+    },
+    rewrittenCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["editor-local-history-rekey"],
+  proofIds: ["editor.local-history-rekey-failed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const EDITOR_LOCAL_HISTORY_REKEY_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "editor.local-history.rekey.completed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "editor.localHistory.localHistoryCapture.reKeyEditorLocalHistorySafely",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["succeeded"],
+    },
+    rewrittenCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["editor-local-history-rekey"],
+  proofIds: ["editor.local-history-rekey-completed.emitted-line"],
+  releaseImpact: "patch",
+});
+
+function reKeyActivityErrorKind(error: unknown): ActivityLogErrorKind {
+  if (!(error instanceof EditorLocalHistoryError)) return "internal";
+  if (error.code === "INDEX_UNAVAILABLE") return "unavailable";
+  return error.code === "INVALID_CAPTURE" ? "validation-failed" : "internal";
+}
 
 export interface EditorLocalHistoryResolvedRoot {
   readonly workspaceId: string;
@@ -165,14 +224,13 @@ function reKeyFailureOutcome(
     Date.now(),
     correlationId,
   );
-  activityLog.write({
-    level: "error",
-    category: "diagnostic",
-    op: "editor.local-history.rekey.failed",
-    correlationId,
-    errorKind: errorKindOf(error),
-    extra: { outcome: "failed", rewrittenCount: 0 },
-  });
+  activityLog.write(
+    activityLogEvent(
+      EDITOR_LOCAL_HISTORY_REKEY_FAILED_OPERATION,
+      { level: "error", correlationId, errorKind: reKeyActivityErrorKind(error) },
+      { outcome: "failed", rewrittenCount: 0 },
+    ),
+  );
   return 0;
 }
 
@@ -205,12 +263,13 @@ export function reKeyEditorLocalHistorySafely(input: {
       input.previousRelativePath,
       input.nextRelativePath,
     );
-    activityLog.write({
-      category: "diagnostic",
-      op: "editor.local-history.rekey.completed",
-      correlationId,
-      extra: { outcome: "succeeded", rewrittenCount },
-    });
+    activityLog.write(
+      activityLogEvent(
+        EDITOR_LOCAL_HISTORY_REKEY_COMPLETED_OPERATION,
+        { correlationId },
+        { outcome: "succeeded", rewrittenCount },
+      ),
+    );
     return rewrittenCount;
   } catch (error) {
     return reKeyFailureOutcome(input.deps, activityLog, correlationId, error);
