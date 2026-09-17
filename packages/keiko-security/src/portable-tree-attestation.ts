@@ -13,6 +13,10 @@ import {
 } from "node:fs";
 import { lstat, open, opendir, type FileHandle } from "node:fs/promises";
 import { join } from "node:path";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { emitSecurityLogEvent, securityErrorKind, type SecurityLogSink } from "./log-port.js";
 
 const TREE_HASH_SCHEMA = "KHT1";
@@ -24,6 +28,30 @@ const BUFFER_BYTES = 64 * 1024;
 const ASYNC_READS_PER_YIELD = 64;
 const ASYNC_IO_STEPS_PER_YIELD = 256;
 const SHA256 = /^[a-f0-9]{64}$/u;
+
+const SECURITY_PORTABLE_TREE_ATTESTATION_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "security.portable-tree-attestation.failed",
+  category: "security",
+  owner: "keiko-security",
+  emitter: "portable-tree-attestation.logAttestationFailure",
+  fields: {
+    driver: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["async", "sync"],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["portable-tree-attestation"],
+  proofIds: ["security.portable-tree-attestation.failed.driver"],
+  releaseImpact: "patch",
+});
 
 export interface PortableTreeKht1Operation {
   readonly signal?: AbortSignal | undefined;
@@ -572,13 +600,14 @@ function logAttestationFailure(
   driver: "async" | "sync",
   error: unknown,
 ): void {
-  emitSecurityLogEvent(sink, {
-    level: "error",
-    category: "security",
-    op: "security.portable-tree-attestation.failed",
-    errorKind: securityErrorKind(error),
-    extra: { driver },
-  });
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(
+      SECURITY_PORTABLE_TREE_ATTESTATION_FAILED_OPERATION,
+      { level: "error", errorKind: "validation-failed" },
+      { driver, failureKind: securityErrorKind(error) },
+    ),
+  );
 }
 
 export async function hashPortableTreeKht1(

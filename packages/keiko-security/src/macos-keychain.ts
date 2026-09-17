@@ -19,6 +19,11 @@
 import { execFileSync } from "node:child_process";
 
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+
+import {
   emitSecurityLogEvent,
   securityErrorKind,
   startSecurityLogTimer,
@@ -26,6 +31,30 @@ import {
 } from "./log-port.js";
 
 const MACOS_SECURITY_EXECUTABLE = "/usr/bin/security";
+
+const SECURITY_KEYCHAIN_FALLBACK_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "security.keychain.fallback",
+  category: "security",
+  owner: "keiko-security",
+  emitter: "macos-keychain.emitKeychainFallback",
+  fields: {
+    boundedExitKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["timeout", "signal", "exit-status", "spawn-error", "unknown"],
+    },
+    reasonKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["security-keychain-access"],
+  proofIds: ["security.keychain.fallback.bounded-exit"],
+  releaseImpact: "patch",
+});
 
 /**
  * Generous next to a healthy `security` call, which answers in tens of milliseconds, and short next
@@ -126,7 +155,9 @@ function readOutcome(error: unknown): MacosKeychainRead {
 // had to be killed, exactly the shape a blocking OS modal produces. Closed vocabulary, verified
 // against the shipped `execFileSync` error shape for a killed timeout, a plain non-zero exit, and a
 // missing executable (ENOENT).
-function classifyBoundedExit(error: unknown): string {
+type BoundedExitKind = "timeout" | "signal" | "exit-status" | "spawn-error" | "unknown";
+
+function classifyBoundedExit(error: unknown): BoundedExitKind {
   if (typeof error !== "object" || error === null) return "unknown";
   const e = error as { code?: unknown; signal?: unknown; status?: unknown };
   if (e.code === "ETIMEDOUT") return "timeout";
@@ -145,16 +176,17 @@ export function emitKeychainFallback(
   error: unknown,
   elapsedMs: () => number,
 ): void {
-  emitSecurityLogEvent(sink, {
-    level: "warn",
-    category: "security",
-    op: "security.keychain.fallback",
-    durationMs: elapsedMs(),
-    extra: {
-      reasonKind: securityErrorKind(error),
-      boundedExitKind: classifyBoundedExit(error),
-    },
-  });
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(
+      SECURITY_KEYCHAIN_FALLBACK_OPERATION,
+      { level: "warn", errorKind: "unavailable", durationMs: elapsedMs() },
+      {
+        reasonKind: securityErrorKind(error),
+        boundedExitKind: classifyBoundedExit(error),
+      },
+    ),
+  );
 }
 
 /** Reads the generic password for `service`/`account`. Never throws. */

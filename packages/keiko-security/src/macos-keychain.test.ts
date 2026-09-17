@@ -308,6 +308,7 @@ describe("readMacosKeychainSecret sink wiring", () => {
       level: "warn",
       category: "security",
       op: "security.keychain.fallback",
+      errorKind: "unavailable",
       extra: { reasonKind: "Error", boundedExitKind: "exit-status" },
     });
     expect(typeof event?.durationMs).toBe("number");
@@ -315,6 +316,7 @@ describe("readMacosKeychainSecret sink wiring", () => {
     expect(Object.keys(event ?? {}).sort()).toEqual([
       "category",
       "durationMs",
+      "errorKind",
       "extra",
       "level",
       "op",
@@ -337,6 +339,7 @@ describe("readMacosKeychainSecret sink wiring", () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       op: "security.keychain.fallback",
+      errorKind: "unavailable",
       extra: { reasonKind: "ETIMEDOUT", boundedExitKind: "timeout" },
     });
   }, 15_000);

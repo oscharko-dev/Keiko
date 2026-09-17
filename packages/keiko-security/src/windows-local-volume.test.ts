@@ -147,8 +147,8 @@ describe("Windows local volume authority", () => {
         category: "security",
         level: "error",
         op: "security.windows-local-volume.refused",
-        errorKind: "Error",
-        extra: { phase: "verify" },
+        errorKind: "unsafe-target",
+        extra: { failureKind: "Error", phase: "verify" },
       }),
     ]);
     expect(JSON.stringify(events)).not.toContain(path);

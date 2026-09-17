@@ -1010,6 +1010,7 @@ describe("createKeychainVaultKeyAccess", () => {
         level: "warn",
         category: "security",
         op: "security.keychain.fallback",
+        errorKind: "unavailable",
         extra: { reasonKind: "Error", boundedExitKind: "exit-status" },
       });
       expect(typeof event?.durationMs).toBe("number");

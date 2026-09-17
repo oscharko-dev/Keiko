@@ -14,6 +14,10 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 as win32Path } from "node:path";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { emitSecurityLogEvent, securityErrorKind, type SecurityLogSink } from "./log-port.js";
 import {
   resolveWindowsSystemBinary,
@@ -36,6 +40,54 @@ export const WINDOWS_SHORTCUT_MAX_BYTES = 128 * 1024;
 // spawn error, which the caller already fails closed on.
 export const WINDOWS_SHORTCUT_TIMEOUT_MS = 30_000;
 const WINDOWS_SHORTCUT_FALLBACK_SCHEMA = "keiko-windows-shortcut-v1";
+
+const SECURITY_WINDOWS_SHORTCUT_SYSTEM_ROOT_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "security.windows-shortcut.system-root-refused",
+  category: "security",
+  owner: "keiko-security",
+  emitter: "windows-shortcuts.logShortcutHostFailure",
+  fields: {
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    mode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["create", "read"],
+    },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["windows-shortcut-system-root"],
+  proofIds: ["security.windows-shortcut.system-root-refused.mode"],
+  releaseImpact: "patch",
+});
+
+const SECURITY_WINDOWS_SHORTCUT_SYSTEM_BINARY_MISSING_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "security.windows-shortcut.system-binary-missing",
+  category: "diagnostic",
+  owner: "keiko-security",
+  emitter: "windows-shortcuts.logShortcutHostFailure",
+  fields: {
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    mode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["create", "read"],
+    },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["windows-shortcut-system-binary"],
+  proofIds: ["security.windows-shortcut.system-binary-missing.mode"],
+  releaseImpact: "patch",
+});
 
 const WINDOWS_SHORTCUT_SCRIPT = [
   'var shell = WScript.CreateObject("WScript.Shell");',
@@ -166,22 +218,24 @@ function logShortcutHostFailure(
   error: unknown,
 ): void {
   if (error instanceof WindowsSystemDirectoryError) {
-    emitSecurityLogEvent(sink, {
-      level: "warn",
-      category: "security",
-      op: "security.windows-shortcut.system-root-refused",
-      errorKind: securityErrorKind(error),
-      extra: { mode },
-    });
+    emitSecurityLogEvent(
+      sink,
+      activityLogEvent(
+        SECURITY_WINDOWS_SHORTCUT_SYSTEM_ROOT_REFUSED_OPERATION,
+        { level: "warn", errorKind: "unsafe-target" },
+        { failureKind: securityErrorKind(error), mode },
+      ),
+    );
   }
   if (error instanceof WindowsSystemBinaryMissingError) {
-    emitSecurityLogEvent(sink, {
-      level: "error",
-      category: "diagnostic",
-      op: "security.windows-shortcut.system-binary-missing",
-      errorKind: securityErrorKind(error),
-      extra: { mode },
-    });
+    emitSecurityLogEvent(
+      sink,
+      activityLogEvent(
+        SECURITY_WINDOWS_SHORTCUT_SYSTEM_BINARY_MISSING_OPERATION,
+        { level: "error", errorKind: "unavailable" },
+        { failureKind: securityErrorKind(error), mode },
+      ),
+    );
   }
 }
 

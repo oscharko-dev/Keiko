@@ -219,8 +219,8 @@ describe("definition read/write entry points on the win32 route", () => {
       level: "error",
       category: "diagnostic",
       op: "security.windows-shortcut.system-binary-missing",
-      errorKind: "WINDOWS_SYSTEM_BINARY_MISSING",
-      extra: { mode: "read" },
+      errorKind: "unavailable",
+      extra: { failureKind: "WINDOWS_SYSTEM_BINARY_MISSING", mode: "read" },
     });
   });
 
@@ -242,8 +242,8 @@ describe("definition read/write entry points on the win32 route", () => {
       level: "error",
       category: "diagnostic",
       op: "security.windows-shortcut.system-binary-missing",
-      errorKind: "WINDOWS_SYSTEM_BINARY_MISSING",
-      extra: { mode: "create" },
+      errorKind: "unavailable",
+      extra: { failureKind: "WINDOWS_SYSTEM_BINARY_MISSING", mode: "create" },
     });
   });
 
@@ -284,6 +284,7 @@ describe("definition read/write entry points on the win32 route", () => {
         level: "warn",
         category: "security",
         op: "security.windows-shortcut.system-root-refused",
+        errorKind: "unsafe-target",
       }),
     );
 
@@ -322,7 +323,8 @@ describe("definition read/write entry points on the win32 route", () => {
         level: "warn",
         category: "security",
         op: "security.windows-shortcut.system-root-refused",
-        extra: { mode: "create" },
+        errorKind: "unsafe-target",
+        extra: expect.objectContaining({ mode: "create" }),
       }),
     );
 

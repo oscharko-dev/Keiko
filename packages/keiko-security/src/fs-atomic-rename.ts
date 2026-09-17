@@ -12,7 +12,49 @@
 
 import { realpathSync, renameSync } from "node:fs";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { emitSecurityLogEvent, securityErrorKind, type SecurityLogSink } from "./log-port.js";
+
+const SECURITY_FS_ATOMIC_RENAME_RETRIED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "security.fs.atomic-rename-retried",
+  category: "security",
+  owner: "keiko-security",
+  emitter: "fs-atomic-rename.emitRenameRetry",
+  fields: {
+    attempts: { type: "integer", dataClass: "count", required: true },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["security-atomic-publish"],
+  proofIds: ["security.fs.atomic-rename-retried.attempts"],
+  releaseImpact: "patch",
+});
+
+const SECURITY_FS_ATOMIC_RENAME_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "security.fs.atomic-rename-failed",
+  category: "security",
+  owner: "keiko-security",
+  emitter: "fs-atomic-rename.emitRenameFailed",
+  fields: {
+    attempts: { type: "integer", dataClass: "count", required: true },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["security-atomic-publish"],
+  proofIds: ["security.fs.atomic-rename-failed.attempts"],
+  releaseImpact: "patch",
+});
 
 // Tree-swap / PE-install policy: immediate first try, then exponential backoff. Six attempts,
 // 620 ms worst-case wait. Passed explicitly by install and activation callers — it is NOT the
@@ -96,13 +138,14 @@ function emitRenameRetry(
   attempts: number,
   error: unknown,
 ): void {
-  emitSecurityLogEvent(sink, {
-    level: "info",
-    category: "security",
-    op: "security.fs.atomic-rename-retried",
-    errorKind: securityErrorKind(error),
-    extra: { attempts },
-  });
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(
+      SECURITY_FS_ATOMIC_RENAME_RETRIED_OPERATION,
+      { level: "info" },
+      { attempts, failureKind: securityErrorKind(error) },
+    ),
+  );
 }
 
 function emitRenameFailed(
@@ -110,13 +153,14 @@ function emitRenameFailed(
   attempts: number,
   error: unknown,
 ): void {
-  emitSecurityLogEvent(sink, {
-    level: "error",
-    category: "security",
-    op: "security.fs.atomic-rename-failed",
-    errorKind: securityErrorKind(error),
-    extra: { attempts },
-  });
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(
+      SECURITY_FS_ATOMIC_RENAME_FAILED_OPERATION,
+      { level: "error", errorKind: "write-failed" },
+      { attempts, failureKind: securityErrorKind(error) },
+    ),
+  );
 }
 
 function retryWindowsPublishRename(

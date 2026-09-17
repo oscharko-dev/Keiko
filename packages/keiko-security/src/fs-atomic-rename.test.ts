@@ -119,12 +119,11 @@ describe("atomicPublishRename", () => {
     expect(events[0]).toMatchObject({
       category: "security",
       op: "security.fs.atomic-rename-retried",
-      errorKind: "EPERM",
-      extra: { attempts: 3 },
+      extra: { attempts: 3, failureKind: "EPERM" },
     });
     expect(JSON.stringify(events[0])).not.toContain("Users");
     expect(JSON.stringify(events[0])).not.toContain("secret");
-    expect(Object.keys(events[0]?.extra ?? {})).toEqual(["attempts"]);
+    expect(Object.keys(events[0]?.extra ?? {})).toEqual(["attempts", "failureKind"]);
   });
 
   it("retries EBUSY on win32", () => {
@@ -189,8 +188,11 @@ describe("atomicPublishRename", () => {
       expect.objectContaining({
         level: "error",
         op: "security.fs.atomic-rename-failed",
-        errorKind: "EPERM",
-        extra: { attempts: WINDOWS_ATOMIC_RENAME_BACKOFF_MS.length },
+        errorKind: "write-failed",
+        extra: {
+          attempts: WINDOWS_ATOMIC_RENAME_BACKOFF_MS.length,
+          failureKind: "EPERM",
+        },
       }),
     ]);
     expect(JSON.stringify(events[0])).not.toContain("/tmp");
@@ -250,7 +252,8 @@ describe("atomicPublishRename", () => {
       expect.objectContaining({
         level: "error",
         op: "security.fs.atomic-rename-failed",
-        extra: { attempts: 1 },
+        errorKind: "write-failed",
+        extra: { attempts: 1, failureKind: "EPERM" },
       }),
     ]);
   });
