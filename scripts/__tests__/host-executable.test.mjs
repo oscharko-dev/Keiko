@@ -207,6 +207,20 @@ describe("resolveHostExecutable", () => {
   );
 
   it.skipIf(process.platform === "win32")(
+    "keeps non-Homebrew runtimes scoped to their package root and rejects missing runtimes",
+    () => {
+      const runtime = temporary("keiko-host-executable-runtime-");
+      const nodeBin = join(runtime, "bin");
+      const nodeExecutable = join(nodeBin, "node");
+      mkdirSync(nodeBin);
+      writeFileSync(nodeExecutable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+
+      expect(runtimeTrustRoots(nodeExecutable)).toEqual([realpathSync(runtime)]);
+      expect(runtimeTrustRoots(join(runtime, "missing-node"))).toEqual([]);
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
     "rejects a group-writable symlink that escapes its trusted runtime root",
     () => {
       const workspace = temporary("keiko-host-executable-workspace-");

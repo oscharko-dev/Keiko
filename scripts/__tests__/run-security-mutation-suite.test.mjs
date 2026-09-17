@@ -59,4 +59,17 @@ describe("security mutation suite runner", () => {
       "mutation-security: FAIL - general security mutation run; general security mutation baseline ratchet",
     );
   });
+
+  it("uses default sinks and treats a spawn without an exit status as failed", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      expect(runSecurityMutationSuite({ spawn: vi.fn(() => ({ status: null })) })).toBe(1);
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("mutation-security: FAIL"));
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("mutation-security: RUN"));
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
+  });
 });

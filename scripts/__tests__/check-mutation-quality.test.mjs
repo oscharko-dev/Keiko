@@ -10,6 +10,7 @@ import {
   evaluateStrictMutation,
   evaluateScopedMutation,
   executeMutationQualityCli,
+  mutationQualityCliInput,
   mutationFingerprint,
   mutantTouchesChangedLine,
   parseChangedLineRanges,
@@ -314,6 +315,36 @@ describe("mutation quality", () => {
       mode: "strict",
       reportPath: "debug.json",
     });
+  });
+
+  it("runs strict report evaluation with the constitutional defaults", async () => {
+    const log = vi.fn();
+    const read = vi.fn(async () => JSON.stringify(report(mutant("Killed"))));
+
+    await expect(runMutationQuality({ log, mode: "strict", read })).resolves.toMatchObject({
+      current: { score: 100 },
+      failures: [],
+    });
+    expect(log).toHaveBeenCalledWith(expect.stringContaining("100.00%"));
+  });
+
+  it("parses baseline paths and rejects ambiguous modes or invalid numeric thresholds", () => {
+    expect(
+      mutationQualityCliInput(["--baseline", "baseline.json", "--report", "report.json"]),
+    ).toEqual({
+      baselinePath: "baseline.json",
+      mode: "baseline",
+      reportPath: "report.json",
+    });
+    expect(() => mutationQualityCliInput(["--scoped", "--strict"])).toThrow(
+      "choose only one mutation-quality mode",
+    );
+    expect(() => mutationQualityCliInput(["--strict", "--minimum-score", "not-a-number"])).toThrow(
+      "--minimum-score must be a non-negative number",
+    );
+    expect(() => mutationQualityCliInput(["--strict", "--maximum-survived", "-1"])).toThrow(
+      "--maximum-survived must be a non-negative number",
+    );
   });
 
   it("rejects weakened strict CLI thresholds before invoking the runner", async () => {
