@@ -100,14 +100,17 @@ producer's 262,144-byte catalog bound. A separate 320-tool fixture must be rejec
 6,000 comparisons per sample, so the normal pull-request gate proves complete work without using a
 host-dependent timeout as a performance threshold.
 
-The committed calibration and candidate use the same percentile and budget policy as the native
+The initial committed ceiling uses the same percentile and derivation policy as the native
 coding-runtime target: nearest-rank p95 with a ceiling no wider than the calibration maximum plus
-its full observed range. The candidate binds the measured tool-catalog source tree and lockfile;
-both documents bind the measurement ruler and reference environment. A routine source or lockfile
-update therefore writes a new candidate against the frozen calibration and budget. It never moves
-the threshold. `npm run check:tool-catalog-performance` runs a fresh deterministic work check on
-every invocation, then evaluates the committed reference evidence. Fresh local or CI wall-clock
-values are reported for diagnosis and are never compared with the reference threshold.
+its full observed range. The budget then freezes those reviewed values as explicit non-widening
+ceilings. A ruler recalibration rebinds the calibration digest but carries every prior maximum
+forward unchanged; it cannot widen or opportunistically tighten a threshold from one noisy run.
+The candidate binds the measured tool-catalog source tree and lockfile; both documents bind the
+measurement ruler and reference environment. A routine source or lockfile update therefore writes
+a new candidate against the frozen calibration and budget. It never moves the threshold.
+`npm run check:tool-catalog-performance` runs a fresh deterministic work check on every invocation,
+then evaluates the committed reference evidence. Fresh local or CI wall-clock values are reported
+for diagnosis and are never compared with the reference threshold.
 
 The reference environment is the pinned Linux arm64 Node image below with at least 14 logical cores.
 The repository command creates a self-contained clone at the exact source revision, installs and

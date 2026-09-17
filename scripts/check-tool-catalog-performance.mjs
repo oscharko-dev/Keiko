@@ -77,6 +77,7 @@ const SYNTHETIC_HANDLER_ID = "tool-catalog-performance-fixture";
 const SHA256 = /^[a-f0-9]{64}$/u;
 const TOOL_CATALOG_PERFORMANCE_CLASS = "functional-performance-reference-container";
 const TOOL_CATALOG_PERFORMANCE_METRICS = ["coldCompileMs", "lookupBatchMs"];
+const TOOL_CATALOG_FROZEN_BUDGET_POLICY = "reviewed-non-widening-ceilings-v1";
 const LEGACY_PERFORMANCE_CASE_ID = "legacy-native-6-tool";
 const SYNTHETIC_PERFORMANCE_CASE_ID = `synthetic-${String(TOOL_CATALOG_SYNTHETIC_TOOL_COUNT)}-tool`;
 export const TOOL_CATALOG_REFERENCE_IMAGE =
@@ -553,48 +554,54 @@ export function buildToolCatalogPerformanceDocument(raw, input) {
 export function toolCatalogPerformanceBudgets(calibration) {
   validateToolCatalogPerformanceDocument(calibration);
   assertEvidence(calibration.role === "calibration", "catalog budget input must be calibration");
+  const maximumP95Ms = Object.fromEntries(
+    Object.entries(calibration.cases).map(([id, testCase]) => [
+      id,
+      Object.fromEntries(
+        TOOL_CATALOG_PERFORMANCE_METRICS.map((metric) => {
+          const aggregate = testCase.aggregates[metric];
+          return [metric, aggregate.maximum + (aggregate.maximum - aggregate.minimum)];
+        }),
+      ),
+    ]),
+  );
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     target: "tool-catalog",
-    policy: CODING_PERFORMANCE_BUDGET_POLICY,
+    policy: TOOL_CATALOG_FROZEN_BUDGET_POLICY,
     calibrationSha256: calibration.documentSha256,
-    maximumP95Ms: Object.fromEntries(
-      Object.entries(calibration.cases).map(([id, testCase]) => [
-        id,
-        Object.fromEntries(
-          TOOL_CATALOG_PERFORMANCE_METRICS.map((metric) => {
-            const aggregate = testCase.aggregates[metric];
-            return [metric, aggregate.maximum + (aggregate.maximum - aggregate.minimum)];
-          }),
-        ),
-      ]),
-    ),
+    ceilingP95Ms: structuredClone(maximumP95Ms),
+    maximumP95Ms,
   };
 }
 
+function validateBudgetMetrics(metricsByCase, label) {
+  exactKeys(metricsByCase, expectedPerformanceCaseIds(), `${label} cases`);
+  for (const metrics of Object.values(metricsByCase)) {
+    exactKeys(metrics, TOOL_CATALOG_PERFORMANCE_METRICS, `${label} metrics`);
+    assertEvidence(
+      Object.values(metrics).every((value) => Number.isFinite(value) && value > 0),
+      `${label} must be finite and positive`,
+    );
+  }
+}
+
 function validateToolCatalogPerformanceBudget(budget) {
-  exactKeys(
-    budget,
-    ["schemaVersion", "target", "policy", "calibrationSha256", "maximumP95Ms"],
-    "catalog performance budget",
-  );
+  const legacy = budget?.schemaVersion === 1;
+  const keys = ["schemaVersion", "target", "policy", "calibrationSha256", "maximumP95Ms"];
+  exactKeys(budget, legacy ? keys : [...keys, "ceilingP95Ms"], "catalog performance budget");
   assertEvidence(
-    budget.schemaVersion === 1 && budget.target === "tool-catalog",
+    (legacy || budget.schemaVersion === 2) && budget.target === "tool-catalog",
     "invalid catalog performance budget version",
   );
   assertEvidence(
-    budget.policy === CODING_PERFORMANCE_BUDGET_POLICY,
+    budget.policy ===
+      (legacy ? CODING_PERFORMANCE_BUDGET_POLICY : TOOL_CATALOG_FROZEN_BUDGET_POLICY),
     "invalid catalog performance budget policy",
   );
   assertEvidence(SHA256.test(budget.calibrationSha256), "invalid catalog budget calibration");
-  exactKeys(budget.maximumP95Ms, expectedPerformanceCaseIds(), "catalog performance budget cases");
-  for (const metrics of Object.values(budget.maximumP95Ms)) {
-    exactKeys(metrics, TOOL_CATALOG_PERFORMANCE_METRICS, "catalog performance budget metrics");
-    assertEvidence(
-      Object.values(metrics).every((value) => Number.isFinite(value) && value > 0),
-      "catalog performance budget must be finite and positive",
-    );
-  }
+  validateBudgetMetrics(budget.maximumP95Ms, "catalog performance budget");
+  if (!legacy) validateBudgetMetrics(budget.ceilingP95Ms, "catalog performance ceiling");
 }
 
 function performanceBudgetDefects(budget, calibration) {
@@ -606,8 +613,13 @@ function performanceBudgetDefects(budget, calibration) {
       defects.push("catalog performance budget calibration differs");
     for (const id of expectedPerformanceCaseIds())
       for (const metric of TOOL_CATALOG_PERFORMANCE_METRICS)
-        if (budget.maximumP95Ms[id][metric] > derived.maximumP95Ms[id][metric])
-          defects.push(`${id} ${metric} budget exceeds its calibrated ceiling`);
+        if (
+          budget.maximumP95Ms[id][metric] >
+          (budget.schemaVersion === 1
+            ? derived.maximumP95Ms[id][metric]
+            : budget.ceilingP95Ms[id][metric])
+        )
+          defects.push(`${id} ${metric} budget exceeds its reviewed ceiling`);
     return defects;
   } catch (error) {
     return [error instanceof TypeError ? error.message : "invalid catalog performance budget"];
@@ -616,14 +628,15 @@ function performanceBudgetDefects(budget, calibration) {
 
 export function ratchetToolCatalogPerformanceBudgets(calibration, previousBudget) {
   validateToolCatalogPerformanceBudget(previousBudget);
-  const next = toolCatalogPerformanceBudgets(calibration);
-  for (const id of expectedPerformanceCaseIds())
-    for (const metric of TOOL_CATALOG_PERFORMANCE_METRICS)
-      next.maximumP95Ms[id][metric] = Math.min(
-        next.maximumP95Ms[id][metric],
-        previousBudget.maximumP95Ms[id][metric],
-      );
-  return next;
+  const maximumP95Ms = structuredClone(previousBudget.maximumP95Ms);
+  return {
+    schemaVersion: 2,
+    target: "tool-catalog",
+    policy: TOOL_CATALOG_FROZEN_BUDGET_POLICY,
+    calibrationSha256: calibration.documentSha256,
+    ceilingP95Ms: structuredClone(maximumP95Ms),
+    maximumP95Ms,
+  };
 }
 
 function performancePairDefects(measurement, calibration, budget) {

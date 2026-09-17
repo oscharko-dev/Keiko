@@ -473,7 +473,7 @@ describe("compiler measurements reuse the existing sample and percentile convent
     alteredBudget.maximumP95Ms["legacy-native-6-tool"].coldCompileMs += 1;
     expect(
       evaluateToolCatalogPerformanceEvidence(withinBudget, calibration, alteredBudget).defects,
-    ).toEqual(["legacy-native-6-tool coldCompileMs budget exceeds its calibrated ceiling"]);
+    ).toEqual(["legacy-native-6-tool coldCompileMs budget exceeds its reviewed ceiling"]);
     const ratcheted = ratchetToolCatalogPerformanceBudgets(calibration, {
       ...budget,
       maximumP95Ms: {
@@ -487,6 +487,7 @@ describe("compiler measurements reuse the existing sample and percentile convent
     expect(ratcheted.maximumP95Ms["legacy-native-6-tool"].coldCompileMs).toBe(
       budget.maximumP95Ms["legacy-native-6-tool"].coldCompileMs / 2,
     );
+    expect(ratcheted.ceilingP95Ms).toEqual(ratcheted.maximumP95Ms);
     const renamedRaw = structuredClone(calibrationRaw);
     renamedRaw.cases = {
       renamed: renamedRaw.cases["legacy-native-6-tool"],
@@ -639,7 +640,7 @@ describe("compiler measurements reuse the existing sample and percentile convent
       invalidBudget.maximumP95Ms["legacy-native-6-tool"].coldCompileMs += 1;
       writeFileSync(budgetPath, `${JSON.stringify(invalidBudget, null, 2)}\n`);
       await expect(recalibrateToolCatalogPerformance(root, dependencies)).rejects.toThrow(
-        "budget exceeds its calibrated ceiling",
+        "budget exceeds its reviewed ceiling",
       );
     } finally {
       rmSync(root, { recursive: true, force: true });
