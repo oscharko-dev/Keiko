@@ -1316,7 +1316,11 @@ describe("activity-log seam: memory-vault.store.opened retains the key-resolutio
     const opened = events.filter((event) => event.op === "memory-vault.store.opened");
     expect(opened).toHaveLength(1);
     expect(opened[0]).toMatchObject({ category: "memory", op: "memory-vault.store.opened" });
-    expect(opened[0]?.extra).toEqual({ keySource: "env" });
+    expect(opened[0]?.extra).toEqual({
+      completeness: "complete",
+      keySource: "env",
+      loss: "none",
+    });
     expect(typeof opened[0]?.durationMs).toBe("number");
     v.close();
   });
@@ -1336,7 +1340,7 @@ describe("activity-log seam: memory-vault.store.opened retains the key-resolutio
 
     const opened = events.filter((event) => event.op === "memory-vault.store.opened");
     expect(opened).toHaveLength(1);
-    expect(opened[0]?.extra).toBeUndefined();
+    expect(opened[0]?.extra).toEqual({ completeness: "complete", loss: "none" });
     v.close();
   });
 

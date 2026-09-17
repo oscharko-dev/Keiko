@@ -173,7 +173,12 @@ describe("emitConsolidationLogEvent", () => {
       category: "diagnostic",
       op: "consolidation.log.sink-failed",
       errorKind: "unavailable",
-      extra: { droppedOpDigest: "84515d8cbae7dcba", failureKind: "ENOSPC" },
+      extra: {
+        completeness: "complete",
+        droppedOpDigest: "84515d8cbae7dcba",
+        failureKind: "ENOSPC",
+        loss: "none",
+      },
     });
   });
 

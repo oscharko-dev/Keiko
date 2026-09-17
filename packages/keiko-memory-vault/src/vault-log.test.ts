@@ -153,7 +153,12 @@ describe("emitMemoryVaultLogEvent", () => {
       category: "diagnostic",
       op: "memory-vault.log.sink-failed",
       errorKind: "unavailable",
-      extra: { droppedOpDigest: "3b9d5ea9d495ed7f", failureKind: "ENOSPC" },
+      extra: {
+        completeness: "complete",
+        droppedOpDigest: "3b9d5ea9d495ed7f",
+        failureKind: "ENOSPC",
+        loss: "none",
+      },
     });
   });
 

@@ -542,7 +542,11 @@ describe("runConsolidation - summaryFallbackReason", () => {
       baseOptions({ jaccardThreshold: 0, summaryGenerator: () => null, logSink: sink }),
     );
     expect(events).toHaveLength(1);
-    expect(events[0]?.extra).toEqual({ reason: "invalid-output" });
+    expect(events[0]?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      reason: "invalid-output",
+    });
   });
 
   it("reports 'invalid-output' when the summaryGenerator returns an empty body", () => {
@@ -553,7 +557,11 @@ describe("runConsolidation - summaryFallbackReason", () => {
       baseOptions({ jaccardThreshold: 0, summaryGenerator: () => "   ", logSink: sink }),
     );
     expect(events).toHaveLength(1);
-    expect(events[0]?.extra).toEqual({ reason: "invalid-output" });
+    expect(events[0]?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      reason: "invalid-output",
+    });
   });
 
   it("reports 'union-not-preserved' when the generated summary drops source content", () => {
@@ -564,7 +572,11 @@ describe("runConsolidation - summaryFallbackReason", () => {
       baseOptions({ jaccardThreshold: 0, summaryGenerator: () => "use tabs", logSink: sink }),
     );
     expect(events).toHaveLength(1);
-    expect(events[0]?.extra).toEqual({ reason: "union-not-preserved" });
+    expect(events[0]?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      reason: "union-not-preserved",
+    });
   });
 
   it("reports 'generator-threw' when the summaryGenerator throws, and the sink receives the event", () => {
@@ -588,7 +600,11 @@ describe("runConsolidation - summaryFallbackReason", () => {
       {
         category: "consolidation",
         op: "consolidation.summary.fallback",
-        extra: { reason: "generator-threw" },
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          reason: "generator-threw",
+        },
       },
     ]);
   });
