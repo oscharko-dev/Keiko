@@ -1,6 +1,7 @@
 import { captureActivityLog } from "./activityLogCapture.test-support.js";
 import { describe, expect, it, vi } from "vitest";
 import type { GitProcessResult, GitProcessRunner } from "@oscharko-dev/keiko-git";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { logGitProcessOutcome, observedGitRunner } from "./gitProcessActivity.js";
 import {
@@ -28,6 +29,10 @@ function onlyEvent(events: readonly ServerLogEvent[]): ServerLogEvent {
   expect(events).toHaveLength(1);
   const event = events[0];
   if (event === undefined) throw new Error("expected exactly one activity-log event");
+  expect(
+    activityLogEventRegistration(event as unknown as Readonly<Record<PropertyKey, unknown>>),
+  ).toBeDefined();
+  expect(event.extra).toMatchObject({ completeness: "complete", loss: "none" });
   return event;
 }
 
@@ -63,12 +68,13 @@ describe("logGitProcessOutcome", () => {
       category: "security",
       op: "git.process.refused",
       correlationId: "corr-refusal-0001",
-      errorKind: "git-option-refused",
+      errorKind: "authority-denied",
       durationMs: 1,
       extra: {
         subcommand: "diff",
         exitCode: 128,
         refusal: "config-override",
+        failureKind: "git-option-refused",
         truncated: false,
         timedOut: false,
         aborted: false,
@@ -95,8 +101,8 @@ describe("logGitProcessOutcome", () => {
     );
 
     const event = onlyEvent(log.events);
-    expect(event.errorKind).toBe("git-option-refused");
-    expect(event.errorKind).not.toBe("git-error");
+    expect(event.errorKind).toBe("authority-denied");
+    expect(event.extra?.failureKind).toBe("git-option-refused");
     expect(event.op).toBe("git.process.refused");
   });
 
@@ -105,29 +111,33 @@ describe("logGitProcessOutcome", () => {
       label: "a missing git executable",
       failure: result({ exitCode: 127 }),
       kind: "git-missing",
+      closedKind: "unavailable",
       endedBy: "exit",
     },
     {
       label: "a wall-clock timeout",
       failure: result({ exitCode: null, signal: "SIGTERM", truncated: true, timedOut: true }),
       kind: "timeout",
+      closedKind: "timeout",
       endedBy: "signal",
     },
     {
       label: "unsafe repository ownership",
       failure: result({ exitCode: 128, stderr: "fatal: detected dubious ownership" }),
       kind: "unsafe-repository",
+      closedKind: "unsafe-target",
       endedBy: "exit",
     },
     {
       label: "a folder that is not a repository",
       failure: result({ exitCode: 128, stderr: "fatal: not a git repository" }),
       kind: "not-a-repository",
+      closedKind: "unavailable",
       endedBy: "exit",
     },
   ])(
     "reports $label as a diagnostic failure with errorKind $kind",
-    ({ failure, kind, endedBy }) => {
+    ({ failure, kind, closedKind, endedBy }) => {
       const log = captureActivityLog();
 
       logGitProcessOutcome(log.sink, "corr-failure-0001", STATUS_ARGS, failure, 7);
@@ -137,12 +147,13 @@ describe("logGitProcessOutcome", () => {
         category: "diagnostic",
         op: "git.process.failed",
         correlationId: "corr-failure-0001",
-        errorKind: kind,
+        errorKind: closedKind,
         durationMs: 7,
         extra: {
           subcommand: "status",
           endedBy,
           ...(failure.exitCode === null ? {} : { exitCode: failure.exitCode }),
+          failureKind: kind,
         },
       });
     },
@@ -164,8 +175,13 @@ describe("logGitProcessOutcome", () => {
     );
 
     expect(onlyEvent(log.events)).toMatchObject({
-      errorKind: "output-truncated",
-      extra: { endedBy: "signal", signal: "SIGTERM", truncated: true },
+      errorKind: "unavailable",
+      extra: {
+        endedBy: "signal",
+        signal: "SIGTERM",
+        truncated: true,
+        failureKind: "output-truncated",
+      },
     });
   });
 
@@ -203,7 +219,7 @@ describe("logGitProcessOutcome", () => {
       20,
     );
 
-    expect(onlyEvent(log.events).errorKind).toBe(kind);
+    expect(onlyEvent(log.events).extra?.failureKind).toBe(kind);
   });
 
   it("stays silent for a non-zero exit the call site declared successful", () => {
@@ -233,7 +249,10 @@ describe("logGitProcessOutcome", () => {
       3,
       [1],
     );
-    expect(log.events.map((event) => event.errorKind)).toEqual(["git-error", "output-truncated"]);
+    expect(log.events.map((event) => event.extra?.failureKind)).toEqual([
+      "git-error",
+      "output-truncated",
+    ]);
   });
 
   it("reports a byte-cap truncation even though the run exited 0", () => {
@@ -257,8 +276,14 @@ describe("logGitProcessOutcome", () => {
       category: "diagnostic",
       op: "git.process.failed",
       correlationId: "corr-truncated-0001",
-      errorKind: "output-truncated",
-      extra: { subcommand: "status", endedBy: "exit", exitCode: 0, truncated: true },
+      errorKind: "unavailable",
+      extra: {
+        subcommand: "status",
+        endedBy: "exit",
+        exitCode: 0,
+        truncated: true,
+        failureKind: "output-truncated",
+      },
     });
   });
 
@@ -282,7 +307,11 @@ describe("logGitProcessOutcome", () => {
       5,
     );
 
-    expect(log.events.map((event) => event.errorKind)).toEqual(["timeout", "git-cancelled"]);
+    expect(log.events.map((event) => event.errorKind)).toEqual(["timeout", "cancelled"]);
+    expect(log.events.map((event) => event.extra?.failureKind)).toEqual([
+      "timeout",
+      "git-cancelled",
+    ]);
   });
 
   it("keeps a spawn-error/abort race at warn, not info, so it survives KEIKO_LOG_LEVEL=warn", () => {
@@ -300,7 +329,11 @@ describe("logGitProcessOutcome", () => {
       2,
     );
 
-    expect(onlyEvent(log.events)).toMatchObject({ level: "warn", errorKind: "git-missing" });
+    expect(onlyEvent(log.events)).toMatchObject({
+      level: "warn",
+      errorKind: "unavailable",
+      extra: { failureKind: "git-missing" },
+    });
   });
 
   it("separates an untrusted git executable from a machine with no git at all", () => {
@@ -324,14 +357,15 @@ describe("logGitProcessOutcome", () => {
       level: "error",
       category: "security",
       op: "git.process.refused",
-      errorKind: "git-executable-untrusted",
-      extra: { refusal: "untrusted-executable" },
+      errorKind: "unsafe-target",
+      extra: { refusal: "untrusted-executable", failureKind: "git-executable-untrusted" },
     });
     expect(missing).toMatchObject({
       level: "warn",
       category: "diagnostic",
       op: "git.process.failed",
-      errorKind: "git-missing",
+      errorKind: "unavailable",
+      extra: { failureKind: "git-missing" },
     });
   });
 
@@ -351,8 +385,13 @@ describe("logGitProcessOutcome", () => {
     expect(onlyEvent(log.events)).toMatchObject({
       level: "info",
       op: "git.process.failed",
-      errorKind: "git-cancelled",
-      extra: { aborted: true, endedBy: "signal", signal: "SIGTERM" },
+      errorKind: "cancelled",
+      extra: {
+        aborted: true,
+        endedBy: "signal",
+        signal: "SIGTERM",
+        failureKind: "git-cancelled",
+      },
     });
   });
 
@@ -592,8 +631,9 @@ describe("the line that actually reaches disk", () => {
       category: "security",
       op: "git.process.refused",
       correlationId: "corr-persisted-refuse1",
-      errorKind: "git-option-refused",
+      errorKind: "authority-denied",
       refusal: "config-override",
+      failureKind: "git-option-refused",
       subcommand: "diff",
       // Not "exit": keiko-git synthesises exit 128 so existing consumers keep the shape they had,
       // but no child ever launched. Reporting it as an exit would state the opposite.

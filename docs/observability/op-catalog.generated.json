@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "205b1dc41337fe3b2841dca3dee729eb51c7027de380f8bf8b1f1391d61fd2a3",
-    "catalogDigest": "38ec2ae51df325444a49d63b97c8e896112a811e8bfa2009114743909e8e4adf",
+    "catalogDigest": "580584a2d5040d5b1ee5a291b2b3be612a93beab74af2714cca5b2b91436719c",
     "operations": [
       {
         "contractKind": "activity-log-operation",
@@ -1139,6 +1139,161 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gateway-spend-budget.ts:79",
         "emitterSites": ["packages/keiko-server/src/gateway-spend-budget.ts:280"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "git.process.failed",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "gitProcessActivity.logGitProcessOutcome.failed",
+        "fields": {
+          "subcommand": {
+            "type": "string",
+            "dataClass": "safe-platform-class",
+            "required": true,
+            "maxLength": 64
+          },
+          "endedBy": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["not-started", "exit", "signal", "unknown"]
+          },
+          "exitCode": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "signal": {
+            "type": "string",
+            "dataClass": "safe-platform-class",
+            "required": false,
+            "maxLength": 16
+          },
+          "truncated": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "timedOut": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "aborted": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "failureKind": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": true,
+            "maxLength": 64
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["git-process-failure"],
+        "proofIds": ["git.process.failed.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/gitProcessActivity.ts:143",
+        "emitterSites": ["packages/keiko-server/src/gitProcessActivity.ts:388"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "git.process.refused",
+        "category": "security",
+        "owner": "keiko-server",
+        "emitter": "gitProcessActivity.logGitProcessOutcome.refused",
+        "fields": {
+          "subcommand": {
+            "type": "string",
+            "dataClass": "safe-platform-class",
+            "required": true,
+            "maxLength": 64
+          },
+          "endedBy": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["not-started", "exit", "signal", "unknown"]
+          },
+          "exitCode": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "signal": {
+            "type": "string",
+            "dataClass": "safe-platform-class",
+            "required": false,
+            "maxLength": 16
+          },
+          "truncated": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "timedOut": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "aborted": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "refusal": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "remote-command-option",
+              "diff-enabling-flag",
+              "config-override",
+              "untrusted-executable"
+            ]
+          },
+          "failureKind": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": true,
+            "maxLength": 64
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["git-process-refusal"],
+        "proofIds": ["git.process.refused.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/gitProcessActivity.ts:95",
+        "emitterSites": ["packages/keiko-server/src/gitProcessActivity.ts:368"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -5457,13 +5612,13 @@
     {
       "op": "git.process.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/gitProcessActivity.ts:250",
+      "site": "packages/keiko-server/src/gitProcessActivity.ts:146",
       "package": "keiko-server"
     },
     {
       "op": "git.process.refused",
       "category": "security",
-      "site": "packages/keiko-server/src/gitProcessActivity.ts:239",
+      "site": "packages/keiko-server/src/gitProcessActivity.ts:98",
       "package": "keiko-server"
     },
     {
