@@ -6,13 +6,16 @@ import {
   resolveWindowsPowerShellExecutable,
   resolveWindowsSystemBinary,
   resolveWindowsSystemDirectory,
-  securityErrorKind,
   type SecurityLogSink,
   type WindowsBinaryExistsCheck,
   type WindowsSystemDirectoryIdentityCheck,
   WindowsSystemBinaryMissingError,
   WindowsSystemDirectoryError,
 } from "@oscharko-dev/keiko-security";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import {
@@ -30,6 +33,29 @@ const WINDOWS_SIGNER_THUMBPRINT = /^[A-F0-9]{40}$/u;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const BASE64_PATTERN = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u;
 let validatedVerifierAssemblyInput: string | undefined;
+
+const WINDOWS_AUTHENTICODE_SYSTEM_BINARY_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "portable.windows-authenticode.system-binary-refused",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-runtime.windowsPortableAuthenticode.logSystemResolutionFailure",
+  fields: {
+    failure: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["system-directory-refused", "system-binary-missing"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["windows-authenticode-system-binary"],
+  proofIds: ["portable.windows-authenticode.system-binary-refused.emitted-line"],
+  releaseImpact: "patch",
+});
 
 export interface WindowsAuthenticodeCommandOptions {
   readonly env: NodeJS.ProcessEnv;
@@ -70,21 +96,31 @@ export interface WindowsAuthenticodeSystem {
 function logSystemResolutionFailure(error: unknown, sink: SecurityLogSink | undefined): void {
   const target = sink ?? processServerLogSink();
   if (error instanceof WindowsSystemDirectoryError) {
-    emitSecurityLogEvent(target, {
-      level: "warn",
-      category: "security",
-      op: "portable.windows-authenticode.system-binary-refused",
-      correlationId: UNKNOWN_CORRELATION_ID,
-      errorKind: securityErrorKind(error),
-    });
+    emitSecurityLogEvent(
+      target,
+      activityLogEvent(
+        WINDOWS_AUTHENTICODE_SYSTEM_BINARY_REFUSED_OPERATION,
+        {
+          level: "warn",
+          correlationId: UNKNOWN_CORRELATION_ID,
+          errorKind: "unsafe-target",
+        },
+        { failure: "system-directory-refused" },
+      ),
+    );
   } else if (error instanceof WindowsSystemBinaryMissingError) {
-    emitSecurityLogEvent(target, {
-      level: "error",
-      category: "diagnostic",
-      op: "portable.windows-authenticode.system-binary-refused",
-      correlationId: UNKNOWN_CORRELATION_ID,
-      errorKind: securityErrorKind(error),
-    });
+    emitSecurityLogEvent(
+      target,
+      activityLogEvent(
+        WINDOWS_AUTHENTICODE_SYSTEM_BINARY_REFUSED_OPERATION,
+        {
+          level: "error",
+          correlationId: UNKNOWN_CORRELATION_ID,
+          errorKind: "unavailable",
+        },
+        { failure: "system-binary-missing" },
+      ),
+    );
   }
 }
 

@@ -351,7 +351,8 @@ describe("Windows portable Authenticode identity", (): void => {
       expect.objectContaining({
         category: "security",
         correlationId: "unknown-correlation-id",
-        errorKind: "WindowsSystemDirectoryError",
+        errorKind: "unsafe-target",
+        extra: { failure: "system-directory-refused" },
         level: "warn",
         op: "portable.windows-authenticode.system-binary-refused",
       }),
@@ -377,9 +378,10 @@ describe("Windows portable Authenticode identity", (): void => {
     ).toThrow(WindowsSystemBinaryMissingError);
     expect(events).toEqual([
       expect.objectContaining({
-        category: "diagnostic",
+        category: "security",
         correlationId: "unknown-correlation-id",
-        errorKind: "WINDOWS_SYSTEM_BINARY_MISSING",
+        errorKind: "unavailable",
+        extra: { failure: "system-binary-missing" },
         level: "error",
         op: "portable.windows-authenticode.system-binary-refused",
       }),
