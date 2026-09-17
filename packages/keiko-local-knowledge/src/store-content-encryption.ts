@@ -21,6 +21,11 @@
 
 import type { DatabaseSync } from "node:sqlite";
 
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+
 import { KnowledgeStoreError } from "./errors.js";
 import {
   emitKnowledgeLogEvent,
@@ -44,6 +49,60 @@ const ENCRYPTION_PROBE_KEY = "content_encryption_probe";
 const ENCRYPTION_SCOPE_KEY = "content_encryption_scope";
 const ENCRYPTION_SCOPE_VALUE = "reconstructive-columns/v3";
 const UPGRADEABLE_ENCRYPTION_SCOPE_VALUES = new Set<string>(["reconstructive-columns/v2"]);
+
+const STORE_ENCRYPTION_CHECKPOINT_DEGRADED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "store.encryption-checkpoint-degraded",
+  category: "diagnostic",
+  owner: "keiko-local-knowledge",
+  emitter: "store-content-encryption.reportCheckpointDegraded",
+  fields: {
+    attempts: { type: "integer", dataClass: "count", required: true },
+    checkpointState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["threw", "malformed", "busy", "partial"],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["store-encryption-checkpoint"],
+  proofIds: ["store.encryption-checkpoint-degraded.state"],
+  releaseImpact: "patch",
+});
+
+const STORE_ENCRYPTION_MIGRATED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "store.encryption-migrated",
+  category: "diagnostic",
+  owner: "keiko-local-knowledge",
+  emitter: "store-content-encryption.logEncryptionMigrated",
+  fields: {
+    fromScope: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["plaintext", "unscoped", "reconstructive-columns/v2"],
+    },
+    toScope: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["reconstructive-columns/v3"],
+    },
+  },
+  causal: "none",
+  lifecycle: "end",
+  analyzerProjection: "capability",
+  failureClasses: ["store-encryption-migration"],
+  proofIds: ["store.encryption-migrated.scope"],
+  releaseImpact: "patch",
+});
 // Fixed, non-secret sentinel. Sealed at migration time and re-opened on every encrypted open to prove
 // the resolved key matches the one the store was sealed with. Never carries customer content.
 const ENCRYPTION_PROBE_PLAINTEXT = "keiko-local-knowledge-content-encryption-v1";
@@ -351,18 +410,28 @@ function checkpointErrorKind(attempt: WalCheckpointAttempt): string {
   return attempt.result.busy === 1 ? "checkpoint-busy" : "checkpoint-partial";
 }
 
+function checkpointState(last: WalCheckpointAttempt): "threw" | "malformed" | "busy" | "partial" {
+  if (last.kind !== "ok") return last.kind;
+  return last.result.busy === 1 ? "busy" : "partial";
+}
+
 function reportCheckpointDegraded(
   logSink: KnowledgeLogSink | undefined,
   attempts: number,
   last: WalCheckpointAttempt,
 ): void {
-  emitKnowledgeLogEvent(logSink, {
-    level: "error",
-    category: "diagnostic",
-    op: "store.encryption-checkpoint-degraded",
-    errorKind: checkpointErrorKind(last),
-    extra: { attempts, busy: last.kind === "ok" ? last.result.busy === 1 : true },
-  });
+  emitKnowledgeLogEvent(
+    logSink,
+    activityLogEvent(
+      STORE_ENCRYPTION_CHECKPOINT_DEGRADED_OPERATION,
+      { level: "error", errorKind: "durability-failed" },
+      {
+        attempts,
+        checkpointState: checkpointState(last),
+        failureKind: checkpointErrorKind(last),
+      },
+    ),
+  );
 }
 
 function checkpointDegradedError(last: WalCheckpointAttempt): KnowledgeStoreError {
@@ -414,16 +483,18 @@ export function flushPlaintextResidue(
 // package writes (`startKnowledgeLogTimer`, ADR-0019 seam).
 function logEncryptionMigrated(
   logSink: KnowledgeLogSink | undefined,
-  fromScope: string,
-  toScope: string,
+  fromScope: "plaintext" | "unscoped" | "reconstructive-columns/v2",
+  toScope: "reconstructive-columns/v3",
   durationMs: number,
 ): void {
-  emitKnowledgeLogEvent(logSink, {
-    category: "diagnostic",
-    op: "store.encryption-migrated",
-    durationMs,
-    extra: { fromScope, toScope },
-  });
+  emitKnowledgeLogEvent(
+    logSink,
+    activityLogEvent(
+      STORE_ENCRYPTION_MIGRATED_OPERATION,
+      { durationMs },
+      { fromScope, toScope },
+    ),
+  );
 }
 
 function migrateToEncrypted(
@@ -484,7 +555,9 @@ function upgradeEncryptedScope(
   }
   flushPlaintextResidue(db, logSink);
   writeSchemaMeta(db, ENCRYPTION_SCOPE_KEY, ENCRYPTION_SCOPE_VALUE);
-  logEncryptionMigrated(logSink, fromScope, ENCRYPTION_SCOPE_VALUE, elapsed());
+  const fromScopeClass =
+    fromScope === "reconstructive-columns/v2" ? fromScope : UNSCOPED_ENCRYPTED_SCOPE_LABEL;
+  logEncryptionMigrated(logSink, fromScopeClass, ENCRYPTION_SCOPE_VALUE, elapsed());
 }
 
 function verifyProbe(db: DatabaseSync, cipher: StoreContentCipher): void {
