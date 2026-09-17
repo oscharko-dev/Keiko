@@ -7,6 +7,10 @@ import type {
   DraftDeliveryRecord,
 } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
 import type { GitDeliveryApprovalRequirement } from "@oscharko-dev/keiko-contracts";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { GitPrCreateCommand, GitPushCommand } from "@oscharko-dev/keiko-tools";
 import {
   DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
@@ -37,6 +41,7 @@ import {
   proposalRecord,
   storeDraft,
   draftApprovalChanged,
+  logDraftDeliveryActivity,
   type DraftDeliveryCommand,
 } from "./draftDeliveryLedger.js";
 import { resolveDraftDeliveryTemplate } from "./draftDeliveryTemplate.js";
@@ -44,6 +49,48 @@ import { readDraftDeliveryChecks } from "./draftDeliveryChecks.js";
 import { executeDraftDeliveryEffect } from "./draftDeliveryEffects.js";
 import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { errorKindOf } from "../observability/server-log.js";
+import { gitDeliveryActivityErrorKind } from "./execution.js";
+
+const DRAFT_RELATED_ISSUES_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.draft-related-issues",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/draftDeliveryService.relatedIssues",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["unavailable"],
+    },
+    count: { type: "integer", dataClass: "count", required: true },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    errorClass: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    code: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["git-draft-related-issues"],
+  proofIds: ["git.draft-related-issues"],
+  releaseImpact: "patch",
+});
 
 interface DeliveryGuard {
   readonly check: () => boolean;
@@ -172,26 +219,34 @@ export class DraftDeliveryController implements DraftDeliveryService {
     }
   }
   private busyRefusal(context: DraftDeliveryRunContext): CodingRuntimeDeliveryResult {
-    (this.options.execution?.activityLog ?? processServerLogSink()).write({
-      category: "process",
-      op: "git.draft-delivery",
-      correlationId: context.correlationId,
-      level: "warn",
-      extra: { runId: context.runId, phase: "refused", reason: "operation-in-flight" },
-    });
+    logDraftDeliveryActivity(
+      this.options,
+      context.correlationId,
+      { runId: context.runId, phase: "refused", reason: "operation-in-flight" },
+      { errorKind: "conflict" },
+    );
     return unavailable("operation-in-flight");
   }
   private failure(context: DraftDeliveryRunContext, error: unknown): CodingRuntimeDeliveryResult {
     this.proposal = undefined;
     const reason = error instanceof DraftDeliveryFailure ? error.reason : "provider-failed";
-    (this.options.execution?.activityLog ?? processServerLogSink()).write({
-      category: "process",
-      op: "git.draft-delivery",
-      correlationId: context.correlationId,
-      level: "warn",
-      errorKind: "internal",
-      extra: { runId: context.runId, phase: "failed", reason, ...describeError(error) },
-    });
+    const failureKind = errorKindOf(error);
+    const detail = describeError(error);
+    logDraftDeliveryActivity(
+      this.options,
+      context.correlationId,
+      {
+        runId: context.runId,
+        phase: "failed",
+        reason,
+        failureKind,
+        errorClass: detail.errorClass,
+        ...(detail.code === undefined ? {} : { code: detail.code }),
+        ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+        ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+      },
+      { errorKind: gitDeliveryActivityErrorKind(failureKind) },
+    );
     const current = currentDraft(this.options, context);
     if (current === undefined) return unavailable("provider-unavailable");
     const pullRequest =
@@ -310,14 +365,28 @@ export class DraftDeliveryController implements DraftDeliveryService {
     try {
       return (await this.options.resolveRelatedIssues?.(context)) ?? [];
     } catch (error) {
-      (this.options.execution?.activityLog ?? processServerLogSink()).write({
-        category: "process",
-        op: "git.draft-related-issues",
-        correlationId: context.correlationId,
-        level: "warn",
-        errorKind: "internal",
-        extra: { runId: context.runId, state: "unavailable", count: 0, ...describeError(error) },
-      });
+      const failureKind = errorKindOf(error);
+      const detail = describeError(error);
+      (this.options.execution?.activityLog ?? processServerLogSink()).write(
+        activityLogEvent(
+          DRAFT_RELATED_ISSUES_OPERATION,
+          {
+            correlationId: context.correlationId,
+            level: "warn",
+            errorKind: gitDeliveryActivityErrorKind(failureKind),
+          },
+          {
+            runId: context.runId,
+            state: "unavailable",
+            count: 0,
+            failureKind,
+            errorClass: detail.errorClass,
+            ...(detail.code === undefined ? {} : { code: detail.code }),
+            ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+            ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+          },
+        ),
+      );
       return [];
     }
   }
@@ -433,16 +502,11 @@ export class DraftDeliveryController implements DraftDeliveryService {
     if (approved?.proposal === proposal) return approved.claim;
     if (this.options.policyAllowsWithoutApproval?.(deliveryAction(proposal)) !== true)
       throw new DraftDeliveryFailure("approval-invalid");
-    (this.options.execution?.activityLog ?? processServerLogSink()).write({
-      category: "process",
-      op: "git.draft-delivery",
-      correlationId: context.correlationId,
-      extra: {
-        runId: context.runId,
-        phase: "approval",
-        reason: "policy-authorized",
-        proposalId: proposal.record.proposalId,
-      },
+    logDraftDeliveryActivity(this.options, context.correlationId, {
+      runId: context.runId,
+      phase: "approval",
+      reason: "policy-authorized",
+      proposalId: proposal.record.proposalId,
     });
     return { required: false };
   }
