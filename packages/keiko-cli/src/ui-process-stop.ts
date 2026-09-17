@@ -12,6 +12,10 @@ import type {
   WindowsTreeKillResult,
 } from "@oscharko-dev/keiko-contracts";
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   emitSecurityLogEvent,
   securityErrorKind,
   type SecurityLogSink,
@@ -26,6 +30,97 @@ const GRACEFUL_POLL_MS = 500;
 const FORCED_POLL_MS = 100;
 const FORCED_WAIT_MS = 2_000;
 const UI_PID_FILE = "ui.pid";
+
+const STOP_REQUESTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "cli.lifecycle.stop-requested",
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "ui-process-stop.emitStopRequested",
+  fields: {
+    channel: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["shutdown-request", "sigterm"],
+    },
+  },
+  causal: "none",
+  lifecycle: "start",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["ui-process-stop"],
+  proofIds: ["cli.lifecycle.stop-requested.channel"],
+  releaseImpact: "patch",
+});
+
+const STOP_ESCALATED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "cli.lifecycle.stop-escalated",
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "ui-process-stop.escalateForcedStop",
+  fields: {
+    windowsTreeKill: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "succeeded",
+        "failed",
+        "unknown",
+        "budget-exhausted",
+        "blocked-untrusted-system-root",
+        "refused-self-pid",
+        "root-not-found",
+        "not-attempted",
+      ],
+    },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["ui-process-stop-escalation"],
+  proofIds: ["cli.lifecycle.stop-escalated.disposition"],
+  releaseImpact: "patch",
+});
+
+const STOP_REQUEST_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "cli.lifecycle.stop-request-failed",
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "ui-process-stop.emitStopRequestFailed",
+  fields: {
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["ui-process-stop-request"],
+  proofIds: ["cli.lifecycle.stop-request-failed.kind"],
+  releaseImpact: "patch",
+});
+
+const STOP_ESCALATION_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "cli.lifecycle.stop-escalation-failed",
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "ui-process-stop.emitStopEscalationFailed",
+  fields: {
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["ui-process-stop-escalation"],
+  proofIds: ["cli.lifecycle.stop-escalation-failed.kind"],
+  releaseImpact: "patch",
+});
 
 export interface TerminateUiProcessInput {
   readonly pid: number;
@@ -140,12 +235,10 @@ function emitStopRequested(
   input: TerminateUiProcessInput,
   channel: "shutdown-request" | "sigterm",
 ): void {
-  emitSecurityLogEvent(input.securityLogSink, {
-    level: "info",
-    category: "diagnostic",
-    op: "cli.lifecycle.stop-requested",
-    extra: { channel },
-  });
+  emitSecurityLogEvent(
+    input.securityLogSink,
+    activityLogEvent(STOP_REQUESTED_OPERATION, { level: "info" }, { channel }),
+  );
 }
 
 function signalPosixTerm(input: TerminateUiProcessInput): boolean {
@@ -192,12 +285,10 @@ async function escalateForcedStop(input: TerminateUiProcessInput): Promise<void>
   if (shouldSignalAfterTreeKill(windowsTreeKill)) {
     signalForcedKill(input);
   }
-  emitSecurityLogEvent(input.securityLogSink, {
-    level: "info",
-    category: "diagnostic",
-    op: "cli.lifecycle.stop-escalated",
-    extra: { windowsTreeKill },
-  });
+  emitSecurityLogEvent(
+    input.securityLogSink,
+    activityLogEvent(STOP_ESCALATED_OPERATION, { level: "info" }, { windowsTreeKill }),
+  );
 }
 
 function shouldSignalAfterTreeKill(result: WindowsTreeKillDisposition): boolean {
@@ -266,21 +357,29 @@ function resolveLaunchId(input: TerminateUiProcessInput): string | undefined {
 }
 
 function emitStopRequestFailed(input: TerminateUiProcessInput, errorKind: string): void {
-  emitSecurityLogEvent(input.securityLogSink, {
-    level: "warn",
-    category: "diagnostic",
-    op: "cli.lifecycle.stop-request-failed",
-    errorKind,
-  });
+  const activityErrorKind =
+    errorKind === "refused-self-pid" || errorKind === "unverified-pid"
+      ? "unsafe-target"
+      : "unavailable";
+  emitSecurityLogEvent(
+    input.securityLogSink,
+    activityLogEvent(
+      STOP_REQUEST_FAILED_OPERATION,
+      { level: "warn", errorKind: activityErrorKind },
+      { failureKind: errorKind },
+    ),
+  );
 }
 
 function emitStopEscalationFailed(input: TerminateUiProcessInput, errorKind: string): void {
-  emitSecurityLogEvent(input.securityLogSink, {
-    level: "warn",
-    category: "diagnostic",
-    op: "cli.lifecycle.stop-escalation-failed",
-    errorKind,
-  });
+  emitSecurityLogEvent(
+    input.securityLogSink,
+    activityLogEvent(
+      STOP_ESCALATION_FAILED_OPERATION,
+      { level: "warn", errorKind: "unavailable" },
+      { failureKind: errorKind },
+    ),
+  );
 }
 
 function errorCode(error: unknown): string | undefined {

@@ -1,4 +1,8 @@
 import { spawn } from "node:child_process";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   emitSecurityLogEvent,
@@ -31,6 +35,35 @@ import { emitCliWindowsSystemFailure } from "./security-log.js";
 
 const MAX_ALERT_MESSAGE_LENGTH = 400;
 const OSASCRIPT_EXECUTABLE = "/usr/bin/osascript";
+
+const WINDOWS_ALERT_SPAWN_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "portable.windows-alert.spawn-failed",
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "portable-launch-notifier.logWindowsAlertSpawnFailure",
+  fields: {
+    surface: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["portable-failure-alert"],
+    },
+    failureKind: {
+      type: "string",
+      dataClass: "error-kind",
+      required: true,
+      maxLength: 64,
+    },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["windows-alert-spawn"],
+  proofIds: ["portable.windows-alert.spawn-failed"],
+  releaseImpact: "patch",
+});
 export type PortableFailureNotifierFn = (message: string, env: EnvSource) => void;
 
 export interface PortableFailureNotifierDeps {
@@ -199,13 +232,14 @@ function spawnWindowsAlertChild(
 }
 
 function logWindowsAlertSpawnFailure(error: unknown, sink: SecurityLogSink | undefined): void {
-  emitSecurityLogEvent(sink, {
-    level: "error",
-    category: "diagnostic",
-    op: "portable.windows-alert.spawn-failed",
-    errorKind: securityErrorKind(error),
-    extra: { surface: "portable-failure-alert" },
-  });
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(
+      WINDOWS_ALERT_SPAWN_FAILED_OPERATION,
+      { level: "error", errorKind: "unavailable" },
+      { surface: "portable-failure-alert", failureKind: securityErrorKind(error) },
+    ),
+  );
 }
 
 function defaultAlertFailureReport(line: string): void {
