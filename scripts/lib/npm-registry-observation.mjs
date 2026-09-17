@@ -1,7 +1,8 @@
 import { URL } from "node:url";
 
-const registryProbeConnectTimeoutSeconds = 15;
-const registryProbeMaxTimeSeconds = 60;
+const registryProbeConnectTimeoutSeconds = 5;
+export const REGISTRY_OBSERVATION_TIMEOUT_MS = 15_000;
+const registryProbeMaxTimeSeconds = REGISTRY_OBSERVATION_TIMEOUT_MS / 1_000;
 
 export function registryVersionEndpoint(pkg, registry) {
   const registryUrl = new URL(registry);

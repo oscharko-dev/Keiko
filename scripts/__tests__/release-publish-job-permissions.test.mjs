@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import { REGISTRY_OBSERVATION_TIMEOUT_MS } from "../lib/npm-registry-observation.mjs";
 
 // GITHUB_TOKEN carries only the permissions a job declares, and GitHub's permission data for
 // installation tokens requires attestations:read to list attestations and deployments:read to list
@@ -38,7 +39,11 @@ describe("release publish job token", () => {
 
     expect(publishJob["timeout-minutes"]).toBeGreaterThanOrEqual(75);
     expect(publishStep.env.KEIKO_RELEASE_VERIFY_ATTEMPTS).toBe("30");
-    expect(publishStep.env.KEIKO_RELEASE_VERIFY_DELAY_MS).toBe("60000");
+    expect(publishStep.env.KEIKO_RELEASE_VERIFY_DELAY_MS).toBe("30000");
+    const attempts = Number(publishStep.env.KEIKO_RELEASE_VERIFY_ATTEMPTS);
+    const delayMs = Number(publishStep.env.KEIKO_RELEASE_VERIFY_DELAY_MS);
+    const worstCaseMs = attempts * REGISTRY_OBSERVATION_TIMEOUT_MS * 2 + (attempts - 1) * delayMs;
+    expect(worstCaseMs).toBeLessThan(30 * 60 * 1_000);
     expect(publishStep.env.NODE_AUTH_TOKEN).toBeUndefined();
     expect(publishStep.env.NPM_TOKEN).toBeUndefined();
   });

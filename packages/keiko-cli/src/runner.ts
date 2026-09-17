@@ -92,7 +92,7 @@ type CommandHandler = (
 
 interface DeferredSecurityLogCollector {
   readonly factory: CliSecurityLogSinkFactory;
-  readonly flush: () => Promise<void>;
+  readonly flush: () => Promise<boolean>;
 }
 
 interface PendingSecurityLogEvent {
@@ -100,14 +100,35 @@ interface PendingSecurityLogEvent {
   readonly event: SecurityLogEvent;
 }
 
-function deferredSecurityLogCollector(): DeferredSecurityLogCollector {
+interface DeferredLogFailure {
+  readonly io: CliIo;
+  readonly message: string;
+}
+
+function pendingSecurityLogEvent(
+  stateDir: string,
+  event: SecurityLogEvent,
+  invocationCorrelationId?: string,
+): PendingSecurityLogEvent {
+  return {
+    stateDir,
+    event:
+      invocationCorrelationId === undefined
+        ? event
+        : { ...event, correlationId: invocationCorrelationId },
+  };
+}
+
+function deferredSecurityLogCollector(
+  invocationCorrelationId?: string,
+): DeferredSecurityLogCollector {
   const pending: PendingSecurityLogEvent[] = [];
   const sinks = new Map<string, SecurityLogSink>();
   let drainPromise: Promise<void> | undefined;
   let fileSinkFactory: CliSecurityLogSinkFactory | undefined;
+  let unavailable = false;
 
   const drain = async (): Promise<void> => {
-    if (pending.length === 0) return;
     try {
       fileSinkFactory ??= (await loadServer()).createFileServerLogSink;
       while (pending.length > 0) {
@@ -121,6 +142,7 @@ function deferredSecurityLogCollector(): DeferredSecurityLogCollector {
         sink.write(next.event);
       }
     } catch (cause) {
+      unavailable = true;
       pending.splice(0);
       warnSecurityLogSinkUnavailable(cause);
     }
@@ -138,29 +160,40 @@ function deferredSecurityLogCollector(): DeferredSecurityLogCollector {
   return {
     factory: (stateDir): SecurityLogSink => ({
       write: (event): void => {
-        pending.push({ stateDir, event });
+        pending.push(pendingSecurityLogEvent(stateDir, event, invocationCorrelationId));
         void startDrain();
       },
     }),
-    flush: async (): Promise<void> => {
+    flush: async (): Promise<boolean> => {
       while (pending.length > 0 || drainPromise !== undefined) {
         await (drainPromise ?? startDrain());
       }
+      return !unavailable;
     },
   };
 }
 
 async function runWithDeferredSecurityLog(
   run: (factory: CliSecurityLogSinkFactory) => number | Promise<number>,
+  invocationCorrelationId?: string,
+  failure?: DeferredLogFailure,
 ): Promise<number> {
-  const collector = deferredSecurityLogCollector();
+  const collector = deferredSecurityLogCollector(invocationCorrelationId);
+  let result: number;
   try {
-    return await run(collector.factory);
-  } finally {
+    result = await run(collector.factory);
+  } catch (cause) {
     // Eventless commands never load the server graph. Detached helpers retain their sink after
     // settlement; any later child error starts another serialized drain instead of being stranded.
     await collector.flush();
+    throw cause;
   }
+  const persisted = await collector.flush();
+  if (!persisted && failure !== undefined) {
+    failure.io.err(failure.message);
+    return 1;
+  }
+  return result;
 }
 
 function warnSecurityLogSinkUnavailable(cause: unknown): void {
@@ -175,8 +208,8 @@ function warnSecurityLogSinkUnavailable(cause: unknown): void {
       },
     );
   } catch {
-    // The warning channel is the last body-free fallback. Logging must never block a repair,
-    // uninstall, or portable command when that channel is unavailable too.
+    // The warning channel is the last body-free fallback. Its own failure must never block a
+    // recovery command; read-only audit separately fails closed when its evidence cannot persist.
   }
 }
 
@@ -187,15 +220,17 @@ function runRepairCommand(
 ): number | Promise<number> {
   // Keep repair's established synchronous return on hosts that cannot invoke the Windows shortcut
   // helper. Windows loads the existing file sink only after dispatch, never on `keiko --version`.
-  const needsLayoutEvidence = installLayoutOverrideEvidence(env) !== undefined;
+  const layoutEvidence = installLayoutOverrideEvidence(env);
+  const needsLayoutEvidence = layoutEvidence !== undefined;
   if (
     !needsLayoutEvidence &&
     (process.platform !== "win32" || rest[0] === "--help" || rest[0] === "-h")
   ) {
     return runRepairCli(rest, io, env);
   }
-  return runWithDeferredSecurityLog((securityLogSinkFactory) =>
-    runRepairCli(rest, io, env, { securityLogSinkFactory }),
+  return runWithDeferredSecurityLog(
+    (securityLogSinkFactory) => runRepairCli(rest, io, env, { securityLogSinkFactory }),
+    layoutEvidence?.correlationId,
   );
 }
 
@@ -206,10 +241,12 @@ function runLauncherCommand(
 ): number | Promise<number> {
   const command = rest[0];
   const needsWindowsHelper = process.platform === "win32" && command === "install";
-  const needsLayoutEvidence = installLayoutOverrideEvidence(env) !== undefined;
+  const layoutEvidence = installLayoutOverrideEvidence(env);
+  const needsLayoutEvidence = layoutEvidence !== undefined;
   if (!needsWindowsHelper && !needsLayoutEvidence) return runLauncherCli(rest, io, env);
-  return runWithDeferredSecurityLog((securityLogSinkFactory) =>
-    runLauncherCli(rest, io, env, { securityLogSinkFactory }),
+  return runWithDeferredSecurityLog(
+    (securityLogSinkFactory) => runLauncherCli(rest, io, env, { securityLogSinkFactory }),
+    layoutEvidence?.correlationId,
   );
 }
 
@@ -223,9 +260,11 @@ function runSupportCommand(rest: readonly string[], io: CliIo, env: EnvSource): 
 }
 
 function runUiCommand(rest: readonly string[], io: CliIo, env: EnvSource): Promise<number> {
-  if (installLayoutOverrideEvidence(env) === undefined) return runUiCli(rest, io, env);
-  return runWithDeferredSecurityLog((activityLogSinkFactory) =>
-    runUiCli(rest, io, env, { activityLogSinkFactory }),
+  const layoutEvidence = installLayoutOverrideEvidence(env);
+  if (layoutEvidence === undefined) return runUiCli(rest, io, env);
+  return runWithDeferredSecurityLog(
+    (activityLogSinkFactory) => runUiCli(rest, io, env, { activityLogSinkFactory }),
+    layoutEvidence.correlationId,
   );
 }
 
@@ -235,12 +274,13 @@ function runLifecycleCommand(
   io: CliIo,
   env: EnvSource,
 ): number | Promise<number> {
+  const layoutEvidence = installLayoutOverrideEvidence(env);
   const needsDeferredLog =
-    (process.platform === "win32" && rest.includes("--open")) ||
-    installLayoutOverrideEvidence(env) !== undefined;
+    (process.platform === "win32" && rest.includes("--open")) || layoutEvidence !== undefined;
   if (!needsDeferredLog) return runLifecycleCli(command, rest, io, env);
-  return runWithDeferredSecurityLog((securityLogSinkFactory) =>
-    runLifecycleCli(command, rest, io, env, { securityLogSinkFactory }),
+  return runWithDeferredSecurityLog(
+    (securityLogSinkFactory) => runLifecycleCli(command, rest, io, env, { securityLogSinkFactory }),
+    layoutEvidence?.correlationId,
   );
 }
 
@@ -251,8 +291,9 @@ function runUninstallCommand(
 ): number | Promise<number> {
   const help = rest[0] === "--help" || rest[0] === "-h";
   if (help) return runUninstallCli(rest, io, env);
-  return runWithDeferredSecurityLog((securityLogSinkFactory) =>
-    runUninstallCli(rest, io, env, { securityLogSinkFactory }),
+  return runWithDeferredSecurityLog(
+    (securityLogSinkFactory) => runUninstallCli(rest, io, env, { securityLogSinkFactory }),
+    installLayoutOverrideEvidence(env)?.correlationId,
   );
 }
 
@@ -263,8 +304,13 @@ function runAuditCommand(
 ): number | Promise<number> {
   const help = rest.includes("--help") || rest.includes("-h");
   if (help) return runAuditCli(rest, io, env);
-  return runWithDeferredSecurityLog((activityLogSinkFactory) =>
-    runAuditCli(rest, io, env, { activityLogSinkFactory }),
+  return runWithDeferredSecurityLog(
+    (activityLogSinkFactory) => runAuditCli(rest, io, env, { activityLogSinkFactory }),
+    installLayoutOverrideEvidence(env)?.correlationId,
+    {
+      io,
+      message: "keiko audit: durable activity logging is unavailable; audit refused.\n",
+    },
   );
 }
 
@@ -276,12 +322,14 @@ function runPortableCommand(
   const command = rest[0];
   const noShortcutOperation =
     command === undefined || command === "--help" || command === "-h" || command === "status";
-  const needsLayoutEvidence = installLayoutOverrideEvidence(env) !== undefined;
+  const layoutEvidence = installLayoutOverrideEvidence(env);
+  const needsLayoutEvidence = layoutEvidence !== undefined;
   if ((!needsLayoutEvidence && process.platform !== "win32") || noShortcutOperation) {
     return runPortableCli(rest, io, env);
   }
-  return runWithDeferredSecurityLog((securityLogSinkFactory) =>
-    runPortableCli(rest, io, env, { securityLogSinkFactory }),
+  return runWithDeferredSecurityLog(
+    (securityLogSinkFactory) => runPortableCli(rest, io, env, { securityLogSinkFactory }),
+    layoutEvidence?.correlationId,
   );
 }
 

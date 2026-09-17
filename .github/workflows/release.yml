@@ -221,8 +221,8 @@ jobs:
           KEIKO_RELEASE_OWNER_GITHUB_LOGINS: ${{ vars.KEIKO_RELEASE_OWNER_GITHUB_LOGINS }}
           # npm Trusted Publishing can quarantine an OIDC/provenance publish after the CLI reports
           # success and before the version-specific registry endpoint returns HTTP 200. v1.0.3 took
-          # roughly 14 minutes. Use a 30-minute read budget; release-publish.mjs counts this as 30
-          # total reads, including the initial read, with one minute between reads.
+          # roughly 14 minutes. Thirty reads, 30-second waits, and hard 15-second ceilings on each
+          # version and dist-tag probe give a provable worst-case verification time below 30 minutes.
           KEIKO_RELEASE_VERIFY_ATTEMPTS: "30"
-          KEIKO_RELEASE_VERIFY_DELAY_MS: "60000"
+          KEIKO_RELEASE_VERIFY_DELAY_MS: "30000"
         run: npm run release:publish -- --tag "$NPM_DIST_TAG"

@@ -63,6 +63,7 @@ import { recordNpmPublishDeployment } from "./lib/npm-publish-deployment.mjs";
 import {
   classifyDistTagResult,
   classifyRegistryVersionResult,
+  REGISTRY_OBSERVATION_TIMEOUT_MS,
   registryVersionProbeArgs,
   resolveDistTagAction,
   resolveVersionExistence,
@@ -281,6 +282,8 @@ function commandResult(cmd, args, options = {}) {
     input: options.input,
     stdio: options.stdio ?? "pipe",
     env: options.env ?? process.env,
+    killSignal: options.killSignal,
+    timeout: options.timeout,
   });
 }
 
@@ -1656,6 +1659,8 @@ function npmViewDistTagResult(pkg, npmEnv, registry, tag) {
     ["view", pkg.name, `dist-tags.${tag}`, "--registry", registry],
     {
       env: npmEnv,
+      killSignal: "SIGKILL",
+      timeout: REGISTRY_OBSERVATION_TIMEOUT_MS,
     },
   );
   return classifyDistTagResult(result);

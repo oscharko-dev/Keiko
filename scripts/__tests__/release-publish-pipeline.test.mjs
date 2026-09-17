@@ -1860,8 +1860,8 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       const distTagViews = lastRun.calls.filter(isDistTagView).length;
       expect(versionViews).toBeGreaterThanOrEqual(2);
       expect(distTagViews).toBeGreaterThanOrEqual(2);
-      expect(versionEndpointReads[0]).toContain('"--connect-timeout","15"');
-      expect(versionEndpointReads[0]).toContain('"--max-time","60"');
+      expect(versionEndpointReads[0]).toContain('"--connect-timeout","5"');
+      expect(versionEndpointReads[0]).toContain('"--max-time","15"');
 
       const uploadLine = lastRun.calls.find(
         (l) => l.startsWith('gh ["release","upload"') && l.includes("keiko-windows-x64.zip"),

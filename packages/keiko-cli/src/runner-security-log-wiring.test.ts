@@ -279,6 +279,39 @@ describe("Windows CLI security-log production wiring", () => {
     ]);
   });
 
+  it("keeps normalization and later command events on one invocation correlation", async () => {
+    const correlationId = "00000000-0000-4000-8000-000000000001";
+    const stateDir = String.raw`C:\Keiko\state`;
+    const written: PersistedServerLogEvent[] = [];
+    commandMocks.loadServer.mockResolvedValue({
+      createFileServerLogSink: () => ({
+        write: (event): void => {
+          written.push(event);
+        },
+      }),
+    });
+    commandMocks.lifecycle.mockImplementation((_command, _args, _io, env, deps) => {
+      writeInstallLayoutOverrideEvidence(deps?.securityLogSinkFactory?.(stateDir), env);
+      createCliSecurityLogSink(stateDir, deps?.securityLogSinkFactory)?.write({
+        category: "security",
+        op: "security.windows-lifecycle-opener.system-root-refused",
+      });
+      return Promise.resolve(45);
+    });
+    const env: EnvSource = {
+      [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin",
+      [INSTALL_LAYOUT_CORRELATION_ID_ENV]: correlationId,
+    };
+
+    await expect(Promise.resolve(runCli(["start", "--open"], io(), env))).resolves.toBe(45);
+
+    expect(written.map(({ op }) => op)).toEqual([
+      "cli.install-layout.normalized",
+      "security.windows-lifecycle-opener.system-root-refused",
+    ]);
+    expect(written.every((event) => event.correlationId === correlationId)).toBe(true);
+  });
+
   it("persists a detached Windows alert error emitted after the command has settled", async () => {
     const stateDir = String.raw`C:\Keiko\state`;
     const written: PersistedServerLogEvent[] = [];
@@ -361,5 +394,28 @@ describe("Windows CLI security-log production wiring", () => {
     expect(JSON.stringify(emitWarning.mock.calls)).toContain("errorKind=Error");
     expect(JSON.stringify(emitWarning.mock.calls)).not.toContain("module load failed");
     expect(JSON.stringify(emitWarning.mock.calls)).not.toContain("Sensitive");
+  });
+
+  it("fails a read-only audit closed when deferred activity evidence cannot persist", async () => {
+    commandMocks.loadServer.mockRejectedValue(new Error("module load failed"));
+    const emitWarning = vi.spyOn(process, "emitWarning").mockImplementation((): void => undefined);
+    const err = vi.fn<(text: string) => void>();
+    commandMocks.audit.mockImplementation((_args, _io, _env, deps) => {
+      deps?.activityLogSinkFactory?.("/control").write({
+        category: "diagnostic",
+        op: "cli.audit.started",
+      });
+      return 46;
+    });
+
+    await expect(
+      Promise.resolve(runCli(["audit", "local-state"], { out: (): void => undefined, err }, {})),
+    ).resolves.toBe(1);
+
+    expect(commandMocks.loadServer).toHaveBeenCalledTimes(1);
+    expect(emitWarning).toHaveBeenCalledTimes(1);
+    expect(err).toHaveBeenCalledWith(
+      "keiko audit: durable activity logging is unavailable; audit refused.\n",
+    );
   });
 });
