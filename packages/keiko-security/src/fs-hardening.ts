@@ -26,7 +26,7 @@ import {
   writeSync,
 } from "node:fs";
 import type { Stats } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 // Owner-only directory: rwx for the owner, nothing for group/other.
 export const DIR_MODE = 0o700;
@@ -64,8 +64,7 @@ export function chmodIfPresent(path: string, mode: number): void {
 
 export const SAFE_ARTIFACT_CLASSES = [
   "activity-log",
-  "support-bundle",
-  "support-integrity",
+  "support-report",
   "replay-fixture",
   "manifest",
   "integrity-artifact",
@@ -75,6 +74,8 @@ export type SafeArtifactClass = (typeof SAFE_ARTIFACT_CLASSES)[number];
 export type SafeArtifactOpenMode = "append-existing-or-create" | "exclusive-create" | "read";
 export type SafeArtifactFileFailureKind =
   | "invalid-publication"
+  | "close-failed"
+  | "durability-failed"
   | "open-failed"
   | "permission-failed"
   | "permission-unsafe"
@@ -85,6 +86,7 @@ export type SafeArtifactFileFailureKind =
   | "replace-failed"
   | "target-exists"
   | "target-mutated"
+  | "unsafe-ancestor"
   | "unsafe-target"
   | "write-failed";
 
@@ -103,6 +105,7 @@ export class SafeArtifactFileError extends Error {
 export interface OpenSafeArtifactFileOptions {
   readonly artifactClass: SafeArtifactClass;
   readonly mode: SafeArtifactOpenMode;
+  readonly trustedRoot: string;
 }
 
 function safeFileError(
@@ -110,6 +113,14 @@ function safeFileError(
   kind: SafeArtifactFileFailureKind,
 ): SafeArtifactFileError {
   return new SafeArtifactFileError(artifactClass, kind);
+}
+
+function closeArtifactDescriptor(descriptor: number, artifactClass: SafeArtifactClass): void {
+  try {
+    closeSync(descriptor);
+  } catch {
+    throw safeFileError(artifactClass, "close-failed");
+  }
 }
 
 function errorCode(error: unknown): string | undefined {
@@ -125,6 +136,155 @@ function pathExists(path: string, artifactClass: SafeArtifactClass): boolean {
     if (errorCode(error) === "ENOENT") return false;
     throw safeFileError(artifactClass, "open-failed");
   }
+}
+
+interface DirectoryGuard {
+  readonly path: string;
+  readonly dev: number;
+  readonly ino: number;
+  readonly descriptor: number | undefined;
+}
+
+function lstatDirectory(path: string, artifactClass: SafeArtifactClass): Stats {
+  try {
+    const stat: Stats = lstatSync(path);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw safeFileError(artifactClass, "unsafe-ancestor");
+    }
+    return stat;
+  } catch (error) {
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(artifactClass, "unsafe-ancestor");
+  }
+}
+
+function containedDirectories(
+  trustedRoot: string,
+  targetPath: string,
+  artifactClass: SafeArtifactClass,
+): readonly string[] {
+  const root = resolve(trustedRoot);
+  const parent = dirname(resolve(targetPath));
+  const fromRoot = relative(root, parent);
+  if (fromRoot === ".." || fromRoot.startsWith(`..${sep}`) || isAbsolute(fromRoot)) {
+    throw safeFileError(artifactClass, "unsafe-ancestor");
+  }
+  const directories = [root];
+  let current = root;
+  for (const component of fromRoot === "" ? [] : fromRoot.split(sep)) {
+    current = join(current, component);
+    directories.push(current);
+  }
+  return directories;
+}
+
+function openDirectoryGuard(path: string, artifactClass: SafeArtifactClass): DirectoryGuard {
+  const before = lstatDirectory(path, artifactClass);
+  if (process.platform === "win32") {
+    const after = lstatDirectory(path, artifactClass);
+    if (after.dev !== before.dev || after.ino !== before.ino) {
+      throw safeFileError(artifactClass, "target-mutated");
+    }
+    return { path, dev: after.dev, ino: after.ino, descriptor: undefined };
+  }
+  const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+  const directory = typeof constants.O_DIRECTORY === "number" ? constants.O_DIRECTORY : 0;
+  let descriptor: number | undefined;
+  try {
+    descriptor = openSync(path, constants.O_RDONLY | noFollow | directory);
+    return validateDirectoryGuard(path, before.dev, before.ino, descriptor, artifactClass);
+  } catch (error) {
+    if (descriptor !== undefined) closeDescriptorIgnoringErrors(descriptor);
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(artifactClass, "unsafe-ancestor");
+  }
+}
+
+function validateDirectoryGuard(
+  path: string,
+  dev: number,
+  ino: number,
+  descriptor: number,
+  artifactClass: SafeArtifactClass,
+): DirectoryGuard {
+  let opened: Stats;
+  try {
+    opened = fstatSync(descriptor);
+  } catch {
+    throw safeFileError(artifactClass, "unsafe-ancestor");
+  }
+  const pathname = lstatDirectory(path, artifactClass);
+  if (
+    !opened.isDirectory() ||
+    opened.dev !== dev ||
+    opened.ino !== ino ||
+    pathname.dev !== dev ||
+    pathname.ino !== ino
+  ) {
+    throw safeFileError(artifactClass, "target-mutated");
+  }
+  return { path, dev, ino, descriptor };
+}
+
+function closeDescriptorIgnoringErrors(descriptor: number): void {
+  try {
+    closeSync(descriptor);
+  } catch {
+    // Preserve the already-closed primary failure.
+  }
+}
+
+function captureDirectoryGuards(
+  trustedRoot: string,
+  targetPath: string,
+  artifactClass: SafeArtifactClass,
+): readonly DirectoryGuard[] {
+  const guards: DirectoryGuard[] = [];
+  try {
+    for (const path of containedDirectories(trustedRoot, targetPath, artifactClass)) {
+      guards.push(openDirectoryGuard(path, artifactClass));
+    }
+    return guards;
+  } catch (error) {
+    closeDirectoryGuardsIgnoringErrors(guards);
+    throw error;
+  }
+}
+
+function directoryGuardStillMatches(guard: DirectoryGuard): boolean {
+  try {
+    const pathname = lstatSync(guard.path);
+    if (!pathname.isDirectory() || pathname.isSymbolicLink()) return false;
+    if (pathname.dev !== guard.dev || pathname.ino !== guard.ino) return false;
+    if (guard.descriptor === undefined) return process.platform === "win32";
+    const opened = fstatSync(guard.descriptor);
+    return opened.isDirectory() && opened.dev === guard.dev && opened.ino === guard.ino;
+  } catch {
+    return false;
+  }
+}
+
+function closeDirectoryGuardsIgnoringErrors(guards: readonly DirectoryGuard[]): void {
+  for (const guard of guards) {
+    if (guard.descriptor === undefined) continue;
+    closeDescriptorIgnoringErrors(guard.descriptor);
+  }
+}
+
+function closeDirectoryGuards(
+  guards: readonly DirectoryGuard[],
+  artifactClass: SafeArtifactClass,
+): void {
+  let failed = false;
+  for (const guard of guards) {
+    if (guard.descriptor === undefined) continue;
+    try {
+      closeSync(guard.descriptor);
+    } catch {
+      failed = true;
+    }
+  }
+  if (failed) throw safeFileError(artifactClass, "close-failed");
 }
 
 function refuseSymlinkFallback(path: string, artifactClass: SafeArtifactClass): void {
@@ -185,12 +345,23 @@ function verifyDescriptorIdentity(
 export function verifySafeArtifactFileDescriptor(
   descriptor: number,
   path: string,
-  artifactClass: SafeArtifactClass,
+  options: Pick<OpenSafeArtifactFileOptions, "artifactClass" | "trustedRoot">,
 ): void {
-  const opened = verifyDescriptorIdentity(descriptor, path, artifactClass);
-  if (!permissionIsPrivate(opened.mode)) {
-    throw safeFileError(artifactClass, "permission-unsafe");
+  const guards = captureDirectoryGuards(options.trustedRoot, path, options.artifactClass);
+  try {
+    const opened = verifyDescriptorIdentity(descriptor, path, options.artifactClass);
+    if (!permissionIsPrivate(opened.mode)) {
+      throw safeFileError(options.artifactClass, "permission-unsafe");
+    }
+    if (!guards.every(directoryGuardStillMatches)) {
+      throw safeFileError(options.artifactClass, "target-mutated");
+    }
+  } catch (error) {
+    closeDirectoryGuardsIgnoringErrors(guards);
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(options.artifactClass, "open-failed");
   }
+  closeDirectoryGuards(guards, options.artifactClass);
 }
 
 function tightenDescriptor(descriptor: number, artifactClass: SafeArtifactClass): void {
@@ -209,26 +380,58 @@ function mapOpenError(error: unknown): SafeArtifactFileFailureKind {
   return "open-failed";
 }
 
-/** Opens without following the final symlink and verifies the descriptor before any caller write. */
-export function openSafeArtifactFile(path: string, options: OpenSafeArtifactFileOptions): number {
-  const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+function noFollowFlag(): number {
+  if (process.platform === "win32") return 0;
+  return typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
+}
+
+function openArtifactDescriptor(path: string, options: OpenSafeArtifactFileOptions): number {
+  const noFollow = noFollowFlag();
   const nonBlocking = typeof constants.O_NONBLOCK === "number" ? constants.O_NONBLOCK : 0;
   if (noFollow === 0) refuseSymlinkFallback(path, options.artifactClass);
-  let descriptor: number;
   try {
-    descriptor = openSync(path, openFlags(options.mode) | noFollow | nonBlocking, FILE_MODE);
+    return openSync(path, openFlags(options.mode) | noFollow | nonBlocking, FILE_MODE);
   } catch (error) {
     if (error instanceof SafeArtifactFileError) throw error;
     throw safeFileError(options.artifactClass, mapOpenError(error));
   }
+}
+
+function validateOpenedArtifact(
+  descriptor: number,
+  path: string,
+  options: OpenSafeArtifactFileOptions,
+  guards: readonly DirectoryGuard[],
+): void {
+  verifyDescriptorIdentity(descriptor, path, options.artifactClass);
+  if (options.mode !== "read") tightenDescriptor(descriptor, options.artifactClass);
+  const opened = verifyDescriptorIdentity(descriptor, path, options.artifactClass);
+  if (!permissionIsPrivate(opened.mode)) {
+    throw safeFileError(options.artifactClass, "permission-unsafe");
+  }
+  if (!guards.every(directoryGuardStillMatches)) {
+    throw safeFileError(options.artifactClass, "target-mutated");
+  }
+}
+
+/**
+ * Opens without following the final symlink and verifies the descriptor before any caller write.
+ * Windows lacks stable no-follow directory descriptors: reparse points are refused by lstat and
+ * ancestor identities are checked before and after open, with any ambiguity failing closed.
+ */
+export function openSafeArtifactFile(path: string, options: OpenSafeArtifactFileOptions): number {
+  const guards = captureDirectoryGuards(options.trustedRoot, path, options.artifactClass);
+  let descriptor: number | undefined;
   try {
-    verifyDescriptorIdentity(descriptor, path, options.artifactClass);
-    if (options.mode !== "read") tightenDescriptor(descriptor, options.artifactClass);
-    verifySafeArtifactFileDescriptor(descriptor, path, options.artifactClass);
+    descriptor = openArtifactDescriptor(path, options);
+    validateOpenedArtifact(descriptor, path, options, guards);
+    closeDirectoryGuards(guards, options.artifactClass);
     return descriptor;
   } catch (error) {
-    closeSync(descriptor);
-    throw error;
+    closeDirectoryGuardsIgnoringErrors(guards);
+    if (descriptor !== undefined) closeArtifactDescriptor(descriptor, options.artifactClass);
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(options.artifactClass, "open-failed");
   }
 }
 
@@ -240,6 +443,7 @@ export interface SafeArtifactPublicationEntry {
 
 export interface SafeArtifactPublicationOptions {
   readonly commitPath: string;
+  readonly trustedRoot: string;
 }
 
 export interface SafeArtifactPublicationResult {
@@ -248,6 +452,7 @@ export interface SafeArtifactPublicationResult {
 
 export interface ReplaceSafeArtifactFileOptions {
   readonly artifactClass: SafeArtifactClass;
+  readonly trustedRoot: string;
 }
 
 interface PreparedPublicationEntry {
@@ -255,6 +460,7 @@ interface PreparedPublicationEntry {
   readonly stagePath: string;
   readonly bytes: Buffer;
   readonly artifactClass: SafeArtifactClass;
+  readonly trustedRoot: string;
 }
 
 function publicationId(
@@ -262,7 +468,8 @@ function publicationId(
   commitPath: string,
 ): string {
   const hash = createHash("sha256");
-  for (const entry of entries) hash.update(resolve(entry.path)).update("\0");
+  const paths = entries.map((entry) => resolve(entry.path)).sort();
+  for (const path of paths) hash.update(path).update("\0");
   hash.update(resolve(commitPath));
   return hash.digest("hex").slice(0, 24);
 }
@@ -270,10 +477,14 @@ function publicationId(
 function preparePublicationEntries(
   entries: readonly SafeArtifactPublicationEntry[],
   commitPath: string,
+  trustedRoot: string,
 ): readonly PreparedPublicationEntry[] {
   const parent = dirname(resolve(commitPath));
   const id = publicationId(entries, commitPath);
-  return entries.map((entry, index) => ({
+  const ordered = [...entries].sort((left, right) =>
+    resolve(left.path).localeCompare(resolve(right.path)),
+  );
+  return ordered.map((entry, index) => ({
     path: resolve(entry.path),
     stagePath: join(parent, `.keiko-publish-${id}-${String(index)}.stage`),
     bytes:
@@ -281,15 +492,16 @@ function preparePublicationEntries(
         ? Buffer.from(entry.contents, "utf8")
         : Buffer.from(entry.contents),
     artifactClass: entry.artifactClass,
+    trustedRoot: resolve(trustedRoot),
   }));
 }
 
 function validatePublication(
   entries: readonly SafeArtifactPublicationEntry[],
-  commitPath: string,
+  options: SafeArtifactPublicationOptions,
 ): void {
   const fallbackClass = entries[0]?.artifactClass ?? "manifest";
-  const resolvedCommit = resolve(commitPath);
+  const resolvedCommit = resolve(options.commitPath);
   const paths = entries.map((entry) => resolve(entry.path));
   const parents = new Set(paths.map(dirname));
   if (
@@ -300,6 +512,7 @@ function validatePublication(
   ) {
     throw safeFileError(fallbackClass, "invalid-publication");
   }
+  for (const path of paths) containedDirectories(options.trustedRoot, path, fallbackClass);
 }
 
 function writeAll(descriptor: number, bytes: Buffer, artifactClass: SafeArtifactClass): void {
@@ -320,50 +533,168 @@ function createStage(entry: PreparedPublicationEntry): void {
   const descriptor = openSafeArtifactFile(entry.stagePath, {
     artifactClass: entry.artifactClass,
     mode: "exclusive-create",
+    trustedRoot: entry.trustedRoot,
   });
   try {
     writeAll(descriptor, entry.bytes, entry.artifactClass);
-    fsyncSync(descriptor);
+    try {
+      fsyncSync(descriptor);
+    } catch {
+      throw safeFileError(entry.artifactClass, "durability-failed");
+    }
   } catch (error) {
-    if (error instanceof SafeArtifactFileError) throw error;
-    throw safeFileError(entry.artifactClass, "write-failed");
-  } finally {
-    closeSync(descriptor);
+    closeDescriptorIgnoringErrors(descriptor);
+    throw error;
   }
+  closeArtifactDescriptor(descriptor, entry.artifactClass);
 }
 
-function syncDirectory(path: string, artifactClass: SafeArtifactClass): void {
-  if (process.platform === "win32") return;
-  const noFollow = typeof constants.O_NOFOLLOW === "number" ? constants.O_NOFOLLOW : 0;
-  const directory = typeof constants.O_DIRECTORY === "number" ? constants.O_DIRECTORY : 0;
-  let descriptor: number | undefined;
+function syncDirectory(path: string, trustedRoot: string, artifactClass: SafeArtifactClass): void {
+  const guards = captureDirectoryGuards(
+    trustedRoot,
+    join(path, ".keiko-directory-sync"),
+    artifactClass,
+  );
   try {
-    descriptor = openSync(path, constants.O_RDONLY | noFollow | directory);
-    if (!fstatSync(descriptor).isDirectory()) throw safeFileError(artifactClass, "publish-failed");
-    fsyncSync(descriptor);
+    const parent = guards.at(-1);
+    if (parent === undefined || !guards.every(directoryGuardStillMatches)) {
+      throw safeFileError(artifactClass, "target-mutated");
+    }
+    if (parent.descriptor !== undefined) fsyncSync(parent.descriptor);
+    if (!guards.every(directoryGuardStillMatches)) {
+      throw safeFileError(artifactClass, "target-mutated");
+    }
   } catch (error) {
+    closeDirectoryGuardsIgnoringErrors(guards);
     if (error instanceof SafeArtifactFileError) throw error;
-    throw safeFileError(artifactClass, "publish-failed");
-  } finally {
-    if (descriptor !== undefined) closeSync(descriptor);
+    throw safeFileError(artifactClass, "durability-failed");
   }
+  closeDirectoryGuards(guards, artifactClass);
 }
 
 function readExactPrivateFile(
   path: string,
   expected: Buffer,
   artifactClass: SafeArtifactClass,
+  trustedRoot: string,
 ): boolean {
-  const descriptor = openSafeArtifactFile(path, { artifactClass, mode: "read" });
+  const descriptor = openSafeArtifactFile(path, {
+    artifactClass,
+    mode: "read",
+    trustedRoot,
+  });
   try {
     const buffer = Buffer.alloc(expected.length + 1);
-    const read = readSync(descriptor, buffer, 0, buffer.length, 0);
+    const read = readIntoBuffer(descriptor, buffer, artifactClass);
     return read === expected.length && buffer.subarray(0, read).equals(expected);
   } catch (error) {
     if (error instanceof SafeArtifactFileError) throw error;
     throw safeFileError(artifactClass, "read-failed");
   } finally {
-    closeSync(descriptor);
+    closeArtifactDescriptor(descriptor, artifactClass);
+  }
+}
+
+function readIntoBuffer(
+  descriptor: number,
+  buffer: Buffer,
+  artifactClass: SafeArtifactClass,
+): number {
+  let offset = 0;
+  try {
+    while (offset < buffer.length) {
+      const read = readSync(descriptor, buffer, offset, buffer.length - offset, offset);
+      if (read === 0) break;
+      offset += read;
+    }
+    return offset;
+  } catch {
+    throw safeFileError(artifactClass, "read-failed");
+  }
+}
+
+function linkedRecoveryStats(entry: PreparedPublicationEntry): {
+  readonly stage: Stats;
+  readonly target: Stats;
+} {
+  try {
+    const stage: Stats = lstatSync(entry.stagePath);
+    const target: Stats = lstatSync(entry.path);
+    if (!linkedStatsAreSafe(stage, target)) {
+      throw safeFileError(entry.artifactClass, "recovery-conflict");
+    }
+    return { stage, target };
+  } catch (error) {
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(entry.artifactClass, "recovery-conflict");
+  }
+}
+
+function linkedStatsAreSafe(stage: Stats, target: Stats): boolean {
+  const checks = [
+    stage.isFile(),
+    target.isFile(),
+    !stage.isSymbolicLink(),
+    !target.isSymbolicLink(),
+    stage.nlink === 2,
+    target.nlink === 2,
+    stage.dev === target.dev,
+    stage.ino === target.ino,
+    permissionIsPrivate(stage.mode),
+    permissionIsPrivate(target.mode),
+  ];
+  return checks.every(Boolean);
+}
+
+function openLinkedStage(entry: PreparedPublicationEntry): number {
+  const noFollow = noFollowFlag();
+  const nonBlocking = typeof constants.O_NONBLOCK === "number" ? constants.O_NONBLOCK : 0;
+  if (noFollow === 0) refuseSymlinkFallback(entry.stagePath, entry.artifactClass);
+  try {
+    return openSync(entry.stagePath, constants.O_RDONLY | noFollow | nonBlocking);
+  } catch (error) {
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(entry.artifactClass, "read-failed");
+  }
+}
+
+function linkedDescriptorMatches(descriptor: number, expected: Stats): boolean {
+  const opened = fstatSync(descriptor);
+  return [
+    opened.isFile(),
+    opened.dev === expected.dev,
+    opened.ino === expected.ino,
+    opened.nlink === 2,
+  ].every(Boolean);
+}
+
+function readMatchesPublication(descriptor: number, entry: PreparedPublicationEntry): boolean {
+  const buffer = Buffer.alloc(entry.bytes.length + 1);
+  const read = readIntoBuffer(descriptor, buffer, entry.artifactClass);
+  return read === entry.bytes.length && buffer.subarray(0, read).equals(entry.bytes);
+}
+
+function linkedRecoveryContentsMatch(entry: PreparedPublicationEntry): boolean {
+  const expected = linkedRecoveryStats(entry).stage;
+  const guards = captureDirectoryGuards(entry.trustedRoot, entry.stagePath, entry.artifactClass);
+  let descriptor: number | undefined;
+  try {
+    descriptor = openLinkedStage(entry);
+    if (
+      !linkedDescriptorMatches(descriptor, expected) ||
+      !guards.every(directoryGuardStillMatches)
+    ) {
+      throw safeFileError(entry.artifactClass, "recovery-conflict");
+    }
+    const matches = readMatchesPublication(descriptor, entry);
+    closeArtifactDescriptor(descriptor, entry.artifactClass);
+    closeDirectoryGuards(guards, entry.artifactClass);
+    return matches;
+  } catch (error) {
+    if (descriptor !== undefined) closeDescriptorIgnoringErrors(descriptor);
+    closeDirectoryGuardsIgnoringErrors(guards);
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(entry.artifactClass, "read-failed");
   }
 }
 
@@ -384,7 +715,7 @@ function recoverLinkedStage(entry: PreparedPublicationEntry): boolean {
   ) {
     return false;
   }
-  if (!samePathNode(entry.stagePath, entry.path)) {
+  if (!samePathNode(entry.stagePath, entry.path) || !linkedRecoveryContentsMatch(entry)) {
     throw safeFileError(entry.artifactClass, "recovery-conflict");
   }
   try {
@@ -392,10 +723,32 @@ function recoverLinkedStage(entry: PreparedPublicationEntry): boolean {
   } catch {
     throw safeFileError(entry.artifactClass, "publish-failed");
   }
-  if (!readExactPrivateFile(entry.path, entry.bytes, entry.artifactClass)) {
+  if (!readExactPrivateFile(entry.path, entry.bytes, entry.artifactClass, entry.trustedRoot)) {
     throw safeFileError(entry.artifactClass, "recovery-conflict");
   }
+  syncDirectory(dirname(entry.stagePath), entry.trustedRoot, entry.artifactClass);
   return true;
+}
+
+function removeVerifiedStage(entry: PreparedPublicationEntry): void {
+  const descriptor = openSafeArtifactFile(entry.stagePath, {
+    artifactClass: entry.artifactClass,
+    mode: "read",
+    trustedRoot: entry.trustedRoot,
+  });
+  try {
+    verifySafeArtifactFileDescriptor(descriptor, entry.stagePath, {
+      artifactClass: entry.artifactClass,
+      trustedRoot: entry.trustedRoot,
+    });
+    unlinkSync(entry.stagePath);
+    syncDirectory(dirname(entry.stagePath), entry.trustedRoot, entry.artifactClass);
+  } catch (error) {
+    closeDescriptorIgnoringErrors(descriptor);
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(entry.artifactClass, "publish-failed");
+  }
+  closeArtifactDescriptor(descriptor, entry.artifactClass);
 }
 
 function ensurePreparedStage(entry: PreparedPublicationEntry, recovering: boolean): void {
@@ -403,7 +756,10 @@ function ensurePreparedStage(entry: PreparedPublicationEntry, recovering: boolea
   const stageExists = pathExists(entry.stagePath, entry.artifactClass);
   const targetExists = pathExists(entry.path, entry.artifactClass);
   if (targetExists) {
-    if (!recovering || !readExactPrivateFile(entry.path, entry.bytes, entry.artifactClass)) {
+    if (
+      !recovering ||
+      !readExactPrivateFile(entry.path, entry.bytes, entry.artifactClass, entry.trustedRoot)
+    ) {
       throw safeFileError(entry.artifactClass, recovering ? "recovery-conflict" : "target-exists");
     }
     return;
@@ -412,8 +768,10 @@ function ensurePreparedStage(entry: PreparedPublicationEntry, recovering: boolea
     createStage(entry);
     return;
   }
-  if (!readExactPrivateFile(entry.stagePath, entry.bytes, entry.artifactClass)) {
-    throw safeFileError(entry.artifactClass, "recovery-conflict");
+  if (!readExactPrivateFile(entry.stagePath, entry.bytes, entry.artifactClass, entry.trustedRoot)) {
+    if (!recovering) throw safeFileError(entry.artifactClass, "recovery-conflict");
+    removeVerifiedStage(entry);
+    createStage(entry);
   }
 }
 
@@ -427,23 +785,80 @@ function orderedForCommit(
   return [...entries.filter((entry) => entry !== commit), commit];
 }
 
-function publishPreparedEntry(entry: PreparedPublicationEntry, parent: string): void {
-  if (pathExists(entry.path, entry.artifactClass)) return;
+function acceptRecoveredTarget(entry: PreparedPublicationEntry, recovering: boolean): void {
+  if (!recovering) throw safeFileError(entry.artifactClass, "target-exists");
+  if (!readExactPrivateFile(entry.path, entry.bytes, entry.artifactClass, entry.trustedRoot)) {
+    throw safeFileError(entry.artifactClass, "recovery-conflict");
+  }
+}
+
+function finishGuardedLink(
+  guards: readonly DirectoryGuard[],
+  entry: PreparedPublicationEntry,
+): void {
+  if (!guards.every(directoryGuardStillMatches)) {
+    throw safeFileError(entry.artifactClass, "target-mutated");
+  }
+  closeDirectoryGuards(guards, entry.artifactClass);
+}
+
+function handleLinkFailure(
+  error: unknown,
+  entry: PreparedPublicationEntry,
+  recovering: boolean,
+  guards: readonly DirectoryGuard[],
+): boolean {
+  const code = errorCode(error);
+  if (code === "EEXIST") {
+    try {
+      acceptRecoveredTarget(entry, recovering);
+      finishGuardedLink(guards, entry);
+      return false;
+    } catch (recoveryError) {
+      closeDirectoryGuardsIgnoringErrors(guards);
+      throw recoveryError;
+    }
+  }
+  closeDirectoryGuardsIgnoringErrors(guards);
+  const kind = code === "EXDEV" ? "publish-unsupported" : "publish-failed";
+  throw safeFileError(entry.artifactClass, kind);
+}
+
+function linkPreparedEntry(entry: PreparedPublicationEntry, recovering: boolean): boolean {
+  const guards = captureDirectoryGuards(entry.trustedRoot, entry.path, entry.artifactClass);
   try {
     linkSync(entry.stagePath, entry.path);
+    finishGuardedLink(guards, entry);
+    return true;
   } catch (error) {
-    const kind = errorCode(error) === "EXDEV" ? "publish-unsupported" : "publish-failed";
-    throw safeFileError(entry.artifactClass, kind);
+    if (error instanceof SafeArtifactFileError) {
+      closeDirectoryGuardsIgnoringErrors(guards);
+      throw error;
+    }
+    return handleLinkFailure(error, entry, recovering, guards);
   }
+}
+
+function publishPreparedEntry(
+  entry: PreparedPublicationEntry,
+  parent: string,
+  recovering: boolean,
+): void {
+  if (recovering && pathExists(entry.path, entry.artifactClass)) {
+    acceptRecoveredTarget(entry, true);
+    return;
+  }
+  if (!linkPreparedEntry(entry, recovering)) return;
   try {
-    if (!samePathNode(entry.stagePath, entry.path)) {
+    if (!samePathNode(entry.stagePath, entry.path) || !linkedRecoveryContentsMatch(entry)) {
       throw safeFileError(entry.artifactClass, "target-mutated");
     }
-    syncDirectory(parent, entry.artifactClass);
+    syncDirectory(parent, entry.trustedRoot, entry.artifactClass);
     unlinkSync(entry.stagePath);
-    if (!readExactPrivateFile(entry.path, entry.bytes, entry.artifactClass)) {
+    if (!readExactPrivateFile(entry.path, entry.bytes, entry.artifactClass, entry.trustedRoot)) {
       throw safeFileError(entry.artifactClass, "target-mutated");
     }
+    syncDirectory(parent, entry.trustedRoot, entry.artifactClass);
   } catch (error) {
     if (error instanceof SafeArtifactFileError) throw error;
     throw safeFileError(entry.artifactClass, "publish-failed");
@@ -461,24 +876,27 @@ function publicationArtifactClass(entries: readonly PreparedPublicationEntry[]):
   return entries[0]?.artifactClass ?? "manifest";
 }
 
-/** Publishes related files without replacement; the designated commit artifact appears last. */
+/**
+ * Publishes related files without replacement; the designated commit artifact appears last.
+ * Filesystems without same-directory hard links fail closed as `publish-unsupported`.
+ */
 export function publishSafeArtifactFileSet(
   entries: readonly SafeArtifactPublicationEntry[],
   options: SafeArtifactPublicationOptions,
 ): SafeArtifactPublicationResult {
-  validatePublication(entries, options.commitPath);
-  const prepared = preparePublicationEntries(entries, options.commitPath);
+  validatePublication(entries, options);
+  const prepared = preparePublicationEntries(entries, options.commitPath, options.trustedRoot);
   const recovering = publicationHasPath(prepared, "stagePath");
   if (!recovering && publicationHasPath(prepared, "path")) {
     throw safeFileError(publicationArtifactClass(prepared), "target-exists");
   }
   for (const entry of prepared) ensurePreparedStage(entry, recovering);
   const parent = dirname(resolve(options.commitPath));
-  syncDirectory(parent, publicationArtifactClass(prepared));
+  syncDirectory(parent, options.trustedRoot, publicationArtifactClass(prepared));
   for (const entry of orderedForCommit(prepared, options.commitPath)) {
-    publishPreparedEntry(entry, parent);
+    publishPreparedEntry(entry, parent, recovering);
   }
-  syncDirectory(parent, publicationArtifactClass(prepared));
+  syncDirectory(parent, options.trustedRoot, publicationArtifactClass(prepared));
   const status = recovering ? "recovered" : "published";
   return { status };
 }
@@ -491,21 +909,50 @@ function replacementStagePath(path: string): string {
 function writeReplacementStage(
   path: string,
   contents: string | Uint8Array,
-  artifactClass: SafeArtifactClass,
+  options: ReplaceSafeArtifactFileOptions,
 ): string {
   const stagePath = replacementStagePath(path);
-  if (pathExists(stagePath, artifactClass)) {
-    throw safeFileError(artifactClass, "recovery-conflict");
+  if (pathExists(stagePath, options.artifactClass)) {
+    throw safeFileError(options.artifactClass, "recovery-conflict");
   }
   const bytes =
     typeof contents === "string" ? Buffer.from(contents, "utf8") : Buffer.from(contents);
-  createStage({ path: resolve(path), stagePath, bytes, artifactClass });
+  createStage({
+    path: resolve(path),
+    stagePath,
+    bytes,
+    artifactClass: options.artifactClass,
+    trustedRoot: resolve(options.trustedRoot),
+  });
   return stagePath;
 }
 
-function assertSafeReplacementTarget(path: string, artifactClass: SafeArtifactClass): void {
-  const descriptor = openSafeArtifactFile(path, { artifactClass, mode: "read" });
-  closeSync(descriptor);
+function assertSafeReplacementTarget(path: string, options: ReplaceSafeArtifactFileOptions): void {
+  const descriptor = openSafeArtifactFile(path, {
+    artifactClass: options.artifactClass,
+    mode: "read",
+    trustedRoot: options.trustedRoot,
+  });
+  closeArtifactDescriptor(descriptor, options.artifactClass);
+}
+
+function renameVerifiedReplacement(
+  stagePath: string,
+  path: string,
+  options: ReplaceSafeArtifactFileOptions,
+): void {
+  const guards = captureDirectoryGuards(options.trustedRoot, path, options.artifactClass);
+  try {
+    renameSync(stagePath, path);
+    if (!guards.every(directoryGuardStillMatches)) {
+      throw safeFileError(options.artifactClass, "target-mutated");
+    }
+  } catch (error) {
+    closeDirectoryGuardsIgnoringErrors(guards);
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw safeFileError(options.artifactClass, "replace-failed");
+  }
+  closeDirectoryGuards(guards, options.artifactClass);
 }
 
 /** Atomically replaces an existing, verified private file; unsupported on Windows. */
@@ -517,15 +964,16 @@ export function replaceSafeArtifactFile(
   if (process.platform === "win32") {
     throw safeFileError(options.artifactClass, "publish-unsupported");
   }
-  assertSafeReplacementTarget(path, options.artifactClass);
-  const stagePath = writeReplacementStage(path, contents, options.artifactClass);
+  containedDirectories(options.trustedRoot, path, options.artifactClass);
+  assertSafeReplacementTarget(path, options);
+  const stagePath = writeReplacementStage(path, contents, options);
   const parent = dirname(resolve(path));
   try {
-    syncDirectory(parent, options.artifactClass);
-    assertSafeReplacementTarget(path, options.artifactClass);
-    renameSync(stagePath, path);
-    assertSafeReplacementTarget(path, options.artifactClass);
-    syncDirectory(parent, options.artifactClass);
+    syncDirectory(parent, options.trustedRoot, options.artifactClass);
+    assertSafeReplacementTarget(path, options);
+    renameVerifiedReplacement(stagePath, path, options);
+    assertSafeReplacementTarget(path, options);
+    syncDirectory(parent, options.trustedRoot, options.artifactClass);
   } catch (error) {
     if (error instanceof SafeArtifactFileError) throw error;
     throw safeFileError(options.artifactClass, "replace-failed");
