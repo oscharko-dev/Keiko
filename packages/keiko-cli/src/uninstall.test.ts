@@ -728,6 +728,42 @@ describe("runUninstallCli — scripts edge cases", () => {
     expect(extraOf(events[1]).reason).toBe("package-parse-failed");
   });
 
+  it("validates scripts before a forced stop or launcher removal", async () => {
+    const root = makeRoot();
+    const { stateDir, shortcut } = installLauncher(root);
+    writeFileSync(join(stateDir, "ui.pid"), `555\n${STOP_LAUNCH_ID}\n`, "utf8");
+    writeFileSync(join(root, "package.json"), "{not json", "utf8");
+    let livenessChecks = 0;
+    let killCalls = 0;
+    const c = makeIo();
+
+    await expect(
+      runUninstallCli(
+        ["--state", "--launchers", "--scripts", "--force"],
+        c.io,
+        {},
+        {
+          cwd: root,
+          homedir: () => root,
+          isProcessAlive: () => {
+            livenessChecks += 1;
+            return true;
+          },
+          killProcess: () => {
+            killCalls += 1;
+          },
+          ...verifiedStopIdentity(),
+        },
+      ),
+    ).resolves.toBe(1);
+
+    expect(c.err()).toContain("not valid JSON");
+    expect(livenessChecks).toBe(0);
+    expect(killCalls).toBe(0);
+    expect(existsSync(shortcut)).toBe(true);
+    expect(existsSync(join(stateDir, "ui.pid"))).toBe(true);
+  });
+
   it("fails with structured evidence when package.json cannot be read", async () => {
     const root = makeRoot();
     const packageDirectory = join(root, "package-directory");
@@ -821,6 +857,7 @@ describe("runUninstallCli — scripts edge cases", () => {
     chmodSync(root, 0o755); // restore so afterEach cleanup can remove it
     expect(code).toBe(1);
     expect(c.err()).toContain("keiko uninstall:");
+    expect(c.out()).not.toContain("removed: package.json script");
     // The original manifest — including the keiko:start/stop scripts the (failed) removal was
     // supposed to prune — survives byte-for-byte.
     expect(readFileSync(pkg, "utf8")).toBe(original);

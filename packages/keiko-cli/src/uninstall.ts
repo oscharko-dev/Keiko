@@ -337,30 +337,44 @@ class UninstallPackageParseError extends Error {
   }
 }
 
-function pruneKeikoScripts(
-  scripts: Record<string, unknown>,
-  io: CliIo,
-  dryRun: boolean,
-): { readonly next: Record<string, unknown>; readonly removed: number } {
-  const removeNames = new Set<string>();
+interface KeikoScriptPrunePlan {
+  readonly next: Record<string, unknown>;
+  readonly removeNames: readonly string[];
+  readonly retainNames: readonly string[];
+}
+
+function planKeikoScriptPruning(scripts: Record<string, unknown>): KeikoScriptPrunePlan {
+  const removeNames: string[] = [];
+  const retainNames: string[] = [];
   for (const [name, expected] of Object.entries(KEIKO_SCRIPTS)) {
     if (!(name in scripts)) continue;
     if (scripts[name] !== expected) {
-      io.out(`kept: ${name} (customized — not the script keiko init writes)\n`);
+      retainNames.push(name);
       continue;
     }
-    io.out(`${dryRun ? "would-remove" : "removed"}: package.json script ${name}\n`);
-    removeNames.add(name);
+    removeNames.push(name);
   }
-  const next = Object.fromEntries(Object.entries(scripts).filter(([key]) => !removeNames.has(key)));
-  return { next, removed: removeNames.size };
+  const removalSet = new Set(removeNames);
+  const next = Object.fromEntries(Object.entries(scripts).filter(([key]) => !removalSet.has(key)));
+  return { next, removeNames, retainNames };
 }
 
-function removeScriptsStep(opts: UninstallOptions, io: CliIo): number {
-  if (!opts.scopes.scripts) return 0;
+type PreparedScriptsStep =
+  | { readonly kind: "disabled" }
+  | { readonly kind: "missing"; readonly packagePath: string }
+  | { readonly kind: "empty" }
+  | {
+      readonly kind: "ready";
+      readonly packagePath: string;
+      readonly content: string;
+      readonly removeNames: readonly string[];
+      readonly retainNames: readonly string[];
+    };
+
+function prepareScriptsStep(opts: UninstallOptions): PreparedScriptsStep {
+  if (!opts.scopes.scripts) return { kind: "disabled" };
   if (!existsSync(opts.packagePath)) {
-    io.out(`scripts: package.json not found at ${opts.packagePath} (nothing to remove)\n`);
-    return 0;
+    return { kind: "missing", packagePath: opts.packagePath };
   }
   // KEIKO-0752: read RAW so we can detect the file's own indentation before we parse it,
   // then re-serialize with the SAME indent init.ts uses when it originally wrote scripts.
@@ -381,21 +395,40 @@ function removeScriptsStep(opts: UninstallOptions, io: CliIo): number {
   }
   const scripts = isRecord(pkg) ? pkg.scripts : undefined;
   if (!isRecord(pkg) || !isRecord(scripts)) {
+    return { kind: "empty" };
+  }
+  const plan = planKeikoScriptPruning(scripts);
+  return {
+    kind: "ready",
+    packagePath: opts.packagePath,
+    content: stringifyPackageJson({ ...pkg, scripts: plan.next }, detectPackageJsonIndent(raw)),
+    removeNames: plan.removeNames,
+    retainNames: plan.retainNames,
+  };
+}
+
+function applyScriptsStep(plan: PreparedScriptsStep, io: CliIo, dryRun: boolean): number {
+  if (plan.kind === "disabled") return 0;
+  if (plan.kind === "missing") {
+    io.out(`scripts: package.json not found at ${plan.packagePath} (nothing to remove)\n`);
+    return 0;
+  }
+  if (plan.kind === "empty") {
     io.out("scripts: no keiko:start / keiko:stop scripts found.\n");
     return 0;
   }
-  const { next, removed } = pruneKeikoScripts(scripts, io, opts.dryRun);
-  if (removed > 0 && !opts.dryRun) {
-    const indent = detectPackageJsonIndent(raw);
-    // #2906 round 3 (comment 3865273714): reuses init.ts's temp-file-plus-rename writer
-    // instead of a direct writeFileSync, which could truncate/corrupt package.json if the
-    // process or filesystem fails mid-write.
-    writePackageJsonAtomically(
-      opts.packagePath,
-      stringifyPackageJson({ ...pkg, scripts: next }, indent),
-    );
+  for (const name of plan.retainNames) {
+    io.out(`kept: ${name} (customized — not the script keiko init writes)\n`);
   }
-  return removed;
+  if (plan.removeNames.length > 0 && !dryRun) {
+    // #2906: the shared temp-file-plus-rename writer prevents a failed write from truncating the
+    // manifest. Preparation already proved the selected package is readable and valid JSON.
+    writePackageJsonAtomically(plan.packagePath, plan.content);
+  }
+  for (const name of plan.removeNames) {
+    io.out(`${dryRun ? "would-remove" : "removed"}: package.json script ${name}\n`);
+  }
+  return plan.removeNames.length;
 }
 
 // Issue #1321: remove every Keiko-owned sensitive runtime artifact under the state dir,
@@ -832,12 +865,13 @@ async function executeUninstall(
     emitUninstallFailure(activity, "UninstallPreflightError", "preflight-refused");
     return 1;
   }
+  const scripts = prepareScriptsStep(opts);
   if ((await ensureServerStoppable(opts, io, deps, stateDir, activity.sink)) === "refused") {
     emitUninstallFailure(activity, "UninstallStateInUseError", "server-stop-refused");
     return 1;
   }
   const launcherRefused = removeLaunchersStep(opts, io, deps, stateDir);
-  const scriptCount = removeScriptsStep(opts, io);
+  const scriptCount = applyScriptsStep(scripts, io, opts.dryRun);
   removePortableManagedStep(opts, io, env, stateDir, deps.homedir(), activity.sink);
   const stateOutcome = removeStateStep(opts, io, stateDir);
   printPackageGuidance(io, deps);

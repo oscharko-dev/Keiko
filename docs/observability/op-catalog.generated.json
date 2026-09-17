@@ -90,25 +90,25 @@
     {
       "op": "cli.uninstall.completed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/uninstall.ts:851",
+      "site": "packages/keiko-cli/src/uninstall.ts:885",
       "package": "keiko-cli"
     },
     {
       "op": "cli.uninstall.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/uninstall.ts:681",
+      "site": "packages/keiko-cli/src/uninstall.ts:714",
       "package": "keiko-cli"
     },
     {
       "op": "cli.uninstall.failed",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/uninstall.ts:812",
+      "site": "packages/keiko-cli/src/uninstall.ts:845",
       "package": "keiko-cli"
     },
     {
       "op": "cli.uninstall.started",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/uninstall.ts:742",
+      "site": "packages/keiko-cli/src/uninstall.ts:775",
       "package": "keiko-cli"
     },
     {

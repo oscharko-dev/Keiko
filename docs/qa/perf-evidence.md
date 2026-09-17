@@ -130,10 +130,10 @@ npm run perf:evidence:regen:tool-catalog -- --recalibrate
 ```
 
 Recalibration refuses a different reference environment or case identity and carries every
-existing numeric ceiling forward with a shrink-only `min(previous, newly-derived)` ratchet. It can
-therefore tighten a threshold but cannot turn a slower ruler run into a wider budget. Initial
-calibration is a separate `--calibrate` operation and refuses to overwrite existing calibration or
-budget files.
+existing numeric ceiling forward unchanged. Tightening a reviewed ceiling requires a separate,
+explicit budget change with representative evidence; one unusually fast recalibration run cannot
+silently convert measurement noise into a stricter release gate. Initial calibration is a separate
+`--calibrate` operation and refuses to overwrite existing calibration or budget files.
 
 This is functional compiler and lookup performance evidence. It does not qualify provider latency,
 live-model behavior, or production customer workloads.
