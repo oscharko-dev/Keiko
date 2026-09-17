@@ -25,6 +25,10 @@ import {
   validateCodingSafeActivityFeed,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-safe-activity";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import {
   emitServerDiagnostic,
@@ -38,6 +42,53 @@ const DEFAULT_TTL_MS = 30 * 60_000;
 const DEFAULT_MAX_SUBSCRIBERS = 32;
 const DEFAULT_MAX_SIGNAL_IDENTITIES = 32_768;
 const SAFE_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u;
+
+const CODING_RUNTIME_SAFE_ACTIVITY_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.safe-activity",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingSafeActivityProjection.lifecycle",
+  fields: {
+    event: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["purged", "dropped"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "stop",
+        "takeover",
+        "shutdown",
+        "workspace-switch",
+        "invariant-violation",
+        "validation-rejected",
+        "redactor-collapsed",
+        "projection-rejected",
+        "capacity-rejected",
+        "subscriber-rejected",
+      ],
+    },
+    occurrenceCount: { type: "integer", dataClass: "count", required: false },
+    lossState: {
+      type: "string",
+      dataClass: "loss-state",
+      required: false,
+      values: ["event-dropped"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "loss",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-safe-activity-projection"],
+  proofIds: ["coding-runtime.safe-activity.emitted-line"],
+  releaseImpact: "patch",
+});
 
 interface SignalBase {
   readonly occurredAt: string;
@@ -451,12 +502,16 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     if (notify) this.notifySubscribers(subscribers, null);
     if (retained) {
       emitPurgeDiagnostic(this.diagnostics, this.now, correlationId, reason);
-      this.activityLog?.write({
-        category: "process",
-        op: "coding-runtime.safe-activity",
-        correlationId,
-        extra: { event: "purged", reason },
-      });
+      this.activityLog?.write(
+        activityLogEvent(
+          CODING_RUNTIME_SAFE_ACTIVITY_OPERATION,
+          {
+            correlationId,
+            ...(reason === "invariant-violation" ? { level: "error", errorKind: "internal" } : {}),
+          },
+          { event: "purged", reason },
+        ),
+      );
     }
   }
 
@@ -491,12 +546,18 @@ class SafeActivityProjection implements CodingSafeActivityProjection {
     previous: number,
     next: number,
   ): void {
-    this.activityLog?.write({
-      category: "process",
-      op: "coding-runtime.safe-activity",
-      correlationId: correlationIdOrUnknown(runId),
-      extra: { event: "dropped", reason, occurrenceCount: next },
-    });
+    this.activityLog?.write(
+      activityLogEvent(
+        CODING_RUNTIME_SAFE_ACTIVITY_OPERATION,
+        {
+          correlationId: correlationIdOrUnknown(runId),
+          ...(reason === "capacity-rejected"
+            ? {}
+            : { level: "warn", errorKind: "validation-failed" }),
+        },
+        { event: "dropped", reason, occurrenceCount: next, lossState: "event-dropped" },
+      ),
+    );
     // A capacity drop is the feed's DESIGNED truncation: a long agent turn keeps its newest
     // messages within the contract bounds. The activity line above records it; an error-level
     // diagnostic for it read as a fault in every long run (F49, Coding Workbench run 24).

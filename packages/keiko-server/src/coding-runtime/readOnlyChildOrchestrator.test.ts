@@ -502,7 +502,7 @@ describe("createReadOnlyChildOrchestrator", () => {
     expect(logs).toHaveLength(2);
     expect(logOfOp(logs, "coding-runtime.read-only-child.runner-failed")).toMatchObject({
       correlationId: "run-2387",
-      errorKind: "ReadOnlyChildTrustViolationError",
+      errorKind: "authority-denied",
       extra: {
         childRunId: CHILD_RUN_ID,
         terminal: "denied",
@@ -576,7 +576,7 @@ describe("createReadOnlyChildOrchestrator", () => {
     const runnerFailed = logOfOp(logs, "coding-runtime.read-only-child.runner-failed");
     expect(runnerFailed).toMatchObject({
       correlationId: "run-2387",
-      errorKind: "Error",
+      errorKind: "unavailable",
       extra: {
         childRunId: CHILD_RUN_ID,
         terminal: "unavailable",

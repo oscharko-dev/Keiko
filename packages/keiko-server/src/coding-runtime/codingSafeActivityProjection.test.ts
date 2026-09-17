@@ -586,7 +586,12 @@ describe("bounded coding safe-activity projection", () => {
       category: "process",
       op: "coding-runtime.safe-activity",
       correlationId: RUN_ID,
-      extra: { event: "dropped", reason: "capacity-rejected", occurrenceCount: 1 },
+      extra: {
+        event: "dropped",
+        reason: "capacity-rejected",
+        occurrenceCount: 1,
+        lossState: "event-dropped",
+      },
     });
     // F49: designed truncation is recorded by that line alone, never as an error diagnostic.
     expect(
