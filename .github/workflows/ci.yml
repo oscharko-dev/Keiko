@@ -150,17 +150,29 @@ jobs:
           set -euo pipefail
           if [ -f scripts/check-documentation-only-change.mjs ]; then
             node scripts/check-documentation-only-change.mjs
+            missing_windows_relevant=false
+            missing_cross_platform_os=false
             if ! grep -q '^windows-relevant=' "${GITHUB_OUTPUT}"; then
-              echo "windows-relevant=true" >> "${GITHUB_OUTPUT}"
+              missing_windows_relevant=true
             fi
             if ! grep -q '^cross-platform-os=' "${GITHUB_OUTPUT}"; then
-              echo 'cross-platform-os=["ubuntu-latest","macos-latest","windows-latest"]' >> "${GITHUB_OUTPUT}"
+              missing_cross_platform_os=true
             fi
+            {
+              if [[ "${missing_windows_relevant}" == "true" ]]; then
+                echo "windows-relevant=true"
+              fi
+              if [[ "${missing_cross_platform_os}" == "true" ]]; then
+                echo 'cross-platform-os=["ubuntu-latest","macos-latest","windows-latest"]'
+              fi
+            } >> "${GITHUB_OUTPUT}"
           else
             echo "documentation-only-change: false — the base revision has no classifier yet"
-            echo "documentation-only=false" >> "${GITHUB_OUTPUT}"
-            echo "windows-relevant=true" >> "${GITHUB_OUTPUT}"
-            echo 'cross-platform-os=["ubuntu-latest","macos-latest","windows-latest"]' >> "${GITHUB_OUTPUT}"
+            {
+              echo "documentation-only=false"
+              echo "windows-relevant=true"
+              echo 'cross-platform-os=["ubuntu-latest","macos-latest","windows-latest"]'
+            } >> "${GITHUB_OUTPUT}"
           fi
 
   # Zero-tolerance semantic-clone gate. Fallow compares only files changed since the immutable
