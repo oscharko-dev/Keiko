@@ -40,13 +40,17 @@ import {
   measureToolCatalogOverflowRejection,
   measureToolCatalogPerformance,
   measureToolCatalogPerformanceInFreshProcess,
+  recalibrateToolCatalogPerformance,
   ratchetToolCatalogPerformanceBudgets,
   toolCatalogPerformanceBudgets,
+  TOOL_CATALOG_PERFORMANCE_FILES,
   TOOL_CATALOG_OVERFLOW_TOOL_COUNT,
   TOOL_CATALOG_SYNTHETIC_TOOL_COUNT,
   producerShippedSourceSha256,
   TOOL_CATALOG_REFERENCE_IMAGE,
   validateToolCatalogPerformanceSamples,
+  writeToolCatalogPerformanceCalibration,
+  writeToolCatalogPerformanceMeasurement,
 } from "../check-tool-catalog-performance.mjs";
 import {
   regenerateArguments,
@@ -375,12 +379,9 @@ describe("compiler measurements reuse the existing sample and percentile convent
   }, 45_000);
   it("isolates calibration and candidate measurements in separate fresh processes", async () => {
     const source = readFileSync(join(ROOT, "scripts/check-tool-catalog-performance.mjs"), "utf8");
-    expect(source).toContain(
-      "const calibrationRaw = await measureToolCatalogPerformanceInFreshProcess(root);",
-    );
-    expect(source).toContain(
-      "const measurementRaw = await measureToolCatalogPerformanceInFreshProcess(root);",
-    );
+    expect(source).toContain("measure: measureToolCatalogPerformanceInFreshProcess,");
+    expect(source.match(/const calibrationRaw = await deps\.measure\(root\);/gu)).toHaveLength(2);
+    expect(source).toContain("const measurementRaw = await deps.measure(root);");
 
     const evidence = await measureToolCatalogPerformanceInFreshProcess(ROOT);
     expect(evidence.environment).toEqual({
@@ -571,6 +572,78 @@ describe("compiler measurements reuse the existing sample and percentile convent
       ],
       verdicts: [],
     });
+  }, 45_000);
+
+  it("writes, ratchets, and validates governed reference artifacts through hermetic dependencies", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-catalog-writer-"));
+    mkdirSync(join(root, "docs", "release"), { recursive: true });
+    mkdirSync(join(root, "scripts"), { recursive: true });
+    let clock = 0;
+    const raw = await measureToolCatalogPerformance(ROOT, () => ++clock);
+    const environment = {
+      platform: "linux",
+      architecture: "arm64",
+      nodeVersion: "v24.18.0",
+      logicalCores: 16,
+      totalMemoryBytes: 24_000_000_000,
+      containerImage: TOOL_CATALOG_REFERENCE_IMAGE,
+    };
+    let rulerDigest = "a".repeat(64);
+    let measuredAtIso = "2026-09-06T00:00:00.000Z";
+    const dependencies = {
+      environment: () => environment,
+      measure: async () => structuredClone(raw),
+      now: () => measuredAtIso,
+      rulerDigest: () => rulerDigest,
+    };
+    try {
+      const initial = await writeToolCatalogPerformanceCalibration(root, dependencies);
+      await expect(writeToolCatalogPerformanceCalibration(root, dependencies)).rejects.toThrow(
+        "catalog calibration is immutable",
+      );
+
+      rulerDigest = "b".repeat(64);
+      measuredAtIso = "2026-09-06T00:01:00.000Z";
+      const recalibrated = await recalibrateToolCatalogPerformance(root, dependencies);
+      expect(recalibrated.budget.maximumP95Ms).toEqual(initial.budget.maximumP95Ms);
+
+      measuredAtIso = "2026-09-06T00:02:00.000Z";
+      await expect(
+        writeToolCatalogPerformanceMeasurement(root, {
+          ...dependencies,
+          environment: () => ({ ...environment, totalMemoryBytes: 1 }),
+        }),
+      ).rejects.toThrow("catalog performance environment differs from calibration");
+      const candidate = await writeToolCatalogPerformanceMeasurement(root, dependencies);
+      expect(candidate.result).toEqual({ defects: [], verdicts: [] });
+
+      await expect(
+        recalibrateToolCatalogPerformance(root, {
+          ...dependencies,
+          environment: () => ({ ...environment, totalMemoryBytes: 1 }),
+        }),
+      ).rejects.toThrow("catalog recalibration reference environment differs");
+
+      const identityDrift = structuredClone(raw);
+      for (const sample of identityDrift.cases["legacy-native-6-tool"].samples)
+        sample.projectionDigest = "f".repeat(64);
+      await expect(
+        recalibrateToolCatalogPerformance(root, {
+          ...dependencies,
+          measure: async () => identityDrift,
+        }),
+      ).rejects.toThrow("legacy-native-6-tool case identity differs from calibration");
+
+      const budgetPath = join(root, TOOL_CATALOG_PERFORMANCE_FILES.budget);
+      const invalidBudget = JSON.parse(readFileSync(budgetPath, "utf8"));
+      invalidBudget.maximumP95Ms["legacy-native-6-tool"].coldCompileMs += 1;
+      writeFileSync(budgetPath, `${JSON.stringify(invalidBudget, null, 2)}\n`);
+      await expect(recalibrateToolCatalogPerformance(root, dependencies)).rejects.toThrow(
+        "budget exceeds its calibrated ceiling",
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   }, 45_000);
 });
 describe("#3415 catalog-semantic negative-fixture matrix", () => {
