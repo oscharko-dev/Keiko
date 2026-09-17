@@ -33,6 +33,7 @@ import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogFields,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   advanceRing,
@@ -209,6 +210,122 @@ const SEARCH_CONNECTED_CONTEXT_STARTED_OPERATION = defineActivityLogOperation({
   analyzerProjection: "timeline",
   failureClasses: ["connected-context-retrieval"],
   proofIds: ["search.connected-context.started.line"],
+  releaseImpact: "patch",
+});
+
+const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "search.connected-context.completed",
+  category: "search",
+  owner: "keiko-server",
+  emitter: "grounded-orchestrator.createConnectedContextActivity.completed",
+  fields: {
+    scopeIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    queryIdentitySha256: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    activityDetailStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["complete", "unavailable"],
+    },
+    plannedRingCount: { type: "integer", dataClass: "count", required: false },
+    usageSearchCalls: { type: "integer", dataClass: "count", required: false },
+    usageFilesRead: { type: "integer", dataClass: "count", required: false },
+    usageExcerptBytes: { type: "integer", dataClass: "count", required: false },
+    usageModelInputTokens: { type: "integer", dataClass: "count", required: false },
+    usageModelOutputTokens: { type: "integer", dataClass: "count", required: false },
+    usageElapsedMs: { type: "integer", dataClass: "duration", required: false },
+    usageRerankCalls: { type: "integer", dataClass: "count", required: false },
+    selectedFileCount: { type: "integer", dataClass: "count", required: false },
+    omittedCount: { type: "integer", dataClass: "count", required: false },
+    uncertaintyCount: { type: "integer", dataClass: "count", required: false },
+    scopeIncompleteUncertaintyCount: { type: "integer", dataClass: "count", required: false },
+    budgetClippedUncertaintyCount: { type: "integer", dataClass: "count", required: false },
+    toolUnavailableUncertaintyCount: { type: "integer", dataClass: "count", required: false },
+    unsupportedClaimUncertaintyCount: { type: "integer", dataClass: "count", required: false },
+    entailmentUnavailableUncertaintyCount: { type: "integer", dataClass: "count", required: false },
+    coverageStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["not-reported", "incomplete", "complete"],
+    },
+    coverageReasons: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 5,
+      values: ["aborted", "file-cap", "match-cap", "timeout", "depth-pruned"],
+    },
+    coverageFilesDiscovered: { type: "integer", dataClass: "count", required: false },
+    coverageFilesScanned: { type: "integer", dataClass: "count", required: false },
+    coverageFilesSkipped: { type: "integer", dataClass: "count", required: false },
+    coverageDepthPruned: { type: "integer", dataClass: "count", required: false },
+    coverageMaxFilesPruned: { type: "integer", dataClass: "count", required: false },
+    retrievalReadBudgetBlocked: { type: "boolean", dataClass: "closed-enum", required: false },
+    retrievalElapsedBudgetBlocked: { type: "boolean", dataClass: "closed-enum", required: false },
+    retrievalWorkspaceIndexProviderStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["not-evaluated", "available", "unavailable"],
+    },
+    structuralContextCount: { type: "integer", dataClass: "count", required: false },
+    structuralCandidateInventoryBuildCount: { type: "integer", dataClass: "count", required: false },
+    structuralTextSearchCount: { type: "integer", dataClass: "count", required: false },
+    indexProviderStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["not-evaluated", "available", "unavailable"],
+    },
+    indexSearchMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "not-evaluated",
+        "unused",
+        "live-fallback",
+        "persistent-cold",
+        "persistent-warm",
+        "persistent-reconciled",
+        "request-local-cold",
+        "request-local-warm",
+        "request-local-reconciled",
+      ],
+    },
+    indexLoadStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["not-attempted", "hit", "miss", "mixed", "failed"],
+    },
+    indexSaveStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["not-attempted", "succeeded", "unfinished", "failed"],
+    },
+    indexIndexedRecords: { type: "integer", dataClass: "count", required: false },
+    indexReusedRecords: { type: "integer", dataClass: "count", required: false },
+    indexStaleRecords: { type: "integer", dataClass: "count", required: false },
+    indexSearchCount: { type: "integer", dataClass: "count", required: false },
+    indexReportCount: { type: "integer", dataClass: "count", required: false },
+    indexFallbackSearchCount: { type: "integer", dataClass: "count", required: false },
+    indexLoadFailures: { type: "integer", dataClass: "count", required: false },
+    indexSaveFailures: { type: "integer", dataClass: "count", required: false },
+    workspaceIoContentReadCalls: { type: "integer", dataClass: "count", required: false },
+    workspaceIoContentReadBytes: { type: "integer", dataClass: "count", required: false },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["connected-context-retrieval"],
+  proofIds: ["search.connected-context.completed.line"],
   releaseImpact: "patch",
 });
 
@@ -4998,20 +5115,21 @@ function uncertaintyActivityExtra(
   };
   for (const marker of markers) counts[marker.kind] += 1;
   return {
-    noEvidenceUncertaintyCount: counts["no-evidence"],
-    staleEvidenceUncertaintyCount: counts["stale-evidence"],
     scopeIncompleteUncertaintyCount: counts["scope-incomplete"],
     budgetClippedUncertaintyCount: counts["budget-clipped"],
     toolUnavailableUncertaintyCount: counts["tool-unavailable"],
-    lowConfidenceUncertaintyCount: counts["low-confidence"],
-    unsupportedCitationUncertaintyCount: counts["unsupported-citation"],
-    incompleteAnswerUncertaintyCount: counts["incomplete-answer"],
     unsupportedClaimUncertaintyCount: counts["unsupported-claim"],
     entailmentUnavailableUncertaintyCount: counts["entailment-unavailable"],
   };
 }
 
-function coverageActivityExtra(pack: ConnectedContextPack): Readonly<Record<string, unknown>> {
+type ConnectedContextCompletedActivityFields = ActivityLogFields<
+  typeof SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION
+>;
+
+function coverageActivityExtra(
+  pack: ConnectedContextPack,
+): Partial<ConnectedContextCompletedActivityFields> {
   const coverage = pack.diagnostics?.coverage;
   if (coverage === undefined) {
     return { coverageStatus: "not-reported", coverageReasons: [] };
@@ -5027,37 +5145,74 @@ function coverageActivityExtra(pack: ConnectedContextPack): Readonly<Record<stri
   };
 }
 
+function structuralActivityExtra(
+  structural: StructuralRequestContextPoolDiagnostics,
+): Partial<ConnectedContextCompletedActivityFields> {
+  return {
+    structuralContextCount: structural.contextCount,
+    structuralCandidateInventoryBuildCount: structural.candidateInventoryBuildCount,
+    structuralTextSearchCount: structural.textSearchCount,
+  };
+}
+
+function workspaceIndexActivityExtra(
+  index: WorkspaceIndexActivityDiagnostics,
+): Partial<ConnectedContextCompletedActivityFields> {
+  return {
+    indexProviderStatus: index.providerStatus,
+    indexSearchMode: index.searchMode,
+    indexLoadStatus: index.loadStatus,
+    indexSaveStatus: index.saveStatus,
+    indexIndexedRecords: index.indexedRecords,
+    indexReusedRecords: index.reusedRecords,
+    indexStaleRecords: index.staleRecords,
+    indexSearchCount: index.searchCount,
+    indexReportCount: index.reportCount,
+    indexFallbackSearchCount: index.fallbackSearchCount,
+    indexLoadFailures: index.loadFailures,
+    indexSaveFailures: index.saveFailures,
+  };
+}
+
+function workspaceIoActivityExtra(
+  io: WorkspaceIoActivityDiagnostics,
+): Partial<ConnectedContextCompletedActivityFields> {
+  return {
+    workspaceIoContentReadCalls: io.contentReadCalls,
+    workspaceIoContentReadBytes: io.contentReadBytes,
+  };
+}
+
 function completionActivityExtra(
   identity: ConnectedContextActivityIdentity,
   execution: ConnectedContextExecution,
-): Readonly<Record<string, unknown>> {
+): ConnectedContextCompletedActivityFields {
   const { pack, plan } = execution.output;
   return {
-    ...commonActivityExtra(identity),
+    scopeIdentitySha256: identity.scopeIdentitySha256,
+    queryIdentitySha256: identity.queryIdentitySha256,
     activityDetailStatus: "complete",
     plannedRingCount: plan.rings.length,
-    usage: {
-      searchCalls: pack.usage.searchCalls,
-      filesRead: pack.usage.filesRead,
-      excerptBytes: pack.usage.excerptBytes,
-      modelInputTokens: pack.usage.modelInputTokens,
-      modelOutputTokens: pack.usage.modelOutputTokens,
-      elapsedMs: pack.usage.elapsedMs,
-      rerankCalls: pack.usage.rerankCalls,
-    },
-    selectionCounts: {
-      selectedFileCount: pack.files.length,
-      omittedCount: pack.omitted.length,
-    },
-    uncertainty: {
-      count: pack.uncertainty.length,
-      ...uncertaintyActivityExtra(pack.uncertainty),
-    },
-    coverage: coverageActivityExtra(pack),
-    retrievalStatus: execution.status,
-    structural: execution.structural,
-    workspaceIndex: execution.workspaceIndex,
-    workspaceIo: execution.workspaceIo,
+    usageSearchCalls: pack.usage.searchCalls,
+    usageFilesRead: pack.usage.filesRead,
+    usageExcerptBytes: pack.usage.excerptBytes,
+    usageModelInputTokens: pack.usage.modelInputTokens,
+    usageModelOutputTokens: pack.usage.modelOutputTokens,
+    usageElapsedMs: pack.usage.elapsedMs,
+    usageRerankCalls: pack.usage.rerankCalls,
+    selectedFileCount: pack.files.length,
+    omittedCount: pack.omitted.length,
+    uncertaintyCount: pack.uncertainty.length,
+    ...uncertaintyActivityExtra(pack.uncertainty),
+    ...coverageActivityExtra(pack),
+    retrievalReadBudgetBlocked: execution.status.readBudgetBlocked,
+    retrievalElapsedBudgetBlocked: execution.status.elapsedBudgetBlocked,
+    retrievalWorkspaceIndexProviderStatus: execution.status.workspaceIndexProviderStatus,
+    ...structuralActivityExtra(execution.structural),
+    ...workspaceIndexActivityExtra(execution.workspaceIndex),
+    ...workspaceIoActivityExtra(execution.workspaceIo),
+    completeness: "complete",
+    loss: "none",
   };
 }
 
@@ -5109,16 +5264,30 @@ function unavailableActivityExtra(
   return { ...commonActivityExtra(identity), activityDetailStatus: "unavailable", workspaceIo };
 }
 
+function unavailableCompletionActivityExtra(
+  identity: ConnectedContextActivityIdentity,
+  workspaceIo: WorkspaceIoActivityDiagnostics,
+): ConnectedContextCompletedActivityFields {
+  return {
+    scopeIdentitySha256: identity.scopeIdentitySha256,
+    queryIdentitySha256: identity.queryIdentitySha256,
+    activityDetailStatus: "unavailable",
+    ...workspaceIoActivityExtra(workspaceIo),
+    completeness: "complete",
+    loss: "none",
+  };
+}
+
 function safeCompletionActivityExtra(
   identity: ConnectedContextActivityIdentity,
   execution: ConnectedContextExecution,
   correlationId: string,
-): Readonly<Record<string, unknown>> {
+): ConnectedContextCompletedActivityFields {
   try {
     return completionActivityExtra(identity, execution);
   } catch (error) {
     reportServerLogFailure(error, { op: "search.connected-context.completed", correlationId });
-    return unavailableActivityExtra(identity, execution.workspaceIo);
+    return unavailableCompletionActivityExtra(identity, execution.workspaceIo);
   }
 }
 
@@ -5171,13 +5340,13 @@ function createConnectedContextActivity(
       );
     },
     completed: (execution): void => {
-      logger.info(() => ({
-        category: "search",
-        op: "search.connected-context.completed",
-        correlationId,
-        durationMs: logElapsed(),
-        extra: safeCompletionActivityExtra(identity, execution, correlationId),
-      }));
+      logger.info(() =>
+        activityLogEvent(
+          SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION,
+          { correlationId, durationMs: logElapsed() },
+          safeCompletionActivityExtra(identity, execution, correlationId),
+        ),
+      );
     },
     failed: (error, progress): void => {
       const errorKind = safeConnectedContextErrorKind(error);
