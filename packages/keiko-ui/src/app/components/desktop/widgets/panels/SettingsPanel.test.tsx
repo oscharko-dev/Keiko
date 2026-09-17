@@ -862,7 +862,7 @@ describe("SettingsPanel gateway readiness checks", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: "Apply verified values" }));
     expect(
-      screen.getByRole("alertdialog", { name: "Apply verified model capabilities?" }),
+      await screen.findByRole("alertdialog", { name: "Apply verified model capabilities?" }),
     ).toBeInTheDocument();
     const readinessButton = screen.getByRole("button", { name: "Run readiness check" });
     readinessButton.focus();
