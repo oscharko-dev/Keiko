@@ -238,9 +238,11 @@ describe("legacy update audit import", () => {
       occurredAt: "2025-01-02T03:04:05.000Z",
       type: "portable-staging-result",
       portableStageId: "a".repeat(32),
+      correlationId: "unknown-correlation-id",
+      completeness: "complete",
+      loss: "none",
     });
     expect(String(lines[0]?.eventId)).toMatch(/^legacy-audit-event-[0-9a-f]{64}$/u);
-    expect(lines[0]).not.toHaveProperty("correlationId");
     expect(lines[0]).not.toHaveProperty("requestId");
     expect(lines[0]).not.toHaveProperty("parentCorrelationId");
     expect(lines[0]?.ts).not.toBe(lines[0]?.occurredAt);
@@ -250,6 +252,8 @@ describe("legacy update audit import", () => {
       historical: true,
       sourceSchemaVersion: 1,
       importedCount: 2,
+      completeness: "complete",
+      loss: "none",
     });
     expect(String(lines[2]?.importId)).toMatch(/^legacy-audit-[0-9a-f]{64}$/u);
     expect(String(lines[2]?.sourceDigest)).toMatch(/^[0-9a-f]{64}$/u);

@@ -86,6 +86,7 @@ import {
   serverDiagnosticFromError,
   type ServerDiagnosticSink,
 } from "./diagnostics-log.js";
+import { updateRuntimeActivityEvent } from "./update-runtime-activity.js";
 import {
   isOptionalProcessIdentity,
   processIdentityField,
@@ -1652,23 +1653,57 @@ function recordAuditEvent(
     ...input,
   };
   try {
-    context.activityLog?.write({
-      category: "diagnostic",
-      op: "update.runtime.event",
-      ...(event.correlationId === undefined ? {} : { correlationId: event.correlationId }),
-      extra: {
+    context.activityLog?.write(
+      updateRuntimeActivityEvent(event.correlationId, {
         eventId: event.eventId,
         type: event.type,
+        occurredAt: event.occurredAt,
         ...(event.targetVersion === undefined ? {} : { targetVersion: event.targetVersion }),
         ...(event.snapshotId === undefined ? {} : { snapshotId: event.snapshotId }),
         ...(event.portableStageId === undefined ? {} : { portableStageId: event.portableStageId }),
         ...(event.portableActivationId === undefined
           ? {}
           : { portableActivationId: event.portableActivationId }),
+        ...(event.portableTarget === undefined ? {} : { portableTarget: event.portableTarget }),
+        ...(event.portableAssetName === undefined
+          ? {}
+          : { portableAssetName: event.portableAssetName }),
+        ...(event.portableAssetSha256 === undefined
+          ? {}
+          : { portableAssetSha256: event.portableAssetSha256 }),
+        ...(event.portableAssetSizeBytes === undefined
+          ? {}
+          : { portableAssetSizeBytes: event.portableAssetSizeBytes }),
+        ...(event.portableSidecarName === undefined
+          ? {}
+          : { portableSidecarName: event.portableSidecarName }),
+        ...(event.portableSidecarKind === undefined
+          ? {}
+          : { portableSidecarKind: event.portableSidecarKind }),
+        ...(event.portableSidecarVersion === undefined
+          ? {}
+          : { portableSidecarVersion: event.portableSidecarVersion }),
+        ...(event.portableSidecarTarget === undefined
+          ? {}
+          : { portableSidecarTarget: event.portableSidecarTarget }),
+        ...(event.portableSidecarPayloadSha256 === undefined
+          ? {}
+          : { portableSidecarPayloadSha256: event.portableSidecarPayloadSha256 }),
+        ...(event.portableSidecarPayloadSha256Prefix === undefined
+          ? {}
+          : { portableSidecarPayloadSha256Prefix: event.portableSidecarPayloadSha256Prefix }),
+        ...(event.portableSidecarStatus === undefined
+          ? {}
+          : { portableSidecarStatus: event.portableSidecarStatus }),
+        ...(event.portableSidecarFailureCode === undefined
+          ? {}
+          : { portableSidecarFailureCode: event.portableSidecarFailureCode }),
+        ...(event.store === undefined ? {} : { store: event.store }),
+        ...(event.remediation === undefined ? {} : { remediation: event.remediation }),
         ...(event.status === undefined ? {} : { status: event.status }),
         ...(event.warningCode === undefined ? {} : { warningCode: event.warningCode }),
-      },
-    });
+      }),
+    );
     return { event };
   } catch (error) {
     emitServerDiagnostic(

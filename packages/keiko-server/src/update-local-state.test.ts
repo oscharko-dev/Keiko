@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { UPDATE_HEALTH_LABELS } from "@oscharko-dev/keiko-contracts/runtime/update-local-state";
+import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 import {
   createUpdateLocalStateManager,
   UpdateRuntimeStateError,
@@ -572,6 +573,48 @@ describe("update runtime state and audit events", () => {
         source: "update-local-state",
       }),
     );
+  });
+
+  it("emits typed complete runtime activity with the approved portable fields", () => {
+    const stateDir = makeStateDir();
+    const events: SecurityLogEvent[] = [];
+    const localState = createUpdateLocalStateManager({
+      stateDir,
+      now: () => NOW,
+      idFactory: () => "event-3405-0123456789abcdef",
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+
+    localState.recordAuditEvent("portable-download-result", {
+      correlationId: "request-3405-0123456789abcdef",
+      targetVersion: "0.2.12",
+      portableTarget: "windows-x64",
+      portableAssetName: "keiko-windows-x64.zip",
+      portableAssetSha256: "a".repeat(64),
+      portableAssetSizeBytes: 42,
+      status: "succeeded",
+    });
+
+    expect(events).toEqual([
+      expect.objectContaining({
+        category: "diagnostic",
+        op: "update.runtime.event",
+        correlationId: "request-3405-0123456789abcdef",
+        extra: expect.objectContaining({
+          eventId: "event-3405-0123456789abcdef",
+          type: "portable-download-result",
+          occurredAt: "2026-06-30T12:00:00.000Z",
+          targetVersion: "0.2.12",
+          portableTarget: "windows-x64",
+          portableAssetName: "keiko-windows-x64.zip",
+          portableAssetSha256: "a".repeat(64),
+          portableAssetSizeBytes: 42,
+          status: "succeeded",
+          completeness: "complete",
+          loss: "none",
+        }),
+      }),
+    ]);
   });
 
   it("migrates legacy runtime facts without fabricating a terminal session", () => {
