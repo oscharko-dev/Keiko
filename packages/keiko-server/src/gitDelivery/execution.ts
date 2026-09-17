@@ -1118,9 +1118,11 @@ function admittedCount(value: unknown): number | undefined {
 }
 
 function failureValue(result: unknown, detail: GitDeliveryFailureDetail, key: string): unknown {
-  const resultValue =
-    typeof result === "object" && result !== null ? Reflect.get(result, key) : undefined;
-  const explicitValue = detail[key];
+  const resultValue: unknown =
+    typeof result === "object" && result !== null
+      ? (result as Readonly<Record<string, unknown>>)[key]
+      : undefined;
+  const explicitValue: string | number | undefined = detail[key];
   return closedFailureDetailValue(explicitValue) ? explicitValue : resultValue;
 }
 
@@ -1180,17 +1182,20 @@ const EXECUTION_ACTIVITY_ERROR_KIND: Readonly<
   "internal-error": "internal",
 };
 
+const ACTIVITY_ERROR_PATTERNS: readonly (readonly [RegExp, ActivityLogErrorKind])[] = [
+  [/timeout/u, "timeout"],
+  [/cancel|abort/u, "cancelled"],
+  [/authority/u, "authority-denied"],
+  [/permission|denied/u, "permission-denied"],
+  [/conflict|lock/u, "conflict"],
+  [/valid|signature/u, "validation-failed"],
+  [/unavailable|unreachable|network/u, "unavailable"],
+];
+
 export function gitDeliveryActivityErrorKind(kind: string): ActivityLogErrorKind {
   const lower = kind.toLowerCase();
-  if (lower.includes("timeout")) return "timeout";
-  if (lower.includes("cancel") || lower.includes("abort")) return "cancelled";
-  if (lower.includes("authority")) return "authority-denied";
-  if (lower.includes("permission") || lower.includes("denied")) return "permission-denied";
-  if (lower.includes("conflict") || lower.includes("lock")) return "conflict";
-  if (lower.includes("valid") || lower.includes("signature")) return "validation-failed";
-  if (lower.includes("unavailable") || lower.includes("unreachable") || lower.includes("network")) {
-    return "unavailable";
-  }
+  const match = ACTIVITY_ERROR_PATTERNS.find(([pattern]) => pattern.test(lower));
+  if (match !== undefined) return match[1];
   return kind === "unknown" ? "unknown" : "internal";
 }
 

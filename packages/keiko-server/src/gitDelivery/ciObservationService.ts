@@ -31,6 +31,14 @@ import {
 } from "./draftDeliveryTypes.js";
 import { produceCiReadinessSnapshot } from "./ciReadinessSnapshot.js";
 
+interface CiObservationFailureFields {
+  readonly failureKind: string;
+  readonly errorClass: string;
+  readonly code?: string;
+  readonly frames?: readonly string[];
+  readonly causeChain?: readonly string[];
+}
+
 const CI_OBSERVATION_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
   schemaVersion: 1,
@@ -429,7 +437,6 @@ export class CiObservationController implements CiObservationService {
     result: CodingRuntimeCiResult,
     error?: unknown,
   ): CodingRuntimeCiResult {
-    const detail = error === undefined ? undefined : describeError(error);
     (this.options.execution?.activityLog ?? processServerLogSink()).write(
       activityLogEvent(
         CI_OBSERVATION_OPERATION,
@@ -442,20 +449,23 @@ export class CiObservationController implements CiObservationService {
           phase: result.status,
           ...resultFields(result),
           retryAfterMs: result.retryAfterMs,
-          ...(detail === undefined
-            ? {}
-            : {
-                failureKind: detail.errorClass,
-                errorClass: detail.errorClass,
-                ...(detail.code === undefined ? {} : { code: detail.code }),
-                ...(detail.frames === undefined ? {} : { frames: detail.frames }),
-                ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
-              }),
+          ...(error === undefined ? {} : ciObservationFailureFields(error)),
         },
       ),
     );
     return result;
   }
+}
+
+function ciObservationFailureFields(error: unknown): CiObservationFailureFields {
+  const detail = describeError(error);
+  return {
+    failureKind: detail.errorClass,
+    errorClass: detail.errorClass,
+    ...(detail.code === undefined ? {} : { code: detail.code }),
+    ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+    ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+  };
 }
 
 async function readFailureContext(

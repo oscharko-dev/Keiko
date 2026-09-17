@@ -207,7 +207,6 @@ function logReadinessObservation(
   correlationId: string | undefined,
   failure: { readonly error: unknown } | undefined,
 ): void {
-  const error = failure === undefined ? undefined : describeError(failure.error);
   (seams.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       READINESS_OBSERVED_OPERATION,
@@ -219,22 +218,23 @@ function logReadinessObservation(
         state: result.providerError === true ? "unknown" : "observed",
         providerError: result.providerError === true,
         count: result.checks?.total ?? 0,
-        ...(error === undefined
-          ? {}
-          : {
-              errorClass: error.errorClass,
-              ...(error.code === undefined ? {} : { code: error.code }),
-              ...(error.gatewayRequestId === undefined
-                ? {}
-                : { gatewayRequestId: error.gatewayRequestId }),
-              ...(error.httpStatus === undefined ? {} : { httpStatus: error.httpStatus }),
-              ...(error.retryAfterMs === undefined ? {} : { retryAfterMs: error.retryAfterMs }),
-              ...(error.frames === undefined ? {} : { frames: error.frames }),
-              ...(error.causeChain === undefined ? {} : { causeChain: error.causeChain }),
-            }),
+        ...(failure === undefined ? {} : readinessFailureFields(failure.error)),
       },
     ),
   );
+}
+
+function readinessFailureFields(error: unknown): Record<string, unknown> {
+  const detail = describeError(error);
+  return {
+    errorClass: detail.errorClass,
+    ...(detail.code === undefined ? {} : { code: detail.code }),
+    ...(detail.gatewayRequestId === undefined ? {} : { gatewayRequestId: detail.gatewayRequestId }),
+    ...(detail.httpStatus === undefined ? {} : { httpStatus: detail.httpStatus }),
+    ...(detail.retryAfterMs === undefined ? {} : { retryAfterMs: detail.retryAfterMs }),
+    ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+    ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+  };
 }
 
 /**

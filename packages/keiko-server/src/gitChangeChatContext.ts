@@ -109,31 +109,25 @@ const PR_DESCRIPTION_CHAT_UNAVAILABLE_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-function descriptionErrorKind(
-  reason: import("@oscharko-dev/keiko-contracts").PrDescriptionReason,
-): ActivityLogErrorKind {
-  switch (reason) {
-    case "authority-denied":
-      return "authority-denied";
-    case "budget-exhausted":
-      return "rate-limited";
-    case "cancelled":
-      return "cancelled";
-    case "timeout":
-      return "timeout";
-    case "unsafe-model-output":
-      return "unsafe-target";
-    case "invalid-model-output":
-    case "invalid-snapshot":
-    case "invalid-request":
-      return "validation-failed";
-    case "model-unavailable":
-    case "provider-failed":
-    case "snapshot-unavailable":
-      return "unavailable";
-    case "none":
-      return "unknown";
-  }
+type PrDescriptionReason = import("@oscharko-dev/keiko-contracts").PrDescriptionReason;
+
+const DESCRIPTION_ERROR_KINDS: Readonly<Record<PrDescriptionReason, ActivityLogErrorKind>> = {
+  "authority-denied": "authority-denied",
+  "budget-exhausted": "rate-limited",
+  cancelled: "cancelled",
+  timeout: "timeout",
+  "unsafe-model-output": "unsafe-target",
+  "invalid-model-output": "validation-failed",
+  "invalid-snapshot": "validation-failed",
+  "invalid-request": "validation-failed",
+  "model-unavailable": "unavailable",
+  "provider-failed": "unavailable",
+  "snapshot-unavailable": "unavailable",
+  none: "unknown",
+};
+
+function descriptionErrorKind(reason: PrDescriptionReason): ActivityLogErrorKind {
+  return DESCRIPTION_ERROR_KINDS[reason];
 }
 
 function logDescriptionResult(

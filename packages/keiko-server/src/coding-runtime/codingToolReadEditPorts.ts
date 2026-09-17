@@ -419,16 +419,24 @@ const CODING_RUNTIME_EDITOR_MUTATION_SETTLED_OPERATION = defineActivityLogOperat
   releaseImpact: "patch",
 });
 
+const WORKSPACE_READ_ERROR_KINDS: Partial<
+  Readonly<Record<WorkspaceReadFailureReason, ActivityLogErrorKind>>
+> = {
+  cancelled: "cancelled",
+  timeout: "timeout",
+  denied: "authority-denied",
+  "preflight-refused": "authority-denied",
+  "postflight-refused": "authority-denied",
+  "not-found": "unavailable",
+  "workspace-unavailable": "unavailable",
+  "too-large": "validation-failed",
+  "response-too-large": "validation-failed",
+  exception: "internal",
+  "process-failed": "internal",
+};
+
 function workspaceReadErrorKind(reason: WorkspaceReadFailureReason): ActivityLogErrorKind {
-  if (reason === "cancelled") return "cancelled";
-  if (reason === "timeout") return "timeout";
-  if (reason === "denied" || reason === "preflight-refused" || reason === "postflight-refused") {
-    return "authority-denied";
-  }
-  if (reason === "not-found" || reason === "workspace-unavailable") return "unavailable";
-  if (reason === "too-large" || reason === "response-too-large") return "validation-failed";
-  if (reason === "exception" || reason === "process-failed") return "internal";
-  return "read-failed";
+  return WORKSPACE_READ_ERROR_KINDS[reason] ?? "read-failed";
 }
 
 function completedRead(

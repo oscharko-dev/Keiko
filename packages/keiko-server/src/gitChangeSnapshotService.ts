@@ -518,34 +518,26 @@ function deadlineFailureReason(error: AbortDeadlineRaceError): "cancelled" | "ti
   return error.reason === "aborted" ? "cancelled" : "timeout";
 }
 
+const CAPTURE_ERROR_KINDS: Readonly<Record<string, ActivityLogErrorKind>> = {
+  cancelled: "cancelled",
+  timeout: "timeout",
+  "git-missing": "unavailable",
+  "unsafe-repository": "unsafe-target",
+  "invalid-ref": "validation-failed",
+  "missing-ref": "validation-failed",
+  "identical-revisions": "validation-failed",
+  "no-merge-base": "validation-failed",
+  "head-behind-base": "validation-failed",
+  "unsupported-object-format": "validation-failed",
+  "head-mismatch": "validation-failed",
+  "revision-mismatch": "validation-failed",
+  "metadata-truncated": "validation-failed",
+  "malformed-output": "validation-failed",
+  "git-error": "internal",
+};
+
 function captureEnvelopeErrorKind(reason: string | undefined): ActivityLogErrorKind | undefined {
-  switch (reason) {
-    case undefined:
-      return undefined;
-    case "cancelled":
-      return "cancelled";
-    case "timeout":
-      return "timeout";
-    case "git-missing":
-      return "unavailable";
-    case "unsafe-repository":
-      return "unsafe-target";
-    case "invalid-ref":
-    case "missing-ref":
-    case "identical-revisions":
-    case "no-merge-base":
-    case "head-behind-base":
-    case "unsupported-object-format":
-    case "head-mismatch":
-    case "revision-mismatch":
-    case "metadata-truncated":
-    case "malformed-output":
-      return "validation-failed";
-    case "git-error":
-      return "internal";
-    default:
-      return "unknown";
-  }
+  return reason === undefined ? undefined : (CAPTURE_ERROR_KINDS[reason] ?? "unknown");
 }
 
 function captureErrorFields(error: unknown): {

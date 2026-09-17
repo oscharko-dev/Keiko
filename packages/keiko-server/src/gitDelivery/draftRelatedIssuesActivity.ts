@@ -65,6 +65,26 @@ type DraftRelatedIssuesOutcome =
       readonly causeChain?: readonly string[];
     };
 
+type UnavailableOutcome = Extract<DraftRelatedIssuesOutcome, { readonly state: "unavailable" }>;
+
+interface UnavailableFields {
+  readonly failureKind?: string;
+  readonly errorClass?: string;
+  readonly code?: string;
+  readonly frames?: readonly string[];
+  readonly causeChain?: readonly string[];
+}
+
+function unavailableFields(outcome: UnavailableOutcome): UnavailableFields {
+  return {
+    ...(outcome.failureKind === undefined ? {} : { failureKind: outcome.failureKind }),
+    ...(outcome.errorClass === undefined ? {} : { errorClass: outcome.errorClass }),
+    ...(outcome.code === undefined ? {} : { code: outcome.code }),
+    ...(outcome.frames === undefined ? {} : { frames: outcome.frames }),
+    ...(outcome.causeChain === undefined ? {} : { causeChain: outcome.causeChain }),
+  };
+}
+
 export function logDraftRelatedIssues(
   sink: ServerLogSink,
   context: DraftRelatedIssuesContext,
@@ -83,21 +103,7 @@ export function logDraftRelatedIssues(
         runId: context.runId,
         state: outcome.state,
         count: outcome.count,
-        ...(outcome.state === "unavailable" && outcome.failureKind !== undefined
-          ? { failureKind: outcome.failureKind }
-          : {}),
-        ...(outcome.state === "unavailable" && outcome.errorClass !== undefined
-          ? { errorClass: outcome.errorClass }
-          : {}),
-        ...(outcome.state === "unavailable" && outcome.code !== undefined
-          ? { code: outcome.code }
-          : {}),
-        ...(outcome.state === "unavailable" && outcome.frames !== undefined
-          ? { frames: outcome.frames }
-          : {}),
-        ...(outcome.state === "unavailable" && outcome.causeChain !== undefined
-          ? { causeChain: outcome.causeChain }
-          : {}),
+        ...(outcome.state === "unavailable" ? unavailableFields(outcome) : {}),
       },
     ),
   );

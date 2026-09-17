@@ -329,7 +329,6 @@ export class JourneyObservationController {
     result: JourneyObservationResult,
     error?: unknown,
   ): JourneyObservationResult {
-    const detail = error === undefined ? undefined : describeError(error);
     logJourneyObservationActivity(
       this.options.activityLog ?? processServerLogSink(),
       context?.correlationId ?? UNKNOWN_CORRELATION_ID,
@@ -337,20 +336,23 @@ export class JourneyObservationController {
         phase: result.status,
         ...(context === undefined ? {} : { runId: context.draft.binding.runId }),
         ...observationFields(result),
-        ...(detail === undefined
-          ? {}
-          : {
-              failureKind: detail.errorClass,
-              errorClass: detail.errorClass,
-              ...(detail.code === undefined ? {} : { code: detail.code }),
-              ...(detail.frames === undefined ? {} : { frames: detail.frames }),
-              ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
-            }),
+        ...(error === undefined ? {} : journeyFailureFields(error)),
       },
       error === undefined ? undefined : { errorKind: "internal" },
     );
     return result;
   }
+}
+
+function journeyFailureFields(error: unknown): Partial<JourneyObservationActivityFields> {
+  const detail = describeError(error);
+  return {
+    failureKind: detail.errorClass,
+    errorClass: detail.errorClass,
+    ...(detail.code === undefined ? {} : { code: detail.code }),
+    ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+    ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+  };
 }
 
 function observationFields(

@@ -163,6 +163,24 @@ interface RuntimeGitActivityFields {
   readonly causeChain?: readonly string[];
 }
 
+function runtimeGitLogOptions(
+  context: VerifiedCommitRunContext | undefined,
+  extra: RuntimeGitActivityFields,
+  outcome: "ok" | "refused" | "failed",
+): {
+  readonly correlationId: string;
+  readonly level?: "warn";
+  readonly errorKind?: ReturnType<typeof gitDeliveryActivityErrorKind>;
+} {
+  return {
+    correlationId: context?.correlationId ?? UNKNOWN_CORRELATION_ID,
+    ...(outcome === "ok" ? {} : { level: "warn" as const }),
+    ...(outcome === "failed"
+      ? { errorKind: gitDeliveryActivityErrorKind(extra.failureKind ?? extra.reason ?? outcome) }
+      : {}),
+  };
+}
+
 export interface RuntimeGitProposal {
   readonly proposalId: string;
   readonly runId: string;
@@ -627,21 +645,11 @@ export class RuntimeGitService {
     outcome: "ok" | "refused" | "failed" = "ok",
   ): void {
     (this.options.execution?.activityLog ?? processServerLogSink()).write(
-      activityLogEvent(
-        RUNTIME_GIT_OPERATION,
-        {
-          correlationId: context?.correlationId ?? UNKNOWN_CORRELATION_ID,
-          ...(outcome === "ok" ? {} : { level: "warn" }),
-          ...(outcome === "failed"
-            ? {
-                errorKind: gitDeliveryActivityErrorKind(
-                  extra.failureKind ?? extra.reason ?? outcome,
-                ),
-              }
-            : {}),
-        },
-        { phase, ...(context === undefined ? {} : { runId: context.runId }), ...extra },
-      ),
+      activityLogEvent(RUNTIME_GIT_OPERATION, runtimeGitLogOptions(context, extra, outcome), {
+        phase,
+        ...(context === undefined ? {} : { runId: context.runId }),
+        ...extra,
+      }),
     );
   }
 }

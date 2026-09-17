@@ -72,35 +72,36 @@ type ReadOnlyChildReasonCode =
   | "malformed-tool-arguments-denied"
   | "child-runner-error";
 
+const READ_ONLY_CHILD_REASON_CODES: ReadonlySet<string> = new Set<ReadOnlyChildReasonCode>([
+  "nested-child-denied",
+  "not-a-child-agent-request",
+  "parent-envelope-invalid",
+  "child-run-id-invalid",
+  "invalid-max-tool-calls",
+  "workspace-read-denied",
+  "workspace-write-denied",
+  "command-execution-denied",
+  "verification-denied",
+  "connector-access-denied",
+  "network-egress-denied",
+  "delivery-denied",
+  "child-max-tool-calls",
+  "parent-budget-exceeded",
+  "parent-paused",
+  "parent-stopped",
+  "parent-question",
+  "awaiting-approval",
+  "authority-revoked",
+  "timeout",
+  "fabricated-tool-denied",
+  "malformed-tool-arguments-denied",
+  "child-runner-error",
+]);
+
 function closedChildReasonCode(reason: string): ReadOnlyChildReasonCode {
-  switch (reason) {
-    case "nested-child-denied":
-    case "not-a-child-agent-request":
-    case "parent-envelope-invalid":
-    case "child-run-id-invalid":
-    case "invalid-max-tool-calls":
-    case "workspace-read-denied":
-    case "workspace-write-denied":
-    case "command-execution-denied":
-    case "verification-denied":
-    case "connector-access-denied":
-    case "network-egress-denied":
-    case "delivery-denied":
-    case "child-max-tool-calls":
-    case "parent-budget-exceeded":
-    case "parent-paused":
-    case "parent-stopped":
-    case "parent-question":
-    case "awaiting-approval":
-    case "authority-revoked":
-    case "timeout":
-    case "fabricated-tool-denied":
-    case "malformed-tool-arguments-denied":
-    case "child-runner-error":
-      return reason;
-    default:
-      return "child-runner-error";
-  }
+  return READ_ONLY_CHILD_REASON_CODES.has(reason)
+    ? (reason as ReadOnlyChildReasonCode)
+    : "child-runner-error";
 }
 
 const CODING_RUNTIME_READ_ONLY_CHILD_COMPLETED_OPERATION = defineActivityLogOperation({

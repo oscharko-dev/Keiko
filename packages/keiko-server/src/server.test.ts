@@ -1574,4 +1574,23 @@ describe("logRequestOnClose", () => {
     expect(sink.events[0]?.extra?.path).toBe("/api/{id}");
     expect(JSON.stringify(sink.events[0])).not.toContain("customer-secret");
   });
+
+  it("clamps duration when the wall clock moves backward before close", () => {
+    const now = vi.spyOn(Date, "now").mockReturnValueOnce(1_000).mockReturnValueOnce(900);
+    const { req, res } = doubles();
+    const sink = createBufferedServerLogSink();
+    try {
+      logRequestOnClose(
+        req as unknown as IncomingMessage,
+        res as unknown as ServerResponse,
+        "corr-clock",
+        sink,
+        {},
+      );
+      expect(() => res.emit("close")).not.toThrow();
+      expect(sink.events[0]?.durationMs).toBe(0);
+    } finally {
+      now.mockRestore();
+    }
+  });
 });

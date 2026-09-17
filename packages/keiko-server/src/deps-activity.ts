@@ -179,9 +179,40 @@ export type RuntimeShutdownEvidence =
       readonly runtimeShutdown: RuntimeShutdownDisposition;
     });
 
-function runtimeShutdownFields(
-  evidence: RuntimeShutdownEvidence,
-): ActivityLogEventFields<typeof SERVER_RUNTIME_SHUTDOWN_OPERATION> {
+type RuntimeShutdownFields = ActivityLogEventFields<typeof SERVER_RUNTIME_SHUTDOWN_OPERATION>;
+
+function runtimeShutdownErrorFields(
+  cleanup: RuntimeShutdownCleanup,
+): Partial<RuntimeShutdownFields> {
+  return {
+    ...(cleanup.errorClass === undefined ? {} : { errorClass: cleanup.errorClass }),
+    ...(cleanup.code === undefined ? {} : { code: cleanup.code }),
+    ...(cleanup.gatewayRequestId === undefined
+      ? {}
+      : { gatewayRequestId: cleanup.gatewayRequestId }),
+    ...(cleanup.httpStatus === undefined ? {} : { httpStatus: cleanup.httpStatus }),
+    ...(cleanup.retryAfterMs === undefined ? {} : { retryAfterMs: cleanup.retryAfterMs }),
+    ...(cleanup.promptTokens === undefined ? {} : { promptTokens: cleanup.promptTokens }),
+    ...(cleanup.completionTokens === undefined
+      ? {}
+      : { completionTokens: cleanup.completionTokens }),
+  };
+}
+
+function runtimeShutdownDiagnosticFields(
+  cleanup: RuntimeShutdownCleanup,
+): Partial<RuntimeShutdownFields> {
+  return {
+    ...(cleanup.frames === undefined ? {} : { frames: cleanup.frames }),
+    ...(cleanup.causeChain === undefined ? {} : { causeChain: cleanup.causeChain }),
+    ...(cleanup.failedStepCount === undefined ? {} : { failedStepCount: cleanup.failedStepCount }),
+    ...(cleanup.failedStepErrorClasses === undefined
+      ? {}
+      : { failedStepErrorClasses: cleanup.failedStepErrorClasses }),
+  };
+}
+
+function runtimeShutdownFields(evidence: RuntimeShutdownEvidence): RuntimeShutdownFields {
   if (evidence.state === "started") return evidence;
   return {
     state: evidence.state,
@@ -190,25 +221,8 @@ function runtimeShutdownFields(
     durationMs: evidence.durationMs,
     runtimeShutdown: evidence.runtimeShutdown,
     cleanup: evidence.cleanup,
-    ...(evidence.errorClass === undefined ? {} : { errorClass: evidence.errorClass }),
-    ...(evidence.code === undefined ? {} : { code: evidence.code }),
-    ...(evidence.gatewayRequestId === undefined
-      ? {}
-      : { gatewayRequestId: evidence.gatewayRequestId }),
-    ...(evidence.httpStatus === undefined ? {} : { httpStatus: evidence.httpStatus }),
-    ...(evidence.retryAfterMs === undefined ? {} : { retryAfterMs: evidence.retryAfterMs }),
-    ...(evidence.promptTokens === undefined ? {} : { promptTokens: evidence.promptTokens }),
-    ...(evidence.completionTokens === undefined
-      ? {}
-      : { completionTokens: evidence.completionTokens }),
-    ...(evidence.frames === undefined ? {} : { frames: evidence.frames }),
-    ...(evidence.causeChain === undefined ? {} : { causeChain: evidence.causeChain }),
-    ...(evidence.failedStepCount === undefined
-      ? {}
-      : { failedStepCount: evidence.failedStepCount }),
-    ...(evidence.failedStepErrorClasses === undefined
-      ? {}
-      : { failedStepErrorClasses: evidence.failedStepErrorClasses }),
+    ...runtimeShutdownErrorFields(evidence),
+    ...runtimeShutdownDiagnosticFields(evidence),
   };
 }
 

@@ -243,27 +243,24 @@ function gitFailureLevel(result: GitProcessResult): ServerLogLevel {
   return result.aborted === true ? "info" : "warn";
 }
 
+const CLOSED_GIT_ERROR_KINDS: Readonly<Record<string, ActivityLogErrorKind>> = {
+  [TIMEOUT_ERROR_KIND]: "timeout",
+  [CANCELLED_ERROR_KIND]: "cancelled",
+  "auth-failed": "permission-denied",
+  "permission-denied": "permission-denied",
+  "unsafe-repository": "unsafe-target",
+  "git-executable-untrusted": "unsafe-target",
+  "git-option-refused": "authority-denied",
+  [TRUNCATED_ERROR_KIND]: "unavailable",
+  "git-missing": "unavailable",
+  "not-a-repository": "unavailable",
+  "remote-unavailable": "unavailable",
+  "untrusted-host-key": "unavailable",
+  "repository-not-found": "unavailable",
+};
+
 function closedGitErrorKind(errorKind: string): ActivityLogErrorKind {
-  if (errorKind === TIMEOUT_ERROR_KIND) return "timeout";
-  if (errorKind === CANCELLED_ERROR_KIND) return "cancelled";
-  if (errorKind === "auth-failed" || errorKind === "permission-denied") {
-    return "permission-denied";
-  }
-  if (errorKind === "unsafe-repository" || errorKind === "git-executable-untrusted") {
-    return "unsafe-target";
-  }
-  if (errorKind === "git-option-refused") return "authority-denied";
-  if (
-    errorKind === TRUNCATED_ERROR_KIND ||
-    errorKind === "git-missing" ||
-    errorKind === "not-a-repository" ||
-    errorKind === "remote-unavailable" ||
-    errorKind === "untrusted-host-key" ||
-    errorKind === "repository-not-found"
-  ) {
-    return "unavailable";
-  }
-  return "internal";
+  return CLOSED_GIT_ERROR_KINDS[errorKind] ?? "internal";
 }
 
 const GIT_FAILURE_KIND = /^[A-Za-z0-9._-]{1,64}$/u;
@@ -364,41 +361,58 @@ export function logGitProcessOutcome(
     gitFailureErrorKind(result, subcommand, classifyFailure),
   );
   if (result.refusal !== undefined) {
-    log.write(
-      activityLogEvent(
-        GIT_PROCESS_REFUSED_OPERATION,
-        {
-          level: "error",
-          correlationId: id,
-          errorKind: closedGitErrorKind(failureKind),
-          durationMs,
-        },
-        {
-          ...fields,
-          refusal: result.refusal,
-          failureKind,
-          completeness: "complete",
-          loss: "none",
-        },
-      ),
-    );
+    writeGitRefusal(log, id, durationMs, fields, failureKind, result.refusal);
     return;
   }
+  writeGitFailure(log, id, durationMs, fields, failureKind, result);
+}
+
+function writeGitRefusal(
+  log: ServerLogSink,
+  correlationId: string,
+  durationMs: number,
+  fields: ReturnType<typeof gitOutcomeFields>,
+  failureKind: string,
+  refusal: NonNullable<GitProcessResult["refusal"]>,
+): void {
   log.write(
     activityLogEvent(
-      GIT_PROCESS_FAILED_OPERATION,
+      GIT_PROCESS_REFUSED_OPERATION,
       {
-        level: gitFailureLevel(result),
-        correlationId: id,
+        level: "error",
+        correlationId,
         errorKind: closedGitErrorKind(failureKind),
         durationMs,
       },
       {
         ...fields,
+        refusal,
         failureKind,
         completeness: "complete",
         loss: "none",
       },
+    ),
+  );
+}
+
+function writeGitFailure(
+  log: ServerLogSink,
+  correlationId: string,
+  durationMs: number,
+  fields: ReturnType<typeof gitOutcomeFields>,
+  failureKind: string,
+  result: GitProcessResult,
+): void {
+  log.write(
+    activityLogEvent(
+      GIT_PROCESS_FAILED_OPERATION,
+      {
+        level: gitFailureLevel(result),
+        correlationId,
+        errorKind: closedGitErrorKind(failureKind),
+        durationMs,
+      },
+      { ...fields, failureKind, completeness: "complete", loss: "none" },
     ),
   );
 }

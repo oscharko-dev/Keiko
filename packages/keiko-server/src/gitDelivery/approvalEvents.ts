@@ -214,6 +214,18 @@ const PR_MARK_READY_APPROVAL_MINTED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const APPROVAL_OPERATION_REGISTRATIONS = {
+  "git.delivery.push.approval.required": PUSH_APPROVAL_REQUIRED_OPERATION,
+  "git.delivery.push.approval.minted": PUSH_APPROVAL_MINTED_OPERATION,
+  "git.delivery.pr.approval.required": PR_APPROVAL_REQUIRED_OPERATION,
+  "git.delivery.pr.approval.minted": PR_APPROVAL_MINTED_OPERATION,
+  "git.delivery.commit.approval.required": COMMIT_APPROVAL_REQUIRED_OPERATION,
+  "git.delivery.commit.approval.minted": COMMIT_APPROVAL_MINTED_OPERATION,
+  "git.delivery.sync.approval.minted": SYNC_APPROVAL_MINTED_OPERATION,
+  "git.delivery.pr-mark-ready.approval.required": PR_MARK_READY_APPROVAL_REQUIRED_OPERATION,
+  "git.delivery.pr-mark-ready.approval.minted": PR_MARK_READY_APPROVAL_MINTED_OPERATION,
+} as const;
+
 // #3387 (ADR-0138 D2): shared by the push and PR execute/approve routes' approval-required and
 // approval-minted lines — see `pushApprovalRequiredBlock`/`prApprovalRequiredBlock` for why the
 // mandatory consumed-approval gate this logs cannot be substituted by policy-pack disposition alone.
@@ -239,36 +251,5 @@ export function logGitDeliveryApprovalEvent(
     ...(evidence.prExternalId === undefined ? {} : { prExternalId: evidence.prExternalId }),
   };
   const envelope = { correlationId, status: 200 } as const;
-  switch (op) {
-    case "git.delivery.push.approval.required":
-      activityLog.write(activityLogEvent(PUSH_APPROVAL_REQUIRED_OPERATION, envelope, fields));
-      return;
-    case "git.delivery.push.approval.minted":
-      activityLog.write(activityLogEvent(PUSH_APPROVAL_MINTED_OPERATION, envelope, fields));
-      return;
-    case "git.delivery.pr.approval.required":
-      activityLog.write(activityLogEvent(PR_APPROVAL_REQUIRED_OPERATION, envelope, fields));
-      return;
-    case "git.delivery.pr.approval.minted":
-      activityLog.write(activityLogEvent(PR_APPROVAL_MINTED_OPERATION, envelope, fields));
-      return;
-    case "git.delivery.commit.approval.required":
-      activityLog.write(activityLogEvent(COMMIT_APPROVAL_REQUIRED_OPERATION, envelope, fields));
-      return;
-    case "git.delivery.commit.approval.minted":
-      activityLog.write(activityLogEvent(COMMIT_APPROVAL_MINTED_OPERATION, envelope, fields));
-      return;
-    case "git.delivery.sync.approval.minted":
-      activityLog.write(activityLogEvent(SYNC_APPROVAL_MINTED_OPERATION, envelope, fields));
-      return;
-    case "git.delivery.pr-mark-ready.approval.required":
-      activityLog.write(
-        activityLogEvent(PR_MARK_READY_APPROVAL_REQUIRED_OPERATION, envelope, fields),
-      );
-      return;
-    case "git.delivery.pr-mark-ready.approval.minted":
-      activityLog.write(
-        activityLogEvent(PR_MARK_READY_APPROVAL_MINTED_OPERATION, envelope, fields),
-      );
-  }
+  activityLog.write(activityLogEvent(APPROVAL_OPERATION_REGISTRATIONS[op], envelope, fields));
 }

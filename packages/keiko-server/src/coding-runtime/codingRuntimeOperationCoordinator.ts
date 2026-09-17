@@ -943,13 +943,13 @@ function recordRuntimeOperationTransportFailure(
   (activityLog ?? processServerLogSink()).write(runtimeOperationTransportEvent(input));
 }
 
-type RuntimeOperationTransportFailure = {
+interface RuntimeOperationTransportFailure {
   readonly runId: string;
   readonly correlationId?: string | undefined;
   readonly operation:
     "follow-up" | "list" | "answer" | "reject" | "initial-turn-dispatch" | "initial-turn-stop";
   readonly error: unknown;
-};
+}
 
 function runtimeOperationTransportEvent(input: RuntimeOperationTransportFailure): ServerLogEvent {
   const envelope = {

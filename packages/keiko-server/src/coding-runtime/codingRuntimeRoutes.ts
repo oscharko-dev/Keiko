@@ -109,20 +109,32 @@ const CODING_RUNTIME_OPERATION_REFUSED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const RUNTIME_REFUSAL_ERROR_KINDS: Partial<
+  Readonly<Record<CodingWorkbenchRuntimeFailureCode, ActivityLogErrorKind>>
+> = {
+  "runtime-unavailable": "unavailable",
+  "issue-context-unavailable": "unavailable",
+  "active-run-conflict": "conflict",
+  "recovery-required": "conflict",
+  "task-drift": "conflict",
+  "workspace-drift": "conflict",
+  "project-drift": "conflict",
+  "branch-drift": "conflict",
+  "scope-drift": "conflict",
+  "budget-drift": "conflict",
+  "source-drift": "conflict",
+  "replay-cap-exhausted": "rate-limited",
+  "authority-budget-exceeded": "rate-limited",
+  "authority-resolution-failed": "authority-denied",
+  "authority-expired": "authority-denied",
+  "authority-replayed": "authority-denied",
+  revoked: "authority-denied",
+  "invalid-intent": "invalid-request",
+  "question-answer-rejected": "invalid-request",
+};
+
 function runtimeRefusalErrorKind(reason: CodingWorkbenchRuntimeFailureCode): ActivityLogErrorKind {
-  if (reason === "runtime-unavailable" || reason === "issue-context-unavailable") {
-    return "unavailable";
-  }
-  if (reason === "active-run-conflict" || reason === "recovery-required") return "conflict";
-  if (reason === "replay-cap-exhausted" || reason === "authority-budget-exceeded") {
-    return "rate-limited";
-  }
-  if (reason.includes("authority") || reason === "revoked") return "authority-denied";
-  if (reason.endsWith("-drift")) return "conflict";
-  if (reason === "invalid-intent" || reason === "question-answer-rejected") {
-    return "invalid-request";
-  }
-  return "internal";
+  return RUNTIME_REFUSAL_ERROR_KINDS[reason] ?? "internal";
 }
 
 class BodyTooLargeError extends Error {}

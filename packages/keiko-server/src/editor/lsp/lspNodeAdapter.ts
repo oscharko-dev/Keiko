@@ -217,30 +217,29 @@ const LSP_PROCESS_TERMINATED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const LSP_ACTIVITY_ERROR_KINDS: Readonly<Record<string, ActivityLogErrorKind>> = {
+  CANCELLED: "cancelled",
+  ABORT_ERR: "cancelled",
+  INITIALIZE_TIMEOUT: "timeout",
+  REQUEST_TIMED_OUT: "timeout",
+  SHUTDOWN_TIMEOUT: "timeout",
+  ETIMEDOUT: "timeout",
+  EACCES: "permission-denied",
+  EPERM: "permission-denied",
+  ERR_INVALID_ARG_VALUE: "invalid-request",
+  EXECUTABLE_NOT_FOUND: "unavailable",
+  ENOENT: "unavailable",
+  RESOURCE_BUDGET_EXCEEDED: "unavailable",
+  DISPOSED: "unavailable",
+};
+
 function lspActivityErrorKind(
   error: unknown,
   fallback?: LspProcessErrorCode,
 ): ActivityLogErrorKind {
   const raw = error === undefined ? fallback : errorKindOf(error);
   if (isActivityLogErrorKind(raw)) return raw;
-  if (raw === "CANCELLED" || raw === "ABORT_ERR") return "cancelled";
-  if (
-    raw === "INITIALIZE_TIMEOUT" ||
-    raw === "REQUEST_TIMED_OUT" ||
-    raw === "SHUTDOWN_TIMEOUT" ||
-    raw === "ETIMEDOUT"
-  )
-    return "timeout";
-  if (raw === "EACCES" || raw === "EPERM") return "permission-denied";
-  if (raw === "ERR_INVALID_ARG_VALUE") return "invalid-request";
-  if (
-    raw === "EXECUTABLE_NOT_FOUND" ||
-    raw === "ENOENT" ||
-    raw === "RESOURCE_BUDGET_EXCEEDED" ||
-    raw === "DISPOSED"
-  )
-    return "unavailable";
-  return "internal";
+  return raw === undefined ? "internal" : (LSP_ACTIVITY_ERROR_KINDS[raw] ?? "internal");
 }
 
 // AGENTS.md §8 Rule 1 (PR reviewer finding): this adapter's two platform-dependent decision

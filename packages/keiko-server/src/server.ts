@@ -573,7 +573,7 @@ export function logRequestOnClose(
         {
           correlationId,
           status,
-          durationMs: Date.now() - startedAt,
+          durationMs: Math.max(0, Date.now() - startedAt),
         },
         buildHttpRequestExtra(
           { method, path: requestUrl.split("?")[0] ?? "", aborted, responseBytes },

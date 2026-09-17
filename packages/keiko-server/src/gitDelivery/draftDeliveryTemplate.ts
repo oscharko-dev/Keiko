@@ -338,51 +338,61 @@ function failureReason(error: unknown): DraftDeliveryTemplateFailure {
   return "template-unreadable";
 }
 
+function logReadyTemplate(
+  input: DraftDeliveryTemplateInput,
+  result: Extract<DraftDeliveryTemplateResult, { status: "ready" }>,
+): void {
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      DRAFT_TEMPLATE_OPERATION,
+      { correlationId: input.correlationId },
+      {
+        state: result.status,
+        titleDigest: result.titleDigest,
+        bodyDigest: result.bodyDigest,
+        templateBytes: result.templateBytes,
+        ...(result.templateDigest === undefined ? {} : { templateDigest: result.templateDigest }),
+        relatedIssueCount: input.relatedIssueNumbers?.length ?? 0,
+        checksState: input.verificationChecks?.status ?? "absent",
+        checkRowCount: result.checkRowCount ?? 0,
+      },
+    ),
+  );
+}
+
+function logBlockedTemplate(input: DraftDeliveryTemplateInput, error: unknown): void {
+  const detail = describeError(error);
+  (input.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      DRAFT_TEMPLATE_OPERATION,
+      {
+        correlationId: input.correlationId,
+        level: "warn",
+        errorKind: error instanceof TemplateResolutionError ? "validation-failed" : "internal",
+      },
+      {
+        state: "blocked",
+        reason: failureReason(error),
+        errorClass: detail.errorClass,
+        ...(detail.code === undefined ? {} : { code: detail.code }),
+        ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+        ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+      },
+    ),
+  );
+}
+
 /** Pure local preparation only. The delivery owner must bind/recheck this exact payload at dispatch. */
 export function resolveDraftDeliveryTemplate(
   input: DraftDeliveryTemplateInput,
 ): DraftDeliveryTemplateResult {
-  const activityLog = input.activityLog ?? processServerLogSink();
   try {
     const result = compose(input);
-    activityLog.write(
-      activityLogEvent(
-        DRAFT_TEMPLATE_OPERATION,
-        { correlationId: input.correlationId },
-        {
-          state: result.status,
-          titleDigest: result.titleDigest,
-          bodyDigest: result.bodyDigest,
-          templateBytes: result.templateBytes,
-          ...(result.templateDigest === undefined ? {} : { templateDigest: result.templateDigest }),
-          relatedIssueCount: input.relatedIssueNumbers?.length ?? 0,
-          checksState: input.verificationChecks?.status ?? "absent",
-          checkRowCount: result.checkRowCount ?? 0,
-        },
-      ),
-    );
+    logReadyTemplate(input, result);
     return result;
   } catch (error) {
     const reason = failureReason(error);
-    const detail = describeError(error);
-    activityLog.write(
-      activityLogEvent(
-        DRAFT_TEMPLATE_OPERATION,
-        {
-          correlationId: input.correlationId,
-          level: "warn",
-          errorKind: error instanceof TemplateResolutionError ? "validation-failed" : "internal",
-        },
-        {
-          state: "blocked",
-          reason,
-          errorClass: detail.errorClass,
-          ...(detail.code === undefined ? {} : { code: detail.code }),
-          ...(detail.frames === undefined ? {} : { frames: detail.frames }),
-          ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
-        },
-      ),
-    );
+    logBlockedTemplate(input, error);
     return { status: "blocked", reason };
   }
 }

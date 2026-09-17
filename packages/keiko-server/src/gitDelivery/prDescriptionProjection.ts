@@ -150,6 +150,26 @@ function failureDetail(error: unknown): { readonly detail?: PrDescriptionFailure
     ? { detail: error.detail }
     : {};
 }
+
+function descriptionFailureFields(error: unknown): Record<string, unknown> {
+  const description = describeError(error);
+  return {
+    errorClass: description.errorClass,
+    ...(description.code === undefined ? {} : { code: description.code }),
+    ...(description.frames === undefined ? {} : { frames: description.frames }),
+    ...(description.causeChain === undefined ? {} : { causeChain: description.causeChain }),
+  };
+}
+
+function descriptionStatusFields(status: PrDescriptionApplicationStatus): Record<string, unknown> {
+  return {
+    state: status.state,
+    effect: status.effect,
+    snapshotDigest: status.binding.snapshotDigest,
+    artifactDigest: status.binding.draftDigest,
+    bodyDigest: status.binding.finalBodyDigest,
+  };
+}
 export function logDescription(
   options: PrDescriptionServiceOptions,
   context: PrDescriptionContext,
@@ -159,7 +179,6 @@ export function logDescription(
   error?: unknown,
 ): void {
   const failureKind = error === undefined ? undefined : errorKindOf(error);
-  const description = error === undefined ? undefined : describeError(error);
   (options.execution.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
       PR_DESCRIPTION_OPERATION,
@@ -172,26 +191,9 @@ export function logDescription(
       {
         phase,
         reason,
-        ...(status === undefined
-          ? {}
-          : {
-              state: status.state,
-              effect: status.effect,
-              snapshotDigest: status.binding.snapshotDigest,
-              artifactDigest: status.binding.draftDigest,
-              bodyDigest: status.binding.finalBodyDigest,
-            }),
+        ...(status === undefined ? {} : descriptionStatusFields(status)),
         ...(failureKind === undefined ? {} : { failureKind }),
-        ...(description === undefined
-          ? {}
-          : {
-              errorClass: description.errorClass,
-              ...(description.code === undefined ? {} : { code: description.code }),
-              ...(description.frames === undefined ? {} : { frames: description.frames }),
-              ...(description.causeChain === undefined
-                ? {}
-                : { causeChain: description.causeChain }),
-            }),
+        ...(error === undefined ? {} : descriptionFailureFields(error)),
         ...failureDetail(error),
       },
     ),

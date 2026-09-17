@@ -1327,20 +1327,33 @@ function recordRuntimeEventDropped(
   );
 }
 
+type CompleteVerificationSummary = CodingWorkbenchRuntimeEvent & {
+  readonly kind: "verification-summarized";
+  readonly verificationKind: NonNullable<CodingWorkbenchRuntimeEvent["verificationKind"]>;
+  readonly verificationStatus: NonNullable<CodingWorkbenchRuntimeEvent["verificationStatus"]>;
+  readonly passedCount: number;
+  readonly failedCount: number;
+  readonly skippedCount: number;
+};
+
+function isCompleteVerificationSummary(
+  event: CodingWorkbenchRuntimeEvent,
+): event is CompleteVerificationSummary {
+  if (event.kind !== "verification-summarized") return false;
+  return [
+    event.verificationKind,
+    event.verificationStatus,
+    event.passedCount,
+    event.failedCount,
+    event.skippedCount,
+  ].every((value) => value !== undefined);
+}
+
 function recordRuntimeVerificationSummary(
   activityLog: ServerLogSink | undefined,
   event: CodingWorkbenchRuntimeEvent,
 ): void {
-  if (
-    event.kind !== "verification-summarized" ||
-    event.verificationKind === undefined ||
-    event.verificationStatus === undefined ||
-    event.passedCount === undefined ||
-    event.failedCount === undefined ||
-    event.skippedCount === undefined
-  ) {
-    return;
-  }
+  if (!isCompleteVerificationSummary(event)) return;
   activityLog?.write(
     activityLogEvent(
       CODING_RUNTIME_VERIFICATION_SUMMARIZED_OPERATION,

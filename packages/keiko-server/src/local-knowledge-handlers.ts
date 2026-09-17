@@ -3318,82 +3318,74 @@ export async function handleCancelLocalKnowledgeCapsuleIndexing(
   ctx: RouteContext,
   deps: UiHandlerDeps,
 ): Promise<RouteResult> {
-  return runHandler(async () => {
-    const capsuleId = parseCapsuleId(ctx);
-    await readJsonObject(ctx.req);
-    const log = indexingRouteLog(capsuleId);
-    // Item 4, and the reason it matters: the customer in the field incident CANCELLED after six
-    // minutes. The orchestrator writes `indexing.job.finished` with status cancelled once the run
-    // observes the flag — but a run wedged BEFORE that observation never does, which is precisely
-    // the state under investigation. This line is written on arrival, so the operator's action is
-    // on the record even when the run it targets never reacts to it.
-    log.logger.info(
-      activityLogEvent(
-        INDEXING_CANCEL_REQUESTED_OPERATION,
-        { correlationId: log.correlationId },
-        { capsuleIdDigest: log.capsuleIdDigest, completeness: "complete", loss: "none" },
-      ),
-    );
-    const env = openStoreForDeps(deps);
-    try {
-      const capsule = getCapsule(env.store, capsuleId);
-      if (capsule === undefined) {
-        log.logger.warn(
-          activityLogEvent(
-            INDEXING_CANCEL_REFUSED_OPERATION,
-            {
-              correlationId: log.correlationId,
-              status: 404,
-              errorKind: "invalid-request",
-            },
-            {
-              capsuleIdDigest: log.capsuleIdDigest,
-              reason: "capsule-not-found",
-              completeness: "complete",
-              loss: "none",
-            },
-          ),
-        );
-        return notFound(`Capsule not found: ${capsuleId}`);
-      }
-      // Read before requesting: `requestRunningJobCancellation` answers only yes/no, and the id of
-      // the job the flag was set on is what joins this line to the run's own lines.
-      const runningJobId = latestRunningJobId(env.store, capsule.id);
-      if (!requestRunningJobCancellation(env.store, capsule.id)) {
-        log.logger.warn(
-          activityLogEvent(
-            INDEXING_CANCEL_REFUSED_OPERATION,
-            { correlationId: log.correlationId, status: 409, errorKind: "conflict" },
-            {
-              capsuleIdDigest: log.capsuleIdDigest,
-              reason: "no-running-job",
-              completeness: "complete",
-              loss: "none",
-            },
-          ),
-        );
-        return conflict("No running indexing job was found for this capsule.");
-      }
-      // Warn, matching the orchestrator's own level for a cancelled job: a cancellation is a run
-      // that did not deliver, and the two lines must survive the same operator filter.
-      const acceptedLog = indexingLogWithCorrelation(log, runningJobId);
-      acceptedLog.logger.warn(
-        activityLogEvent(
-          INDEXING_CANCEL_ACCEPTED_OPERATION,
-          { correlationId: acceptedLog.correlationId, status: 200 },
-          {
-            capsuleIdDigest: acceptedLog.capsuleIdDigest,
-            cancellationRequested: true,
-            completeness: "complete",
-            loss: "none",
-          },
-        ),
-      );
-      return actionResponse(capsule.id);
-    } finally {
-      env.close();
+  return runHandler(() => cancelLocalKnowledgeCapsuleIndexing(ctx, deps));
+}
+
+function logCancellationRefused(
+  log: IndexingRouteLog,
+  status: 404 | 409,
+  reason: "capsule-not-found" | "no-running-job",
+): void {
+  log.logger.warn(
+    activityLogEvent(
+      INDEXING_CANCEL_REFUSED_OPERATION,
+      {
+        correlationId: log.correlationId,
+        status,
+        errorKind: status === 404 ? "invalid-request" : "conflict",
+      },
+      { capsuleIdDigest: log.capsuleIdDigest, reason, completeness: "complete", loss: "none" },
+    ),
+  );
+}
+
+function logCancellationAccepted(log: IndexingRouteLog): void {
+  log.logger.warn(
+    activityLogEvent(
+      INDEXING_CANCEL_ACCEPTED_OPERATION,
+      { correlationId: log.correlationId, status: 200 },
+      {
+        capsuleIdDigest: log.capsuleIdDigest,
+        cancellationRequested: true,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
+}
+
+async function cancelLocalKnowledgeCapsuleIndexing(
+  ctx: RouteContext,
+  deps: UiHandlerDeps,
+): Promise<RouteResult> {
+  const capsuleId = parseCapsuleId(ctx);
+  await readJsonObject(ctx.req);
+  const log = indexingRouteLog(capsuleId);
+  log.logger.info(
+    activityLogEvent(
+      INDEXING_CANCEL_REQUESTED_OPERATION,
+      { correlationId: log.correlationId },
+      { capsuleIdDigest: log.capsuleIdDigest, completeness: "complete", loss: "none" },
+    ),
+  );
+  const env = openStoreForDeps(deps);
+  try {
+    const capsule = getCapsule(env.store, capsuleId);
+    if (capsule === undefined) {
+      logCancellationRefused(log, 404, "capsule-not-found");
+      return notFound(`Capsule not found: ${capsuleId}`);
     }
-  });
+    const runningJobId = latestRunningJobId(env.store, capsule.id);
+    if (!requestRunningJobCancellation(env.store, capsule.id)) {
+      logCancellationRefused(log, 409, "no-running-job");
+      return conflict("No running indexing job was found for this capsule.");
+    }
+    const acceptedLog = indexingLogWithCorrelation(log, runningJobId);
+    logCancellationAccepted(acceptedLog);
+    return actionResponse(capsule.id);
+  } finally {
+    env.close();
+  }
 }
 
 // ─── Connect a source folder to a capsule (Epic #189) ─────────────────────────

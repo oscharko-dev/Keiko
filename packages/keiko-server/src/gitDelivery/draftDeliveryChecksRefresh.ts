@@ -252,12 +252,19 @@ function refreshFields(
   return { reason: outcome.reason, ...describeError(outcome.error) };
 }
 
+function refreshFailureFields(outcome: RefreshOutcome): Partial<DraftChecksActivityFields> {
+  if (outcome.state !== "failed" || outcome.error === undefined) return {};
+  const detail = describeError(outcome.error);
+  return {
+    errorClass: detail.errorClass,
+    ...(detail.code === undefined ? {} : { code: detail.code }),
+    ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+    ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+  };
+}
+
 function logRefresh(input: DraftChecksRefreshInput, outcome: RefreshOutcome): void {
   const { options, context, record, pullRequest } = input;
-  const detail =
-    outcome.state === "failed" && outcome.error !== undefined
-      ? describeError(outcome.error)
-      : undefined;
   logDraftChecksActivity(
     options.execution?.activityLog ?? processServerLogSink(),
     context.correlationId,
@@ -268,14 +275,7 @@ function logRefresh(input: DraftChecksRefreshInput, outcome: RefreshOutcome): vo
       prNumber: pullRequest.number,
       headSha: record.binding.headSha,
       ...refreshFields(outcome),
-      ...(detail === undefined
-        ? {}
-        : {
-            errorClass: detail.errorClass,
-            ...(detail.code === undefined ? {} : { code: detail.code }),
-            ...(detail.frames === undefined ? {} : { frames: detail.frames }),
-            ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
-          }),
+      ...refreshFailureFields(outcome),
     },
     outcome.state === "failed"
       ? { errorKind: CONFLICT_REASONS.has(outcome.reason) ? "conflict" : "internal" }

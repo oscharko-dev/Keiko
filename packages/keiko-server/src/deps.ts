@@ -5078,9 +5078,7 @@ function createUiHandlerDispose(
     const activityLog = args.options.activityLog ?? processServerLogSink();
     const correlationId = randomUUID();
     const startedAtMs = Date.now();
-    const openSseStreamCount = currentOpenSseStreamCount();
-    const activeRunCount =
-      services.codingRuntimeControlPlane?.orchestrator.hasLiveRun() === true ? 1 : 0;
+    const { openSseStreamCount, activeRunCount } = runtimeShutdownStartState(services);
     markServerShuttingDown();
     logRuntimeShutdown(activityLog, correlationId, {
       state: "started",
@@ -5123,6 +5121,16 @@ function createUiHandlerDispose(
         runtimeShutdown === "faulted",
       );
     }
+  };
+}
+
+function runtimeShutdownStartState(services: UiHandlerRuntimeServices): {
+  readonly openSseStreamCount: number;
+  readonly activeRunCount: number;
+} {
+  return {
+    openSseStreamCount: currentOpenSseStreamCount(),
+    activeRunCount: services.codingRuntimeControlPlane?.orchestrator.hasLiveRun() === true ? 1 : 0,
   };
 }
 
