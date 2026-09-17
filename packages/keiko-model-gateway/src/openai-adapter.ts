@@ -93,7 +93,6 @@ const CHAT_REQUEST_DISPATCH_OPERATION = defineActivityLogOperation({
       type: "boolean",
       dataClass: "closed-enum",
       required: true,
-      values: ["true", "false"],
     },
     readBudgetMs: { type: "number", dataClass: "duration", required: false },
   },

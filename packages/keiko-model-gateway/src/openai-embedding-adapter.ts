@@ -50,7 +50,6 @@ const EMBEDDING_REQUEST_DISPATCH_OPERATION = defineActivityLogOperation({
       type: "boolean",
       dataClass: "closed-enum",
       required: true,
-      values: ["true", "false"],
     },
   },
   causal: "none",
@@ -74,7 +73,6 @@ const EMBEDDING_REQUEST_FAILED_OPERATION = defineActivityLogOperation({
       type: "boolean",
       dataClass: "closed-enum",
       required: true,
-      values: ["true", "false"],
     },
   },
   causal: "none",
@@ -162,7 +160,6 @@ const EMBEDDING_BATCH_DISPATCH_OPERATION = defineActivityLogOperation({
       type: "boolean",
       dataClass: "closed-enum",
       required: true,
-      values: ["true", "false"],
     },
   },
   causal: "none",
@@ -292,7 +289,6 @@ const EMBEDDING_BATCH_DEGRADED_OPERATION = defineActivityLogOperation({
       type: "boolean",
       dataClass: "closed-enum",
       required: true,
-      values: ["true", "false"],
     },
     embedded: { type: "integer", dataClass: "count", required: true },
   },
@@ -362,7 +358,6 @@ const EMBEDDING_BATCH_ARRAY_UNSUPPORTED_OPERATION = defineActivityLogOperation({
       type: "boolean",
       dataClass: "closed-enum",
       required: true,
-      values: ["true"],
     },
     reason: {
       type: "string",
@@ -973,11 +968,9 @@ async function requestMinimalShapeEmbedding(
   // Process-lifetime memo: from here on every request to this endpoint SKIPS the extras rung.
   strictShapeEndpoints.add(request.endpoint);
   log.write(
-    activityLogEvent(
-      EMBEDDING_ENDPOINT_STRICT_MEMOIZED_OPERATION,
-      embeddingEnvelope(log, "info"),
-      { endpointDigest },
-    ),
+    activityLogEvent(EMBEDDING_ENDPOINT_STRICT_MEMOIZED_OPERATION, embeddingEnvelope(log, "info"), {
+      endpointDigest,
+    }),
   );
   return decodeSuccess(dispatched, request);
 }
@@ -1273,11 +1266,10 @@ export async function requestOpenAIEmbeddingBatch(
     // now on costs N round-trips instead of one, which is the throughput cliff an operator
     // chasing "indexing got slow after a restart" needs to see named.
     log.write(
-      activityLogEvent(
-        EMBEDDING_BATCH_SCALAR_MEMO_HIT_OPERATION,
-        embeddingEnvelope(log, "info"),
-        { endpointDigest, inputCount },
-      ),
+      activityLogEvent(EMBEDDING_BATCH_SCALAR_MEMO_HIT_OPERATION, embeddingEnvelope(log, "info"), {
+        endpointDigest,
+        inputCount,
+      }),
     );
     return await requestScalarFallbackBatch(request, deadlineAt);
   }

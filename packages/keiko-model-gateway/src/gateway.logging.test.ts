@@ -3,6 +3,7 @@
 // adapter. Every case injects an adapter and a Clock — no network, no timers, no global state.
 
 import { describe, expect, it } from "vitest";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { TransportError } from "@oscharko-dev/keiko-security/errors/gateway";
 import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import { Gateway } from "./gateway.js";
@@ -235,6 +236,10 @@ describe("Gateway.chat — activity log", () => {
       reasoningEffort: "high",
       streaming: false,
     });
+    expect(
+      activityLogEventRegistration(started as unknown as Readonly<Record<PropertyKey, unknown>>)
+        ?.fields.streaming,
+    ).toEqual({ type: "boolean", dataClass: "closed-enum", required: true });
   });
 
   // The failure the whole effort exists for: the attempt is on record even though no outcome
