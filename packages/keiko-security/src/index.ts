@@ -41,6 +41,7 @@ export type {
   SafeArtifactPublicationResult,
   SafeArtifactRecoveryOptions,
   SafeArtifactRecoveryResult,
+  SafeArtifactReceiptOptions,
 } from "./fs-hardening.js";
 export {
   DIR_MODE,
@@ -50,6 +51,7 @@ export {
   SAFE_ARTIFACT_CLASSES,
   SAFE_ARTIFACT_FILE_FAILURE_KINDS,
   SafeArtifactFileError,
+  acknowledgeSafeArtifactFileSet,
   ensureDirHardened,
   chmodIfPresent,
   openSafeArtifactFile,

@@ -17,6 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
@@ -25,6 +26,7 @@ import {
   MAX_SAFE_ARTIFACT_RECOVERY_ENTRY_BYTES,
   MAX_SAFE_ARTIFACT_RECOVERY_PUBLICATION_BYTES,
   SafeArtifactFileError,
+  acknowledgeSafeArtifactFileSet,
   chmodIfPresent,
   ensureDirHardened,
   openSafeArtifactFile,
@@ -647,7 +649,7 @@ describe("publishSafeArtifactFileSet", () => {
     );
     expect(readFileSync(report, "utf8")).toBe("old-report");
     expect(readFileSync(integrity, "utf8")).toBe("old-digest\n");
-    expect(publicationStages(base)).toHaveLength(0);
+    expect(publicationStages(base)).toEqual([`.keiko-publish-${slot}.complete`]);
   });
 
   it("rolls back partial pre-target stages from a fixed slot", async () => {
@@ -688,7 +690,7 @@ describe("publishSafeArtifactFileSet", () => {
       permissionAssurance: safeArtifactPermissionAssurance(),
       durabilityAssurance: process.platform === "win32" ? "directory-sync-unavailable" : "verified",
     });
-    expect(readdirSync(base)).toEqual([]);
+    expect(readdirSync(base)).toEqual([`.keiko-publish-${slot}.consumed`]);
   });
 
   it("rejects a second publisher for an occupied fixed slot without creating another transaction", async () => {
@@ -798,7 +800,7 @@ describe("publishSafeArtifactFileSet", () => {
     );
   });
 
-  it("removes its bounded fixed-slot reservation when hard-link publication is unsupported", async () => {
+  it("keeps one bounded recovery locator when hard-link publication is unsupported", async () => {
     const base = freshDir();
     const report = join(base, "support.jsonl");
     const slot = safeArtifactPublicationSlot("support-export", report);
@@ -817,7 +819,7 @@ describe("publishSafeArtifactFileSet", () => {
         { commitPath: report, trustedRoot: base, publicationSlot: slot },
       ),
     ).toThrow(expect.objectContaining({ kind: "publish-unsupported" }));
-    expect(readdirSync(base)).toEqual([]);
+    expect(readdirSync(base)).toEqual([`.keiko-publish-${slot}.active`]);
   });
 
   it("refuses hostile fixed-slot intent markers without changing their victim", (ctx) => {
@@ -825,7 +827,7 @@ describe("publishSafeArtifactFileSet", () => {
     const base = freshDir();
     const report = join(base, "support.jsonl");
     const slot = safeArtifactPublicationSlot("support-export", report);
-    const marker = join(base, `.keiko-publish-${slot}.intent`);
+    const marker = join(base, `.keiko-publish-${slot}.active`);
     const victim = join(base, "victim");
     writeFileSync(victim, "operator-owned", { mode: 0o640 });
     chmodSync(victim, 0o640);
@@ -843,7 +845,7 @@ describe("publishSafeArtifactFileSet", () => {
     }
   });
 
-  it("restores the completed intent when its post-unlink directory fsync fails", async () => {
+  it("keeps the consumed locator when acknowledgement directory fsync fails", async () => {
     const base = freshDir();
     const report = join(base, "support.jsonl");
     const slot = safeArtifactPublicationSlot("support-export", report);
@@ -861,7 +863,7 @@ describe("publishSafeArtifactFileSet", () => {
       ...actual,
       unlinkSync: (...args: Parameters<typeof actual.unlinkSync>): void => {
         Reflect.apply(actual.unlinkSync, actual, args);
-        if (String(args[0]).endsWith(".intent")) intentUnlinked = true;
+        if (String(args[0]).endsWith(".complete")) intentUnlinked = true;
       },
       fsyncSync: (...args: Parameters<typeof actual.fsyncSync>): void => {
         if (intentUnlinked && !failed) {
@@ -873,7 +875,7 @@ describe("publishSafeArtifactFileSet", () => {
     }));
     const interrupted = await import("./fs-hardening.js");
     expect(() =>
-      interrupted.recoverSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base }),
+      interrupted.acknowledgeSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base }),
     ).toThrow(expect.objectContaining({ kind: "durability-failed" }));
     expect(readFileSync(report, "utf8")).toBe("report");
     expect(statSync(report).nlink).toBe(1);
@@ -881,10 +883,67 @@ describe("publishSafeArtifactFileSet", () => {
     vi.doUnmock("node:fs");
     vi.resetModules();
 
-    expect(recoverSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base })).toEqual(
-      expect.objectContaining({ status: "recovered", commitPath: report, artifactCount: 1 }),
+    expect(acknowledgeSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base })).toBe(
+      "verified",
     );
-    expect(readdirSync(base)).toEqual(["support.jsonl"]);
+    expect(recoverSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base })).toEqual({
+      status: "none",
+    });
+    expect(readdirSync(base).sort()).toEqual([`.keiko-publish-${slot}.consumed`, "support.jsonl"]);
+  });
+
+  it("keeps a bounded receipt while acknowledged runs publish fresh snapshots", () => {
+    const base = freshDir();
+    const slot = safeArtifactPublicationSlot("support-export", base);
+    const first = join(base, "first.jsonl");
+    const second = join(base, "second.jsonl");
+
+    expect(
+      publishSafeArtifactFileSet(
+        [{ path: first, contents: "first", artifactClass: "support-report" }],
+        { commitPath: first, trustedRoot: base, publicationSlot: slot },
+      ),
+    ).toEqual(expect.objectContaining({ status: "published" }));
+    acknowledgeSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base });
+    expect(recoverSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base })).toEqual({
+      status: "none",
+    });
+
+    expect(
+      publishSafeArtifactFileSet(
+        [{ path: second, contents: "second", artifactClass: "support-report" }],
+        { commitPath: second, trustedRoot: base, publicationSlot: slot },
+      ),
+    ).toEqual(expect.objectContaining({ status: "published" }));
+    acknowledgeSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base });
+
+    expect(readFileSync(first, "utf8")).toBe("first");
+    expect(readFileSync(second, "utf8")).toBe("second");
+    expect(publicationStages(base)).toHaveLength(1);
+  });
+
+  it("recovers the exact unacknowledged snapshot before allowing a fresh one", () => {
+    const base = freshDir();
+    const slot = safeArtifactPublicationSlot("support-export", base);
+    const report = join(base, "interrupted.jsonl");
+    publishSafeArtifactFileSet(
+      [{ path: report, contents: "before-crash", artifactClass: "support-report" }],
+      { commitPath: report, trustedRoot: base, publicationSlot: slot },
+    );
+
+    expect(recoverSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base })).toEqual(
+      expect.objectContaining({
+        status: "recovered",
+        commitPath: report,
+        commitSha256: createHash("sha256").update("before-crash").digest("hex"),
+      }),
+    );
+    acknowledgeSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base });
+    expect(recoverSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base })).toEqual({
+      status: "none",
+    });
+    expect(readFileSync(report, "utf8")).toBe("before-crash");
+    expect(publicationStages(base)).toHaveLength(1);
   });
 
   it.each([
@@ -894,7 +953,7 @@ describe("publishSafeArtifactFileSet", () => {
     const base = freshDir();
     const report = join(base, "support.jsonl");
     const slot = safeArtifactPublicationSlot("support-export", report);
-    const marker = join(base, `.keiko-publish-${slot}.intent`);
+    const marker = join(base, `.keiko-publish-${slot}.active`);
     writeFileSync(marker, contents, { mode: FILE_MODE });
 
     expect(() => recoverSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base })).toThrow(
@@ -902,7 +961,7 @@ describe("publishSafeArtifactFileSet", () => {
     );
     expect(readFileSync(marker, "utf8")).toBe(contents);
     expect(existsSync(report)).toBe(false);
-    expect(readdirSync(base)).toEqual([`.keiko-publish-${slot}.intent`]);
+    expect(readdirSync(base)).toEqual([`.keiko-publish-${slot}.active`]);
   });
 
   it.each(["darwin", "win32"] as const)(

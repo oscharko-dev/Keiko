@@ -508,7 +508,9 @@ describe("runSupportCli export", () => {
     const report = readFileSync(outPath, "utf8");
     expect(report).not.toContain("post-interruption-log");
     expect(secondIo.out()).toContain(`Recovered support report at ${outPath}`);
-    expect(readdirSync(context.root).some((name) => name.includes(context.slot))).toBe(false);
+    expect(readdirSync(context.root).filter((name) => name.includes(context.slot))).toEqual([
+      `.keiko-publish-${context.slot}.consumed`,
+    ]);
     const expectedDigest = createHash("sha256").update(report).digest("hex");
     expect(readFileSync(`${outPath}.sha256`, "utf8").trim()).toBe(expectedDigest);
     const evidence = readFileSync(join(stateDir, "logs", "server.log"), "utf8")
@@ -570,7 +572,9 @@ describe("runSupportCli export", () => {
     ).toBe(0);
     expect(existsSync(outPath)).toBe(true);
     expect(resumedIo.out()).toContain(`Recovered support report at ${outPath}`);
-    expect(readdirSync(context.root).some((name) => name.includes(context.slot))).toBe(false);
+    expect(readdirSync(context.root).filter((name) => name.includes(context.slot))).toEqual([
+      `.keiko-publish-${context.slot}.consumed`,
+    ]);
   });
 
   // Regression pin: `redactLogFields`'s field-NAME denylist matches only an exact normalized

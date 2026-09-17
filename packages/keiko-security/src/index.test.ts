@@ -42,6 +42,7 @@ import {
   SAFE_ARTIFACT_CLASSES,
   SAFE_ARTIFACT_FILE_FAILURE_KINDS,
   SafeArtifactFileError,
+  acknowledgeSafeArtifactFileSet,
   ensureDirHardened,
   chmodIfPresent,
   openSafeArtifactFile,
@@ -160,6 +161,7 @@ describe("keiko-security package surface", () => {
     expect(typeof verifySafeArtifactFileDescriptor).toBe("function");
     expect(typeof publishSafeArtifactFileSet).toBe("function");
     expect(typeof recoverSafeArtifactFileSet).toBe("function");
+    expect(typeof acknowledgeSafeArtifactFileSet).toBe("function");
     expect(typeof safeArtifactPublicationSlot).toBe("function");
     expect(typeof replaceSafeArtifactFile).toBe("function");
     expect(typeof safeArtifactContainmentAssurance).toBe("function");

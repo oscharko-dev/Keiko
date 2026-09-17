@@ -18,6 +18,7 @@ import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import {
   SafeArtifactFileError,
+  acknowledgeSafeArtifactFileSet,
   publishSafeArtifactFileSet,
   recoverSafeArtifactFileSet,
   safeArtifactPublicationSlot,
@@ -522,6 +523,21 @@ function recoverSupportBundle(
   }
 }
 
+function acknowledgeSupportPublication(context: SupportPublicationContext, io: CliIo): boolean {
+  try {
+    acknowledgeSafeArtifactFileSet({
+      publicationSlot: context.slot,
+      trustedRoot: context.root,
+    });
+    return true;
+  } catch (error) {
+    io.err(
+      `keiko support export: could not acknowledge publication: ${supportPublicationErrorKind(error)}\n`,
+    );
+    return false;
+  }
+}
+
 type LoadedServer = Awaited<ReturnType<typeof loadServer>>;
 
 function emitSupportPublicationEvidence(
@@ -779,13 +795,14 @@ async function recoveredSupportExportExitCode(
   recovery: SupportRecoveryOutcome,
   stateDir: string,
   io: CliIo,
+  context: SupportPublicationContext,
 ): Promise<number | undefined> {
   if (recovery.status === "none" || recovery.status === "rolled-back") return undefined;
   const server = await loadServer();
   emitSupportPublicationEvidence(server, stateDir, randomUUID(), recovery);
   if (recovery.status === "failed") return 1;
   io.out(`Recovered support report at ${recovery.result.commitPath}\n`);
-  return 0;
+  return acknowledgeSupportPublication(context, io) ? 0 : 1;
 }
 
 function publishedSupportExportExitCode(
@@ -795,11 +812,12 @@ function publishedSupportExportExitCode(
   lineCount: number,
   outPath: string,
   io: CliIo,
+  context: SupportPublicationContext,
 ): number {
   emitSupportPublicationEvidence(server, stateDir, randomUUID(), publication);
   if (publication.status === "failed") return 1;
   io.out(`Wrote ${String(lineCount)} lines to ${outPath}\n`);
-  return 0;
+  return acknowledgeSupportPublication(context, io) ? 0 : 1;
 }
 
 interface FreshSupportExportContext {
@@ -897,6 +915,7 @@ async function publishFreshSupportExport(
     lines.length,
     outPath,
     io,
+    context.publication,
   );
 }
 
@@ -912,7 +931,12 @@ async function runSupportExport(
   const stateDirSource = resolveStateDirSource(env, args.stateDir);
   const publicationContext = supportPublicationContext(cwd, args.out);
   const recovery = recoverSupportBundle(publicationContext, io);
-  const recoveredExitCode = await recoveredSupportExportExitCode(recovery, stateDir, io);
+  const recoveredExitCode = await recoveredSupportExportExitCode(
+    recovery,
+    stateDir,
+    io,
+    publicationContext,
+  );
   if (recoveredExitCode !== undefined) return recoveredExitCode;
   if (recovery.status !== "none" && recovery.status !== "rolled-back") return 1;
   return publishFreshSupportExport(args, io, env, deps, {

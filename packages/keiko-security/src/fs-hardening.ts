@@ -542,6 +542,8 @@ export interface SafeArtifactRecoveryOptions {
   readonly trustedRoot: string;
 }
 
+export type SafeArtifactReceiptOptions = SafeArtifactRecoveryOptions;
+
 export type SafeArtifactRecoveryResult =
   | { readonly status: "none" }
   | {
@@ -587,6 +589,8 @@ interface PublicationIntent {
   readonly entries: readonly PublicationIntentEntry[];
 }
 
+type PublicationReceiptState = "active" | "complete" | "consumed";
+
 const PUBLICATION_SLOT_PATTERN = /^[0-9a-f]{24}$/u;
 const PUBLICATION_DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const PUBLICATION_OWNER_TOKEN_PATTERN = /^[0-9a-f]{24}$/u;
@@ -601,8 +605,8 @@ function validatePublicationSlot(slot: string, artifactClass: SafeArtifactClass)
   }
 }
 
-function intentPath(trustedRoot: string, slot: string): string {
-  return join(resolve(trustedRoot), `.keiko-publish-${slot}.intent`);
+function intentPath(trustedRoot: string, slot: string, state: PublicationReceiptState): string {
+  return join(resolve(trustedRoot), `.keiko-publish-${slot}.${state}`);
 }
 
 function publicationId(
@@ -932,6 +936,18 @@ function createPublicationIntent(
   return syncDirectory(dirname(path), trustedRoot, artifactClass);
 }
 
+function parsePublicationIntentBytes(buffer: Buffer, count: number): PublicationIntent {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(buffer.subarray(0, count).toString("utf8")) as unknown;
+  } catch {
+    throw safeFileError("manifest", "recovery-conflict");
+  }
+  const intent = parsedPublicationIntent(parsed);
+  if (intent === undefined) throw safeFileError("manifest", "recovery-conflict");
+  return intent;
+}
+
 function readPublicationIntent(path: string, trustedRoot: string): PublicationIntent {
   const artifactClass = "manifest";
   const descriptor = openSafeArtifactFile(path, {
@@ -948,15 +964,7 @@ function readPublicationIntent(path: string, trustedRoot: string): PublicationIn
     const count = readIntoBuffer(descriptor, buffer, artifactClass);
     verifySafeArtifactFileDescriptor(descriptor, path, { artifactClass, trustedRoot });
     if (count !== Number(stat.size)) throw safeFileError(artifactClass, "recovery-conflict");
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(buffer.subarray(0, count).toString("utf8")) as unknown;
-    } catch {
-      throw safeFileError(artifactClass, "recovery-conflict");
-    }
-    const intent = parsedPublicationIntent(parsed);
-    if (intent === undefined) throw safeFileError(artifactClass, "recovery-conflict");
-    return intent;
+    return parsePublicationIntentBytes(buffer, count);
   } finally {
     closeArtifactDescriptor(descriptor, artifactClass);
   }
@@ -1423,6 +1431,79 @@ function combineDurabilityAssurance(
     : "verified";
 }
 
+function publicationLocatorEntry(
+  intent: PublicationIntent,
+  trustedRoot: string,
+  slot: string,
+  from: PublicationReceiptState,
+  to: PublicationReceiptState,
+): PreparedPublicationEntry {
+  return {
+    path: intentPath(trustedRoot, slot, to),
+    stagePath: intentPath(trustedRoot, slot, from),
+    bytes: intentBytes(intent),
+    artifactClass: "manifest",
+    trustedRoot,
+  };
+}
+
+function readLinkedPublicationIntent(
+  fromPath: string,
+  toPath: string,
+  trustedRoot: string,
+): PublicationIntent {
+  const entry: PreparedPublicationEntry = {
+    path: toPath,
+    stagePath: fromPath,
+    bytes: Buffer.alloc(0),
+    artifactClass: "manifest",
+    trustedRoot,
+  };
+  const guards = [
+    ...captureDirectoryGuards(trustedRoot, fromPath, "manifest"),
+    ...captureDirectoryGuards(trustedRoot, toPath, "manifest"),
+  ];
+  let descriptor: number | undefined;
+  try {
+    const before = linkedRecoveryStats(entry).stage;
+    if (before.size <= 0n || before.size > BigInt(MAX_PUBLICATION_INTENT_BYTES)) {
+      throw safeFileError("manifest", "recovery-conflict");
+    }
+    descriptor = openLinkedStage(entry);
+    if (!linkedDescriptorMatches(descriptor, before)) {
+      throw safeFileError("manifest", "recovery-conflict");
+    }
+    const buffer = Buffer.alloc(Number(before.size) + 1);
+    const count = readIntoBuffer(descriptor, buffer, "manifest");
+    const after = linkedRecoveryStats(entry).stage;
+    if (count !== Number(before.size) || !sameRecoveryIdentity(before, after)) {
+      throw safeFileError("manifest", "recovery-conflict");
+    }
+    if (!linkedDescriptorMatches(descriptor, after) || !guards.every(directoryGuardStillMatches)) {
+      throw safeFileError("manifest", "recovery-conflict");
+    }
+    return parsePublicationIntentBytes(buffer, count);
+  } finally {
+    if (descriptor !== undefined) closeArtifactDescriptor(descriptor, "manifest");
+    closeDirectoryGuards(guards, "manifest");
+  }
+}
+
+function transitionPublicationReceipt(
+  intent: PublicationIntent,
+  trustedRoot: string,
+  slot: string,
+  from: PublicationReceiptState,
+  to: PublicationReceiptState,
+): SafeArtifactDurabilityAssurance {
+  const entry = publicationLocatorEntry(intent, trustedRoot, slot, from, to);
+  publishPreparedEntry(entry, true);
+  const linked = syncDirectory(dirname(entry.path), trustedRoot, "manifest");
+  cleanupPublishedStage(entry);
+  const cleaned = syncDirectory(dirname(entry.path), trustedRoot, "manifest");
+  return combineDurabilityAssurance(linked, cleaned);
+}
+
 function cleanupPublishedStages(
   entries: readonly PreparedPublicationEntry[],
   parent: string,
@@ -1502,33 +1583,45 @@ function removeIntentPublicationStages(
 
 function rollbackIntentPublication(
   prepared: readonly PreparedPublicationEntry[],
-  markerPath: string,
+  intent: PublicationIntent,
+  options: SafeArtifactPublicationOptions & { readonly publicationSlot: string },
 ): SafeArtifactDurabilityAssurance {
   if (publicationHasPath(prepared, "path")) {
     throw safeFileError(publicationArtifactClass(prepared), "recovery-conflict");
   }
   const stages = removeIntentPublicationStages(prepared);
-  const marker = removePublicationIntent(
-    markerPath,
-    prepared[0]?.trustedRoot ?? dirname(markerPath),
-    publicationArtifactClass(prepared),
+  const marker = transitionPublicationReceipt(
+    intent,
+    options.trustedRoot,
+    options.publicationSlot,
+    "active",
+    "consumed",
   );
   return combineDurabilityAssurance(stages, marker);
 }
 
-function publishIntentFileSet(
+interface BegunIntentPublication {
+  readonly prepared: readonly PreparedPublicationEntry[];
+  readonly intent: PublicationIntent;
+  readonly initialAssurance: SafeArtifactDurabilityAssurance;
+}
+
+function beginIntentPublication(
   entries: readonly SafeArtifactPublicationEntry[],
   options: SafeArtifactPublicationOptions & { readonly publicationSlot: string },
-): SafeArtifactPublicationResult {
+): BegunIntentPublication {
   const prepared = preparePublicationEntries(
     entries,
     options.commitPath,
     options.trustedRoot,
     options.publicationSlot,
   );
-  const markerPath = intentPath(options.trustedRoot, options.publicationSlot);
+  const activePath = intentPath(options.trustedRoot, options.publicationSlot, "active");
+  const completePath = intentPath(options.trustedRoot, options.publicationSlot, "complete");
+  const consumedPath = intentPath(options.trustedRoot, options.publicationSlot, "consumed");
   if (
-    pathExists(markerPath, publicationArtifactClass(prepared)) ||
+    pathExists(activePath, publicationArtifactClass(prepared)) ||
+    pathExists(completePath, publicationArtifactClass(prepared)) ||
     publicationHasPath(prepared, "stagePath")
   ) {
     throw safeFileError(publicationArtifactClass(prepared), "recovery-conflict");
@@ -1536,24 +1629,53 @@ function publishIntentFileSet(
   if (publicationHasPath(prepared, "path")) {
     throw safeFileError(publicationArtifactClass(prepared), "target-exists");
   }
-  const markerAssurance = createPublicationIntent(
-    markerPath,
-    intentBytes(publicationIntent(prepared, options.commitPath)),
+  const hasConsumed = pathExists(consumedPath, "manifest");
+  if (hasConsumed) readPublicationIntent(consumedPath, options.trustedRoot);
+  const intent = publicationIntent(prepared, options.commitPath);
+  const activeAssurance = createPublicationIntent(
+    activePath,
+    intentBytes(intent),
     publicationArtifactClass(prepared),
     options.trustedRoot,
   );
+  const priorAssurance = hasConsumed
+    ? removePublicationIntent(consumedPath, options.trustedRoot, "manifest")
+    : "verified";
+  return {
+    prepared,
+    intent,
+    initialAssurance: combineDurabilityAssurance(activeAssurance, priorAssurance),
+  };
+}
+
+function publishIntentFileSet(
+  entries: readonly SafeArtifactPublicationEntry[],
+  options: SafeArtifactPublicationOptions & { readonly publicationSlot: string },
+): SafeArtifactPublicationResult {
+  const begun = beginIntentPublication(entries, options);
   let result: SafeArtifactPublicationResult;
   try {
-    result = completePreparedPublication(prepared, options, false);
+    result = completePreparedPublication(begun.prepared, options, false);
   } catch (error) {
     if (error instanceof SafeArtifactFileError && error.kind === "publish-unsupported") {
-      rollbackIntentPublication(prepared, markerPath);
+      rollbackIntentPublication(begun.prepared, begun.intent, options);
     }
     throw error;
   }
+  const receiptAssurance = transitionPublicationReceipt(
+    begun.intent,
+    options.trustedRoot,
+    options.publicationSlot,
+    "active",
+    "complete",
+  );
   return {
     ...result,
-    durabilityAssurance: combineDurabilityAssurance(markerAssurance, result.durabilityAssurance),
+    durabilityAssurance: combineDurabilityAssurance(
+      begun.initialAssurance,
+      result.durabilityAssurance,
+      receiptAssurance,
+    ),
   };
 }
 
@@ -1599,7 +1721,6 @@ function rollbackIncompleteIntent(
   intent: PublicationIntent,
   trustedRoot: string,
   slot: string,
-  markerPath: string,
 ): SafeArtifactDurabilityAssurance {
   const root = resolve(trustedRoot);
   const assurances: SafeArtifactDurabilityAssurance[] = [];
@@ -1617,7 +1738,7 @@ function rollbackIncompleteIntent(
     });
     assurances.push("verified");
   }
-  const marker = removePublicationIntent(markerPath, root, "manifest");
+  const marker = transitionPublicationReceipt(intent, root, slot, "active", "consumed");
   return combineDurabilityAssurance(...assurances, marker);
 }
 
@@ -1645,11 +1766,32 @@ function processIsAlive(pid: number): boolean {
   }
 }
 
+function finishLinkedPublicationReceipt(
+  root: string,
+  slot: string,
+  from: PublicationReceiptState,
+  to: PublicationReceiptState,
+): { readonly intent: PublicationIntent; readonly assurance: SafeArtifactDurabilityAssurance } {
+  const fromPath = intentPath(root, slot, from);
+  const toPath = intentPath(root, slot, to);
+  if (!samePathNode(fromPath, toPath)) throw safeFileError("manifest", "recovery-conflict");
+  const intent = readLinkedPublicationIntent(fromPath, toPath, root);
+  const assurance = transitionPublicationReceipt(intent, root, slot, from, to);
+  return { intent, assurance };
+}
+
+function retireConsumedReceipt(root: string, slot: string): SafeArtifactDurabilityAssurance {
+  const consumedPath = intentPath(root, slot, "consumed");
+  readPublicationIntent(consumedPath, root);
+  return removePublicationIntent(consumedPath, root, "manifest");
+}
+
 function completeIntentRecovery(
   intent: PublicationIntent,
   options: SafeArtifactRecoveryOptions,
   root: string,
-  markerPath: string,
+  state: "active" | "complete",
+  priorAssurance: SafeArtifactDurabilityAssurance = "verified",
 ): SafeArtifactRecoveryResult {
   const prepared = preparedRecoveryEntries(intent, root, options.publicationSlot);
   const commit = prepared[intent.commitIndex];
@@ -1663,12 +1805,10 @@ function completeIntentRecovery(
     },
     true,
   );
-  const intentCleanup = removePublicationIntent(
-    markerPath,
-    root,
-    publicationArtifactClass(prepared),
-    intentBytes(intent),
-  );
+  const receiptAssurance =
+    state === "active"
+      ? transitionPublicationReceipt(intent, root, options.publicationSlot, "active", "complete")
+      : "verified";
   return {
     status: "recovered",
     commitPath: commit.path,
@@ -1676,8 +1816,56 @@ function completeIntentRecovery(
     commitByteCount: intent.entries[intent.commitIndex]?.byteCount ?? 0,
     commitSha256: intent.entries[intent.commitIndex]?.sha256 ?? publicationDigest(commit.bytes),
     permissionAssurance: result.permissionAssurance,
-    durabilityAssurance: combineDurabilityAssurance(result.durabilityAssurance, intentCleanup),
+    durabilityAssurance: combineDurabilityAssurance(
+      priorAssurance,
+      result.durabilityAssurance,
+      receiptAssurance,
+    ),
   };
+}
+
+type RecoveredReceiptState =
+  | { readonly status: "active"; readonly priorAssurance: SafeArtifactDurabilityAssurance }
+  | { readonly status: "complete"; readonly priorAssurance: SafeArtifactDurabilityAssurance }
+  | { readonly status: "none" }
+  | { readonly status: "rolled-back" };
+
+function transitionalReceiptState(
+  root: string,
+  slot: string,
+  active: boolean,
+  complete: boolean,
+  consumed: boolean,
+): RecoveredReceiptState | undefined {
+  if (complete && consumed) {
+    finishLinkedPublicationReceipt(root, slot, "complete", "consumed");
+    return { status: "none" };
+  }
+  if (active && complete) {
+    const finished = finishLinkedPublicationReceipt(root, slot, "active", "complete");
+    return { status: "complete", priorAssurance: finished.assurance };
+  }
+  if (
+    active &&
+    consumed &&
+    samePathNode(intentPath(root, slot, "active"), intentPath(root, slot, "consumed"))
+  ) {
+    finishLinkedPublicationReceipt(root, slot, "active", "consumed");
+    return { status: "rolled-back" };
+  }
+  return undefined;
+}
+
+function recoveredReceiptState(root: string, slot: string): RecoveredReceiptState {
+  const active = pathExists(intentPath(root, slot, "active"), "manifest");
+  const complete = pathExists(intentPath(root, slot, "complete"), "manifest");
+  const consumed = pathExists(intentPath(root, slot, "consumed"), "manifest");
+  const transitional = transitionalReceiptState(root, slot, active, complete, consumed);
+  if (transitional !== undefined) return transitional;
+  if (active) return { status: "active", priorAssurance: "verified" };
+  if (complete) return { status: "complete", priorAssurance: "verified" };
+  if (consumed) readPublicationIntent(intentPath(root, slot, "consumed"), root);
+  return { status: "none" };
 }
 
 /** Recovers or safely rolls back the bounded transaction named by a durable publication slot. */
@@ -1686,19 +1874,34 @@ export function recoverSafeArtifactFileSet(
 ): SafeArtifactRecoveryResult {
   validatePublicationSlot(options.publicationSlot, "manifest");
   const root = resolve(options.trustedRoot);
-  const markerPath = intentPath(root, options.publicationSlot);
-  if (!pathExists(markerPath, "manifest")) return { status: "none" };
+  const state = recoveredReceiptState(root, options.publicationSlot);
+  if (state.status === "none") return { status: "none" };
+  if (state.status === "rolled-back") {
+    return {
+      status: "rolled-back",
+      permissionAssurance: safeArtifactPermissionAssurance(),
+      durabilityAssurance: "verified",
+    };
+  }
+  const markerPath = intentPath(root, options.publicationSlot, state.status);
   const intent = readPublicationIntent(markerPath, root);
   if (intent.ownerPid !== process.pid && processIsAlive(intent.ownerPid)) {
     throw safeFileError("manifest", "recovery-conflict");
   }
+  if (state.status === "complete") {
+    return completeIntentRecovery(intent, options, root, "complete", state.priorAssurance);
+  }
+  const priorAssurance = pathExists(
+    intentPath(root, options.publicationSlot, "consumed"),
+    "manifest",
+  )
+    ? retireConsumedReceipt(root, options.publicationSlot)
+    : state.priorAssurance;
   const targetCount = countIntentPaths(intent, root, options.publicationSlot, "target");
   if (targetCount === 0) {
-    const durabilityAssurance = rollbackIncompleteIntent(
-      intent,
-      root,
-      options.publicationSlot,
-      markerPath,
+    const durabilityAssurance = combineDurabilityAssurance(
+      priorAssurance,
+      rollbackIncompleteIntent(intent, root, options.publicationSlot),
     );
     return {
       status: "rolled-back",
@@ -1706,7 +1909,36 @@ export function recoverSafeArtifactFileSet(
       durabilityAssurance,
     };
   }
-  return completeIntentRecovery(intent, options, root, markerPath);
+  return completeIntentRecovery(intent, options, root, "active", priorAssurance);
+}
+
+/** Marks a completed fixed-slot publication as observed without removing its durable locator. */
+export function acknowledgeSafeArtifactFileSet(
+  options: SafeArtifactReceiptOptions,
+): SafeArtifactDurabilityAssurance {
+  validatePublicationSlot(options.publicationSlot, "manifest");
+  const root = resolve(options.trustedRoot);
+  const activePath = intentPath(root, options.publicationSlot, "active");
+  const completePath = intentPath(root, options.publicationSlot, "complete");
+  const consumedPath = intentPath(root, options.publicationSlot, "consumed");
+  if (pathExists(activePath, "manifest")) throw safeFileError("manifest", "recovery-conflict");
+  if (pathExists(consumedPath, "manifest")) {
+    if (pathExists(completePath, "manifest")) {
+      return finishLinkedPublicationReceipt(root, options.publicationSlot, "complete", "consumed")
+        .assurance;
+    }
+    readPublicationIntent(consumedPath, root);
+    return "verified";
+  }
+  const intent = readPublicationIntent(completePath, root);
+  preparedRecoveryEntries(intent, root, options.publicationSlot);
+  return transitionPublicationReceipt(
+    intent,
+    root,
+    options.publicationSlot,
+    "complete",
+    "consumed",
+  );
 }
 
 /**
