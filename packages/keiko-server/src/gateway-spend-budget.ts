@@ -1,4 +1,8 @@
 import { isAbsolute } from "node:path";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { ConfigInvalidError } from "@oscharko-dev/keiko-security/errors/gateway";
 import type {
   GatewayCallRequest,
@@ -30,6 +34,118 @@ const REJECTION_REASONS = new Set<Rejection>([
   "spend-budget-exceeded",
   "spend-ledger-unavailable",
 ]);
+
+const GATEWAY_SPEND_REJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.spend.rejected",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-spend-budget.reject",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "spend-budget-invalid",
+        "spend-pricing-unavailable",
+        "spend-bound-unavailable",
+        "spend-budget-exceeded",
+        "spend-ledger-unavailable",
+      ],
+    },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: true,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: true,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["gateway-spend-policy"],
+  proofIds: ["gateway.spend.rejected.line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_SPEND_SETTLED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.spend.settled",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-spend-budget.reservation.settle",
+  fields: {
+    chargedNanoUsd: { type: "integer", dataClass: "count", required: true },
+    measured: { type: "boolean", dataClass: "closed-enum", required: true },
+    boundExceeded: { type: "boolean", dataClass: "closed-enum", required: true },
+    measurementErrorKind: {
+      type: "string",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 64,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-spend-measurement"],
+  proofIds: ["gateway.spend.settled.line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_SPEND_CEILING_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.spend.ceiling",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-spend-budget.PersistentGatewaySpendBudget.reportCeiling",
+  fields: {
+    disposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["unchanged", "lowered", "raised", "raise-refused"],
+    },
+    ceilingNanoUsd: { type: "integer", dataClass: "count", required: true },
+    configuredNanoUsd: { type: "integer", dataClass: "count", required: true },
+    chargedNanoUsd: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-spend-ceiling"],
+  proofIds: ["gateway.spend.ceiling.line"],
+  releaseImpact: "patch",
+});
+
+const GATEWAY_SPEND_RESERVED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.spend.reserved",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-spend-budget.PersistentGatewaySpendBudget.reserve",
+  fields: {
+    reservedNanoUsd: { type: "integer", dataClass: "count", required: true },
+    ceilingNanoUsd: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-spend-reservation"],
+  proofIds: ["gateway.spend.reserved.line"],
+  releaseImpact: "patch",
+});
 
 export function gatewaySpendRejectionReason(error: unknown): Rejection | undefined {
   if (!(error instanceof ConfigInvalidError)) return undefined;
@@ -126,18 +242,17 @@ function reject(
 ): never {
   const rejection = new ConfigInvalidError(reason);
   const diagnosticError = error ?? rejection;
-  log.write({
-    category: "gateway",
-    level: "warn",
-    op: "gateway.spend.rejected",
-    correlationId,
-    errorKind: "GATEWAY_CONFIG_INVALID",
-    extra: {
-      reason,
-      frames: keikoStackFrames(diagnosticError),
-      causeChain: causeChain(diagnosticError),
-    },
-  });
+  log.write(
+    activityLogEvent(
+      GATEWAY_SPEND_REJECTED_OPERATION,
+      { level: "warn", correlationId, errorKind: "validation-failed" },
+      {
+        reason,
+        frames: keikoStackFrames(diagnosticError),
+        causeChain: causeChain(diagnosticError),
+      },
+    ),
+  );
   throw rejection;
 }
 
@@ -161,20 +276,24 @@ function reservation(
       } catch (error) {
         reject(log, correlationId, "spend-ledger-unavailable", error);
       }
-      log.write({
-        category: "gateway",
-        level: measurement.errorKind === undefined ? "info" : "warn",
-        op: "gateway.spend.settled",
-        correlationId,
-        extra: {
-          chargedNanoUsd: charged,
-          measured: usage !== undefined && charged !== upper && measurement.errorKind === undefined,
-          boundExceeded: charged > upper,
-          ...(measurement.errorKind === undefined
-            ? {}
-            : { measurementErrorKind: measurement.errorKind }),
-        },
-      });
+      log.write(
+        activityLogEvent(
+          GATEWAY_SPEND_SETTLED_OPERATION,
+          {
+            level: measurement.errorKind === undefined ? "info" : "warn",
+            correlationId,
+          },
+          {
+            chargedNanoUsd: charged,
+            measured:
+              usage !== undefined && charged !== upper && measurement.errorKind === undefined,
+            boundExceeded: charged > upper,
+            ...(measurement.errorKind === undefined
+              ? {}
+              : { measurementErrorKind: measurement.errorKind }),
+          },
+        ),
+      );
       if (charged > upper) reject(log, correlationId, "spend-bound-unavailable");
     },
   };
@@ -231,18 +350,21 @@ class PersistentGatewaySpendBudget implements GatewaySpendBudget {
    * nowhere near, and the log cannot tell them which ceiling actually applied.
    */
   private reportCeiling(reconciliation: SpendCeilingReconciliation, correlationId: string): void {
-    this.log.write({
-      category: "gateway",
-      level: reconciliation.disposition === "raise-refused" ? "warn" : "info",
-      op: "gateway.spend.ceiling",
-      correlationId,
-      extra: {
-        disposition: reconciliation.disposition,
-        ceilingNanoUsd: reconciliation.ceilingNanoUsd,
-        configuredNanoUsd: reconciliation.configuredNanoUsd,
-        chargedNanoUsd: reconciliation.chargedNanoUsd,
-      },
-    });
+    this.log.write(
+      activityLogEvent(
+        GATEWAY_SPEND_CEILING_OPERATION,
+        {
+          level: reconciliation.disposition === "raise-refused" ? "warn" : "info",
+          correlationId,
+        },
+        {
+          disposition: reconciliation.disposition,
+          ceilingNanoUsd: reconciliation.ceilingNanoUsd,
+          configuredNanoUsd: reconciliation.configuredNanoUsd,
+          chargedNanoUsd: reconciliation.chargedNanoUsd,
+        },
+      ),
+    );
   }
 
   reserve(
@@ -260,15 +382,15 @@ class PersistentGatewaySpendBudget implements GatewaySpendBudget {
       reject(this.log, correlationId, "spend-ledger-unavailable", error);
     }
     if (!admitted) reject(this.log, correlationId, "spend-budget-exceeded");
-    this.log.write({
-      category: "gateway",
-      level: "info",
-      op: "gateway.spend.reserved",
-      correlationId,
-      // The ledger's own ceiling, never the configured one: they differ whenever a reused ledger
-      // holds a lower ceiling, and reporting the configured number there hides exactly that case.
-      extra: { reservedNanoUsd: upper, ceilingNanoUsd: effectiveCeiling },
-    });
+    this.log.write(
+      activityLogEvent(
+        GATEWAY_SPEND_RESERVED_OPERATION,
+        { level: "info", correlationId },
+        // The ledger's own ceiling, never the configured one: they differ whenever a reused ledger
+        // holds a lower ceiling, and reporting the configured number there hides exactly that case.
+        { reservedNanoUsd: upper, ceilingNanoUsd: effectiveCeiling },
+      ),
+    );
     return reservation(store, upper, pricing, this.log, correlationId);
   }
 }
