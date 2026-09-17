@@ -536,57 +536,6 @@ describe("runLifecycleCli", () => {
     expect(spawned[0]?.args[0]).toBe(binPath);
   });
 
-  it("passes the active local package CLI and static root to the UI child", async () => {
-    const root = makeRoot();
-    mkdirSync(join(root, "dist", "cli"), { recursive: true });
-    mkdirSync(join(root, "dist", "ui", "static"), { recursive: true });
-    writeFileSync(join(root, "package.json"), '{"name":"@oscharko-dev/keiko"}\n', "utf8");
-    writeFileSync(join(root, "dist", "cli", "index.js"), "#!/usr/bin/env node\n", "utf8");
-    writeFileSync(join(root, "dist", "ui", "static", "index.html"), "<html></html>\n", "utf8");
-    const packageRoot = join(root, "node_modules", "@oscharko-dev", "keiko");
-    const localCli = join(packageRoot, "dist", "cli", "index.js");
-    const localStatic = join(packageRoot, "dist", "ui", "static");
-    mkdirSync(join(packageRoot, "dist", "cli"), { recursive: true });
-    mkdirSync(localStatic, { recursive: true });
-    writeFileSync(localCli, "#!/usr/bin/env node\n", "utf8");
-    writeFileSync(join(localStatic, "index.html"), "<html></html>\n", "utf8");
-    const c = makeIo();
-    const spawned: { readonly args: readonly string[]; readonly opts: SpawnOptions }[] = [];
-    const child = { pid: 12345, unref: vi.fn(), once: vi.fn() } as unknown as ChildProcess;
-
-    const code = await runLifecycle(
-      "start",
-      [],
-      c.io,
-      { KEIKO_CLI_BIN_PATH: localCli, KEIKO_UI_STATIC_ROOT: localStatic },
-      {
-        cwd: root,
-        spawnFn: (_command, args, opts) => {
-          spawned.push({ args, opts });
-          return child;
-        },
-        fetchImpl: () =>
-          Promise.resolve(
-            new Response(JSON.stringify({ version: SDK_VERSION }), {
-              headers: { "content-type": "application/json" },
-              status: 200,
-            }),
-          ),
-        isProcessAlive: () => true,
-        isPortAvailable: () => Promise.resolve(true),
-        killProcess: vi.fn(),
-        sleep: () => Promise.resolve(),
-      },
-    );
-
-    expect(code).toBe(0);
-    expect(spawned[0]?.args[0]).toBe(localCli);
-    expect(spawned[0]?.opts.env).toMatchObject({
-      KEIKO_CLI_BIN_PATH: localCli,
-      KEIKO_UI_STATIC_ROOT: localStatic,
-    });
-  });
-
   it("refuses a KEIKO_STATE_DIR that resolves outside the user's home with STATE_DIR_ESCAPE", async (ctx) => {
     // #KEIKO-0330 must-fail-before-fix: buildLifecycleOptions/resolveStateDir accepted a
     // planted KEIKO_STATE_DIR unconditionally and `keiko start` proceeded to mkdir it.
@@ -712,10 +661,7 @@ describe("runLifecycleCli", () => {
       "start",
       [],
       c.io,
-      {
-        KEIKO_CLI_BIN_PATH: "/nonexistent/keiko-bin-planted.js",
-        KEIKO_UI_STATIC_ROOT: "/nonexistent/keiko-ui-planted",
-      },
+      { KEIKO_CLI_BIN_PATH: "/nonexistent/keiko-bin-planted.js" },
       {
         cwd: root,
         spawnFn: (command, args, opts) => {
@@ -734,8 +680,6 @@ describe("runLifecycleCli", () => {
     expect(spawned).toHaveLength(1);
     expect(spawned[0]?.args[0]).not.toBe("/nonexistent/keiko-bin-planted.js");
     expect(spawned[0]?.args[0]).toMatch(/index\.js$/u);
-    expect(spawned[0]?.opts.env).not.toHaveProperty("KEIKO_CLI_BIN_PATH");
-    expect(spawned[0]?.opts.env).not.toHaveProperty("KEIKO_UI_STATIC_ROOT");
   });
 
   it("prefers the built workspace checkout over a stale inherited global bin", async () => {

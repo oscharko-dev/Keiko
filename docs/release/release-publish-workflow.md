@@ -475,11 +475,15 @@ The `publish` job authenticates to the npm registry with [npm Trusted Publishing
   verifies the version-specific registry endpoint and then the dist-tag with the same attempt/delay
   settings as post-publish registry verification. The Actions workflow uses 30 total reads with one
   minute between reads because npm Trusted Publishing can quarantine an OIDC/provenance publish
-  after the CLI reports success; v1.0.3 took roughly 14 minutes. If that budget is exhausted, do not
-  add a registry token to the workflow. Wait until
-  `https://registry.npmjs.org/@oscharko-dev/keiko/<version>` returns HTTP 200, re-run verification,
-  and manually mark the `npm-publish` deployment successful only once that endpoint is 200 and the
-  dist-tag has moved.
+  after the CLI reports success; v1.0.3 took roughly 14 minutes. Retryable HTTP and transport
+  failures consume that same budget. Before publishing, a separate three-probe check distinguishes
+  a real 404 from transient registry uncertainty and refuses to mutate when existence is unknown.
+  If the post-publish budget is exhausted, do not add a registry token to the workflow and do not
+  edit deployment state by hand. Wait until
+  `https://registry.npmjs.org/@oscharko-dev/keiko/<version>` returns HTTP 200 and re-run the governed
+  verification. If the version is visible but the dist-tag remains stale, run the full release
+  orchestrator from the exact tagged commit with an operator-held npm token and the original
+  qualified portable inputs; deployment success is recorded only after all verification passes.
 
 The `prepack` and `prepublishOnly` gates also run `npm run check:workspace-supply-chain` and
 `npm run check:release-impact`, so a publish cannot bypass SBOM/license verification or missing,

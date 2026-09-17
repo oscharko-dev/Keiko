@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Reports whether the change set under test is documentation only, for CI cost scoping (#2699).
 //
-// Writes `documentation-only=true|false` and `windows-relevant=true|false` to $GITHUB_OUTPUT when
-// present, and prints the verdict. Any failure to determine the change set prints safe defaults:
-// the expensive matrix then runs, which is the only safe direction for this decision.
+// Writes the scope verdict and exact cross-platform OS matrix to $GITHUB_OUTPUT when present. Any
+// failure to determine the change set prints safe defaults: the full matrix then runs, which is the
+// only safe direction for this decision.
 
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
@@ -54,10 +54,24 @@ export function resolveVerdict(baseSha, headSha, listChangedPaths = changedPaths
   }
 }
 
-export function verdictLine({ documentationOnly, reason }) {
+const FULL_CROSS_PLATFORM_OS = Object.freeze(["ubuntu-latest", "macos-latest", "windows-latest"]);
+const NON_WINDOWS_CROSS_PLATFORM_OS = Object.freeze(["ubuntu-latest", "macos-latest"]);
+
+export function crossPlatformOsForEvent(windowsRelevant, eventName) {
+  return eventName === "pull_request" && windowsRelevant === false
+    ? NON_WINDOWS_CROSS_PLATFORM_OS
+    : FULL_CROSS_PLATFORM_OS;
+}
+
+export function verdictLine({ documentationOnly, reason, windowsRelevant }) {
+  const matrix = documentationOnly
+    ? "cross-platform matrix skipped"
+    : windowsRelevant === false
+      ? "running the Linux/macOS matrix"
+      : "running the full matrix";
   return (
-    `documentation-only-change: ${String(documentationOnly)} — ${reason}` +
-    (documentationOnly ? "" : " (running the full matrix)")
+    `documentation-only-change: ${String(documentationOnly)} — ${reason}; ` +
+    `windows-relevant=${String(windowsRelevant)} (${matrix})`
   );
 }
 
@@ -67,10 +81,15 @@ export function main() {
     process.env.KEIKO_CHANGE_HEAD_SHA ?? "HEAD",
   );
   console.log(verdictLine(verdict));
+  const crossPlatformOs = crossPlatformOsForEvent(
+    verdict.windowsRelevant,
+    process.env.GITHUB_EVENT_NAME ?? "",
+  );
   const outputPath = process.env.GITHUB_OUTPUT;
   if (outputPath !== undefined && outputPath.length > 0) {
     appendFileSync(outputPath, `documentation-only=${String(verdict.documentationOnly)}\n`, "utf8");
     appendFileSync(outputPath, `windows-relevant=${String(verdict.windowsRelevant)}\n`, "utf8");
+    appendFileSync(outputPath, `cross-platform-os=${JSON.stringify(crossPlatformOs)}\n`, "utf8");
   }
 }
 

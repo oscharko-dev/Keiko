@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 // From the contracts leaf, not the keiko-sdk fat barrel (GEN-PERF-CLI-001).
 import { KEIKO_PRODUCT_VERSION as SDK_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
@@ -7,8 +7,7 @@ import type { CliIo } from "./runner.js";
 import {
   hasBuiltKeikoLayout,
   localPackageRoot,
-  resolveBuiltCheckoutLayout,
-  resolveLocalPackageLayout,
+  resolvePreferredInstallLayout,
 } from "./install-layout.js";
 
 interface PackageJsonLike {
@@ -18,11 +17,10 @@ interface PackageJsonLike {
 interface LocalInstall {
   readonly packageRoot: string;
   readonly cliEntry: string;
-  readonly staticRoot: string;
   readonly version: string;
 }
 
-export interface DoctorReport {
+interface DoctorReport {
   readonly cwd: string;
   readonly runningEntry: string | undefined;
   readonly runningVersion: string;
@@ -47,12 +45,11 @@ function readVersion(packageJsonPath: string): string | undefined {
 }
 
 function resolveLocalPackageInstall(cwd: string): LocalInstall | undefined {
-  const layout = resolveLocalPackageLayout(cwd);
-  if (layout === undefined) return undefined;
   const packageRoot = localPackageRoot(cwd);
+  const cliEntry = resolve(packageRoot, "dist", "cli", "index.js");
   const version = readVersion(join(packageRoot, "package.json"));
   if (!hasBuiltKeikoLayout(packageRoot) || version === undefined) return undefined;
-  return { packageRoot, cliEntry: layout.binPath, staticRoot: layout.staticRoot, version };
+  return { packageRoot, cliEntry, version };
 }
 
 function resolveRunningEntry(argv: readonly string[] | undefined): string | undefined {
@@ -89,7 +86,7 @@ function staleBinaryWarning(report: DoctorReport): string | undefined {
 export function collectDoctorReport(deps: DoctorCliDeps = {}): DoctorReport {
   const cwd = deps.cwd ?? process.cwd();
   const runningEntry = resolveRunningEntry(deps.argv ?? process.argv);
-  const localBuildBin = resolveBuiltCheckoutLayout(cwd)?.binPath;
+  const localBuildBin = resolvePreferredInstallLayout(cwd)?.binPath;
   const localPackageInstall = resolveLocalPackageInstall(cwd);
   const report: DoctorReport = {
     cwd,

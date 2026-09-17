@@ -45,14 +45,6 @@ const KNOWN_IRRELEVANT_PATTERNS = Object.freeze([
   /^\.gitleaks\.toml$/u,
   /^\.gitignore$/u,
   /^\.prettier(?:ignore|rc(?:\.json)?)$/u,
-  /^eslint\.config\./u,
-  /^package(?:-lock)?\.json$/u,
-  /^release-impact\.catalog\.json$/u,
-  /^tsconfig(?:\.[^/]+)?\.json$/u,
-  /^vitest\.config\.ts$/u,
-  /^packages\/keiko-ui\//u,
-  /^src\//u,
-  /^tests\//u,
 ]);
 
 function isRecognizedIrrelevantPath(path) {

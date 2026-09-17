@@ -69,7 +69,7 @@ describe("debug launch security mutation configuration", () => {
     ]);
 
     expect(config.ignoreStatic).toBe(false);
-    expect(config.thresholds).toStrictEqual({ break: 0, high: 100, low: 100 });
+    expect(config.thresholds).toStrictEqual({ break: 100, high: 100, low: 100 });
     expect(config.mutate).toStrictEqual(expectedMutate);
     expect(config.testFiles).toStrictEqual(expectedTests);
     expect(globalConfig.ignoreStatic).toBe(true);

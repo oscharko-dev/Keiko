@@ -518,11 +518,10 @@ describe("dev quality workflows", () => {
   it("omits the Windows matrix leg only for positively scoped non-Windows changes", () => {
     const osExpression = String(ciWorkflow.jobs["cross-platform-smoke"].strategy.matrix.os);
 
-    expect(osExpression).toContain("needs.change-scope.outputs.windows-relevant != 'false'");
-    expect(osExpression).toContain("github.event_name == 'push'");
-    expect(osExpression).toContain("github.event_name == 'workflow_dispatch'");
-    expect(osExpression).toContain('["ubuntu-latest","macos-latest","windows-latest"]');
-    expect(osExpression).toContain('["ubuntu-latest","macos-latest"]');
+    expect(osExpression).toBe("${{ fromJSON(needs.change-scope.outputs.cross-platform-os) }}");
+    expect(ciWorkflow.jobs["change-scope"].outputs["cross-platform-os"]).toBe(
+      "${{ steps.classify.outputs.cross-platform-os }}",
+    );
   });
 
   it.each(["failure", "skipped", "cancelled", "", "unknown"])(
@@ -557,10 +556,7 @@ describe("dev quality workflows", () => {
       / {2}cross-platform-smoke:\n[\s\S]*?(?=\n {2}node-26-compatibility:\n)/u,
     )?.[0];
     expect(crossPlatform).toBeDefined();
-    expect(crossPlatform).toContain("windows-latest");
-    expect(crossPlatform).toContain("needs.change-scope.outputs.windows-relevant != 'false'");
-    expect(crossPlatform).toContain("github.event_name == 'push'");
-    expect(crossPlatform).toContain("github.event_name == 'workflow_dispatch'");
+    expect(crossPlatform).toContain("fromJSON(needs.change-scope.outputs.cross-platform-os)");
     expect(crossPlatform).toContain(
       "actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68",
     );

@@ -230,9 +230,10 @@ describe("CI test/gate wiring guard", () => {
     const windowsJobStart = ci.indexOf("  cross-platform-smoke:");
     const windowsJobEnd = ci.indexOf("\n  node-26-compatibility:", windowsJobStart);
     const windowsJob = ci.slice(windowsJobStart, windowsJobEnd);
-    const buildStep = ci.indexOf("      - name: Build");
+    const buildStep = ci.indexOf("      - name: Build", windowsJobStart);
     const fixtureStep = ci.indexOf(
       "      - name: Verify the Windows portable handoff protocol fixture",
+      windowsJobStart,
     );
     const nextStep = ci.indexOf(
       "      - name: Verify Git executable Windows reparse containment",
@@ -240,8 +241,9 @@ describe("CI test/gate wiring guard", () => {
     );
     expect(windowsJobStart).toBeGreaterThan(-1);
     expect(windowsJob).toContain("runs-on: ${{ matrix.os }}");
-    expect(windowsJob).toContain("windows-latest");
+    expect(windowsJob).toContain("fromJSON(needs.change-scope.outputs.cross-platform-os)");
     expect(buildStep).toBeGreaterThan(-1);
+    expect(buildStep).toBeLessThan(windowsJobEnd);
     expect(fixtureStep).toBeGreaterThan(buildStep);
     expect(fixtureStep).toBeLessThan(windowsJobEnd);
     expect(nextStep).toBeGreaterThan(fixtureStep);
@@ -473,9 +475,7 @@ describe("CI test/gate wiring guard", () => {
     const start = ci.indexOf("  cross-platform-smoke:");
     const end = ci.indexOf("\n  node-26-compatibility:", start);
     const crossPlatform = ci.slice(start, end);
-    expect(crossPlatform).toContain("ubuntu-latest");
-    expect(crossPlatform).toContain("macos-latest");
-    expect(crossPlatform).toContain("windows-latest");
+    expect(crossPlatform).toContain("fromJSON(needs.change-scope.outputs.cross-platform-os)");
     expect(crossPlatform).toContain("Typecheck the complete package graph");
     expect(crossPlatform).toContain("- name: Build");
     expect(crossPlatform).toContain("Installable-package smoke with native optional dependencies");
@@ -489,9 +489,7 @@ describe("CI test/gate wiring guard", () => {
     const end = ci.indexOf("\n  node-26-compatibility:", start);
     const crossPlatform = ci.slice(start, end);
     expect(ci).not.toContain("windows-cross-platform-smoke");
-    expect(crossPlatform).toContain("needs.change-scope.outputs.windows-relevant != 'false'");
-    expect(crossPlatform).toContain("github.event_name == 'push'");
-    expect(crossPlatform).toContain("github.event_name == 'workflow_dispatch'");
+    expect(crossPlatform).toContain("fromJSON(needs.change-scope.outputs.cross-platform-os)");
     expect(crossPlatform).toContain("npm run typecheck");
     expect(crossPlatform).toContain("npm run build");
     expect(crossPlatform).toContain("npm run prepare:bin");

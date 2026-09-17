@@ -86,12 +86,18 @@ settled once that endpoint is visible and the tag names the same version.
 
 The workflow's retry budget is deliberately sized for that quarantine: 30 total reads, including the
 initial read, with one minute between reads. `ensurePackageDistTag()` and `verifyPackage()` share
-that exact attempt/delay budget, so the environment value is no longer off by one. If the budget is
-exhausted without visibility or with a stale tag, the script fails closed with the real recovery
-paths: wait for the version-specific endpoint to return 200 and re-run verification, or manually
-mark the `npm-publish` deployment successful once the endpoint is 200 and the dist-tag has moved.
-It no longer tells a workflow operator to provision `NODE_AUTH_TOKEN`/`NPM_TOKEN`; no Actions
-workflow carries such a token after secret retirement.
+that exact attempt/delay budget, so the environment value is no longer off by one. HTTP 408, 425,
+429, 5xx, npm-view transport failures, and curl transport failures consume this bounded budget
+instead of aborting the release on the first transient read. The pre-publish existence check uses a
+separate three-probe budget and refuses to publish while registry state is transient; uncertainty is
+never interpreted as a missing version.
+
+If the budget is exhausted without visibility, wait for the version-specific endpoint to return
+200 and re-run the governed release verification. If the endpoint is visible but the dist-tag
+remains stale, run the full release orchestrator from the exact tagged commit with an operator-held
+npm token and the original qualified release inputs, then let its complete verification and
+deployment-record path finish. Never repair the deployment status independently of those checks.
+No Actions workflow carries a classic registry token after secret retirement.
 
 A local operator environment may still contain a classic token, and `createNpmEnvironment()` keeps
 supporting it for governed local publishes. That compatibility is not an Actions recovery path and
@@ -219,8 +225,8 @@ land that rename unnoticed.
   privileged process with its own credentials to protect); adds an operational subsystem to build
   and maintain for a problem OIDC already solves for the primary `npm publish` path.
 - **Why rejected**: Trades one long-lived secret for a rotation pipeline that is itself a new
-  trust boundary, to close a gap (`dist-tag`) that D3's narrow, fail-closed fallback already
-  handles without new infrastructure.
+  trust boundary. D3 keeps the Actions path tokenless and reserves dist-tag repair for a deliberate
+  governed local orchestrator run with an operator-held token when verification proves it is needed.
 
 ### Alternative 3: Restructure to avoid ever needing `npm dist-tag add`
 
@@ -231,7 +237,7 @@ land that rename unnoticed.
   (idempotent retry over a partially completed prior attempt) that is already rare and already
   fails closed.
 - **Why rejected**: Higher complexity and user-visible cost for a rare recovery path, versus D3's
-  narrow, explicit, already-tested fallback.
+  explicit fail-closed verification and credentialed local orchestrator recovery.
 
 ## Related
 
@@ -260,4 +266,5 @@ it below.
 | 1.0     | 2026-07-11 | Accepted: npm Trusted Publishing adopted for the release `publish` job. |
 | 1.1     | 2026-08-10 | Publish npm pin bound to the governed `EXPECTED_PACKAGE_MANAGER` (npm@11.16.0) with a lockstep test; stale 10.9.x/11.18.0 references removed. |
 | 1.2     | 2026-08-28 | Provisioning recorded as configured and verified (v0.3.8 attestation); `NPM_TOKEN` Actions secret retired; repository-side binding enforced by a new gate (D5); provenance-by-publish-path consequence recorded. |
+| 1.4     | 2026-09-17 | Registry probes classify bounded transient transport/server failures, pre-publish uncertainty fails closed, and recovery must rerun the governed verifier before deployment success. |
 | 1.3     | 2026-09-16 | Tokenless publish verification moved to the version-specific registry endpoint, the Actions retry budget expanded to 30 minutes, and the dead workflow-token recovery hint was removed. |

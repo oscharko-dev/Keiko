@@ -262,7 +262,7 @@ measurement surfaced rather than settled.
 
 **The protection it adds already exists one layer down, in a stronger form.**
 `scripts/check-runtime-toolchain.mjs` compares the **executed** Node and npm against the governed
-values — not a declaration, the actual interpreter and the actual npm on `PATH` — and it runs at 29
+values — not a declaration, the actual interpreter and the actual npm on `PATH` — and it runs at 28
 points across eight workflows, in every case before `npm ci`. `engine-strict` would re-ask a weaker
 version of a question that is already answered where it matters.
 

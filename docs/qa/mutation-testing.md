@@ -106,8 +106,10 @@ excuses a new mutant in a trust-boundary, redaction, secret, authority, integrit
 
 The dedicated debug-launch configuration has no historical-debt allowance: the repository-owned
 `check:mutation:debug-launch` ratchet requires a 100 percent score, zero surviving mutants, and zero
-no-coverage mutants. Stryker's native `break` value remains zero so that the strict ratchet always
-gets to inspect the JSON report instead of being hidden by an earlier Stryker exit.
+no-coverage mutants. Stryker's native `break` value is also 100, so direct focused runs fail at the
+same boundary. The suite orchestrator does not short-circuit on that exit: Stryker writes the JSON
+report before applying its threshold, and `run-security-mutation-suite.mjs` still executes both
+repository-owned ratchets and reports every failed phase.
 
 `coverageAnalysis: "perTest"` limits each mutant to tests that cover it after the focused security
 test matrix has run. The Vitest runner's `related` discovery is intentionally disabled for this
@@ -117,8 +119,8 @@ machine-readable JSON; `scripts/check-mutation-quality.mjs` is the authoritative
 decision. The script also fails a report that has mutants and coverage but zero killed or timed-out
 mutants, because that shape is an instrumentation failure rather than meaningful test-quality
 evidence.
-Stryker's native break value is zero only so that this stricter repository-owned decision can
-evaluate both historical fingerprints and current results after the complete run.
+The repository-owned decision therefore evaluates historical fingerprints and current results even
+when Stryker's native threshold has already rejected the focused run.
 
 Static module-initialization mutants are excluded because Stryker cannot reliably activate them
 after an ESM module has been cached by a reused Vitest worker. Exact required-check names, immutable

@@ -104,6 +104,7 @@ const verifyAttempts = positiveIntegerEnv("KEIKO_RELEASE_VERIFY_ATTEMPTS", 1);
 const verifyDelayMs = nonNegativeIntegerEnv("KEIKO_RELEASE_VERIFY_DELAY_MS", 0);
 const registryProbeConnectTimeoutSeconds = 15;
 const registryProbeMaxTimeSeconds = 60;
+const prePublishProbeAttempts = 3;
 
 function positiveIntegerEnv(name, fallback) {
   const raw = process.env[name];
@@ -1631,11 +1632,6 @@ function smokePortableDownloadUrl(expected, url) {
   }
 }
 
-function npmViewVersion(pkg, registry) {
-  const result = npmViewVersionResult(pkg, registry);
-  return result.kind === "available" && result.version === pkg.version;
-}
-
 function registryVersionEndpoint(pkg, registry) {
   const registryUrl = new URL(registry);
   const prefix = registryUrl.pathname.endsWith("/")
@@ -1646,6 +1642,11 @@ function registryVersionEndpoint(pkg, registry) {
   registryUrl.search = "";
   registryUrl.hash = "";
   return registryUrl.toString();
+}
+
+function transientRegistryHttpStatus(status) {
+  const code = Number(status);
+  return code === 408 || code === 425 || code === 429 || (code >= 500 && code <= 599);
 }
 
 function npmViewVersionResult(pkg, registry) {
@@ -1669,23 +1670,22 @@ function npmViewVersionResult(pkg, registry) {
     { env: networkEnvironment() },
   );
   if (result.error !== undefined) {
-    fail(`${pkg.spec} registry version endpoint could not be inspected: ${result.error.message}`);
+    return { kind: "transient", reason: "spawn-error", version: "" };
   }
   if (result.status === 0) {
     const status = result.stdout.trim();
     if (status === "200") return { kind: "available", version: pkg.version };
     if (status === "404") return { kind: "missing", version: "" };
+    if (transientRegistryHttpStatus(status)) {
+      return { kind: "transient", reason: `http-${status}`, version: "" };
+    }
     fail(`${pkg.spec} registry version endpoint returned HTTP ${status}.`);
   }
-  fail(
-    `could not inspect ${pkg.spec} in ${registry}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
-  );
-}
-
-function npmViewDistTag(pkg, npmEnv, registry, tag) {
-  const result = npmViewDistTagResult(pkg, npmEnv, registry, tag);
-  if (result.kind === "available") return result.version;
-  return "";
+  return {
+    kind: "transient",
+    reason: `curl-exit-${String(result.status ?? "unknown")}`,
+    version: "",
+  };
 }
 
 function npmViewDistTagResult(pkg, npmEnv, registry, tag) {
@@ -1696,6 +1696,9 @@ function npmViewDistTagResult(pkg, npmEnv, registry, tag) {
       env: npmEnv,
     },
   );
+  if (result.error !== undefined) {
+    return { kind: "transient", reason: "spawn-error", version: "" };
+  }
   if (result.status === 0) {
     return { kind: "available", version: result.stdout.trim() };
   }
@@ -1703,8 +1706,31 @@ function npmViewDistTagResult(pkg, npmEnv, registry, tag) {
   if (viewOutput.includes("E404") || viewOutput.includes("No match found")) {
     return { kind: "missing", version: "" };
   }
+  return {
+    kind: "transient",
+    reason: `npm-exit-${String(result.status ?? "unknown")}`,
+    version: "",
+  };
+}
+
+function versionExistsBeforePublish(pkg, registry) {
+  let result = npmViewVersionResult(pkg, registry);
+  for (let attempt = 1; attempt <= prePublishProbeAttempts; attempt += 1) {
+    if (result.kind === "available") return true;
+    if (result.kind === "missing") return false;
+    if (attempt < prePublishProbeAttempts) {
+      console.log(
+        `release-publish: PREPUBLISH pending ${pkg.spec} ` +
+          `(attempt ${String(attempt)}/${String(prePublishProbeAttempts)}; ` +
+          `version=${result.reason ?? result.kind}).`,
+      );
+      waitForRegistryPropagation();
+      result = npmViewVersionResult(pkg, registry);
+    }
+  }
   fail(
-    `could not inspect ${pkg.name} dist-tag ${tag}\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+    `${pkg.spec} registry availability remained transient after ${String(prePublishProbeAttempts)} probes. ` +
+      "Refusing to publish because package existence could not be established safely.",
   );
 }
 
@@ -1723,7 +1749,7 @@ function publishPackage(pkg, npmEnv, options, hasToken) {
     return;
   }
 
-  if (npmViewVersion(pkg, options.registry)) {
+  if (versionExistsBeforePublish(pkg, options.registry)) {
     console.log(`release-publish: SKIP ${pkg.spec} already exists.`);
   } else {
     publishPackageToRegistry(pkg, npmEnv, options);
@@ -1772,8 +1798,8 @@ function publishPackageToRegistry(pkg, npmEnv, options) {
 }
 
 function ensurePackageDistTag(pkg, npmEnv, options, hasToken) {
-  const currentTag = npmViewDistTag(pkg, npmEnv, options.registry, options.tag);
-  if (currentTag === pkg.version) {
+  const currentTag = npmViewDistTagResult(pkg, npmEnv, options.registry, options.tag);
+  if (currentTag.kind === "available" && currentTag.version === pkg.version) {
     console.log(`release-publish: TAG ${pkg.name}@${options.tag} -> ${pkg.version}.`);
     return;
   }
@@ -1782,13 +1808,15 @@ function ensurePackageDistTag(pkg, npmEnv, options, hasToken) {
   // next registry read can still race npm Trusted Publishing's server-side quarantine, so a
   // mismatch here is usually transient propagation lag rather than a real problem. Only after the
   // same total read budget verifyPackage() uses is exhausted do we treat it as actionable.
-  if (!hasToken) {
+  if (!hasToken || currentTag.kind === "transient") {
     const state = waitForVerifiedPackageState(pkg, npmEnv, options.registry, options.tag, "TAG");
     if (verificationSucceeded(pkg, state)) {
       console.log(`release-publish: TAG ${pkg.name}@${options.tag} -> ${pkg.version}.`);
       return;
     }
-    failVerification(pkg, state, options.registry, options.tag);
+    if (!hasToken || state.version.kind !== "available" || state.tag.kind === "transient") {
+      failVerification(pkg, state, options.registry, options.tag);
+    }
   }
   console.log(`release-publish: DIST-TAG ${pkg.name}@${options.tag} -> ${pkg.version}.`);
   run("npm", ["dist-tag", "add", pkg.spec, options.tag, "--registry", options.registry], {
@@ -1805,33 +1833,50 @@ function readVerificationState(pkg, npmEnv, registry, tag) {
 }
 
 function verificationSucceeded(pkg, state) {
-  return state.version.version === pkg.version && state.tag.version === pkg.version;
+  return (
+    state.version.kind === "available" &&
+    state.version.version === pkg.version &&
+    state.tag.kind === "available" &&
+    state.tag.version === pkg.version
+  );
+}
+
+function verificationObservation(result) {
+  return result.version || result.reason || result.kind;
 }
 
 function logPendingVerification(pkg, state, tag, attempt, label) {
   console.log(
     `release-publish: ${label} pending ${pkg.spec} ` +
       `(attempt ${String(attempt)}/${String(verifyAttempts)}; ` +
-      `version=${state.version.version || state.version.kind}; ` +
-      `${tag}=${state.tag.version || state.tag.kind}).`,
+      `version=${verificationObservation(state.version)}; ` +
+      `${tag}=${verificationObservation(state.tag)}).`,
   );
 }
 
 function failVerification(pkg, state, registry, tag) {
-  if (state.version.version !== pkg.version) {
-    const observed = state.version.version || state.version.kind;
+  if (state.version.kind !== "available" || state.version.version !== pkg.version) {
+    const observed = verificationObservation(state.version);
+    if (state.version.kind === "transient") {
+      fail(
+        `${pkg.spec} registry availability remained transient after the bounded verification ` +
+          `budget (observed ${observed}). Re-run the governed release verification; do not ` +
+          "publish again or change deployment state while package existence is unknown.",
+      );
+    }
     fail(
       `${pkg.spec} is not available in ${registry} after publish (observed ${observed}). ` +
         "npm Trusted Publishing may still be clearing server-side quarantine; wait for the " +
         "version-specific registry endpoint to return HTTP 200, then re-run release verification.",
     );
   }
-  if (state.tag.version !== pkg.version) {
-    const observed = state.tag.version || state.tag.kind;
+  if (state.tag.kind !== "available" || state.tag.version !== pkg.version) {
+    const observed = verificationObservation(state.tag);
     fail(
       `${pkg.name}@${tag} points to ${observed}, expected ${pkg.version}. ` +
-        "If the version-specific registry endpoint already returns HTTP 200 and the dist-tag has " +
-        "moved, re-mark the npm-publish deployment success; otherwise wait and re-run verification.",
+        "If the version endpoint is visible but the tag remains stale, run the governed release " +
+        "orchestrator from the exact tagged commit with an operator-held npm token and the original " +
+        "qualified release inputs; otherwise wait and re-run verification.",
     );
   }
 }

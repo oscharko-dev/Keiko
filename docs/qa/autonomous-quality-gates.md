@@ -38,14 +38,15 @@ successful:
   evidence, and regression gates;
 - sharded package/UI/script coverage, followed by one Sonar verdict over the reassembled evidence;
 - the release build, shipped-dependency audit, SBOM, package-install, and runtime smoke lane;
-- Linux/macOS cross-platform smoke, plus Windows smoke only when the change can affect Windows
-  native behavior or the run is a full integration push/manual dispatch;
+- Linux/macOS cross-platform smoke, plus the same full Windows proof unless the trusted
+  base-revision classifier positively identifies every changed pull-request path as
+  non-Windows-relevant; pushes, merge groups, and manual runs always use the full matrix;
 - the UI lint, typecheck, build, browser smoke, and release-evidence lane;
 - Fallow semantic duplicate analysis over changed files only; and
 - Gitleaks over every addition in the pull-request commit range, including intermediate commits.
 
 The aggregate permits only the documented editor fast-path skip, documentation-only cross-platform
-skip, and non-Windows-relevant Windows-smoke skip. Every other failed, cancelled, or skipped
+skip, and non-Windows-relevant pull-request omission of the Windows matrix leg. Every other failed, cancelled, or skipped
 dependency makes `ci` fail. Network and 5xx failures from npm's audit endpoint receive bounded
 retries; a real advisory or an exhausted retry budget remains a hard failure.
 

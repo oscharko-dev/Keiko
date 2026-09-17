@@ -23,8 +23,12 @@ describe("root CLI entrypoint", () => {
     const exit = vi.spyOn(process, "exit").mockImplementation((() => undefined) as never);
     const previousExitCode = process.exitCode;
     process.exitCode = undefined;
-    delete process.env.KEIKO_CLI_BIN_PATH;
-    delete process.env.KEIKO_UI_STATIC_ROOT;
+    const previousCliBinPath = process.env.KEIKO_CLI_BIN_PATH;
+    const previousUiStaticRoot = process.env.KEIKO_UI_STATIC_ROOT;
+    const previousAuditor = process.env.KEIKO_LOCAL_STATE_AUDITOR;
+    process.env.KEIKO_CLI_BIN_PATH = "/tmp/stale-keiko/dist/cli/index.js";
+    process.env.KEIKO_UI_STATIC_ROOT = "/tmp/stale-keiko/dist/ui/static";
+    process.env.KEIKO_LOCAL_STATE_AUDITOR = "/tmp/stale-keiko/local-state-audit.mjs";
 
     try {
       await import("../src/cli/index.js");
@@ -38,8 +42,19 @@ describe("root CLI entrypoint", () => {
       expect(stderr).toHaveBeenCalledWith("stderr");
       expect(process.env.KEIKO_CLI_BIN_PATH).toMatch(/\/src\/cli\/index\.js$/u);
       expect(process.env.KEIKO_UI_STATIC_ROOT).toMatch(/\/src\/ui\/static$/u);
+      expect(process.env.KEIKO_LOCAL_STATE_AUDITOR).toMatch(
+        /\/scripts\/lib\/local-state-audit\.mjs$/u,
+      );
     } finally {
       process.exitCode = previousExitCode;
+      restoreEnv("KEIKO_CLI_BIN_PATH", previousCliBinPath);
+      restoreEnv("KEIKO_UI_STATIC_ROOT", previousUiStaticRoot);
+      restoreEnv("KEIKO_LOCAL_STATE_AUDITOR", previousAuditor);
     }
   });
 });
+
+function restoreEnv(name: string, value: string | undefined): void {
+  if (value === undefined) Reflect.deleteProperty(process.env, name);
+  else process.env[name] = value;
+}

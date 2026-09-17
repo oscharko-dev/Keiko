@@ -864,8 +864,16 @@ function curlStubBody() {
     `const versionEndpointSuffix = "/" + VERSION;`,
     "if (url.endsWith(versionEndpointSuffix)) {",
     "  const s = state();",
-    "  if (!s.published) { process.stdout.write('404'); process.exit(0); }",
     "  const attempts = s.versionEndpointAttempts ?? 0;",
+    "  const scripted = s.versionEndpointResponses;",
+    "  if (Array.isArray(scripted) && scripted.length > 0) {",
+    "    const response = scripted[Math.min(attempts, scripted.length - 1)];",
+    "    setState({ versionEndpointAttempts: attempts + 1 });",
+    "    if (Number.isInteger(response.exitCode)) process.exit(response.exitCode);",
+    "    process.stdout.write(String(response.httpStatus));",
+    "    process.exit(0);",
+    "  }",
+    "  if (!s.published) { process.stdout.write('404'); process.exit(0); }",
     "  setState({ versionEndpointAttempts: attempts + 1 });",
     "  const visibleAfter = s.versionVisibleAfterAttempts ?? 0;",
     "  process.stdout.write(attempts >= visibleAfter ? '200' : '404');",
@@ -2324,6 +2332,90 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
       expect(lastRun.calls.filter(isVersionEndpointCurl).length).toBeGreaterThanOrEqual(3);
     });
 
+    it("retries transient registry responses inside the post-publish verification budget", () => {
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody()),
+        initState: {
+          published: false,
+          tagged: true,
+          versionEndpointResponses: [
+            { httpStatus: 404 },
+            { httpStatus: 503 },
+            { exitCode: 28 },
+            { httpStatus: 200 },
+          ],
+        },
+        qualificationEnv: {
+          ...NO_REGISTRY_TOKEN_ENV,
+          KEIKO_RELEASE_VERIFY_ATTEMPTS: "4",
+        },
+      });
+
+      expect(lastRun.status).toBe(0);
+      expect(lastRun.stdout).toContain("VERIFY pending");
+      expect(lastRun.stdout).toContain("http-503");
+      expect(lastRun.stdout).toContain("curl-exit-28");
+      expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
+      expect(lastRun.calls.filter(isVersionEndpointCurl)).toHaveLength(4);
+    });
+
+    it("refuses to publish when the pre-publish existence probe remains transient", () => {
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody(), { failOnPublish: true }),
+        initState: {
+          published: false,
+          tagged: false,
+          versionEndpointResponses: [{ httpStatus: 503 }],
+        },
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("registry availability remained transient");
+      expect(lastRun.stderr).toContain("package existence could not be established safely");
+      expect(lastRun.calls.filter(isVersionEndpointCurl)).toHaveLength(3);
+      expect(lastRun.calls.some((line) => line.startsWith('npm ["publish"'))).toBe(false);
+    });
+
+    it("publishes only after transient pre-publish probes resolve to a definitive 404", () => {
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody()),
+        initState: {
+          published: false,
+          tagged: true,
+          versionEndpointResponses: [
+            { httpStatus: 503 },
+            { exitCode: 28 },
+            { httpStatus: 404 },
+            { httpStatus: 200 },
+          ],
+        },
+      });
+
+      expect(lastRun.status).toBe(0);
+      expect(lastRun.stdout).toContain("PREPUBLISH pending");
+      expect(lastRun.stdout).toContain(`PUBLISH ${RELEASE_SPEC}`);
+      expect(lastRun.stdout).toContain(`PASS - ${RELEASE_SPEC} published as latest`);
+      expect(lastRun.calls.filter(isVersionEndpointCurl)).toHaveLength(4);
+      expect(lastRun.calls.filter((line) => line.startsWith('npm ["publish"'))).toHaveLength(1);
+    });
+
+    it("fails only after the full budget when post-publish registry reads stay transient", () => {
+      lastRun = runPublish({
+        npmBody: npmStub(passthroughViewBody()),
+        initState: {
+          published: false,
+          tagged: true,
+          versionEndpointResponses: [{ httpStatus: 404 }, { httpStatus: 429 }],
+        },
+        qualificationEnv: NO_REGISTRY_TOKEN_ENV,
+      });
+
+      expect(lastRun.status).toBe(1);
+      expect(lastRun.stderr).toContain("bounded verification budget");
+      expect(lastRun.stderr).toContain("do not publish again or change deployment state");
+      expect(lastRun.calls.filter(isVersionEndpointCurl)).toHaveLength(4);
+    });
+
     it("fails the release when the dist-tag never resolves to the published version", () => {
       // Version publishes fine, but `npm view <name> dist-tags.latest` keeps pointing at a
       // different version — verifyPackage() must reject this and exit non-zero.
@@ -2545,8 +2637,9 @@ describe.skipIf(RELEASE_VERSION_IS_PRERELEASE)(
 
       expect(lastRun.status).toBe(1);
       expect(lastRun.stderr).toContain(`${RELEASE_NAME}@latest points to 0.0.0-stale`);
-      expect(lastRun.stderr).toContain("version-specific registry endpoint");
-      expect(lastRun.stderr).toContain("re-mark the npm-publish deployment success");
+      expect(lastRun.stderr).toContain("version endpoint is visible");
+      expect(lastRun.stderr).toContain("governed release orchestrator");
+      expect(lastRun.stderr).toContain("operator-held npm token");
       expect(lastRun.stderr).not.toContain("NODE_AUTH_TOKEN");
       expect(lastRun.calls.some((l) => l.startsWith('npm ["dist-tag","add"'))).toBe(false);
       expect(lastRun.stdout).not.toContain("PASS -");

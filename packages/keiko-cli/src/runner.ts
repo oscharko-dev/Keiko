@@ -1,4 +1,3 @@
-import { spawnSync, type SpawnSyncOptions, type SpawnSyncReturns } from "node:child_process";
 import { runModelsCli } from "./models.js";
 import { runAgentCli } from "./run.js";
 import { runContextCli } from "./context.js";
@@ -18,12 +17,7 @@ import { runPortableCli } from "./portable.js";
 import { runUninstallCli } from "./uninstall.js";
 import { runRepairCli } from "./repair.js";
 import { runUpdateCli } from "./update.js";
-import {
-  collectDoctorReport,
-  emitDoctorWarning,
-  runDoctorCli,
-  type DoctorReport,
-} from "./doctor.js";
+import { emitDoctorWarning, runDoctorCli } from "./doctor.js";
 import { runAuditCli } from "./audit.js";
 import { runSupportCli } from "./support.js";
 import { loadServer } from "./lazy-modules.js";
@@ -94,18 +88,6 @@ type CommandHandler = (
   io: CliIo,
   env: EnvSource,
 ) => number | Promise<number>;
-
-type SpawnSyncFn = (
-  command: string,
-  args: readonly string[],
-  options: SpawnSyncOptions,
-) => SpawnSyncReturns<Buffer>;
-
-export interface RunCliDeps {
-  readonly cwd?: string | undefined;
-  readonly argv?: readonly string[] | undefined;
-  readonly spawnSync?: SpawnSyncFn | undefined;
-}
 
 interface DeferredSecurityLogCollector {
   readonly factory: CliSecurityLogSinkFactory;
@@ -330,94 +312,12 @@ function handleMetaCommand(first: string | undefined, io: CliIo): number | undef
   return undefined;
 }
 
-const LOCAL_REEXEC_MARKER = "KEIKO_LOCAL_PACKAGE_REEXEC";
-const LOCAL_REEXEC_COMMANDS = new Set(["start", "restart", "ui", "update"]);
-type LocalPackageInstall = NonNullable<DoctorReport["localPackageInstall"]>;
-
-function helpRequested(args: readonly string[]): boolean {
-  return args.includes("--help") || args.includes("-h");
-}
-
-function commandAllowsLocalReexec(args: readonly string[]): boolean {
-  const first = args[0];
-  return first !== undefined && LOCAL_REEXEC_COMMANDS.has(first) && !helpRequested(args);
-}
-
-function localPackageReexecTarget(report: DoctorReport): LocalPackageInstall | undefined {
-  const localInstall = report.localPackageInstall;
-  if (report.runningEntry === undefined || localInstall === undefined) return undefined;
-  return report.runningEntry === localInstall.cliEntry ? undefined : localInstall;
-}
-
-function processEnvForLocalPackageReexec(
-  env: EnvSource,
-  cliEntry: string,
-  staticRoot: string,
-): NodeJS.ProcessEnv {
-  const next: NodeJS.ProcessEnv = { ...process.env };
-  for (const [key, value] of Object.entries(env)) {
-    if (value === undefined) {
-      Reflect.deleteProperty(next, key);
-    } else {
-      next[key] = value;
-    }
-  }
-  next[LOCAL_REEXEC_MARKER] = "1";
-  next.KEIKO_CLI_BIN_PATH = cliEntry;
-  next.KEIKO_UI_STATIC_ROOT = staticRoot;
-  return next;
-}
-
-function runLocalPackageReexec(
-  args: readonly string[],
-  io: CliIo,
-  env: EnvSource,
-  deps: RunCliDeps,
-  report: DoctorReport,
-  localInstall: LocalPackageInstall,
-): number {
-  io.err("keiko notice: stale launch path detected; re-running the local package install.\n");
-  const result = (deps.spawnSync ?? spawnSync)(process.execPath, [localInstall.cliEntry, ...args], {
-    cwd: report.cwd,
-    env: processEnvForLocalPackageReexec(env, localInstall.cliEntry, localInstall.staticRoot),
-    stdio: "inherit",
-    windowsHide: false,
-  });
-  if (result.error !== undefined) {
-    io.err(`keiko: failed to re-run the local package install (${result.error.message}).\n`);
-    return 1;
-  }
-  if (result.signal !== null) {
-    io.err(`keiko: local package install exited after signal ${result.signal}.\n`);
-    return 1;
-  }
-  return result.status ?? 1;
-}
-
-function maybeReexecLocalPackage(
-  args: readonly string[],
-  io: CliIo,
-  env: EnvSource,
-  deps: RunCliDeps,
-): number | undefined {
-  if (!commandAllowsLocalReexec(args)) return undefined;
-  if (env[LOCAL_REEXEC_MARKER] === "1") return undefined;
-  const report = collectDoctorReport({
-    cwd: deps.cwd ?? process.cwd(),
-    argv: deps.argv ?? process.argv,
-  });
-  const localInstall = localPackageReexecTarget(report);
-  if (localInstall === undefined) return undefined;
-  return runLocalPackageReexec(args, io, env, deps, report, localInstall);
-}
-
 // Returns a number for synchronous commands; the async `run` command returns a Promise.
 // The process shim in index.ts awaits the union before assigning process.exitCode.
 export function runCli(
   args: readonly string[],
   io: CliIo,
   env: EnvSource = {},
-  deps: RunCliDeps = {},
 ): number | Promise<number> {
   const first = args[0];
   const meta = handleMetaCommand(first, io);
@@ -426,8 +326,6 @@ export function runCli(
     io.err("keiko: internal error while dispatching command.\n");
     return 2;
   }
-  const reexec = maybeReexecLocalPackage(args, io, env, deps);
-  if (reexec !== undefined) return reexec;
   if (first === "start" || first === "ui") {
     emitDoctorWarning(io);
   }

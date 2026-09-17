@@ -128,6 +128,7 @@ jobs:
     outputs:
       documentation-only: ${{ steps.classify.outputs.documentation-only }}
       windows-relevant: ${{ steps.classify.outputs.windows-relevant }}
+      cross-platform-os: ${{ steps.classify.outputs.cross-platform-os }}
     steps:
       # The classifier decides whether the cross-platform matrix runs, so a pull request must not be
       # able to edit its own classifier and suppress the native install checks (CWE-807). The code
@@ -152,10 +153,14 @@ jobs:
             if ! grep -q '^windows-relevant=' "${GITHUB_OUTPUT}"; then
               echo "windows-relevant=true" >> "${GITHUB_OUTPUT}"
             fi
+            if ! grep -q '^cross-platform-os=' "${GITHUB_OUTPUT}"; then
+              echo 'cross-platform-os=["ubuntu-latest","macos-latest","windows-latest"]' >> "${GITHUB_OUTPUT}"
+            fi
           else
             echo "documentation-only-change: false — the base revision has no classifier yet"
             echo "documentation-only=false" >> "${GITHUB_OUTPUT}"
             echo "windows-relevant=true" >> "${GITHUB_OUTPUT}"
+            echo 'cross-platform-os=["ubuntu-latest","macos-latest","windows-latest"]' >> "${GITHUB_OUTPUT}"
           fi
 
   # Zero-tolerance semantic-clone gate. Fallow compares only files changed since the immutable
@@ -1171,20 +1176,9 @@ jobs:
       fail-fast: false
       matrix:
         # Windows is part of the same full release proof as Linux and macOS. The matrix omits only
-        # the Windows leg for PRs that the fail-open classifier has positively identified as
-        # non-Windows-relevant; pushes and manual runs still produce full integration evidence.
-        os: >-
-          ${{
-            fromJSON(
-              (
-                needs.change-scope.outputs.windows-relevant != 'false'
-                || github.event_name == 'push'
-                || github.event_name == 'workflow_dispatch'
-              )
-              && '["ubuntu-latest","macos-latest","windows-latest"]'
-              || '["ubuntu-latest","macos-latest"]'
-            )
-          }}
+        # the Windows leg for PRs that the trusted base-revision classifier has positively identified
+        # as non-Windows-relevant. Every non-PR event receives the full fail-open matrix.
+        os: ${{ fromJSON(needs.change-scope.outputs.cross-platform-os) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     permissions:
