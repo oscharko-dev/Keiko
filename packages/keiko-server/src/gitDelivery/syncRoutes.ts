@@ -57,6 +57,7 @@ import {
 import {
   gitDeliveryAuthorityContinuityGuard,
   gitDeliveryAuthorityGate,
+  logGitDeliveryAuthorityAdmission,
   prepareGitDeliveryRequest,
   type GitDeliveryAuthorityContinuityDenialCapture,
   type GitDeliveryAuthorityGate as GitDeliveryAuthorityGateResult,
@@ -526,13 +527,13 @@ function logUserInitiatedSyncAdmission(
   operation: GitSyncOperation,
   seams: GitDeliverySyncSeams,
 ): void {
-  (seams.activityLog ?? processServerLogSink()).write({
-    category: "security",
-    op: "git.delivery.authority.admitted",
-    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-    status: 200,
-    extra: { operation, phase: "admission", source: "local-user" },
-  });
+  logGitDeliveryAuthorityAdmission(
+    ctx,
+    operation,
+    "admission",
+    seams.activityLog ?? processServerLogSink(),
+    { source: "local-user" },
+  );
 }
 
 function admitSyncExecute({

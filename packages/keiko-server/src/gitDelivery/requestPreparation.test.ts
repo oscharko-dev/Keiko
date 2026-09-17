@@ -180,9 +180,15 @@ describe("prepareGitDeliveryRequest — repository-mismatch activity log line", 
     expect(mismatchEvent).toBeDefined();
     expect(mismatchEvent?.level).toBe("warn");
     expect(mismatchEvent?.correlationId).toBe("11111111-1111-4111-8111-111111111111");
-    expect(typeof mismatchEvent?.errorKind).toBe("string");
+    expect(mismatchEvent?.errorKind).toBe("internal");
     const extra = mismatchEvent?.extra as
-      { readonly frames?: readonly string[]; readonly causeChain?: readonly string[] } | undefined;
+      | {
+          readonly failureKind?: string;
+          readonly frames?: readonly string[];
+          readonly causeChain?: readonly string[];
+        }
+      | undefined;
+    expect(extra?.failureKind).toBe("ENOTDIR");
     expect(Array.isArray(extra?.frames)).toBe(true);
     expect(Array.isArray(extra?.causeChain)).toBe(true);
   });
