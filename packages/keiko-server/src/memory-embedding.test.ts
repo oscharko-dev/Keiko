@@ -784,7 +784,10 @@ describe("memory embedding activity log", () => {
     expect(event?.op).toBe("embedding.memory.failed");
     expect(event?.errorKind).toBe("rate-limited");
     expect(event?.status).toBe(429);
-    expect(event?.extra).toMatchObject({ modelId: EMBEDDING_MODEL });
+    expect(event?.extra).toMatchObject({
+      modelId: EMBEDDING_MODEL,
+      failureKind: "rate-limited",
+    });
     expect(sink.lines().join("\n")).not.toContain("the user prefers tabs");
   });
 
@@ -797,7 +800,8 @@ describe("memory embedding activity log", () => {
 
     expect(await embedMemoryText(deps, "a durable preference")).toBeNull();
 
-    expect(sink.events[0]?.errorKind).toBe("ENOTFOUND");
+    expect(sink.events[0]?.errorKind).toBe("unknown");
+    expect(sink.events[0]?.extra?.failureKind).toBe("ENOTFOUND");
     expect(sink.lines().join("\n")).not.toContain("getaddrinfo");
   });
 
@@ -904,8 +908,8 @@ describe("memory embedding activity log", () => {
         correlationId: undefined,
         durationMs: undefined,
         status: undefined,
-        errorKind: "EDIMENSION",
-        extra: undefined,
+        errorKind: "unknown",
+        extra: { failureKind: "EDIMENSION" },
       },
     ]);
     expect(sink.lines().join("\n")).not.toContain("dimension mismatch");

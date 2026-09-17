@@ -25,6 +25,12 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { createHash, randomUUID } from "node:crypto";
 import type { EmbeddingModelIdentity } from "@oscharko-dev/keiko-contracts";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  isActivityLogErrorKind,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type {
   MemoryEdgeId,
   MemoryId,
@@ -50,6 +56,173 @@ import { errorKindOf, getServerLogger, startLogTimer } from "./observability/ind
 
 const MEMORY_VECTOR_METRIC = "cosine" as const;
 export type MemoryEmbeddingKind = "query" | "document";
+
+const EMBEDDING_MEMORY_UNAVAILABLE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "embedding.memory.unavailable",
+  category: "embedding",
+  owner: "keiko-server",
+  emitter: "memory-embedding.logEmbeddingUnavailable",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["no-embedding-capable-model", "provider-absent"],
+    },
+    providerCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["memory-embedding-unavailable"],
+  proofIds: ["embedding.memory.unavailable.line"],
+  releaseImpact: "patch",
+});
+
+const EMBEDDING_MEMORY_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "embedding.memory.failed",
+  category: "embedding",
+  owner: "keiko-server",
+  emitter: "memory-embedding.logEmbeddingFailed",
+  fields: {
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 240 },
+    providerIdentity: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["memory-embedding-request"],
+  proofIds: ["embedding.memory.failed.line"],
+  releaseImpact: "patch",
+});
+
+const MEMORY_EMBEDDING_STORE_REJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "memory.embedding.store-rejected",
+  category: "memory",
+  owner: "keiko-server",
+  emitter: "memory-embedding.logEmbeddingStoreRejected.store",
+  fields: {
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["memory-embedding-storage"],
+  proofIds: ["memory.embedding.store-rejected.line"],
+  releaseImpact: "patch",
+});
+
+const MEMORY_EMBEDDING_INVALIDATION_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "memory.embedding.invalidation-failed",
+  category: "memory",
+  owner: "keiko-server",
+  emitter: "memory-embedding.logEmbeddingStoreRejected.invalidation",
+  fields: {
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["memory-embedding-invalidation"],
+  proofIds: ["memory.embedding.invalidation-failed.line"],
+  releaseImpact: "patch",
+});
+
+const EMBEDDING_MEMORY_SUCCEEDED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "embedding.memory.succeeded",
+  category: "embedding",
+  owner: "keiko-server",
+  emitter: "memory-embedding.logEmbeddingSucceeded",
+  fields: {
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 240 },
+    providerIdentity: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    embeddingKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["query", "document"],
+    },
+    dimensions: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "none",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["memory-embedding-request"],
+  proofIds: ["embedding.memory.succeeded.line"],
+  releaseImpact: "patch",
+});
+
+const MEMORY_EMBEDDING_INVALIDATED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "memory.embedding.invalidated",
+  category: "memory",
+  owner: "keiko-server",
+  emitter: "memory-embedding.logEmbeddingInvalidated",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["no-embedding", "store-rejected"],
+    },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["memory-embedding-invalidation"],
+  proofIds: ["memory.embedding.invalidated.line"],
+  releaseImpact: "patch",
+});
+
+const MEMORY_CAPTURE_NOVELTY_GATE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "memory.capture.novelty-gate",
+  category: "memory",
+  owner: "keiko-server",
+  emitter: "memory-embedding.logNoveltyDecision",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["inserted", "merged", "suppressed"],
+    },
+    scopeKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["user", "workspace", "project", "workflow", "global"],
+    },
+    embedded: { type: "boolean", dataClass: "closed-enum", required: true },
+    dedupThreshold: { type: "number", dataClass: "count", required: true },
+    neighborCount: { type: "integer", dataClass: "count", required: false },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["suppressed-by-forget", "suppressed-by-rejection"],
+    },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["memory-capture-novelty"],
+  proofIds: ["memory.capture.novelty-gate.line"],
+  releaseImpact: "patch",
+});
 
 const QWEN3_MEMORY_QUERY_INSTRUCTION =
   "Given a user conversation query, retrieve the most relevant durable memories for assisting the user.";
@@ -153,14 +326,22 @@ export type MemoryEmbedder = (
 // "No embedding-capable model is configured" is the default install's steady state, not a fault, so
 // it stays at debug and is there when an operator asks why memory retrieval finds nothing. A model
 // that WAS selected but whose provider is missing is an inconsistent configuration, and warns.
-function logEmbeddingUnavailable(reason: string, providerCount: number, faulty: boolean): void {
+type EmbeddingUnavailableReason = "no-embedding-capable-model" | "provider-absent";
+
+function logEmbeddingUnavailable(
+  reason: EmbeddingUnavailableReason,
+  providerCount: number,
+  faulty: boolean,
+): void {
   // A thunk in BOTH branches: the debug case must not allocate the event while the threshold is
   // at info, and that is the case an unconfigured install reaches on every capture.
-  getServerLogger().log(faulty ? "warn" : "debug", () => ({
-    category: "embedding",
-    op: "embedding.memory.unavailable",
-    extra: { reason, providerCount },
-  }));
+  getServerLogger().log(faulty ? "warn" : "debug", () =>
+    activityLogEvent(EMBEDDING_MEMORY_UNAVAILABLE_OPERATION, {}, { reason, providerCount }),
+  );
+}
+
+function closedEmbeddingErrorKind(errorKind: string): ActivityLogErrorKind {
+  return isActivityLogErrorKind(errorKind) ? errorKind : "unknown";
 }
 
 function logEmbeddingFailed(
@@ -169,24 +350,40 @@ function logEmbeddingFailed(
   durationMs: number,
   status?: number,
 ): void {
-  getServerLogger().warn({
-    category: "embedding",
-    op: "embedding.memory.failed",
-    durationMs,
-    errorKind,
-    ...(status === undefined ? {} : { status }),
-    extra: {
-      modelId: provider.modelId,
-      providerIdentity: memoryEmbeddingProviderIdentity(provider),
-    },
-  });
+  getServerLogger().warn(
+    activityLogEvent(
+      EMBEDDING_MEMORY_FAILED_OPERATION,
+      {
+        durationMs,
+        errorKind: closedEmbeddingErrorKind(errorKind),
+        ...(status === undefined ? {} : { status }),
+      },
+      {
+        modelId: provider.modelId,
+        providerIdentity: memoryEmbeddingProviderIdentity(provider),
+        failureKind: errorKind,
+      },
+    ),
+  );
 }
 
 // A vault rejection of a freshly produced vector is swallowed on purpose — the write it belongs to
 // already succeeded and must not be undone — but "swallowed" must not mean "invisible". The error
 // is reduced to a classification; the vector and the vault's own message never appear.
-function logEmbeddingStoreRejected(op: string, error: unknown): void {
-  getServerLogger().warn({ category: "memory", op, errorKind: errorKindOf(error) });
+type EmbeddingStoreRejection = "store-rejected" | "invalidation-failed";
+
+function logEmbeddingStoreRejected(kind: EmbeddingStoreRejection, error: unknown): void {
+  const failureKind = errorKindOf(error);
+  const envelope = { errorKind: closedEmbeddingErrorKind(failureKind) } as const;
+  if (kind === "store-rejected") {
+    getServerLogger().warn(
+      activityLogEvent(MEMORY_EMBEDDING_STORE_REJECTED_OPERATION, envelope, { failureKind }),
+    );
+    return;
+  }
+  getServerLogger().warn(
+    activityLogEvent(MEMORY_EMBEDDING_INVALIDATION_FAILED_OPERATION, envelope, { failureKind }),
+  );
 }
 
 function logEmbeddingSucceeded(
@@ -195,17 +392,18 @@ function logEmbeddingSucceeded(
   dimensions: number,
   durationMs: number,
 ): void {
-  getServerLogger().debug(() => ({
-    category: "embedding",
-    op: "embedding.memory.succeeded",
-    durationMs,
-    extra: {
-      modelId: provider.modelId,
-      providerIdentity: memoryEmbeddingProviderIdentity(provider),
-      embeddingKind: kind,
-      dimensions,
-    },
-  }));
+  getServerLogger().debug(() =>
+    activityLogEvent(
+      EMBEDDING_MEMORY_SUCCEEDED_OPERATION,
+      { durationMs },
+      {
+        modelId: provider.modelId,
+        providerIdentity: memoryEmbeddingProviderIdentity(provider),
+        embeddingKind: kind,
+        dimensions,
+      },
+    ),
+  );
 }
 
 // Builds an embedder from a gateway config, or returns null when no embedding-capable model is
@@ -295,7 +493,7 @@ export async function embedAndStoreMemory(
     vault.upsertEmbedding(memoryId, input);
   } catch (error) {
     // gateEmbeddingInput / storage rejection — capture already succeeded; drop the embedding.
-    logEmbeddingStoreRejected("memory.embedding.store-rejected", error);
+    logEmbeddingStoreRejected("store-rejected", error);
   }
 }
 
@@ -318,18 +516,16 @@ export async function refreshMemoryEmbeddingAfterBodyEdit(
   try {
     vault.upsertEmbedding(memoryId, input);
   } catch (error) {
-    logEmbeddingStoreRejected("memory.embedding.store-rejected", error);
+    logEmbeddingStoreRejected("store-rejected", error);
     logEmbeddingInvalidated("store-rejected");
     deleteEmbeddingBestEffort(vault, memoryId);
   }
 }
 
-function logEmbeddingInvalidated(reason: string): void {
-  getServerLogger().warn({
-    category: "memory",
-    op: "memory.embedding.invalidated",
-    extra: { reason },
-  });
+function logEmbeddingInvalidated(reason: "no-embedding" | "store-rejected"): void {
+  getServerLogger().warn(
+    activityLogEvent(MEMORY_EMBEDDING_INVALIDATED_OPERATION, {}, { reason }),
+  );
 }
 
 // Missing memory / no existing row / storage rejection: the edit already succeeded, and the
@@ -338,7 +534,7 @@ function deleteEmbeddingBestEffort(vault: MemoryVaultStore, memoryId: MemoryId):
   try {
     vault.deleteEmbedding(memoryId);
   } catch (error) {
-    logEmbeddingStoreRejected("memory.embedding.invalidation-failed", error);
+    logEmbeddingStoreRejected("invalidation-failed", error);
   }
 }
 
@@ -675,17 +871,30 @@ const SEMANTIC_SUPPRESSION_REASONS: readonly MemoryCaptureSuppressionReason[] = 
 // suppression in particular is a governed refusal the operator must be able to account for. One
 // line per decision, carrying the scope KIND (never the scoping id), whether an embedding was
 // available at all, the threshold that was applied and the neighbour count it was applied over.
+type NoveltyDecisionEvidence =
+  | {
+      readonly outcome: "suppressed";
+      readonly reason: MemoryCaptureSuppressionReason;
+      readonly dedupThreshold: number;
+    }
+  | {
+      readonly outcome: "inserted" | "merged";
+      readonly dedupThreshold: number;
+      readonly neighborCount: number;
+    };
+
 function logNoveltyDecision(
-  outcome: NoveltyInsertOutcome["kind"],
   scopeKind: MemoryRecord["scope"]["kind"],
   embedded: boolean,
-  fields: Readonly<Record<string, unknown>>,
+  evidence: NoveltyDecisionEvidence,
 ): void {
-  getServerLogger().info({
-    category: "memory",
-    op: "memory.capture.novelty-gate",
-    extra: { outcome, scopeKind, embedded, ...fields },
-  });
+  getServerLogger().info(
+    activityLogEvent(
+      MEMORY_CAPTURE_NOVELTY_GATE_OPERATION,
+      {},
+      { scopeKind, embedded, ...evidence },
+    ),
+  );
 }
 
 export async function insertSalienceMemoryWithNoveltyGate(
@@ -700,7 +909,11 @@ export async function insertSalienceMemoryWithNoveltyGate(
   const dedupThreshold = calibration.semanticDedupThreshold ?? SEMANTIC_DEDUP_COSINE_THRESHOLD;
   const suppression = semanticSuppressionReason(vault, record.scope, embedding, dedupThreshold);
   if (suppression !== null) {
-    logNoveltyDecision("suppressed", scopeKind, embedded, { reason: suppression, dedupThreshold });
+    logNoveltyDecision(scopeKind, embedded, {
+      outcome: "suppressed",
+      reason: suppression,
+      dedupThreshold,
+    });
     return { kind: "suppressed", reason: suppression };
   }
   const neighbors = gatherScopeEmbeddings(vault, record.scope);
@@ -708,17 +921,25 @@ export async function insertSalienceMemoryWithNoveltyGate(
   const duplicateOf = findSemanticDuplicate(embedding, neighbors, dedupThreshold);
   if (duplicateOf !== null) {
     vault.recordAccess([duplicateOf], Date.now());
-    logNoveltyDecision("merged", scopeKind, embedded, { dedupThreshold, neighborCount });
+    logNoveltyDecision(scopeKind, embedded, {
+      outcome: "merged",
+      dedupThreshold,
+      neighborCount,
+    });
     return { kind: "merged", mergedInto: duplicateOf };
   }
   const inserted = vault.insertMemory(record);
-  logNoveltyDecision("inserted", scopeKind, embedded, { dedupThreshold, neighborCount });
+  logNoveltyDecision(scopeKind, embedded, {
+    outcome: "inserted",
+    dedupThreshold,
+    neighborCount,
+  });
   if (embedding !== null) {
     try {
       vault.upsertEmbedding(inserted.id, embedding);
     } catch (error) {
       // gateEmbeddingInput / storage rejection — capture already succeeded; drop the embedding.
-      logEmbeddingStoreRejected("memory.embedding.store-rejected", error);
+      logEmbeddingStoreRejected("store-rejected", error);
     }
     // A-MEM-style associative linking (#204, O-P4). Reuses the neighbour set already fetched for the
     // novelty gate — no extra IO. Opt-in (default off => no edges, byte-identical).
