@@ -33,6 +33,7 @@ export type {
   SafeArtifactClass,
   SafeArtifactFileFailureKind,
   SafeArtifactOpenMode,
+  SafeArtifactPermissionAssurance,
   SafeArtifactPublicationEntry,
   SafeArtifactPublicationOptions,
   SafeArtifactPublicationResult,
@@ -41,12 +42,14 @@ export {
   DIR_MODE,
   FILE_MODE,
   SAFE_ARTIFACT_CLASSES,
+  SAFE_ARTIFACT_FILE_FAILURE_KINDS,
   SafeArtifactFileError,
   ensureDirHardened,
   chmodIfPresent,
   openSafeArtifactFile,
   publishSafeArtifactFileSet,
   replaceSafeArtifactFile,
+  safeArtifactPermissionAssurance,
   verifySafeArtifactFileDescriptor,
 } from "./fs-hardening.js";
 

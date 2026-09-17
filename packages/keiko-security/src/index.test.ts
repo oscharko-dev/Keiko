@@ -37,8 +37,16 @@ import {
   RedactingError,
   DIR_MODE,
   FILE_MODE,
+  SAFE_ARTIFACT_CLASSES,
+  SAFE_ARTIFACT_FILE_FAILURE_KINDS,
+  SafeArtifactFileError,
   ensureDirHardened,
   chmodIfPresent,
+  openSafeArtifactFile,
+  publishSafeArtifactFileSet,
+  replaceSafeArtifactFile,
+  safeArtifactPermissionAssurance,
+  verifySafeArtifactFileDescriptor,
   bindSecurityLogCorrelation,
   WINDOWS_ATOMIC_RENAME_BACKOFF_MS,
   WINDOWS_ATOMIC_RENAME_RETRY_CODES,
@@ -137,6 +145,14 @@ describe("keiko-security package surface", () => {
     expect(FILE_MODE).toBe(0o600);
     expect(typeof ensureDirHardened).toBe("function");
     expect(typeof chmodIfPresent).toBe("function");
+    expect(SAFE_ARTIFACT_CLASSES).toContain("activity-log");
+    expect(SAFE_ARTIFACT_FILE_FAILURE_KINDS).toContain("unsafe-target");
+    expect(typeof SafeArtifactFileError).toBe("function");
+    expect(typeof openSafeArtifactFile).toBe("function");
+    expect(typeof verifySafeArtifactFileDescriptor).toBe("function");
+    expect(typeof publishSafeArtifactFileSet).toBe("function");
+    expect(typeof replaceSafeArtifactFile).toBe("function");
+    expect(typeof safeArtifactPermissionAssurance).toBe("function");
   });
 
   it("exposes the shared atomic-publish rename primitives", () => {
