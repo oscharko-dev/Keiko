@@ -1,5 +1,5 @@
-// Server activity log — one JSON line per operation into `<stateDir>/logs/server.log`, with
-// day-based rotation and a rolling 7-day retention. Written unconditionally, no env-var opt-in:
+// Server activity log — one JSON line per operation into `<stateDir>/logs/server.log`. Written
+// unconditionally, no env-var opt-in:
 // operators facing a stuck run must not have to know a magic switch to see what the process is
 // doing. Redaction stays strict — endpoints, sizes, HTTP statuses, error kinds and correlation
 // ids only; request bodies, response bodies, tokens, api-keys and user text never appear, and
@@ -16,13 +16,13 @@
 //
 // The cost is bounded and pinned by COUNTING, not by timing. The sink holds ONE append-mode
 // descriptor open for the life of the file, so a line costs a single `write(2)` rather than the
-// open/write/close triple `appendFileSync` pays per call. `server-log.test.ts` asserts exactly
-// that over a burst — one `openSync`, one `writeSync` per line, and a file whose size is the SUM of
-// each line's own byte length (lines are no longer byte-identical once `seq` is in the envelope: its
-// digit width grows at each power-of-ten boundary the burst crosses) — so a regression to per-write
-// open/close, or to a quadratic format path, fails the suite deterministically instead of showing up
-// as latency in production. A wall-clock budget would measure the runner's disk instead, and go red
-// on a diff that never touched this file.
+// open/write/close triple `appendFileSync` pays per call. The initial open also verifies the state
+// and ancestry descriptors before closing those guards. `server-log.test.ts` asserts that the
+// fixed setup count does not grow over a burst — never one open per line — plus one `writeSync` per line and
+// a file whose size is the SUM of each line's own byte length (lines are no longer byte-identical
+// once `seq` is in the envelope: its digit width grows at each power-of-ten boundary the burst
+// crosses). A regression to per-write open/close, or to a quadratic format path, therefore fails
+// deterministically instead of showing up as latency in production.
 //
 // Levels are the volume control instead: an event below the configured threshold returns before
 // any string or JSON work happens at all (`KEIKO_LOG_LEVEL`, default `info`).
@@ -31,25 +31,26 @@ import { randomUUID } from "node:crypto";
 import {
   closeSync,
   constants,
-  existsSync,
   fstatSync,
   fsyncSync,
-  linkSync,
   lstatSync,
   mkdirSync,
   openSync,
   readSync,
-  readdirSync,
-  renameSync,
-  unlinkSync,
   writeSync,
 } from "node:fs";
-import { join, resolve as resolvePath } from "node:path";
-import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
+import { dirname, join, resolve as resolvePath } from "node:path";
+import {
+  SAFE_ARTIFACT_FILE_FAILURE_KINDS,
+  SafeArtifactFileError,
+  openSafeArtifactFile,
+  safeArtifactContainmentAssurance,
+  safeArtifactPermissionAssurance,
+} from "@oscharko-dev/keiko-security/fs-hardening";
 
 import { classifyErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
-import { isValidCorrelationId } from "../correlation.js";
+import { correlationIdOrUnknown, isValidCorrelationId } from "../correlation.js";
 import { contentFreeErrorClass, machineToken, safeProperty } from "./error-classification.js";
 import {
   DEFAULT_SERVER_LOG_LEVEL,
@@ -143,8 +144,8 @@ export const SERVER_LOG_SCHEMA_VERSION = 2;
 
 // One instance id per process, computed once from a single `randomUUID()` call so every line this
 // process ever writes carries the SAME value. A pid alone is not a process-identity key: the OS
-// reuses pids across restarts, so two different process lifetimes can share one in a rotated
-// multi-day file. `pid` + `instanceId` together, never `pid` alone, is what an agent joins on.
+// reuses pids across restarts, so two different process lifetimes can share one multi-day file.
+// `pid` + `instanceId` together, never `pid` alone, is what an agent joins on.
 const INSTANCE_ID = randomUUID().replaceAll("-", "").slice(0, 8);
 
 // Exposed so a future consumer (the CLI's support-bundle manifest) can name the same instance the
@@ -173,6 +174,7 @@ export interface ServerLogSink {
   readonly close?: (() => void) | undefined;
 }
 
+// Compatibility value for existing callers. Mutation-based retention is deferred to #3530.
 export const DEFAULT_LOG_RETENTION_DAYS = 7;
 
 // A hard ceiling on one serialised line. Every field guard runs first, so reaching this means a
@@ -219,11 +221,25 @@ export function nullServerLogSink(): ServerLogSink {
 // `Error`-name hardening above. Either branch still floors on the fixed string `"unknown"` for a
 // non-conforming candidate, pinned by `server-logger.test.ts`.
 export function errorKindOf(error: unknown): string {
+  const safeArtifactKind = safeArtifactErrorKind(error);
+  if (safeArtifactKind !== undefined) return safeArtifactKind;
   if (typeof error !== "object" || error === null) return "unknown";
   const code = machineToken(safeProperty(error, "code"));
   if (code !== undefined) return code;
   if (error instanceof Error) return contentFreeErrorClass(error);
   return classifyErrorKind(safeProperty(error, "name")) ?? "unknown";
+}
+
+const SAFE_ARTIFACT_ERROR_KINDS: ReadonlySet<string> = new Set(SAFE_ARTIFACT_FILE_FAILURE_KINDS);
+
+function safeArtifactErrorKind(error: unknown): string | undefined {
+  try {
+    if (!(error instanceof SafeArtifactFileError)) return undefined;
+  } catch {
+    return undefined;
+  }
+  const kind = safeProperty(error, "kind");
+  return typeof kind === "string" && SAFE_ARTIFACT_ERROR_KINDS.has(kind) ? kind : "open-failed";
 }
 
 // LAST-RESORT FAILURE NOTICE
@@ -245,6 +261,7 @@ export const LOG_FAILURE_NOTICE_WINDOW_MS = 60_000;
 export interface ServerLogFailureContext {
   readonly op?: string | undefined;
   readonly correlationId?: string | undefined;
+  readonly loss?: "event-dropped" | "event-location-unknown" | undefined;
 }
 
 const failureNotice = { lastAt: null as number | null, suppressed: 0 };
@@ -315,6 +332,8 @@ function emitLogNoticeFailedWarning(notice: Record<string, unknown>): void {
         failedOp: notice.failedOp,
         correlationId: notice.correlationId,
         errorKind: notice.errorKind,
+        completeness: notice.completeness,
+        loss: notice.loss,
         suppressedNotices: notice.suppressedNotices,
       }),
     });
@@ -335,11 +354,11 @@ function emitFailureNotice(
     category: "diagnostic",
     op: LOG_FAILURE_NOTICE_OP,
     errorKind: errorKindOf(error),
+    correlationId: correlationIdOrUnknown(context.correlationId),
+    completeness: "unknown",
+    loss: context.loss ?? "event-dropped",
   };
   if (context.op !== undefined) notice.failedOp = redactLogLabel(context.op);
-  if (context.correlationId !== undefined) {
-    notice.correlationId = redactLogLabel(context.correlationId);
-  }
   if (suppressed > 0) notice.suppressedNotices = suppressed;
   writeStderrNotice(notice);
 }
@@ -360,6 +379,10 @@ function emitShutdownFlushNotice(suppressed: number, now: number): void {
     level: "error",
     category: "diagnostic",
     op: LOG_FAILURE_NOTICE_OP,
+    correlationId: correlationIdOrUnknown(undefined),
+    errorKind: "unknown",
+    completeness: "unknown",
+    loss: "event-dropped",
     reason: "shutdown-flush",
     suppressedNotices: suppressed,
   });
@@ -453,26 +476,28 @@ function oversizedLine(record: Record<string, unknown>, lineBytes: number): stri
   return `${JSON.stringify(replacement)}\n`;
 }
 
-// Kept in memory so a single process rotates without reopening on every write, and holds one
-// append-mode descriptor for the life of the current file.
+// Kept in memory so a single process holds one append-mode descriptor for the life of the current
+// file.
 //
-// ONE ActiveLog PER FILE, PROCESS-WIDE. This is a data-loss invariant, not a performance tweak.
-// Two independent ActiveLogs on the same `server.log` each carry their own `currentDay`, so at the
-// UTC day boundary BOTH run `rotateIfNeeded`: the first renames `server.log` to the archive and
-// starts a fresh file, and the second renames that fresh file over the archive the first just
-// wrote — destroying every line from the finished day. The CLI already wires one file sink as
-// `deps.activityLog` while `getServerLogger()` lazily builds another for deep call sites, so this
-// was not a hypothetical arrangement; it was the shipped one.
+// ONE ActiveLog PER FILE, PROCESS-WIDE. Besides sharing the append descriptor, this keeps one UTC
+// boundary state so a process emits exactly one deferred-rotation warning per day.
 interface ActiveLog {
   readonly directory: string;
+  readonly trustedRoot: string;
   readonly currentPath: string;
-  readonly retentionDays: number;
   currentDay: string;
   handle: number | null;
   // Set while a record is being written and cleared once it has landed whole, so a write that
   // stalled mid-line is remembered: the file ends mid-record and the next record must open with a
   // newline. See `writeRecord`.
   pendingNewline: boolean;
+  pendingSafeOpenEvidence: boolean;
+  pendingRotationOutcome: RotationOutcome | undefined;
+}
+
+interface RotationOutcome {
+  readonly status: "deferred";
+  readonly durability: "unchanged";
 }
 
 // PROCESS-WIDE `seq` ALLOCATOR — one counter, one module, for the life of the process.
@@ -481,25 +506,31 @@ interface ActiveLog {
 // pointed at a workspace-local state dir, and the server logger's own default) each resolve to a
 // DIFFERENT `ActiveLog`; a counter kept per `ActiveLog` restarts at 1 for each one, so two lines
 // written moments apart — one to each directory — can carry the identical `(pid, instanceId, seq)`
-// tuple. That tuple is the join key ADR-0173 (D2) promises an agent a total, gap-free order on, and
+// tuple. That tuple is the join key ADR-0173 (D2) promises an agent a total monotonic order on, and
 // a duplicate breaks the promise regardless of how many log directories the process happens to
-// have open. One allocator shared by every `ActiveLog`, every rotation, and every sink built on top
-// of any of them is what keeps the tuple unique process-wide.
+// have open. One allocator shared by every `ActiveLog` and every sink built on top of any of them
+// is what keeps the tuple unique process-wide while gaps expose failed persistence attempts.
 //
-// Claimed as soon as an event clears the level gate, in `createFileSinkFacade.write`, BEFORE the
-// write is attempted — never rolled back if that write then throws. The alternative, claiming only
-// after a successful write, would let two callers racing the same failure both observe the same
-// pre-failure counter value and then both claim the number that follows it, silently reusing a
-// sequence number for two different lines. A gap is not a bug in this counter: it is the evidence
-// that a line was not persisted, and `reportServerLogFailure`'s suppressed-notice count accounts
-// for the writes a gap represents. Monotonic per process; a gap marks a line the sink could not
-// persist.
+// Each non-filtered facade call claims one identity before boundary handling or opening. Its first
+// persisted record uses that identity; further records claim in physical-write order. Claims are
+// never rolled back after failure. A gap is therefore not a counter bug: it marks a facade call or
+// subsequent evidence record that could not persist its next line. Monotonic per process; never
+// reused.
 let nextProcessSeq = 1;
 
 function allocateServerLogSeq(): number {
   const seq = nextProcessSeq;
   nextProcessSeq += 1;
   return seq;
+}
+
+function allocateServerLogIdentity(): ServerLogIdentity {
+  return {
+    schemaVersion: SERVER_LOG_SCHEMA_VERSION,
+    pid: process.pid,
+    instanceId: INSTANCE_ID,
+    seq: allocateServerLogSeq(),
+  };
 }
 
 function todayUtc(now: Date = new Date()): string {
@@ -516,116 +547,50 @@ function closeHandle(active: ActiveLog): void {
   active.handle = null;
 }
 
-// Throws rather than returning null: a descriptor we cannot open is a failure an operator has to
-// hear about, and the caller's catch is the one place that both closes and reports.
+function openActivityLogHandle(active: ActiveLog): number {
+  return openSafeArtifactFile(active.currentPath, {
+    artifactClass: "activity-log",
+    mode: "append-existing-or-create",
+    trustedRoot: active.trustedRoot,
+  });
+}
+
+function handleStillCurrent(active: ActiveLog): boolean {
+  if (active.handle === null) return false;
+  try {
+    const opened = trustedLogIdentity(fstatSync(active.handle));
+    const pathname = pathLogIdentity(active.currentPath);
+    return opened !== undefined && pathname !== undefined && sameLogNode(opened, pathname);
+  } catch {
+    return false;
+  }
+}
+
+// Revalidates the cached descriptor against the current pathname before every append. A peer that
+// rotated or replaced `server.log` therefore forces a close/reopen instead of receiving bytes on a
+// stale or unlinked inode.
 function ensureHandle(active: ActiveLog): number {
-  if (active.handle !== null) return active.handle;
-  active.handle = openSync(active.currentPath, "a", 0o600);
+  if (handleStillCurrent(active) && active.handle !== null) return active.handle;
+  closeHandle(active);
+  active.handle = openActivityLogHandle(active);
+  active.pendingSafeOpenEvidence = true;
   return active.handle;
 }
 
-function errorCode(error: unknown): string {
-  if (typeof error !== "object" || error === null || !("code" in error)) return "";
-  const { code } = error;
-  return typeof code === "string" ? code : "";
-}
-
-// Names old files with their calendar day, e.g. `server-2026-08-20.log`, and keeps at most
-// `retentionDays` of them. A fresh install starts empty. This is the whole rotation policy.
-function rotateIfNeeded(active: ActiveLog): void {
+// Node does not expose descriptor-relative rename/unlink primitives. Every path-based rotation
+// implementation therefore has an unavoidable final ancestor-substitution window that can mutate
+// a same-UID target outside the trusted root. Until #3530 installs bounded append-only segments,
+// keep writing the already-verified current descriptor and record the deferred boundary once.
+function rotateIfNeeded(active: ActiveLog): RotationOutcome | undefined {
   const day = todayUtc();
-  if (day === active.currentDay) return;
-  closeHandle(active);
-  // A successful archive means the file we were mid-record in is no longer the file we append to,
-  // so the partial-record debt does not travel to the fresh one.
-  if (archiveCurrentDay(active)) active.pendingNewline = false;
+  if (day === active.currentDay) return undefined;
   active.currentDay = day;
-  pruneOldFiles(active.directory, active.retentionDays);
+  return { status: "deferred", durability: "unchanged" };
 }
 
-// Rotation has to be atomic ACROSS PROCESSES, not merely within one. `renameSync` REPLACES an
-// existing destination, so two Keiko processes sharing a state directory that both reach the UTC
-// boundary destroy the finished day: the first archives it, the second renames its own fresh file
-// over that archive. An `existsSync` guard does not close that window — it is a check, and the
-// window is between the check and the rename. The in-process registry below cannot help either;
-// by construction it coordinates only one process.
-//
-// `link(2)` has no such window: it fails with EEXIST when the destination already exists, so
-// exactly one process can ever create `server-<day>.log`. The loser leaves the archive alone and
-// only advances its own day; only the winner unlinks the current path, so a fresh file another
-// process is already appending to can never be moved on top of a finished day.
-// `link(2)` reports "not supported by this filesystem" through these. EPERM is ambiguous — it is
-// also plain permission denial — but the state directory is created by this process at 0700, so a
-// permission failure on it is not the reachable case, and treating it as unsupported keeps
-// removable-media installs rotating.
-const NO_HARD_LINK_SUPPORT = new Set(["EPERM", "ENOSYS", "EOPNOTSUPP", "ENOTSUP"]);
-
-function archiveCurrentDay(active: ActiveLog): boolean {
-  const rolled = join(active.directory, `server-${active.currentDay}.log`);
-  try {
-    linkSync(active.currentPath, rolled);
-  } catch (error) {
-    const code = errorCode(error);
-    // EEXIST: a peer already archived this day, and leaving its file untouched is the whole point.
-    // ENOENT: there is nothing to archive (a fresh install, or a peer that has already moved it).
-    if (code === "EEXIST" || code === "ENOENT") return false;
-    // ONLY "this filesystem has no hard links" may fall back to the destination-replacing rename.
-    // EACCES, EMLINK, EIO and friends are real failures, and for them the safe outcome is to NOT
-    // rotate: one file growing is a nuisance, overwriting a peer's finished archive is data loss.
-    // Choose the nuisance. Without this narrowing the fallback re-opened the exact race the
-    // hard-link rotation exists to close.
-    if (!NO_HARD_LINK_SUPPORT.has(code)) return false;
-    return archiveWithoutHardLinks(active, rolled);
-  }
-  return unlinkCurrentPath(active);
-}
-
-// A filesystem that cannot hard-link at all (FAT/exFAT under a state directory on removable
-// media). No atomic primitive is left, so this falls back to the guarded rename rather than never
-// rotating and letting one file grow without bound — the cross-process window exists only here,
-// and only where nothing better is available.
-function archiveWithoutHardLinks(active: ActiveLog, rolled: string): boolean {
-  if (existsSync(rolled) || !existsSync(active.currentPath)) return false;
-  try {
-    atomicPublishRename(active.currentPath, rolled, { rename: renameSync });
-    return true;
-  } catch {
-    // Windows file-busy and friends: keep appending to the current file — rotation is a
-    // convenience, not a correctness requirement.
-    return false;
-  }
-}
-
-function unlinkCurrentPath(active: ActiveLog): boolean {
-  try {
-    unlinkSync(active.currentPath);
-    return true;
-  } catch {
-    // The archive is written, which is the part that matters. This process keeps appending to the
-    // still-linked current file, and the next boundary finds the archive present and leaves it be.
-    return false;
-  }
-}
-
-function pruneOldFiles(directory: string, retentionDays: number): void {
-  try {
-    const entries = readdirSync(directory).filter((name) =>
-      /^server-\d{4}-\d{2}-\d{2}\.log$/.test(name),
-    );
-    if (entries.length <= retentionDays) return;
-    // Explicit collator, not the default lexicographic sort: the names are ISO-dated, so the
-    // ordering decides which files rotation deletes.
-    entries.sort((left, right) => left.localeCompare(right, "en-US"));
-    for (const stale of entries.slice(0, entries.length - retentionDays)) {
-      try {
-        unlinkSync(join(directory, stale));
-      } catch {
-        // Best effort; a locked file will be retried on the next rotation.
-      }
-    }
-  } catch {
-    // Directory unreadable is not a reason to fail the server; the next write recreates it.
-  }
+function refreshPendingRotation(active: ActiveLog): void {
+  const outcome = rotateIfNeeded(active);
+  if (outcome !== undefined) active.pendingRotationOutcome = outcome;
 }
 
 // The descriptor is opened `a`, so every write is an atomic O_APPEND write at the current end of
@@ -643,7 +608,7 @@ function writeAll(handle: number, payload: Buffer): void {
   let offset = 0;
   while (offset < payload.length) {
     const written = writeSync(handle, payload, offset, payload.length - offset);
-    if (written <= 0) throw new Error("activity log descriptor accepted no bytes");
+    if (written <= 0) throw new SafeArtifactFileError("activity-log", "write-failed");
     offset += written;
   }
 }
@@ -660,8 +625,155 @@ function writeRecord(active: ActiveLog, handle: number, line: string): void {
   active.pendingNewline = false;
 }
 
+function writeEventRecord(
+  active: ActiveLog,
+  handle: number,
+  event: ServerLogEvent,
+  identity: ServerLogIdentity = allocateServerLogIdentity(),
+): void {
+  writeRecord(active, handle, formatServerLogLine(event, undefined, identity));
+}
+
+function safeOpenEvidence(): ServerLogEvent {
+  return {
+    category: "diagnostic",
+    op: "server-log.safe-open",
+    correlationId: correlationIdOrUnknown(undefined),
+    extra: {
+      artifactClass: "activity-log",
+      persistenceStatus: "opened",
+      permissionAssurance: safeArtifactPermissionAssurance(),
+      containmentAssurance: safeArtifactContainmentAssurance(),
+      completeness: "complete",
+      loss: "none",
+    },
+  };
+}
+
+function rotationEvidence(
+  outcome: RotationOutcome,
+  correlationId: string | undefined,
+): ServerLogEvent {
+  return {
+    level: "warn",
+    category: "diagnostic",
+    op: "server-log.rotation",
+    correlationId: correlationIdOrUnknown(correlationId),
+    errorKind: "publish-unsupported",
+    extra: {
+      artifactClass: "activity-log",
+      persistenceStatus: outcome.status,
+      durabilityAssurance: outcome.durability,
+      rotationAssurance: "append-only-current",
+      retentionStatus: "deferred",
+      retentionReason: "segment-retention-owned-by-3530",
+      completeness: "partial",
+      loss: "none",
+    },
+  };
+}
+
+function pendingPersistenceEvents(
+  active: ActiveLog,
+  correlationId: string | undefined,
+): readonly ServerLogEvent[] {
+  const events: ServerLogEvent[] = [];
+  if (active.pendingSafeOpenEvidence) events.push(safeOpenEvidence());
+  if (active.pendingRotationOutcome !== undefined) {
+    events.push(rotationEvidence(active.pendingRotationOutcome, correlationId));
+  }
+  return events;
+}
+
+function clearPendingPersistenceEvents(active: ActiveLog): void {
+  active.pendingSafeOpenEvidence = false;
+  active.pendingRotationOutcome = undefined;
+}
+
+function writePendingPersistenceEvents(
+  active: ActiveLog,
+  handle: number,
+  firstIdentity: ServerLogIdentity,
+  correlationId: string | undefined,
+): boolean {
+  let firstIdentityUsed = false;
+  if (active.pendingSafeOpenEvidence) {
+    writeEventRecord(active, handle, safeOpenEvidence(), firstIdentity);
+    active.pendingSafeOpenEvidence = false;
+    firstIdentityUsed = true;
+  }
+  if (active.pendingRotationOutcome !== undefined) {
+    const identity = firstIdentityUsed ? undefined : firstIdentity;
+    writeEventRecord(
+      active,
+      handle,
+      rotationEvidence(active.pendingRotationOutcome, correlationId),
+      identity,
+    );
+    active.pendingRotationOutcome = undefined;
+    firstIdentityUsed = true;
+  }
+  return firstIdentityUsed;
+}
+
+class PostWriteMutationError extends SafeArtifactFileError {
+  public constructor() {
+    super("activity-log", "target-mutated");
+  }
+}
+
+function mutationEvidence(event: ServerLogEvent): ServerLogEvent {
+  return {
+    level: "error",
+    category: "diagnostic",
+    op: LOG_FAILURE_NOTICE_OP,
+    correlationId: correlationIdOrUnknown(event.correlationId),
+    errorKind: "target-mutated",
+    extra: {
+      failedOp: redactLogLabel(event.op),
+      artifactClass: "activity-log",
+      permissionAssurance: safeArtifactPermissionAssurance(),
+      containmentAssurance: safeArtifactContainmentAssurance(),
+      completeness: "unknown",
+      loss: "event-location-unknown",
+    },
+  };
+}
+
+function persistPostWriteMutation(active: ActiveLog, event: ServerLogEvent): void {
+  closeHandle(active);
+  try {
+    const handle = ensureHandle(active);
+    writePendingPersistenceEvents(active, handle, allocateServerLogIdentity(), event.correlationId);
+    writeEventRecord(active, handle, mutationEvidence(event));
+    if (!handleStillCurrent(active)) throw new PostWriteMutationError();
+  } catch {
+    throw new PostWriteMutationError();
+  }
+}
+
+function writeCurrentEvent(
+  active: ActiveLog,
+  event: ServerLogEvent,
+  firstIdentity: ServerLogIdentity,
+): void {
+  const handle = ensureHandle(active);
+  const firstIdentityUsed = writePendingPersistenceEvents(
+    active,
+    handle,
+    firstIdentity,
+    event.correlationId,
+  );
+  writeEventRecord(active, handle, event, firstIdentityUsed ? undefined : firstIdentity);
+  if (!handleStillCurrent(active)) {
+    persistPostWriteMutation(active, event);
+    throw new PostWriteMutationError();
+  }
+}
+
 export interface FileServerLogSinkOptions {
   readonly level?: ServerLogThreshold | undefined;
+  // Retained for configuration compatibility while mutation-based retention is deferred to #3530.
   readonly retentionDays?: number | undefined;
   readonly env?: ServerLogEnv | undefined;
 }
@@ -744,31 +856,24 @@ function pathLogIdentity(path: string): LogFileIdentity | undefined {
 
 function currentHandleIdentity(active: ActiveLog): LogFileIdentity | undefined {
   if (active.handle === null) return undefined;
-  const descriptor = trustedLogIdentity(fstatSync(active.handle));
-  if (descriptor === undefined) return undefined;
-  const pathname = pathLogIdentity(active.currentPath);
-  return pathname !== undefined && sameLogNode(descriptor, pathname) ? descriptor : undefined;
+  try {
+    const descriptor = trustedLogIdentity(fstatSync(active.handle));
+    if (descriptor === undefined) return undefined;
+    const pathname = pathLogIdentity(active.currentPath);
+    return pathname !== undefined && sameLogNode(descriptor, pathname) ? descriptor : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function openTrustedDurableHandle(active: ActiveLog): LogFileIdentity | undefined {
   const existing = currentHandleIdentity(active);
   if (existing !== undefined) return existing;
   closeHandle(active);
-  const secureFlags =
-    constants.O_WRONLY | constants.O_APPEND | constants.O_NONBLOCK | constants.O_NOFOLLOW;
   try {
-    active.handle = openSync(active.currentPath, secureFlags);
-  } catch (error) {
-    if (errorCode(error) !== "ENOENT") return undefined;
-    try {
-      active.handle = openSync(
-        active.currentPath,
-        secureFlags | constants.O_CREAT | constants.O_EXCL,
-        0o600,
-      );
-    } catch {
-      return undefined;
-    }
+    ensureHandle(active);
+  } catch {
+    return undefined;
   }
   return currentHandleIdentity(active);
 }
@@ -860,13 +965,7 @@ function closeLogDirectoryGuards(guards: readonly LogDirectoryGuard[]): void {
 function batchLines(events: readonly ServerLogEvent[]): readonly string[] | undefined {
   const lines: string[] = [];
   for (const event of events) {
-    const seq = allocateServerLogSeq();
-    const line = formatServerLogLine(event, undefined, {
-      schemaVersion: SERVER_LOG_SCHEMA_VERSION,
-      pid: process.pid,
-      instanceId: INSTANCE_ID,
-      seq,
-    });
+    const line = formatServerLogLine(event, undefined, allocateServerLogIdentity());
     if (Buffer.byteLength(line, "utf8") > MAX_LOG_LINE_BYTES) return undefined;
     lines.push(line);
   }
@@ -874,10 +973,21 @@ function batchLines(events: readonly ServerLogEvent[]): readonly string[] | unde
 }
 
 interface PreparedDurableLog {
+  readonly status: "prepared";
   readonly active: ActiveLog;
   readonly initial: LogFileIdentity;
   readonly directory: string;
 }
+
+type DurablePreparationResult =
+  PreparedDurableLog | Extract<DurableServerLogBatchResult, { readonly status: "deferred" }>;
+
+type DurableEvidencePersistenceResult =
+  | { readonly status: "persisted"; readonly identity: LogFileIdentity }
+  | {
+      readonly status: "deferred";
+      readonly reason: "append-failed" | "durability-uncertain" | "destination-mutated";
+    };
 
 function repairPendingRecord(active: ActiveLog): boolean {
   if (!active.pendingNewline) return true;
@@ -941,26 +1051,28 @@ function repairCurrentLogTail(
 function prepareDurableLog(
   stateDir: string,
   guards: LogDirectoryGuard[],
-): PreparedDurableLog | undefined {
+): DurablePreparationResult {
   const stateGuard = openLogDirectoryGuard(stateDir);
-  if (stateGuard === undefined) return undefined;
+  if (stateGuard === undefined) return { status: "deferred", reason: "destination-unsafe" };
   guards.push(stateGuard);
   const directory = join(stateDir, "logs");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  if (!durableLogDirectory(directory)) return undefined;
+  if (!durableLogDirectory(directory)) return { status: "deferred", reason: "destination-unsafe" };
   const logGuard = openLogDirectoryGuard(directory);
-  if (logGuard === undefined) return undefined;
+  if (logGuard === undefined) return { status: "deferred", reason: "destination-unsafe" };
   guards.push(logGuard);
-  const active = resolveActiveLog(directory, DEFAULT_LOG_RETENTION_DAYS);
-  rotateIfNeeded(active);
+  const active = resolveActiveLog(directory);
+  refreshPendingRotation(active);
   let initial = openTrustedDurableHandle(active);
   if (initial === undefined || active.handle === null) {
     closeHandle(active);
-    return undefined;
+    return { status: "deferred", reason: "destination-unsafe" };
   }
   initial = repairCurrentLogTail(active, initial, guards);
-  if (initial === undefined) return undefined;
-  return { active, initial, directory };
+  if (initial === undefined) return { status: "deferred", reason: "destination-unsafe" };
+  const evidence = persistPendingDurableEvidence(active, initial, guards);
+  if (evidence.status === "deferred") return evidence;
+  return { status: "prepared", active, initial: evidence.identity, directory };
 }
 
 function stableBeforeBatch(
@@ -999,10 +1111,48 @@ function completedBatchMatches(
   before: LogFileIdentity,
   expectedSize: number,
 ): boolean {
+  return completedBatchIdentity(active, before, expectedSize) !== undefined;
+}
+
+function completedBatchIdentity(
+  active: ActiveLog,
+  before: LogFileIdentity,
+  expectedSize: number,
+): LogFileIdentity | undefined {
   const completed = currentHandleIdentity(active);
-  return (
-    completed?.dev === before.dev && completed.ino === before.ino && completed.size === expectedSize
-  );
+  if (
+    completed?.dev !== before.dev ||
+    completed.ino !== before.ino ||
+    completed.size !== expectedSize
+  ) {
+    return undefined;
+  }
+  return completed;
+}
+
+function persistPendingDurableEvidence(
+  active: ActiveLog,
+  before: LogFileIdentity,
+  guards: readonly LogDirectoryGuard[],
+): DurableEvidencePersistenceResult {
+  const events = pendingPersistenceEvents(active, undefined);
+  if (events.length === 0) return { status: "persisted", identity: before };
+  const lines = batchLines(events);
+  if (lines === undefined) return { status: "deferred", reason: "append-failed" };
+  const addedBytes = lines.reduce((total, line) => total + Buffer.byteLength(line, "utf8"), 0);
+  if (!writeBatchRecords(active, lines)) return { status: "deferred", reason: "append-failed" };
+  if (!syncBatch(active)) return { status: "deferred", reason: "durability-uncertain" };
+  const completed = completedBatchIdentity(active, before, before.size + addedBytes);
+  if (
+    completed === undefined ||
+    !handleStillCurrent(active) ||
+    !guards.every(logDirectoryStillSame)
+  ) {
+    closeHandle(active);
+    return { status: "deferred", reason: "destination-mutated" };
+  }
+  clearPendingPersistenceEvents(active);
+  return { status: "persisted", identity: completed };
 }
 
 function appendInspectedBatch(
@@ -1015,7 +1165,9 @@ function appendInspectedBatch(
   if (inspection.events.some((event) => !serverLogLevelEnabled(eventLevel(event), threshold))) {
     return { status: "deferred", reason: "level-filtered" };
   }
-  const lines = batchLines(inspection.events);
+  const correlationId = inspection.events[0]?.correlationId;
+  const persistenceEvents = pendingPersistenceEvents(prepared.active, correlationId);
+  const lines = batchLines([...persistenceEvents, ...inspection.events]);
   if (lines === undefined) return { status: "deferred", reason: "append-failed" };
   const addedBytes = lines.reduce((total, line) => total + Buffer.byteLength(line, "utf8"), 0);
   if (!writeBatchRecords(prepared.active, lines)) {
@@ -1026,12 +1178,14 @@ function appendInspectedBatch(
   }
   if (
     !completedBatchMatches(prepared.active, before, before.size + addedBytes) ||
+    !handleStillCurrent(prepared.active) ||
     !guards.every(logDirectoryStillSame)
   ) {
     closeHandle(prepared.active);
     return { status: "deferred", reason: "destination-mutated" };
   }
-  return { status: "appended", appendedCount: lines.length };
+  clearPendingPersistenceEvents(prepared.active);
+  return { status: "appended", appendedCount: inspection.events.length };
 }
 
 function inspectAndAppendDurableBatch(
@@ -1065,8 +1219,8 @@ export function appendDurableServerLogBatch(
   const guards: LogDirectoryGuard[] = [];
   try {
     const prepared = prepareDurableLog(stateDir, guards);
-    return prepared === undefined
-      ? { status: "deferred", reason: "destination-unsafe" }
+    return prepared.status === "deferred"
+      ? prepared
       : inspectAndAppendDurableBatch(prepared, guards, options);
   } catch {
     return { status: "deferred", reason: "destination-unsafe" };
@@ -1076,23 +1230,23 @@ export function appendDurableServerLogBatch(
 }
 
 // The process-wide registry that makes the file sink a singleton per resolved log directory. Every
-// consumer of the same file shares one descriptor and one rotation state; the threshold stays
+// consumer of the same file shares one descriptor and one UTC boundary state; the threshold stays
 // per-consumer, because that is a caller's own volume control and cannot lose data.
 const activeLogs = new Map<string, ActiveLog>();
 
-function resolveActiveLog(directory: string, retentionDays: number): ActiveLog {
+function resolveActiveLog(directory: string): ActiveLog {
   const key = resolvePath(directory);
   const existing = activeLogs.get(key);
-  // The first caller's retention wins: a second sink on the same file is the same file, and two
-  // retention policies over one directory is not a thing that can be honoured anyway.
   if (existing !== undefined) return existing;
   const created: ActiveLog = {
     directory,
+    trustedRoot: dirname(directory),
     currentPath: join(directory, "server.log"),
-    retentionDays,
     currentDay: todayUtc(),
     handle: null,
     pendingNewline: false,
+    pendingSafeOpenEvidence: false,
+    pendingRotationOutcome: undefined,
   };
   activeLogs.set(key, created);
   return created;
@@ -1103,8 +1257,7 @@ function resolveActiveLog(directory: string, retentionDays: number): ActiveLog {
 // releases an OS resource, it never disables the log.
 //
 // The registry entries themselves are KEPT. Dropping them would let a sink created after a
-// shutdown build a second ActiveLog over a file some retained sink still writes to — which is the
-// two-rotation-states data loss this registry exists to make impossible.
+// shutdown build a second ActiveLog over a file some retained sink still writes to.
 export function closeFileServerLogSinks(): void {
   for (const active of activeLogs.values()) closeHandle(active);
 }
@@ -1121,7 +1274,7 @@ export function createFileServerLogSink(
     // server; the caller keeps running and the operator sees a missing file, not a hang.
     return NULL_SINK;
   }
-  const active = resolveActiveLog(directory, options.retentionDays ?? DEFAULT_LOG_RETENTION_DAYS);
+  const active = resolveActiveLog(directory);
   const threshold = options.level ?? resolveServerLogThreshold(options.env ?? process.env);
   return createFileSinkFacade(active, threshold);
 }
@@ -1132,25 +1285,22 @@ function createFileSinkFacade(active: ActiveLog, threshold: ServerLogThreshold):
     write(event: ServerLogEvent): void {
       // The threshold check comes before any formatting: a filtered event costs one comparison.
       if (!serverLogLevelEnabled(eventLevel(event), threshold)) return;
+      const identity = allocateServerLogIdentity();
       try {
-        rotateIfNeeded(active);
-        // Claimed as soon as the event clears the gate, before the write is attempted: see
-        // `allocateServerLogSeq` for why a dropped write must not roll this number back.
-        const seq = allocateServerLogSeq();
-        const identity: ServerLogIdentity = {
-          schemaVersion: SERVER_LOG_SCHEMA_VERSION,
-          pid: process.pid,
-          instanceId: INSTANCE_ID,
-          seq,
-        };
-        writeRecord(active, ensureHandle(active), formatServerLogLine(event, undefined, identity));
+        refreshPendingRotation(active);
+        writeCurrentEvent(active, event, identity);
       } catch (error) {
         // Writing must never take the server down; a full disk, a permission change or a file
         // removed under us drops the line and forces a reopen on the next write. It does NOT drop
         // the fact that it happened: a log that has stopped working is exactly the condition an
         // operator cannot infer from the absence of lines.
         closeHandle(active);
-        reportServerLogFailure(error, { op: event.op, correlationId: event.correlationId });
+        reportServerLogFailure(error, {
+          op: event.op,
+          correlationId: event.correlationId,
+          loss:
+            error instanceof PostWriteMutationError ? "event-location-unknown" : "event-dropped",
+        });
       }
     },
     flush(): void {

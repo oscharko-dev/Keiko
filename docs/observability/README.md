@@ -7,24 +7,22 @@ lifecycle, and how to read it with `keiko support export` / `keiko support analy
 consumer-facing counterpart to [ADR-0173](../adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md),
 which records the design decisions behind everything described here.
 
-## File location, rotation, retention
+## File location and deferred rotation
 
 The log lives at `<stateDir>/logs/server.log` — `<stateDir>` is `./.keiko` by default, or wherever
 `--state-dir` / `KEIKO_STATE_DIR` points. It is JSON Lines: one `JSON.stringify`-serialized object
 per line, written synchronously so that the last line on disk before a hang or a crash is the last
 line the process actually reached.
 
-Rotation is day-based, keyed to the UTC calendar day, and **hard-link-atomic across processes**:
-at the first write after midnight UTC, the process links the finished day's file to
-`server-<YYYY-MM-DD>.log` (`link(2)`, which fails closed with `EEXIST` if a peer process already
-made that link) before starting a fresh `server.log`. This is why two Keiko processes sharing a
-state directory never race each other into overwriting a finished day's archive — a plain
-`rename` would lose that race; a hard link cannot. On a filesystem with no hard-link support
-(FAT/exFAT removable media), rotation falls back to a guarded rename instead of never rotating.
-
-Retention is a **rolling 7-day window** of rotated `server-<date>.log` files, pruned oldest-first
-on every rotation. The current, not-yet-rotated `server.log` is never counted against or dropped
-by retention.
+Rotation and retention are deliberately deferred to #3530's bounded append-only segment design.
+Node does not expose descriptor-relative rename/unlink operations, so mutating dated files through
+absolute paths leaves a final same-UID ancestor-substitution window. Keiko therefore keeps
+appending to the verified `server.log` instead of risking an overwrite or deletion outside the
+selected state root. At the first write after each UTC day boundary it emits one correlated
+`server-log.rotation` warning with `persistenceStatus: "deferred"`,
+`durabilityAssurance: "unchanged"`, and `retentionStatus: "deferred"`. No archive, stage, marker,
+or retention deletion is attempted. Operators should monitor the current file's growth until the
+append-only segment replacement lands.
 
 ## Log level
 
@@ -68,8 +66,9 @@ hashes, and shapes.
 
 Every `ServerLogEvent` line carries `pid`, `instanceId` (8 hex characters, minted once per process
 start), and a process-wide, monotonically allocated `seq`. Together, `(pid, instanceId, seq)` give
-a **total, gap-free order within one process lifetime** — but that is the full extent of the
-ordering guarantee. There is no true cross-process global order: two different process lifetimes
+a **total order over persisted lines within one process lifetime**. The sequence may contain gaps
+when an opening or write attempt fails, and the failure notice provides the closed classification;
+there is no true cross-process global order. Two different process lifetimes
 each count `seq` from their own start, so a `seq` value from one process is not orderable against
 the same `seq` value from another by the tuple alone. The wall-clock `ts` field is a best-effort
 tiebreak hint only, never a guarantee, and should not be relied on to order lines across processes.
@@ -190,7 +189,8 @@ their process activity is `not-applicable`. Missing or invalid observations rema
 `unknown`; file mtimes and guessed instance ids are never substituted.
 
 A line successfully parsed but missing the full `(pid, instanceId, seq)` triple is a **legacy
-line** — one written before this envelope shipped, still inside the log's 7-day retention window.
+line** — one written before this envelope shipped in the long-lived current file or a compatible
+legacy `server-YYYY-MM-DD.log` archive retained from the retired rotation implementation.
 It is never dropped or misordered; it is ordered by its own file position, counted in
 `legacyLineCount`, and named in exactly one `warnings[]` entry when that count is nonzero. Treat
 that warning as an instruction to read the file position ordering with less confidence for those

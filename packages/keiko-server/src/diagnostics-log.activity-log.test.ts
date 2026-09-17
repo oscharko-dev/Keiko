@@ -18,7 +18,10 @@ import { closeFileServerLogSinks, SERVER_LOG_LEVEL_ENV } from "./observability/i
 
 function readActivityLine(stateDir: string): Record<string, unknown> {
   const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8").trim();
-  return JSON.parse(raw) as Record<string, unknown>;
+  const records = raw.split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+  const activity = records.find((record) => record.op !== "server-log.safe-open");
+  if (activity === undefined) throw new Error("activity record missing");
+  return activity;
 }
 
 describe("diagnostic records on the activity log", () => {

@@ -885,7 +885,7 @@ describe("support timeline contract — the #3347 workspace-authority security o
     expect(seed?.causeChain).toEqual(causes);
   });
 
-  it("drops the operation from every timeline when an emitter writes no correlationId at all", () => {
+  it("keeps an uncorrelated caller out of timelines while accounting for safe-open fallback", () => {
     // The sanctioned fallback is `UNKNOWN_CORRELATION_ID`, never an absent field: an emitter that
     // omits the id entirely loses its own timeline, and this pin makes that cost visible instead of
     // letting a future emitter discover it in production. The line is still ACCOUNTED for — it is
@@ -902,9 +902,17 @@ describe("support timeline contract — the #3347 workspace-authority security o
 
     const result = analyzeLogText(serialized);
 
-    expect(result.timelines).toEqual([]);
+    expect(result.timelines).toEqual([
+      expect.objectContaining({
+        correlationId: "unknown-correlation-id",
+        lines: [expect.objectContaining({ op: "server-log.safe-open" })],
+      }),
+    ]);
     expect(result.malformedLineCount).toBe(0);
-    expect(result.clusters.map((cluster) => cluster.op)).toEqual([WATCH_AUTHORITY_REVOKED]);
+    expect(result.clusters.map((cluster) => cluster.op)).toEqual([
+      "server-log.safe-open",
+      WATCH_AUTHORITY_REVOKED,
+    ]);
   });
 
   it("fails closed when an op this contract covers is no longer emitted anywhere in production", () => {

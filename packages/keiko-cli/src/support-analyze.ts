@@ -19,8 +19,8 @@
 // position of their FIRST line in the file — the order the operator's machine actually produced
 // them — and a lifetime's lines are kept together behind that rank. A line written before the v2
 // envelope shipped (schemaVersion 1, no pid/instanceId/seq) can still be present in a server.log
-// spanning the upgrade (the sink's own 7-day retention window); it has no lifetime to belong to, so
-// it ranks by its own file position. The result is ONE total order (rank, then seq) rather than a
+// spanning the upgrade or in a retained legacy rotation archive; it has no lifetime to belong to,
+// so it ranks by its own file position. The result is ONE total order (rank, then seq) rather than a
 // comparator that switches rule per pair, which is not transitive and would hand `sort` an
 // undefined result the moment a pre-v2 line sits between two v2 lines of the same process.
 //
@@ -139,7 +139,7 @@ export interface AnalyzeAllResult {
   readonly malformedLineCount: number;
   readonly processes: readonly ProcessSummary[];
   // Lines successfully parsed as log records but missing the full (pid, instanceId, seq) v2
-  // identity triple — pre-v2 lines the sink's own retention window can still be holding.
+  // identity triple — pre-v2 lines the long-lived current file or a legacy archive can still hold.
   readonly legacyLineCount: number;
   // Exactly one entry when legacyLineCount > 0, naming the count; empty otherwise. The honest
   // machine-readable admission that this analyzer fell back to file-position ordering for some
