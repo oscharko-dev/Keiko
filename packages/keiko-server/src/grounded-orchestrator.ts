@@ -5355,7 +5355,7 @@ function coverageActivityExtra(
 
 function structuralActivityExtra(
   structural: StructuralRequestContextPoolDiagnostics,
-): Partial<ConnectedContextCompletionDetailsActivityFields> {
+): FailedStructuralFields & Partial<ConnectedContextCompletionDetailsActivityFields> {
   return {
     structuralContextCount: structural.contextCount,
     structuralCandidateInventoryBuildCount: structural.candidateInventoryBuildCount,
@@ -5372,7 +5372,7 @@ function structuralActivityExtra(
 
 function workspaceIndexActivityExtra(
   index: WorkspaceIndexActivityDiagnostics,
-): Partial<ConnectedContextCompletionDetailsActivityFields> {
+): FailedIndexFields & Partial<ConnectedContextCompletionDetailsActivityFields> {
   return {
     indexProviderStatus: index.providerStatus,
     indexSearchMode: index.searchMode,
@@ -5391,55 +5391,7 @@ function workspaceIndexActivityExtra(
 
 function workspaceIoActivityExtra(
   io: WorkspaceIoActivityDiagnostics,
-): Partial<ConnectedContextCompletionDetailsActivityFields> {
-  return {
-    workspaceIoReadDirCalls: io.readDirCalls,
-    workspaceIoReadDirEntries: io.readDirEntries,
-    workspaceIoStatCalls: io.statCalls,
-    workspaceIoRealPathCalls: io.realPathCalls,
-    workspaceIoExistsCalls: io.existsCalls,
-    workspaceIoContentReadCalls: io.contentReadCalls,
-    workspaceIoContentReadBytes: io.contentReadBytes,
-  };
-}
-
-function failedStructuralActivityExtra(
-  structural: StructuralRequestContextPoolDiagnostics,
-): FailedStructuralFields {
-  return {
-    structuralContextCount: structural.contextCount,
-    structuralCandidateInventoryBuildCount: structural.candidateInventoryBuildCount,
-    structuralCandidateFileCount: structural.candidateFileCount,
-    structuralCandidateDirectoryCount: structural.candidateDirectoryCount,
-    structuralCodeIndexBuildCount: structural.codeIndexBuildCount,
-    structuralSymbolGraphBuildCount: structural.symbolGraphBuildCount,
-    structuralImportGraphBuildCount: structural.importGraphBuildCount,
-    structuralEndpointGraphBuildCount: structural.endpointGraphBuildCount,
-    structuralFileSearchCount: structural.fileSearchCount,
-    structuralTextSearchCount: structural.textSearchCount,
-  };
-}
-
-function failedIndexActivityExtra(index: WorkspaceIndexActivityDiagnostics): FailedIndexFields {
-  return {
-    indexProviderStatus: index.providerStatus,
-    indexSearchMode: index.searchMode,
-    indexLoadStatus: index.loadStatus,
-    indexSaveStatus: index.saveStatus,
-    indexIndexedRecords: index.indexedRecords,
-    indexReusedRecords: index.reusedRecords,
-    indexStaleRecords: index.staleRecords,
-    indexSearchCount: index.searchCount,
-    indexReportCount: index.reportCount,
-    indexFallbackSearchCount: index.fallbackSearchCount,
-    indexLoadFailures: index.loadFailures,
-    indexSaveFailures: index.saveFailures,
-  };
-}
-
-function failedWorkspaceIoActivityExtra(
-  io: WorkspaceIoActivityDiagnostics,
-): FailedWorkspaceIoFields {
+): FailedWorkspaceIoFields & Partial<ConnectedContextCompletionDetailsActivityFields> {
   return {
     workspaceIoReadDirCalls: io.readDirCalls,
     workspaceIoReadDirEntries: io.readDirEntries,
@@ -5517,9 +5469,9 @@ function failureActivityExtra(
     failureKind: connectedContextFailureKind(error),
     retrievalPhase: progress.phase,
     plannedRingCount: progress.plannedRingCount,
-    ...failedStructuralActivityExtra(structural),
-    ...failedIndexActivityExtra(index),
-    ...failedWorkspaceIoActivityExtra(io),
+    ...structuralActivityExtra(structural),
+    ...workspaceIndexActivityExtra(index),
+    ...workspaceIoActivityExtra(io),
     ...(frames.length === 0 ? {} : { frames }),
     ...(chain.length === 0 ? {} : { causeChain: chain }),
     completeness: "complete",
@@ -5562,9 +5514,9 @@ function unavailableFailureActivityExtra(
     outcome: cancelled ? "cancelled" : "failed",
     retrievalPhase: progress.phase,
     plannedRingCount: progress.plannedRingCount,
-    ...failedStructuralActivityExtra(EMPTY_STRUCTURAL_DIAGNOSTICS),
-    ...failedIndexActivityExtra(NOT_EVALUATED_WORKSPACE_INDEX_DIAGNOSTICS),
-    ...failedWorkspaceIoActivityExtra(emptyWorkspaceIoActivityDiagnostics()),
+    ...structuralActivityExtra(EMPTY_STRUCTURAL_DIAGNOSTICS),
+    ...workspaceIndexActivityExtra(NOT_EVALUATED_WORKSPACE_INDEX_DIAGNOSTICS),
+    ...workspaceIoActivityExtra(emptyWorkspaceIoActivityDiagnostics()),
     completeness: "partial",
     loss: "none",
   };

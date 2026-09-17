@@ -392,8 +392,8 @@ const ACTIVITY_LOG_REDUCER_OWNED_FIELDS: ReadonlySet<string> = new Set([
 
 function isBodyFreeMachineValue(value: string): boolean {
   if (value.length === 0 || value.startsWith("{") || value.startsWith("<")) return false;
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
+  for (const character of value) {
+    const code = character.codePointAt(0) ?? 0;
     if (code < 0x21 || code > 0x7e) return false;
   }
   return true;

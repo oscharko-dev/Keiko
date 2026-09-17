@@ -28,7 +28,7 @@ import {
   type GitDeliveryApprovalBinding,
   type GitDeliveryIssuedApproval,
 } from "./approvalStore.js";
-import { executeGovernedMutation } from "./execution.js";
+import { executeGovernedMutation, gitDeliveryActivityErrorKind } from "./execution.js";
 import {
   admitStageSelection,
   reviewStageSelection,
@@ -47,7 +47,6 @@ import { describeError } from "../diagnostics-log.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { errorKindOf } from "../observability/server-log.js";
-import { gitDeliveryActivityErrorKind } from "./execution.js";
 
 const RUNTIME_GIT_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",

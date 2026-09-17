@@ -1275,8 +1275,10 @@ function lineSequenceAnomalies(line: ParsedLine, state: SequenceState): ProcessS
   if (seq === 1 && state.previous > 1)
     anomalies.push(sequenceAnomaly("reset", line, state.previous));
   if (seq < state.previous) {
-    anomalies.push(sequenceAnomaly("decreasing", line, state.previous));
-    anomalies.push(sequenceAnomaly("reorder", line, state.previous));
+    anomalies.push(
+      sequenceAnomaly("decreasing", line, state.previous),
+      sequenceAnomaly("reorder", line, state.previous),
+    );
   }
   state.seen.add(seq);
   state.previous = seq;

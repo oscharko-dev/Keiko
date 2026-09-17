@@ -173,7 +173,7 @@ const ACTIVITY_LOG_PERSISTED_ENVELOPE_CONTRACT = {
   productVersion: {
     type: "string",
     required: true,
-    pattern: "^\\d+\\.\\d+\\.\\d+(?:-[0-9A-Za-z.-]+)?$",
+    pattern: String.raw`^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$`,
   },
   compatibilityState: {
     type: "string",
@@ -445,10 +445,12 @@ function propertyNameText(name) {
 }
 
 function literalPrimitive(value) {
-  if (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)) return value.text;
-  if (ts.isNumericLiteral(value)) return Number(value.text);
-  if (value.kind === ts.SyntaxKind.TrueKeyword) return true;
-  if (value.kind === ts.SyntaxKind.FalseKeyword) return false;
+  if (ts.isStringLiteral(value) || ts.isNoSubstitutionTemplateLiteral(value)) {
+    return { value: value.text };
+  }
+  if (ts.isNumericLiteral(value)) return { value: Number(value.text) };
+  if (value.kind === ts.SyntaxKind.TrueKeyword) return { value: true };
+  if (value.kind === ts.SyntaxKind.FalseKeyword) return { value: false };
   return undefined;
 }
 
@@ -486,7 +488,7 @@ function literalRegistryObject(value, checker, seen) {
 function literalRegistryValue(expression, checker, seen = new Set()) {
   const value = unwrapExpression(expression);
   const primitive = literalPrimitive(value);
-  if (primitive !== undefined) return primitive;
+  if (primitive !== undefined) return primitive.value;
   if (ts.isIdentifier(value)) {
     const initializer = constInitializer(checker, value);
     if (initializer === undefined || seen.has(initializer)) return undefined;
@@ -539,18 +541,21 @@ function invalidExemptionField(exemption) {
   }
   if (!Object.keys(exemption).every((key) => EXEMPTION_KEYS.has(key))) return "unknown-key";
   const checks = [
-    ["contractKind", exemption.contractKind === "activity-log-exemption"],
-    ["schemaVersion", exemption.schemaVersion === 1],
-    ["id", validExemptionToken(exemption.id)],
-    ["operation", validExemptionOperation(exemption.operation)],
-    ["failureClass", validExemptionToken(exemption.failureClass)],
-    ["boundary", EXEMPTION_BOUNDARIES.has(exemption.boundary)],
-    ["owner", validExemptionToken(exemption.owner)],
-    ["reason", validExemptionReason(exemption.reason)],
-    ["trackingIssue", Number.isInteger(exemption.trackingIssue) && exemption.trackingIssue > 0],
-    ["expiresOn", validExpiryDate(exemption.expiresOn)],
+    { field: "contractKind", valid: exemption.contractKind === "activity-log-exemption" },
+    { field: "schemaVersion", valid: exemption.schemaVersion === 1 },
+    { field: "id", valid: validExemptionToken(exemption.id) },
+    { field: "operation", valid: validExemptionOperation(exemption.operation) },
+    { field: "failureClass", valid: validExemptionToken(exemption.failureClass) },
+    { field: "boundary", valid: EXEMPTION_BOUNDARIES.has(exemption.boundary) },
+    { field: "owner", valid: validExemptionToken(exemption.owner) },
+    { field: "reason", valid: validExemptionReason(exemption.reason) },
+    {
+      field: "trackingIssue",
+      valid: Number.isInteger(exemption.trackingIssue) && exemption.trackingIssue > 0,
+    },
+    { field: "expiresOn", valid: validExpiryDate(exemption.expiresOn) },
   ];
-  return checks.find(([, valid]) => !valid)?.[0];
+  return checks.find(({ valid }) => !valid)?.field;
 }
 
 function exemptionViolation(code, index, detail, correctiveAction) {
@@ -804,21 +809,30 @@ function invalidRegistrationField(value) {
   const fields = invalidFields(value.fields);
   if (fields !== undefined) return fields;
   const checks = [
-    ["unknown-key", Object.keys(value).every((key) => REGISTRATION_KEYS.has(key))],
-    ["contractKind", value.contractKind === "activity-log-operation"],
-    ["schemaVersion", value.schemaVersion === 1],
-    ["op", typeof value.op === "string" && OP_NAME_PATTERN.test(value.op)],
-    ["category", REGISTRATION_CATEGORIES.has(value.category)],
-    ["owner", typeof value.owner === "string" && REGISTRATION_TOKEN.test(value.owner)],
-    ["emitter", typeof value.emitter === "string" && REGISTRATION_TOKEN.test(value.emitter)],
-    ["causal", REGISTRATION_CAUSAL.has(value.causal)],
-    ["lifecycle", REGISTRATION_LIFECYCLE.has(value.lifecycle)],
-    ["analyzerProjection", REGISTRATION_PROJECTIONS.has(value.analyzerProjection)],
-    ["failureClasses", !invalidClosedStringArray(value.failureClasses)],
-    ["proofIds", !invalidClosedStringArray(value.proofIds)],
-    ["releaseImpact", REGISTRATION_RELEASE_IMPACTS.has(value.releaseImpact)],
+    { field: "unknown-key", valid: Object.keys(value).every((key) => REGISTRATION_KEYS.has(key)) },
+    { field: "contractKind", valid: value.contractKind === "activity-log-operation" },
+    { field: "schemaVersion", valid: value.schemaVersion === 1 },
+    { field: "op", valid: typeof value.op === "string" && OP_NAME_PATTERN.test(value.op) },
+    { field: "category", valid: REGISTRATION_CATEGORIES.has(value.category) },
+    {
+      field: "owner",
+      valid: typeof value.owner === "string" && REGISTRATION_TOKEN.test(value.owner),
+    },
+    {
+      field: "emitter",
+      valid: typeof value.emitter === "string" && REGISTRATION_TOKEN.test(value.emitter),
+    },
+    { field: "causal", valid: REGISTRATION_CAUSAL.has(value.causal) },
+    { field: "lifecycle", valid: REGISTRATION_LIFECYCLE.has(value.lifecycle) },
+    {
+      field: "analyzerProjection",
+      valid: REGISTRATION_PROJECTIONS.has(value.analyzerProjection),
+    },
+    { field: "failureClasses", valid: !invalidClosedStringArray(value.failureClasses) },
+    { field: "proofIds", valid: !invalidClosedStringArray(value.proofIds) },
+    { field: "releaseImpact", valid: REGISTRATION_RELEASE_IMPACTS.has(value.releaseImpact) },
   ];
-  return checks.find(([, valid]) => !valid)?.[0];
+  return checks.find(({ valid }) => !valid)?.field;
 }
 
 function pushInvalidRegistration(context, site, detail, correctiveAction) {

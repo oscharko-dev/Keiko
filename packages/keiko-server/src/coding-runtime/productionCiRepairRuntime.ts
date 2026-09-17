@@ -172,6 +172,15 @@ interface AvailabilityInput {
   readonly allowConfirmed: boolean;
   readonly reason: "invalid-binding" | "storage-unavailable";
 }
+
+function availabilityErrorKind(
+  error: unknown,
+  reason: AvailabilityInput["reason"],
+): "internal" | "unavailable" | "validation-failed" {
+  if (error !== undefined) return "internal";
+  return reason === "invalid-binding" ? "validation-failed" : "unavailable";
+}
+
 function availabilityGuard(input: AvailabilityInput): () => boolean {
   const { deps, verified, binding } = input;
   const snapshots = deps?.snapshots ?? verified?.snapshots;
@@ -195,12 +204,7 @@ function availabilityGuard(input: AvailabilityInput): () => boolean {
         {
           level: "warn",
           correlationId: correlationIdOrUnknown(binding.runId),
-          errorKind:
-            error === undefined
-              ? input.reason === "invalid-binding"
-                ? "validation-failed"
-                : "unavailable"
-              : "internal",
+          errorKind: availabilityErrorKind(error, input.reason),
         },
         {
           phase: "availability",

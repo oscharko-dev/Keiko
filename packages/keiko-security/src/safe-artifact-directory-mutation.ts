@@ -8,7 +8,7 @@ import {
   type SafeArtifactDirectoryMutationRequest,
 } from "./safe-artifact-directory-mutation-protocol.js";
 
-const DECIMAL_INTEGER_PATTERN = /^(?:0|[1-9][0-9]*)$/u;
+const DECIMAL_INTEGER_PATTERN = /^(?:0|[1-9]\d*)$/u;
 const UNSUPPORTED_LINK_CODES = new Set(["EPERM", "ENOSYS", "ENOTSUP", "EOPNOTSUPP", "EXDEV"]);
 
 function errorCode(error: unknown): string | undefined {
@@ -19,7 +19,7 @@ function errorCode(error: unknown): string | undefined {
 function isMutationOperation(value: unknown): value is SafeArtifactDirectoryMutationOperation {
   return (
     typeof value === "string" &&
-    SAFE_ARTIFACT_DIRECTORY_MUTATION_OPERATIONS.some((operation) => operation === value)
+    (SAFE_ARTIFACT_DIRECTORY_MUTATION_OPERATIONS as readonly string[]).includes(value)
   );
 }
 

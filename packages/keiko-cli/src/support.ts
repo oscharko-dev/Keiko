@@ -1967,7 +1967,7 @@ async function persistSupportAnalysisEvidence(
   // Analysis input is immutable evidence. Persist the operator action to the CLI's local Activity
   // Log instead of appending to a raw input file, which may itself end in the crash fragment being
   // diagnosed.
-  const stateDir = resolveStateDir(cwd, env, undefined);
+  const stateDir = resolveStateDir(cwd, env);
   try {
     const server = await loadServer();
     emitSupportAnalysisEvidence(server, stateDir, result);
@@ -1980,32 +1980,41 @@ async function persistSupportAnalysisEvidence(
   }
 }
 
+interface AnalyzedSupportResultContext {
+  readonly text: string;
+  readonly args: AnalyzeArgs;
+  readonly cwd: string;
+  readonly filePath: string;
+  readonly io: CliIo;
+  readonly env: EnvSource;
+  readonly deps: SupportCliDeps;
+  readonly options: SupportAnalyzeOptions;
+}
+
 async function emitAnalyzedSupportResult(
   result: AnalyzeAllResult,
-  text: string,
-  args: AnalyzeArgs,
-  cwd: string,
-  filePath: string,
-  io: CliIo,
-  env: EnvSource,
-  deps: SupportCliDeps,
-  options: SupportAnalyzeOptions,
+  context: AnalyzedSupportResultContext,
 ): Promise<number> {
-  if (!(await persistSupportAnalysisEvidence(result, cwd, env, io))) return 1;
-  if (args.clusters) return emitClusters(result.clusters, args.json, io);
-  if (args.seed || args.emitFixture !== undefined) {
-    return runSeedAndFixture(text, args, cwd, io, options);
+  if (!(await persistSupportAnalysisEvidence(result, context.cwd, context.env, context.io)))
+    return 1;
+  if (context.args.clusters) return emitClusters(result.clusters, context.args.json, context.io);
+  if (context.args.seed || context.args.emitFixture !== undefined) {
+    return runSeedAndFixture(context.text, context.args, context.cwd, context.io, context.options);
   }
-  const report = buildAnalysisReport(result, filePath, deps);
-  if (args.correlationId === undefined) return emitAllTimelines(report, args.json, io);
-  const timeline = findTimeline(result, args.correlationId);
-  if (timeline === undefined) return reportMissingCorrelationId(args.correlationId, io);
+  const report = buildAnalysisReport(result, context.filePath, context.deps);
+  if (context.args.correlationId === undefined) {
+    return emitAllTimelines(report, context.args.json, context.io);
+  }
+  const timeline = findTimeline(result, context.args.correlationId);
+  if (timeline === undefined) {
+    return reportMissingCorrelationId(context.args.correlationId, context.io);
+  }
   return emitSingleTimeline(
     timeline,
     result.malformedLineCount,
     report.analysisContext,
-    args.json,
-    io,
+    context.args.json,
+    context.io,
   );
 }
 
@@ -2024,7 +2033,16 @@ async function runSupportAnalyze(
   const options = await loadToolAnalysisOptions(basic, io);
   const result =
     options.toolLifecycleValidator === undefined ? basic : analyzeLogText(text, options);
-  return emitAnalyzedSupportResult(result, text, args, cwd, filePath, io, env, deps, options);
+  return emitAnalyzedSupportResult(result, {
+    text,
+    args,
+    cwd,
+    filePath,
+    io,
+    env,
+    deps,
+    options,
+  });
 }
 
 export async function runSupportCli(

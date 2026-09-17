@@ -899,8 +899,10 @@ function emitJobActivity(sink: KnowledgeLogSink | undefined, event: IndexingActi
 
 function emitJobFinished(sink: KnowledgeLogSink | undefined, event: IndexingActivity): boolean {
   if (event.op !== "indexing.job.finished") return false;
-  const level =
-    event.jobStatus === "succeeded" ? "info" : event.jobStatus === "failed" ? "error" : "warn";
+  let level: "info" | "error" | "warn";
+  if (event.jobStatus === "succeeded") level = "info";
+  else if (event.jobStatus === "failed") level = "error";
+  else level = "warn";
   emitKnowledgeLogEvent(
     sink,
     activityLogEvent(

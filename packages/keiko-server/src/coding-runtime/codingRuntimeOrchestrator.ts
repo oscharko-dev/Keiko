@@ -1391,16 +1391,13 @@ function recordRuntimeRunSettled(
   state: CodingWorkbenchRuntimeStateName,
   failureCode?: CodingWorkbenchRuntimeFailureCode,
 ): void {
+  const errorKind = runtimeRunSettledErrorKind(state);
   activityLog?.write(
     activityLogEvent(
       CODING_RUNTIME_RUN_SETTLED_OPERATION,
       {
         correlationId: runtimeDiagnosticCorrelationId(snapshot.runId),
-        ...(state === "failed" || state === "recovery-required"
-          ? { errorKind: "internal" as const }
-          : state === "cancelled" || state === "taken-over"
-            ? { errorKind: "cancelled" as const }
-            : {}),
+        ...(errorKind === undefined ? {} : { errorKind }),
       },
       {
         runId: snapshot.runId,
@@ -1415,6 +1412,14 @@ function recordRuntimeRunSettled(
       },
     ),
   );
+}
+
+function runtimeRunSettledErrorKind(
+  state: CodingWorkbenchRuntimeStateName,
+): ActivityLogErrorKind | undefined {
+  if (state === "failed" || state === "recovery-required") return "internal";
+  if (state === "cancelled" || state === "taken-over") return "cancelled";
+  return undefined;
 }
 
 function descriptionSettleOp(

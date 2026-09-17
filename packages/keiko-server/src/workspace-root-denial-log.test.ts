@@ -70,17 +70,28 @@ describe("workspace root denial activity", () => {
     });
   });
 
-  it("rejects unregistered denial fields at compile time", () => {
+  it("rejects unregistered denial fields and excludes them from runtime evidence", () => {
     const sink = createBufferedServerLogSink();
+    const unregisteredPath = "/private/customer";
     recordWorkspaceRootDenied(
       {
         // @ts-expect-error workspace paths are not registered body-free evidence
-        workspacePath: "/private/customer",
+        workspacePath: unregisteredPath,
         reason: "managed-root-ownership",
         failureKind: "WORKSPACE_MANAGED_AUTHORITY_DENIED",
         errorKind: "authority-denied",
       },
       { activityLog: sink },
     );
+
+    expect(sink.events).toHaveLength(1);
+    expect(sink.events[0]).toMatchObject({
+      errorKind: "authority-denied",
+      extra: {
+        reason: "managed-root-ownership",
+        failureKind: "WORKSPACE_MANAGED_AUTHORITY_DENIED",
+      },
+    });
+    expect(JSON.stringify(sink.events[0])).not.toContain(unregisteredPath);
   });
 });

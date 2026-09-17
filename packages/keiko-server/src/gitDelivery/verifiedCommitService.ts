@@ -24,14 +24,17 @@ import type { GitMutationLifecycleResult } from "@oscharko-dev/keiko-tools";
 import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { errorKindOf } from "../observability/server-log.js";
-import { gitDeliveryActivityErrorKind } from "./execution.js";
 import {
   DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
   GIT_DELIVERY_LOCAL_OPERATOR_ID,
   type GitDeliveryApprovalBinding,
   type GitDeliveryIssuedApproval,
 } from "./approvalStore.js";
-import { executeGovernedMutation, readStagedConflictMarkerFileCountFor } from "./execution.js";
+import {
+  executeGovernedMutation,
+  gitDeliveryActivityErrorKind,
+  readStagedConflictMarkerFileCountFor,
+} from "./execution.js";
 import {
   readVerifiedCommitFacts,
   sameVerifiedCommitFacts,
