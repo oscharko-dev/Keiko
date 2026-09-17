@@ -2185,6 +2185,7 @@ describe("CodingRuntimeOrchestrator", () => {
         category: "process",
         op: "coding-runtime.verification-summarized",
         correlationId: runId,
+        errorKind: "validation-failed",
         extra: {
           runId,
           verificationEventId: "verification-1",

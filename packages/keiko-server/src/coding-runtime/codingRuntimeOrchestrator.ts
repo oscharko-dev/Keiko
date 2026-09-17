@@ -382,6 +382,162 @@ const CODING_RUNTIME_EVENT_DROPPED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const CODING_RUNTIME_VERIFICATION_SUMMARIZED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.verification-summarized",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeOrchestrator.recordRuntimeVerificationSummary",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    verificationEventId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: true,
+      maxLength: 128,
+    },
+    verificationKind: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: true,
+      maxLength: 128,
+    },
+    verificationStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["passed", "failed", "partial"],
+    },
+    passedCount: { type: "integer", dataClass: "count", required: true },
+    failedCount: { type: "integer", dataClass: "count", required: true },
+    skippedCount: { type: "integer", dataClass: "count", required: true },
+    failureLocationCount: { type: "integer", dataClass: "count", required: false },
+    failureLocationsTruncated: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: false,
+    },
+    verificationTargetDigest: {
+      type: "string",
+      dataClass: "digest",
+      required: false,
+      maxLength: 64,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "settle",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-verification"],
+  proofIds: ["coding-runtime.verification-summarized.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_RUN_SETTLED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.run.settled",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeOrchestrator.recordRuntimeRunSettled",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "idle",
+        "starting",
+        "ready",
+        "running",
+        "paused",
+        "awaiting-approval",
+        "stopping",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "taken-over",
+        "recovery-required",
+      ],
+    },
+    revision: { type: "integer", dataClass: "count", required: true },
+    requestedMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
+    },
+    runtimeSource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["keiko-sidecar", "codex-cli-adapter", "delivery-runner"],
+    },
+    modelSource: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "keiko-model-gateway",
+        "openai-api-key-through-gateway",
+        "chatgpt-codex-subscription-profile",
+      ],
+    },
+    terminal: { type: "boolean", dataClass: "closed-enum", required: true },
+    failureCode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "runtime-unavailable",
+        "active-run-conflict",
+        "invalid-intent",
+        "approval-activation-failed",
+        "authority-resolution-failed",
+        "authority-expired",
+        "authority-replayed",
+        "task-drift",
+        "workspace-drift",
+        "project-drift",
+        "branch-drift",
+        "scope-drift",
+        "budget-drift",
+        "authority-budget-exceeded",
+        "source-drift",
+        "runtime-failed",
+        "revoked",
+        "recovery-required",
+        "replay-cap-exhausted",
+        "issue-context-unavailable",
+        "question-answer-rejected",
+        "delivery-not-evidenced",
+      ],
+    },
+    taskOutcomeStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["cancelled", "failed", "signalled", "succeeded"],
+    },
+    exitCode: { type: "integer", dataClass: "count", required: false },
+    outputByteCount: { type: "integer", dataClass: "count", required: false },
+    outputLineCount: { type: "integer", dataClass: "count", required: false },
+    outputDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    outputTruncated: { type: "boolean", dataClass: "closed-enum", required: false },
+    diagnosticByteCount: { type: "integer", dataClass: "count", required: false },
+    diagnosticLineCount: { type: "integer", dataClass: "count", required: false },
+    diagnosticDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    diagnosticTruncated: { type: "boolean", dataClass: "closed-enum", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "settle",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-run-settlement"],
+  proofIds: ["coding-runtime.run.settled.emitted-line"],
+  releaseImpact: "patch",
+});
+
 function descriptionGenerationBinding(
   snapshot: CodingRuntimeSnapshot,
 ): WorkbenchDescriptionGenerationBinding {
@@ -820,24 +976,45 @@ function recordRuntimeVerificationSummary(
   activityLog: ServerLogSink | undefined,
   event: CodingWorkbenchRuntimeEvent,
 ): void {
-  if (event.kind !== "verification-summarized") return;
-  activityLog?.write({
-    category: "process",
-    op: "coding-runtime.verification-summarized",
-    correlationId: runtimeDiagnosticCorrelationId(event.runId),
-    extra: {
-      runId: event.runId,
-      verificationEventId: event.eventId,
-      verificationKind: event.verificationKind,
-      verificationStatus: event.verificationStatus,
-      passedCount: event.passedCount,
-      failedCount: event.failedCount,
-      skippedCount: event.skippedCount,
-      failureLocationCount: event.failureLocationCount,
-      failureLocationsTruncated: event.failureLocationsTruncated,
-      verificationTargetDigest: event.verificationTargetDigest,
-    },
-  });
+  if (
+    event.kind !== "verification-summarized" ||
+    event.verificationKind === undefined ||
+    event.verificationStatus === undefined ||
+    event.passedCount === undefined ||
+    event.failedCount === undefined ||
+    event.skippedCount === undefined
+  ) {
+    return;
+  }
+  activityLog?.write(
+    activityLogEvent(
+      CODING_RUNTIME_VERIFICATION_SUMMARIZED_OPERATION,
+      {
+        correlationId: runtimeDiagnosticCorrelationId(event.runId),
+        ...(event.verificationStatus === "failed" || event.verificationStatus === "partial"
+          ? { errorKind: "validation-failed" as const }
+          : {}),
+      },
+      {
+        runId: event.runId,
+        verificationEventId: event.eventId,
+        verificationKind: event.verificationKind,
+        verificationStatus: event.verificationStatus,
+        passedCount: event.passedCount,
+        failedCount: event.failedCount,
+        skippedCount: event.skippedCount,
+        ...(event.failureLocationCount === undefined
+          ? {}
+          : { failureLocationCount: event.failureLocationCount }),
+        ...(event.failureLocationsTruncated === undefined
+          ? {}
+          : { failureLocationsTruncated: event.failureLocationsTruncated }),
+        ...(event.verificationTargetDigest === undefined
+          ? {}
+          : { verificationTargetDigest: event.verificationTargetDigest }),
+      },
+    ),
+  );
 }
 
 function recordRuntimeRunSettled(
@@ -846,22 +1023,30 @@ function recordRuntimeRunSettled(
   state: CodingWorkbenchRuntimeStateName,
   failureCode?: CodingWorkbenchRuntimeFailureCode,
 ): void {
-  activityLog?.write({
-    category: "process",
-    op: "coding-runtime.run.settled",
-    correlationId: runtimeDiagnosticCorrelationId(snapshot.runId),
-    extra: {
-      runId: snapshot.runId,
-      state,
-      revision: snapshot.revision,
-      requestedMode: snapshot.requestedMode,
-      runtimeSource: snapshot.runtimeSource,
-      modelSource: snapshot.modelSource,
-      terminal: TERMINAL_STATES.has(state),
-      ...(failureCode === undefined ? {} : { failureCode }),
-      ...runtimeResultLogFields(snapshot.result),
-    },
-  });
+  activityLog?.write(
+    activityLogEvent(
+      CODING_RUNTIME_RUN_SETTLED_OPERATION,
+      {
+        correlationId: runtimeDiagnosticCorrelationId(snapshot.runId),
+        ...(state === "failed" || state === "recovery-required"
+          ? { errorKind: "internal" as const }
+          : state === "cancelled" || state === "taken-over"
+            ? { errorKind: "cancelled" as const }
+            : {}),
+      },
+      {
+        runId: snapshot.runId,
+        state,
+        revision: snapshot.revision,
+        requestedMode: snapshot.requestedMode,
+        runtimeSource: snapshot.runtimeSource,
+        modelSource: snapshot.modelSource,
+        terminal: TERMINAL_STATES.has(state),
+        ...(failureCode === undefined ? {} : { failureCode }),
+        ...runtimeResultLogFields(snapshot.result),
+      },
+    ),
+  );
 }
 
 function descriptionSettleOp(
@@ -873,13 +1058,26 @@ function descriptionSettleOp(
   return state === "blocked" ? "blocked" : "generated";
 }
 
+interface RuntimeResultLogFields {
+  readonly taskOutcomeStatus?: "cancelled" | "failed" | "signalled" | "succeeded";
+  readonly exitCode?: number;
+  readonly outputByteCount?: number;
+  readonly outputLineCount?: number;
+  readonly outputDigest?: string;
+  readonly outputTruncated?: boolean;
+  readonly diagnosticByteCount?: number;
+  readonly diagnosticLineCount?: number;
+  readonly diagnosticDigest?: string;
+  readonly diagnosticTruncated?: boolean;
+}
+
 function runtimeResultLogFields(
   result: CodingWorkbenchRuntimeResult | undefined,
-): Readonly<Record<string, unknown>> {
+): RuntimeResultLogFields {
   if (result === undefined) return {};
   return {
     taskOutcomeStatus: result.status,
-    exitCode: result.exitCode,
+    ...(result.exitCode === null ? {} : { exitCode: result.exitCode }),
     outputByteCount: result.output.byteCount,
     outputLineCount: result.output.lineCount,
     outputDigest: result.output.sha256,
