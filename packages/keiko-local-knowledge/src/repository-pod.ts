@@ -19,6 +19,10 @@ import type {
 import { isKnowledgePodEvidenceSafeText } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-pods";
 import { isSafeScopePath } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-paths";
 import { standardPodModelUsePolicy } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-model-use-policy";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { OpenAIEmbeddingAdapter } from "@oscharko-dev/keiko-model-gateway";
 import type { WorkspaceFs } from "@oscharko-dev/keiko-workspace";
 
@@ -47,6 +51,28 @@ import type { ParserRegistry } from "./parsers/index.js";
 import type { AuditEventSink } from "./privacy/index.js";
 import { addSourceToCapsule, listCapsuleSources } from "./source-lifecycle.js";
 import type { KnowledgeStore } from "./store.js";
+
+const REPOSITORY_FINGERPRINT_DIFF_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "repository.fingerprint-diff.completed",
+  category: "indexing",
+  owner: "keiko-local-knowledge",
+  emitter: "repository-pod.logFingerprintDiffCompleted",
+  fields: {
+    added: { type: "integer", dataClass: "count", required: true },
+    changed: { type: "integer", dataClass: "count", required: true },
+    removed: { type: "integer", dataClass: "count", required: true },
+    moved: { type: "integer", dataClass: "count", required: true },
+    unchanged: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["repository-fingerprint-diff"],
+  proofIds: ["repository.fingerprint-diff.counts"],
+  releaseImpact: "patch",
+});
 
 export interface RepositoryPodDeps {
   readonly store: KnowledgeStore;
@@ -336,18 +362,20 @@ function logFingerprintDiffCompleted(
   runId: string,
   delta: FingerprintSetDelta,
 ): void {
-  emitKnowledgeLogEvent(deps.logSink, {
-    category: "indexing",
-    op: "repository.fingerprint-diff.completed",
-    correlationId: runId,
-    extra: {
+  emitKnowledgeLogEvent(
+    deps.logSink,
+    activityLogEvent(
+      REPOSITORY_FINGERPRINT_DIFF_COMPLETED_OPERATION,
+      { correlationId: runId },
+      {
       added: delta.added,
       changed: delta.changed,
       removed: delta.removed,
       moved: delta.moved,
       unchanged: delta.unchanged,
-    },
-  });
+      },
+    ),
+  );
 }
 
 // The one delta this run reports — from `prior` to the EFFECTIVE next baseline (the

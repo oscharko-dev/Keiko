@@ -23,6 +23,10 @@ import {
   KNOWLEDGE_CAPSULE_V1_TABLES,
   LOCAL_KNOWLEDGE_DB_SCHEMA_VERSION,
 } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-schema";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 // Shared fs-hardening owner [GEN-MAINT-COUPLING-005]: the single 0o700/0o600 hardening pair.
 import {
   chmodIfPresent,
@@ -42,7 +46,6 @@ import { KnowledgeStoreError } from "./errors.js";
 import {
   emitKnowledgeLogEvent,
   knowledgeErrorKind,
-  type KnowledgeLogEvent,
   type KnowledgeLogSink,
 } from "./knowledge-log.js";
 import {
@@ -55,6 +58,54 @@ import {
   readStoreEncryptionMode,
 } from "./store-content-encryption.js";
 import type { VectorIndexOptions } from "./retrieval/vector-index.js";
+
+const KNOWLEDGE_STORE_QUARANTINED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "knowledge.store.quarantined",
+  category: "diagnostic",
+  owner: "keiko-local-knowledge",
+  emitter: "store.logStoreQuarantine",
+  fields: {
+    reopenState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["reopened", "failed"],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["knowledge-store-corruption", "knowledge-store-reopen"],
+  proofIds: ["knowledge.store.quarantined.recovery"],
+  releaseImpact: "patch",
+});
+
+const KNOWLEDGE_STORE_ENCRYPTION_REJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "knowledge.store.encryption-rejected",
+  category: "diagnostic",
+  owner: "keiko-local-knowledge",
+  emitter: "store.openKnowledgeStore",
+  fields: {
+    protectionMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["plaintext-local-file-permissions", "encrypted-key-provider"],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["knowledge-store-encryption"],
+  proofIds: ["knowledge.store.encryption-rejected.mode"],
+  releaseImpact: "patch",
+});
 
 export interface OpenKnowledgeStoreOptions {
   readonly dbPath: string;
@@ -461,10 +512,6 @@ function restrictStoreFilePermissions(dbPath: string): void {
 // is dead. Keeping that logic in `knowledge-log.ts` rather than here is deliberate: the same
 // guarantee is owed by the indexing orchestrator and the embedding batcher, and one implementation
 // cannot drift from itself.
-function writeStoreLog(opts: OpenKnowledgeStoreOptions, event: KnowledgeLogEvent): void {
-  emitKnowledgeLogEvent(opts.logSink, event);
-}
-
 // Recovering from confirmed SQLite corruption trades the old database for an empty one. That is
 // the correct fail-forward, but it is a DATA-LOSING decision, so it is recorded at `error` even
 // when the reopen succeeds — and separately when the reopen does not.
@@ -473,13 +520,15 @@ function logStoreQuarantine(
   cause: unknown,
   reopened: boolean,
 ): void {
-  writeStoreLog(opts, {
-    level: "error",
-    category: "diagnostic",
-    op: "knowledge.store.quarantined",
-    errorKind: knowledgeErrorKind(cause),
-    extra: { reopened },
-  });
+  const failureKind = knowledgeErrorKind(cause);
+  emitKnowledgeLogEvent(
+    opts.logSink,
+    activityLogEvent(
+      KNOWLEDGE_STORE_QUARANTINED_OPERATION,
+      { level: "error", errorKind: "read-failed" },
+      { reopenState: reopened ? "reopened" : "failed", failureKind },
+    ),
+  );
 }
 
 export function openKnowledgeStore(opts: OpenKnowledgeStoreOptions): KnowledgeStore {
@@ -510,13 +559,18 @@ export function openKnowledgeStore(opts: OpenKnowledgeStoreOptions): KnowledgeSt
     // Fail-closed: a wrong key or a missing provider for an already-encrypted store. The throw
     // reaches the caller, but the reason is buried in a cause chain the server surfaces as an
     // opaque failure — the kind belongs in the log where an operator will actually find it.
-    writeStoreLog(opts, {
-      level: "error",
-      category: "diagnostic",
-      op: "knowledge.store.encryption-rejected",
-      errorKind: knowledgeErrorKind(cause),
-      extra: { protectionMode: opts.protection?.mode ?? "plaintext-local-file-permissions" },
-    });
+    const failureKind = knowledgeErrorKind(cause);
+    emitKnowledgeLogEvent(
+      opts.logSink,
+      activityLogEvent(
+        KNOWLEDGE_STORE_ENCRYPTION_REJECTED_OPERATION,
+        { level: "error", errorKind: "permission-denied" },
+        {
+          protectionMode: opts.protection?.mode ?? "plaintext-local-file-permissions",
+          failureKind,
+        },
+      ),
+    );
     throw cause;
   }
   restrictStoreFilePermissions(opts.dbPath);
