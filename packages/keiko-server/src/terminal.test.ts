@@ -316,8 +316,8 @@ describe("listDirectories — deny vocabulary (#3347)", () => {
     expect(sink.events[0]).toMatchObject({
       op: "workspace.root.denied",
       correlationId: "terminal-picker-correlation-0001",
-      errorKind: "WORKSPACE_PATH_DENIED",
-      extra: { decision: "denied" },
+      errorKind: "permission-denied",
+      extra: { decision: "denied", failureKind: "WORKSPACE_PATH_DENIED" },
     });
     expect(JSON.stringify(sink.events)).not.toContain(workspaceRoot);
   });
@@ -493,11 +493,12 @@ describe("TerminalExecutionManager — denials and validation", () => {
     expect(activityEvents[0]).toMatchObject({
       op: "workspace.root.denied",
       correlationId,
-      errorKind: "WORKSPACE_PATH_DENIED",
+      errorKind: "permission-denied",
     });
     expect(activityEvents[0]?.extra).toMatchObject({
       decision: "denied",
       reason: "denied-locus",
+      failureKind: "WORKSPACE_PATH_DENIED",
     });
     expect(JSON.stringify(activityEvents)).not.toContain(fixture);
   });

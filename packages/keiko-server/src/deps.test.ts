@@ -2257,8 +2257,8 @@ describe("buildUiHandlerDeps — workspaceRootAccessResolver denial logging (#33
       level: "warn",
       category: "security",
       correlationId,
-      errorKind: "WORKSPACE_PATH_DENIED",
-      extra: { decision: "denied" },
+      errorKind: "permission-denied",
+      extra: { decision: "denied", failureKind: "WORKSPACE_PATH_DENIED" },
     });
     // Body-free: the denied path itself never enters the logged event.
     expect(JSON.stringify(denialEvents[0])).not.toContain(deniedRoot);

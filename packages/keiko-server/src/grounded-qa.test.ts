@@ -1732,8 +1732,12 @@ describe("handleGroundedAsk", () => {
         category: "security",
         op: "workspace.root.denied",
         correlationId,
-        errorKind: "WORKSPACE_PATH_DENIED",
-        extra: { decision: "denied", reason: "denied-locus" },
+        errorKind: "permission-denied",
+        extra: {
+          decision: "denied",
+          reason: "denied-locus",
+          failureKind: "WORKSPACE_PATH_DENIED",
+        },
       });
       expect(JSON.stringify(denialEvents)).not.toContain(deniedRoot);
       expect(JSON.stringify(denialEvents)).not.toContain(".aws");
@@ -1924,11 +1928,12 @@ describe("handleGroundedAsk", () => {
         category: "security",
         op: "workspace.root.denied",
         correlationId,
-        errorKind: "WORKSPACE_PATH_DENIED",
+        errorKind: "permission-denied",
       });
       expect(denialEvents[0]?.extra).toMatchObject({
         decision: "denied",
         reason: "denied-locus",
+        failureKind: "WORKSPACE_PATH_DENIED",
       });
       const serializedEvents = JSON.stringify(denialEvents);
       expect(serializedEvents).not.toContain(tmp);

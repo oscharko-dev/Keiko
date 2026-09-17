@@ -62,8 +62,12 @@ function expectDeniedLifecycle(activityLog: BufferedActivityLog): void {
   expect(activityLog.events[1]).toMatchObject({
     level: "warn",
     category: "security",
-    errorKind: "WORKSPACE_PATH_DENIED",
-    extra: { decision: "denied", reason: "denied-locus" },
+    errorKind: "permission-denied",
+    extra: {
+      decision: "denied",
+      reason: "denied-locus",
+      failureKind: "WORKSPACE_PATH_DENIED",
+    },
   });
   expect(activityLog.events[2]).toMatchObject({
     level: "error",

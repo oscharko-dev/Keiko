@@ -3,14 +3,121 @@ import {
   resolveExistingAllowedWorkspaceRealRoot,
   type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { correlationIdOrUnknown } from "./correlation.js";
-import { createServerLogger, type ServerLogSink } from "./observability/index.js";
+import type { ServerLogSink } from "./observability/index.js";
 import { causeChain, keikoStackFrames } from "./observability/stack-frames.js";
 import { processServerLogSink } from "./process-log-sink.js";
+
+export type WorkspaceRootDenialReason =
+  | "denied-locus"
+  | "managed-root-session-authority-missing"
+  | "managed-authority-unavailable"
+  | "managed-root-ownership"
+  | "managed-root-not-registered"
+  | "managed-root-lifecycle"
+  | "managed-root-identity"
+  | "managed-root-identity-schema-retired"
+  | "managed-root-identity-unsupported"
+  | "managed-root-resolution-failed"
+  | "managed-root-lifecycle-resolution-failed";
+
+const WORKSPACE_ROOT_DENIED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "workspace.root.denied",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "workspace-root-denial-log.recordWorkspaceRootDenied",
+  fields: {
+    decision: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["denied"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "denied-locus",
+        "managed-root-session-authority-missing",
+        "managed-authority-unavailable",
+        "managed-root-ownership",
+        "managed-root-not-registered",
+        "managed-root-lifecycle",
+        "managed-root-identity",
+        "managed-root-identity-schema-retired",
+        "managed-root-identity-unsupported",
+        "managed-root-resolution-failed",
+        "managed-root-lifecycle-resolution-failed",
+      ],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxItems: 5,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["workspace-root-denial"],
+  proofIds: ["workspace.root.denied.line"],
+  releaseImpact: "patch",
+});
 
 export interface WorkspaceRootDenialLogContext {
   readonly activityLog?: ServerLogSink | undefined;
   readonly correlationId?: string | undefined;
+}
+
+export interface WorkspaceRootDenialEvidence {
+  readonly reason: WorkspaceRootDenialReason;
+  readonly failureKind: string;
+  readonly errorKind: ActivityLogErrorKind;
+  readonly frames?: readonly string[] | undefined;
+  readonly causeChain?: readonly string[] | undefined;
+}
+
+export function recordWorkspaceRootDenied(
+  evidence: WorkspaceRootDenialEvidence,
+  context: WorkspaceRootDenialLogContext,
+): void {
+  (context.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      WORKSPACE_ROOT_DENIED_OPERATION,
+      {
+        level: "warn",
+        correlationId: correlationIdOrUnknown(context.correlationId),
+        errorKind: evidence.errorKind,
+      },
+      {
+        decision: "denied",
+        reason: evidence.reason,
+        failureKind: evidence.failureKind,
+        ...(evidence.frames === undefined ? {} : { frames: evidence.frames }),
+        ...(evidence.causeChain === undefined ? {} : { causeChain: evidence.causeChain }),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
 }
 
 export function recordWorkspaceRootDenial(
@@ -19,21 +126,16 @@ export function recordWorkspaceRootDenial(
 ): void {
   const frames = keikoStackFrames(error);
   const causes = causeChain(error);
-  createServerLogger({
-    sink: context.activityLog ?? processServerLogSink(),
-    level: "debug",
-  }).warn({
-    category: "security",
-    op: "workspace.root.denied",
-    correlationId: correlationIdOrUnknown(context.correlationId),
-    errorKind: error.code,
-    extra: {
-      decision: "denied",
+  recordWorkspaceRootDenied(
+    {
       reason: "denied-locus",
+      failureKind: error.code,
+      errorKind: "permission-denied",
       ...(frames.length === 0 ? {} : { frames }),
       ...(causes.length === 0 ? {} : { causeChain: causes }),
     },
-  });
+    context,
+  );
 }
 
 // Why a request for a path under Keiko's private managed-workspace root was refused before any
@@ -50,16 +152,10 @@ export function recordManagedRootRequestDenial(
   reason: ManagedRootRequestDenialReason,
   context: WorkspaceRootDenialLogContext,
 ): void {
-  createServerLogger({
-    sink: context.activityLog ?? processServerLogSink(),
-    level: "debug",
-  }).warn({
-    category: "security",
-    op: "workspace.root.denied",
-    correlationId: correlationIdOrUnknown(context.correlationId),
-    errorKind: "DENIED",
-    extra: { decision: "denied", reason },
-  });
+  recordWorkspaceRootDenied(
+    { reason, failureKind: "DENIED", errorKind: "authority-denied" },
+    context,
+  );
 }
 
 export function resolveRecordedWorkspaceRoot(

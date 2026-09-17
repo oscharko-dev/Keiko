@@ -18,9 +18,7 @@ import {
 } from "./terminal.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { requiresConfiguredManagedWorkspaceAuthority } from "./task-workspace/workspace-root-access.js";
-import { correlationIdOrUnknown } from "./correlation.js";
-import { createServerLogger } from "./observability/index.js";
-import { processServerLogSink } from "./process-log-sink.js";
+import { recordWorkspaceRootDenied } from "./workspace-root-denial-log.js";
 import { SSE_HEADERS, readyMessage, startSseHeartbeat } from "./sse.js";
 import { redactedEventJson } from "./sse-frame-cache.js";
 import {
@@ -177,13 +175,14 @@ function assertManagedRootAuthorityAvailable(
 ): void {
   if (deps.terminal?.resolveWorkspaceRootAccess !== undefined) return;
   if (!requiresConfiguredManagedWorkspaceAuthority(deps, projectId)) return;
-  createServerLogger({ sink: processServerLogSink(), level: "debug" }).warn({
-    category: "security",
-    op: "workspace.root.denied",
-    correlationId: correlationIdOrUnknown(correlationId),
-    errorKind: "WORKSPACE_MANAGED_AUTHORITY_DENIED",
-    extra: { decision: "denied", reason: "managed-authority-unavailable" },
-  });
+  recordWorkspaceRootDenied(
+    {
+      reason: "managed-authority-unavailable",
+      failureKind: "WORKSPACE_MANAGED_AUTHORITY_DENIED",
+      errorKind: "authority-denied",
+    },
+    { correlationId },
+  );
   throw new TerminalToolError("CWD_DENIED", "Working directory is denied by policy.");
 }
 
