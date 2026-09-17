@@ -13,6 +13,7 @@
 
 import { afterEach, describe, expect, it } from "vitest";
 import { EventEmitter } from "node:events";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { buildRedactor, createRunRegistry, QueueEventSink } from "./index.js";
 import { handleAllRunEvents } from "./run-handlers.js";
@@ -218,7 +219,14 @@ describe("GET /api/runs/events resume cursors (user finding #2456)", () => {
       liveOnlyRuns: 0,
       fullReplayRuns: 1,
       cursorsUnusable: true,
+      completeness: "complete",
+      loss: "none",
     });
+    expect(
+      activityLogEventRegistration(
+        line as unknown as Readonly<Record<PropertyKey, unknown>>,
+      ),
+    ).toBeDefined();
     fireClose();
     deps.store.close();
   });
@@ -356,7 +364,13 @@ describe("GET /api/runs/events resume cursors (user finding #2456)", () => {
     expect(line).toBeDefined();
     expect(line?.category).toBe("http");
     expect(line?.correlationId).toBe("corr-resume-1");
-    expect(line?.extra).toEqual({ resumedRuns: 1, liveOnlyRuns: 1, fullReplayRuns: 1 });
+    expect(line?.extra).toEqual({
+      resumedRuns: 1,
+      liveOnlyRuns: 1,
+      fullReplayRuns: 1,
+      completeness: "complete",
+      loss: "none",
+    });
     fireClose();
     deps.store.close();
   });
