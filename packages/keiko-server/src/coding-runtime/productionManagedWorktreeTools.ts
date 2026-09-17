@@ -1804,10 +1804,16 @@ function recordVerificationNotRun(
       {
         state: "not-run",
         stepCount: steps.length,
-        steps: steps.map((step) => `${step.kind}:${step.reason}`),
+        steps: steps.map(verificationNotRunLogStep),
       },
     ),
   );
+}
+
+type VerificationNotRunLogStep = `${VerificationKind}:${VerificationNotRunReason}`;
+
+function verificationNotRunLogStep(step: VerificationNotRunStep): VerificationNotRunLogStep {
+  return `${step.kind}:${step.reason}`;
 }
 
 function verificationNotRunErrorKind(

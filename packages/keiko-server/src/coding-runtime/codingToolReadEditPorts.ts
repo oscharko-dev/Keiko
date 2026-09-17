@@ -18,7 +18,11 @@ import {
   type WorkspaceFs,
 } from "@oscharko-dev/keiko-workspace";
 
-import { emitServerDiagnostic, type ServerDiagnosticSink } from "../diagnostics-log.js";
+import {
+  contentFreeErrorClass,
+  emitServerDiagnostic,
+  type ServerDiagnosticSink,
+} from "../diagnostics-log.js";
 import {
   correlationIdOrUnknown,
   isValidCorrelationId,

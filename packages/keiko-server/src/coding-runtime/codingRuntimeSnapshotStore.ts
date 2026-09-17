@@ -571,7 +571,7 @@ function recordVerifiedCommit(
           phase: "retained",
           runId: result.runId,
           proposalId: retained.proposalId,
-          headSha: retained.headSha,
+          ...(retained.headSha === undefined ? {} : { headSha: retained.headSha }),
         },
       ),
     );

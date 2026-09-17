@@ -901,11 +901,24 @@ function recordCompactionActivity(
               event: activity.event,
               compactionIdSha256: activity.compactionIdSha256,
               compactionErrorKind: activity.errorKind,
-              finishReason: activity.finishReason,
+              finishReason: registeredCompactionFinishReason(activity.finishReason),
             }
           : activity,
       ),
     );
+  }
+}
+
+type RegisteredCompactionFinishReason = "content-filter" | "error" | "length" | "unknown";
+
+function registeredCompactionFinishReason(value: string): RegisteredCompactionFinishReason {
+  switch (value) {
+    case "content-filter":
+    case "error":
+    case "length":
+      return value;
+    default:
+      return "unknown";
   }
 }
 
