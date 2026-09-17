@@ -5,6 +5,7 @@ import type {
   ContextCompactionRecord,
 } from "@oscharko-dev/keiko-contracts";
 import { CONTEXT_ENGINEERING_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/context-engineering";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   createInMemoryEvidenceStore,
   type EvidenceManifest,
@@ -292,14 +293,22 @@ describe("enrichChatCompactionWithModelSummary", () => {
       "Inferred statements (not facts):\n- the plan likely needs no further review",
     );
     expect(prompt).not.toContain("Facts:\n- the plan likely needs no further review");
-    expect(sink.events).toContainEqual(
-      expect.objectContaining({
-        category: "gateway",
-        op: "chat.compaction.facts.classified",
-        correlationId: CORRELATION_ID,
-        extra: { inferredFactCount: 1, verbatimFactCount: 1 },
-      }),
-    );
+    const event = sink.events.find((entry) => entry.op === "chat.compaction.facts.classified");
+    expect(event).toMatchObject({
+      category: "gateway",
+      correlationId: CORRELATION_ID,
+      extra: {
+        inferredFactCount: 1,
+        verbatimFactCount: 1,
+        completeness: "complete",
+        loss: "none",
+      },
+    });
+    expect(
+      activityLogEventRegistration(
+        event as unknown as Readonly<Record<PropertyKey, unknown>>,
+      ),
+    ).toBeDefined();
     expect(sink.lines().join("\n")).not.toContain("the plan likely needs no further review");
   });
 
