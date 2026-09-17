@@ -187,6 +187,53 @@ const CODING_SIDECAR_GATEWAY_READINESS_INSUFFICIENT_OPERATION = defineActivityLo
   releaseImpact: "patch",
 });
 
+const CODING_SIDECAR_GATEWAY_TOOL_AVAILABILITY_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.tool-availability",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.resolveToolCatalogHandlerCoverage",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    handlerSetDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    unavailableOptionalTools: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: true,
+      maxItems: 4,
+      values: [
+        "keiko_research_fetch",
+        "keiko_skill_discover",
+        "keiko_skill",
+        "keiko_child_agent",
+      ],
+    },
+    unavailableOptionalToolCount: { type: "integer", dataClass: "count", required: true },
+    offeredOptionalTools: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: true,
+      maxItems: 4,
+      values: [
+        "keiko_research_fetch",
+        "keiko_skill_discover",
+        "keiko_skill",
+        "keiko_child_agent",
+      ],
+    },
+    offeredOptionalToolCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["coding-sidecar-tool-availability"],
+  proofIds: ["coding-sidecar.gateway.tool-availability.line"],
+  releaseImpact: "patch",
+});
+
 // #3390 closeout (AGENTS.md §8): every rejection this route can hand back gets ONE body-free
 // activity-log line carrying the REASON, so a defect is reconstructable from the log alone instead
 // of only the opaque HTTP status the client saw. `reason` is this closed vocabulary — never a raw
@@ -195,7 +242,6 @@ const CODING_SIDECAR_GATEWAY_REJECTED_OP = "coding-sidecar.gateway.rejected";
 // The readiness projection (`/api/coding-sidecar/gateway/profile`) demoting an otherwise
 // "available" profile because its context window cannot survive a real request gets its own op:
 // it is not a per-request rejection, it is a standing state of the profile itself.
-const CODING_SIDECAR_GATEWAY_TOOL_AVAILABILITY_OP = "coding-sidecar.gateway.tool-availability";
 
 type CodingSidecarGatewayRejectionReason =
   | "request-too-large"
@@ -760,25 +806,33 @@ function resolveToolCatalogHandlerCoverage(
   const unavailable = runtimeCapabilityAuthenticator(deps)?.unavailableOptionalTools?.(runId);
   if (unavailable === undefined) return undefined;
   const unavailableOptionalTools = [...OPENCODE_OPTIONAL_TOOL_NAMES]
-    .filter((name) => unavailable.has(name as OpenCodeOptionalToolName))
+    .filter((name): name is OpenCodeOptionalToolName =>
+      unavailable.has(name as OpenCodeOptionalToolName),
+    )
     .sort(compareStrings);
   const offeredOptionalTools = [...OPENCODE_OPTIONAL_TOOL_NAMES]
-    .filter((name) => !unavailable.has(name as OpenCodeOptionalToolName))
+    .filter(
+      (name): name is OpenCodeOptionalToolName =>
+        !unavailable.has(name as OpenCodeOptionalToolName),
+    )
     .sort(compareStrings);
   const coverage = createCanonicalOpenCodeHandlerCoverage(unavailable);
-  getServerLogger().info({
-    category: "gateway",
-    op: CODING_SIDECAR_GATEWAY_TOOL_AVAILABILITY_OP,
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-    extra: {
-      runId,
-      handlerSetDigest: coverage.handlerSetDigest,
-      unavailableOptionalTools,
-      unavailableOptionalToolCount: unavailableOptionalTools.length,
-      offeredOptionalTools,
-      offeredOptionalToolCount: offeredOptionalTools.length,
-    },
-  });
+  getServerLogger().info(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_TOOL_AVAILABILITY_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      {
+        runId,
+        handlerSetDigest: coverage.handlerSetDigest,
+        unavailableOptionalTools,
+        unavailableOptionalToolCount: unavailableOptionalTools.length,
+        offeredOptionalTools,
+        offeredOptionalToolCount: offeredOptionalTools.length,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
   return coverage;
 }
 
