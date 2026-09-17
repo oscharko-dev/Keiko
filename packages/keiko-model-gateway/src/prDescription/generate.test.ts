@@ -637,7 +637,7 @@ describe("bounded PR narrative lifecycle", () => {
     expect(
       setup.events.find((event) => event.op === "pr-description.authority.revalidation.failed")
         ?.errorKind,
-    ).toBe("Error");
+    ).toBe("internal");
     expect(JSON.stringify(setup.events)).not.toContain("private authority failure");
   });
 
