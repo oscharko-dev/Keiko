@@ -167,8 +167,8 @@ describe("scalar embedding — activity log", () => {
     expect(retry.level).toBe("warn");
     expect(retry.status).toBe(400);
     expect(retry.extra).toMatchObject({ reason: "strict-gateway-rejection" });
-    // The endpoint is reduced to scheme://host — never the /embeddings path, never the input.
-    expect(retry.extra?.endpoint).toBe(new URL(endpoint).origin);
+    expect(retry.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(JSON.stringify(retry)).not.toContain(new URL(endpoint).host);
     expect(JSON.stringify(log.events)).not.toContain("some private document text");
   });
 
@@ -185,7 +185,7 @@ describe("scalar embedding — activity log", () => {
     expect(outcome.ok).toBe(false);
     const failed = eventFor(log.events, "embedding.request.failed");
     expect(failed.status).toBe(401);
-    expect(failed.errorKind).toBe("wrong-header");
+    expect(failed.errorKind).toBe("validation-failed");
     expect(failed.extra).toMatchObject({ minimalShape: false });
   });
 
@@ -286,7 +286,7 @@ describe("batch embedding — activity log", () => {
     const degrading = eventFor(log.events, "embedding.batch.degrading-to-scalar");
     expect(degrading.level).toBe("warn");
     expect(degrading.status).toBe(500);
-    expect(degrading.errorKind).toBe("http-error");
+    expect(degrading.errorKind).toBe("unavailable");
     expect(degrading.extra).toMatchObject({ inputCount: 2 });
 
     const degraded = eventFor(log.events, "embedding.batch.degraded-to-scalar");
@@ -466,13 +466,13 @@ describe("batch embedding — activity log", () => {
     expect(Object.keys(fromMemo.extra ?? {}).sort()).toEqual(
       Object.keys(fromRetry.extra ?? {}).sort(),
     );
-    expect({ ...fromMemo.extra, endpoint: undefined }).toEqual({
+    expect({ ...fromMemo.extra, endpointDigest: undefined }).toEqual({
       ...fromRetry.extra,
-      endpoint: undefined,
+      endpointDigest: undefined,
     });
-    // The host is the one field that legitimately differs — and it is a HOST, never the path.
-    expect(fromMemo.extra?.endpoint).toBe(new URL(strictEndpoint).origin);
-    expect(fromRetry.extra?.endpoint).toBe(new URL(endpoint).origin);
+    expect(fromMemo.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(fromRetry.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(fromMemo.extra?.endpointDigest).not.toBe(fromRetry.extra?.endpointDigest);
   });
 
   it("names which structural check rejected a malformed body", async () => {
