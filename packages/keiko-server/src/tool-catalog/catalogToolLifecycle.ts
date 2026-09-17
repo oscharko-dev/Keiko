@@ -13,10 +13,17 @@ import {
   type ToolLifecyclePhase,
 } from "@oscharko-dev/keiko-contracts/runtime/governed-tool-lifecycle";
 import { deepFreeze } from "@oscharko-dev/keiko-contracts/runtime/deep-freeze";
-import { isErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  isErrorKind,
+  type ActivityLogErrorKind,
+  type ActivityLogEventEnvelope,
+  type ActivityLogFields,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isValidCorrelationId } from "../correlation.js";
 import { redactLogFields } from "../observability/log-redaction.js";
-import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -62,6 +69,299 @@ const BIND_REASONS: ReadonlySet<string> = new Set([
   ...TOOL_RESULT_REASONS.invalid,
   ...TOOL_RESULT_REASONS.denied,
 ]);
+
+const TOOL_CATALOG_PROJECTION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "tool-catalog.projection",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "tool-catalog.catalogToolLifecycle.writeProjection",
+  fields: {
+    catalogRevision: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    profileId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    profileVersion: { type: "integer", dataClass: "count", required: true },
+    projectionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    readiness: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["ready", "unavailable", "dry-run", "unsupported", "mismatch"],
+    },
+    resultCount: { type: "integer", dataClass: "count", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["tool-catalog-projection"],
+  proofIds: ["tool-catalog.projection.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const TOOL_CATALOG_BIND_READY_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "tool-catalog.bind-ready",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "tool-catalog.catalogToolLifecycle.writeBindingReady",
+  fields: {
+    catalogRevision: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    profileId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    profileVersion: { type: "integer", dataClass: "count", required: true },
+    projectionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    readiness: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["ready"],
+    },
+    handlerSetDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["tool-catalog-binding"],
+  proofIds: ["tool-catalog.bind-ready.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const TOOL_CATALOG_BIND_UNAVAILABLE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "tool-catalog.bind-unavailable",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "tool-catalog.catalogToolLifecycle.writeBindingUnavailable",
+  fields: {
+    catalogRevision: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    profileId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    profileVersion: { type: "integer", dataClass: "count", required: true },
+    projectionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    readiness: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["unavailable", "dry-run", "unsupported", "mismatch"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "authority-invalid",
+        "authority-expired",
+        "authority-revoked",
+        "hard-denial",
+        "approval-required",
+        "approval-rejected",
+        "budget-exhausted",
+        "workspace-denied",
+        "effect-denied",
+        "unknown-tool",
+        "unoffered-tool",
+        "ambiguous-alias",
+        "invalid-arguments",
+        "version-mismatch",
+        "projection-mismatch",
+        "unsupported-capability",
+        "cursor-invalid",
+        "cursor-expired",
+        "cursor-replayed",
+        "workspace-stale",
+        "replay-conflict",
+        "recovery-required",
+        "handler-unavailable",
+        "handler-mismatch",
+        "handler-failed",
+        "result-contract-failed",
+        "effect-outcome-unknown",
+        "budget-port-failed",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "capability",
+  failureClasses: ["tool-catalog-binding-unavailable"],
+  proofIds: ["tool-catalog.bind-unavailable.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const TOOL_CATALOG_INVOCATION_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "tool-catalog.invocation-started",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "tool-catalog.catalogToolLifecycle.writeInvocationStarted",
+  fields: {
+    catalogRevision: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    profileId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    profileVersion: { type: "integer", dataClass: "count", required: true },
+    projectionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    invocationId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    toolCanonicalId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    toolContractVersion: { type: "integer", dataClass: "count", required: true },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["started"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["none"],
+    },
+    reservationId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["tool-catalog-invocation"],
+  proofIds: ["tool-catalog.invocation-started.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const TOOL_CATALOG_INVOCATION_SETTLED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "tool-catalog.invocation-settled",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "tool-catalog.catalogToolLifecycle.writeInvocationSettled",
+  fields: {
+    catalogRevision: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    profileId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    profileVersion: { type: "integer", dataClass: "count", required: true },
+    projectionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    invocationId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    toolCanonicalId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    toolContractVersion: { type: "integer", dataClass: "count", required: false },
+    toolRefCompleteness: { type: "string", dataClass: "completeness-state", required: true },
+    settlementId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    reservationId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    reservationState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["reserved", "not-reserved"],
+    },
+    status: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["completed", "denied", "invalid", "busy", "cancelled", "timeout", "failed"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "none",
+        "authority-invalid",
+        "authority-expired",
+        "authority-revoked",
+        "hard-denial",
+        "approval-required",
+        "approval-rejected",
+        "budget-exhausted",
+        "workspace-denied",
+        "effect-denied",
+        "unknown-tool",
+        "unoffered-tool",
+        "ambiguous-alias",
+        "invalid-arguments",
+        "version-mismatch",
+        "projection-mismatch",
+        "unsupported-capability",
+        "cursor-invalid",
+        "cursor-expired",
+        "cursor-replayed",
+        "workspace-stale",
+        "replay-conflict",
+        "recovery-required",
+        "invocation-in-flight",
+        "capacity-exhausted",
+        "explicit-cancellation",
+        "parent-cancelled",
+        "deadline-exceeded",
+        "handler-unavailable",
+        "handler-mismatch",
+        "handler-failed",
+        "result-contract-failed",
+        "effect-outcome-unknown",
+        "budget-port-failed",
+      ],
+    },
+    durationMs: { type: "integer", dataClass: "duration", required: true },
+    effectStarted: { type: "boolean", dataClass: "closed-enum", required: true },
+    budgetDisposition: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["committed", "released", "not-reserved", "commit-uncertain", "release-uncertain"],
+    },
+    inputBytes: { type: "integer", dataClass: "count", required: false },
+    outputBytes: { type: "integer", dataClass: "count", required: false },
+    resultCount: { type: "integer", dataClass: "count", required: false },
+    truncated: { type: "boolean", dataClass: "closed-enum", required: false },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["tool-catalog-invocation-settlement"],
+  proofIds: ["tool-catalog.invocation-settled.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const TOOL_CATALOG_COMPLETION_DISCARDED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "tool-catalog.completion-discarded",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "tool-catalog.catalogToolLifecycle.writeCompletionDiscarded",
+  fields: {
+    catalogRevision: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    profileId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    profileVersion: { type: "integer", dataClass: "count", required: true },
+    projectionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    invocationId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    toolCanonicalId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    toolContractVersion: { type: "integer", dataClass: "count", required: true },
+    settlementId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["late-completion"],
+    },
+    lossState: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "loss",
+  analyzerProjection: "process-lifecycle",
+  failureClasses: ["tool-catalog-late-completion"],
+  proofIds: ["tool-catalog.completion-discarded.emitted-line"],
+  releaseImpact: "patch",
+});
 
 function requireLifecycle(condition: boolean): asserts condition {
   if (!condition) throw new TypeError("Invalid tool lifecycle evidence");
@@ -223,39 +523,215 @@ export function validateToolLifecycleEvent(source: unknown): ToolLifecycleEvent 
   }
 }
 
-function writeLifecycle(sink: ServerLogSink, event: ToolLifecycleEvent): void {
-  const fields: Omit<ServerLogEvent, "op"> = {
+const CATALOG_REASON_ERROR_KIND: Readonly<Record<string, ActivityLogErrorKind>> = {
+  "authority-invalid": "authority-denied",
+  "authority-expired": "authority-denied",
+  "authority-revoked": "authority-denied",
+  "hard-denial": "authority-denied",
+  "approval-required": "authority-denied",
+  "approval-rejected": "authority-denied",
+  "budget-exhausted": "rate-limited",
+  "workspace-denied": "authority-denied",
+  "effect-denied": "authority-denied",
+  "unknown-tool": "invalid-request",
+  "unoffered-tool": "invalid-request",
+  "ambiguous-alias": "invalid-request",
+  "invalid-arguments": "invalid-request",
+  "version-mismatch": "validation-failed",
+  "projection-mismatch": "validation-failed",
+  "unsupported-capability": "unavailable",
+  "cursor-invalid": "invalid-request",
+  "cursor-expired": "invalid-request",
+  "cursor-replayed": "conflict",
+  "workspace-stale": "conflict",
+  "replay-conflict": "conflict",
+  "recovery-required": "conflict",
+  "invocation-in-flight": "conflict",
+  "capacity-exhausted": "rate-limited",
+  "explicit-cancellation": "cancelled",
+  "parent-cancelled": "cancelled",
+  "deadline-exceeded": "timeout",
+  "handler-unavailable": "unavailable",
+  "handler-mismatch": "unavailable",
+  "handler-failed": "internal",
+  "result-contract-failed": "validation-failed",
+  "effect-outcome-unknown": "unknown",
+  "budget-port-failed": "internal",
+};
+
+function lifecycleEnvelope(
+  event: ToolLifecycleEvent,
+  errorKind?: ActivityLogErrorKind,
+): ActivityLogEventEnvelope {
+  return {
     level:
       event.op === "tool-catalog.invocation-settled" && event.status === "failed"
         ? "error"
         : "info",
-    category: "security",
     correlationId: event.correlationId,
-    extra: { ...event },
     ...(event.parentCorrelationId === undefined
       ? {}
       : { parentCorrelationId: event.parentCorrelationId }),
+    ...(errorKind === undefined ? {} : { errorKind }),
   };
-  // These are actual writes: source extraction records exactly the six generated lifecycle IDs.
+}
+
+function identityFields(event: ToolLifecycleEvent): {
+  readonly catalogRevision: string;
+  readonly profileId: string;
+  readonly profileVersion: number;
+  readonly projectionDigest: string;
+} {
+  return {
+    catalogRevision: event.catalogRevision,
+    profileId: event.profile.id,
+    profileVersion: event.profile.version,
+    projectionDigest: event.projectionDigest,
+  };
+}
+
+function writeProjection(
+  sink: ServerLogSink,
+  event: Extract<ToolLifecycleEvent, { readonly op: "tool-catalog.projection" }>,
+): void {
+  sink.write(
+    activityLogEvent(TOOL_CATALOG_PROJECTION_OPERATION, lifecycleEnvelope(event), {
+      ...identityFields(event),
+      readiness: event.readiness,
+      ...(event.resultCount === undefined ? {} : { resultCount: event.resultCount }),
+    }),
+  );
+}
+
+function writeBindingReady(
+  sink: ServerLogSink,
+  event: Extract<ToolLifecycleEvent, { readonly op: "tool-catalog.bind-ready" }>,
+): void {
+  sink.write(
+    activityLogEvent(TOOL_CATALOG_BIND_READY_OPERATION, lifecycleEnvelope(event), {
+      ...identityFields(event),
+      readiness: event.readiness,
+      handlerSetDigest: event.handlerSetDigest,
+    }),
+  );
+}
+
+function writeBindingUnavailable(
+  sink: ServerLogSink,
+  event: Extract<ToolLifecycleEvent, { readonly op: "tool-catalog.bind-unavailable" }>,
+): void {
+  sink.write(
+    activityLogEvent(
+      TOOL_CATALOG_BIND_UNAVAILABLE_OPERATION,
+      lifecycleEnvelope(event, CATALOG_REASON_ERROR_KIND[event.reason] ?? "unavailable"),
+      { ...identityFields(event), readiness: event.readiness, reason: event.reason },
+    ),
+  );
+}
+
+function writeInvocationStarted(
+  sink: ServerLogSink,
+  event: Extract<ToolLifecycleEvent, { readonly op: "tool-catalog.invocation-started" }>,
+): void {
+  sink.write(
+    activityLogEvent(TOOL_CATALOG_INVOCATION_STARTED_OPERATION, lifecycleEnvelope(event), {
+      ...identityFields(event),
+      invocationId: event.invocationId,
+      toolCanonicalId: event.toolRef.canonicalId,
+      toolContractVersion: event.toolRef.contractVersion,
+      state: event.state,
+      reason: event.reason,
+      reservationId: event.reservationId,
+    }),
+  );
+}
+
+type SettlementEvent = Extract<
+  ToolLifecycleEvent,
+  { readonly op: "tool-catalog.invocation-settled" }
+>;
+
+function settledFields(
+  event: SettlementEvent,
+): ActivityLogFields<typeof TOOL_CATALOG_INVOCATION_SETTLED_OPERATION> {
+  return {
+    ...identityFields(event),
+    invocationId: event.invocationId,
+    ...(event.toolRef === null
+      ? { toolRefCompleteness: "unknown" }
+      : {
+          toolCanonicalId: event.toolRef.canonicalId,
+          toolContractVersion: event.toolRef.contractVersion,
+          toolRefCompleteness: "complete",
+        }),
+    settlementId: event.settlementId,
+    ...(event.reservationId === null
+      ? { reservationState: "not-reserved" }
+      : { reservationId: event.reservationId, reservationState: "reserved" }),
+    status: event.status,
+    reason: event.reason,
+    durationMs: event.durationMs,
+    effectStarted: event.effectStarted,
+    budgetDisposition: event.budgetDisposition,
+    ...(event.inputBytes === undefined ? {} : { inputBytes: event.inputBytes }),
+    ...(event.outputBytes === undefined ? {} : { outputBytes: event.outputBytes }),
+    ...(event.resultCount === undefined ? {} : { resultCount: event.resultCount }),
+    ...(event.truncated === undefined ? {} : { truncated: event.truncated }),
+    ...(event.status === "failed" ? { frames: event.frames, causeChain: event.causeChain } : {}),
+  };
+}
+
+function settlementErrorKind(event: SettlementEvent): ActivityLogErrorKind | undefined {
+  return event.status === "completed"
+    ? undefined
+    : (CATALOG_REASON_ERROR_KIND[event.reason] ?? "internal");
+}
+
+function writeInvocationSettled(sink: ServerLogSink, event: SettlementEvent): void {
+  sink.write(
+    activityLogEvent(
+      TOOL_CATALOG_INVOCATION_SETTLED_OPERATION,
+      lifecycleEnvelope(event, settlementErrorKind(event)),
+      settledFields(event),
+    ),
+  );
+}
+
+function writeCompletionDiscarded(
+  sink: ServerLogSink,
+  event: Extract<ToolLifecycleEvent, { readonly op: "tool-catalog.completion-discarded" }>,
+): void {
+  sink.write(
+    activityLogEvent(
+      TOOL_CATALOG_COMPLETION_DISCARDED_OPERATION,
+      lifecycleEnvelope(event, "unknown"),
+      {
+        ...identityFields(event),
+        invocationId: event.invocationId,
+        toolCanonicalId: event.toolRef.canonicalId,
+        toolContractVersion: event.toolRef.contractVersion,
+        settlementId: event.settlementId,
+        reason: event.reason,
+        lossState: "event-dropped",
+      },
+    ),
+  );
+}
+
+function writeLifecycle(sink: ServerLogSink, event: ToolLifecycleEvent): void {
   switch (event.op) {
     case "tool-catalog.projection":
-      sink.write({ ...fields, op: "tool-catalog.projection" });
-      break;
+      return writeProjection(sink, event);
     case "tool-catalog.bind-ready":
-      sink.write({ ...fields, op: "tool-catalog.bind-ready" });
-      break;
+      return writeBindingReady(sink, event);
     case "tool-catalog.bind-unavailable":
-      sink.write({ ...fields, op: "tool-catalog.bind-unavailable" });
-      break;
+      return writeBindingUnavailable(sink, event);
     case "tool-catalog.invocation-started":
-      sink.write({ ...fields, op: "tool-catalog.invocation-started" });
-      break;
+      return writeInvocationStarted(sink, event);
     case "tool-catalog.invocation-settled":
-      sink.write({ ...fields, op: "tool-catalog.invocation-settled" });
-      break;
+      return writeInvocationSettled(sink, event);
     case "tool-catalog.completion-discarded":
-      sink.write({ ...fields, op: "tool-catalog.completion-discarded" });
-      break;
+      return writeCompletionDiscarded(sink, event);
   }
 }
 
