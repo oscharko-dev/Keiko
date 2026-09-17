@@ -542,7 +542,15 @@ describe("editor-agent producer turn reachability (#2489 Findings 1/2)", () => {
     expect(completed).toMatchObject({
       category: "process",
       op: "editor.producer-turn.completed",
-      extra: { outcome: "completed", toolCallCount: 1, toolNames: ["editor_navigate_symbol"] },
+      extra: {
+        outcome: "completed",
+        toolCallCount: 1,
+        toolNames: ["editor_navigate_symbol"],
+        toolNameLoss: "none",
+        catalogProfile: "editor@1",
+        catalogProfileLoss: "none",
+        advertisedToolRefLoss: "none",
+      },
     });
     expect(JSON.stringify(completed)).not.toContain("reachability probe");
 

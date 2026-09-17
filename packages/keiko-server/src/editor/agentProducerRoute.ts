@@ -15,6 +15,7 @@ import {
   MemoryEventSink,
   type HarnessEvent,
   type ModelPort,
+  type RunOutcome,
   type ToolCallCompletedEvent,
   type ToolCallResult,
   type ToolPort,
@@ -34,6 +35,11 @@ import {
   EDITOR_AGENT_SCHEMA_VERSION,
   isEditorAgentGovernedAuthorityReference,
 } from "@oscharko-dev/keiko-contracts/runtime/editor-agent";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogLossState,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   EDITOR_AGENT_ACTION_APPROVAL_RISK,
   classifyEditorAgentAction,
@@ -79,6 +85,71 @@ const PRODUCER_TOOL_NAMES: ReadonlySet<string> = new Set(Object.keys(PRODUCER_AC
 
 const MAX_PRODUCER_BODY_BYTES = 65_536;
 const MAX_GOAL_CHARS = 4_000;
+
+const EDITOR_PRODUCER_TURN_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "editor.producer-turn.completed",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "editor.agentProducerRoute.recordProducerCompletion",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["completed", "cancelled", "failed", "limit-exceeded"],
+    },
+    toolCallCount: { type: "integer", dataClass: "count", required: true },
+    toolNames: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: true,
+      maxLength: 64,
+      maxItems: 128,
+      values: [
+        "editor_navigate_symbol",
+        "editor_search_workspace",
+        "editor_git_context",
+        "editor_request_verification",
+        "unrecognized",
+      ],
+    },
+    toolNameLoss: { type: "string", dataClass: "loss-state", required: true },
+    catalogRevision: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    catalogProfile: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["editor@1", "unrecognized"],
+    },
+    catalogProfileLoss: { type: "string", dataClass: "loss-state", required: true },
+    projectionDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    handlerSetDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    advertisedToolRefs: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: true,
+      maxLength: 64,
+      maxItems: 32,
+      values: [
+        "keiko.editor.git@1",
+        "keiko.editor.search@1",
+        "keiko.editor.symbol@1",
+        "keiko.editor.verify@1",
+        "unrecognized",
+      ],
+    },
+    advertisedToolRefLoss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["editor-producer-turn"],
+  proofIds: ["editor.producer-turn-completed.emitted-line"],
+  releaseImpact: "patch",
+});
 
 // A content-free (enum/boolean only, never raw content) per-call outcome the producer surfaces
 // alongside toolCallCount/toolNames -- without this, a caller (or a reachability test) cannot tell
@@ -402,29 +473,79 @@ async function runProducerTurn(
 interface ProducerCompletionEvidence {
   readonly catalog: ProducerCatalogEvidence;
   readonly correlationId: string;
-  readonly outcome: string;
+  readonly outcome: RunOutcome;
   readonly runId: string;
   readonly toolCallCount: number;
   readonly toolNames: readonly string[];
 }
 
+type ProducerActivityToolName =
+  | "editor_navigate_symbol"
+  | "editor_search_workspace"
+  | "editor_git_context"
+  | "editor_request_verification"
+  | "unrecognized";
+
+type ProducerActivityToolRef =
+  | "keiko.editor.git@1"
+  | "keiko.editor.search@1"
+  | "keiko.editor.symbol@1"
+  | "keiko.editor.verify@1"
+  | "unrecognized";
+
+function producerActivityToolName(toolName: string): ProducerActivityToolName {
+  if (toolName === "editor_navigate_symbol") return toolName;
+  if (toolName === "editor_search_workspace") return toolName;
+  if (toolName === "editor_git_context") return toolName;
+  if (toolName === "editor_request_verification") return toolName;
+  return "unrecognized";
+}
+
+function producerActivityToolRef(
+  canonicalId: string,
+  contractVersion: number,
+): ProducerActivityToolRef {
+  const reference = `${canonicalId}@${String(contractVersion)}`;
+  if (reference === "keiko.editor.git@1") return reference;
+  if (reference === "keiko.editor.search@1") return reference;
+  if (reference === "keiko.editor.symbol@1") return reference;
+  if (reference === "keiko.editor.verify@1") return reference;
+  return "unrecognized";
+}
+
+function producerLoss(values: readonly string[]): ActivityLogLossState {
+  return values.includes("unrecognized") ? "event-location-unknown" : "none";
+}
+
 function recordProducerCompletion(log: ServerLogSink, evidence: ProducerCompletionEvidence): void {
-  log.write({
-    category: "process",
-    op: "editor.producer-turn.completed",
-    correlationId: evidence.correlationId,
-    extra: {
-      runId: evidence.runId,
-      outcome: evidence.outcome,
-      toolCallCount: evidence.toolCallCount,
-      toolNames: evidence.toolNames,
-      catalogRevision: evidence.catalog.catalogRevision,
-      catalogProfile: evidence.catalog.profile,
-      projectionDigest: evidence.catalog.projectionDigest,
-      handlerSetDigest: evidence.catalog.handlerSetDigest,
-      advertisedToolRefs: evidence.catalog.toolRefs,
-    },
-  });
+  const toolNames = evidence.toolNames.map(producerActivityToolName);
+  const advertisedToolRefs = evidence.catalog.toolRefs.map((tool) =>
+    producerActivityToolRef(tool.canonicalId, tool.contractVersion),
+  );
+  const catalogProfile =
+    evidence.catalog.profile.id === "editor" && evidence.catalog.profile.version === 1
+      ? "editor@1"
+      : "unrecognized";
+  log.write(
+    activityLogEvent(
+      EDITOR_PRODUCER_TURN_COMPLETED_OPERATION,
+      { correlationId: evidence.correlationId },
+      {
+        runId: evidence.runId,
+        outcome: evidence.outcome,
+        toolCallCount: evidence.toolCallCount,
+        toolNames,
+        toolNameLoss: producerLoss(toolNames),
+        catalogRevision: evidence.catalog.catalogRevision,
+        catalogProfile,
+        catalogProfileLoss: producerLoss([catalogProfile]),
+        projectionDigest: evidence.catalog.projectionDigest,
+        handlerSetDigest: evidence.catalog.handlerSetDigest,
+        advertisedToolRefs,
+        advertisedToolRefLoss: producerLoss(advertisedToolRefs),
+      },
+    ),
+  );
 }
 
 function lifecycleIdentity(
@@ -496,7 +617,9 @@ function emitCatalogSettled(
     resultCount: observation.resultCount,
     durationMs: observation.durationMs,
     truncated: observation.truncated,
-    ...(observation.status === "failed" ? { errorKind: "Error", frames: [], causeChain: [] } : {}),
+    ...(observation.status === "failed"
+      ? { errorKind: "internal", frames: [], causeChain: [] }
+      : {}),
   });
 }
 
