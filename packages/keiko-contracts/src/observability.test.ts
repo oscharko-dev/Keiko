@@ -81,11 +81,23 @@ describe("typed Activity Log operation registration", () => {
       releaseImpact: "patch",
     });
 
-    expect(activityLogEvent(operation, { itemCount: 2 })).toEqual({
+    expect(activityLogEvent(operation, {}, { itemCount: 2 })).toEqual({
       contractKind: "activity-log-event",
       category: "diagnostic",
       op: "registry.fixture.completed",
-      itemCount: 2,
+      extra: { itemCount: 2 },
     });
+
+    if (false) {
+      const rawFields = { itemCount: 2, rawBody: "forbidden" };
+      // @ts-expect-error required registered field is missing
+      activityLogEvent(operation, {}, {});
+      // @ts-expect-error unregistered fields cannot enter the event
+      activityLogEvent(operation, {}, { itemCount: 2, rawBody: "forbidden" });
+      // @ts-expect-error a widened variable cannot smuggle an unregistered field
+      activityLogEvent(operation, {}, rawFields);
+      // @ts-expect-error registered count fields are numeric
+      activityLogEvent(operation, {}, { itemCount: "two" });
+    }
   });
 });

@@ -36,14 +36,18 @@ disabling the log the operator is trying to read.
 
 ## The op catalog
 
-Every log line's `op` field is a value from a closed, generated vocabulary — never a free string
-an operator has to guess the meaning of. The checked-in catalog,
-[`op-catalog.generated.json`](op-catalog.generated.json), lists every `op` this build can emit
-alongside its `category`, owning package, and call site, and is regenerated and drift-tested by
-`scripts/generate-op-catalog.mjs` whenever a new operation is added. A `<dynamic>` entry marks a
-forwarding call site that receives its `op` value from a caller rather than minting its own; the
-catalog also lists that caller's own literal separately, so the vocabulary is always traceable to
-where it actually originates.
+[`op-catalog.generated.json`](op-catalog.generated.json) is the single generated registry. Its
+`typedRegistry.operations` array is the authoritative production contract: each operation is a
+literal `defineActivityLogOperation` declaration bound to an `activityLogEvent` emitter through
+TypeScript symbol resolution. Non-literal registrations, duplicate operations, unregistered
+emissions, and registrations with no emitter are closed violations with an exact source site and
+corrective action.
+
+The root `entries`/`operations` arrays remain only as a non-authoritative migration input for code
+that still uses the predecessor's bracket scanner. Their `<dynamic>` and `unknown` values are
+reported in `legacyDiscovery`; they can neither register nor authorize a production operation.
+Producers move into the authoritative array operation by operation, without adding a second
+catalog or treating heuristic inference as contract truth.
 
 ## Redaction scope, stated honestly
 

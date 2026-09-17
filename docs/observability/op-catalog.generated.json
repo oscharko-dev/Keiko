@@ -1,7 +1,11 @@
 {
-  "$schema": "keiko-op-catalog/1",
+  "$schema": "keiko-activity-log-registry/2",
   "generatedBy": "scripts/generate-op-catalog.mjs",
   "operationContracts": ["docs/observability/tool-catalog-operations.v1.json"],
+  "authority": {
+    "operationSource": "typedRegistry.operations",
+    "legacyDiscovery": "non-authoritative-migration-input"
+  },
   "typedRegistry": {
     "schemaVersion": 1,
     "operations": [
@@ -59,6 +63,11 @@
       }
     ],
     "violations": []
+  },
+  "legacyDiscovery": {
+    "dynamicCount": 33,
+    "unknownCategoryCount": 22,
+    "authoritative": false
   },
   "entries": [
     {
