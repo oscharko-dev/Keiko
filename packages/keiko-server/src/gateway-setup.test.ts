@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { PassThrough, Readable } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { IncomingMessage } from "node:http";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { FigmaConnectorError } from "./qualityIntelligence/figma/figmaConnectorErrors.js";
 import { currentGatewayConfig } from "./deps.js";
 import { buildUiHandlerDeps } from "./deps.js";
@@ -559,8 +560,17 @@ describe("handleGatewaySetup", () => {
       expect(verificationEvent).toMatchObject({
         category: "gateway",
         correlationId: "corr-tool-proof",
-        extra: { verificationStatus: "verified" },
+        extra: {
+          verificationStatus: "verified",
+          completeness: "complete",
+          loss: "none",
+        },
       });
+      expect(
+        activityLogEventRegistration(
+          verificationEvent as unknown as Readonly<Record<PropertyKey, unknown>>,
+        ),
+      ).toBeDefined();
     } finally {
       resetServerLogger();
       deps.store.close();

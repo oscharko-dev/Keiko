@@ -51,6 +51,10 @@ import {
   GATEWAY_SETUP_AUDIT_SCHEMA_VERSION,
   validateGatewaySetupAuditRecord,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway-setup-audit";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type {
   GatewayModelUnsupportedReason,
   GatewaySetupAuditRecord,
@@ -89,7 +93,7 @@ import type {
   VerifiedModelCapabilityFields,
 } from "./deps.js";
 import { currentGatewayConfig, currentGatewayEgressConfig } from "./deps.js";
-import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -128,6 +132,37 @@ const MISTRAL_TOOL_CALLING_LIMITATION =
   "Tool calling is disabled by default for Mistral deployments until endpoint readiness verifies it";
 const DISCOVERED_MODEL_SMOKE_TIMEOUT_MS = 15_000;
 const DEPLOYMENT_SMOKE_TIMEOUT_MS = 30_000;
+
+const GATEWAY_TOOL_CALLING_VERIFICATION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "gateway.tool-calling.verification",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "gateway-setup.logToolCallingVerification",
+  fields: {
+    verificationStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["verified", "unsupported", "unverified"],
+    },
+    configurationFingerprint: {
+      type: "string",
+      dataClass: "digest",
+      required: false,
+      maxLength: 64,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["gateway-tool-calling-capability"],
+  proofIds: ["gateway.tool-calling.verification.line"],
+  releaseImpact: "patch",
+});
 const FIGMA_CREDENTIAL_SMOKE_TIMEOUT_MS = 15_000;
 const FIGMA_CREDENTIAL_SMOKE_RESPONSE_BYTES = 64_000;
 const SETUP_SMOKE_CONCURRENCY = 4;
@@ -6395,17 +6430,22 @@ function logToolCallingVerification(
   const fingerprint =
     configurationFingerprint ??
     (provider === undefined ? undefined : toolCallingConfigurationFingerprint(provider));
-  processServerLogSink().write({
-    category: "gateway",
-    op: "gateway.tool-calling.verification",
-    correlationId,
-    status: status === "verified" ? 200 : 503,
-    ...(status === "verified" ? {} : { errorKind: status }),
-    extra: {
-      verificationStatus: status,
-      ...(fingerprint === undefined ? {} : { configurationFingerprint: fingerprint }),
-    },
-  });
+  processServerLogSink().write(
+    activityLogEvent(
+      GATEWAY_TOOL_CALLING_VERIFICATION_OPERATION,
+      {
+        correlationId: correlationIdOrUnknown(correlationId),
+        status: status === "verified" ? 200 : 503,
+        ...(status === "verified" ? {} : { errorKind: "unavailable" }),
+      },
+      {
+        verificationStatus: status,
+        ...(fingerprint === undefined ? {} : { configurationFingerprint: fingerprint }),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
 }
 
 /** Applies only generation-current live observations after an explicit, human-confirmed request. */
