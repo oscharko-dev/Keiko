@@ -224,6 +224,14 @@ function sameFilesystemPath(left: string, right: string): boolean {
   return filesystemComparisonPath(left) === filesystemComparisonPath(right);
 }
 
+function compareResolvedPaths(left: string, right: string): number {
+  const resolvedLeft = resolve(left);
+  const resolvedRight = resolve(right);
+  if (resolvedLeft < resolvedRight) return -1;
+  if (resolvedLeft > resolvedRight) return 1;
+  return 0;
+}
+
 function containedDirectories(
   trustedRoot: string,
   targetPath: string,
@@ -386,6 +394,20 @@ function permissionIsPrivate(mode: number | bigint): boolean {
   return typeof mode === "bigint" ? (mode & 0o077n) === 0n : (mode & 0o077) === 0;
 }
 
+function descriptorOwnerIsTrusted(stat: BigIntStats): boolean {
+  if (process.platform === "win32") return true;
+  const effectiveUser = process.geteuid?.();
+  return effectiveUser !== undefined && stat.uid === BigInt(effectiveUser);
+}
+
+function descriptorIsSafeArtifact(stat: BigIntStats): boolean {
+  return stat.isFile() && stat.nlink === 1n && descriptorOwnerIsTrusted(stat);
+}
+
+function descriptorSafetyFailureKind(stat: BigIntStats): SafeArtifactFileFailureKind {
+  return stat.isFile() && stat.nlink === 1n ? "permission-unsafe" : "unsafe-target";
+}
+
 function verifyDescriptorIdentity(
   descriptor: number,
   path: string,
@@ -397,8 +419,8 @@ function verifyDescriptorIdentity(
   } catch {
     throw safeFileError(artifactClass, "open-failed");
   }
-  if (!opened.isFile() || opened.nlink !== 1n) {
-    throw safeFileError(artifactClass, "unsafe-target");
+  if (!descriptorIsSafeArtifact(opened)) {
+    throw safeFileError(artifactClass, descriptorSafetyFailureKind(opened));
   }
   let pathname: BigIntStats;
   try {
@@ -624,9 +646,7 @@ function publicationId(
   commitPath: string,
 ): string {
   const hash = createHash("sha256");
-  const ordered = [...entries].sort((left, right) =>
-    resolve(left.path).localeCompare(resolve(right.path)),
-  );
+  const ordered = [...entries].sort((left, right) => compareResolvedPaths(left.path, right.path));
   for (const entry of ordered) {
     const bytes =
       typeof entry.contents === "string"
@@ -664,9 +684,7 @@ function preparePublicationEntries(
 ): readonly PreparedPublicationEntry[] {
   const parent = dirname(resolve(commitPath));
   const id = fixedSlot ?? publicationId(entries, commitPath);
-  const ordered = [...entries].sort((left, right) =>
-    resolve(left.path).localeCompare(resolve(right.path)),
-  );
+  const ordered = [...entries].sort((left, right) => compareResolvedPaths(left.path, right.path));
   return ordered.map((entry, index) => ({
     path: resolve(entry.path),
     stagePath: join(parent, `.keiko-publish-${id}-${String(index)}.stage`),
@@ -1651,7 +1669,11 @@ function releasePublicationOwnerAfterFailure(
 ): void {
   activePublicationOwnerTokens.delete(intent.ownerToken);
   if (!ownerCreated) return;
-  releasePublicationOwner(intent, options);
+  try {
+    releasePublicationOwner(intent, options);
+  } catch {
+    // Preserve the primary failure. The durable owner marker remains available for recovery.
+  }
 }
 
 function createOwnedActiveReceipt(
@@ -1751,7 +1773,7 @@ function publishIntentFileSet(
       "active",
       "complete",
     );
-    return {
+    const publication = {
       ...result,
       durabilityAssurance: combineDurabilityAssurance(
         begun.initialAssurance,
@@ -1759,8 +1781,11 @@ function publishIntentFileSet(
         receiptAssurance,
       ),
     };
-  } finally {
     releasePublicationOwner(begun.intent, options);
+    return publication;
+  } catch (error) {
+    releasePublicationOwnerAfterFailure(begun.intent, options, true);
+    throw error;
   }
 }
 

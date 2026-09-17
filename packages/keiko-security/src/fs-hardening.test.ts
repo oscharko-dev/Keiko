@@ -362,6 +362,36 @@ describe("openSafeArtifactFile", () => {
     expect(stat.mode & 0o777).toBe(FILE_MODE);
   });
 
+  it("rejects a private file owned by a different POSIX user", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const base = freshDir();
+    const path = join(base, "artifact");
+    writeFileSync(path, "existing", { mode: FILE_MODE });
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      fstatSync: (
+        ...args: Parameters<typeof actual.fstatSync>
+      ): ReturnType<typeof actual.fstatSync> => {
+        const stat = Reflect.apply(actual.fstatSync, actual, args);
+        if (typeof stat.uid !== "bigint" || !stat.isFile()) return stat;
+        Object.defineProperty(stat, "uid", { value: stat.uid + 1n });
+        return stat;
+      },
+    }));
+    const isolated = await import("./fs-hardening.js");
+
+    expect(() =>
+      isolated.openSafeArtifactFile(path, {
+        artifactClass: "activity-log",
+        mode: "append-existing-or-create",
+        trustedRoot: base,
+      }),
+    ).toThrow(expect.objectContaining({ kind: "permission-unsafe" }));
+    expect(readFileSync(path, "utf8")).toBe("existing");
+  });
+
   it("rejects a final pathname replaced after open instead of trusting a precheck", async () => {
     const base = freshDir();
     const path = join(base, "artifact");
@@ -880,6 +910,44 @@ describe("publishSafeArtifactFileSet", () => {
     expect(readFileSync(integrity, "utf8")).toBe("digest");
   });
 
+  it("preserves a primary durability failure when owner cleanup also fails", async () => {
+    const base = freshDir();
+    const report = join(base, "support.jsonl");
+    const slot = safeArtifactPublicationSlot("support-export", report);
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let stageDescriptor: number | undefined;
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      openSync: (...args: Parameters<typeof actual.openSync>): number => {
+        const descriptor = Reflect.apply(actual.openSync, actual, args);
+        if (String(args[0]).endsWith(".stage")) stageDescriptor = descriptor;
+        return descriptor;
+      },
+      fsyncSync: (...args: Parameters<typeof actual.fsyncSync>): void => {
+        if (args[0] === stageDescriptor) {
+          throw Object.assign(new Error("stage durability failed"), { code: "EIO" });
+        }
+        Reflect.apply(actual.fsyncSync, actual, args);
+      },
+      unlinkSync: (...args: Parameters<typeof actual.unlinkSync>): void => {
+        if (String(args[0]).endsWith(".owner")) {
+          throw Object.assign(new Error("owner cleanup failed"), { code: "EIO" });
+        }
+        Reflect.apply(actual.unlinkSync, actual, args);
+      },
+    }));
+    const isolated = await import("./fs-hardening.js");
+
+    expect(() =>
+      isolated.publishSafeArtifactFileSet(
+        [{ path: report, contents: "report", artifactClass: "support-report" }],
+        { commitPath: report, trustedRoot: base, publicationSlot: slot },
+      ),
+    ).toThrow(expect.objectContaining({ kind: "durability-failed" }));
+    expect(readdirSync(base)).toContain(`.keiko-publish-${slot}.owner`);
+  });
+
   it("keeps one bounded recovery locator when hard-link publication is unsupported", async () => {
     const base = freshDir();
     const report = join(base, "support.jsonl");
@@ -1157,7 +1225,7 @@ describe("publishSafeArtifactFileSet", () => {
         [{ path: second, contents: "second", artifactClass: "support-report" }],
         { commitPath: second, trustedRoot: base, publicationSlot: slot },
       ),
-    ).toThrow(expect.objectContaining({ kind: "publish-failed" }));
+    ).toThrow(expect.objectContaining({ kind: "open-failed" }));
     vi.doUnmock("node:fs");
     vi.resetModules();
 
@@ -1276,6 +1344,28 @@ describe("publishSafeArtifactFileSet", () => {
       permissionAssurance: "platform-inherited",
       durabilityAssurance: "directory-sync-unavailable",
     });
+  });
+
+  it("uses a locale-independent publication order", () => {
+    const base = freshDir();
+    const first = join(base, "z-report.json");
+    const second = join(base, "ä-report.json");
+    const localeCompare = vi
+      .spyOn(String.prototype, "localeCompare")
+      .mockImplementation((): never => {
+        throw new Error("process locale must not determine publication identity");
+      });
+
+    expect(
+      publishSafeArtifactFileSet(
+        [
+          { path: second, contents: "second", artifactClass: "integrity-artifact" },
+          { path: first, contents: "first", artifactClass: "manifest" },
+        ],
+        { commitPath: first, trustedRoot: base },
+      ),
+    ).toEqual(expect.objectContaining({ status: "published" }));
+    expect(localeCompare).not.toHaveBeenCalled();
   });
 
   it("uses a writable recovery-stage handle while exposing unavailable directory sync", async () => {

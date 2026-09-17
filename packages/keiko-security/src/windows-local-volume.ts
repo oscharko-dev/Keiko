@@ -7,6 +7,7 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import type { ActivityLogErrorKind } from "@oscharko-dev/keiko-contracts";
 import { emitSecurityLogEvent, securityErrorKind, type SecurityLogSink } from "./log-port.js";
 import { resolveWindowsPowerShellExecutable } from "./windows-system-directory.js";
 
@@ -155,6 +156,12 @@ function commandFailed(result: ReturnType<WindowsLocalVolumeRunner>): boolean {
   ].some(Boolean);
 }
 
+function localVolumeErrorKind(phase: "input" | "resolve" | "verify"): ActivityLogErrorKind {
+  if (phase === "input") return "invalid-request";
+  if (phase === "resolve") return "unavailable";
+  return "unsafe-target";
+}
+
 export function assertWindowsLocalVolume(
   path: string,
   options: WindowsLocalVolumeOptions = {},
@@ -188,7 +195,7 @@ export function assertWindowsLocalVolume(
       options.securityLogSink,
       activityLogEvent(
         SECURITY_WINDOWS_LOCAL_VOLUME_REFUSED_OPERATION,
-        { level: "error", errorKind: "unsafe-target" },
+        { level: "error", errorKind: localVolumeErrorKind(phase) },
         { failureKind: securityErrorKind(error), phase },
       ),
     );
