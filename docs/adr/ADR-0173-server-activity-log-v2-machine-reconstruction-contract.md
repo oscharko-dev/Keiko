@@ -495,11 +495,13 @@ dropping or misordering them. The compatibility rule: a retained pre-v2 line is 
 never treated as malformed — it is ordered by its own position in the file (the same signal used to
 rank process lifetimes against each other, D2), counted in `legacyLineCount`, and surfaced through
 exactly one `warnings[]` entry when that count is nonzero. This compatibility path remains required
-while a current file may span releases; #3530's bounded segment retention will define when those
-legacy lines age out.
+while a current file or retained segment may span releases. It may be retired only when a reviewed
+release-impact/support-baseline change and bounded retention prove that no supported log can still
+contain a pre-v2 line; the reader, tests, operator documentation, and release-impact record then
+change together.
 
 A partially present or invalid v2 tuple is not legacy. The analyzer classifies each input as
-supported, legacy-supported, unsupported-version, corrupt, truncated, or incomplete and validates
+supported, legacy, unsupported, corrupt, truncated, or incomplete and validates
 schema version, positive integer pid/seq, bounded instance id, registry/schema/catalog identity,
 compatibility, and writer capability. For a record carrying the current registry identity, it also
 validates the operation, category, exact registered field set, closed error kind, and required
@@ -507,6 +509,29 @@ fields against the generated runtime schema. Within each `(pid, instanceId)` lif
 gaps, duplicates, decreasing/reset values, and reorder deterministically. These machine states are
 included in human and JSON output; a line cannot become trusted v2 evidence merely because its JSON
 parsed successfully.
+
+The compatibility and deprecation contract is explicit:
+
+| Input or contract surface                                                                                      | Contract state / analyzer classification | Required behavior                                                                                      | Retirement condition                                                                                                                                             |
+| -------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Complete v2 identity with current registry/schema/catalog and `supported`/`active`                             | `supported`                              | Validate the registered operation, exact fields, closed vocabularies, bounds, and sequence integrity. | A breaking change requires a new versioned compatibility contract; it is never inferred from shape.                                                              |
+| Parseable pre-v2 line with no v2 identity                                                                      | `legacy-supported` / `legacy`            | Preserve, order by file position, count, and warn exactly once per analysis.                          | Reviewed release-impact/support baselines plus bounded retention prove no supported input can contain it; remove reader/tests/docs together.                      |
+| Unknown schema version or mismatched registry/schema/catalog identity                                          | `unsupported-version` / `unsupported`    | Preserve the classification but exclude the record from trusted current reconstruction.              | No implicit coercion; analyze with the matching versioned contract.                                                                                               |
+| Invalid JSON away from a terminal fragment, invalid types/ranges, or invalid current-registry operation/fields | `corrupt`                                | Report and exclude from trusted reconstruction.                                                       | Never demote to legacy because a prefix or subset parsed.                                                                                                         |
+| Unterminated terminal fragment or explicitly declared truncation                                               | `truncated`                              | Preserve the surviving evidence and report that it is not complete.                                  | Remains explicit; no reader may silently normalize it away.                                                                                                       |
+| Partial v2 identity, missing required evidence, declared `incomplete`, or non-`active` writer capability       | `incomplete`                             | Report the missing evidence/capability and refuse a complete-reconstruction claim.                    | Only a complete record emitted under the current contract is supported; readers do not synthesize missing fields.                                                 |
+| Predecessor literal scanner                                                                                    | migration-only                           | May inventory migration candidates but authorizes no operation.                                      | Remove only when all production producers use canonical typed registration/emission and authoritative generation reports no legacy production dependency.        |
+
+The other closed evidence vocabularies are equally versioned: `completeness` is exactly
+`complete | partial | unknown`; `loss` is exactly
+`none | event-dropped | event-location-unknown | publication-unavailable`; and writer capability is
+exactly `active | degraded | unavailable`. `complete`/`none` are the normal constructor defaults.
+`partial` names a known subset, `unknown` means completeness cannot be established,
+`event-dropped` means a record was not persisted, `event-location-unknown` means post-write
+durability or location cannot be proven, and `publication-unavailable` means the requested support
+publication could not be made durable. Any non-`active` writer is incomplete evidence to the
+analyzer. Extending a vocabulary requires the versioned producer, analyzer, proofs, and these docs
+to change together.
 
 ### D11 — `ERROR_KIND_PATTERN` consolidation (Wave 2, landed) is a relocation, not a relaxation
 

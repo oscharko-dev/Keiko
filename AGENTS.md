@@ -410,6 +410,12 @@ system that exists, never beside it:
   or durability boundary may use only the registry's reviewed exemption shape: one exact operation
   and failure class, owner, technical reason, linked issue, and expiry. Wildcards, expired records,
   unknown operations, extra authorization fields, silent loss, and incomplete evidence fail closed.
+- **Sufficiency is complete by default.** A supported failure class owns its start/state/end/failure
+  and loss transitions, causal edges, safe context, frames/causes, analyzer projection, and replay
+  proof. Exercise unavailable sinks, rejected writes, backpressure, disk and durability failures,
+  interrupted publication, and degraded capability in focused fault-injection tests. A missing
+  transition or proof is a contract failure, not an optional follow-up; this proof set is the
+  fault-injection gate for the change.
 - **Thread the correlation.** Every line of one logical operation carries that operation's
   `correlationId`; a background job spawned by a request carries `parentCorrelationId` pointing
   back at it. The only sanctioned fallback is `UNKNOWN_CORRELATION_ID`
@@ -428,6 +434,12 @@ system that exists, never beside it:
   revalidated immediately before serialization, so post-construction mutation, an unknown field,
   a wrong type or vocabulary value, or an invalid identity cannot reach JSON. Rejection evidence
   uses a closed body-free reason and never echoes the rejected operation or value.
+- **Loss and degraded operation are explicit.** Backpressure, disk exhaustion, unsafe targets,
+  failed durability, and an unavailable primary sink may never masquerade as an active complete
+  writer. Persist the applicable closed completeness/loss/capability state when the primary path is
+  available; otherwise use the existing independent body-free diagnostic fallbacks and state their
+  loss ceiling honestly. An explicit `silent` log level produces no reconstruction evidence and
+  must never be interpreted as an active writer.
 - **Body-free, always.** §7's redaction rule applies to every new field: counts, statuses, scopes,
   hashes, ids, route templates, byte sizes, durations — never prompts, responses, file contents,
   secrets, paths, endpoints or PII (ADR-0173 D4). New fields go into `extra` and through the
@@ -438,6 +450,21 @@ system that exists, never beside it:
   emitted line(s) — `op`, `correlationId`, `errorKind`, the fields that carry the evidence — and a
   change to a user-visible or failure-prone surface is checked against `keiko support analyze`
   showing the operation in its timeline. The pull-request template carries this as a checklist item.
+- **Keep one logical, bounded Activity Log.** The storage contract remains one logical Activity Log,
+  bounded through append-only segments and deterministic retention; it must not create a second
+  logical stream or a path-based replacement shortcut. Until segmented persistence is present, do
+  not claim the append-only current file is bounded. Segment and retention changes preserve
+  ordering, compatibility classification, explicit truncation/loss, and support-export reconstruction.
+- **Saved reports remain under human control.** A support export or replay fixture is written only
+  to the local destination the user selected. Keiko does not upload it, attach it to GitHub, open an
+  issue, or otherwise disclose it automatically. Content-bearing optional sections require their
+  existing explicit consent; adding a new destination or disclosure path is a separate authority
+  and privacy decision, never an implied extension of logging.
+- **Keep the contract converged in the same change.** When runtime behavior changes this contract,
+  update the owning code, failure-first regression, emitted-line/analyzer or replay proof,
+  ADR-0173, this section, `CONTRIBUTING.md`, and directly affected operator documentation together.
+  Run the existing locally executable op-catalog and error-observability checks; do not document a
+  future gate name before its command exists.
 
 ### Rule 2 — when you debug, the log is your primary source
 
@@ -455,7 +482,7 @@ already recorded:
 3. **Investigate from the timeline.** `keiko investigate --from-timeline <timeline.json>` turns that
    timeline into a governed investigation with persisted evidence.
 4. **Read compatibility and integrity before trusting a seed.** The analyzer distinguishes
-   supported, legacy-supported, unsupported-version, corrupt, truncated, and incomplete input. It
+   supported, legacy, unsupported, corrupt, truncated, and incomplete input. It
    reports gaps, duplicates, decreasing/reset sequence values, and reorder per
    `(pid, instanceId)` before exposing a reconstruction. Its `warnings` also name exactly which
    evidence class it could not reconstruct (no stack frames, no gateway call, no request line, no store fingerprint).

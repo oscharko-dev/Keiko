@@ -48,6 +48,13 @@ limited to one registered operation/failure-class pair and requires an owner, te
 linked tracking issue, unavoidable platform or durability boundary, and expiry. It cannot permit
 unknown fields, prohibited data, silent loss, or incomplete evidence.
 
+Keep this contract converged in one change. A runtime change that affects Activity Log behavior
+updates the owning implementation, its failure-first regression, emitted-line and analyzer/replay
+proof, ADR-0173, AGENTS.md, this contributor contract, and directly affected operator documentation
+as applicable. Saved support reports remain local artifacts written to a user-selected destination;
+publishing or attaching one to GitHub or another external system requires separate explicit user
+authority and is never part of logging or export.
+
 ## Pull requests
 
 All required status checks must pass on the current pull-request head before a change can merge into

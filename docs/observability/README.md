@@ -1,11 +1,12 @@
 # Observability: the server activity log
 
-Keiko writes one operator-readable activity log for every local install, unconditionally — there
-is no environment variable that turns it off, only one (`KEIKO_LOG_LEVEL`) that turns its volume
-down. This page documents the log itself, how its lines join together across a request's
-lifecycle, and how to read it with `keiko support export` / `keiko support analyze`. It is the
-consumer-facing counterpart to [ADR-0173](../adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md),
-which records the design decisions behind everything described here.
+Keiko configures one operator-readable activity log for every local install. `KEIKO_LOG_LEVEL`
+controls its threshold and can explicitly disable writes with `silent`; a silent interval has no
+reconstruction evidence and must not be interpreted as an active writer. This page documents the
+log itself, how its lines join together across a request's lifecycle, and how to read it with
+`keiko support export` / `keiko support analyze`. It is the consumer-facing counterpart to
+[ADR-0173](../adr/ADR-0173-server-activity-log-v2-machine-reconstruction-contract.md), which records
+the design decisions behind everything described here.
 
 ## File location and deferred rotation
 
@@ -99,23 +100,30 @@ hashes, and shapes.
 
 ## Joining lines across a request's lifecycle
 
-Every persisted v2 line carries `schemaVersion`, `registryVersion`, the schema and catalog SHA-256
-digests, `buildClass`, `releaseClass`, `platformClass`, `productVersion`, `compatibilityState`, and
-`writerCapability`. The central sink stamps these fields; producers cannot supply or override
-them. A current writer persists only the exact supported schema/catalog identity and records an
-explicit body-free unavailable/incomplete capability notice when validation or persistence fails.
+Every successfully persisted v2 line carries `schemaVersion`, `registryVersion`, the schema and
+catalog SHA-256 digests, `buildClass`, `releaseClass`, `platformClass`, `productVersion`,
+`compatibilityState`, and `writerCapability`. The central sink stamps these fields; producers cannot
+supply or override them. A current writer persists normal records only with the exact supported
+schema/catalog identity and `supported`/`active` capability.
+
+When validation or persistence fails, the file sink cannot promise to persist a notice about its own
+failure. It instead attempts the existing independent body-free fallback chain: stderr first, then
+`process.emitWarning`. The notice carries `incomplete`/`unavailable` and an explicit loss state, but
+all three channels can be unavailable during the same failure. A later sequence gap can prove that a
+write was attempted; after a hard kill or total channel failure, the exact count may be unrecoverable.
+This is the loss ceiling, not a complete persisted-notice guarantee.
 
 The line also carries `pid`, `instanceId` (8 hex characters, minted once per process start), and a
 process-wide, monotonically allocated `seq`. Together, `(pid, instanceId, seq)` give
 a **total order over persisted lines within one process lifetime**. The sequence may contain gaps
-when an opening or write attempt fails, and the failure notice provides the closed classification;
-there is no true cross-process global order. Two different process lifetimes
+when an opening or write attempt fails, and the fallback channels attempt to provide the closed
+classification; there is no true cross-process global order. Two different process lifetimes
 each count `seq` from their own start, so a `seq` value from one process is not orderable against
 the same `seq` value from another by the tuple alone. The wall-clock `ts` field is a best-effort
 tiebreak hint only, never a guarantee, and should not be relied on to order lines across processes.
 
-`keiko support analyze` validates the complete identity tuple. It distinguishes supported,
-legacy-supported, unsupported-version, corrupt, truncated, and incomplete evidence and reports
+`keiko support analyze` validates the complete identity tuple. It distinguishes supported, legacy,
+unsupported, corrupt, truncated, and incomplete evidence and reports
 sequence gaps, duplicates, decreasing/reset values, and reorder deterministically for each
 `(pid, instanceId)` lifetime. These states are evidence, not warnings to ignore: an unsupported or
 incomplete input cannot be treated as a complete reconstruction.
@@ -124,6 +132,34 @@ For current-registry records the analyzer also validates the operation, category
 field set, required fields, and closed error kind against the generated runtime schema. A complete
 but unknown operation or extra field is corrupt evidence; an absent required field is incomplete
 evidence; a mismatched registry/schema/catalog identity is unsupported.
+
+### Closed evidence states
+
+These values are the complete current vocabularies; readers reject additions until the versioned
+contract, analyzer, and proofs change together.
+
+| Dimension            | Closed values                                                                                | Meaning                                                                                                                                        |
+| -------------------- | -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `completeness`       | `complete`, `partial`, `unknown`                                                             | All required evidence is present; a known subset is present; or completeness cannot be established.                                            |
+| `loss`               | `none`, `event-dropped`, `event-location-unknown`, `publication-unavailable`                 | No known loss; a record was not persisted; durability/location cannot be proven; or a requested support publication could not be made durable. |
+| `writerCapability`   | `active`, `degraded`, `unavailable`                                                          | The primary writer is fully usable; it has an explicit reduced capability; or the primary evidence path cannot write.                          |
+| `compatibilityState` | `supported`, `legacy-supported`, `unsupported-version`, `corrupt`, `truncated`, `incomplete` | The writer's declared compatibility; the analyzer still validates the actual record and may lower trust.                                       |
+
+### Compatibility and deprecation matrix
+
+| Input on disk                                                                                                                    | Contract state / analyzer classification | Reader behavior                                                                                | Retirement rule                                                                                                                                                           |
+| -------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Complete v2 identity, current registry/schema/catalog, `supported`/`active`                                                      | `supported`                              | Validate the registered operation, exact fields, vocabularies, bounds, and sequence integrity. | Supported for the current contract; a breaking identity or schema change requires a versioned compatibility change.                                                       |
+| Parseable pre-v2 line with no v2 identity                                                                                        | `legacy-supported` / `legacy`            | Preserve it, order it by file position, count it, and emit one legacy warning.                 | Remove only when reviewed release-impact/support baselines and bounded retention prove no supported log can still contain such a line; remove reader/tests/docs together. |
+| Unknown schema version or mismatched registry/schema/catalog identity                                                            | `unsupported-version` / `unsupported`    | Preserve the classification, but do not treat the record as trusted current evidence.          | No implicit upgrade or coercion; support requires the matching versioned contract.                                                                                        |
+| Invalid JSON away from the terminal fragment, invalid types/ranges, or a current-registry record with an unknown operation/field | `corrupt`                                | Report the defect and exclude it from trusted reconstruction.                                  | Never reclassify as legacy merely because parsing partly succeeded.                                                                                                       |
+| An unterminated terminal fragment or explicitly declared truncated evidence                                                      | `truncated`                              | Report truncation and keep the surviving evidence distinguishable from complete input.         | Retained as an explicit loss state; it is not silently normalized away.                                                                                                   |
+| Partial v2 identity, missing required evidence, declared `incomplete`, or any non-`active` writer capability                     | `incomplete`                             | Report the missing capability/evidence and do not claim complete reconstruction.               | Becomes supported only after the producer emits a complete current contract; readers never synthesize the missing fields.                                                 |
+
+The predecessor literal scanner is likewise migration-only. It may be removed only after every
+production producer is represented by canonical typed registration/emission and authoritative
+generation reports no legacy production dependency; remove the scanner, its compatibility tests,
+and its documentation in the same change.
 
 Cross-process (and cross-request) causality is instead established through two id fields:
 

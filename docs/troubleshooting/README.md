@@ -81,6 +81,27 @@ the default output, rerun from the same working directory. Keiko resolves the on
 slot before reading a new clock or activity-log snapshot. A conflicting target, intent, stage,
 symlink, hard link, or non-regular file fails closed and is not removed or replaced.
 
+If Keiko aborts startup with an Activity Log safe-artifact failure, use the closed failure kind from
+stderr to recover; the diagnostic intentionally does not echo the configured path:
+
+1. Stop processes using the same state directory and inspect the operator-selected `<stateDir>` and
+   its `logs/server.log` target without following links. Preserve suspicious entries for review;
+   Keiko never deletes or rewrites them as recovery.
+2. For `unsafe-ancestor`, `unsafe-target`, `target-mutated`, or `permission-unsafe`, verify that every
+   state-directory component is an expected real directory and that `server.log`, when present, is
+   a regular single-link file owned by the expected account. Do not replace an unknown symlink,
+   reparse point, hard link, or non-regular file in place.
+3. For `open-failed`, `permission-failed`, `write-failed`, or `durability-failed`, verify the selected
+   filesystem is writable, has free space, and permits private directory/file creation and durable
+   writes. On Windows, also verify the operator-selected root ACL because POSIX mode checks are not
+   available there.
+4. Retry with a clean, operator-controlled state directory. A repeated `target-mutated` or unsafe
+   target result indicates continuing mutation or an untrusted path; stop retrying and investigate
+   that boundary instead of weakening the check.
+5. After startup succeeds, run `keiko support analyze <stateDir>/logs/server.log` and confirm the
+   new evidence is current. Treat an incomplete/unavailable writer or an unexplained sequence gap as
+   evidence loss, not as a recovered complete log.
+
 To capture verbose output for a single command run, invoke the CLI in the
 foreground and redirect both streams to a file you control. For example:
 
