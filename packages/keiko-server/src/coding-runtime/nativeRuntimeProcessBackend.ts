@@ -10,11 +10,19 @@ import {
   GATEWAY_UNSUPPORTED_ON_HOST_REASON,
   type RuntimeGatewayConfinement,
 } from "@oscharko-dev/keiko-sandbox";
+import {
+  activityLogEvent,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
-import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
+import type { ServerLogSink } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { encodeLaunchPacket, validateLaunchPacketRequest } from "./nativeRuntimeProcessProtocol.js";
+import {
+  RUNTIME_CONFINEMENT_FAILED_OPERATION,
+  RUNTIME_CONFINEMENT_UNAVAILABLE_OPERATION,
+} from "./codingRuntimeActivityOperations.js";
 import {
   invalidRequest,
   pathIsContained,
@@ -194,14 +202,20 @@ function validateBackendOptions(
  * correlation id — a support bundle reconstructs either lane's refusal identically.
  */
 function recordNativeConfinementFailure(sink: ServerLogSink, runId: string, error: unknown): void {
-  sink.write({
-    category: "process",
-    level: "error",
-    op: "runtime.confinement.failed",
-    correlationId: runId,
-    errorKind: errorKindOf(error),
-    extra: { frames: keikoStackFrames(error), causeChain: causeChain(error) },
-  });
+  sink.write(
+    activityLogEvent(
+      RUNTIME_CONFINEMENT_FAILED_OPERATION,
+      { level: "error", correlationId: runId, errorKind: nativeConfinementErrorKind(error) },
+      { frames: keikoStackFrames(error), causeChain: causeChain(error) },
+    ),
+  );
+}
+
+function nativeConfinementErrorKind(error: unknown): ActivityLogErrorKind {
+  if (!(error instanceof Error)) return "internal";
+  if (error.message === "runtime-gateway-confinement-drift") return "conflict";
+  if (error.message === GATEWAY_UNSUPPORTED_ON_HOST_REASON) return "unavailable";
+  return error instanceof TypeError ? "validation-failed" : "internal";
 }
 
 /**
@@ -214,13 +228,13 @@ function recordNativeConfinementUnavailable(
   runId: string,
   identity: NativeRuntimeProcessBackend["identity"],
 ): void {
-  sink.write({
-    category: "process",
-    level: "info",
-    op: "runtime.confinement.unavailable",
-    correlationId: runId,
-    extra: { platform: identity.platform, arch: identity.arch, backend: identity.backend },
-  });
+  sink.write(
+    activityLogEvent(
+      RUNTIME_CONFINEMENT_UNAVAILABLE_OPERATION,
+      { level: "info", correlationId: runId },
+      { platform: identity.platform, arch: identity.arch, backend: identity.backend },
+    ),
+  );
 }
 
 function validGatewayConfinement(

@@ -185,7 +185,7 @@ describe("dev-lane runtime process backend", () => {
         expect.objectContaining({
           op: "runtime.confinement.failed",
           correlationId: request.runId,
-          errorKind: "Error",
+          errorKind: "conflict",
         }),
       );
       expect(JSON.stringify(activityLog.events)).not.toContain(fixture.runtimeRoot);
