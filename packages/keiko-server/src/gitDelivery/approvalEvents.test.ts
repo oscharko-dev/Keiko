@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { validateRegisteredActivityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { captureActivityLog } from "../activityLogCapture.test-support.js";
 import { logGitDeliveryApprovalEvent, parseVerifiedCommitSha } from "./approvalEvents.js";
 
@@ -45,18 +46,23 @@ describe("logGitDeliveryApprovalEvent", () => {
       activity.sink,
       "git.delivery.push.approval.required",
       "push",
-      "corr-1",
+      "corr-0001",
       "run-1",
     );
     expect(activity.events).toEqual([
       {
         category: "security",
         op: "git.delivery.push.approval.required",
-        correlationId: "corr-1",
+        correlationId: "corr-0001",
         status: 200,
-        extra: { operation: "push", runId: "run-1" },
+        extra: { completeness: "complete", loss: "none", operation: "push", runId: "run-1" },
       },
     ]);
+    expect(
+      validateRegisteredActivityLogEvent(
+        activity.events[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
+      ),
+    ).toMatchObject({ op: "git.delivery.push.approval.required" });
   });
 
   it("writes the pr approval-minted line with the shared shape", () => {
@@ -65,17 +71,22 @@ describe("logGitDeliveryApprovalEvent", () => {
       activity.sink,
       "git.delivery.pr.approval.minted",
       "pr",
-      "corr-2",
+      "corr-0002",
       "run-2",
     );
     expect(activity.events).toEqual([
       {
         category: "security",
         op: "git.delivery.pr.approval.minted",
-        correlationId: "corr-2",
+        correlationId: "corr-0002",
         status: 200,
-        extra: { operation: "pr", runId: "run-2" },
+        extra: { completeness: "complete", loss: "none", operation: "pr", runId: "run-2" },
       },
     ]);
+    expect(
+      validateRegisteredActivityLogEvent(
+        activity.events[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
+      ),
+    ).toMatchObject({ op: "git.delivery.pr.approval.minted" });
   });
 });

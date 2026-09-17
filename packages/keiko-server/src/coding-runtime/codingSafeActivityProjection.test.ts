@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { validateRegisteredActivityLogEvent } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import type { ServerDiagnosticRecord } from "../diagnostics-log.js";
 import { createBufferedServerLogSink } from "../observability/server-log.js";
@@ -587,12 +588,19 @@ describe("bounded coding safe-activity projection", () => {
       op: "coding-runtime.safe-activity",
       correlationId: RUN_ID,
       extra: {
+        completeness: "complete",
         event: "dropped",
+        loss: "none",
         reason: "capacity-rejected",
         occurrenceCount: 1,
         lossState: "event-dropped",
       },
     });
+    expect(
+      validateRegisteredActivityLogEvent(
+        activityLog.events[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
+      ),
+    ).toMatchObject({ op: "coding-runtime.safe-activity" });
     // F49: designed truncation is recorded by that line alone, never as an error diagnostic.
     expect(
       records.filter((record) => record.code === "CODING_SAFE_ACTIVITY_EVENT_DROPPED"),
@@ -833,8 +841,13 @@ describe("bounded coding safe-activity projection", () => {
       category: "process",
       op: "coding-runtime.safe-activity",
       correlationId: RUN_ID,
-      extra: { event: "purged", reason: "takeover" },
+      extra: { completeness: "complete", event: "purged", loss: "none", reason: "takeover" },
     });
+    expect(
+      validateRegisteredActivityLogEvent(
+        activityLog.events[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
+      ),
+    ).toMatchObject({ op: "coding-runtime.safe-activity" });
   });
 
   it("replaces the plan snapshot with monotonic revisions and purges it with the feed", () => {

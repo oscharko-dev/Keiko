@@ -90,7 +90,14 @@ describe("server logger bound context", () => {
       category: "diagnostic",
       owner: "keiko-server",
       emitter: "observability/server-logger.test",
-      fields: { outcome: { type: "string", dataClass: "closed-enum", required: true } },
+      fields: {
+        outcome: {
+          type: "string",
+          dataClass: "closed-enum",
+          required: true,
+          values: ["accepted"],
+        },
+      },
       causal: "none",
       lifecycle: "state",
       analyzerProjection: "timeline",
@@ -296,7 +303,7 @@ describe("server logger failure isolation", () => {
       level: "error",
       category: "diagnostic",
       op: "server-log.write-failed",
-      errorKind: "Error",
+      errorKind: "internal",
       failedOp: "gateway.chat.failed",
       correlationId: "job-4f2a",
     });
@@ -313,7 +320,7 @@ describe("server logger failure isolation", () => {
 
     expect(stderr).toHaveBeenCalledTimes(1);
     const notice = stderrNotice(stderr.mock.calls[0]?.[0]);
-    expect(notice).toMatchObject({ op: "server-log.write-failed", errorKind: "TypeError" });
+    expect(notice).toMatchObject({ op: "server-log.write-failed", errorKind: "internal" });
     // The event never existed, so there is nothing honest to say about which op failed.
     expect(notice.failedOp).toBeUndefined();
   });
@@ -387,12 +394,18 @@ describe("process-wide server logger", () => {
     }).not.toThrow();
   });
 
-  it("writes to <stateDir>/logs/server.log when the CLI configured one", () => {
+  it("persists registered initialization evidence and rejects an unregistered call", () => {
     vi.stubEnv("KEIKO_STATE_DIR", stateDir);
-    getServerLogger().warn({ category: "indexing", op: "indexing.job.skipped" });
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    getServerLogger().warn({ category: "indexing", op: "test.unregistered-operation" });
     const raw = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
-    expect(raw).toContain("indexing.job.skipped");
-    expect(raw).toContain('"level":"warn"');
+    expect(raw).toContain('"op":"server-log.safe-open"');
+    expect(raw).toContain('"writerCapability":"active"');
+    expect(raw).not.toContain("test.unregistered-operation");
+    expect(stderrNotice(stderr.mock.calls[0]?.[0])).toMatchObject({
+      op: "server-log.write-failed",
+      rejectionKind: "unregistered-operation",
+    });
   });
 
   it("returns the same instance until it is reset", () => {

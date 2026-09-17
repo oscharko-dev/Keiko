@@ -2,7 +2,10 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessage } from "@oscharko-dev/keiko-model-gateway";
 import { resolveTaskPlan, type HarnessEvent } from "@oscharko-dev/keiko-harness";
-import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
+  activityLogEventRegistration,
+  validateRegisteredActivityLogEvent,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ServerLogEvent, ServerLogSink } from "./observability/server-log.js";
 import {
   createServerHarnessContextCompactor,
@@ -284,7 +287,7 @@ describe("logHarnessContextCompactionEvents", () => {
     const events: HarnessEvent[] = [
       {
         schemaVersion: "1",
-        runId: "run-123",
+        runId: "run-0123",
         fingerprint: "fp",
         seq: 1,
         ts: 0,
@@ -299,7 +302,7 @@ describe("logHarnessContextCompactionEvents", () => {
     const line = writes[0];
     expect(line?.op).toBe("harness.context.compacted");
     expect(line?.category).toBe("process");
-    expect(line?.correlationId).toBe("run-123");
+    expect(line?.correlationId).toBe("run-0123");
     expect(line?.parentCorrelationId).toBeUndefined();
     expect(line?.extra).toEqual({
       messagesDropped: 4,
@@ -311,6 +314,9 @@ describe("logHarnessContextCompactionEvents", () => {
     expect(
       activityLogEventRegistration(line as unknown as Readonly<Record<PropertyKey, unknown>>),
     ).toBeDefined();
+    expect(
+      validateRegisteredActivityLogEvent(line as unknown as Readonly<Record<PropertyKey, unknown>>),
+    ).toMatchObject({ op: "harness.context.compacted" });
     // Body-free: no message content anywhere in the line.
     expect(JSON.stringify(line)).not.toContain("call ");
   });
@@ -323,7 +329,7 @@ describe("logHarnessContextCompactionEvents", () => {
     const events: HarnessEvent[] = [
       {
         schemaVersion: "1",
-        runId: "run-456",
+        runId: "run-0456",
         fingerprint: "fp",
         seq: 1,
         ts: 0,
@@ -335,7 +341,7 @@ describe("logHarnessContextCompactionEvents", () => {
     ];
     logHarnessContextCompactionEvents(events, { parentCorrelationId: "parent-run-abc" }, sink);
     expect(writes).toHaveLength(1);
-    expect(writes[0]?.correlationId).toBe("run-456");
+    expect(writes[0]?.correlationId).toBe("run-0456");
     expect(writes[0]?.parentCorrelationId).toBe("parent-run-abc");
   });
 
