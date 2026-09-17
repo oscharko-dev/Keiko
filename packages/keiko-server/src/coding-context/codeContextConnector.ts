@@ -332,20 +332,16 @@ function emitSanitizationEvidence(
     }),
     { title: 0, body: 0, comment: 0 },
   );
-  recordCodingContextPack(
-    deps.activityLog,
-    deps.correlationId ?? UNKNOWN_CORRELATION_ID,
-    {
-      runId: request.runId,
-      outcome: "sanitized",
-      sanitizedItemCount: tallies.length,
-      sanitizedObjectIds: tallies.map((tally) => tally.objectId),
-      sanitizedTitleBytesRemoved: totals.title,
-      sanitizedBodyBytesRemoved: totals.body,
-      sanitizedCommentBytesRemoved: totals.comment,
-      sanitizedContentDigest: sanitizedPackDigest(items),
-    },
-  );
+  recordCodingContextPack(deps.activityLog, deps.correlationId ?? UNKNOWN_CORRELATION_ID, {
+    runId: request.runId,
+    outcome: "sanitized",
+    sanitizedItemCount: tallies.length,
+    sanitizedObjectIds: tallies.map((tally) => tally.objectId),
+    sanitizedTitleBytesRemoved: totals.title,
+    sanitizedBodyBytesRemoved: totals.body,
+    sanitizedCommentBytesRemoved: totals.comment,
+    sanitizedContentDigest: sanitizedPackDigest(items),
+  });
 }
 
 /**

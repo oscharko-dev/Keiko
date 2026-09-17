@@ -223,9 +223,7 @@ describe("GET /api/runs/events resume cursors (user finding #2456)", () => {
       loss: "none",
     });
     expect(
-      activityLogEventRegistration(
-        line as unknown as Readonly<Record<PropertyKey, unknown>>,
-      ),
+      activityLogEventRegistration(line as unknown as Readonly<Record<PropertyKey, unknown>>),
     ).toBeDefined();
     fireClose();
     deps.store.close();

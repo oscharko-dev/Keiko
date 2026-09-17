@@ -3471,9 +3471,7 @@ describe("coding-sidecar gateway", () => {
     });
     expect(validated?.extra?.estimatedPromptTokens).toEqual(expect.any(Number));
     expect(
-      activityLogEventRegistration(
-        validated as unknown as Readonly<Record<PropertyKey, unknown>>,
-      ),
+      activityLogEventRegistration(validated as unknown as Readonly<Record<PropertyKey, unknown>>),
     ).toBeDefined();
     expect(JSON.stringify(sink.events)).not.toContain("bounded source context");
   });

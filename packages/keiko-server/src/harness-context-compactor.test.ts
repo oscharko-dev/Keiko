@@ -309,9 +309,7 @@ describe("logHarnessContextCompactionEvents", () => {
       loss: "none",
     });
     expect(
-      activityLogEventRegistration(
-        line as unknown as Readonly<Record<PropertyKey, unknown>>,
-      ),
+      activityLogEventRegistration(line as unknown as Readonly<Record<PropertyKey, unknown>>),
     ).toBeDefined();
     // Body-free: no message content anywhere in the line.
     expect(JSON.stringify(line)).not.toContain("call ");

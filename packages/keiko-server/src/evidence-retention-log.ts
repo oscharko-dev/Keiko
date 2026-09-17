@@ -72,11 +72,7 @@ export function evidenceRetentionObserver(
   const correlationId = randomUUID();
   return (deletedCount: number): void => {
     activityLog.write(
-      activityLogEvent(
-        EVIDENCE_RETENTION_OPERATION,
-        { correlationId },
-        { source, deletedCount },
-      ),
+      activityLogEvent(EVIDENCE_RETENTION_OPERATION, { correlationId }, { source, deletedCount }),
     );
   };
 }

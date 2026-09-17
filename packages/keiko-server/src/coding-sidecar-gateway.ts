@@ -202,12 +202,7 @@ const CODING_SIDECAR_GATEWAY_TOOL_AVAILABILITY_OPERATION = defineActivityLogOper
       dataClass: "closed-enum",
       required: true,
       maxItems: 4,
-      values: [
-        "keiko_research_fetch",
-        "keiko_skill_discover",
-        "keiko_skill",
-        "keiko_child_agent",
-      ],
+      values: ["keiko_research_fetch", "keiko_skill_discover", "keiko_skill", "keiko_child_agent"],
     },
     unavailableOptionalToolCount: { type: "integer", dataClass: "count", required: true },
     offeredOptionalTools: {
@@ -215,12 +210,7 @@ const CODING_SIDECAR_GATEWAY_TOOL_AVAILABILITY_OPERATION = defineActivityLogOper
       dataClass: "closed-enum",
       required: true,
       maxItems: 4,
-      values: [
-        "keiko_research_fetch",
-        "keiko_skill_discover",
-        "keiko_skill",
-        "keiko_child_agent",
-      ],
+      values: ["keiko_research_fetch", "keiko_skill_discover", "keiko_skill", "keiko_child_agent"],
     },
     offeredOptionalToolCount: { type: "integer", dataClass: "count", required: true },
     completeness: { type: "string", dataClass: "completeness-state", required: true },

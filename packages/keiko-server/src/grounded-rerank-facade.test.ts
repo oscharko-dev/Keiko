@@ -780,9 +780,7 @@ describe("rerankSelection activity log", () => {
     expect(event?.category).toBe("search");
     expect(event?.errorKind).toBe("authority-denied");
     expect(
-      activityLogEventRegistration(
-        event as unknown as Readonly<Record<PropertyKey, unknown>>,
-      ),
+      activityLogEventRegistration(event as unknown as Readonly<Record<PropertyKey, unknown>>),
     ).toBeDefined();
     expect(event?.extra).toMatchObject({
       outcome: "denied",

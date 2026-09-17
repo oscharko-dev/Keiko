@@ -70,9 +70,7 @@ const SEARCH_RERANK_COMPLETED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-const RERANK_ERROR_KIND: Readonly<
-  Record<GroundedRerankerFailureKind, ActivityLogErrorKind>
-> = {
+const RERANK_ERROR_KIND: Readonly<Record<GroundedRerankerFailureKind, ActivityLogErrorKind>> = {
   "not-configured": "unavailable",
   "policy-denied": "authority-denied",
   "wrong-header": "validation-failed",
@@ -447,9 +445,7 @@ function logRerankOutcome(
           : { transportLatencyMs: diagnostics.latencyMs }),
         fallbackMode,
         topN,
-        ...(diagnostics.failureKind === undefined
-          ? {}
-          : { failureKind: diagnostics.failureKind }),
+        ...(diagnostics.failureKind === undefined ? {} : { failureKind: diagnostics.failureKind }),
         completeness: "complete",
         loss: "none",
       },

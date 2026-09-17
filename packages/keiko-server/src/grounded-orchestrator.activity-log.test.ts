@@ -217,9 +217,7 @@ function nestedExtra(
   );
 }
 
-const COMPLETION_FIELD_GROUPS: Readonly<
-  Record<string, Readonly<Record<string, string>>>
-> = {
+const COMPLETION_FIELD_GROUPS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   usage: {
     searchCalls: "usageSearchCalls",
     filesRead: "usageFilesRead",
@@ -302,14 +300,10 @@ function lifecycleEvents(
   expect(terminal.op).toBe(terminalOp);
   expect(terminal.correlationId).toBe(started.correlationId);
   expect(
-    activityLogEventRegistration(
-      started as unknown as Readonly<Record<PropertyKey, unknown>>,
-    ),
+    activityLogEventRegistration(started as unknown as Readonly<Record<PropertyKey, unknown>>),
   ).toBeDefined();
   expect(
-    activityLogEventRegistration(
-      terminal as unknown as Readonly<Record<PropertyKey, unknown>>,
-    ),
+    activityLogEventRegistration(terminal as unknown as Readonly<Record<PropertyKey, unknown>>),
   ).toBeDefined();
   return [started, terminal];
 }

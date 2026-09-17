@@ -197,11 +197,7 @@ function logRuntimeSelection(
     return;
   }
   log.info(
-    activityLogEvent(
-      GATEWAY_INSTANCE_BOUND_OPERATION,
-      {},
-      { generation, reason, lifecycleReset },
-    ),
+    activityLogEvent(GATEWAY_INSTANCE_BOUND_OPERATION, {}, { generation, reason, lifecycleReset }),
   );
 }
 

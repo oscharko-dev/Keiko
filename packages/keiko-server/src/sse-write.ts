@@ -141,9 +141,9 @@ function emitSseStreamClosed(res: ServerResponse, state: SseStreamCounterState):
         durationMs: Date.now() - state.startedAt,
       },
       {
-      frameCount: state.frameCount,
-      bytesStreamed: state.bytesStreamed,
-      reason: sseStreamReason(res, state),
+        frameCount: state.frameCount,
+        bytesStreamed: state.bytesStreamed,
+        reason: sseStreamReason(res, state),
       },
     ),
   );

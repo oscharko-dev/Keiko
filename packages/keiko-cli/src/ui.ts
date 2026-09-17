@@ -944,11 +944,15 @@ function writeProcessExiting(activity: WaitForShutdownActivity, reason: ProcessE
     return;
   }
   activityLog.write(
-    activityLogEvent(PROCESS_EXITING_OPERATION, {}, {
-      reason,
-      uptimeMs: Math.max(0, Date.now() - startedAt),
-      ...(onShutdownErrorKind === undefined ? {} : { onShutdownErrorKind }),
-    }),
+    activityLogEvent(
+      PROCESS_EXITING_OPERATION,
+      {},
+      {
+        reason,
+        uptimeMs: Math.max(0, Date.now() - startedAt),
+        ...(onShutdownErrorKind === undefined ? {} : { onShutdownErrorKind }),
+      },
+    ),
   );
   if (closeActivityLog !== undefined) {
     closeActivityLog();
@@ -1177,13 +1181,17 @@ function writeHeartbeat(activityLog: ServerLogSink, histogram: EventLoopHistogra
     Number.isFinite(measuredDelayMs) && measuredDelayMs >= 0 ? measuredDelayMs : 0;
   histogram.reset();
   activityLog.write(
-    activityLogEvent(PROCESS_HEARTBEAT_OPERATION, { level: "info" }, {
-      rssBytes: memory.rss,
-      heapUsedBytes: memory.heapUsed,
-      heapTotalBytes: memory.heapTotal,
-      externalBytes: memory.external,
-      eventLoopDelayP99Ms,
-    }),
+    activityLogEvent(
+      PROCESS_HEARTBEAT_OPERATION,
+      { level: "info" },
+      {
+        rssBytes: memory.rss,
+        heapUsedBytes: memory.heapUsed,
+        heapTotalBytes: memory.heapTotal,
+        externalBytes: memory.external,
+        eventLoopDelayP99Ms,
+      },
+    ),
   );
 }
 
@@ -1289,19 +1297,23 @@ async function reportProcessStarted(
   // physical write boundary in `server-log.ts`), so the invariant this field exists for — the
   // manifest and the log agreeing on which process wrote a line — already holds without it.
   activityLog.write(
-    activityLogEvent(PROCESS_STARTED_OPERATION, { level: "info" }, {
-      nodeVersion: process.version,
-      platform: process.platform,
-      arch: process.arch,
-      productVersion: KEIKO_PRODUCT_VERSION,
-      host: UI_HOST,
-      port: parsed.port,
-      stateDirSource,
-      logLevel,
-      ...(installMode === undefined ? {} : { installMode }),
-      ...(installModeErrorKind === undefined ? {} : { installModeErrorKind }),
-      ...(gatewayProviderCount === undefined ? {} : { gatewayProviderCount }),
-    }),
+    activityLogEvent(
+      PROCESS_STARTED_OPERATION,
+      { level: "info" },
+      {
+        nodeVersion: process.version,
+        platform: process.platform,
+        arch: process.arch,
+        productVersion: KEIKO_PRODUCT_VERSION,
+        host: UI_HOST,
+        port: parsed.port,
+        stateDirSource,
+        logLevel,
+        ...(installMode === undefined ? {} : { installMode }),
+        ...(installModeErrorKind === undefined ? {} : { installModeErrorKind }),
+        ...(gatewayProviderCount === undefined ? {} : { gatewayProviderCount }),
+      },
+    ),
   );
   return isRealLaunch ? startProcessHeartbeat(activityLog) : undefined;
 }

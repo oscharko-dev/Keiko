@@ -215,9 +215,7 @@ export class GitChangeSnapshotRegistry {
     this.prune();
     const entry = this.records.get(reference);
     const allowed = entry?.scope === scope;
-    this.log.write(
-      activityLogEvent(GIT_SNAPSHOT_READ_OPERATION, { correlationId }, { allowed }),
-    );
+    this.log.write(activityLogEvent(GIT_SNAPSHOT_READ_OPERATION, { correlationId }, { allowed }));
     return allowed ? structuredClone(entry.content) : undefined;
   }
 

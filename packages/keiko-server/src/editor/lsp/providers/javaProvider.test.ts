@@ -632,11 +632,7 @@ describe("managed Eclipse JDT LS provider", () => {
   it.each([
     ["timeout", new CommandTimeoutError("timed out", 5_000), "timeout"],
     ["spawn-error", Object.assign(new Error("missing"), { code: "ENOENT" }), "unavailable"],
-    [
-      "invocation-failed",
-      new CommandDeniedError("isolation unavailable", "java"),
-      "internal",
-    ],
+    ["invocation-failed", new CommandDeniedError("isolation unavailable", "java"), "internal"],
     ["cancelled", new CommandCancelledError("cancelled"), "cancelled"],
   ] as const)(
     "logs the distinct %s rejection with errorKind",

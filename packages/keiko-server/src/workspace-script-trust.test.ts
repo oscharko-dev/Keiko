@@ -358,9 +358,7 @@ describe("WorkspaceScriptTrustService", () => {
     ]);
     for (const record of records) {
       expect(
-        activityLogEventRegistration(
-          record as unknown as Readonly<Record<PropertyKey, unknown>>,
-        ),
+        activityLogEventRegistration(record as unknown as Readonly<Record<PropertyKey, unknown>>),
       ).toBeDefined();
     }
     expect(JSON.stringify(records)).not.toContain(root);
@@ -1189,11 +1187,7 @@ describe("managed task worktrees below the state directory", () => {
       nowMs = Date.parse("2026-09-10T20:00:00.000Z");
       expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(false);
       nowMs = Date.parse("2026-09-10T19:00:00.000Z");
-      trust.admitRunManifest(
-        fixture.worktreeRoot,
-        "run-trust-0001",
-        "2026-09-10T20:00:00.000Z",
-      );
+      trust.admitRunManifest(fixture.worktreeRoot, "run-trust-0001", "2026-09-10T20:00:00.000Z");
       expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(true);
 
       // And with the run itself; a second run's admissions are untouched by the first run's end.
@@ -1234,21 +1228,13 @@ describe("managed task worktrees below the state directory", () => {
       });
       // The worktree is not a registered project yet.
       expect(
-        trust.admitRunManifest(
-          fixture.worktreeRoot,
-          "run-trust-0001",
-          "2026-09-10T20:00:00.000Z",
-        ),
+        trust.admitRunManifest(fixture.worktreeRoot, "run-trust-0001", "2026-09-10T20:00:00.000Z"),
       ).toBeUndefined();
       expectRefusalLogged("root-unregistered");
       managedStore.createProject(fixture.worktreeRoot, "worktree");
       // Authority already expired: nothing to admit under it.
       expect(
-        trust.admitRunManifest(
-          fixture.worktreeRoot,
-          "run-trust-0001",
-          "2026-09-10T18:00:00.000Z",
-        ),
+        trust.admitRunManifest(fixture.worktreeRoot, "run-trust-0001", "2026-09-10T18:00:00.000Z"),
       ).toBeUndefined();
       expectRefusalLogged("authority-expired");
       expect(
@@ -1258,22 +1244,14 @@ describe("managed task worktrees below the state directory", () => {
       // An unparseable manifest is an unknown basis and admits nothing.
       writeFileSync(join(fixture.worktreeRoot, "package.json"), "{ not json");
       expect(
-        trust.admitRunManifest(
-          fixture.worktreeRoot,
-          "run-trust-0001",
-          "2026-09-10T20:00:00.000Z",
-        ),
+        trust.admitRunManifest(fixture.worktreeRoot, "run-trust-0001", "2026-09-10T20:00:00.000Z"),
       ).toBeUndefined();
       expectRefusalLogged("manifest-unreadable");
       expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(false);
       // No manifest at all is a legitimate, admitted basis (no package scripts to run).
       rmSync(join(fixture.worktreeRoot, "package.json"));
       expect(
-        trust.admitRunManifest(
-          fixture.worktreeRoot,
-          "run-trust-0001",
-          "2026-09-10T20:00:00.000Z",
-        ),
+        trust.admitRunManifest(fixture.worktreeRoot, "run-trust-0001", "2026-09-10T20:00:00.000Z"),
       ).toEqual({ basis: "absent" });
       expect(trust.holdsRunAdmissionForRoot(fixture.worktreeRoot)).toBe(true);
     } finally {

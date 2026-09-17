@@ -523,9 +523,7 @@ export async function refreshMemoryEmbeddingAfterBodyEdit(
 }
 
 function logEmbeddingInvalidated(reason: "no-embedding" | "store-rejected"): void {
-  getServerLogger().warn(
-    activityLogEvent(MEMORY_EMBEDDING_INVALIDATED_OPERATION, {}, { reason }),
-  );
+  getServerLogger().warn(activityLogEvent(MEMORY_EMBEDDING_INVALIDATED_OPERATION, {}, { reason }));
 }
 
 // Missing memory / no existing row / storage rejection: the edit already succeeded, and the

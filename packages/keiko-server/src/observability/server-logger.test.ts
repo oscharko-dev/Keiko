@@ -113,9 +113,7 @@ describe("server logger bound context", () => {
       extra: { outcome: "accepted" },
     });
     expect(
-      activityLogEventRegistration(
-        event as unknown as Readonly<Record<PropertyKey, unknown>>,
-      ),
+      activityLogEventRegistration(event as unknown as Readonly<Record<PropertyKey, unknown>>),
     ).toBe(operation);
   });
 

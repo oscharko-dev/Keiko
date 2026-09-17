@@ -305,9 +305,7 @@ describe("enrichChatCompactionWithModelSummary", () => {
       },
     });
     expect(
-      activityLogEventRegistration(
-        event as unknown as Readonly<Record<PropertyKey, unknown>>,
-      ),
+      activityLogEventRegistration(event as unknown as Readonly<Record<PropertyKey, unknown>>),
     ).toBeDefined();
     expect(sink.lines().join("\n")).not.toContain("the plan likely needs no further review");
   });
