@@ -490,7 +490,12 @@ describe("WebSocket live dictation upgrade — transcription-only control plane"
           category: "http",
           op: "voice.live-dictation.capacity-rejected",
           errorKind: "rate-limited",
-          extra: { observedCount: 64, reason: "active-session-cap" },
+          extra: {
+            completeness: "complete",
+            loss: "none",
+            observedCount: 64,
+            reason: "active-session-cap",
+          },
         }),
       );
     } finally {

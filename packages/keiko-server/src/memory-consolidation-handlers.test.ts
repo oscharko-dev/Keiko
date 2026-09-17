@@ -1109,7 +1109,7 @@ describe("memory consolidation job handlers", () => {
           category: "consolidation",
           op: "consolidation.summary.fallback",
           correlationId: createdJob.id,
-          extra: { reason: "absent" },
+          extra: { completeness: "complete", loss: "none", reason: "absent" },
         }),
       );
     });

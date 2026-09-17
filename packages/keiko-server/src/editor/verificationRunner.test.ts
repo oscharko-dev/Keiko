@@ -1167,7 +1167,9 @@ describe("VerificationRunnerManager — catalog + edge cases", () => {
         op: "editor.verification.execute",
         correlationId: "terminal-status-counts",
         extra: {
+          completeness: "complete",
           state: "completed",
+          loss: "none",
           runnerId: "vitest",
           verificationStatus: "failed",
           stepCount: 2,
