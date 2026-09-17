@@ -9,6 +9,8 @@ import {
 
 import {
   cliControlStateWouldMutateTarget,
+  cliTargetIdentitySha256,
+  resolveCliControlFailureStateDir,
   resolveCliControlStateDir,
 } from "./cli-control-state.js";
 import {
@@ -16,7 +18,11 @@ import {
   writeInstallLayoutOverrideEvidenceWithFactory,
 } from "./install-layout.js";
 import type { CliIo } from "./runner.js";
-import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
+import {
+  createCliSecurityLogSink,
+  createIsolatedCliFailureSink,
+  type CliSecurityLogSinkFactory,
+} from "./security-log.js";
 
 // `keiko audit local-state` — the at-rest self-verification the local-at-rest contract
 // (docs/local-runtime-state-contract.md) names as its compensating control, reachable from a real
@@ -141,6 +147,7 @@ export interface AuditCliDeps {
   readonly homedir?: () => string;
   readonly platform?: NodeJS.Platform;
   readonly activityStateDir?: string;
+  readonly failureActivityStateDir?: string;
   readonly activityLogSinkFactory?: CliSecurityLogSinkFactory;
 }
 
@@ -299,6 +306,7 @@ async function runLocalStateAudit(
   json: boolean,
   deps: AuditCliDeps,
   activityLogSink: SecurityLogSink | undefined,
+  targetSha256: string,
 ): Promise<number> {
   let result: AuditResult;
   try {
@@ -310,7 +318,7 @@ async function runLocalStateAudit(
       category: "diagnostic",
       op: "cli.audit.failed",
       errorKind: securityErrorKind(error),
-      extra: { reason: error.reason },
+      extra: { reason: error.reason, targetSha256 },
     });
     reportLoadFailure(error, io);
     return 1;
@@ -324,6 +332,7 @@ async function runLocalStateAudit(
       healthy: result.ok,
       classCount: result.classes.length,
       findingCount: result.classes.reduce((count, entry) => count + entry.findings.length, 0),
+      targetSha256,
     },
   });
 
@@ -361,8 +370,94 @@ function resolveAuditorPath(
 }
 
 type PreparedAuditActivity =
-  | { readonly kind: "ready"; readonly sink: SecurityLogSink | undefined }
+  | {
+      readonly kind: "ready";
+      readonly sink: SecurityLogSink | undefined;
+      readonly targetSha256: string;
+    }
   | { readonly kind: "refused" };
+
+interface AuditActivityContext {
+  readonly stateDir: string;
+  readonly activityStateDir: string;
+  readonly failureStateDir: string;
+  readonly targetSha256: string;
+  readonly correlationId: string | undefined;
+  readonly factory: CliSecurityLogSinkFactory | undefined;
+}
+
+function refuseAuditActivity(
+  context: AuditActivityContext,
+  errorKind: string,
+  reason: string,
+): PreparedAuditActivity {
+  const sink = createIsolatedCliFailureSink(
+    context.stateDir,
+    context.failureStateDir,
+    context.factory,
+    context.correlationId,
+  );
+  emitSecurityLogEvent(sink, {
+    level: "error",
+    category: "diagnostic",
+    op: "cli.audit.failed",
+    errorKind,
+    extra: { reason, targetSha256: context.targetSha256 },
+  });
+  return { kind: "refused" };
+}
+
+function resolveAuditActivityContext(
+  stateDir: string,
+  env: Readonly<Record<string, string | undefined>>,
+  deps: AuditCliDeps,
+): AuditActivityContext {
+  const home = (deps.homedir ?? defaultHomedir)();
+  const platform = deps.platform ?? process.platform;
+  const layoutEvidence = installLayoutOverrideEvidence(env);
+  return {
+    stateDir,
+    activityStateDir: deps.activityStateDir ?? resolveCliControlStateDir(platform, home),
+    failureStateDir:
+      deps.failureActivityStateDir ?? resolveCliControlFailureStateDir(platform, home),
+    targetSha256: cliTargetIdentitySha256(stateDir),
+    correlationId: layoutEvidence?.correlationId,
+    factory: deps.activityLogSinkFactory,
+  };
+}
+
+function openAuditActivity(
+  context: AuditActivityContext,
+  env: Readonly<Record<string, string | undefined>>,
+  io: CliIo,
+): PreparedAuditActivity {
+  const pendingLayoutEvidence = installLayoutOverrideEvidence(env) !== undefined;
+  const layoutEvidenceWritten = writeInstallLayoutOverrideEvidenceWithFactory(
+    context.factory,
+    context.activityStateDir,
+    env,
+  );
+  if (pendingLayoutEvidence && !layoutEvidenceWritten) {
+    refuseAuditActivity(context, "AuditActivityLogUnavailableError", "activity-log-unavailable");
+    io.err(
+      "keiko audit: refusing to consume a normalized install path because durable activity " +
+        "logging is unavailable.\n",
+    );
+    return { kind: "refused" };
+  }
+  const sink = createCliSecurityLogSink(
+    context.activityStateDir,
+    context.factory,
+    context.correlationId,
+  );
+  emitSecurityLogEvent(sink, {
+    level: "info",
+    category: "diagnostic",
+    op: "cli.audit.started",
+    extra: { targetSha256: context.targetSha256 },
+  });
+  return { kind: "ready", sink, targetSha256: context.targetSha256 };
+}
 
 function prepareAuditActivity(
   stateDir: string,
@@ -370,41 +465,22 @@ function prepareAuditActivity(
   io: CliIo,
   deps: AuditCliDeps,
 ): PreparedAuditActivity {
-  const home = (deps.homedir ?? defaultHomedir)();
-  const activityStateDir =
-    deps.activityStateDir ?? resolveCliControlStateDir(deps.platform ?? process.platform, home);
+  const context = resolveAuditActivityContext(stateDir, env, deps);
   try {
-    if (cliControlStateWouldMutateTarget(activityStateDir, stateDir)) {
+    if (cliControlStateWouldMutateTarget(context.activityStateDir, stateDir)) {
+      refuseAuditActivity(context, "AuditControlStateOverlapError", "control-state-overlap");
       io.err(
         "keiko audit: refusing to run because the reserved CLI control state overlaps the " +
           "audited tree. Select a different --state-dir.\n",
       );
       return { kind: "refused" };
     }
-    const pendingLayoutEvidence = installLayoutOverrideEvidence(env) !== undefined;
-    const layoutEvidenceWritten = writeInstallLayoutOverrideEvidenceWithFactory(
-      deps.activityLogSinkFactory,
-      activityStateDir,
-      env,
-    );
-    if (pendingLayoutEvidence && !layoutEvidenceWritten) {
-      io.err(
-        "keiko audit: refusing to consume a normalized install path because durable activity " +
-          "logging is unavailable.\n",
-      );
-      return { kind: "refused" };
-    }
-  } catch {
+    return openAuditActivity(context, env, io);
+  } catch (error) {
+    refuseAuditActivity(context, securityErrorKind(error), "control-state-validation-failed");
     io.err("keiko audit: the reserved CLI control state could not be validated or opened.\n");
     return { kind: "refused" };
   }
-  const sink = createCliSecurityLogSink(activityStateDir, deps.activityLogSinkFactory);
-  emitSecurityLogEvent(sink, {
-    level: "info",
-    category: "diagnostic",
-    op: "cli.audit.started",
-  });
-  return { kind: "ready", sink };
 }
 
 export async function runAuditCli(
@@ -443,9 +519,17 @@ export async function runAuditCli(
       category: "diagnostic",
       op: "cli.audit.failed",
       errorKind: "AuditConfigurationError",
-      extra: { reason: "auditor-unavailable" },
+      extra: { reason: "auditor-unavailable", targetSha256: activity.targetSha256 },
     });
     return 1;
   }
-  return runLocalStateAudit(stateDir, auditorPath, io, parsed.json, deps, activity.sink);
+  return runLocalStateAudit(
+    stateDir,
+    auditorPath,
+    io,
+    parsed.json,
+    deps,
+    activity.sink,
+    activity.targetSha256,
+  );
 }

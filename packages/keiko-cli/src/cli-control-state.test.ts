@@ -4,7 +4,10 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  cliControlStateLexicallyWouldMutateTarget,
   cliControlStateWouldMutateTarget,
+  cliTargetIdentitySha256,
+  resolveCliControlFailureStateDir,
   resolveCliControlStateDir,
 } from "./cli-control-state.js";
 
@@ -19,6 +22,23 @@ describe("resolveCliControlStateDir", () => {
     expect(resolveCliControlStateDir("win32", String.raw`C:\Users\alice`)).toBe(
       String.raw`C:\Users\alice\AppData\Local\Keiko\control`,
     );
+  });
+
+  it("uses a separate fixed location for control-root refusal evidence", () => {
+    expect(resolveCliControlFailureStateDir("linux", "/home/alice")).toBe(
+      "/home/alice/.cache/keiko/control-failures",
+    );
+    expect(resolveCliControlFailureStateDir("darwin", "/Users/alice")).toBe(
+      "/Users/alice/Library/Caches/Keiko/control-failures",
+    );
+    expect(resolveCliControlFailureStateDir("win32", String.raw`C:\Users\alice`)).toBe(
+      String.raw`C:\Users\alice\AppData\Local\KeikoControlFailures`,
+    );
+  });
+
+  it("provides a conservative lexical check when canonical validation cannot complete", () => {
+    expect(cliControlStateLexicallyWouldMutateTarget("/state/control", "/state")).toBe(true);
+    expect(cliControlStateLexicallyWouldMutateTarget("/control", "/state")).toBe(false);
   });
 });
 
@@ -36,5 +56,18 @@ describe("cliControlStateWouldMutateTarget", () => {
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
+  });
+});
+
+describe("cliTargetIdentitySha256", () => {
+  it("is stable, body-free, and distinguishes normalized targets", () => {
+    const first = cliTargetIdentitySha256("/tmp/forensic-a/../forensic-a");
+    const same = cliTargetIdentitySha256("/tmp/forensic-a");
+    const second = cliTargetIdentitySha256("/tmp/forensic-b");
+
+    expect(first).toBe(same);
+    expect(first).not.toBe(second);
+    expect(first).toMatch(/^[0-9a-f]{64}$/u);
+    expect(first).not.toContain("forensic");
   });
 });

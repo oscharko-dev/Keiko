@@ -4,7 +4,13 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 
-import { AuditLoadError, auditLocalStateResult, parseAuditArgs, runAuditCli } from "./audit.js";
+import {
+  AuditLoadError,
+  auditLocalStateResult,
+  parseAuditArgs,
+  runAuditCli,
+  type AuditCliDeps,
+} from "./audit.js";
 import {
   INSTALL_LAYOUT_CORRELATION_ID_ENV,
   INSTALL_LAYOUT_OVERRIDES_ENV,
@@ -26,6 +32,10 @@ function makeIo(): { io: CliIo; out: () => string; err: () => string } {
     out: (): string => outChunks.join(""),
     err: (): string => errChunks.join(""),
   };
+}
+
+function extraOf(event: SecurityLogEvent | undefined): Readonly<Record<string, unknown>> {
+  return event?.extra ?? {};
 }
 
 const HEALTHY = {
@@ -165,10 +175,11 @@ describe("runAuditCli", () => {
     let auditorLoaded = false;
     const sinkRoots: string[] = [];
     const events: SecurityLogEvent[] = [];
+    const correlationId = "00000000-0000-4000-8000-000000000001";
     const runtimeEnv: NodeJS.ProcessEnv = {
       ...env,
       [INSTALL_LAYOUT_OVERRIDES_ENV]: "local-state-auditor",
-      [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+      [INSTALL_LAYOUT_CORRELATION_ID_ENV]: correlationId,
     };
 
     try {
@@ -195,25 +206,71 @@ describe("runAuditCli", () => {
         "cli.audit.started",
         "cli.audit.completed",
       ]);
+      expect(new Set(events.map(({ correlationId }) => correlationId))).toEqual(
+        new Set([correlationId]),
+      );
+      const targetHashes = events
+        .map((event) => event.extra?.targetSha256)
+        .filter((value) => value !== undefined);
+      expect(targetHashes).toHaveLength(2);
+      expect(new Set(targetHashes).size).toBe(1);
+      expect(targetHashes[0]).toMatch(/^[0-9a-f]{64}$/u);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
   });
 
-  it("refuses a control-state path inside the audited tree without opening a sink", async () => {
+  it("distinguishes audited targets by hash without persisting either path", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-audit-target-identity-"));
+    const firstStateDir = join(root, "first-state");
+    const secondStateDir = join(root, "second-state");
+    const events: SecurityLogEvent[] = [];
+    mkdirSync(firstStateDir);
+    mkdirSync(secondStateDir);
+    const deps: AuditCliDeps = {
+      activityStateDir: join(root, "control-state"),
+      activityLogSinkFactory: () => ({
+        write: (event: SecurityLogEvent): void => void events.push(event),
+      }),
+      loadAuditor: () => Promise.resolve({ auditLocalState: () => HEALTHY }),
+    };
+
+    try {
+      await expect(
+        runAuditCli(["local-state", "--state-dir", firstStateDir], makeIo().io, env, deps),
+      ).resolves.toBe(0);
+      await expect(
+        runAuditCli(["local-state", "--state-dir", secondStateDir], makeIo().io, env, deps),
+      ).resolves.toBe(0);
+      const targetHashes = events
+        .filter(({ op }) => op === "cli.audit.started")
+        .map((event) => extraOf(event).targetSha256);
+      expect(targetHashes).toHaveLength(2);
+      expect(new Set(targetHashes).size).toBe(2);
+      expect(JSON.stringify(events)).not.toContain(firstStateDir);
+      expect(JSON.stringify(events)).not.toContain(secondStateDir);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("logs a structured refusal outside a target that contains the primary control state", async () => {
     const c = makeIo();
     const root = mkdtempSync(join(tmpdir(), "keiko-audit-overlap-"));
     const stateDir = join(root, "forensic-copy");
     mkdirSync(stateDir);
-    let sinkOpened = false;
+    const sinkRoots: string[] = [];
+    const events: SecurityLogEvent[] = [];
+    const failureActivityStateDir = join(root, "control-failures");
     let auditorLoaded = false;
     try {
       expect(
         await runAuditCli(["local-state", "--state-dir", stateDir], c.io, env, {
           activityStateDir: join(stateDir, "control"),
-          activityLogSinkFactory: () => {
-            sinkOpened = true;
-            return { write: (): void => undefined };
+          failureActivityStateDir,
+          activityLogSinkFactory: (sinkRoot) => {
+            sinkRoots.push(sinkRoot);
+            return { write: (event): void => void events.push(event) };
           },
           loadAuditor: () => {
             auditorLoaded = true;
@@ -221,9 +278,16 @@ describe("runAuditCli", () => {
           },
         }),
       ).toBe(1);
-      expect(sinkOpened).toBe(false);
+      expect(sinkRoots).toEqual([failureActivityStateDir]);
       expect(auditorLoaded).toBe(false);
       expect(c.err()).toContain("overlaps the audited tree");
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({
+        op: "cli.audit.failed",
+        errorKind: "AuditControlStateOverlapError",
+      });
+      expect(extraOf(events[0])).toMatchObject({ reason: "control-state-overlap" });
+      expect(extraOf(events[0]).targetSha256).toMatch(/^[0-9a-f]{64}$/u);
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
@@ -247,9 +311,45 @@ describe("runAuditCli", () => {
       expect(events[1]).toEqual(
         expect.objectContaining({
           errorKind: "AuditLoadError",
-          extra: { reason: "missing-export" },
         }),
       );
+      expect(extraOf(events[1]).reason).toBe("missing-export");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the refusal log when opening the primary control sink fails", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-audit-control-failure-"));
+    const activityStateDir = join(root, "control");
+    const failureActivityStateDir = join(root, "control-failures");
+    const events: SecurityLogEvent[] = [];
+    const layoutEnv = {
+      ...env,
+      [INSTALL_LAYOUT_OVERRIDES_ENV]: "local-state-auditor",
+      [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+    };
+    let auditorLoaded = false;
+    try {
+      await expect(
+        runAuditCli(["local-state"], makeIo().io, layoutEnv, {
+          cwd: root,
+          activityStateDir,
+          failureActivityStateDir,
+          activityLogSinkFactory: (sinkRoot) => {
+            if (sinkRoot === activityStateDir) throw new Error("primary unavailable");
+            return { write: (event): void => void events.push(event) };
+          },
+          loadAuditor: () => {
+            auditorLoaded = true;
+            return Promise.resolve({ auditLocalState: () => HEALTHY });
+          },
+        }),
+      ).resolves.toBe(1);
+      expect(auditorLoaded).toBe(false);
+      expect(events).toHaveLength(1);
+      expect(events[0]).toMatchObject({ op: "cli.audit.failed", errorKind: "Error" });
+      expect(extraOf(events[0]).reason).toBe("control-state-validation-failed");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

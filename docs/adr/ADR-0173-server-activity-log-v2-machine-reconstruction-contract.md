@@ -107,21 +107,28 @@ the tuple alone.
 ### D2a — Destructive and read-only CLI commands use a stable control-state root
 
 An operator-selected runtime-state directory cannot be the durable evidence owner for a command
-whose contract is to leave that directory untouched or remove it. `keiko audit local-state` and a
-real `keiko uninstall` operation that touches state or launchers therefore use a fixed per-user CLI
-control-state root: `~/.local/state/keiko/control` on Linux,
+whose contract is to leave that directory untouched or remove it. `keiko audit local-state` and
+every operational `keiko uninstall` invocation therefore use a fixed per-user CLI control-state
+root: `~/.local/state/keiko/control` on Linux,
 `~/Library/Application Support/Keiko/control` on macOS, and
 `%USERPROFILE%\AppData\Local\Keiko\control` on Windows. Environment variables cannot redirect this
 root. The command resolves existing symlinks before use and refuses when the control root is at or
-below the selected target.
+below the selected target. A refusal that cannot trust or open the primary root uses the independent
+failure root `~/.cache/keiko/control-failures` on Linux,
+`~/Library/Caches/Keiko/control-failures` on macOS, or
+`%USERPROFILE%\AppData\Local\KeikoControlFailures` on Windows. That fallback is opened only after it
+is proved outside the selected target; a canonicalization failure falls back to a conservative
+lexical overlap check and otherwise remains fail-closed.
 
 This is a placement rule, not a second logging system. The control root receives the existing
 `ServerLogSink` at `logs/server.log`, so D1-D13, correlation, redaction, rotation, retention, and
 the generated op vocabulary apply unchanged. Install-layout normalization is persisted there
-before a corrected internal path is consumed. Audit records start and completion/failure without
-writing into the audited tree; uninstall records start, forced-stop activity, and completion/failure
-without losing the record when target state is removed. Dry runs and scripts-only uninstall remain
-eventless and do not create control state.
+before a corrected internal path is consumed, and its correlation id joins the complete command
+lifecycle. Audit records start and completion/failure without writing into the audited tree.
+Uninstall records start, forced-stop activity, and completion/failure without losing the record when
+target state is removed; this includes dry runs and scripts-only operations. Events identify selected
+state and package targets only by SHA-256, and completion records whether state was absent, removed,
+retained, or would be removed/retained plus body-free affected/retained counts.
 
 **"Gap-free" means every claimed `seq` is accounted for, not that every claimed `seq` reaches disk —
 and that accounting is delivered on the next notice or at shutdown, never guaranteed against every

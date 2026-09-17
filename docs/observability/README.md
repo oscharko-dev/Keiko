@@ -22,9 +22,18 @@ that selected tree write their own lifecycle evidence to a fixed per-user CLI co
 The control path accepts no environment override and may not be at or below the selected audit or
 uninstall target. `keiko audit local-state` therefore cannot mutate the forensic tree it reads, and
 `keiko uninstall --state` cannot delete or asynchronously recreate the store that holds its own
-result. This is not a second logging subsystem: both locations use the same `ServerLogSink`, JSONL
-envelope, redaction, correlation, rotation, retention, and generated op catalog. A control-state
-`server.log` can be passed directly to `keiko support analyze`.
+result. If the primary control root overlaps the target or cannot be validated/opened, the refusal
+is written through an independent per-user failure root (`~/.cache/keiko/control-failures` on Linux,
+`~/Library/Caches/Keiko/control-failures` on macOS, or
+`%USERPROFILE%\AppData\Local\KeikoControlFailures` on Windows), but only after that root is proved
+outside the protected target. This is not a second logging subsystem: both locations use the same
+`ServerLogSink`, JSONL envelope, redaction, correlation, rotation, retention, and generated op
+catalog. A control-state `server.log` can be passed directly to `keiko support analyze`.
+
+One correlation id joins install-layout normalization to audit or uninstall start, subordinate
+forced-stop activity, and completion/failure. Audit and uninstall events carry SHA-256 identities
+for their selected targets instead of paths. Uninstall also logs dry runs and scripts-only work, and
+its completion records the state disposition plus body-free affected and retained counts.
 
 Each log is JSON Lines: one `JSON.stringify`-serialized object per line, written synchronously so
 that the last line on disk before a hang or a crash is the last line the process actually reached.
