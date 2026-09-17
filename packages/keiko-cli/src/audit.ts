@@ -1,6 +1,7 @@
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
+import { installLayoutOverrideEvidence } from "./install-layout.js";
 import type { CliIo } from "./runner.js";
 
 // `keiko audit local-state` — the at-rest self-verification the local-at-rest contract
@@ -306,6 +307,36 @@ async function runLocalStateAudit(
   return 1;
 }
 
+function resolveAuditorPath(
+  env: Readonly<Record<string, string | undefined>>,
+  io: CliIo,
+): string | undefined {
+  const layoutEvidence = installLayoutOverrideEvidence(env);
+  if (layoutEvidence?.overriddenKinds.includes("local-state-auditor") === true) {
+    // The only durable activity log lives below a Keiko state root. Opening it here could mutate
+    // the exact forensic tree selected for this read-only command, so never consume a corrected
+    // auditor path while its required normalization evidence is still pending. A clean process
+    // has no inherited internal layout override and can run the packaged auditor normally.
+    io.err(
+      "keiko audit: refusing to run while inherited install-layout normalization is pending. " +
+        "Start the audit from a clean process with inherited KEIKO_* install-layout variables " +
+        "removed so the audited tree remains read-only.\n",
+    );
+    return undefined;
+  }
+
+  const auditorPath = env.KEIKO_LOCAL_STATE_AUDITOR;
+  if (auditorPath !== undefined && auditorPath !== "") return auditorPath;
+  // Fail closed and say why. A silent skip here would read as "audited, nothing wrong" for the
+  // one control that is supposed to prove the at-rest claims.
+  io.err(
+    "keiko audit: the local-state auditor was not located in this installation " +
+      "(KEIKO_LOCAL_STATE_AUDITOR is unset). Reinstall the package, or run " +
+      "`npm run audit:local-state -- --state-dir <path>` from a repository checkout.\n",
+  );
+  return undefined;
+}
+
 export async function runAuditCli(
   rest: readonly string[],
   io: CliIo,
@@ -322,17 +353,8 @@ export async function runAuditCli(
     return 2;
   }
 
-  const auditorPath = env.KEIKO_LOCAL_STATE_AUDITOR;
-  if (auditorPath === undefined || auditorPath === "") {
-    // Fail closed and say why. A silent skip here would read as "audited, nothing wrong" for the
-    // one control that is supposed to prove the at-rest claims.
-    io.err(
-      "keiko audit: the local-state auditor was not located in this installation " +
-        "(KEIKO_LOCAL_STATE_AUDITOR is unset). Reinstall the package, or run " +
-        "`npm run audit:local-state -- --state-dir <path>` from a repository checkout.\n",
-    );
-    return 1;
-  }
+  const auditorPath = resolveAuditorPath(env, io);
+  if (auditorPath === undefined) return 1;
 
   // KEIKO_STATE_DIR is where the product actually keeps its state when the operator moved it, so
   // defaulting to <cwd>/.keiko while that is set audits a directory the runtime does not use —

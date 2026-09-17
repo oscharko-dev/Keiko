@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -153,11 +153,14 @@ describe("runAuditCli", () => {
     expect(audited?.replaceAll("\\", "/")).toBe("/home/operator/.keiko");
   });
 
-  it("does not mutate the audited tree when install-layout normalization evidence is present", async () => {
+  it("refuses pending layout evidence without loading the auditor or mutating its target", async () => {
     const c = makeIo();
     const root = mkdtempSync(join(tmpdir(), "keiko-audit-read-only-"));
     const stateDir = join(root, "forensic-copy");
     mkdirSync(stateDir);
+    const marker = join(stateDir, "forensic.marker");
+    writeFileSync(marker, "unaltered", "utf8");
+    let auditorLoaded = false;
     const runtimeEnv: NodeJS.ProcessEnv = {
       ...env,
       [INSTALL_LAYOUT_OVERRIDES_ENV]: "local-state-auditor",
@@ -167,11 +170,17 @@ describe("runAuditCli", () => {
     try {
       expect(
         await runAuditCli(["local-state", "--state-dir", stateDir], c.io, runtimeEnv, {
-          loadAuditor: () => Promise.resolve({ auditLocalState: () => ({ ...HEALTHY, stateDir }) }),
+          loadAuditor: () => {
+            auditorLoaded = true;
+            return Promise.resolve({ auditLocalState: () => ({ ...HEALTHY, stateDir }) });
+          },
         }),
-      ).toBe(0);
+      ).toBe(1);
+      expect(auditorLoaded).toBe(false);
       expect(existsSync(join(stateDir, "logs"))).toBe(false);
+      expect(readFileSync(marker, "utf8")).toBe("unaltered");
       expect(runtimeEnv[INSTALL_LAYOUT_OVERRIDES_ENV]).toBe("local-state-auditor");
+      expect(c.err()).toContain("inherited install-layout normalization is pending");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }
