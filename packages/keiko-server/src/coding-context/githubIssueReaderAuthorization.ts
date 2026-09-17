@@ -5,6 +5,12 @@ import type { ServerLogLevel, ServerLogSink } from "../observability/index.js";
 import { errorKindOf } from "../observability/server-log.js";
 import { realpathSync } from "node:fs";
 import { REDACTION_PLACEHOLDER } from "@oscharko-dev/keiko-security";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  isActivityLogErrorKind,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import { readGitRemoteUrl } from "@oscharko-dev/keiko-tools/internal/git-mutation";
@@ -13,6 +19,74 @@ import { githubOwnerAndRepoFromRemoteUrl } from "../gitDelivery/branchProtection
 import { deriveRepositoryId } from "../task-workspace/naming.js";
 import type { GitHubCodeContextApiPort } from "./githubCodeContextConnector.js";
 import { createGitHubCodeContextApiPort } from "./githubCodeContextPort.js";
+
+const GITHUB_AUTHORIZATION_EVALUATED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-context.github-authorization.evaluated",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-context/githubIssueReaderAuthorization.isGitHubIssueReaderAuthorized",
+  fields: {
+    decision: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "authorized",
+        "repository-unresolved",
+        "store-unavailable",
+        "no-grant",
+        "revoked",
+      ],
+    },
+    authorized: { type: "boolean", dataClass: "closed-enum", required: true },
+    repositoryId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    revision: { type: "integer", dataClass: "count", required: false },
+    inheritedFromRepository: { type: "boolean", dataClass: "closed-enum", required: false },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["github-issue-reader-authorization"],
+  proofIds: ["coding-context.github-authorization.evaluated.line"],
+  releaseImpact: "patch",
+});
+
+const GITHUB_REMOTE_EVALUATED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-context.github-remote.evaluated",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-context/githubIssueReaderAuthorization.recordRemoteResolution",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "resolved",
+        "repository-unresolved",
+        "remote-not-github",
+        "remote-redacted",
+        "remote-unreadable",
+        "resolver-failed",
+      ],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["github-remote-resolution"],
+  proofIds: ["coding-context.github-remote.evaluated.line"],
+  releaseImpact: "patch",
+});
+
+function closedErrorKind(value: string): ActivityLogErrorKind {
+  return isActivityLogErrorKind(value) ? value : "unknown";
+}
 
 /**
  * Why the GitHub issue reader was admitted or refused for one repository. A closed vocabulary, so a
@@ -169,23 +243,26 @@ export function isGitHubIssueReaderAuthorized(
   const { decision, repositoryId, revision, inherited } = decide(deps, repositoryRoot);
   const authorized = decision === "authorized";
   const sink = observation.activityLog ?? processServerLogSink();
-  sink.write({
-    level: authorized ? "debug" : "info",
-    category: "security",
-    op: "coding-context.github-authorization.evaluated",
-    correlationId: observation.correlationId ?? UNKNOWN_CORRELATION_ID,
-    extra: {
-      decision,
-      authorized,
-      ...(repositoryId === undefined ? {} : { repositoryId }),
-      // Which stored grant was evaluated, so a timeline can tell one revision from the next. Absent
-      // exactly when no row was read, which the decision already says.
-      ...(revision === undefined ? {} : { revision }),
-      // True when the asked-about root is a managed task worktree and the grant evaluated is the
-      // one of the repository it was provisioned from (#3390).
-      ...(inherited === true ? { inheritedFromRepository: true } : {}),
-    },
-  });
+  sink.write(
+    activityLogEvent(
+      GITHUB_AUTHORIZATION_EVALUATED_OPERATION,
+      {
+        level: authorized ? "debug" : "info",
+        correlationId: observation.correlationId ?? UNKNOWN_CORRELATION_ID,
+      },
+      {
+        decision,
+        authorized,
+        ...(repositoryId === undefined ? {} : { repositoryId }),
+        // Which stored grant was evaluated, so a timeline can tell one revision from the next.
+        // Absent exactly when no row was read, which the decision already says.
+        ...(revision === undefined ? {} : { revision }),
+        // True when the asked-about root is a managed task worktree and the grant evaluated is the
+        // one of the repository it was provisioned from (#3390).
+        ...(inherited === true ? { inheritedFromRepository: true } : {}),
+      },
+    ),
+  );
   return authorized;
 }
 
@@ -258,14 +335,17 @@ function recordRemoteResolution(
   errorKind?: string,
 ): void {
   const sink = observation.activityLog ?? processServerLogSink();
-  sink.write({
-    level: levelForOutcome(outcome),
-    category: "security",
-    op: "coding-context.github-remote.evaluated",
-    correlationId: observation.correlationId ?? UNKNOWN_CORRELATION_ID,
-    ...(errorKind === undefined ? {} : { errorKind }),
-    extra: { outcome },
-  });
+  sink.write(
+    activityLogEvent(
+      GITHUB_REMOTE_EVALUATED_OPERATION,
+      {
+        level: levelForOutcome(outcome),
+        correlationId: observation.correlationId ?? UNKNOWN_CORRELATION_ID,
+        ...(errorKind === undefined ? {} : { errorKind: closedErrorKind(errorKind) }),
+      },
+      { outcome, ...(errorKind === undefined ? {} : { failureKind: errorKind }) },
+    ),
+  );
 }
 
 // The content-free workspace view both `gh` and `git` are given for one checkout. Declared once
