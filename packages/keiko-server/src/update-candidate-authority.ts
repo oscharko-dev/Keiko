@@ -10,6 +10,11 @@ import type {
   UpdateSessionStartRequest,
 } from "@oscharko-dev/keiko-contracts";
 import { UPDATE_CANDIDATE_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/update-candidate";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
 import {
   emitServerDiagnostic,
@@ -18,6 +23,106 @@ import {
 } from "./diagnostics-log.js";
 
 const DEFAULT_CANDIDATE_TTL_MS = 10 * 60_000;
+
+const UPDATE_CANDIDATE_ISSUED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "update.candidate.issued",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "update-candidate-authority.issue",
+  fields: {
+    candidateId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    targetVersion: { type: "string", dataClass: "safe-version", required: true, maxLength: 64 },
+    installKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "package-manager",
+        "portable-managed",
+        "portable-bootstrap",
+        "portable-setup-failed",
+        "portable-it-managed",
+      ],
+    },
+    releaseImpactDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["update-candidate-authority"],
+  proofIds: ["update.candidate.issued.identity"],
+  releaseImpact: "patch",
+});
+
+const UPDATE_CANDIDATE_REJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "update.candidate.rejected",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "update-candidate-authority.consume.reject",
+  fields: {
+    candidateId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "unknown",
+        "expired",
+        "replayed",
+        "claim-mismatch",
+        "current-version-changed",
+        "install-facts-changed",
+      ],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["update-candidate-authority"],
+  proofIds: ["update.candidate.rejected.reason"],
+  releaseImpact: "patch",
+});
+
+const UPDATE_CANDIDATE_CONSUMED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "update.candidate.consumed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "update-candidate-authority.consume",
+  fields: {
+    candidateId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    targetVersion: { type: "string", dataClass: "safe-version", required: true, maxLength: 64 },
+    installKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "package-manager",
+        "portable-managed",
+        "portable-bootstrap",
+        "portable-setup-failed",
+        "portable-it-managed",
+      ],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["update-candidate-authority"],
+  proofIds: ["update.candidate.consumed.identity"],
+  releaseImpact: "patch",
+});
 
 interface CandidateRecord {
   readonly snapshot: UpdateCandidateSnapshot;
@@ -42,6 +147,21 @@ export type UpdateCandidateConsumption =
       readonly impact: UpdateReleaseImpactInput;
     }
   | { readonly ok: false; readonly reason: UpdateCandidateRejection };
+
+function candidateRejectionErrorKind(reason: UpdateCandidateRejection): ActivityLogErrorKind {
+  switch (reason) {
+    case "expired":
+      return "timeout";
+    case "replayed":
+    case "current-version-changed":
+    case "install-facts-changed":
+      return "conflict";
+    case "claim-mismatch":
+      return "validation-failed";
+    case "unknown":
+      return "invalid-request";
+  }
+}
 
 export interface UpdateCandidateAuthority {
   readonly issue: (
@@ -303,17 +423,18 @@ export function createUpdateCandidateAuthority(
       trimAfterInsertion(records);
       emitCandidateEvent(
         activityLog,
-        {
-          category: "diagnostic",
-          op: "update.candidate.issued",
-          correlationId: candidateId,
-          extra: {
+        activityLogEvent(
+          UPDATE_CANDIDATE_ISSUED_OPERATION,
+          { correlationId: candidateId },
+          {
             candidateId,
             targetVersion: snapshot.targetVersion,
             installKind: snapshot.install.installKind,
             releaseImpactDigest: snapshot.releaseImpactDigest,
+            completeness: "complete",
+            loss: "none",
           },
-        },
+        ),
         diagnostics,
       );
       return {
@@ -335,12 +456,19 @@ export function createUpdateCandidateAuthority(
         const reason = consumed.has(claim.candidateId) ? "replayed" : "unknown";
         emitCandidateEvent(
           activityLog,
-          {
-            category: "diagnostic",
-            op: "update.candidate.rejected",
-            correlationId: claim.requestId ?? claim.candidateId,
-            extra: { candidateId: claim.candidateId, reason },
-          },
+          activityLogEvent(
+            UPDATE_CANDIDATE_REJECTED_OPERATION,
+            {
+              correlationId: claim.requestId ?? claim.candidateId,
+              errorKind: candidateRejectionErrorKind(reason),
+            },
+            {
+              candidateId: claim.candidateId,
+              reason,
+              completeness: "complete",
+              loss: "none",
+            },
+          ),
           diagnostics,
         );
         return { ok: false, reason };
@@ -348,12 +476,19 @@ export function createUpdateCandidateAuthority(
       const reject = (reason: UpdateCandidateRejection): UpdateCandidateConsumption => {
         emitCandidateEvent(
           activityLog,
-          {
-            category: "diagnostic",
-            op: "update.candidate.rejected",
-            correlationId: claim.requestId ?? claim.candidateId,
-            extra: { candidateId: claim.candidateId, reason },
-          },
+          activityLogEvent(
+            UPDATE_CANDIDATE_REJECTED_OPERATION,
+            {
+              correlationId: claim.requestId ?? claim.candidateId,
+              errorKind: candidateRejectionErrorKind(reason),
+            },
+            {
+              candidateId: claim.candidateId,
+              reason,
+              completeness: "complete",
+              loss: "none",
+            },
+          ),
           diagnostics,
         );
         return { ok: false, reason };
@@ -372,16 +507,17 @@ export function createUpdateCandidateAuthority(
       if (!freshReportMatches(record, freshReport)) return reject("claim-mismatch");
       emitCandidateEvent(
         activityLog,
-        {
-          category: "diagnostic",
-          op: "update.candidate.consumed",
-          correlationId: claim.requestId ?? claim.candidateId,
-          extra: {
+        activityLogEvent(
+          UPDATE_CANDIDATE_CONSUMED_OPERATION,
+          { correlationId: claim.requestId ?? claim.candidateId },
+          {
             candidateId: claim.candidateId,
             targetVersion: record.snapshot.targetVersion,
             installKind: record.snapshot.install.installKind,
+            completeness: "complete",
+            loss: "none",
           },
-        },
+        ),
         diagnostics,
       );
       return {

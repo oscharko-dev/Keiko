@@ -5,6 +5,7 @@ import type {
   UpdatePreflightReport,
   UpdateSessionStartRequest,
 } from "@oscharko-dev/keiko-contracts";
+import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 import { createUpdateCandidateAuthority } from "./update-candidate-authority.js";
 
 const NOW = Date.parse("2026-09-04T12:00:00.000Z");
@@ -238,7 +239,7 @@ describe("UpdateCandidateAuthority", () => {
   });
 
   it("emits only body-free candidate identity and never the execution token", () => {
-    const events: unknown[] = [];
+    const events: SecurityLogEvent[] = [];
     const authority = createUpdateCandidateAuthority({
       now: () => NOW,
       idFactory: () => "candidate-3405-0123456789abcdef",
@@ -259,7 +260,68 @@ describe("UpdateCandidateAuthority", () => {
     expect(serialized).not.toContain(claim.executionToken);
     expect(serialized).not.toContain("Reviewed update");
     expect(serialized).not.toContain("releaseNoteBullets");
-    expect(events).toHaveLength(2);
+    expect(events).toMatchObject([
+      {
+        category: "diagnostic",
+        op: "update.candidate.issued",
+        correlationId: "candidate-3405-0123456789abcdef",
+        extra: {
+          candidateId: "candidate-3405-0123456789abcdef",
+          targetVersion: "0.3.18",
+          installKind: "package-manager",
+          completeness: "complete",
+          loss: "none",
+        },
+      },
+      {
+        category: "diagnostic",
+        op: "update.candidate.consumed",
+        correlationId: "request-3405-0123456789abcdef",
+        extra: {
+          candidateId: "candidate-3405-0123456789abcdef",
+          targetVersion: "0.3.18",
+          installKind: "package-manager",
+          completeness: "complete",
+          loss: "none",
+        },
+      },
+    ]);
+  });
+
+  it("emits a closed rejection reason and error kind", () => {
+    const events: SecurityLogEvent[] = [];
+    const authority = createUpdateCandidateAuthority({
+      now: () => NOW,
+      activityLog: { write: (event): void => void events.push(event) },
+    });
+
+    expect(
+      authority.consume(
+        {
+          candidateId: "unknown-candidate-01234567",
+          confirmationDigest: "d".repeat(64),
+          executionToken: "e".repeat(64),
+          requestId: "request-unknown-01234567",
+        },
+        "0.3.17",
+        mode(),
+        report(),
+      ),
+    ).toEqual({ ok: false, reason: "unknown" });
+    expect(events).toEqual([
+      expect.objectContaining({
+        category: "diagnostic",
+        op: "update.candidate.rejected",
+        correlationId: "request-unknown-01234567",
+        errorKind: "invalid-request",
+        extra: {
+          candidateId: "unknown-candidate-01234567",
+          reason: "unknown",
+          completeness: "complete",
+          loss: "none",
+        },
+      }),
+    ]);
   });
 
   it("reports a canonical activity sink failure through bounded diagnostics", () => {
