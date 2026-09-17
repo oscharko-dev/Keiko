@@ -1549,14 +1549,13 @@ function isGatewayAttemptLine(view: ServerLogLineView): boolean {
   );
 }
 
-// `errorKind` is the gateway's own `GatewayError.code` (`logErrorKind`, keiko-model-gateway's
-// observability.ts) — this maps the 4 codes a replay script cares about onto the narrower
-// `GatewayReplayAttempt.outcome` vocabulary; anything else (circuit-open, cancelled, unknown)
-// falls into the generic "provider-error" bucket rather than growing the outcome union for a
-// distinction a replay fixture does not need to make.
+// Current typed events use ADR-0173's closed error-kind vocabulary. Retained pre-registry logs can
+// still carry the gateway's historical `GatewayError.code`, so keep those exact aliases readable
+// rather than making an upgrade erase an otherwise reconstructable replay outcome. Anything else
+// falls into the generic provider-error bucket.
 function attemptOutcome(errorKind: string | undefined): GatewayReplayAttempt["outcome"] {
-  if (errorKind === "GATEWAY_RATE_LIMIT") return "rate-limit";
-  if (errorKind === "GATEWAY_TIMEOUT") return "timeout";
+  if (errorKind === "rate-limited" || errorKind === "GATEWAY_RATE_LIMIT") return "rate-limit";
+  if (errorKind === "timeout" || errorKind === "GATEWAY_TIMEOUT") return "timeout";
   if (errorKind === "GATEWAY_TRANSPORT") return "transport-error";
   return "provider-error";
 }

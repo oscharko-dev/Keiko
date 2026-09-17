@@ -652,7 +652,7 @@ describe("runUiCli", () => {
       category: "diagnostic",
       op: "update.runtime.legacy-import-deferred",
       errorKind: "unavailable",
-      extra: { reason: "append-failed" },
+      extra: { completeness: "complete", loss: "none", reason: "append-failed" },
     });
     expect(events.some((event) => event.op === "process.started")).toBe(true);
     expect(err.join("")).toBe(

@@ -1904,24 +1904,50 @@ describe("renderHumanClusters", () => {
 });
 
 describe("buildGatewayReplayScript — outcome classification and attempt fallbacks", () => {
-  it("classifies GATEWAY_TIMEOUT as timeout and GATEWAY_TRANSPORT as transport-error", () => {
+  it("classifies typed and legacy timeout kinds while retaining legacy transport detail", () => {
     const timeoutLine: ServerLogLineView = {
       ts: T0,
       category: "gateway",
       op: "gateway.chat.failed",
+      errorKind: "timeout",
+    };
+    const legacyTimeoutLine: ServerLogLineView = {
+      ts: T1,
+      category: "gateway",
+      op: "gateway.stream.failed",
       errorKind: "GATEWAY_TIMEOUT",
     };
     const transportLine: ServerLogLineView = {
-      ts: T1,
+      ts: T2,
       category: "gateway",
       op: "gateway.stream.failed",
       errorKind: "GATEWAY_TRANSPORT",
     };
 
-    const script = buildGatewayReplayScript([timeoutLine, transportLine]);
+    const script = buildGatewayReplayScript([timeoutLine, legacyTimeoutLine, transportLine]);
 
     expect(script?.attempts[0]?.outcome).toBe("timeout");
-    expect(script?.attempts[1]?.outcome).toBe("transport-error");
+    expect(script?.attempts[1]?.outcome).toBe("timeout");
+    expect(script?.attempts[2]?.outcome).toBe("transport-error");
+  });
+
+  it("classifies typed and retained legacy rate-limit kinds", () => {
+    const typedLine: ServerLogLineView = {
+      ts: T0,
+      category: "gateway",
+      op: "gateway.retry.scheduled",
+      errorKind: "rate-limited",
+    };
+    const legacyLine: ServerLogLineView = {
+      ts: T1,
+      category: "gateway",
+      op: "gateway.retry.scheduled",
+      errorKind: "GATEWAY_RATE_LIMIT",
+    };
+
+    const script = buildGatewayReplayScript([typedLine, legacyLine]);
+
+    expect(script?.attempts.map(({ outcome }) => outcome)).toEqual(["rate-limit", "rate-limit"]);
   });
 
   it("falls back to unknown-model, a zero durationMs, and no firstTokenMs when the line carries no extra", () => {

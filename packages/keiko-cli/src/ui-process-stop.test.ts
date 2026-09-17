@@ -74,7 +74,11 @@ describe("terminateUiProcess", () => {
     expect(killed).toEqual([[42, "SIGTERM"]]);
     expect(existsSync(join(stateDir, "ui.shutdown"))).toBe(false);
     expect(events.map((event) => event.op)).toEqual(["cli.lifecycle.stop-requested"]);
-    expect(events[0]?.extra).toEqual({ channel: "sigterm" });
+    expect(events[0]?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      channel: "sigterm",
+    });
   });
 
   it("on Windows writes the sentinel, never SIGTERMs, and clears the request after a graceful death", async () => {
@@ -103,7 +107,11 @@ describe("terminateUiProcess", () => {
     expect(sawSentinel).toBe(true);
     expect(killed).toEqual([]);
     expect(existsSync(join(stateDir, "ui.shutdown"))).toBe(false);
-    expect(events[0]?.extra).toEqual({ channel: "shutdown-request" });
+    expect(events[0]?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      channel: "shutdown-request",
+    });
   });
 
   it("on Windows escalates with tree-kill and does not SIGKILL after a successful tree-kill", async () => {
@@ -142,7 +150,11 @@ describe("terminateUiProcess", () => {
     expect(killWindowsTree).toHaveBeenCalledWith(77, treeEnv);
     expect(killProcess).not.toHaveBeenCalled();
     const escalated = events.find((event) => event.op === "cli.lifecycle.stop-escalated");
-    expect(escalated?.extra).toEqual({ windowsTreeKill: "succeeded" });
+    expect(escalated?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      windowsTreeKill: "succeeded",
+    });
   });
 
   it("on Windows does not SIGKILL when tree-kill refuses the current pid", async () => {
@@ -331,7 +343,11 @@ describe("terminateUiProcess", () => {
     });
     expect(events.map((event) => event.op)).toEqual(["cli.lifecycle.stop-request-failed"]);
     expect(events[0]?.errorKind).toBe("unavailable");
-    expect(events[0]?.extra).toEqual({ failureKind: "EPERM" });
+    expect(events[0]?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
+      failureKind: "EPERM",
+    });
   });
 
   it("emits stop-escalation-failed when Windows tree-kill throws and still SIGKILLs", async () => {

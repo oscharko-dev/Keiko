@@ -234,8 +234,13 @@ describe("Windows CLI security-log production wiring", () => {
       expect.objectContaining({
         category: "diagnostic",
         op: "portable.windows-alert.spawn-failed",
-        errorKind: "Error",
-        extra: { surface: "portable-failure-alert" },
+        errorKind: "unavailable",
+        extra: {
+          completeness: "complete",
+          loss: "none",
+          surface: "portable-failure-alert",
+          failureKind: "Error",
+        },
       }),
     ]);
     expect(written[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
