@@ -63,6 +63,40 @@ describe("classifyErrorKind", () => {
 });
 
 describe("typed Activity Log operation registration", () => {
+  it("types every member of a governed string-array vocabulary", () => {
+    const operation = defineActivityLogOperation({
+      contractKind: "activity-log-operation",
+      schemaVersion: 1,
+      op: "registry.fixture.array",
+      category: "diagnostic",
+      owner: "keiko-contracts",
+      emitter: "observability.test.array",
+      fields: {
+        reasons: {
+          type: "string-array",
+          dataClass: "closed-enum",
+          required: true,
+          values: ["first", "second"],
+        },
+      },
+      causal: "none",
+      lifecycle: "state",
+      analyzerProjection: "timeline",
+      failureClasses: ["registry-fixture"],
+      proofIds: ["registry-fixture-array-emitted-line"],
+      releaseImpact: "none",
+    });
+
+    expect(activityLogEvent(operation, {}, { reasons: ["first", "second"] }).extra).toEqual({
+      reasons: ["first", "second"],
+    });
+
+    if (false) {
+      // @ts-expect-error each array member stays inside the registered vocabulary
+      activityLogEvent(operation, {}, { reasons: ["third"] });
+    }
+  });
+
   it("binds an emitted field set to one immutable operation identity", () => {
     const operation = defineActivityLogOperation({
       contractKind: "activity-log-operation",

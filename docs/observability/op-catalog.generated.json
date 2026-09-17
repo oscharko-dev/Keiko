@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "205b1dc41337fe3b2841dca3dee729eb51c7027de380f8bf8b1f1391d61fd2a3",
-    "catalogDigest": "9b0d40284b2fdba0d623425f3e8fe359b860e8c83b8f5039fb89b8f3b9e757d3",
+    "catalogDigest": "10bfe733820dfb7a6b102775984c60134d765448dde465eb20195284e74b8a2f",
     "operations": [
       {
         "contractKind": "activity-log-operation",
@@ -223,7 +223,7 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:23",
         "emitterSites": [
-          "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:241"
+          "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:247"
         ]
       },
       {
@@ -260,9 +260,9 @@
         "failureClasses": ["github-remote-resolution"],
         "proofIds": ["coding-context.github-remote.evaluated.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:50",
+        "registrationSite": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:56",
         "emitterSites": [
-          "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:333"
+          "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:339"
         ]
       },
       {
@@ -320,6 +320,279 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/coding-context/githubCodeContextPort.ts:47",
         "emitterSites": ["packages/keiko-server/src/coding-context/githubCodeContextPort.ts:298"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "coding-context.linked-issue-skipped",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "coding-context/codingRuntimeIssueIntake.logLinkedIssueSkipped",
+        "fields": {
+          "runId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": true,
+            "maxLength": 256
+          },
+          "issueNumber": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "failure": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "invalid-reference",
+              "repository-mismatch",
+              "auth-required",
+              "issue-unavailable",
+              "clone-failed",
+              "authority-denied",
+              "cancelled"
+            ]
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["coding-context-linked-issue"],
+        "proofIds": ["coding-context.linked-issue-skipped.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/coding-context/codingRuntimeIssueIntake.ts:22",
+        "emitterSites": ["packages/keiko-server/src/coding-context/codingRuntimeIssueIntake.ts:185"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "coding-context.pack",
+        "category": "security",
+        "owner": "keiko-server",
+        "emitter": "coding-context/activity-log.recordCodingContextPack",
+        "fields": {
+          "runId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": true,
+            "maxLength": 256
+          },
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["sanitized"]
+          },
+          "effectiveMode": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["governed-assist", "supervised-coding", "autonomous-delivery"]
+          },
+          "status": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["ready", "blocked", "degraded"]
+          },
+          "blockedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "blockedReasons": {
+            "type": "string-array",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["missing-scope", "missing-credentials", "mode-ceiling"],
+            "maxItems": 3
+          },
+          "sanitizedItemCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "sanitizedObjectIds": {
+            "type": "string-array",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxItems": 64,
+            "maxLength": 256
+          },
+          "sanitizedTitleBytesRemoved": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "sanitizedBodyBytesRemoved": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "sanitizedCommentBytesRemoved": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "sanitizedContentDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["coding-context-pack"],
+        "proofIds": ["coding-context.pack.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/coding-context/activity-log.ts:10",
+        "emitterSites": [
+          "packages/keiko-server/src/coding-context/activity-log.ts:97",
+          "packages/keiko-server/src/coding-context/activity-log.ts:115"
+        ]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "coding-workbench.issue.previewed",
+        "category": "http",
+        "owner": "keiko-server",
+        "emitter": "coding-context/issuePreviewRoutes.recordPreview",
+        "fields": {
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "invalid-reference",
+              "repository-mismatch",
+              "auth-required",
+              "issue-unavailable",
+              "clone-failed",
+              "authority-denied",
+              "cancelled",
+              "invalid-request",
+              "request-too-large",
+              "unknown-repository",
+              "resolved"
+            ]
+          },
+          "issueNumber": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "repositoryId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxLength": 256
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["coding-workbench-issue-preview"],
+        "proofIds": ["coding-workbench.issue.previewed.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/coding-context/issuePreviewRoutes.ts:48",
+        "emitterSites": ["packages/keiko-server/src/coding-context/issuePreviewRoutes.ts:264"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "coding-workbench.issue.resolved",
+        "category": "security",
+        "owner": "keiko-server",
+        "emitter": "coding-context/githubIssueResolution.record",
+        "fields": {
+          "outcome": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "invalid-reference",
+              "repository-mismatch",
+              "auth-required",
+              "issue-unavailable",
+              "clone-failed",
+              "authority-denied",
+              "cancelled",
+              "resolved"
+            ]
+          },
+          "issueNumber": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "repositoryId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxLength": 256
+          },
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "empty",
+              "malformed",
+              "unsupported-host",
+              "pull-request",
+              "invalid-repository",
+              "invalid-number",
+              "repository-required",
+              "repository-unresolved",
+              "remote-unresolved",
+              "reference-names-other-repository",
+              "no-grant",
+              "reader-unavailable",
+              "read-failed",
+              "read-transient-failure",
+              "identity-missing",
+              "state-unknown",
+              "pull-request-as-issue",
+              "closed",
+              "provenance-unreadable",
+              "transferred",
+              "renumbered",
+              "default-branch-read-failed",
+              "default-branch-unresolved",
+              "aborted"
+            ]
+          },
+          "failureKind": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxLength": 64
+          },
+          "frames": {
+            "type": "string-array",
+            "dataClass": "safe-platform-class",
+            "required": false,
+            "maxItems": 8
+          },
+          "causeChain": {
+            "type": "string-array",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxItems": 5
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["coding-workbench-issue-resolution"],
+        "proofIds": ["coding-workbench.issue.resolved.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/coding-context/githubIssueResolution.ts:63",
+        "emitterSites": ["packages/keiko-server/src/coding-context/githubIssueResolution.ts:515"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3239,7 +3512,7 @@
     {
       "op": "coding-context.github-remote.evaluated",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:53",
+      "site": "packages/keiko-server/src/coding-context/githubIssueReaderAuthorization.ts:59",
       "package": "keiko-server"
     },
     {
@@ -3251,13 +3524,13 @@
     {
       "op": "coding-context.linked-issue-skipped",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-context/codingRuntimeIssueIntake.ts:146",
+      "site": "packages/keiko-server/src/coding-context/codingRuntimeIssueIntake.ts:25",
       "package": "keiko-server"
     },
     {
       "op": "coding-context.pack",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-context/codeContextConnector.ts:337",
+      "site": "packages/keiko-server/src/coding-context/activity-log.ts:13",
       "package": "keiko-server"
     },
     {
@@ -3265,12 +3538,6 @@
       "category": "diagnostic",
       "site": "packages/keiko-server/src/coding-context/codingContextRoutes.ts:397",
       "sourceKind": "diagnostic-operation",
-      "package": "keiko-server"
-    },
-    {
-      "op": "coding-context.pack",
-      "category": "security",
-      "site": "packages/keiko-server/src/coding-context/codingRuntimeIssueIntake.ts:202",
       "package": "keiko-server"
     },
     {
@@ -3859,20 +4126,20 @@
     {
       "op": "coding-workbench.issue.preview",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/coding-context/issuePreviewRoutes.ts:273",
+      "site": "packages/keiko-server/src/coding-context/issuePreviewRoutes.ts:313",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
     {
       "op": "coding-workbench.issue.previewed",
       "category": "http",
-      "site": "packages/keiko-server/src/coding-context/issuePreviewRoutes.ts:225",
+      "site": "packages/keiko-server/src/coding-context/issuePreviewRoutes.ts:51",
       "package": "keiko-server"
     },
     {
       "op": "coding-workbench.issue.resolved",
       "category": "security",
-      "site": "packages/keiko-server/src/coding-context/githubIssueResolution.ts:429",
+      "site": "packages/keiko-server/src/coding-context/githubIssueResolution.ts:66",
       "package": "keiko-server"
     },
     {

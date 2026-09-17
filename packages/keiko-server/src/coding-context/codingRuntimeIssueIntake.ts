@@ -1,8 +1,16 @@
 import { canonicalise } from "@oscharko-dev/keiko-security";
-import type { CodingWorkbenchConnectorScope } from "@oscharko-dev/keiko-contracts";
+import type {
+  CodingWorkbenchConnectorScope,
+  CodingWorkbenchIssueBindingFailure,
+} from "@oscharko-dev/keiko-contracts";
 import { codingWorkbenchPolicyEffectFor } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { CodingRuntimeIssueIntake } from "../coding-runtime/codingRuntimeIssueIntake.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { recordCodingContextPack } from "./activity-log.js";
 import {
   buildCodeContextPack,
   type CodeContextConnector,
@@ -10,6 +18,39 @@ import {
   type CodeContextRawObject,
 } from "./codeContextConnector.js";
 import { resolveGitHubIssue, type GitHubIssueResolutionDeps } from "./githubIssueResolution.js";
+
+const LINKED_ISSUE_SKIPPED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-context.linked-issue-skipped",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-context/codingRuntimeIssueIntake.logLinkedIssueSkipped",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    issueNumber: { type: "integer", dataClass: "count", required: false },
+    failure: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "invalid-reference",
+        "repository-mismatch",
+        "auth-required",
+        "issue-unavailable",
+        "clone-failed",
+        "authority-denied",
+        "cancelled",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-context-linked-issue"],
+  proofIds: ["coding-context.linked-issue-skipped.line"],
+  releaseImpact: "patch",
+});
 
 /** Uses the same resolver and context-pack builder as preview; no second issue reader or store. */
 export function createProductionCodingRuntimeIssueIntake(
@@ -138,19 +179,19 @@ function logLinkedIssueSkipped(
   deps: GitHubIssueResolutionDeps,
   request: LinkedIssueRequest,
   issueNumber: number | undefined,
-  failure: string,
+  failure: CodingWorkbenchIssueBindingFailure,
 ): void {
-  (deps.activityLog ?? processServerLogSink()).write({
-    level: "info",
-    category: "process",
-    op: "coding-context.linked-issue-skipped",
-    correlationId: request.correlationId,
-    extra: {
-      runId: request.runId,
-      ...(issueNumber === undefined ? {} : { issueNumber }),
-      failure,
-    },
-  });
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      LINKED_ISSUE_SKIPPED_OPERATION,
+      { level: "info", correlationId: request.correlationId },
+      {
+        runId: request.runId,
+        ...(issueNumber === undefined ? {} : { issueNumber }),
+        failure,
+      },
+    ),
+  );
 }
 
 function commentCountsOf(resolutions: readonly ResolvedIssue[]): ReadonlyMap<string, number> {
@@ -196,18 +237,12 @@ function logPackBlocked(
   pack: CodeContextPackResult,
 ): void {
   const sink = deps.activityLog ?? processServerLogSink();
-  sink.write({
-    level: "info",
-    category: "security",
-    op: "coding-context.pack",
-    correlationId: input.correlationId,
-    extra: {
-      runId: input.runId,
-      effectiveMode: input.effectiveMode,
-      status: pack.status,
-      blockedCount: pack.evidence.blockedCount,
-      blockedReasons: [...new Set(pack.blocked.map((blocked) => blocked.reason))],
-    },
+  recordCodingContextPack(sink, input.correlationId, {
+    runId: input.runId,
+    effectiveMode: input.effectiveMode,
+    status: pack.status,
+    blockedCount: pack.evidence.blockedCount,
+    blockedReasons: [...new Set(pack.blocked.map((blocked) => blocked.reason))],
   });
 }
 

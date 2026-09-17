@@ -22,6 +22,10 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { parseCodingWorkbenchIssuePreviewRequest } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { UNKNOWN_REPOSITORY_ERROR_CODE } from "@oscharko-dev/keiko-contracts/runtime/bff-wire";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
@@ -40,6 +44,43 @@ import {
 // A repository path and one pasted reference. Anything larger is not this request. Enforced on
 // the bytes actually read, behind the shared transport reader's own (wider) cap.
 export const ISSUE_PREVIEW_MAX_BODY_BYTES = 1_024;
+
+const ISSUE_PREVIEWED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-workbench.issue.previewed",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "coding-context/issuePreviewRoutes.recordPreview",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "invalid-reference",
+        "repository-mismatch",
+        "auth-required",
+        "issue-unavailable",
+        "clone-failed",
+        "authority-denied",
+        "cancelled",
+        "invalid-request",
+        "request-too-large",
+        "unknown-repository",
+        "resolved",
+      ],
+    },
+    issueNumber: { type: "integer", dataClass: "count", required: false },
+    repositoryId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-workbench-issue-preview"],
+  proofIds: ["coding-workbench.issue.previewed.line"],
+  releaseImpact: "patch",
+});
 
 interface FailureStatus {
   readonly status: number;
@@ -219,18 +260,17 @@ function recordPreview(
   status: number,
   detail: { readonly issueNumber?: number | undefined; readonly repositoryId?: string | undefined },
 ): void {
-  (deps.activityLog ?? processServerLogSink()).write({
-    level: "info",
-    category: "http",
-    op: "coding-workbench.issue.previewed",
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-    status,
-    extra: {
-      outcome,
-      ...(detail.issueNumber === undefined ? {} : { issueNumber: detail.issueNumber }),
-      ...(detail.repositoryId === undefined ? {} : { repositoryId: detail.repositoryId }),
-    },
-  });
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      ISSUE_PREVIEWED_OPERATION,
+      { level: "info", correlationId: correlationId ?? UNKNOWN_CORRELATION_ID, status },
+      {
+        outcome,
+        ...(detail.issueNumber === undefined ? {} : { issueNumber: detail.issueNumber }),
+        ...(detail.repositoryId === undefined ? {} : { repositoryId: detail.repositoryId }),
+      },
+    ),
+  );
 }
 
 type AdmittedPreview =
