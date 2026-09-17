@@ -50,6 +50,7 @@ afterEach(() => {
   vi.restoreAllMocks();
   vi.doUnmock("node:fs");
   vi.resetModules();
+  vi.useRealTimers();
   for (const path of cleanups.splice(0)) {
     rmSync(path, { recursive: true, force: true });
   }
@@ -747,6 +748,30 @@ describe("publishSafeArtifactFileSet", () => {
       { path: report, contents: "old-report", artifactClass: "support-report" as const },
       { path: integrity, contents: "old-digest", artifactClass: "integrity-artifact" as const },
     ];
+    const peerScript = `
+      import { recoverSafeArtifactFileSet } from "@oscharko-dev/keiko-security/fs-hardening";
+      const mode = process.env.KEIKO_TEST_PUBLICATION_MODE;
+      try {
+        const result = recoverSafeArtifactFileSet({
+          publicationSlot: process.env.KEIKO_TEST_PUBLICATION_SLOT,
+          trustedRoot: process.env.KEIKO_TEST_PUBLICATION_ROOT,
+        });
+        process.exit(mode === "released" && result.status === "recovered" ? 0 : 2);
+      } catch (error) {
+        process.exit(mode === "active" && error?.kind === "recovery-conflict" ? 0 : 3);
+      }
+    `;
+    const runPeer = (mode: "active" | "released"): void => {
+      execFileSync(process.execPath, ["--input-type=module", "--eval", peerScript], {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          KEIKO_TEST_PUBLICATION_MODE: mode,
+          KEIKO_TEST_PUBLICATION_ROOT: base,
+          KEIKO_TEST_PUBLICATION_SLOT: slot,
+        },
+      });
+    };
     const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
     let links = 0;
     vi.resetModules();
@@ -754,6 +779,7 @@ describe("publishSafeArtifactFileSet", () => {
       ...actual,
       linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
         links += 1;
+        if (links === 1) runPeer("active");
         if (links === 2) throw Object.assign(new Error("publisher paused"), { code: "EINTR" });
         Reflect.apply(actual.linkSync, actual, args);
       },
@@ -768,20 +794,60 @@ describe("publishSafeArtifactFileSet", () => {
     ).toThrow(expect.objectContaining({ kind: "publish-failed" }));
     vi.doUnmock("node:fs");
     vi.resetModules();
-    const before = readdirSync(base).sort();
+    expect(() => {
+      runPeer("released");
+    }).not.toThrow();
+    expect(readFileSync(integrity, "utf8")).toBe("old-digest");
+    expect(readFileSync(report, "utf8")).toBe("old-report");
+    expect(publicationStages(base)).toEqual([`.keiko-publish-${slot}.complete`]);
+  });
+
+  it("does not let a reused live PID block an expired owner lease", async () => {
+    const base = freshDir();
+    const report = join(base, "support.jsonl");
+    const integrity = join(base, "support.jsonl.sha256");
+    const slot = safeArtifactPublicationSlot("support-export", report);
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let links = 0;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(0));
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
+        links += 1;
+        if (links === 2) throw Object.assign(new Error("interrupted"), { code: "EINTR" });
+        Reflect.apply(actual.linkSync, actual, args);
+      },
+      unlinkSync: (...args: Parameters<typeof actual.unlinkSync>): void => {
+        if (String(args[0]).endsWith(".owner")) {
+          throw Object.assign(new Error("owner release interrupted"), { code: "EIO" });
+        }
+        Reflect.apply(actual.unlinkSync, actual, args);
+      },
+    }));
+    const interrupted = await import("./fs-hardening.js");
+    expect(() =>
+      interrupted.publishSafeArtifactFileSet(
+        [
+          { path: report, contents: "report", artifactClass: "support-report" },
+          { path: integrity, contents: "digest", artifactClass: "integrity-artifact" },
+        ],
+        { commitPath: report, trustedRoot: base, publicationSlot: slot },
+      ),
+    ).toThrow(expect.objectContaining({ kind: "publish-failed" }));
+    vi.doUnmock("node:fs");
+    vi.resetModules();
+    vi.useRealTimers();
+
     const peerScript = `
       import { recoverSafeArtifactFileSet } from "@oscharko-dev/keiko-security/fs-hardening";
-      try {
-        recoverSafeArtifactFileSet({
-          publicationSlot: process.env.KEIKO_TEST_PUBLICATION_SLOT,
-          trustedRoot: process.env.KEIKO_TEST_PUBLICATION_ROOT,
-        });
-        process.exit(2);
-      } catch (error) {
-        process.exit(error?.kind === "recovery-conflict" ? 0 : 3);
-      }
+      const result = recoverSafeArtifactFileSet({
+        publicationSlot: process.env.KEIKO_TEST_PUBLICATION_SLOT,
+        trustedRoot: process.env.KEIKO_TEST_PUBLICATION_ROOT,
+      });
+      process.exit(result.status === "recovered" ? 0 : 2);
     `;
-
     expect(() =>
       execFileSync(process.execPath, ["--input-type=module", "--eval", peerScript], {
         cwd: process.cwd(),
@@ -792,12 +858,9 @@ describe("publishSafeArtifactFileSet", () => {
         },
       }),
     ).not.toThrow();
-    expect(readdirSync(base).sort()).toEqual(before);
-    expect(readFileSync(integrity, "utf8")).toBe("old-digest");
-    expect(existsSync(report)).toBe(false);
-    expect(recoverSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base })).toEqual(
-      expect.objectContaining({ status: "recovered" }),
-    );
+    expect(readFileSync(report, "utf8")).toBe("report");
+    expect(readFileSync(integrity, "utf8")).toBe("digest");
+    expect(publicationStages(base)).toEqual([`.keiko-publish-${slot}.complete`]);
   });
 
   it("keeps one bounded recovery locator when hard-link publication is unsupported", async () => {

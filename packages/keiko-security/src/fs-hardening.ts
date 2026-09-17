@@ -585,6 +585,7 @@ interface PublicationIntent {
   readonly schemaVersion: 1;
   readonly ownerPid: number;
   readonly ownerToken: string;
+  readonly ownerExpiresAt: number;
   readonly commitIndex: number;
   readonly entries: readonly PublicationIntentEntry[];
 }
@@ -594,6 +595,11 @@ type PublicationReceiptState = "active" | "complete" | "consumed";
 const PUBLICATION_SLOT_PATTERN = /^[0-9a-f]{24}$/u;
 const PUBLICATION_DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
 const PUBLICATION_OWNER_TOKEN_PATTERN = /^[0-9a-f]{24}$/u;
+// The owner file and in-process token identify one synchronous publish call, not a process. A peer
+// fails closed while that call is live; a crashed owner's reused PID can delay recovery only until
+// this bounded lease expires. Publication contents are independently capped below.
+const PUBLICATION_OWNER_LEASE_MS = 10 * 60 * 1000;
+const activePublicationOwnerTokens = new Set<string>();
 const MAX_PUBLICATION_ENTRIES = 16;
 export const MAX_SAFE_ARTIFACT_RECOVERY_ENTRY_BYTES = 256 * 1024 * 1024;
 export const MAX_SAFE_ARTIFACT_RECOVERY_PUBLICATION_BYTES = 512 * 1024 * 1024;
@@ -607,6 +613,10 @@ function validatePublicationSlot(slot: string, artifactClass: SafeArtifactClass)
 
 function intentPath(trustedRoot: string, slot: string, state: PublicationReceiptState): string {
   return join(resolve(trustedRoot), `.keiko-publish-${slot}.${state}`);
+}
+
+function ownerPath(trustedRoot: string, slot: string): string {
+  return join(resolve(trustedRoot), `.keiko-publish-${slot}.owner`);
 }
 
 function publicationId(
@@ -683,6 +693,7 @@ function publicationIntent(
     schemaVersion: 1,
     ownerPid: process.pid,
     ownerToken: randomBytes(12).toString("hex"),
+    ownerExpiresAt: Date.now() + PUBLICATION_OWNER_LEASE_MS,
     commitIndex,
     entries: entries.map((entry) => ({
       name: basename(entry.path),
@@ -765,15 +776,22 @@ function isCommitIndex(value: unknown, entryCount: number): value is number {
   );
 }
 
-function hasValidIntentOwner(
-  value: Readonly<Record<string, unknown>>,
-): value is Readonly<Record<string, unknown>> & { ownerPid: number; ownerToken: string } {
+function hasValidIntentOwner(value: Readonly<Record<string, unknown>>): value is Readonly<
+  Record<string, unknown>
+> & {
+  ownerPid: number;
+  ownerToken: string;
+  ownerExpiresAt: number;
+} {
   return (
     typeof value.ownerPid === "number" &&
     Number.isSafeInteger(value.ownerPid) &&
     value.ownerPid > 0 &&
     typeof value.ownerToken === "string" &&
-    PUBLICATION_OWNER_TOKEN_PATTERN.test(value.ownerToken)
+    PUBLICATION_OWNER_TOKEN_PATTERN.test(value.ownerToken) &&
+    typeof value.ownerExpiresAt === "number" &&
+    Number.isSafeInteger(value.ownerExpiresAt) &&
+    value.ownerExpiresAt > 0
   );
 }
 
@@ -802,6 +820,7 @@ function parsedPublicationIntent(value: unknown): PublicationIntent | undefined 
     schemaVersion: 1,
     ownerPid: value.ownerPid,
     ownerToken: value.ownerToken,
+    ownerExpiresAt: value.ownerExpiresAt,
     commitIndex: value.commitIndex,
     entries,
   };
@@ -1612,6 +1631,67 @@ interface BegunIntentPublication {
   readonly initialAssurance: SafeArtifactDurabilityAssurance;
 }
 
+function releasePublicationOwner(
+  intent: PublicationIntent,
+  options: SafeArtifactRecoveryOptions,
+): SafeArtifactDurabilityAssurance {
+  activePublicationOwnerTokens.delete(intent.ownerToken);
+  const path = ownerPath(options.trustedRoot, options.publicationSlot);
+  if (!pathExists(path, "manifest")) return "verified";
+  if (!readExactPrivateFile(path, intentBytes(intent), "manifest", options.trustedRoot)) {
+    throw safeFileError("manifest", "recovery-conflict");
+  }
+  return removePublicationIntent(path, options.trustedRoot, "manifest");
+}
+
+function releasePublicationOwnerAfterFailure(
+  intent: PublicationIntent,
+  options: SafeArtifactRecoveryOptions,
+  ownerCreated: boolean,
+): void {
+  activePublicationOwnerTokens.delete(intent.ownerToken);
+  if (!ownerCreated) return;
+  releasePublicationOwner(intent, options);
+}
+
+function createOwnedActiveReceipt(
+  intent: PublicationIntent,
+  activePath: string,
+  consumedPath: string,
+  hasConsumed: boolean,
+  artifactClass: SafeArtifactClass,
+  options: SafeArtifactPublicationOptions & { readonly publicationSlot: string },
+): SafeArtifactDurabilityAssurance {
+  const publicationOwnerPath = ownerPath(options.trustedRoot, options.publicationSlot);
+  if (pathExists(publicationOwnerPath, "manifest")) {
+    throw safeFileError("manifest", "recovery-conflict");
+  }
+  let ownerCreated = false;
+  activePublicationOwnerTokens.add(intent.ownerToken);
+  try {
+    ownerCreated = true;
+    const ownerAssurance = createPublicationIntent(
+      publicationOwnerPath,
+      intentBytes(intent),
+      "manifest",
+      options.trustedRoot,
+    );
+    const activeAssurance = createPublicationIntent(
+      activePath,
+      intentBytes(intent),
+      artifactClass,
+      options.trustedRoot,
+    );
+    const priorAssurance = hasConsumed
+      ? removePublicationIntent(consumedPath, options.trustedRoot, "manifest")
+      : "verified";
+    return combineDurabilityAssurance(ownerAssurance, activeAssurance, priorAssurance);
+  } catch (error) {
+    releasePublicationOwnerAfterFailure(intent, options, ownerCreated);
+    throw error;
+  }
+}
+
 function beginIntentPublication(
   entries: readonly SafeArtifactPublicationEntry[],
   options: SafeArtifactPublicationOptions & { readonly publicationSlot: string },
@@ -1638,20 +1718,15 @@ function beginIntentPublication(
   const hasConsumed = pathExists(consumedPath, "manifest");
   if (hasConsumed) readPublicationIntent(consumedPath, options.trustedRoot);
   const intent = publicationIntent(prepared, options.commitPath);
-  const activeAssurance = createPublicationIntent(
-    activePath,
-    intentBytes(intent),
-    publicationArtifactClass(prepared),
-    options.trustedRoot,
-  );
-  const priorAssurance = hasConsumed
-    ? removePublicationIntent(consumedPath, options.trustedRoot, "manifest")
-    : "verified";
-  return {
-    prepared,
+  const initialAssurance = createOwnedActiveReceipt(
     intent,
-    initialAssurance: combineDurabilityAssurance(activeAssurance, priorAssurance),
-  };
+    activePath,
+    consumedPath,
+    hasConsumed,
+    publicationArtifactClass(prepared),
+    options,
+  );
+  return { prepared, intent, initialAssurance };
 }
 
 function publishIntentFileSet(
@@ -1659,30 +1734,34 @@ function publishIntentFileSet(
   options: SafeArtifactPublicationOptions & { readonly publicationSlot: string },
 ): SafeArtifactPublicationResult {
   const begun = beginIntentPublication(entries, options);
-  let result: SafeArtifactPublicationResult;
   try {
-    result = completePreparedPublication(begun.prepared, options, false);
-  } catch (error) {
-    if (error instanceof SafeArtifactFileError && error.kind === "publish-unsupported") {
-      rollbackIntentPublication(begun.prepared, begun.intent, options);
+    let result: SafeArtifactPublicationResult;
+    try {
+      result = completePreparedPublication(begun.prepared, options, false);
+    } catch (error) {
+      if (error instanceof SafeArtifactFileError && error.kind === "publish-unsupported") {
+        rollbackIntentPublication(begun.prepared, begun.intent, options);
+      }
+      throw error;
     }
-    throw error;
+    const receiptAssurance = transitionPublicationReceipt(
+      begun.intent,
+      options.trustedRoot,
+      options.publicationSlot,
+      "active",
+      "complete",
+    );
+    return {
+      ...result,
+      durabilityAssurance: combineDurabilityAssurance(
+        begun.initialAssurance,
+        result.durabilityAssurance,
+        receiptAssurance,
+      ),
+    };
+  } finally {
+    releasePublicationOwner(begun.intent, options);
   }
-  const receiptAssurance = transitionPublicationReceipt(
-    begun.intent,
-    options.trustedRoot,
-    options.publicationSlot,
-    "active",
-    "complete",
-  );
-  return {
-    ...result,
-    durabilityAssurance: combineDurabilityAssurance(
-      begun.initialAssurance,
-      result.durabilityAssurance,
-      receiptAssurance,
-    ),
-  };
 }
 
 function preparedRecoveryEntries(
@@ -1770,6 +1849,21 @@ function processIsAlive(pid: number): boolean {
   } catch (error) {
     return errorCode(error) !== "ESRCH";
   }
+}
+
+function publicationOwnerIsActive(intent: PublicationIntent): boolean {
+  if (intent.ownerPid === process.pid) {
+    return activePublicationOwnerTokens.has(intent.ownerToken);
+  }
+  return intent.ownerExpiresAt > Date.now() && processIsAlive(intent.ownerPid);
+}
+
+function recoverPublicationOwner(root: string, slot: string): SafeArtifactDurabilityAssurance {
+  const path = ownerPath(root, slot);
+  if (!pathExists(path, "manifest")) return "verified";
+  const intent = readPublicationIntent(path, root);
+  if (publicationOwnerIsActive(intent)) throw safeFileError("manifest", "recovery-conflict");
+  return releasePublicationOwner(intent, { publicationSlot: slot, trustedRoot: root });
 }
 
 function finishLinkedPublicationReceipt(
@@ -1880,29 +1974,34 @@ export function recoverSafeArtifactFileSet(
 ): SafeArtifactRecoveryResult {
   validatePublicationSlot(options.publicationSlot, "manifest");
   const root = resolve(options.trustedRoot);
+  const ownerAssurance = recoverPublicationOwner(root, options.publicationSlot);
   const state = recoveredReceiptState(root, options.publicationSlot);
   if (state.status === "none") return { status: "none" };
   if (state.status === "rolled-back") {
     return {
       status: "rolled-back",
       permissionAssurance: safeArtifactPermissionAssurance(),
-      durabilityAssurance: "verified",
+      durabilityAssurance: ownerAssurance,
     };
   }
   const markerPath = intentPath(root, options.publicationSlot, state.status);
   const intent = readPublicationIntent(markerPath, root);
-  if (intent.ownerPid !== process.pid && processIsAlive(intent.ownerPid)) {
-    throw safeFileError("manifest", "recovery-conflict");
-  }
   if (state.status === "complete") {
-    return completeIntentRecovery(intent, options, root, "complete", state.priorAssurance);
+    return completeIntentRecovery(
+      intent,
+      options,
+      root,
+      "complete",
+      combineDurabilityAssurance(ownerAssurance, state.priorAssurance),
+    );
   }
-  const priorAssurance = pathExists(
+  const consumedAssurance = pathExists(
     intentPath(root, options.publicationSlot, "consumed"),
     "manifest",
   )
     ? retireConsumedReceipt(root, options.publicationSlot)
     : state.priorAssurance;
+  const priorAssurance = combineDurabilityAssurance(ownerAssurance, consumedAssurance);
   const targetCount = countIntentPaths(intent, root, options.publicationSlot, "target");
   if (targetCount === 0) {
     const durabilityAssurance = combineDurabilityAssurance(
