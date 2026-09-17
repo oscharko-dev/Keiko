@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "205b1dc41337fe3b2841dca3dee729eb51c7027de380f8bf8b1f1391d61fd2a3",
-    "catalogDigest": "60c26cd6b7acff3646028805b99f5e12f6785818e76aafc3489b2318153e57c3",
+    "catalogDigest": "ed75e2937015847fd7091a9ed967ac7fc2c6663635c14c341ccae65555490700",
     "operations": [
       {
         "contractKind": "activity-log-operation",
@@ -1481,6 +1481,49 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/gitChangeSnapshotRegistry.ts:120",
         "emitterSites": ["packages/keiko-server/src/gitChangeSnapshotRegistry.ts:261"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "harness.context.compacted",
+        "category": "process",
+        "owner": "keiko-server",
+        "emitter": "harness-context-compactor.logHarnessContextCompactionEvents",
+        "fields": {
+          "messagesDropped": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "bytesBefore": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "bytesAfter": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["harness-context-compaction"],
+        "proofIds": ["harness.context.compacted.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/harness-context-compactor.ts:54",
+        "emitterSites": ["packages/keiko-server/src/harness-context-compactor.ts:275"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -5869,7 +5912,7 @@
     {
       "op": "harness.context.compacted",
       "category": "process",
-      "site": "packages/keiko-server/src/harness-context-compactor.ts:250",
+      "site": "packages/keiko-server/src/harness-context-compactor.ts:57",
       "package": "keiko-server"
     },
     {

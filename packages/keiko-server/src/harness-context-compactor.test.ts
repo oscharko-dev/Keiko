@@ -2,6 +2,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChatMessage } from "@oscharko-dev/keiko-model-gateway";
 import { resolveTaskPlan, type HarnessEvent } from "@oscharko-dev/keiko-harness";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ServerLogEvent, ServerLogSink } from "./observability/server-log.js";
 import {
   createServerHarnessContextCompactor,
@@ -300,7 +301,18 @@ describe("logHarnessContextCompactionEvents", () => {
     expect(line?.category).toBe("process");
     expect(line?.correlationId).toBe("run-123");
     expect(line?.parentCorrelationId).toBeUndefined();
-    expect(line?.extra).toEqual({ messagesDropped: 4, bytesBefore: 9000, bytesAfter: 3000 });
+    expect(line?.extra).toEqual({
+      messagesDropped: 4,
+      bytesBefore: 9000,
+      bytesAfter: 3000,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(
+      activityLogEventRegistration(
+        line as unknown as Readonly<Record<PropertyKey, unknown>>,
+      ),
+    ).toBeDefined();
     // Body-free: no message content anywhere in the line.
     expect(JSON.stringify(line)).not.toContain("call ");
   });
