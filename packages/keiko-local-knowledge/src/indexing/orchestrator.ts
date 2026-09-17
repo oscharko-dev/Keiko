@@ -143,6 +143,7 @@ import {
   type IndexingOptions,
   type IndexingResult,
 } from "./types.js";
+import { emitIndexingActivity } from "./orchestrator-activity-log.js";
 import {
   boundedDocumentContext,
   contextualizeChunk,
@@ -350,12 +351,22 @@ function endpointHostExtra(state: RunState): Readonly<Record<string, unknown>> {
   return host === undefined ? {} : { endpointHost: host };
 }
 
+function endpointDigestExtra(state: RunState): { readonly endpointDigest?: string } {
+  const host = embeddingEndpointHost(state.options.embeddingAdapter.endpoint);
+  return host === undefined ? {} : { endpointDigest: logDigest(host) };
+}
+
 // The run's chunker profile, resolved through the exact same two calls the pipeline itself
 // takes to decide chunk boundaries (`chunkingOptionsForState` + `resolveChunkingOptions`) — no
 // new computation, just surfacing values the run already derives. `IndexingOptions.chunkingOptions`
 // is operator-overridable, so without this an operator-supplied budget was invisible on the one
 // line that states the run's shape.
-function chunkerConfigExtra(state: RunState): Readonly<Record<string, unknown>> {
+function chunkerConfigExtra(state: RunState): {
+  readonly minChunkTokens: number;
+  readonly maxChunkTokens: number;
+  readonly overlapTokens: number;
+  readonly tokenizerKind: "tokenizer" | "estimator";
+} {
   const resolved = resolveChunkingOptions(chunkingOptionsForState(state));
   return {
     minChunkTokens: resolved.minTokens,
@@ -977,11 +988,12 @@ async function prepareChunksToEmbedSafely(
     // neither is the raw document id, which IS the document's relative path (`doc:<capsule>:
     // <source>:<relativePath>`): the digest correlates it to every other line of this document's
     // work without writing a customer file name into the log.
-    logDocument(state, documentId, {
-      level: "warn",
+    emitIndexingActivity(state.options.logSink, {
       op: "indexing.chunking.failed",
-      errorKind: knowledgeErrorKind(cause),
-      extra: { sourceTextLength: sourceText.length, lane: "standard" },
+      context: documentLogContext(state, documentId),
+      failureKind: knowledgeErrorKind(cause),
+      sourceTextLength: sourceText.length,
+      lane: "standard",
     });
     return null;
   }
@@ -1064,10 +1076,12 @@ async function embedDocumentChunks(
   // The flush plan for this document: how many chunks became how many batches at which cap. It
   // is the last line before the first outbound call, so a run that stalls in embedding stops
   // exactly here — with the count of work it was about to issue.
-  logDocument(state, documentId, {
-    level: "info",
+  emitIndexingActivity(state.options.logSink, {
     op: "indexing.document.embedding-started",
-    extra: { chunkCount: chunks.length, batchCount: batches.length, batchSize: state.batchSize },
+    context: documentLogContext(state, documentId),
+    chunkCount: chunks.length,
+    batchCount: batches.length,
+    batchSize: state.batchSize,
   });
   return embedChunkBatches(state, documentId, batches);
 }
@@ -1077,10 +1091,11 @@ function handleExtractionSkipped(state: RunState, result: ExtractionResult): Ind
   state.skippedDocuments += 1;
   const documentId =
     result.outcome.kind === "skipped" ? result.outcome.document.id : ("" as DocumentId);
-  logDocument(state, documentId, {
-    level: "info",
+  emitIndexingActivity(state.options.logSink, {
     op: "indexing.document.skipped",
-    extra: { reason: "unchanged", skippedDocuments: state.skippedDocuments },
+    context: documentLogContext(state, documentId),
+    reason: "unchanged",
+    skippedDocuments: state.skippedDocuments,
   });
   return {
     kind: "document-skipped",
@@ -1104,11 +1119,11 @@ const TRANSIENT_DISCOVERY_CODES: ReadonlySet<string> = new Set(["READ_FAILED", "
 // rejected the bytes are three different problems. The message is never written; it quotes the
 // path, or the fragment of content that failed to parse.
 function logExtractionFailed(state: RunState, documentId: DocumentId, discoveryCode: string): void {
-  logDocument(state, documentId, {
-    level: "warn",
+  emitIndexingActivity(state.options.logSink, {
     op: "indexing.document.extraction-failed",
-    errorKind: discoveryCode,
-    extra: { failedDocuments: state.failedDocuments },
+    context: documentLogContext(state, documentId),
+    failureKind: discoveryCode,
+    failedDocuments: state.failedDocuments,
   });
 }
 
@@ -1126,15 +1141,13 @@ function transientRereadSkip(
   preservedChunkCount: number,
 ): IndexingEvent {
   state.skippedDocuments += 1;
-  logDocument(state, documentId, {
-    level: "warn",
+  emitIndexingActivity(state.options.logSink, {
     op: "indexing.document.skipped",
-    errorKind: discoveryCode,
-    extra: {
-      reason: "transient-read-failure",
-      preservedChunkCount,
-      skippedDocuments: state.skippedDocuments,
-    },
+    context: documentLogContext(state, documentId),
+    failureKind: discoveryCode,
+    reason: "transient-read-failure",
+    preservedChunkCount,
+    skippedDocuments: state.skippedDocuments,
   });
   return {
     kind: "document-skipped",
@@ -1308,14 +1321,14 @@ function chunkedDocumentEvents(
   // the operator sees: with this line an operator can say the chunker produced 36 and embedding
   // never returned, which is a different bug from the chunker producing nothing. The relative
   // path is deliberately absent — it is a customer file name; the document digest identifies it.
-  logDocument(state, documentId, {
-    level: "info",
+  emitIndexingActivity(state.options.logSink, {
     op: "indexing.document.extracted",
+    context: documentLogContext(state, documentId),
   });
-  logDocument(state, documentId, {
-    level: "info",
+  emitIndexingActivity(state.options.logSink, {
     op: "indexing.document.chunked",
-    extra: { chunkCount },
+    context: documentLogContext(state, documentId),
+    chunkCount,
   });
   return [
     {
@@ -1435,11 +1448,11 @@ function tryChunkDocument(
     // Same class as the contextual lane above and the bounded lane below: the document error is
     // flattened to CHUNKING_FAILED, so the real cause exists nowhere else. One shared op name
     // across all three lanes, distinguished by `lane`, so an operator greps once.
-    logDocument(state, documentId, {
-      level: "warn",
+    emitIndexingActivity(state.options.logSink, {
       op: "indexing.chunking.failed",
-      errorKind: knowledgeErrorKind(cause),
-      extra: { lane: "standard-chunker" },
+      context: documentLogContext(state, documentId),
+      failureKind: knowledgeErrorKind(cause),
+      lane: "standard-chunker",
     });
     // Routed through the shared failure sink rather than a hand-built copy of it: this branch
     // used to duplicate the counter bump, the artifact cleanup, the status write and the event,
@@ -1477,14 +1490,12 @@ function appendDocumentFailure(
   // exactly that reason. Claiming otherwise here is what left that lane silent through four
   // releases of field guesswork. The error CODE is written, never the message: a document
   // error's message can quote the content that failed to parse.
-  logDocument(state, documentId, {
-    level: "warn",
+  emitIndexingActivity(state.options.logSink, {
     op: "indexing.document.failed",
-    errorKind: error.code,
-    extra: {
-      transient: error.transient === true,
-      consecutiveTransientEmbedFailures: state.consecutiveTransientEmbedFailures,
-    },
+    context: documentLogContext(state, documentId),
+    failureKind: error.code,
+    failureClass: error.transient === true ? "transient" : "terminal",
+    consecutiveTransientEmbedFailures: state.consecutiveTransientEmbedFailures,
   });
   events.push({
     kind: "document-failed",
@@ -1508,14 +1519,12 @@ function completeEmbeddedDocument(
   state.processedDocuments += 1;
   state.vectorsPersisted += embedResult.vectorCount;
   if (embedResult.lastChunkId !== null) state.lastResumeToken = embedResult.lastChunkId;
-  logDocument(state, documentId, {
-    level: "info",
+  emitIndexingActivity(state.options.logSink, {
     op: "indexing.document.embedded",
-    extra: {
-      vectorCount: embedResult.vectorCount,
-      vectorsPersistedSoFar: state.vectorsPersisted,
-      processedDocuments: state.processedDocuments,
-    },
+    context: documentLogContext(state, documentId),
+    vectorCount: embedResult.vectorCount,
+    vectorsPersistedSoFar: state.vectorsPersisted,
+    processedDocuments: state.processedDocuments,
   });
   events.push({
     kind: "document-embedded",
@@ -1773,15 +1782,13 @@ function prepareBoundedChunks(
 // which otherwise returns zero events and leaves an operator with a document that simply stopped
 // existing in the run.
 function logBoundedChunkFailure(state: RunState, documentId: DocumentId, cause: unknown): void {
-  logDocument(state, documentId, {
-    level: "warn",
+  emitIndexingActivity(state.options.logSink, {
     op: "indexing.chunking.failed",
-    errorKind: knowledgeErrorKind(cause),
-    extra: {
-      lane: "bounded",
-      cancelled: cause instanceof BoundedIndexingCancelledError || cancellationRequested(state),
-      policyRejection: cause instanceof BoundedIndexingPolicyError,
-    },
+    context: documentLogContext(state, documentId),
+    failureKind: knowledgeErrorKind(cause),
+    lane: "bounded",
+    cancelled: cause instanceof BoundedIndexingCancelledError || cancellationRequested(state),
+    policyRejection: cause instanceof BoundedIndexingPolicyError,
   });
 }
 
@@ -1997,15 +2004,16 @@ function* handleUnsupportedDocument(
   // scanned PDF or an image saw a run that looked identical to one wedged in the gateway. The
   // `extracted` line keeps this lane countable next to the chunked lane's own; `documentStatus`
   // is the closed enum the extractor assigned, never a file name.
-  logDocument(state, documentId, { level: "info", op: "indexing.document.extracted" });
-  logDocument(state, documentId, {
-    level: "info",
+  emitIndexingActivity(state.options.logSink, {
+    op: "indexing.document.extracted",
+    context: documentLogContext(state, documentId),
+  });
+  emitIndexingActivity(state.options.logSink, {
     op: "indexing.document.skipped",
-    extra: {
-      reason: "unsupported",
-      documentStatus: result.outcome.document.status,
-      skippedDocuments: state.skippedDocuments,
-    },
+    context: documentLogContext(state, documentId),
+    reason: "unsupported",
+    documentStatus: result.outcome.document.status,
+    skippedDocuments: state.skippedDocuments,
   });
   yield {
     kind: "document-extracted",
@@ -2212,10 +2220,11 @@ function logDocumentExtractionStarted(
   documentId: DocumentId,
   sizeBytes: number,
 ): void {
-  logDocument(state, documentId, {
-    level: "info",
+  emitIndexingActivity(state.options.logSink, {
     op: "indexing.document.extraction-started",
-    extra: { discoveredCount: state.totalDocuments, sizeBytes },
+    context: documentLogContext(state, documentId),
+    discoveredCount: state.totalDocuments,
+    sizeBytes,
   });
 }
 
@@ -2226,14 +2235,12 @@ function logDocumentExtractionStarted(
 // never written because a walk error's message quotes the path that produced it. Note that a
 // deny-list match is dropped inside the walk without an error at all and cannot reach here.
 function logDiscoveryScopeError(state: RunState, error: DiscoveryError): void {
-  logIndexing(state, {
-    level: "warn",
+  emitIndexingActivity(state.options.logSink, {
     op: "indexing.discovery.scope-error",
-    errorKind: error.code,
-    extra: {
-      scopedToFile: error.relativePath !== undefined,
-      discoveryFailedDocuments: state.discoveryFailedDocuments,
-    },
+    context: state.logContext,
+    failureKind: error.code,
+    scopedToFile: error.relativePath !== undefined,
+    discoveryFailedDocuments: state.discoveryFailedDocuments,
   });
 }
 
@@ -2317,10 +2324,11 @@ function discoveryStreamFor(
 // the ONLY evidence that a run stalled in discovery rather than in embedding. The source id is
 // digested for the same reason the capsule id is: it is caller-supplied.
 function logSourceStarted(state: RunState, source: KnowledgeSource, sourceDigest: string): void {
-  logIndexing(state, {
-    level: "info",
+  emitIndexingActivity(state.options.logSink, {
     op: "indexing.source.started",
-    extra: { sourceIdDigest: sourceDigest, scopeKind: source.scope.kind },
+    context: state.logContext,
+    sourceIdDigest: sourceDigest,
+    scopeKind: source.scope.kind,
   });
 }
 
@@ -2335,18 +2343,16 @@ function logSourceCompleted(
     readonly durationMs: number;
   },
 ): void {
-  logIndexing(state, {
-    level: "info",
+  emitIndexingActivity(state.options.logSink, {
     op: "indexing.source.completed",
+    context: state.logContext,
     durationMs: counts.durationMs,
-    extra: {
-      sourceIdDigest: counts.sourceDigest,
-      discoveredCount: progress.discoveredPaths.size,
-      failedCount: counts.failedCount,
-      walkCompleted: progress.completed,
-      cancelled: progress.cancelled,
-      sawScopeError: progress.sawScopeError,
-    },
+    sourceIdDigest: counts.sourceDigest,
+    discoveredCount: progress.discoveredPaths.size,
+    failedCount: counts.failedCount,
+    walkCompleted: progress.completed,
+    cancelled: progress.cancelled,
+    sawScopeError: progress.sawScopeError,
   });
 }
 
@@ -2878,14 +2884,12 @@ function persistDiscoveryLimitWarning(state: RunState): void {
   // produced it, in the file. Written once per run behind the guard above, because LIMIT_REACHED
   // surfaces once per ancestor frame.
   const discovery = resolvedDiscoveryOptions(state);
-  logIndexing(state, {
-    level: "warn",
+  emitIndexingActivity(state.options.logSink, {
     op: "indexing.discovery.limit-reached",
-    extra: {
-      discoveredCount: state.totalDocuments,
-      maxFiles: discovery.maxFiles,
-      maxDepth: discovery.maxDepth,
-    },
+    context: state.logContext,
+    discoveredCount: state.totalDocuments,
+    maxFiles: discovery.maxFiles,
+    maxDepth: discovery.maxDepth,
   });
   try {
     insertDiagnosticRow(state.options.store._internal.db, {
@@ -2956,19 +2960,17 @@ function emitJobStarted(state: RunState, sources: readonly KnowledgeSource[]): I
   // The first line of the run's spine, and the only place the run's shape is stated: how many
   // sources it will walk, and the two caps that decide the whole request profile. Everything
   // downstream is read against these numbers.
-  logIndexing(state, {
-    level: "info",
+  emitIndexingActivity(state.options.logSink, {
     op: "indexing.job.started",
-    extra: {
-      sourceCount: sources.length,
-      batchSize: state.batchSize,
-      concurrency: state.concurrency,
-      force: state.options.force === true,
-      resume: state.options.resume === true,
-      contextualRetrieval: state.options.contextualRetrieval?.enabled === true,
-      ...chunkerConfigExtra(state),
-      ...endpointHostExtra(state),
-    },
+    context: state.logContext,
+    sourceCount: sources.length,
+    batchSize: state.batchSize,
+    concurrency: state.concurrency,
+    force: state.options.force === true,
+    resume: state.options.resume === true,
+    contextualRetrieval: state.options.contextualRetrieval?.enabled === true,
+    ...chunkerConfigExtra(state),
+    ...endpointDigestExtra(state),
   });
   return emit(state, event);
 }
@@ -3016,17 +3018,15 @@ async function* runSourcesWithProgress(
 // The capsule id is caller-supplied, so it is digested here by the same function the rest of the
 // run uses: the prologue line and every later line share one correlation key.
 function logJobReceived(options: IndexingOptions, jobId: string): void {
-  emitKnowledgeLogEvent(options.logSink, {
-    level: "info",
-    category: "indexing",
+  emitIndexingActivity(options.logSink, {
     op: "indexing.job.received",
-    correlationId: jobId,
-    extra: {
+    context: {
+      jobId,
       capsuleIdDigest: logDigest(String(options.capsuleId)),
-      sourceIdFilterCount: options.sourceIds?.length ?? 0,
-      force: options.force === true,
-      resume: options.resume === true,
     },
+    sourceIdFilterCount: options.sourceIds?.length ?? 0,
+    force: options.force === true,
+    resume: options.resume === true,
   });
 }
 
@@ -3197,30 +3197,18 @@ function resolveJobStatus(
 // six minutes with zero vectors" is a single greppable line rather than an inference across the
 // whole file. `warn` for a cancellation and `error` for a failure: a run that did not succeed
 // must be visible at a level an operator filters TO, not one they filter out.
-const JOB_FINISH_LEVELS = {
-  succeeded: "info",
-  cancelled: "warn",
-  failed: "error",
-} as const satisfies Record<IndexingResult["status"], KnowledgeLogEvent["level"]>;
-
 function logJobFinished(state: RunState, result: IndexingResult): void {
-  logIndexing(state, {
-    level: JOB_FINISH_LEVELS[result.status],
+  emitIndexingActivity(state.options.logSink, {
     op: "indexing.job.finished",
+    context: state.logContext,
     durationMs: state.elapsed(),
-    ...(state.lastError !== undefined ? { errorKind: state.lastError.code } : {}),
-    extra: {
-      // NOT `status`. The sink flattens `extra` onto the same record as the envelope, whose
-      // `status` field is the numeric HTTP status every operator query and dashboard filter
-      // reads. A run's terminal state written under that name puts the string "succeeded" where
-      // a number belongs and silently poisons those queries for every other line's `status`.
-      jobStatus: result.status,
-      totalDocuments: result.totalDocuments,
-      processedDocuments: result.processedDocuments,
-      failedDocuments: result.failedDocuments,
-      skippedDocuments: result.skippedDocuments,
-      vectorsPersisted: result.vectorsPersisted,
-    },
+    ...(state.lastError === undefined ? {} : { failureKind: state.lastError.code }),
+    jobStatus: result.status,
+    totalDocuments: result.totalDocuments,
+    processedDocuments: result.processedDocuments,
+    failedDocuments: result.failedDocuments,
+    skippedDocuments: result.skippedDocuments,
+    vectorsPersisted: result.vectorsPersisted,
   });
 }
 
