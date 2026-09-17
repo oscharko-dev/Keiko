@@ -84,7 +84,7 @@
     {
       "op": "process.started",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:1111",
+      "site": "packages/keiko-cli/src/ui.ts:1108",
       "package": "keiko-cli"
     },
     {
@@ -138,7 +138,7 @@
     {
       "op": "update.runtime.legacy-import-deferred",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/ui.ts:1318",
+      "site": "packages/keiko-cli/src/ui.ts:1314",
       "package": "keiko-cli"
     },
     {
