@@ -1037,8 +1037,10 @@ describe("publishSafeArtifactFileSet", () => {
     const complete = join(base, `.keiko-publish-${slot}.complete`);
     const consumed = join(base, `.keiko-publish-${slot}.consumed`);
     const active = join(base, `.keiko-publish-${slot}.active`);
+    const owner = join(base, `.keiko-publish-${slot}.owner`);
     linkSync(complete, consumed);
     writeFileSync(active, readFileSync(complete), { mode: FILE_MODE });
+    writeFileSync(owner, readFileSync(active), { mode: FILE_MODE });
     const before = artifactDirectorySnapshot(base);
 
     expect(() => recoverSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base })).toThrow(
@@ -1063,8 +1065,10 @@ describe("publishSafeArtifactFileSet", () => {
       const complete = join(base, `.keiko-publish-${slot}.complete`);
       const extra = join(base, `.keiko-publish-${slot}.${extraState}`);
       const retained = join(base, `.keiko-publish-${slot}.${retainedState}`);
+      const owner = join(base, `.keiko-publish-${slot}.owner`);
       if (retained !== complete) renameSync(complete, retained);
       writeFileSync(extra, readFileSync(retained), { mode: FILE_MODE });
+      writeFileSync(owner, readFileSync(retained), { mode: FILE_MODE });
       const before = artifactDirectorySnapshot(base);
 
       expect(() =>

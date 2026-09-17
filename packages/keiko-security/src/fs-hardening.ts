@@ -1975,12 +1975,70 @@ function recoveredReceiptState(root: string, slot: string): RecoveredReceiptStat
   return { status: "none" };
 }
 
+function validateLinkedReceiptPair(
+  root: string,
+  slot: string,
+  from: PublicationReceiptState,
+  to: PublicationReceiptState,
+): void {
+  const fromPath = intentPath(root, slot, from);
+  const toPath = intentPath(root, slot, to);
+  if (!samePathNode(fromPath, toPath)) throw safeFileError("manifest", "recovery-conflict");
+  readLinkedPublicationIntent(fromPath, toPath, root);
+}
+
+function validateActiveConsumedPair(root: string, slot: string): void {
+  const activePath = intentPath(root, slot, "active");
+  const consumedPath = intentPath(root, slot, "consumed");
+  if (samePathNode(activePath, consumedPath)) {
+    readLinkedPublicationIntent(activePath, consumedPath, root);
+    return;
+  }
+  readPublicationIntent(activePath, root);
+  readPublicationIntent(consumedPath, root);
+}
+
+function validateStableReceiptStates(
+  root: string,
+  slot: string,
+  active: boolean,
+  complete: boolean,
+  consumed: boolean,
+): void {
+  if (active) readPublicationIntent(intentPath(root, slot, "active"), root);
+  if (complete) readPublicationIntent(intentPath(root, slot, "complete"), root);
+  if (consumed) readPublicationIntent(intentPath(root, slot, "consumed"), root);
+}
+
+function validateReceiptTopology(root: string, slot: string): void {
+  const active = pathExists(intentPath(root, slot, "active"), "manifest");
+  const complete = pathExists(intentPath(root, slot, "complete"), "manifest");
+  const consumed = pathExists(intentPath(root, slot, "consumed"), "manifest");
+  if (Number(active) + Number(complete) + Number(consumed) === 3) {
+    throw safeFileError("manifest", "recovery-conflict");
+  }
+  if (active && complete) {
+    validateLinkedReceiptPair(root, slot, "active", "complete");
+    return;
+  }
+  if (complete && consumed) {
+    validateLinkedReceiptPair(root, slot, "complete", "consumed");
+    return;
+  }
+  if (active && consumed) {
+    validateActiveConsumedPair(root, slot);
+    return;
+  }
+  validateStableReceiptStates(root, slot, active, complete, consumed);
+}
+
 /** Recovers or safely rolls back the bounded transaction named by a durable publication slot. */
 export function recoverSafeArtifactFileSet(
   options: SafeArtifactRecoveryOptions,
 ): SafeArtifactRecoveryResult {
   validatePublicationSlot(options.publicationSlot, "manifest");
   const root = resolve(options.trustedRoot);
+  validateReceiptTopology(root, options.publicationSlot);
   const ownerAssurance = recoverPublicationOwner(root, options.publicationSlot);
   const state = recoveredReceiptState(root, options.publicationSlot);
   if (state.status === "none") return { status: "none" };
