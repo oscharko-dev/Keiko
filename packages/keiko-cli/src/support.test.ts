@@ -429,9 +429,10 @@ describe("runSupportCli export", () => {
       publicationPersistenceStatus: "failed",
       publicationCompleteness: "unknown",
       publicationLoss: "publication-unavailable",
-      visibleArtifactCount: "unknown",
       failedArtifactClass: "support-report",
+      failureKind: "target-exists",
     });
+    expect(failure?.visibleArtifactCount).toBeUndefined();
     expect(String(failure?.correlationId)).toMatch(/^[0-9a-f-]{36}$/);
   });
 

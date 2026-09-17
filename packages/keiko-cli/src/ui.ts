@@ -946,7 +946,7 @@ function writeProcessExiting(activity: WaitForShutdownActivity, reason: ProcessE
   activityLog.write(
     activityLogEvent(PROCESS_EXITING_OPERATION, {}, {
       reason,
-      uptimeMs: Date.now() - startedAt,
+      uptimeMs: Math.max(0, Date.now() - startedAt),
       ...(onShutdownErrorKind === undefined ? {} : { onShutdownErrorKind }),
     }),
   );
@@ -1172,7 +1172,9 @@ const NANOSECONDS_PER_MILLISECOND = 1_000_000;
 // leaks into the next one (#2902 PR review).
 function writeHeartbeat(activityLog: ServerLogSink, histogram: EventLoopHistogram): void {
   const memory = process.memoryUsage();
-  const eventLoopDelayP99Ms = histogram.percentile(99) / NANOSECONDS_PER_MILLISECOND;
+  const measuredDelayMs = histogram.percentile(99) / NANOSECONDS_PER_MILLISECOND;
+  const eventLoopDelayP99Ms =
+    Number.isFinite(measuredDelayMs) && measuredDelayMs >= 0 ? measuredDelayMs : 0;
   histogram.reset();
   activityLog.write(
     activityLogEvent(PROCESS_HEARTBEAT_OPERATION, { level: "info" }, {

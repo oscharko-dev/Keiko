@@ -153,7 +153,7 @@ function fakeServerModule(described: {
 }
 
 describe("installProcessGuards — injected loadServer, KEIKO_STATE_DIR set", () => {
-  it("writes one process.fatal activity-log line before stderr, code-first errorKind", async () => {
+  it("writes one process.fatal line before stderr with a code-first failureKind", async () => {
     vi.stubEnv("KEIKO_STATE_DIR", "/fake/state/dir");
     const { module, writes, createFileServerLogSink } = fakeServerModule({
       errorClass: "GatewayError",
@@ -182,9 +182,10 @@ describe("installProcessGuards — injected loadServer, KEIKO_STATE_DIR set", ()
         level: "error",
         category: "process",
         op: "process.fatal",
-        errorKind: "ECONNRESET",
+        errorKind: "internal",
         extra: {
           kind: "unhandled-rejection",
+          failureKind: "ECONNRESET",
           frames: ["packages/keiko-cli/dist/run.js:12:4"],
           causeChain: ["TypeError"],
         },
@@ -199,7 +200,7 @@ describe("installProcessGuards — injected loadServer, KEIKO_STATE_DIR set", ()
     }
   });
 
-  it("falls back to the error class in errorKind when no code is present", async () => {
+  it("falls back to the error class in failureKind when no code is present", async () => {
     vi.stubEnv("KEIKO_STATE_DIR", "/fake/state/dir");
     const { module, writes } = fakeServerModule({ errorClass: "TypeError" });
     const sink: ProcessGuardSink = {
@@ -214,8 +215,8 @@ describe("installProcessGuards — injected loadServer, KEIKO_STATE_DIR set", ()
         expect(writes).toHaveLength(1);
       });
       const [event] = writes as [{ errorKind: string; extra: Record<string, unknown> }];
-      expect(event.errorKind).toBe("TypeError");
-      expect(event.extra).toEqual({ kind: "uncaught-exception" });
+      expect(event.errorKind).toBe("internal");
+      expect(event.extra).toEqual({ kind: "uncaught-exception", failureKind: "TypeError" });
     } finally {
       cleanup();
     }

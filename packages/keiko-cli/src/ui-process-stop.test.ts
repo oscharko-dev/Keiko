@@ -330,7 +330,8 @@ describe("terminateUiProcess", () => {
       ...verifiedIdentity(),
     });
     expect(events.map((event) => event.op)).toEqual(["cli.lifecycle.stop-request-failed"]);
-    expect(events[0]?.errorKind).toBe("EPERM");
+    expect(events[0]?.errorKind).toBe("unavailable");
+    expect(events[0]?.extra).toEqual({ failureKind: "EPERM" });
   });
 
   it("emits stop-escalation-failed when Windows tree-kill throws and still SIGKILLs", async () => {

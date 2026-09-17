@@ -484,9 +484,10 @@ describe("runUiCli", () => {
     ).rejects.toThrow("Portable update startup recovery is required before listening.");
     expect(createServer).not.toHaveBeenCalled();
     const event = sink.events.find(({ op }) => op === "process.fatal");
-    expect(event?.errorKind).toBe("PORTABLE_UPDATE_RECOVERY_CORRUPT");
+    expect(event?.errorKind).toBe("internal");
     expect(extraOf(event)).toMatchObject({
       kind: "server-error",
+      failureKind: "PORTABLE_UPDATE_RECOVERY_CORRUPT",
       recoveryReason: "corrupt",
       sessionId: "session-1",
     });
@@ -544,7 +545,8 @@ describe("runUiCli", () => {
     expect(phases).toStrictEqual(["pre-listen", "post-listen"]);
     expect(close).toHaveBeenCalledOnce();
     const event = sink.events.find(({ op }) => op === "process.fatal");
-    expect(event?.errorKind).toBe("PORTABLE_UPDATE_RECOVERY_PERSISTENCE_FAILED");
+    expect(event?.errorKind).toBe("internal");
+    expect(extraOf(event).failureKind).toBe("PORTABLE_UPDATE_RECOVERY_PERSISTENCE_FAILED");
     expect(extraOf(event).recoveryReason).toBe("persistence-failed");
   });
 
@@ -649,6 +651,7 @@ describe("runUiCli", () => {
       level: "warn",
       category: "diagnostic",
       op: "update.runtime.legacy-import-deferred",
+      errorKind: "unavailable",
       extra: { reason: "append-failed" },
     });
     expect(events.some((event) => event.op === "process.started")).toBe(true);
@@ -1466,8 +1469,9 @@ describe("attachDurableServerErrorListener (KEIKO-0858 / #2906 round 3, comment 
     expect(event?.level).toBe("error");
     expect(event?.category).toBe("process");
     expect(event?.op).toBe("process.fatal");
-    expect(event?.errorKind).toBe("RangeError");
+    expect(event?.errorKind).toBe("internal");
     expect(extraOf(event).kind).toBe("server-error");
+    expect(extraOf(event).failureKind).toBe("RangeError");
   });
 
   // A sink whose write never settles, or a close() that never calls back, must not hang the
