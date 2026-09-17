@@ -443,7 +443,7 @@ describe("VerificationRunnerManager — workspace-trust gate (AC3/AC4)", () => {
         expect.objectContaining({
           op: "editor.verification.execute",
           correlationId: "run-drift",
-          errorKind: "WORKSPACE_TRUST_REQUIRED",
+          errorKind: "authority-denied",
           extra: expect.objectContaining({
             state: "refused",
             reason: "WORKSPACE_TRUST_REQUIRED",
@@ -1245,7 +1245,7 @@ describe("VerificationRunnerManager — catalog + edge cases", () => {
       expect.objectContaining({
         op: "editor.verification.execute",
         correlationId: "node-runner-refused",
-        errorKind: "NO_RUNNABLE_STEPS",
+        errorKind: "invalid-request",
         extra: expect.objectContaining({
           state: "refused",
           runnerId: "node-test",
