@@ -3669,6 +3669,8 @@ describe("editor agent routes — Issue #1392 liveness and queue lifecycle", () 
           op: "sse.stream.closed",
           correlationId: "corr-agent-bridge-1",
           extra: {
+            completeness: "complete",
+            loss: "none",
             frameCount: 2,
             bytesStreamed: Buffer.byteLength(bridge.frames(), "utf8"),
             reason: "client-disconnected",

@@ -168,6 +168,8 @@ describe("sse.stream.closed terminal line", () => {
     expect(event).toMatchObject({ level: "info", category: "http", op: "sse.stream.closed" });
     expect(typeof event?.durationMs).toBe("number");
     expect(event?.extra).toEqual({
+      completeness: "complete",
+      loss: "none",
       frameCount: 3,
       bytesStreamed: frames.reduce((sum, f) => sum + Buffer.byteLength(f, "utf8"), 0),
       reason: "completed",
@@ -247,9 +249,12 @@ describe("sse.stream.closed terminal line", () => {
         op: "sse.stream.closed",
         correlationId: "corr-sse-1",
         durationMs: expect.any(Number) as number,
+        parentCorrelationId: undefined,
         status: undefined,
         errorKind: undefined,
         extra: {
+          completeness: "complete",
+          loss: "none",
           frameCount: 1,
           bytesStreamed: Buffer.byteLength("event: a\ndata: {}\n\n"),
           reason: "backpressure-killed",

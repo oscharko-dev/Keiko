@@ -589,7 +589,13 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     expect(extra.platform).toBe(process.platform);
     expect(typeof extra.childPid).toBe("number");
     // Body-free: never the resolved executable path or args on the evidence line.
-    expect(Object.keys(extra).sort()).toEqual(["childPid", "platform", "windowsWrapperEngaged"]);
+    expect(Object.keys(extra).sort()).toEqual([
+      "childPid",
+      "completeness",
+      "loss",
+      "platform",
+      "windowsWrapperEngaged",
+    ]);
     // Through the REAL redactor (review 5058571583 finding 1): `pid` is a reserved envelope name
     // and would be silently dropped — every evidence field here must SURVIVE redaction.
     const redacted = redactLogFields(extra) ?? {};
@@ -827,6 +833,8 @@ describe("defaultLspSpawnFn — activity-log evidence (AGENTS.md §8 Rule 1)", (
     expect(typeof extra.childPid).toBe("number");
     expect(Object.keys(extra).sort()).toEqual([
       "childPid",
+      "completeness",
+      "loss",
       "signal",
       "treeContainment",
       "windowsTreeKill",

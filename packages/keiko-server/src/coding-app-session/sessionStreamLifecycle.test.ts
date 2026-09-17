@@ -168,12 +168,13 @@ describe("channel lifecycle lines (F65)", () => {
       expect.objectContaining({
         op: "coding-app-session.channel.opened",
         correlationId: CORRELATION,
-        extra: { live: true },
+        extra: { completeness: "complete", loss: "none", live: true },
       }),
       expect.objectContaining({
         op: "coding-app-session.channel.closed",
         correlationId: CORRELATION,
         durationMs: 1_500,
+        extra: { completeness: "complete", loss: "none" },
       }),
     ]);
   });
@@ -190,7 +191,10 @@ describe("channel lifecycle lines (F65)", () => {
     );
 
     expect(channelLines()).toEqual([
-      expect.objectContaining({ op: "coding-app-session.channel.opened", extra: { live: false } }),
+      expect.objectContaining({
+        op: "coding-app-session.channel.opened",
+        extra: { completeness: "complete", loss: "none", live: false },
+      }),
     ]);
   });
 });
