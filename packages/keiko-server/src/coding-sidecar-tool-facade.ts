@@ -12,15 +12,18 @@
 // admission gate (maxInFlight, requestDeadlineMs, abort-on-close) -- this file builds no second
 // authenticator, it only reads the request body under the bridge's existing byte budget and
 // forwards it.
-import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { correlationIdOrUnknown } from "./correlation.js";
 import { incomingHeaders } from "./coding-runtime/opencodeRuntimeComposition.js";
 import { CODING_TOOL_MAX_BODY_BYTES } from "./coding-runtime/codingToolIpc.js";
 import type { UiHandlerDeps } from "./deps.js";
 import { readJsonObject } from "./files.js";
 import { getServerLogger } from "./observability/index.js";
 import { errorBody, type RouteContext, type RouteResult } from "./routes.js";
-
-const CODING_SIDECAR_TOOL_FACADE_REJECTED_OP = "coding-sidecar.tool-facade.rejected";
 
 // Closed vocabulary (AGENTS.md §8): every rejection this route can hand back gets ONE body-free
 // warn line naming WHY, never a raw message. A status the bridge can return that is not in this
@@ -33,6 +36,49 @@ type CodingSidecarToolFacadeRejectionReason =
   | "body-invalid"
   | "busy"
   | "deadline";
+
+const CODING_SIDECAR_TOOL_FACADE_REJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.tool-facade.rejected",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-tool-facade.logToolFacadeRejection",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "origin-not-allowed",
+        "capability-invalid",
+        "body-too-large",
+        "body-invalid",
+        "busy",
+        "deadline",
+      ],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-sidecar-tool-facade-rejection"],
+  proofIds: ["coding-sidecar.tool-facade.rejected.line"],
+  releaseImpact: "patch",
+});
+
+const TOOL_FACADE_REJECTION_ERROR_KIND: Readonly<
+  Record<CodingSidecarToolFacadeRejectionReason, ActivityLogErrorKind>
+> = {
+  "origin-not-allowed": "authority-denied",
+  "capability-invalid": "permission-denied",
+  "body-too-large": "invalid-request",
+  "body-invalid": "invalid-request",
+  busy: "unavailable",
+  deadline: "timeout",
+};
 
 interface ToolFacadeStatusMapping {
   readonly reason?: CodingSidecarToolFacadeRejectionReason;
@@ -103,13 +149,17 @@ function logToolFacadeRejection(
   status: number,
   reason: CodingSidecarToolFacadeRejectionReason,
 ): void {
-  getServerLogger().warn({
-    category: "gateway",
-    op: CODING_SIDECAR_TOOL_FACADE_REJECTED_OP,
-    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-    status,
-    extra: { reason },
-  });
+  getServerLogger().warn(
+    activityLogEvent(
+      CODING_SIDECAR_TOOL_FACADE_REJECTED_OPERATION,
+      {
+        correlationId: correlationIdOrUnknown(ctx.correlationId),
+        status,
+        errorKind: TOOL_FACADE_REJECTION_ERROR_KIND[reason],
+      },
+      { reason, completeness: "complete", loss: "none" },
+    ),
+  );
 }
 
 function hasBrowserOrigin(ctx: RouteContext): boolean {

@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "205b1dc41337fe3b2841dca3dee729eb51c7027de380f8bf8b1f1391d61fd2a3",
-    "catalogDigest": "dc8c6ca391beb76f4a20846f6dcbf7912c2ec1e1fc2d88ffdcfedb7f729201f0",
+    "catalogDigest": "4f95d1ac7f6cff7fc5c55809bbd3e52ff579f6a9781ec59c837329f695277006",
     "operations": [
       {
         "contractKind": "activity-log-operation",
@@ -491,6 +491,47 @@
           "packages/keiko-server/src/coding-context/activity-log.ts:97",
           "packages/keiko-server/src/coding-context/activity-log.ts:115"
         ]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "coding-sidecar.tool-facade.rejected",
+        "category": "gateway",
+        "owner": "keiko-server",
+        "emitter": "coding-sidecar-tool-facade.logToolFacadeRejection",
+        "fields": {
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "origin-not-allowed",
+              "capability-invalid",
+              "body-too-large",
+              "body-invalid",
+              "busy",
+              "deadline"
+            ]
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["coding-sidecar-tool-facade-rejection"],
+        "proofIds": ["coding-sidecar.tool-facade.rejected.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/coding-sidecar-tool-facade.ts:40",
+        "emitterSites": ["packages/keiko-server/src/coding-sidecar-tool-facade.ts:153"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -5090,7 +5131,7 @@
     {
       "op": "coding-sidecar.tool-facade.rejected",
       "category": "gateway",
-      "site": "packages/keiko-server/src/coding-sidecar-tool-facade.ts:108",
+      "site": "packages/keiko-server/src/coding-sidecar-tool-facade.ts:43",
       "package": "keiko-server"
     },
     {

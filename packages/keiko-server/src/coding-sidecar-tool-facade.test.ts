@@ -9,6 +9,7 @@ import { Readable } from "node:stream";
 import type { IncomingMessage } from "node:http";
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import type { UiHandlerDeps } from "./deps.js";
 import type { CodingRuntimeToolFacadeBridge } from "./coding-runtime/codingRuntimeControlPlane.js";
@@ -145,9 +146,15 @@ describe("coding-sidecar tool facade route", () => {
         op: "coding-sidecar.tool-facade.rejected",
         correlationId: "run-tool-facade-test",
         status: 403,
-        extra: { reason: "origin-not-allowed" },
+        errorKind: "authority-denied",
+        extra: { reason: "origin-not-allowed", completeness: "complete", loss: "none" },
       }),
     ]);
+    expect(
+      activityLogEventRegistration(
+        log.events[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
+      ),
+    ).toBeDefined();
     // Body-free: the log line never carries the browser origin value itself.
     expect(log.lines().join("\n")).not.toContain("evil.test");
   });
@@ -180,7 +187,8 @@ describe("coding-sidecar tool facade route", () => {
       expect.objectContaining({
         op: "coding-sidecar.tool-facade.rejected",
         status: 401,
-        extra: { reason: "capability-invalid" },
+        errorKind: "permission-denied",
+        extra: { reason: "capability-invalid", completeness: "complete", loss: "none" },
       }),
     ]);
   });
@@ -201,7 +209,8 @@ describe("coding-sidecar tool facade route", () => {
       expect.objectContaining({
         op: "coding-sidecar.tool-facade.rejected",
         status: 413,
-        extra: { reason: "body-too-large" },
+        errorKind: "invalid-request",
+        extra: { reason: "body-too-large", completeness: "complete", loss: "none" },
       }),
     ]);
   });
@@ -227,7 +236,8 @@ describe("coding-sidecar tool facade route", () => {
       expect.objectContaining({
         op: "coding-sidecar.tool-facade.rejected",
         status: 400,
-        extra: { reason: "body-invalid" },
+        errorKind: "invalid-request",
+        extra: { reason: "body-invalid", completeness: "complete", loss: "none" },
       }),
     ]);
   });
@@ -315,7 +325,8 @@ describe("coding-sidecar tool facade route", () => {
         op: "coding-sidecar.tool-facade.rejected",
         correlationId: "run-tool-facade-deadline-test",
         status: 408,
-        extra: { reason: "deadline" },
+        errorKind: "timeout",
+        extra: { reason: "deadline", completeness: "complete", loss: "none" },
       }),
     ]);
   });
