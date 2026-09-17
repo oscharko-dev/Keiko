@@ -15,10 +15,16 @@ import type {
   VerifiedCommitResult,
   VerifiedCommitStatus,
 } from "@oscharko-dev/keiko-contracts/runtime/verified-commit";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { GitMutationLifecycleResult } from "@oscharko-dev/keiko-tools";
 import { describeError } from "../diagnostics-log.js";
 import { processServerLogSink } from "../process-log-sink.js";
+import { errorKindOf } from "../observability/server-log.js";
+import { gitDeliveryActivityErrorKind } from "./execution.js";
 import {
   DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
   GIT_DELIVERY_LOCAL_OPERATOR_ID,
@@ -48,6 +54,224 @@ import type {
   VerifiedCommitServiceOptions,
   VerifiedCommitBlockingPaths,
 } from "./verifiedCommitTypes.js";
+
+const VERIFIED_COMMIT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.verified-commit",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/verifiedCommitService.VerifiedCommitService.log",
+  fields: {
+    phase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "verification-unavailable",
+        "verification-discarded",
+        "verification",
+        "verification-observed",
+        "approval",
+        "execute",
+        "write-ahead",
+        "result",
+        "persist-failed",
+        "reconcile",
+      ],
+    },
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "candidate-not-staged",
+        "approval-required",
+        "approval-invalid",
+        "authority-denied",
+        "verification-missing",
+        "verification-failed",
+        "verification-stale",
+        "candidate-drift",
+        "repository-drift",
+        "message-policy",
+        "review-incomplete",
+        "issue-directive",
+        "conflict-markers",
+        "policy-block",
+        "preflight-block",
+        "execution-failed",
+        "execution-uncertain",
+        "restart-reconciliation",
+        "completed",
+      ],
+    },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "issued",
+        "consumed",
+        "policy-authorized",
+        "succeeded",
+        "approval-required",
+        "blocked",
+        "failed",
+        "recovery-required",
+        "verification-failed",
+        "drift",
+      ],
+    },
+    unstagedCount: { type: "integer", dataClass: "count", required: false },
+    untrackedCount: { type: "integer", dataClass: "count", required: false },
+    passed: { type: "boolean", dataClass: "closed-enum", required: false },
+    verificationEvidenceId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 128,
+    },
+    checkCount: { type: "integer", dataClass: "count", required: false },
+    omittedCount: { type: "integer", dataClass: "count", required: false },
+    proposalId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    stagedTreeDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    violations: {
+      type: "string-array",
+      dataClass: "closed-enum",
+      required: false,
+      maxItems: 6,
+      values: [
+        "empty-subject",
+        "missing-conventional-prefix",
+        "disallowed-type",
+        "subject-too-long",
+        "missing-issue-key",
+        "missing-signoff",
+      ],
+    },
+    violationCount: { type: "integer", dataClass: "count", required: false },
+    attemptedStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "succeeded",
+        "approval-required",
+        "blocked",
+        "failed",
+        "recovery-required",
+        "verification-failed",
+        "drift",
+      ],
+    },
+    attemptedReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "approval-required",
+        "approval-invalid",
+        "authority-denied",
+        "verification-missing",
+        "verification-failed",
+        "verification-stale",
+        "candidate-drift",
+        "repository-drift",
+        "message-policy",
+        "review-incomplete",
+        "issue-directive",
+        "conflict-markers",
+        "policy-block",
+        "preflight-block",
+        "execution-failed",
+        "execution-uncertain",
+        "restart-reconciliation",
+        "completed",
+      ],
+    },
+    effectPhase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["pre-effect", "post-effect"],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    code: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-verified-commit"],
+  proofIds: ["git.verified-commit"],
+  releaseImpact: "patch",
+});
+
+type VerifiedCommitActivityPhase =
+  | "verification-unavailable"
+  | "verification-discarded"
+  | "verification"
+  | "verification-observed"
+  | "approval"
+  | "execute"
+  | "write-ahead"
+  | "result"
+  | "persist-failed"
+  | "reconcile";
+
+interface VerifiedCommitActivityFields {
+  readonly reason?: VerifiedCommitReason | "candidate-not-staged";
+  readonly state?: VerifiedCommitStatus | "issued" | "consumed" | "policy-authorized" | "failed";
+  readonly unstagedCount?: number;
+  readonly untrackedCount?: number;
+  readonly passed?: boolean;
+  readonly verificationEvidenceId?: string;
+  readonly checkCount?: number;
+  readonly omittedCount?: number;
+  readonly proposalId?: string;
+  readonly stagedTreeDigest?: string;
+  readonly violations?: NonNullable<VerifiedCommitResult["violations"]>;
+  readonly violationCount?: number;
+  readonly attemptedStatus?: VerifiedCommitStatus;
+  readonly attemptedReason?: VerifiedCommitReason;
+  readonly effectPhase?: "pre-effect" | "post-effect";
+  readonly failureKind?: string;
+  readonly errorClass?: string;
+  readonly code?: string;
+  readonly frames?: readonly string[];
+  readonly causeChain?: readonly string[];
+}
+
+function verifiedCommitErrorFields(
+  error: unknown,
+): Pick<
+  VerifiedCommitActivityFields,
+  "failureKind" | "errorClass" | "code" | "frames" | "causeChain"
+> {
+  const failureKind = errorKindOf(error);
+  const detail = describeError(error);
+  return {
+    failureKind,
+    errorClass: detail.errorClass,
+    ...(detail.code === undefined ? {} : { code: detail.code }),
+    ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+    ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+  };
+}
 
 const TTL_MS = 5 * 60 * 1000;
 interface VerificationTicket {
@@ -544,7 +768,12 @@ class VerifiedCommitController implements VerifiedCommitService {
   }
 
   private admissionFailure(proposal: VerifiedCommitProposal, error: unknown): VerifiedCommitResult {
-    this.log(proposal.context, "execute", { state: "failed", ...describeError(error) }, true);
+    this.log(
+      proposal.context,
+      "execute",
+      { state: "failed", ...verifiedCommitErrorFields(error) },
+      true,
+    );
     return this.contextIsCurrent(proposal.context)
       ? this.record(proposal.context, proposal.binding, "failed", "execution-failed")
       : this.record(proposal.context, proposal.binding, "blocked", "authority-denied");
@@ -683,7 +912,7 @@ class VerifiedCommitController implements VerifiedCommitService {
         kernelDetails(result),
       );
     } catch (error) {
-      this.log(context, "execute", { state: "failed", ...describeError(error) }, true);
+      this.log(context, "execute", { state: "failed", ...verifiedCommitErrorFields(error) }, true);
       return this.record(context, binding, "recovery-required", "execution-uncertain");
     }
   }
@@ -752,7 +981,7 @@ class VerifiedCommitController implements VerifiedCommitService {
           attemptedStatus: status,
           attemptedReason: reason,
           effectPhase,
-          ...describeError(error),
+          ...verifiedCommitErrorFields(error),
         },
         true,
       );
@@ -780,17 +1009,25 @@ class VerifiedCommitController implements VerifiedCommitService {
 
   private log(
     context: VerifiedCommitRunContext,
-    phase: string,
-    extra: Readonly<Record<string, unknown>>,
+    phase: VerifiedCommitActivityPhase,
+    extra: VerifiedCommitActivityFields,
     failed = false,
   ): void {
-    (this.options.execution?.activityLog ?? processServerLogSink()).write({
-      category: "process",
-      op: "git.verified-commit",
-      correlationId: context.correlationId,
-      ...(failed ? ({ level: "warn", errorKind: "internal" } as const) : {}),
-      extra: { phase, runId: context.runId, ...extra },
-    });
+    (this.options.execution?.activityLog ?? processServerLogSink()).write(
+      activityLogEvent(
+        VERIFIED_COMMIT_OPERATION,
+        {
+          correlationId: context.correlationId,
+          ...(failed
+            ? {
+                level: "warn",
+                errorKind: gitDeliveryActivityErrorKind(extra.failureKind ?? "internal"),
+              }
+            : {}),
+        },
+        { phase, runId: context.runId, ...extra },
+      ),
+    );
   }
 
   public invalidate(): void {
