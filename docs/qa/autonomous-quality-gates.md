@@ -45,10 +45,12 @@ successful:
 - Fallow semantic duplicate analysis over changed files only; and
 - Gitleaks over every addition in the pull-request commit range, including intermediate commits.
 
-The aggregate permits only the documented editor fast-path skip, documentation-only cross-platform
-skip, and non-Windows-relevant pull-request omission of the Windows matrix leg. Every other failed, cancelled, or skipped
-dependency makes `ci` fail. Network and 5xx failures from npm's audit endpoint receive bounded
-retries; a real advisory or an exhausted retry budget remains a hard failure.
+The aggregate permits only the documented editor fast-path and documentation-only skips. For a pull
+request positively classified as non-Windows-relevant, the Windows matrix leg is not created; the
+successful cross-platform matrix result therefore carries no separate Windows skip result. Every
+selected dependency that fails, is cancelled, or is skipped makes `ci` fail. Network and 5xx
+failures from npm's audit endpoint receive bounded retries; a real advisory or an exhausted retry
+budget remains a hard failure.
 
 The jobs run concurrently. Full mutation, extended end-to-end, and reference-machine performance
 measurements remain scheduled or release-owned; fast deterministic proxies and affected-area tests
