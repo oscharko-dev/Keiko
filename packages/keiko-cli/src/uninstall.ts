@@ -601,25 +601,26 @@ function uninstallPreflight(
   return stateRoot === undefined ? { refused: false } : { refused: false, stateRoot };
 }
 
-function writeUninstallInstallLayoutEvidence(
+function prepareUninstallSecurityLog(
   opts: UninstallOptions,
   stateRoot: StateRootInspection | undefined,
   stateDir: string,
   env: EnvSource,
   factory: CliSecurityLogSinkFactory | undefined,
-): void {
+): SecurityLogSink | undefined {
   // A scripts-only or dry-run command must not touch state. A state-removing command cannot retain
   // an event in the store it deletes and an asynchronous sink could recreate that store afterward.
-  // Persist only for a real launcher-only operation whose validated state directory already exists.
+  // Open a sink only for a real launcher-only operation whose validated state directory exists.
   if (
     opts.dryRun ||
     opts.scopes.state ||
     !opts.scopes.launchers ||
     stateRoot?.status !== "directory"
   ) {
-    return;
+    return undefined;
   }
   writeInstallLayoutOverrideEvidenceWithFactory(factory, stateDir, env);
+  return createCliSecurityLogSink(stateDir, factory);
 }
 
 export async function runUninstallCli(
@@ -646,14 +647,13 @@ export async function runUninstallCli(
     // error handler prints the scoped diagnostic instead of the process-level fatal path.
     const preflight = uninstallPreflight(opts, io, stateDir);
     if (preflight.refused) return 1;
-    writeUninstallInstallLayoutEvidence(
+    const securityLogSink = prepareUninstallSecurityLog(
       opts,
       preflight.stateRoot,
       stateDir,
       env,
       deps.securityLogSinkFactory,
     );
-    const securityLogSink = createCliSecurityLogSink(stateDir, deps.securityLogSinkFactory);
     // #KEIKO-0422: ensureServerStoppable is now async — it waits (bounded) for the
     // signalled UI to exit before returning "ok", so state removal never races with a
     // still-shutting-down process.

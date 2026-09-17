@@ -17,7 +17,10 @@
 
 import { bench, describe } from "vitest";
 import { analyzePrompt } from "./prompt-enhancer-analyzer.js";
-import { PROMPT_ANALYZER_BENCHMARK_REQUEST } from "./prompt-enhancer-analyzer-benchmark-fixture.js";
+import {
+  PROMPT_ANALYZER_BENCHMARK_REQUEST,
+  PROMPT_ANALYZER_GUARDED_BENCHMARK_CASES,
+} from "./prompt-enhancer-analyzer-benchmark-fixture.js";
 
 // Adversarial near-miss input: dense with fragments that resemble the analyzer's cue keywords
 // (instruction-override, tool-authority, egress, temporal-recency, market-price, retrieval,
@@ -33,9 +36,16 @@ import { PROMPT_ANALYZER_BENCHMARK_REQUEST } from "./prompt-enhancer-analyzer-be
 // looked like near-misses but were literal substrings of real cues (e.g. "is it legal-ish"
 // contains the ADVICE_CUES needle "is it legal"; "exchange rate as of todayish" contains three
 // separate TEMPORAL_RECENCY_CUES/MARKET_PRICE_CUES needles), which silently short-circuited most
-// of those lists and under-measured the ceiling this bench claims to pin.
+// of those lists and under-measured the ceiling this bench claims to pin. Separate ceiling-sized
+// cases activate every task-class-guarded missing-context scan; a factual-QA-only fixture skips
+// audience, constraint, criteria, scope, and format checks before their cue scans run.
 describe("analyzePrompt bench (KEIKO-1028, #3340)", () => {
-  bench("analyzePrompt at the scan ceiling", () => {
+  bench("analyzePrompt no-match baseline at the scan ceiling", () => {
     analyzePrompt(PROMPT_ANALYZER_BENCHMARK_REQUEST);
   });
+  for (const benchmarkCase of PROMPT_ANALYZER_GUARDED_BENCHMARK_CASES) {
+    bench(`analyzePrompt ${benchmarkCase.name} guard at the scan ceiling`, () => {
+      analyzePrompt(benchmarkCase.request);
+    });
+  }
 });

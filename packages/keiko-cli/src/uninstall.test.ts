@@ -719,6 +719,38 @@ describe("runUninstallCli — running server guard", () => {
     expect(existsSync(stateDir)).toBe(false);
   });
 
+  it("never opens an activity sink in state that a forced uninstall removes", async () => {
+    const root = makeRoot();
+    const stateDir = seedState(root, "555");
+    let aliveCalls = 0;
+    let factoryCalls = 0;
+    const deps: UninstallCliDeps = {
+      cwd: root,
+      homedir: () => root,
+      isProcessAlive: () => {
+        aliveCalls += 1;
+        return aliveCalls === 1;
+      },
+      killProcess: (): void => undefined,
+      sleep: () => Promise.resolve(),
+      securityLogSinkFactory: () => {
+        factoryCalls += 1;
+        return { write: (): void => undefined };
+      },
+      ...verifiedStopIdentity(),
+    };
+    const layoutEnv = {
+      [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin",
+      [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+    };
+
+    await expect(
+      runUninstallCli(["--state", "--force"], makeIo().io, layoutEnv, deps),
+    ).resolves.toBe(0);
+    expect(factoryCalls).toBe(0);
+    expect(existsSync(stateDir)).toBe(false);
+  });
+
   it("binds launchId from the same pid record classifyPid read", async () => {
     const root = makeRoot();
     const stateDir = seedState(root, "555");
