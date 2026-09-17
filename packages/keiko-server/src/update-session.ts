@@ -22,6 +22,11 @@ import type {
 } from "@oscharko-dev/keiko-contracts";
 import { UPDATE_SESSION_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/update-session";
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   PACKAGE_NAME,
   UPDATE_COMMAND_RULES,
   buildUpdateCommand,
@@ -64,6 +69,7 @@ import {
 import { initialUpdateLifecycle, transitionUpdateSession } from "./update-lifecycle.js";
 import type { UpdateLocalStateManager } from "./update-local-state.js";
 import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import { correlationIdOrUnknown } from "./correlation.js";
 import {
   emitServerDiagnostic,
   serverDiagnosticFromError,
@@ -74,7 +80,104 @@ export { UpdateSessionError } from "./update-session-support.js";
 
 const RESTART_HOSTS: ReadonlySet<string> = new Set(["127.0.0.1", "localhost"]);
 const SIMPLE_SHELL_ARG = /^[A-Za-z0-9_./:@%+=,-]+$/u;
-const UPDATE_SESSION_LIFECYCLE_OP = "update.session.lifecycle";
+
+const UPDATE_SESSION_LIFECYCLE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "update.session.lifecycle",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "update-session.UpdateSessionManagerImpl.emitSessionEvent",
+  fields: {
+    sessionId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    candidateId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    candidateDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    targetVersion: { type: "string", dataClass: "safe-version", required: true, maxLength: 64 },
+    phase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "confirmed",
+        "preparing",
+        "downloading",
+        "verifying",
+        "staging",
+        "handoff-pending",
+        "activating",
+        "verifying-relaunch",
+        "cleanup-pending",
+        "remediation-required",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "recovery-required",
+      ],
+    },
+    cancellationCutoff: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["not-reached", "mutation-started", "handoff-committed"],
+    },
+    eventKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["started", "transition", "persistence-failed"],
+    },
+    completedBytes: { type: "integer", dataClass: "count", required: true },
+    totalBytes: { type: "integer", dataClass: "count", required: false },
+    failureReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "none",
+        "policy-disabled",
+        "unsupported-install-mode",
+        "command-denied",
+        "spawn-error",
+        "non-zero-exit",
+        "timed-out",
+        "cancelled",
+        "portable-preflight-ineligible",
+        "portable-download-failed",
+        "portable-verification-failed",
+        "portable-sidecar-verification-failed",
+        "portable-staging-failed",
+        "portable-activation-failed",
+        "portable-relaunch-failed",
+        "portable-version-verification-failed",
+        "restart-version-mismatch",
+      ],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["update-session-lifecycle"],
+  proofIds: ["update.session.lifecycle.transition"],
+  releaseImpact: "patch",
+});
+
+function updateSessionErrorKind(
+  session: UpdateSession,
+  eventKind: "started" | "transition" | "persistence-failed",
+): ActivityLogErrorKind | undefined {
+  if (eventKind === "persistence-failed") return "durability-failed";
+  if (session.lifecycle.phase === "cancelled") return "cancelled";
+  if (session.lifecycle.phase === "failed") return "internal";
+  if (
+    session.lifecycle.phase === "recovery-required" ||
+    session.lifecycle.phase === "remediation-required"
+  ) {
+    return "unavailable";
+  }
+  return undefined;
+}
 
 function validPort(value: string | undefined): value is string {
   if (value === undefined || !/^\d{1,5}$/u.test(value)) return false;
@@ -805,25 +908,32 @@ class UpdateSessionManagerImpl implements UpdateSessionManager {
     eventKind: "started" | "transition" | "persistence-failed",
   ): void {
     try {
-      this.activityLog?.write({
-        category: "diagnostic",
-        op: UPDATE_SESSION_LIFECYCLE_OP,
-        correlationId: session.correlationId,
-        extra: {
-          sessionId: session.sessionId,
-          candidateId: session.candidateId,
-          candidateDigest: session.candidateDigest,
-          targetVersion: session.targetVersion,
-          phase: session.lifecycle.phase,
-          cancellationCutoff: session.lifecycle.cancellationCutoff,
-          eventKind,
-          completedBytes: session.lifecycle.progress.completedBytes,
-          ...(session.lifecycle.progress.totalBytes === undefined
-            ? {}
-            : { totalBytes: session.lifecycle.progress.totalBytes }),
-          failureReason: session.failureReason,
-        },
-      });
+      const errorKind = updateSessionErrorKind(session, eventKind);
+      this.activityLog?.write(
+        activityLogEvent(
+          UPDATE_SESSION_LIFECYCLE_OPERATION,
+          {
+            correlationId: correlationIdOrUnknown(session.correlationId),
+            ...(errorKind === undefined ? {} : { errorKind }),
+          },
+          {
+            sessionId: session.sessionId,
+            candidateId: session.candidateId,
+            candidateDigest: session.candidateDigest,
+            targetVersion: session.targetVersion,
+            phase: session.lifecycle.phase,
+            cancellationCutoff: session.lifecycle.cancellationCutoff,
+            eventKind,
+            completedBytes: session.lifecycle.progress.completedBytes,
+            ...(session.lifecycle.progress.totalBytes === undefined
+              ? {}
+              : { totalBytes: session.lifecycle.progress.totalBytes }),
+            failureReason: session.failureReason,
+            completeness: "complete",
+            loss: "none",
+          },
+        ),
+      );
     } catch (error) {
       emitServerDiagnostic(
         this.diagnostics,
