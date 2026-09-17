@@ -16,6 +16,7 @@ import {
 } from "@oscharko-dev/keiko-model-gateway";
 import { providerRequestBudgetMs } from "@oscharko-dev/keiko-model-gateway/internal/resilience";
 import { TOOL_CALLING_VERIFICATION_MAX_AGE_MS } from "@oscharko-dev/keiko-contracts/runtime/gateway";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { buildRedactor, type UiHandlerDeps } from "./deps.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import type { ServerDiagnosticRecord } from "./diagnostics-log.js";
@@ -3446,8 +3447,18 @@ describe("coding-sidecar gateway", () => {
       (event) => event.op === "coding-sidecar.gateway.request-validated",
     );
     expect(validated?.correlationId).toEqual(expect.any(String));
-    expect(validated?.extra).toMatchObject({ maxRequestBytes: 1_048_576, inputMessageCount: 1 });
+    expect(validated?.extra).toMatchObject({
+      maxRequestBytes: 1_048_576,
+      inputMessageCount: 1,
+      completeness: "complete",
+      loss: "none",
+    });
     expect(validated?.extra?.estimatedPromptTokens).toEqual(expect.any(Number));
+    expect(
+      activityLogEventRegistration(
+        validated as unknown as Readonly<Record<PropertyKey, unknown>>,
+      ),
+    ).toBeDefined();
     expect(JSON.stringify(sink.events)).not.toContain("bounded source context");
   });
 
