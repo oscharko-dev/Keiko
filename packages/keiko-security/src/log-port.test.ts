@@ -194,8 +194,8 @@ describe("emitSecurityLogEvent", () => {
       level: "error",
       category: "diagnostic",
       op: "security.log.sink-failed",
-      errorKind: "ENOSPC",
-      extra: { droppedOp: "security.vault.shard-unreadable" },
+      errorKind: "unavailable",
+      extra: { droppedOpDigest: "764c7a89e99dae45", failureKind: "ENOSPC" },
     });
   });
 
@@ -228,7 +228,7 @@ describe("emitSecurityLogEvent", () => {
     const calls: readonly (readonly unknown[])[] = warn.mock.calls;
     expect(calls[0]?.[1]).toMatchObject({
       code: "KEIKO_LOG_SINK_FAILED",
-      detail: "op=security.keychain.fallback errorKind=ENOSPC",
+      detail: "opDigest=3a8b3e925403036f errorKind=ENOSPC",
     });
 
     // Per sink, not per process: a replaced sink that also fails is a new fact about the log.
