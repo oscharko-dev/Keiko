@@ -1,8 +1,13 @@
 import type { CodingRuntimeCiResult } from "@oscharko-dev/keiko-contracts/runtime/coding-runtime-ci";
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   isGitCiFailureContextResult,
   gitDeliveryObservationFailure,
   type GitCiFailureContextResult,
+  type GitDeliveryObservationFailure,
   type ReadinessSnapshot,
 } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
@@ -25,6 +30,159 @@ import {
   type DraftDeliveryRunContext,
 } from "./draftDeliveryTypes.js";
 import { produceCiReadinessSnapshot } from "./ciReadinessSnapshot.js";
+
+const CI_OBSERVATION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.ci-observation",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/ciObservationService.CiObservationController",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    phase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["started", "observed", "unavailable"],
+    },
+    revision: { type: "integer", dataClass: "count", required: false },
+    headSha: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    baseSha: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    remoteDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "authority-denied",
+        "draft-unavailable",
+        "provider-unavailable",
+        "observation-in-flight",
+        "poll-backoff",
+        "observation-superseded",
+        "auth-required",
+        "invalid-binding",
+        "cancelled",
+        "provider-forbidden",
+        "provider-not-found",
+        "rate-limited",
+        "timeout",
+        "pagination-exhausted",
+        "output-truncated",
+        "malformed-response",
+        "visibility-unknown",
+        "requirements-ambiguous",
+        "revision-changed",
+        "required-checks-passed",
+        "required-checks-pending",
+        "required-checks-failed",
+        "required-checks-blocked",
+        "required-checks-unknown",
+        "pull-request-closed",
+        "merge-conflict",
+        "base-outdated",
+        "merge-context-unknown",
+        "repair-budget-exhausted",
+      ],
+    },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["technical-ready", "pending", "failed", "blocked", "unknown"],
+    },
+    requirementsDigest: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    evidenceRef: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    complete: { type: "boolean", dataClass: "closed-enum", required: false },
+    requiredCount: { type: "integer", dataClass: "count", required: false },
+    failingCount: { type: "integer", dataClass: "count", required: false },
+    retryAfterMs: { type: "integer", dataClass: "duration", required: false },
+    contextStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["observed", "unavailable"],
+    },
+    contextReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "authority-denied",
+        "auth-required",
+        "invalid-binding",
+        "cancelled",
+        "provider-forbidden",
+        "provider-not-found",
+        "rate-limited",
+        "provider-unavailable",
+        "timeout",
+        "pagination-exhausted",
+        "output-truncated",
+        "malformed-response",
+        "visibility-unknown",
+        "requirements-ambiguous",
+        "revision-changed",
+      ],
+    },
+    sourceCount: { type: "integer", dataClass: "count", required: false },
+    entryCount: { type: "integer", dataClass: "count", required: false },
+    byteCount: { type: "integer", dataClass: "count", required: false },
+    contextComplete: { type: "boolean", dataClass: "closed-enum", required: false },
+    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    code: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-ci-observation"],
+  proofIds: ["git.ci-observation"],
+  releaseImpact: "patch",
+});
+
+interface CiObservationActivityFields {
+  readonly runId?: string;
+  readonly phase: "started" | CodingRuntimeCiResult["status"];
+  readonly revision?: number;
+  readonly headSha?: string;
+  readonly baseSha?: string;
+  readonly remoteDigest?: string;
+  readonly reason?:
+    | Extract<CodingRuntimeCiResult, { status: "unavailable" }>["reason"]
+    | ReadinessSnapshot["reason"];
+  readonly state?: ReadinessSnapshot["state"];
+  readonly requirementsDigest?: string;
+  readonly evidenceRef?: string;
+  readonly complete?: boolean;
+  readonly requiredCount?: number;
+  readonly failingCount?: number;
+  readonly retryAfterMs?: number;
+  readonly contextStatus?: "observed" | "unavailable";
+  readonly contextReason?: GitDeliveryObservationFailure["reason"];
+  readonly sourceCount?: number;
+  readonly entryCount?: number;
+  readonly byteCount?: number;
+  readonly contextComplete?: boolean;
+  readonly failureKind?: string;
+  readonly errorClass?: string;
+  readonly code?: string;
+  readonly frames?: readonly string[];
+  readonly causeChain?: readonly string[];
+}
 
 export interface CiObservationService {
   observe(forceFresh?: boolean): Promise<CodingRuntimeCiResult>;
@@ -66,7 +224,20 @@ function observationFailure(error: unknown): CodingRuntimeCiResult {
   return unavailable("provider-unavailable", 5_000);
 }
 
-function resultFields(result: CodingRuntimeCiResult): Readonly<Record<string, unknown>> {
+function resultFields(
+  result: CodingRuntimeCiResult,
+): Omit<
+  CiObservationActivityFields,
+  | "runId"
+  | "phase"
+  | "revision"
+  | "remoteDigest"
+  | "failureKind"
+  | "errorClass"
+  | "code"
+  | "frames"
+  | "causeChain"
+> {
   if (result.status === "unavailable") return { reason: result.reason };
   const snapshot = result.snapshot;
   return {
@@ -74,7 +245,9 @@ function resultFields(result: CodingRuntimeCiResult): Readonly<Record<string, un
     state: snapshot.state,
     headSha: snapshot.headSha,
     baseSha: snapshot.baseSha,
-    requirementsDigest: snapshot.requirementsDigest,
+    ...(snapshot.requirementsDigest === null
+      ? {}
+      : { requirementsDigest: snapshot.requirementsDigest }),
     evidenceRef: snapshot.evidenceRef,
     complete: snapshot.complete,
     requiredCount: snapshot.requiredChecks.total,
@@ -84,7 +257,10 @@ function resultFields(result: CodingRuntimeCiResult): Readonly<Record<string, un
 }
 function failureContextFields(
   value: GitCiFailureContextResult | undefined,
-): Readonly<Record<string, unknown>> {
+): Pick<
+  CiObservationActivityFields,
+  "contextStatus" | "contextReason" | "sourceCount" | "entryCount" | "byteCount" | "contextComplete"
+> {
   if (value === undefined) return {};
   if (value.status === "unavailable")
     return { contextStatus: value.status, contextReason: value.failure.reason };
@@ -232,38 +408,50 @@ export class CiObservationController implements CiObservationService {
     });
   }
   private started(observation: Observation): void {
-    (this.options.execution?.activityLog ?? processServerLogSink()).write({
-      category: "process",
-      op: "git.ci-observation",
-      correlationId: observation.context.correlationId,
-      extra: {
-        runId: observation.context.runId,
-        phase: "started",
-        revision: observation.ticket.revision,
-        headSha: observation.draft.binding.headSha,
-        remoteDigest: observation.draft.binding.remoteDigest,
-      },
-    });
+    (this.options.execution?.activityLog ?? processServerLogSink()).write(
+      activityLogEvent(
+        CI_OBSERVATION_OPERATION,
+        { correlationId: observation.context.correlationId },
+        {
+          runId: observation.context.runId,
+          phase: "started",
+          revision: observation.ticket.revision,
+          headSha: observation.draft.binding.headSha,
+          remoteDigest: observation.draft.binding.remoteDigest,
+        },
+      ),
+    );
   }
   private record(
     context: DraftDeliveryRunContext | undefined,
     result: CodingRuntimeCiResult,
     error?: unknown,
   ): CodingRuntimeCiResult {
-    (this.options.execution?.activityLog ?? processServerLogSink()).write({
-      category: "process",
-      op: "git.ci-observation",
-      correlationId: context?.correlationId ?? UNKNOWN_CORRELATION_ID,
-      level: error === undefined ? "info" : "warn",
-      ...(error === undefined ? {} : { errorKind: "internal" }),
-      extra: {
-        runId: context?.runId,
-        phase: result.status,
-        ...resultFields(result),
-        retryAfterMs: result.retryAfterMs,
-        ...(error === undefined ? {} : describeError(error)),
-      },
-    });
+    const detail = error === undefined ? undefined : describeError(error);
+    (this.options.execution?.activityLog ?? processServerLogSink()).write(
+      activityLogEvent(
+        CI_OBSERVATION_OPERATION,
+        {
+          correlationId: context?.correlationId ?? UNKNOWN_CORRELATION_ID,
+          ...(error === undefined ? {} : { level: "warn", errorKind: "internal" }),
+        },
+        {
+          runId: context?.runId,
+          phase: result.status,
+          ...resultFields(result),
+          retryAfterMs: result.retryAfterMs,
+          ...(detail === undefined
+            ? {}
+            : {
+                failureKind: detail.errorClass,
+                errorClass: detail.errorClass,
+                ...(detail.code === undefined ? {} : { code: detail.code }),
+                ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+                ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+              }),
+        },
+      ),
+    );
     return result;
   }
 }
