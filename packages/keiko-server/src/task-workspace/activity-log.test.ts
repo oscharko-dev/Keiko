@@ -53,6 +53,8 @@ describe("logWorkspaceLifecycle", () => {
       workspaceId: "ws_test",
       attempt: 1,
       worktreeCount: 0,
+      completeness: "complete",
+      loss: "none",
     });
   });
 
@@ -77,7 +79,8 @@ describe("logWorkspaceLifecycle", () => {
     logWorkspaceLifecycle({ activityLog }, { ...BASE, outcome: "blocked" });
     const [line] = activityLog.events;
     expect(line?.level).toBe("warn");
-    expect(line?.errorKind).toBe("blocked");
+    expect(line?.errorKind).toBe("internal");
+    expect(line?.extra?.failureKind).toBe("blocked");
   });
 
   it("prefers an explicit errorCode over the bare outcome when both are failure-classified", () => {
@@ -88,7 +91,8 @@ describe("logWorkspaceLifecycle", () => {
     );
     const [line] = activityLog.events;
     expect(line?.level).toBe("warn");
-    expect(line?.errorKind).toBe("LOCK_CONTENTION");
+    expect(line?.errorKind).toBe("conflict");
+    expect(line?.extra?.failureKind).toBe("LOCK_CONTENTION");
   });
 
   // Reconciliation's own evidence `outcome` is always the fixed "reconciled" (a success-classified
@@ -103,7 +107,8 @@ describe("logWorkspaceLifecycle", () => {
     );
     const [line] = activityLog.events;
     expect(line?.level).toBe("warn");
-    expect(line?.errorKind).toBe("drifted");
+    expect(line?.errorKind).toBe("internal");
+    expect(line?.extra?.failureKind).toBe("drifted");
     expect(line?.extra?.outcome).toBe("reconciled");
   });
 
