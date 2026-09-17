@@ -56,6 +56,7 @@ import { processServerLogSink } from "../process-log-sink.js";
 import { requiresConfiguredManagedWorkspaceAuthority } from "../task-workspace/workspace-root-access.js";
 import {
   gitDeliveryAuthorityGate,
+  logGitDeliveryAuthorityAdmission,
   type GitDeliveryAuthorityIdentity,
   type GitDeliveryAuthorityGate,
 } from "./requestPreparation.js";
@@ -998,12 +999,8 @@ function logCommitApprovalRequired(
 }
 
 function logUserInitiatedCommitAdmission(ctx: RouteContext, activityLog: ServerLogSink): void {
-  activityLog.write({
-    category: "security",
-    op: "git.delivery.authority.admitted",
-    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-    status: 200,
-    extra: { operation: "commit", phase: "admission", source: "local-user" },
+  logGitDeliveryAuthorityAdmission(ctx, "commit", "admission", activityLog, {
+    source: "local-user",
   });
 }
 

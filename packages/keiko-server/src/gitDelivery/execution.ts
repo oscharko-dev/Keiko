@@ -1094,7 +1094,7 @@ const EXECUTION_ACTIVITY_ERROR_KIND: Readonly<
   "internal-error": "internal",
 };
 
-function activityErrorKindOfFailure(kind: string): ActivityLogErrorKind {
+export function gitDeliveryActivityErrorKind(kind: string): ActivityLogErrorKind {
   const lower = kind.toLowerCase();
   if (lower.includes("timeout")) return "timeout";
   if (lower.includes("cancel") || lower.includes("abort")) return "cancelled";
@@ -1170,7 +1170,7 @@ export function logGitDeliveryPreconditionFailure(
       {
         level: "error",
         correlationId: correlationIdOrUnknown(correlationId),
-        errorKind: activityErrorKindOfFailure(failureKind),
+        errorKind: gitDeliveryActivityErrorKind(failureKind),
       },
       { actionKind, phaseReached: "snapshot", failureKind },
     ),

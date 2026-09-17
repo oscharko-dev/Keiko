@@ -1234,8 +1234,8 @@ describe("sync route activity log (AGENTS.md §8 Rule 1)", () => {
     expect(failures[0]).toMatchObject({
       category: "diagnostic",
       correlationId: "corr-sync-000001",
-      errorKind: "not-a-repository",
-      extra: { subcommand: "status" },
+      errorKind: "unavailable",
+      extra: { subcommand: "status", failureKind: "not-a-repository" },
     });
     // The response stays content-free; the log is where the reason lives.
     expect(JSON.stringify(failures[0])).not.toContain("not a git repository");
@@ -1312,7 +1312,11 @@ describe("sync route activity log (AGENTS.md §8 Rule 1)", () => {
 
       const failures = activity.events.filter((event) => event.op === "git.process.failed");
       expect(failures).toHaveLength(1);
-      expect(failures[0]).toMatchObject({ correlationId: "corr-sync-pullkind", errorKind: kind });
+      expect(failures[0]).toMatchObject({
+        correlationId: "corr-sync-pullkind",
+        errorKind: "internal",
+        extra: { failureKind: kind },
+      });
       // Still body-free. The closed-vocabulary KIND (`not-fast-forward`) is the point of the line;
       // what must never appear is git's own prose, which is what the classifier read to derive it.
       const serialized = JSON.stringify(failures[0]);

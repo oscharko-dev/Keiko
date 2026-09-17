@@ -11,15 +11,23 @@
 
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-workspace";
 import type { GitRepositoryAgentOperationKind } from "@oscharko-dev/keiko-contracts";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { RouteContext, RouteResult } from "../routes.js";
 import { errorBody } from "../route-error.js";
 import type { UiHandlerDeps } from "../deps.js";
-import { CORRELATION_RESPONSE_HEADER, UNKNOWN_CORRELATION_ID } from "../correlation.js";
+import {
+  CORRELATION_RESPONSE_HEADER,
+  correlationIdOrUnknown,
+  UNKNOWN_CORRELATION_ID,
+} from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import type { ServerLogSink } from "../observability/index.js";
 import { errorKindOf } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
-import { resolveProjectWorkspace } from "./execution.js";
+import { gitDeliveryActivityErrorKind, resolveProjectWorkspace } from "./execution.js";
 import { readParsedGitDeliveryBody } from "./requestGuards.js";
 import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
 import { readVerifiedGitHubOwnerAndRepo } from "./verifiedRepositoryIdentity.js";
@@ -36,6 +44,146 @@ import {
   type GitDeliveryApprovalStore,
   type ParsedGitDeliveryApprovalRequest,
 } from "./approvalStore.js";
+
+const AUTHORITY_DENIED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.delivery.authority.denied",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "gitDelivery/requestPreparation.logGitDeliveryAuthorityDenial",
+  fields: {
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "status",
+        "diff",
+        "branch-list",
+        "branch-create",
+        "branch-switch",
+        "stage",
+        "unstage",
+        "commit",
+        "fetch",
+        "pull",
+        "push",
+        "pull-request",
+        "merge",
+      ],
+    },
+    phase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["admission", "continuity"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "accepted-run-unavailable",
+        "authority-expired",
+        "workspace-out-of-envelope",
+        "mode-denied",
+        "approval-required",
+        "permission-scope-missing",
+        "branch-out-of-envelope",
+        "authority-changed",
+        "workspace-unresolvable",
+        "verified-commit-required",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["git-delivery-authority"],
+  proofIds: ["git.delivery.authority.denied"],
+  releaseImpact: "patch",
+});
+
+const AUTHORITY_ADMITTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.delivery.authority.admitted",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "gitDelivery/requestPreparation.logGitDeliveryAuthorityAdmission",
+  fields: {
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "status",
+        "diff",
+        "branch-list",
+        "branch-create",
+        "branch-switch",
+        "stage",
+        "unstage",
+        "commit",
+        "fetch",
+        "pull",
+        "push",
+        "pull-request",
+        "merge",
+      ],
+    },
+    phase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["admission", "continuity"],
+    },
+    runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+    source: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["local-user"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-delivery-authority-gap"],
+  proofIds: ["git.delivery.authority.admitted"],
+  releaseImpact: "patch",
+});
+
+const REPOSITORY_MISMATCH_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.delivery.repository.mismatch",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "gitDelivery/requestPreparation.logGitDeliveryRepositoryMismatch",
+  fields: {
+    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["git-delivery-repository-binding"],
+  proofIds: ["git.delivery.repository.mismatch"],
+  releaseImpact: "patch",
+});
 
 // The validator each route already exposes: it maps an unknown parsed body to either a typed request
 // value (carrying the projectId) or a ready-to-return error result.
@@ -228,13 +376,38 @@ export function logGitDeliveryAuthorityDenial(
   phase: GitDeliveryAuthorityPhase = "admission",
   logSink: ServerLogSink = processServerLogSink(),
 ): void {
-  logSink.write({
-    category: "security",
-    op: "git.delivery.authority.denied",
-    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-    status: 403,
-    extra: { operation, phase, reason },
-  });
+  logSink.write(
+    activityLogEvent(
+      AUTHORITY_DENIED_OPERATION,
+      {
+        correlationId: correlationIdOrUnknown(ctx.correlationId),
+        status: 403,
+        errorKind: "authority-denied",
+      },
+      { operation, phase, reason },
+    ),
+  );
+}
+
+export function logGitDeliveryAuthorityAdmission(
+  ctx: RouteContext,
+  operation: GitRepositoryAgentOperationKind,
+  phase: GitDeliveryAuthorityPhase,
+  logSink: ServerLogSink,
+  evidence: { readonly runId?: string; readonly source?: "local-user" },
+): void {
+  logSink.write(
+    activityLogEvent(
+      AUTHORITY_ADMITTED_OPERATION,
+      { correlationId: correlationIdOrUnknown(ctx.correlationId), status: 200 },
+      {
+        operation,
+        phase,
+        ...(evidence.runId === undefined ? {} : { runId: evidence.runId }),
+        ...(evidence.source === undefined ? {} : { source: evidence.source }),
+      },
+    ),
+  );
 }
 
 function authorityPhaseFor(audit: GitDeliveryAuthorityAuditSeams): GitDeliveryAuthorityPhase {
@@ -254,13 +427,7 @@ function admittedAuthorityGate(
     logGitDeliveryAuthorityDenial(ctx, operation, "authority-changed", phase, logSink);
     return deniedAuthorityGate(ctx, "authority-changed");
   }
-  logSink.write({
-    category: "security",
-    op: "git.delivery.authority.admitted",
-    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-    status: 200,
-    extra: { operation, phase, runId: decision.runId },
-  });
+  logGitDeliveryAuthorityAdmission(ctx, operation, phase, logSink, { runId: decision.runId });
   return { allowed: true, runId: decision.runId, envelopeDigest: decision.envelopeDigest };
 }
 
@@ -452,19 +619,27 @@ function logGitDeliveryRepositoryMismatch(
   logSink: ServerLogSink,
   readFailure?: GitDeliveryRepositoryReadFailure,
 ): void {
-  logSink.write({
-    level: readFailure === undefined ? "info" : "warn",
-    category: "security",
-    op: "git.delivery.repository.mismatch",
-    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-    status: 403,
-    ...(readFailure === undefined
-      ? {}
-      : {
-          errorKind: readFailure.errorKind,
-          extra: { frames: readFailure.frames, causeChain: readFailure.causeChain },
-        }),
-  });
+  logSink.write(
+    activityLogEvent(
+      REPOSITORY_MISMATCH_OPERATION,
+      {
+        level: readFailure === undefined ? "info" : "warn",
+        correlationId: correlationIdOrUnknown(ctx.correlationId),
+        status: 403,
+        errorKind:
+          readFailure === undefined
+            ? "permission-denied"
+            : gitDeliveryActivityErrorKind(readFailure.errorKind),
+      },
+      readFailure === undefined
+        ? {}
+        : {
+            failureKind: readFailure.errorKind,
+            frames: readFailure.frames,
+            causeChain: readFailure.causeChain,
+          },
+    ),
+  );
 }
 
 // Runs the shared read → validate → resolve-workspace prologue. Returns the validated request value
