@@ -23,7 +23,6 @@ import {
   safeArtifactPublicationSlot,
   type SafeArtifactFileFailureKind,
   type SafeArtifactPublicationResult,
-  type SafeArtifactRecoveryResult,
 } from "@oscharko-dev/keiko-security/fs-hardening";
 import { type AuditCliDeps, AuditLoadError, auditLocalStateResult } from "./audit.js";
 // KEIKO-0655: shared argv-parsing helper replaces the byte-identical flagValue copy this file held.
@@ -490,7 +489,8 @@ function publishSupportBundle(
 }
 
 type SupportRecoveryOutcome =
-  | { readonly status: "none" | "rolled-back" }
+  | { readonly status: "none" }
+  | { readonly status: "rolled-back" }
   | Extract<BundlePublicationOutcome, { readonly status: "recovered" | "failed" }>;
 
 function recoverSupportBundle(
@@ -799,18 +799,29 @@ interface FreshSupportExportContext {
   readonly cwd: string;
   readonly now: () => Date;
   readonly stateDir: string;
-  readonly stateDirSource: StateDirSource;
+  readonly stateDirSource: ReturnType<typeof resolveStateDirSource>;
   readonly publication: SupportPublicationContext;
   readonly recoveryState: "none" | "rolled-back";
 }
 
-async function publishFreshSupportExport(
+interface FreshSupportData {
+  readonly logContent: LogContent;
+  readonly evidenceIndexCount: number;
+  readonly server: LoadedServer;
+  readonly auditSummary: Awaited<ReturnType<typeof auditLocalStateResult>>;
+  readonly stores: Awaited<ReturnType<LoadedServer["collectStoreFingerprints"]>>;
+  readonly uiLog: UiLogInclusion;
+  readonly evidenceSections: readonly SupportBundleEvidenceManifestSection[];
+  readonly generatedAtDate: Date;
+}
+
+async function collectFreshSupportData(
   args: ExportArgs,
   io: CliIo,
   env: EnvSource,
   deps: SupportCliDeps,
   context: FreshSupportExportContext,
-): Promise<number> {
+): Promise<FreshSupportData | number> {
   const logContent = collectLogContent(
     join(context.stateDir, "logs"),
     args.maxBytes ?? DEFAULT_MAX_BUNDLE_BYTES,
@@ -832,19 +843,39 @@ async function publishFreshSupportExport(
     args.includeEvidenceRunIds,
     deps,
   );
-  const generatedAtDate = context.now();
-  const manifest = buildSupportBundleManifest({
-    ...processProvenance(server, generatedAtDate, context.stateDirSource),
-    ...logContentManifestFields(logContent),
-    auditSummary,
+  return {
+    logContent,
     evidenceIndexCount,
-    storeFingerprints: stores.fingerprints,
-    storesUnavailable: stores.unavailable,
-    sectionsExcluded: uiLog.excluded ? [UI_LOG_SECTION] : [],
+    server,
+    auditSummary,
+    stores,
+    uiLog,
+    evidenceSections,
+    generatedAtDate: context.now(),
+  };
+}
+
+async function publishFreshSupportExport(
+  args: ExportArgs,
+  io: CliIo,
+  env: EnvSource,
+  deps: SupportCliDeps,
+  context: FreshSupportExportContext,
+): Promise<number> {
+  const data = await collectFreshSupportData(args, io, env, deps, context);
+  if (typeof data === "number") return data;
+  const manifest = buildSupportBundleManifest({
+    ...processProvenance(data.server, data.generatedAtDate, context.stateDirSource),
+    ...logContentManifestFields(data.logContent),
+    auditSummary: data.auditSummary,
+    evidenceIndexCount: data.evidenceIndexCount,
+    storeFingerprints: data.stores.fingerprints,
+    storesUnavailable: data.stores.unavailable,
+    sectionsExcluded: data.uiLog.excluded ? [UI_LOG_SECTION] : [],
   });
-  const sections = assembleWave6Sections(env, server, uiLog, evidenceSections);
-  const lines = serializeBundleLines(manifest, sections, logContent.contentLines);
-  const outPath = resolveOutPath(context.cwd, args.out, generatedAtDate);
+  const sections = assembleWave6Sections(env, data.server, data.uiLog, data.evidenceSections);
+  const lines = serializeBundleLines(manifest, sections, data.logContent.contentLines);
+  const outPath = resolveOutPath(context.cwd, args.out, data.generatedAtDate);
   const publication = publishSupportBundle(
     outPath,
     bundleText(lines),
@@ -854,7 +885,7 @@ async function publishFreshSupportExport(
   );
   return publishedSupportExportExitCode(
     publication,
-    server,
+    data.server,
     context.stateDir,
     lines.length,
     outPath,
@@ -876,6 +907,7 @@ async function runSupportExport(
   const recovery = recoverSupportBundle(publicationContext, io);
   const recoveredExitCode = await recoveredSupportExportExitCode(recovery, stateDir, io);
   if (recoveredExitCode !== undefined) return recoveredExitCode;
+  if (recovery.status !== "none" && recovery.status !== "rolled-back") return 1;
   return publishFreshSupportExport(args, io, env, deps, {
     cwd,
     now,
