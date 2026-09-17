@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "205b1dc41337fe3b2841dca3dee729eb51c7027de380f8bf8b1f1391d61fd2a3",
-    "catalogDigest": "ed75e2937015847fd7091a9ed967ac7fc2c6663635c14c341ccae65555490700",
+    "catalogDigest": "63cb0317d34553f3941ca6d34390e32af642aade4fdc27b2969203044473348c",
     "operations": [
       {
         "contractKind": "activity-log-operation",
@@ -2442,6 +2442,54 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/diagnostics-log.ts:27",
         "emitterSites": ["packages/keiko-server/src/diagnostics-log.ts:415"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "sse.run-events.resume",
+        "category": "http",
+        "owner": "keiko-server",
+        "emitter": "run-handlers.logResumeDecision",
+        "fields": {
+          "resumedRuns": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "liveOnlyRuns": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "fullReplayRuns": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "cursorsUnusable": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["sse-resume-decision"],
+        "proofIds": ["sse.run-events.resume.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/run-handlers.ts:56",
+        "emitterSites": ["packages/keiko-server/src/run-handlers.ts:601"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -6405,7 +6453,7 @@
     {
       "op": "sse.run-events.resume",
       "category": "http",
-      "site": "packages/keiko-server/src/run-handlers.ts:575",
+      "site": "packages/keiko-server/src/run-handlers.ts:59",
       "package": "keiko-server"
     },
     {
