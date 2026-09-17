@@ -22,7 +22,14 @@
 
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import type { WorkspaceInfo } from "@oscharko-dev/keiko-contracts";
-import type { ReadinessSnapshot } from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
+import type {
+  GitDeliveryObservationFailureReason,
+  ReadinessSnapshot,
+} from "@oscharko-dev/keiko-contracts/runtime/git-delivery-provider";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { PrDescriptionApplicationStatus } from "@oscharko-dev/keiko-contracts/runtime/pr-description-application";
 import type { JourneyOutcome } from "@oscharko-dev/keiko-contracts/runtime/git-journey-outcome";
 import type { DraftDeliveryRecord } from "@oscharko-dev/keiko-contracts/runtime/draft-delivery";
@@ -41,6 +48,7 @@ import { hasOnlyAllowedKeys, isPlainObject, readParsedGitDeliveryBody } from "./
 import { contentFreeWorkspaceFor } from "../coding-context/githubIssueReaderAuthorization.js";
 import {
   JourneyObservationController,
+  logJourneyObservationActivity,
   type JourneyObservationContext,
   type JourneyObservationOptions,
   type JourneyObservationResult,
@@ -57,6 +65,162 @@ import {
 import { produceCiReadinessSnapshot } from "./ciReadinessSnapshot.js";
 import { createPrDescriptionReceiptStore } from "./prDescriptionReceiptStore.js";
 import type { PrDescriptionContext } from "./prDescriptionTypes.js";
+
+const JOURNEY_READINESS_REFRESHED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.journey-readiness.refreshed",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/journeyRoutes",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["technical-ready", "pending", "failed", "blocked", "unknown"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["observed", "reader-unavailable", "not-observed", "read-failed"],
+    },
+    readinessReason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "authority-denied",
+        "auth-required",
+        "invalid-binding",
+        "cancelled",
+        "provider-forbidden",
+        "provider-not-found",
+        "rate-limited",
+        "provider-unavailable",
+        "timeout",
+        "pagination-exhausted",
+        "output-truncated",
+        "malformed-response",
+        "visibility-unknown",
+        "requirements-ambiguous",
+        "revision-changed",
+        "required-checks-passed",
+        "required-checks-pending",
+        "required-checks-failed",
+        "required-checks-blocked",
+        "required-checks-unknown",
+        "pull-request-closed",
+        "merge-conflict",
+        "base-outdated",
+        "merge-context-unknown",
+        "repair-budget-exhausted",
+      ],
+    },
+    recorded: { type: "boolean", dataClass: "closed-enum", required: true },
+    store: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["available", "unavailable"],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    code: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-journey-readiness"],
+  proofIds: ["git.journey-readiness.refreshed"],
+  releaseImpact: "patch",
+});
+
+const JOURNEY_OUTCOME_RECORDED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.journey-outcome.recorded",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "gitDelivery/journeyRoutes.recordJourneyOutcome",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "awaiting-ready-approval",
+        "keiko-technical-ready",
+        "ready-for-human-review",
+        "awaiting-human-requirements",
+        "merged-awaiting-issue-closure",
+        "completed",
+        "blocked",
+        "cancelled",
+        "recovery-required",
+      ],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "ready-approval-required",
+        "technical-ready",
+        "human-review-ready",
+        "required-reviews-missing",
+        "changes-requested",
+        "unresolved-conversations",
+        "review-visibility-unknown",
+        "issue-closure-pending",
+        "merge-and-closure-observed",
+        "closed-unmerged",
+        "issue-closed-without-merge",
+        "retargeted",
+        "head-changed",
+        "readiness-unavailable",
+        "readiness-stale",
+        "checks-not-ready",
+        "description-unavailable",
+        "description-stale",
+        "description-not-applied",
+        "provider-unavailable",
+        "authority-denied",
+        "observation-superseded",
+        "cancelled",
+        "ready-effect-uncertain",
+      ],
+    },
+    recorded: { type: "boolean", dataClass: "closed-enum", required: true },
+    store: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["unavailable"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["git-journey-outcome-persistence"],
+  proofIds: ["git.journey-outcome.recorded"],
+  releaseImpact: "patch",
+});
 
 // ─── Error envelope ─────────────────────────────────────────────────────────────────────────────
 
@@ -272,41 +436,56 @@ function persistJourneyReadiness(
 ): void {
   const store = deps.codingRuntimeSnapshotStore?.ciReadiness;
   const recorded = store?.recordPostDeliveryObservation(runId, snapshot) ?? false;
-  (deps.activityLog ?? processServerLogSink()).write({
-    category: "process",
-    op: "git.journey-readiness.refreshed",
-    correlationId,
-    level: "info",
-    extra: {
-      runId,
-      state: snapshot.state,
-      reason: snapshot.reason,
-      recorded,
-      store: store === undefined ? "unavailable" : "available",
-    },
-  });
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      JOURNEY_READINESS_REFRESHED_OPERATION,
+      { correlationId },
+      {
+        runId,
+        state: snapshot.state,
+        reason: "observed",
+        readinessReason: snapshot.reason,
+        recorded,
+        store: store === undefined ? "unavailable" : "available",
+      },
+    ),
+  );
 }
 
 function logJourneyReadinessFallback(
   deps: UiHandlerDeps,
   correlationId: string,
   runId: string,
-  reason: string,
+  reason: "reader-unavailable" | "not-observed" | "read-failed",
+  observationReason?: GitDeliveryObservationFailureReason,
   error?: unknown,
 ): void {
-  (deps.activityLog ?? processServerLogSink()).write({
-    category: "process",
-    op: "git.journey-readiness.refreshed",
-    correlationId,
-    level: "warn",
-    ...(error === undefined ? {} : { errorKind: "internal" }),
-    extra: {
-      runId,
-      recorded: false,
-      reason,
-      ...(error === undefined ? {} : describeError(error)),
-    },
-  });
+  const detail = error === undefined ? undefined : describeError(error);
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      JOURNEY_READINESS_REFRESHED_OPERATION,
+      {
+        correlationId,
+        level: "warn",
+        errorKind: error === undefined ? "unavailable" : "internal",
+      },
+      {
+        runId,
+        recorded: false,
+        reason,
+        ...(observationReason === undefined ? {} : { readinessReason: observationReason }),
+        ...(detail === undefined
+          ? {}
+          : {
+              failureKind: detail.errorClass,
+              errorClass: detail.errorClass,
+              ...(detail.code === undefined ? {} : { code: detail.code }),
+              ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+              ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+            }),
+      },
+    ),
+  );
 }
 
 /** Why a renewal did not produce a snapshot. The provider's own failure reason is carried through
@@ -315,7 +494,7 @@ function logJourneyReadinessFallback(
 type JourneyReadinessRenewal =
   | { readonly kind: "observed"; readonly snapshot: ReadinessSnapshot }
   | { readonly kind: "reader-unavailable" }
-  | { readonly kind: "not-observed"; readonly reason: string };
+  | { readonly kind: "not-observed"; readonly reason: GitDeliveryObservationFailureReason };
 
 async function freshJourneyReadiness(
   deps: UiHandlerDeps,
@@ -408,14 +587,20 @@ async function refreshJourneyReadiness(
   try {
     const fresh = await freshJourneyReadiness(deps, draft, context, resolveCiReader);
     if (fresh.kind === "observed") return fresh.snapshot;
+    if (fresh.kind === "reader-unavailable") {
+      logJourneyReadinessFallback(deps, context.correlationId, runId, "reader-unavailable");
+    } else {
+      logJourneyReadinessFallback(deps, context.correlationId, runId, "not-observed", fresh.reason);
+    }
+  } catch (error) {
     logJourneyReadinessFallback(
       deps,
       context.correlationId,
       runId,
-      fresh.kind === "reader-unavailable" ? "reader-unavailable" : `not-observed:${fresh.reason}`,
+      "read-failed",
+      undefined,
+      error,
     );
-  } catch (error) {
-    logJourneyReadinessFallback(deps, context.correlationId, runId, "read-failed", error);
   }
   return cached ?? null;
 }
@@ -501,34 +686,37 @@ function recordJourneyOutcome(
   outcome: JourneyOutcome,
 ): boolean {
   if (outcomes === undefined) {
-    (deps.activityLog ?? processServerLogSink()).write({
-      category: "process",
-      op: "git.journey-outcome.recorded",
-      correlationId,
-      level: "warn",
-      extra: {
-        runId: outcome.binding.runId,
-        state: outcome.state,
-        reason: outcome.reason,
-        recorded: false,
-        store: "unavailable",
-      },
-    });
+    (deps.activityLog ?? processServerLogSink()).write(
+      activityLogEvent(
+        JOURNEY_OUTCOME_RECORDED_OPERATION,
+        { correlationId, level: "warn", errorKind: "unavailable" },
+        {
+          runId: outcome.binding.runId,
+          state: outcome.state,
+          reason: outcome.reason,
+          recorded: false,
+          store: "unavailable",
+        },
+      ),
+    );
     return false;
   }
   const recorded = outcomes.record(outcome);
-  (deps.activityLog ?? processServerLogSink()).write({
-    category: "process",
-    op: "git.journey-outcome.recorded",
-    correlationId,
-    level: recorded ? "info" : "warn",
-    extra: {
-      runId: outcome.binding.runId,
-      state: outcome.state,
-      reason: outcome.reason,
-      recorded,
-    },
-  });
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      JOURNEY_OUTCOME_RECORDED_OPERATION,
+      {
+        correlationId,
+        ...(recorded ? {} : { level: "warn", errorKind: "conflict" }),
+      },
+      {
+        runId: outcome.binding.runId,
+        state: outcome.state,
+        reason: outcome.reason,
+        recorded,
+      },
+    ),
+  );
   return recorded;
 }
 
@@ -640,13 +828,12 @@ function logJourneyRefreshUnavailable(
   runId: string,
   reason: "draft-unavailable" | "observation-in-flight",
 ): void {
-  (deps.activityLog ?? processServerLogSink()).write({
-    category: "process",
-    op: "git.journey-observation",
+  logJourneyObservationActivity(
+    deps.activityLog ?? processServerLogSink(),
     correlationId,
-    level: "warn",
-    extra: { phase: "unavailable", runId, reason },
-  });
+    { phase: "unavailable", runId, reason },
+    { errorKind: reason === "observation-in-flight" ? "conflict" : "unavailable" },
+  );
 }
 
 async function observeJourney(
