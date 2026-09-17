@@ -203,12 +203,21 @@ export function selectLogFilesWithinBudget(
 // Splits raw file bytes into lines, dropping only the single empty artifact a trailing newline
 // produces — never re-parsing or re-serializing a line, so a re-encoding bug cannot introduce a
 // leak into content that is already redacted (AGENTS.md §7).
-export function readVerbatimLogLines(path: string): readonly string[] {
+interface VerbatimLogContent {
+  readonly lines: readonly string[];
+  readonly terminalFragment: boolean;
+}
+
+function readVerbatimLogContent(path: string): VerbatimLogContent {
   const text = readFileSync(path, "utf8");
-  if (text.length === 0) return [];
+  if (text.length === 0) return { lines: [], terminalFragment: false };
   const lines = text.split("\n");
   if (lines.at(-1) === "") lines.pop();
-  return lines;
+  return { lines, terminalFragment: !text.endsWith("\n") };
+}
+
+export function readVerbatimLogLines(path: string): readonly string[] {
+  return readVerbatimLogContent(path).lines;
 }
 
 // Same concurrent-removal race as `discoverServerLogFiles`, one step later: a name that survived the
@@ -216,11 +225,9 @@ export function readVerbatimLogLines(path: string): readonly string[] {
 // actually read. The `skip` branch signals that race to the caller (distinct from the legitimate
 // `lines: []` an empty-but-present file produces) — with the fs error's diagnosable kind — so the
 // file is skipped, not aborted.
-function readVerbatimLogLinesOrSkip(
-  path: string,
-): { readonly lines: readonly string[] } | { readonly skip: string } {
+function readVerbatimLogLinesOrSkip(path: string): VerbatimLogContent | { readonly skip: string } {
   try {
-    return { lines: readVerbatimLogLines(path) };
+    return readVerbatimLogContent(path);
   } catch (error) {
     return { skip: describeErrorKind(error) };
   }
@@ -239,6 +246,7 @@ export interface CurrentFileTailTruncated {
 interface TailReadOutcome {
   readonly lines: readonly string[];
   readonly droppedBytes: number;
+  readonly terminalFragment: boolean;
 }
 
 // Reads only the last `tailBudgetBytes` bytes of `path` via a bounded `openSync`/`readSync` pair —
@@ -258,13 +266,13 @@ function readTailLines(path: string, sizeBytes: number, tailBudgetBytes: number)
     closeSync(fd);
   }
   const newlineIndex = buffer.indexOf(NEWLINE_BYTE);
-  if (newlineIndex === -1) return { lines: [], droppedBytes: sizeBytes };
+  if (newlineIndex === -1) return { lines: [], droppedBytes: sizeBytes, terminalFragment: false };
   const droppedBytes = regionStart + newlineIndex + 1;
   const keptText = buffer.toString("utf8", newlineIndex + 1);
-  if (keptText.length === 0) return { lines: [], droppedBytes };
+  if (keptText.length === 0) return { lines: [], droppedBytes, terminalFragment: false };
   const lines = keptText.split("\n");
   if (lines.at(-1) === "") lines.pop();
-  return { lines, droppedBytes };
+  return { lines, droppedBytes, terminalFragment: !keptText.endsWith("\n") };
 }
 
 // Same vanish-before-read race as `readVerbatimLogLinesOrSkip`, for the bounded tail reader.
@@ -282,6 +290,10 @@ function readTailLinesOrSkip(
 
 export interface ReadKeptFilesResult {
   readonly contentLines: readonly string[];
+  // True when the final copied source line was not newline-terminated. The bundle writer preserves
+  // this boundary so the analyzer can distinguish a writer-crash fragment from terminated corrupt
+  // JSON after the source lines have been assembled behind the bundle metadata.
+  readonly terminalFragment: boolean;
   // Relative names only, from `LogFileInfo.name` — never the absolute `LogFileInfo.path`.
   readonly skippedLogFiles: readonly SkippedLogFile[];
   // Set when the current file's tail was read instead of its full content — see
@@ -316,6 +328,7 @@ export function readKeptFiles(
   const skippedLogFiles: SkippedLogFile[] = [];
   let currentFileTailTruncated: CurrentFileTailTruncated | undefined;
   let budgetExceeded = false;
+  let terminalFragment = false;
   const lastIndex = keptFiles.length - 1;
 
   for (const [index, file] of keptFiles.entries()) {
@@ -326,16 +339,27 @@ export function readKeptFiles(
       continue;
     }
     for (const line of lookup.lines) contentLines.push(line);
+    if (lookup.lines.length > 0) terminalFragment = lookup.terminalFragment;
     if (lookup.tail !== undefined) {
       currentFileTailTruncated = lookup.tail;
       budgetExceeded = lookup.lines.length === 0;
     }
   }
-  return { contentLines, skippedLogFiles, currentFileTailTruncated, budgetExceeded };
+  return {
+    contentLines,
+    terminalFragment,
+    skippedLogFiles,
+    currentFileTailTruncated,
+    budgetExceeded,
+  };
 }
 
 type KeptFileLookup =
-  | { readonly lines: readonly string[]; readonly tail: CurrentFileTailTruncated | undefined }
+  | {
+      readonly lines: readonly string[];
+      readonly terminalFragment: boolean;
+      readonly tail: CurrentFileTailTruncated | undefined;
+    }
   | { readonly skip: SkippedLogFile["errorKind"] };
 
 // One kept file's lines: the bounded tail when a tail budget applies (only ever the last, never-
@@ -343,11 +367,15 @@ type KeptFileLookup =
 function readKeptFileLines(file: LogFileInfo, tailBudgetBytes: number | undefined): KeptFileLookup {
   if (tailBudgetBytes === undefined) {
     const whole = readVerbatimLogLinesOrSkip(file.path);
-    return "skip" in whole ? whole : { lines: whole.lines, tail: undefined };
+    return "skip" in whole ? whole : { ...whole, tail: undefined };
   }
   const tail = readTailLinesOrSkip(file.path, file.sizeBytes, tailBudgetBytes);
   if ("skip" in tail) return tail;
-  return { lines: tail.lines, tail: { name: file.name, droppedBytes: tail.droppedBytes } };
+  return {
+    lines: tail.lines,
+    terminalFragment: tail.terminalFragment,
+    tail: { name: file.name, droppedBytes: tail.droppedBytes },
+  };
 }
 
 // What the manifest is allowed to say about the audit: everything EXCEPT `stateDir`. `AuditResult`
@@ -607,9 +635,11 @@ export function sha256SidecarPath(outPath: string): string {
   return `${outPath}.sha256`;
 }
 
-// Joins lines with a single trailing newline, the same shape server-log.ts's own file sink writes
-// (one JSON object per line) so a bundle round-trips through the same line-splitting convention
-// this module's own reader (and support-analyze.ts) uses.
-export function bundleText(lines: readonly string[]): string {
-  return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
+// Joins lines with the source log's terminal boundary intact. Healthy activity logs end in one
+// newline; an interrupted final write does not, and preserving that absence is what lets the
+// analyzer classify the final invalid JSON as truncated rather than ordinary corruption.
+export function bundleText(lines: readonly string[], terminalFragment = false): string {
+  if (lines.length === 0) return "";
+  const text = lines.join("\n");
+  return terminalFragment ? text : `${text}\n`;
 }

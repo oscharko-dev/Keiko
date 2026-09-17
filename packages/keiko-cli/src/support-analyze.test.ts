@@ -1388,6 +1388,7 @@ describe("analyzeLogText — strict v2 identity and compatibility classification
     ["missing pid", { pid: undefined }, "incomplete"],
     ["missing instanceId", { instanceId: undefined }, "incomplete"],
     ["missing seq", { seq: undefined }, "incomplete"],
+    ["invalid pid with missing seq", { pid: "attacker", seq: undefined }, "corrupt"],
     ["fractional schemaVersion", { schemaVersion: 2.5 }, "corrupt"],
     ["zero pid", { pid: 0 }, "corrupt"],
     ["fractional pid", { pid: 1.5 }, "corrupt"],
@@ -1474,6 +1475,18 @@ describe("analyzeLogText — strict v2 identity and compatibility classification
       corruptLineCount: 1,
     });
   });
+
+  it("retains a copied terminal-fragment signal in a support bundle", () => {
+    const bundle = `${line({ $section: "manifest" })}\n${line({
+      $section: "config-snapshot",
+    })}\n{"ts":`;
+
+    expect(analyzeLogText(bundle).evidence).toMatchObject({
+      classification: "truncated",
+      truncatedLineCount: 1,
+      corruptLineCount: 0,
+    });
+  });
 });
 
 describe("analyzeLogText — process sequence integrity", () => {
@@ -1527,6 +1540,26 @@ describe("analyzeLogText — process sequence integrity", () => {
         missingFrom: 1,
         missingTo: 3,
       }),
+    ]);
+    expect(result.evidence.classification).toBe("supported");
+  });
+
+  it("does not mistake process-wide allocations in another state directory for missing evidence", () => {
+    const event = (seq: number): string =>
+      line({
+        ts: T0,
+        category: "process",
+        op: `state-a-${String(seq)}`,
+        pid: 5151,
+        instanceId: "cross-directory",
+        seq,
+      });
+
+    const result = analyzeLogText(`${event(1)}\n${event(3)}\n`);
+
+    expect(result.evidence.classification).toBe("supported");
+    expect(result.evidence.sequenceAnomalies).toEqual([
+      expect.objectContaining({ kind: "gap", previousSeq: 1, seq: 3 }),
     ]);
   });
 });

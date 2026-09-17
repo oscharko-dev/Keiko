@@ -441,6 +441,14 @@ function hasValidProcessIdentity(record: Record<string, unknown>): boolean {
   );
 }
 
+function hasInvalidPresentProcessIdentity(record: Record<string, unknown>): boolean {
+  return (
+    (record.pid !== undefined && !validProcessId(record.pid)) ||
+    (record.instanceId !== undefined && !validInstanceId(record.instanceId)) ||
+    (record.seq !== undefined && !validSequence(record.seq))
+  );
+}
+
 const ACTIVITY_LOG_COMPATIBILITY_STATES: ReadonlySet<string> = new Set([
   "supported",
   "legacy-supported",
@@ -536,10 +544,15 @@ function identityClassification(
 ): ActivityLogEvidenceClassification {
   const identityValues = [record.pid, record.instanceId, record.seq];
   const identityCount = identityValues.filter((value) => value !== undefined).length;
+  const hasInvalidPresentIdentity = hasInvalidPresentProcessIdentity(record);
   const schemaClassification = schemaVersionClassification(record.schemaVersion, identityCount);
-  if (schemaClassification !== undefined) return schemaClassification;
+  if (schemaClassification !== undefined) {
+    return schemaClassification === "incomplete" && hasInvalidPresentIdentity
+      ? "corrupt"
+      : schemaClassification;
+  }
+  if (hasInvalidPresentIdentity) return "corrupt";
   if (identityCount < identityValues.length) return "incomplete";
-  if (!hasValidProcessIdentity(record)) return "corrupt";
   return registryIdentityClassification(record);
 }
 
@@ -1182,7 +1195,13 @@ function overallEvidenceClassification(
   if (counts.corrupt > 0) return "corrupt";
   if (counts.truncated > 0) return "truncated";
   if (counts.unsupported > 0) return "unsupported";
-  if (counts.incomplete > 0 || anomalies.length > 0) return "incomplete";
+  // `seq` is allocated process-wide across every state directory. A gap in one analyzed artifact
+  // can therefore be a write to another directory, not missing evidence. Keep reporting the gap,
+  // but only identity violations that cannot arise from cross-directory allocation degrade the
+  // artifact's integrity classification.
+  if (counts.incomplete > 0 || anomalies.some((anomaly) => anomaly.kind !== "gap")) {
+    return "incomplete";
+  }
   if (counts.legacy > 0) return "legacy";
   return "supported";
 }

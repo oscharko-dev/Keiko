@@ -260,6 +260,7 @@ describe("readKeptFiles", () => {
     ]);
 
     expect(result.contentLines).toEqual(['{"ts":"a"}', '{"ts":"b"}']);
+    expect(result.terminalFragment).toBe(false);
     expect(result.skippedLogFiles).toEqual([]);
   });
 
@@ -726,5 +727,9 @@ describe("serializeBundleLines and bundleText", () => {
   it("bundleText joins with a single trailing newline, and is empty for zero lines", () => {
     expect(bundleText(["a", "b"])).toBe("a\nb\n");
     expect(bundleText([])).toBe("");
+  });
+
+  it("preserves a copied terminal fragment without manufacturing a newline", () => {
+    expect(bundleText(["manifest", '{"ts":'], true)).toBe('manifest\n{"ts":');
   });
 });

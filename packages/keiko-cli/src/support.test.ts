@@ -36,15 +36,18 @@ import {
 } from "@oscharko-dev/keiko-server";
 import type { AuditResult } from "./audit.js";
 import type { CliIo } from "./runner.js";
+import { analyzeLogText } from "./support-analyze.js";
 import {
   parseSupportArgs,
   resolveOutPath,
-  runSupportCli,
+  runSupportCli as runSupportCliImpl,
   supportPublicationErrorKind,
   supportPublicationContext,
   type SupportCliDeps,
 } from "./support.js";
 import { CURRENT_LOG_FILE_NAME } from "./support-export.js";
+
+const runSupportCli = runSupportCliImpl;
 
 const BUILT_CLI_ENTRY = fileURLToPath(new URL("../../../dist/cli/index.js", import.meta.url));
 
@@ -81,6 +84,9 @@ function runBuiltSupportCli(
   stateDir: string,
   nodeArgs: readonly string[] = [],
 ): SpawnSyncReturns<string> {
+  if (!existsSync(BUILT_CLI_ENTRY)) {
+    throw new Error("Built CLI entry is missing; run npm run build:packages before this test");
+  }
   return spawnSync(
     process.execPath,
     [...nodeArgs, BUILT_CLI_ENTRY, "support", "export", "--state-dir", stateDir],
@@ -321,6 +327,42 @@ describe("runSupportCli export", () => {
   it("maps non-primitive publication failures to the closed unknown kind", () => {
     const error = Object.assign(new Error("private path /customer/report.jsonl"), { code: "EIO" });
     expect(supportPublicationErrorKind(error)).toBe("unknown");
+  });
+
+  it("rejects a fresh Activity Log path as the support-bundle destination", async () => {
+    const outPath = join(stateDir, "logs", CURRENT_LOG_FILE_NAME);
+    const c = makeIo();
+
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("destination collides with the Activity Log");
+    expect(existsSync(outPath)).toBe(false);
+    expect(existsSync(`${outPath}.sha256`)).toBe(false);
+  });
+
+  it("fails before publication when the required Activity Log directory is unavailable", async () => {
+    rmSync(join(stateDir, "logs"), { recursive: true });
+    writeFileSync(join(stateDir, "logs"), "not-a-directory");
+    const outPath = join(outDir, "unlogged-report.jsonl");
+    const c = makeIo();
+
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(1);
+    expect(c.err()).toContain("Activity Log unavailable: open-failed");
+    expect(existsSync(outPath)).toBe(false);
+    expect(existsSync(`${outPath}.sha256`)).toBe(false);
   });
 
   it("writes a bundle whose first line is the manifest and whose remaining lines are the log content, verbatim", async () => {
@@ -633,6 +675,65 @@ describe("runSupportCli export", () => {
     });
   });
 
+  it("records rolled-back recovery before a later audit failure exits", async () => {
+    const outPath = join(outDir, "rolled-back-report.jsonl");
+    const context = supportPublicationContext(outDir, outPath);
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let interrupted = false;
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
+        if (!interrupted) {
+          interrupted = true;
+          throw Object.assign(new Error("process interrupted"), { code: "EINTR" });
+        }
+        Reflect.apply(actual.linkSync, actual, args);
+      },
+    }));
+    const firstRun = await import("./support.js");
+
+    expect(
+      await firstRun.runSupportCli(
+        ["export", "--state-dir", stateDir, "--out", outPath],
+        makeIo().io,
+        AUDIT_ENV,
+        { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+      ),
+    ).toBe(1);
+    expect(readdirSync(context.root).some((name) => name.includes(context.slot))).toBe(true);
+
+    vi.doUnmock("node:fs");
+    vi.resetModules();
+    const resumed = await import("./support.js");
+    const secondIo = makeIo();
+    expect(
+      await resumed.runSupportCli(
+        ["export", "--state-dir", stateDir, "--out", outPath],
+        secondIo.io,
+        AUDIT_ENV,
+        {
+          auditDeps: { loadAuditor: () => Promise.resolve({} as never) },
+          evidenceStore: createInMemoryEvidenceStore(),
+        },
+      ),
+    ).toBe(1);
+    expect(secondIo.err()).toContain("local-state audit could not produce a result");
+    const recovery = readFileSync(join(stateDir, "logs", CURRENT_LOG_FILE_NAME), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .filter((record) => record.op === "support.export.publication")
+      .at(-1);
+    expect(recovery).toMatchObject({
+      publicationPersistenceStatus: "rolled-back",
+      recoveryState: "rolled-back",
+      visibleArtifactCount: 0,
+      publicationCompleteness: "complete",
+      publicationLoss: "none",
+    });
+  });
+
   it("recovers the default output slot without consulting a replacement clock", async () => {
     const firstNow = new Date("2026-09-02T03:04:05.000Z");
     const outPath = resolveOutPath(outDir, undefined, firstNow);
@@ -810,6 +911,28 @@ describe("runSupportCli export", () => {
     ) as Record<string, unknown>;
     expect(manifest.truncatedLogFiles).toEqual(["server-2026-08-18.log"]);
     expect(manifest.sourceLogFiles).toEqual(["server.log"]);
+  });
+
+  it("preserves an unterminated crash fragment for bundle analysis", async () => {
+    writeFileSync(join(stateDir, "logs", CURRENT_LOG_FILE_NAME), '{"ts":');
+    const outPath = join(outDir, "terminal-fragment.jsonl");
+    const c = makeIo();
+
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir, "--out", outPath],
+      c.io,
+      AUDIT_ENV,
+      { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+    );
+
+    expect(code).toBe(0);
+    const bundle = readFileSync(outPath, "utf8");
+    expect(bundle.endsWith("\n")).toBe(false);
+    expect(analyzeLogText(bundle).evidence).toMatchObject({
+      classification: "truncated",
+      truncatedLineCount: 1,
+      corruptLineCount: 0,
+    });
   });
 
   // Regression for #2902 PR review, follow-up finding: a single oversized CURRENT server.log was
@@ -1233,6 +1356,42 @@ describe("runSupportCli export", () => {
     expect(JSON.stringify(publication)).not.toContain(outPath);
   });
 
+  it("preserves a per-entry integrity-artifact failure in publication evidence", async () => {
+    vi.resetModules();
+    vi.doMock("@oscharko-dev/keiko-security/fs-hardening", async () => {
+      const actual = await vi.importActual<
+        typeof import("@oscharko-dev/keiko-security/fs-hardening")
+      >("@oscharko-dev/keiko-security/fs-hardening");
+      return {
+        ...actual,
+        publishSafeArtifactFileSet: (): never => {
+          throw new actual.SafeArtifactFileError("integrity-artifact", "write-failed");
+        },
+      };
+    });
+    const isolated = await import("./support.js");
+    const outPath = join(outDir, "integrity-write-failure.jsonl");
+
+    expect(
+      await isolated.runSupportCli(
+        ["export", "--state-dir", stateDir, "--out", outPath],
+        makeIo().io,
+        AUDIT_ENV,
+        { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+      ),
+    ).toBe(1);
+    const failure = readFileSync(join(stateDir, "logs", CURRENT_LOG_FILE_NAME), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>)
+      .find((record) => record.op === "support.export.publication");
+    expect(failure).toMatchObject({
+      errorKind: "write-failed",
+      failedArtifactClass: "integrity-artifact",
+      failureKind: "write-failed",
+    });
+  });
+
   it("records acknowledgement failure as the sole terminal publication evidence", async () => {
     vi.resetModules();
     vi.doMock("@oscharko-dev/keiko-security/fs-hardening", async () => {
@@ -1356,12 +1515,54 @@ describe("runSupportCli export", () => {
 describe("runSupportCli analyze", () => {
   let dir: string;
 
+  const runSupportCli: typeof runSupportCliImpl = (args, io, env, deps) =>
+    runSupportCliImpl(args, io, env ?? {}, { ...deps, cwd: deps?.cwd ?? dir });
+
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "keiko-support-cli-analyze-"));
   });
 
   afterEach(() => {
     rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("records body-free classification counts with a correlation id", async () => {
+    const stateDir = join(dir, "state");
+    const filePath = join(dir, "truncated-bundle.jsonl");
+    writeFileSync(filePath, `${JSON.stringify({ $section: "manifest" })}\n{"ts":`);
+    const c = makeIo();
+
+    const code = await runSupportCli(
+      ["analyze", filePath, "--json"],
+      c.io,
+      { KEIKO_STATE_DIR: stateDir },
+      { cwd: dir },
+    );
+
+    expect(code).toBe(0);
+    const evidence = readFileSync(join(stateDir, "logs", CURRENT_LOG_FILE_NAME), "utf8")
+      .split("\n")
+      .filter((line) => line.startsWith("{"))
+      .flatMap((line) => {
+        try {
+          return [JSON.parse(line) as Record<string, unknown>];
+        } catch {
+          return [];
+        }
+      })
+      .find((record) => record.op === "support.analyze.classified");
+    expect(evidence).toMatchObject({
+      category: "diagnostic",
+      sourceKind: "bundle",
+      evidenceClassification: "truncated",
+      truncatedLineCount: 1,
+      corruptLineCount: 0,
+      malformedLineCount: 1,
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(String(evidence?.correlationId)).toMatch(/^[0-9a-f-]{36}$/);
+    expect(JSON.stringify(evidence)).not.toContain(filePath);
   });
 
   it("auto-detects a raw log and emits the minimal LogTimeline JSON for one correlation id", async () => {
