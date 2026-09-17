@@ -38,12 +38,133 @@ export type ToolCatalogLogEvidence =
 const LOG_ENVELOPE = new Set([
   "ts",
   "schemaVersion",
+  "registryVersion",
+  "schemaDigest",
+  "catalogDigest",
+  "buildClass",
+  "releaseClass",
+  "platformClass",
+  "productVersion",
+  "compatibilityState",
+  "writerCapability",
   "pid",
   "instanceId",
   "seq",
   "level",
   "category",
 ]);
+
+const TOOL_SINK_DIAGNOSTIC_OPERATION = "tool-catalog.lifecycle-sink-failed";
+
+function definedFields(
+  record: Readonly<Record<string, unknown>>,
+  keys: readonly string[],
+): Record<string, unknown> {
+  return Object.fromEntries(
+    keys.flatMap((key) => (record[key] === undefined ? [] : [[key, record[key]]])),
+  );
+}
+
+function registeredToolRef(record: Readonly<Record<string, unknown>>): unknown {
+  if (record.toolRefCompleteness === "unknown") {
+    if (record.toolCanonicalId !== undefined || record.toolContractVersion !== undefined) {
+      throw new TypeError("Contradictory tool identity evidence");
+    }
+    return null;
+  }
+  if (record.toolRefCompleteness !== undefined && record.toolRefCompleteness !== "complete") {
+    throw new TypeError("Invalid tool identity completeness");
+  }
+  return {
+    canonicalId: record.toolCanonicalId,
+    contractVersion: record.toolContractVersion,
+  };
+}
+
+function registeredReservation(record: Readonly<Record<string, unknown>>): unknown {
+  if (record.reservationState === "not-reserved") {
+    if (record.reservationId !== undefined) {
+      throw new TypeError("Contradictory reservation evidence");
+    }
+    return null;
+  }
+  if (record.reservationState !== "reserved") {
+    throw new TypeError("Invalid reservation state");
+  }
+  return record.reservationId;
+}
+
+function registeredIdentity(record: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  if (record.completeness !== "complete" || record.loss !== "none") {
+    throw new TypeError("Incomplete tool lifecycle evidence");
+  }
+  return {
+    op: record.op,
+    correlationId: record.correlationId,
+    ...definedFields(record, ["parentCorrelationId"]),
+    catalogRevision: record.catalogRevision,
+    profile: { id: record.profileId, version: record.profileVersion },
+    projectionDigest: record.projectionDigest,
+  };
+}
+
+function registeredTerminal(record: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  const diagnostics =
+    record.status === "failed" ? definedFields(record, ["errorKind", "frames", "causeChain"]) : {};
+  return {
+    ...registeredIdentity(record),
+    invocationId: record.invocationId,
+    toolRef: registeredToolRef(record),
+    settlementId: record.settlementId,
+    reservationId: registeredReservation(record),
+    status: record.status,
+    reason: record.reason,
+    durationMs: record.durationMs,
+    effectStarted: record.effectStarted,
+    budgetDisposition: record.budgetDisposition,
+    ...definedFields(record, ["inputBytes", "outputBytes", "resultCount", "truncated"]),
+    ...diagnostics,
+  };
+}
+
+function registeredLifecycleCandidate(
+  record: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  const identity = registeredIdentity(record);
+  switch (toolLifecyclePhaseFor(String(record.op))) {
+    case "projection":
+      return { ...identity, ...definedFields(record, ["readiness", "resultCount"]) };
+    case "bind-ready":
+      return {
+        ...identity,
+        readiness: record.readiness,
+        handlerSetDigest: record.handlerSetDigest,
+      };
+    case "bind-unavailable":
+      return { ...identity, readiness: record.readiness, reason: record.reason };
+    case "invocation-started":
+      return {
+        ...identity,
+        ...definedFields(record, ["invocationId", "state", "reservationId", "reason"]),
+        toolRef: registeredToolRef(record),
+      };
+    case "terminal":
+      return registeredTerminal(record);
+    case "discarded":
+      return {
+        ...identity,
+        ...definedFields(record, ["invocationId", "settlementId", "reason"]),
+        toolRef: registeredToolRef(record),
+      };
+    default:
+      throw new TypeError("Unknown tool lifecycle operation");
+  }
+}
+
+function lifecycleCandidate(record: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  if (record.registryVersion !== undefined) return registeredLifecycleCandidate(record);
+  return Object.fromEntries(Object.entries(record).filter(([key]) => !LOG_ENVELOPE.has(key)));
+}
 
 function restoreTerminalFields(candidate: Record<string, unknown>): readonly string[] {
   const restored: string[] = [];
@@ -85,12 +206,10 @@ function lifecycleEvidence(
   record: Readonly<Record<string, unknown>>,
   validateLifecycle: ToolLifecycleValidator,
 ): ToolCatalogLogEvidence {
-  const candidate = Object.fromEntries(
-    Object.entries(record).filter(([key]) => !LOG_ENVELOPE.has(key)),
-  );
-  const restoredFields = restoreTerminalFields(candidate);
   try {
     if (record.category !== "security") throw new TypeError("Invalid lifecycle category");
+    const candidate = lifecycleCandidate(record);
+    const restoredFields = restoreTerminalFields(candidate);
     const event = validateLifecycle(candidate);
     const receipt = receiptFor(event);
     return {
@@ -124,13 +243,29 @@ export function readToolCatalogEvidence(
       };
     return lifecycleEvidence(record, validateLifecycle);
   }
-  if (record.op !== "tool-catalog.lifecycle-sink-failed") return undefined;
+  if (!isToolSinkDiagnostic(record)) return undefined;
   return {
     kind: "sink-failure",
     sink: sinkIdentity(record.source),
     ...sinkDiagnostics(record, redactDiagnostics),
-    ...(isErrorKind(record.errorKind) ? { errorKind: record.errorKind } : {}),
+    ...sinkErrorKind(record),
   };
+}
+
+function sinkErrorKind(
+  record: Readonly<Record<string, unknown>>,
+): Pick<Extract<ToolCatalogLogEvidence, { kind: "sink-failure" }>, "errorKind"> {
+  const candidate =
+    record.op === "server.diagnostic.failure" ? record.diagnosticErrorClass : record.errorKind;
+  return isErrorKind(candidate) ? { errorKind: candidate } : {};
+}
+
+function isToolSinkDiagnostic(record: Readonly<Record<string, unknown>>): boolean {
+  return (
+    record.op === TOOL_SINK_DIAGNOSTIC_OPERATION ||
+    (record.op === "server.diagnostic.failure" &&
+      record.diagnosticOperation === TOOL_SINK_DIAGNOSTIC_OPERATION)
+  );
 }
 
 function sinkDiagnostics(

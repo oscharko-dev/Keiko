@@ -72,7 +72,6 @@ async function emittedLog(
       },
     );
     const offer = binder.offer();
-    sink.write({ category: "http", op: "request", correlationId: "other-request", status: 204 });
     await binder.dispatch(
       qualified
         ? {
@@ -135,10 +134,9 @@ describe("tool catalog reconstruction from actual emitted activity log", () => {
     expect(timeline).toBeDefined();
     if (timeline === undefined) throw new Error("Expected catalog timeline");
     expect(renderHumanTimeline(timeline)).toContain("budgetDisposition");
-    expect(findTimeline(all, "other-request")?.lines[0]?.status).toBe(204);
   });
 
-  it("restores only permitted redactor omissions for unqualified rejection", async () => {
+  it("reconstructs explicit unknown identity and unreserved budget states", async () => {
     const { text } = await emittedLog(undefined, false);
     const terminal = settlement(seedFor(text));
     expect(terminal.event).toMatchObject({ toolRef: null, status: "invalid" });
@@ -146,7 +144,7 @@ describe("tool catalog reconstruction from actual emitted activity log", () => {
       reservationId: null,
       budgetDisposition: "not-reserved",
     });
-    expect(terminal.restoredFields).toEqual(expect.arrayContaining(["toolRef", "reservationId"]));
+    expect(terminal.restoredFields).toEqual([]);
   });
 
   it.each(["commit", "release"] as const)(
@@ -217,15 +215,39 @@ describe("tool lifecycle sink and corrupted artifact reconstruction", () => {
   );
 
   it.each([
-    { toolRef: null },
-    { toolRef: undefined },
-    { reservationId: undefined },
-    { budgetDisposition: "commit-uncertain" },
-    { status: "committed" },
-    { inputBytes: -1 },
-    { arguments: { secret: "private-body" } },
-    { profile: { id: "private/body", version: 1 } },
-  ])("fails closed on corrupted emitted terminal fields %j", async (patch) => {
+    {
+      label: "contradictory tool identity",
+      patch: { toolRefCompleteness: "unknown" },
+      outcome: "invalid-lifecycle",
+    },
+    {
+      label: "missing tool identity",
+      patch: { toolCanonicalId: undefined },
+      outcome: "invalid-lifecycle",
+    },
+    {
+      label: "missing reserved budget identity",
+      patch: { reservationId: undefined },
+      outcome: "invalid-lifecycle",
+    },
+    {
+      label: "contradictory budget acknowledgement",
+      patch: { budgetDisposition: "commit-uncertain" },
+      outcome: "invalid-lifecycle",
+    },
+    { label: "unknown status", patch: { status: "committed" }, outcome: "corrupt-line" },
+    { label: "negative input size", patch: { inputBytes: -1 }, outcome: "corrupt-line" },
+    {
+      label: "unregistered arguments body",
+      patch: { arguments: { secret: "private-body" } },
+      outcome: "corrupt-line",
+    },
+    {
+      label: "unregistered profile body",
+      patch: { profile: { id: "private/body", version: 1 } },
+      outcome: "corrupt-line",
+    },
+  ] as const)("fails closed on corrupted emitted terminal fields: $label", async (fixture) => {
     const { text } = await emittedLog();
     const changed = text
       .trim()
@@ -233,17 +255,26 @@ describe("tool lifecycle sink and corrupted artifact reconstruction", () => {
       .map((line) => {
         const value = JSON.parse(line) as Record<string, unknown>;
         return JSON.stringify(
-          value.op === "tool-catalog.invocation-settled" ? { ...value, ...patch } : value,
+          value.op === "tool-catalog.invocation-settled" ? { ...value, ...fixture.patch } : value,
         );
       })
       .join("\n");
     const seed = seedFor(changed);
-    expect(seed.toolCatalog).toContainEqual({
-      kind: "invalid",
-      operation: "tool-catalog.invocation-settled",
-      reason: "invalid-lifecycle-evidence",
-    });
-    expect(seed.warnings.join(" ")).toContain("invalid tool lifecycle evidence");
+    const analysis = analyzeLogText(changed, ANALYZE_OPTIONS);
+    if (fixture.outcome === "invalid-lifecycle") {
+      expect(seed.toolCatalog).toContainEqual({
+        kind: "invalid",
+        operation: "tool-catalog.invocation-settled",
+        reason: "invalid-lifecycle-evidence",
+      });
+      expect(seed.warnings.join(" ")).toContain("invalid tool lifecycle evidence");
+    } else {
+      expect(analysis.evidence.corruptLineCount).toBe(1);
+      expect(seed.toolCatalog?.some((entry) => entry.kind === "invalid")).toBe(false);
+    }
+    expect(seed.toolCatalog?.some((entry) => entry.kind === "lifecycle" && entry.receipt)).toBe(
+      false,
+    );
     expect(JSON.stringify(seed)).not.toContain("private-body");
     expect(JSON.stringify(seed)).not.toContain("private/body");
   });
@@ -260,7 +291,7 @@ describe("tool lifecycle sink and corrupted artifact reconstruction", () => {
           ...value,
           status: "failed",
           reason: "budget-port-failed",
-          errorKind: "Error",
+          errorKind: "internal",
           budgetDisposition: "commit-uncertain",
         });
       })
@@ -438,7 +469,7 @@ describe("existing CLI lazy lifecycle analysis dispatch", () => {
       .split("\n")
       .map((line) => {
         const value = JSON.parse(line) as Record<string, unknown>;
-        if (value.op !== "tool-catalog.lifecycle-sink-failed") return line;
+        if (value.diagnosticOperation !== "tool-catalog.lifecycle-sink-failed") return line;
         return JSON.stringify({
           ...value,
           frames: ["/private/customer/secret.ts:1:2"],
