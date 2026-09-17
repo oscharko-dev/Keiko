@@ -1075,6 +1075,7 @@ describe("CodingRuntimeOrchestrator", () => {
       (candidate) => candidate.op === "coding-runtime.run.shutdown",
     );
     expect(shutdown).toMatchObject({
+      errorKind: "conflict",
       extra: { runId: "run-1", reason: "server-shutdown", outcome: "refused" },
     });
     // The shutdown ended nothing, so it wrote no new terminal line — and the cause line says so

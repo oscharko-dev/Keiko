@@ -704,6 +704,107 @@ const CODING_RUNTIME_DELIVERY_UNEVIDENCED_OPERATION = defineActivityLogOperation
   releaseImpact: "patch",
 });
 
+const CODING_RUNTIME_RUN_SHUTDOWN_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.run.shutdown",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeOrchestrator.shutdown",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    stateBefore: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "idle",
+        "starting",
+        "ready",
+        "running",
+        "paused",
+        "awaiting-approval",
+        "stopping",
+        "succeeded",
+        "failed",
+        "cancelled",
+        "taken-over",
+        "recovery-required",
+      ],
+    },
+    revision: { type: "integer", dataClass: "count", required: true },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["server-shutdown"],
+    },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["ended", "refused"],
+    },
+    failureCode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "runtime-unavailable",
+        "active-run-conflict",
+        "invalid-intent",
+        "approval-activation-failed",
+        "authority-resolution-failed",
+        "authority-expired",
+        "authority-replayed",
+        "task-drift",
+        "workspace-drift",
+        "project-drift",
+        "branch-drift",
+        "scope-drift",
+        "budget-drift",
+        "authority-budget-exceeded",
+        "source-drift",
+        "runtime-failed",
+        "revoked",
+        "recovery-required",
+        "replay-cap-exhausted",
+        "issue-context-unavailable",
+        "question-answer-rejected",
+        "delivery-not-evidenced",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "settle",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-shutdown"],
+  proofIds: ["coding-runtime.run.shutdown.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_ISSUE_CONTEXT_ATTACHED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.run.issue-context-attached",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeOrchestrator.startFresh",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    issueNumber: { type: "integer", dataClass: "count", required: true },
+    itemCount: { type: "integer", dataClass: "count", required: true },
+    linkedIssueCount: { type: "integer", dataClass: "count", required: true },
+    byteCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-issue-context"],
+  proofIds: ["coding-runtime.run.issue-context-attached.emitted-line"],
+  releaseImpact: "patch",
+});
+
 function descriptionGenerationBinding(
   snapshot: CodingRuntimeSnapshot,
 ): WorkbenchDescriptionGenerationBinding {
@@ -2622,22 +2723,26 @@ export class CodingRuntimeOrchestrator {
       return { ok: true, snapshot: this.projection.idle() };
     }
     const result = await this.end("stop", current.runId, { requestId: current.runId });
-    this.deps.activityLog?.write({
-      level: "warn",
-      category: "process",
-      op: "coding-runtime.run.shutdown",
-      correlationId: runtimeDiagnosticCorrelationId(current.runId),
-      extra: {
-        runId: current.runId,
-        stateBefore: current.state,
-        revision: current.revision,
-        reason: "server-shutdown",
-        // What the shutdown actually achieved for this run: it ended, or the orchestrator refused
-        // to end it and the run keeps whatever state it had.
-        outcome: result.ok ? "ended" : "refused",
-        ...(result.ok ? {} : { failureCode: result.failureCode }),
-      },
-    });
+    this.deps.activityLog?.write(
+      activityLogEvent(
+        CODING_RUNTIME_RUN_SHUTDOWN_OPERATION,
+        {
+          level: "warn",
+          correlationId: runtimeDiagnosticCorrelationId(current.runId),
+          ...(result.ok ? {} : { errorKind: "conflict" as const }),
+        },
+        {
+          runId: current.runId,
+          stateBefore: current.state,
+          revision: current.revision,
+          reason: "server-shutdown",
+          // What the shutdown actually achieved for this run: it ended, or the orchestrator
+          // refused to end it and the run keeps whatever state it had.
+          outcome: result.ok ? "ended" : "refused",
+          ...(result.ok ? {} : { failureCode: result.failureCode }),
+        },
+      ),
+    );
     return result;
   }
 
@@ -2820,18 +2925,19 @@ export class CodingRuntimeOrchestrator {
       ...(initialContext === undefined ? {} : { initialContext }),
     });
     if (initialTurn === "accepted" && attachment !== undefined) {
-      this.deps.activityLog?.write({
-        category: "process",
-        op: "coding-runtime.run.issue-context-attached",
-        correlationId: runId,
-        extra: {
-          runId,
-          issueNumber: attachment.issueNumber,
-          itemCount: attachment.itemCount,
-          linkedIssueCount: attachment.linkedIssueCount,
-          byteCount: attachment.byteCount,
-        },
-      });
+      this.deps.activityLog?.write(
+        activityLogEvent(
+          CODING_RUNTIME_ISSUE_CONTEXT_ATTACHED_OPERATION,
+          { correlationId: runId },
+          {
+            runId,
+            issueNumber: attachment.issueNumber,
+            itemCount: attachment.itemCount,
+            linkedIssueCount: attachment.linkedIssueCount,
+            byteCount: attachment.byteCount,
+          },
+        ),
+      );
     }
     // Every OTHER guarded mutation (follow-up dispatch, question answer/reject) advances the live
     // revision in the SAME call that commits its production-guard reservation
