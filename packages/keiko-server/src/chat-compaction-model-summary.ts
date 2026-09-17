@@ -16,6 +16,10 @@ import {
 } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
 import { validateContextCompactionRecord } from "@oscharko-dev/keiko-contracts/runtime/context-engineering-compaction-validation";
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   findConfiguredCapability,
   type NormalizedResponse,
   type ResponseFormat,
@@ -28,7 +32,7 @@ import {
   persistChatCompactionEvidence,
   type ChatCompactionEvidenceInput,
 } from "./chat-compaction-evidence.js";
-import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { correlationIdOrUnknown } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { getServerLogger } from "./observability/index.js";
 
@@ -37,6 +41,27 @@ const MAX_SOURCE_TURNS = 16;
 const HEAD_SOURCE_TURNS = 4;
 const MAX_TURN_SOURCE_CHARS = 1_200;
 const MAX_MODEL_SOURCE_CHARS = 14_000;
+
+const CHAT_COMPACTION_FACTS_CLASSIFIED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "chat.compaction.facts.classified",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "chat-compaction-model-summary.logInferredFactClassification",
+  fields: {
+    inferredFactCount: { type: "integer", dataClass: "count", required: true },
+    verbatimFactCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["compaction-fact-classification"],
+  proofIds: ["chat.compaction.facts.classified.line"],
+  releaseImpact: "patch",
+});
 
 type ModelSummaryFailureReason = NonNullable<ContextCompactionModelSummary["failureReason"]>;
 type ModelSummaryValidationState = ContextCompactionModelSummary["validationState"];
@@ -373,15 +398,18 @@ function logInferredFactClassification(
   if (facts.inferred.length === 0) {
     return;
   }
-  getServerLogger().info({
-    category: "gateway",
-    op: "chat.compaction.facts.classified",
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-    extra: {
-      inferredFactCount: facts.inferred.length,
-      verbatimFactCount: facts.verbatim.length,
-    },
-  });
+  getServerLogger().info(
+    activityLogEvent(
+      CHAT_COMPACTION_FACTS_CLASSIFIED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      {
+        inferredFactCount: facts.inferred.length,
+        verbatimFactCount: facts.verbatim.length,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
 }
 
 function sourceTurnLines(

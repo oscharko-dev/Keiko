@@ -9,8 +9,46 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "205b1dc41337fe3b2841dca3dee729eb51c7027de380f8bf8b1f1391d61fd2a3",
-    "catalogDigest": "9ddb99bb5ad311309574f7b9df24f9a2a50f4d693af29c6ec1cad385156eec92",
+    "catalogDigest": "60c26cd6b7acff3646028805b99f5e12f6785818e76aafc3489b2318153e57c3",
     "operations": [
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "chat.compaction.facts.classified",
+        "category": "gateway",
+        "owner": "keiko-server",
+        "emitter": "chat-compaction-model-summary.logInferredFactClassification",
+        "fields": {
+          "inferredFactCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "verbatimFactCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["compaction-fact-classification"],
+        "proofIds": ["chat.compaction.facts.classified.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/chat-compaction-model-summary.ts:45",
+        "emitterSites": ["packages/keiko-server/src/chat-compaction-model-summary.ts:402"]
+      },
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
@@ -4188,13 +4226,13 @@
     {
       "op": "chat.compaction.facts.classified",
       "category": "gateway",
-      "site": "packages/keiko-server/src/chat-compaction-model-summary.ts:378",
+      "site": "packages/keiko-server/src/chat-compaction-model-summary.ts:48",
       "package": "keiko-server"
     },
     {
       "op": "chat.compaction.summary",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/chat-compaction-model-summary.ts:736",
+      "site": "packages/keiko-server/src/chat-compaction-model-summary.ts:764",
       "sourceKind": "diagnostic-operation",
       "package": "keiko-server"
     },
