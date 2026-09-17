@@ -99,8 +99,7 @@ function registeredIdentity(record: Readonly<Record<string, unknown>>): Record<s
     throw new TypeError("Incomplete tool lifecycle evidence");
   }
   return {
-    op: record.op,
-    correlationId: record.correlationId,
+    ...definedFields(record, ["op", "correlationId"]),
     ...definedFields(record, ["parentCorrelationId"]),
     catalogRevision: record.catalogRevision,
     profile: { id: record.profileId, version: record.profileVersion },

@@ -497,9 +497,10 @@ function makeConsolidationLogPortProbe() {
       );
       check(record.level === "error", `consolidation log-port level: ${record.level}`);
       check(
-        record.extra?.droppedOp === "gate.probe.op",
-        "consolidation log-port droppedOp not retained",
+        record.extra?.droppedOpDigest === "2b1c9df7297b97cf",
+        "consolidation log-port droppedOpDigest not retained",
       );
+      check(record.extra?.droppedOp === undefined, "consolidation log-port leaked droppedOp");
       check(
         typeof record.errorKind === "string" && record.errorKind.length > 0,
         "consolidation log-port errorKind missing",
