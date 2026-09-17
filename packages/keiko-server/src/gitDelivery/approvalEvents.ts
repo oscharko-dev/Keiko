@@ -214,17 +214,106 @@ const PR_MARK_READY_APPROVAL_MINTED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
-const APPROVAL_OPERATION_REGISTRATIONS = {
-  "git.delivery.push.approval.required": PUSH_APPROVAL_REQUIRED_OPERATION,
-  "git.delivery.push.approval.minted": PUSH_APPROVAL_MINTED_OPERATION,
-  "git.delivery.pr.approval.required": PR_APPROVAL_REQUIRED_OPERATION,
-  "git.delivery.pr.approval.minted": PR_APPROVAL_MINTED_OPERATION,
-  "git.delivery.commit.approval.required": COMMIT_APPROVAL_REQUIRED_OPERATION,
-  "git.delivery.commit.approval.minted": COMMIT_APPROVAL_MINTED_OPERATION,
-  "git.delivery.sync.approval.minted": SYNC_APPROVAL_MINTED_OPERATION,
-  "git.delivery.pr-mark-ready.approval.required": PR_MARK_READY_APPROVAL_REQUIRED_OPERATION,
-  "git.delivery.pr-mark-ready.approval.minted": PR_MARK_READY_APPROVAL_MINTED_OPERATION,
-} as const;
+interface ApprovalEventEnvelope {
+  readonly correlationId: string;
+  readonly status: 200;
+}
+
+interface ApprovalEventFields {
+  readonly operation: GitDeliveryApprovalOperation;
+  readonly runId: string;
+  readonly prExternalId?: string;
+}
+
+type ApprovalEventWriter = (
+  activityLog: ServerLogSink,
+  envelope: ApprovalEventEnvelope,
+  fields: ApprovalEventFields,
+) => void;
+
+function writePushApprovalRequired(
+  log: ServerLogSink,
+  envelope: ApprovalEventEnvelope,
+  fields: ApprovalEventFields,
+): void {
+  log.write(activityLogEvent(PUSH_APPROVAL_REQUIRED_OPERATION, envelope, fields));
+}
+
+function writePushApprovalMinted(
+  log: ServerLogSink,
+  envelope: ApprovalEventEnvelope,
+  fields: ApprovalEventFields,
+): void {
+  log.write(activityLogEvent(PUSH_APPROVAL_MINTED_OPERATION, envelope, fields));
+}
+
+function writePrApprovalRequired(
+  log: ServerLogSink,
+  envelope: ApprovalEventEnvelope,
+  fields: ApprovalEventFields,
+): void {
+  log.write(activityLogEvent(PR_APPROVAL_REQUIRED_OPERATION, envelope, fields));
+}
+
+function writePrApprovalMinted(
+  log: ServerLogSink,
+  envelope: ApprovalEventEnvelope,
+  fields: ApprovalEventFields,
+): void {
+  log.write(activityLogEvent(PR_APPROVAL_MINTED_OPERATION, envelope, fields));
+}
+
+function writeCommitApprovalRequired(
+  log: ServerLogSink,
+  envelope: ApprovalEventEnvelope,
+  fields: ApprovalEventFields,
+): void {
+  log.write(activityLogEvent(COMMIT_APPROVAL_REQUIRED_OPERATION, envelope, fields));
+}
+
+function writeCommitApprovalMinted(
+  log: ServerLogSink,
+  envelope: ApprovalEventEnvelope,
+  fields: ApprovalEventFields,
+): void {
+  log.write(activityLogEvent(COMMIT_APPROVAL_MINTED_OPERATION, envelope, fields));
+}
+
+function writeSyncApprovalMinted(
+  log: ServerLogSink,
+  envelope: ApprovalEventEnvelope,
+  fields: ApprovalEventFields,
+): void {
+  log.write(activityLogEvent(SYNC_APPROVAL_MINTED_OPERATION, envelope, fields));
+}
+
+function writePrMarkReadyApprovalRequired(
+  log: ServerLogSink,
+  envelope: ApprovalEventEnvelope,
+  fields: ApprovalEventFields,
+): void {
+  log.write(activityLogEvent(PR_MARK_READY_APPROVAL_REQUIRED_OPERATION, envelope, fields));
+}
+
+function writePrMarkReadyApprovalMinted(
+  log: ServerLogSink,
+  envelope: ApprovalEventEnvelope,
+  fields: ApprovalEventFields,
+): void {
+  log.write(activityLogEvent(PR_MARK_READY_APPROVAL_MINTED_OPERATION, envelope, fields));
+}
+
+const APPROVAL_EVENT_WRITERS: Readonly<Record<GitDeliveryApprovalEventOp, ApprovalEventWriter>> = {
+  "git.delivery.push.approval.required": writePushApprovalRequired,
+  "git.delivery.push.approval.minted": writePushApprovalMinted,
+  "git.delivery.pr.approval.required": writePrApprovalRequired,
+  "git.delivery.pr.approval.minted": writePrApprovalMinted,
+  "git.delivery.commit.approval.required": writeCommitApprovalRequired,
+  "git.delivery.commit.approval.minted": writeCommitApprovalMinted,
+  "git.delivery.sync.approval.minted": writeSyncApprovalMinted,
+  "git.delivery.pr-mark-ready.approval.required": writePrMarkReadyApprovalRequired,
+  "git.delivery.pr-mark-ready.approval.minted": writePrMarkReadyApprovalMinted,
+};
 
 // #3387 (ADR-0138 D2): shared by the push and PR execute/approve routes' approval-required and
 // approval-minted lines — see `pushApprovalRequiredBlock`/`prApprovalRequiredBlock` for why the
@@ -251,5 +340,5 @@ export function logGitDeliveryApprovalEvent(
     ...(evidence.prExternalId === undefined ? {} : { prExternalId: evidence.prExternalId }),
   };
   const envelope = { correlationId, status: 200 } as const;
-  activityLog.write(activityLogEvent(APPROVAL_OPERATION_REGISTRATIONS[op], envelope, fields));
+  APPROVAL_EVENT_WRITERS[op](activityLog, envelope, fields);
 }
