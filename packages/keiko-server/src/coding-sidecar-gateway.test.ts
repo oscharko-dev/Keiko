@@ -995,6 +995,8 @@ describe("coding-sidecar gateway", () => {
           unavailableOptionalToolCount: 1,
           offeredOptionalTools: ["keiko_child_agent", "keiko_skill", "keiko_skill_discover"],
           offeredOptionalToolCount: 3,
+          completeness: "complete",
+          loss: "none",
         },
       });
       expect(availabilityEvents[1]).toMatchObject({
@@ -1005,8 +1007,15 @@ describe("coding-sidecar gateway", () => {
           unavailableOptionalToolCount: 1,
           offeredOptionalTools: ["keiko_research_fetch", "keiko_skill", "keiko_skill_discover"],
           offeredOptionalToolCount: 3,
+          completeness: "complete",
+          loss: "none",
         },
       });
+      expect(
+        activityLogEventRegistration(
+          availabilityEvents[0] as unknown as Readonly<Record<PropertyKey, unknown>>,
+        ),
+      ).toBeDefined();
       expect(availabilityEvents[0]?.extra?.handlerSetDigest).not.toBe(
         availabilityEvents[1]?.extra?.handlerSetDigest,
       );
