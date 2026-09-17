@@ -48,11 +48,7 @@ import { createPendingResearchApprovals } from "./researchApprovalIssuance.js";
 import { createResearchGrantRegistry } from "./researchGrantRegistry.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { ServerDiagnosticRecord, ServerDiagnosticSink } from "../diagnostics-log.js";
-import {
-  errorKindOf,
-  type ServerLogEvent,
-  type ServerLogSink,
-} from "../observability/server-log.js";
+import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
 import type {
   AuxiliaryResearchScopeV1,
   CodingWorkbenchIssueBinding,
@@ -1352,14 +1348,14 @@ describe("CodingRuntimeOrchestrator", () => {
     expect(f.manager.stop).toHaveBeenCalled();
     expect(linesWithOp(captured, "coding-runtime.run.delivery-continuation-refused")).toEqual([
       expect.objectContaining({
-        errorKind: errorKindOf(unreadable),
+        errorKind: "unavailable",
         extra: expect.objectContaining({ attempt: 1, reason: "evidence-unreadable" }) as unknown,
       }),
     ]);
     expect(linesWithOp(captured, "coding-runtime.run.delivery-evidence-unreadable")).toEqual([
       expect.objectContaining({
         level: "warn",
-        errorKind: errorKindOf(unreadable),
+        errorKind: "unavailable",
         extra: expect.objectContaining({ runId: "run-1" }) as unknown,
       }),
     ]);
@@ -1377,7 +1373,7 @@ describe("CodingRuntimeOrchestrator", () => {
     });
     expect(linesWithOp(captured, "coding-runtime.run.delivery-continuation-refused")).toEqual([
       expect.objectContaining({
-        errorKind: errorKindOf(thrown),
+        errorKind: "unavailable",
         extra: expect.objectContaining({ attempt: 1, reason: "dispatch-threw" }) as unknown,
       }),
     ]);

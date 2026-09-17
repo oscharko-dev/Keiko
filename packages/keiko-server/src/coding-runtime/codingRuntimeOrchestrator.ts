@@ -538,6 +538,172 @@ const CODING_RUNTIME_RUN_SETTLED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+const CODING_RUNTIME_RECOVERY_ACKNOWLEDGED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.run.recovery-acknowledged",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeOrchestrator.acknowledgeRecovery",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    revision: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-recovery-acknowledgement"],
+  proofIds: ["coding-runtime.run.recovery-acknowledged.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_DELIVERY_EVIDENCE_UNREADABLE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.run.delivery-evidence-unreadable",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeOrchestrator.recordDeliveryEvidenceUnreadable",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    issueNumber: { type: "integer", dataClass: "count", required: false },
+    errorClass: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    code: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    gatewayRequestId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 128,
+    },
+    httpStatus: { type: "integer", dataClass: "count", required: false },
+    retryAfterMs: { type: "integer", dataClass: "duration", required: false },
+    partialPromptTokens: { type: "integer", dataClass: "count", required: false },
+    partialCompletionTokens: { type: "integer", dataClass: "count", required: false },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-runtime-delivery-evidence"],
+  proofIds: ["coding-runtime.run.delivery-evidence-unreadable.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_DELIVERY_CONTINUED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.run.delivery-continued",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeOrchestrator.recordDeliveryContinued",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    issueNumber: { type: "integer", dataClass: "count", required: false },
+    attempt: { type: "integer", dataClass: "count", required: true },
+    max: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-delivery-continuation"],
+  proofIds: ["coding-runtime.run.delivery-continued.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_DELIVERY_CONTINUATION_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.run.delivery-continuation-refused",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeOrchestrator.recordDeliveryContinuationRefused",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    issueNumber: { type: "integer", dataClass: "count", required: false },
+    attempt: { type: "integer", dataClass: "count", required: true },
+    max: { type: "integer", dataClass: "count", required: true },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["dispatch-threw", "dispatch-refused", "evidence-unreadable", "run-superseded"],
+    },
+    errorClass: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    code: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    gatewayRequestId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 128,
+    },
+    httpStatus: { type: "integer", dataClass: "count", required: false },
+    retryAfterMs: { type: "integer", dataClass: "duration", required: false },
+    partialPromptTokens: { type: "integer", dataClass: "count", required: false },
+    partialCompletionTokens: { type: "integer", dataClass: "count", required: false },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-runtime-delivery-continuation"],
+  proofIds: ["coding-runtime.run.delivery-continuation-refused.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_DELIVERY_UNEVIDENCED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.run.delivery-unevidenced",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeOrchestrator.deliveryTruthfulOutcome",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    issueNumber: { type: "integer", dataClass: "count", required: true },
+    hasVerifiedCommit: { type: "boolean", dataClass: "closed-enum", required: true },
+    hasDraftDelivery: { type: "boolean", dataClass: "closed-enum", required: true },
+    reportedOutcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["succeeded"],
+    },
+    continuations: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-runtime-delivery-evidence"],
+  proofIds: ["coding-runtime.run.delivery-unevidenced.emitted-line"],
+  releaseImpact: "patch",
+});
+
 function descriptionGenerationBinding(
   snapshot: CodingRuntimeSnapshot,
 ): WorkbenchDescriptionGenerationBinding {
@@ -1169,15 +1335,55 @@ function isLegalSettlementTarget<T extends { readonly state: CodingWorkbenchRunt
   return target !== undefined && isLegalCodingWorkbenchRuntimeTransition(live.state, target.state);
 }
 
+interface DeliveryContinuationFields {
+  readonly runId: string;
+  readonly issueNumber?: number;
+  readonly attempt: number;
+  readonly max: number;
+}
+
+interface RuntimeDeliveryErrorFields {
+  readonly errorClass: string;
+  readonly code?: string;
+  readonly gatewayRequestId?: string;
+  readonly httpStatus?: number;
+  readonly retryAfterMs?: number;
+  readonly partialPromptTokens?: number;
+  readonly partialCompletionTokens?: number;
+  readonly frames?: readonly string[];
+  readonly causeChain?: readonly string[];
+}
+
 function deliveryContinuationExtra(
   live: CodingRuntimeSnapshot,
   attempt: number,
-): Readonly<Record<string, unknown>> {
+): DeliveryContinuationFields {
   return {
     runId: live.runId,
-    issueNumber: live.issueBinding?.issueNumber,
+    ...(live.issueBinding === undefined ? {} : { issueNumber: live.issueBinding.issueNumber }),
     attempt,
     max: DELIVERY_CONTINUATION_MAX,
+  };
+}
+
+function runtimeDeliveryErrorFields(error: unknown): RuntimeDeliveryErrorFields {
+  const description = describeError(error);
+  return {
+    errorClass: description.errorClass,
+    ...(description.code === undefined ? {} : { code: description.code }),
+    ...(description.gatewayRequestId === undefined
+      ? {}
+      : { gatewayRequestId: description.gatewayRequestId }),
+    ...(description.httpStatus === undefined ? {} : { httpStatus: description.httpStatus }),
+    ...(description.retryAfterMs === undefined ? {} : { retryAfterMs: description.retryAfterMs }),
+    ...(description.partialUsage === undefined
+      ? {}
+      : {
+          partialPromptTokens: description.partialUsage.promptTokens,
+          partialCompletionTokens: description.partialUsage.completionTokens,
+        }),
+    ...(description.frames === undefined ? {} : { frames: description.frames }),
+    ...(description.causeChain === undefined ? {} : { causeChain: description.causeChain }),
   };
 }
 
@@ -1809,12 +2015,13 @@ export class CodingRuntimeOrchestrator {
         current.runId,
         this.now().toISOString(),
       );
-      this.deps.activityLog?.write({
-        category: "process",
-        op: "coding-runtime.run.recovery-acknowledged",
-        correlationId: runtimeDiagnosticCorrelationId(acknowledged.runId),
-        extra: { runId: acknowledged.runId, revision: acknowledged.revision },
-      });
+      this.deps.activityLog?.write(
+        activityLogEvent(
+          CODING_RUNTIME_RECOVERY_ACKNOWLEDGED_OPERATION,
+          { correlationId: runtimeDiagnosticCorrelationId(acknowledged.runId) },
+          { runId: acknowledged.runId, revision: acknowledged.revision },
+        ),
+      );
       return { ok: true, snapshot: this.publicSnapshotWithDescription(acknowledged) };
     });
   }
@@ -2120,18 +2327,23 @@ export class CodingRuntimeOrchestrator {
   }
 
   private recordDeliveryEvidenceUnreadable(live: CodingRuntimeSnapshot, error: unknown): void {
-    this.deps.activityLog?.write({
-      level: "warn",
-      category: "process",
-      op: "coding-runtime.run.delivery-evidence-unreadable",
-      correlationId: runtimeDiagnosticCorrelationId(live.runId),
-      errorKind: errorKindOf(error),
-      extra: {
-        runId: live.runId,
-        issueNumber: live.issueBinding?.issueNumber,
-        ...describeError(error),
-      },
-    });
+    this.deps.activityLog?.write(
+      activityLogEvent(
+        CODING_RUNTIME_DELIVERY_EVIDENCE_UNREADABLE_OPERATION,
+        {
+          level: "warn",
+          correlationId: runtimeDiagnosticCorrelationId(live.runId),
+          errorKind: "unavailable",
+        },
+        {
+          runId: live.runId,
+          ...(live.issueBinding === undefined
+            ? {}
+            : { issueNumber: live.issueBinding.issueNumber }),
+          ...runtimeDeliveryErrorFields(error),
+        },
+      ),
+    );
   }
 
   // The one-based attempt a finished turn may continue with, or undefined when it settles: only a
@@ -2226,13 +2438,13 @@ export class CodingRuntimeOrchestrator {
     attempt: number,
     correlationId: string,
   ): void {
-    this.deps.activityLog?.write({
-      level: "info",
-      category: "process",
-      op: "coding-runtime.run.delivery-continued",
-      correlationId,
-      extra: deliveryContinuationExtra(live, attempt),
-    });
+    this.deps.activityLog?.write(
+      activityLogEvent(
+        CODING_RUNTIME_DELIVERY_CONTINUED_OPERATION,
+        { level: "info", correlationId },
+        deliveryContinuationExtra(live, attempt),
+      ),
+    );
   }
 
   // Every refusal names its reason; one that follows a thrown error also carries its errorKind and
@@ -2244,18 +2456,21 @@ export class CodingRuntimeOrchestrator {
     reason: DeliveryContinuationRefusal,
     error?: unknown,
   ): void {
-    this.deps.activityLog?.write({
-      level: "warn",
-      category: "process",
-      op: "coding-runtime.run.delivery-continuation-refused",
-      correlationId,
-      ...(error === undefined ? {} : { errorKind: errorKindOf(error) }),
-      extra: {
-        ...deliveryContinuationExtra(live, attempt),
-        reason,
-        ...(error === undefined ? {} : describeError(error)),
-      },
-    });
+    this.deps.activityLog?.write(
+      activityLogEvent(
+        CODING_RUNTIME_DELIVERY_CONTINUATION_REFUSED_OPERATION,
+        {
+          level: "warn",
+          correlationId,
+          errorKind: reason === "run-superseded" ? "conflict" : "unavailable",
+        },
+        {
+          ...deliveryContinuationExtra(live, attempt),
+          reason,
+          ...(error === undefined ? {} : runtimeDeliveryErrorFields(error)),
+        },
+      ),
+    );
   }
 
   /**
@@ -2303,20 +2518,24 @@ export class CodingRuntimeOrchestrator {
     }
     const { hasVerifiedCommit, hasDraftDelivery } = evidence;
     if (hasVerifiedCommit || hasDraftDelivery) return target;
-    this.deps.activityLog?.write({
-      level: "warn",
-      category: "process",
-      op: "coding-runtime.run.delivery-unevidenced",
-      correlationId: runtimeDiagnosticCorrelationId(live.runId),
-      extra: {
-        runId: live.runId,
-        issueNumber: live.issueBinding.issueNumber,
-        hasVerifiedCommit,
-        hasDraftDelivery,
-        reportedOutcome: "succeeded",
-        continuations: this.deliveryContinuations.get(live.runId) ?? 0,
-      },
-    });
+    this.deps.activityLog?.write(
+      activityLogEvent(
+        CODING_RUNTIME_DELIVERY_UNEVIDENCED_OPERATION,
+        {
+          level: "warn",
+          correlationId: runtimeDiagnosticCorrelationId(live.runId),
+          errorKind: "validation-failed",
+        },
+        {
+          runId: live.runId,
+          issueNumber: live.issueBinding.issueNumber,
+          hasVerifiedCommit,
+          hasDraftDelivery,
+          reportedOutcome: "succeeded",
+          continuations: this.deliveryContinuations.get(live.runId) ?? 0,
+        },
+      ),
+    );
     return { state: "failed", failureCode: "delivery-not-evidenced" };
   }
 
