@@ -564,6 +564,9 @@ describe("executionFailureDetail — closed provider failure words on the mutati
       identityIssue: "shape-invalid",
     });
     expect(executionFailureDetail(failed({ ...base, failureClass: "Free text here" }))).toEqual({});
+    expect(executionFailureDetail(failed({ ...base, failureClass: "plausible-token" }))).toEqual(
+      {},
+    );
   });
 
   it("admits the detail the PR path hands in beside the result's own words", () => {
