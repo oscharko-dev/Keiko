@@ -17,6 +17,7 @@ import { join } from "node:path";
 import { Readable } from "node:stream";
 
 import type { KnowledgeCapsuleId, KnowledgeSourceId } from "@oscharko-dev/keiko-contracts";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import {
   addSourceToCapsule,
   openKnowledgeStore,
@@ -200,11 +201,28 @@ const RUN_LAUNCHED = "indexing.detached-run.launched";
 const CANCEL_REQUESTED = "indexing.cancel.requested";
 const CANCEL_REFUSED = "indexing.cancel.refused";
 const CANCEL_ACCEPTED = "indexing.cancel.accepted";
+const ROUTE_OPERATIONS: ReadonlySet<string> = new Set([
+  START_ACCEPTED,
+  START_REFUSED,
+  RUN_LAUNCHED,
+  "indexing.detached-run.failed",
+  CANCEL_REQUESTED,
+  CANCEL_REFUSED,
+  CANCEL_ACCEPTED,
+]);
 
 function lineFor(sink: BufferedServerLogSink, op: string): ServerLogEvent {
   const event = sink.events.find((candidate) => candidate.op === op);
   if (event === undefined) {
     throw new TypeError(`no activity-log line was written for ${op}`);
+  }
+  if (ROUTE_OPERATIONS.has(op)) {
+    expect(
+      activityLogEventRegistration(
+        event as unknown as Readonly<Record<PropertyKey, unknown>>,
+      ),
+    ).toBeDefined();
+    expect(event.extra).toMatchObject({ completeness: "complete", loss: "none" });
   }
   return event;
 }
