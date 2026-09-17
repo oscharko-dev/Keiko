@@ -28,6 +28,10 @@ import type {
 import { compareStrings } from "@oscharko-dev/keiko-contracts/runtime/comparators";
 import { CODING_WORKBENCH_MINIMUM_CODING_CONTEXT_PROMPT_TOKENS } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   MODEL_REASONING_EFFORTS,
   validateGatewaySamplingParameters,
 } from "@oscharko-dev/keiko-contracts/runtime/gateway";
@@ -49,7 +53,7 @@ import {
   type OpenCodeGatewayHandlerCoverage,
 } from "./coding-runtime/opencodeToolSchemas.js";
 import type { OpenCodeOptionalToolName } from "./coding-runtime/opencodeLaunchProfile.js";
-import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import { correlationIdOrUnknown, UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { emitServerDiagnostic, serverDiagnosticFromError } from "./diagnostics-log.js";
 import { readJsonObject } from "./files.js";
 import { getServerLogger } from "./observability/index.js";
@@ -131,6 +135,30 @@ const OUTPUT_BYTES_PER_TOKEN_LIMIT = 4;
 const TOOL_ADOPTION_GAP_MESSAGE_THRESHOLD = 9;
 const GOVERNED_TOOL_NAME_PREFIX = "keiko_";
 const MODEL_REASONING_EFFORT_SET: ReadonlySet<string> = new Set(MODEL_REASONING_EFFORTS);
+
+const CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-sidecar.gateway.request-validated",
+  category: "gateway",
+  owner: "keiko-server",
+  emitter: "coding-sidecar-gateway.logValidatedRequestBounds",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    maxRequestBytes: { type: "integer", dataClass: "count", required: true },
+    maxPromptTokens: { type: "integer", dataClass: "count", required: true },
+    estimatedPromptTokens: { type: "integer", dataClass: "count", required: true },
+    inputMessageCount: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-sidecar-gateway-request"],
+  proofIds: ["coding-sidecar.gateway.request-validated.line"],
+  releaseImpact: "patch",
+});
 
 // #3390 closeout (AGENTS.md §8): every rejection this route can hand back gets ONE body-free
 // activity-log line carrying the REASON, so a defect is reconstructable from the log alone instead
@@ -2321,18 +2349,21 @@ function logValidatedRequestBounds(
   bounds: CodingWorkbenchSidecarGatewayRunMetadata,
   estimatedPromptTokens: number,
 ): void {
-  getServerLogger().info({
-    category: "gateway",
-    op: "coding-sidecar.gateway.request-validated",
-    correlationId: ctx.correlationId ?? UNKNOWN_CORRELATION_ID,
-    extra: {
-      runId,
-      maxRequestBytes: bounds.maxRequestBytes,
-      maxPromptTokens: bounds.maxPromptTokens,
-      estimatedPromptTokens,
-      inputMessageCount: request.messages.length,
-    },
-  });
+  getServerLogger().info(
+    activityLogEvent(
+      CODING_SIDECAR_GATEWAY_REQUEST_VALIDATED_OPERATION,
+      { correlationId: correlationIdOrUnknown(ctx.correlationId) },
+      {
+        runId,
+        maxRequestBytes: bounds.maxRequestBytes,
+        maxPromptTokens: bounds.maxPromptTokens,
+        estimatedPromptTokens,
+        inputMessageCount: request.messages.length,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
 }
 
 function executeBudgetedGatewayChat(
