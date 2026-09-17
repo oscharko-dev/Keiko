@@ -18,6 +18,10 @@ import type {
   SkillUnavailableReason,
 } from "@oscharko-dev/keiko-contracts";
 import { CODE_TASK_AUXILIARY_SCHEMA_VERSION } from "@oscharko-dev/keiko-contracts/runtime/code-task-auxiliary";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import type { ModelPort } from "@oscharko-dev/keiko-harness";
 
 import type { CodingToolMutationGuard } from "./codingToolFacadePorts.js";
@@ -60,6 +64,33 @@ export const SKILL_HANDLER_CATEGORIES: ReadonlySet<SkillCategory> = new Set([
 export const PRODUCTION_SKILL_STATIC_FACTS: SkillStaticFacts = Object.freeze({
   profile: OPENCODE_SKILL_PROFILE,
   handlerMounted: (category: SkillCategory): boolean => SKILL_HANDLER_CATEGORIES.has(category),
+});
+
+const CODING_RUNTIME_SKILL_DISCOVERY_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.skill-discovery",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionAuxiliaryPorts.skillDiscoveryPort",
+  fields: {
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    catalogRevision: { type: "integer", dataClass: "count", required: true },
+    catalogDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    approvedCount: { type: "integer", dataClass: "count", required: true },
+    listedCount: { type: "integer", dataClass: "count", required: true },
+    disabledCount: { type: "integer", dataClass: "count", required: true },
+    incompatibleCount: { type: "integer", dataClass: "count", required: true },
+    handlerUnavailableCount: { type: "integer", dataClass: "count", required: true },
+    authorityDeniedCount: { type: "integer", dataClass: "count", required: true },
+    budgetExhaustedCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "capability",
+  failureClasses: ["coding-runtime-skill-discovery"],
+  proofIds: ["coding-runtime.skill-discovery.emitted-line"],
+  releaseImpact: "patch",
 });
 
 export interface ProductionAuxiliaryPortInput {
@@ -214,20 +245,25 @@ function skillDiscoveryPort(
           input.catalog.isImplicitAllowed(skillId) || input.explicitSkills.isPending(skillId),
       );
       binding.catalogDigest = skills.catalogDigest;
-      input.activityLog.write({
-        category: "process",
-        op: "coding-runtime.skill-discovery",
-        correlationId: input.runId,
-        durationMs: Date.now() - startedAt,
-        extra: {
-          runId: input.runId,
-          catalogRevision: input.catalog.revision(),
-          catalogDigest: skills.catalogDigest,
-          approvedCount: projection.skills.length,
-          listedCount: skills.skills.length,
-          unavailableByReason: unavailableSkillCounts(projection),
-        },
-      });
+      const unavailable = unavailableSkillCounts(projection);
+      input.activityLog.write(
+        activityLogEvent(
+          CODING_RUNTIME_SKILL_DISCOVERY_OPERATION,
+          { correlationId: input.runId, durationMs: Date.now() - startedAt },
+          {
+            runId: input.runId,
+            catalogRevision: input.catalog.revision(),
+            catalogDigest: skills.catalogDigest,
+            approvedCount: projection.skills.length,
+            listedCount: skills.skills.length,
+            disabledCount: unavailable.disabled ?? 0,
+            incompatibleCount: unavailable.incompatible ?? 0,
+            handlerUnavailableCount: unavailable["handler-unavailable"] ?? 0,
+            authorityDeniedCount: unavailable["authority-denied"] ?? 0,
+            budgetExhaustedCount: unavailable["budget-exhausted"] ?? 0,
+          },
+        ),
+      );
       return Promise.resolve({ status: "completed", skills });
     },
   };

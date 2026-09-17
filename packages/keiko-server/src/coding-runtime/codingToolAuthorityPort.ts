@@ -13,6 +13,10 @@ import {
   codingWorkbenchCodeTaskDeliveryEffectFor,
   codingWorkbenchPolicyEffectFor,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import type {
   CodingToolAuthorityPort,
@@ -43,6 +47,49 @@ import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import { processServerLogSink } from "../process-log-sink.js";
 import { defaultServerDiagnosticSink, type ServerDiagnosticSink } from "../diagnostics-log.js";
 import type { ServerLogSink } from "../observability/server-log.js";
+
+const CODING_RUNTIME_TOOL_AUTHORITY_DENIED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.tool-authority.denied",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingToolAuthorityPort.logAuthorityDenial",
+  fields: {
+    action: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "read",
+        "discover",
+        "search",
+        "edit",
+        "command",
+        "verification",
+        "git",
+        "delivery",
+        "connector",
+        "egress",
+        "skill",
+        "skill-discover",
+        "child-agent",
+      ],
+    },
+    effectiveMode: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["governed-assist", "supervised-coding", "autonomous-delivery"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-tool-authority"],
+  proofIds: ["coding-runtime.tool-authority.denied.emitted-line"],
+  releaseImpact: "patch",
+});
 
 export interface CodingToolAuthorityContext {
   readonly adapterKind: CodingWorkbenchRuntimeAdapterKind;
@@ -169,13 +216,17 @@ function logAuthorityDenial(
   envelope: CodingWorkbenchRuntimeAuthorityEnvelope,
   request: CodingToolActionRequest,
 ): void {
-  activityLog?.write({
-    level: "warn",
-    category: "security",
-    op: "coding-runtime.tool-authority.denied",
-    correlationId: context.correlationId ?? UNKNOWN_CORRELATION_ID,
-    extra: { action: request.action, effectiveMode: envelope.authority.effectiveMode },
-  });
+  activityLog?.write(
+    activityLogEvent(
+      CODING_RUNTIME_TOOL_AUTHORITY_DENIED_OPERATION,
+      {
+        level: "warn",
+        correlationId: context.correlationId ?? UNKNOWN_CORRELATION_ID,
+        errorKind: "authority-denied",
+      },
+      { action: request.action, effectiveMode: envelope.authority.effectiveMode },
+    ),
+  );
 }
 
 // The authority surface this port reads. `delegationFits` answers a budget question without

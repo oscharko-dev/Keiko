@@ -10,6 +10,10 @@ import {
   createFetchEditorAgentHttpTransport,
   EditorAgentHttpClient,
 } from "@oscharko-dev/keiko-tools";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { codingSidecarDisabledByPolicy } from "../coding-sidecar-gateway.js";
 import type { OpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway.js";
@@ -36,6 +40,86 @@ type ProductionOpenCodePorts = Pick<
   ProductionCodingRuntimeResolverInput,
   "backend" | "editorAgentClient" | "secureWorkspaceTextRead"
 >;
+
+const CODING_RUNTIME_DEV_LANE_ACTIVATED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.dev-lane.activated",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionOpenCodeActivation.recordDevLaneDiscovery",
+  fields: {
+    lane: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["dev-checkout"],
+    },
+    target: {
+      type: "string",
+      dataClass: "safe-platform-class",
+      required: true,
+      values: ["windows-x64", "macos-arm64", "macos-x64"],
+    },
+    evidenceClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["functional-not-platform-qualified"],
+    },
+    runtimeSupervisorSha256: {
+      type: "string",
+      dataClass: "digest",
+      required: false,
+      maxLength: 64,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "capability",
+  failureClasses: ["coding-runtime-dev-lane"],
+  proofIds: ["coding-runtime.dev-lane.activated.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CODING_RUNTIME_DEV_LANE_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.dev-lane.refused",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionOpenCodeActivation.recordDevLaneDiscovery",
+  fields: {
+    lane: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["dev-checkout"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "platform-unsupported",
+        "packaged-install-present",
+        "not-a-dev-checkout",
+        "payload-missing",
+        "payload-unapproved",
+        "payload-tampered",
+        "native-helper-directory-untrusted",
+        "secure-read-helper-missing",
+        "secure-read-helper-stale",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-runtime-dev-lane"],
+  proofIds: ["coding-runtime.dev-lane.refused.emitted-line"],
+  releaseImpact: "patch",
+});
 
 export interface ProductionOpenCodeActivationInput {
   readonly env: NodeJS.ProcessEnv;
@@ -201,27 +285,29 @@ function recordDevLaneDiscovery(
 ): void {
   if (discovery.outcome === "inactive") return;
   if (discovery.outcome === "activated") {
-    activityLog.write({
-      category: "process",
-      op: "coding-runtime.dev-lane.activated",
-      correlationId: UNKNOWN_CORRELATION_ID,
-      extra: {
-        lane: discovery.runtime.lane,
-        target: discovery.runtime.target,
-        evidenceClass: discovery.runtime.evidenceClass,
-        ...(discovery.runtime.nativeHelperSha256 === undefined
-          ? {}
-          : { runtimeSupervisorSha256: discovery.runtime.nativeHelperSha256 }),
-      },
-    });
+    activityLog.write(
+      activityLogEvent(
+        CODING_RUNTIME_DEV_LANE_ACTIVATED_OPERATION,
+        { correlationId: UNKNOWN_CORRELATION_ID },
+        {
+          lane: discovery.runtime.lane,
+          target: discovery.runtime.target,
+          evidenceClass: discovery.runtime.evidenceClass,
+          ...(discovery.runtime.nativeHelperSha256 === undefined
+            ? {}
+            : { runtimeSupervisorSha256: discovery.runtime.nativeHelperSha256 }),
+        },
+      ),
+    );
     return;
   }
-  activityLog.write({
-    category: "process",
-    op: "coding-runtime.dev-lane.refused",
-    correlationId: UNKNOWN_CORRELATION_ID,
-    extra: { lane: "dev-checkout", reason: discovery.reason },
-  });
+  activityLog.write(
+    activityLogEvent(
+      CODING_RUNTIME_DEV_LANE_REFUSED_OPERATION,
+      { level: "warn", correlationId: UNKNOWN_CORRELATION_ID, errorKind: "unavailable" },
+      { lane: "dev-checkout", reason: discovery.reason },
+    ),
+  );
 }
 
 function devLaneRuntime(discovery: DevLaneOpenCodeDiscovery): ResolvedRuntime {
