@@ -362,8 +362,8 @@ describe("runSupportCli export", () => {
     // `discoverServerLogFiles` only `statSync`s each name (which succeeds on a directory too), so
     // a directory sitting where `server.log` belongs passes discovery — the read step afterward
     // (`readFileSync`) is what actually fails, with EISDIR. This is the same "vanished between two
-    // fs calls" shape the sink's own rotation/retention pruning produces, exercised deterministically
-    // instead of via a real race.
+    // fs calls" shape concurrent operator cleanup can produce, exercised deterministically instead
+    // of via a real race.
     mkdirSync(join(stateDir, "logs", "server.log"), { recursive: true });
 
     const c = makeIo();

@@ -512,7 +512,7 @@ describe("legacy update audit import", () => {
     });
   });
 
-  it("recognizes an exact completion in a rotated allowed log", () => {
+  it("recognizes an exact completion in an allowed legacy archive", () => {
     const stateDir = fixture();
     writeLegacy(stateDir, [JSON.stringify(legacyEvent())]);
     const first = importLegacyUpdateAuditSnapshot({ stateDir, level: "info" });
@@ -609,7 +609,18 @@ describe("legacy update audit import", () => {
       status: "deferred",
       reason: "destination-invalid",
     });
-    expect(readFileSync(logPath, "utf8")).toBe(crowdedLog);
+    const after = readFileSync(logPath, "utf8");
+    expect(after.startsWith(crowdedLog)).toBe(true);
+    const appended = after.slice(crowdedLog.length).trim().split("\n");
+    expect(appended).toHaveLength(1);
+    expect(JSON.parse(appended[0] ?? "null")).toMatchObject({
+      op: "server-log.safe-open",
+      persistenceStatus: "opened",
+      completeness: "complete",
+      loss: "none",
+      correlationId: "unknown-correlation-id",
+    });
+    expect(after).not.toContain(stateDir);
   });
 
   it.each(["symlink", "hardlink"])("rejects a %s canonical current file", (kind) => {

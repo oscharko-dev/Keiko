@@ -506,25 +506,31 @@ interface RotationOutcome {
 // pointed at a workspace-local state dir, and the server logger's own default) each resolve to a
 // DIFFERENT `ActiveLog`; a counter kept per `ActiveLog` restarts at 1 for each one, so two lines
 // written moments apart — one to each directory — can carry the identical `(pid, instanceId, seq)`
-// tuple. That tuple is the join key ADR-0173 (D2) promises an agent a total, gap-free order on, and
+// tuple. That tuple is the join key ADR-0173 (D2) promises an agent a total monotonic order on, and
 // a duplicate breaks the promise regardless of how many log directories the process happens to
-// have open. One allocator shared by every `ActiveLog`, every rotation, and every sink built on top
-// of any of them is what keeps the tuple unique process-wide.
+// have open. One allocator shared by every `ActiveLog` and every sink built on top of any of them
+// is what keeps the tuple unique process-wide while gaps expose failed persistence attempts.
 //
-// Claimed as soon as an event clears the level gate, in `createFileSinkFacade.write`, BEFORE the
-// write is attempted — never rolled back if that write then throws. The alternative, claiming only
-// after a successful write, would let two callers racing the same failure both observe the same
-// pre-failure counter value and then both claim the number that follows it, silently reusing a
-// sequence number for two different lines. A gap is not a bug in this counter: it is the evidence
-// that a line was not persisted, and `reportServerLogFailure`'s suppressed-notice count accounts
-// for the writes a gap represents. Monotonic per process; a gap marks a line the sink could not
-// persist.
+// Each non-filtered facade call claims one identity before boundary handling or opening. Its first
+// persisted record uses that identity; further records claim in physical-write order. Claims are
+// never rolled back after failure. A gap is therefore not a counter bug: it marks a facade call or
+// subsequent evidence record that could not persist its next line. Monotonic per process; never
+// reused.
 let nextProcessSeq = 1;
 
 function allocateServerLogSeq(): number {
   const seq = nextProcessSeq;
   nextProcessSeq += 1;
   return seq;
+}
+
+function allocateServerLogIdentity(): ServerLogIdentity {
+  return {
+    schemaVersion: SERVER_LOG_SCHEMA_VERSION,
+    pid: process.pid,
+    instanceId: INSTANCE_ID,
+    seq: allocateServerLogSeq(),
+  };
 }
 
 function todayUtc(now: Date = new Date()): string {
@@ -582,6 +588,11 @@ function rotateIfNeeded(active: ActiveLog): RotationOutcome | undefined {
   return { status: "deferred", durability: "unchanged" };
 }
 
+function refreshPendingRotation(active: ActiveLog): void {
+  const outcome = rotateIfNeeded(active);
+  if (outcome !== undefined) active.pendingRotationOutcome = outcome;
+}
+
 // The descriptor is opened `a`, so every write is an atomic O_APPEND write at the current end of
 // file. Inside one process the registry above already gives every sink on a file the same
 // descriptor; O_APPEND is what additionally makes it safe for a SECOND Keiko process sharing the
@@ -614,21 +625,20 @@ function writeRecord(active: ActiveLog, handle: number, line: string): void {
   active.pendingNewline = false;
 }
 
-function writeEventRecord(active: ActiveLog, handle: number, event: ServerLogEvent): void {
-  const identity: ServerLogIdentity = {
-    schemaVersion: SERVER_LOG_SCHEMA_VERSION,
-    pid: process.pid,
-    instanceId: INSTANCE_ID,
-    seq: allocateServerLogSeq(),
-  };
+function writeEventRecord(
+  active: ActiveLog,
+  handle: number,
+  event: ServerLogEvent,
+  identity: ServerLogIdentity = allocateServerLogIdentity(),
+): void {
   writeRecord(active, handle, formatServerLogLine(event, undefined, identity));
 }
 
-function safeOpenEvidence(correlationId: string | undefined): ServerLogEvent {
+function safeOpenEvidence(): ServerLogEvent {
   return {
     category: "diagnostic",
     op: "server-log.safe-open",
-    correlationId: correlationIdOrUnknown(correlationId),
+    correlationId: correlationIdOrUnknown(undefined),
     extra: {
       artifactClass: "activity-log",
       persistenceStatus: "opened",
@@ -668,7 +678,7 @@ function pendingPersistenceEvents(
   correlationId: string | undefined,
 ): readonly ServerLogEvent[] {
   const events: ServerLogEvent[] = [];
-  if (active.pendingSafeOpenEvidence) events.push(safeOpenEvidence(correlationId));
+  if (active.pendingSafeOpenEvidence) events.push(safeOpenEvidence());
   if (active.pendingRotationOutcome !== undefined) {
     events.push(rotationEvidence(active.pendingRotationOutcome, correlationId));
   }
@@ -678,6 +688,32 @@ function pendingPersistenceEvents(
 function clearPendingPersistenceEvents(active: ActiveLog): void {
   active.pendingSafeOpenEvidence = false;
   active.pendingRotationOutcome = undefined;
+}
+
+function writePendingPersistenceEvents(
+  active: ActiveLog,
+  handle: number,
+  firstIdentity: ServerLogIdentity,
+  correlationId: string | undefined,
+): boolean {
+  let firstIdentityUsed = false;
+  if (active.pendingSafeOpenEvidence) {
+    writeEventRecord(active, handle, safeOpenEvidence(), firstIdentity);
+    active.pendingSafeOpenEvidence = false;
+    firstIdentityUsed = true;
+  }
+  if (active.pendingRotationOutcome !== undefined) {
+    const identity = firstIdentityUsed ? undefined : firstIdentity;
+    writeEventRecord(
+      active,
+      handle,
+      rotationEvidence(active.pendingRotationOutcome, correlationId),
+      identity,
+    );
+    active.pendingRotationOutcome = undefined;
+    firstIdentityUsed = true;
+  }
+  return firstIdentityUsed;
 }
 
 class PostWriteMutationError extends SafeArtifactFileError {
@@ -708,10 +744,7 @@ function persistPostWriteMutation(active: ActiveLog, event: ServerLogEvent): voi
   closeHandle(active);
   try {
     const handle = ensureHandle(active);
-    for (const persistenceEvent of pendingPersistenceEvents(active, event.correlationId)) {
-      writeEventRecord(active, handle, persistenceEvent);
-    }
-    clearPendingPersistenceEvents(active);
+    writePendingPersistenceEvents(active, handle, allocateServerLogIdentity(), event.correlationId);
     writeEventRecord(active, handle, mutationEvidence(event));
     if (!handleStillCurrent(active)) throw new PostWriteMutationError();
   } catch {
@@ -719,13 +752,19 @@ function persistPostWriteMutation(active: ActiveLog, event: ServerLogEvent): voi
   }
 }
 
-function writeCurrentEvent(active: ActiveLog, event: ServerLogEvent): void {
+function writeCurrentEvent(
+  active: ActiveLog,
+  event: ServerLogEvent,
+  firstIdentity: ServerLogIdentity,
+): void {
   const handle = ensureHandle(active);
-  for (const persistenceEvent of pendingPersistenceEvents(active, event.correlationId)) {
-    writeEventRecord(active, handle, persistenceEvent);
-  }
-  clearPendingPersistenceEvents(active);
-  writeEventRecord(active, handle, event);
+  const firstIdentityUsed = writePendingPersistenceEvents(
+    active,
+    handle,
+    firstIdentity,
+    event.correlationId,
+  );
+  writeEventRecord(active, handle, event, firstIdentityUsed ? undefined : firstIdentity);
   if (!handleStillCurrent(active)) {
     persistPostWriteMutation(active, event);
     throw new PostWriteMutationError();
@@ -926,13 +965,7 @@ function closeLogDirectoryGuards(guards: readonly LogDirectoryGuard[]): void {
 function batchLines(events: readonly ServerLogEvent[]): readonly string[] | undefined {
   const lines: string[] = [];
   for (const event of events) {
-    const seq = allocateServerLogSeq();
-    const line = formatServerLogLine(event, undefined, {
-      schemaVersion: SERVER_LOG_SCHEMA_VERSION,
-      pid: process.pid,
-      instanceId: INSTANCE_ID,
-      seq,
-    });
+    const line = formatServerLogLine(event, undefined, allocateServerLogIdentity());
     if (Buffer.byteLength(line, "utf8") > MAX_LOG_LINE_BYTES) return undefined;
     lines.push(line);
   }
@@ -940,10 +973,21 @@ function batchLines(events: readonly ServerLogEvent[]): readonly string[] | unde
 }
 
 interface PreparedDurableLog {
+  readonly status: "prepared";
   readonly active: ActiveLog;
   readonly initial: LogFileIdentity;
   readonly directory: string;
 }
+
+type DurablePreparationResult =
+  PreparedDurableLog | Extract<DurableServerLogBatchResult, { readonly status: "deferred" }>;
+
+type DurableEvidencePersistenceResult =
+  | { readonly status: "persisted"; readonly identity: LogFileIdentity }
+  | {
+      readonly status: "deferred";
+      readonly reason: "append-failed" | "durability-uncertain" | "destination-mutated";
+    };
 
 function repairPendingRecord(active: ActiveLog): boolean {
   if (!active.pendingNewline) return true;
@@ -1007,26 +1051,28 @@ function repairCurrentLogTail(
 function prepareDurableLog(
   stateDir: string,
   guards: LogDirectoryGuard[],
-): PreparedDurableLog | undefined {
+): DurablePreparationResult {
   const stateGuard = openLogDirectoryGuard(stateDir);
-  if (stateGuard === undefined) return undefined;
+  if (stateGuard === undefined) return { status: "deferred", reason: "destination-unsafe" };
   guards.push(stateGuard);
   const directory = join(stateDir, "logs");
   mkdirSync(directory, { recursive: true, mode: 0o700 });
-  if (!durableLogDirectory(directory)) return undefined;
+  if (!durableLogDirectory(directory)) return { status: "deferred", reason: "destination-unsafe" };
   const logGuard = openLogDirectoryGuard(directory);
-  if (logGuard === undefined) return undefined;
+  if (logGuard === undefined) return { status: "deferred", reason: "destination-unsafe" };
   guards.push(logGuard);
   const active = resolveActiveLog(directory);
-  active.pendingRotationOutcome ??= rotateIfNeeded(active);
+  refreshPendingRotation(active);
   let initial = openTrustedDurableHandle(active);
   if (initial === undefined || active.handle === null) {
     closeHandle(active);
-    return undefined;
+    return { status: "deferred", reason: "destination-unsafe" };
   }
   initial = repairCurrentLogTail(active, initial, guards);
-  if (initial === undefined) return undefined;
-  return { active, initial, directory };
+  if (initial === undefined) return { status: "deferred", reason: "destination-unsafe" };
+  const evidence = persistPendingDurableEvidence(active, initial, guards);
+  if (evidence.status === "deferred") return evidence;
+  return { status: "prepared", active, initial: evidence.identity, directory };
 }
 
 function stableBeforeBatch(
@@ -1065,10 +1111,48 @@ function completedBatchMatches(
   before: LogFileIdentity,
   expectedSize: number,
 ): boolean {
+  return completedBatchIdentity(active, before, expectedSize) !== undefined;
+}
+
+function completedBatchIdentity(
+  active: ActiveLog,
+  before: LogFileIdentity,
+  expectedSize: number,
+): LogFileIdentity | undefined {
   const completed = currentHandleIdentity(active);
-  return (
-    completed?.dev === before.dev && completed.ino === before.ino && completed.size === expectedSize
-  );
+  if (
+    completed?.dev !== before.dev ||
+    completed.ino !== before.ino ||
+    completed.size !== expectedSize
+  ) {
+    return undefined;
+  }
+  return completed;
+}
+
+function persistPendingDurableEvidence(
+  active: ActiveLog,
+  before: LogFileIdentity,
+  guards: readonly LogDirectoryGuard[],
+): DurableEvidencePersistenceResult {
+  const events = pendingPersistenceEvents(active, undefined);
+  if (events.length === 0) return { status: "persisted", identity: before };
+  const lines = batchLines(events);
+  if (lines === undefined) return { status: "deferred", reason: "append-failed" };
+  const addedBytes = lines.reduce((total, line) => total + Buffer.byteLength(line, "utf8"), 0);
+  if (!writeBatchRecords(active, lines)) return { status: "deferred", reason: "append-failed" };
+  if (!syncBatch(active)) return { status: "deferred", reason: "durability-uncertain" };
+  const completed = completedBatchIdentity(active, before, before.size + addedBytes);
+  if (
+    completed === undefined ||
+    !handleStillCurrent(active) ||
+    !guards.every(logDirectoryStillSame)
+  ) {
+    closeHandle(active);
+    return { status: "deferred", reason: "destination-mutated" };
+  }
+  clearPendingPersistenceEvents(active);
+  return { status: "persisted", identity: completed };
 }
 
 function appendInspectedBatch(
@@ -1094,6 +1178,7 @@ function appendInspectedBatch(
   }
   if (
     !completedBatchMatches(prepared.active, before, before.size + addedBytes) ||
+    !handleStillCurrent(prepared.active) ||
     !guards.every(logDirectoryStillSame)
   ) {
     closeHandle(prepared.active);
@@ -1134,8 +1219,8 @@ export function appendDurableServerLogBatch(
   const guards: LogDirectoryGuard[] = [];
   try {
     const prepared = prepareDurableLog(stateDir, guards);
-    return prepared === undefined
-      ? { status: "deferred", reason: "destination-unsafe" }
+    return prepared.status === "deferred"
+      ? prepared
       : inspectAndAppendDurableBatch(prepared, guards, options);
   } catch {
     return { status: "deferred", reason: "destination-unsafe" };
@@ -1200,9 +1285,10 @@ function createFileSinkFacade(active: ActiveLog, threshold: ServerLogThreshold):
     write(event: ServerLogEvent): void {
       // The threshold check comes before any formatting: a filtered event costs one comparison.
       if (!serverLogLevelEnabled(eventLevel(event), threshold)) return;
+      const identity = allocateServerLogIdentity();
       try {
-        active.pendingRotationOutcome ??= rotateIfNeeded(active);
-        writeCurrentEvent(active, event);
+        refreshPendingRotation(active);
+        writeCurrentEvent(active, event, identity);
       } catch (error) {
         // Writing must never take the server down; a full disk, a permission change or a file
         // removed under us drops the line and forces a reopen on the next write. It does NOT drop

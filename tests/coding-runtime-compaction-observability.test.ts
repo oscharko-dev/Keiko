@@ -75,7 +75,8 @@ describe("native coding-runtime compaction support reconstruction", () => {
       activityLog.close?.();
 
       const serialized = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
-      const timeline = findTimeline(analyzeLogText(serialized), runId);
+      const analysis = analyzeLogText(serialized);
+      const timeline = findTimeline(analysis, runId);
       expect(timeline?.lines.map(({ op, extra, errorKind }) => ({ op, extra, errorKind }))).toEqual(
         [
           {
@@ -128,6 +129,17 @@ describe("native coding-runtime compaction support reconstruction", () => {
           },
         ],
       );
+      const infrastructure = findTimeline(analysis, "unknown-correlation-id");
+      expect(infrastructure?.lines).toHaveLength(1);
+      expect(infrastructure?.lines[0]).toMatchObject({
+        op: "server-log.safe-open",
+        extra: {
+          artifactClass: "activity-log",
+          persistenceStatus: "opened",
+          completeness: "complete",
+          loss: "none",
+        },
+      });
       expect(serialized).not.toContain(bodyCanary);
     } finally {
       activityLog.close?.();

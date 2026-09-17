@@ -69,6 +69,8 @@ const fsCalls = vi.hoisted(() => ({
   close: 0,
   fsync: 0,
   failFsync: false,
+  failOpenPath: null as string | null,
+  failWriteOpOnce: null as string | null,
   // `null` passes every write through untouched. A number is a byte budget: the descriptor accepts
   // that many more bytes and then reports 0, which is what a stalled descriptor reports and the
   // only way to produce a short write on a regular file.
@@ -86,19 +88,30 @@ vi.mock("node:fs", async (importOriginal) => {
     ...actual,
     openSync: (...args: Parameters<typeof actual.openSync>): number => {
       fsCalls.open += 1;
+      if (String(args[0]) === fsCalls.failOpenPath) {
+        throw Object.assign(new Error("forced open failure"), { code: "EIO" });
+      }
       return actual.openSync(...args);
     },
     writeSync: (...args: Parameters<typeof actual.writeSync>): number => {
       fsCalls.write += 1;
       const budget = fsCalls.writeBudgetBytes;
       const [fd, buffer, offset, length] = args as unknown as BufferWriteArgs;
+      const writtenText = buffer.subarray(offset, offset + length).toString("utf8");
+      if (
+        fsCalls.failWriteOpOnce !== null &&
+        writtenText.includes(`"op":"${fsCalls.failWriteOpOnce}"`)
+      ) {
+        fsCalls.failWriteOpOnce = null;
+        return 0;
+      }
       const allowed = budget === null ? length : Math.min(length, budget);
       if (budget !== null) fsCalls.writeBudgetBytes = budget - allowed;
       if (allowed === 0) return 0;
       const written = actual.writeSync(fd, buffer, offset, allowed);
       const replacement = fsCalls.replaceAfterWrite;
-      const writtenText = buffer.subarray(offset, offset + written).toString("utf8");
-      if (replacement !== null && writtenText.includes(`"op":"${replacement.op}"`)) {
+      const acceptedText = buffer.subarray(offset, offset + written).toString("utf8");
+      if (replacement !== null && acceptedText.includes(`"op":"${replacement.op}"`)) {
         fsCalls.replaceAfterWrite = null;
         actual.renameSync(replacement.current, replacement.stale);
         actual.writeFileSync(replacement.current, "", { mode: 0o600 });
@@ -155,6 +168,8 @@ describe("server activity log", () => {
     fsCalls.replaceAfterWrite = null;
     fsCalls.fsync = 0;
     fsCalls.failFsync = false;
+    fsCalls.failOpenPath = null;
+    fsCalls.failWriteOpOnce = null;
     // The failure notice is throttled process-wide, so a test that asserts on it must start from a
     // slate no earlier test can have used up.
     resetServerLogFailureNotices();
@@ -169,6 +184,8 @@ describe("server activity log", () => {
     fsCalls.replaceAfterWrite = null;
     fsCalls.fsync = 0;
     fsCalls.failFsync = false;
+    fsCalls.failOpenPath = null;
+    fsCalls.failWriteOpOnce = null;
     rmSync(stateDir, { recursive: true, force: true });
     vi.unstubAllEnvs();
     vi.useRealTimers();
@@ -247,6 +264,54 @@ describe("server activity log", () => {
     expect(readLines(stateDir).at(-1)).not.toHaveProperty("persistenceStatus");
   });
 
+  it("persists first-open evidence when a durable batch is already complete", () => {
+    const result = appendDurableServerLogBatch(stateDir, {
+      level: "info",
+      inspect: () => ({ status: "already-complete" }),
+    });
+
+    expect(result).toStrictEqual({ status: "already-complete" });
+    expect(readLines(stateDir)).toEqual([
+      expect.objectContaining({
+        op: "server-log.safe-open",
+        correlationId: "unknown-correlation-id",
+        persistenceStatus: "opened",
+        completeness: "complete",
+        loss: "none",
+      }),
+    ]);
+    expect(fsCalls.fsync).toBe(1);
+  });
+
+  it("persists boundary evidence before a durable inspection defers", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-20T23:59:00Z"));
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({ category: "process", op: "before-deferred-inspection" });
+    sink.close?.();
+
+    vi.setSystemTime(new Date("2026-08-21T00:00:30Z"));
+    const result = appendDurableServerLogBatch(stateDir, {
+      level: "info",
+      inspect: () => ({ status: "deferred" }),
+    });
+
+    expect(result).toStrictEqual({ status: "inspection-deferred" });
+    expect(readLines(stateDir).slice(-2)).toEqual([
+      expect.objectContaining({
+        op: "server-log.safe-open",
+        correlationId: "unknown-correlation-id",
+      }),
+      expect.objectContaining({
+        op: "server-log.rotation",
+        correlationId: "unknown-correlation-id",
+        persistenceStatus: "deferred",
+        durabilityAssurance: "unchanged",
+      }),
+    ]);
+    expect(fsCalls.fsync).toBe(1);
+  });
+
   it("does not inspect or touch the log directory when a durable info batch is filtered", () => {
     const inspect = vi.fn(() => ({ status: "already-complete" as const }));
 
@@ -280,6 +345,7 @@ describe("server activity log", () => {
   });
 
   it("reports uncertain durability and closes the active handle when batch fsync fails", () => {
+    createFileServerLogSink(stateDir).write({ category: "process", op: "before-fsync-failure" });
     fsCalls.failFsync = true;
 
     expect(
@@ -294,7 +360,46 @@ describe("server activity log", () => {
     expect(fsCalls.close).toBeGreaterThanOrEqual(3);
   });
 
+  it("classifies a fresh safe-open evidence write failure before inspection", () => {
+    fsCalls.writeBudgetBytes = 0;
+    const inspect = vi.fn(() => ({ status: "already-complete" as const }));
+
+    expect(appendDurableServerLogBatch(stateDir, { level: "info", inspect })).toStrictEqual({
+      status: "deferred",
+      reason: "append-failed",
+    });
+    expect(inspect).not.toHaveBeenCalled();
+  });
+
+  it("classifies fresh safe-open evidence with uncertain durability before inspection", () => {
+    fsCalls.failFsync = true;
+    const inspect = vi.fn(() => ({ status: "already-complete" as const }));
+
+    expect(appendDurableServerLogBatch(stateDir, { level: "info", inspect })).toStrictEqual({
+      status: "deferred",
+      reason: "durability-uncertain",
+    });
+    expect(inspect).not.toHaveBeenCalled();
+  });
+
+  it("classifies a fresh safe-open pathname replacement before inspection", () => {
+    const current = join(stateDir, "logs", "server.log");
+    fsCalls.replaceAfterWrite = {
+      current,
+      stale: join(stateDir, "logs", "server-stale.log"),
+      op: "server-log.safe-open",
+    };
+    const inspect = vi.fn(() => ({ status: "already-complete" as const }));
+
+    expect(appendDurableServerLogBatch(stateDir, { level: "info", inspect })).toStrictEqual({
+      status: "deferred",
+      reason: "destination-mutated",
+    });
+    expect(inspect).not.toHaveBeenCalled();
+  });
+
   it("terminates a partial record before a durable batch retry", () => {
+    createFileServerLogSink(stateDir).write({ category: "process", op: "before-partial-batch" });
     fsCalls.writeBudgetBytes = 5;
     expect(
       appendDurableServerLogBatch(stateDir, {
@@ -334,7 +439,9 @@ describe("server activity log", () => {
         level: "info",
         inspect: (directory) => {
           inspected = true;
-          expect(readFileSync(join(directory, "server.log"), "utf8")).toBe('{"interrupted":\n');
+          const raw = readFileSync(join(directory, "server.log"), "utf8");
+          expect(raw.startsWith('{"interrupted":\n')).toBe(true);
+          expect(raw).toContain('"op":"server-log.safe-open"');
           return {
             status: "append",
             events: [{ category: "diagnostic", op: "fresh-process-retry" }],
@@ -348,7 +455,7 @@ describe("server activity log", () => {
         null,
         expect.objectContaining({ op: "fresh-process-retry" }),
       ]);
-      expect(fsCalls.fsync).toBe(2);
+      expect(fsCalls.fsync).toBe(3);
     } finally {
       freshServerLog.closeFileServerLogSinks();
     }
@@ -410,7 +517,7 @@ describe("server activity log", () => {
     expect(lines[0]).toMatchObject({
       category: "diagnostic",
       op: "server-log.safe-open",
-      correlationId: "request-correlation-3528",
+      correlationId: "unknown-correlation-id",
       artifactClass: "activity-log",
       persistenceStatus: "opened",
       permissionAssurance: process.platform === "win32" ? "platform-inherited" : "verified-private",
@@ -430,9 +537,9 @@ describe("server activity log", () => {
   });
 
   // Envelope v2 (#2902): every line the file sink writes carries a process/sequence identity an
-  // agent joins a run across a rotated multi-day file on. This is the functional counterpart to the
-  // spoofing test below — it proves the real values actually land on disk, not merely that a forged
-  // one is stripped.
+  // agent joins across the long-lived current file and any legacy archive. This is the functional
+  // counterpart to the spoofing test below — it proves the real values actually land on disk, not
+  // merely that a forged one is stripped.
   it("stamps schemaVersion, pid, instanceId and seq on every file-sink line", () => {
     const sink = createFileServerLogSink(stateDir);
     sink.write({ category: "http", op: "one" });
@@ -554,6 +661,41 @@ describe("server activity log", () => {
     expect(readRawRecords(stateDir)).toContainEqual(
       expect.objectContaining({ op: "server-log.safe-open", seq: before + 2 }),
     );
+  });
+
+  it("reserves the caller seq before an open failure and exposes the exact gap", () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const sink = createFileServerLogSink(stateDir, { level: "debug" });
+    sink.write({ category: "http", op: "before-open-failure" });
+    const before = readCallerLines(stateDir)[0]?.seq as number;
+    sink.close?.();
+
+    fsCalls.failOpenPath = join(stateDir, "logs", "server.log");
+    sink.write({ category: "http", op: "open-failed-caller" });
+    fsCalls.failOpenPath = null;
+    sink.write({ category: "http", op: "after-open-recovery" });
+
+    const records = readLines(stateDir);
+    expect(readCallerLines(stateDir).map((record) => record.op)).toStrictEqual([
+      "before-open-failure",
+      "after-open-recovery",
+    ]);
+    expect(records.some((record) => record.seq === before + 1)).toBe(false);
+    expect(records).toContainEqual(
+      expect.objectContaining({ op: "server-log.safe-open", seq: before + 2 }),
+    );
+    expect(readCallerLines(stateDir)[1]?.seq).toBe(before + 3);
+    const notice = stderr.mock.calls
+      .map((call) => String(call[0]))
+      .find((value) => value.includes('"failedOp":"open-failed-caller"'));
+    expect(notice).toBeDefined();
+    expect(JSON.parse(notice ?? "{}")).toMatchObject({
+      op: "server-log.write-failed",
+      failedOp: "open-failed-caller",
+      errorKind: "open-failed",
+      completeness: "unknown",
+      loss: "event-dropped",
+    });
   });
 
   // Envelope v2 widens the category union to include process-lifecycle lines; this proves the sink
@@ -767,6 +909,26 @@ describe("server activity log", () => {
     sink.close?.();
   });
 
+  it("does not repeat deferred-rotation evidence when the caller write fails", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-20T23:59:00Z"));
+    const sink = createFileServerLogSink(stateDir, { level: "debug" });
+    sink.write({ category: "indexing", op: "before-boundary-caller-failure" });
+
+    vi.setSystemTime(new Date("2026-08-21T00:00:30Z"));
+    fsCalls.failWriteOpOnce = "boundary-caller-fails";
+    sink.write({ category: "indexing", op: "boundary-caller-fails" });
+    sink.write({ category: "indexing", op: "boundary-caller-retry" });
+
+    const records = readRawRecords(stateDir).filter(
+      (record): record is Record<string, unknown> => record !== null,
+    );
+    expect(
+      records.filter((line) => !FILESYSTEM_EVIDENCE_OPS.has(line.op)).map((line) => line.op),
+    ).toStrictEqual(["before-boundary-caller-failure", "boundary-caller-retry"]);
+    expect(records.filter((line) => line.op === "server-log.rotation")).toHaveLength(1);
+  });
+
   it("keeps Windows logging active with explicit platform and deferred-rotation evidence", () => {
     stateDir = realpathSync(stateDir);
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
@@ -807,19 +969,18 @@ describe("server activity log", () => {
     });
   });
 
-  // Requirement: rotation must be atomic ACROSS PROCESSES. Two Keiko processes on one state
-  // directory both reach the UTC boundary; `renameSync` replaces its destination, so the second
-  // one renamed its own fresh file over the archive the first had just written and the finished
-  // day was gone. The in-process registry cannot see a second process by construction.
-  it("never replaces an archive another process already wrote", () => {
+  // Regression for the retired path-based rotation: a peer may still move the current inode into a
+  // legacy archive and install a new current file. The sink must reopen the pathname and must never
+  // mutate the moved inode through its stale descriptor.
+  it("reopens after peer replacement without mutating the legacy archive", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-20T23:59:00Z"));
     const logsDir = join(stateDir, "logs");
     const sink = createFileServerLogSink(stateDir, { level: "debug" });
     sink.write({ category: "indexing", op: "our-day-20" });
 
-    // A peer process wins the boundary: it archives the finished day and starts a fresh file. Our
-    // sink still holds the descriptor for the archived inode, exactly as it would in production.
+    // A peer process or operator moves the current inode and installs a fresh file. Our sink still
+    // holds the descriptor for the moved inode until its pre-write identity check rejects it.
     renameSync(join(logsDir, "server.log"), join(logsDir, "server-2026-08-20.log"));
     writeFileSync(join(logsDir, "server.log"), `${JSON.stringify({ op: "peer-day-21" })}\n`, {
       mode: 0o600,
@@ -828,8 +989,7 @@ describe("server activity log", () => {
     vi.setSystemTime(new Date("2026-08-21T00:00:30Z"));
     sink.write({ category: "indexing", op: "our-day-21" });
 
-    // The peer's archive is untouched. Under the rename it holds `peer-day-21` and the whole of
-    // 08-20 is unrecoverable.
+    // The legacy archive is untouched and contains only the bytes it held when it was moved.
     const archived = readFileSync(join(logsDir, "server-2026-08-20.log"), "utf8");
     expect(archived).toContain("our-day-20");
     expect(archived).not.toContain("peer-day-21");
@@ -1031,6 +1191,31 @@ describe("server activity log", () => {
     ]);
     expect(readLines(stateDir).filter((line) => line.op === "server-log.rotation")).toHaveLength(1);
     expect(readdirSync(join(stateDir, "logs"))).toStrictEqual(["server.log"]);
+  });
+
+  it("coalesces multi-day open failures into one warning on the recovery day", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-20T23:59:00Z"));
+    const sink = createFileServerLogSink(stateDir, { level: "debug" });
+    sink.write({ category: "indexing", op: "before-multi-day-failure" });
+    sink.close?.();
+
+    fsCalls.failOpenPath = join(stateDir, "logs", "server.log");
+    vi.setSystemTime(new Date("2026-08-21T00:00:30Z"));
+    sink.write({ category: "indexing", op: "lost-day-21" });
+    vi.setSystemTime(new Date("2026-08-22T00:00:30Z"));
+    sink.write({ category: "indexing", op: "lost-day-22" });
+    fsCalls.failOpenPath = null;
+
+    sink.write({ category: "indexing", op: "recovered-day-22" });
+    sink.write({ category: "indexing", op: "same-recovery-day" });
+
+    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual([
+      "before-multi-day-failure",
+      "recovered-day-22",
+      "same-recovery-day",
+    ]);
+    expect(readLines(stateDir).filter((line) => line.op === "server-log.rotation")).toHaveLength(1);
   });
 
   it("measures the line cap in bytes, because the write encodes UTF-8", () => {

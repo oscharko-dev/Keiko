@@ -119,8 +119,8 @@ describe("discoverServerLogFiles", () => {
     });
   });
 
-  // Regression-shaped: a name `readdirSync` returns can vanish before `statSync` runs (the sink's
-  // own rotation/retention pruning), one step earlier than the `readKeptFiles` race already pinned
+  // Regression-shaped: a name `readdirSync` returns can vanish before `statSync` runs (for example,
+  // through concurrent operator cleanup), one step earlier than the `readKeptFiles` race already pinned
   // above. Reproduced with a broken symlink — `readdirSync` lists its name, but `statSync` follows
   // it and throws ENOENT, a real race rather than a mock — so discovery must skip it (recording
   // its name and the real fs error code, never a path) instead of throwing out of the whole
@@ -264,7 +264,7 @@ describe("readKeptFiles", () => {
   });
 
   // Regression: a file present in the list `selectLogFilesWithinBudget` kept can still vanish
-  // (the sink's own rotation/retention pruning) before its bytes are actually read — a real race
+  // through concurrent operator cleanup before its bytes are actually read — a real race
   // reproduced here by deleting it between the discovery/selection step and the read step, not by
   // mocking. Before the fix, `readFileSync` threw straight out of `serializeBundleLines`, aborting
   // the whole export. After the fix, the vanished file is skipped (named, with the real fs error
@@ -282,7 +282,7 @@ describe("readKeptFiles", () => {
       CURRENT_LOG_FILE_NAME,
     ]);
 
-    // The race: the current log file rotates out from under the export after it was selected.
+    // The race: the selected current log is removed by another actor before export reads it.
     rmSync(vanishingPath);
 
     const result = readKeptFiles(selection.kept);

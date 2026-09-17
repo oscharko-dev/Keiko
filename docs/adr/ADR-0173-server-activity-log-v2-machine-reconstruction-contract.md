@@ -76,7 +76,7 @@ only (positional locators, never customer field names as object keys), not imple
   side.
 - `seq: number` — allocated from one module-level counter shared by every `ActiveLog` in the
   process (not one counter per resolved log directory), so a process writing to more than one
-  state directory still stamps one gap-free sequence, never two independently-numbered ones.
+  state directory still stamps one monotonic sequence, never two independently-numbered ones.
   Survives UTC day boundaries and every `ActiveLog` reinitialization; resets only on process
   restart.
   Reserved because it is the ordering primitive (D2) — if a caller could set `extra.seq`, ordering
@@ -109,17 +109,17 @@ concurrently) each maintain their own `seq` counting from the same starting poin
 process A carrying `seq: 40` is not orderable against a line from process B carrying `seq: 40` by
 the tuple alone.
 
-**"Gap-free" means every claimed `seq` is accounted for, not that every claimed `seq` reaches disk —
-and that accounting is delivered on the next notice or at shutdown, never guaranteed against every
-possible exit.** A `seq` value is claimed in `createFileSinkFacade.write` — before the write it
-numbers is attempted — and is never rolled back if that write then throws; this is claim-before-write
-by design, not an oversight. Two callers racing the same failure must not both observe the same
-pre-failure counter value and then both claim the number that follows it, silently reusing a sequence
-number for two different lines — a missing number is the strictly safer failure than a repeated one.
-A gap in the `seq` sequence therefore marks a line the sink attempted to persist and could not, and is
-not silently lost on a clean exit: `reportServerLogFailure` emits a throttled, independent-channel
+**The sequence is monotonic and may contain gaps.** Each non-filtered
+`createFileSinkFacade.write` invocation reserves one identity before boundary handling or opening the
+file. The first record that invocation actually persists — safe-open evidence, deferred-rotation
+evidence, or the caller record — uses that reserved identity; any additional records allocate their
+identities immediately before their physical writes. An opening or write failure never rolls an
+identity back. Two callers racing the same failure therefore cannot reuse the number that follows it;
+a missing number is the strictly safer failure than a repeated one. A gap marks a sink invocation or
+subsequent evidence write that could not persist its next record. On a clean exit the associated
+failure is accounted for by `reportServerLogFailure`, which emits a throttled, independent-channel
 stderr notice (`server-log.write-failed`) whose `suppressedNotices` count accounts for the failed
-writes a gap represents, so the throttle hides the failure's *repetition*, never its *scale*. That
+sink invocations, so the throttle hides the failure's *repetition*, never its *scale*. That
 notice travels a fixed **channel order**, each one independent of the one before it: the **file
 sink** is the primary write path and is what the notice reports on; failing that, the **stderr
 notice** carries the redacted classification (`op`, `failedOp`, `correlationId`, `errorKind`,
@@ -386,7 +386,8 @@ coherent noun groups the artifact producer and its own consumer under one verb s
   --i-understand-this-is-unredacted] [--include-evidence RUNID[,RUNID...]]` composes existing,
   already-hardened pieces — the evidence index listing, the local-state audit summary, a redacted
   config-snapshot of Keiko's own resolved `KEIKO_*` runtime configuration, and a plain
-  read-and-concatenate of the rotated log files — into one manifest-led `.jsonl` bundle, plus a
+  read-and-concatenate of the current log plus any legacy rotation archives — into one manifest-led
+  `.jsonl` bundle, plus a
   `<output>.sha256` integrity sidecar (D12). No new redaction logic is written for the bulk of the
   file — every log line copied in is a line that was already redacted at write time. `ui.log` (a
   verified, acknowledged-unredacted operator stream) is excluded by default and requires both new
@@ -653,11 +654,11 @@ browser saw. Everything on these lines is a count, a closed label, a template, o
 This section is the operational summary of the join keys this ADR defines, stated once in one place
 rather than left implicit across the Decision section:
 
-1. **Within one process lifetime**, order every line carrying the full v2 identity triple by
-   `(pid, instanceId, seq)` — exact, gap-free (in the sense D2 defines: every claimed `seq` is
-   accounted for, whether or not its write landed), guaranteed (D2). A retained pre-v2 line carries
-   no such triple; it is ordered by its own file position instead, counted in `legacyLineCount`, and
-   never treated as belonging to a process lifetime (D10).
+1. **Within one process lifetime**, order every persisted line carrying the full v2 identity triple
+   by `(pid, instanceId, seq)` — exact and strictly monotonic, but not gap-free (D2). A gap marks a
+   sink invocation or subsequent evidence record whose next physical write did not persist. A
+   retained pre-v2 line carries no such triple; it is ordered by its own file position instead,
+   counted in `legacyLineCount`, and never treated as belonging to a process lifetime (D10).
 2. **Across process lifetimes**, do not rely on the ordering tuple; use `ts` only as a best-effort
    hint, and prefer to reason about one logical operation (one request, one job) at a time, since
    that operation's lines all share one process lifetime by construction.
@@ -695,12 +696,13 @@ rather than left implicit across the Decision section:
   back to `correlationId`/`parentCorrelationId` for cross-process causality. Within a process,
   `(pid, instanceId, seq)` uniqueness holds across every log directory that process writes to,
   because `seq` is allocated from one process-wide counter (D1), never one scoped per directory.
-  "Gap-free" is a claim about accounting, not delivery: a gap marks a write the sink attempted and
-  could not persist, and the throttled stderr failure notice's `suppressedNotices` count accounts
-  for exactly those gaps (D2).
+  The sequence is deliberately not gap-free: a gap marks a sink invocation or subsequent evidence
+  record whose next physical write could not persist. The throttled stderr failure notice's
+  `suppressedNotices` counts failed sink invocations; it is not an exact persisted-gap counter when
+  one invocation attempted more than one record (D2).
 - Retained pre-v2 log lines are a real compatibility case, not an oversight: a line written before
-  this contract shipped can still appear in the current multi-release log file. The analyzer never
-  drops or misorders such a line — it orders it by file position, counts
+  this contract shipped can still appear in the long-lived current file or a legacy rotation
+  archive. The analyzer never drops or misorders such a line — it orders it by file position, counts
   it in `legacyLineCount`, and surfaces exactly one `warnings[]` entry naming that count (D9, D10).
   An agent must read `warnings[]` before trusting that every line in a bundle came from an ordered
   v2 process lifetime.

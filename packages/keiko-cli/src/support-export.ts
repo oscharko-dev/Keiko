@@ -44,8 +44,8 @@ export const UI_LOG_FILE_NAME = "ui.log";
 // the two files that need it.
 export const UI_LOG_SECTION = "ui-log";
 
-// The sink's own DEFAULT_LOG_RETENTION_DAYS (7) keeps at most a week of rotated files on disk, so
-// 50MB is a generous ceiling for a single export; --max-bytes on the CLI overrides it.
+// The current activity log can grow until #3530 supplies bounded append-only segments. Keep each
+// export independently bounded at 50MB; --max-bytes on the CLI overrides this ceiling.
 export const DEFAULT_MAX_BUNDLE_BYTES = 50 * 1024 * 1024;
 
 // Versions the JSONL bundle FORMAT itself (line 1 is always the manifest; every subsequent line is
@@ -85,8 +85,8 @@ export function describeErrorKind(error: unknown): string {
   return error instanceof Error ? error.constructor.name : "Error";
 }
 
-// The sink prunes rotated files on its own retention schedule, so a name `readdirSync` just
-// returned can already be gone by the time it is `stat`'d — a race, not a failed export. Returns
+// A concurrent operator or legacy cleanup can remove a name after `readdirSync` but before it is
+// `stat`'d — a race, not a failed export. Returns
 // the skip (name plus the fs error's diagnosable kind — never its absolute path) so the caller can
 // record it and keep going; the export must never fail for one unreadable log file.
 function toLogFileInfoOrSkip(
@@ -117,23 +117,23 @@ function sortedRotatedNames(names: readonly string[]): readonly string[] {
     const match = rotatedMatchOrUndefined(name);
     if (match !== undefined) matches.push(match);
   }
-  // Explicit collator over the ISO day, matching the sink's own rotation pruning: the ordering
-  // decides which file is copied first, and "oldest first" is part of the bundle contract.
+  // Explicit collator over the ISO day for legacy rotation archives: the ordering decides which
+  // file is copied first, and "oldest first" is part of the bundle contract.
   matches.sort((a, b) => a.day.localeCompare(b.day, "en-US"));
   return matches.map((m) => m.name);
 }
 
 export interface LogFileDiscovery {
   readonly files: readonly LogFileInfo[];
-  // Entries `readdirSync` returned but that vanished before they could be `stat`'d — the sink's
-  // own rotation/retention pruning racing this scan — named (never `LogFileInfo.path`, which is
+  // Entries `readdirSync` returned but that vanished before they could be `stat`'d — a concurrent
+  // filesystem change racing this scan — named (never `LogFileInfo.path`, which is
   // absolute) alongside the fs error kind that caused the skip, so it can be attested in the
   // bundle manifest and diagnosed by an operator.
   readonly skippedLogFiles: readonly SkippedLogFile[];
 }
 
-// Lists the rotated + current server*.log files, oldest rotated file first, current file last —
-// exactly the order they are copied into the bundle. A missing logs directory (a state dir that
+// Lists compatible legacy archives plus the current server.log, oldest archive first and current
+// last — exactly the order copied into the bundle. A missing logs directory (a state dir that
 // predates any server run, or one the operator moved) yields an empty result rather than throwing:
 // the bundle is still worth producing, just without log content.
 export function discoverServerLogFiles(logsDir: string): LogFileDiscovery {
@@ -211,7 +211,7 @@ export function readVerbatimLogLines(path: string): readonly string[] {
   return lines;
 }
 
-// Same rotation race as `discoverServerLogFiles`, one step later: a name that survived the
+// Same concurrent-removal race as `discoverServerLogFiles`, one step later: a name that survived the
 // `readdirSync`→`statSync` gap and was kept for the bundle can still vanish before its bytes are
 // actually read. The `skip` branch signals that race to the caller (distinct from the legitimate
 // `lines: []` an empty-but-present file produces) — with the fs error's diagnosable kind — so the
@@ -297,12 +297,12 @@ export interface ReadKeptFilesResult {
 }
 
 // Reads every kept log file's bytes verbatim, in file order, tolerating the same
-// discover-to-read rotation race `discoverServerLogFiles` guards against one step earlier. A file
+// discover-to-read removal race `discoverServerLogFiles` guards against one step earlier. A file
 // that vanishes here contributes no lines and is skipped, not aborted — recorded by name so the
 // manifest can attest to it. Lines are appended one at a time rather than via
 // `contentLines.push(...fileLines)`: a spread of a large array as call arguments can throw
 // `RangeError: Maximum call stack size exceeded` (observed at ~262k elements on Node v24), and a
-// single oversized rotated log file must not abort the whole export.
+// single oversized legacy archive must not abort the whole export.
 //
 // `currentFileTailBudgetBytes` (from `LogFileSelection`) applies only to the LAST file in
 // `keptFiles` — by construction the one file `selectLogFilesWithinBudget` never drops — and only
@@ -411,8 +411,8 @@ export interface SupportBundleManifest {
   // strategy above cannot rescue. False whenever the export (in full, or via a successful tail
   // read) fits `--max-bytes`. See `ReadKeptFilesResult.budgetExceeded`.
   readonly budgetExceeded: boolean;
-  // Files a directory listing named but that had vanished (the sink's own rotation/retention
-  // pruning) by the time this export tried to size or read them — named (never the files'
+  // Files a directory listing named but that had vanished after a concurrent filesystem change by
+  // the time this export tried to size or read them — named (never the files'
   // absolute paths) alongside the fs error kind that caused the skip. Distinct from
   // `truncatedLogFiles`: those were dropped on purpose for the size budget; these were simply gone.
   readonly skippedLogFiles: readonly SkippedLogFile[];

@@ -66,8 +66,9 @@ hashes, and shapes.
 
 Every `ServerLogEvent` line carries `pid`, `instanceId` (8 hex characters, minted once per process
 start), and a process-wide, monotonically allocated `seq`. Together, `(pid, instanceId, seq)` give
-a **total, gap-free order within one process lifetime** — but that is the full extent of the
-ordering guarantee. There is no true cross-process global order: two different process lifetimes
+a **total order over persisted lines within one process lifetime**. The sequence may contain gaps
+when an opening or write attempt fails, and the failure notice provides the closed classification;
+there is no true cross-process global order. Two different process lifetimes
 each count `seq` from their own start, so a `seq` value from one process is not orderable against
 the same `seq` value from another by the tuple alone. The wall-clock `ts` field is a best-effort
 tiebreak hint only, never a guarantee, and should not be relied on to order lines across processes.
@@ -188,7 +189,8 @@ their process activity is `not-applicable`. Missing or invalid observations rema
 `unknown`; file mtimes and guessed instance ids are never substituted.
 
 A line successfully parsed but missing the full `(pid, instanceId, seq)` triple is a **legacy
-line** — one written before this envelope shipped, still inside the log's 7-day retention window.
+line** — one written before this envelope shipped in the long-lived current file or a compatible
+legacy `server-YYYY-MM-DD.log` archive retained from the retired rotation implementation.
 It is never dropped or misordered; it is ordered by its own file position, counted in
 `legacyLineCount`, and named in exactly one `warnings[]` entry when that count is nonzero. Treat
 that warning as an instruction to read the file position ordering with less confidence for those
