@@ -105,7 +105,7 @@ describe("description authority lifetime and capacity", () => {
     }
     expect(log.events[1]?.extra?.effectiveMode).toBe("governed-assist");
     expect(log.events[2]).toMatchObject({
-      errorKind: "TypeError",
+      errorKind: "validation-failed",
       extra: { causeChain: [] },
     });
     expect(log.events[2]?.extra?.frames).toBeInstanceOf(Array);
