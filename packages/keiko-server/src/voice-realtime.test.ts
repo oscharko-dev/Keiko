@@ -687,6 +687,7 @@ describe("VoiceControlConnection diagnostics (w4b-voice-realtime)", () => {
       category: "http",
       op: "voice.realtime.policy-decision",
       correlationId: "diag-policy-deny-1",
+      errorKind: "authority-denied",
       extra: { decision: "deny", reason: "profile-mismatch" },
     });
     expect(JSON.stringify(sink.events[0])).not.toContain("speech-to-text");
@@ -706,11 +707,13 @@ describe("VoiceControlConnection diagnostics (w4b-voice-realtime)", () => {
       category: "http",
       op: "voice.realtime.session-started",
       correlationId: "diag-lifecycle-1",
+      extra: { profile: "full-realtime", resumed: false },
     });
     expect(sink.events[1]).toMatchObject({
       category: "http",
       op: "voice.realtime.session-ended",
       correlationId: "diag-lifecycle-1",
+      extra: {},
     });
   });
 });

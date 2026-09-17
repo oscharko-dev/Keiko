@@ -29,6 +29,10 @@ import {
   VOICE_PROTOCOL_VERSION,
   validateVoiceControlMessage,
 } from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isAllowedHost } from "./host-check.js";
 import { resolveCorrelationId } from "./correlation.js";
 import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "./deps.js";
@@ -47,6 +51,46 @@ import {
 import { getServerLogger } from "./observability/index.js";
 
 export const VOICE_LIVE_TRANSCRIBE_PATH = "/api/voice/transcribe/live";
+
+const VOICE_LIVE_DICTATION_CAPACITY_REJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "voice.live-dictation.capacity-rejected",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "voice-live-dictation.rejectForCapacity",
+  fields: {
+    observedCount: { type: "integer", dataClass: "count", required: true },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["active-session-cap", "socket-cap"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["voice-live-dictation-admission"],
+  proofIds: ["voice.live-dictation.capacity-rejected.count"],
+  releaseImpact: "patch",
+});
+
+const VOICE_LIVE_DICTATION_INITIAL_FRAME_TIMEOUT_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "voice.live-dictation.initial-frame-timeout",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "voice-live-dictation.startInitialFrameDeadline",
+  fields: {},
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["voice-live-dictation-admission"],
+  proofIds: ["voice.live-dictation.initial-frame-timeout.deadline"],
+  releaseImpact: "patch",
+});
 
 const MAX_OFFER_SDP_BYTES = 256_000;
 const MAX_ID_LENGTH = 200;
@@ -644,12 +688,13 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
     reason: "active-session-cap" | "socket-cap",
     observedCount: number,
   ): void {
-    getServerLogger().info({
-      category: "http",
-      op: "voice.live-dictation.capacity-rejected",
-      correlationId,
-      extra: { reason, observedCount },
-    });
+    getServerLogger().info(
+      activityLogEvent(
+        VOICE_LIVE_DICTATION_CAPACITY_REJECTED_OPERATION,
+        { correlationId, errorKind: "rate-limited" },
+        { reason, observedCount },
+      ),
+    );
     closeRejectedSocket(ws, 1013, "too many live-dictation sessions");
   }
 
@@ -658,11 +703,13 @@ class VoiceLiveDictationPlaneImpl implements VoiceControlPlane {
     correlationId: string,
   ): ReturnType<typeof setTimeout> {
     const timer = setTimeout(() => {
-      getServerLogger().info({
-        category: "http",
-        op: "voice.live-dictation.initial-frame-timeout",
-        correlationId,
-      });
+      getServerLogger().info(
+        activityLogEvent(
+          VOICE_LIVE_DICTATION_INITIAL_FRAME_TIMEOUT_OPERATION,
+          { correlationId, errorKind: "timeout" },
+          {},
+        ),
+      );
       closeRejectedSocket(ws, 1008, "initial session frame deadline exceeded");
     }, this.planeDeps.initialFrameTimeoutMs ?? LIVE_DICTATION_INITIAL_FRAME_TIMEOUT_MS);
     timer.unref();

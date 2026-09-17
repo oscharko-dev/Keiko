@@ -50,6 +50,10 @@ import {
   VOICE_REPLAY_CAPACITY,
   voiceMessageAllowedForProfile,
 } from "@oscharko-dev/keiko-contracts/runtime/voice-protocol";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isAllowedHost } from "./host-check.js";
 import { resolveCorrelationId } from "./correlation.js";
 import { currentGatewayConfig, currentGatewayEgressConfig, type UiHandlerDeps } from "./deps.js";
@@ -64,6 +68,75 @@ import { getServerLogger } from "./observability/index.js";
 // The single loopback path the BFF WebSocket upgrade is re-opened for. Every other upgrade keeps the
 // hard 404 + socket.destroy() default (server.ts).
 export const VOICE_CONTROL_PATH = "/api/voice/control";
+
+const VOICE_REALTIME_SESSION_STARTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "voice.realtime.session-started",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "voice-realtime.VoiceControlConnection.start",
+  fields: {
+    profile: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["none", "speech-to-text", "speech-output", "full-realtime"],
+    },
+    resumed: { type: "boolean", dataClass: "closed-enum", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["voice-realtime-session"],
+  proofIds: ["voice.realtime.session-started.profile"],
+  releaseImpact: "patch",
+});
+
+const VOICE_REALTIME_SESSION_ENDED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "voice.realtime.session-ended",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "voice-realtime.VoiceControlConnection.endSession",
+  fields: {},
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["voice-realtime-session"],
+  proofIds: ["voice.realtime.session-ended.closed"],
+  releaseImpact: "patch",
+});
+
+const VOICE_REALTIME_POLICY_DECISION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "voice.realtime.policy-decision",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "voice-realtime.VoiceControlConnection.dispatchIn",
+  fields: {
+    decision: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["deny"],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["profile-mismatch"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["voice-realtime-policy"],
+  proofIds: ["voice.realtime.policy-decision.reason"],
+  releaseImpact: "patch",
+});
 
 // Bound every client WebSocket control frame before UTF-8 conversion or JSON parsing. SDP and
 // transcript fields have narrower semantic caps below; this is the transport-level abuse guard.
@@ -359,12 +432,13 @@ export class VoiceControlConnection {
     // dispose()'s session-ended line so an operator/agent reconstructing a defect can see exactly
     // how long a control-plane session was attached. Content-free — profile and resume are both
     // closed-vocabulary/boolean values, never the session or idempotency id.
-    getServerLogger().info({
-      category: "http",
-      op: "voice.realtime.session-started",
-      correlationId: this.correlationId,
-      extra: { profile: this.session.profile, resumed: resume },
-    });
+    getServerLogger().info(
+      activityLogEvent(
+        VOICE_REALTIME_SESSION_STARTED_OPERATION,
+        { correlationId: this.correlationId },
+        { profile: this.session.profile, resumed: resume },
+      ),
+    );
     if (resume) {
       for (const buffered of replayEvents(this.session)) {
         this.dispatchOut(buffered);
@@ -441,11 +515,13 @@ export class VoiceControlConnection {
       return false;
     }
     this.closed = true;
-    getServerLogger().info({
-      category: "http",
-      op: "voice.realtime.session-ended",
-      correlationId: this.correlationId,
-    });
+    getServerLogger().info(
+      activityLogEvent(
+        VOICE_REALTIME_SESSION_ENDED_OPERATION,
+        { correlationId: this.correlationId },
+        {},
+      ),
+    );
     this.negotiation?.abort();
     this.negotiation = undefined;
     return true;
@@ -485,12 +561,13 @@ export class VoiceControlConnection {
           // log too (body-free: a fixed reason code only, never the requested or negotiated
           // profile) so the timeline can reconstruct why capability selection failed, not just
           // that this particular client session saw a "deny".
-          getServerLogger().info({
-            category: "http",
-            op: "voice.realtime.policy-decision",
-            correlationId: this.correlationId,
-            extra: { decision: "deny", reason: "profile-mismatch" },
-          });
+          getServerLogger().info(
+            activityLogEvent(
+              VOICE_REALTIME_POLICY_DECISION_OPERATION,
+              { correlationId: this.correlationId, errorKind: "authority-denied" },
+              { decision: "deny", reason: "profile-mismatch" },
+            ),
+          );
           this.emit({ kind: "policy.decision", decision: "deny" });
           return;
         }
