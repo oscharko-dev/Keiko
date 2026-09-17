@@ -101,7 +101,7 @@ describe("USearch ANN index — native-runtime-resolved logging (hermetic)", () 
     const binary = join(fixtureDir, "usearch.node");
     writeFileSync(binary, FIXTURE_BINARY_CONTENT, "utf8");
     // Prove the fixture is what it claims to be, independent of the mocked approval object —
-    // if this ever drifted, the "resolved: true" assertions below would silently start
+    // if this ever drifted, the resolved-state assertions below would silently start
     // exercising the "invalid" branch instead of the success branch they are named for.
     expect(createHash("sha256").update(FIXTURE_BINARY_CONTENT).digest("hex")).toBe(
       FIXTURE_BINARY_SHA256,
@@ -125,7 +125,7 @@ describe("USearch ANN index — native-runtime-resolved logging (hermetic)", () 
 
     try {
       // The fixture verifies successfully (its hash matches the mocked approval), so
-      // targetRuntime() logs "resolved: true" before the ANN worker ever starts. The worker
+      // targetRuntime() logs the resolved state before the ANN worker ever starts. The worker
       // then fails to load the fixture as a real native addon — expected and irrelevant here,
       // since this test is about the logging boundary, not ANN search correctness (which the
       // real-binary tests in usearch-ann-index.test.ts already cover).
@@ -139,7 +139,7 @@ describe("USearch ANN index — native-runtime-resolved logging (hermetic)", () 
         level: "info",
         category: "search",
         extra: {
-          resolved: true,
+          resolutionState: "resolved",
           version: FIXTURE_VERSION,
         },
       });

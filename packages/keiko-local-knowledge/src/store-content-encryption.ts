@@ -397,13 +397,12 @@ function isCheckpointComplete(attempt: WalCheckpointAttempt): boolean {
   );
 }
 
-// #2906 round-3 review: errorKind was previously present only when the PRAGMA itself threw, so the
+// #2906 round-3 review: evidence was previously present only when the PRAGMA itself threw, so the
 // two primary new failure modes -- a persistently busy/partial checkpoint and a malformed result
-// row -- had no closed, body-free kind to cluster or reconstruct through the structured log
-// contract (AGENTS.md §8). Every non-complete outcome now gets one: the real cause's classified
-// code/name when the statement threw, and a literal, stable identifier for each of the three
-// still-incomplete "ok" shapes otherwise, so busy-exhaustion, a partial flush, and a malformed row
-// are distinguishable from each other in the log alone.
+// row -- had no closed, body-free detail to reconstruct through the structured log contract
+// (AGENTS.md §8). Every non-complete outcome now carries a stable `failureKind` beneath the closed
+// durability-failed envelope: the real cause's classified code/name when the statement threw, and
+// a literal identifier for each still-incomplete shape otherwise.
 function checkpointErrorKind(attempt: WalCheckpointAttempt): string {
   if (attempt.kind === "threw") return knowledgeErrorKind(attempt.cause);
   if (attempt.kind === "malformed") return "checkpoint-malformed";
@@ -489,11 +488,7 @@ function logEncryptionMigrated(
 ): void {
   emitKnowledgeLogEvent(
     logSink,
-    activityLogEvent(
-      STORE_ENCRYPTION_MIGRATED_OPERATION,
-      { durationMs },
-      { fromScope, toScope },
-    ),
+    activityLogEvent(STORE_ENCRYPTION_MIGRATED_OPERATION, { durationMs }, { fromScope, toScope }),
   );
 }
 

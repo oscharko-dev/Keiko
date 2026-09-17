@@ -95,15 +95,15 @@ describe("openKnowledgeStore — a failing log sink never becomes the failure", 
       logSink: sinkFailingOn("knowledge.store.quarantined", events),
     }).close();
 
-    expect(events).toStrictEqual([
-      {
-        level: "error",
-        category: "diagnostic",
-        op: "knowledge.log.sink-failed",
-        errorKind: "ENOSPC",
-        extra: { droppedOp: "knowledge.store.quarantined" },
-      },
-    ]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      level: "error",
+      category: "diagnostic",
+      op: "knowledge.log.sink-failed",
+      errorKind: "unavailable",
+      extra: { failureKind: "ENOSPC" },
+    });
+    expect(events[0]?.extra?.droppedOpDigest).toMatch(/^[0-9a-f]{16}$/u);
   });
 
   it("reports a wholly dead sink on the process warning channel instead of dropping it", () => {
@@ -116,7 +116,7 @@ describe("openKnowledgeStore — a failing log sink never becomes the failure", 
     const calls: readonly (readonly unknown[])[] = warn.mock.calls;
     expect(calls[0]?.[1]).toMatchObject({
       code: "KEIKO_LOG_SINK_FAILED",
-      detail: "op=knowledge.store.quarantined errorKind=Error",
+      detail: expect.stringMatching(/^opDigest=[0-9a-f]{16} errorKind=Error$/u),
     });
     // The sink's own message is a body like any other and never reaches the report.
     expect(JSON.stringify(calls)).not.toContain("the activity log sink is down");
@@ -153,7 +153,11 @@ describe("openKnowledgeStore — a failing log sink never becomes the failure", 
     expect(quarantineEvents.map((event) => event.op)).toStrictEqual([
       "knowledge.store.quarantined",
     ]);
-    expect(quarantineEvents[0]).toMatchObject({ level: "error", extra: { reopened: true } });
+    expect(quarantineEvents[0]).toMatchObject({
+      level: "error",
+      errorKind: "read-failed",
+      extra: { reopenState: "reopened" },
+    });
 
     const encryptionEvents: KnowledgeLogEvent[] = [];
     expect(() => {

@@ -40,6 +40,8 @@ interface Fixture {
   readonly chunks: readonly ChunkToEmbed[];
 }
 
+const LOG_DIGEST = /^[0-9a-f]{16}$/u;
+
 function buildFixture(
   text = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi",
 ): Fixture {
@@ -1295,7 +1297,7 @@ describe("embedChunkBatch — activity log", () => {
         uniqueChunkCount: chunks.length,
         dedupedCount: 0,
         concurrency: 4,
-        endpointHost: "https://example.test",
+        endpointDigest: expect.stringMatching(LOG_DIGEST),
       });
 
       const grouped = log.find("embedding.batch.grouped");
@@ -1304,7 +1306,7 @@ describe("embedChunkBatch — activity log", () => {
         uniqueChunkCount: chunks.length,
         batchCount: 1,
         concurrency: 4,
-        endpointHost: "https://example.test",
+        endpointDigest: selected?.extra?.endpointDigest,
       });
 
       const completed = log.find("embedding.batch.completed");
@@ -1346,7 +1348,7 @@ describe("embedChunkBatch — activity log", () => {
         uniqueChunkCount: 1,
         dedupedCount: 2,
         concurrency: 2,
-        endpointHost: "https://example.test",
+        endpointDigest: expect.stringMatching(LOG_DIGEST),
       });
       expect(log.ops()).not.toContain("embedding.batch.grouped");
     } finally {
@@ -1402,7 +1404,8 @@ describe("embedChunkBatch — activity log", () => {
         remainingCount: 2,
         completedCount: 0,
         transport: "array-batch",
-        endpointHost: "https://example.test",
+        endpointDigest: expect.stringMatching(LOG_DIGEST),
+        failureKind: "timeout",
       });
       // "Refused instantly" and "burned the provider deadline" are the same error kind; only
       // the duration separates them, so the field has to be on the line.
@@ -1468,7 +1471,7 @@ describe("embedChunkBatch — activity log", () => {
       expect(progress.map((event) => event.extra?.remainingCount)).toEqual([2, 1]);
       expect(progress[0]?.level).toBe("warn");
       expect(progress[0]?.errorKind).toBe("timeout");
-      expect(progress[0]?.extra?.endpointHost).toBe("https://example.test");
+      expect(progress[0]?.extra?.endpointDigest).toMatch(LOG_DIGEST);
       expect(progress[0]?.durationMs).toBeGreaterThanOrEqual(0);
       expect(log.ops()).not.toContain("embedding.batch.retry");
     } finally {
@@ -1503,9 +1506,10 @@ describe("embedChunkBatch — activity log", () => {
       expect(failed?.errorKind).toBe("timeout");
       expect(failed?.extra).toEqual({
         itemCount: 2,
-        transient: true,
+        failureClass: "transient",
         transport: "array-batch",
-        endpointHost: "https://example.test",
+        endpointDigest: expect.stringMatching(LOG_DIGEST),
+        failureKind: "timeout",
       });
       expect(failed?.durationMs).toBeGreaterThanOrEqual(0);
       // The batch still "completed" — with zero vectors and two errors, at warn.
@@ -1540,17 +1544,22 @@ describe("embedChunkBatch — activity log", () => {
       expect(result.vectors).toEqual([]);
       const rejectedIdentity = log.find("embedding.identity.rejected");
       expect(rejectedIdentity?.level).toBe("error");
-      expect(rejectedIdentity?.errorKind).toBe("INCOMPATIBLE_EMBEDDING_IDENTITY");
+      expect(rejectedIdentity?.errorKind).toBe("validation-failed");
       expect(rejectedIdentity?.extra).toEqual({
         pinnedDimensions: DEFAULT_EMBEDDING.vectorDimensions,
         observedDimensions: 768,
         pinnedNormalization: "l2",
+        failureKind: "INCOMPATIBLE_EMBEDDING_IDENTITY",
       });
 
       const rejectedBatch = log.find("embedding.batch.rejected");
       expect(rejectedBatch?.level).toBe("error");
-      expect(rejectedBatch?.errorKind).toBe("INCOMPATIBLE_EMBEDDING_IDENTITY");
-      expect(rejectedBatch?.extra).toMatchObject({ vectorCount: 0, chunkCount: chunks.length });
+      expect(rejectedBatch?.errorKind).toBe("validation-failed");
+      expect(rejectedBatch?.extra).toMatchObject({
+        vectorCount: 0,
+        chunkCount: chunks.length,
+        failureKind: "INCOMPATIBLE_EMBEDDING_IDENTITY",
+      });
       expect(log.ops()).not.toContain("embedding.batch.completed");
     } finally {
       cleanup();
@@ -1584,8 +1593,11 @@ describe("embedChunkBatch — activity log", () => {
       expect(result.vectors).toEqual([]);
       const budgeting = log.find("embedding.batch.budgeting-failed");
       expect(budgeting?.level).toBe("warn");
-      expect(budgeting?.errorKind).toBe("RangeError");
-      expect(budgeting?.extra).toEqual({ uniqueChunkCount: chunks.length });
+      expect(budgeting?.errorKind).toBe("unavailable");
+      expect(budgeting?.extra).toEqual({
+        uniqueChunkCount: chunks.length,
+        failureKind: "RangeError",
+      });
     } finally {
       cleanup();
     }
@@ -1621,8 +1633,8 @@ describe("embedChunkBatch — activity log", () => {
 
       const cancelled = log.find("embedding.batch.cancelled");
       expect(cancelled?.level).toBe("warn");
-      expect(cancelled?.errorKind).toBe("CANCELLED");
-      expect(cancelled?.extra).toMatchObject({ vectorCount: 0 });
+      expect(cancelled?.errorKind).toBe("cancelled");
+      expect(cancelled?.extra).toMatchObject({ vectorCount: 0, failureKind: "CANCELLED" });
       expect(log.ops()).not.toContain("embedding.batch.completed");
     } finally {
       cleanup();
@@ -1685,14 +1697,15 @@ describe("embedChunkBatch — activity log", () => {
       const persistFailed = log.find("embedding.batch.persist-failed");
       expect(persistFailed?.level).toBe("error");
       expect(persistFailed?.category).toBe("embedding");
-      // The batcher wraps the cause in an IndexingError, so the KIND an operator sees is the
-      // persistence code — not the tokenizer/transport codes every other failure line carries.
-      expect(persistFailed?.errorKind).toBe("PERSISTENCE_FAILED");
+      // The batcher wraps the cause in an IndexingError, so the detailed failure class is the
+      // persistence code while the envelope stays in the analyzer's closed vocabulary.
+      expect(persistFailed?.errorKind).toBe("unavailable");
       expect(persistFailed?.durationMs).toBeGreaterThanOrEqual(0);
       expect(persistFailed?.extra).toMatchObject({
         chunkCount: chunks.length,
         vectorCount: 0,
         capsuleIdDigest: CONTEXT.capsuleIdDigest,
+        failureKind: "PERSISTENCE_FAILED",
       });
       // The whole point: the run must NOT look like it completed.
       expect(log.ops()).not.toContain("embedding.batch.completed");
@@ -1771,7 +1784,7 @@ describe("embedChunkBatch — activity log", () => {
         attempt: 1,
         maxRetries: 2,
         transport: "scalar",
-        endpointHost: "https://gateway.test:8443",
+        endpointDigest: expect.stringMatching(LOG_DIGEST),
       });
     } finally {
       cleanup();
@@ -1812,13 +1825,14 @@ describe("embedChunkBatch — activity log", () => {
       expect(roundTripsPerChunk).toBe(noBackoff.maxRetries + 1);
       const exhausted = log.find("embedding.chunk.retry-exhausted");
       expect(exhausted?.level).toBe("warn");
-      expect(exhausted?.errorKind).toBe("transport");
+      expect(exhausted?.errorKind).toBe("unavailable");
       expect(exhausted?.durationMs).toBeGreaterThanOrEqual(0);
       expect(exhausted?.extra).toMatchObject({
         attempt: roundTripsPerChunk,
         maxRetries: noBackoff.maxRetries,
         transport: "scalar",
-        endpointHost: "https://example.test",
+        endpointDigest: expect.stringMatching(LOG_DIGEST),
+        failureKind: "transport",
       });
     } finally {
       cleanup();
@@ -1847,8 +1861,8 @@ describe("embedChunkBatch — activity log", () => {
         logContext: CONTEXT,
       });
 
-      expect(log.find("embedding.chunk.retry-exhausted")?.extra?.endpointHost).toBe(
-        "https://gateway.test",
+      expect(log.find("embedding.chunk.retry-exhausted")?.extra?.endpointDigest).toMatch(
+        LOG_DIGEST,
       );
       const serialized = JSON.stringify(log.events);
       expect(serialized).not.toContain("hunter2");
@@ -1891,10 +1905,10 @@ describe("embedChunkBatch — activity log", () => {
       }
     };
 
-    expect(await exhaustedExtraFor("not-a-url")).not.toHaveProperty("endpointHost");
+    expect(await exhaustedExtraFor("not-a-url")).not.toHaveProperty("endpointDigest");
     expect(await exhaustedExtraFor("https://gateway.test/v1")).toHaveProperty(
-      "endpointHost",
-      "https://gateway.test",
+      "endpointDigest",
+      expect.stringMatching(LOG_DIGEST),
     );
   });
 

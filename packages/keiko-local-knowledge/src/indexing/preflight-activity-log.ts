@@ -5,7 +5,11 @@ import {
   type ActivityLogEventEnvelope,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
-import { emitKnowledgeLogEvent, type KnowledgeLogSink } from "../knowledge-log.js";
+import {
+  emitKnowledgeLogEvent,
+  knowledgeLogCorrelationId,
+  type KnowledgeLogSink,
+} from "../knowledge-log.js";
 import type { IndexingLogContext } from "./types.js";
 
 const PREFLIGHT_STARTED_OPERATION = defineActivityLogOperation({
@@ -20,9 +24,19 @@ const PREFLIGHT_STARTED_OPERATION = defineActivityLogOperation({
     providerDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
     modelIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
     expectedDimensions: { type: "integer", dataClass: "count", required: false },
-    fingerprinted: { type: "boolean", dataClass: "closed-enum", required: true },
+    fingerprinted: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true", "false"],
+    },
     endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
-    cached: { type: "boolean", dataClass: "closed-enum", required: true },
+    cached: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true", "false"],
+    },
   },
   causal: "correlation",
   lifecycle: "start",
@@ -44,7 +58,12 @@ const PREFLIGHT_FAILED_OPERATION = defineActivityLogOperation({
     providerDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
     modelIdDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
     expectedDimensions: { type: "integer", dataClass: "count", required: false },
-    fingerprinted: { type: "boolean", dataClass: "closed-enum", required: false },
+    fingerprinted: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["true", "false"],
+    },
     endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
     failureSource: {
       type: "string",
@@ -74,7 +93,12 @@ const PREFLIGHT_COMPLETED_OPERATION = defineActivityLogOperation({
     providerDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
     modelIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
     expectedDimensions: { type: "integer", dataClass: "count", required: false },
-    fingerprinted: { type: "boolean", dataClass: "closed-enum", required: true },
+    fingerprinted: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true", "false"],
+    },
     endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
     observedDimensions: { type: "integer", dataClass: "count", required: true },
   },
@@ -98,9 +122,19 @@ const PREFLIGHT_CACHE_HIT_OPERATION = defineActivityLogOperation({
     providerDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
     modelIdDigest: { type: "string", dataClass: "digest", required: true, maxLength: 16 },
     expectedDimensions: { type: "integer", dataClass: "count", required: false },
-    fingerprinted: { type: "boolean", dataClass: "closed-enum", required: true },
+    fingerprinted: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true", "false"],
+    },
     endpointDigest: { type: "string", dataClass: "digest", required: false, maxLength: 16 },
-    cached: { type: "boolean", dataClass: "closed-enum", required: true },
+    cached: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true", "false"],
+    },
   },
   causal: "correlation",
   lifecycle: "state",
@@ -234,7 +268,7 @@ function eventEnvelope(
 ): ActivityLogEventEnvelope {
   return {
     level,
-    correlationId: context.jobId,
+    correlationId: knowledgeLogCorrelationId(context.jobId),
     ...(failureKind === undefined ? {} : { errorKind: failureErrorKind(failureKind) }),
     ...(durationMs === undefined ? {} : { durationMs }),
   };

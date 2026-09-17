@@ -746,8 +746,9 @@ describe("openKnowledgeStore — activity log", () => {
     expect(quarantine).toBeDefined();
     expect(quarantine?.level).toBe("error");
     expect(quarantine?.category).toBe("diagnostic");
-    expect(quarantine?.extra).toEqual({ reopened: true });
-    expect(typeof quarantine?.errorKind).toBe("string");
+    expect(quarantine?.extra).toMatchObject({ reopenState: "reopened" });
+    expect(typeof quarantine?.extra?.failureKind).toBe("string");
+    expect(quarantine?.errorKind).toBe("read-failed");
   });
 
   it("writes nothing when the store opens cleanly", () => {
@@ -786,7 +787,9 @@ describe("openKnowledgeStore — activity log", () => {
     const rejection = events.find((event) => event.op === "knowledge.store.encryption-rejected");
     expect(rejection).toBeDefined();
     expect(rejection?.level).toBe("error");
-    expect(rejection?.extra).toEqual({ protectionMode: "encrypted-key-provider" });
+    expect(rejection?.errorKind).toBe("permission-denied");
+    expect(rejection?.extra).toMatchObject({ protectionMode: "encrypted-key-provider" });
+    expect(typeof rejection?.extra?.failureKind).toBe("string");
   });
 
   function testKeyProvider(fill: number): KnowledgeStoreKeyProvider {
