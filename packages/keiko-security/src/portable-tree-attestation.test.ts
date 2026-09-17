@@ -311,14 +311,24 @@ describe("portable KHT1 tree attestation", () => {
         level: "error",
         op: "security.portable-tree-attestation.failed",
         errorKind: "validation-failed",
-        extra: { driver: "async", failureKind: "ENOENT" },
+        extra: {
+          completeness: "complete",
+          driver: "async",
+          failureKind: "ENOENT",
+          loss: "none",
+        },
       }),
       expect.objectContaining({
         category: "security",
         level: "error",
         op: "security.portable-tree-attestation.failed",
         errorKind: "validation-failed",
-        extra: { driver: "sync", failureKind: "PortableTreeAttestationError" },
+        extra: {
+          completeness: "complete",
+          driver: "sync",
+          failureKind: "PortableTreeAttestationError",
+          loss: "none",
+        },
       }),
     ]);
     expect(JSON.stringify(events)).not.toContain("content that must not reach the log");
