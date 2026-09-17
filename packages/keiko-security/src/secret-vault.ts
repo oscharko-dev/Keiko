@@ -66,6 +66,97 @@ import {
 const KEY_BYTES = 32;
 const STORE_VERSION = 1;
 const MACOS_SECURITY_EXECUTABLE = "/usr/bin/security";
+const MAX_VAULT_STACK_CHARS = 16 * 1024;
+const MAX_VAULT_STACK_LINES = 64;
+const MAX_VAULT_FRAMES = 8;
+const MAX_VAULT_CAUSES = 5;
+const VAULT_FRAME_ANCHOR = "/packages/keiko-security/";
+const VAULT_FRAME_RELATIVE_PATTERN = /^(?:dist|src)\/[A-Za-z0-9_./-]{1,160}\.(?:js|ts)$/u;
+const LINE_OR_COLUMN_PATTERN = /^\d{1,6}$/u;
+
+interface VaultFailureEvidence {
+  readonly failureKind: string;
+  readonly frames?: readonly string[];
+  readonly causeChain?: readonly string[];
+}
+
+function safeErrorProperty(error: unknown, property: string): unknown {
+  if ((typeof error !== "object" || error === null) && typeof error !== "function") {
+    return undefined;
+  }
+  try {
+    return Reflect.get(error, property);
+  } catch {
+    return undefined;
+  }
+}
+
+function frameLocation(line: string): string | undefined {
+  const trimmed = line.trim();
+  if (!trimmed.startsWith("at ")) return undefined;
+  const value = trimmed.slice(3);
+  if (!value.endsWith(")")) return value;
+  const openIndex = value.lastIndexOf("(");
+  return openIndex === -1 ? undefined : value.slice(openIndex + 1, -1);
+}
+
+function anchoredVaultFrame(line: string): string | undefined {
+  const location = frameLocation(line)
+    ?.replaceAll("\\", "/")
+    .replace(/^file:\/\//u, "");
+  if (location === undefined) return undefined;
+  const columnSeparator = location.lastIndexOf(":");
+  const lineSeparator = location.lastIndexOf(":", columnSeparator - 1);
+  if (columnSeparator <= 0 || lineSeparator <= 0) return undefined;
+  const lineNumber = location.slice(lineSeparator + 1, columnSeparator);
+  const column = location.slice(columnSeparator + 1);
+  if (!LINE_OR_COLUMN_PATTERN.test(lineNumber) || !LINE_OR_COLUMN_PATTERN.test(column)) {
+    return undefined;
+  }
+  const path = location.slice(0, lineSeparator);
+  const anchorIndex = path.lastIndexOf(VAULT_FRAME_ANCHOR);
+  if (anchorIndex === -1) return undefined;
+  const relative = path.slice(anchorIndex + VAULT_FRAME_ANCHOR.length);
+  if (!VAULT_FRAME_RELATIVE_PATTERN.test(relative) || relative.includes("../")) return undefined;
+  return `packages/keiko-security/${relative}:${lineNumber}:${column}`;
+}
+
+function vaultStackFrames(error: unknown): readonly string[] {
+  const stack = safeErrorProperty(error, "stack");
+  if (typeof stack !== "string") return [];
+  const bounded = stack.slice(0, MAX_VAULT_STACK_CHARS);
+  return bounded
+    .split("\n")
+    .slice(1, MAX_VAULT_STACK_LINES + 1)
+    .map(anchoredVaultFrame)
+    .filter((frame): frame is string => frame !== undefined)
+    .slice(0, MAX_VAULT_FRAMES);
+}
+
+function vaultCauseChain(error: unknown): readonly string[] {
+  const classes: string[] = [];
+  const seen = new WeakSet();
+  if (typeof error === "object" && error !== null) seen.add(error);
+  let current = error;
+  for (let depth = 0; depth < MAX_VAULT_CAUSES; depth += 1) {
+    const cause = safeErrorProperty(current, "cause");
+    if (typeof cause !== "object" || cause === null || seen.has(cause)) break;
+    seen.add(cause);
+    classes.push(securityErrorKind(cause));
+    current = cause;
+  }
+  return classes;
+}
+
+function vaultFailureEvidence(error: unknown): VaultFailureEvidence {
+  const frames = vaultStackFrames(error);
+  const chain = vaultCauseChain(error);
+  return {
+    failureKind: securityErrorKind(error),
+    ...(frames.length === 0 ? {} : { frames }),
+    ...(chain.length === 0 ? {} : { causeChain: chain }),
+  };
+}
 
 const SECURITY_VAULT_KEY_RESOLVED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -82,11 +173,43 @@ const SECURITY_VAULT_KEY_RESOLVED_OPERATION = defineActivityLogOperation({
       values: ["env", "keychain", "keyfile"],
     },
   },
-  causal: "none",
+  causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "capability",
   failureClasses: ["security-vault-key-resolution"],
   proofIds: ["security.vault.key-resolved.source"],
+  releaseImpact: "patch",
+});
+
+const SECURITY_VAULT_KEY_RESOLUTION_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "security.vault.key-resolution-failed",
+  category: "security",
+  owner: "keiko-security",
+  emitter: "secret-vault.emitKeyResolutionFailed",
+  fields: {
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["security-vault-key-resolution"],
+  proofIds: ["security.vault.key-resolution-failed.evidence"],
   releaseImpact: "patch",
 });
 
@@ -98,7 +221,7 @@ const SECURITY_VAULT_ENTRIES_MERGED_OPERATION = defineActivityLogOperation({
   owner: "keiko-security",
   emitter: "secret-vault.emitEntriesMerged",
   fields: { count: { type: "integer", dataClass: "count", required: true } },
-  causal: "none",
+  causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["security-vault-write"],
@@ -114,7 +237,7 @@ const SECURITY_VAULT_ENTRIES_DELETED_OPERATION = defineActivityLogOperation({
   owner: "keiko-security",
   emitter: "secret-vault.emitEntriesDeleted",
   fields: { count: { type: "integer", dataClass: "count", required: true } },
-  causal: "none",
+  causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["security-vault-delete"],
@@ -132,8 +255,22 @@ const SECURITY_VAULT_ENTRIES_DELETE_FAILED_OPERATION = defineActivityLogOperatio
   fields: {
     count: { type: "integer", dataClass: "count", required: true },
     failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
   },
-  causal: "none",
+  causal: "correlation",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["security-vault-delete"],
@@ -151,8 +288,22 @@ const SECURITY_VAULT_ENTRIES_MERGE_FAILED_OPERATION = defineActivityLogOperation
   fields: {
     count: { type: "integer", dataClass: "count", required: true },
     failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
   },
-  causal: "none",
+  causal: "correlation",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["security-vault-write"],
@@ -170,8 +321,22 @@ const SECURITY_VAULT_SHARD_UNREADABLE_OPERATION = defineActivityLogOperation({
   fields: {
     count: { type: "integer", dataClass: "count", required: true },
     failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
   },
-  causal: "none",
+  causal: "correlation",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["security-vault-read"],
@@ -189,8 +354,22 @@ const SECURITY_VAULT_ENTRIES_ROLLBACK_FAILED_OPERATION = defineActivityLogOperat
   fields: {
     count: { type: "integer", dataClass: "count", required: true },
     failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
   },
-  causal: "none",
+  causal: "correlation",
   lifecycle: "failure",
   analyzerProjection: "failure-cluster",
   failureClasses: ["security-vault-rollback"],
@@ -416,10 +595,25 @@ function keyFromKeyfile(vaultDir: string, keyfileName: string): Buffer {
   return key;
 }
 
+function emitKeyResolutionFailed(sink: SecurityLogSink | undefined, error: unknown): void {
+  emitSecurityLogEvent(
+    sink,
+    activityLogEvent(
+      SECURITY_VAULT_KEY_RESOLUTION_FAILED_OPERATION,
+      { level: "error", errorKind: "unavailable" },
+      vaultFailureEvidence(error),
+    ),
+  );
+}
+
 export function resolveLocalVaultKey(options: ResolveLocalVaultKeyOptions): ResolvedLocalVaultKey {
-  const resolved = computeLocalVaultKey(options);
-  // Fires only once the tier has genuinely resolved — a thrown error (a malformed env key, a
-  // symlinked keyfile path) skips this and reports nothing, exactly as before this event existed.
+  let resolved: ResolvedLocalVaultKey;
+  try {
+    resolved = computeLocalVaultKey(options);
+  } catch (error) {
+    emitKeyResolutionFailed(options.sink, error);
+    throw error;
+  }
   emitSecurityLogEvent(
     options.sink,
     activityLogEvent(
@@ -754,7 +948,7 @@ function deleteManyWithLog(
       activityLogEvent(
         SECURITY_VAULT_ENTRIES_DELETE_FAILED_OPERATION,
         { level: "error", errorKind: "write-failed", durationMs: elapsedMs() },
-        { count: references.length, failureKind: securityErrorKind(error) },
+        { count: references.length, ...vaultFailureEvidence(error) },
       ),
     );
     throw error;
@@ -777,7 +971,7 @@ function setManyWithLog(
       activityLogEvent(
         SECURITY_VAULT_ENTRIES_MERGE_FAILED_OPERATION,
         { level: "error", errorKind: "write-failed", durationMs: elapsedMs() },
-        { count: next.size, failureKind: securityErrorKind(error) },
+        { count: next.size, ...vaultFailureEvidence(error) },
       ),
     );
     throw error;
@@ -871,7 +1065,7 @@ function emitShardUnreadable(sink: SecurityLogSink | undefined, cause: unknown):
       { level: "warn", errorKind: "read-failed" },
       // A single unreadable file per call; never the filename (it decodes to the reference) or the
       // read error's message (it can carry the resolved path).
-      { count: 1, failureKind: securityErrorKind(cause) },
+      { count: 1, ...vaultFailureEvidence(cause) },
     ),
   );
 }
@@ -954,7 +1148,7 @@ function rollbackCommittedShards(
         activityLogEvent(
           SECURITY_VAULT_ENTRIES_ROLLBACK_FAILED_OPERATION,
           { level: "error", errorKind: "durability-failed" },
-          { count: 1, failureKind: securityErrorKind(cause) },
+          { count: 1, ...vaultFailureEvidence(cause) },
         ),
       );
     }
