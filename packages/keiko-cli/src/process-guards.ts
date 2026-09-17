@@ -31,6 +31,7 @@
 // The fallback never reads `.message` either: see `fallbackErrorKind`.
 
 import type { ServerLogEvent, ServerLogSink } from "@oscharko-dev/keiko-server";
+import { processFatalActivityLogEvent } from "./process-activity-log.js";
 
 // The narrow slice of keiko-server's public surface the fatal path needs, loaded only inside the
 // handler (see the file banner). `describeError` is reused rather than re-derived from its parts:
@@ -108,16 +109,6 @@ export function fatalProcessLine(kind: string, errorKind: string): string {
   return `keiko: fatal ${kind} (${errorKind}). The process will exit.\n`;
 }
 
-function fatalActivityLogExtra(
-  machineKind: FatalReasonKind,
-  described: ReturnType<FatalDiagnosticsModule["describeError"]>,
-): Readonly<Record<string, unknown>> {
-  const extra: Record<string, unknown> = { kind: machineKind };
-  if (described.frames !== undefined) extra.frames = described.frames;
-  if (described.causeChain !== undefined) extra.causeChain = described.causeChain;
-  return extra;
-}
-
 function writeFatalActivityLogLine(
   server: FatalDiagnosticsModule,
   machineKind: FatalReasonKind,
@@ -126,13 +117,12 @@ function writeFatalActivityLogLine(
   const stateDir = process.env.KEIKO_STATE_DIR;
   if (typeof stateDir !== "string" || stateDir.length === 0) return;
   const activityLog: ServerLogSink = server.createFileServerLogSink(stateDir);
-  const event: ServerLogEvent = {
-    level: "error",
-    category: "process",
-    op: "process.fatal",
-    errorKind: described.code ?? described.errorClass,
-    extra: fatalActivityLogExtra(machineKind, described),
-  };
+  const event: ServerLogEvent = processFatalActivityLogEvent({
+    kind: machineKind,
+    failureKind: described.code ?? described.errorClass,
+    ...(described.frames === undefined ? {} : { frames: described.frames }),
+    ...(described.causeChain === undefined ? {} : { causeChain: described.causeChain }),
+  });
   activityLog.write(event);
   activityLog.close?.();
 }
