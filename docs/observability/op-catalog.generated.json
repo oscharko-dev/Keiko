@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "205b1dc41337fe3b2841dca3dee729eb51c7027de380f8bf8b1f1391d61fd2a3",
-    "catalogDigest": "d3b7163b2df0764d030eb7bbc659415de4fbbab457b723f7b75acbb699d8c9a0",
+    "catalogDigest": "de9c0a24978a793ad427a5c028c90bffdcffe1ac916c73f31b6ba14aa16d06b5",
     "operations": [
       {
         "contractKind": "activity-log-operation",
@@ -241,6 +241,154 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/evidence-retention-log.ts:29",
         "emitterSites": ["packages/keiko-server/src/evidence-retention-log.ts:75"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "gateway.spend.ceiling",
+        "category": "gateway",
+        "owner": "keiko-server",
+        "emitter": "gateway-spend-budget.PersistentGatewaySpendBudget.reportCeiling",
+        "fields": {
+          "disposition": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["unchanged", "lowered", "raised", "raise-refused"]
+          },
+          "ceilingNanoUsd": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "configuredNanoUsd": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "chargedNanoUsd": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["gateway-spend-ceiling"],
+        "proofIds": ["gateway.spend.ceiling.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/gateway-spend-budget.ts:105",
+        "emitterSites": ["packages/keiko-server/src/gateway-spend-budget.ts:354"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "gateway.spend.rejected",
+        "category": "gateway",
+        "owner": "keiko-server",
+        "emitter": "gateway-spend-budget.reject",
+        "fields": {
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "spend-budget-invalid",
+              "spend-pricing-unavailable",
+              "spend-bound-unavailable",
+              "spend-budget-exceeded",
+              "spend-ledger-unavailable"
+            ]
+          },
+          "frames": {
+            "type": "string-array",
+            "dataClass": "safe-platform-class",
+            "required": true,
+            "maxItems": 8
+          },
+          "causeChain": {
+            "type": "string-array",
+            "dataClass": "error-kind",
+            "required": true,
+            "maxItems": 5
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["gateway-spend-policy"],
+        "proofIds": ["gateway.spend.rejected.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/gateway-spend-budget.ts:38",
+        "emitterSites": ["packages/keiko-server/src/gateway-spend-budget.ts:246"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "gateway.spend.reserved",
+        "category": "gateway",
+        "owner": "keiko-server",
+        "emitter": "gateway-spend-budget.PersistentGatewaySpendBudget.reserve",
+        "fields": {
+          "reservedNanoUsd": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "ceilingNanoUsd": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "start",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["gateway-spend-reservation"],
+        "proofIds": ["gateway.spend.reserved.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/gateway-spend-budget.ts:131",
+        "emitterSites": ["packages/keiko-server/src/gateway-spend-budget.ts:386"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "gateway.spend.settled",
+        "category": "gateway",
+        "owner": "keiko-server",
+        "emitter": "gateway-spend-budget.reservation.settle",
+        "fields": {
+          "chargedNanoUsd": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "measured": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "boundExceeded": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": true
+          },
+          "measurementErrorKind": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxLength": 64
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["gateway-spend-measurement"],
+        "proofIds": ["gateway.spend.settled.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/gateway-spend-budget.ts:79",
+        "emitterSites": ["packages/keiko-server/src/gateway-spend-budget.ts:280"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -3417,25 +3565,25 @@
     {
       "op": "gateway.spend.ceiling",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-spend-budget.ts:237",
+      "site": "packages/keiko-server/src/gateway-spend-budget.ts:108",
       "package": "keiko-server"
     },
     {
       "op": "gateway.spend.rejected",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-spend-budget.ts:132",
+      "site": "packages/keiko-server/src/gateway-spend-budget.ts:41",
       "package": "keiko-server"
     },
     {
       "op": "gateway.spend.reserved",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-spend-budget.ts:266",
+      "site": "packages/keiko-server/src/gateway-spend-budget.ts:134",
       "package": "keiko-server"
     },
     {
       "op": "gateway.spend.settled",
       "category": "gateway",
-      "site": "packages/keiko-server/src/gateway-spend-budget.ts:167",
+      "site": "packages/keiko-server/src/gateway-spend-budget.ts:82",
       "package": "keiko-server"
     },
     {
