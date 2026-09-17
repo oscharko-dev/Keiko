@@ -623,10 +623,8 @@ describe("CodingRuntimeOperationCoordinator", () => {
       // production run id (`run-<decimal projection of a UUID>`) is well past that floor and is
       // used as-is; see the reject test below.
       correlationId: "unknown-correlation-id",
-      // A plain `new Error(...)` classifies as the generic "Error" class (contentFreeErrorClass) --
-      // asserted directly rather than via `expect.any(String)`, whose vitest/jest typings are `any`
-      // and trip `@typescript-eslint/no-unsafe-assignment` when inlined into a typed object literal.
-      errorKind: "Error",
+      // Transport failures use the registry's closed, content-free failure vocabulary.
+      errorKind: "unavailable",
     });
     expect(event?.extra).toMatchObject({ runId: "run-1", operation: "answer" });
     expect(Array.isArray(event?.extra?.frames)).toBe(true);
@@ -693,7 +691,7 @@ describe("CodingRuntimeOperationCoordinator", () => {
       {
         level: "warn",
         op: "coding-runtime.follow-up.dispatch-failed",
-        errorKind: "Error",
+        errorKind: "unavailable",
         extra: { runId: "run-1", operation: "follow-up" },
       },
     ]);
