@@ -4,6 +4,10 @@
 // an error; only a redacted, status-level summary is surfaced.
 
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   AuthenticationError,
   CancelledError,
   ContextOverflowError,
@@ -18,6 +22,7 @@ import {
   TransportError,
   type GatewayEgressErrorCode,
 } from "@oscharko-dev/keiko-security/errors/gateway";
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 import {
   apiKeyHeaderValue,
   DEFAULT_API_KEY_HEADER_NAME,
@@ -46,8 +51,9 @@ import {
   type OpenAiCompatiblePromptMessage,
 } from "./prompt-token-accounting.js";
 import {
+  activityLogErrorKind,
+  logCorrelationId,
   logEndpointHost,
-  logErrorKind,
   logLevelEnabled,
   logTimer,
   resolveLogSink,
@@ -69,6 +75,65 @@ import type {
 } from "./types.js";
 
 const PROVIDER_EMPTY_ASSISTANT_STATUS = 200;
+
+const CHAT_REQUEST_DISPATCH_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "chat.request.dispatch",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "openai-adapter.logChatDispatch",
+  fields: {
+    endpointDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    messageCount: { type: "integer", dataClass: "count", required: true },
+    bodyBytes: { type: "integer", dataClass: "count", required: true },
+    timeoutMs: { type: "number", dataClass: "duration", required: true },
+    stream: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true", "false"],
+    },
+    readBudgetMs: { type: "number", dataClass: "duration", required: false },
+  },
+  causal: "none",
+  lifecycle: "start",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-chat-provider-call"],
+  proofIds: ["chat.request-dispatch.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const CHAT_RESPONSE_STREAMED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "chat.response.streamed",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "openai-adapter.logStreamRead",
+  fields: {
+    modelId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 256 },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["completed", "whole-body", "stalled", "failed"],
+    },
+    dataEvents: { type: "integer", dataClass: "count", required: true },
+    firstDataMs: { type: "number", dataClass: "duration", required: false },
+    maxGapMs: { type: "number", dataClass: "duration", required: true },
+    silenceMs: { type: "number", dataClass: "duration", required: true },
+    readBudgetMs: { type: "number", dataClass: "duration", required: false },
+    silentForMs: { type: "number", dataClass: "duration", required: false },
+  },
+  causal: "none",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["gateway-stream-read"],
+  proofIds: ["chat.response-streamed.emitted-line"],
+  releaseImpact: "patch",
+});
 const GATEWAY_EGRESS_CODES: Record<OutboundHttpEgressErrorCode, GatewayEgressErrorCode> = {
   PROXY_UNREACHABLE: ERROR_CODES.PROXY_UNREACHABLE,
   PROXY_AUTH_REQUIRED: ERROR_CODES.PROXY_AUTH_REQUIRED,
@@ -104,7 +169,7 @@ export interface AdapterDeps {
 // the silence `http.gateway.fetch.*` alone cannot fill for a real chat call (AdapterDeps carried
 // no sink at all before this change).
 interface ChatDispatchFields {
-  readonly endpoint: string | undefined;
+  readonly endpointDigest: string;
   readonly modelId: string;
   readonly messageCount: number;
   // UTF-8 BYTES on the wire, not `String.length`'s UTF-16 code units — see the identical note on
@@ -124,9 +189,16 @@ interface ChatDispatchFields {
 // `{ name: "logDispatch", category: "embedding" }` entry for the embedding module's identically
 // shaped helper. Reusing that name here would silently mislabel every op this function emits as
 // category "embedding" in the generated catalog instead of "gateway".
-function logChatDispatch(log: ModelGatewayLogSink, op: string, fields: ChatDispatchFields): void {
+function logChatDispatch(log: ModelGatewayLogSink, fields: ChatDispatchFields): void {
   if (!logLevelEnabled(log, "info")) return;
-  log.write({ level: "info", category: "gateway", op, extra: { ...fields } });
+  const correlationId = logCorrelationId(log);
+  log.write(
+    activityLogEvent(
+      CHAT_REQUEST_DISPATCH_OPERATION,
+      { level: "info", ...(correlationId === undefined ? {} : { correlationId }) },
+      fields,
+    ),
+  );
 }
 
 function cancellationWasDeadline(signal: AbortSignal | undefined): boolean {
@@ -822,7 +894,15 @@ function streamReadFields(
   read: StreamRead,
   report: StreamReport,
   outcome: StreamReadOutcome,
-): Readonly<Record<string, unknown>> {
+): {
+  readonly modelId: string;
+  readonly outcome: StreamReadOutcome;
+  readonly dataEvents: number;
+  readonly firstDataMs?: number;
+  readonly maxGapMs: number;
+  readonly silenceMs: number;
+  readonly readBudgetMs?: number;
+} {
   return {
     modelId: read.config.modelId,
     outcome,
@@ -1088,17 +1168,22 @@ export class OpenAiAdapter implements ProviderAdapter {
     const settled = outcome === "completed" || outcome === "whole-body";
     if (settled && !logLevelEnabled(this.log, "info")) return;
     const durationMs = report.elapsed();
-    this.log.write({
-      level: settled ? "info" : "warn",
-      category: "gateway",
-      op: "chat.response.streamed",
-      durationMs,
-      ...(error === undefined ? {} : { errorKind: logErrorKind(error) }),
-      extra: {
-        ...streamReadFields(read, report, outcome),
-        ...(settled ? {} : { silentForMs: durationMs - report.lastDataMs }),
-      },
-    });
+    const correlationId = logCorrelationId(this.log);
+    this.log.write(
+      activityLogEvent(
+        CHAT_RESPONSE_STREAMED_OPERATION,
+        {
+          level: settled ? "info" : "warn",
+          ...(correlationId === undefined ? {} : { correlationId }),
+          durationMs,
+          ...(error === undefined ? {} : { errorKind: activityLogErrorKind(error) }),
+        },
+        {
+          ...streamReadFields(read, report, outcome),
+          ...(settled ? {} : { silentForMs: durationMs - report.lastDataMs }),
+        },
+      ),
+    );
   }
 
   // Retain the usage the stream had already accumulated (counts only, never
@@ -1163,8 +1248,8 @@ export class OpenAiAdapter implements ProviderAdapter {
       "content-type": "application/json",
       ...apiKeyHeaders(config),
     };
-    logChatDispatch(this.log, "chat.request.dispatch", {
-      endpoint: logEndpointHost(url),
+    logChatDispatch(this.log, {
+      endpointDigest: sha256Hex(logEndpointHost(url) ?? "invalid-endpoint"),
       modelId: config.modelId,
       messageCount: request.messages.length,
       bodyBytes: Buffer.byteLength(body, "utf8"),

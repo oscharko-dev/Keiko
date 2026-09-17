@@ -15,7 +15,7 @@ import {
 import { gatewayCatalogAdvertisement } from "./__fixtures__/toolCatalog.js";
 import { OpenAiAdapter } from "./openai-adapter.js";
 import {
-  logErrorKind,
+  activityLogErrorKind,
   type ModelGatewayLogEvent,
   type ModelGatewayLogSink,
 } from "./observability.js";
@@ -367,7 +367,7 @@ describe("OpenAiAdapter.callStream with read bounds: the answer matches a whole 
     expect(reads).toHaveLength(1);
     expect(reads[0]).toMatchObject({
       level: "warn",
-      errorKind: logErrorKind(failure),
+      errorKind: activityLogErrorKind(failure),
       extra: { outcome: "failed" },
     });
   });
@@ -393,7 +393,7 @@ describe("OpenAiAdapter.callStream with read bounds: the answer matches a whole 
     expect(reads).toHaveLength(1);
     expect(reads[0]).toMatchObject({
       level: "warn",
-      errorKind: logErrorKind(failure),
+      errorKind: activityLogErrorKind(failure),
       extra: { outcome: "failed", dataEvents: 0 },
     });
   });
@@ -535,7 +535,7 @@ describe("OpenAiAdapter.callStream through a LiteLLM proxy", () => {
       expect(provider.cancelled()).toBe(true);
       expect(streamedLine(log.events)).toMatchObject({
         level: "warn",
-        errorKind: logErrorKind(failure),
+        errorKind: activityLogErrorKind(failure),
         extra: { outcome: "failed", dataEvents: 2 },
       });
     },

@@ -98,19 +98,19 @@ describe("OpenAiAdapter.call — activity log", () => {
     expect(dispatch.level).toBe("info");
     expect(dispatch.category).toBe("gateway");
     expect(dispatch.extra).toMatchObject({
-      endpoint: new URL(CONFIG.baseUrl).origin,
       modelId: "example-chat-model",
       messageCount: 2,
       timeoutMs: 12_000,
       stream: false,
     });
+    expect(dispatch.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
     expect(typeof dispatch.extra?.bodyBytes).toBe("number");
     // Never the prompt content, and never the api key.
     expect(JSON.stringify(log.events)).not.toContain("some private prompt text");
     expect(JSON.stringify(log.events)).not.toContain(CONFIG.apiKey);
   });
 
-  it("names the dispatch endpoint by host only, never the path or query", async () => {
+  it("records only a digest of the dispatch endpoint", async () => {
     const log = recorder();
     const fetchImpl: typeof fetch = () => Promise.resolve(jsonResponse(successBody()));
     const adapter = new OpenAiAdapter({
@@ -121,7 +121,8 @@ describe("OpenAiAdapter.call — activity log", () => {
     });
     await adapter.call(REQUEST, CONFIG);
     const dispatch = eventFor(log.events, "chat.request.dispatch");
-    expect(dispatch.extra?.endpoint).toBe("https://provider.example");
+    expect(dispatch.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
+    expect(JSON.stringify(dispatch)).not.toContain("provider.example");
   });
 
   it("marks a streaming dispatch distinctly from a non-streaming one", async () => {
