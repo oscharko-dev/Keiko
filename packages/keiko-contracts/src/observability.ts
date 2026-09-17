@@ -47,3 +47,106 @@ export function isErrorKind(value: unknown): value is string {
 export function classifyErrorKind(value: unknown): string | undefined {
   return isErrorKind(value) ? value : undefined;
 }
+
+// Activity Log registry foundation (#3529). These values are deliberately data-only so every
+// package can register operations through the contracts leaf without depending on the server.
+// The registry generator resolves calls to the two functions below through TypeScript's type
+// system; a same-named helper with a different return type is not an Activity Log declaration.
+export const ACTIVITY_LOG_FIELD_TYPES = [
+  "boolean",
+  "integer",
+  "number",
+  "string",
+  "string-array",
+] as const;
+
+export type ActivityLogFieldType = (typeof ACTIVITY_LOG_FIELD_TYPES)[number];
+
+export const ACTIVITY_LOG_DATA_CLASSES = [
+  "closed-enum",
+  "completeness-state",
+  "count",
+  "digest",
+  "duration",
+  "error-kind",
+  "loss-state",
+  "opaque-id",
+  "safe-platform-class",
+  "safe-version",
+] as const;
+
+export type ActivityLogDataClass = (typeof ACTIVITY_LOG_DATA_CLASSES)[number];
+
+export interface ActivityLogFieldContract {
+  readonly type: ActivityLogFieldType;
+  readonly dataClass: ActivityLogDataClass;
+  readonly required: boolean;
+  readonly maxLength?: number | undefined;
+  readonly maxItems?: number | undefined;
+  readonly values?: readonly string[] | undefined;
+}
+
+export const ACTIVITY_LOG_LIFECYCLE_PHASES = ["start", "state", "end", "failure", "loss"] as const;
+export type ActivityLogLifecyclePhase = (typeof ACTIVITY_LOG_LIFECYCLE_PHASES)[number];
+
+export const ACTIVITY_LOG_ANALYZER_PROJECTIONS = [
+  "timeline",
+  "process-lifecycle",
+  "failure-cluster",
+  "capability",
+] as const;
+export type ActivityLogAnalyzerProjection = (typeof ACTIVITY_LOG_ANALYZER_PROJECTIONS)[number];
+
+export const ACTIVITY_LOG_RELEASE_IMPACTS = ["none", "patch", "minor", "major"] as const;
+export type ActivityLogReleaseImpact = (typeof ACTIVITY_LOG_RELEASE_IMPACTS)[number];
+
+export interface ActivityLogOperationRegistration {
+  readonly contractKind: "activity-log-operation";
+  readonly schemaVersion: 1;
+  readonly op: string;
+  readonly category: string;
+  readonly owner: string;
+  readonly emitter: string;
+  readonly fields: Readonly<Record<string, ActivityLogFieldContract>>;
+  readonly causal: "none" | "correlation" | "parent-correlation";
+  readonly lifecycle: ActivityLogLifecyclePhase;
+  readonly analyzerProjection: ActivityLogAnalyzerProjection;
+  readonly failureClasses: readonly string[];
+  readonly proofIds: readonly string[];
+  readonly releaseImpact: ActivityLogReleaseImpact;
+}
+
+export interface RegisteredActivityLogEvent<
+  Registration extends ActivityLogOperationRegistration = ActivityLogOperationRegistration,
+> {
+  readonly contractKind: "activity-log-event";
+  readonly category: Registration["category"];
+  readonly op: Registration["op"];
+}
+
+/**
+ * Declares one operation for the generated Activity Log registry. Keep the call at the production
+ * emitter; the generator records that exact source site and rejects non-literal declarations.
+ */
+export function defineActivityLogOperation<
+  const Registration extends ActivityLogOperationRegistration,
+>(registration: Registration): Registration {
+  return registration;
+}
+
+/**
+ * Binds an emitted field set to its registered operation. Runtime schema validation is added at
+ * the owning serializer in the next migration slice; this typed binding lets discovery fail
+ * closed now instead of inferring operations from unrelated object literals.
+ */
+export function activityLogEvent<const Registration extends ActivityLogOperationRegistration>(
+  registration: Registration,
+  fields: Readonly<Record<string, unknown>>,
+): RegisteredActivityLogEvent<Registration> & Readonly<Record<string, unknown>> {
+  return {
+    ...fields,
+    contractKind: "activity-log-event",
+    category: registration.category,
+    ["op"]: registration.op,
+  };
+}

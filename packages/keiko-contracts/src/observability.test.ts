@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { ERROR_KIND_PATTERN, classifyErrorKind, isErrorKind } from "./observability.js";
+import {
+  ERROR_KIND_PATTERN,
+  activityLogEvent,
+  classifyErrorKind,
+  defineActivityLogOperation,
+  isErrorKind,
+} from "./observability.js";
 
 describe("ERROR_KIND_PATTERN (ADR-0173 D11)", () => {
   it("accepts an identifier, a taxonomy code, and a constructor name", () => {
@@ -52,5 +58,34 @@ describe("classifyErrorKind", () => {
     expect(classifyErrorKind("a whole sentence of prose")).toBeUndefined();
     expect(classifyErrorKind(123)).toBeUndefined();
     expect(classifyErrorKind(undefined)).toBeUndefined();
+  });
+});
+
+describe("typed Activity Log operation registration", () => {
+  it("binds an emitted field set to one immutable operation identity", () => {
+    const operation = defineActivityLogOperation({
+      contractKind: "activity-log-operation",
+      schemaVersion: 1,
+      op: "registry.fixture.completed",
+      category: "diagnostic",
+      owner: "keiko-contracts",
+      emitter: "observability.test",
+      fields: {
+        itemCount: { type: "integer", dataClass: "count", required: true },
+      },
+      causal: "correlation",
+      lifecycle: "end",
+      analyzerProjection: "timeline",
+      failureClasses: ["registry-fixture"],
+      proofIds: ["registry-fixture-emitted-line"],
+      releaseImpact: "patch",
+    });
+
+    expect(activityLogEvent(operation, { itemCount: 2 })).toEqual({
+      contractKind: "activity-log-event",
+      category: "diagnostic",
+      op: "registry.fixture.completed",
+      itemCount: 2,
+    });
   });
 });
