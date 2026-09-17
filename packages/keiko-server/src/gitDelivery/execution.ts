@@ -58,6 +58,7 @@ import type { GitDeliveryBranchProtectionReader } from "./branchProtectionPrefli
 import { recordGitDeliveryMutationEvidence } from "./mutationEvidenceLedger.js";
 import { defaultMintableRepoPack } from "./policyPackMintability.js";
 import { errorKindOf, type ServerLogSink } from "../observability/server-log.js";
+import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
 import { logCommandTermination, processServerLogSink } from "../process-log-sink.js";
 
 const KEIKO_DEFAULT_PROTECTED_BRANCH_PATTERNS = [
@@ -1088,19 +1089,26 @@ const UNSUCCESSFUL_MUTATION_STATUSES: ReadonlySet<string> = new Set([
  * is not a short closed word never reaches the log.
  */
 export interface GitDeliveryFailureFields {
-  readonly rejectionReason?: string;
-  readonly failureClass?: string;
-  readonly identityIssue?: string;
+  readonly rejectionReason?: MutationFailureStringValue<"rejectionReason">;
+  readonly failureClass?: MutationFailureStringValue<"failureClass">;
+  readonly identityIssue?: MutationFailureStringValue<"identityIssue">;
   readonly stdoutBytes?: number;
   readonly stderrBytes?: number;
   readonly exitCode?: number;
 }
 
 type MutationFailureStringField = "rejectionReason" | "failureClass" | "identityIssue";
+type MutationFailureStringValue<FieldName extends MutationFailureStringField> =
+  (typeof MUTATION_COMPLETED_OPERATION.fields)[FieldName]["values"][number];
 
-function admittedString(fieldName: MutationFailureStringField, value: unknown): string | undefined {
+function admittedString<FieldName extends MutationFailureStringField>(
+  fieldName: FieldName,
+  value: unknown,
+): MutationFailureStringValue<FieldName> | undefined {
   const values: readonly string[] = MUTATION_COMPLETED_OPERATION.fields[fieldName].values;
-  return typeof value === "string" && values.includes(value) ? value : undefined;
+  return typeof value === "string" && values.includes(value)
+    ? (value as MutationFailureStringValue<FieldName>)
+    : undefined;
 }
 
 function admittedCount(value: unknown): number | undefined {

@@ -335,7 +335,7 @@ export class JourneyObservationController {
       context?.correlationId ?? UNKNOWN_CORRELATION_ID,
       {
         phase: result.status,
-        runId: context?.draft.binding.runId,
+        ...(context === undefined ? {} : { runId: context.draft.binding.runId }),
         ...observationFields(result),
         ...(detail === undefined
           ? {}
@@ -364,9 +364,13 @@ function observationFields(
     evidenceRef: outcome.evidenceRef,
     headSha: outcome.binding.headSha,
     merged: outcome.remote !== null && outcome.remote.mergedAt !== null,
-    unresolvedCount: outcome.remote?.reviewConversations.unresolved,
-    issueState: outcome.remote?.issue.state,
-    descriptionState: outcome.description?.state,
+    ...(outcome.remote === null
+      ? {}
+      : {
+          unresolvedCount: outcome.remote.reviewConversations.unresolved,
+          issueState: outcome.remote.issue.state,
+        }),
+    ...(outcome.description === null ? {} : { descriptionState: outcome.description.state }),
     complete: outcome.keikoDescriptionApplied,
   };
 }

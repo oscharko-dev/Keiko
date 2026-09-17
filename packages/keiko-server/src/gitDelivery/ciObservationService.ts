@@ -438,7 +438,7 @@ export class CiObservationController implements CiObservationService {
           ...(error === undefined ? {} : { level: "warn", errorKind: "internal" }),
         },
         {
-          runId: context?.runId,
+          ...(context?.runId === undefined ? {} : { runId: context.runId }),
           phase: result.status,
           ...resultFields(result),
           retryAfterMs: result.retryAfterMs,
