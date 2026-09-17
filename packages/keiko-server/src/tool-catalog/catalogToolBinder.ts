@@ -465,14 +465,20 @@ function buildCatalogOfferForTool(state: CatalogBindingState, toolRef: ToolRef):
   });
   const identity = lifecycleIdentity(state, context);
   const bindingReady = binding.readiness === "ready";
-  emitToolLifecycleEvent(state.input.logPort, {
-    ...identity,
-    op: bindingReady ? "tool-catalog.bind-ready" : "tool-catalog.bind-unavailable",
-    readiness: bindingReady ? "ready" : "unavailable",
-    ...(bindingReady
-      ? { handlerSetDigest: binding.handlerSetDigest }
-      : { reason: "handler-unavailable" as const }),
-  });
+  if (bindingReady)
+    emitToolLifecycleEvent(state.input.logPort, {
+      ...identity,
+      op: "tool-catalog.bind-ready",
+      readiness: "ready",
+      handlerSetDigest: binding.handlerSetDigest,
+    });
+  else
+    emitToolLifecycleEvent(state.input.logPort, {
+      ...identity,
+      op: "tool-catalog.bind-unavailable",
+      readiness: "unavailable",
+      reason: "handler-unavailable",
+    });
   emitToolLifecycleEvent(state.input.logPort, {
     ...identity,
     op: "tool-catalog.projection",
