@@ -32,13 +32,12 @@
 // for eight operations × outcome-class). The single write site below uses a top-level literal const,
 // so the op-catalog generator resolves the closed op without dynamic string construction. An agent
 // reconstructing a run filters this one op by `extra.operation` (`provision`/`activate`/.../`cleanup`),
-// then by `extra.outcome` for settled outcomes or `errorKind` for a thrown rejection.
+// then by `extra.outcome` for settled outcomes or `extra.failureKind` for a thrown rejection.
 //
-// `errorKind` on a failure-classified outcome is always a short identifier/taxonomy code, never a
-// sentence. Lowercase hyphenated `WorkspaceLifecycleOutcome`/`WorkspaceReconciliationStatus`
-// members and uppercase `TaskWorkspaceError.code` members are both intentionally accepted by the
-// shared `ERROR_KIND_PATTERN` (keiko-contracts/observability.ts, ADR-0173 D11). No second vocabulary
-// is needed; each caller's existing closed code set already conforms.
+// `errorKind` uses the global closed activity-log taxonomy. The exact, domain-specific
+// `WorkspaceLifecycleOutcome`, `WorkspaceReconciliationStatus`, or `TaskWorkspaceError.code` is
+// retained independently in `extra.failureKind`, so reconstruction keeps both the cross-domain
+// failure class and the original task-workspace verdict.
 
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
@@ -243,7 +242,7 @@ export interface WorkspaceLifecycleLogInput {
   // evidence `outcome` is a fixed "reconciled" regardless of what the live pass found, so its own
   // classification has to travel through this field or it is lost entirely. Omitted, it falls back to
   // `outcome` itself, but only when `outcome` is failure-classified — a plain success never invents an
-  // `errorKind` out of nothing.
+  // failure classification out of nothing.
   readonly errorCode?: string | undefined;
   // The failure itself, when the caller has it in scope. The settled failure line is the ONLY line a
   // classified provisioning failure leaves — the rethrow path's operation-local tracker suppresses

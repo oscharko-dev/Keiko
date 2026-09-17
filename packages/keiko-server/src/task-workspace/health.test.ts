@@ -66,7 +66,12 @@ function failProofFor(worktreePath: string, cause: Error): void {
     candidate === worktreePath ? { kind: "failed", cause } : real(candidate, ...rest),
   );
 }
-import { createBufferedServerLogSink, type ServerLogSink } from "../observability/server-log.js";
+import {
+  createBufferedServerLogSink,
+  type BufferedServerLogSink,
+  type ServerLogEvent,
+  type ServerLogSink,
+} from "../observability/server-log.js";
 
 const __twMutex = createWorkspaceMutexRegistry();
 
@@ -243,6 +248,17 @@ function entryFor(
   return report.entries.find((e) => e.kind === "instance" && e.workspaceId === workspaceId);
 }
 
+function activityLogEventWithFailureKind(
+  sink: BufferedServerLogSink,
+  failureKind: string,
+): ServerLogEvent {
+  const line = sink.events.find((event) => event.extra?.failureKind === failureKind);
+  if (line === undefined) {
+    throw new Error(`no activity-log event with failureKind ${failureKind}`);
+  }
+  return line;
+}
+
 describe("operational health classification (AC1)", () => {
   it("normalizes a malformed correlationId before every health adapter call", async () => {
     await provisionTask("t-correlation-boundary");
@@ -345,11 +361,12 @@ describe("operational health classification (AC1)", () => {
     expect(carried?.driftMarkers).toEqual([]);
     expect(entryFor(report, other.workspaceId)?.classification).toBe("healthy");
     expect(validateWorkspaceHealthReport(report).ok).toBe(true);
-    const line = activityLog.events.find((event) => event.errorKind === "IDENTITY_PROOF_FAILED");
-    expect(line?.correlationId).toBe("health-proof-0001");
+    const line = activityLogEventWithFailureKind(activityLog, "IDENTITY_PROOF_FAILED");
+    expect(line.correlationId).toBe("health-proof-0001");
+    expect(line.errorKind).toBe("internal");
     // Body-free by contract: the cause travels as a class chain, never as its message.
-    expect(line?.extra).toMatchObject({ operation: "health" });
-    expect(Array.isArray(line?.extra?.causeChain)).toBe(true);
+    expect(line.extra).toMatchObject({ operation: "health" });
+    expect(Array.isArray(line.extra?.causeChain)).toBe(true);
     expect(JSON.stringify(report)).not.toContain(managedRoot);
   });
 
@@ -446,9 +463,10 @@ describe("an unreachable repository is isolated to its own rows", () => {
     expect(carried?.cleanupEligible).toBe(false);
     // Nothing was written: the last classification stands until the repository is reachable.
     expect(store.getById(stranded.workspaceId)?.health).toBe("healthy");
-    const line = activityLog.events.find((event) => event.errorKind === "REPOSITORY_UNREACHABLE");
-    expect(line?.correlationId).toBe("health-unreachable-0001");
-    expect(line?.extra).toMatchObject({ operation: "health" });
+    const line = activityLogEventWithFailureKind(activityLog, "REPOSITORY_UNREACHABLE");
+    expect(line.correlationId).toBe("health-unreachable-0001");
+    expect(line.errorKind).toBe("internal");
+    expect(line.extra).toMatchObject({ operation: "health" });
     expect(JSON.stringify(line)).not.toContain(other);
   });
 });
@@ -491,12 +509,11 @@ describe("a global report surfaces orphans of repositories without persisted row
 
         expect(entryFor(report, instance.workspaceId)?.classification).toBe("healthy");
         expect(validateWorkspaceHealthReport(report).ok).toBe(true);
-        const line = activityLog.events.find(
-          (event) => event.errorKind === "REPOSITORY_UNREACHABLE",
-        );
-        expect(line?.correlationId).toBe("health-listing-0001");
-        expect(line?.extra).toMatchObject({ operation: "health" });
-        expect(Array.isArray(line?.extra?.causeChain)).toBe(true);
+        const line = activityLogEventWithFailureKind(activityLog, "REPOSITORY_UNREACHABLE");
+        expect(line.correlationId).toBe("health-listing-0001");
+        expect(line.errorKind).toBe("internal");
+        expect(line.extra).toMatchObject({ operation: "health" });
+        expect(Array.isArray(line.extra?.causeChain)).toBe(true);
         expect(JSON.stringify(line)).not.toContain(managedRoot);
       } finally {
         chmodSync(managedRoot, 0o700);

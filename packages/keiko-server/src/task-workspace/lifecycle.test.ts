@@ -245,8 +245,9 @@ describe("getActive / list", () => {
       // is not the one this identity derives is not a containment incident, so it gets the line and
       // no drift row (#3376 review) — but never silence, because the caller drops the binding here
       // exactly as it does for the other refusals (PR #3381 review).
-      const line = activityLog.events.find((event) => event.errorKind === "POINTER_DRIFT");
+      const line = activityLog.events.find((event) => event.extra?.failureKind === "POINTER_DRIFT");
       expect(line?.correlationId).toBe("active-read-unbindable");
+      expect(line?.errorKind).toBe("conflict");
       expect(line?.extra).toMatchObject({
         operation: "activate",
         outcome: "blocked",
@@ -297,8 +298,11 @@ describe("getActive / list", () => {
     // The last refusal on this read that clears the pointer. It used to swallow the cause in a bare
     // `catch { return false; }`, so the operator's binding disappeared with nothing in `server.log`
     // to tie it to — the same gap the three refusals inside canExposeBinding had (PR #3381 review).
-    const line = activityLog.events.find((event) => event.errorKind === "PROVISIONING_FAILED");
+    const line = activityLog.events.find(
+      (event) => event.extra?.failureKind === "PROVISIONING_FAILED",
+    );
     expect(line?.correlationId).toBe("active-read-identity-failed");
+    expect(line?.errorKind).toBe("internal");
     expect(line?.extra).toMatchObject({ operation: "activate" });
     expect(Array.isArray(line?.extra?.causeChain)).toBe(true);
     // Body-free: the seam's own message never reaches the line.
@@ -320,8 +324,11 @@ describe("getActive / list", () => {
 
     expect(restarted.getActive("active-read-0001")).toBeUndefined();
     expect(pointerStore.get()).toBeUndefined();
-    const line = activityLog.events.find((event) => event.errorKind === "ILLEGAL_TRANSITION");
+    const line = activityLog.events.find(
+      (event) => event.extra?.failureKind === "ILLEGAL_TRANSITION",
+    );
     expect(line?.correlationId).toBe("active-read-0001");
+    expect(line?.errorKind).toBe("internal");
     expect(line?.extra).toMatchObject({
       operation: "activate",
       outcome: "blocked",
@@ -343,8 +350,11 @@ describe("getActive / list", () => {
     expect(pointerStore.get()).toBeUndefined();
     // A missing seam is the same operator symptom as a seam that threw, so it gets the same line
     // rather than an unexplained unbound application.
-    const line = activityLog.events.find((event) => event.errorKind === "PROVISIONING_FAILED");
+    const line = activityLog.events.find(
+      (event) => event.extra?.failureKind === "PROVISIONING_FAILED",
+    );
     expect(line?.correlationId).toBe("active-read-identity-unwired");
+    expect(line?.errorKind).toBe("internal");
     expect(line?.extra).toMatchObject({ operation: "activate" });
   });
 });
@@ -410,8 +420,8 @@ describe("setActive (atomic switch)", () => {
     expect(activityLog.events).toHaveLength(1);
     expect(lastActivityLogEvent(activityLog)).toMatchObject({
       correlationId: "req-corr-nested-activation-1",
-      errorKind: "INVALID_REQUEST",
-      extra: { operation: "activate" },
+      errorKind: "internal",
+      extra: { operation: "activate", failureKind: "INVALID_REQUEST" },
     });
     expect(activityLog.lines().join("\n")).not.toContain("hostile body");
   });
@@ -532,7 +542,8 @@ describe("pause", () => {
     const line = lastActivityLogEvent(activityLog);
     expect(line.op).toBe("task-workspace.lifecycle");
     expect(line.correlationId).toBe("req-corr-pause-rejection-1");
-    expect(line.errorKind).toBe("ILLEGAL_TRANSITION");
+    expect(line.errorKind).toBe("internal");
+    expect(line.extra?.failureKind).toBe("ILLEGAL_TRANSITION");
     expect(line.extra?.operation).toBe("pause");
     expect(line.extra?.workspaceIdentity).toMatch(/^wsref_[0-9a-f]{24}$/u);
     const formatted = activityLog.lines().at(-1) ?? "{}";
@@ -573,7 +584,8 @@ describe("pause", () => {
     const diagnostic = activityLogEventAt(activityLog, 0);
     const lifecycle = activityLogEventAt(activityLog, 1);
     const diagnosticExtra = diagnostic.extra ?? {};
-    expect(diagnostic.errorKind).toBe("EVIDENCE_PERSISTENCE_FAILED");
+    expect(diagnostic.errorKind).toBe("durability-failed");
+    expect(diagnosticExtra.failureKind).toBe("EVIDENCE_PERSISTENCE_FAILED");
     expect(diagnostic.correlationId).toBe("req-corr-evidence-failure-1");
     expect(diagnosticExtra.operation).toBe("pause");
     expect(diagnosticExtra.evidencePersistence).toBe("failed");
@@ -709,7 +721,8 @@ describe("identity proof before bindings and readiness", () => {
 
     expect(upgraded.getActive()).toBeUndefined();
     expect(pointerStore.get()).toBeUndefined();
-    const line = activityLog.events.find((event) => event.errorKind === "POINTER_DRIFT");
+    const line = activityLog.events.find((event) => event.extra?.failureKind === "POINTER_DRIFT");
+    expect(line?.errorKind).toBe("conflict");
     expect(line?.extra).toMatchObject({
       operation: "activate",
       outcome: "retry-required",
@@ -790,8 +803,9 @@ describe("identity proof before bindings and readiness", () => {
       expect(flagged?.lifecycleState).toBe("recovery-required");
       expect(flagged?.driftMarkers).toEqual(["path-escape"]);
       expect(flagged?.recoveryHints.map((hint) => hint.strategy)).toEqual(["operator-repair"]);
-      const line = activityLog.events.find((event) => event.errorKind === "POINTER_DRIFT");
+      const line = activityLog.events.find((event) => event.extra?.failureKind === "POINTER_DRIFT");
       expect(line?.correlationId).toBe("active-read-escape");
+      expect(line?.errorKind).toBe("conflict");
       expect(line?.extra).toMatchObject({
         operation: "activate",
         workspaceId: inst.workspaceId,
@@ -839,8 +853,9 @@ describe("identity proof before bindings and readiness", () => {
     expect(flagged?.lifecycleState).toBe("recovery-required");
     expect(flagged?.health).toBe("missing");
     expect(flagged?.driftMarkers).toEqual(["worktree-missing"]);
-    const line = activityLog.events.find((event) => event.errorKind === "POINTER_DRIFT");
+    const line = activityLog.events.find((event) => event.extra?.failureKind === "POINTER_DRIFT");
     expect(line?.correlationId).toBe("active-read-missing");
+    expect(line?.errorKind).toBe("conflict");
     expect(line?.extra).toMatchObject({
       operation: "activate",
       outcome: "retry-required",

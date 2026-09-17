@@ -245,8 +245,8 @@ describe("POST /api/task-workspaces/reconciliation", () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       correlationId,
-      errorKind: "INVALID_REQUEST",
-      extra: { operation: "reconcile" },
+      errorKind: "internal",
+      extra: { operation: "reconcile", failureKind: "INVALID_REQUEST" },
     });
     expect(activityLog.lines().join("\n")).not.toContain(root);
   });
@@ -324,8 +324,8 @@ describe("POST /api/task-workspaces/:workspaceId/repair", () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       correlationId,
-      errorKind: "INVALID_REQUEST",
-      extra: { operation: "repair" },
+      errorKind: "internal",
+      extra: { operation: "repair", failureKind: "INVALID_REQUEST" },
     });
     expect(activityLog.lines().join("\n")).not.toContain(workspaceId);
   });

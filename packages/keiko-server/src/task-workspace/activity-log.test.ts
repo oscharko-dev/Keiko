@@ -2,7 +2,8 @@
 // #445-#448 service test files (provisioning/lifecycle/reconciliation/repair/cleanup .test.ts)
 // proves this module is actually WIRED into that service's own central `emit` helper, at an
 // integration level, over a real store/adapter. This file proves the mapping `logWorkspaceLifecycle`
-// itself performs, in isolation: op/category, the info/warn level split, `errorKind` resolution
+// itself performs, in isolation: op/category, the info/warn level split, global `errorKind`
+// classification plus exact `extra.failureKind` preservation
 // (explicit override vs. outcome fallback vs. success-omits-it), the correlationId shape guard, and
 // the default fallback to the process-wide sink when a caller supplies none.
 
@@ -74,12 +75,12 @@ describe("logWorkspaceLifecycle", () => {
     },
   );
 
-  it("raises level to warn and sets errorKind to the outcome itself for a failure-classified outcome with no explicit code", () => {
+  it("classifies and preserves a failure outcome with no explicit code", () => {
     const activityLog = createBufferedServerLogSink();
     logWorkspaceLifecycle({ activityLog }, { ...BASE, outcome: "blocked" });
     const [line] = activityLog.events;
     expect(line?.level).toBe("warn");
-    expect(line?.errorKind).toBe("internal");
+    expect(line?.errorKind).toBe("conflict");
     expect(line?.extra?.failureKind).toBe("blocked");
   });
 
@@ -107,7 +108,7 @@ describe("logWorkspaceLifecycle", () => {
     );
     const [line] = activityLog.events;
     expect(line?.level).toBe("warn");
-    expect(line?.errorKind).toBe("internal");
+    expect(line?.errorKind).toBe("conflict");
     expect(line?.extra?.failureKind).toBe("drifted");
     expect(line?.extra?.outcome).toBe("reconciled");
   });

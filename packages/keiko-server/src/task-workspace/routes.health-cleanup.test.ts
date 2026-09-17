@@ -262,8 +262,8 @@ describe("POST /api/task-workspaces/:workspaceId/cleanup", () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       correlationId,
-      errorKind: "INVALID_REQUEST",
-      extra: { operation: "cleanup" },
+      errorKind: "internal",
+      extra: { operation: "cleanup", failureKind: "INVALID_REQUEST" },
     });
     expect(activityLog.lines().join("\n")).not.toContain(mode);
   });
@@ -315,8 +315,8 @@ describe("POST /api/task-workspaces/cleanup/orphans", () => {
     expect(events).toHaveLength(1);
     expect(events[0]).toMatchObject({
       correlationId,
-      errorKind: "INVALID_REQUEST",
-      extra: { operation: "cleanup" },
+      errorKind: "internal",
+      extra: { operation: "cleanup", failureKind: "INVALID_REQUEST" },
     });
     expect(activityLog.lines().join("\n")).not.toContain(root);
   });

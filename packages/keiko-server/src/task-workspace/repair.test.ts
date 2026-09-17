@@ -218,9 +218,14 @@ function lastActivityLogEvent(sink: BufferedServerLogSink): ServerLogEvent {
 }
 
 // The same single-narrowing-point rule for a searched log line.
-function activityLogEventWithKind(sink: BufferedServerLogSink, errorKind: string): ServerLogEvent {
-  const line = sink.events.find((event) => event.errorKind === errorKind);
-  if (line === undefined) throw new Error(`no activity-log event with errorKind ${errorKind}`);
+function activityLogEventWithFailureKind(
+  sink: BufferedServerLogSink,
+  failureKind: string,
+): ServerLogEvent {
+  const line = sink.events.find((event) => event.extra?.failureKind === failureKind);
+  if (line === undefined) {
+    throw new Error(`no activity-log event with failureKind ${failureKind}`);
+  }
   return line;
 }
 
@@ -563,7 +568,8 @@ describe("accept-moved-head (adopt an out-of-band commit as the verified head)",
     expect(error.outcome).toBe("retry-required");
     expect(causeMessageOf(error)).toBe("spawn git ENOENT");
     expect(gathers).toBeGreaterThan(1);
-    const line = activityLogEventWithKind(activityLog, "REPOSITORY_UNREACHABLE");
+    const line = activityLogEventWithFailureKind(activityLog, "REPOSITORY_UNREACHABLE");
+    expect(line.errorKind).toBe("internal");
     expect(line.op).toBe("task-workspace.lifecycle");
     expect(line.extra?.operation).toBe("repair");
     expect(Array.isArray(line.extra?.frames)).toBe(true);
@@ -706,8 +712,11 @@ describe("release-stale-lock (clear stale lock)", () => {
       // Retryable and 503, the same verdict the pass and the health report give the same fact.
       expect(rejection.status).toBe(503);
       expect(rejection.failureClass).toBe("retryable");
-      const line = activityLog.events.find((event) => event.errorKind === "REPOSITORY_UNREACHABLE");
+      const line = activityLog.events.find(
+        (event) => event.extra?.failureKind === "REPOSITORY_UNREACHABLE",
+      );
       expect(line?.correlationId).toBe("repair-unreachable-0001");
+      expect(line?.errorKind).toBe("internal");
       expect(line?.extra).toMatchObject({ operation: "repair" });
       expect(Array.isArray(line?.extra?.causeChain)).toBe(true);
       // Body-free: the unreachable root never reaches the line.
@@ -801,7 +810,8 @@ describe("release-stale-lock (clear stale lock)", () => {
     const line = lastActivityLogEvent(activityLog);
     expect(line.op).toBe("task-workspace.lifecycle");
     expect(line.correlationId).toBe("req-corr-repair-rejection-1");
-    expect(line.errorKind).toBe("OPERATOR_APPROVAL_REQUIRED");
+    expect(line.errorKind).toBe("internal");
+    expect(line.extra?.failureKind).toBe("OPERATOR_APPROVAL_REQUIRED");
     expect(line.extra?.operation).toBe("repair");
     expect(line.extra?.workspaceIdentity).toMatch(/^wsref_[0-9a-f]{24}$/u);
   });
