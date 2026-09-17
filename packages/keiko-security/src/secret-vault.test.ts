@@ -499,7 +499,8 @@ describe("createLocalSecretVault — setMany", () => {
     expect(events.filter((event) => event.op === "security.vault.entries-merge-failed")).toEqual([
       expect.objectContaining({
         level: "error",
-        extra: { count: 1 },
+        errorKind: "write-failed",
+        extra: { count: 1, failureKind: expect.any(String) },
       }),
     ]);
     expect(JSON.stringify(events)).not.toContain("SUPERSECRET");
@@ -1315,8 +1316,8 @@ describe("createShardedLocalSecretVault — CRUD parity with the single-file lay
       level: "warn",
       category: "security",
       op: "security.vault.shard-unreadable",
-      errorKind: "EISDIR",
-      extra: { count: 1 },
+      errorKind: "read-failed",
+      extra: { count: 1, failureKind: "EISDIR" },
     });
     expect(Object.keys(event ?? {}).sort()).toEqual([
       "category",
