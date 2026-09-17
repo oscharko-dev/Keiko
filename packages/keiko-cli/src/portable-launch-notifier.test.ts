@@ -147,7 +147,12 @@ describe("notifyPortableLaunchFailure", () => {
 
       expect(reported).toEqual(["keiko portable launch: the failure alert could not be shown\n"]);
       expect(events).toHaveLength(1);
-      expect(events[0]).toMatchObject({ category, op, errorKind });
+      expect(events[0]).toMatchObject({
+        category,
+        op,
+        errorKind: errorKind === "WindowsSystemDirectoryError" ? "unsafe-target" : "unavailable",
+        extra: { failureKind: errorKind },
+      });
       expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
       expect(JSON.stringify(events)).not.toContain(systemRoot);
     },
@@ -330,7 +335,8 @@ describe("runDetachedWindowsAlert", () => {
     expect(events[0]).toMatchObject({
       category: "diagnostic",
       op: "portable.windows-alert.spawn-failed",
-      errorKind: "Error",
+      errorKind: "unavailable",
+      extra: { surface: "portable-failure-alert", failureKind: "Error" },
     });
     expect(events[0]?.correlationId).toMatch(/^[0-9a-f-]{36}$/u);
   });
