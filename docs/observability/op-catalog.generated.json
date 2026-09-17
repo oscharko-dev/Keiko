@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "205b1dc41337fe3b2841dca3dee729eb51c7027de380f8bf8b1f1391d61fd2a3",
-    "catalogDigest": "221edce0feb64af8cd1708b003359e470aeca9a6b6b5294f3d06257aa9df49e7",
+    "catalogDigest": "9d3aa567bfedcc965beddeb0f6a550208070948a6f770a1da95c810e58165041",
     "operations": [
       {
         "contractKind": "activity-log-operation",
@@ -2043,6 +2043,214 @@
         "releaseImpact": "patch",
         "registrationSite": "packages/keiko-server/src/task-workspace/activity-log.ts:73",
         "emitterSites": ["packages/keiko-server/src/task-workspace/activity-log.ts:301"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "workspace-script-trust.granted",
+        "category": "security",
+        "owner": "keiko-server",
+        "emitter": "workspace-script-trust.recordHumanDecision.granted",
+        "fields": {
+          "basis": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["known", "unknown", "unavailable", "absent"]
+          },
+          "manifestDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "revision": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["workspace-script-trust"],
+        "proofIds": ["workspace-script-trust.granted.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/workspace-script-trust.ts:67",
+        "emitterSites": ["packages/keiko-server/src/workspace-script-trust.ts:830"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "workspace-script-trust.revoked",
+        "category": "security",
+        "owner": "keiko-server",
+        "emitter": "workspace-script-trust.recordHumanDecision.revoked",
+        "fields": {
+          "basis": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["known", "unknown", "unavailable", "absent"]
+          },
+          "manifestDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "revision": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["workspace-script-trust"],
+        "proofIds": ["workspace-script-trust.revoked.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/workspace-script-trust.ts:99",
+        "emitterSites": ["packages/keiko-server/src/workspace-script-trust.ts:839"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "workspace-script-trust.run-manifest-admitted",
+        "category": "security",
+        "owner": "keiko-server",
+        "emitter": "workspace-script-trust.admitRunManifest",
+        "fields": {
+          "basis": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["known", "absent"]
+          },
+          "manifestDigest": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": false,
+            "maxLength": 64
+          },
+          "expiresAt": {
+            "type": "string",
+            "dataClass": "safe-version",
+            "required": true,
+            "maxLength": 64
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "state",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["workspace-script-trust-admission"],
+        "proofIds": ["workspace-script-trust.run-manifest-admitted.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/workspace-script-trust.ts:161",
+        "emitterSites": ["packages/keiko-server/src/workspace-script-trust.ts:1017"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "workspace-script-trust.run-manifest-not-admitted",
+        "category": "security",
+        "owner": "keiko-server",
+        "emitter": "workspace-script-trust.admitRunManifest.refused",
+        "fields": {
+          "reason": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": [
+              "authority-expired",
+              "root-unresolvable",
+              "root-unregistered",
+              "manifest-unreadable"
+            ]
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["workspace-script-trust-admission"],
+        "proofIds": ["workspace-script-trust.run-manifest-not-admitted.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/workspace-script-trust.ts:131",
+        "emitterSites": ["packages/keiko-server/src/workspace-script-trust.ts:1002"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "workspace-script-trust.run-manifest-revoked",
+        "category": "security",
+        "owner": "keiko-server",
+        "emitter": "workspace-script-trust.revokeRunAdmissions",
+        "fields": {
+          "count": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": true
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["workspace-script-trust-admission"],
+        "proofIds": ["workspace-script-trust.run-manifest-revoked.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/workspace-script-trust.ts:193",
+        "emitterSites": ["packages/keiko-server/src/workspace-script-trust.ts:1083"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -6018,31 +6226,31 @@
     {
       "op": "workspace-script-trust.granted",
       "category": "security",
-      "site": "packages/keiko-server/src/workspace-script-trust.ts:681",
+      "site": "packages/keiko-server/src/workspace-script-trust.ts:70",
       "package": "keiko-server"
     },
     {
       "op": "workspace-script-trust.revoked",
       "category": "security",
-      "site": "packages/keiko-server/src/workspace-script-trust.ts:689",
+      "site": "packages/keiko-server/src/workspace-script-trust.ts:102",
       "package": "keiko-server"
     },
     {
       "op": "workspace-script-trust.run-manifest-admitted",
       "category": "security",
-      "site": "packages/keiko-server/src/workspace-script-trust.ts:869",
+      "site": "packages/keiko-server/src/workspace-script-trust.ts:164",
       "package": "keiko-server"
     },
     {
       "op": "workspace-script-trust.run-manifest-not-admitted",
       "category": "security",
-      "site": "packages/keiko-server/src/workspace-script-trust.ts:855",
+      "site": "packages/keiko-server/src/workspace-script-trust.ts:134",
       "package": "keiko-server"
     },
     {
       "op": "workspace-script-trust.run-manifest-revoked",
       "category": "security",
-      "site": "packages/keiko-server/src/workspace-script-trust.ts:934",
+      "site": "packages/keiko-server/src/workspace-script-trust.ts:196",
       "package": "keiko-server"
     },
     {
