@@ -1142,8 +1142,8 @@ describe("publishSafeArtifactFileSet", () => {
       publishSafeArtifactFileSet(entries, { commitPath: manifest, trustedRoot: base }),
     ).toEqual({
       status: "recovered",
-      permissionAssurance: "verified-private",
-      durabilityAssurance: "verified",
+      permissionAssurance: safeArtifactPermissionAssurance(),
+      durabilityAssurance: process.platform === "win32" ? "directory-sync-unavailable" : "verified",
     });
     expect(publicationStages(base)).toHaveLength(0);
     expect(readFileSync(manifest, "utf8")).toBe("manifest");
