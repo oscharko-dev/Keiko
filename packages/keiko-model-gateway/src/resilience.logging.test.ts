@@ -73,7 +73,7 @@ describe("executeWithRetry — activity log", () => {
     expect(scheduled.category).toBe("gateway");
     expect(scheduled.level).toBe("warn");
     expect(scheduled.correlationId).toBe("corr-1");
-    expect(scheduled.errorKind).toBe("GATEWAY_TRANSPORT");
+    expect(scheduled.errorKind).toBe("internal");
     expect(scheduled.extra).toMatchObject({
       modelId: "example-chat-model",
       attempt: 1,
@@ -203,7 +203,7 @@ describe("executeWithRetry — activity log", () => {
     ).rejects.toBeInstanceOf(RateLimitError);
     const budget = eventFor(log.events, "gateway.retry.budget-exhausted");
     expect(budget.level).toBe("warn");
-    expect(budget.errorKind).toBe("GATEWAY_RATE_LIMIT");
+    expect(budget.errorKind).toBe("rate-limited");
     expect(budget.extra).toMatchObject({
       modelId: "m",
       hadPriorFailure: true,
