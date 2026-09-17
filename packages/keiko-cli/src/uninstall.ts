@@ -34,7 +34,15 @@ import { existsSync, readFileSync, rmdirSync, unlinkSync } from "node:fs";
 import { homedir as defaultHomedir } from "node:os";
 import { join, resolve } from "node:path";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import type { SecurityLogSink } from "@oscharko-dev/keiko-security";
+import {
+  emitSecurityLogEvent,
+  securityErrorKind,
+  type SecurityLogSink,
+} from "@oscharko-dev/keiko-security";
+import {
+  cliControlStateWouldMutateTarget,
+  resolveCliControlStateDir,
+} from "./cli-control-state.js";
 import type { CliIo } from "./runner.js";
 import { LauncherError } from "./launcher-platforms.js";
 import { removeLauncherShortcuts } from "./launcher.js";
@@ -46,6 +54,7 @@ import {
   writePackageJsonAtomically,
 } from "./init.js";
 import {
+  installLayoutOverrideEvidence,
   localPackageRoot,
   writeInstallLayoutOverrideEvidenceWithFactory,
 } from "./install-layout.js";
@@ -119,6 +128,7 @@ export interface UninstallCliDeps {
   readonly killWindowsTree?: WindowsTreeKill | undefined;
   readonly processEnv?: NodeJS.ProcessEnv | undefined;
   readonly securityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
+  readonly activityStateDir?: string | undefined;
   readonly verifyLaunchIdentity?: ((pid: number, launchId: string) => boolean) | undefined;
 }
 
@@ -601,26 +611,135 @@ function uninstallPreflight(
   return stateRoot === undefined ? { refused: false } : { refused: false, stateRoot };
 }
 
-function prepareUninstallSecurityLog(
-  opts: UninstallOptions,
-  stateRoot: StateRootInspection | undefined,
+type PreparedUninstallActivity =
+  | { readonly kind: "ready"; readonly sink: SecurityLogSink | undefined }
+  | { readonly kind: "refused" };
+
+function persistUninstallLayoutEvidence(
+  activityStateDir: string,
   stateDir: string,
   env: EnvSource,
+  io: CliIo,
   factory: CliSecurityLogSinkFactory | undefined,
-): SecurityLogSink | undefined {
-  // A scripts-only or dry-run command must not touch state. A state-removing command cannot retain
-  // an event in the store it deletes and an asynchronous sink could recreate that store afterward.
-  // Open a sink only for a real launcher-only operation whose validated state directory exists.
-  if (
-    opts.dryRun ||
-    opts.scopes.state ||
-    !opts.scopes.launchers ||
-    stateRoot?.status !== "directory"
-  ) {
-    return undefined;
+): boolean {
+  try {
+    if (cliControlStateWouldMutateTarget(activityStateDir, stateDir)) {
+      io.err(
+        "keiko uninstall: refusing to run because the reserved CLI control state overlaps the " +
+          "selected state tree. Select a different --state-dir.\n",
+      );
+      return false;
+    }
+    const pending = installLayoutOverrideEvidence(env) !== undefined;
+    const written = writeInstallLayoutOverrideEvidenceWithFactory(factory, activityStateDir, env);
+    if (!pending || written) return true;
+    io.err(
+      "keiko uninstall: refusing to consume a normalized install path because durable " +
+        "activity logging is unavailable.\n",
+    );
+    return false;
+  } catch {
+    io.err("keiko uninstall: the reserved CLI control state could not be validated or opened.\n");
+    return false;
   }
-  writeInstallLayoutOverrideEvidenceWithFactory(factory, stateDir, env);
-  return createCliSecurityLogSink(stateDir, factory);
+}
+
+function prepareUninstallActivity(
+  opts: UninstallOptions,
+  stateDir: string,
+  env: EnvSource,
+  io: CliIo,
+  deps: ResolvedDeps,
+  activityStateDirOverride: string | undefined,
+  factory: CliSecurityLogSinkFactory | undefined,
+): PreparedUninstallActivity {
+  if (opts.dryRun || (!opts.scopes.state && !opts.scopes.launchers)) {
+    return { kind: "ready", sink: undefined };
+  }
+  const activityStateDir =
+    activityStateDirOverride ?? resolveCliControlStateDir(deps.platform, deps.homedir());
+  if (!persistUninstallLayoutEvidence(activityStateDir, stateDir, env, io, factory)) {
+    return { kind: "refused" };
+  }
+  const sink = createCliSecurityLogSink(activityStateDir, factory);
+  emitSecurityLogEvent(sink, {
+    level: "info",
+    category: "diagnostic",
+    op: "cli.uninstall.started",
+    extra: {
+      removeState: opts.scopes.state,
+      removeLaunchers: opts.scopes.launchers,
+      removeScripts: opts.scopes.scripts,
+      force: opts.force,
+    },
+  });
+  return { kind: "ready", sink };
+}
+
+function emitUninstallFailure(
+  sink: SecurityLogSink | undefined,
+  errorKind: string,
+  reason: string,
+): void {
+  emitSecurityLogEvent(sink, {
+    level: "error",
+    category: "diagnostic",
+    op: "cli.uninstall.failed",
+    errorKind,
+    extra: { reason },
+  });
+}
+
+async function executeUninstall(
+  opts: UninstallOptions,
+  io: CliIo,
+  env: EnvSource,
+  deps: ResolvedDeps,
+  stateDir: string,
+  sink: SecurityLogSink | undefined,
+): Promise<number> {
+  const preflight = uninstallPreflight(opts, io, stateDir);
+  if (preflight.refused) {
+    emitUninstallFailure(sink, "UninstallPreflightError", "preflight-refused");
+    return 1;
+  }
+  if ((await ensureServerStoppable(opts, io, deps, stateDir, sink)) === "refused") {
+    emitUninstallFailure(sink, "UninstallStateInUseError", "server-stop-refused");
+    return 1;
+  }
+  const launcherRefused = removeLaunchersStep(opts, io, deps, stateDir);
+  removeScriptsStep(opts, io);
+  removePortableManagedStep(opts, io, env, stateDir, deps.homedir(), sink);
+  removeStateStep(opts, io, stateDir);
+  printPackageGuidance(io, deps);
+  if (launcherRefused > 0) {
+    emitUninstallFailure(sink, "LauncherRemovalRefused", "launcher-removal-refused");
+    return 1;
+  }
+  emitSecurityLogEvent(sink, {
+    level: "info",
+    category: "diagnostic",
+    op: "cli.uninstall.completed",
+  });
+  return 0;
+}
+
+function reportUninstallException(
+  error: unknown,
+  io: CliIo,
+  sink: SecurityLogSink | undefined,
+): number {
+  emitUninstallFailure(
+    sink,
+    securityErrorKind(error),
+    error instanceof LauncherError ? "launcher-error" : "operation-error",
+  );
+  if (error instanceof LauncherError) {
+    io.err(`${error.message}\n`);
+    return 1;
+  }
+  io.err(`keiko uninstall: ${error instanceof Error ? error.message : String(error)}\n`);
+  return 1;
 }
 
 export async function runUninstallCli(
@@ -640,42 +759,20 @@ export async function runUninstallCli(
     return 2;
   }
   const stateDir = resolveStateDir(resolved.cwd, env, opts.stateDirArg);
+  const activity = prepareUninstallActivity(
+    opts,
+    stateDir,
+    env,
+    io,
+    resolved,
+    deps.activityStateDir,
+    deps.securityLogSinkFactory,
+  );
+  if (activity.kind === "refused") return 1;
   try {
-    // PR-review follow-up (Codex thread 3771600804): preflight guards can throw when
-    // an lstat / read on the state directory or portable-install-state.json fails with
-    // EACCES / EIO / etc. Keep them inside the same try so the documented filesystem-
-    // error handler prints the scoped diagnostic instead of the process-level fatal path.
-    const preflight = uninstallPreflight(opts, io, stateDir);
-    if (preflight.refused) return 1;
-    const securityLogSink = prepareUninstallSecurityLog(
-      opts,
-      preflight.stateRoot,
-      stateDir,
-      env,
-      deps.securityLogSinkFactory,
-    );
-    // #KEIKO-0422: ensureServerStoppable is now async — it waits (bounded) for the
-    // signalled UI to exit before returning "ok", so state removal never races with a
-    // still-shutting-down process.
-    if (
-      (await ensureServerStoppable(opts, io, resolved, stateDir, securityLogSink)) === "refused"
-    ) {
-      return 1;
-    }
-    const launcherRefused = removeLaunchersStep(opts, io, resolved, stateDir);
-    removeScriptsStep(opts, io);
-    removePortableManagedStep(opts, io, env, stateDir, resolved.homedir(), securityLogSink);
-    removeStateStep(opts, io, stateDir);
-    printPackageGuidance(io, resolved);
-    return launcherRefused > 0 ? 1 : 0;
-  } catch (e) {
-    if (e instanceof LauncherError) {
-      io.err(`${e.message}\n`);
-      return 1;
-    }
-    // Filesystem errors (e.g. a read-only package.json or state file) are reported as a
-    // clean non-zero exit rather than crashing the CLI with an unhandled exception.
-    io.err(`keiko uninstall: ${e instanceof Error ? e.message : String(e)}\n`);
-    return 1;
+    // Preflight stays inside this catch: EACCES/EIO is a scoped command failure, not a fatal crash.
+    return await executeUninstall(opts, io, env, resolved, stateDir, activity.sink);
+  } catch (error) {
+    return reportUninstallException(error, io, activity.sink);
   }
 }

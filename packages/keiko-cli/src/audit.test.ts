@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
+import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 
 import { AuditLoadError, auditLocalStateResult, parseAuditArgs, runAuditCli } from "./audit.js";
 import {
@@ -153,14 +154,17 @@ describe("runAuditCli", () => {
     expect(audited?.replaceAll("\\", "/")).toBe("/home/operator/.keiko");
   });
 
-  it("refuses pending layout evidence without loading the auditor or mutating its target", async () => {
+  it("logs pending layout evidence outside the audited tree before loading the auditor", async () => {
     const c = makeIo();
     const root = mkdtempSync(join(tmpdir(), "keiko-audit-read-only-"));
     const stateDir = join(root, "forensic-copy");
+    const activityStateDir = join(root, "control-state");
     mkdirSync(stateDir);
     const marker = join(stateDir, "forensic.marker");
     writeFileSync(marker, "unaltered", "utf8");
     let auditorLoaded = false;
+    const sinkRoots: string[] = [];
+    const events: SecurityLogEvent[] = [];
     const runtimeEnv: NodeJS.ProcessEnv = {
       ...env,
       [INSTALL_LAYOUT_OVERRIDES_ENV]: "local-state-auditor",
@@ -174,13 +178,78 @@ describe("runAuditCli", () => {
             auditorLoaded = true;
             return Promise.resolve({ auditLocalState: () => ({ ...HEALTHY, stateDir }) });
           },
+          activityStateDir,
+          activityLogSinkFactory: (sinkRoot) => {
+            sinkRoots.push(sinkRoot);
+            return { write: (event): void => void events.push(event) };
+          },
         }),
-      ).toBe(1);
-      expect(auditorLoaded).toBe(false);
+      ).toBe(0);
+      expect(auditorLoaded).toBe(true);
       expect(existsSync(join(stateDir, "logs"))).toBe(false);
       expect(readFileSync(marker, "utf8")).toBe("unaltered");
-      expect(runtimeEnv[INSTALL_LAYOUT_OVERRIDES_ENV]).toBe("local-state-auditor");
-      expect(c.err()).toContain("inherited install-layout normalization is pending");
+      expect(runtimeEnv[INSTALL_LAYOUT_OVERRIDES_ENV]).toBeUndefined();
+      expect(new Set(sinkRoots)).toEqual(new Set([activityStateDir]));
+      expect(events.map(({ op }) => op)).toEqual([
+        "cli.install-layout.normalized",
+        "cli.audit.started",
+        "cli.audit.completed",
+      ]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("refuses a control-state path inside the audited tree without opening a sink", async () => {
+    const c = makeIo();
+    const root = mkdtempSync(join(tmpdir(), "keiko-audit-overlap-"));
+    const stateDir = join(root, "forensic-copy");
+    mkdirSync(stateDir);
+    let sinkOpened = false;
+    let auditorLoaded = false;
+    try {
+      expect(
+        await runAuditCli(["local-state", "--state-dir", stateDir], c.io, env, {
+          activityStateDir: join(stateDir, "control"),
+          activityLogSinkFactory: () => {
+            sinkOpened = true;
+            return { write: (): void => undefined };
+          },
+          loadAuditor: () => {
+            auditorLoaded = true;
+            return Promise.resolve({ auditLocalState: () => HEALTHY });
+          },
+        }),
+      ).toBe(1);
+      expect(sinkOpened).toBe(false);
+      expect(auditorLoaded).toBe(false);
+      expect(c.err()).toContain("overlaps the audited tree");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("logs a body-free failure when the auditor cannot produce a result", async () => {
+    const root = mkdtempSync(join(tmpdir(), "keiko-audit-failure-log-"));
+    const events: SecurityLogEvent[] = [];
+    try {
+      expect(
+        await runAuditCli(["local-state"], makeIo().io, env, {
+          cwd: root,
+          activityStateDir: join(root, "control"),
+          activityLogSinkFactory: () => ({
+            write: (event): void => void events.push(event),
+          }),
+          loadAuditor: () => Promise.resolve({} as never),
+        }),
+      ).toBe(1);
+      expect(events.map(({ op }) => op)).toEqual(["cli.audit.started", "cli.audit.failed"]);
+      expect(events[1]).toEqual(
+        expect.objectContaining({
+          errorKind: "AuditLoadError",
+          extra: { reason: "missing-export" },
+        }),
+      );
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

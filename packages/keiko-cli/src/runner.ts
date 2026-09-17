@@ -250,12 +250,21 @@ function runUninstallCommand(
   env: EnvSource,
 ): number | Promise<number> {
   const help = rest[0] === "--help" || rest[0] === "-h";
-  const needsLayoutEvidence = installLayoutOverrideEvidence(env) !== undefined;
-  if ((!needsLayoutEvidence && process.platform !== "win32") || help) {
-    return runUninstallCli(rest, io, env);
-  }
+  if (help) return runUninstallCli(rest, io, env);
   return runWithDeferredSecurityLog((securityLogSinkFactory) =>
     runUninstallCli(rest, io, env, { securityLogSinkFactory }),
+  );
+}
+
+function runAuditCommand(
+  rest: readonly string[],
+  io: CliIo,
+  env: EnvSource,
+): number | Promise<number> {
+  const help = rest.includes("--help") || rest.includes("-h");
+  if (help) return runAuditCli(rest, io, env);
+  return runWithDeferredSecurityLog((activityLogSinkFactory) =>
+    runAuditCli(rest, io, env, { activityLogSinkFactory }),
   );
 }
 
@@ -297,7 +306,7 @@ const COMMAND_HANDLERS: ReadonlyMap<string, CommandHandler> = new Map<string, Co
   ["task-workspace", runTaskWorkspaceCli],
   ["init", runInitCli],
   ["doctor", runDoctorCli],
-  ["audit", runAuditCli],
+  ["audit", runAuditCommand],
   ["support", runSupportCommand],
   ["repair", runRepairCommand],
   ["uninstall", runUninstallCommand],

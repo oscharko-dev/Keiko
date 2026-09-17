@@ -2,7 +2,8 @@
 
 ## Status
 
-Accepted (Epic #3233, Wave 6 closeout, 2026-08-22).
+Accepted (Epic #3233, Wave 6 closeout, 2026-08-22). Amended 2026-09-17 to define
+the durable CLI control-state boundary for commands that audit or remove runtime state.
 
 Drafted in Wave 1 alongside the envelope's ordering primitive (`seq`) and the minimal exporter/
 analyzer, and finalized here once all seven waves of the epic had landed: envelope v2 (D1–D2),
@@ -102,6 +103,25 @@ many directories it writes to. It does **not** give a true cross-process global 
 concurrently) each maintain their own `seq` counting from the same starting point, so a line from
 process A carrying `seq: 40` is not orderable against a line from process B carrying `seq: 40` by
 the tuple alone.
+
+### D2a — Destructive and read-only CLI commands use a stable control-state root
+
+An operator-selected runtime-state directory cannot be the durable evidence owner for a command
+whose contract is to leave that directory untouched or remove it. `keiko audit local-state` and a
+real `keiko uninstall` operation that touches state or launchers therefore use a fixed per-user CLI
+control-state root: `~/.local/state/keiko/control` on Linux,
+`~/Library/Application Support/Keiko/control` on macOS, and
+`%USERPROFILE%\AppData\Local\Keiko\control` on Windows. Environment variables cannot redirect this
+root. The command resolves existing symlinks before use and refuses when the control root is at or
+below the selected target.
+
+This is a placement rule, not a second logging system. The control root receives the existing
+`ServerLogSink` at `logs/server.log`, so D1-D13, correlation, redaction, rotation, retention, and
+the generated op vocabulary apply unchanged. Install-layout normalization is persisted there
+before a corrected internal path is consumed. Audit records start and completion/failure without
+writing into the audited tree; uninstall records start, forced-stop activity, and completion/failure
+without losing the record when target state is removed. Dry runs and scripts-only uninstall remain
+eventless and do not create control state.
 
 **"Gap-free" means every claimed `seq` is accounted for, not that every claimed `seq` reaches disk —
 and that accounting is delivered on the next notice or at shutdown, never guaranteed against every

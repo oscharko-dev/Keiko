@@ -22,6 +22,30 @@
       "package": "keiko-cli"
     },
     {
+      "op": "cli.audit.completed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/audit.ts:322",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.audit.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/audit.ts:311",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.audit.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/audit.ts:444",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.audit.started",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/audit.ts:405",
+      "package": "keiko-cli"
+    },
+    {
       "op": "cli.install-layout.normalized",
       "category": "diagnostic",
       "site": "packages/keiko-cli/src/install-layout.ts:81",
@@ -49,6 +73,24 @@
       "op": "cli.lifecycle.stop-requested",
       "category": "diagnostic",
       "site": "packages/keiko-cli/src/ui-process-stop.ts:146",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.uninstall.completed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/uninstall.ts:722",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.uninstall.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/uninstall.ts:687",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.uninstall.started",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/uninstall.ts:668",
       "package": "keiko-cli"
     },
     {
@@ -3981,11 +4023,17 @@
     "chat.response.streamed",
     "chat.send.rejected",
     "chat.turn.started",
+    "cli.audit.completed",
+    "cli.audit.failed",
+    "cli.audit.started",
     "cli.install-layout.normalized",
     "cli.lifecycle.stop-escalated",
     "cli.lifecycle.stop-escalation-failed",
     "cli.lifecycle.stop-request-failed",
     "cli.lifecycle.stop-requested",
+    "cli.uninstall.completed",
+    "cli.uninstall.failed",
+    "cli.uninstall.started",
     "client.diagnostic",
     "client.diagnostic.rate-limited",
     "coding-app-session.channel.closed",

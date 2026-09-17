@@ -40,7 +40,7 @@ type PersistedServerLogEvent = Parameters<
 
 const commandMocks = vi.hoisted(() => ({
   loadServer: vi.fn<() => Promise<ServerModule>>(),
-  audit: vi.fn<SecurityAwareCommand>(),
+  audit: vi.fn<ActivityAwareCommand>(),
   launcher: vi.fn<SecurityAwareCommand>(),
   lifecycle: vi.fn<SecurityAwareLifecycleCommand>(),
   portable: vi.fn<SecurityAwareCommand>(),
@@ -75,6 +75,12 @@ function commandSecurityFactory(
   call: Parameters<SecurityAwareCommand> | undefined,
 ): CliSecurityLogSinkFactory | undefined {
   return call?.[3]?.securityLogSinkFactory;
+}
+
+function commandActivityFactory(
+  call: Parameters<ActivityAwareCommand> | undefined,
+): CliSecurityLogSinkFactory | undefined {
+  return call?.[3]?.activityLogSinkFactory;
 }
 
 function lifecycleSecurityFactory(
@@ -120,7 +126,7 @@ afterEach(() => {
 });
 
 describe("Windows CLI security-log production wiring", () => {
-  it("persists layout evidence for every mutating consumer while audit stays read-only", async () => {
+  it("persists layout evidence for every install-layout consumer outside read-only targets", async () => {
     Object.defineProperty(process, "platform", { ...platform, value: "darwin" });
     const written: PersistedServerLogEvent[] = [];
     const createFileServerLogSink = vi.fn<ServerModule["createFileServerLogSink"]>(() => ({
@@ -132,6 +138,10 @@ describe("Windows CLI security-log production wiring", () => {
     commandMocks.repair.mockImplementation((_args, _io, env, deps) => {
       writeInstallLayoutOverrideEvidence(deps?.securityLogSinkFactory?.("/state"), env);
       return 41;
+    });
+    commandMocks.audit.mockImplementation((_args, _io, env, deps) => {
+      writeInstallLayoutOverrideEvidence(deps?.activityLogSinkFactory?.("/control"), env);
+      return 46;
     });
     for (const command of [commandMocks.launcher, commandMocks.portable, commandMocks.uninstall]) {
       command.mockImplementation((_args, _io, env, deps) => {
@@ -168,14 +178,19 @@ describe("Windows CLI security-log production wiring", () => {
     );
     await expect(Promise.resolve(runCli(["ui"], io(), evidenceEnv()))).resolves.toBe(41);
 
+    const auditFactory = commandActivityFactory(commandMocks.audit.mock.calls[0]);
+    expect(typeof auditFactory).toBe("function");
     expect(commandMocks.audit).toHaveBeenCalledWith(
       ["local-state"],
       expect.anything(),
       expect.anything(),
+      {
+        activityLogSinkFactory: auditFactory,
+      },
     );
-    expect(commandMocks.loadServer).toHaveBeenCalledTimes(6);
-    expect(createFileServerLogSink).toHaveBeenCalledTimes(6);
-    expect(written).toHaveLength(6);
+    expect(commandMocks.loadServer).toHaveBeenCalledTimes(7);
+    expect(createFileServerLogSink).toHaveBeenCalledTimes(7);
+    expect(written).toHaveLength(7);
     expect(written.every(({ op }) => op === "cli.install-layout.normalized")).toBe(true);
   });
 
