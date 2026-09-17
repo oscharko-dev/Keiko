@@ -7,7 +7,7 @@
 // keiko-security depends only on keiko-contracts and is depended upon by the store/vault packages, so
 // hoisting this module here introduces no dependency cycle.
 
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   chmodSync,
   closeSync,
@@ -581,14 +581,18 @@ interface PublicationIntentEntry {
 
 interface PublicationIntent {
   readonly schemaVersion: 1;
+  readonly ownerPid: number;
+  readonly ownerToken: string;
   readonly commitIndex: number;
   readonly entries: readonly PublicationIntentEntry[];
 }
 
 const PUBLICATION_SLOT_PATTERN = /^[0-9a-f]{24}$/u;
 const PUBLICATION_DIGEST_PATTERN = /^[0-9a-f]{64}$/u;
+const PUBLICATION_OWNER_TOKEN_PATTERN = /^[0-9a-f]{24}$/u;
 const MAX_PUBLICATION_ENTRIES = 16;
-const MAX_RECOVERY_ARTIFACT_BYTES = 256 * 1024 * 1024;
+export const MAX_SAFE_ARTIFACT_RECOVERY_ENTRY_BYTES = 256 * 1024 * 1024;
+export const MAX_SAFE_ARTIFACT_RECOVERY_PUBLICATION_BYTES = 512 * 1024 * 1024;
 const MAX_PUBLICATION_INTENT_BYTES = 64 * 1024;
 
 function validatePublicationSlot(slot: string, artifactClass: SafeArtifactClass): void {
@@ -673,6 +677,8 @@ function publicationIntent(
   const commitIndex = entries.findIndex((entry) => entry.path === resolvedCommit);
   return {
     schemaVersion: 1,
+    ownerPid: process.pid,
+    ownerToken: randomBytes(12).toString("hex"),
     commitIndex,
     entries: entries.map((entry) => ({
       name: basename(entry.path),
@@ -706,8 +712,30 @@ function isIntentByteCount(value: unknown): value is number {
     typeof value === "number" &&
     Number.isSafeInteger(value) &&
     value >= 0 &&
-    value <= MAX_RECOVERY_ARTIFACT_BYTES
+    value <= MAX_SAFE_ARTIFACT_RECOVERY_ENTRY_BYTES
   );
+}
+
+function publicationContentsByteCount(contents: unknown): number | undefined {
+  if (typeof contents === "string") return Buffer.byteLength(contents);
+  return contents instanceof Uint8Array ? contents.byteLength : undefined;
+}
+
+function validateIntentPublicationEntries(
+  entries: readonly SafeArtifactPublicationEntry[],
+  artifactClass: SafeArtifactClass,
+): void {
+  let totalBytes = 0;
+  for (const entry of entries) {
+    const byteCount = publicationContentsByteCount(entry.contents);
+    if (!isIntentName(basename(resolve(entry.path))) || !isIntentByteCount(byteCount)) {
+      throw safeFileError(artifactClass, "invalid-publication");
+    }
+    totalBytes += byteCount;
+  }
+  if (totalBytes > MAX_SAFE_ARTIFACT_RECOVERY_PUBLICATION_BYTES) {
+    throw safeFileError(artifactClass, "invalid-publication");
+  }
 }
 
 function isIntentEntry(value: unknown): value is PublicationIntentEntry {
@@ -727,22 +755,45 @@ function isCommitIndex(value: unknown, entryCount: number): value is number {
   );
 }
 
-function parsedPublicationIntent(value: unknown): PublicationIntent | undefined {
-  if (!isRecord(value) || value.schemaVersion !== 1 || !Array.isArray(value.entries)) {
+function hasValidIntentOwner(
+  value: Readonly<Record<string, unknown>>,
+): value is Readonly<Record<string, unknown>> & { ownerPid: number; ownerToken: string } {
+  return (
+    typeof value.ownerPid === "number" &&
+    Number.isSafeInteger(value.ownerPid) &&
+    value.ownerPid > 0 &&
+    typeof value.ownerToken === "string" &&
+    PUBLICATION_OWNER_TOKEN_PATTERN.test(value.ownerToken)
+  );
+}
+
+function parsedIntentEntries(value: unknown): readonly PublicationIntentEntry[] | undefined {
+  if (!Array.isArray(value) || value.length === 0 || value.length > MAX_PUBLICATION_ENTRIES) {
     return undefined;
   }
-  if (value.entries.length === 0 || value.entries.length > MAX_PUBLICATION_ENTRIES)
+  if (!value.every(isIntentEntry)) return undefined;
+  const comparisonNames = value.map((entry) => filesystemComparisonPath(join("/", entry.name)));
+  const totalBytes = value.reduce((total, entry) => total + entry.byteCount, 0);
+  if (
+    new Set(comparisonNames).size !== comparisonNames.length ||
+    totalBytes > MAX_SAFE_ARTIFACT_RECOVERY_PUBLICATION_BYTES
+  ) {
     return undefined;
-  if (!value.entries.every(isIntentEntry)) return undefined;
-  if (!isCommitIndex(value.commitIndex, value.entries.length)) return undefined;
-  const comparisonNames = value.entries.map((entry) =>
-    filesystemComparisonPath(join("/", entry.name)),
-  );
-  if (new Set(comparisonNames).size !== comparisonNames.length) return undefined;
+  }
+  return value;
+}
+
+function parsedPublicationIntent(value: unknown): PublicationIntent | undefined {
+  if (!isRecord(value) || value.schemaVersion !== 1) return undefined;
+  const entries = parsedIntentEntries(value.entries);
+  if (entries === undefined || !isCommitIndex(value.commitIndex, entries.length)) return undefined;
+  if (!hasValidIntentOwner(value)) return undefined;
   return {
     schemaVersion: 1,
+    ownerPid: value.ownerPid,
+    ownerToken: value.ownerToken,
     commitIndex: value.commitIndex,
-    entries: value.entries,
+    entries,
   };
 }
 
@@ -773,17 +824,19 @@ function validatePublication(
   if (entries.length > MAX_PUBLICATION_ENTRIES) {
     throw safeFileError(fallbackClass, "invalid-publication");
   }
-  validatePublicationSlotOption(options, resolvedCommit, fallbackClass);
+  validatePublicationSlotOption(entries, options, resolvedCommit, fallbackClass);
   for (const path of paths) containedDirectories(options.trustedRoot, path, fallbackClass);
 }
 
 function validatePublicationSlotOption(
+  entries: readonly SafeArtifactPublicationEntry[],
   options: SafeArtifactPublicationOptions,
   resolvedCommit: string,
   artifactClass: SafeArtifactClass,
 ): void {
   if (options.publicationSlot === undefined) return;
   validatePublicationSlot(options.publicationSlot, artifactClass);
+  validateIntentPublicationEntries(entries, artifactClass);
   if (!sameFilesystemPath(dirname(resolvedCommit), resolve(options.trustedRoot))) {
     throw safeFileError(artifactClass, "invalid-publication");
   }
@@ -913,6 +966,7 @@ function removePublicationIntent(
   path: string,
   trustedRoot: string,
   artifactClass: SafeArtifactClass,
+  restoreBytes?: Buffer,
 ): SafeArtifactDurabilityAssurance {
   const descriptor = openSafeArtifactFile(path, {
     artifactClass,
@@ -928,7 +982,14 @@ function removePublicationIntent(
     throw safeFileError(artifactClass, "publish-failed");
   }
   closeArtifactDescriptor(descriptor, artifactClass);
-  return syncDirectory(dirname(path), trustedRoot, artifactClass);
+  try {
+    return syncDirectory(dirname(path), trustedRoot, artifactClass);
+  } catch (error) {
+    if (restoreBytes !== undefined && !pathExists(path, artifactClass)) {
+      createPublicationIntent(path, restoreBytes, artifactClass, trustedRoot);
+    }
+    throw error;
+  }
 }
 
 function readExactPrivateFile(
@@ -1490,18 +1551,9 @@ function publishIntentFileSet(
     }
     throw error;
   }
-  const intentCleanup = removePublicationIntent(
-    markerPath,
-    options.trustedRoot,
-    publicationArtifactClass(prepared),
-  );
   return {
     ...result,
-    durabilityAssurance: combineDurabilityAssurance(
-      markerAssurance,
-      result.durabilityAssurance,
-      intentCleanup,
-    ),
+    durabilityAssurance: combineDurabilityAssurance(markerAssurance, result.durabilityAssurance),
   };
 }
 
@@ -1584,6 +1636,15 @@ function countIntentPaths(
   }).length;
 }
 
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return errorCode(error) !== "ESRCH";
+  }
+}
+
 function completeIntentRecovery(
   intent: PublicationIntent,
   options: SafeArtifactRecoveryOptions,
@@ -1606,6 +1667,7 @@ function completeIntentRecovery(
     markerPath,
     root,
     publicationArtifactClass(prepared),
+    intentBytes(intent),
   );
   return {
     status: "recovered",
@@ -1627,6 +1689,9 @@ export function recoverSafeArtifactFileSet(
   const markerPath = intentPath(root, options.publicationSlot);
   if (!pathExists(markerPath, "manifest")) return { status: "none" };
   const intent = readPublicationIntent(markerPath, root);
+  if (intent.ownerPid !== process.pid && processIsAlive(intent.ownerPid)) {
+    throw safeFileError("manifest", "recovery-conflict");
+  }
   const targetCount = countIntentPaths(intent, root, options.publicationSlot, "target");
   if (targetCount === 0) {
     const durabilityAssurance = rollbackIncompleteIntent(

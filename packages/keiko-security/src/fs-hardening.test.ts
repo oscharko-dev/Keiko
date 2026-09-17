@@ -22,6 +22,8 @@ import { dirname, join } from "node:path";
 import {
   DIR_MODE,
   FILE_MODE,
+  MAX_SAFE_ARTIFACT_RECOVERY_ENTRY_BYTES,
+  MAX_SAFE_ARTIFACT_RECOVERY_PUBLICATION_BYTES,
   SafeArtifactFileError,
   chmodIfPresent,
   ensureDirHardened,
@@ -55,6 +57,13 @@ function freshDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "keiko-fs-harden-"));
   cleanups.push(dir);
   return dir;
+}
+
+function byteCountFixture(byteLength: number): Uint8Array {
+  return new Proxy(new Uint8Array(0), {
+    get: (target, property): unknown =>
+      property === "byteLength" ? byteLength : Reflect.get(target, property, target),
+  });
 }
 
 async function leaveLinkedPublication(base: string, path: string): Promise<void> {
@@ -551,6 +560,52 @@ describe("openSafeArtifactFile", () => {
 });
 
 describe("publishSafeArtifactFileSet", () => {
+  it("rejects reserved fixed-slot output names before writing an intent", () => {
+    const base = freshDir();
+    const path = join(base, ".keiko-publish-customer-output");
+    const slot = safeArtifactPublicationSlot("support-export", path);
+    expect(() =>
+      publishSafeArtifactFileSet([{ path, contents: "report", artifactClass: "support-report" }], {
+        commitPath: path,
+        trustedRoot: base,
+        publicationSlot: slot,
+      }),
+    ).toThrow(expect.objectContaining({ kind: "invalid-publication" }));
+    expect(readdirSync(base)).toEqual([]);
+  });
+
+  it("rejects per-entry and aggregate fixed-slot byte bounds before writing an intent", () => {
+    const base = freshDir();
+    const paths = ["one", "two", "three"].map((name) => join(base, name));
+    const first = paths[0];
+    if (first === undefined) throw new Error("expected publication path");
+    const slot = safeArtifactPublicationSlot("support-export", first);
+    expect(() =>
+      publishSafeArtifactFileSet(
+        [
+          {
+            path: first,
+            contents: byteCountFixture(MAX_SAFE_ARTIFACT_RECOVERY_ENTRY_BYTES + 1),
+            artifactClass: "support-report",
+          },
+        ],
+        { commitPath: first, trustedRoot: base, publicationSlot: slot },
+      ),
+    ).toThrow(expect.objectContaining({ kind: "invalid-publication" }));
+    expect(() =>
+      publishSafeArtifactFileSet(
+        paths.map((path, index) => ({
+          path,
+          contents: byteCountFixture(MAX_SAFE_ARTIFACT_RECOVERY_PUBLICATION_BYTES / 2),
+          artifactClass:
+            index === 0 ? ("support-report" as const) : ("integrity-artifact" as const),
+        })),
+        { commitPath: first, trustedRoot: base, publicationSlot: slot },
+      ),
+    ).toThrow(expect.objectContaining({ kind: "invalid-publication" }));
+    expect(readdirSync(base)).toEqual([]);
+  });
+
   it("recovers a fixed publication slot without rebuilding the original contents", async () => {
     const base = freshDir();
     const report = join(base, "support.jsonl");
@@ -681,6 +736,68 @@ describe("publishSafeArtifactFileSet", () => {
     expect(readFileSync(integrity, "utf8")).toBe("old-digest");
   });
 
+  it("prevents a real peer process from rolling back a live publisher slot", async () => {
+    const base = freshDir();
+    const report = join(base, "support.jsonl");
+    const integrity = join(base, "support.jsonl.sha256");
+    const slot = safeArtifactPublicationSlot("support-export", report);
+    const entries = [
+      { path: report, contents: "old-report", artifactClass: "support-report" as const },
+      { path: integrity, contents: "old-digest", artifactClass: "integrity-artifact" as const },
+    ];
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let links = 0;
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
+        links += 1;
+        if (links === 2) throw Object.assign(new Error("publisher paused"), { code: "EINTR" });
+        Reflect.apply(actual.linkSync, actual, args);
+      },
+    }));
+    const interrupted = await import("./fs-hardening.js");
+    expect(() =>
+      interrupted.publishSafeArtifactFileSet(entries, {
+        commitPath: report,
+        trustedRoot: base,
+        publicationSlot: slot,
+      }),
+    ).toThrow(expect.objectContaining({ kind: "publish-failed" }));
+    vi.doUnmock("node:fs");
+    vi.resetModules();
+    const before = readdirSync(base).sort();
+    const peerScript = `
+      import { recoverSafeArtifactFileSet } from "@oscharko-dev/keiko-security/fs-hardening";
+      try {
+        recoverSafeArtifactFileSet({
+          publicationSlot: process.env.KEIKO_TEST_PUBLICATION_SLOT,
+          trustedRoot: process.env.KEIKO_TEST_PUBLICATION_ROOT,
+        });
+        process.exit(2);
+      } catch (error) {
+        process.exit(error?.kind === "recovery-conflict" ? 0 : 3);
+      }
+    `;
+
+    expect(() =>
+      execFileSync(process.execPath, ["--input-type=module", "--eval", peerScript], {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          KEIKO_TEST_PUBLICATION_ROOT: base,
+          KEIKO_TEST_PUBLICATION_SLOT: slot,
+        },
+      }),
+    ).not.toThrow();
+    expect(readdirSync(base).sort()).toEqual(before);
+    expect(readFileSync(integrity, "utf8")).toBe("old-digest");
+    expect(existsSync(report)).toBe(false);
+    expect(recoverSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base })).toEqual(
+      expect.objectContaining({ status: "recovered" }),
+    );
+  });
+
   it("removes its bounded fixed-slot reservation when hard-link publication is unsupported", async () => {
     const base = freshDir();
     const report = join(base, "support.jsonl");
@@ -726,30 +843,41 @@ describe("publishSafeArtifactFileSet", () => {
     }
   });
 
-  it("recovers complete targets when the final intent unlink was interrupted", async () => {
+  it("restores the completed intent when its post-unlink directory fsync fails", async () => {
     const base = freshDir();
     const report = join(base, "support.jsonl");
     const slot = safeArtifactPublicationSlot("support-export", report);
+    expect(
+      publishSafeArtifactFileSet(
+        [{ path: report, contents: "report", artifactClass: "support-report" }],
+        { commitPath: report, trustedRoot: base, publicationSlot: slot },
+      ),
+    ).toEqual(expect.objectContaining({ status: "published" }));
     const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let intentUnlinked = false;
+    let failed = false;
     vi.resetModules();
     vi.doMock("node:fs", () => ({
       ...actual,
       unlinkSync: (...args: Parameters<typeof actual.unlinkSync>): void => {
-        if (String(args[0]).endsWith(".intent")) {
-          throw Object.assign(new Error("intent unlink interrupted"), { code: "EIO" });
-        }
         Reflect.apply(actual.unlinkSync, actual, args);
+        if (String(args[0]).endsWith(".intent")) intentUnlinked = true;
+      },
+      fsyncSync: (...args: Parameters<typeof actual.fsyncSync>): void => {
+        if (intentUnlinked && !failed) {
+          failed = true;
+          throw Object.assign(new Error("post-unlink directory fsync failed"), { code: "EIO" });
+        }
+        Reflect.apply(actual.fsyncSync, actual, args);
       },
     }));
     const interrupted = await import("./fs-hardening.js");
     expect(() =>
-      interrupted.publishSafeArtifactFileSet(
-        [{ path: report, contents: "report", artifactClass: "support-report" }],
-        { commitPath: report, trustedRoot: base, publicationSlot: slot },
-      ),
-    ).toThrow(expect.objectContaining({ kind: "publish-failed" }));
+      interrupted.recoverSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base }),
+    ).toThrow(expect.objectContaining({ kind: "durability-failed" }));
     expect(readFileSync(report, "utf8")).toBe("report");
     expect(statSync(report).nlink).toBe(1);
+    expect(publicationStages(base)).toHaveLength(1);
     vi.doUnmock("node:fs");
     vi.resetModules();
 
