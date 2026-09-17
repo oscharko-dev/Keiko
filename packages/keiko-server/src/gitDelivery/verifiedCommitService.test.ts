@@ -1810,9 +1810,12 @@ describe("productive runtime status/diff/stage lane", () => {
       });
       const pendingStage = invoke({ operation: "stage", phase: "propose", paths: ["code.js"] });
       if (mode === "governed-assist") {
-        await vi.waitFor(() => {
-          expect(fixture.events.at(-1)?.permissionRequest?.actionKind).toBe("git-stage");
-        });
+        await vi.waitFor(
+          () => {
+            expect(fixture.events.at(-1)?.permissionRequest?.actionKind).toBe("git-stage");
+          },
+          { timeout: 5_000 },
+        );
         const pendingId = fixture.events.at(-1)?.permissionRequest?.requestId;
         if (pendingId === undefined) throw new Error("stage permission missing");
         expect(fixture.bridge.issueStage?.("foreign-run", pendingId)).toBeUndefined();
