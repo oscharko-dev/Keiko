@@ -1902,8 +1902,8 @@ describe("pr mark-ready routes (#3389)", () => {
     expect(failure).toMatchObject({
       correlationId: "corr-ci-read",
       level: "error",
-      errorKind: "Error",
-      extra: { actionKind: "pr-mark-ready", phaseReached: "readiness" },
+      errorKind: "internal",
+      extra: { actionKind: "pr-mark-ready", phaseReached: "readiness", failureKind: "Error" },
     });
     expect(failure?.extra?.frames).toBeDefined();
     expect(failure?.extra?.causeChain).toBeDefined();
@@ -1939,8 +1939,8 @@ describe("pr mark-ready routes (#3389)", () => {
     expect(activity.find((event) => event.op === "git.delivery.mutation.failed")).toMatchObject({
       correlationId: "corr-mark-ready-failed",
       level: "error",
-      errorKind: "Error",
-      extra: { actionKind: "pr-mark-ready", phaseReached: "dispatch" },
+      errorKind: "internal",
+      extra: { actionKind: "pr-mark-ready", phaseReached: "dispatch", failureKind: "Error" },
     });
     expect(diagnostics).toHaveLength(1);
     expect(diagnostics[0]).toMatchObject({

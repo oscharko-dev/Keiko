@@ -221,7 +221,7 @@ const MUTATION_FAILED_OPERATION = defineActivityLogOperation({
   op: "git.delivery.mutation.failed",
   category: "diagnostic",
   owner: "keiko-server",
-  emitter: "gitDelivery/execution.logGitDeliveryPreconditionFailure",
+  emitter: "gitDelivery/execution.logGitDeliveryMutationFailure",
   fields: {
     actionKind: {
       type: "string",
@@ -250,6 +250,18 @@ const MUTATION_FAILED_OPERATION = defineActivityLogOperation({
       values: ["snapshot", "readiness", "post-observation", "dispatch"],
     },
     failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxItems: 5,
+    },
   },
   causal: "correlation",
   lifecycle: "failure",
@@ -1163,7 +1175,30 @@ export function logGitDeliveryPreconditionFailure(
   error: unknown,
   correlationId: string | undefined,
 ): void {
+  writeGitDeliveryMutationFailure(log, actionKind, "snapshot", error, correlationId, false);
+}
+
+export function logGitDeliveryMutationFailure(
+  log: ServerLogSink,
+  actionKind: GitDeliveryActionKind,
+  phaseReached: "snapshot" | "readiness" | "post-observation" | "dispatch",
+  error: unknown,
+  correlationId: string | undefined,
+): void {
+  writeGitDeliveryMutationFailure(log, actionKind, phaseReached, error, correlationId, true);
+}
+
+function writeGitDeliveryMutationFailure(
+  log: ServerLogSink,
+  actionKind: GitDeliveryActionKind,
+  phaseReached: "snapshot" | "readiness" | "post-observation" | "dispatch",
+  error: unknown,
+  correlationId: string | undefined,
+  includeErrorStructure: boolean,
+): void {
   const failureKind = errorKindOf(error);
+  const frames = keikoStackFrames(error);
+  const chain = causeChain(error);
   log.write(
     activityLogEvent(
       MUTATION_FAILED_OPERATION,
@@ -1172,7 +1207,13 @@ export function logGitDeliveryPreconditionFailure(
         correlationId: correlationIdOrUnknown(correlationId),
         errorKind: gitDeliveryActivityErrorKind(failureKind),
       },
-      { actionKind, phaseReached: "snapshot", failureKind },
+      {
+        actionKind,
+        phaseReached,
+        failureKind,
+        ...(includeErrorStructure && frames.length > 0 ? { frames } : {}),
+        ...(includeErrorStructure && chain.length > 0 ? { causeChain: chain } : {}),
+      },
     ),
   );
 }
