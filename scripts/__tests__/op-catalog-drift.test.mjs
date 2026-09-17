@@ -232,11 +232,10 @@ describe("op catalog drift", () => {
         "",
       ].join("\n"),
       (root) => {
-        expect(generateTypedActivityLogRegistry(root)).toEqual({
-          schemaVersion: 1,
-          operations: [],
-          violations: [],
-        });
+        const registry = generateTypedActivityLogRegistry(root);
+        expect(registry).toMatchObject({ schemaVersion: 1, operations: [], violations: [] });
+        expect(registry.schemaDigest).toMatch(/^[a-f0-9]{64}$/u);
+        expect(registry.catalogDigest).toMatch(/^[a-f0-9]{64}$/u);
       },
     );
   });

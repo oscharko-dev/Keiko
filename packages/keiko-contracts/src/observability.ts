@@ -20,6 +20,12 @@
 // bypasses the `extra` redaction path entirely: this shape gate is the only thing standing
 // between a provider's rejected-input message and a log line an operator will grep in the clear.
 
+export {
+  ACTIVITY_LOG_CATALOG_DIGEST,
+  ACTIVITY_LOG_REGISTRY_VERSION,
+  ACTIVITY_LOG_SCHEMA_DIGEST,
+} from "./activity-log-registry.generated.js";
+
 /**
  * The shape an error KIND may take: a leading letter, then up to 63 more letters, digits,
  * underscores, dots, or hyphens — 64 characters total. Long enough for every taxonomy code and
@@ -201,6 +207,8 @@ export interface RegisteredActivityLogEvent<
 export const ACTIVITY_LOG_EVENT_FAILURE_KINDS = [
   "unregistered-operation",
   "registration-mismatch",
+  "missing-identity",
+  "invalid-identity",
   "fields-not-object",
   "missing-field",
   "unknown-field",
