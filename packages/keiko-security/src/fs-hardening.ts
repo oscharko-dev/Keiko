@@ -701,13 +701,19 @@ function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function publicationNameComparison(value: string): string {
+  return process.platform === "darwin" || process.platform === "win32"
+    ? value.normalize("NFC").toLocaleLowerCase("en-US")
+    : value;
+}
+
 function isIntentName(value: unknown): value is string {
   return (
     typeof value === "string" &&
     value !== "." &&
     value !== ".." &&
     basename(value) === value &&
-    !value.startsWith(".keiko-publish-")
+    !publicationNameComparison(value).startsWith(".keiko-publish-")
   );
 }
 

@@ -985,6 +985,24 @@ describe("publishSafeArtifactFileSet", () => {
     },
   );
 
+  it.each(["darwin", "win32"] as const)(
+    "rejects a case-folded reserved publication basename on %s",
+    (platform) => {
+      const base = freshDir();
+      const report = join(base, ".KEIKO-PUBLISH-customer.jsonl");
+      const slot = safeArtifactPublicationSlot("support-export", report);
+      setPlatform(platform);
+
+      expect(() =>
+        publishSafeArtifactFileSet(
+          [{ path: report, contents: "report", artifactClass: "support-report" }],
+          { commitPath: report, trustedRoot: base, publicationSlot: slot },
+        ),
+      ).toThrow(expect.objectContaining({ kind: "invalid-publication" }));
+      expect(readdirSync(base)).toEqual([]);
+    },
+  );
+
   it("reports the reviewed Windows ACL residual as platform-inherited", () => {
     const base = realpathSync(freshDir());
     const path = join(base, "report.json");
