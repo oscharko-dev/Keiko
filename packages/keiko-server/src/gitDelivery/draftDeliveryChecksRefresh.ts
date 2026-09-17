@@ -23,10 +23,12 @@ import { processServerLogSink } from "../process-log-sink.js";
 import { basePinnedPrPolicyPacks } from "./basePinnedPrPolicy.js";
 import {
   frameDraftChecksSection,
+  logDraftChecksActivity,
   readDraftDeliveryChecks,
   renderDraftDeliveryChecks,
   spliceDraftChecksSection,
   type DraftChecksSplice,
+  type DraftChecksActivityFields,
   type RenderedDraftDeliveryChecks,
 } from "./draftDeliveryChecks.js";
 import type { DraftDeliveryRunContext, DraftDeliveryServiceOptions } from "./draftDeliveryTypes.js";
@@ -241,7 +243,9 @@ function rereadRefusal(
 // A pull request that changed under the refresh is a conflict, not a Keiko fault.
 const CONFLICT_REASONS: ReadonlySet<FailReason> = new Set(["body-changed", "identity-changed"]);
 
-function refreshFields(outcome: RefreshOutcome): Readonly<Record<string, unknown>> {
+function refreshFields(
+  outcome: RefreshOutcome,
+): Pick<DraftChecksActivityFields, "checkRowCount" | "authority" | "reason"> {
   if (outcome.state === "refreshed")
     return { checkRowCount: outcome.checkRowCount, authority: "policy-authorized" };
   if (outcome.state === "skipped" || outcome.error === undefined) return { reason: outcome.reason };
@@ -250,23 +254,31 @@ function refreshFields(outcome: RefreshOutcome): Readonly<Record<string, unknown
 
 function logRefresh(input: DraftChecksRefreshInput, outcome: RefreshOutcome): void {
   const { options, context, record, pullRequest } = input;
-  (options.execution?.activityLog ?? processServerLogSink()).write({
-    category: "process",
-    op: "git.draft-checks",
-    correlationId: context.correlationId,
-    ...(outcome.state === "failed"
-      ? ({
-          level: "warn",
-          errorKind: CONFLICT_REASONS.has(outcome.reason) ? "conflict" : "internal",
-        } as const)
-      : {}),
-    extra: {
+  const detail =
+    outcome.state === "failed" && outcome.error !== undefined
+      ? describeError(outcome.error)
+      : undefined;
+  logDraftChecksActivity(
+    options.execution?.activityLog ?? processServerLogSink(),
+    context.correlationId,
+    {
       runId: context.runId,
       phase: "refresh",
       state: outcome.state,
       prNumber: pullRequest.number,
       headSha: record.binding.headSha,
       ...refreshFields(outcome),
+      ...(detail === undefined
+        ? {}
+        : {
+            errorClass: detail.errorClass,
+            ...(detail.code === undefined ? {} : { code: detail.code }),
+            ...(detail.frames === undefined ? {} : { frames: detail.frames }),
+            ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+          }),
     },
-  });
+    outcome.state === "failed"
+      ? { errorKind: CONFLICT_REASONS.has(outcome.reason) ? "conflict" : "internal" }
+      : undefined,
+  );
 }
