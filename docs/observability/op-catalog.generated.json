@@ -8,6 +8,8 @@
   },
   "typedRegistry": {
     "schemaVersion": 1,
+    "schemaDigest": "205b1dc41337fe3b2841dca3dee729eb51c7027de380f8bf8b1f1391d61fd2a3",
+    "catalogDigest": "687d627087ccb685754e1b8ae77a09c225940c56848ce409323e7bacd390da83",
     "operations": [
       {
         "contractKind": "activity-log-operation",
@@ -58,8 +60,8 @@
         "failureClasses": ["activity-log-persistence"],
         "proofIds": ["server-log.safe-open.emitted-line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:641",
-        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:685"]
+        "registrationSite": "packages/keiko-server/src/observability/server-log.ts:812",
+        "emitterSites": ["packages/keiko-server/src/observability/server-log.ts:856"]
       }
     ],
     "violations": []
@@ -1184,7 +1186,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1344",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1514",
       "package": "keiko-server"
     },
     {
@@ -3514,31 +3516,31 @@
     {
       "op": "server-log.rotation",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:705",
+      "site": "packages/keiko-server/src/observability/server-log.ts:875",
       "package": "keiko-server"
     },
     {
       "op": "server-log.safe-open",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:644",
+      "site": "packages/keiko-server/src/observability/server-log.ts:815",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:359",
+      "site": "packages/keiko-server/src/observability/server-log.ts:423",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:385",
+      "site": "packages/keiko-server/src/observability/server-log.ts:480",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:774",
+      "site": "packages/keiko-server/src/observability/server-log.ts:944",
       "package": "keiko-server"
     },
     {

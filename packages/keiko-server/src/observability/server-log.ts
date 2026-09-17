@@ -49,10 +49,21 @@ import {
 } from "@oscharko-dev/keiko-security/fs-hardening";
 
 import {
-  activityLogEvent, activityLogEventRegistration,
-  classifyErrorKind, defineActivityLogOperation,
+  ACTIVITY_LOG_CATALOG_DIGEST,
+  ACTIVITY_LOG_REGISTRY_VERSION,
+  ACTIVITY_LOG_SCHEMA_DIGEST,
+  ActivityLogEventValidationError,
+  activityLogEvent,
+  activityLogEventRegistration,
+  classifyErrorKind,
+  defineActivityLogOperation,
+  isActivityLogErrorKind,
+  type ActivityLogCompatibilityState,
+  type ActivityLogErrorKind,
+  type ActivityLogWriterCapabilityState,
   validateRegisteredActivityLogEvent,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 
 import { correlationIdOrUnknown, isValidCorrelationId } from "../correlation.js";
 import { contentFreeErrorClass, machineToken, safeProperty } from "./error-classification.js";
@@ -158,16 +169,56 @@ export function serverLogInstanceId(): string {
   return INSTANCE_ID;
 }
 
-// The four fields the sink stamps once, at the physical write boundary — never left to a caller,
+// The identity fields the sink stamps once, at the physical write boundary — never left to a caller,
 // and never spoofable through `extra` (see `RESERVED_FIELD_NAMES` in `log-redaction.ts`). Bundled
-// as one optional parameter on `formatServerLogLine` rather than four, because a caller either
+// as one optional parameter on `formatServerLogLine`, because a caller either
 // wants the full process/sequence identity or none of it: the file sink always passes one, and the
 // in-memory buffered test sink is free to omit it entirely.
 export interface ServerLogIdentity {
   readonly schemaVersion: number;
+  readonly registryVersion: number;
+  readonly schemaDigest: string;
+  readonly catalogDigest: string;
+  readonly buildClass: "node-esm";
+  readonly releaseClass: "stable" | "prerelease";
+  readonly platformClass: string;
+  readonly productVersion: string;
+  readonly compatibilityState: ActivityLogCompatibilityState;
+  readonly writerCapability: ActivityLogWriterCapabilityState;
   readonly pid: number;
   readonly instanceId: string;
   readonly seq: number;
+}
+
+const ACTIVITY_LOG_DIGEST = /^[a-f0-9]{64}$/u;
+const ACTIVITY_LOG_INSTANCE_ID = /^[a-f0-9]{8}$/u;
+const ACTIVITY_LOG_PLATFORM_CLASS = /^(?:darwin|linux|win32|other)-(?:arm64|x64|other)$/u;
+const ACTIVITY_LOG_PRODUCT_VERSION = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
+
+function validServerLogIdentity(identity: ServerLogIdentity): boolean {
+  return [
+    identity.schemaVersion === SERVER_LOG_SCHEMA_VERSION &&
+      identity.registryVersion === ACTIVITY_LOG_REGISTRY_VERSION,
+    ACTIVITY_LOG_DIGEST.test(identity.schemaDigest) &&
+      identity.schemaDigest === ACTIVITY_LOG_SCHEMA_DIGEST &&
+      ACTIVITY_LOG_DIGEST.test(identity.catalogDigest) &&
+      identity.catalogDigest === ACTIVITY_LOG_CATALOG_DIGEST,
+    identity.buildClass === "node-esm" &&
+    (identity.releaseClass === "stable" || identity.releaseClass === "prerelease") &&
+      ACTIVITY_LOG_PLATFORM_CLASS.test(identity.platformClass),
+    ACTIVITY_LOG_PRODUCT_VERSION.test(identity.productVersion) &&
+      identity.productVersion === KEIKO_PRODUCT_VERSION,
+    identity.compatibilityState === "supported" && identity.writerCapability === "active",
+    Number.isInteger(identity.pid) && identity.pid > 0,
+    ACTIVITY_LOG_INSTANCE_ID.test(identity.instanceId),
+    Number.isInteger(identity.seq) && identity.seq > 0,
+  ].every(Boolean);
+}
+
+function validateServerLogIdentity(identity: ServerLogIdentity): void {
+  if (!validServerLogIdentity(identity)) {
+    throw new ActivityLogEventValidationError("invalid-identity");
+  }
 }
 
 export interface ServerLogSink {
@@ -266,6 +317,7 @@ export interface ServerLogFailureContext {
   readonly op?: string | undefined;
   readonly correlationId?: string | undefined;
   readonly loss?: "event-dropped" | "event-location-unknown" | undefined;
+  readonly identity?: ServerLogIdentity | undefined;
 }
 
 const failureNotice = { lastAt: null as number | null, suppressed: 0 };
@@ -306,7 +358,13 @@ export function reportServerLogFailure(
   const suppressed = failureNotice.suppressed;
   failureNotice.lastAt = now;
   failureNotice.suppressed = 0;
-  emitFailureNotice(error, context, suppressed, now);
+  emitFailureNotice(
+    error,
+    context,
+    suppressed,
+    now,
+    context.identity ?? allocateServerLogIdentity(),
+  );
 }
 
 // Shared by every stderr notice this module emits: a diagnostic that cannot itself be delivered
@@ -336,6 +394,9 @@ function emitLogNoticeFailedWarning(notice: Record<string, unknown>): void {
         failedOp: notice.failedOp,
         correlationId: notice.correlationId,
         errorKind: notice.errorKind,
+        rejectionKind: notice.rejectionKind,
+        writerCapability: notice.writerCapability,
+        compatibilityState: notice.compatibilityState,
         completeness: notice.completeness,
         loss: notice.loss,
         suppressedNotices: notice.suppressedNotices,
@@ -351,20 +412,52 @@ function emitFailureNotice(
   context: ServerLogFailureContext,
   suppressed: number,
   now: number,
+  identity: ServerLogIdentity,
 ): void {
+  const validationFailure = activityLogValidationFailure(error);
   const notice: Record<string, unknown> = {
     ts: new Date(now).toISOString(),
+    ...failureNoticeIdentity(identity),
     level: "error",
     category: "diagnostic",
     op: LOG_FAILURE_NOTICE_OP,
-    errorKind: errorKindOf(error),
+    errorKind: closedFailureNoticeErrorKind(error),
     correlationId: correlationIdOrUnknown(context.correlationId),
+    compatibilityState: "incomplete",
+    writerCapability: "unavailable",
     completeness: "unknown",
     loss: context.loss ?? "event-dropped",
   };
-  if (context.op !== undefined) notice.failedOp = redactLogLabel(context.op);
+  if (validationFailure !== undefined) notice.rejectionKind = validationFailure;
+  else if (context.op !== undefined) notice.failedOp = redactLogLabel(context.op);
   if (suppressed > 0) notice.suppressedNotices = suppressed;
   writeStderrNotice(notice);
+}
+
+function activityLogValidationFailure(error: unknown): string | undefined {
+  return error instanceof ActivityLogEventValidationError ? error.kind : undefined;
+}
+
+function closedFailureNoticeErrorKind(error: unknown): ActivityLogErrorKind {
+  if (error instanceof ActivityLogEventValidationError) return "validation-failed";
+  const candidate = errorKindOf(error);
+  return isActivityLogErrorKind(candidate) ? candidate : "internal";
+}
+
+function failureNoticeIdentity(identity: ServerLogIdentity): Record<string, unknown> {
+  return {
+    schemaVersion: identity.schemaVersion,
+    registryVersion: identity.registryVersion,
+    schemaDigest: identity.schemaDigest,
+    catalogDigest: identity.catalogDigest,
+    buildClass: identity.buildClass,
+    releaseClass: identity.releaseClass,
+    platformClass: identity.platformClass,
+    productVersion: identity.productVersion,
+    pid: identity.pid,
+    instanceId: identity.instanceId,
+    seq: identity.seq,
+  };
 }
 
 // The last-resort flush: whatever `suppressed` count was still sitting unreported when the notice
@@ -378,13 +471,17 @@ function emitFailureNotice(
 // skips every other cleanup path. The `seq` gap for such a window still marks that a write failed;
 // only the count of how many is not recoverable after that kind of exit.
 function emitShutdownFlushNotice(suppressed: number, now: number): void {
+  const identity = allocateServerLogIdentity();
   writeStderrNotice({
     ts: new Date(now).toISOString(),
+    ...failureNoticeIdentity(identity),
     level: "error",
     category: "diagnostic",
     op: LOG_FAILURE_NOTICE_OP,
     correlationId: correlationIdOrUnknown(undefined),
     errorKind: "unknown",
+    compatibilityState: "incomplete",
+    writerCapability: "unavailable",
     completeness: "unknown",
     loss: "event-dropped",
     reason: "shutdown-flush",
@@ -432,6 +529,15 @@ export function formatServerLogLine(
   const record: Record<string, unknown> = { ts: now.toISOString() };
   if (identity !== undefined) {
     record.schemaVersion = identity.schemaVersion;
+    record.registryVersion = identity.registryVersion;
+    record.schemaDigest = identity.schemaDigest;
+    record.catalogDigest = identity.catalogDigest;
+    record.buildClass = identity.buildClass;
+    record.releaseClass = identity.releaseClass;
+    record.platformClass = identity.platformClass;
+    record.productVersion = identity.productVersion;
+    record.compatibilityState = identity.compatibilityState;
+    record.writerCapability = identity.writerCapability;
     record.pid = identity.pid;
     record.instanceId = identity.instanceId;
     record.seq = identity.seq;
@@ -452,6 +558,10 @@ export function formatRegisteredServerLogLine(
   now: Date = new Date(),
   identity?: ServerLogIdentity,
 ): string {
+  if (identity === undefined) {
+    throw new ActivityLogEventValidationError("missing-identity");
+  }
+  validateServerLogIdentity(identity);
   validateRegisteredActivityLogEvent(
     event as unknown as Readonly<Record<PropertyKey, unknown>>,
   );
@@ -497,10 +607,9 @@ function oversizedLine(record: Record<string, unknown>, lineBytes: number): stri
   // The identity fields ride along when present: an agent joining lines by (pid, instanceId, seq)
   // must not see a gap in that join key just because the ORIGINAL event happened to be oversized.
   const replacement: Record<string, unknown> = { ts: record.ts };
-  if (record.schemaVersion !== undefined) replacement.schemaVersion = record.schemaVersion;
-  if (record.pid !== undefined) replacement.pid = record.pid;
-  if (record.instanceId !== undefined) replacement.instanceId = record.instanceId;
-  if (record.seq !== undefined) replacement.seq = record.seq;
+  for (const field of SERVER_LOG_IDENTITY_FIELDS) {
+    if (record[field] !== undefined) replacement[field] = record[field];
+  }
   replacement.level = record.level;
   replacement.category = record.category;
   replacement.op = record.op;
@@ -508,6 +617,22 @@ function oversizedLine(record: Record<string, unknown>, lineBytes: number): stri
   replacement.droppedLineBytes = lineBytes;
   return `${JSON.stringify(replacement)}\n`;
 }
+
+const SERVER_LOG_IDENTITY_FIELDS = [
+  "schemaVersion",
+  "registryVersion",
+  "schemaDigest",
+  "catalogDigest",
+  "buildClass",
+  "releaseClass",
+  "platformClass",
+  "productVersion",
+  "compatibilityState",
+  "writerCapability",
+  "pid",
+  "instanceId",
+  "seq",
+] as const;
 
 // Kept in memory so a single process holds one append-mode descriptor for the life of the current
 // file.
@@ -551,6 +676,14 @@ interface RotationOutcome {
 // reused.
 let nextProcessSeq = 1;
 
+function platformClass(): string {
+  const platform = new Set(["darwin", "linux", "win32"]).has(process.platform)
+    ? process.platform
+    : "other";
+  const architecture = new Set(["arm64", "x64"]).has(process.arch) ? process.arch : "other";
+  return `${platform}-${architecture}`;
+}
+
 function allocateServerLogSeq(): number {
   const seq = nextProcessSeq;
   nextProcessSeq += 1;
@@ -560,6 +693,15 @@ function allocateServerLogSeq(): number {
 function allocateServerLogIdentity(): ServerLogIdentity {
   return {
     schemaVersion: SERVER_LOG_SCHEMA_VERSION,
+    registryVersion: ACTIVITY_LOG_REGISTRY_VERSION,
+    schemaDigest: ACTIVITY_LOG_SCHEMA_DIGEST,
+    catalogDigest: ACTIVITY_LOG_CATALOG_DIGEST,
+    buildClass: "node-esm",
+    releaseClass: KEIKO_PRODUCT_VERSION.includes("-") ? "prerelease" : "stable",
+    platformClass: platformClass(),
+    productVersion: KEIKO_PRODUCT_VERSION,
+    compatibilityState: "supported",
+    writerCapability: "active",
     pid: process.pid,
     instanceId: INSTANCE_ID,
     seq: allocateServerLogSeq(),
@@ -1371,6 +1513,7 @@ function createFileSinkFacade(active: ActiveLog, threshold: ServerLogThreshold):
         reportServerLogFailure(error, {
           op: event.op,
           correlationId: event.correlationId,
+          identity,
           loss:
             error instanceof PostWriteMutationError ? "event-location-unknown" : "event-dropped",
         });

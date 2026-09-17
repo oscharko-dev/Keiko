@@ -19,10 +19,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ACTIVITY_LOG_CATALOG_DIGEST,
+  ACTIVITY_LOG_REGISTRY_VERSION,
+  ACTIVITY_LOG_SCHEMA_DIGEST,
   ActivityLogEventValidationError,
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 
 import { MAX_LOG_FIELD_COUNT, REDACTED_KEY, REDACTED_SHAPE } from "./log-redaction.js";
 import {
@@ -42,8 +46,30 @@ import {
   serverLogLineBytes,
   serverLogLineWithinCap,
 } from "./server-log.js";
-import type { ServerLogEvent } from "./server-log.js";
+import type { ServerLogEvent, ServerLogIdentity } from "./server-log.js";
 import { getServerLogger, resetServerLogger, shutdownServerLogging } from "./server-logger.js";
+
+function testServerLogIdentity(seq = 1): ServerLogIdentity {
+  const platform = new Set(["darwin", "linux", "win32"]).has(process.platform)
+    ? process.platform
+    : "other";
+  const architecture = new Set(["arm64", "x64"]).has(process.arch) ? process.arch : "other";
+  return {
+    schemaVersion: SERVER_LOG_SCHEMA_VERSION,
+    registryVersion: ACTIVITY_LOG_REGISTRY_VERSION,
+    schemaDigest: ACTIVITY_LOG_SCHEMA_DIGEST,
+    catalogDigest: ACTIVITY_LOG_CATALOG_DIGEST,
+    buildClass: "node-esm",
+    releaseClass: KEIKO_PRODUCT_VERSION.includes("-") ? "prerelease" : "stable",
+    platformClass: `${platform}-${architecture}`,
+    productVersion: KEIKO_PRODUCT_VERSION,
+    compatibilityState: "supported",
+    writerCapability: "active",
+    pid: process.pid,
+    instanceId: serverLogInstanceId(),
+    seq,
+  };
+}
 
 // A line the file holds, or `null` when those bytes are not a parseable record. Used by the
 // short-write test, which is about exactly that distinction.
@@ -546,13 +572,27 @@ describe("server activity log", () => {
   // agent joins across the long-lived current file and any legacy archive. This is the functional
   // counterpart to the spoofing test below — it proves the real values actually land on disk, not
   // merely that a forged one is stripped.
-  it("stamps schemaVersion, pid, instanceId and seq on every file-sink line", () => {
+  it("stamps registry, build, platform and writer identity on every file-sink line", () => {
     const sink = createFileServerLogSink(stateDir);
     sink.write({ category: "http", op: "one" });
     sink.write({ category: "http", op: "two" });
     const lines = readCallerLines(stateDir);
 
-    expect(lines[0]).toMatchObject({ schemaVersion: SERVER_LOG_SCHEMA_VERSION, pid: process.pid });
+    expect(lines[0]).toMatchObject({
+      schemaVersion: SERVER_LOG_SCHEMA_VERSION,
+      registryVersion: ACTIVITY_LOG_REGISTRY_VERSION,
+      schemaDigest: ACTIVITY_LOG_SCHEMA_DIGEST,
+      catalogDigest: ACTIVITY_LOG_CATALOG_DIGEST,
+      buildClass: "node-esm",
+      releaseClass: KEIKO_PRODUCT_VERSION.includes("-") ? "prerelease" : "stable",
+      productVersion: KEIKO_PRODUCT_VERSION,
+      compatibilityState: "supported",
+      writerCapability: "active",
+      pid: process.pid,
+    });
+    expect(String(lines[0]?.platformClass)).toMatch(
+      /^(?:darwin|linux|win32|other)-(?:arm64|x64|other)$/u,
+    );
     expect(lines[0]?.instanceId).toBe(serverLogInstanceId());
     expect(String(lines[0]?.instanceId)).toMatch(/^[0-9a-f]{8}$/);
     // Monotonic PER PROCESS, not per file and not starting at a fixed value: the allocator is
@@ -572,17 +612,39 @@ describe("server activity log", () => {
   // `log-redaction.ts` strips a same-named `extra` key before the real identity is ever applied, so
   // a caller (or a hostile upstream value merged into `extra`) cannot make its own line look like a
   // different process or a different position in the sequence.
-  it("never lets extra spoof schemaVersion, pid, instanceId or seq", () => {
+  it("never lets extra spoof registry, runtime, writer or process identity", () => {
     const sink = createFileServerLogSink(stateDir);
     sink.write({
       category: "http",
       op: "spoof-attempt",
-      extra: { schemaVersion: 999, pid: -1, instanceId: "deadbeef", seq: 999_999, keep: 1 },
+      extra: {
+        schemaVersion: 999,
+        registryVersion: 999,
+        schemaDigest: "0".repeat(64),
+        catalogDigest: "0".repeat(64),
+        buildClass: "hostile-build",
+        releaseClass: "hostile-release",
+        platformClass: "hostile-platform",
+        productVersion: "999.999.999",
+        compatibilityState: "corrupt",
+        writerCapability: "unavailable",
+        pid: -1,
+        instanceId: "deadbeef",
+        seq: 999_999,
+        keep: 1,
+      },
     });
     const lines = readCallerLines(stateDir);
 
     expect(lines[0]).toMatchObject({
       schemaVersion: SERVER_LOG_SCHEMA_VERSION,
+      registryVersion: ACTIVITY_LOG_REGISTRY_VERSION,
+      schemaDigest: ACTIVITY_LOG_SCHEMA_DIGEST,
+      catalogDigest: ACTIVITY_LOG_CATALOG_DIGEST,
+      buildClass: "node-esm",
+      productVersion: KEIKO_PRODUCT_VERSION,
+      compatibilityState: "supported",
+      writerCapability: "active",
       pid: process.pid,
       keep: 1,
     });
@@ -699,6 +761,8 @@ describe("server activity log", () => {
       op: "server-log.write-failed",
       failedOp: "open-failed-caller",
       errorKind: "open-failed",
+      compatibilityState: "incomplete",
+      writerCapability: "unavailable",
       completeness: "unknown",
       loss: "event-dropped",
     });
@@ -1094,6 +1158,8 @@ describe("server activity log", () => {
       failedOp: "indexing.document.persisted",
       correlationId: "job-7-correlation",
       errorKind: "write-failed",
+      compatibilityState: "incomplete",
+      writerCapability: "unavailable",
       completeness: "unknown",
       loss: "event-dropped",
     });
@@ -1142,7 +1208,9 @@ describe("server activity log", () => {
     expect(stderr).toHaveBeenCalledTimes(1);
     expect(JSON.parse(String(stderr.mock.calls[0]?.[0]))).toMatchObject({
       correlationId: "unknown-correlation-id",
-      errorKind: "Error",
+      errorKind: "internal",
+      compatibilityState: "incomplete",
+      writerCapability: "unavailable",
       completeness: "unknown",
       loss: "event-dropped",
     });
@@ -1162,11 +1230,35 @@ describe("server activity log", () => {
       op: "server-log.write-failed",
       correlationId: "unknown-correlation-id",
       errorKind: "unknown",
+      compatibilityState: "incomplete",
+      writerCapability: "unavailable",
       completeness: "unknown",
       loss: "event-dropped",
       reason: "shutdown-flush",
       suppressedNotices: 1,
     });
+  });
+
+  it("reports a closed body-free registration rejection without recursing into the file sink", () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    reportServerLogFailure(new ActivityLogEventValidationError("unknown-field"), {
+      op: "hostile.operation.value",
+      correlationId: "registration-rejection",
+    });
+
+    expect(stderr).toHaveBeenCalledTimes(1);
+    const raw = String(stderr.mock.calls[0]?.[0]);
+    expect(JSON.parse(raw)).toMatchObject({
+      op: "server-log.write-failed",
+      correlationId: "registration-rejection",
+      errorKind: "validation-failed",
+      rejectionKind: "unknown-field",
+      compatibilityState: "incomplete",
+      writerCapability: "unavailable",
+      completeness: "unknown",
+      loss: "event-dropped",
+    });
+    expect(raw).not.toContain("hostile.operation.value");
   });
 
   it("closes the descriptor it holds and reopens on the next write", () => {
@@ -1296,7 +1388,11 @@ describe("server activity log level threshold", () => {
 describe("server activity log line format", () => {
   it("rejects unregistered and post-construction-mutated typed events without serializing content", () => {
     expect(() =>
-      formatRegisteredServerLogLine({ category: "diagnostic", op: "unknown.operation" }),
+      formatRegisteredServerLogLine(
+        { category: "diagnostic", op: "unknown.operation" },
+        undefined,
+        testServerLogIdentity(),
+      ),
     ).toThrow(new ActivityLogEventValidationError("unregistered-operation"));
 
     const operation = defineActivityLogOperation({
@@ -1327,9 +1423,37 @@ describe("server activity log line format", () => {
       { status: "ready" },
     );
     (event.extra as Record<string, unknown>).rawBody = "must-not-serialize";
-    expect(() => formatRegisteredServerLogLine(event)).toThrow(
+    expect(() => formatRegisteredServerLogLine(event, undefined, testServerLogIdentity())).toThrow(
       new ActivityLogEventValidationError("unknown-field"),
     );
+  });
+
+  it("requires the generated registry identity and closed writer capability for typed events", () => {
+    const operation = defineActivityLogOperation({
+      contractKind: "activity-log-operation",
+      schemaVersion: 1,
+      op: "registry.identity.fixture",
+      category: "diagnostic",
+      owner: "keiko-server",
+      emitter: "observability/server-log.test",
+      fields: {},
+      causal: "none",
+      lifecycle: "state",
+      analyzerProjection: "capability",
+      failureClasses: ["registry-runtime-fixture"],
+      proofIds: ["registry-runtime-identity"],
+      releaseImpact: "patch",
+    });
+    const event = activityLogEvent(operation, {}, {});
+    expect(() => formatRegisteredServerLogLine(event)).toThrow(
+      new ActivityLogEventValidationError("missing-identity"),
+    );
+    expect(() =>
+      formatRegisteredServerLogLine(event, undefined, {
+        ...testServerLogIdentity(),
+        writerCapability: "degraded",
+      }),
+    ).toThrow(new ActivityLogEventValidationError("invalid-identity"));
   });
 
   it("redacts every field the caller supplies through extra", () => {
@@ -1561,12 +1685,7 @@ describe("server activity log burst cost", () => {
     let expectedBytes = serverLogLineBytes(`${JSON.stringify(lines[0])}\n`);
     for (let index = 0; index < BURST_EVENT_COUNT; index += 1) {
       expectedBytes += serverLogLineBytes(
-        formatServerLogLine(event, undefined, {
-          schemaVersion: SERVER_LOG_SCHEMA_VERSION,
-          pid: process.pid,
-          instanceId: serverLogInstanceId(),
-          seq: firstSeq + index,
-        }),
+        formatServerLogLine(event, undefined, testServerLogIdentity(firstSeq + index)),
       );
     }
     expect(statSync(join(stateDir, "logs", "server.log")).size).toBe(expectedBytes);
