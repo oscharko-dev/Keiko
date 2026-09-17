@@ -189,15 +189,14 @@ describe("analyzeLogText — governed update attempts", () => {
       sessionId,
       correlationIds: [candidateId, requestId, recoveryId],
     });
-    const updateLines = attempt?.lines.filter((entry) => entry.op !== "server-log.safe-open");
-    expect(updateLines?.map((entry) => entry.op)).toEqual([
+    expect(attempt?.lines.map((entry) => entry.op)).toEqual([
       UPDATE_CANDIDATE_ISSUED,
       UPDATE_CANDIDATE_CONSUMED,
       UPDATE_SESSION_LIFECYCLE,
       UPDATE_RUNTIME_EVENT,
       UPDATE_RUNTIME_EVENT,
     ]);
-    expect(updateLines?.[3]).toMatchObject({
+    expect(attempt?.lines[3]).toMatchObject({
       parentCorrelationId: requestId,
       status: "recovery-required",
       extra: { type: "portable-relaunch-result" },
@@ -492,10 +491,9 @@ describe("analyzeLogText — raw log", () => {
 
       const serialized = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
       const timeline = findTimeline(analyzeLogText(serialized), correlationId);
-      const lifecycle = timeline?.lines.find((entry) => entry.op === "task-workspace.lifecycle");
       expect(timeline?.correlationId).toBe(correlationId);
       expect(timeline?.errorKinds).toEqual(["LOCK_CONTENTION"]);
-      expect(lifecycle).toMatchObject({
+      expect(timeline?.lines[0]).toMatchObject({
         category: "diagnostic",
         op: "task-workspace.lifecycle",
         errorKind: "LOCK_CONTENTION",
@@ -646,21 +644,20 @@ describe("analyzeLogText — raw log", () => {
 
       const serialized = readFileSync(join(stateDir, "logs", "server.log"), "utf8");
       const timeline = findTimeline(analyzeLogText(serialized), correlationId);
-      const contextLines = timeline?.lines.filter((entry) => entry.op !== "server-log.safe-open");
-      expect(contextLines?.map((entry) => entry.op)).toEqual([
+      expect(timeline?.lines.map((entry) => entry.op)).toEqual([
         CONNECTED_CONTEXT_STARTED,
         CONNECTED_CONTEXT_COMPLETED,
       ]);
-      expect(contextLines?.map((entry) => entry.category)).toEqual([
+      expect(timeline?.lines.map((entry) => entry.category)).toEqual([
         productionLogCategory(CONNECTED_CONTEXT_STARTED),
         productionLogCategory(CONNECTED_CONTEXT_COMPLETED),
       ]);
-      expect(contextLines?.[0]?.extra).toMatchObject({
+      expect(timeline?.lines[0]?.extra).toMatchObject({
         explicitConnection: true,
         scopeIdentitySha256,
         ...requestShape,
       });
-      expect(contextLines?.[1]?.extra).toMatchObject({
+      expect(timeline?.lines[1]?.extra).toMatchObject({
         activityDetailStatus: "complete",
         explicitConnection: true,
         scopeIdentitySha256,
@@ -821,8 +818,7 @@ describe("support timeline contract — the #3347 workspace-authority security o
     });
 
     const timeline = findTimeline(analyzeLogText(serialized), CORRELATION_ID);
-    const denial = timeline?.lines.find((entry) => entry.op === WORKSPACE_ROOT_DENIED);
-    expect(denial).toMatchObject({
+    expect(timeline?.lines[0]).toMatchObject({
       category: "security",
       op: WORKSPACE_ROOT_DENIED,
       errorKind: error.code,
@@ -831,8 +827,8 @@ describe("support timeline contract — the #3347 workspace-authority security o
     // `frames`/`causeChain` are written INSIDE `extra` by the emitter and hoisted onto the line by
     // the sink's own formatter — which is the only reason `keiko support analyze --seed` finds them
     // as typed evidence instead of leaving them buried in `extra`.
-    expect(denial?.frames).toEqual(frames);
-    expect(denial?.causeChain).toEqual(causes);
+    expect(timeline?.lines[0]?.frames).toEqual(frames);
+    expect(timeline?.lines[0]?.causeChain).toEqual(causes);
     expect(timeline?.errorKinds).toEqual([error.code]);
   });
 
@@ -858,17 +854,16 @@ describe("support timeline contract — the #3347 workspace-authority security o
     });
 
     const timeline = findTimeline(analyzeLogText(serialized), CORRELATION_ID);
-    const authorityLines = timeline?.lines.filter((entry) => entry.op !== "server-log.safe-open");
-    expect(authorityLines?.map((entry) => entry.op)).toEqual([
+    expect(timeline?.lines.map((entry) => entry.op)).toEqual([
       WORKSPACE_ROOT_DENIED,
       WATCH_AUTHORITY_REVOKED,
     ]);
-    expect(authorityLines?.map((entry) => entry.category)).toEqual(["security", "security"]);
+    expect(timeline?.lines.map((entry) => entry.category)).toEqual(["security", "security"]);
     expect(timeline?.errorKinds).toEqual([error.code, "WATCH_AUTHORITY_REVOKED"]);
-    expect(authorityLines?.[1]?.extra).toEqual({ decision: "revoked", rootToken: "a".repeat(24) });
+    expect(timeline?.lines[1]?.extra).toEqual({ decision: "revoked", rootToken: "a".repeat(24) });
     // The revocation carries no path, no endpoint and no client identity — only a decision and the
     // body-free root token the watch session is joined on.
-    expect(JSON.stringify(authorityLines?.[1]?.extra)).not.toContain("/");
+    expect(JSON.stringify(timeline?.lines[1]?.extra)).not.toContain("/");
   });
 
   it("turns the denial into a reproduction seed whose stack frames are the emitter's own", () => {
@@ -1051,7 +1046,7 @@ describe("analyzeLogText — extra fields and frames", () => {
     });
 
     const timeline = findTimeline(analyzeLogText(serialized), correlationId);
-    expect(timeline?.lines.find((entry) => entry.op === "client.diagnostic")).toMatchObject({
+    expect(timeline?.lines[0]).toMatchObject({
       op: "client.diagnostic",
       extra: {
         repositoryId: "repository-a",
@@ -1089,19 +1084,6 @@ describe("analyzeLogText — extra fields and frames", () => {
 
     const timeline = findTimeline(analyzeLogText(serialized), correlationId);
     expect(timeline?.lines.map(({ op: lineOp, extra }) => ({ op: lineOp, extra }))).toEqual([
-      {
-        op: "server-log.safe-open",
-        extra: {
-          artifactClass: "activity-log",
-          persistenceStatus: "opened",
-          permissionAssurance:
-            process.platform === "win32" ? "platform-inherited" : "verified-private",
-          containmentAssurance:
-            process.platform === "win32" ? "platform-inherited" : "private-root-guarded",
-          completeness: "complete",
-          loss: "none",
-        },
-      },
       {
         op,
         extra: {
@@ -1144,11 +1126,7 @@ describe("analyzeLogText — extra fields and frames", () => {
       });
     });
 
-    expect(
-      findTimeline(analyzeLogText(serialized), correlationId)?.lines.find(
-        (entry) => entry.op === op,
-      ),
-    ).toMatchObject({
+    expect(findTimeline(analyzeLogText(serialized), correlationId)?.lines[0]).toMatchObject({
       op,
       extra: { state: "completed", targetPathSha256, startLine: 4, maxLines: 20 },
     });
