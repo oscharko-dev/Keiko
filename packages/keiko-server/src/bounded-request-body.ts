@@ -1,10 +1,16 @@
 import type { IncomingMessage } from "node:http";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 
+import { correlationIdOrUnknown } from "./correlation.js";
 import { errorKindOf, getServerLogger } from "./observability/index.js";
 
 // A raw Node header value: absent, a single value, or (for a repeated header) several. Shared by
 // every helper below that reads `Content-Type` off a request, so the union is spelled once.
 type ContentTypeHeaderValue = string | string[] | undefined;
+type RequestMediaType = "application/json" | "other" | "unspecified";
 
 export class RequestBodyTooLargeError extends Error {
   public constructor() {
@@ -68,17 +74,113 @@ interface BoundedBodyOutcomeFields {
   readonly receivedBytes: number;
 }
 
+const HTTP_REQUEST_BODY_REJECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "http.request.body.rejected",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "bounded-request-body.logBodyRejected",
+  fields: {
+    maxBytes: { type: "integer", dataClass: "count", required: true },
+    receivedBytes: { type: "integer", dataClass: "count", required: true },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["limit-exceeded"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["http-request-body"],
+  proofIds: ["http.request.body.rejected.line"],
+  releaseImpact: "patch",
+});
+
+const HTTP_REQUEST_BODY_CANCELLED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "http.request.body.cancelled",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "bounded-request-body.logBodyCancelled",
+  fields: {
+    maxBytes: { type: "integer", dataClass: "count", required: true },
+    receivedBytes: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "timeline",
+  failureClasses: ["http-request-body"],
+  proofIds: ["http.request.body.cancelled.line"],
+  releaseImpact: "patch",
+});
+
+const HTTP_REQUEST_BODY_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "http.request.body.failed",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "bounded-request-body.logBodyFailed",
+  fields: {
+    maxBytes: { type: "integer", dataClass: "count", required: true },
+    receivedBytes: { type: "integer", dataClass: "count", required: true },
+    failureKind: { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["http-request-body"],
+  proofIds: ["http.request.body.failed.line"],
+  releaseImpact: "patch",
+});
+
+const HTTP_REQUEST_BODY_RECEIVED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "http.request.body.received",
+  category: "http",
+  owner: "keiko-server",
+  emitter: "bounded-request-body.logBodyReceived",
+  fields: {
+    contentType: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["application/json", "other", "unspecified"],
+    },
+    receivedBytes: { type: "integer", dataClass: "count", required: true },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["http-request-body"],
+  proofIds: ["http.request.body.received.line"],
+  releaseImpact: "patch",
+});
+
 function logBodyRejected(
   correlationId: string | undefined,
   fields: BoundedBodyOutcomeFields,
 ): void {
-  getServerLogger().warn({
-    category: "http",
-    op: "http.request.body.rejected",
-    ...(correlationId === undefined ? {} : { correlationId }),
-    errorKind: "RequestBodyTooLargeError",
-    extra: { ...fields, reason: "limit-exceeded" },
-  });
+  getServerLogger().warn(
+    activityLogEvent(
+      HTTP_REQUEST_BODY_REJECTED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId), errorKind: "invalid-request" },
+      { ...fields, reason: "limit-exceeded", completeness: "complete", loss: "none" },
+    ),
+  );
 }
 
 function logBodyCancelled(
@@ -87,13 +189,13 @@ function logBodyCancelled(
 ): void {
   // A client that disconnects mid-upload is routine, not a fault: it stays at debug so a busy
   // server does not fill the log with it, while still being available when a stall is investigated.
-  getServerLogger().debug(() => ({
-    category: "http" as const,
-    op: "http.request.body.cancelled",
-    ...(correlationId === undefined ? {} : { correlationId }),
-    errorKind: "RequestBodyCancelledError",
-    extra: { ...fields },
-  }));
+  getServerLogger().debug(() =>
+    activityLogEvent(
+      HTTP_REQUEST_BODY_CANCELLED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId), errorKind: "cancelled" },
+      { ...fields, completeness: "complete", loss: "none" },
+    ),
+  );
 }
 
 function logBodyFailed(
@@ -101,13 +203,18 @@ function logBodyFailed(
   fields: BoundedBodyOutcomeFields,
   error: unknown,
 ): void {
-  getServerLogger().warn({
-    category: "http",
-    op: "http.request.body.failed",
-    ...(correlationId === undefined ? {} : { correlationId }),
-    errorKind: errorKindOf(error),
-    extra: { ...fields },
-  });
+  getServerLogger().warn(
+    activityLogEvent(
+      HTTP_REQUEST_BODY_FAILED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId), errorKind: "internal" },
+      {
+        ...fields,
+        failureKind: errorKindOf(error),
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
 }
 
 // `IncomingMessage.headers` is typed as always present, but several test doubles across the
@@ -131,7 +238,7 @@ const KNOWN_REQUEST_MEDIA_TYPES = new Set<string>(["application/json"]);
 // `; boundary=...`) that can carry caller-chosen, unbounded text, then maps it through the
 // allowlist above. A subtype this reader has no reason to ever see collapses to the fixed label
 // `"other"` rather than being retained verbatim in the diagnostic sink.
-function mediaTypeOf(header: ContentTypeHeaderValue): string {
+function mediaTypeOf(header: ContentTypeHeaderValue): RequestMediaType {
   const value = typeof header === "string" ? header : header?.[0];
   const mediaType = value?.split(";", 1)[0]?.trim().toLowerCase();
   if (mediaType === undefined || mediaType.length === 0) return "unspecified";
@@ -146,12 +253,18 @@ function logBodyReceived(
   contentType: ContentTypeHeaderValue,
   receivedBytes: number,
 ): void {
-  getServerLogger().debug(() => ({
-    category: "http" as const,
-    op: "http.request.body.received",
-    ...(correlationId === undefined ? {} : { correlationId }),
-    extra: { contentType: mediaTypeOf(contentType), receivedBytes },
-  }));
+  getServerLogger().debug(() =>
+    activityLogEvent(
+      HTTP_REQUEST_BODY_RECEIVED_OPERATION,
+      { correlationId: correlationIdOrUnknown(correlationId) },
+      {
+        contentType: mediaTypeOf(contentType),
+        receivedBytes,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
 }
 
 class BoundedRequestBodyReader {
