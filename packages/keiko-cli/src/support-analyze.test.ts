@@ -1418,6 +1418,44 @@ describe("analyzeLogText — strict v2 identity and compatibility classification
     expect(result.timelines).toEqual([]);
   });
 
+  it("validates a registered string status as an operation field while preserving it in extra", () => {
+    const correlationId = "request-status-0123456789abcdef";
+    const record = {
+      ...base,
+      category: "diagnostic",
+      op: "git.delivery.mutation.completed",
+      correlationId,
+      generation: undefined,
+      completeness: "complete",
+      loss: "none",
+      actionId: "action-0123456789abcdef",
+      actionKind: "commit",
+      status: "blocked",
+      phaseReached: "result",
+      policyOutcome: "blocked",
+      preflightFindingCount: 1,
+      preflightBlockingCount: 1,
+      requiredApproverCount: 0,
+    };
+
+    const result = analyzeLogText(`${line(record)}\n`);
+
+    expect(result.evidence.classification).toBe("supported");
+    const view = findTimeline(result, correlationId)?.lines[0];
+    expect(view?.status).toBeUndefined();
+    expect(view?.extra).toMatchObject({ status: "blocked", actionKind: "commit" });
+  });
+
+  it("keeps a registered numeric status in the envelope rather than operation fields", () => {
+    const correlationId = "request-http-status-0123456789";
+    const result = analyzeLogText(`${line({ ...base, correlationId, status: 204 })}\n`);
+
+    expect(result.evidence.classification).toBe("supported");
+    const view = findTimeline(result, correlationId)?.lines[0];
+    expect(view?.status).toBe(204);
+    expect(view?.extra).not.toHaveProperty("status");
+  });
+
   it("classifies an invalid terminal fragment as truncated but invalid terminated JSON as corrupt", () => {
     const truncated = analyzeLogText("{partial");
     const corrupt = analyzeLogText("{partial\n");
