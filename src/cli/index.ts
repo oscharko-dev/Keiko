@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { installProcessGuards, runCli } from "@oscharko-dev/keiko-cli";
+import {
+  applyAuthoritativeInstallLayout,
+  installProcessGuards,
+  runCli,
+} from "@oscharko-dev/keiko-cli";
 
 if (process.platform === "win32") {
   process.title = "Keiko";
@@ -21,19 +25,18 @@ if (process.platform === "win32") {
 //     builtins-only script with no package-graph edge, so the cli imports it
 //     at runtime by path rather than depending on it.
 // We surface all three via env vars before dispatch so the cli package does not
-// have to deep-import the bin or know its own installation layout. Tests can
-// override any variable to point at fixtures.
+// have to deep-import the bin or know its own installation layout. The bin entry
+// overwrites inherited values: its own location is the authoritative installation
+// identity, and a stale parent environment must not redirect update attestation,
+// UI assets, or the local-state auditor into another package tree.
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT_DIST = resolve(HERE, "..");
 const PACKAGE_ROOT = resolve(ROOT_DIST, "..");
-process.env.KEIKO_CLI_BIN_PATH ??= resolve(HERE, "index.js");
-process.env.KEIKO_UI_STATIC_ROOT ??= resolve(ROOT_DIST, "ui", "static");
-process.env.KEIKO_LOCAL_STATE_AUDITOR ??= resolve(
-  PACKAGE_ROOT,
-  "scripts",
-  "lib",
-  "local-state-audit.mjs",
-);
+applyAuthoritativeInstallLayout(process.env, {
+  cliBinPath: resolve(HERE, "index.js"),
+  uiStaticRoot: resolve(ROOT_DIST, "ui", "static"),
+  localStateAuditor: resolve(PACKAGE_ROOT, "scripts", "lib", "local-state-audit.mjs"),
+});
 
 // Process-level catch-alls: a stray async error outside any request must exit
 // with one clean, redacted line instead of a raw stack. The logic lives in

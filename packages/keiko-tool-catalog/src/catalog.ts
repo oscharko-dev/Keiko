@@ -28,6 +28,9 @@ export interface CatalogCompilationContext {
   readonly previous?: ToolCatalog | undefined;
 }
 
+const DESCRIPTORS_BY_REF = new WeakMap<ToolCatalog, ReadonlyMap<string, ToolDescriptor>>();
+const VALIDATED_CATALOGS = new WeakSet();
+
 function descriptorsFrom(
   value: unknown,
   previous: readonly ToolDescriptor[],
@@ -60,9 +63,11 @@ function descriptorsFrom(
 }
 
 export function lookupCatalogTool(catalog: ToolCatalog, ref: ToolRef): ToolDescriptor | undefined {
-  return catalog.descriptors.find(
-    (descriptor) => toolRefKey(descriptor.toolRef) === toolRefKey(ref),
-  );
+  const key = toolRefKey(ref);
+  const index = DESCRIPTORS_BY_REF.get(catalog);
+  return index === undefined
+    ? catalog.descriptors.find((descriptor) => toolRefKey(descriptor.toolRef) === key)
+    : index.get(key);
 }
 
 function assertCompatibilityEntries(
@@ -122,14 +127,20 @@ function snapshot(
     profiles: declarations,
     compatibility,
   });
-  const catalog = {
+  const catalog: ToolCatalog = {
     catalogRevision,
     descriptors,
     profiles: declarations.map((declaration) => stampCatalogProfile(declaration, catalogRevision)),
     compatibility,
   };
+  DESCRIPTORS_BY_REF.set(
+    catalog,
+    new Map(descriptors.map((descriptor) => [toolRefKey(descriptor.toolRef), descriptor])),
+  );
   assertProfiles(catalog);
-  return deepFreeze(catalog);
+  const frozen = deepFreeze(catalog);
+  VALIDATED_CATALOGS.add(frozen);
+  return frozen;
 }
 
 // A republished profile's binding identity: which canonical tool each alias resolves to, plus
@@ -178,6 +189,9 @@ function assertProfileProgression(
 
 /** Verify content identity; time-dependent compatibility eligibility remains the producer's check. */
 export function verifyToolCatalogSnapshot(value: unknown): ToolCatalog {
+  if (typeof value === "object" && value !== null && VALIDATED_CATALOGS.has(value)) {
+    return value as ToolCatalog;
+  }
   const object = catalogObject(copyCatalogJson(value));
   exactCatalogKeys(object, ["catalogRevision", "descriptors", "profiles", "compatibility"]);
   const revision = catalogDigest(object.catalogRevision);

@@ -9,8 +9,10 @@ import { EXPECTED_NODE_BASELINE, EXPECTED_NPM_ENGINE } from "./check-runtime-too
 import {
   buildCodingPerformanceEvidence,
   calibrationBudgets,
+  codingPerformanceBudgetDefects,
   CODING_PERFORMANCE_PROCEDURE,
   evaluateCodingPerformanceEvidence,
+  ratchetCodingPerformanceBudgets,
   validateCodingPerformanceSample,
 } from "./coding-runtime-performance-evidence.mjs";
 import { measureCodingRuntimeSample } from "./coding-runtime-performance-harness.mjs";
@@ -101,9 +103,9 @@ function assertClean(root) {
     throw new Error("performance-subject-or-toolchain-is-dirty");
 }
 
-function assertOutputOwnership(root, calibrate) {
+function assertOutputOwnership(root, mode) {
   if (
-    calibrate &&
+    mode === "calibrate" &&
     [CODING_PERFORMANCE_FILES.calibration, CODING_PERFORMANCE_FILES.budget].some((path) =>
       existsSync(join(root, path)),
     )
@@ -112,8 +114,9 @@ function assertOutputOwnership(root, calibrate) {
   }
 }
 
-function buildMeasuredDocument(input, calibrate, root) {
-  if (calibrate) return buildCodingPerformanceEvidence({ ...input, role: "calibration" });
+function buildMeasuredDocument(input, mode, root) {
+  if (mode !== "measurement")
+    return buildCodingPerformanceEvidence({ ...input, role: "calibration" });
   const calibration = readDocument(root, CODING_PERFORMANCE_FILES.calibration);
   const budget = readDocument(root, CODING_PERFORMANCE_FILES.budget);
   const document = buildCodingPerformanceEvidence({
@@ -127,6 +130,25 @@ function buildMeasuredDocument(input, calibrate, root) {
   for (const verdict of findings.verdicts)
     process.stderr.write(`[coding-performance] measured verdict: ${verdict}\n`);
   return document;
+}
+
+function readRecalibrationState(root, environment) {
+  const calibration = readDocument(root, CODING_PERFORMANCE_FILES.calibration);
+  const budget = readDocument(root, CODING_PERFORMANCE_FILES.budget);
+  const defects = codingPerformanceBudgetDefects(calibration, budget);
+  if (defects.length > 0) throw new Error(`invalid-previous-budget:${defects.join(",")}`);
+  if (!isDeepStrictEqual(environment, calibration.environment))
+    throw new Error("recalibration-reference-environment-differs");
+  return { budget };
+}
+
+function writeCalibration(root, document, mode, previous) {
+  const budget =
+    mode === "recalibrate"
+      ? ratchetCodingPerformanceBudgets(document, previous.budget)
+      : calibrationBudgets(document);
+  writeDocument(root, CODING_PERFORMANCE_FILES.calibration, document);
+  writeDocument(root, CODING_PERFORMANCE_FILES.budget, budget);
 }
 
 function compileMeasurementRuntime(root) {
@@ -165,12 +187,15 @@ export function codingPerformanceFailureSummary(stage, error) {
   return `measurement-${phase}-failed diagnosticSha256=${diagnosticSha256}`;
 }
 
-export async function produceCodingPerformanceEvidence({ calibrate = false } = {}) {
+export async function produceCodingPerformanceEvidence({ mode = "measurement" } = {}) {
   const root = ROOT;
   let stage = "inputs";
   try {
-    assertOutputOwnership(root, calibrate);
+    if (!new Set(["measurement", "calibrate", "recalibrate"]).has(mode))
+      throw new Error("invalid-performance-evidence-mode");
+    assertOutputOwnership(root, mode);
     const inputs = measurementInputs(root);
+    const previous = mode === "recalibrate" ? readRecalibrationState(root, inputs.environment) : {};
     stage = "compilation";
     compileMeasurementRuntime(root);
     stage = "samples";
@@ -188,17 +213,12 @@ export async function produceCodingPerformanceEvidence({ calibrate = false } = {
     stage = "document";
     const document = buildMeasuredDocument(
       { ...inputs, samples, measuredAtIso: new Date().toISOString() },
-      calibrate,
+      mode,
       root,
     );
     stage = "write";
-    writeDocument(
-      root,
-      calibrate ? CODING_PERFORMANCE_FILES.calibration : CODING_PERFORMANCE_FILES.measurement,
-      document,
-    );
-    if (calibrate)
-      writeDocument(root, CODING_PERFORMANCE_FILES.budget, calibrationBudgets(document));
+    if (mode === "measurement") writeDocument(root, CODING_PERFORMANCE_FILES.measurement, document);
+    else writeCalibration(root, document, mode, previous);
     return document;
   } catch (error) {
     throw new Error(codingPerformanceFailureSummary(stage, error), { cause: error });
@@ -207,12 +227,21 @@ export async function produceCodingPerformanceEvidence({ calibrate = false } = {
 
 if (isMainModule(import.meta.url)) {
   const args = process.argv.slice(2);
-  if (args.length > 1 || (args.length === 1 && args[0] !== "--calibrate")) {
-    process.stderr.write("usage: coding-runtime-performance-producer.mjs [--calibrate]\n");
+  const flag = args[0];
+  if (
+    args.length > 1 ||
+    (args.length === 1 && flag !== "--calibrate" && flag !== "--recalibrate")
+  ) {
+    process.stderr.write(
+      "usage: coding-runtime-performance-producer.mjs [--calibrate | --recalibrate]\n",
+    );
     process.exitCode = 2;
   } else {
     try {
-      await produceCodingPerformanceEvidence({ calibrate: args[0] === "--calibrate" });
+      let mode = "measurement";
+      if (flag === "--calibrate") mode = "calibrate";
+      if (flag === "--recalibrate") mode = "recalibrate";
+      await produceCodingPerformanceEvidence({ mode });
       process.stdout.write("coding-runtime performance evidence: WRITTEN\n");
     } catch (error) {
       process.stderr.write(

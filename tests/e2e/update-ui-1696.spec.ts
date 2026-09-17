@@ -28,7 +28,6 @@ const REPO_ROOT = resolve(process.cwd());
 const EVIDENCE_DIR = resolve(REPO_ROOT, "docs", "design-system", "evidence", "3405");
 const APP_ORIGIN = `http://127.0.0.1:${process.env.KEIKO_E2E_UI_PORT ?? "32201"}`;
 const OUTAGE_WRAPPER = resolve(REPO_ROOT, "tests/e2e/support/update-bff-outage-3405.mjs");
-const PACKAGED_CLI = resolve(REPO_ROOT, "dist/cli/index.js");
 const PACKAGED_STATIC_ROOT = resolve(REPO_ROOT, "dist/ui/static");
 const EVIDENCE_GENERATED_AT = new Date().toISOString();
 const AXE_SOURCE = readFileSync(
@@ -211,7 +210,7 @@ function runOutageLifecycle(harness: OutageHarness, command: "start" | "stop" | 
   return execFileSync(
     process.execPath,
     [
-      PACKAGED_CLI,
+      OUTAGE_WRAPPER,
       command,
       "--state-dir",
       harness.stateDir,

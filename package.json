@@ -41,13 +41,13 @@
     "keiko:start": "node dist/cli/index.js start",
     "keiko:stop": "node dist/cli/index.js stop",
     "typecheck": "npm run build:packages && npm run check:package-graph && node node_modules/@typescript/native/bin/tsc -p tsconfig.json --noEmit",
-    "lint": "node --max-old-space-size=12288 ./node_modules/eslint/bin/eslint.js . --max-warnings=0 && npm --workspace @oscharko-dev/keiko-ui run lint",
+    "lint": "npm run build:packages && node --max-old-space-size=12288 ./node_modules/eslint/bin/eslint.js . --max-warnings=0 && npm --workspace @oscharko-dev/keiko-ui run lint",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "test": "npm run build && vitest run",
     "test:coverage:packages": "npm run build && vitest run --config vitest.coverage.packages.config.ts --coverage",
     "test:coverage:packages:shard": "npm run build && vitest run --config vitest.coverage.packages.config.ts --coverage --reporter=default --reporter=blob",
-    "test:coverage:packages:merge": "vitest run --config vitest.coverage.packages.config.ts --coverage --mergeReports=.vitest/blob",
+    "test:coverage:packages:merge": "vitest run --config vitest.coverage.packages.config.ts --coverage --mergeReports=.vitest-reports",
     "test:coverage:ui": "vitest run --config packages/keiko-ui/vitest.coverage.config.ts --coverage",
     "test:coverage:scripts": "npm run build && vitest run --config vitest.coverage.scripts.config.ts --coverage",
     "test:coverage:quality": "npm run test:coverage:packages && npm run test:coverage:ui && npm run test:coverage:scripts && npm run check:coverage:quality",
@@ -213,7 +213,8 @@
     "test:mutation:security:run": "stryker run stryker.security.conf.json",
     "test:mutation:debug-launch-security": "stryker run stryker.debug-launch.security.conf.json",
     "check:mutation:baseline": "node scripts/check-mutation-quality.mjs",
-    "test:mutation:security": "npm run test:mutation:security:run && npm run test:mutation:debug-launch-security && npm run check:mutation:baseline",
+    "check:mutation:debug-launch": "node scripts/check-mutation-quality.mjs --strict --report reports/mutation/debug-launch-security/mutation-report.json --minimum-score 100 --maximum-survived 0 --maximum-no-coverage 0",
+    "test:mutation:security": "node scripts/run-security-mutation-suite.mjs",
     "check:publish-manifests": "node scripts/check-publish-manifests.mjs",
     "smoke:registry-install": "node scripts/registry-install-smoke.mjs",
     "provision:usearch": "node scripts/provision-usearch.mjs",
@@ -273,7 +274,7 @@
     "eslint-plugin-react@7.37.5": {
       "eslint": "^10.0.0"
     },
-    "@napi-rs/canvas": "1.0.8"
+    "@napi-rs/canvas": "1.0.9"
   },
   "devDependencies": {
     "@babel/core": "^8.0.1",
@@ -284,12 +285,12 @@
     "@playwright/test": "^1.61.1",
     "@stryker-mutator/core": "10.0.0",
     "@stryker-mutator/vitest-runner": "10.0.0",
-    "@types/node": "^26.4.1",
+    "@types/node": "^26.5.1",
     "@types/ws": "^8.18.1",
     "@types/yauzl": "^3.4.0",
     "@typescript/native": "npm:typescript@~7.0.2",
     "@vitejs/plugin-react": "6.1.1",
-    "@vitest/coverage-v8": "^5.0.0",
+    "@vitest/coverage-v8": "^4.1.11",
     "acorn": "^8.16.0",
     "corepack": "0.36.0",
     "dependency-cruiser": "^18.0.0",
@@ -297,13 +298,13 @@
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-sonarjs": "^4.2.0",
     "fallow": "3.9.1",
-    "knip": "6.34.0",
+    "knip": "6.35.1",
     "pdfjs-dist": "^6.3.289",
     "prettier": "^3.0.0",
     "semver": "^7.8.5",
     "sigstore": "^5.0.0",
     "typescript-eslint": "^8.69.0",
-    "vitest": "^5.0.0",
+    "vitest": "^4.1.11",
     "yaml": "2.9.0"
   },
   "dependencies": {
@@ -362,7 +363,6 @@
     "@oscharko-dev/keiko-cli"
   ],
   "allowScripts": {
-    "fsevents@2.3.2": true,
     "fsevents@2.3.3": true,
     "unrs-resolver": true
   }

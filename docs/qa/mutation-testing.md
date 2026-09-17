@@ -8,7 +8,10 @@ integrity, authority, and other trust-boundary decisions.
 
 The toolchain is reproducible: `@stryker-mutator/core` and
 `@stryker-mutator/vitest-runner` are exact-version development dependencies in the root lockfile.
-The workflow never downloads an unpinned package through `npx`.
+The workflow never downloads an unpinned package through `npx`. Vitest is pinned to the patched
+4.1.11 line for mutation testing compatibility: Vitest 5.0.0 makes the Stryker Vitest runner's
+per-test mutant execution report zero killed mutants even when the dry run proves the tests cover
+the mutated code (#3474).
 
 ## Covered modules
 
@@ -27,7 +30,8 @@ Full mutation testing is deliberately outside the pull-request critical path. Th
 configuration can take hours on a large trust-boundary change, so making its completion a Required
 Check creates an availability dependency rather than a bounded quality decision. The daily
 scheduled workflow runs the complete critical configuration, and maintainers can start the same
-complete run through `workflow_dispatch`. It remains strict and may not use `continue-on-error`.
+complete run through `workflow_dispatch`. It may use `continue-on-error` only around the mutation
+command to file or update the tracking issue; the lane must then fail explicitly.
 
 Pull requests remain blocked by deterministic coverage ratchets, Sonar New Code analysis,
 architecture checks, sandbox isolation, typecheck/lint, security scans, and affected functional and
@@ -38,7 +42,10 @@ only repository-relative safe paths, and distinguishes the dedicated debug-launc
 runs can select the strict DAP configuration without widening an unrelated mutation run.
 
 The scheduled/manual `test:mutation:security` command runs the general critical configuration, the
-dedicated debug-launch configuration, and the historical-debt baseline ratchet exactly once each.
+dedicated debug-launch configuration, and then both repository-owned ratchets exactly once each.
+It deliberately does not chain those phases with shell `&&`: a Stryker process failure or a
+debug-launch survivor must not prevent the historical-debt baseline from inspecting the generated
+security report.
 
 ## How to run
 
@@ -74,11 +81,11 @@ never enters the dry-run. The ordinary vitest job still executes the functional 
 
 ## Thresholds
 
-| Level           | Score |
-| --------------- | ----- |
-| target (`high`) | 90 %  |
-| warning (`low`) | 80 %  |
-| hard failure    | 80 %  |
+| Level              | Score |
+| ------------------ | ----- |
+| target (`high`)    | 90 %  |
+| warning (`low`)    | 80 %  |
+| repository ratchet | 80 %  |
 
 The target remains at least 90 percent and the hard target remains 80 percent. The first complete
 run on 2026-07-11 established that the pre-existing critical scope starts at 61.66 percent, with
@@ -97,17 +104,23 @@ A focused pre-publication run for changed critical production code is stricter: 
 least 80 percent and have zero surviving and zero no-coverage mutants. A numerical aggregate never
 excuses a new mutant in a trust-boundary, redaction, secret, authority, integrity, or merge decision.
 
-The dedicated debug-launch configuration has no historical-debt allowance: `high`, `low`, and
-`break` are all 100 percent. Every mutant in that closed trust-boundary scope must be killed.
+The dedicated debug-launch configuration has no historical-debt allowance: the repository-owned
+`check:mutation:debug-launch` ratchet requires a 100 percent score, zero surviving mutants, and zero
+no-coverage mutants. Stryker's native `break` value is also 100, so direct focused runs fail at the
+same boundary. The suite orchestrator does not short-circuit on that exit: Stryker writes the JSON
+report before applying its threshold, and `run-security-mutation-suite.mjs` still executes both
+repository-owned ratchets and reports every failed phase.
 
 `coverageAnalysis: "perTest"` limits each mutant to tests that cover it after the focused security
 test matrix has run. The Vitest runner's `related` discovery is intentionally disabled for this
 gate: these trust-boundary tests often exercise routes, stores, and gateways indirectly, and related
 test discovery can otherwise produce no covering tests for changed security code. Stryker emits
 machine-readable JSON; `scripts/check-mutation-quality.mjs` is the authoritative ratchet/scoped
-decision.
-Stryker's native break value is zero only so that this stricter repository-owned decision can
-evaluate both historical fingerprints and current results after the complete run.
+decision. The script also fails a report that has mutants and coverage but zero killed or timed-out
+mutants, because that shape is an instrumentation failure rather than meaningful test-quality
+evidence.
+The repository-owned decision therefore evaluates historical fingerprints and current results even
+when Stryker's native threshold has already rejected the focused run.
 
 Static module-initialization mutants are excluded because Stryker cannot reliably activate them
 after an ESM module has been cached by a reused Vitest worker. Exact required-check names, immutable

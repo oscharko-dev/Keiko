@@ -11,13 +11,24 @@
 // ./support-export.ts and ./support-analyze.ts, each independently unit-tested on data, not argv.
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { homedir as defaultHomedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
+import { emitSecurityLogEvent, securityErrorKind } from "@oscharko-dev/keiko-security";
 import { type AuditCliDeps, AuditLoadError, auditLocalStateResult } from "./audit.js";
 // KEIKO-0655: shared argv-parsing helper replaces the byte-identical flagValue copy this file held.
 import { flagValue } from "./cli-arg-parsing.js";
+import {
+  cliControlStateConflictsWithTarget,
+  cliTargetIdentitySha256,
+  resolveCliControlStateDir,
+} from "./cli-control-state.js";
+import {
+  installLayoutOverrideEvidence,
+  writeInstallLayoutOverrideEvidenceWithFactory,
+} from "./install-layout.js";
 // GEN-PERF-CLI-001 — the evidence graph (and, below, the server module graph) load at dispatch,
 // and only for `export`; tool-lifecycle analysis lazily loads its narrow validator subpath. Store-fingerprint collection (ui,
 // local-knowledge, memory-vault) is owned by keiko-server (ADR-0019 direction rule 7: keiko-cli
@@ -25,7 +36,8 @@ import { flagValue } from "./cli-arg-parsing.js";
 // same lazily-loaded server module, via `server.collectStoreFingerprints`.
 import { loadEvidence, loadServer, loadToolLifecycle } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
-import { resolveStateDir } from "./state-paths.js";
+import { createCliSecurityLogSink, type CliSecurityLogSinkFactory } from "./security-log.js";
+import { inspectStateRoot, resolveStateDir } from "./state-paths.js";
 import {
   analyzeLogText,
   buildReproductionSeed,
@@ -121,6 +133,10 @@ export interface SupportCliDeps {
   readonly evidenceStore?: EvidenceStore | undefined;
   /** Test seam for determining whether the newest raw-log process still exists. */
   readonly processIsRunning?: ((pid: number) => boolean) | undefined;
+  readonly activityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
+  readonly controlActivityStateDir?: string | undefined;
+  readonly homedir?: (() => string) | undefined;
+  readonly platform?: NodeJS.Platform | undefined;
 }
 
 type SupportLogFreshness = "current" | "stale" | "unknown";
@@ -143,6 +159,111 @@ interface SupportAnalysisReport extends AnalyzeAllResult {
 interface Assessment<T> {
   readonly value: T;
   readonly warning?: string | undefined;
+}
+
+interface SupportRefusalContext {
+  readonly stateDir: string;
+  readonly controlStateDir: string;
+  readonly correlationId: string;
+  readonly factory: CliSecurityLogSinkFactory | undefined;
+}
+
+function emitSupportInstallLayoutRefusal(
+  context: SupportRefusalContext,
+  errorKind: string,
+  reason: string,
+): void {
+  try {
+    if (cliControlStateConflictsWithTarget(context.controlStateDir, context.stateDir)) return;
+  } catch {
+    return;
+  }
+  const sink = createCliSecurityLogSink(
+    context.controlStateDir,
+    context.factory,
+    context.correlationId,
+  );
+  emitSecurityLogEvent(sink, {
+    level: "error",
+    category: "diagnostic",
+    op: "cli.support.export.failed",
+    errorKind,
+    extra: { reason, targetSha256: cliTargetIdentitySha256(context.stateDir) },
+  });
+}
+
+function refuseSupportInstallLayout(
+  context: SupportRefusalContext,
+  errorKind: string,
+  reason: string,
+): "refused" {
+  emitSupportInstallLayoutRefusal(context, errorKind, reason);
+  return "refused";
+}
+
+function writeSupportInstallLayoutEvidence(
+  stateDir: string,
+  env: EnvSource,
+  deps: SupportCliDeps,
+): "ready" | "refused" {
+  const evidence = installLayoutOverrideEvidence(env);
+  if (evidence === undefined) return "ready";
+  const controlStateDir =
+    deps.controlActivityStateDir ??
+    resolveCliControlStateDir(
+      deps.platform ?? process.platform,
+      (deps.homedir ?? defaultHomedir)(),
+    );
+  const context: SupportRefusalContext = {
+    stateDir,
+    controlStateDir,
+    correlationId: evidence.correlationId,
+    factory: deps.activityLogSinkFactory,
+  };
+  try {
+    const stateRoot = inspectStateRoot(stateDir);
+    if (stateRoot.status === "symlink") {
+      return refuseSupportInstallLayout(
+        context,
+        "SupportStateRootSymlinkError",
+        "unsafe-state-root",
+      );
+    }
+    if (stateRoot.status === "not-directory") {
+      return refuseSupportInstallLayout(
+        context,
+        "SupportStateRootNotDirectoryError",
+        "unsafe-state-root",
+      );
+    }
+    return writeInstallLayoutOverrideEvidenceWithFactory(deps.activityLogSinkFactory, stateDir, env)
+      ? "ready"
+      : refuseSupportInstallLayout(
+          context,
+          "SupportActivityLogUnavailableError",
+          "activity-log-unavailable",
+        );
+  } catch (error) {
+    return refuseSupportInstallLayout(
+      context,
+      securityErrorKind(error),
+      "state-root-validation-failed",
+    );
+  }
+}
+
+function prepareSupportInstallLayoutEvidence(
+  stateDir: string,
+  env: EnvSource,
+  deps: SupportCliDeps,
+  io: CliIo,
+): boolean {
+  if (writeSupportInstallLayoutEvidence(stateDir, env, deps) === "ready") return true;
+  io.err(
+    "keiko support export: refusing to consume a normalized install path because durable " +
+      "activity logging is unavailable.\n",
+  );
+  return false;
 }
 
 const SUPPORT_LOG_STALE_AFTER_MS = 5 * 60_000;
@@ -612,7 +733,7 @@ async function runSupportExport(
   const cwd = deps.cwd ?? process.cwd();
   const now = deps.now ?? ((): Date => new Date());
   const stateDir = resolveStateDir(cwd, env, args.stateDir);
-  const stateDirSource = resolveStateDirSource(env, args.stateDir);
+  if (!prepareSupportInstallLayoutEvidence(stateDir, env, deps, io)) return 1;
   const logContent = collectLogContent(
     join(stateDir, "logs"),
     args.maxBytes ?? DEFAULT_MAX_BUNDLE_BYTES,
@@ -642,7 +763,7 @@ async function runSupportExport(
   );
   const generatedAtDate = now();
   const manifest = buildSupportBundleManifest({
-    ...processProvenance(server, generatedAtDate, stateDirSource),
+    ...processProvenance(server, generatedAtDate, resolveStateDirSource(env, args.stateDir)),
     ...logContentManifestFields(logContent),
     auditSummary,
     evidenceIndexCount,

@@ -37,7 +37,7 @@ import { compareStrings } from "./lib/compare-strings.mjs";
 // size, not a wall-clock duration, so this gate cannot flake on a slow or shared CI runner.
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { cpus, totalmem } from "node:os";
 import { join, relative, sep } from "node:path";
 import { performance } from "node:perf_hooks";
@@ -77,6 +77,7 @@ const SYNTHETIC_HANDLER_ID = "tool-catalog-performance-fixture";
 const SHA256 = /^[a-f0-9]{64}$/u;
 const TOOL_CATALOG_PERFORMANCE_CLASS = "functional-performance-reference-container";
 const TOOL_CATALOG_PERFORMANCE_METRICS = ["coldCompileMs", "lookupBatchMs"];
+const TOOL_CATALOG_FROZEN_BUDGET_POLICY = "reviewed-non-widening-ceilings-v1";
 const LEGACY_PERFORMANCE_CASE_ID = "legacy-native-6-tool";
 const SYNTHETIC_PERFORMANCE_CASE_ID = `synthetic-${String(TOOL_CATALOG_SYNTHETIC_TOOL_COUNT)}-tool`;
 export const TOOL_CATALOG_REFERENCE_IMAGE =
@@ -553,35 +554,100 @@ export function buildToolCatalogPerformanceDocument(raw, input) {
 export function toolCatalogPerformanceBudgets(calibration) {
   validateToolCatalogPerformanceDocument(calibration);
   assertEvidence(calibration.role === "calibration", "catalog budget input must be calibration");
+  const maximumP95Ms = Object.fromEntries(
+    Object.entries(calibration.cases).map(([id, testCase]) => [
+      id,
+      Object.fromEntries(
+        TOOL_CATALOG_PERFORMANCE_METRICS.map((metric) => {
+          const aggregate = testCase.aggregates[metric];
+          return [metric, aggregate.maximum + (aggregate.maximum - aggregate.minimum)];
+        }),
+      ),
+    ]),
+  );
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     target: "tool-catalog",
-    policy: CODING_PERFORMANCE_BUDGET_POLICY,
+    policy: TOOL_CATALOG_FROZEN_BUDGET_POLICY,
     calibrationSha256: calibration.documentSha256,
-    maximumP95Ms: Object.fromEntries(
-      Object.entries(calibration.cases).map(([id, testCase]) => [
-        id,
-        Object.fromEntries(
-          TOOL_CATALOG_PERFORMANCE_METRICS.map((metric) => {
-            const aggregate = testCase.aggregates[metric];
-            return [metric, aggregate.maximum + (aggregate.maximum - aggregate.minimum)];
-          }),
-        ),
-      ]),
-    ),
+    ceilingP95Ms: structuredClone(maximumP95Ms),
+    maximumP95Ms,
+  };
+}
+
+function validateBudgetMetrics(metricsByCase, label) {
+  exactKeys(metricsByCase, expectedPerformanceCaseIds(), `${label} cases`);
+  for (const metrics of Object.values(metricsByCase)) {
+    exactKeys(metrics, TOOL_CATALOG_PERFORMANCE_METRICS, `${label} metrics`);
+    assertEvidence(
+      Object.values(metrics).every((value) => Number.isFinite(value) && value > 0),
+      `${label} must be finite and positive`,
+    );
+  }
+}
+
+function validateToolCatalogPerformanceBudget(budget) {
+  const legacy = budget?.schemaVersion === 1;
+  const keys = ["schemaVersion", "target", "policy", "calibrationSha256", "maximumP95Ms"];
+  exactKeys(budget, legacy ? keys : [...keys, "ceilingP95Ms"], "catalog performance budget");
+  assertEvidence(
+    (legacy || budget.schemaVersion === 2) && budget.target === "tool-catalog",
+    "invalid catalog performance budget version",
+  );
+  assertEvidence(
+    budget.policy ===
+      (legacy ? CODING_PERFORMANCE_BUDGET_POLICY : TOOL_CATALOG_FROZEN_BUDGET_POLICY),
+    "invalid catalog performance budget policy",
+  );
+  assertEvidence(SHA256.test(budget.calibrationSha256), "invalid catalog budget calibration");
+  validateBudgetMetrics(budget.maximumP95Ms, "catalog performance budget");
+  if (!legacy) validateBudgetMetrics(budget.ceilingP95Ms, "catalog performance ceiling");
+}
+
+function performanceBudgetDefects(budget, calibration) {
+  try {
+    validateToolCatalogPerformanceBudget(budget);
+    const derived = toolCatalogPerformanceBudgets(calibration);
+    const defects = [];
+    if (budget.calibrationSha256 !== calibration.documentSha256)
+      defects.push("catalog performance budget calibration differs");
+    for (const id of expectedPerformanceCaseIds())
+      for (const metric of TOOL_CATALOG_PERFORMANCE_METRICS)
+        if (
+          budget.maximumP95Ms[id][metric] >
+          (budget.schemaVersion === 1
+            ? derived.maximumP95Ms[id][metric]
+            : budget.ceilingP95Ms[id][metric])
+        )
+          defects.push(`${id} ${metric} budget exceeds its reviewed ceiling`);
+    return defects;
+  } catch (error) {
+    return [error instanceof TypeError ? error.message : "invalid catalog performance budget"];
+  }
+}
+
+export function ratchetToolCatalogPerformanceBudgets(calibration, previousBudget) {
+  validateToolCatalogPerformanceBudget(previousBudget);
+  const maximumP95Ms = structuredClone(previousBudget.maximumP95Ms);
+  return {
+    schemaVersion: 2,
+    target: "tool-catalog",
+    policy: TOOL_CATALOG_FROZEN_BUDGET_POLICY,
+    calibrationSha256: calibration.documentSha256,
+    ceilingP95Ms: structuredClone(maximumP95Ms),
+    maximumP95Ms,
   };
 }
 
 function performancePairDefects(measurement, calibration, budget) {
   return [
-    ...(!isDeepStrictEqual(budget, toolCatalogPerformanceBudgets(calibration))
-      ? ["catalog performance budget differs from calibration"]
-      : []),
+    ...performanceBudgetDefects(budget, calibration),
     ...(measurement.calibrationSha256 !== calibration.documentSha256
       ? ["catalog performance calibration binding differs"]
       : []),
-    ...(!isDeepStrictEqual(measurement.subject, calibration.subject)
-      ? ["catalog performance subject differs from calibration"]
+    ...(measurement.subject.measurementHarnessSha256 !==
+    calibration.subject.measurementHarnessSha256
+      ? ["catalog performance measurement ruler differs from calibration"]
       : []),
     ...(!isDeepStrictEqual(measurement.environment, calibration.environment)
       ? ["catalog performance environment differs from calibration"]
@@ -661,30 +727,88 @@ function writeJson(root, path, value) {
   writeFileSync(join(root, path), canonicalD12ArtifactBytes(value));
 }
 
-export async function writeToolCatalogPerformanceReference(root = process.cwd()) {
-  const environment = referenceEnvironment();
-  const measurementHarnessSha256 = toolCatalogPerformanceRulerDigest(root);
-  const calibrationRaw = await measureToolCatalogPerformanceInFreshProcess(root);
+function evidenceWriterDependencies(overrides = {}) {
+  return {
+    exists: existsSync,
+    environment: referenceEnvironment,
+    measure: measureToolCatalogPerformanceInFreshProcess,
+    now: () => new Date().toISOString(),
+    read: readJson,
+    rulerDigest: toolCatalogPerformanceRulerDigest,
+    write: writeJson,
+    ...overrides,
+  };
+}
+
+export async function writeToolCatalogPerformanceCalibration(root = process.cwd(), overrides = {}) {
+  const deps = evidenceWriterDependencies(overrides);
+  for (const path of [
+    TOOL_CATALOG_PERFORMANCE_FILES.calibration,
+    TOOL_CATALOG_PERFORMANCE_FILES.budget,
+  ]) {
+    if (deps.exists(join(root, path))) {
+      throw new TypeError(
+        "catalog calibration is immutable; remove it only in an explicitly reviewed recalibration",
+      );
+    }
+  }
+  const environment = deps.environment();
+  const measurementHarnessSha256 = deps.rulerDigest(root);
+  const calibrationRaw = await deps.measure(root);
   const calibration = buildToolCatalogPerformanceDocument(calibrationRaw, {
     role: "calibration",
-    measuredAtIso: new Date().toISOString(),
+    measuredAtIso: deps.now(),
     measurementHarnessSha256,
     environment,
   });
   const budget = toolCatalogPerformanceBudgets(calibration);
-  const measurementRaw = await measureToolCatalogPerformanceInFreshProcess(root);
+  deps.write(root, TOOL_CATALOG_PERFORMANCE_FILES.calibration, calibration);
+  deps.write(root, TOOL_CATALOG_PERFORMANCE_FILES.budget, budget);
+  return { calibration, budget };
+}
+
+export async function recalibrateToolCatalogPerformance(root = process.cwd(), overrides = {}) {
+  const deps = evidenceWriterDependencies(overrides);
+  const previousCalibration = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.calibration);
+  const previousBudget = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.budget);
+  const previousBudgetDefects = performanceBudgetDefects(previousBudget, previousCalibration);
+  if (previousBudgetDefects.length > 0) throw new TypeError(previousBudgetDefects.join("; "));
+  const environment = deps.environment();
+  if (!isDeepStrictEqual(environment, previousCalibration.environment))
+    throw new TypeError("catalog recalibration reference environment differs");
+  const calibrationRaw = await deps.measure(root);
+  const calibration = buildToolCatalogPerformanceDocument(calibrationRaw, {
+    role: "calibration",
+    measuredAtIso: deps.now(),
+    measurementHarnessSha256: deps.rulerDigest(root),
+    environment,
+  });
+  const identityDefects = performanceCaseIdentityDefects(calibration, previousCalibration);
+  if (identityDefects.length > 0) throw new TypeError(identityDefects.join("; "));
+  const budget = ratchetToolCatalogPerformanceBudgets(calibration, previousBudget);
+  deps.write(root, TOOL_CATALOG_PERFORMANCE_FILES.calibration, calibration);
+  deps.write(root, TOOL_CATALOG_PERFORMANCE_FILES.budget, budget);
+  return { calibration, budget };
+}
+
+export async function writeToolCatalogPerformanceMeasurement(root = process.cwd(), overrides = {}) {
+  const deps = evidenceWriterDependencies(overrides);
+  const calibration = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.calibration);
+  const budget = deps.read(root, TOOL_CATALOG_PERFORMANCE_FILES.budget);
+  const environment = deps.environment();
+  const measurementHarnessSha256 = deps.rulerDigest(root);
+  const measurementRaw = await deps.measure(root);
   const measurement = buildToolCatalogPerformanceDocument(measurementRaw, {
     role: "measurement",
-    measuredAtIso: new Date().toISOString(),
+    measuredAtIso: deps.now(),
     measurementHarnessSha256,
     calibrationSha256: calibration.documentSha256,
     environment,
   });
   const result = evaluateToolCatalogPerformanceEvidence(measurement, calibration, budget);
-  writeJson(root, TOOL_CATALOG_PERFORMANCE_FILES.calibration, calibration);
-  writeJson(root, TOOL_CATALOG_PERFORMANCE_FILES.measurement, measurement);
-  writeJson(root, TOOL_CATALOG_PERFORMANCE_FILES.budget, budget);
-  return { calibration, measurement, budget, result };
+  if (result.defects.length > 0) throw new TypeError(result.defects.join("; "));
+  deps.write(root, TOOL_CATALOG_PERFORMANCE_FILES.measurement, measurement);
+  return { measurement, result };
 }
 
 function currentIdentityDefects(document, current) {
@@ -737,11 +861,22 @@ export async function checkToolCatalogPerformanceReference(
 }
 
 if (isMainModule(import.meta.url)) {
-  if (process.argv.includes("--write-reference")) {
-    const { result } = await writeToolCatalogPerformanceReference();
+  const calibrate = process.argv.includes("--calibrate");
+  const recalibrate = process.argv.includes("--recalibrate");
+  const writeMeasurement = process.argv.includes("--write-measurement");
+  if ([calibrate, recalibrate, writeMeasurement].filter(Boolean).length > 1) {
+    throw new TypeError("choose one performance evidence operation");
+  } else if (calibrate) {
+    await writeToolCatalogPerformanceCalibration();
+    console.log("tool-catalog-performance: PASS — immutable calibration and budget written");
+  } else if (recalibrate) {
+    await recalibrateToolCatalogPerformance();
+    console.log("tool-catalog-performance: PASS — non-widening recalibration written");
+  } else if (writeMeasurement) {
+    const { result } = await writeToolCatalogPerformanceMeasurement();
     if (result.defects.length > 0 || result.verdicts.length > 0)
       throw new TypeError([...result.defects, ...result.verdicts].join("; "));
-    console.log("tool-catalog-performance: PASS — calibrated reference evidence written");
+    console.log("tool-catalog-performance: PASS — candidate evidence written");
   } else {
     const evidence = await measureToolCatalogPerformance();
     const outputIndex = process.argv.indexOf("--output");

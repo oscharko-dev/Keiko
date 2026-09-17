@@ -215,17 +215,37 @@ const HTML_MANUAL_FIXTURE_IDS = [
 ];
 
 describe("CI test/gate wiring guard", () => {
+  it("keeps package coverage blob paths aligned with the governed Vitest 4 reporter", () => {
+    expect(rootManifest.scripts["test:coverage:packages:shard"]).toContain("--reporter=blob");
+    expect(rootManifest.scripts["test:coverage:packages:merge"]).toContain(
+      "--mergeReports=.vitest-reports",
+    );
+    expect(ci).toContain("path: .vitest-reports/");
+    expect(ci).toContain("path: .vitest-reports\n");
+    expect(ci).toContain("find .vitest-reports -maxdepth 1 -name 'blob-*.json'");
+    expect(ci).toContain("run: rm -rf .vitest-reports");
+  });
+
   it("runs the portable handoff protocol fixture suite on a genuine Windows host", () => {
-    const buildStep = ci.indexOf("      - name: Build packages for the Windows smokes");
+    const windowsJobStart = ci.indexOf("  cross-platform-smoke:");
+    const windowsJobEnd = ci.indexOf("\n  node-26-compatibility:", windowsJobStart);
+    const windowsJob = ci.slice(windowsJobStart, windowsJobEnd);
+    const buildStep = ci.indexOf("      - name: Build", windowsJobStart);
     const fixtureStep = ci.indexOf(
       "      - name: Verify the Windows portable handoff protocol fixture",
+      windowsJobStart,
     );
     const nextStep = ci.indexOf(
       "      - name: Verify Git executable Windows reparse containment",
       fixtureStep,
     );
+    expect(windowsJobStart).toBeGreaterThan(-1);
+    expect(windowsJob).toContain("runs-on: ${{ matrix.os }}");
+    expect(windowsJob).toContain("fromJSON(needs.change-scope.outputs.cross-platform-os)");
     expect(buildStep).toBeGreaterThan(-1);
+    expect(buildStep).toBeLessThan(windowsJobEnd);
     expect(fixtureStep).toBeGreaterThan(buildStep);
+    expect(fixtureStep).toBeLessThan(windowsJobEnd);
     expect(nextStep).toBeGreaterThan(fixtureStep);
     const fixtureGate = ci.slice(fixtureStep, nextStep);
     expect(fixtureGate).toContain("if: runner.os == 'Windows'");
@@ -238,6 +258,10 @@ describe("CI test/gate wiring guard", () => {
   });
 
   it("refreshes workspace evidence without replacing the immutable D12 comparison", () => {
+    const evidenceStep = ci.slice(
+      ci.indexOf("      - name: Build internal packages so contracts dist resolves for UI tsc"),
+      ci.indexOf("      - name: Security audit UI dependencies"),
+    );
     const performanceStep = ci.slice(
       ci.indexOf("      - name: Refresh workspace performance evidence"),
       ci.indexOf("      - name: Build package and UI assets"),
@@ -245,13 +269,18 @@ describe("CI test/gate wiring guard", () => {
     expect(performanceStep).toContain("npm run test:e2e:workspace-perf");
     expect(performanceStep).not.toContain("npm run test:e2e:editor-perf");
     expect(performanceStep).not.toContain("rm -f docs/release/1209-perf-evidence.json");
-    expect(performanceStep).toContain("immutable D12 baseline/candidate comparison");
     // ADR-0139 D7: the immutable editor evidence is validated on pull requests and merge groups;
     // the workspace refresh and freshness gate stay on push/dispatch (post-merge) only.
-    expect(performanceStep).toContain(
+    expect(evidenceStep).toContain(
       "if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}",
     );
-    expect(performanceStep).toContain("npm run check:perf-evidence:editor");
+    expect(evidenceStep).toContain("npm run check:tool-catalog-performance");
+    expect(evidenceStep).toContain("npm run check:perf-evidence:editor");
+    expect(evidenceStep).toContain("npm run check:perf-evidence:workspace");
+    expect(evidenceStep).toContain("npm run check:perf-evidence:coding-runtime");
+    expect(ci.indexOf("Validate tool-catalog performance evidence")).toBeLessThan(
+      ci.indexOf("Install Playwright browser"),
+    );
     expect(performanceStep).toContain("Upload redacted performance evidence");
     expect(performanceStep).toContain("if-no-files-found: warn");
     expect(performanceStep).not.toContain("always()");
@@ -439,8 +468,10 @@ describe("CI test/gate wiring guard", () => {
     // staging/qualification lanes; ADR-0177 adds the dev release-rehearsal readiness lane and the
     // standing release-alignment lane; ADR-0177 D8 adds the release-candidate plan and tag lanes and
     // the stable build's publish-request lane. Epic #3495 (#3498) retired the wait-for-checks
-    // release-verify lane. The load-bearing pairing below proves every lane verifies the governed
-    // toolchain, while the exact counts make a removed or unreviewed new lane fail.
+    // release-verify lane. Issue #3519 keeps Windows in the full cross-platform matrix while making
+    // that matrix omit only the Windows leg for positively classified non-Windows PRs.
+    // The load-bearing pairing below proves every lane verifies the governed toolchain, while the
+    // exact counts make a removed or unreviewed new lane fail.
     expect(node24SetupCount).toBe(27);
     expect(node26SetupCount).toBe(1);
     expect(nodeSetupCount).toBe(28);
@@ -449,17 +480,32 @@ describe("CI test/gate wiring guard", () => {
     expect(ci).toContain("NODE_26_COMPATIBILITY_RESULT");
   });
 
-  it("executes typecheck, build, and install smokes on every desktop OS", () => {
+  it("executes typecheck, build, and install smokes on Linux, macOS, and Windows", () => {
     const start = ci.indexOf("  cross-platform-smoke:");
     const end = ci.indexOf("\n  node-26-compatibility:", start);
     const crossPlatform = ci.slice(start, end);
-    expect(crossPlatform).toContain("os: [ubuntu-latest, windows-latest, macos-latest]");
+    expect(crossPlatform).toContain("fromJSON(needs.change-scope.outputs.cross-platform-os)");
     expect(crossPlatform).toContain("Typecheck the complete package graph");
     expect(crossPlatform).toContain("- name: Build");
     expect(crossPlatform).toContain("Installable-package smoke with native optional dependencies");
     expect(crossPlatform).toContain("Verify productive native sources on macOS");
     expect(crossPlatform).toContain("Verify productive native sources on Windows");
     expect(crossPlatform).not.toContain("npm test");
+  });
+
+  it("keeps Windows in the full cross-platform proof instead of a slim side job", () => {
+    const start = ci.indexOf("  cross-platform-smoke:");
+    const end = ci.indexOf("\n  node-26-compatibility:", start);
+    const crossPlatform = ci.slice(start, end);
+    expect(ci).not.toContain("windows-cross-platform-smoke");
+    expect(crossPlatform).toContain("fromJSON(needs.change-scope.outputs.cross-platform-os)");
+    expect(crossPlatform).toContain("npm run typecheck");
+    expect(crossPlatform).toContain("npm run build");
+    expect(crossPlatform).toContain("npm run prepare:bin");
+    expect(crossPlatform).toContain("npm run build:ui");
+    expect(crossPlatform).toContain("npm run smoke:install");
+    expect(crossPlatform).toContain("Verify productive native sources on Windows");
+    expect(crossPlatform).toContain("Smoke the Windows setup bootstrap");
   });
 
   for (const command of REQUIRED_CI_COMMANDS) {

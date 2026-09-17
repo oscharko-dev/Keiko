@@ -29,6 +29,10 @@ import type {
   UiHandlerDeps,
 } from "@oscharko-dev/keiko-server";
 import type { CliIo } from "./runner.js";
+import {
+  INSTALL_LAYOUT_CORRELATION_ID_ENV,
+  INSTALL_LAYOUT_OVERRIDES_ENV,
+} from "./install-layout.js";
 import { peekShutdownRequest } from "./state-paths.js";
 
 function captureIo(): { io: CliIo; out: string[]; err: string[] } {
@@ -250,10 +254,51 @@ describe("runUiCli", () => {
 
   it("returns 1 with a clear error when the static export is missing", async () => {
     const { io, err } = captureIo();
-    const deps: UiCliDeps = { staticRoot: join(staticRoot, "does-not-exist") };
-    const code = await runUiCli([], io, {}, deps);
+    const sink = createRecordingSink();
+    const correlationId = "00000000-0000-4000-8000-000000000001";
+    const deps: UiCliDeps = {
+      staticRoot: join(staticRoot, "does-not-exist"),
+      activityLog: sink,
+      createServer: () => fakeServer({}),
+    };
+    const code = await runUiCli(
+      [],
+      io,
+      {
+        [INSTALL_LAYOUT_OVERRIDES_ENV]: "ui-static-root",
+        [INSTALL_LAYOUT_CORRELATION_ID_ENV]: correlationId,
+      },
+      deps,
+    );
     expect(code).toBe(1);
     expect(err.join("")).toContain("build:ui");
+    expect(sink.events).toEqual([
+      expect.objectContaining({ op: "cli.install-layout.normalized", correlationId }),
+    ]);
+  });
+
+  it("records install-layout normalization before static HTML loading fails", async () => {
+    const { io } = captureIo();
+    const sink = createRecordingSink();
+    const invalidStaticRoot = join(staticRoot, "not-a-directory");
+    await writeFile(invalidStaticRoot, "not a directory", "utf8");
+
+    await expect(
+      runUiCli(
+        [],
+        io,
+        {
+          [INSTALL_LAYOUT_OVERRIDES_ENV]: "ui-static-root",
+          [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+        },
+        {
+          staticRoot: invalidStaticRoot,
+          activityLog: sink,
+          createServer: () => fakeServer({}),
+        },
+      ),
+    ).rejects.toThrow();
+    expect(sink.events.map(({ op }) => op)).toEqual(["cli.install-layout.normalized"]);
   });
 
   it("prefers the built workspace checkout over a stale inherited global static root", async () => {
@@ -464,7 +509,11 @@ describe("runUiCli", () => {
       runUiCli(
         ["--port", "4399"],
         io,
-        { KEIKO_UI_LAUNCH_ID: "a".repeat(32) },
+        {
+          KEIKO_UI_LAUNCH_ID: "a".repeat(32),
+          [INSTALL_LAYOUT_OVERRIDES_ENV]: "ui-static-root",
+          [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+        },
         {
           staticRoot,
           hashesFile: join(staticRoot, "csp-hashes.json"),
@@ -483,6 +532,15 @@ describe("runUiCli", () => {
       ),
     ).rejects.toThrow("Portable update startup recovery is required before listening.");
     expect(createServer).not.toHaveBeenCalled();
+    expect(sink.events.map(({ op }) => op)).toEqual([
+      "cli.install-layout.normalized",
+      "process.fatal",
+    ]);
+    expect(sink.events[0]).toMatchObject({
+      correlationId: "00000000-0000-4000-8000-000000000001",
+      extra: { overriddenCount: 1, overriddenKinds: ["ui-static-root"] },
+    });
+    expect(sink.closeCallCount).toBe(1);
     const event = sink.events.find(({ op }) => op === "process.fatal");
     expect(event?.errorKind).toBe("PORTABLE_UPDATE_RECOVERY_CORRUPT");
     expect(extraOf(event)).toMatchObject({
@@ -1161,8 +1219,28 @@ describe("runUiCli", () => {
       },
     };
     try {
-      const code = await runUiCli([], io, { KEIKO_LOG_LEVEL: "debug" }, deps);
+      const correlationId = "00000000-0000-4000-8000-000000000001";
+      const code = await runUiCli(
+        [],
+        io,
+        {
+          KEIKO_LOG_LEVEL: "debug",
+          [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin,ui-static-root,local-state-auditor",
+          [INSTALL_LAYOUT_CORRELATION_ID_ENV]: correlationId,
+        },
+        deps,
+      );
       expect(code).toBe(0);
+      const normalized = sink.events.find((event) => event.op === "cli.install-layout.normalized");
+      expect(normalized).toMatchObject({
+        category: "diagnostic",
+        correlationId,
+        level: "info",
+        extra: {
+          overriddenCount: 3,
+          overriddenKinds: ["cli-bin", "ui-static-root", "local-state-auditor"],
+        },
+      });
       const started = sink.events.find((event) => event.op === "process.started");
       expect(started).toBeDefined();
       expect(started?.category).toBe("process");

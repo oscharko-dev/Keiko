@@ -21,6 +21,10 @@ import {
   WindowsSystemDirectoryError,
 } from "@oscharko-dev/keiko-security";
 import { runLauncherCli, type LauncherCliDeps } from "./launcher.js";
+import {
+  INSTALL_LAYOUT_CORRELATION_ID_ENV,
+  INSTALL_LAYOUT_OVERRIDES_ENV,
+} from "./install-layout.js";
 import { hashContent, loadState, saveState, upsertEntry } from "./launcher-state.js";
 import { makeCapturedIo } from "./test-support/cli-io.js";
 
@@ -280,6 +284,38 @@ describe("runLauncherCli install — happy paths", () => {
 });
 
 describe("runLauncherCli install — refusals (security)", () => {
+  it("records install-layout normalization before consuming the corrected CLI path", () => {
+    const h = makeHarness();
+    const c = makeIo();
+    const events: SecurityLogEvent[] = [];
+    const correlationId = "00000000-0000-4000-8000-000000000001";
+
+    expect(
+      runLauncherCli(
+        ["install", "--dry-run"],
+        c.io,
+        {
+          [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin",
+          [INSTALL_LAYOUT_CORRELATION_ID_ENV]: correlationId,
+        },
+        {
+          ...h.deps,
+          securityLogSinkFactory: (stateDir) => {
+            expect(stateDir).toBe(h.stateDir);
+            return { write: (event): void => void events.push(event) };
+          },
+        },
+      ),
+    ).toBe(0);
+    expect(events).toEqual([
+      expect.objectContaining({
+        op: "cli.install-layout.normalized",
+        correlationId,
+        extra: { overriddenCount: 1, overriddenKinds: ["cli-bin"] },
+      }),
+    ]);
+  });
+
   it.each([
     {
       error: new WindowsSystemDirectoryError(

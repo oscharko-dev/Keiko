@@ -63,7 +63,10 @@ import {
   upsertEntry,
   type LauncherStateEntry,
 } from "./launcher-state.js";
-import { resolveKeikoBinary } from "./install-layout.js";
+import {
+  resolveKeikoBinary,
+  writeInstallLayoutOverrideEvidenceWithFactory,
+} from "./install-layout.js";
 import { resolveContainedStateDir } from "./state-paths.js";
 import {
   createCliSecurityLogSink,
@@ -616,6 +619,7 @@ export function runLauncherCli(
     // is converted to a `1` exit instead of an uncaught throw.
     const r = resolveDeps(env, deps);
     resolved = r;
+    writeInstallLayoutOverrideEvidenceWithFactory(deps.securityLogSinkFactory, r.stateDir, env);
     const home = r.homedir();
     const handlers: Readonly<Record<LauncherSubcommand, () => number>> = {
       install: () => dispatchInstall(rest, io, env, r),

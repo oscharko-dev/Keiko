@@ -587,13 +587,17 @@ function recordContextTelemetry(
 ): void {
   const registry = run.contextUsage;
   if (registry === undefined) return;
+  const providerTokenUsage = event.providerTokenUsage;
+  const completedCompaction =
+    event.compaction?.event === "completed" ? event.compaction : undefined;
+  if (providerTokenUsage === undefined && completedCompaction === undefined) return;
   const updatedAt = new Date().toISOString();
-  if (event.providerTokenUsage !== undefined) {
+  if (providerTokenUsage !== undefined) {
     const accepted = registry.recordProviderSample(run.request.runId, {
       sampleId: event.digest,
       capacityTokens: contextGeometry.contextWindowTokens,
       reservedOutputTokens: contextGeometry.maxOutputTokens,
-      inputTokens: event.providerTokenUsage.inputTokens,
+      inputTokens: providerTokenUsage.inputTokens,
       updatedAt,
     });
     activityLog.write({
@@ -604,14 +608,14 @@ function recordContextTelemetry(
       extra: {
         state: accepted ? "accepted" : "rejected",
         capacityTokens: contextGeometry.contextWindowTokens,
-        usedInputTokens: event.providerTokenUsage.inputTokens,
+        usedInputTokens: providerTokenUsage.inputTokens,
         reservedOutputTokens: contextGeometry.maxOutputTokens,
         sampleDigest: event.digest,
       },
     });
   }
-  if (event.compaction?.event === "completed") {
-    registry.recordCompaction(run.request.runId, event.compaction.compactionIdSha256, updatedAt);
+  if (completedCompaction !== undefined) {
+    registry.recordCompaction(run.request.runId, completedCompaction.compactionIdSha256, updatedAt);
   }
 }
 

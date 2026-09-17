@@ -52,6 +52,20 @@ describe("createCliSecurityLogSink", () => {
   it("does not create correlation state when no production sink was wired", () => {
     expect(createCliSecurityLogSink("/state", undefined)).toBeUndefined();
   });
+
+  it("preserves an invocation correlation supplied by the composition owner", () => {
+    const events: SecurityLogEvent[] = [];
+    const correlationId = "00000000-0000-4000-8000-000000000001";
+    const sink = createCliSecurityLogSink(
+      "/state",
+      () => ({ write: (event): void => void events.push(event) }),
+      correlationId,
+    );
+
+    sink?.write({ category: "diagnostic", op: "cli.audit.started" });
+
+    expect(events).toEqual([expect.objectContaining({ op: "cli.audit.started", correlationId })]);
+  });
 });
 
 describe("emitCliWindowsSystemFailure", () => {

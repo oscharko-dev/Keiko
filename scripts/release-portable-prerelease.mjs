@@ -148,6 +148,7 @@ export function parseArgs(argv) {
 }
 
 let processRunner = spawnSyncRunner;
+let executableResolver = resolveHostExecutable;
 let hostPlatform = process.platform;
 let sleeper = atomicsSleep;
 let assetCopier = fsAssetCopier;
@@ -165,12 +166,15 @@ export function withHostPlatform(platform, callback) {
 
 /** Test seam: swap the process runner for a callback's duration, always restoring it. */
 export function withProcessRunner(runner, callback) {
-  const previous = processRunner;
+  const previousRunner = processRunner;
+  const previousResolver = executableResolver;
   processRunner = runner;
+  executableResolver = (command) => command;
   try {
     return callback();
   } finally {
-    processRunner = previous;
+    processRunner = previousRunner;
+    executableResolver = previousResolver;
   }
 }
 
@@ -219,7 +223,7 @@ export function run(command, args, options = {}) {
 }
 
 function gh(args, options = {}) {
-  return run(resolveHostExecutable("gh"), args, options);
+  return run(executableResolver("gh"), args, options);
 }
 
 function ghJson(args) {
@@ -794,7 +798,7 @@ function ensureTagRefAtBuiltCommit(tag, commitSha) {
     "-f",
     `sha=${commitSha}`,
   ];
-  const result = processRunner(resolveHostExecutable("gh"), args, {});
+  const result = processRunner(executableResolver("gh"), args, {});
   if (result.error !== undefined) fail(`gh could not spawn: ${result.error.message}`);
   if (result.status === 0) {
     log(`created tag ${tag} at the built commit ${commitSha}.`);
@@ -827,7 +831,7 @@ function assertTagRefMatchesBuiltCommit(tag, commitSha) {
 
 function readRemoteTagRef(tag) {
   const args = ["api", `repos/{owner}/{repo}/git/ref/tags/${tag}`];
-  const result = processRunner(resolveHostExecutable("gh"), args, {});
+  const result = processRunner(executableResolver("gh"), args, {});
   if (result.error !== undefined) fail(`gh could not spawn: ${result.error.message}`);
   if (result.status === 0) return JSON.parse(result.stdout ?? "");
   // Only an absent ref (404) may proceed — any other lookup failure refuses, never guesses.
@@ -907,7 +911,7 @@ function branchExists(repository, branch) {
   // path segments, 404, and silently hand release authority to the default branch while the
   // configured branch was alive (Codex finding on #3054).
   const result = processRunner(
-    resolveHostExecutable("gh"),
+    executableResolver("gh"),
     ["api", `repos/${repository}/branches/${encodeURIComponent(branch)}`],
     { cwd: repoRoot, encoding: "utf8" },
   );
@@ -960,13 +964,13 @@ function assertPublicReleaseSourceIsApproved(commitSha, repository) {
  * the stable tag and the Latest release from unverified local code.
  */
 function assertPublisherCheckoutMatches(commitSha) {
-  const head = run(resolveHostExecutable("git"), ["rev-parse", "HEAD"]).trim();
+  const head = run(executableResolver("git"), ["rev-parse", "HEAD"]).trim();
   if (head !== commitSha) {
     fail(
       `the publishing checkout is at ${head}, not the built commit ${commitSha} — check out the built commit before publishing a public release.`,
     );
   }
-  const dirty = run(resolveHostExecutable("git"), ["status", "--porcelain"]).trim();
+  const dirty = run(executableResolver("git"), ["status", "--porcelain"]).trim();
   if (dirty !== "") {
     fail(
       "the publishing checkout has uncommitted changes — a public release must be cut from a clean tree.",
@@ -984,7 +988,7 @@ function releaseOwnerAllowlist(repository) {
     configured: process.env.KEIKO_RELEASE_OWNER_GITHUB_LOGINS,
     repository,
     runGh: (args) =>
-      processRunner(resolveHostExecutable("gh"), args, { cwd: repoRoot, encoding: "utf8" }),
+      processRunner(executableResolver("gh"), args, { cwd: repoRoot, encoding: "utf8" }),
   });
   if (value === undefined) {
     fail(

@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 // Reports whether the change set under test is documentation only, for CI cost scoping (#2699).
 //
-// Writes `documentation-only=true|false` to $GITHUB_OUTPUT when present, and prints the verdict.
-// Any failure to determine the change set prints false: the expensive matrix then runs, which is
-// the only safe direction for this decision.
+// Writes the scope verdict and exact cross-platform OS matrix to $GITHUB_OUTPUT when present. Any
+// failure to determine the change set prints safe defaults: the full matrix then runs, which is the
+// only safe direction for this decision.
 
 import { execFileSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
@@ -12,6 +12,7 @@ import { fileURLToPath } from "node:url";
 
 import { resolveHostExecutable } from "./lib/host-executable.mjs";
 import { isDocumentationOnlyChange } from "./lib/documentation-only-change.mjs";
+import { isWindowsRelevantChange } from "./lib/windows-relevant-change.mjs";
 
 function changedPaths(baseSha, headSha) {
   const output = execFileSync(
@@ -26,31 +27,53 @@ function changedPaths(baseSha, headSha) {
 }
 
 /**
- * Resolves the verdict for a change set. Exported so the decision — including every path that must
- * answer "false" — is testable without spawning git or writing to $GITHUB_OUTPUT.
+ * Resolves the verdict for a change set. Exported so the decision, including every path that must
+ * answer "false", is testable without spawning git or writing to $GITHUB_OUTPUT.
  */
 export function resolveVerdict(baseSha, headSha, listChangedPaths = changedPaths) {
   if (typeof baseSha !== "string" || baseSha.length === 0) {
-    return { documentationOnly: false, reason: "no base sha supplied" };
+    return {
+      documentationOnly: false,
+      reason: "no base sha supplied",
+      windowsRelevant: true,
+    };
   }
   try {
     const paths = listChangedPaths(baseSha, headSha);
     return {
       documentationOnly: isDocumentationOnlyChange(paths),
       reason: `${String(paths.length)} changed path(s)`,
+      windowsRelevant: isWindowsRelevantChange(paths),
     };
   } catch (error) {
     return {
       documentationOnly: false,
       reason: `could not resolve the change set (${error instanceof Error ? error.name : "unknown"})`,
+      windowsRelevant: true,
     };
   }
 }
 
-export function verdictLine({ documentationOnly, reason }) {
+const FULL_CROSS_PLATFORM_OS = Object.freeze(["ubuntu-latest", "macos-latest", "windows-latest"]);
+const NON_WINDOWS_CROSS_PLATFORM_OS = Object.freeze(["ubuntu-latest", "macos-latest"]);
+
+export function crossPlatformOsForEvent(windowsRelevant, eventName) {
+  return eventName === "pull_request" && windowsRelevant === false
+    ? NON_WINDOWS_CROSS_PLATFORM_OS
+    : FULL_CROSS_PLATFORM_OS;
+}
+
+function matrixDescription(documentationOnly, windowsRelevant) {
+  if (documentationOnly) return "cross-platform matrix skipped";
+  if (windowsRelevant === false) return "running the Linux/macOS matrix";
+  return "running the full matrix";
+}
+
+export function verdictLine({ documentationOnly, reason, windowsRelevant }) {
+  const matrix = matrixDescription(documentationOnly, windowsRelevant);
   return (
-    `documentation-only-change: ${String(documentationOnly)} — ${reason}` +
-    (documentationOnly ? "" : " (running the full matrix)")
+    `documentation-only-change: ${String(documentationOnly)} — ${reason}; ` +
+    `windows-relevant=${String(windowsRelevant)} (${matrix})`
   );
 }
 
@@ -60,9 +83,15 @@ export function main() {
     process.env.KEIKO_CHANGE_HEAD_SHA ?? "HEAD",
   );
   console.log(verdictLine(verdict));
+  const crossPlatformOs = crossPlatformOsForEvent(
+    verdict.windowsRelevant,
+    process.env.GITHUB_EVENT_NAME ?? "",
+  );
   const outputPath = process.env.GITHUB_OUTPUT;
   if (outputPath !== undefined && outputPath.length > 0) {
     appendFileSync(outputPath, `documentation-only=${String(verdict.documentationOnly)}\n`, "utf8");
+    appendFileSync(outputPath, `windows-relevant=${String(verdict.windowsRelevant)}\n`, "utf8");
+    appendFileSync(outputPath, `cross-platform-os=${JSON.stringify(crossPlatformOs)}\n`, "utf8");
   }
 }
 

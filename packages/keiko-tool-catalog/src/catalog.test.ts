@@ -10,6 +10,7 @@ import {
   gatewayToolDefinitions,
   lookupCatalogTool,
   validateToolResultEnvelope,
+  verifyToolCatalogSnapshot,
   verifyToolDescriptor,
 } from "./index.js";
 import { catalogBytes } from "./json.js";
@@ -86,6 +87,16 @@ describe("canonical descriptors and version axes", () => {
 });
 
 describe("profile compilation", () => {
+  it("reuses only owner-validated snapshots and revalidates detached input", () => {
+    const { catalog } = fixture();
+    expect(verifyToolCatalogSnapshot(catalog)).toBe(catalog);
+
+    const detached = structuredClone(catalog);
+    const verified = verifyToolCatalogSnapshot(detached);
+    expect(verified).not.toBe(detached);
+    expect(verified).toEqual(catalog);
+  });
+
   it("rejects a profile downgrade against the supplied producer checkpoint", () => {
     const descriptor = createToolDescriptor(declaration());
     const current = {

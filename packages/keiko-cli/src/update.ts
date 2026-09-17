@@ -24,6 +24,7 @@ import {
   renderUpdateStatus,
 } from "./update-output.js";
 import { resolveStateDir as resolveRuntimeStateDir } from "./state-paths.js";
+import { writeInstallLayoutOverrideEvidence } from "./install-layout.js";
 
 type ServerModule = typeof import("@oscharko-dev/keiko-server");
 type EvidenceModule = typeof import("@oscharko-dev/keiko-evidence");
@@ -151,6 +152,7 @@ async function createRuntime(env: EnvSource, deps: UpdateCliDeps): Promise<Updat
   };
   try {
     activityLog = server.createFileServerLogSink(stateDir);
+    writeInstallLayoutOverrideEvidence(activityLog, env);
     const candidateAuthority = server.createUpdateCandidateAuthority({ activityLog });
     const localState = server.createUpdateLocalStateManager({ stateDir, activityLog });
     const processEnv = processEnvFrom(env);

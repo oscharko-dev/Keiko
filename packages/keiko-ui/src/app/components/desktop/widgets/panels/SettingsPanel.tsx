@@ -1586,7 +1586,7 @@ function renderModelsListBody({
   readonly onCapabilityApplied: (model: ModelCapability, observedGeneration: number) => void;
   readonly t: I18nTranslate;
 }): ReactNode {
-  if (loadingModels) {
+  if (loadingModels && models.length === 0) {
     return (
       <output className="set-placeholder" style={NATIVE_BLOCK_STYLE}>
         {t("settings.models.loading")}

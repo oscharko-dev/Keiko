@@ -22,6 +22,42 @@
       "package": "keiko-cli"
     },
     {
+      "op": "cli.audit.completed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/audit.ts:324",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.audit.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/audit.ts:313",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.audit.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/audit.ts:394",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.audit.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/audit.ts:514",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.audit.started",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/audit.ts:447",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.install-layout.normalized",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/install-layout.ts:81",
+      "package": "keiko-cli"
+    },
+    {
       "op": "cli.lifecycle.stop-escalated",
       "category": "diagnostic",
       "site": "packages/keiko-cli/src/ui-process-stop.ts:198",
@@ -46,6 +82,36 @@
       "package": "keiko-cli"
     },
     {
+      "op": "cli.support.export.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/support.ts:189",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.uninstall.completed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/uninstall.ts:885",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.uninstall.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/uninstall.ts:714",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.uninstall.failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/uninstall.ts:845",
+      "package": "keiko-cli"
+    },
+    {
+      "op": "cli.uninstall.started",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/uninstall.ts:775",
+      "package": "keiko-cli"
+    },
+    {
       "op": "portable.windows-alert.spawn-failed",
       "category": "diagnostic",
       "site": "packages/keiko-cli/src/portable-launch-notifier.ts:205",
@@ -54,7 +120,7 @@
     {
       "op": "process.exiting",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:756",
+      "site": "packages/keiko-cli/src/ui.ts:762",
       "package": "keiko-cli"
     },
     {
@@ -66,19 +132,19 @@
     {
       "op": "process.fatal",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:490",
+      "site": "packages/keiko-cli/src/ui.ts:496",
       "package": "keiko-cli"
     },
     {
       "op": "process.heartbeat",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:990",
+      "site": "packages/keiko-cli/src/ui.ts:996",
       "package": "keiko-cli"
     },
     {
       "op": "process.started",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:1105",
+      "site": "packages/keiko-cli/src/ui.ts:1111",
       "package": "keiko-cli"
     },
     {
@@ -132,7 +198,7 @@
     {
       "op": "update.runtime.legacy-import-deferred",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/ui.ts:1311",
+      "site": "packages/keiko-cli/src/ui.ts:1317",
       "package": "keiko-cli"
     },
     {
@@ -1543,7 +1609,7 @@
     {
       "op": "coding-runtime.context-usage.observed",
       "category": "process",
-      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:602",
+      "site": "packages/keiko-server/src/coding-runtime/productionOpenCodeBackend.ts:606",
       "package": "keiko-server"
     },
     {
@@ -3975,10 +4041,18 @@
     "chat.response.streamed",
     "chat.send.rejected",
     "chat.turn.started",
+    "cli.audit.completed",
+    "cli.audit.failed",
+    "cli.audit.started",
+    "cli.install-layout.normalized",
     "cli.lifecycle.stop-escalated",
     "cli.lifecycle.stop-escalation-failed",
     "cli.lifecycle.stop-request-failed",
     "cli.lifecycle.stop-requested",
+    "cli.support.export.failed",
+    "cli.uninstall.completed",
+    "cli.uninstall.failed",
+    "cli.uninstall.started",
     "client.diagnostic",
     "client.diagnostic.rate-limited",
     "coding-app-session.channel.closed",

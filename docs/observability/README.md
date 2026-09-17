@@ -9,10 +9,31 @@ which records the design decisions behind everything described here.
 
 ## File location, rotation, retention
 
-The log lives at `<stateDir>/logs/server.log` — `<stateDir>` is `./.keiko` by default, or wherever
-`--state-dir` / `KEIKO_STATE_DIR` points. It is JSON Lines: one `JSON.stringify`-serialized object
-per line, written synchronously so that the last line on disk before a hang or a crash is the last
-line the process actually reached.
+Normal runtime activity lives at `<stateDir>/logs/server.log` — `<stateDir>` is `./.keiko` by
+default, or wherever `--state-dir` / `KEIKO_STATE_DIR` points. Commands that must audit or remove
+that selected tree write their own lifecycle evidence to a fixed per-user CLI control-state log:
+
+| Platform | CLI control-state log                                         |
+| -------- | ------------------------------------------------------------- |
+| Linux    | `~/.local/state/keiko/control/logs/server.log`                |
+| macOS    | `~/Library/Application Support/Keiko/control/logs/server.log` |
+| Windows  | `%USERPROFILE%\AppData\Local\Keiko\control\logs\server.log`   |
+
+The control path accepts no environment override and may not be at or below the selected audit or
+uninstall target. `keiko audit local-state` therefore cannot mutate the forensic tree it reads, and
+`keiko uninstall --state` cannot delete or asynchronously recreate the store that holds its own
+result. If the primary control root overlaps the target or cannot be validated or opened, the
+command emits a body-free terminal refusal before any sink opens. It does not create an independent
+fallback log root inside an unproved trust boundary. A control-state `server.log` can be passed
+directly to `keiko support analyze`.
+
+One correlation id joins install-layout normalization to audit or uninstall start, subordinate
+forced-stop activity, and completion/failure. Audit and uninstall events carry SHA-256 identities
+for their selected targets instead of paths. Uninstall also logs dry runs and scripts-only work, and
+its completion records the state disposition plus body-free affected and retained counts.
+
+Each log is JSON Lines: one `JSON.stringify`-serialized object per line, written synchronously so
+that the last line on disk before a hang or a crash is the last line the process actually reached.
 
 Rotation is day-based, keyed to the UTC calendar day, and **hard-link-atomic across processes**:
 at the first write after midnight UTC, the process links the finished day's file to
