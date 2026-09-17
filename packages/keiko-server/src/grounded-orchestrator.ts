@@ -32,6 +32,7 @@ import {
 import type { ContextProfile } from "@oscharko-dev/keiko-contracts";
 import {
   activityLogEvent,
+  classifyErrorKind,
   defineActivityLogOperation,
   isActivityLogErrorKind,
   type ActivityLogErrorKind,
@@ -279,6 +280,13 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
       dataClass: "count",
       required: false,
     },
+    structuralCandidateFileCount: { type: "integer", dataClass: "count", required: false },
+    structuralCandidateDirectoryCount: { type: "integer", dataClass: "count", required: false },
+    structuralCodeIndexBuildCount: { type: "integer", dataClass: "count", required: false },
+    structuralSymbolGraphBuildCount: { type: "integer", dataClass: "count", required: false },
+    structuralImportGraphBuildCount: { type: "integer", dataClass: "count", required: false },
+    structuralEndpointGraphBuildCount: { type: "integer", dataClass: "count", required: false },
+    structuralFileSearchCount: { type: "integer", dataClass: "count", required: false },
     structuralTextSearchCount: { type: "integer", dataClass: "count", required: false },
     indexProviderStatus: {
       type: "string",
@@ -322,6 +330,11 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
     indexFallbackSearchCount: { type: "integer", dataClass: "count", required: false },
     indexLoadFailures: { type: "integer", dataClass: "count", required: false },
     indexSaveFailures: { type: "integer", dataClass: "count", required: false },
+    workspaceIoReadDirCalls: { type: "integer", dataClass: "count", required: false },
+    workspaceIoReadDirEntries: { type: "integer", dataClass: "count", required: false },
+    workspaceIoStatCalls: { type: "integer", dataClass: "count", required: false },
+    workspaceIoRealPathCalls: { type: "integer", dataClass: "count", required: false },
+    workspaceIoExistsCalls: { type: "integer", dataClass: "count", required: false },
     workspaceIoContentReadCalls: { type: "integer", dataClass: "count", required: false },
     workspaceIoContentReadBytes: { type: "integer", dataClass: "count", required: false },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -357,6 +370,7 @@ const SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION = defineActivityLogOperation({
       required: true,
       values: ["failed", "cancelled"],
     },
+    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
     retrievalPhase: {
       type: "string",
       dataClass: "closed-enum",
@@ -5314,6 +5328,13 @@ function structuralActivityExtra(
   return {
     structuralContextCount: structural.contextCount,
     structuralCandidateInventoryBuildCount: structural.candidateInventoryBuildCount,
+    structuralCandidateFileCount: structural.candidateFileCount,
+    structuralCandidateDirectoryCount: structural.candidateDirectoryCount,
+    structuralCodeIndexBuildCount: structural.codeIndexBuildCount,
+    structuralSymbolGraphBuildCount: structural.symbolGraphBuildCount,
+    structuralImportGraphBuildCount: structural.importGraphBuildCount,
+    structuralEndpointGraphBuildCount: structural.endpointGraphBuildCount,
+    structuralFileSearchCount: structural.fileSearchCount,
     structuralTextSearchCount: structural.textSearchCount,
   };
 }
@@ -5341,6 +5362,11 @@ function workspaceIoActivityExtra(
   io: WorkspaceIoActivityDiagnostics,
 ): Partial<ConnectedContextCompletedActivityFields> {
   return {
+    workspaceIoReadDirCalls: io.readDirCalls,
+    workspaceIoReadDirEntries: io.readDirEntries,
+    workspaceIoStatCalls: io.statCalls,
+    workspaceIoRealPathCalls: io.realPathCalls,
+    workspaceIoExistsCalls: io.existsCalls,
     workspaceIoContentReadCalls: io.contentReadCalls,
     workspaceIoContentReadBytes: io.contentReadBytes,
   };
@@ -5444,6 +5470,7 @@ function failureActivityExtra(
     queryIdentitySha256: identity.queryIdentitySha256,
     activityDetailStatus: "complete",
     outcome: cancelled ? "cancelled" : "failed",
+    failureKind: connectedContextFailureKind(error),
     retrievalPhase: progress.phase,
     plannedRingCount: progress.plannedRingCount,
     ...failedStructuralActivityExtra(structural),
@@ -5457,10 +5484,14 @@ function failureActivityExtra(
 }
 
 function safeConnectedContextErrorKind(error: unknown): ActivityLogErrorKind {
+  const value = connectedContextFailureKind(error);
+  if (value === ERROR_CODES.CANCELLED) return "cancelled";
+  return isActivityLogErrorKind(value) ? value : "internal";
+}
+
+function connectedContextFailureKind(error: unknown): string {
   try {
-    const value = errorKindOf(error);
-    if (value === ERROR_CODES.CANCELLED) return "cancelled";
-    return isActivityLogErrorKind(value) ? value : "internal";
+    return classifyErrorKind(errorKindOf(error)) ?? "unknown";
   } catch {
     return "unknown";
   }

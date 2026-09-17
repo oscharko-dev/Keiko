@@ -885,11 +885,31 @@ function recordEventExtra(
   extra: Readonly<Record<string, unknown>> | undefined,
   key: string,
 ): Readonly<Record<string, unknown>> {
-  const value = extra?.[key];
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError(`expected object activity field: ${key}`);
+  if (extra === undefined) throw new TypeError(`expected activity fields for: ${key}`);
+  if (key === "structural") {
+    return Object.fromEntries(
+      Object.entries(extra)
+        .filter(([name]) => name.startsWith("structural"))
+        .map(([name, value]) => [`${name[10]?.toLowerCase() ?? ""}${name.slice(11)}`, value]),
+    );
   }
-  return value as Readonly<Record<string, unknown>>;
+  if (key === "workspaceIo") {
+    return Object.fromEntries(
+      Object.entries(extra)
+        .filter(([name]) => name.startsWith("workspaceIo"))
+        .map(([name, value]) => [`${name[11]?.toLowerCase() ?? ""}${name.slice(12)}`, value]),
+    );
+  }
+  if (key === "uncertainty") {
+    return {
+      scopeIncompleteUncertaintyCount: extra.scopeIncompleteUncertaintyCount,
+      budgetClippedUncertaintyCount: extra.budgetClippedUncertaintyCount,
+      toolUnavailableUncertaintyCount: extra.toolUnavailableUncertaintyCount,
+      unsupportedClaimUncertaintyCount: extra.unsupportedClaimUncertaintyCount,
+      entailmentUnavailableUncertaintyCount: extra.entailmentUnavailableUncertaintyCount,
+    };
+  }
+  throw new TypeError(`unknown activity field group: ${key}`);
 }
 
 function workspaceIoCounts(extra: Readonly<Record<string, unknown>>): WorkspaceIoCounts {
@@ -5451,7 +5471,7 @@ describe("excerpt reads past the absolute deadline (#3347 P1)", () => {
     expect(elapsedBudgetClaims(out.pack.uncertainty).length).toBeGreaterThan(0);
     expect(
       activityLog.events.find((event) => event.op === "search.connected-context.completed")?.extra
-        ?.retrievalStatus,
-    ).toMatchObject({ elapsedBudgetBlocked: true });
+        ?.retrievalElapsedBudgetBlocked,
+    ).toBe(true);
   });
 });
