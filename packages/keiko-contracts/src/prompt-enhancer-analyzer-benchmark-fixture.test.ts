@@ -13,4 +13,11 @@ describe("prompt analyzer benchmark fixture", () => {
   it("contains no literal match from any production cue group", () => {
     expect(detectPromptAnalyzerCueGroups(PROMPT_ANALYZER_BENCHMARK_REQUEST.input.text)).toEqual([]);
   });
+
+  it("derives task-class and domain diagnostics from their production rule sets", () => {
+    expect(detectPromptAnalyzerCueGroups("Return a medical code snippet")).toEqual([
+      "taskClass",
+      "domain",
+    ]);
+  });
 });

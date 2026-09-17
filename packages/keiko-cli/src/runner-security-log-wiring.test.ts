@@ -157,7 +157,9 @@ describe("Windows CLI security-log production wiring", () => {
     await expect(
       Promise.resolve(runCli(["launcher", "install"], io(), evidenceEnv())),
     ).resolves.toBe(41);
-    await expect(Promise.resolve(runCli(["uninstall"], io(), evidenceEnv()))).resolves.toBe(41);
+    await expect(
+      Promise.resolve(runCli(["uninstall", "--launchers"], io(), evidenceEnv())),
+    ).resolves.toBe(41);
     await expect(Promise.resolve(runCli(["portable", "setup"], io(), evidenceEnv()))).resolves.toBe(
       41,
     );

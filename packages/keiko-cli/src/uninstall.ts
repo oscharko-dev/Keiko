@@ -46,7 +46,6 @@ import {
   writePackageJsonAtomically,
 } from "./init.js";
 import {
-  installLayoutOverrideEvidence,
   localPackageRoot,
   writeInstallLayoutOverrideEvidenceWithFactory,
 } from "./install-layout.js";
@@ -577,27 +576,49 @@ function refuseStateRemovalOnCorruptRegistration(
 // Consolidates the pre-run refusal checks so runUninstallCli stays under the repo-wide
 // cyclomatic-complexity ceiling: unsafe state-root (symlink / non-directory) and corrupt
 // portable registration (only when state removal is selected) are both fail-closed guards.
-function refuseEarly(opts: UninstallOptions, io: CliIo, stateDir: string): boolean {
+interface UninstallPreflight {
+  readonly refused: boolean;
+  readonly stateRoot?: StateRootInspection;
+}
+
+function uninstallPreflight(
+  opts: UninstallOptions,
+  io: CliIo,
+  stateDir: string,
+): UninstallPreflight {
   // PR-review follow-up (Codex thread 3771542616): only inspect the state directory when
   // a scope that actually touches it is selected. --scripts alone must not lstat an
   // unrelated state dir; an EACCES/EIO on that path would otherwise abort the scripts
   // uninstall for no reason.
-  if (opts.scopes.state || opts.scopes.launchers) {
-    const stateRoot = inspectStateRoot(stateDir);
-    if (refuseUnsafeStateRoot(opts, io, stateRoot)) return true;
+  const stateRoot =
+    opts.scopes.state || opts.scopes.launchers ? inspectStateRoot(stateDir) : undefined;
+  if (stateRoot !== undefined && refuseUnsafeStateRoot(opts, io, stateRoot)) {
+    return { refused: true, stateRoot };
   }
-  if (refuseStateRemovalOnCorruptRegistration(opts, io, stateDir)) return true;
-  return false;
+  if (refuseStateRemovalOnCorruptRegistration(opts, io, stateDir)) {
+    return stateRoot === undefined ? { refused: true } : { refused: true, stateRoot };
+  }
+  return stateRoot === undefined ? { refused: false } : { refused: false, stateRoot };
 }
 
 function writeUninstallInstallLayoutEvidence(
+  opts: UninstallOptions,
+  stateRoot: StateRootInspection | undefined,
   stateDir: string,
   env: EnvSource,
   factory: CliSecurityLogSinkFactory | undefined,
 ): void {
-  if (installLayoutOverrideEvidence(env) === undefined) return;
-  const root = inspectStateRoot(stateDir);
-  if (root.status !== "absent" && root.status !== "directory") return;
+  // A scripts-only or dry-run command must not touch state. A state-removing command cannot retain
+  // an event in the store it deletes and an asynchronous sink could recreate that store afterward.
+  // Persist only for a real launcher-only operation whose validated state directory already exists.
+  if (
+    opts.dryRun ||
+    opts.scopes.state ||
+    !opts.scopes.launchers ||
+    stateRoot?.status !== "directory"
+  ) {
+    return;
+  }
   writeInstallLayoutOverrideEvidenceWithFactory(factory, stateDir, env);
 }
 
@@ -619,12 +640,19 @@ export async function runUninstallCli(
   }
   const stateDir = resolveStateDir(resolved.cwd, env, opts.stateDirArg);
   try {
-    // PR-review follow-up (Codex thread 3771600804): refuseEarly's guards can throw when
+    // PR-review follow-up (Codex thread 3771600804): preflight guards can throw when
     // an lstat / read on the state directory or portable-install-state.json fails with
     // EACCES / EIO / etc. Keep them inside the same try so the documented filesystem-
     // error handler prints the scoped diagnostic instead of the process-level fatal path.
-    if (refuseEarly(opts, io, stateDir)) return 1;
-    writeUninstallInstallLayoutEvidence(stateDir, env, deps.securityLogSinkFactory);
+    const preflight = uninstallPreflight(opts, io, stateDir);
+    if (preflight.refused) return 1;
+    writeUninstallInstallLayoutEvidence(
+      opts,
+      preflight.stateRoot,
+      stateDir,
+      env,
+      deps.securityLogSinkFactory,
+    );
     const securityLogSink = createCliSecurityLogSink(stateDir, deps.securityLogSinkFactory);
     // #KEIKO-0422: ensureServerStoppable is now async — it waits (bounded) for the
     // signalled UI to exit before returning "ok", so state removal never races with a

@@ -936,6 +936,8 @@ const CRITERIA_CUES: readonly string[] = [
 ];
 
 const PROMPT_ANALYZER_CUE_GROUPS = Object.freeze({
+  taskClass: TASK_CLASS_RULES.flatMap((rule) => [...rule.strong, ...rule.weak]),
+  domain: DOMAIN_RULES.flatMap((rule) => rule.keywords),
   advice: ADVICE_CUES,
   instructionOverride: INSTRUCTION_OVERRIDE_CUES,
   toolAuthority: TOOL_AUTHORITY_CUES,

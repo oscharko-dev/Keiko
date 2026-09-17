@@ -306,17 +306,62 @@ describe("runUninstallCli — usage", () => {
 });
 
 describe("runUninstallCli — dry run", () => {
-  it("records install-layout normalization after state-root validation", async () => {
+  it("does not mutate state to record install-layout normalization", async () => {
+    const root = makeRoot();
+    const stateDir = seedState(root);
+    seedPackageJson(root, {});
+    const c = makeIo();
+    let factoryCalls = 0;
+    const correlationId = "00000000-0000-4000-8000-000000000001";
+
+    await expect(
+      runUninstallCli(
+        ["--dry-run"],
+        c.io,
+        {
+          [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin",
+          [INSTALL_LAYOUT_CORRELATION_ID_ENV]: correlationId,
+        },
+        {
+          cwd: root,
+          homedir: () => root,
+          securityLogSinkFactory: () => {
+            factoryCalls += 1;
+            return { write: (): void => undefined };
+          },
+        },
+      ),
+    ).resolves.toBe(0);
+    expect(factoryCalls).toBe(0);
+    expect(existsSync(join(stateDir, "logs"))).toBe(false);
+  });
+
+  it("reports would-remove without changing anything", async () => {
+    const root = makeRoot();
+    const stateDir = seedState(root);
+    const pkg = seedPackageJson(root, { custom: "echo hi" });
+    const c = makeIo();
+    const deps: UninstallCliDeps = { cwd: root, homedir: () => root };
+    await expect(runUninstallCli(["--dry-run"], c.io, {}, deps)).resolves.toBe(0);
+    expect(c.out()).toContain("would-remove");
+    expect(c.out()).toContain("To remove the package itself");
+    // Nothing actually removed.
+    expect(existsSync(join(stateDir, "ui.pid"))).toBe(true);
+    expect(readScripts(pkg)["keiko:start"]).toBe(KEIKO_START_SCRIPT);
+  });
+});
+
+describe("runUninstallCli — apply", () => {
+  it("records normalization only for a state-preserving launcher operation", async () => {
     const root = makeRoot();
     seedState(root);
-    seedPackageJson(root, {});
     const c = makeIo();
     const events: SecurityLogEvent[] = [];
     const correlationId = "00000000-0000-4000-8000-000000000001";
 
     await expect(
       runUninstallCli(
-        ["--dry-run"],
+        ["--launchers"],
         c.io,
         {
           [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin",
@@ -336,22 +381,34 @@ describe("runUninstallCli — dry run", () => {
     ]);
   });
 
-  it("reports would-remove without changing anything", async () => {
+  it("does not queue evidence into state that a full uninstall removes", async () => {
     const root = makeRoot();
     const stateDir = seedState(root);
-    const pkg = seedPackageJson(root, { custom: "echo hi" });
-    const c = makeIo();
-    const deps: UninstallCliDeps = { cwd: root, homedir: () => root };
-    await expect(runUninstallCli(["--dry-run"], c.io, {}, deps)).resolves.toBe(0);
-    expect(c.out()).toContain("would-remove");
-    expect(c.out()).toContain("To remove the package itself");
-    // Nothing actually removed.
-    expect(existsSync(join(stateDir, "ui.pid"))).toBe(true);
-    expect(readScripts(pkg)["keiko:start"]).toBe(KEIKO_START_SCRIPT);
-  });
-});
+    seedPackageJson(root);
+    let factoryCalls = 0;
 
-describe("runUninstallCli — apply", () => {
+    await expect(
+      runUninstallCli(
+        [],
+        makeIo().io,
+        {
+          [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin",
+          [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+        },
+        {
+          cwd: root,
+          homedir: () => root,
+          securityLogSinkFactory: () => {
+            factoryCalls += 1;
+            return { write: (): void => undefined };
+          },
+        },
+      ),
+    ).resolves.toBe(0);
+    expect(factoryCalls).toBe(0);
+    expect(existsSync(stateDir)).toBe(false);
+  });
+
   it("removes state, keiko scripts (keeping custom), and prints guidance", async () => {
     const root = makeRoot();
     const stateDir = seedState(root);
@@ -371,10 +428,28 @@ describe("runUninstallCli — apply", () => {
     const stateDir = seedState(root);
     const pkg = seedPackageJson(root);
     const c = makeIo();
+    let factoryCalls = 0;
     await expect(
-      runUninstallCli(["--scripts"], c.io, {}, { cwd: root, homedir: () => root }),
+      runUninstallCli(
+        ["--scripts"],
+        c.io,
+        {
+          [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin",
+          [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+        },
+        {
+          cwd: root,
+          homedir: () => root,
+          securityLogSinkFactory: () => {
+            factoryCalls += 1;
+            return { write: (): void => undefined };
+          },
+        },
+      ),
     ).resolves.toBe(0);
+    expect(factoryCalls).toBe(0);
     expect(existsSync(stateDir)).toBe(true);
+    expect(existsSync(join(stateDir, "logs"))).toBe(false);
     expect(readScripts(pkg)["keiko:start"]).toBeUndefined();
   });
 

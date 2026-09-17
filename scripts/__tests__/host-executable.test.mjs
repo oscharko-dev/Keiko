@@ -1,7 +1,9 @@
+import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   realpathSync,
   renameSync,
   rmSync,
@@ -161,7 +163,8 @@ describe("resolveHostExecutable", () => {
       mkdirSync(ghBin, { recursive: true });
       mkdirSync(npmBin, { recursive: true });
       writeFileSync(nodeExecutable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-      writeFileSync(join(ghBin, "gh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      const ghExecutable = join(ghBin, "gh");
+      writeFileSync(ghExecutable, "#!/bin/sh\nprintf 'trusted-gh\\n'\n", { mode: 0o755 });
       writeFileSync(join(npmBin, "npm-cli.js"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
       symlinkSync(join(npmBin, "npm-cli.js"), join(nodeBin, "npm"));
       symlinkSync("../Cellar/node/26.8.1/bin/npm", join(bin, "npm"));
@@ -172,13 +175,13 @@ describe("resolveHostExecutable", () => {
       expect(runtimeTrustRoots(nodeExecutable)).toEqual([
         realpathSync(join(homebrew, "Cellar", "node", "26.8.1")),
       ]);
-      expect(
-        resolveHostExecutable("gh", {
-          env: { PATH: bin },
-          runtimeExecutable: nodeExecutable,
-          workspaceRoot: workspace,
-        }),
-      ).toBe(realpathSync(join(ghBin, "gh")));
+      const resolvedGh = resolveHostExecutable("gh", {
+        env: { PATH: bin },
+        runtimeExecutable: nodeExecutable,
+        workspaceRoot: workspace,
+      });
+      expect(resolvedGh).not.toBe(realpathSync(ghExecutable));
+      expect(readFileSync(resolvedGh)).toEqual(readFileSync(ghExecutable));
       expect(
         resolveHostExecutable("npm", {
           env: { PATH: bin },
@@ -189,6 +192,13 @@ describe("resolveHostExecutable", () => {
 
       const ghFormula = join(homebrew, "Cellar", "gh");
       const displacedFormula = join(homebrew, "Cellar", "gh-displaced");
+      renameSync(ghFormula, displacedFormula);
+      mkdirSync(ghBin, { recursive: true });
+      writeFileSync(ghExecutable, "#!/bin/sh\nprintf 'attacker-gh\\n'\n", { mode: 0o755 });
+      expect(execFileSync(resolvedGh, { encoding: "utf8" })).toBe("trusted-gh\n");
+      rmSync(ghFormula, { recursive: true });
+      renameSync(displacedFormula, ghFormula);
+
       renameSync(ghFormula, displacedFormula);
       symlinkSync(displacedFormula, ghFormula, "dir");
       expect(() =>

@@ -1,4 +1,21 @@
-import { constants, accessSync, lstatSync, realpathSync, statSync } from "node:fs";
+import { Buffer } from "node:buffer";
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  accessSync,
+  fstatSync,
+  fsyncSync,
+  lstatSync,
+  mkdtempSync,
+  openSync,
+  readSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -6,6 +23,10 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const BARE_EXECUTABLE = /^[A-Za-z0-9._-]+$/u;
 const GROUP_WRITE_BIT = 0o020;
 const WORLD_WRITE_BIT = 0o002;
+const SNAPSHOT_MODE = 0o500;
+const snapshotRoots = new Set();
+const formulaSnapshots = new Map();
+let snapshotCleanupRegistered = false;
 
 function environmentValue(env, name, platform) {
   if (env[name] !== undefined || platform !== "win32") return env[name];
@@ -35,12 +56,15 @@ function activeGroupIds() {
   return [...new Set([process.getgid(), ...process.getgroups()])];
 }
 
-function isWritableByCaller(path, groupIds) {
-  const stats = statSync(path);
+function statsWritableByCaller(stats, groupIds) {
   if ((stats.mode & WORLD_WRITE_BIT) !== 0) return true;
   return (
     (stats.mode & GROUP_WRITE_BIT) !== 0 && (groupIds === undefined || groupIds.includes(stats.gid))
   );
+}
+
+function isWritableByCaller(path, groupIds) {
+  return statsWritableByCaller(statSync(path), groupIds);
 }
 
 function isRuntimeAnchored(candidate, real, trustedRoots) {
@@ -74,28 +98,107 @@ function isOwnedBy(path, ownerUid) {
   return statSync(path).uid === ownerUid;
 }
 
-function isHomebrewFormulaTarget(candidate, real, runtimeExecutable, platform, groupIds) {
-  if (platform === "win32" || !lstatSync(candidate).isSymbolicLink()) return false;
+function homebrewFormulaIdentity(candidate, real, runtimeExecutable, platform, groupIds) {
+  if (platform === "win32" || !lstatSync(candidate).isSymbolicLink()) return undefined;
   const runtimeReal = realpathSync(runtimeExecutable);
   const cellar = ancestorNamed(runtimeReal, "Cellar");
-  if (cellar === undefined || basename(real) !== basename(candidate)) return false;
+  if (cellar === undefined || basename(real) !== basename(candidate)) return undefined;
   const formulaEntry = join(cellar, basename(candidate));
-  if (lstatSync(formulaEntry).isSymbolicLink()) return false;
+  if (lstatSync(formulaEntry).isSymbolicLink()) return undefined;
   const formulaRoot = realpathSync(formulaEntry);
   const runtimeOwnerUid = statSync(runtimeReal).uid;
-  // Homebrew's shared Cellar is group-writable on standard Apple Silicon installs. Binding every
-  // accepted formula node to the active Node runtime's owner closes the sibling-admin replacement
-  // path without treating the writable prefix itself as trusted: another group member cannot
-  // recreate the displaced formula tree with the runtime owner's uid.
-  return (
+  const sourceStats = statSync(real);
+  const trusted =
     isContained(formulaRoot, real) &&
     protectedFormulaPaths(formulaRoot, real).every(
       (path) => isOwnedBy(path, runtimeOwnerUid) && !isWritableByCaller(path, groupIds),
-    )
-  );
+    );
+  return trusted ? { sourceStats, runtimeOwnerUid } : undefined;
 }
 
-function hasTrustedPermissions(
+function cleanupSnapshots() {
+  for (const root of snapshotRoots) rmSync(root, { force: true, recursive: true });
+  snapshotRoots.clear();
+  formulaSnapshots.clear();
+}
+
+function privateSnapshotRoot() {
+  const root = mkdtempSync(join(tmpdir(), "keiko-host-executable-"));
+  chmodSync(root, 0o700);
+  snapshotRoots.add(root);
+  if (!snapshotCleanupRegistered) {
+    snapshotCleanupRegistered = true;
+    process.once("exit", cleanupSnapshots);
+  }
+  return root;
+}
+
+function sameFile(left, right) {
+  return left.dev === right.dev && left.ino === right.ino;
+}
+
+function copyExecutable(sourceFd, destinationFd) {
+  const buffer = Buffer.allocUnsafe(64 * 1024);
+  let bytesRead = readSync(sourceFd, buffer, 0, buffer.length, null);
+  while (bytesRead > 0) {
+    let offset = 0;
+    while (offset < bytesRead) {
+      const written = writeSync(destinationFd, buffer, offset, bytesRead - offset);
+      if (written === 0) throw new Error("trusted executable snapshot write made no progress");
+      offset += written;
+    }
+    bytesRead = readSync(sourceFd, buffer, 0, buffer.length, null);
+  }
+}
+
+function snapshotHomebrewExecutable(real, identity, groupIds) {
+  const snapshotKey = [
+    real,
+    identity.sourceStats.dev,
+    identity.sourceStats.ino,
+    identity.sourceStats.size,
+    identity.sourceStats.mtimeMs,
+  ].join(":");
+  const cached = formulaSnapshots.get(snapshotKey);
+  if (cached !== undefined) return cached;
+  const sourceFd = openSync(real, constants.O_RDONLY | constants.O_NOFOLLOW);
+  let destinationFd;
+  let root;
+  let complete = false;
+  try {
+    const openedStats = fstatSync(sourceFd);
+    if (
+      !openedStats.isFile() ||
+      !sameFile(openedStats, identity.sourceStats) ||
+      openedStats.uid !== identity.runtimeOwnerUid ||
+      statsWritableByCaller(openedStats, groupIds)
+    ) {
+      return undefined;
+    }
+    root = privateSnapshotRoot();
+    const snapshot = join(root, basename(real));
+    destinationFd = openSync(
+      snapshot,
+      constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
+      SNAPSHOT_MODE,
+    );
+    copyExecutable(sourceFd, destinationFd);
+    fsyncSync(destinationFd);
+    chmodSync(snapshot, SNAPSHOT_MODE);
+    formulaSnapshots.set(snapshotKey, snapshot);
+    complete = true;
+    return snapshot;
+  } finally {
+    if (destinationFd !== undefined) closeSync(destinationFd);
+    closeSync(sourceFd);
+    if (root !== undefined && !complete) {
+      snapshotRoots.delete(root);
+      rmSync(root, { force: true, recursive: true });
+    }
+  }
+}
+
+function trustedExecutablePath(
   candidate,
   real,
   runtimeExecutable,
@@ -103,13 +206,16 @@ function hasTrustedPermissions(
   groupIds,
   trustedRoots,
 ) {
-  if (platform === "win32") return true;
+  if (platform === "win32") return real;
   const protectedPaths = [dirname(candidate), real, dirname(real)];
-  return (
+  if (
     protectedPaths.every((path) => !isWritableByCaller(path, groupIds)) ||
-    isRuntimeAnchored(candidate, real, trustedRoots) ||
-    isHomebrewFormulaTarget(candidate, real, runtimeExecutable, platform, groupIds)
-  );
+    isRuntimeAnchored(candidate, real, trustedRoots)
+  ) {
+    return real;
+  }
+  const identity = homebrewFormulaIdentity(candidate, real, runtimeExecutable, platform, groupIds);
+  return identity === undefined ? undefined : snapshotHomebrewExecutable(real, identity, groupIds);
 }
 
 function trustedCandidate(
@@ -124,16 +230,14 @@ function trustedCandidate(
     accessSync(candidate, constants.X_OK);
     const real = realpathSync(candidate);
     if (isContained(realpathSync(workspaceRoot), real)) return undefined;
-    return hasTrustedPermissions(
+    return trustedExecutablePath(
       candidate,
       real,
       runtimeExecutable,
       platform,
       groupIds,
       trustedRoots,
-    )
-      ? real
-      : undefined;
+    );
   } catch {
     return undefined;
   }
