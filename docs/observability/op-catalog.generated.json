@@ -22,6 +22,12 @@
       "package": "keiko-cli"
     },
     {
+      "op": "cli.install-layout.normalized",
+      "category": "diagnostic",
+      "site": "packages/keiko-cli/src/install-layout.ts:79",
+      "package": "keiko-cli"
+    },
+    {
       "op": "cli.lifecycle.stop-escalated",
       "category": "diagnostic",
       "site": "packages/keiko-cli/src/ui-process-stop.ts:198",
@@ -54,7 +60,7 @@
     {
       "op": "process.exiting",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:756",
+      "site": "packages/keiko-cli/src/ui.ts:759",
       "package": "keiko-cli"
     },
     {
@@ -66,19 +72,19 @@
     {
       "op": "process.fatal",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:490",
+      "site": "packages/keiko-cli/src/ui.ts:493",
       "package": "keiko-cli"
     },
     {
       "op": "process.heartbeat",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:990",
+      "site": "packages/keiko-cli/src/ui.ts:993",
       "package": "keiko-cli"
     },
     {
       "op": "process.started",
       "category": "process",
-      "site": "packages/keiko-cli/src/ui.ts:1105",
+      "site": "packages/keiko-cli/src/ui.ts:1111",
       "package": "keiko-cli"
     },
     {
@@ -132,7 +138,7 @@
     {
       "op": "update.runtime.legacy-import-deferred",
       "category": "diagnostic",
-      "site": "packages/keiko-cli/src/ui.ts:1311",
+      "site": "packages/keiko-cli/src/ui.ts:1318",
       "package": "keiko-cli"
     },
     {
@@ -3975,6 +3981,7 @@
     "chat.response.streamed",
     "chat.send.rejected",
     "chat.turn.started",
+    "cli.install-layout.normalized",
     "cli.lifecycle.stop-escalated",
     "cli.lifecycle.stop-escalation-failed",
     "cli.lifecycle.stop-request-failed",

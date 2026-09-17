@@ -145,57 +145,46 @@ describe("resolveHostExecutable", () => {
   );
 
   it.skipIf(process.platform === "win32")(
-    "accepts Homebrew-style symlinks anchored to the trusted package prefix",
+    "does not extend runtime trust to a writable Homebrew prefix",
     () => {
       const workspace = temporary("keiko-host-executable-workspace-");
       const homebrew = temporary("keiko-host-executable-homebrew-");
       const bin = join(homebrew, "bin");
       const nodeBin = join(homebrew, "Cellar", "node", "26.8.1", "bin");
       const ghBin = join(homebrew, "Cellar", "gh", "2.100.0", "bin");
-      mkdirSync(bin);
-      mkdirSync(nodeBin, { recursive: true });
-      mkdirSync(ghBin, { recursive: true });
-      writeFileSync(join(nodeBin, "npm"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-      writeFileSync(join(ghBin, "gh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
-      symlinkSync("../Cellar/node/26.8.1/bin/npm", join(bin, "npm"));
-      symlinkSync("../Cellar/gh/2.100.0/bin/gh", join(bin, "gh"));
-      chmodSync(bin, 0o775);
-
-      expect(
-        resolveHostExecutable("npm", {
-          env: { PATH: bin },
-          trustedRoots: [homebrew],
-          workspaceRoot: workspace,
-        }),
-      ).toBe(realpathSync(join(nodeBin, "npm")));
-      expect(
-        resolveHostExecutable("gh", {
-          env: { PATH: bin },
-          trustedRoots: [homebrew],
-          workspaceRoot: workspace,
-        }),
-      ).toBe(realpathSync(join(ghBin, "gh")));
-    },
-  );
-
-  it.skipIf(process.platform === "win32")(
-    "derives the Homebrew trust prefix from a Cellar-hosted Node runtime",
-    () => {
-      const workspace = temporary("keiko-host-executable-workspace-");
-      const homebrew = temporary("keiko-host-executable-homebrew-");
-      const bin = join(homebrew, "bin");
-      const nodeBin = join(homebrew, "Cellar", "node", "26.8.1", "bin");
-      const ghBin = join(homebrew, "Cellar", "gh", "2.100.0", "bin");
+      const npmBin = join(homebrew, "lib", "node_modules", "npm", "bin");
       const nodeExecutable = join(nodeBin, "node");
       mkdirSync(bin);
       mkdirSync(nodeBin, { recursive: true });
       mkdirSync(ghBin, { recursive: true });
+      mkdirSync(npmBin, { recursive: true });
       writeFileSync(nodeExecutable, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
       writeFileSync(join(ghBin, "gh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      writeFileSync(join(npmBin, "npm-cli.js"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      symlinkSync(join(npmBin, "npm-cli.js"), join(nodeBin, "npm"));
+      symlinkSync("../Cellar/node/26.8.1/bin/npm", join(bin, "npm"));
       symlinkSync("../Cellar/gh/2.100.0/bin/gh", join(bin, "gh"));
       chmodSync(bin, 0o775);
 
-      expect(runtimeTrustRoots(nodeExecutable)).toContain(realpathSync(homebrew));
+      expect(runtimeTrustRoots(nodeExecutable)).toEqual([
+        realpathSync(join(homebrew, "Cellar", "node", "26.8.1")),
+      ]);
+      expect(() =>
+        resolveHostExecutable("gh", {
+          env: { PATH: bin },
+          runtimeExecutable: nodeExecutable,
+          workspaceRoot: workspace,
+        }),
+      ).toThrow("trusted host executable is unavailable");
+      expect(
+        resolveHostExecutable("npm", {
+          env: { PATH: bin },
+          runtimeExecutable: nodeExecutable,
+          workspaceRoot: workspace,
+        }),
+      ).toBe(realpathSync(join(npmBin, "npm-cli.js")));
+
+      chmodSync(bin, 0o755);
       expect(
         resolveHostExecutable("gh", {
           env: { PATH: bin },

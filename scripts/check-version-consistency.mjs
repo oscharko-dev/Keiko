@@ -32,10 +32,10 @@ const APPROVED_ROOT_SRC_FILES = ["src/cli/index.ts", "src/index.ts"];
 const APPROVED_ROOT_SRC_SHA256 = new Map([
   ["src/index.ts", "751c1c0fae45a8bf68ba099ecd0706a74d64661f8fc1b9bd7f05d4abd1beb20b"],
   // The bin facade owns installation-dependent paths and the final process disposition. It binds
-  // those paths to the executing package instead of trusting stale inherited overrides, and its
-  // natural exit lets late detached-helper security events finish their activity-log drain. The
-  // hash is re-pinned to this reviewed content; the next unreviewed edit still fails closed.
-  ["src/cli/index.ts", "f0c7ad0a3e10abf2e78c931966da4f790fa8c3df95e5a39f28809779a6de9863"],
+  // those paths to the executing package through the CLI's tested normalization/evidence helper,
+  // and its natural exit lets late detached-helper security events finish their activity-log
+  // drain. The hash is re-pinned to this reviewed content; the next unreviewed edit still fails.
+  ["src/cli/index.ts", "72fe0ca5e2041e4fdb79dc409ce3d331c2a3430489105f2c98c4e86f7081a273"],
 ]);
 
 function listFilesRecursively(rootDir, prefix = "") {

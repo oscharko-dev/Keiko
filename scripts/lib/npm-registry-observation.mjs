@@ -66,7 +66,8 @@ export function classifyDistTagResult(result) {
     return { kind: "transient", reason: "spawn-error", version: "" };
   }
   if (result.status === 0) {
-    return { kind: "available", version: result.stdout.trim() };
+    const version = result.stdout.trim();
+    return version === "" ? { kind: "missing", version } : { kind: "available", version };
   }
   const viewOutput = `${result.stdout}\n${result.stderr}`;
   if (viewOutput.includes("E404") || viewOutput.includes("No match found")) {

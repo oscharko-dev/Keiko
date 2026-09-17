@@ -1,6 +1,20 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const installProcessGuards = vi.fn();
+const applyAuthoritativeInstallLayout = vi.fn(
+  (
+    env: NodeJS.ProcessEnv,
+    layout: {
+      readonly cliBinPath: string;
+      readonly uiStaticRoot: string;
+      readonly localStateAuditor: string;
+    },
+  ): void => {
+    env.KEIKO_CLI_BIN_PATH = layout.cliBinPath;
+    env.KEIKO_UI_STATIC_ROOT = layout.uiStaticRoot;
+    env.KEIKO_LOCAL_STATE_AUDITOR = layout.localStateAuditor;
+  },
+);
 const runCli = vi.fn(
   (
     _args: readonly string[],
@@ -12,7 +26,11 @@ const runCli = vi.fn(
   },
 );
 
-vi.mock("@oscharko-dev/keiko-cli", () => ({ installProcessGuards, runCli }));
+vi.mock("@oscharko-dev/keiko-cli", () => ({
+  applyAuthoritativeInstallLayout,
+  installProcessGuards,
+  runCli,
+}));
 
 describe("root CLI entrypoint", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -38,6 +56,7 @@ describe("root CLI entrypoint", () => {
       expect(process.exitCode).toBe(0);
       expect(installProcessGuards).toHaveBeenCalledOnce();
       expect(runCli).toHaveBeenCalledOnce();
+      expect(applyAuthoritativeInstallLayout).toHaveBeenCalledOnce();
       expect(stdout).toHaveBeenCalledWith("stdout");
       expect(stderr).toHaveBeenCalledWith("stderr");
       expect(process.env.KEIKO_CLI_BIN_PATH).toMatch(/\/src\/cli\/index\.js$/u);

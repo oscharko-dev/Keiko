@@ -932,6 +932,31 @@ const CRITERIA_CUES: readonly string[] = [
   "prioritize",
   "based on",
 ];
+
+const PROMPT_ANALYZER_CUE_GROUPS = Object.freeze({
+  advice: ADVICE_CUES,
+  instructionOverride: INSTRUCTION_OVERRIDE_CUES,
+  toolAuthority: TOOL_AUTHORITY_CUES,
+  egress: EGRESS_CUES,
+  temporalRecency: TEMPORAL_RECENCY_CUES,
+  namedCurrent: NAMED_CURRENT_CUES,
+  marketPrice: MARKET_PRICE_CUES,
+  suppliedContext: SUPPLIED_CONTEXT_CUES,
+  retrieval: RETRIEVAL_CUES,
+  scopeReference: SCOPE_REFERENCE_CUES,
+  audience: AUDIENCE_CUES,
+  constraint: CONSTRAINT_CUES,
+  criteria: CRITERIA_CUES,
+});
+
+// Content-free diagnostic used by the permanent benchmark fixture proof. It deliberately consumes
+// the analyzer's production cue arrays, so the proof cannot drift by restating their literals.
+export function detectPromptAnalyzerCueGroups(text: string): readonly string[] {
+  const lower = foldForSearch(normalizePromptDraft(text));
+  return Object.entries(PROMPT_ANALYZER_CUE_GROUPS)
+    .filter(([, cues]) => containsAny(lower, cues))
+    .map(([group]) => group);
+}
 const FORMAT_SENSITIVE_CLASSES: ReadonlySet<PromptTaskClass> = new Set([
   "structured-extraction",
   "data-analysis",

@@ -97,6 +97,7 @@ describe("npm registry observation", () => {
       version: "",
     });
     expect(classifyDistTagResult({ status: 0, stdout: "1.0.4\n", stderr: "" })).toEqual(available);
+    expect(classifyDistTagResult({ status: 0, stdout: " \n", stderr: "" })).toEqual(missing);
     expect(classifyDistTagResult({ status: 1, stdout: "E404", stderr: "" })).toEqual(missing);
     expect(classifyDistTagResult({ status: 1, stdout: "", stderr: "No match found" })).toEqual(
       missing,

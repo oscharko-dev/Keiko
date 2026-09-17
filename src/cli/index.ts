@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { installProcessGuards, runCli } from "@oscharko-dev/keiko-cli";
+import {
+  applyAuthoritativeInstallLayout,
+  installProcessGuards,
+  runCli,
+} from "@oscharko-dev/keiko-cli";
 
 if (process.platform === "win32") {
   process.title = "Keiko";
@@ -28,14 +32,11 @@ if (process.platform === "win32") {
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT_DIST = resolve(HERE, "..");
 const PACKAGE_ROOT = resolve(ROOT_DIST, "..");
-process.env.KEIKO_CLI_BIN_PATH = resolve(HERE, "index.js");
-process.env.KEIKO_UI_STATIC_ROOT = resolve(ROOT_DIST, "ui", "static");
-process.env.KEIKO_LOCAL_STATE_AUDITOR = resolve(
-  PACKAGE_ROOT,
-  "scripts",
-  "lib",
-  "local-state-audit.mjs",
-);
+applyAuthoritativeInstallLayout(process.env, {
+  cliBinPath: resolve(HERE, "index.js"),
+  uiStaticRoot: resolve(ROOT_DIST, "ui", "static"),
+  localStateAuditor: resolve(PACKAGE_ROOT, "scripts", "lib", "local-state-audit.mjs"),
+});
 
 // Process-level catch-alls: a stray async error outside any request must exit
 // with one clean, redacted line instead of a raw stack. The logic lives in

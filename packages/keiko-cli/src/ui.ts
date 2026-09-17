@@ -35,7 +35,10 @@ import type {
   UpdateStartupRecoveryPort,
 } from "@oscharko-dev/keiko-server";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
-import { resolvePreferredInstallLayout } from "./install-layout.js";
+import {
+  resolvePreferredInstallLayout,
+  writeInstallLayoutOverrideEvidence,
+} from "./install-layout.js";
 // GEN-PERF-CLI-001 — the server module graph (routes, local-knowledge/sqlite wiring,
 // ws, …) loads on FIRST USE, not when this module is parsed. The CLI barrel evaluates
 // ui.ts on every `keiko` invocation, and this one eager import accounted for most of
@@ -1069,6 +1072,7 @@ interface ProcessStartedContext {
   readonly handlerDeps: UiHandlerDeps;
   readonly stateDirSource: StateDirSource;
   readonly logLevel: ServerLogThreshold;
+  readonly runtimeEnv: EnvSource;
   // Threaded from `UiCliDeps.installModeProbe`. Undefined on every real launch that does not
   // override it (the real detector runs) and on the injected-server path with no override (no
   // probe runs at all, matching today's behavior) — defined only when a test explicitly injects
@@ -1084,7 +1088,8 @@ interface ProcessStartedContext {
 async function reportProcessStarted(
   context: ProcessStartedContext,
 ): Promise<(() => void) | undefined> {
-  const { activityLog, isRealLaunch, parsed, handlerDeps, stateDirSource, logLevel } = context;
+  const { activityLog, isRealLaunch, parsed, handlerDeps, stateDirSource, logLevel, runtimeEnv } =
+    context;
   const { installModeProbe } = context;
   const shouldProbeInstallMode = isRealLaunch || installModeProbe !== undefined;
   if (activityLog === undefined) return undefined;
@@ -1092,6 +1097,7 @@ async function reportProcessStarted(
     ? await probeInstallModeKind(installModeProbe)
     : { installMode: undefined, installModeErrorKind: undefined };
   const gatewayProviderCount = handlerDeps.config?.providers.length;
+  writeInstallLayoutOverrideEvidence(activityLog, runtimeEnv);
   // No `instanceId` in `extra` here: `instanceId` is a RESERVED field name
   // (`log-redaction.ts`'s `RESERVED_FIELD_NAMES`), so `redactLogFields` silently drops it from
   // `extra` the same way it drops any other reserved name a caller supplies — see
@@ -1282,6 +1288,7 @@ async function reportStartedAndWaitForShutdown(input: {
     handlerDeps,
     stateDirSource,
     logLevel,
+    runtimeEnv: options.runtimeEnv,
     installModeProbe: deps.installModeProbe,
   });
   await maybeWaitForShutdown(server, deps, {

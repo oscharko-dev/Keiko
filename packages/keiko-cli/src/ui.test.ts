@@ -29,6 +29,10 @@ import type {
   UiHandlerDeps,
 } from "@oscharko-dev/keiko-server";
 import type { CliIo } from "./runner.js";
+import {
+  INSTALL_LAYOUT_CORRELATION_ID_ENV,
+  INSTALL_LAYOUT_OVERRIDES_ENV,
+} from "./install-layout.js";
 import { peekShutdownRequest } from "./state-paths.js";
 
 function captureIo(): { io: CliIo; out: string[]; err: string[] } {
@@ -1161,8 +1165,28 @@ describe("runUiCli", () => {
       },
     };
     try {
-      const code = await runUiCli([], io, { KEIKO_LOG_LEVEL: "debug" }, deps);
+      const correlationId = "00000000-0000-4000-8000-000000000001";
+      const code = await runUiCli(
+        [],
+        io,
+        {
+          KEIKO_LOG_LEVEL: "debug",
+          [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin,ui-static-root,local-state-auditor",
+          [INSTALL_LAYOUT_CORRELATION_ID_ENV]: correlationId,
+        },
+        deps,
+      );
       expect(code).toBe(0);
+      const normalized = sink.events.find((event) => event.op === "cli.install-layout.normalized");
+      expect(normalized).toMatchObject({
+        category: "diagnostic",
+        correlationId,
+        level: "info",
+        extra: {
+          overriddenCount: 3,
+          overriddenKinds: ["cli-bin", "ui-static-root", "local-state-auditor"],
+        },
+      });
       const started = sink.events.find((event) => event.op === "process.started");
       expect(started).toBeDefined();
       expect(started?.category).toBe("process");

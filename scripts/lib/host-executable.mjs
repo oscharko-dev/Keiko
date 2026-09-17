@@ -74,21 +74,10 @@ function trustedCandidate(candidate, workspaceRoot, platform, groupIds, trustedR
 
 export function runtimeTrustRoots(runtimeExecutable = process.execPath) {
   try {
-    const nodeRuntime = dirname(dirname(realpathSync(runtimeExecutable)));
-    const roots = [nodeRuntime];
-    const homebrewPrefix = homebrewPrefixForCellarRuntime(nodeRuntime);
-    if (homebrewPrefix !== undefined) roots.push(homebrewPrefix);
-    return roots;
+    return [dirname(dirname(realpathSync(runtimeExecutable)))];
   } catch {
     return [];
   }
-}
-
-function homebrewPrefixForCellarRuntime(runtimeRoot) {
-  const packageRoot = dirname(runtimeRoot);
-  const cellarRoot = dirname(packageRoot);
-  if (cellarRoot.endsWith("/Cellar")) return dirname(cellarRoot);
-  return undefined;
 }
 
 export function resolveHostExecutable(
@@ -107,8 +96,10 @@ export function resolveHostExecutable(
   }
   const names = executableNames(command, env, platform);
   const realTrustedRoots = trustedRoots.map((root) => realpathSync(root));
-  const resolved = resolveFromPath(
-    environmentValue(env, "PATH", platform),
+  const path = environmentValue(env, "PATH", platform);
+  const resolved = resolveTrustedExecutable(
+    runtimeExecutable,
+    path,
     names,
     workspaceRoot,
     platform,
@@ -117,6 +108,66 @@ export function resolveHostExecutable(
   );
   if (resolved !== undefined) return resolved;
   throw new Error(`trusted host executable is unavailable: ${command}`);
+}
+
+function resolveTrustedExecutable(
+  runtimeExecutable,
+  path,
+  names,
+  workspaceRoot,
+  platform,
+  groupIds,
+  trustedRoots,
+) {
+  const runtimeResolved = runtimeExecutableFromPath(
+    runtimeExecutable,
+    path,
+    names,
+    workspaceRoot,
+    platform,
+    groupIds,
+    trustedRoots,
+  );
+  if (runtimeResolved !== undefined) return runtimeResolved;
+  return resolveFromPath(path, names, workspaceRoot, platform, groupIds, trustedRoots);
+}
+
+function runtimeExecutableFromPath(
+  runtimeExecutable,
+  path,
+  names,
+  workspaceRoot,
+  platform,
+  groupIds,
+  trustedRoots,
+) {
+  const nodeRuntimeBin = runtimeBin(runtimeExecutable);
+  if (nodeRuntimeBin === undefined) return undefined;
+  const resolved = resolveFromEntry(
+    nodeRuntimeBin,
+    names,
+    workspaceRoot,
+    platform,
+    groupIds,
+    trustedRoots,
+  );
+  return resolved !== undefined && pathSelectsExecutable(path, names, resolved)
+    ? resolved
+    : undefined;
+}
+
+function pathSelectsExecutable(path, names, expectedReal) {
+  for (const entry of (path ?? "").split(delimiter)) {
+    if (!isAbsolute(entry)) continue;
+    for (const name of names) {
+      try {
+        if (realpathSync(join(entry, name)) === expectedReal) return true;
+      } catch {
+        // Keep searching: absent and broken PATH candidates are not authoritative.
+      }
+    }
+  }
+  return false;
 }
 
 export function shellCommandForTrustedExecutable(executable, platform = process.platform) {
@@ -136,6 +187,14 @@ function resolveFromPath(path, names, workspaceRoot, platform, groupIds, trusted
     if (resolved !== undefined) return resolved;
   }
   return undefined;
+}
+
+function runtimeBin(runtimeExecutable) {
+  try {
+    return dirname(realpathSync(runtimeExecutable));
+  } catch {
+    return undefined;
+  }
 }
 
 function resolveFromEntry(entry, names, workspaceRoot, platform, groupIds, trustedRoots) {
