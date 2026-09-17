@@ -27,6 +27,12 @@ import {
   type GitHubIssueReferenceRejection,
 } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { stripUnsafeFormatChars } from "@oscharko-dev/keiko-contracts/runtime/text-safety";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  isActivityLogErrorKind,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { canonicalise, sha256Hex } from "@oscharko-dev/keiko-security";
 import { readGitDefaultBranch } from "@oscharko-dev/keiko-tools";
 
@@ -53,6 +59,88 @@ import {
   githubRemoteOwnerAndRepoFor,
   isGitHubIssueReaderAuthorized,
 } from "./githubIssueReaderAuthorization.js";
+
+const ISSUE_RESOLVED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-workbench.issue.resolved",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-context/githubIssueResolution.record",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "invalid-reference",
+        "repository-mismatch",
+        "auth-required",
+        "issue-unavailable",
+        "clone-failed",
+        "authority-denied",
+        "cancelled",
+        "resolved",
+      ],
+    },
+    issueNumber: { type: "integer", dataClass: "count", required: false },
+    repositoryId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "empty",
+        "malformed",
+        "unsupported-host",
+        "pull-request",
+        "invalid-repository",
+        "invalid-number",
+        "repository-required",
+        "repository-unresolved",
+        "remote-unresolved",
+        "reference-names-other-repository",
+        "no-grant",
+        "reader-unavailable",
+        "read-failed",
+        "read-transient-failure",
+        "identity-missing",
+        "state-unknown",
+        "pull-request-as-issue",
+        "closed",
+        "provenance-unreadable",
+        "transferred",
+        "renumbered",
+        "default-branch-read-failed",
+        "default-branch-unresolved",
+        "aborted",
+      ],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-workbench-issue-resolution"],
+  proofIds: ["coding-workbench.issue.resolved.line"],
+  releaseImpact: "patch",
+});
+
+function closedResolutionErrorKind(value: string): ActivityLogErrorKind {
+  return isActivityLogErrorKind(value) ? value : "unknown";
+}
 
 export interface GitHubIssueResolutionInput {
   /** Server-resolved checkout root, already canonical (realpath'd by the caller). */
@@ -423,22 +511,28 @@ function record(
     readonly repositoryId?: string | undefined;
   },
 ): void {
-  ctx.activityLog.write({
-    level: levelFor(outcome, detail.errorKind),
-    category: "security",
-    op: "coding-workbench.issue.resolved",
-    correlationId: ctx.correlationId,
-    ...(detail.errorKind === undefined ? {} : { errorKind: detail.errorKind }),
-    extra: {
-      outcome,
-      ...(detail.issueNumber === undefined ? {} : { issueNumber: detail.issueNumber }),
-      ...(detail.repositoryId === undefined ? {} : { repositoryId: detail.repositoryId }),
-      ...(detail.reason === undefined ? {} : { reason: detail.reason }),
-      ...(detail.frames === undefined
-        ? {}
-        : { frames: detail.frames, causeChain: detail.causeChain }),
-    },
-  });
+  ctx.activityLog.write(
+    activityLogEvent(
+      ISSUE_RESOLVED_OPERATION,
+      {
+        level: levelFor(outcome, detail.errorKind),
+        correlationId: ctx.correlationId,
+        ...(detail.errorKind === undefined
+          ? {}
+          : { errorKind: closedResolutionErrorKind(detail.errorKind) }),
+      },
+      {
+        outcome,
+        ...(detail.issueNumber === undefined ? {} : { issueNumber: detail.issueNumber }),
+        ...(detail.repositoryId === undefined ? {} : { repositoryId: detail.repositoryId }),
+        ...(detail.reason === undefined ? {} : { reason: detail.reason }),
+        ...(detail.errorKind === undefined ? {} : { failureKind: detail.errorKind }),
+        ...(detail.frames === undefined
+          ? {}
+          : { frames: detail.frames, causeChain: detail.causeChain }),
+      },
+    ),
+  );
 }
 
 interface Resolved {

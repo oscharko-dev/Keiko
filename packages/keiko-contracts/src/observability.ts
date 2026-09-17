@@ -252,9 +252,13 @@ type ActivityLogFieldValue<Contract extends ActivityLogFieldContract> =
     ? ActivityLogCompletenessState
     : Contract["dataClass"] extends "loss-state"
       ? ActivityLogLossState
-      : Contract["values"] extends readonly string[]
-        ? Contract["values"][number]
-        : ActivityLogPrimitiveValue<Contract>;
+      : Contract["type"] extends "string-array"
+        ? Contract["values"] extends readonly string[]
+          ? readonly Contract["values"][number][]
+          : readonly string[]
+        : Contract["values"] extends readonly string[]
+          ? Contract["values"][number]
+          : ActivityLogPrimitiveValue<Contract>;
 
 type RequiredActivityLogFieldNames<Fields extends Readonly<Record<string, ActivityLogFieldContract>>> = {
   [Name in keyof Fields]: Fields[Name]["required"] extends true ? Name : never;

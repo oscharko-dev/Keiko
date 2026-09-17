@@ -235,8 +235,8 @@ describe("server-resolved issue intake", () => {
     expect(f.events.at(-1)).toMatchObject({
       op: "coding-workbench.issue.resolved",
       correlationId: "issue-test",
-      errorKind: "Error",
-      extra: { reason: "read-failed" },
+      errorKind: "unknown",
+      extra: { reason: "read-failed", failureKind: "Error" },
     });
   });
 
