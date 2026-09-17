@@ -94,6 +94,78 @@ function runBuiltSupportCli(
   );
 }
 
+interface DirectoryMutationInvocation {
+  readonly operation: "link" | "unlink";
+  readonly sourcePath: string;
+  readonly targetPath: string | undefined;
+}
+
+function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === "object" && value !== null;
+}
+
+function isDirectoryMutationOperation(value: unknown): value is "link" | "unlink" {
+  return value === "link" || value === "unlink";
+}
+
+function directoryMutationInvocation(options: unknown): DirectoryMutationInvocation | undefined {
+  if (!isRecord(options)) return undefined;
+  const { input, cwd } = options;
+  if (typeof input !== "string" || typeof cwd !== "string") return undefined;
+  const request: unknown = JSON.parse(input);
+  if (!isRecord(request)) return undefined;
+  const { operation, source, target } = request;
+  if (!isDirectoryMutationOperation(operation)) return undefined;
+  if (typeof source !== "string") return undefined;
+  if (operation === "link" && typeof target !== "string") return undefined;
+  return {
+    operation,
+    sourcePath: join(cwd, source),
+    targetPath: typeof target === "string" ? join(cwd, target) : undefined,
+  };
+}
+
+function mutationProcessResult(
+  status: number | null,
+  signal: NodeJS.Signals | null = null,
+): ReturnType<(typeof import("node:child_process"))["spawnSync"]> {
+  return {
+    pid: 0,
+    output: [null, null, null],
+    stdout: null,
+    stderr: null,
+    status,
+    signal,
+  } as ReturnType<(typeof import("node:child_process"))["spawnSync"]>;
+}
+
+async function crashDirectoryMutationAtLink(linkOrdinal: number): Promise<void> {
+  const actualChild =
+    await vi.importActual<typeof import("node:child_process")>("node:child_process");
+  const actualFs = await vi.importActual<typeof import("node:fs")>("node:fs");
+  let links = 0;
+  vi.doMock("node:child_process", () => ({
+    ...actualChild,
+    spawnSync: (
+      ...args: Parameters<typeof actualChild.spawnSync>
+    ): ReturnType<typeof actualChild.spawnSync> => {
+      const invocation = directoryMutationInvocation(args[2]);
+      if (invocation === undefined) {
+        return Reflect.apply(actualChild.spawnSync, actualChild, args);
+      }
+      if (invocation.operation === "link") {
+        links += 1;
+        if (links === linkOrdinal) return mutationProcessResult(null, "SIGKILL");
+        if (invocation.targetPath === undefined) throw new Error("expected mutation target");
+        actualFs.linkSync(invocation.sourcePath, invocation.targetPath);
+      } else {
+        actualFs.unlinkSync(invocation.sourcePath);
+      }
+      return mutationProcessResult(0);
+    },
+  }));
+}
+
 function makeIo(): { io: CliIo; out: () => string; err: () => string } {
   const outChunks: string[] = [];
   const errChunks: string[] = [];
@@ -318,6 +390,7 @@ describe("runSupportCli export", () => {
 
   afterEach(() => {
     vi.doUnmock("node:fs");
+    vi.doUnmock("node:child_process");
     vi.doUnmock("@oscharko-dev/keiko-security/fs-hardening");
     vi.resetModules();
     rmSync(stateDir, { recursive: true, force: true });
@@ -594,17 +667,8 @@ describe("runSupportCli export", () => {
   it("recovers the durable prior report before reading a changed clock or activity log", async () => {
     const outPath = join(outDir, "recoverable-report.jsonl");
     const context = supportPublicationContext(outDir, outPath);
-    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-    let links = 0;
     vi.resetModules();
-    vi.doMock("node:fs", () => ({
-      ...actual,
-      linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
-        links += 1;
-        if (links === 2) throw Object.assign(new Error("process interrupted"), { code: "EINTR" });
-        Reflect.apply(actual.linkSync, actual, args);
-      },
-    }));
+    await crashDirectoryMutationAtLink(2);
     const interrupted = await import("./support.js");
     const firstIo = makeIo();
 
@@ -625,7 +689,7 @@ describe("runSupportCli export", () => {
     expect(existsSync(`${outPath}.sha256`)).toBe(true);
     expect(readdirSync(context.root).some((name) => name.includes(context.slot))).toBe(true);
 
-    vi.doUnmock("node:fs");
+    vi.doUnmock("node:child_process");
     vi.resetModules();
     writeFileSync(
       join(stateDir, "logs", "server.log"),
@@ -678,19 +742,8 @@ describe("runSupportCli export", () => {
   it("records rolled-back recovery before a later audit failure exits", async () => {
     const outPath = join(outDir, "rolled-back-report.jsonl");
     const context = supportPublicationContext(outDir, outPath);
-    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-    let interrupted = false;
     vi.resetModules();
-    vi.doMock("node:fs", () => ({
-      ...actual,
-      linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
-        if (!interrupted) {
-          interrupted = true;
-          throw Object.assign(new Error("process interrupted"), { code: "EINTR" });
-        }
-        Reflect.apply(actual.linkSync, actual, args);
-      },
-    }));
+    await crashDirectoryMutationAtLink(1);
     const firstRun = await import("./support.js");
 
     expect(
@@ -703,7 +756,7 @@ describe("runSupportCli export", () => {
     ).toBe(1);
     expect(readdirSync(context.root).some((name) => name.includes(context.slot))).toBe(true);
 
-    vi.doUnmock("node:fs");
+    vi.doUnmock("node:child_process");
     vi.resetModules();
     const resumed = await import("./support.js");
     const secondIo = makeIo();
@@ -738,17 +791,8 @@ describe("runSupportCli export", () => {
     const firstNow = new Date("2026-09-02T03:04:05.000Z");
     const outPath = resolveOutPath(outDir, undefined, firstNow);
     const context = supportPublicationContext(outDir, undefined);
-    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
-    let links = 0;
     vi.resetModules();
-    vi.doMock("node:fs", () => ({
-      ...actual,
-      linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
-        links += 1;
-        if (links === 2) throw Object.assign(new Error("process interrupted"), { code: "EINTR" });
-        Reflect.apply(actual.linkSync, actual, args);
-      },
-    }));
+    await crashDirectoryMutationAtLink(2);
     const interrupted = await import("./support.js");
     expect(
       await interrupted.runSupportCli(["export", "--state-dir", stateDir], makeIo().io, AUDIT_ENV, {
@@ -760,7 +804,7 @@ describe("runSupportCli export", () => {
     ).toBe(1);
     expect(readdirSync(context.root).some((name) => name.includes(context.slot))).toBe(true);
 
-    vi.doUnmock("node:fs");
+    vi.doUnmock("node:child_process");
     vi.resetModules();
     const resumed = await import("./support.js");
     const resumedIo = makeIo();
