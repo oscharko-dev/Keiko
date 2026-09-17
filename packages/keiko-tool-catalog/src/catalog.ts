@@ -28,6 +28,8 @@ export interface CatalogCompilationContext {
   readonly previous?: ToolCatalog | undefined;
 }
 
+const DESCRIPTORS_BY_REF = new WeakMap<ToolCatalog, ReadonlyMap<string, ToolDescriptor>>();
+
 function descriptorsFrom(
   value: unknown,
   previous: readonly ToolDescriptor[],
@@ -60,9 +62,11 @@ function descriptorsFrom(
 }
 
 export function lookupCatalogTool(catalog: ToolCatalog, ref: ToolRef): ToolDescriptor | undefined {
-  return catalog.descriptors.find(
-    (descriptor) => toolRefKey(descriptor.toolRef) === toolRefKey(ref),
-  );
+  const key = toolRefKey(ref);
+  const index = DESCRIPTORS_BY_REF.get(catalog);
+  return index === undefined
+    ? catalog.descriptors.find((descriptor) => toolRefKey(descriptor.toolRef) === key)
+    : index.get(key);
 }
 
 function assertCompatibilityEntries(
@@ -122,12 +126,16 @@ function snapshot(
     profiles: declarations,
     compatibility,
   });
-  const catalog = {
+  const catalog: ToolCatalog = {
     catalogRevision,
     descriptors,
     profiles: declarations.map((declaration) => stampCatalogProfile(declaration, catalogRevision)),
     compatibility,
   };
+  DESCRIPTORS_BY_REF.set(
+    catalog,
+    new Map(descriptors.map((descriptor) => [toolRefKey(descriptor.toolRef), descriptor])),
+  );
   assertProfiles(catalog);
   return deepFreeze(catalog);
 }
