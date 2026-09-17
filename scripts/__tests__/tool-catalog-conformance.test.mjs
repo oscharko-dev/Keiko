@@ -37,6 +37,7 @@ import {
   buildSyntheticRegistrationSet,
   evaluateToolCatalogPerformanceEvidence,
   deriveLookupIterations,
+  isSupportedToolCatalogPerformanceProcedure,
   measureToolCatalogOverflowRejection,
   measureToolCatalogPerformance,
   measureToolCatalogPerformanceInFreshProcess,
@@ -236,6 +237,24 @@ describe("compiler measurements reuse the existing sample and percentile convent
       batches: 3,
       samplesPerBatch: 10,
     });
+  });
+
+  it("keeps procedure migration closed to the reviewed historical and current shapes", () => {
+    expect(
+      isSupportedToolCatalogPerformanceProcedure({
+        ...TOOL_CATALOG_PERFORMANCE_PROCEDURE,
+        warmups: 2,
+      }),
+    ).toBe(true);
+    expect(isSupportedToolCatalogPerformanceProcedure(TOOL_CATALOG_PERFORMANCE_PROCEDURE)).toBe(
+      true,
+    );
+    expect(
+      isSupportedToolCatalogPerformanceProcedure({
+        ...TOOL_CATALOG_PERFORMANCE_PROCEDURE,
+        warmups: 3,
+      }),
+    ).toBe(false);
   });
 
   // CI head 02785dbd (run 33983984303): 30 real compile/lookup samples across both the
