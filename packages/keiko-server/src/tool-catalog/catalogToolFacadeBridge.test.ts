@@ -306,12 +306,12 @@ describe("canonical catalog facade bridge", () => {
     expect(log.events.at(-1)).toMatchObject({
       op: "tool-catalog.invocation-settled",
       correlationId: context.correlationId,
+      errorKind: "internal",
       extra: {
         status: "failed",
         reason: "handler-failed",
         effectStarted: true,
         budgetDisposition: "committed",
-        errorKind: "CatalogDispatchFault",
       },
     });
   });
@@ -347,12 +347,12 @@ describe("canonical catalog facade bridge", () => {
     expect(log.events.at(-1)).toMatchObject({
       op: "tool-catalog.invocation-settled",
       correlationId: context.correlationId,
+      errorKind: "internal",
       extra: {
         status: "failed",
         reason: "handler-failed",
         effectStarted: true,
         budgetDisposition: "committed",
-        errorKind: "CatalogDispatchFault",
       },
     });
     expect(JSON.stringify(log.events)).not.toContain("runtime-workspace-drift-private-path");
