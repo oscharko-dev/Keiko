@@ -95,6 +95,10 @@ export. Default --out is ./keiko-support-<timestamp>.jsonl (colons replaced with
 always named in the manifest's truncatedLogFiles. The current log file is never dropped; if it
 alone still exceeds the cap, only its tail is exported instead, named in the manifest's
 currentFileTailTruncated. A <output>.sha256 sidecar carries a SHA-256 digest of the bundle's bytes.
+Publication exclusively creates the report and sidecar and never replaces an existing destination.
+If a process stops mid-publication, rerun the same explicit --out command; for the default output,
+rerun from the same working directory. Keiko recovers the durable prior bytes before taking a new
+clock or log snapshot, or fails closed when the bounded recovery slot conflicts.
 
 <state-dir>/ui.log (the UI/BFF process's raw, unredacted stdout+stderr) is excluded by default and
 always named in the manifest's sectionsExcluded — attaching it requires BOTH --include-ui-log AND
@@ -313,7 +317,7 @@ function defaultOutFileName(generatedAt: Date): string {
   return `keiko-support-${generatedAt.toISOString().replaceAll(":", "-")}.jsonl`;
 }
 
-function resolveOutPath(cwd: string, outArg: string | undefined, generatedAt: Date): string {
+export function resolveOutPath(cwd: string, outArg: string | undefined, generatedAt: Date): string {
   const value = outArg ?? defaultOutFileName(generatedAt);
   return isAbsolute(value) ? value : resolve(cwd, value);
 }
@@ -398,9 +402,8 @@ function collectLogContent(logsDir: string, maxBytes: number): LogContent {
 // generic prefix didn't already say. Returns undefined on success, an exit code on failure.
 // Also writes the `<output>.sha256` sidecar (design doc §6.2's closing addendum): a cheap
 // integrity story for an artifact that crosses a customer-machine-to-agent trust boundary, computed
-// over the EXACT bytes just written to `outPath`. A failure writing either file reports the same
-// content-free outcome and writes neither half — a bundle without its sidecar, or a sidecar for
-// bytes that were never actually persisted, are both worse than refusing the export.
+// over the EXACT report bytes. A crash can leave a bounded, intent-owned partial publication;
+// the next invocation recovers those original bytes before reading a new clock or log snapshot.
 type BundlePublicationOutcome =
   | {
       readonly status: "published";
@@ -425,7 +428,9 @@ type BundlePublicationOutcome =
       readonly recoveryState: "conflict" | "none" | "rolled-back";
     };
 
-function supportPublicationErrorKind(error: unknown): SafeArtifactFileFailureKind | "unknown" {
+export function supportPublicationErrorKind(
+  error: unknown,
+): SafeArtifactFileFailureKind | "unknown" {
   try {
     if (error instanceof SafeArtifactFileError) return error.kind;
   } catch {
@@ -528,15 +533,17 @@ function emitSupportPublicationEvidence(
   const activityLog = server.createFileServerLogSink(stateDir);
   try {
     const complete = outcome.status !== "failed";
+    const loss = complete ? "none" : "publication-unavailable";
     const common = {
       publicationArtifactClass: "support-report",
-      artifactCount: outcome.status === "failed" ? 0 : 2,
+      artifactCount: 2,
+      visibleArtifactCount: complete ? 2 : "unknown",
       persistenceStatus: outcome.status,
       publicationPersistenceStatus: outcome.status,
       completeness: complete ? "complete" : "unknown",
       publicationCompleteness: complete ? "complete" : "unknown",
-      loss: "none",
-      publicationLoss: "none",
+      loss,
+      publicationLoss: loss,
       recoveryState: outcome.recoveryState,
     };
     activityLog.write(
@@ -560,7 +567,7 @@ function emitSupportPublicationEvidence(
             op: "support.export.publication",
             correlationId,
             errorKind: outcome.errorKind,
-            extra: common,
+            extra: { ...common, failedArtifactClass: "support-report" },
           },
     );
   } finally {

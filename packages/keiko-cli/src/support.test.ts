@@ -32,7 +32,9 @@ import type { AuditResult } from "./audit.js";
 import type { CliIo } from "./runner.js";
 import {
   parseSupportArgs,
+  resolveOutPath,
   runSupportCli,
+  supportPublicationErrorKind,
   supportPublicationContext,
   type SupportCliDeps,
 } from "./support.js";
@@ -267,6 +269,11 @@ describe("runSupportCli export", () => {
     rmSync(outDir, { recursive: true, force: true });
   });
 
+  it("maps non-primitive publication failures to the closed unknown kind", () => {
+    const error = Object.assign(new Error("private path /customer/report.jsonl"), { code: "EIO" });
+    expect(supportPublicationErrorKind(error)).toBe("unknown");
+  });
+
   it("writes a bundle whose first line is the manifest and whose remaining lines are the log content, verbatim", async () => {
     const rotatedLine = JSON.stringify({
       ts: "2026-08-19T00:00:00.000Z",
@@ -352,7 +359,9 @@ describe("runSupportCli export", () => {
       publicationArtifactClass: "support-report",
       publicationPersistenceStatus: "failed",
       publicationCompleteness: "unknown",
-      publicationLoss: "none",
+      publicationLoss: "publication-unavailable",
+      visibleArtifactCount: "unknown",
+      failedArtifactClass: "support-report",
     });
     expect(String(failure?.correlationId)).toMatch(/^[0-9a-f-]{36}$/);
   });
@@ -517,6 +526,51 @@ describe("runSupportCli export", () => {
       publicationCompleteness: "complete",
       publicationLoss: "none",
     });
+  });
+
+  it("recovers the default output slot without consulting a replacement clock", async () => {
+    const firstNow = new Date("2026-09-02T03:04:05.000Z");
+    const outPath = resolveOutPath(outDir, undefined, firstNow);
+    const context = supportPublicationContext(outDir, undefined);
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let links = 0;
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
+        links += 1;
+        if (links === 2) throw Object.assign(new Error("process interrupted"), { code: "EINTR" });
+        Reflect.apply(actual.linkSync, actual, args);
+      },
+    }));
+    const interrupted = await import("./support.js");
+    expect(
+      await interrupted.runSupportCli(["export", "--state-dir", stateDir], makeIo().io, AUDIT_ENV, {
+        cwd: outDir,
+        now: () => firstNow,
+        auditDeps: healthyAuditDeps(),
+        evidenceStore: createInMemoryEvidenceStore(),
+      }),
+    ).toBe(1);
+    expect(readdirSync(context.root).some((name) => name.includes(context.slot))).toBe(true);
+
+    vi.doUnmock("node:fs");
+    vi.resetModules();
+    const resumed = await import("./support.js");
+    const resumedIo = makeIo();
+    expect(
+      await resumed.runSupportCli(["export", "--state-dir", stateDir], resumedIo.io, AUDIT_ENV, {
+        cwd: outDir,
+        now: () => {
+          throw new Error("default recovery must precede clock access");
+        },
+        auditDeps: healthyAuditDeps(),
+        evidenceStore: createInMemoryEvidenceStore(),
+      }),
+    ).toBe(0);
+    expect(existsSync(outPath)).toBe(true);
+    expect(resumedIo.out()).toContain(`Recovered support report at ${outPath}`);
+    expect(readdirSync(context.root).some((name) => name.includes(context.slot))).toBe(false);
   });
 
   // Regression pin: `redactLogFields`'s field-NAME denylist matches only an exact normalized
@@ -1047,6 +1101,8 @@ describe("runSupportCli export", () => {
       }),
     ).toBe(0);
 
+    const report = readFileSync(outPath);
+    const reportSha256 = createHash("sha256").update(report).digest("hex");
     const records = readFileSync(join(stateDir, "logs", "server.log"), "utf8")
       .trim()
       .split("\n")
@@ -1062,6 +1118,9 @@ describe("runSupportCli export", () => {
       durabilityAssurance: process.platform === "win32" ? "directory-sync-unavailable" : "verified",
       publicationCompleteness: "complete",
       publicationLoss: "none",
+      visibleArtifactCount: 2,
+      reportBytes: report.length,
+      reportSha256,
     });
     expect(String(publication?.correlationId)).toMatch(/^[0-9a-f-]{36}$/);
     expect(JSON.stringify(publication)).not.toContain(outPath);
