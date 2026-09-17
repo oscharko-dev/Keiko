@@ -20,6 +20,11 @@ import { unpairedCodingWorkbenchRuntimeApprovalReviewChannelPayload } from "@osc
 import { unpairedCodingWorkbenchRuntimeQuestionsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-questions";
 import { unpairedCodingWorkbenchRuntimeSkillsChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-skill-discovery";
 import { unpairedCodingWorkbenchRuntimeResearchChannelPayload } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime-research";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { resolveAppSessionReadAuthority } from "../coding-app-session/appSessionReadAuthority.js";
 import { UNKNOWN_CORRELATION_ID } from "../correlation.js";
 import type { UiHandlerDeps } from "../deps.js";
@@ -37,6 +42,88 @@ import type { CodingRuntimeEventHub } from "./codingRuntimeEventHub.js";
 import type { CodingRuntimeOrchestrator } from "./codingRuntimeOrchestrator.js";
 
 const MAX_BODY_BYTES = 64 * 1024;
+
+const CODING_RUNTIME_OPERATION_REFUSED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.operation.refused",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.codingRuntimeRoutes.logRuntimeOperationRefusal",
+  fields: {
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "start",
+        "approval",
+        "stop",
+        "takeover",
+        "retry",
+        "recovery-ack",
+        "pause",
+        "resume",
+        "research-revoke",
+        "follow-up",
+        "answer",
+        "reject",
+      ],
+    },
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "runtime-unavailable",
+        "active-run-conflict",
+        "invalid-intent",
+        "approval-activation-failed",
+        "authority-resolution-failed",
+        "authority-expired",
+        "authority-replayed",
+        "task-drift",
+        "workspace-drift",
+        "project-drift",
+        "branch-drift",
+        "scope-drift",
+        "budget-drift",
+        "authority-budget-exceeded",
+        "source-drift",
+        "runtime-failed",
+        "revoked",
+        "recovery-required",
+        "replay-cap-exhausted",
+        "issue-context-unavailable",
+        "question-answer-rejected",
+        "delivery-not-evidenced",
+      ],
+    },
+    runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["coding-runtime-operation-refusal"],
+  proofIds: ["coding-runtime.operation-refused.emitted-line"],
+  releaseImpact: "patch",
+});
+
+function runtimeRefusalErrorKind(reason: CodingWorkbenchRuntimeFailureCode): ActivityLogErrorKind {
+  if (reason === "runtime-unavailable" || reason === "issue-context-unavailable") {
+    return "unavailable";
+  }
+  if (reason === "active-run-conflict" || reason === "recovery-required") return "conflict";
+  if (reason === "replay-cap-exhausted" || reason === "authority-budget-exceeded") {
+    return "rate-limited";
+  }
+  if (reason.includes("authority") || reason === "revoked") return "authority-denied";
+  if (reason.endsWith("-drift")) return "conflict";
+  if (reason === "invalid-intent" || reason === "question-answer-rejected") {
+    return "invalid-request";
+  }
+  return "internal";
+}
 
 class BodyTooLargeError extends Error {}
 
@@ -129,13 +216,17 @@ function logRuntimeOperationRefusal(
   runId: string | undefined,
   reason: CodingWorkbenchRuntimeFailureCode,
 ): void {
-  (deps.activityLog ?? processServerLogSink()).write({
-    level: "warn",
-    category: "process",
-    op: "coding-runtime.operation.refused",
-    correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
-    extra: { operation, reason, ...(runId === undefined ? {} : { runId }) },
-  });
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      CODING_RUNTIME_OPERATION_REFUSED_OPERATION,
+      {
+        level: "warn",
+        correlationId: correlationId ?? UNKNOWN_CORRELATION_ID,
+        errorKind: runtimeRefusalErrorKind(reason),
+      },
+      { operation, reason, ...(runId === undefined ? {} : { runId }) },
+    ),
+  );
 }
 
 function readBody(req: IncomingMessage): Promise<unknown> {

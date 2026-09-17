@@ -122,7 +122,7 @@ describe("production coding repository handler composition", () => {
     });
     expect(events[1]).toMatchObject({
       correlationId: context().correlationId,
-      errorKind: "CodingRepositorySearchError",
+      errorKind: "authority-denied",
       extra: {
         reason: "authority-stale",
         frames: expect.any(Array) as unknown,
@@ -165,14 +165,14 @@ describe("production coding repository handler composition", () => {
     expect(
       await handler.invoke({ ...request, root: "/private", policy: "allow" }, context()),
     ).toEqual({ ok: false, reason: "invalid-request" });
-    expect(events[1]?.errorKind).toBe("CodingRepositorySearchError");
+    expect(events[1]?.errorKind).toBe("validation-failed");
   });
   it("records cancellation from either parent signal with a single terminal event", async () => {
     const controller = new AbortController();
     controller.abort();
     const { handler, events } = fixture(() => true, { signal: controller.signal });
     expect(await handler.invoke(request, context())).toEqual({ ok: false, reason: "cancelled" });
-    expect(events[1]).toMatchObject({ errorKind: "CodingRepositorySearchError" });
+    expect(events[1]).toMatchObject({ errorKind: "cancelled" });
     expect(events).toHaveLength(2);
   });
   it("uses the canonical correlation fallback and records unexpected authority failure", async () => {
@@ -185,7 +185,7 @@ describe("production coding repository handler composition", () => {
     const line = terminalLine(events);
     expect(JSON.parse(line)).toMatchObject({
       correlationId: "unknown-correlation-id",
-      errorKind: "TypeError",
+      errorKind: "internal",
     });
     expect(line).not.toContain("private");
   });
