@@ -9,6 +9,10 @@ import type {
 import { CODING_WORKBENCH_RUNTIME_CONTRACT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-runtime";
 import { validateCodingWorkbenchRuntimeEvent } from "@oscharko-dev/keiko-contracts/runtime/coding-workbench-validation";
 import type { LongLivedRuntimeQualification } from "@oscharko-dev/keiko-contracts/runtime/runtime-qualification";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { createRuntimeGatewayConfinement } from "@oscharko-dev/keiko-sandbox";
 
 import type { OpenCodeGatewayReadinessRegistry } from "../coding-sidecar-gateway.js";
@@ -48,6 +52,33 @@ import type { OpenCodeReconciliationEvent } from "./opencodeReconciler.js";
 import type { ServerLogSink } from "../observability/server-log.js";
 
 const OPEN_CODE_START_TIMEOUT_MS = 120_000;
+
+const CODING_RUNTIME_CONTEXT_USAGE_OBSERVED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "coding-runtime.context-usage.observed",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionOpenCodeBackend.recordContextTelemetry",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["accepted", "rejected"],
+    },
+    capacityTokens: { type: "integer", dataClass: "count", required: true },
+    usedInputTokens: { type: "integer", dataClass: "count", required: true },
+    reservedOutputTokens: { type: "integer", dataClass: "count", required: true },
+    sampleDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["coding-runtime-context-usage"],
+  proofIds: ["coding-runtime.context-usage.observed.emitted-line"],
+  releaseImpact: "patch",
+});
 
 /**
  * Functional-evidence stand-in for a platform-qualified portable OpenCode runtime. It is reachable
@@ -596,19 +627,23 @@ function recordContextTelemetry(
       inputTokens: event.providerTokenUsage.inputTokens,
       updatedAt,
     });
-    activityLog.write({
-      category: "process",
-      level: accepted ? "info" : "warn",
-      op: "coding-runtime.context-usage.observed",
-      correlationId: run.request.runId,
-      extra: {
-        state: accepted ? "accepted" : "rejected",
-        capacityTokens: contextGeometry.contextWindowTokens,
-        usedInputTokens: event.providerTokenUsage.inputTokens,
-        reservedOutputTokens: contextGeometry.maxOutputTokens,
-        sampleDigest: event.digest,
-      },
-    });
+    activityLog.write(
+      activityLogEvent(
+        CODING_RUNTIME_CONTEXT_USAGE_OBSERVED_OPERATION,
+        {
+          level: accepted ? "info" : "warn",
+          correlationId: run.request.runId,
+          ...(accepted ? {} : { errorKind: "conflict" }),
+        },
+        {
+          state: accepted ? "accepted" : "rejected",
+          capacityTokens: contextGeometry.contextWindowTokens,
+          usedInputTokens: event.providerTokenUsage.inputTokens,
+          reservedOutputTokens: contextGeometry.maxOutputTokens,
+          sampleDigest: event.digest,
+        },
+      ),
+    );
   }
   if (event.compaction?.event === "completed") {
     registry.recordCompaction(run.request.runId, event.compaction.compactionIdSha256, updatedAt);

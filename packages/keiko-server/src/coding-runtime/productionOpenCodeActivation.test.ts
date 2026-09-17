@@ -150,6 +150,8 @@ describe("production OpenCode activation", () => {
         category: "process",
         op: "coding-runtime.dev-lane.refused",
         correlationId: UNKNOWN_CORRELATION_ID,
+        level: "warn",
+        errorKind: "unavailable",
         extra: { lane: "dev-checkout", reason: "payload-missing" },
       },
     ]);

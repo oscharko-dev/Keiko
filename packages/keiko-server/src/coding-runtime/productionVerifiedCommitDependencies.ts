@@ -1,5 +1,9 @@
 import { validateGitCommitMessage } from "@oscharko-dev/keiko-contracts/runtime/git-commit-policy";
 import type { EditorAgentSessionSnapshot } from "@oscharko-dev/keiko-contracts";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isWithinWorkspace } from "@oscharko-dev/keiko-workspace";
 import type { UiHandlerDeps } from "../deps.js";
 import { resolveEditorAgentSessionRoot } from "../editor/agentRootBoundary.js";
@@ -20,6 +24,31 @@ export type VerifiedCommitCompositionDeps = Pick<
   | "env"
   | "activityLog"
 >;
+
+const GIT_DELIVERY_BUFFERS_CHECKED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.delivery.buffers.checked",
+  category: "security",
+  owner: "keiko-server",
+  emitter: "coding-runtime.productionVerifiedCommitDependencies.verifiedCommitBuffersClean",
+  fields: {
+    state: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["clean", "blocked"],
+    },
+    editorSessionCount: { type: "integer", dataClass: "count", required: true },
+    dirtySessionCount: { type: "integer", dataClass: "count", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["git-delivery-dirty-buffer"],
+  proofIds: ["git.delivery.buffers.checked.emitted-line"],
+  releaseImpact: "patch",
+});
 
 /** Reuses the registered workspace, settings, editor and delivery owners of the composed server. */
 export function createProductionVerifiedCommitDependencies(
@@ -69,16 +98,20 @@ export function verifiedCommitBuffersClean(
   const sessions = editorAgentRegistry.listSessions();
   const dirty = sessions.filter((session) => session.dirtyFiles.length > 0);
   const clean = dirty.every((session) => dirtySessionIsOutside(deps, session, root));
-  (deps.activityLog ?? processServerLogSink()).write({
-    level: clean ? "info" : "warn",
-    category: "security",
-    op: "git.delivery.buffers.checked",
-    correlationId: runId,
-    extra: {
-      state: clean ? "clean" : "blocked",
-      editorSessionCount: sessions.length,
-      dirtySessionCount: dirty.length,
-    },
-  });
+  (deps.activityLog ?? processServerLogSink()).write(
+    activityLogEvent(
+      GIT_DELIVERY_BUFFERS_CHECKED_OPERATION,
+      {
+        level: clean ? "info" : "warn",
+        correlationId: runId,
+        ...(clean ? {} : { errorKind: "conflict" }),
+      },
+      {
+        state: clean ? "clean" : "blocked",
+        editorSessionCount: sessions.length,
+        dirtySessionCount: dirty.length,
+      },
+    ),
+  );
   return clean;
 }
