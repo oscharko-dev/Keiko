@@ -13,6 +13,12 @@
 import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+  type ActivityLogFields,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
 import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
@@ -555,11 +561,127 @@ function acknowledgeSupportPublication(
 
 type LoadedServer = Awaited<ReturnType<typeof loadServer>>;
 
+const SUPPORT_EXPORT_PUBLICATION_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "support.export.publication",
+  category: "diagnostic",
+  owner: "keiko-cli",
+  emitter: "support.emitSupportPublicationEvidence",
+  fields: {
+    publicationArtifactClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["support-report"],
+    },
+    artifactCount: { type: "integer", dataClass: "count", required: true },
+    visibleArtifactCount: { type: "integer", dataClass: "count", required: false },
+    persistenceStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["published", "recovered", "acknowledgement-failed", "failed"],
+    },
+    publicationPersistenceStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["published", "recovered", "acknowledgement-failed", "failed"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    publicationCompleteness: {
+      type: "string",
+      dataClass: "completeness-state",
+      required: true,
+    },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+    publicationLoss: { type: "string", dataClass: "loss-state", required: true },
+    recoveryState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["none", "rolled-back", "recovered", "conflict"],
+    },
+    publicationStatus: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["published", "recovered"],
+    },
+    permissionAssurance: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["verified-private", "platform-inherited"],
+    },
+    durabilityAssurance: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["verified", "directory-sync-unavailable"],
+    },
+    reportBytes: { type: "integer", dataClass: "count", required: false },
+    reportSha256: {
+      type: "string",
+      dataClass: "digest",
+      required: false,
+      maxLength: 64,
+    },
+    receiptState: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["consumed", "acknowledgement-uncertain", "unknown"],
+    },
+    failedArtifactClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["support-report", "manifest"],
+    },
+    failureKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "invalid-publication",
+        "close-failed",
+        "durability-failed",
+        "open-failed",
+        "permission-failed",
+        "permission-unsafe",
+        "publish-failed",
+        "publish-unsupported",
+        "read-failed",
+        "recovery-conflict",
+        "replace-failed",
+        "target-exists",
+        "target-mutated",
+        "unsafe-ancestor",
+        "unsafe-target",
+        "write-failed",
+        "unknown",
+      ],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "capability",
+  failureClasses: ["support-publication", "support-publication-acknowledgement"],
+  proofIds: ["support.export.publication-evidence", "support.export.commit-last"],
+  releaseImpact: "patch",
+});
+
+type SupportPublicationEvidenceFields = ActivityLogFields<
+  typeof SUPPORT_EXPORT_PUBLICATION_OPERATION
+>;
+
 function completedPublicationEvidenceFields(
   publication: CompletedBundlePublicationOutcome,
   persistenceStatus: "published" | "recovered" | "acknowledgement-failed",
   receiptState: "consumed" | "acknowledgement-uncertain",
-): Readonly<Record<string, unknown>> {
+): SupportPublicationEvidenceFields {
   return {
     publicationArtifactClass: "support-report",
     artifactCount: 2,
@@ -582,11 +704,10 @@ function completedPublicationEvidenceFields(
 
 function failedPublicationEvidenceFields(
   outcome: Extract<BundlePublicationOutcome, { readonly status: "failed" }>,
-): Readonly<Record<string, unknown>> {
+): SupportPublicationEvidenceFields {
   return {
     publicationArtifactClass: "support-report",
     artifactCount: 2,
-    visibleArtifactCount: "unknown",
     persistenceStatus: "failed",
     publicationPersistenceStatus: "failed",
     completeness: "unknown",
@@ -596,7 +717,31 @@ function failedPublicationEvidenceFields(
     recoveryState: outcome.recoveryState,
     receiptState: "unknown",
     failedArtifactClass: "support-report",
+    failureKind: outcome.errorKind,
   };
+}
+
+function supportPublicationActivityErrorKind(
+  failure: SafeArtifactFileFailureKind | "unknown",
+): ActivityLogErrorKind {
+  switch (failure) {
+    case "invalid-publication":
+      return "validation-failed";
+    case "permission-failed":
+      return "permission-denied";
+    case "permission-unsafe":
+    case "unsafe-ancestor":
+      return "unsafe-target";
+    case "publish-failed":
+    case "replace-failed":
+      return "write-failed";
+    case "recovery-conflict":
+      return "conflict";
+    case "close-failed":
+      return "durability-failed";
+    default:
+      return failure;
+  }
 }
 
 function emitSupportPublicationEvidence(
@@ -608,40 +753,48 @@ function emitSupportPublicationEvidence(
   const activityLog = server.createFileServerLogSink(stateDir);
   try {
     if (outcome.status === "acknowledgement-failed") {
-      activityLog.write({
-        level: "error",
-        category: "diagnostic",
-        op: "support.export.publication",
-        correlationId,
-        errorKind: outcome.errorKind,
-        extra: {
-          ...completedPublicationEvidenceFields(
-            outcome.publication,
-            "acknowledgement-failed",
-            "acknowledgement-uncertain",
-          ),
-          failedArtifactClass: "manifest",
-        },
-      });
+      activityLog.write(
+        activityLogEvent(
+          SUPPORT_EXPORT_PUBLICATION_OPERATION,
+          {
+            level: "error",
+            correlationId,
+            errorKind: supportPublicationActivityErrorKind(outcome.errorKind),
+          },
+          {
+            ...completedPublicationEvidenceFields(
+              outcome.publication,
+              "acknowledgement-failed",
+              "acknowledgement-uncertain",
+            ),
+            failedArtifactClass: "manifest",
+            failureKind: outcome.errorKind,
+          },
+        ),
+      );
       return;
     }
     if (outcome.status !== "failed") {
-      activityLog.write({
-        category: "diagnostic",
-        op: "support.export.publication",
-        correlationId,
-        extra: completedPublicationEvidenceFields(outcome, outcome.status, "consumed"),
-      });
+      activityLog.write(
+        activityLogEvent(
+          SUPPORT_EXPORT_PUBLICATION_OPERATION,
+          { correlationId },
+          completedPublicationEvidenceFields(outcome, outcome.status, "consumed"),
+        ),
+      );
       return;
     }
-    activityLog.write({
-      level: "error",
-      category: "diagnostic",
-      op: "support.export.publication",
-      correlationId,
-      errorKind: outcome.errorKind,
-      extra: failedPublicationEvidenceFields(outcome),
-    });
+    activityLog.write(
+      activityLogEvent(
+        SUPPORT_EXPORT_PUBLICATION_OPERATION,
+        {
+          level: "error",
+          correlationId,
+          errorKind: supportPublicationActivityErrorKind(outcome.errorKind),
+        },
+        failedPublicationEvidenceFields(outcome),
+      ),
+    );
   } finally {
     activityLog.close?.();
   }
