@@ -2014,7 +2014,7 @@ function validateStableReceiptStates(
 ): PublicationIntent | undefined {
   if (active) return readPublicationIntent(intentPath(root, slot, "active"), root);
   if (complete) return readPublicationIntent(intentPath(root, slot, "complete"), root);
-  if (consumed) return readPublicationIntent(intentPath(root, slot, "consumed"), root);
+  if (consumed) readPublicationIntent(intentPath(root, slot, "consumed"), root);
   return undefined;
 }
 
