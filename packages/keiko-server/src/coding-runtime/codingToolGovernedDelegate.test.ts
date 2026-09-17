@@ -230,6 +230,8 @@ describe("CodingToolGovernedDelegate", () => {
           category: "process",
           op: "coding-runtime.tool-result",
           correlationId: UNKNOWN_CORRELATION_ID,
+          level: "warn",
+          errorKind: "authority-denied",
           extra: { actionKind: "read", state: "discarded", reason: "authority-denied" },
         },
       ]);
