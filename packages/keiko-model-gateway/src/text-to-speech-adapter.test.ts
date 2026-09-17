@@ -276,7 +276,12 @@ describe("requestTextToSpeech", () => {
         category: "gateway",
         op: "speech.tts.mime.corrected",
         correlationId: "corr-tts-mime",
-        extra: { declaredMimeClass: "mp3", resolvedMimeClass: "opus" },
+        extra: {
+          completeness: "complete",
+          declaredMimeClass: "mp3",
+          loss: "none",
+          resolvedMimeClass: "opus",
+        },
       },
     ]);
   });
@@ -557,7 +562,12 @@ describe("requestTextToSpeechStream", () => {
       op: "speech.tts.stream.peek.failed",
       correlationId: "corr-tts-stream-prefix",
       errorKind: "internal",
-      extra: { phase: "response-prefix", outcomeKind: "transport" },
+      extra: {
+        completeness: "complete",
+        loss: "none",
+        phase: "response-prefix",
+        outcomeKind: "transport",
+      },
     });
     expect(JSON.stringify(events)).not.toContain(ANSWER);
     expect(JSON.stringify(events)).not.toContain(SECRET_API_KEY);

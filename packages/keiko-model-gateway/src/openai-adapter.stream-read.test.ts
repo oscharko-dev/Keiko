@@ -184,7 +184,7 @@ describe("OpenAiAdapter.callStream with read bounds: silence and budget", () => 
     expect(provider.cancelled()).toBe(true);
     expect(streamedLine(log.events)).toMatchObject({
       level: "warn",
-      errorKind: "GATEWAY_TIMEOUT",
+      errorKind: "timeout",
       extra: { outcome: "stalled", dataEvents: 1 },
     });
   });

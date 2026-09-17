@@ -209,12 +209,12 @@ describe("scalar embedding — activity log", () => {
     const dispatch = eventFor(log.events, "embedding.request.dispatch");
     expect(dispatch.level).toBe("info");
     expect(dispatch.extra).toMatchObject({
-      endpoint: new URL(endpoint).origin,
       modelId: "embed-1",
       inputCount: 1,
       timeoutMs: 12_000,
       minimalShape: false,
     });
+    expect(dispatch.extra).not.toHaveProperty("endpoint");
     expect(typeof dispatch.extra?.bodyBytes).toBe("number");
     expect(JSON.stringify(log.events)).not.toContain("some private document text");
   });
