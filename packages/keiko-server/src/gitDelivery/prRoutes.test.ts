@@ -745,9 +745,12 @@ describe("pr execute — governed create + no-bypass (AC1/AC4/AC5)", () => {
     expect(completed).toMatchObject({
       level: "warn",
       correlationId: "request-correlation-pr-rejected",
-      errorKind: "provider-rejected",
+      errorKind: "unavailable",
     });
-    expect(completed?.extra).toMatchObject({ status: "failed" });
+    expect(completed?.extra).toMatchObject({
+      status: "failed",
+      executionErrorCode: "provider-rejected",
+    });
   });
 
   // #3387 (ADR-0138 D2): an accepted run's PR now requires an actually consumed, server-issued
@@ -1388,6 +1391,7 @@ describe("executeGovernedPullRequest — no-spawn refusal is marked, never reach
     expect(marker?.correlationId).toBe("request-correlation-pr-no-spawn");
     expect(marker?.extra?.operation).toBe("pr-create");
     expect(marker?.status).toBe(403);
+    expect(marker?.errorKind).toBe("authority-denied");
   });
 });
 

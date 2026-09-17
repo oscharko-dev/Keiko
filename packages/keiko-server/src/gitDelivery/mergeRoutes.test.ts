@@ -687,6 +687,7 @@ describe("merge execute (governed)", () => {
     expect(marker?.correlationId).toBe("request-correlation-merge-no-spawn");
     expect(marker?.extra?.operation).toBe("merge");
     expect(marker?.status).toBe(403);
+    expect(marker?.errorKind).toBe("authority-denied");
   });
 
   it("normalizes a provider rejection into a typed reason + recovery disposition (AC3/AC4)", async () => {
