@@ -42,6 +42,12 @@
 
 import { sha256Hex } from "@oscharko-dev/keiko-security";
 import type { EvidenceStore } from "@oscharko-dev/keiko-evidence";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+  type ActivityLogErrorKind,
+  type ActivityLogFields,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { correlationIdOrUnknown } from "../correlation.js";
 import type { ServerLogEvent, ServerLogSink } from "../observability/server-log.js";
 import { causeChain, keikoStackFrames } from "../observability/stack-frames.js";
@@ -60,10 +66,141 @@ import {
 // op rather than one per operation. Declared as a top-level UPPER_SNAKE const so the op-catalog
 // generator resolves it as a literal (`generate-op-catalog.mjs`'s `collectConstStrings`) even though
 // the `.write()` call references the constant rather than restating the string.
-const TASK_WORKSPACE_LIFECYCLE_OP = "task-workspace.lifecycle";
 const EVIDENCE_PERSISTENCE_ERROR_KIND = "EVIDENCE_PERSISTENCE_FAILED";
 const WORKSPACE_LOG_IDENTITY_PREFIX = "wsref_";
 const RECORDED_FAILURE_LOG_KEYS = new WeakMap<TaskWorkspaceError, Set<string>>();
+
+const TASK_WORKSPACE_LIFECYCLE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "task-workspace.lifecycle",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "task-workspace/activity-log.writeWorkspaceLog",
+  fields: {
+    operation: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "provision",
+        "activate",
+        "pause",
+        "resume",
+        "handoff",
+        "reconcile",
+        "repair",
+        "cleanup",
+        "health",
+        "verify-head",
+      ],
+    },
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "provisioned",
+        "activated",
+        "resumed",
+        "paused",
+        "handoff-prepared",
+        "blocked",
+        "failed",
+        "retry-required",
+        "reconciled",
+        "repaired",
+        "operator-required",
+        "cleanup-requested",
+        "cleanup-completed",
+        "cleanup-refused",
+      ],
+    },
+    workspaceId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    workspaceIdentity: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 64,
+    },
+    eventId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 256 },
+    attempt: { type: "integer", dataClass: "count", required: false },
+    worktreeCount: { type: "integer", dataClass: "count", required: false },
+    driftMarker: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: [
+        "worktree-missing",
+        "gitdir-mismatch",
+        "head-moved",
+        "branch-deleted",
+        "uncommitted-changes",
+        "lock-stale",
+        "path-escape",
+        "pointer-stale",
+        "identity-schema-retired",
+        "identity-unsupported",
+      ],
+    },
+    evidencePersistence: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: false,
+      values: ["failed"],
+    },
+    failureKind: { type: "string", dataClass: "error-kind", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "safe-platform-class",
+      required: false,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxItems: 5,
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["task-workspace-lifecycle", "evidence-persistence"],
+  proofIds: ["task-workspace.lifecycle.line"],
+  releaseImpact: "patch",
+});
+
+const TASK_WORKSPACE_IDENTITY_PROBE_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "task-workspace.identity.creation-time-probe",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "task-workspace/activity-log.logWorkspaceIdentityProbe",
+  fields: {
+    managedRoot: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["durable", "aliased", "absent", "inconclusive"],
+    },
+    repository: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["durable", "aliased", "absent", "inconclusive", "same-volume"],
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "capability",
+  failureClasses: ["workspace-identity-capability"],
+  proofIds: ["task-workspace.identity.creation-time-probe.line"],
+  releaseImpact: "patch",
+});
 
 // Every #445-#448 service deps bundle carries this OPTIONAL seam, mirroring
 // `GitDeliveryTerminationLogSeam` (gitDelivery/execution.ts): production falls back to the process-wide
@@ -154,7 +291,35 @@ function writeWorkspaceLog(
   event: Omit<ServerLogEvent, "category" | "op">,
 ): void {
   const sink = seam.activityLog ?? processServerLogSink();
-  sink.write({ ...event, category: "diagnostic", op: TASK_WORKSPACE_LIFECYCLE_OP });
+  const fields = {
+    ...event.extra,
+    ...(event.errorKind === undefined ? {} : { failureKind: event.errorKind }),
+    completeness: "complete",
+    loss: "none",
+  } as ActivityLogFields<typeof TASK_WORKSPACE_LIFECYCLE_OPERATION>;
+  sink.write(
+    activityLogEvent(
+      TASK_WORKSPACE_LIFECYCLE_OPERATION,
+      {
+        ...(event.level === undefined ? {} : { level: event.level }),
+        ...(event.correlationId === undefined ? {} : { correlationId: event.correlationId }),
+        ...(event.parentCorrelationId === undefined
+          ? {}
+          : { parentCorrelationId: event.parentCorrelationId }),
+        ...(event.durationMs === undefined ? {} : { durationMs: event.durationMs }),
+        ...(event.errorKind === undefined
+          ? {}
+          : { errorKind: closedWorkspaceErrorKind(event.errorKind) }),
+      },
+      fields,
+    ),
+  );
+}
+
+function closedWorkspaceErrorKind(errorKind: string): ActivityLogErrorKind {
+  if (errorKind === EVIDENCE_PERSISTENCE_ERROR_KIND) return "durability-failed";
+  if (/CONFLICT|LOCK|DRIFT|STALE|MOVED|BLOCKED/iu.test(errorKind)) return "conflict";
+  return "internal";
 }
 
 // The ONE projection for a settled #445-#448 lifecycle outcome. `recordWorkspaceLifecycle` below owns
@@ -323,11 +488,14 @@ export function logWorkspaceIdentityProbe(
   const durable =
     input.support.managedRoot === "durable" &&
     (input.support.repository === "durable" || input.support.repository === "same-volume");
-  sink.write({
-    category: "diagnostic",
-    op: "task-workspace.identity.creation-time-probe",
-    level: durable ? "info" : "warn",
-    correlationId: correlationIdOrUnknown(input.correlationId),
-    extra: { managedRoot: input.support.managedRoot, repository: input.support.repository },
-  });
+  sink.write(
+    activityLogEvent(
+      TASK_WORKSPACE_IDENTITY_PROBE_OPERATION,
+      {
+        level: durable ? "info" : "warn",
+        correlationId: correlationIdOrUnknown(input.correlationId),
+      },
+      { managedRoot: input.support.managedRoot, repository: input.support.repository },
+    ),
+  );
 }
