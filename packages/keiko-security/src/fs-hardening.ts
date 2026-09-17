@@ -1466,8 +1466,14 @@ function publishIntentFileSet(
     options.publicationSlot,
   );
   const markerPath = intentPath(options.trustedRoot, options.publicationSlot);
-  if (pathExists(markerPath, publicationArtifactClass(prepared))) {
+  if (
+    pathExists(markerPath, publicationArtifactClass(prepared)) ||
+    publicationHasPath(prepared, "stagePath")
+  ) {
     throw safeFileError(publicationArtifactClass(prepared), "recovery-conflict");
+  }
+  if (publicationHasPath(prepared, "path")) {
+    throw safeFileError(publicationArtifactClass(prepared), "target-exists");
   }
   const markerAssurance = createPublicationIntent(
     markerPath,
@@ -1544,21 +1550,23 @@ function rollbackIncompleteIntent(
   markerPath: string,
 ): SafeArtifactDurabilityAssurance {
   const root = resolve(trustedRoot);
-  const present = intent.entries.flatMap((entry, index) => {
+  const assurances: SafeArtifactDurabilityAssurance[] = [];
+  for (let index = 0; index < intent.entries.length; index += 1) {
+    const entry = intent.entries[index];
+    if (entry === undefined) continue;
     const stagePath = join(root, `.keiko-publish-${slot}-${String(index)}.stage`);
-    if (!pathExists(stagePath, entry.artifactClass)) return [];
-    const bytes = readRecoveryBytes(stagePath, entry, root);
-    return [
-      {
-        path: join(root, entry.name),
-        stagePath,
-        bytes,
-        artifactClass: entry.artifactClass,
-        trustedRoot: root,
-      },
-    ];
-  });
-  return rollbackIntentPublication(present, markerPath);
+    if (!pathExists(stagePath, entry.artifactClass)) continue;
+    removeVerifiedStage({
+      path: join(root, entry.name),
+      stagePath,
+      bytes: Buffer.alloc(0),
+      artifactClass: entry.artifactClass,
+      trustedRoot: root,
+    });
+    assurances.push("verified");
+  }
+  const marker = removePublicationIntent(markerPath, root, "manifest");
+  return combineDurabilityAssurance(...assurances, marker);
 }
 
 function countIntentPaths(
@@ -1620,8 +1628,7 @@ export function recoverSafeArtifactFileSet(
   if (!pathExists(markerPath, "manifest")) return { status: "none" };
   const intent = readPublicationIntent(markerPath, root);
   const targetCount = countIntentPaths(intent, root, options.publicationSlot, "target");
-  const stageCount = countIntentPaths(intent, root, options.publicationSlot, "stage");
-  if (targetCount === 0 && stageCount < intent.entries.length) {
+  if (targetCount === 0) {
     const durabilityAssurance = rollbackIncompleteIntent(
       intent,
       root,

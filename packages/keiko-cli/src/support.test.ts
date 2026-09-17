@@ -406,6 +406,37 @@ describe("runSupportCli export", () => {
     expect(c.err()).toContain("could not write the bundle: target-exists");
   });
 
+  it("refuses hostile integrity destinations without touching their victim or report", async (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const victim = join(outDir, "integrity-victim");
+    writeFileSync(victim, "operator-integrity\n", { mode: 0o640 });
+    chmodSync(victim, 0o640);
+
+    for (const kind of ["symlink", "hard-link", "fifo"] as const) {
+      const outPath = join(outDir, `${kind}-sidecar.jsonl`);
+      const sidecarPath = `${outPath}.sha256`;
+      if (kind === "symlink") symlinkSync(victim, sidecarPath);
+      else if (kind === "hard-link") linkSync(victim, sidecarPath);
+      else execFileSync("mkfifo", [sidecarPath]);
+      const c = makeIo();
+
+      expect(
+        await runSupportCli(
+          ["export", "--state-dir", stateDir, "--out", outPath],
+          c.io,
+          AUDIT_ENV,
+          { auditDeps: healthyAuditDeps(), evidenceStore: createInMemoryEvidenceStore() },
+        ),
+      ).toBe(1);
+      expect(existsSync(outPath)).toBe(false);
+      expect(readFileSync(victim, "utf8")).toBe("operator-integrity\n");
+      expect(statSync(victim).mode & 0o777).toBe(0o640);
+      expect(readdirSync(outDir).some((name) => name.endsWith(".intent"))).toBe(false);
+      expect(c.err()).toContain("could not write the bundle: target-exists");
+      rmSync(sidecarPath);
+    }
+  });
+
   it("recovers the durable prior report before reading a changed clock or activity log", async () => {
     const outPath = join(outDir, "recoverable-report.jsonl");
     const context = supportPublicationContext(outDir, outPath);

@@ -595,6 +595,137 @@ describe("publishSafeArtifactFileSet", () => {
     expect(publicationStages(base)).toHaveLength(0);
   });
 
+  it("rolls back partial pre-target stages from a fixed slot", async () => {
+    const base = freshDir();
+    const report = join(base, "support.jsonl");
+    const integrity = join(base, "support.jsonl.sha256");
+    const slot = safeArtifactPublicationSlot("support-export", report);
+    const entries = [
+      { path: report, contents: "report", artifactClass: "support-report" as const },
+      { path: integrity, contents: "digest", artifactClass: "integrity-artifact" as const },
+    ];
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let writes = 0;
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      writeSync: (...args: Parameters<typeof actual.writeSync>): number => {
+        writes += 1;
+        if (writes === 3) throw Object.assign(new Error("stage interrupted"), { code: "EIO" });
+        return Reflect.apply(actual.writeSync, actual, args);
+      },
+    }));
+    const interrupted = await import("./fs-hardening.js");
+    expect(() =>
+      interrupted.publishSafeArtifactFileSet(entries, {
+        commitPath: report,
+        trustedRoot: base,
+        publicationSlot: slot,
+      }),
+    ).toThrow(expect.objectContaining({ kind: "write-failed" }));
+    expect(existsSync(report)).toBe(false);
+    expect(existsSync(integrity)).toBe(false);
+    vi.doUnmock("node:fs");
+    vi.resetModules();
+
+    expect(recoverSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base })).toEqual({
+      status: "rolled-back",
+      permissionAssurance: safeArtifactPermissionAssurance(),
+      durabilityAssurance: process.platform === "win32" ? "directory-sync-unavailable" : "verified",
+    });
+    expect(readdirSync(base)).toEqual([]);
+  });
+
+  it("rejects a second publisher for an occupied fixed slot without creating another transaction", async () => {
+    const base = freshDir();
+    const report = join(base, "support.jsonl");
+    const integrity = join(base, "support.jsonl.sha256");
+    const slot = safeArtifactPublicationSlot("support-export", report);
+    const entries = [
+      { path: report, contents: "old-report", artifactClass: "support-report" as const },
+      { path: integrity, contents: "old-digest", artifactClass: "integrity-artifact" as const },
+    ];
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    let links = 0;
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
+        links += 1;
+        if (links === 2) throw Object.assign(new Error("interrupted"), { code: "EINTR" });
+        Reflect.apply(actual.linkSync, actual, args);
+      },
+    }));
+    const interrupted = await import("./fs-hardening.js");
+    expect(() =>
+      interrupted.publishSafeArtifactFileSet(entries, {
+        commitPath: report,
+        trustedRoot: base,
+        publicationSlot: slot,
+      }),
+    ).toThrow(expect.objectContaining({ kind: "publish-failed" }));
+    vi.doUnmock("node:fs");
+    vi.resetModules();
+    const before = readdirSync(base).sort();
+
+    expect(() =>
+      publishSafeArtifactFileSet(
+        [
+          { path: report, contents: "new-report", artifactClass: "support-report" },
+          { path: integrity, contents: "new-digest", artifactClass: "integrity-artifact" },
+        ],
+        { commitPath: report, trustedRoot: base, publicationSlot: slot },
+      ),
+    ).toThrow(expect.objectContaining({ kind: "recovery-conflict" }));
+    expect(readdirSync(base).sort()).toEqual(before);
+    expect(readFileSync(integrity, "utf8")).toBe("old-digest");
+  });
+
+  it("removes its bounded fixed-slot reservation when hard-link publication is unsupported", async () => {
+    const base = freshDir();
+    const report = join(base, "support.jsonl");
+    const slot = safeArtifactPublicationSlot("support-export", report);
+    const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+    vi.resetModules();
+    vi.doMock("node:fs", () => ({
+      ...actual,
+      linkSync: (): never => {
+        throw Object.assign(new Error("hard links unavailable"), { code: "ENOTSUP" });
+      },
+    }));
+    const isolated = await import("./fs-hardening.js");
+    expect(() =>
+      isolated.publishSafeArtifactFileSet(
+        [{ path: report, contents: "report", artifactClass: "support-report" }],
+        { commitPath: report, trustedRoot: base, publicationSlot: slot },
+      ),
+    ).toThrow(expect.objectContaining({ kind: "publish-unsupported" }));
+    expect(readdirSync(base)).toEqual([]);
+  });
+
+  it("refuses hostile fixed-slot intent markers without changing their victim", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const base = freshDir();
+    const report = join(base, "support.jsonl");
+    const slot = safeArtifactPublicationSlot("support-export", report);
+    const marker = join(base, `.keiko-publish-${slot}.intent`);
+    const victim = join(base, "victim");
+    writeFileSync(victim, "operator-owned", { mode: 0o640 });
+    chmodSync(victim, 0o640);
+
+    for (const kind of ["symlink", "hard-link", "fifo"] as const) {
+      if (kind === "symlink") symlinkSync(victim, marker);
+      else if (kind === "hard-link") linkSync(victim, marker);
+      else execFileSync("mkfifo", [marker]);
+      expect(() =>
+        recoverSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base }),
+      ).toThrow(expect.objectContaining({ kind: "unsafe-target" }));
+      expect(readFileSync(victim, "utf8")).toBe("operator-owned");
+      expect(statSync(victim).mode & 0o777).toBe(0o640);
+      rmSync(marker);
+    }
+  });
+
   it.each(["darwin", "win32"] as const)(
     "rejects case-folded duplicate destinations on %s before writing",
     (platform) => {
