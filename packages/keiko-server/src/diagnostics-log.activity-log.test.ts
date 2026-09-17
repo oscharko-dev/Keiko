@@ -73,9 +73,11 @@ describe("diagnostic records on the activity log", () => {
     // `log-redaction.ts`'s `DENIED_FIELD_NAMES`.
     expect(line).toMatchObject({
       category: "diagnostic",
-      op: "chat.stream",
+      op: "server.diagnostic.failure",
       correlationId: "req-1f2e3d",
-      errorKind: "GatewayError",
+      errorKind: "internal",
+      diagnosticOperation: "chat.stream",
+      diagnosticErrorClass: "GatewayError",
       source: "server.top-level-catch",
       code: "GATEWAY_ERROR",
       occurrenceCount: 2,
@@ -86,6 +88,8 @@ describe("diagnostic records on the activity log", () => {
       httpStatus: 503,
       retryAfterMs: 2_000,
       deadlineMs: 360_000,
+      completeness: "complete",
+      loss: "none",
     });
 
     // Nothing else. Not the undeclared field, not the whole record under a `record` key, and not
@@ -205,7 +209,15 @@ describe("diagnostic records on the activity log", () => {
     });
     const line = readActivityLine(stateDir);
 
-    expect(line).toMatchObject({ op: "evidence.persist", occurrenceCount: 3 });
+    expect(line).toMatchObject({
+      op: "server.diagnostic.failure",
+      diagnosticOperation: "evidence.persist",
+      diagnosticErrorClass: "Error",
+      errorKind: "internal",
+      occurrenceCount: 3,
+      completeness: "complete",
+      loss: "none",
+    });
     expect(Object.keys(line)).not.toContain("code");
     expect(Object.keys(line)).not.toContain("gatewayRequestId");
     expect(Object.keys(line)).not.toContain("promptTokens");

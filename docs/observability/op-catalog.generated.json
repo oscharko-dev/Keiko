@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "205b1dc41337fe3b2841dca3dee729eb51c7027de380f8bf8b1f1391d61fd2a3",
-    "catalogDigest": "cdb40fb34dcfa2e87e28472aebec79b02e6205cdd3d397b2d6c37d435e111cbe",
+    "catalogDigest": "11ca008937db3f84ecd1fa0e518137cd14c0a9a8b669034a54e0805c62c83b80",
     "operations": [
       {
         "contractKind": "activity-log-operation",
@@ -203,12 +203,189 @@
           "packages/keiko-server/src/observability/server-log.ts:508",
           "packages/keiko-server/src/observability/server-log.ts:585"
         ]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
+        "op": "server.diagnostic.failure",
+        "category": "diagnostic",
+        "owner": "keiko-server",
+        "emitter": "diagnostics-log.diagnosticActivityLogEvent",
+        "fields": {
+          "diagnosticOperation": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": true,
+            "maxLength": 160
+          },
+          "diagnosticErrorClass": {
+            "type": "string",
+            "dataClass": "error-kind",
+            "required": true,
+            "maxLength": 64
+          },
+          "source": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": true,
+            "maxLength": 160
+          },
+          "code": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxLength": 256
+          },
+          "parentCorrelationId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxLength": 128
+          },
+          "gatewayRequestId": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxLength": 160
+          },
+          "httpStatus": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "retryAfterMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": false
+          },
+          "deadlineMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": false
+          },
+          "occurrenceCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "frameBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "retainedModelCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "unsupportedModelCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "unverifiedEmbeddingModelCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "droppedEmbeddingModelCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "semanticSkippedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "semanticCandidateCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "quarantinePruneFailedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "audioBytesBucket": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["empty", "q1-of-4", "q2-of-4", "q3-of-4", "q4-of-4", "over-limit"]
+          },
+          "diagnosticSummary": {
+            "type": "string",
+            "dataClass": "opaque-id",
+            "required": false,
+            "maxLength": 256
+          },
+          "unsupportedReasons": {
+            "type": "string-array",
+            "dataClass": "closed-enum",
+            "required": false,
+            "maxItems": 16,
+            "values": [
+              "chat",
+              "completion",
+              "responses",
+              "embedding",
+              "rerank",
+              "image_generation",
+              "audio_transcription",
+              "audio_speech",
+              "moderation",
+              "unrecognised-mode",
+              "not-chat-capable"
+            ]
+          },
+          "promptTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "completionTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "frames": {
+            "type": "string-array",
+            "dataClass": "safe-platform-class",
+            "required": false,
+            "maxItems": 8
+          },
+          "causeChain": {
+            "type": "string-array",
+            "dataClass": "error-kind",
+            "required": false,
+            "maxItems": 5
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "failure",
+        "analyzerProjection": "failure-cluster",
+        "failureClasses": ["server-diagnostic"],
+        "proofIds": ["server-diagnostic.activity-log-line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/diagnostics-log.ts:27",
+        "emitterSites": ["packages/keiko-server/src/diagnostics-log.ts:415"]
       }
     ],
     "violations": []
   },
   "legacyDiscovery": {
-    "dynamicCount": 33,
+    "dynamicCount": 32,
     "unknownCategoryCount": 22,
     "authoritative": false
   },
@@ -1227,12 +1404,6 @@
       "op": "<dynamic>",
       "category": "process",
       "site": "packages/keiko-server/src/coding-runtime/codingRuntimeOperationCoordinator.ts:745",
-      "package": "keiko-server"
-    },
-    {
-      "op": "<dynamic>",
-      "category": "diagnostic",
-      "site": "packages/keiko-server/src/diagnostics-log.ts:318",
       "package": "keiko-server"
     },
     {
@@ -3692,6 +3863,12 @@
       "package": "keiko-server"
     },
     {
+      "op": "server.diagnostic.failure",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/diagnostics-log.ts:30",
+      "package": "keiko-server"
+    },
+    {
       "op": "server.request",
       "category": "diagnostic",
       "site": "packages/keiko-server/src/server.ts:551",
@@ -4616,6 +4793,7 @@
     "server-log.safe-open",
     "server-log.write-failed",
     "server.composition",
+    "server.diagnostic.failure",
     "server.request",
     "server.runtime.shutdown",
     "speech.stt.language.normalized",
