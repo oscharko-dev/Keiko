@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   createPortableHandoffPlan,
@@ -118,7 +119,7 @@ function windowsPlanInput(root: string): PortableHandoffPlanInput {
 
 function fixtureBytes(name: string): Buffer {
   const text = readFileSync(
-    join(process.cwd(), "native", "portable-launcher", "fixtures", name),
+    fileURLToPath(new URL(`../../../native/portable-launcher/fixtures/${name}`, import.meta.url)),
     "ascii",
   );
   expect(text).toMatch(/^(?:[a-f0-9]{2})+\n$/u);

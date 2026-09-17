@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import {
   generationBindingMatchesPackageLayout,
@@ -13,7 +13,9 @@ import {
 function fixture(): Record<string, unknown> {
   return JSON.parse(
     readFileSync(
-      join(process.cwd(), "scripts", "__tests__", "fixtures", "windows-generation-v2.json"),
+      fileURLToPath(
+        new URL("../../../scripts/__tests__/fixtures/windows-generation-v2.json", import.meta.url),
+      ),
       "utf8",
     ),
   ) as Record<string, unknown>;
