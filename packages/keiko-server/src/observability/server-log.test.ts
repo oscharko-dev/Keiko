@@ -788,15 +788,14 @@ describe("server activity log", () => {
     expect(lines[1]).toMatchObject({ level: "error" });
   });
 
-  it("survives write failures without throwing", () => {
-    // Point at a path that is a file, not a directory; the sink must fall back to a null
-    // writer instead of crashing the server on startup.
+  it("fails closed when mandatory activity-log storage cannot be created", () => {
+    // Point at a path that is a file, not a directory. A configured production logger cannot
+    // silently claim reconstruction capability by falling back to a null writer.
     const filePath = join(stateDir, "not-a-dir");
     writeFileSync(filePath, "block");
-    const sink = createFileServerLogSink(filePath);
-    expect(() => {
-      sink.write({ category: "http", op: "request" });
-    }).not.toThrow();
+    expect(() => createFileServerLogSink(filePath)).toThrow(
+      "safe artifact activity-log failed: open-failed",
+    );
   });
 
   it("never propagates a failure that appears after the sink was created", () => {

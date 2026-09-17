@@ -54,7 +54,6 @@ import {
   ACTIVITY_LOG_SCHEMA_DIGEST,
   ActivityLogEventValidationError,
   activityLogEvent,
-  activityLogEventRegistration,
   classifyErrorKind,
   defineActivityLogOperation,
   isActivityLogErrorKind,
@@ -205,7 +204,7 @@ function validServerLogIdentity(identity: ServerLogIdentity): boolean {
       ACTIVITY_LOG_DIGEST.test(identity.catalogDigest) &&
       identity.catalogDigest === ACTIVITY_LOG_CATALOG_DIGEST,
     identity.buildClass === "node-esm" &&
-    (identity.releaseClass === "stable" || identity.releaseClass === "prerelease") &&
+      (identity.releaseClass === "stable" || identity.releaseClass === "prerelease") &&
       ACTIVITY_LOG_PLATFORM_CLASS.test(identity.platformClass),
     ACTIVITY_LOG_PRODUCT_VERSION.test(identity.productVersion) &&
       identity.productVersion === KEIKO_PRODUCT_VERSION,
@@ -480,10 +479,7 @@ function emitFailureNotice(
   }
 }
 
-function emergencyFailureNotice(
-  identity: ServerLogIdentity,
-  now: number,
-): Record<string, unknown> {
+function emergencyFailureNotice(identity: ServerLogIdentity, now: number): Record<string, unknown> {
   return {
     ts: new Date(now).toISOString(),
     ...failureNoticeIdentity(identity),
@@ -677,28 +673,17 @@ export function formatRegisteredServerLogLine(
     throw new ActivityLogEventValidationError("missing-identity");
   }
   validateServerLogIdentity(identity);
-  validateRegisteredActivityLogEvent(
-    event as unknown as Readonly<Record<PropertyKey, unknown>>,
-  );
+  validateRegisteredActivityLogEvent(event as unknown as Readonly<Record<PropertyKey, unknown>>);
   return formatServerLogLine(event, now, identity);
 }
 
-function eventHasTypedRegistration(event: ServerLogEvent): boolean {
-  return (
-    activityLogEventRegistration(
-      event as unknown as Readonly<Record<PropertyKey, unknown>>,
-    ) !== undefined
-  );
-}
-
-function formatEventLine(
-  event: ServerLogEvent,
-  now?: Date,
-  identity?: ServerLogIdentity,
-): string {
-  return eventHasTypedRegistration(event)
-    ? formatRegisteredServerLogLine(event, now, identity)
-    : formatServerLogLine(event, now, identity);
+function formatEventLine(event: ServerLogEvent, now?: Date, identity?: ServerLogIdentity): string {
+  // Every production persistence path supplies an identity and therefore requires a typed
+  // registration. The identity-less branch exists only for the in-memory test sink's redacted
+  // line projection; it cannot write a production file.
+  return identity === undefined
+    ? formatServerLogLine(event, now)
+    : formatRegisteredServerLogLine(event, now, identity);
 }
 
 // The cap is a cap on BYTES, because the write below encodes UTF-8 and a log shipper's line limit
@@ -1023,16 +1008,20 @@ const SERVER_LOG_ROTATION_OPERATION = defineActivityLogOperation({
 });
 
 function safeOpenEvidence(): ServerLogEvent {
-  return activityLogEvent(SERVER_LOG_SAFE_OPEN_OPERATION, {
-    correlationId: correlationIdOrUnknown(undefined),
-  }, {
-    artifactClass: "activity-log",
-    persistenceStatus: "opened",
-    permissionAssurance: safeArtifactPermissionAssurance(),
-    containmentAssurance: safeArtifactContainmentAssurance(),
-    completeness: "complete",
-    loss: "none",
-  });
+  return activityLogEvent(
+    SERVER_LOG_SAFE_OPEN_OPERATION,
+    {
+      correlationId: correlationIdOrUnknown(undefined),
+    },
+    {
+      artifactClass: "activity-log",
+      persistenceStatus: "opened",
+      permissionAssurance: safeArtifactPermissionAssurance(),
+      containmentAssurance: safeArtifactContainmentAssurance(),
+      completeness: "complete",
+      loss: "none",
+    },
+  );
 }
 
 function rotationEvidence(
@@ -1656,9 +1645,11 @@ export function createFileServerLogSink(
   try {
     mkdirSync(directory, { recursive: true, mode: 0o700 });
   } catch {
-    // If we cannot create the directory we return a null sink rather than crashing the
-    // server; the caller keeps running and the operator sees a missing file, not a hang.
-    return NULL_SINK;
+    // A configured production Activity Log is mandatory reconstruction evidence. Returning the
+    // null sink here made startup appear healthy while every later operation was silently
+    // unevidenced. Fail with the existing closed filesystem classification instead; callers that
+    // intentionally need no persistence must choose nullServerLogSink() explicitly.
+    throw new SafeArtifactFileError("activity-log", "open-failed");
   }
   const active = resolveActiveLog(directory);
   const threshold = options.level ?? resolveServerLogThreshold(options.env ?? process.env);

@@ -63,7 +63,7 @@ function withTypedRegistryFixture(pkgName, fileContents, check) {
       join(contractsDir, "observability.ts"),
       [
         "export function defineActivityLogOperation<const T>(value: T): T { return value; }",
-        "export function activityLogEvent<const T>(registration: T, fields: Record<string, unknown>) {",
+        "export function activityLogEvent<const T>(registration: T, _envelope: object, fields: Record<string, unknown>) {",
         '  return { ...fields, contractKind: "activity-log-event" as const, registration };',
         "}",
         "",
@@ -157,10 +157,7 @@ describe("op catalog drift", () => {
         '  category: "diagnostic",',
         '  owner: "zzz-fixture-typed-registry",',
         '  emitter: "fixture",',
-        "  fields: {",
-        '    completeness: { type: "string", dataClass: "completeness-state", required: true },',
-        '    loss: { type: "string", dataClass: "loss-state", required: true },',
-        "  },",
+        "  fields: {},",
         '  causal: "correlation",',
         '  lifecycle: "end",',
         '  analyzerProjection: "timeline",',
@@ -168,7 +165,7 @@ describe("op catalog drift", () => {
         '  proofIds: ["fixture-proof"],',
         '  releaseImpact: "patch",',
         "});",
-        "activityLogEvent(operation, {});",
+        "activityLogEvent(operation, {}, {});",
         "",
       ].join("\n"),
       (root) => {
@@ -179,7 +176,11 @@ describe("op catalog drift", () => {
             op: "fixture.registry.completed",
             owner: "zzz-fixture-typed-registry",
             registrationSite: "packages/zzz-fixture-typed-registry/src/fixture.ts:2",
-            emitterSites: ["packages/zzz-fixture-typed-registry/src/fixture.ts:20"],
+            emitterSites: ["packages/zzz-fixture-typed-registry/src/fixture.ts:17"],
+            fields: expect.objectContaining({
+              completeness: expect.objectContaining({ required: true }),
+              loss: expect.objectContaining({ required: true }),
+            }),
           }),
         ]);
         expect(registry.failureClassCoverage).toMatchObject({
@@ -192,7 +193,7 @@ describe("op catalog drift", () => {
     );
   });
 
-  it("marks a supported failure class incomplete when loss/completeness proof fields are absent", () => {
+  it("adds mandatory loss and completeness fields to every registered operation", () => {
     withTypedRegistryFixture(
       "zzz-fixture-incomplete-failure-class",
       [
@@ -205,22 +206,17 @@ describe("op catalog drift", () => {
         '  failureClasses: ["fixture-failure"], proofIds: ["fixture-proof"],',
         '  releaseImpact: "patch",',
         "});",
-        "activityLogEvent(operation, {});",
+        "activityLogEvent(operation, {}, {});",
         "",
       ].join("\n"),
       (root) => {
         const registry = generateTypedActivityLogRegistry(root);
         expect(registry.failureClassCoverage).toMatchObject({
           supportedClassCount: 1,
-          completeClassCount: 0,
-          completeness: "incomplete",
+          completeClassCount: 1,
+          completeness: "complete",
         });
-        expect(registry.violations).toContainEqual(
-          expect.objectContaining({
-            code: "failure-class-incomplete",
-            detail: "lifecycle-evidence,loss-evidence",
-          }),
-        );
+        expect(registry.violations).toEqual([]);
       },
     );
   });
@@ -230,7 +226,7 @@ describe("op catalog drift", () => {
       "zzz-fixture-dynamic-registry",
       [
         'import { defineActivityLogOperation } from "../../keiko-contracts/src/observability.js";',
-        'const runtimeOp = process.env["FIXTURE_OP"];',
+        'let runtimeOp = "fixture.registry.dynamic";',
         "defineActivityLogOperation({",
         '  contractKind: "activity-log-operation" as const,',
         "  schemaVersion: 1 as const,",
@@ -270,7 +266,7 @@ describe("op catalog drift", () => {
         const registry = generateTypedActivityLogRegistry(root);
         expect(registry.operations).toEqual([]);
         expect(registry.violations).toEqual([
-          expect.objectContaining({ code: "registration-invalid", detail: "owner" }),
+          expect.objectContaining({ code: "registration-invalid", detail: "fields" }),
         ]);
       },
     );
@@ -309,7 +305,7 @@ describe("op catalog drift", () => {
       [
         'import { activityLogEvent } from "../../keiko-contracts/src/observability.js";',
         'const unregistered = { contractKind: "activity-log-operation" as const };',
-        "activityLogEvent(unregistered, {});",
+        "activityLogEvent(unregistered, {}, {});",
         "",
       ].join("\n"),
       (root) => {
@@ -491,15 +487,12 @@ describe("op catalog drift", () => {
     );
   });
 
-  // #2902 W5: orchestrator.ts's logIndexing/logEmbeddingRun/logDocument hardcode `category` inside
-  // their OWN body rather than the caller's object literal, so tier 1 (findSiblingCategory) never
-  // finds a sibling `category:` at these call sites, and tier 3 (fileCategoryBinding) backs off
-  // because the file binds two distinct categories. Before OBJECT_ARG_CATEGORY_FUNCTIONS, both ops
-  // below resolved to "unknown" even though the runtime always stamps a deterministic category for
-  // them. Driven through the real generator entry point, not a re-derivation of its category rules.
-  it("attributes the deterministic category to an op:-only call site of a checked-in object-arg category function", () => {
-    const catalog = generateCurrentOpCatalog();
-    const byOp = (op) => catalog.entries.find((entry) => entry.op === op);
+  // These operations have migrated from the predecessor's object-argument inference into their
+  // owning typed registrations. Pin the authoritative category instead of requiring the legacy
+  // scanner to infer through a cross-module emitter.
+  it("retains deterministic categories after indexing operations migrate to typed emitters", () => {
+    const registry = generateTypedActivityLogRegistry(repoRoot);
+    const byOp = (op) => registry.operations.find((entry) => entry.op === op);
     expect(byOp("indexing.document.failed")?.category).toBe("indexing");
     expect(byOp("embedding.preflight.identity-rejected")?.category).toBe("embedding");
   });

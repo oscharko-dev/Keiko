@@ -44,6 +44,7 @@ import { errorBody } from "./routes.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
 import { observedGitRunner } from "./gitProcessActivity.js";
 import { processServerLogSink } from "./process-log-sink.js";
+import type { ServerLogSink } from "./observability/server-log.js";
 import { parsePorcelainV2Branch } from "./gitPorcelainStatus.js";
 import { codingWorkbenchRemoteDigest } from "./coding-context/githubIssueResolution.js";
 import {
@@ -495,7 +496,7 @@ type GitChangeBlockedLogReason =
   | "GIT_CHANGE_SCOPE_PERSIST_FAILED"
   | "relationship-conflict";
 
-function gitChangeActivity(deps: UiHandlerDeps): ReturnType<typeof processServerLogSink> {
+function gitChangeActivity(deps: UiHandlerDeps): ServerLogSink {
   return deps.activityLog ?? processServerLogSink();
 }
 

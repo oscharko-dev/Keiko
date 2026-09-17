@@ -88,6 +88,8 @@ describe("typed Activity Log operation registration", () => {
     });
 
     expect(activityLogEvent(operation, {}, { reasons: ["first", "second"] }).extra).toEqual({
+      completeness: "complete",
+      loss: "none",
       reasons: ["first", "second"],
     });
 
@@ -126,7 +128,7 @@ describe("typed Activity Log operation registration", () => {
       category: "diagnostic",
       op: "registry.fixture.completed",
       correlationId: "registry-fixture-correlation",
-      extra: { itemCount: 2 },
+      extra: { completeness: "complete", loss: "none", itemCount: 2 },
     });
 
     if (false) {
@@ -142,18 +144,51 @@ describe("typed Activity Log operation registration", () => {
     }
 
     expect(() =>
-      activityLogEvent(
-        operation,
-        { correlationId: "registry-fixture-correlation" },
-        { itemCount: 2, rawBody: "secret" } as never,
-      ),
+      activityLogEvent(operation, { correlationId: "registry-fixture-correlation" }, {
+        itemCount: 2,
+        rawBody: "secret",
+      } as never),
     ).toThrow(new ActivityLogEventValidationError("unknown-field"));
     expect(() =>
-      activityLogEvent(
-        operation,
-        { correlationId: "registry-fixture-correlation" },
-        { itemCount: "two" } as never,
-      ),
+      activityLogEvent(operation, { correlationId: "registry-fixture-correlation" }, {
+        itemCount: "two",
+      } as never),
     ).toThrow(new ActivityLogEventValidationError("invalid-field-type"));
+  });
+
+  it("preserves explicit partial and loss evidence while rejecting global contract drift", () => {
+    const registration = {
+      contractKind: "activity-log-operation",
+      schemaVersion: 1,
+      op: "registry.fixture.loss",
+      category: "diagnostic",
+      owner: "keiko-contracts",
+      emitter: "observability.test.loss",
+      fields: {},
+      causal: "none",
+      lifecycle: "loss",
+      analyzerProjection: "timeline",
+      failureClasses: ["registry-fixture"],
+      proofIds: ["registry-fixture-loss-emitted-line"],
+      releaseImpact: "none",
+    } as const;
+    const event = activityLogEvent(
+      defineActivityLogOperation(registration),
+      {},
+      {
+        completeness: "partial",
+        loss: "event-dropped",
+      },
+    );
+
+    expect(event.extra).toEqual({ completeness: "partial", loss: "event-dropped" });
+    expect(() =>
+      defineActivityLogOperation({
+        ...registration,
+        fields: {
+          completeness: { type: "string", dataClass: "closed-enum", required: true },
+        },
+      }),
+    ).toThrow(new ActivityLogEventValidationError("registration-mismatch"));
   });
 });

@@ -232,8 +232,6 @@ function safeContentTypeHeader(req: IncomingMessage): ContentTypeHeaderValue {
 // subtype safe to log — a client fully controls the whole header and can place sensitive data in
 // a syntactically valid subtype (e.g. `Content-Type: application/<secret>`) that never reaches
 // this gate at all.
-const KNOWN_REQUEST_MEDIA_TYPES = new Set<string>(["application/json"]);
-
 // Reduces a `Content-Type` header to its media type, discarding parameters (`; charset=utf-8`,
 // `; boundary=...`) that can carry caller-chosen, unbounded text, then maps it through the
 // allowlist above. A subtype this reader has no reason to ever see collapses to the fixed label
@@ -242,7 +240,7 @@ function mediaTypeOf(header: ContentTypeHeaderValue): RequestMediaType {
   const value = typeof header === "string" ? header : header?.[0];
   const mediaType = value?.split(";", 1)[0]?.trim().toLowerCase();
   if (mediaType === undefined || mediaType.length === 0) return "unspecified";
-  return KNOWN_REQUEST_MEDIA_TYPES.has(mediaType) ? mediaType : "other";
+  return mediaType === "application/json" ? mediaType : "other";
 }
 
 // The one success line this reader emits, at debug: per-request volume makes it unfit for info,

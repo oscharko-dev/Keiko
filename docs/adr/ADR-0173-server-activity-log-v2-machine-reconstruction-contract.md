@@ -320,8 +320,10 @@ Generation resolves the two canonical `keiko-contracts` APIs through TypeScript 
 alias symbols. A local same-shaped helper is unrelated and ignored. A non-literal or unresolved
 canonical registration/emission, a duplicate operation, a registration with no emitter, an emitter
 without its registration, or relevant compiler diagnostics is an actionable closed violation. The
-checked-in catalog and generated runtime digest constants come from those canonical declarations.
-The drift check requires both byte equality and an empty authoritative violation set.
+checked-in catalog and generated runtime module come from those canonical declarations. The runtime
+module contains the complete safe operation schemas and failure-class coverage as well as the
+registry/schema/catalog identity constants; it is not a digest-only index. The drift check requires
+both byte equality and an empty authoritative violation set.
 
 The predecessor bracket scanner remains temporarily in the same generated file as a visibly
 non-authoritative migration input. Its `<dynamic>` and `unknown` records authorize nothing and must
@@ -331,6 +333,11 @@ the event, and the physical sink repeats validation immediately before serializa
 check closes post-construction mutation and protects JavaScript callers that did not pass through
 the TypeScript checker. A rejection produces only a closed body-free rejection kind; it never
 echoes the rejected operation, field, or value and cannot recursively enter the failed sink.
+
+Every generated operation schema includes required `completeness` and `loss` contracts. The event
+constructor supplies the safe defaults `complete` and `none`, while a producer that observed
+partial evidence or known loss overrides those values explicitly. Central ownership makes the two
+signals structurally present without duplicating identical declarations across every emitter.
 
 The registry also generates two derived governance surfaces from those same declarations. Stable
 implementation-obligation categories give later quality gates one machine vocabulary rather than
@@ -494,7 +501,9 @@ legacy lines age out.
 A partially present or invalid v2 tuple is not legacy. The analyzer classifies each input as
 supported, legacy-supported, unsupported-version, corrupt, truncated, or incomplete and validates
 schema version, positive integer pid/seq, bounded instance id, registry/schema/catalog identity,
-compatibility, and writer capability. Within each `(pid, instanceId)` lifetime it reports sequence
+compatibility, and writer capability. For a record carrying the current registry identity, it also
+validates the operation, category, exact registered field set, closed error kind, and required
+fields against the generated runtime schema. Within each `(pid, instanceId)` lifetime it reports sequence
 gaps, duplicates, decreasing/reset values, and reorder deterministically. These machine states are
 included in human and JSON output; a line cannot become trusted v2 evidence merely because its JSON
 parsed successfully.

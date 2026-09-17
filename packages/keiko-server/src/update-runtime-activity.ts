@@ -12,9 +12,9 @@ import {
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 
 import { correlationIdOrUnknown } from "./correlation.js";
-import type { ServerLogEvent } from "./observability/index.js";
 
 export interface UpdateRuntimeActivityFields {
   readonly eventId: string;
@@ -245,7 +245,7 @@ const UPDATE_LEGACY_SNAPSHOT_IMPORTED_OPERATION = defineActivityLogOperation({
 export function updateRuntimeActivityEvent(
   correlationId: string | undefined,
   fields: UpdateRuntimeActivityFields,
-): ServerLogEvent {
+): SecurityLogEvent {
   return activityLogEvent(
     UPDATE_RUNTIME_EVENT_OPERATION,
     { level: "info", correlationId: correlationIdOrUnknown(correlationId) },
@@ -258,7 +258,7 @@ export function updateLegacySnapshotImportedEvent(input: {
   readonly sourceDigest: string;
   readonly importedIdSetDigest: string;
   readonly importedCount: number;
-}): ServerLogEvent {
+}): SecurityLogEvent {
   return activityLogEvent(
     UPDATE_LEGACY_SNAPSHOT_IMPORTED_OPERATION,
     { level: "info" },

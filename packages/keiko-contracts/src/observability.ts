@@ -20,11 +20,15 @@
 // bypasses the `extra` redaction path entirely: this shape gate is the only thing standing
 // between a provider's rejected-input message and a log line an operator will grep in the clear.
 
+import { ACTIVITY_LOG_OPERATION_REGISTRY } from "./activity-log-registry.generated.js";
+
 export {
   ACTIVITY_LOG_CATALOG_DIGEST,
+  ACTIVITY_LOG_FAILURE_CLASS_COVERAGE,
   ACTIVITY_LOG_REGISTRY_VERSION,
   ACTIVITY_LOG_SCHEMA_DIGEST,
 } from "./activity-log-registry.generated.js";
+export { ACTIVITY_LOG_OPERATION_REGISTRY };
 
 /**
  * The shape an error KIND may take: a leading letter, then up to 63 more letters, digits,
@@ -161,6 +165,17 @@ export interface ActivityLogFieldContract {
   readonly maxItems?: number | undefined;
   readonly values?: readonly string[] | undefined;
 }
+
+// These two fields are part of every persisted v2 operation, not optional per-emitter metadata.
+// Centralizing them keeps loss/completeness evidence structurally present while still allowing an
+// emitter to override the safe defaults when an operation is partial or a known loss occurred.
+export const ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS = {
+  completeness: { type: "string", dataClass: "completeness-state", required: true },
+  loss: { type: "string", dataClass: "loss-state", required: true },
+} as const satisfies Readonly<Record<string, ActivityLogFieldContract>>;
+
+type ActivityLogGlobalFieldContracts = typeof ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS;
+type ActivityLogGlobalFieldName = keyof ActivityLogGlobalFieldContracts;
 
 export const ACTIVITY_LOG_LIFECYCLE_PHASES = ["start", "state", "end", "failure", "loss"] as const;
 export type ActivityLogLifecyclePhase = (typeof ACTIVITY_LOG_LIFECYCLE_PHASES)[number];
@@ -320,8 +335,19 @@ export type ActivityLogFields<Registration extends ActivityLogOperationRegistrat
 
 type ExactActivityLogFields<
   Registration extends ActivityLogOperationRegistration,
-  Fields extends ActivityLogFields<Registration>,
-> = Fields & Record<Exclude<keyof Fields, keyof ActivityLogFields<Registration>>, never>;
+  Fields extends ActivityLogEventFields<Registration>,
+> = Fields & Record<Exclude<keyof Fields, keyof ActivityLogEventFields<Registration>>, never>;
+
+export type ActivityLogEventFields<Registration extends ActivityLogOperationRegistration> = Omit<
+  ActivityLogFields<Registration>,
+  ActivityLogGlobalFieldName
+> &
+  Partial<
+    Pick<
+      ActivityLogFields<Registration>,
+      Extract<ActivityLogGlobalFieldName, keyof ActivityLogFields<Registration>>
+    >
+  >;
 
 function stringFieldFailure(
   contract: ActivityLogFieldContract,
@@ -409,6 +435,28 @@ function validateActivityLogFields(
   }
 }
 
+export function activityLogOperationSchema(
+  op: string,
+): ActivityLogOperationRegistration | undefined {
+  return ACTIVITY_LOG_OPERATION_REGISTRY.find((registration) => registration.op === op);
+}
+
+export function validateActivityLogOperationFields(
+  op: string,
+  category: string,
+  fields: Readonly<Record<string, unknown>>,
+): ActivityLogOperationRegistration {
+  const registration = activityLogOperationSchema(op);
+  if (registration === undefined) {
+    throw new ActivityLogEventValidationError("unregistered-operation");
+  }
+  if (registration.category !== category) {
+    throw new ActivityLogEventValidationError("registration-mismatch");
+  }
+  validateActivityLogFields(registration, fields);
+  return registration;
+}
+
 const ACTIVITY_LOG_ENVELOPE_KEYS: ReadonlySet<string> = new Set([
   "level",
   "correlationId",
@@ -456,14 +504,27 @@ function validateActivityLogEnvelope(
   }
 }
 
+export function validateActivityLogOperationRecord(
+  op: string,
+  category: string,
+  envelope: ActivityLogEventEnvelope,
+  fields: Readonly<Record<string, unknown>>,
+): ActivityLogOperationRegistration {
+  const registration = validateActivityLogOperationFields(op, category, fields);
+  validateActivityLogEnvelope(registration, envelope);
+  return registration;
+}
+
 export const ACTIVITY_LOG_EVENT_REGISTRATION = Symbol.for(
   "@oscharko-dev/keiko-contracts/activity-log-event-registration",
 );
 
 export function activityLogEventRegistration(
-  event: Readonly<Record<PropertyKey, unknown>>,
+  event: object,
 ): ActivityLogOperationRegistration | undefined {
-  const registration = event[ACTIVITY_LOG_EVENT_REGISTRATION];
+  const registration = (event as Readonly<Record<PropertyKey, unknown>>)[
+    ACTIVITY_LOG_EVENT_REGISTRATION
+  ];
   return registration !== null && typeof registration === "object"
     ? (registration as ActivityLogOperationRegistration)
     : undefined;
@@ -545,8 +606,29 @@ export function validateRegisteredActivityLogEvent(
  */
 export function defineActivityLogOperation<
   const Registration extends ActivityLogOperationRegistration,
->(registration: Registration): Registration {
-  return registration;
+>(
+  registration: Registration,
+): Omit<Registration, "fields"> & {
+  readonly fields: ActivityLogGlobalFieldContracts & Registration["fields"];
+} {
+  for (const [name, contract] of Object.entries(ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS)) {
+    const declared = registration.fields[name];
+    if (
+      declared !== undefined &&
+      (declared.type !== contract.type ||
+        declared.dataClass !== contract.dataClass ||
+        declared.required !== contract.required ||
+        declared.maxLength !== undefined ||
+        declared.maxItems !== undefined ||
+        declared.values !== undefined)
+    ) {
+      throw new ActivityLogEventValidationError("registration-mismatch");
+    }
+  }
+  return {
+    ...registration,
+    fields: { ...ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS, ...registration.fields },
+  };
 }
 
 /**
@@ -555,8 +637,10 @@ export function defineActivityLogOperation<
  * closed now instead of inferring operations from unrelated object literals.
  */
 export function activityLogEvent<
-  const Registration extends ActivityLogOperationRegistration,
-  const Fields extends ActivityLogFields<Registration>,
+  const Registration extends ActivityLogOperationRegistration & {
+    readonly fields: ActivityLogGlobalFieldContracts;
+  },
+  const Fields extends ActivityLogEventFields<Registration>,
 >(
   registration: Registration,
   envelope: ActivityLogEventEnvelope,
@@ -564,12 +648,17 @@ export function activityLogEvent<
 ): RegisteredActivityLogEvent<Registration> &
   ActivityLogEventEnvelope & { readonly extra: ActivityLogFields<Registration> } {
   validateActivityLogEnvelope(registration, envelope);
-  validateActivityLogFields(registration, fields);
+  const normalizedFields = {
+    completeness: "complete",
+    loss: "none",
+    ...fields,
+  } as ActivityLogFields<Registration>;
+  validateActivityLogFields(registration, normalizedFields);
   const event = {
     ...envelope,
     category: registration.category,
     ["op"]: registration.op,
-    extra: fields,
+    extra: normalizedFields,
   };
   Object.defineProperty(event, ACTIVITY_LOG_EVENT_REGISTRATION, {
     value: registration,

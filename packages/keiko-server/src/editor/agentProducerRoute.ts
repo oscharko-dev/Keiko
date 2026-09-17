@@ -107,7 +107,7 @@ const EDITOR_PRODUCER_TURN_COMPLETED_OPERATION = defineActivityLogOperation({
       dataClass: "closed-enum",
       required: true,
       maxLength: 64,
-      maxItems: 128,
+      maxItems: 5,
       values: [
         "editor_navigate_symbol",
         "editor_search_workspace",
@@ -518,7 +518,7 @@ function producerLoss(values: readonly string[]): ActivityLogLossState {
 }
 
 function recordProducerCompletion(log: ServerLogSink, evidence: ProducerCompletionEvidence): void {
-  const toolNames = evidence.toolNames.map(producerActivityToolName);
+  const toolNames = [...new Set(evidence.toolNames.map(producerActivityToolName))];
   const advertisedToolRefs = evidence.catalog.toolRefs.map((tool) =>
     producerActivityToolRef(tool.canonicalId, tool.contractVersion),
   );

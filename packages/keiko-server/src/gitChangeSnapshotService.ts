@@ -549,10 +549,10 @@ function captureEnvelopeErrorKind(reason: string | undefined): ActivityLogErrorK
 }
 
 function captureErrorFields(error: unknown): {
-  readonly errorClass?: string | undefined;
-  readonly code?: string | undefined;
-  readonly frames?: readonly string[] | undefined;
-  readonly causeChain?: readonly string[] | undefined;
+  readonly errorClass?: string;
+  readonly code?: string;
+  readonly frames?: readonly string[];
+  readonly causeChain?: readonly string[];
 } {
   const described = describeError(error);
   return {

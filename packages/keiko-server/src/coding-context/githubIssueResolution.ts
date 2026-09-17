@@ -121,12 +121,14 @@ const ISSUE_RESOLVED_OPERATION = defineActivityLogOperation({
       type: "string-array",
       dataClass: "safe-platform-class",
       required: false,
+      maxLength: 512,
       maxItems: 8,
     },
     causeChain: {
       type: "string-array",
       dataClass: "error-kind",
       required: false,
+      maxLength: 128,
       maxItems: 5,
     },
   },
@@ -529,7 +531,10 @@ function record(
         ...(detail.errorKind === undefined ? {} : { failureKind: detail.errorKind }),
         ...(detail.frames === undefined
           ? {}
-          : { frames: detail.frames, causeChain: detail.causeChain }),
+          : {
+              frames: detail.frames,
+              ...(detail.causeChain === undefined ? {} : { causeChain: detail.causeChain }),
+            }),
       },
     ),
   );

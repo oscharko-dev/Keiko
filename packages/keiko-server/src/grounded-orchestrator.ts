@@ -274,7 +274,11 @@ const SEARCH_CONNECTED_CONTEXT_COMPLETED_OPERATION = defineActivityLogOperation(
       values: ["not-evaluated", "available", "unavailable"],
     },
     structuralContextCount: { type: "integer", dataClass: "count", required: false },
-    structuralCandidateInventoryBuildCount: { type: "integer", dataClass: "count", required: false },
+    structuralCandidateInventoryBuildCount: {
+      type: "integer",
+      dataClass: "count",
+      required: false,
+    },
     structuralTextSearchCount: { type: "integer", dataClass: "count", required: false },
     indexProviderStatus: {
       type: "string",
@@ -432,12 +436,14 @@ const SEARCH_CONNECTED_CONTEXT_FAILED_OPERATION = defineActivityLogOperation({
       type: "string-array",
       dataClass: "safe-platform-class",
       required: false,
+      maxLength: 512,
       maxItems: 8,
     },
     causeChain: {
       type: "string-array",
       dataClass: "error-kind",
       required: false,
+      maxLength: 128,
       maxItems: 5,
     },
     completeness: { type: "string", dataClass: "completeness-state", required: true },
@@ -5008,15 +5014,15 @@ interface ConnectedContextCommonActivityFields {
   readonly queryKind: ActivityQueryKind;
   readonly queryIdentitySha256: string;
   readonly inputStatus: "valid" | "invalid";
-  readonly caseSensitive?: boolean | undefined;
-  readonly maxResults?: number | undefined;
-  readonly searchCallsMax?: number | undefined;
-  readonly filesReadMax?: number | undefined;
-  readonly excerptBytesMax?: number | undefined;
-  readonly modelInputTokensMax?: number | undefined;
-  readonly modelOutputTokensMax?: number | undefined;
-  readonly elapsedMsMax?: number | undefined;
-  readonly rerankCallsMax?: number | undefined;
+  readonly caseSensitive?: boolean;
+  readonly maxResults?: number;
+  readonly searchCallsMax?: number;
+  readonly filesReadMax?: number;
+  readonly excerptBytesMax?: number;
+  readonly modelInputTokensMax?: number;
+  readonly modelOutputTokensMax?: number;
+  readonly elapsedMsMax?: number;
+  readonly rerankCallsMax?: number;
   readonly completeness: "complete";
   readonly loss: "none";
 }
@@ -5163,7 +5169,9 @@ function validActivityNumber(value: ActivityNumber): number | undefined {
 function connectedContextInputStatus(
   identity: ConnectedContextActivityIdentity,
 ): "valid" | "invalid" {
-  const values: readonly (ActivityNumber | ActivityBoolean | ActivityScopeKind | ActivityQueryKind)[] = [
+  const values: readonly (
+    ActivityNumber | ActivityBoolean | ActivityScopeKind | ActivityQueryKind
+  )[] = [
     identity.scopeKind,
     identity.queryKind,
     identity.caseSensitive,
@@ -5182,6 +5190,14 @@ function connectedContextInputStatus(
 function commonActivityExtra(
   identity: ConnectedContextActivityIdentity,
 ): ConnectedContextCommonActivityFields {
+  const maxResults = validActivityNumber(identity.maxResults);
+  const searchCallsMax = validActivityNumber(identity.searchCallsMax);
+  const filesReadMax = validActivityNumber(identity.filesReadMax);
+  const excerptBytesMax = validActivityNumber(identity.excerptBytesMax);
+  const modelInputTokensMax = validActivityNumber(identity.modelInputTokensMax);
+  const modelOutputTokensMax = validActivityNumber(identity.modelOutputTokensMax);
+  const elapsedMsMax = validActivityNumber(identity.elapsedMsMax);
+  const rerankCallsMax = validActivityNumber(identity.rerankCallsMax);
   return {
     scopeKind: identity.scopeKind,
     relativePathCount: identity.relativePathCount,
@@ -5191,30 +5207,14 @@ function commonActivityExtra(
     queryIdentitySha256: identity.queryIdentitySha256,
     inputStatus: connectedContextInputStatus(identity),
     ...(identity.caseSensitive === "invalid" ? {} : { caseSensitive: identity.caseSensitive }),
-    ...(validActivityNumber(identity.maxResults) === undefined
-      ? {}
-      : { maxResults: validActivityNumber(identity.maxResults) }),
-    ...(validActivityNumber(identity.searchCallsMax) === undefined
-      ? {}
-      : { searchCallsMax: validActivityNumber(identity.searchCallsMax) }),
-    ...(validActivityNumber(identity.filesReadMax) === undefined
-      ? {}
-      : { filesReadMax: validActivityNumber(identity.filesReadMax) }),
-    ...(validActivityNumber(identity.excerptBytesMax) === undefined
-      ? {}
-      : { excerptBytesMax: validActivityNumber(identity.excerptBytesMax) }),
-    ...(validActivityNumber(identity.modelInputTokensMax) === undefined
-      ? {}
-      : { modelInputTokensMax: validActivityNumber(identity.modelInputTokensMax) }),
-    ...(validActivityNumber(identity.modelOutputTokensMax) === undefined
-      ? {}
-      : { modelOutputTokensMax: validActivityNumber(identity.modelOutputTokensMax) }),
-    ...(validActivityNumber(identity.elapsedMsMax) === undefined
-      ? {}
-      : { elapsedMsMax: validActivityNumber(identity.elapsedMsMax) }),
-    ...(validActivityNumber(identity.rerankCallsMax) === undefined
-      ? {}
-      : { rerankCallsMax: validActivityNumber(identity.rerankCallsMax) }),
+    ...(maxResults === undefined ? {} : { maxResults }),
+    ...(searchCallsMax === undefined ? {} : { searchCallsMax }),
+    ...(filesReadMax === undefined ? {} : { filesReadMax }),
+    ...(excerptBytesMax === undefined ? {} : { excerptBytesMax }),
+    ...(modelInputTokensMax === undefined ? {} : { modelInputTokensMax }),
+    ...(modelOutputTokensMax === undefined ? {} : { modelOutputTokensMax }),
+    ...(elapsedMsMax === undefined ? {} : { elapsedMsMax }),
+    ...(rerankCallsMax === undefined ? {} : { rerankCallsMax }),
     completeness: "complete",
     loss: "none",
   };
@@ -5466,10 +5466,7 @@ function safeConnectedContextErrorKind(error: unknown): ActivityLogErrorKind {
   }
 }
 
-function isConnectedContextCancellation(
-  error: unknown,
-  errorKind: ActivityLogErrorKind,
-): boolean {
+function isConnectedContextCancellation(error: unknown, errorKind: ActivityLogErrorKind): boolean {
   try {
     if (error instanceof CancelledError) return true;
   } catch {

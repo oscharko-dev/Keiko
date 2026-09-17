@@ -68,6 +68,7 @@ import {
   ACTIVITY_LOG_DATA_CLASSES,
   ACTIVITY_LOG_EXEMPTION_BOUNDARIES,
   ACTIVITY_LOG_FIELD_TYPES,
+  ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS,
   ACTIVITY_LOG_IMPLEMENTATION_OBLIGATIONS,
   ACTIVITY_LOG_LIFECYCLE_PHASES,
   ACTIVITY_LOG_REGISTRY_EXEMPTIONS,
@@ -117,6 +118,7 @@ const REGISTRATION_FIELD_KEYS = new Set([
   "values",
 ]);
 const REGISTRATION_TOKEN = /^[A-Za-z][A-Za-z0-9._/-]{0,159}$/u;
+const REGISTRATION_CLOSED_VALUE = /^[A-Za-z0-9][A-Za-z0-9._/@:+-]{0,159}$/u;
 const REGISTRATION_FIELD_NAME = /^[A-Za-z][A-Za-z0-9]{0,63}$/u;
 const EXEMPTION_KEYS = new Set([
   "contractKind",
@@ -166,6 +168,7 @@ function activityLogSchemaDigest() {
       schemaVersion: 1,
       categories: ACTIVITY_LOG_CATEGORIES,
       fieldTypes: ACTIVITY_LOG_FIELD_TYPES,
+      globalFields: ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS,
       dataClasses: ACTIVITY_LOG_DATA_CLASSES,
       exemptionBoundaries: ACTIVITY_LOG_EXEMPTION_BOUNDARIES,
       implementationObligations: ACTIVITY_LOG_IMPLEMENTATION_OBLIGATIONS,
@@ -379,27 +382,53 @@ function literalPrimitive(value) {
   return undefined;
 }
 
-function literalRegistryObject(value) {
+function constInitializer(checker, identifier) {
+  if (checker === undefined) return undefined;
+  let symbol = checker.getSymbolAtLocation(identifier);
+  if (symbol !== undefined && (symbol.flags & ts.SymbolFlags.Alias) !== 0) {
+    symbol = checker.getAliasedSymbol(symbol);
+  }
+  const declarations = symbol?.declarations ?? [];
+  if (declarations.length !== 1) return undefined;
+  const declaration = declarations[0];
+  if (
+    !ts.isVariableDeclaration(declaration) ||
+    declaration.initializer === undefined ||
+    (declaration.parent.flags & ts.NodeFlags.Const) === 0
+  ) {
+    return undefined;
+  }
+  return declaration.initializer;
+}
+
+function literalRegistryObject(value, checker, seen) {
   const result = Object.create(null);
   for (const property of value.properties) {
     if (!ts.isPropertyAssignment(property)) return undefined;
     const name = propertyNameText(property.name);
-    const propertyValue = literalRegistryValue(property.initializer);
+    const propertyValue = literalRegistryValue(property.initializer, checker, seen);
     if (name === undefined || propertyValue === undefined) return undefined;
     result[name] = propertyValue;
   }
   return result;
 }
 
-function literalRegistryValue(expression) {
+function literalRegistryValue(expression, checker, seen = new Set()) {
   const value = unwrapExpression(expression);
   const primitive = literalPrimitive(value);
   if (primitive !== undefined) return primitive;
+  if (ts.isIdentifier(value)) {
+    const initializer = constInitializer(checker, value);
+    if (initializer === undefined || seen.has(initializer)) return undefined;
+    return literalRegistryValue(initializer, checker, new Set([...seen, initializer]));
+  }
   if (ts.isArrayLiteralExpression(value)) {
-    const items = value.elements.map((item) => literalRegistryValue(item));
+    const items = value.elements.map((item) => literalRegistryValue(item, checker, seen));
     return items.includes(undefined) ? undefined : items;
   }
-  return ts.isObjectLiteralExpression(value) ? literalRegistryObject(value) : undefined;
+  return ts.isObjectLiteralExpression(value)
+    ? literalRegistryObject(value, checker, seen)
+    : undefined;
 }
 
 function registrySite(repoRoot, sourceFile, node) {
@@ -556,7 +585,11 @@ function registrationSymbol(checker, call) {
 
 function emittedRegistrationSymbol(checker, expression) {
   const value = unwrapExpression(expression);
-  return ts.isIdentifier(value) ? checker.getSymbolAtLocation(value) : undefined;
+  if (!ts.isIdentifier(value)) return undefined;
+  const symbol = checker.getSymbolAtLocation(value);
+  return symbol !== undefined && (symbol.flags & ts.SymbolFlags.Alias) !== 0
+    ? checker.getAliasedSymbol(symbol)
+    : symbol;
 }
 
 function typedRegistryProgram(repoRoot) {
@@ -609,12 +642,12 @@ function typedRegistryDiagnostics(program, repoRoot) {
     }));
 }
 
-function invalidClosedStringArray(value) {
+function invalidClosedStringArray(value, pattern = REGISTRATION_TOKEN) {
   return (
     !Array.isArray(value) ||
     value.length === 0 ||
     value.length > 64 ||
-    value.some((item) => typeof item !== "string" || !REGISTRATION_TOKEN.test(item))
+    value.some((item) => typeof item !== "string" || !pattern.test(item))
   );
 }
 
@@ -630,7 +663,7 @@ function validFieldContractValues(contract) {
   if (contract.values === undefined) {
     return contract.dataClass !== "closed-enum" || contract.type === "boolean";
   }
-  return !invalidClosedStringArray(contract.values);
+  return !invalidClosedStringArray(contract.values, REGISTRATION_CLOSED_VALUE);
 }
 
 function fieldContractIsBounded(contract) {
@@ -666,10 +699,32 @@ function invalidFieldContract(name, contract) {
 function invalidFields(fields) {
   if (typeof fields !== "object" || fields === null || Array.isArray(fields)) return "fields";
   const entries = Object.entries(fields);
-  if (entries.length > 48) return "fields";
+  const contextFieldCount = entries.filter(
+    ([name]) => ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS[name] === undefined,
+  ).length;
+  if (contextFieldCount > 48) return "fields";
   for (const [name, contract] of entries) {
     const invalid = invalidFieldContract(name, contract);
     if (invalid !== undefined) return `fields.${invalid}`;
+  }
+  return undefined;
+}
+
+function matchesGlobalFieldContract(actual, expected) {
+  return (
+    actual.type === expected.type &&
+    actual.dataClass === expected.dataClass &&
+    actual.required === expected.required &&
+    actual.maxLength === undefined &&
+    actual.maxItems === undefined &&
+    actual.values === undefined
+  );
+}
+
+function invalidGlobalFieldOverride(fields) {
+  for (const [name, expected] of Object.entries(ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS)) {
+    const actual = fields[name];
+    if (actual !== undefined && !matchesGlobalFieldContract(actual, expected)) return name;
   }
   return undefined;
 }
@@ -699,7 +754,8 @@ function collectTypedRegistration(context, sourceFile, node) {
   if (typedCallKind(context.checker, node) !== "activity-log-operation") return;
   const site = registrySite(context.repoRoot, sourceFile, node);
   const argument = node.arguments[0];
-  const value = argument === undefined ? undefined : literalRegistryValue(argument);
+  const value =
+    argument === undefined ? undefined : literalRegistryValue(argument, context.checker);
   if (value === undefined || typeof value.op !== "string") {
     context.violations.push(
       registryViolation(
@@ -710,7 +766,35 @@ function collectTypedRegistration(context, sourceFile, node) {
     );
     return;
   }
-  const invalidField = invalidRegistrationField(value);
+  const declaredInvalidField = invalidRegistrationField(value);
+  if (declaredInvalidField !== undefined) {
+    context.violations.push({
+      ...registryViolation(
+        "registration-invalid",
+        site,
+        "Use the closed ActivityLogOperationRegistration contract and literal bounded metadata.",
+      ),
+      detail: declaredInvalidField,
+    });
+    return;
+  }
+  const invalidGlobalField = invalidGlobalFieldOverride(value.fields);
+  if (invalidGlobalField !== undefined) {
+    context.violations.push({
+      ...registryViolation(
+        "registration-invalid",
+        site,
+        "Use the mandatory global completeness and loss field contracts without modification.",
+      ),
+      detail: `fields.${invalidGlobalField}`,
+    });
+    return;
+  }
+  const valueWithGlobalFields = {
+    ...value,
+    fields: { ...ACTIVITY_LOG_GLOBAL_FIELD_CONTRACTS, ...value.fields },
+  };
+  const invalidField = invalidRegistrationField(valueWithGlobalFields);
   if (invalidField !== undefined) {
     context.violations.push({
       ...registryViolation(
@@ -722,7 +806,7 @@ function collectTypedRegistration(context, sourceFile, node) {
     });
     return;
   }
-  const operation = { ...value, registrationSite: site, emitterSites: [] };
+  const operation = { ...valueWithGlobalFields, registrationSite: site, emitterSites: [] };
   context.operations.push(operation);
   const symbol = registrationSymbol(context.checker, node);
   if (symbol !== undefined) context.bySymbol.set(symbol, operation);
@@ -923,12 +1007,33 @@ export function generateTypedActivityLogRegistry(repoRoot = REPO_ROOT) {
   };
 }
 
+function runtimeOperationContract(operation) {
+  return {
+    contractKind: operation.contractKind,
+    schemaVersion: operation.schemaVersion,
+    op: operation.op,
+    category: operation.category,
+    owner: operation.owner,
+    emitter: operation.emitter,
+    fields: operation.fields,
+    causal: operation.causal,
+    lifecycle: operation.lifecycle,
+    analyzerProjection: operation.analyzerProjection,
+    failureClasses: operation.failureClasses,
+    proofIds: operation.proofIds,
+    releaseImpact: operation.releaseImpact,
+  };
+}
+
 function runtimeRegistryModule(typedRegistry) {
+  const operationRegistry = typedRegistry.operations.map(runtimeOperationContract);
   return [
     "// Generated by scripts/generate-op-catalog.mjs. Do not edit by hand.",
     `export const ACTIVITY_LOG_REGISTRY_VERSION = ${String(typedRegistry.schemaVersion)} as const;`,
     `export const ACTIVITY_LOG_SCHEMA_DIGEST = "${typedRegistry.schemaDigest}" as const;`,
     `export const ACTIVITY_LOG_CATALOG_DIGEST = "${typedRegistry.catalogDigest}" as const;`,
+    `export const ACTIVITY_LOG_OPERATION_REGISTRY = ${JSON.stringify(operationRegistry, null, 2)} as const;`,
+    `export const ACTIVITY_LOG_FAILURE_CLASS_COVERAGE = ${JSON.stringify(typedRegistry.failureClassCoverage, null, 2)} as const;`,
     "",
   ].join("\n");
 }

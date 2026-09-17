@@ -1017,7 +1017,15 @@ class WorkspaceScriptTrustServiceImpl implements WorkspaceScriptTrustService {
       activityLogEvent(
         RUN_MANIFEST_ADMITTED_OPERATION,
         { correlationId: correlationIdOrUnknown(runId) },
-        { ...admission, expiresAt, completeness: "complete", loss: "none" },
+        {
+          basis: admission.basis,
+          ...(admission.manifestDigest === undefined
+            ? {}
+            : { manifestDigest: admission.manifestDigest }),
+          expiresAt,
+          completeness: "complete",
+          loss: "none",
+        },
       ),
     );
     return admission;

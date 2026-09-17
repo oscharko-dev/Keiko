@@ -73,12 +73,14 @@ const GITHUB_CONTEXT_READ_OPERATION = defineActivityLogOperation({
       type: "string-array",
       dataClass: "safe-platform-class",
       required: false,
+      maxLength: 512,
       maxItems: 8,
     },
     causeChain: {
       type: "string-array",
       dataClass: "error-kind",
       required: false,
+      maxLength: 128,
       maxItems: 5,
     },
   },
@@ -319,10 +321,7 @@ function recordRead(
 }
 
 type GitHubContextReadOutcome =
-  | "succeeded"
-  | "cancelled"
-  | GitHubCodeContextPortErrorCode
-  | "failed";
+  "succeeded" | "cancelled" | GitHubCodeContextPortErrorCode | "failed";
 
 function closedReadErrorKind(value: string): ActivityLogErrorKind {
   return isActivityLogErrorKind(value) ? value : "unknown";

@@ -45,6 +45,17 @@ import {
   type ToolDiagnosticRedactor,
 } from "./support-tool-catalog.js";
 import type { StoreFingerprint } from "@oscharko-dev/keiko-contracts";
+import {
+  ACTIVITY_LOG_CATALOG_DIGEST,
+  ACTIVITY_LOG_REGISTRY_VERSION,
+  ACTIVITY_LOG_SCHEMA_DIGEST,
+  ActivityLogEventValidationError,
+  activityLogOperationSchema,
+  isActivityLogErrorKind,
+  validateActivityLogOperationRecord,
+  type ActivityLogEventEnvelope,
+  type ActivityLogOperationRegistration,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isStoreFingerprint } from "@oscharko-dev/keiko-contracts/runtime/store-fingerprint";
 
 export interface SupportAnalyzeOptions {
@@ -55,6 +66,15 @@ export interface SupportAnalyzeOptions {
 const KNOWN_ENVELOPE_KEYS: ReadonlySet<string> = new Set([
   "ts",
   "schemaVersion",
+  "registryVersion",
+  "schemaDigest",
+  "catalogDigest",
+  "buildClass",
+  "releaseClass",
+  "platformClass",
+  "productVersion",
+  "compatibilityState",
+  "writerCapability",
   "pid",
   "instanceId",
   "seq",
@@ -129,19 +149,9 @@ export interface ProcessSummary {
 }
 
 export type ActivityLogEvidenceClassification =
-  | "supported"
-  | "legacy"
-  | "unsupported"
-  | "corrupt"
-  | "truncated"
-  | "incomplete";
+  "supported" | "legacy" | "unsupported" | "corrupt" | "truncated" | "incomplete";
 
-export type ProcessSequenceAnomalyKind =
-  | "gap"
-  | "duplicate"
-  | "decreasing"
-  | "reset"
-  | "reorder";
+export type ProcessSequenceAnomalyKind = "gap" | "duplicate" | "decreasing" | "reset" | "reorder";
 
 export interface ProcessSequenceAnomaly {
   readonly kind: ProcessSequenceAnomalyKind;
@@ -391,13 +401,24 @@ type LineClassification =
 const MAX_PROCESS_ID = 2_147_483_647;
 const MAX_INSTANCE_ID_LENGTH = 64;
 const INSTANCE_ID_PATTERN = /^[A-Za-z0-9_-]+$/u;
+const ACTIVITY_LOG_DIGEST_PATTERN = /^[a-f0-9]{64}$/u;
+const ACTIVITY_LOG_PLATFORM_PATTERN = /^(?:darwin|linux|win32|other)-(?:arm64|x64|other)$/u;
+const ACTIVITY_LOG_PRODUCT_VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u;
+const ACTIVITY_LOG_REGISTRY_IDENTITY_KEYS = [
+  "registryVersion",
+  "schemaDigest",
+  "catalogDigest",
+  "buildClass",
+  "releaseClass",
+  "platformClass",
+  "productVersion",
+  "compatibilityState",
+  "writerCapability",
+] as const;
 
 function validProcessId(value: unknown): value is number {
   return (
-    typeof value === "number" &&
-    Number.isSafeInteger(value) &&
-    value > 0 &&
-    value <= MAX_PROCESS_ID
+    typeof value === "number" && Number.isSafeInteger(value) && value > 0 && value <= MAX_PROCESS_ID
   );
 }
 
@@ -412,6 +433,67 @@ function validInstanceId(value: unknown): value is string {
     value.length <= MAX_INSTANCE_ID_LENGTH &&
     INSTANCE_ID_PATTERN.test(value)
   );
+}
+
+function hasValidProcessIdentity(record: Record<string, unknown>): boolean {
+  return (
+    validProcessId(record.pid) && validInstanceId(record.instanceId) && validSequence(record.seq)
+  );
+}
+
+function validRegistryIdentityShape(record: Record<string, unknown>): boolean {
+  return (
+    typeof record.registryVersion === "number" &&
+    Number.isSafeInteger(record.registryVersion) &&
+    record.registryVersion > 0 &&
+    typeof record.schemaDigest === "string" &&
+    ACTIVITY_LOG_DIGEST_PATTERN.test(record.schemaDigest) &&
+    typeof record.catalogDigest === "string" &&
+    ACTIVITY_LOG_DIGEST_PATTERN.test(record.catalogDigest) &&
+    record.buildClass === "node-esm" &&
+    (record.releaseClass === "stable" || record.releaseClass === "prerelease") &&
+    typeof record.platformClass === "string" &&
+    ACTIVITY_LOG_PLATFORM_PATTERN.test(record.platformClass) &&
+    typeof record.productVersion === "string" &&
+    ACTIVITY_LOG_PRODUCT_VERSION_PATTERN.test(record.productVersion) &&
+    [
+      "supported",
+      "legacy-supported",
+      "unsupported-version",
+      "corrupt",
+      "truncated",
+      "incomplete",
+    ].includes(String(record.compatibilityState)) &&
+    ["active", "degraded", "unavailable"].includes(String(record.writerCapability))
+  );
+}
+
+function declaredCompatibility(record: Record<string, unknown>): ActivityLogEvidenceClassification {
+  if (record.compatibilityState === "legacy-supported") return "legacy";
+  if (record.compatibilityState === "unsupported-version") return "unsupported";
+  if (record.compatibilityState === "corrupt") return "corrupt";
+  if (record.compatibilityState === "truncated") return "truncated";
+  if (record.compatibilityState === "incomplete" || record.writerCapability !== "active") {
+    return "incomplete";
+  }
+  return "supported";
+}
+
+function registryIdentityClassification(
+  record: Record<string, unknown>,
+): ActivityLogEvidenceClassification {
+  const present = ACTIVITY_LOG_REGISTRY_IDENTITY_KEYS.filter((key) => record[key] !== undefined);
+  if (present.length === 0) return "supported";
+  if (present.length !== ACTIVITY_LOG_REGISTRY_IDENTITY_KEYS.length) return "incomplete";
+  if (!validRegistryIdentityShape(record)) return "corrupt";
+  if (
+    record.registryVersion !== ACTIVITY_LOG_REGISTRY_VERSION ||
+    record.schemaDigest !== ACTIVITY_LOG_SCHEMA_DIGEST ||
+    record.catalogDigest !== ACTIVITY_LOG_CATALOG_DIGEST
+  ) {
+    return "unsupported";
+  }
+  return declaredCompatibility(record);
 }
 
 function identityClassification(
@@ -430,11 +512,77 @@ function identityClassification(
   if (schemaVersion === 1) return identityCount === 0 ? "legacy" : "corrupt";
   if (schemaVersion !== 2) return "unsupported";
   if (identityCount < identityValues.length) return "incomplete";
-  return validProcessId(record.pid) &&
-    validInstanceId(record.instanceId) &&
-    validSequence(record.seq)
-    ? "supported"
-    : "corrupt";
+  if (!hasValidProcessIdentity(record)) return "corrupt";
+  return registryIdentityClassification(record);
+}
+
+function registeredFields(
+  record: Record<string, unknown>,
+  registration: ActivityLogOperationRegistration,
+): Readonly<Record<string, unknown>> {
+  const fields: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+  for (const name of Object.keys(registration.fields)) {
+    if (record[name] !== undefined) fields[name] = record[name];
+  }
+  return fields;
+}
+
+function recordEnvelope(record: Record<string, unknown>): ActivityLogEventEnvelope | undefined {
+  const level = record.level;
+  const correlationId = record.correlationId;
+  const parentCorrelationId = record.parentCorrelationId;
+  const durationMs = record.durationMs;
+  const status = record.status;
+  const errorKind = record.errorKind;
+  if (level !== undefined && !["debug", "info", "warn", "error"].includes(String(level))) {
+    return undefined;
+  }
+  if (correlationId !== undefined && typeof correlationId !== "string") return undefined;
+  if (parentCorrelationId !== undefined && typeof parentCorrelationId !== "string")
+    return undefined;
+  if (durationMs !== undefined && typeof durationMs !== "number") return undefined;
+  if (status !== undefined && typeof status !== "number") return undefined;
+  if (errorKind !== undefined && !isActivityLogErrorKind(errorKind)) return undefined;
+  return {
+    ...(level === undefined ? {} : { level: level as ActivityLogEventEnvelope["level"] }),
+    ...(correlationId === undefined ? {} : { correlationId }),
+    ...(parentCorrelationId === undefined ? {} : { parentCorrelationId }),
+    ...(durationMs === undefined ? {} : { durationMs }),
+    ...(status === undefined ? {} : { status }),
+    ...(errorKind === undefined ? {} : { errorKind }),
+  };
+}
+
+function hasUnknownRegisteredField(
+  record: Record<string, unknown>,
+  registration: ActivityLogOperationRegistration,
+): boolean {
+  const allowed = new Set(Object.keys(registration.fields));
+  return Object.keys(record).some((key) => !KNOWN_ENVELOPE_KEYS.has(key) && !allowed.has(key));
+}
+
+function registeredRecordClassification(
+  record: Record<string, unknown>,
+  category: string,
+  op: string,
+): ActivityLogEvidenceClassification {
+  const registration = activityLogOperationSchema(op);
+  const envelope = recordEnvelope(record);
+  if (registration === undefined || envelope === undefined) return "corrupt";
+  if (hasUnknownRegisteredField(record, registration)) return "corrupt";
+  try {
+    validateActivityLogOperationRecord(
+      op,
+      category,
+      envelope,
+      registeredFields(record, registration),
+    );
+    return "supported";
+  } catch (error) {
+    return error instanceof ActivityLogEventValidationError && error.kind === "missing-field"
+      ? "incomplete"
+      : "corrupt";
+  }
 }
 
 // A `$section`-tagged line is bundle metadata, not evidence. Unsupported versions are classified
@@ -462,14 +610,21 @@ function classifyLine(
   if (evidence !== "supported" && evidence !== "legacy") {
     return { kind: "rejected", evidence };
   }
+  const recordEvidence =
+    evidence === "supported" && record.registryVersion !== undefined
+      ? registeredRecordClassification(record, category, op)
+      : evidence;
+  if (recordEvidence !== "supported" && recordEvidence !== "legacy") {
+    return { kind: "rejected", evidence: recordEvidence };
+  }
   const identity = readIdentity(record);
   return {
     kind: "line",
-    evidence,
+    evidence: recordEvidence,
     parsed: {
       view: buildView(ts, category, op, record, identity, options),
       correlationId: optionalString(record, "correlationId"),
-      hasFullIdentity: evidence === "supported",
+      hasFullIdentity: hasValidProcessIdentity(record),
       fileIndex,
     },
   };
@@ -967,7 +1122,9 @@ function evidenceWarnings(evidence: ActivityLogEvidenceSummary): readonly string
     if (count > 0) warnings.push(`${String(count)} ${classification} Activity Log line(s)`);
   }
   if (evidence.sequenceAnomalies.length > 0) {
-    warnings.push(`${String(evidence.sequenceAnomalies.length)} process sequence anomaly/anomalies`);
+    warnings.push(
+      `${String(evidence.sequenceAnomalies.length)} process sequence anomaly/anomalies`,
+    );
   }
   return warnings;
 }
@@ -1003,7 +1160,8 @@ function lineSequenceAnomalies(line: ParsedLine, state: SequenceState): ProcessS
     );
   }
   if (state.seen.has(seq)) anomalies.push(sequenceAnomaly("duplicate", line, state.previous));
-  if (seq === 1 && state.previous > 1) anomalies.push(sequenceAnomaly("reset", line, state.previous));
+  if (seq === 1 && state.previous > 1)
+    anomalies.push(sequenceAnomaly("reset", line, state.previous));
   if (seq < state.previous) {
     anomalies.push(sequenceAnomaly("decreasing", line, state.previous));
     anomalies.push(sequenceAnomaly("reorder", line, state.previous));

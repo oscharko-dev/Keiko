@@ -1,6 +1,7 @@
 import {
   activityLogEvent,
   defineActivityLogOperation,
+  type ActivityLogEventFields,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
 import { correlationIdOrUnknown } from "./correlation.js";
@@ -178,6 +179,39 @@ export type RuntimeShutdownEvidence =
       readonly runtimeShutdown: RuntimeShutdownDisposition;
     });
 
+function runtimeShutdownFields(
+  evidence: RuntimeShutdownEvidence,
+): ActivityLogEventFields<typeof SERVER_RUNTIME_SHUTDOWN_OPERATION> {
+  if (evidence.state === "started") return evidence;
+  return {
+    state: evidence.state,
+    openSseStreamCount: evidence.openSseStreamCount,
+    activeRunCount: evidence.activeRunCount,
+    durationMs: evidence.durationMs,
+    runtimeShutdown: evidence.runtimeShutdown,
+    cleanup: evidence.cleanup,
+    ...(evidence.errorClass === undefined ? {} : { errorClass: evidence.errorClass }),
+    ...(evidence.code === undefined ? {} : { code: evidence.code }),
+    ...(evidence.gatewayRequestId === undefined
+      ? {}
+      : { gatewayRequestId: evidence.gatewayRequestId }),
+    ...(evidence.httpStatus === undefined ? {} : { httpStatus: evidence.httpStatus }),
+    ...(evidence.retryAfterMs === undefined ? {} : { retryAfterMs: evidence.retryAfterMs }),
+    ...(evidence.promptTokens === undefined ? {} : { promptTokens: evidence.promptTokens }),
+    ...(evidence.completionTokens === undefined
+      ? {}
+      : { completionTokens: evidence.completionTokens }),
+    ...(evidence.frames === undefined ? {} : { frames: evidence.frames }),
+    ...(evidence.causeChain === undefined ? {} : { causeChain: evidence.causeChain }),
+    ...(evidence.failedStepCount === undefined
+      ? {}
+      : { failedStepCount: evidence.failedStepCount }),
+    ...(evidence.failedStepErrorClasses === undefined
+      ? {}
+      : { failedStepErrorClasses: evidence.failedStepErrorClasses }),
+  };
+}
+
 export function logMemoryAuditStateCacheSeeded(
   sink: ServerLogSink,
   correlationId: string | undefined,
@@ -247,7 +281,7 @@ export function logRuntimeShutdown(
         correlationId: correlationIdOrUnknown(correlationId),
         ...(cleanupFaulted ? { errorKind: "internal" as const } : {}),
       },
-      { ...evidence, completeness: "complete", loss: "none" },
+      runtimeShutdownFields(evidence),
     ),
   );
 }

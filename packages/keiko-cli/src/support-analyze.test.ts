@@ -6,6 +6,11 @@ import { describe, expect, it } from "vitest";
 
 import { PathDeniedError } from "@oscharko-dev/keiko-workspace";
 import {
+  ACTIVITY_LOG_CATALOG_DIGEST,
+  ACTIVITY_LOG_REGISTRY_VERSION,
+  ACTIVITY_LOG_SCHEMA_DIGEST,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   causeChain as productionCauseChain,
   createFileServerLogSink,
   keikoStackFrames,
@@ -1332,9 +1337,19 @@ describe("analyzeLogText — legacy line accounting and warnings", () => {
 describe("analyzeLogText — strict v2 identity and compatibility classification", () => {
   const base = {
     ts: T0,
-    category: "process",
-    op: "process.heartbeat",
+    category: "gateway",
+    op: "gateway.instance.reused",
+    generation: 1,
     schemaVersion: 2,
+    registryVersion: ACTIVITY_LOG_REGISTRY_VERSION,
+    schemaDigest: ACTIVITY_LOG_SCHEMA_DIGEST,
+    catalogDigest: ACTIVITY_LOG_CATALOG_DIGEST,
+    buildClass: "node-esm",
+    releaseClass: "stable",
+    platformClass: "linux-x64",
+    productVersion: "1.0.0",
+    compatibilityState: "supported",
+    writerCapability: "active",
     pid: 4242,
     instanceId: "deadbeef",
     seq: 1,
@@ -1386,6 +1401,20 @@ describe("analyzeLogText — strict v2 identity and compatibility classification
     expect(result.evidence.classification).toBe(expected);
     expect(result.evidence.legacyLineCount).toBe(0);
     expect(result.processes).toEqual([]);
+  });
+
+  it.each([
+    ["catalog digest mismatch", { catalogDigest: "0".repeat(64) }, "unsupported"],
+    ["partial registry identity", { writerCapability: undefined }, "incomplete"],
+    ["unknown operation", { op: "gateway.instance.unknown" }, "corrupt"],
+    ["missing registered field", { generation: undefined }, "incomplete"],
+    ["unknown registered field", { unexpected: "value" }, "corrupt"],
+    ["unknown error kind", { errorKind: "provider prose is forbidden" }, "corrupt"],
+  ] as const)("classifies %s from the generated registry contract", (_name, override, expected) => {
+    const result = analyzeLogText(`${line({ ...base, ...override })}\n`);
+
+    expect(result.evidence.classification).toBe(expected);
+    expect(result.timelines).toEqual([]);
   });
 
   it("classifies an invalid terminal fragment as truncated but invalid terminated JSON as corrupt", () => {

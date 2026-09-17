@@ -14,6 +14,11 @@ The log lives at `<stateDir>/logs/server.log` — `<stateDir>` is `./.keiko` by 
 per line, written synchronously so that the last line on disk before a hang or a crash is the last
 line the process actually reached.
 
+When a state directory is configured, failure to create or open its log directory aborts startup
+with a closed safe-artifact error. Keiko never silently substitutes a null sink for a configured
+activity log; an in-memory/null sink exists only where a caller explicitly selected one, such as a
+unit-test composition without a state directory.
+
 Rotation and retention are deliberately deferred to #3530's bounded append-only segment design.
 Node does not expose descriptor-relative rename/unlink operations, so mutating dated files through
 absolute paths leaves a final same-UID ancestor-substitution window. Keiko therefore keeps
@@ -56,6 +61,11 @@ and release impact. The runtime event constructor derives its TypeScript shape f
 the physical sink validates the same contract again immediately before serialization. A caller
 therefore cannot add arbitrary metadata, widen a field after construction, or use an unregistered
 operation as an escape hatch.
+
+The generated contracts runtime exports those complete safe operation schemas and the derived
+failure-class coverage alongside the identity digests. Every schema receives mandatory
+`completeness` and `loss` fields centrally; emitters get the safe defaults `complete` and `none` and
+override them only when they observed partial evidence or a known loss.
 
 `typedRegistry.obligationCategories` is the stable machine vocabulary for future implementation
 gates. `typedRegistry.failureClassCoverage` groups the same operation declarations into a generated
@@ -109,6 +119,11 @@ legacy-supported, unsupported-version, corrupt, truncated, and incomplete eviden
 sequence gaps, duplicates, decreasing/reset values, and reorder deterministically for each
 `(pid, instanceId)` lifetime. These states are evidence, not warnings to ignore: an unsupported or
 incomplete input cannot be treated as a complete reconstruction.
+
+For current-registry records the analyzer also validates the operation, category, exact flattened
+field set, required fields, and closed error kind against the generated runtime schema. A complete
+but unknown operation or extra field is corrupt evidence; an absent required field is incomplete
+evidence; a mismatched registry/schema/catalog identity is unsupported.
 
 Cross-process (and cross-request) causality is instead established through two id fields:
 

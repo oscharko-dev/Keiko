@@ -298,8 +298,8 @@ function gitTermination(result: GitProcessResult): "not-started" | "exit" | "sig
 interface GitOutcomeFields {
   readonly subcommand: string;
   readonly endedBy: "not-started" | "exit" | "signal" | "unknown";
-  readonly exitCode?: number | undefined;
-  readonly signal?: NodeJS.Signals | undefined;
+  readonly exitCode?: number;
+  readonly signal?: NodeJS.Signals;
   readonly truncated: boolean;
   readonly timedOut: boolean;
   readonly aborted: boolean;

@@ -9,7 +9,7 @@ import { createGzip } from "node:zlib";
 import {
   activityLogEvent,
   defineActivityLogOperation,
-  type ActivityLogFields,
+  type ActivityLogEventFields,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { applySecurityHeaders } from "./headers.js";
 import { isAllowedHost } from "./host-check.js";
@@ -487,6 +487,7 @@ const HTTP_REQUEST_OPERATION = defineActivityLogOperation({
       type: "string-array",
       dataClass: "opaque-id",
       required: true,
+      maxLength: 64,
       maxItems: 16,
     },
     queryParamDroppedCount: { type: "integer", dataClass: "count", required: false },
@@ -504,7 +505,7 @@ const HTTP_REQUEST_OPERATION = defineActivityLogOperation({
 function buildHttpRequestExtra(
   outcome: HttpRequestOutcome,
   context: RequestLogContext,
-): ActivityLogFields<typeof HTTP_REQUEST_OPERATION> {
+): ActivityLogEventFields<typeof HTTP_REQUEST_OPERATION> {
   return {
     method: outcome.method,
     path: outcome.path,

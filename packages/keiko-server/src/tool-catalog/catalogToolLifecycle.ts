@@ -19,7 +19,7 @@ import {
   isErrorKind,
   type ActivityLogErrorKind,
   type ActivityLogEventEnvelope,
-  type ActivityLogFields,
+  type ActivityLogEventFields,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { isValidCorrelationId } from "../correlation.js";
 import { redactLogFields } from "../observability/log-redaction.js";
@@ -653,7 +653,7 @@ type SettlementEvent = Extract<
 
 function settledFields(
   event: SettlementEvent,
-): ActivityLogFields<typeof TOOL_CATALOG_INVOCATION_SETTLED_OPERATION> {
+): ActivityLogEventFields<typeof TOOL_CATALOG_INVOCATION_SETTLED_OPERATION> {
   return {
     ...identityFields(event),
     invocationId: event.invocationId,
