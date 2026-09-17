@@ -1,15 +1,20 @@
 import {
   appendFileSync,
+  chmodSync,
   existsSync,
+  linkSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readdirSync,
+  realpathSync,
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -55,6 +60,12 @@ function readRawRecords(stateDir: string): (Record<string, unknown> | null)[] {
 // exercising real rotation, real appends and real permissions.
 const fsCalls = vi.hoisted(() => ({
   linkErrorCode: null as string | null,
+  renameBefore: null as (() => void) | null,
+  replaceAfterWrite: null as {
+    readonly current: string;
+    readonly op: string;
+    readonly stale: string;
+  } | null,
   rename: 0,
   open: 0,
   write: 0,
@@ -83,11 +94,19 @@ vi.mock("node:fs", async (importOriginal) => {
     writeSync: (...args: Parameters<typeof actual.writeSync>): number => {
       fsCalls.write += 1;
       const budget = fsCalls.writeBudgetBytes;
-      if (budget === null) return actual.writeSync(...args);
       const [fd, buffer, offset, length] = args as unknown as BufferWriteArgs;
-      const allowed = Math.min(length, budget);
-      fsCalls.writeBudgetBytes = budget - allowed;
-      return allowed === 0 ? 0 : actual.writeSync(fd, buffer, offset, allowed);
+      const allowed = budget === null ? length : Math.min(length, budget);
+      if (budget !== null) fsCalls.writeBudgetBytes = budget - allowed;
+      if (allowed === 0) return 0;
+      const written = actual.writeSync(fd, buffer, offset, allowed);
+      const replacement = fsCalls.replaceAfterWrite;
+      const writtenText = buffer.subarray(offset, offset + written).toString("utf8");
+      if (replacement !== null && writtenText.includes(`"op":"${replacement.op}"`)) {
+        fsCalls.replaceAfterWrite = null;
+        actual.renameSync(replacement.current, replacement.stale);
+        actual.writeFileSync(replacement.current, "", { mode: 0o600 });
+      }
+      return written;
     },
     closeSync: (...args: Parameters<typeof actual.closeSync>): void => {
       fsCalls.close += 1;
@@ -101,6 +120,9 @@ vi.mock("node:fs", async (importOriginal) => {
     },
     renameSync: (...args: Parameters<typeof actual.renameSync>): void => {
       fsCalls.rename += 1;
+      const before = fsCalls.renameBefore;
+      fsCalls.renameBefore = null;
+      before?.();
       actual.renameSync(...args);
     },
     linkSync: (...args: Parameters<typeof actual.linkSync>): void => {
@@ -127,6 +149,18 @@ function readLines(stateDir: string): Record<string, unknown>[] {
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
+const FILESYSTEM_EVIDENCE_OPS: ReadonlySet<unknown> = new Set(["server-log.rotation"]);
+
+function readCallerLines(stateDir: string): Record<string, unknown>[] {
+  return readLines(stateDir).filter((line) => !FILESYSTEM_EVIDENCE_OPS.has(line.op));
+}
+
+function readCallerRecords(stateDir: string): (Record<string, unknown> | null)[] {
+  return readRawRecords(stateDir).filter(
+    (record) => record === null || !FILESYSTEM_EVIDENCE_OPS.has(record.op),
+  );
+}
+
 describe("server activity log", () => {
   let stateDir: string;
 
@@ -136,6 +170,8 @@ describe("server activity log", () => {
     vi.stubEnv(SERVER_LOG_LEVEL_ENV, "debug");
     fsCalls.writeBudgetBytes = null;
     fsCalls.linkErrorCode = null;
+    fsCalls.renameBefore = null;
+    fsCalls.replaceAfterWrite = null;
     fsCalls.rename = 0;
     fsCalls.fsync = 0;
     fsCalls.failFsync = false;
@@ -151,6 +187,8 @@ describe("server activity log", () => {
     closeFileServerLogSinks();
     fsCalls.writeBudgetBytes = null;
     fsCalls.linkErrorCode = null;
+    fsCalls.renameBefore = null;
+    fsCalls.replaceAfterWrite = null;
     fsCalls.rename = 0;
     fsCalls.fsync = 0;
     fsCalls.failFsync = false;
@@ -181,7 +219,7 @@ describe("server activity log", () => {
     // validates the current tail before inspection. The existing append descriptor is still reused.
     expect(fsCalls.open).toBe(openCount + 3);
     expect(fsCalls.fsync).toBe(1);
-    expect(readLines(stateDir).map((line) => line.op)).toStrictEqual([
+    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual([
       "before-batch",
       "batch-one",
       "batch-complete",
@@ -322,7 +360,7 @@ describe("server activity log", () => {
       extra: { items: 36 },
     });
 
-    const lines = readLines(stateDir);
+    const lines = readCallerLines(stateDir);
     expect(lines).toHaveLength(2);
     expect(lines[0]).toMatchObject({
       category: "http",
@@ -340,6 +378,28 @@ describe("server activity log", () => {
     expect(typeof lines[0]?.ts).toBe("string");
   });
 
+  it("adds body-free safe-open evidence to the Activity Log event with correlation", () => {
+    createFileServerLogSink(stateDir).write({
+      category: "http",
+      op: "request",
+      correlationId: "request-correlation-3528",
+    });
+
+    expect(readLines(stateDir)[0]).toMatchObject({
+      category: "http",
+      op: "request",
+      correlationId: "request-correlation-3528",
+      artifactClass: "activity-log",
+      persistenceStatus: "opened",
+      permissionAssurance: process.platform === "win32" ? "platform-inherited" : "verified-private",
+      containmentAssurance:
+        process.platform === "win32" ? "platform-inherited" : "private-root-guarded",
+      completeness: "complete",
+      loss: "none",
+    });
+    expect(JSON.stringify(readLines(stateDir)[0])).not.toContain(stateDir);
+  });
+
   // Envelope v2 (#2902): every line the file sink writes carries a process/sequence identity an
   // agent joins a run across a rotated multi-day file on. This is the functional counterpart to the
   // spoofing test below — it proves the real values actually land on disk, not merely that a forged
@@ -348,7 +408,7 @@ describe("server activity log", () => {
     const sink = createFileServerLogSink(stateDir);
     sink.write({ category: "http", op: "one" });
     sink.write({ category: "http", op: "two" });
-    const lines = readLines(stateDir);
+    const lines = readCallerLines(stateDir);
 
     expect(lines[0]).toMatchObject({ schemaVersion: SERVER_LOG_SCHEMA_VERSION, pid: process.pid });
     expect(lines[0]?.instanceId).toBe(serverLogInstanceId());
@@ -377,7 +437,7 @@ describe("server activity log", () => {
       op: "spoof-attempt",
       extra: { schemaVersion: 999, pid: -1, instanceId: "deadbeef", seq: 999_999, keep: 1 },
     });
-    const lines = readLines(stateDir);
+    const lines = readCallerLines(stateDir);
 
     expect(lines[0]).toMatchObject({
       schemaVersion: SERVER_LOG_SCHEMA_VERSION,
@@ -436,7 +496,7 @@ describe("server activity log", () => {
   it("leaves a gap in seq for a write that throws, and keeps allocating correctly after", () => {
     const sink = createFileServerLogSink(stateDir, { level: "debug" });
     sink.write({ category: "http", op: "before-failure" });
-    const before = readRawRecords(stateDir)[0]?.seq as number;
+    const before = readCallerRecords(stateDir)[0]?.seq as number;
 
     // A zero-byte budget means the descriptor accepts NOTHING for this record: `writeAll` throws
     // on its first call before a single byte lands, so — unlike the short-write test below, which
@@ -454,13 +514,14 @@ describe("server activity log", () => {
     }
 
     sink.write({ category: "http", op: "after-failure" });
-    const records = readRawRecords(stateDir);
+    const records = readCallerRecords(stateDir);
 
     // Only the two writes that actually landed are on disk; the failed one never appears.
     expect(records.map((record) => record?.op)).toStrictEqual(["before-failure", "after-failure"]);
-    // The gap is exactly one seq wide: the failed write claimed `before + 1` and never persisted
-    // it, so the next persisted line is `before + 2`, not `before + 1`.
+    // The failed event claimed `before + 1`; the caller's next event follows it and carries the
+    // safe-reopen evidence on that same line. Exactly the failed number stays absent.
     expect(records[1]?.seq).toBe(before + 2);
+    expect(readRawRecords(stateDir).some((record) => record?.seq === before + 1)).toBe(false);
   });
 
   // Envelope v2 widens the category union to include process-lifecycle lines; this proves the sink
@@ -468,14 +529,17 @@ describe("server activity log", () => {
   it("accepts the process category alongside every existing one", () => {
     const sink = createFileServerLogSink(stateDir);
     sink.write({ category: "process", op: "process.started" });
-    expect(readLines(stateDir)[0]).toMatchObject({ category: "process", op: "process.started" });
+    expect(readCallerLines(stateDir)[0]).toMatchObject({
+      category: "process",
+      op: "process.started",
+    });
   });
 
   it("stamps every line with a level, defaulting to info", () => {
     const sink = createFileServerLogSink(stateDir);
     sink.write({ category: "http", op: "request" });
     sink.write({ level: "error", category: "gateway", op: "transport-failed" });
-    const lines = readLines(stateDir);
+    const lines = readCallerLines(stateDir);
     expect(lines[0]).toMatchObject({ level: "info" });
     expect(lines[1]).toMatchObject({ level: "error" });
   });
@@ -501,6 +565,118 @@ describe("server activity log", () => {
       sink.write({ category: "http", op: "after" });
       sink.write({ category: "http", op: "after-again" });
     }).not.toThrow();
+  });
+
+  it("refuses symlinked, hard-linked, and non-regular current logs", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const logsDir = join(stateDir, "logs");
+    mkdirSync(logsDir);
+    const victim = join(stateDir, "victim");
+    writeFileSync(victim, "unchanged", { mode: 0o640 });
+    chmodSync(victim, 0o640);
+
+    for (const kind of ["symlink", "hard-link", "fifo"] as const) {
+      const current = join(logsDir, "server.log");
+      rmSync(current, { force: true });
+      if (kind === "symlink") symlinkSync(victim, current);
+      else if (kind === "hard-link") linkSync(victim, current);
+      else execFileSync("mkfifo", [current]);
+      const sink = createFileServerLogSink(stateDir);
+      sink.write({
+        category: "diagnostic",
+        op: `unsafe-${kind}`,
+        correlationId: "unsafe-log-test",
+      });
+      sink.close?.();
+      expect(readFileSync(victim, "utf8")).toBe("unchanged");
+      expect(statSync(victim).mode & 0o777).toBe(0o640);
+    }
+
+    expect(stderr).toHaveBeenCalled();
+    const noticeText = stderr.mock.calls
+      .map((call) => String(call[0]))
+      .find((text) => text.includes('"failedOp":"unsafe-symlink"'));
+    expect(noticeText).toBeDefined();
+    expect(JSON.parse(noticeText ?? "{}")).toMatchObject({
+      category: "diagnostic",
+      op: "server-log.write-failed",
+      failedOp: "unsafe-symlink",
+      correlationId: "unsafe-log-test",
+      errorKind: "unsafe-target",
+      completeness: "unknown",
+      loss: "event-dropped",
+    });
+    expect(noticeText).not.toContain(victim);
+  });
+
+  it("reopens the current path when a peer replaces it instead of appending to a stale inode", () => {
+    const sink = createFileServerLogSink(stateDir);
+    sink.write({ category: "diagnostic", op: "before-peer-replace" });
+    const logsDir = join(stateDir, "logs");
+    const stale = join(logsDir, "server-stale.log");
+    renameSync(join(logsDir, "server.log"), stale);
+    writeFileSync(join(logsDir, "server.log"), `${JSON.stringify({ op: "peer" })}\n`, {
+      mode: 0o600,
+    });
+
+    sink.write({ category: "diagnostic", op: "after-peer-replace" });
+
+    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual([
+      "peer",
+      "after-peer-replace",
+    ]);
+    expect(readFileSync(stale, "utf8")).not.toContain("after-peer-replace");
+  });
+
+  it("reports an event location as unknown when a peer swaps the path after its write", () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    const logsDir = join(stateDir, "logs");
+    const current = join(logsDir, "server.log");
+    const stale = join(logsDir, "server-stale.log");
+    const sink = createFileServerLogSink(stateDir, { level: "debug" });
+    fsCalls.replaceAfterWrite = { current, op: "post-write-swap", stale };
+
+    sink.write({
+      category: "diagnostic",
+      op: "post-write-swap",
+      correlationId: "post-write-race-3528",
+    });
+
+    expect(readFileSync(stale, "utf8")).toContain('"op":"post-write-swap"');
+    expect(readFileSync(current, "utf8")).not.toContain('"op":"post-write-swap"');
+    expect(readLines(stateDir)).toContainEqual(
+      expect.objectContaining({
+        op: "server-log.write-failed",
+        failedOp: "post-write-swap",
+        correlationId: "post-write-race-3528",
+        errorKind: "target-mutated",
+        completeness: "unknown",
+        loss: "event-location-unknown",
+      }),
+    );
+    const notice = JSON.parse(String(stderr.mock.calls.at(-1)?.[0])) as Record<string, unknown>;
+    expect(notice).toMatchObject({
+      op: "server-log.write-failed",
+      failedOp: "post-write-swap",
+      correlationId: "post-write-race-3528",
+      errorKind: "target-mutated",
+      completeness: "unknown",
+      loss: "event-location-unknown",
+    });
+  });
+
+  it("tightens an existing current log to owner-only permissions before appending", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    const logsDir = join(stateDir, "logs");
+    mkdirSync(logsDir);
+    const current = join(logsDir, "server.log");
+    writeFileSync(current, "", { mode: 0o644 });
+    chmodSync(current, 0o644);
+
+    createFileServerLogSink(stateDir).write({ category: "diagnostic", op: "permission-hardened" });
+
+    expect(statSync(current).mode & 0o777).toBe(0o600);
   });
 
   it("rotates the current log to a dated file on the next day and prunes past seven", () => {
@@ -547,10 +723,49 @@ describe("server activity log", () => {
     // Yesterday's rolled file holds yesterday's line, not a fresh empty file.
     expect(readFileSync(join(logsDir, "server-2026-08-15.log"), "utf8")).toContain("day1");
     // The current log holds only the newest event.
-    const current = readLines(stateDir);
+    const current = readCallerLines(stateDir);
     expect(current).toHaveLength(1);
     expect(current[0]).toMatchObject({ op: "day2" });
     sink.close?.();
+  });
+
+  it("keeps Windows logging active and reports rotation as unsupported before mutation", () => {
+    stateDir = realpathSync(stateDir);
+    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-20T23:59:00Z"));
+    const sink = createFileServerLogSink(stateDir, { level: "debug" });
+    sink.write({ category: "indexing", op: "windows-day-20" });
+
+    vi.setSystemTime(new Date("2026-08-21T00:00:30Z"));
+    sink.write({
+      category: "indexing",
+      op: "windows-day-21",
+      correlationId: "windows-rotation-3528",
+    });
+
+    expect(readdirSync(join(stateDir, "logs"))).toStrictEqual(["server.log"]);
+    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual([
+      "windows-day-20",
+      "windows-day-21",
+    ]);
+    expect(readLines(stateDir)).toContainEqual(
+      expect.objectContaining({
+        op: "server-log.rotation",
+        correlationId: "windows-rotation-3528",
+        errorKind: "publish-unsupported",
+        persistenceStatus: "unsupported",
+        durabilityAssurance: "platform-inherited",
+        completeness: "partial",
+        loss: "none",
+      }),
+    );
+    expect(readLines(stateDir)[0]).toMatchObject({
+      op: "windows-day-20",
+      persistenceStatus: "opened",
+      permissionAssurance: "platform-inherited",
+      containmentAssurance: "platform-inherited",
+    });
   });
 
   // Requirement: rotation must be atomic ACROSS PROCESSES. Two Keiko processes on one state
@@ -567,7 +782,9 @@ describe("server activity log", () => {
     // A peer process wins the boundary: it archives the finished day and starts a fresh file. Our
     // sink still holds the descriptor for the archived inode, exactly as it would in production.
     renameSync(join(logsDir, "server.log"), join(logsDir, "server-2026-08-20.log"));
-    writeFileSync(join(logsDir, "server.log"), `${JSON.stringify({ op: "peer-day-21" })}\n`);
+    writeFileSync(join(logsDir, "server.log"), `${JSON.stringify({ op: "peer-day-21" })}\n`, {
+      mode: 0o600,
+    });
 
     vi.setSystemTime(new Date("2026-08-21T00:00:30Z"));
     sink.write({ category: "indexing", op: "our-day-21" });
@@ -578,8 +795,97 @@ describe("server activity log", () => {
     expect(archived).toContain("our-day-20");
     expect(archived).not.toContain("peer-day-21");
     // And both processes' lines for the new day are in the new day's file.
-    expect(readLines(stateDir).map((line) => line.op)).toStrictEqual(["peer-day-21", "our-day-21"]);
+    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual([
+      "peer-day-21",
+      "our-day-21",
+    ]);
     sink.close?.();
+  });
+
+  it("recovers a process interruption after archive link and before current replacement", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-21T00:00:30Z"));
+    const logsDir = join(stateDir, "logs");
+    mkdirSync(logsDir);
+    const current = join(logsDir, "server.log");
+    const archived = join(logsDir, "server-2026-08-20.log");
+    writeFileSync(current, `${JSON.stringify({ op: "day-20" })}\n`, { mode: 0o600 });
+    linkSync(current, archived);
+    writeFileSync(
+      join(logsDir, ".keiko-server-rotation.marker"),
+      `2026-08-20:.keiko-server-rotation-${"a".repeat(32)}.stage\n`,
+      { mode: 0o600 },
+    );
+
+    const sink = createFileServerLogSink(stateDir, { level: "debug" });
+    sink.write({
+      category: "indexing",
+      op: "day-21",
+      correlationId: "rotation-recovery-21",
+    });
+
+    expect(readFileSync(archived, "utf8")).toContain("day-20");
+    expect(readFileSync(archived, "utf8")).not.toContain("day-21");
+    const recoveredLines = readLines(stateDir);
+    expect(recoveredLines).toEqual([
+      expect.objectContaining({
+        op: "server-log.rotation",
+        correlationId: "rotation-recovery-21",
+        persistenceStatus: "recovered",
+        durabilityAssurance: process.platform === "win32" ? "platform-inherited" : "verified",
+        completeness: "complete",
+        loss: "none",
+      }),
+      expect.objectContaining({
+        op: "day-21",
+        correlationId: "rotation-recovery-21",
+        persistenceStatus: "opened",
+        completeness: "complete",
+        loss: "none",
+      }),
+    ]);
+    expect(JSON.stringify(recoveredLines)).not.toContain(stateDir);
+    expect(statSync(archived).nlink).toBe(1);
+    expect(statSync(current).nlink).toBe(1);
+    expect(readdirSync(logsDir).some((name) => name.includes("rotation-2026-08-20"))).toBe(false);
+  });
+
+  it("does not mutate an outside victim when the log parent is redirected before rename", (ctx) => {
+    if (process.platform === "win32") ctx.skip();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-20T23:59:00Z"));
+    const sink = createFileServerLogSink(stateDir, { level: "debug" });
+    sink.write({ category: "indexing", op: "before-parent-redirect" });
+    const logsDir = join(stateDir, "logs");
+    const parkedLogs = join(stateDir, "logs-parked");
+    const outside = mkdtempSync(join(tmpdir(), "keiko-server-log-outside-"));
+    const outsideVictim = join(outside, "server.log");
+    writeFileSync(outsideVictim, "outside-victim", { mode: 0o640 });
+    chmodSync(outsideVictim, 0o640);
+    fsCalls.renameBefore = (): void => {
+      renameSync(logsDir, parkedLogs);
+      symlinkSync(outside, logsDir);
+    };
+
+    try {
+      vi.setSystemTime(new Date("2026-08-21T00:00:30Z"));
+      sink.write({ category: "indexing", op: "during-parent-redirect" });
+
+      expect(readFileSync(outsideVictim, "utf8")).toBe("outside-victim");
+      expect(statSync(outsideVictim).mode & 0o777).toBe(0o640);
+      expect(readdirSync(outside)).toStrictEqual(["server.log"]);
+    } finally {
+      fsCalls.renameBefore = null;
+      rmSync(logsDir);
+      renameSync(parkedLogs, logsDir);
+      rmSync(outside, { recursive: true, force: true });
+    }
+
+    sink.write({ category: "indexing", op: "after-parent-restore" });
+    expect(readCallerLines(stateDir).map((line) => line.op)).toContain("after-parent-restore");
+    expect(readdirSync(logsDir).some((name) => name.startsWith(".keiko-server-rotation"))).toBe(
+      false,
+    );
   });
 
   it("bounds a stalled write to the line that stalled instead of corrupting the next one", () => {
@@ -600,7 +906,7 @@ describe("server activity log", () => {
     }
     sink.write({ category: "http", op: "second" });
 
-    const records = readRawRecords(stateDir);
+    const records = readCallerRecords(stateDir);
     expect(records).toHaveLength(3);
     expect(records[0]).toMatchObject({ op: "first" });
     // The truncated bytes are their own line: one lost record, and only one.
@@ -636,6 +942,9 @@ describe("server activity log", () => {
       op: "server-log.write-failed",
       failedOp: "indexing.document.persisted",
       correlationId: "job-7",
+      errorKind: "write-failed",
+      completeness: "unknown",
+      loss: "event-dropped",
     });
     // Body-free, exactly like a log line: a classification, never the thrown message.
     expect(String(stderr.mock.calls[0]?.[0])).not.toContain("accepted no bytes");
@@ -704,7 +1013,7 @@ describe("server activity log", () => {
     sink.write({ category: "http", op: "one" });
     sink.close?.();
     sink.write({ category: "http", op: "two" });
-    expect(readLines(stateDir)).toHaveLength(2);
+    expect(readCallerLines(stateDir)).toHaveLength(2);
   });
 
   // Requirement 1, and the highest-consequence defect in this module: DATA LOSS at the UTC day
@@ -732,7 +1041,7 @@ describe("server activity log", () => {
     expect(rolled).toContain("before-midnight");
     expect(rolled).not.toContain("after-midnight");
     // And nothing written after the boundary was lost.
-    expect(readLines(stateDir).map((line) => line.op)).toStrictEqual([
+    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual([
       "after-midnight-cli",
       "after-midnight-process",
     ]);
@@ -785,7 +1094,7 @@ describe("server activity log level threshold", () => {
     sink.write({ level: "info", category: "indexing", op: "document" });
     sink.write({ level: "warn", category: "indexing", op: "skipped" });
     sink.write({ level: "error", category: "indexing", op: "breaker" });
-    expect(readLines(stateDir).map((line) => line.op)).toStrictEqual(["skipped", "breaker"]);
+    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual(["skipped", "breaker"]);
   });
 
   it("writes nothing at all — not even the file — under a silent threshold", () => {
@@ -798,12 +1107,12 @@ describe("server activity log level threshold", () => {
     const defaulted = createFileServerLogSink(stateDir, { env: {} });
     defaulted.write({ level: "debug", category: "indexing", op: "suppressed" });
     defaulted.write({ level: "info", category: "indexing", op: "kept" });
-    expect(readLines(stateDir).map((line) => line.op)).toStrictEqual(["kept"]);
+    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual(["kept"]);
 
     vi.stubEnv(SERVER_LOG_LEVEL_ENV, "debug");
     const verbose = createFileServerLogSink(stateDir);
     verbose.write({ level: "debug", category: "indexing", op: "now-kept" });
-    expect(readLines(stateDir).map((line) => line.op)).toStrictEqual(["kept", "now-kept"]);
+    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual(["kept", "now-kept"]);
   });
 });
 
@@ -944,15 +1253,16 @@ describe("server activity log descriptor lifecycle", () => {
 
   it("closes the descriptor the process logger opened, and stays usable after", () => {
     getServerLogger().info({ category: "diagnostic", op: "lifecycle.probe" });
-    expect(fsCalls.open).toBe(1);
-    expect(fsCalls.close).toBe(0);
+    const guardedOpenCount = fsCalls.open;
+    expect(guardedOpenCount).toBeGreaterThan(1);
+    expect(fsCalls.close).toBe(guardedOpenCount - 1);
 
     resetServerLogger();
-    expect(fsCalls.close).toBe(1);
+    expect(fsCalls.close).toBe(guardedOpenCount);
 
     // Closing releases an OS resource; it does not disable the log.
     getServerLogger().info({ category: "diagnostic", op: "lifecycle.after" });
-    expect(readLines(stateDir).map((line) => line.op)).toStrictEqual([
+    expect(readCallerLines(stateDir).map((line) => line.op)).toStrictEqual([
       "lifecycle.probe",
       "lifecycle.after",
     ]);
@@ -969,8 +1279,9 @@ describe("server activity log descriptor lifecycle", () => {
 // runner's disk and scheduler instead — it is exactly the "no wall-clock races in the suite" rule
 // AGENTS.md states, and on a loaded CI lane it turns the required `ci` context red on a diff that
 // never touched this file. Counters answer the same question deterministically, and answer it
-// more precisely: a return to open/write/close per line moves `open` from 1 to N, and a quadratic
-// format path shows up as a byte total that is not N x the line size.
+// more precisely: a return to open/write/close per line moves `open` from the fixed boundary-safe
+// setup cost to N, and a quadratic format path shows up as a byte total that is not N x the line
+// size.
 describe("server activity log burst cost", () => {
   let stateDir: string;
 
@@ -996,20 +1307,24 @@ describe("server activity log burst cost", () => {
       durationMs: 12.5,
       extra: { batchIndex: 3, batchCount: 12, chunkCount: 36, vectorsPersistedForDocument: 24 },
     };
-    for (let index = 0; index < BURST_EVENT_COUNT; index += 1) {
+    sink.write(event);
+    const guardedOpenCount = fsCalls.open;
+    const closedGuardCount = fsCalls.close;
+    for (let index = 1; index < BURST_EVENT_COUNT; index += 1) {
       sink.write(event);
     }
 
-    // One open for the whole burst: an `appendFileSync`-style open/write/close per line would
-    // make this BURST_EVENT_COUNT.
-    expect(fsCalls.open).toBe(1);
-    expect(fsCalls.close).toBe(0);
-    // One `write(2)` per line. `writeAll` loops only on a short write, which a regular file does
-    // not produce; a per-line open/write/close triple or a re-serialisation would exceed this.
+    // One retained file descriptor plus one-time ancestry guards. The exact guard count depends on
+    // the absolute state-directory depth; an `appendFileSync`-style path would keep growing it.
+    expect(guardedOpenCount).toBeGreaterThan(1);
+    expect(fsCalls.open).toBe(guardedOpenCount);
+    expect(fsCalls.close).toBe(closedGuardCount);
+    // One `write(2)` per caller line; the first line carries safe-open evidence without a second
+    // write. `writeAll` loops only on a short write, which a regular file does not produce.
     expect(fsCalls.write).toBe(BURST_EVENT_COUNT);
 
     sink.close?.();
-    expect(fsCalls.close).toBe(1);
+    expect(fsCalls.close).toBe(closedGuardCount + 1);
 
     // Linear output, not quadratic — but lines are no longer byte-identical now that the envelope
     // carries `seq`: its digit width grows at each power-of-ten boundary the burst crosses
@@ -1027,8 +1342,8 @@ describe("server activity log burst cost", () => {
     // so they are exactly consecutive.
     const lines = readLines(stateDir);
     const firstSeq = lines[0]?.seq as number;
-    let expectedBytes = 0;
-    for (let index = 0; index < BURST_EVENT_COUNT; index += 1) {
+    let expectedBytes = serverLogLineBytes(`${JSON.stringify(lines[0])}\n`);
+    for (let index = 1; index < BURST_EVENT_COUNT; index += 1) {
       expectedBytes += serverLogLineBytes(
         formatServerLogLine(event, undefined, {
           schemaVersion: SERVER_LOG_SCHEMA_VERSION,
@@ -1072,6 +1387,11 @@ describe("server activity log burst cost", () => {
 // genuinely do not exist — never on a permission or I/O failure, where the safe outcome is to keep
 // appending rather than to overwrite a peer's day.
 describe("rotation fallback is narrow", () => {
+  interface RotationFallbackResult {
+    readonly files: readonly string[];
+    readonly records: readonly Record<string, unknown>[];
+  }
+
   // This block sits outside the file's shared hooks, so it owns its own cleanup. Without it the
   // fake clock, the forced link errno and the registered sinks leak into whatever suite is added
   // below — a failure for a reason unrelated to its own subject.
@@ -1089,7 +1409,7 @@ describe("rotation fallback is narrow", () => {
   // The discriminating observation is whether the ARCHIVE APPEARS. With the broad fallback an
   // EACCES link failure fell through to the guarded rename, which succeeds when no peer archive
   // exists yet and therefore creates the file. With the narrowing it is never attempted.
-  function rotateAcrossBoundary(linkErrorCode: string): readonly string[] {
+  function rotateAcrossBoundary(linkErrorCode: string): RotationFallbackResult {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-08-20T23:59:00Z"));
     const dir = mkdtempSync(join(tmpdir(), "keiko-rot-"));
@@ -1100,20 +1420,36 @@ describe("rotation fallback is narrow", () => {
     sink.write({ category: "indexing", op: "next-day" });
     fsCalls.linkErrorCode = null;
     const files = readdirSync(join(dir, "logs")).sort();
+    const records = readLines(dir);
     sink.close?.();
     rmSync(dir, { recursive: true, force: true });
-    return files;
+    return { files, records };
   }
 
   it.each(["EACCES", "EMLINK", "EIO"])(
     "does not fall back to the replacing rename when link fails with %s",
     (code) => {
-      expect(rotateAcrossBoundary(code)).toStrictEqual(["server.log"]);
+      expect(rotateAcrossBoundary(code).files).toStrictEqual(["server.log"]);
     },
   );
 
-  it("still rotates on a filesystem that genuinely has no hard links", () => {
-    expect(rotateAcrossBoundary("EPERM")).toStrictEqual(["server-2026-08-20.log", "server.log"]);
+  it("keeps the current log when the filesystem has no hard-link publication", () => {
+    const result = rotateAcrossBoundary("EPERM");
+    expect(result.files).toStrictEqual(["server.log"]);
+    expect(
+      result.records
+        .filter((record) => !FILESYSTEM_EVIDENCE_OPS.has(record.op))
+        .map((record) => record.op),
+    ).toStrictEqual(["ours", "next-day"]);
+    expect(result.records).toContainEqual(
+      expect.objectContaining({
+        op: "server-log.rotation",
+        errorKind: "publish-unsupported",
+        persistenceStatus: "unsupported",
+        completeness: "partial",
+        loss: "none",
+      }),
+    );
   });
 });
 

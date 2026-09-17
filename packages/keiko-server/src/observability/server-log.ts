@@ -16,13 +16,13 @@
 //
 // The cost is bounded and pinned by COUNTING, not by timing. The sink holds ONE append-mode
 // descriptor open for the life of the file, so a line costs a single `write(2)` rather than the
-// open/write/close triple `appendFileSync` pays per call. `server-log.test.ts` asserts exactly
-// that over a burst — one `openSync`, one `writeSync` per line, and a file whose size is the SUM of
-// each line's own byte length (lines are no longer byte-identical once `seq` is in the envelope: its
-// digit width grows at each power-of-ten boundary the burst crosses) — so a regression to per-write
-// open/close, or to a quadratic format path, fails the suite deterministically instead of showing up
-// as latency in production. A wall-clock budget would measure the runner's disk instead, and go red
-// on a diff that never touched this file.
+// open/write/close triple `appendFileSync` pays per call. The initial open also verifies the state
+// and ancestry descriptors before closing those guards. `server-log.test.ts` asserts that the
+// fixed setup count does not grow over a burst — never one open per line — plus one `writeSync` per line and
+// a file whose size is the SUM of each line's own byte length (lines are no longer byte-identical
+// once `seq` is in the envelope: its digit width grows at each power-of-ten boundary the burst
+// crosses). A regression to per-write open/close, or to a quadratic format path, therefore fails
+// deterministically instead of showing up as latency in production.
 //
 // Levels are the volume control instead: an event below the configured threshold returns before
 // any string or JSON work happens at all (`KEIKO_LOG_LEVEL`, default `info`).
@@ -31,7 +31,6 @@ import { randomUUID } from "node:crypto";
 import {
   closeSync,
   constants,
-  existsSync,
   fstatSync,
   fsyncSync,
   linkSync,
@@ -44,12 +43,21 @@ import {
   unlinkSync,
   writeSync,
 } from "node:fs";
-import { join, resolve as resolvePath } from "node:path";
+import type { BigIntStats } from "node:fs";
+import { dirname, join, resolve as resolvePath } from "node:path";
 import { atomicPublishRename } from "@oscharko-dev/keiko-security/fs-atomic-rename";
+import {
+  SAFE_ARTIFACT_FILE_FAILURE_KINDS,
+  SafeArtifactFileError,
+  openSafeArtifactFile,
+  safeArtifactContainmentAssurance,
+  safeArtifactPermissionAssurance,
+  verifySafeArtifactFileDescriptor,
+} from "@oscharko-dev/keiko-security/fs-hardening";
 
 import { classifyErrorKind } from "@oscharko-dev/keiko-contracts/runtime/observability";
 
-import { isValidCorrelationId } from "../correlation.js";
+import { correlationIdOrUnknown, isValidCorrelationId } from "../correlation.js";
 import { contentFreeErrorClass, machineToken, safeProperty } from "./error-classification.js";
 import {
   DEFAULT_SERVER_LOG_LEVEL,
@@ -219,11 +227,25 @@ export function nullServerLogSink(): ServerLogSink {
 // `Error`-name hardening above. Either branch still floors on the fixed string `"unknown"` for a
 // non-conforming candidate, pinned by `server-logger.test.ts`.
 export function errorKindOf(error: unknown): string {
+  const safeArtifactKind = safeArtifactErrorKind(error);
+  if (safeArtifactKind !== undefined) return safeArtifactKind;
   if (typeof error !== "object" || error === null) return "unknown";
   const code = machineToken(safeProperty(error, "code"));
   if (code !== undefined) return code;
   if (error instanceof Error) return contentFreeErrorClass(error);
   return classifyErrorKind(safeProperty(error, "name")) ?? "unknown";
+}
+
+const SAFE_ARTIFACT_ERROR_KINDS: ReadonlySet<string> = new Set(SAFE_ARTIFACT_FILE_FAILURE_KINDS);
+
+function safeArtifactErrorKind(error: unknown): string | undefined {
+  try {
+    if (!(error instanceof SafeArtifactFileError)) return undefined;
+  } catch {
+    return undefined;
+  }
+  const kind = safeProperty(error, "kind");
+  return typeof kind === "string" && SAFE_ARTIFACT_ERROR_KINDS.has(kind) ? kind : "open-failed";
 }
 
 // LAST-RESORT FAILURE NOTICE
@@ -245,6 +267,7 @@ export const LOG_FAILURE_NOTICE_WINDOW_MS = 60_000;
 export interface ServerLogFailureContext {
   readonly op?: string | undefined;
   readonly correlationId?: string | undefined;
+  readonly loss?: "event-dropped" | "event-location-unknown" | undefined;
 }
 
 const failureNotice = { lastAt: null as number | null, suppressed: 0 };
@@ -335,6 +358,8 @@ function emitFailureNotice(
     category: "diagnostic",
     op: LOG_FAILURE_NOTICE_OP,
     errorKind: errorKindOf(error),
+    completeness: "unknown",
+    loss: context.loss ?? "event-dropped",
   };
   if (context.op !== undefined) notice.failedOp = redactLogLabel(context.op);
   if (context.correlationId !== undefined) {
@@ -465,6 +490,7 @@ function oversizedLine(record: Record<string, unknown>, lineBytes: number): stri
 // was not a hypothetical arrangement; it was the shipped one.
 interface ActiveLog {
   readonly directory: string;
+  readonly trustedRoot: string;
   readonly currentPath: string;
   readonly retentionDays: number;
   currentDay: string;
@@ -473,6 +499,14 @@ interface ActiveLog {
   // stalled mid-line is remembered: the file ends mid-record and the next record must open with a
   // newline. See `writeRecord`.
   pendingNewline: boolean;
+  pendingRotationOutcome: RotationOutcome | undefined;
+}
+
+type RotationStatus = "published" | "recovered" | "peer-complete" | "unsupported" | "deferred";
+
+interface RotationOutcome {
+  readonly status: RotationStatus;
+  readonly durability: "verified" | "platform-inherited" | "unchanged";
 }
 
 // PROCESS-WIDE `seq` ALLOCATOR — one counter, one module, for the life of the process.
@@ -516,11 +550,33 @@ function closeHandle(active: ActiveLog): void {
   active.handle = null;
 }
 
-// Throws rather than returning null: a descriptor we cannot open is a failure an operator has to
-// hear about, and the caller's catch is the one place that both closes and reports.
+function openActivityLogHandle(active: ActiveLog): number {
+  return openSafeArtifactFile(active.currentPath, {
+    artifactClass: "activity-log",
+    mode: "append-existing-or-create",
+    trustedRoot: active.trustedRoot,
+  });
+}
+
+function handleStillCurrent(active: ActiveLog): boolean {
+  if (active.handle === null) return false;
+  try {
+    const opened = trustedLogIdentity(fstatSync(active.handle));
+    const pathname = pathLogIdentity(active.currentPath);
+    return opened !== undefined && pathname !== undefined && sameLogNode(opened, pathname);
+  } catch {
+    return false;
+  }
+}
+
+// Revalidates the cached descriptor against the current pathname before every append. A peer that
+// rotated or replaced `server.log` therefore forces a close/reopen instead of receiving bytes on a
+// stale or unlinked inode.
 function ensureHandle(active: ActiveLog): number {
-  if (active.handle !== null) return active.handle;
-  active.handle = openSync(active.currentPath, "a", 0o600);
+  if (handleStillCurrent(active) && active.handle !== null) return active.handle;
+  closeHandle(active);
+  active.pendingRotationOutcome ??= recoverInterruptedRotation(active);
+  active.handle = openActivityLogHandle(active);
   return active.handle;
 }
 
@@ -532,15 +588,17 @@ function errorCode(error: unknown): string {
 
 // Names old files with their calendar day, e.g. `server-2026-08-20.log`, and keeps at most
 // `retentionDays` of them. A fresh install starts empty. This is the whole rotation policy.
-function rotateIfNeeded(active: ActiveLog): void {
+function rotateIfNeeded(active: ActiveLog): RotationOutcome | undefined {
   const day = todayUtc();
-  if (day === active.currentDay) return;
+  if (day === active.currentDay) return undefined;
   closeHandle(active);
-  // A successful archive means the file we were mid-record in is no longer the file we append to,
-  // so the partial-record debt does not travel to the fresh one.
-  if (archiveCurrentDay(active)) active.pendingNewline = false;
+  const outcome = archiveCurrentDay(active);
+  if (COMPLETED_ROTATION_STATUSES.has(outcome.status)) {
+    active.pendingNewline = false;
+  }
   active.currentDay = day;
   pruneOldFiles(active.directory, active.retentionDays);
+  return outcome;
 }
 
 // Rotation has to be atomic ACROSS PROCESSES, not merely within one. `renameSync` REPLACES an
@@ -558,53 +616,388 @@ function rotateIfNeeded(active: ActiveLog): void {
 // also plain permission denial — but the state directory is created by this process at 0700, so a
 // permission failure on it is not the reachable case, and treating it as unsupported keeps
 // removable-media installs rotating.
-const NO_HARD_LINK_SUPPORT = new Set(["EPERM", "ENOSYS", "EOPNOTSUPP", "ENOTSUP"]);
+const NO_HARD_LINK_SUPPORT = new Set(["EPERM", "ENOSYS", "EOPNOTSUPP", "ENOTSUP", "EXDEV"]);
+const COMPLETED_ROTATION_STATUSES: ReadonlySet<RotationStatus> = new Set([
+  "published",
+  "recovered",
+  "peer-complete",
+]);
 
-function archiveCurrentDay(active: ActiveLog): boolean {
-  const rolled = join(active.directory, `server-${active.currentDay}.log`);
+function privateRotationMode(mode: bigint): boolean {
+  return process.platform === "win32" || (mode & 0o077n) === 0n;
+}
+
+function rotationStat(path: string): BigIntStats | undefined {
   try {
-    linkSync(active.currentPath, rolled);
+    return lstatSync(path, { bigint: true });
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return undefined;
+    throw new SafeArtifactFileError("activity-log", "open-failed");
+  }
+}
+
+function safeRotationNode(stat: BigIntStats | undefined, links: bigint): stat is BigIntStats {
+  return (
+    stat !== undefined &&
+    stat.isFile() &&
+    !stat.isSymbolicLink() &&
+    stat.nlink === links &&
+    privateRotationMode(stat.mode)
+  );
+}
+
+function linkedRotationMatches(currentPath: string, archivePath: string): boolean {
+  const current = rotationStat(currentPath);
+  const archive = rotationStat(archivePath);
+  return (
+    safeRotationNode(current, 2n) &&
+    safeRotationNode(archive, 2n) &&
+    current.dev === archive.dev &&
+    current.ino === archive.ino
+  );
+}
+
+function completedRotationMatches(currentPath: string, archivePath: string): boolean {
+  const current = rotationStat(currentPath);
+  const archive = rotationStat(archivePath);
+  return (
+    safeRotationNode(current, 1n) &&
+    safeRotationNode(archive, 1n) &&
+    (current.dev !== archive.dev || current.ino !== archive.ino)
+  );
+}
+
+const ROTATION_MARKER_NAME = ".keiko-server-rotation.marker";
+const ROTATION_DAY_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const ROTATION_STAGE_PATTERN = /^\.keiko-server-rotation-[0-9a-f]{32}\.stage$/;
+
+interface RotationTransaction {
+  readonly day: string;
+  readonly stageName: string;
+}
+
+interface OpenRotationTransaction extends RotationTransaction {
+  readonly markerDescriptor: number;
+}
+
+function rotationMarkerPath(active: ActiveLog): string {
+  return join(active.directory, ROTATION_MARKER_NAME);
+}
+
+function rotationStagePath(active: ActiveLog, transaction: RotationTransaction): string {
+  return join(active.directory, transaction.stageName);
+}
+
+function closeRotationDescriptor(descriptor: number): void {
+  try {
+    closeSync(descriptor);
+  } catch {
+    throw new SafeArtifactFileError("activity-log", "close-failed");
+  }
+}
+
+function openRotationStage(active: ActiveLog, transaction: RotationTransaction): number {
+  const stagePath = rotationStagePath(active, transaction);
+  let descriptor: number;
+  try {
+    descriptor = openSafeArtifactFile(stagePath, {
+      artifactClass: "activity-log",
+      mode: "exclusive-create",
+      trustedRoot: active.trustedRoot,
+    });
+  } catch (error) {
+    if (!(error instanceof SafeArtifactFileError) || error.kind !== "target-exists") throw error;
+    descriptor = openSafeArtifactFile(stagePath, {
+      artifactClass: "activity-log",
+      mode: "read-write-existing",
+      trustedRoot: active.trustedRoot,
+    });
+  }
+  const opened = fstatSync(descriptor, { bigint: true });
+  if (opened.size !== 0n) {
+    closeRotationDescriptor(descriptor);
+    throw new SafeArtifactFileError("activity-log", "recovery-conflict");
+  }
+  fsyncSync(descriptor);
+  return descriptor;
+}
+
+function rotationMarkerBytes(transaction: RotationTransaction): Buffer {
+  if (
+    !ROTATION_DAY_PATTERN.test(transaction.day) ||
+    !ROTATION_STAGE_PATTERN.test(transaction.stageName)
+  ) {
+    throw new SafeArtifactFileError("activity-log", "invalid-publication");
+  }
+  return Buffer.from(`${transaction.day}:${transaction.stageName}\n`, "utf8");
+}
+
+function readMarkerBytes(descriptor: number): Buffer | undefined {
+  const opened = fstatSync(descriptor, { bigint: true });
+  if (opened.size <= 0n || opened.size > 128n) return undefined;
+  const actual = Buffer.allocUnsafe(Number(opened.size));
+  let offset = 0;
+  while (offset < actual.length) {
+    const read = readSync(descriptor, actual, offset, actual.length - offset, offset);
+    if (read <= 0) return undefined;
+    offset += read;
+  }
+  return actual;
+}
+
+function parseRotationMarker(bytes: Buffer | undefined): RotationTransaction | undefined {
+  if (bytes === undefined) return undefined;
+  const match = /^(\d{4}-\d{2}-\d{2}):(\.keiko-server-rotation-[0-9a-f]{32}\.stage)\n$/.exec(
+    bytes.toString("utf8"),
+  );
+  return match?.[1] === undefined || match[2] === undefined
+    ? undefined
+    : { day: match[1], stageName: match[2] };
+}
+
+function newRotationTransaction(day: string): RotationTransaction {
+  return {
+    day,
+    stageName: `.keiko-server-rotation-${randomUUID().replaceAll("-", "")}.stage`,
+  };
+}
+
+function openRotationMarker(active: ActiveLog, day: string): OpenRotationTransaction {
+  const markerPath = rotationMarkerPath(active);
+  let transaction = newRotationTransaction(day);
+  let descriptor: number;
+  try {
+    descriptor = openSafeArtifactFile(markerPath, {
+      artifactClass: "activity-log",
+      mode: "exclusive-create",
+      trustedRoot: active.trustedRoot,
+    });
+    writeAll(descriptor, rotationMarkerBytes(transaction));
+  } catch (error) {
+    if (!(error instanceof SafeArtifactFileError) || error.kind !== "target-exists") throw error;
+    descriptor = openSafeArtifactFile(markerPath, {
+      artifactClass: "activity-log",
+      mode: "read-write-existing",
+      trustedRoot: active.trustedRoot,
+    });
+    const recovered = parseRotationMarker(readMarkerBytes(descriptor));
+    if (recovered?.day !== day) {
+      closeRotationDescriptor(descriptor);
+      throw new SafeArtifactFileError("activity-log", "recovery-conflict");
+    }
+    transaction = recovered;
+  }
+  fsyncSync(descriptor);
+  verifySafeArtifactFileDescriptor(descriptor, markerPath, {
+    artifactClass: "activity-log",
+    trustedRoot: active.trustedRoot,
+  });
+  return { ...transaction, markerDescriptor: descriptor };
+}
+
+function captureRotationGuards(active: ActiveLog): readonly LogDirectoryGuard[] {
+  const root = openLogDirectoryGuard(active.trustedRoot);
+  if (root === undefined) throw new SafeArtifactFileError("activity-log", "unsafe-ancestor");
+  const directory = openLogDirectoryGuard(active.directory);
+  if (directory === undefined) {
+    closeLogDirectoryGuards([root]);
+    throw new SafeArtifactFileError("activity-log", "unsafe-ancestor");
+  }
+  return [root, directory];
+}
+
+function syncRotationDirectory(
+  guards: readonly LogDirectoryGuard[],
+): RotationOutcome["durability"] {
+  if (!guards.every(logDirectoryStillSame)) {
+    throw new SafeArtifactFileError("activity-log", "target-mutated");
+  }
+  const directory = guards.at(-1);
+  if (directory?.handle === undefined) return "platform-inherited";
+  try {
+    fsyncSync(directory.handle);
+  } catch {
+    throw new SafeArtifactFileError("activity-log", "durability-failed");
+  }
+  if (!guards.every(logDirectoryStillSame)) {
+    throw new SafeArtifactFileError("activity-log", "target-mutated");
+  }
+  return "verified";
+}
+
+function closeRotationResources(
+  descriptors: readonly number[],
+  guards: readonly LogDirectoryGuard[],
+): void {
+  let failed = false;
+  for (const descriptor of descriptors) {
+    try {
+      closeSync(descriptor);
+    } catch {
+      failed = true;
+    }
+  }
+  try {
+    closeLogDirectoryGuards(guards);
+  } catch {
+    failed = true;
+  }
+  if (failed) throw new SafeArtifactFileError("activity-log", "close-failed");
+}
+
+function removeRotationArtifact(active: ActiveLog, descriptor: number, path: string): void {
+  verifySafeArtifactFileDescriptor(descriptor, path, {
+    artifactClass: "activity-log",
+    trustedRoot: active.trustedRoot,
+  });
+  try {
+    unlinkSync(path);
+  } catch {
+    throw new SafeArtifactFileError("activity-log", "recovery-conflict");
+  }
+}
+
+function abortPreparedRotation(
+  active: ActiveLog,
+  transaction: OpenRotationTransaction,
+  stageDescriptor: number,
+  guards: readonly LogDirectoryGuard[],
+): void {
+  removeRotationArtifact(active, stageDescriptor, rotationStagePath(active, transaction));
+  syncRotationDirectory(guards);
+  removeRotationArtifact(active, transaction.markerDescriptor, rotationMarkerPath(active));
+  syncRotationDirectory(guards);
+}
+
+type ArchiveLinkResult = "linked" | "complete" | "missing" | "unsupported" | "deferred";
+
+function ensureRotationArchive(active: ActiveLog, archivePath: string): ArchiveLinkResult {
+  if (linkedRotationMatches(active.currentPath, archivePath)) return "linked";
+  if (completedRotationMatches(active.currentPath, archivePath)) return "complete";
+  try {
+    linkSync(active.currentPath, archivePath);
   } catch (error) {
     const code = errorCode(error);
-    // EEXIST: a peer already archived this day, and leaving its file untouched is the whole point.
-    // ENOENT: there is nothing to archive (a fresh install, or a peer that has already moved it).
-    if (code === "EEXIST" || code === "ENOENT") return false;
-    // ONLY "this filesystem has no hard links" may fall back to the destination-replacing rename.
-    // EACCES, EMLINK, EIO and friends are real failures, and for them the safe outcome is to NOT
-    // rotate: one file growing is a nuisance, overwriting a peer's finished archive is data loss.
-    // Choose the nuisance. Without this narrowing the fallback re-opened the exact race the
-    // hard-link rotation exists to close.
-    if (!NO_HARD_LINK_SUPPORT.has(code)) return false;
-    return archiveWithoutHardLinks(active, rolled);
+    if (code === "ENOENT") return "missing";
+    if (code === "EEXIST") {
+      if (linkedRotationMatches(active.currentPath, archivePath)) return "linked";
+      if (completedRotationMatches(active.currentPath, archivePath)) return "complete";
+      throw new SafeArtifactFileError("activity-log", "recovery-conflict");
+    }
+    return NO_HARD_LINK_SUPPORT.has(code) ? "unsupported" : "deferred";
   }
-  return unlinkCurrentPath(active);
+  if (!linkedRotationMatches(active.currentPath, archivePath)) {
+    throw new SafeArtifactFileError("activity-log", "target-mutated");
+  }
+  return "linked";
 }
 
-// A filesystem that cannot hard-link at all (FAT/exFAT under a state directory on removable
-// media). No atomic primitive is left, so this falls back to the guarded rename rather than never
-// rotating and letting one file grow without bound — the cross-process window exists only here,
-// and only where nothing better is available.
-function archiveWithoutHardLinks(active: ActiveLog, rolled: string): boolean {
-  if (existsSync(rolled) || !existsSync(active.currentPath)) return false;
+function finishRotationCommit(
+  active: ActiveLog,
+  transaction: OpenRotationTransaction,
+  guards: readonly LogDirectoryGuard[],
+): RotationOutcome["durability"] {
+  const durability = syncRotationDirectory(guards);
+  removeRotationArtifact(active, transaction.markerDescriptor, rotationMarkerPath(active));
+  syncRotationDirectory(guards);
+  return durability;
+}
+
+function publishRotationStage(
+  active: ActiveLog,
+  archivePath: string,
+  transaction: OpenRotationTransaction,
+  stageDescriptor: number,
+  guards: readonly LogDirectoryGuard[],
+): RotationOutcome["durability"] {
+  const stagePath = rotationStagePath(active, transaction);
+  verifySafeArtifactFileDescriptor(stageDescriptor, stagePath, {
+    artifactClass: "activity-log",
+    trustedRoot: active.trustedRoot,
+  });
+  if (!guards.every(logDirectoryStillSame)) {
+    throw new SafeArtifactFileError("activity-log", "target-mutated");
+  }
+  atomicPublishRename(stagePath, active.currentPath, { rename: renameSync });
+  verifySafeArtifactFileDescriptor(stageDescriptor, active.currentPath, {
+    artifactClass: "activity-log",
+    trustedRoot: active.trustedRoot,
+  });
+  if (!safeRotationNode(rotationStat(archivePath), 1n)) {
+    throw new SafeArtifactFileError("activity-log", "target-mutated");
+  }
+  return finishRotationCommit(active, transaction, guards);
+}
+
+function completeRotation(
+  active: ActiveLog,
+  day: string,
+  status: "published" | "recovered",
+): RotationOutcome {
+  const guards = captureRotationGuards(active);
+  let transaction: OpenRotationTransaction | undefined;
+  let stageDescriptor: number | undefined;
   try {
-    atomicPublishRename(active.currentPath, rolled, { rename: renameSync });
-    return true;
-  } catch {
-    // Windows file-busy and friends: keep appending to the current file — rotation is a
-    // convenience, not a correctness requirement.
-    return false;
+    transaction = openRotationMarker(active, day);
+    stageDescriptor = openRotationStage(active, transaction);
+    syncRotationDirectory(guards);
+    const archivePath = join(active.directory, `server-${day}.log`);
+    const linkResult = ensureRotationArchive(active, archivePath);
+    if (linkResult !== "linked") {
+      abortPreparedRotation(active, transaction, stageDescriptor, guards);
+      if (linkResult === "complete") return { status: "peer-complete", durability: "verified" };
+      if (linkResult === "missing") return { status: "peer-complete", durability: "verified" };
+      return { status: linkResult, durability: "verified" };
+    }
+    syncRotationDirectory(guards);
+    return {
+      status,
+      durability: publishRotationStage(active, archivePath, transaction, stageDescriptor, guards),
+    };
+  } catch (error) {
+    if (error instanceof SafeArtifactFileError) throw error;
+    throw new SafeArtifactFileError("activity-log", "replace-failed");
+  } finally {
+    const descriptors = [transaction?.markerDescriptor, stageDescriptor].filter(
+      (descriptor): descriptor is number => descriptor !== undefined,
+    );
+    closeRotationResources(descriptors, guards);
   }
 }
 
-function unlinkCurrentPath(active: ActiveLog): boolean {
+function readInterruptedRotation(active: ActiveLog): RotationTransaction | undefined {
+  if (rotationStat(rotationMarkerPath(active)) === undefined) return undefined;
+  const descriptor = openSafeArtifactFile(rotationMarkerPath(active), {
+    artifactClass: "activity-log",
+    mode: "read",
+    trustedRoot: active.trustedRoot,
+  });
   try {
-    unlinkSync(active.currentPath);
-    return true;
-  } catch {
-    // The archive is written, which is the part that matters. This process keeps appending to the
-    // still-linked current file, and the next boundary finds the archive present and leaves it be.
-    return false;
+    const transaction = parseRotationMarker(readMarkerBytes(descriptor));
+    verifySafeArtifactFileDescriptor(descriptor, rotationMarkerPath(active), {
+      artifactClass: "activity-log",
+      trustedRoot: active.trustedRoot,
+    });
+    if (transaction === undefined) {
+      throw new SafeArtifactFileError("activity-log", "recovery-conflict");
+    }
+    return transaction;
+  } finally {
+    closeRotationDescriptor(descriptor);
   }
+}
+
+function recoverInterruptedRotation(active: ActiveLog): RotationOutcome | undefined {
+  const transaction = readInterruptedRotation(active);
+  if (transaction === undefined) return undefined;
+  return completeRotation(active, transaction.day, "recovered");
+}
+
+function archiveCurrentDay(active: ActiveLog): RotationOutcome {
+  if (process.platform === "win32") {
+    return { status: "unsupported", durability: "platform-inherited" };
+  }
+  return completeRotation(active, active.currentDay, "published");
 }
 
 function pruneOldFiles(directory: string, retentionDays: number): void {
@@ -643,7 +1036,7 @@ function writeAll(handle: number, payload: Buffer): void {
   let offset = 0;
   while (offset < payload.length) {
     const written = writeSync(handle, payload, offset, payload.length - offset);
-    if (written <= 0) throw new Error("activity log descriptor accepted no bytes");
+    if (written <= 0) throw new SafeArtifactFileError("activity-log", "write-failed");
     offset += written;
   }
 }
@@ -658,6 +1051,111 @@ function writeRecord(active: ActiveLog, handle: number, line: string): void {
   active.pendingNewline = true;
   writeAll(handle, payload);
   active.pendingNewline = false;
+}
+
+function writeEventRecord(active: ActiveLog, handle: number, event: ServerLogEvent): void {
+  const identity: ServerLogIdentity = {
+    schemaVersion: SERVER_LOG_SCHEMA_VERSION,
+    pid: process.pid,
+    instanceId: INSTANCE_ID,
+    seq: allocateServerLogSeq(),
+  };
+  writeRecord(active, handle, formatServerLogLine(event, undefined, identity));
+}
+
+function withSafeOpenEvidence(event: ServerLogEvent): ServerLogEvent {
+  return {
+    ...event,
+    extra: {
+      ...event.extra,
+      artifactClass: "activity-log",
+      persistenceStatus: "opened",
+      permissionAssurance: safeArtifactPermissionAssurance(),
+      containmentAssurance: safeArtifactContainmentAssurance(),
+      completeness: "complete",
+      loss: "none",
+    },
+  };
+}
+
+function rotationEvidence(
+  outcome: RotationOutcome,
+  correlationId: string | undefined,
+): ServerLogEvent {
+  const failed = outcome.status === "unsupported" || outcome.status === "deferred";
+  return {
+    level: failed ? "warn" : "info",
+    category: "diagnostic",
+    op: "server-log.rotation",
+    correlationId: correlationIdOrUnknown(correlationId),
+    errorKind: failed
+      ? outcome.status === "unsupported"
+        ? "publish-unsupported"
+        : "publish-failed"
+      : undefined,
+    extra: {
+      artifactClass: "activity-log",
+      persistenceStatus: outcome.status,
+      durabilityAssurance: outcome.durability,
+      completeness: failed ? "partial" : "complete",
+      loss: "none",
+    },
+  };
+}
+
+class PostWriteMutationError extends SafeArtifactFileError {
+  public constructor() {
+    super("activity-log", "target-mutated");
+  }
+}
+
+function mutationEvidence(event: ServerLogEvent): ServerLogEvent {
+  return {
+    level: "error",
+    category: "diagnostic",
+    op: LOG_FAILURE_NOTICE_OP,
+    correlationId: correlationIdOrUnknown(event.correlationId),
+    errorKind: "target-mutated",
+    extra: {
+      failedOp: redactLogLabel(event.op),
+      artifactClass: "activity-log",
+      permissionAssurance: safeArtifactPermissionAssurance(),
+      containmentAssurance: safeArtifactContainmentAssurance(),
+      completeness: "unknown",
+      loss: "event-location-unknown",
+    },
+  };
+}
+
+function persistPostWriteMutation(active: ActiveLog, event: ServerLogEvent): void {
+  closeHandle(active);
+  try {
+    const handle = ensureHandle(active);
+    const rotation = active.pendingRotationOutcome;
+    active.pendingRotationOutcome = undefined;
+    if (rotation !== undefined) {
+      writeEventRecord(active, handle, rotationEvidence(rotation, event.correlationId));
+    }
+    writeEventRecord(active, handle, mutationEvidence(event));
+    if (!handleStillCurrent(active)) throw new PostWriteMutationError();
+  } catch {
+    throw new PostWriteMutationError();
+  }
+}
+
+function writeCurrentEvent(active: ActiveLog, event: ServerLogEvent): void {
+  const current = handleStillCurrent(active);
+  const handle = ensureHandle(active);
+  const rotation = active.pendingRotationOutcome;
+  active.pendingRotationOutcome = undefined;
+  if (rotation !== undefined) {
+    writeEventRecord(active, handle, rotationEvidence(rotation, event.correlationId));
+  }
+  writeEventRecord(active, handle, current ? event : withSafeOpenEvidence(event));
+  if (!handleStillCurrent(active)) {
+    persistPostWriteMutation(active, event);
+    throw new PostWriteMutationError();
+  }
 }
 
 export interface FileServerLogSinkOptions {
@@ -744,31 +1242,24 @@ function pathLogIdentity(path: string): LogFileIdentity | undefined {
 
 function currentHandleIdentity(active: ActiveLog): LogFileIdentity | undefined {
   if (active.handle === null) return undefined;
-  const descriptor = trustedLogIdentity(fstatSync(active.handle));
-  if (descriptor === undefined) return undefined;
-  const pathname = pathLogIdentity(active.currentPath);
-  return pathname !== undefined && sameLogNode(descriptor, pathname) ? descriptor : undefined;
+  try {
+    const descriptor = trustedLogIdentity(fstatSync(active.handle));
+    if (descriptor === undefined) return undefined;
+    const pathname = pathLogIdentity(active.currentPath);
+    return pathname !== undefined && sameLogNode(descriptor, pathname) ? descriptor : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function openTrustedDurableHandle(active: ActiveLog): LogFileIdentity | undefined {
   const existing = currentHandleIdentity(active);
   if (existing !== undefined) return existing;
   closeHandle(active);
-  const secureFlags =
-    constants.O_WRONLY | constants.O_APPEND | constants.O_NONBLOCK | constants.O_NOFOLLOW;
   try {
-    active.handle = openSync(active.currentPath, secureFlags);
-  } catch (error) {
-    if (errorCode(error) !== "ENOENT") return undefined;
-    try {
-      active.handle = openSync(
-        active.currentPath,
-        secureFlags | constants.O_CREAT | constants.O_EXCL,
-        0o600,
-      );
-    } catch {
-      return undefined;
-    }
+    ensureHandle(active);
+  } catch {
+    return undefined;
   }
   return currentHandleIdentity(active);
 }
@@ -1088,11 +1579,13 @@ function resolveActiveLog(directory: string, retentionDays: number): ActiveLog {
   if (existing !== undefined) return existing;
   const created: ActiveLog = {
     directory,
+    trustedRoot: dirname(directory),
     currentPath: join(directory, "server.log"),
     retentionDays,
     currentDay: todayUtc(),
     handle: null,
     pendingNewline: false,
+    pendingRotationOutcome: undefined,
   };
   activeLogs.set(key, created);
   return created;
@@ -1133,24 +1626,20 @@ function createFileSinkFacade(active: ActiveLog, threshold: ServerLogThreshold):
       // The threshold check comes before any formatting: a filtered event costs one comparison.
       if (!serverLogLevelEnabled(eventLevel(event), threshold)) return;
       try {
-        rotateIfNeeded(active);
-        // Claimed as soon as the event clears the gate, before the write is attempted: see
-        // `allocateServerLogSeq` for why a dropped write must not roll this number back.
-        const seq = allocateServerLogSeq();
-        const identity: ServerLogIdentity = {
-          schemaVersion: SERVER_LOG_SCHEMA_VERSION,
-          pid: process.pid,
-          instanceId: INSTANCE_ID,
-          seq,
-        };
-        writeRecord(active, ensureHandle(active), formatServerLogLine(event, undefined, identity));
+        active.pendingRotationOutcome ??= rotateIfNeeded(active);
+        writeCurrentEvent(active, event);
       } catch (error) {
         // Writing must never take the server down; a full disk, a permission change or a file
         // removed under us drops the line and forces a reopen on the next write. It does NOT drop
         // the fact that it happened: a log that has stopped working is exactly the condition an
         // operator cannot infer from the absence of lines.
         closeHandle(active);
-        reportServerLogFailure(error, { op: event.op, correlationId: event.correlationId });
+        reportServerLogFailure(error, {
+          op: event.op,
+          correlationId: event.correlationId,
+          loss:
+            error instanceof PostWriteMutationError ? "event-location-unknown" : "event-dropped",
+        });
       }
     },
     flush(): void {
