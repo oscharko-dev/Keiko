@@ -815,7 +815,9 @@ describe("openKnowledgeStore — activity log", () => {
     expect(migrated?.category).toBe("diagnostic");
     expect(migrated?.durationMs).toBeGreaterThanOrEqual(0);
     expect(migrated?.extra).toEqual({
+      completeness: "complete",
       fromScope: "plaintext",
+      loss: "none",
       toScope: STORE_CONTENT_ENCRYPTION_TEST_CONSTANTS.scopeValue,
     });
   });
@@ -848,7 +850,9 @@ describe("openKnowledgeStore — activity log", () => {
     const migrated = events.find((event) => event.op === "store.encryption-migrated");
     expect(migrated).toBeDefined();
     expect(migrated?.extra).toEqual({
+      completeness: "complete",
       fromScope: "reconstructive-columns/v2",
+      loss: "none",
       toScope: STORE_CONTENT_ENCRYPTION_TEST_CONSTANTS.scopeValue,
     });
   });

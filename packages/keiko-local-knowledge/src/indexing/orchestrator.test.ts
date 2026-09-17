@@ -3183,7 +3183,7 @@ describe("runIndexingJob — activity log", () => {
       expect(bounded?.extra).toMatchObject({
         cancelled: false,
         policyRejection: false,
-        failureKind: "ChunkingError",
+        failureKind: "RangeError",
       });
       expect(bounded?.extra?.documentIdDigest).toMatch(HEX_DIGEST);
 
@@ -3339,6 +3339,14 @@ describe("runIndexingJob — activity log", () => {
       expect(line.errorKind).toBe("read-failed");
       expect(extraOf(line)).toMatchObject({ failedDocuments: 1, failureKind: "READ_FAILED" });
       expect(extraOf(line).documentIdDigest).toMatch(HEX_DIGEST);
+
+      const finished = requireLine(log, "indexing.job.finished");
+      expect(finished.errorKind).toBe("read-failed");
+      expect(extraOf(finished)).toMatchObject({
+        completeness: "complete",
+        failureKind: "DISCOVERY_FAILED.READ_FAILED",
+        loss: "none",
+      });
 
       // This lane does NOT funnel through `appendDocumentFailure` — the corrected comment there
       // says so, and this is what makes the line above the only record of the failure.

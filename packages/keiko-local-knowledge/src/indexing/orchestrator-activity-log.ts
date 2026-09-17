@@ -1,5 +1,6 @@
 import {
   activityLogEvent,
+  classifyErrorKind,
   defineActivityLogOperation,
   type ActivityLogErrorKind,
   type ActivityLogEventEnvelope,
@@ -589,11 +590,29 @@ const EXACT_FAILURE_ERROR_KINDS: Readonly<Record<string, ActivityLogErrorKind>> 
   INVALID_SCOPE: "validation-failed",
 };
 
+// The public indexing event keeps its established `DISCOVERY_FAILED:<code>` shape. The activity
+// registry's error-kind field deliberately rejects `:`, so only a separately validated inner code
+// is projected to the equivalent body-free machine token at the logging boundary.
+const DISCOVERY_FAILURE_PREFIX = "DISCOVERY_FAILED:";
+
+function nestedDiscoveryFailureKind(kind: string): string | undefined {
+  if (!kind.startsWith(DISCOVERY_FAILURE_PREFIX)) return undefined;
+  return classifyErrorKind(kind.slice(DISCOVERY_FAILURE_PREFIX.length));
+}
+
+function activityFailureKind(kind: string): string {
+  const nested = nestedDiscoveryFailureKind(kind);
+  return nested === undefined ? kind : `DISCOVERY_FAILED.${nested}`;
+}
+
 function failureErrorKind(kind: string): ActivityLogErrorKind {
-  const exact = EXACT_FAILURE_ERROR_KINDS[kind];
+  const classifiedKind = nestedDiscoveryFailureKind(kind) ?? kind;
+  const exact = EXACT_FAILURE_ERROR_KINDS[classifiedKind];
   if (exact !== undefined) return exact;
-  if (kind.includes("TIMEOUT")) return "timeout";
-  if (kind.includes("INVALID") || kind.includes("INCOMPATIBLE")) return "validation-failed";
+  if (classifiedKind.includes("TIMEOUT")) return "timeout";
+  if (classifiedKind.includes("INVALID") || classifiedKind.includes("INCOMPATIBLE")) {
+    return "validation-failed";
+  }
   return "internal";
 }
 
@@ -895,7 +914,9 @@ function emitJobFinished(sink: KnowledgeLogSink | undefined, event: IndexingActi
         failedDocuments: event.failedDocuments,
         skippedDocuments: event.skippedDocuments,
         vectorsPersisted: event.vectorsPersisted,
-        ...(event.failureKind === undefined ? {} : { failureKind: event.failureKind }),
+        ...(event.failureKind === undefined
+          ? {}
+          : { failureKind: activityFailureKind(event.failureKind) }),
       },
     ),
   );

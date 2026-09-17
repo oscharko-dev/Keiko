@@ -556,6 +556,8 @@ describe("repository pod fingerprint-diff activity log", () => {
     expect(initialLine?.extra).toEqual({
       added: 4,
       changed: 0,
+      completeness: "complete",
+      loss: "none",
       removed: 0,
       moved: 0,
       unchanged: 0,
@@ -578,6 +580,8 @@ describe("repository pod fingerprint-diff activity log", () => {
     expect(refreshLine?.extra).toEqual({
       added: 0,
       changed: 1,
+      completeness: "complete",
+      loss: "none",
       removed: 0,
       moved: 0,
       unchanged: 3,
