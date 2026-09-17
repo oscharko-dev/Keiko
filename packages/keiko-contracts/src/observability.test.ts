@@ -1,13 +1,52 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  ACTIVITY_LOG_EVENT_REGISTRATION,
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   ActivityLogEventValidationError,
   ERROR_KIND_PATTERN,
   activityLogEvent,
+  activityLogOperationSchema,
   classifyErrorKind,
   defineActivityLogOperation,
   isErrorKind,
+  validateRegisteredActivityLogEvent,
+  type ActivityLogFieldContract,
+  type ActivityLogOperationRegistration,
 } from "./observability.js";
+
+function emitFixtureValue(contract: ActivityLogFieldContract, value: unknown): void {
+  const operation = defineActivityLogOperation({
+    contractKind: "activity-log-operation",
+    schemaVersion: 1,
+    op: "registry.fixture.data-class",
+    category: "diagnostic",
+    owner: "keiko-contracts",
+    emitter: "observability.test.data-class",
+    fields: { value: contract },
+    causal: "none",
+    lifecycle: "state",
+    analyzerProjection: "timeline",
+    failureClasses: ["registry-fixture"],
+    proofIds: ["registry-fixture-data-class"],
+    releaseImpact: "none",
+  });
+  activityLogEvent(operation, {}, { value } as never);
+}
+
+function canonicalFixtureRegistration(): ActivityLogOperationRegistration {
+  const registration = activityLogOperationSchema("gateway.instance.reused");
+  if (registration === undefined) throw new Error("canonical fixture registration is missing");
+  return registration;
+}
+
+function attachRegistration(
+  event: Record<PropertyKey, unknown>,
+  registration: ActivityLogOperationRegistration,
+): Readonly<Record<PropertyKey, unknown>> {
+  Object.defineProperty(event, ACTIVITY_LOG_EVENT_REGISTRATION, { value: registration });
+  return event;
+}
 
 describe("ERROR_KIND_PATTERN (ADR-0173 D11)", () => {
   it("accepts an identifier, a taxonomy code, and a constructor name", () => {
@@ -156,6 +195,48 @@ describe("typed Activity Log operation registration", () => {
     ).toThrow(new ActivityLogEventValidationError("invalid-field-type"));
   });
 
+  it("normalizes legacy correlation ids while preserving causal requirements", () => {
+    const correlated = defineActivityLogOperation({
+      contractKind: "activity-log-operation",
+      schemaVersion: 1,
+      op: "registry.fixture.correlated",
+      category: "diagnostic",
+      owner: "keiko-contracts",
+      emitter: "observability.test.correlated",
+      fields: {},
+      causal: "correlation",
+      lifecycle: "state",
+      analyzerProjection: "timeline",
+      failureClasses: ["registry-fixture"],
+      proofIds: ["registry-fixture-correlated-emitted-line"],
+      releaseImpact: "none",
+    });
+    const parentCorrelated = defineActivityLogOperation({
+      ...correlated,
+      op: "registry.fixture.parent-correlated",
+      emitter: "observability.test.parent-correlated",
+      causal: "parent-correlation",
+      proofIds: ["registry-fixture-parent-correlated-emitted-line"],
+    });
+
+    expect(activityLogEvent(correlated, { correlationId: "run-1" }, {})).toMatchObject({
+      correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+    });
+    expect(activityLogEvent(correlated, {}, {})).toMatchObject({
+      correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+    });
+    expect(
+      activityLogEvent(
+        parentCorrelated,
+        { correlationId: "corr-1", parentCorrelationId: "run-1" },
+        {},
+      ),
+    ).toMatchObject({
+      correlationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+      parentCorrelationId: ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+    });
+  });
+
   it("preserves explicit partial and loss evidence while rejecting global contract drift", () => {
     const registration = {
       contractKind: "activity-log-operation",
@@ -190,5 +271,184 @@ describe("typed Activity Log operation registration", () => {
         },
       }),
     ).toThrow(new ActivityLogEventValidationError("registration-mismatch"));
+  });
+});
+
+describe("Activity Log data-class validation", () => {
+  it.each([
+    [
+      "digest",
+      { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+      "a".repeat(64),
+    ],
+    [
+      "error kind",
+      { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+      "TypeError",
+    ],
+    [
+      "opaque id",
+      { type: "string", dataClass: "opaque-id", required: true, maxLength: 64 },
+      "request-123:attempt-2",
+    ],
+    [
+      "platform class",
+      { type: "string", dataClass: "safe-platform-class", required: true, maxLength: 64 },
+      "linux-x64",
+    ],
+    [
+      "version",
+      { type: "string", dataClass: "safe-version", required: true, maxLength: 64 },
+      "1.2.3-beta.1+build.4",
+    ],
+  ] as const)("accepts a body-free %s", (_label, contract, value) => {
+    expect(() => emitFixtureValue(contract, value)).not.toThrow();
+  });
+
+  it.each([
+    [
+      "digest",
+      { type: "string", dataClass: "digest", required: true, maxLength: 64 },
+      "patient cancer",
+    ],
+    [
+      "error kind",
+      { type: "string", dataClass: "error-kind", required: true, maxLength: 64 },
+      "provider response failed",
+    ],
+    [
+      "opaque id",
+      { type: "string", dataClass: "opaque-id", required: true, maxLength: 64 },
+      "customer diagnosis",
+    ],
+    [
+      "platform class",
+      { type: "string", dataClass: "safe-platform-class", required: true, maxLength: 64 },
+      "customer workstation",
+    ],
+    [
+      "version",
+      { type: "string", dataClass: "safe-version", required: true, maxLength: 64 },
+      "release candidate one",
+    ],
+  ] as const)("rejects prose carried as a %s", (_label, contract, value) => {
+    expect(() => emitFixtureValue(contract, value)).toThrow(
+      new ActivityLogEventValidationError("invalid-field-vocabulary"),
+    );
+  });
+
+  it("applies semantic validation to each array member", () => {
+    const contract = {
+      type: "string-array",
+      dataClass: "digest",
+      required: true,
+      maxLength: 64,
+      maxItems: 2,
+    } as const;
+
+    expect(() => emitFixtureValue(contract, ["a".repeat(64), "b".repeat(16)])).not.toThrow();
+    expect(() => emitFixtureValue(contract, ["a".repeat(64), "raw customer body"])).toThrow(
+      new ActivityLogEventValidationError("invalid-field-vocabulary"),
+    );
+  });
+
+  it("rejects unsafe integer counts and versions", () => {
+    const count = { type: "integer", dataClass: "count", required: true } as const;
+    const version = { type: "integer", dataClass: "safe-version", required: true } as const;
+
+    expect(() => emitFixtureValue(count, Number.MAX_SAFE_INTEGER + 1)).toThrow(
+      new ActivityLogEventValidationError("invalid-field-type"),
+    );
+    expect(() => emitFixtureValue(version, -1)).toThrow(
+      new ActivityLogEventValidationError("invalid-field-bound"),
+    );
+  });
+});
+
+describe("canonical Activity Log event validation", () => {
+  it("accepts an exact structural copy and returns the generated canonical registration", () => {
+    const canonical = canonicalFixtureRegistration();
+    const attached = {
+      ...canonical,
+      fields: structuredClone(canonical.fields),
+      failureClasses: [...canonical.failureClasses],
+      proofIds: [...canonical.proofIds],
+    };
+    const event = attachRegistration(
+      {
+        category: canonical.category,
+        op: canonical.op,
+        extra: { completeness: "complete", loss: "none", generation: 1 },
+      },
+      attached,
+    );
+
+    expect(validateRegisteredActivityLogEvent(event)).toBe(canonical);
+  });
+
+  it("rejects attached registration metadata that differs from the generated contract", () => {
+    const canonical = canonicalFixtureRegistration();
+    const event = attachRegistration(
+      {
+        category: canonical.category,
+        op: canonical.op,
+        extra: { completeness: "complete", loss: "none", generation: 1 },
+      },
+      { ...canonical, owner: "forged-owner" },
+    );
+
+    expect(() => validateRegisteredActivityLogEvent(event)).toThrow(
+      new ActivityLogEventValidationError("registration-mismatch"),
+    );
+  });
+
+  it("rejects an attached operation that does not exist in the generated registry", () => {
+    const canonical = canonicalFixtureRegistration();
+    const attached = { ...canonical, op: "registry.fixture.forged" };
+    const event = attachRegistration(
+      {
+        category: attached.category,
+        op: attached.op,
+        extra: { completeness: "complete", loss: "none", generation: 1 },
+      },
+      attached,
+    );
+
+    expect(() => validateRegisteredActivityLogEvent(event)).toThrow(
+      new ActivityLogEventValidationError("unregistered-operation"),
+    );
+  });
+
+  it("validates event fields against the canonical contract", () => {
+    const canonical = canonicalFixtureRegistration();
+    const event = attachRegistration(
+      {
+        category: canonical.category,
+        op: canonical.op,
+        extra: { completeness: "complete", loss: "none" },
+      },
+      canonical,
+    );
+
+    expect(() => validateRegisteredActivityLogEvent(event)).toThrow(
+      new ActivityLogEventValidationError("missing-field"),
+    );
+  });
+
+  it("keeps strict validation fail-closed for a raw short correlation id", () => {
+    const canonical = canonicalFixtureRegistration();
+    const event = attachRegistration(
+      {
+        category: canonical.category,
+        op: canonical.op,
+        correlationId: "run-1",
+        extra: { completeness: "complete", loss: "none", generation: 1 },
+      },
+      canonical,
+    );
+
+    expect(() => validateRegisteredActivityLogEvent(event)).toThrow(
+      new ActivityLogEventValidationError("invalid-field-bound"),
+    );
   });
 });

@@ -157,14 +157,42 @@ export function isActivityLogErrorKind(value: unknown): value is ActivityLogErro
   );
 }
 
-export interface ActivityLogFieldContract {
-  readonly type: ActivityLogFieldType;
-  readonly dataClass: ActivityLogDataClass;
+interface ActivityLogFieldContractBase {
   readonly required: boolean;
   readonly maxLength?: number | undefined;
   readonly maxItems?: number | undefined;
   readonly values?: readonly string[] | undefined;
 }
+
+// Keep the declared primitive and semantic class coupled. The generated-registry program consumes
+// TypeScript diagnostics, so an impossible pair is rejected at generation time rather than becoming
+// a runtime contract whose data class can never be enforced coherently.
+export type ActivityLogFieldContract = ActivityLogFieldContractBase &
+  (
+    | { readonly type: "boolean"; readonly dataClass: "closed-enum" }
+    | {
+        readonly type: "integer";
+        readonly dataClass: "count" | "duration" | "safe-version";
+      }
+    | { readonly type: "number"; readonly dataClass: "count" | "duration" }
+    | {
+        readonly type: "string";
+        readonly dataClass:
+          | "closed-enum"
+          | "completeness-state"
+          | "digest"
+          | "error-kind"
+          | "loss-state"
+          | "opaque-id"
+          | "safe-platform-class"
+          | "safe-version";
+      }
+    | {
+        readonly type: "string-array";
+        readonly dataClass:
+          "closed-enum" | "digest" | "error-kind" | "opaque-id" | "safe-platform-class";
+      }
+  );
 
 // These two fields are part of every persisted v2 operation, not optional per-emitter metadata.
 // Centralizing them keeps loss/completeness evidence structurally present while still allowing an
@@ -249,6 +277,12 @@ export interface ActivityLogOperationRegistration {
   readonly proofIds: readonly string[];
   readonly releaseImpact: ActivityLogReleaseImpact;
 }
+
+const ACTIVITY_LOG_OPERATION_BY_OP: ReadonlyMap<string, ActivityLogOperationRegistration> = new Map(
+  ACTIVITY_LOG_OPERATION_REGISTRY.map(
+    (registration) => [registration.op, registration as ActivityLogOperationRegistration] as const,
+  ),
+);
 
 export interface RegisteredActivityLogEvent<
   Registration extends ActivityLogOperationRegistration = ActivityLogOperationRegistration,
@@ -349,7 +383,49 @@ export type ActivityLogEventFields<Registration extends ActivityLogOperationRegi
     >
   >;
 
+const ACTIVITY_LOG_DIGEST_VALUE = /^[a-f0-9]{8,128}$/u;
+const ACTIVITY_LOG_REDACTION_MARKER = /^\[(?:dropped|redacted):[a-z-]+\]$/u;
+const ACTIVITY_LOG_REDUCER_OWNED_FIELDS: ReadonlySet<string> = new Set([
+  "clientNote",
+  "diagnosticSummary",
+]);
+
+function isBodyFreeMachineValue(value: string): boolean {
+  if (value.length === 0 || value.startsWith("{") || value.startsWith("<")) return false;
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (code < 0x21 || code > 0x7e) return false;
+  }
+  return true;
+}
+
+function semanticStringFailure(
+  name: string,
+  contract: ActivityLogFieldContract,
+  value: string,
+): ActivityLogEventFailureKind | undefined {
+  if (contract.dataClass === "completeness-state")
+    return (ACTIVITY_LOG_COMPLETENESS_STATES as readonly string[]).includes(value)
+      ? undefined
+      : "invalid-field-vocabulary";
+  if (contract.dataClass === "loss-state")
+    return (ACTIVITY_LOG_LOSS_STATES as readonly string[]).includes(value)
+      ? undefined
+      : "invalid-field-vocabulary";
+  if (contract.dataClass === "digest")
+    return ACTIVITY_LOG_DIGEST_VALUE.test(value) ? undefined : "invalid-field-vocabulary";
+  if (contract.dataClass === "error-kind" && name !== "frames")
+    return ERROR_KIND_PATTERN.test(value) ? undefined : "invalid-field-vocabulary";
+  if (ACTIVITY_LOG_REDUCER_OWNED_FIELDS.has(name)) return undefined;
+  if (contract.dataClass === "closed-enum")
+    return contract.values === undefined ? "invalid-field-vocabulary" : undefined;
+  const bodyFree = ACTIVITY_LOG_REDACTION_MARKER.test(value) || isBodyFreeMachineValue(value);
+  if (!bodyFree) return "invalid-field-vocabulary";
+  return undefined;
+}
+
 function stringFieldFailure(
+  name: string,
   contract: ActivityLogFieldContract,
   value: string,
 ): ActivityLogEventFailureKind | undefined {
@@ -359,22 +435,11 @@ function stringFieldFailure(
   if (contract.values !== undefined && !contract.values.includes(value)) {
     return "invalid-field-vocabulary";
   }
-  if (
-    contract.dataClass === "completeness-state" &&
-    !(ACTIVITY_LOG_COMPLETENESS_STATES as readonly string[]).includes(value)
-  ) {
-    return "invalid-field-vocabulary";
-  }
-  if (
-    contract.dataClass === "loss-state" &&
-    !(ACTIVITY_LOG_LOSS_STATES as readonly string[]).includes(value)
-  ) {
-    return "invalid-field-vocabulary";
-  }
-  return undefined;
+  return semanticStringFailure(name, contract, value);
 }
 
 function stringArrayFailure(
+  name: string,
   contract: ActivityLogFieldContract,
   value: readonly unknown[],
 ): ActivityLogEventFailureKind | undefined {
@@ -383,7 +448,7 @@ function stringArrayFailure(
   }
   for (const item of value) {
     if (typeof item !== "string") return "invalid-field-type";
-    const failure = stringFieldFailure(contract, item);
+    const failure = stringFieldFailure(name, contract, item);
     if (failure !== undefined) return failure;
   }
   return undefined;
@@ -394,24 +459,32 @@ function numberFieldFailure(
   value: number,
 ): ActivityLogEventFailureKind | undefined {
   if (!Number.isFinite(value)) return "invalid-field-type";
-  if (contract.type === "integer" && !Number.isInteger(value)) return "invalid-field-type";
-  if ((contract.dataClass === "count" || contract.dataClass === "duration") && value < 0) {
+  if (contract.type === "integer" && !Number.isSafeInteger(value)) return "invalid-field-type";
+  if (
+    (contract.dataClass === "count" ||
+      contract.dataClass === "duration" ||
+      contract.dataClass === "safe-version") &&
+    value < 0
+  ) {
     return "invalid-field-bound";
   }
   return undefined;
 }
 
 function fieldFailure(
+  name: string,
   contract: ActivityLogFieldContract,
   value: unknown,
 ): ActivityLogEventFailureKind | undefined {
   if (contract.type === "boolean")
     return typeof value === "boolean" ? undefined : "invalid-field-type";
   if (contract.type === "string") {
-    return typeof value === "string" ? stringFieldFailure(contract, value) : "invalid-field-type";
+    return typeof value === "string"
+      ? stringFieldFailure(name, contract, value)
+      : "invalid-field-type";
   }
   if (contract.type === "string-array") {
-    return Array.isArray(value) ? stringArrayFailure(contract, value) : "invalid-field-type";
+    return Array.isArray(value) ? stringArrayFailure(name, contract, value) : "invalid-field-type";
   }
   return typeof value === "number" ? numberFieldFailure(contract, value) : "invalid-field-type";
 }
@@ -430,7 +503,7 @@ function validateActivityLogFields(
       if (contract.required) throw new ActivityLogEventValidationError("missing-field");
       continue;
     }
-    const failure = fieldFailure(contract, value);
+    const failure = fieldFailure(name, contract, value);
     if (failure !== undefined) throw new ActivityLogEventValidationError(failure);
   }
 }
@@ -438,7 +511,7 @@ function validateActivityLogFields(
 export function activityLogOperationSchema(
   op: string,
 ): ActivityLogOperationRegistration | undefined {
-  return ACTIVITY_LOG_OPERATION_REGISTRY.find((registration) => registration.op === op);
+  return ACTIVITY_LOG_OPERATION_BY_OP.get(op);
 }
 
 export function validateActivityLogOperationFields(
@@ -466,9 +539,37 @@ const ACTIVITY_LOG_ENVELOPE_KEYS: ReadonlySet<string> = new Set([
   "errorKind",
 ]);
 const ACTIVITY_LOG_CORRELATION_ID = /^[A-Za-z0-9._-]{8,128}$/u;
+export const ACTIVITY_LOG_UNKNOWN_CORRELATION_ID = "unknown-correlation-id";
 
 function validOptionalCorrelationId(value: string | undefined): boolean {
   return value === undefined || ACTIVITY_LOG_CORRELATION_ID.test(value);
+}
+
+function normalizedCorrelationId(value: string | undefined, required: boolean): string | undefined {
+  if (value === undefined) return required ? ACTIVITY_LOG_UNKNOWN_CORRELATION_ID : undefined;
+  return ACTIVITY_LOG_CORRELATION_ID.test(value) ? value : ACTIVITY_LOG_UNKNOWN_CORRELATION_ID;
+}
+
+function normalizeActivityLogEnvelope(
+  registration: ActivityLogOperationRegistration,
+  envelope: ActivityLogEventEnvelope,
+): ActivityLogEventEnvelope {
+  const { correlationId, parentCorrelationId, ...other } = envelope;
+  const normalizedCorrelation = normalizedCorrelationId(
+    correlationId,
+    registration.causal !== "none",
+  );
+  const normalizedParentCorrelation = normalizedCorrelationId(
+    parentCorrelationId,
+    registration.causal === "parent-correlation",
+  );
+  return {
+    ...other,
+    ...(normalizedCorrelation === undefined ? {} : { correlationId: normalizedCorrelation }),
+    ...(normalizedParentCorrelation === undefined
+      ? {}
+      : { parentCorrelationId: normalizedParentCorrelation }),
+  };
 }
 
 function validateActivityLogEnvelope(
@@ -579,6 +680,77 @@ function registeredEventEnvelope(
   };
 }
 
+function hasExactOwnKeys(left: object, right: object): boolean {
+  const leftKeys = Reflect.ownKeys(left);
+  const rightKeys = new Set(Reflect.ownKeys(right));
+  return leftKeys.length === rightKeys.size && leftKeys.every((key) => rightKeys.has(key));
+}
+
+function sameStringArray(left: readonly string[], right: readonly string[]): boolean {
+  return (
+    Array.isArray(left) &&
+    Array.isArray(right) &&
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  );
+}
+
+function sameFieldContract(
+  left: ActivityLogFieldContract,
+  right: ActivityLogFieldContract,
+): boolean {
+  if (!hasExactOwnKeys(left, right)) return false;
+  const valuesMatch =
+    left.values === undefined
+      ? right.values === undefined
+      : right.values !== undefined && sameStringArray(left.values, right.values);
+  return (
+    left.type === right.type &&
+    left.dataClass === right.dataClass &&
+    left.required === right.required &&
+    left.maxLength === right.maxLength &&
+    left.maxItems === right.maxItems &&
+    valuesMatch
+  );
+}
+
+function sameRegistrationFields(
+  left: Readonly<Record<string, ActivityLogFieldContract>>,
+  right: Readonly<Record<string, ActivityLogFieldContract>>,
+): boolean {
+  if (!hasExactOwnKeys(left, right)) return false;
+  return Object.entries(left).every(([name, contract]) => {
+    const canonical = right[name];
+    return canonical !== undefined && sameFieldContract(contract, canonical);
+  });
+}
+
+function registrationMatchesCanonical(
+  registration: ActivityLogOperationRegistration,
+  canonical: ActivityLogOperationRegistration,
+): boolean {
+  try {
+    return (
+      hasExactOwnKeys(registration, canonical) &&
+      registration.contractKind === canonical.contractKind &&
+      registration.schemaVersion === canonical.schemaVersion &&
+      registration.op === canonical.op &&
+      registration.category === canonical.category &&
+      registration.owner === canonical.owner &&
+      registration.emitter === canonical.emitter &&
+      sameRegistrationFields(registration.fields, canonical.fields) &&
+      registration.causal === canonical.causal &&
+      registration.lifecycle === canonical.lifecycle &&
+      registration.analyzerProjection === canonical.analyzerProjection &&
+      sameStringArray(registration.failureClasses, canonical.failureClasses) &&
+      sameStringArray(registration.proofIds, canonical.proofIds) &&
+      registration.releaseImpact === canonical.releaseImpact
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function validateRegisteredActivityLogEvent(
   event: Readonly<Record<PropertyKey, unknown>>,
 ): ActivityLogOperationRegistration {
@@ -586,18 +758,26 @@ export function validateRegisteredActivityLogEvent(
   if (registration === undefined) {
     throw new ActivityLogEventValidationError("unregistered-operation");
   }
-  if (event.op !== registration.op || event.category !== registration.category) {
+  const canonical = typeof event.op === "string" ? activityLogOperationSchema(event.op) : undefined;
+  if (canonical === undefined) {
+    throw new ActivityLogEventValidationError("unregistered-operation");
+  }
+  if (
+    !registrationMatchesCanonical(registration, canonical) ||
+    event.op !== canonical.op ||
+    event.category !== canonical.category
+  ) {
     throw new ActivityLogEventValidationError("registration-mismatch");
   }
   if (Object.keys(event).some((key) => !ACTIVITY_LOG_EVENT_KEYS.has(key))) {
     throw new ActivityLogEventValidationError("unknown-field");
   }
-  validateActivityLogEnvelope(registration, registeredEventEnvelope(event));
+  validateActivityLogEnvelope(canonical, registeredEventEnvelope(event));
   if (typeof event.extra !== "object" || event.extra === null || Array.isArray(event.extra)) {
     throw new ActivityLogEventValidationError("fields-not-object");
   }
-  validateActivityLogFields(registration, event.extra as Readonly<Record<string, unknown>>);
-  return registration;
+  validateActivityLogFields(canonical, event.extra as Readonly<Record<string, unknown>>);
+  return canonical;
 }
 
 /**
@@ -647,7 +827,8 @@ export function activityLogEvent<
   fields: ExactActivityLogFields<Registration, Fields>,
 ): RegisteredActivityLogEvent<Registration> &
   ActivityLogEventEnvelope & { readonly extra: ActivityLogFields<Registration> } {
-  validateActivityLogEnvelope(registration, envelope);
+  const normalizedEnvelope = normalizeActivityLogEnvelope(registration, envelope);
+  validateActivityLogEnvelope(registration, normalizedEnvelope);
   const normalizedFields = {
     completeness: "complete",
     loss: "none",
@@ -655,7 +836,7 @@ export function activityLogEvent<
   } as ActivityLogFields<Registration>;
   validateActivityLogFields(registration, normalizedFields);
   const event = {
-    ...envelope,
+    ...normalizedEnvelope,
     category: registration.category,
     ["op"]: registration.op,
     extra: normalizedFields,

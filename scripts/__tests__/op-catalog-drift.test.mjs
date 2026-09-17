@@ -26,6 +26,19 @@ const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const CATALOG_PATH = join(repoRoot, "docs", "observability", "op-catalog.generated.json");
 let currentCatalog;
 
+const ACTIVITY_FIELD_TYPES_BY_DATA_CLASS = {
+  "closed-enum": new Set(["boolean", "string", "string-array"]),
+  "completeness-state": new Set(["string"]),
+  count: new Set(["integer", "number"]),
+  digest: new Set(["string", "string-array"]),
+  duration: new Set(["integer", "number"]),
+  "error-kind": new Set(["string", "string-array"]),
+  "loss-state": new Set(["string"]),
+  "opaque-id": new Set(["string", "string-array"]),
+  "safe-platform-class": new Set(["string", "string-array"]),
+  "safe-version": new Set(["integer", "string"]),
+};
+
 function generateCurrentOpCatalog() {
   currentCatalog ??= generateOpCatalog(repoRoot);
   return currentCatalog;
@@ -405,6 +418,18 @@ describe("op catalog drift", () => {
 
   it("fails drift when the authoritative typed registry has any violation", () => {
     expect(readCheckedInCatalog().typedRegistry.violations).toEqual([]);
+  });
+
+  it("generates only primitive types whose data-class semantics can validate them", () => {
+    const registry = generateTypedActivityLogRegistry(repoRoot);
+    for (const operation of registry.operations) {
+      for (const [name, contract] of Object.entries(operation.fields)) {
+        expect(
+          ACTIVITY_FIELD_TYPES_BY_DATA_CLASS[contract.dataClass],
+          `${operation.op}.${name} has incompatible ${contract.type}/${contract.dataClass}`,
+        ).toContain(contract.type);
+      }
+    }
   });
 
   it("carries the schema and generator identity the catalog contract promises", () => {
