@@ -12,10 +12,15 @@ import {
 import { join, resolve } from "node:path";
 import type { UpdateRuntimeState, UpdateSession } from "@oscharko-dev/keiko-contracts";
 import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import {
   bindSecurityLogCorrelation,
   emitSecurityLogEvent,
   type SecurityLogSink,
 } from "@oscharko-dev/keiko-security";
+import { correlationIdOrUnknown } from "./correlation.js";
 import { attestPortableManagedRegistration } from "./update-portable-activation-files.js";
 import { createPortableHandoffTreeAttestor } from "./update-portable-handoff-builder.js";
 import {
@@ -53,6 +58,72 @@ const SHA256 = /^[a-f0-9]{64}$/u;
 const ID = /^[a-f0-9]{32}$/u;
 const VERSION = /^[0-9A-Za-z][0-9A-Za-z.+-]{0,63}$/u;
 export const PORTABLE_RECOVERED_LAUNCH_ENV = "KEIKO_PORTABLE_RECOVERED_LAUNCH";
+
+const PORTABLE_RECOVERY_COMPLETED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "portable.normal-startup-recovery.completed",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "update-portable-normal-startup.recordRecoveryCompleted",
+  fields: {
+    outcome: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["native-recovered", "unaccepted-settled"],
+    },
+    target: {
+      type: "string",
+      dataClass: "safe-platform-class",
+      required: true,
+      values: ["linux-x64", "windows-x64", "macos-arm64", "macos-x64"],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "end",
+  analyzerProjection: "timeline",
+  failureClasses: ["portable-normal-startup-recovery"],
+  proofIds: ["portable.normal-startup-recovery.completed.outcome"],
+  releaseImpact: "patch",
+});
+
+const PORTABLE_RECOVERY_REQUIRED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "portable.normal-startup-recovery.required",
+  category: "diagnostic",
+  owner: "keiko-server",
+  emitter: "update-portable-normal-startup.recoveryRequired",
+  fields: {
+    reason: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "runtime-state-invalid",
+        "authority-invalid",
+        "managed-root-mismatch",
+        "ownership-live-or-mismatch",
+        "ownership-claim-failed",
+        "prepared-settlement-failed",
+        "coordinator-invalid",
+        "native-recovery-failed",
+        "post-native-authority-invalid",
+      ],
+    },
+    completeness: { type: "string", dataClass: "completeness-state", required: true },
+    loss: { type: "string", dataClass: "loss-state", required: true },
+  },
+  causal: "correlation",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["portable-normal-startup-recovery"],
+  proofIds: ["portable.normal-startup-recovery.required.reason"],
+  releaseImpact: "patch",
+});
 
 export interface PortableRecoveredLaunchDescriptor extends UpdateSessionRecoveryOwnership {
   readonly activationId: string;
@@ -206,12 +277,19 @@ function recordRecoveryCompleted(
   authority: RecoveryAuthority,
   outcome: RecoveryCompletion,
 ): void {
-  emitSecurityLogEvent(options.securityLogSink, {
-    category: "diagnostic",
-    correlationId: authority.session.correlationId,
-    op: "portable.normal-startup-recovery.completed",
-    extra: { outcome, target: authority.plan.target },
-  });
+  emitSecurityLogEvent(
+    options.securityLogSink,
+    activityLogEvent(
+      PORTABLE_RECOVERY_COMPLETED_OPERATION,
+      { correlationId: correlationIdOrUnknown(authority.session.correlationId) },
+      {
+        outcome,
+        target: authority.plan.target,
+        completeness: "complete",
+        loss: "none",
+      },
+    ),
+  );
 }
 
 function recoveryRequired(
@@ -220,14 +298,18 @@ function recoveryRequired(
   reason: RecoveryFailureReason,
   authority?: RecoveryAuthority,
 ): PortableNormalStartupRecoveryResult {
-  emitSecurityLogEvent(options.securityLogSink, {
-    level: "error",
-    category: "diagnostic",
-    op: "portable.normal-startup-recovery.required",
-    errorKind: "PortableNormalStartupRecoveryRequired",
-    ...(authority === undefined ? {} : { correlationId: authority.session.correlationId }),
-    extra: { reason },
-  });
+  emitSecurityLogEvent(
+    options.securityLogSink,
+    activityLogEvent(
+      PORTABLE_RECOVERY_REQUIRED_OPERATION,
+      {
+        level: "error",
+        correlationId: correlationIdOrUnknown(authority?.session.correlationId),
+        errorKind: "unavailable",
+      },
+      { reason, completeness: "complete", loss: "none" },
+    ),
+  );
   if (authority !== undefined) {
     try {
       localState.recordAuditEvent("portable-relaunch-result", {
