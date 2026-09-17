@@ -102,6 +102,7 @@ import {
   setServerLogger,
 } from "./observability/index.js";
 import { UNKNOWN_CORRELATION_ID } from "./correlation.js";
+import type { RuntimeShutdownCleanup } from "./deps-activity.js";
 import { resolvePrDescriptionApplicationServiceForContext } from "./gitDelivery/prDescriptionRoutes.js";
 import { createUpdateRemediationManager } from "./update-remediation.js";
 import { createUpdateLocalStateManager } from "./update-local-state.js";
@@ -730,7 +731,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
   // shape: the faulted cleanup is recorded with its full body-free description either way, an earlier
   // failure is never masked, and the cleanup's own error surfaces when nothing else was failing.
   it("keeps the earlier failure when the cleanup also faults, and records why it faulted", async (): Promise<void> => {
-    const records: Readonly<Record<string, unknown>>[] = [];
+    const records: RuntimeShutdownCleanup[] = [];
     const earlier = new Error("orchestrator shutdown failed");
     const cleanupError = new Error("cleanup failed", { cause: new TypeError("inner") });
     const teardown = async (): Promise<void> => {
@@ -756,7 +757,7 @@ describe("buildUiHandlerDeps — UiStore wiring (ADR-0013)", () => {
   });
 
   it("surfaces the cleanup's own error when the shutdown itself succeeded", async (): Promise<void> => {
-    const records: Readonly<Record<string, unknown>>[] = [];
+    const records: RuntimeShutdownCleanup[] = [];
     const cleanupError = new Error("cleanup failed");
 
     await expect(

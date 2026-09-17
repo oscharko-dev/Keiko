@@ -2,6 +2,12 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  ACTIVITY_LOG_CATALOG_DIGEST,
+  ACTIVITY_LOG_REGISTRY_VERSION,
+  ACTIVITY_LOG_SCHEMA_DIGEST,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 import { createFileServerLogSink } from "@oscharko-dev/keiko-server";
 import {
   validateToolLifecycleEvent,
@@ -276,7 +282,21 @@ describe("tool lifecycle sink and corrupted artifact reconstruction", () => {
     if (first === undefined || second === undefined)
       throw new Error("Expected actual lifecycle events");
     const record = (event: typeof first, instanceId: string, seq: number): string =>
-      formatServerLogLine(event, GENERATED, { schemaVersion: 2, pid: 123, instanceId, seq });
+      formatServerLogLine(event, GENERATED, {
+        schemaVersion: 2,
+        registryVersion: ACTIVITY_LOG_REGISTRY_VERSION,
+        schemaDigest: ACTIVITY_LOG_SCHEMA_DIGEST,
+        catalogDigest: ACTIVITY_LOG_CATALOG_DIGEST,
+        buildClass: "node-esm",
+        releaseClass: KEIKO_PRODUCT_VERSION.includes("-") ? "prerelease" : "stable",
+        platformClass: "linux-x64",
+        productVersion: KEIKO_PRODUCT_VERSION,
+        compatibilityState: "supported",
+        writerCapability: "active",
+        pid: 123,
+        instanceId,
+        seq,
+      });
     const lifetimes =
       record(second, "aaaaaaaa", 2) + record(first, "bbbbbbbb", 1) + record(first, "aaaaaaaa", 1);
     const grouped = findTimeline(analyzeLogText(lifetimes, ANALYZE_OPTIONS), "correlation-1");
