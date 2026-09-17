@@ -18,6 +18,7 @@ import type {
   NormalizedResponse,
 } from "@oscharko-dev/keiko-contracts";
 import type { KnowledgePodModelUsePolicy } from "@oscharko-dev/keiko-contracts";
+import { activityLogEventRegistration } from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { DEFAULT_LARGE_DOCUMENT_RESOURCE_POLICY } from "@oscharko-dev/keiko-contracts/runtime/local-knowledge-large-document";
 import {
   KNOWLEDGE_POD_MODEL_USE_POLICY_SCHEMA_VERSION,
@@ -2840,6 +2841,18 @@ describe("runIndexingJob — activity log", () => {
         concurrency: DEFAULT_INDEXING_CONCURRENCY,
         force: false,
       });
+      const jobStarted = requireLine(log, "indexing.job.started");
+      const preflightStarted = requireLine(log, "embedding.preflight.started");
+      expect(
+        activityLogEventRegistration(
+          jobStarted as unknown as Readonly<Record<PropertyKey, unknown>>,
+        )?.fields.force,
+      ).toEqual({ type: "boolean", dataClass: "closed-enum", required: true });
+      expect(
+        activityLogEventRegistration(
+          preflightStarted as unknown as Readonly<Record<PropertyKey, unknown>>,
+        )?.fields.fingerprinted,
+      ).toEqual({ type: "boolean", dataClass: "closed-enum", required: true });
       expect(extraOf(requireLine(log, "indexing.document.chunked")).chunkCount).toBeGreaterThan(0);
       expect(extraOf(requireLine(log, "indexing.source.completed"))).toMatchObject({
         discoveredCount: 1,
