@@ -1,5 +1,5 @@
 import { constants, accessSync, realpathSync, statSync } from "node:fs";
-import { delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
@@ -72,9 +72,29 @@ function trustedCandidate(candidate, workspaceRoot, platform, groupIds, trustedR
   }
 }
 
-function runtimeTrustRoots() {
+function homebrewPrefix(runtimeExecutable) {
+  const binaryDirectory = dirname(runtimeExecutable);
+  const versionDirectory = dirname(binaryDirectory);
+  const formulaDirectory = dirname(versionDirectory);
+  const cellarDirectory = dirname(formulaDirectory);
+  if (
+    basename(runtimeExecutable) !== "node" ||
+    basename(binaryDirectory) !== "bin" ||
+    !/^node(?:@[0-9]+)?$/u.test(basename(formulaDirectory)) ||
+    basename(cellarDirectory) !== "Cellar"
+  ) {
+    return undefined;
+  }
+  return dirname(cellarDirectory);
+}
+
+function runtimeTrustRoots(runtimeExecutable = process.execPath) {
   try {
-    return [dirname(dirname(realpathSync(process.execPath)))];
+    const runtime = realpathSync(runtimeExecutable);
+    const roots = [dirname(dirname(runtime))];
+    const packageManagerPrefix = homebrewPrefix(runtime);
+    if (packageManagerPrefix !== undefined) roots.push(packageManagerPrefix);
+    return roots;
   } catch {
     return [];
   }
@@ -86,7 +106,8 @@ export function resolveHostExecutable(
     env = process.env,
     groupIds = activeGroupIds(),
     platform = process.platform,
-    trustedRoots = runtimeTrustRoots(),
+    runtimeExecutable = process.execPath,
+    trustedRoots = runtimeTrustRoots(runtimeExecutable),
     workspaceRoot = repoRoot,
   } = {},
 ) {

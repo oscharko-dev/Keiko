@@ -8,7 +8,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { delimiter, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   resolveHostExecutable,
@@ -140,6 +140,33 @@ describe("resolveHostExecutable", () => {
           workspaceRoot: workspace,
         }),
       ).toBe(realpathSync(join(npmBin, "npm-cli.js")));
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "anchors Homebrew formulae to the package-manager prefix of the running Node runtime",
+    () => {
+      const workspace = temporary("keiko-host-executable-workspace-");
+      const prefix = temporary("keiko-host-executable-homebrew-");
+      const bin = join(prefix, "bin");
+      const node = join(prefix, "Cellar", "node", "26.8.1", "bin", "node");
+      const gh = join(prefix, "Cellar", "gh", "2.100.0", "bin", "gh");
+      mkdirSync(bin);
+      mkdirSync(dirname(node), { recursive: true });
+      mkdirSync(dirname(gh), { recursive: true });
+      writeFileSync(node, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      writeFileSync(gh, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      symlinkSync(gh, join(bin, "gh"));
+      chmodSync(bin, 0o775);
+      chmodSync(dirname(gh), 0o775);
+
+      expect(
+        resolveHostExecutable("gh", {
+          env: { PATH: bin },
+          runtimeExecutable: node,
+          workspaceRoot: workspace,
+        }),
+      ).toBe(realpathSync(gh));
     },
   );
 
