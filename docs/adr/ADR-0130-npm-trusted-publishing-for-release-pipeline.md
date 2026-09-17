@@ -266,5 +266,5 @@ it below.
 | 1.0     | 2026-07-11 | Accepted: npm Trusted Publishing adopted for the release `publish` job. |
 | 1.1     | 2026-08-10 | Publish npm pin bound to the governed `EXPECTED_PACKAGE_MANAGER` (npm@11.16.0) with a lockstep test; stale 10.9.x/11.18.0 references removed. |
 | 1.2     | 2026-08-28 | Provisioning recorded as configured and verified (v0.3.8 attestation); `NPM_TOKEN` Actions secret retired; repository-side binding enforced by a new gate (D5); provenance-by-publish-path consequence recorded. |
-| 1.4     | 2026-09-17 | Registry probes classify bounded transient transport/server failures, pre-publish uncertainty fails closed, and recovery must rerun the governed verifier before deployment success. |
 | 1.3     | 2026-09-16 | Tokenless publish verification moved to the version-specific registry endpoint, the Actions retry budget expanded to 30 minutes, and the dead workflow-token recovery hint was removed. |
+| 1.4     | 2026-09-17 | Registry probes classify bounded transient transport/server failures, pre-publish uncertainty fails closed, and recovery must rerun the governed verifier before deployment success. |

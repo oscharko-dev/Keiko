@@ -32,8 +32,25 @@ vi.mock("@oscharko-dev/keiko-cli", () => ({
   runCli,
 }));
 
+const INSTALL_ENV_NAMES = [
+  "KEIKO_CLI_BIN_PATH",
+  "KEIKO_UI_STATIC_ROOT",
+  "KEIKO_LOCAL_STATE_AUDITOR",
+] as const;
+
+const UNTRUSTED_INSTALL_VALUES = [
+  ["empty", ""],
+  ["malformed", "not-an-absolute-install-path"],
+  ["hostile", "../../untrusted;$(false)"],
+  ["boundary", "x".repeat(8_192)],
+] as const;
+
 describe("root CLI entrypoint", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.clearAllMocks();
+    vi.restoreAllMocks();
+    vi.resetModules();
+  });
 
   it("initializes packaged paths, process guards, IO, and natural exit handling", async () => {
     const stdout = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
@@ -71,6 +88,33 @@ describe("root CLI entrypoint", () => {
       restoreEnv("KEIKO_LOCAL_STATE_AUDITOR", previousAuditor);
     }
   });
+
+  it.each(UNTRUSTED_INSTALL_VALUES)(
+    "replaces %s inherited installation values",
+    async (_classification, inheritedValue) => {
+      const previousValues = INSTALL_ENV_NAMES.map((name) => process.env[name]);
+      const previousExitCode = process.exitCode;
+      vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+      vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+      for (const name of INSTALL_ENV_NAMES) process.env[name] = inheritedValue;
+
+      try {
+        await import("../src/cli/index.js");
+        await Promise.resolve();
+
+        expect(process.env.KEIKO_CLI_BIN_PATH).toMatch(/\/src\/cli\/index\.js$/u);
+        expect(process.env.KEIKO_UI_STATIC_ROOT).toMatch(/\/src\/ui\/static$/u);
+        expect(process.env.KEIKO_LOCAL_STATE_AUDITOR).toMatch(
+          /\/scripts\/lib\/local-state-audit\.mjs$/u,
+        );
+      } finally {
+        process.exitCode = previousExitCode;
+        INSTALL_ENV_NAMES.forEach((name, index) => {
+          restoreEnv(name, previousValues[index]);
+        });
+      }
+    },
+  );
 });
 
 function restoreEnv(name: string, value: string | undefined): void {
