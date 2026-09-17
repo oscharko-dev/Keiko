@@ -1099,7 +1099,7 @@
     {
       "op": "<dynamic>",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:1153",
+      "site": "packages/keiko-server/src/observability/server-log.ts:1299",
       "package": "keiko-server"
     },
     {
@@ -3427,15 +3427,33 @@
       "package": "keiko-server"
     },
     {
-      "op": "server-log.write-failed",
+      "op": "server-log.rotation",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:336",
+      "site": "packages/keiko-server/src/observability/server-log.ts:660",
+      "package": "keiko-server"
+    },
+    {
+      "op": "server-log.safe-open",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/observability/server-log.ts:640",
       "package": "keiko-server"
     },
     {
       "op": "server-log.write-failed",
       "category": "diagnostic",
-      "site": "packages/keiko-server/src/observability/server-log.ts:362",
+      "site": "packages/keiko-server/src/observability/server-log.ts:355",
+      "package": "keiko-server"
+    },
+    {
+      "op": "server-log.write-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/observability/server-log.ts:381",
+      "package": "keiko-server"
+    },
+    {
+      "op": "server-log.write-failed",
+      "category": "diagnostic",
+      "site": "packages/keiko-server/src/observability/server-log.ts:729",
       "package": "keiko-server"
     },
     {
@@ -4366,6 +4384,8 @@
     "security.windows-portable-legacy-launcher.system-root-refused",
     "security.windows-shortcut.system-binary-missing",
     "security.windows-shortcut.system-root-refused",
+    "server-log.rotation",
+    "server-log.safe-open",
     "server-log.write-failed",
     "server.composition",
     "server.request",
