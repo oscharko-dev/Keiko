@@ -3,6 +3,7 @@ import {
   mkdirSync,
   mkdtempSync,
   realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   unlinkSync,
@@ -166,6 +167,7 @@ describe("resolveHostExecutable", () => {
       symlinkSync("../Cellar/node/26.8.1/bin/npm", join(bin, "npm"));
       symlinkSync("../Cellar/gh/2.100.0/bin/gh", join(bin, "gh"));
       chmodSync(bin, 0o775);
+      chmodSync(join(homebrew, "Cellar"), 0o775);
 
       expect(runtimeTrustRoots(nodeExecutable)).toEqual([
         realpathSync(join(homebrew, "Cellar", "node", "26.8.1")),
@@ -184,6 +186,20 @@ describe("resolveHostExecutable", () => {
           workspaceRoot: workspace,
         }),
       ).toBe(realpathSync(join(npmBin, "npm-cli.js")));
+
+      const ghFormula = join(homebrew, "Cellar", "gh");
+      const displacedFormula = join(homebrew, "Cellar", "gh-displaced");
+      renameSync(ghFormula, displacedFormula);
+      symlinkSync(displacedFormula, ghFormula, "dir");
+      expect(() =>
+        resolveHostExecutable("gh", {
+          env: { PATH: bin },
+          runtimeExecutable: nodeExecutable,
+          workspaceRoot: workspace,
+        }),
+      ).toThrow("trusted host executable is unavailable");
+      unlinkSync(ghFormula);
+      renameSync(displacedFormula, ghFormula);
 
       const outside = temporary("keiko-host-executable-homebrew-outside-");
       writeFileSync(join(outside, "gh"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });

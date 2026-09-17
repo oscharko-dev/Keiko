@@ -41,6 +41,10 @@ vi.mock("@oscharko-dev/keiko-security/windows-local-volume", async (importOrigin
 });
 
 import { runPortableCli } from "./portable.js";
+import {
+  INSTALL_LAYOUT_CORRELATION_ID_ENV,
+  INSTALL_LAYOUT_OVERRIDES_ENV,
+} from "./install-layout.js";
 import { windowsLauncher } from "./launcher-platforms.js";
 import { portableManagedSetupLockPath, validatePortableRoot } from "./portable-install.js";
 import { parseWindowsStartMenuRegistration } from "./portable-maintenance.js";
@@ -385,6 +389,33 @@ const INVALID_SETUP_MANIFEST_CASES: readonly InvalidSetupManifestCase[] = [
 ];
 
 describe("runPortableCli", () => {
+  it("records install-layout normalization for non-status commands", async () => {
+    const home = tempRoot();
+    const stateDir = join(home, ".keiko");
+    const events: SecurityLogEvent[] = [];
+    const correlationId = "00000000-0000-4000-8000-000000000001";
+
+    await runPortableCli(
+      ["resolve-root", "--target", "windows-x64", "--state-dir", stateDir],
+      capture().io,
+      {
+        ...windowsPortableEnv(home),
+        [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin",
+        [INSTALL_LAYOUT_CORRELATION_ID_ENV]: correlationId,
+      },
+      {
+        homedir: () => home,
+        securityLogSinkFactory: () => ({
+          write: (event): void => void events.push(event),
+        }),
+      },
+    );
+
+    expect(events).toEqual([
+      expect.objectContaining({ op: "cli.install-layout.normalized", correlationId }),
+    ]);
+  });
+
   it("consumes a normal Windows inspection allowance while the managed lock is active", async () => {
     const home = tempRoot();
     const managedRoot = join(home, "managed", "Keiko");

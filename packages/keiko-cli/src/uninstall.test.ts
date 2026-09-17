@@ -16,12 +16,17 @@ import { createHash } from "node:crypto";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { SecurityLogEvent } from "@oscharko-dev/keiko-security";
 import { runUninstallCli, type UninstallCliDeps } from "./uninstall.js";
 import { runLauncherCli } from "./launcher.js";
 import { runPortableCli } from "./portable.js";
 import { KEIKO_START_SCRIPT, KEIKO_STOP_SCRIPT } from "./init.js";
 import { ATLASSIAN_CREDENTIAL_ARTIFACTS, defaultUiDataDir } from "./state-paths.js";
 import { makeCapturedIo } from "./test-support/cli-io.js";
+import {
+  INSTALL_LAYOUT_CORRELATION_ID_ENV,
+  INSTALL_LAYOUT_OVERRIDES_ENV,
+} from "./install-layout.js";
 
 // #2906 round 3 (comment 3865329066): reuses the shared fixture instead of a byte-identical
 // local copy (aliased, not just re-exported, so every existing makeIo() call site keeps
@@ -301,6 +306,36 @@ describe("runUninstallCli — usage", () => {
 });
 
 describe("runUninstallCli — dry run", () => {
+  it("records install-layout normalization after state-root validation", async () => {
+    const root = makeRoot();
+    seedState(root);
+    seedPackageJson(root, {});
+    const c = makeIo();
+    const events: SecurityLogEvent[] = [];
+    const correlationId = "00000000-0000-4000-8000-000000000001";
+
+    await expect(
+      runUninstallCli(
+        ["--dry-run"],
+        c.io,
+        {
+          [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin",
+          [INSTALL_LAYOUT_CORRELATION_ID_ENV]: correlationId,
+        },
+        {
+          cwd: root,
+          homedir: () => root,
+          securityLogSinkFactory: () => ({
+            write: (event): void => void events.push(event),
+          }),
+        },
+      ),
+    ).resolves.toBe(0);
+    expect(events).toEqual([
+      expect.objectContaining({ op: "cli.install-layout.normalized", correlationId }),
+    ]);
+  });
+
   it("reports would-remove without changing anything", async () => {
     const root = makeRoot();
     const stateDir = seedState(root);

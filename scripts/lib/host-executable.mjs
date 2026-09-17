@@ -70,14 +70,28 @@ function protectedFormulaPaths(formulaRoot, real) {
   return paths;
 }
 
+function isOwnedBy(path, ownerUid) {
+  return statSync(path).uid === ownerUid;
+}
+
 function isHomebrewFormulaTarget(candidate, real, runtimeExecutable, platform, groupIds) {
   if (platform === "win32" || !lstatSync(candidate).isSymbolicLink()) return false;
-  const cellar = ancestorNamed(realpathSync(runtimeExecutable), "Cellar");
+  const runtimeReal = realpathSync(runtimeExecutable);
+  const cellar = ancestorNamed(runtimeReal, "Cellar");
   if (cellar === undefined || basename(real) !== basename(candidate)) return false;
-  const formulaRoot = realpathSync(join(cellar, basename(candidate)));
+  const formulaEntry = join(cellar, basename(candidate));
+  if (lstatSync(formulaEntry).isSymbolicLink()) return false;
+  const formulaRoot = realpathSync(formulaEntry);
+  const runtimeOwnerUid = statSync(runtimeReal).uid;
+  // Homebrew's shared Cellar is group-writable on standard Apple Silicon installs. Binding every
+  // accepted formula node to the active Node runtime's owner closes the sibling-admin replacement
+  // path without treating the writable prefix itself as trusted: another group member cannot
+  // recreate the displaced formula tree with the runtime owner's uid.
   return (
     isContained(formulaRoot, real) &&
-    protectedFormulaPaths(formulaRoot, real).every((path) => !isWritableByCaller(path, groupIds))
+    protectedFormulaPaths(formulaRoot, real).every(
+      (path) => isOwnedBy(path, runtimeOwnerUid) && !isWritableByCaller(path, groupIds),
+    )
   );
 }
 

@@ -33,6 +33,8 @@ interface InstallLayoutEvidenceSink {
   }) => void;
 }
 
+type InstallLayoutEvidenceSinkFactory = (stateDir: string) => InstallLayoutEvidenceSink;
+
 interface InstallLayoutEntry {
   readonly envName: string;
   readonly kind: InstallLayoutOverrideKind;
@@ -86,6 +88,15 @@ export function writeInstallLayoutOverrideEvidence(
   Reflect.deleteProperty(env, INSTALL_LAYOUT_OVERRIDES_ENV);
   Reflect.deleteProperty(env, INSTALL_LAYOUT_CORRELATION_ID_ENV);
   return true;
+}
+
+export function writeInstallLayoutOverrideEvidenceWithFactory(
+  factory: InstallLayoutEvidenceSinkFactory | undefined,
+  stateDir: string,
+  env: EnvSource,
+): boolean {
+  if (factory === undefined || installLayoutOverrideEvidence(env) === undefined) return false;
+  return writeInstallLayoutOverrideEvidence(factory(stateDir), env);
 }
 
 export function applyAuthoritativeInstallLayout(

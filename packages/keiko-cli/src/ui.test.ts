@@ -254,10 +254,51 @@ describe("runUiCli", () => {
 
   it("returns 1 with a clear error when the static export is missing", async () => {
     const { io, err } = captureIo();
-    const deps: UiCliDeps = { staticRoot: join(staticRoot, "does-not-exist") };
-    const code = await runUiCli([], io, {}, deps);
+    const sink = createRecordingSink();
+    const correlationId = "00000000-0000-4000-8000-000000000001";
+    const deps: UiCliDeps = {
+      staticRoot: join(staticRoot, "does-not-exist"),
+      activityLog: sink,
+      createServer: () => fakeServer({}),
+    };
+    const code = await runUiCli(
+      [],
+      io,
+      {
+        [INSTALL_LAYOUT_OVERRIDES_ENV]: "ui-static-root",
+        [INSTALL_LAYOUT_CORRELATION_ID_ENV]: correlationId,
+      },
+      deps,
+    );
     expect(code).toBe(1);
     expect(err.join("")).toContain("build:ui");
+    expect(sink.events).toEqual([
+      expect.objectContaining({ op: "cli.install-layout.normalized", correlationId }),
+    ]);
+  });
+
+  it("records install-layout normalization before static HTML loading fails", async () => {
+    const { io } = captureIo();
+    const sink = createRecordingSink();
+    const invalidStaticRoot = join(staticRoot, "not-a-directory");
+    await writeFile(invalidStaticRoot, "not a directory", "utf8");
+
+    await expect(
+      runUiCli(
+        [],
+        io,
+        {
+          [INSTALL_LAYOUT_OVERRIDES_ENV]: "ui-static-root",
+          [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+        },
+        {
+          staticRoot: invalidStaticRoot,
+          activityLog: sink,
+          createServer: () => fakeServer({}),
+        },
+      ),
+    ).rejects.toThrow();
+    expect(sink.events.map(({ op }) => op)).toEqual(["cli.install-layout.normalized"]);
   });
 
   it("prefers the built workspace checkout over a stale inherited global static root", async () => {

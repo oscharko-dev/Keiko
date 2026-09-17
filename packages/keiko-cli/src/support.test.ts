@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import {
+  appendFileSync,
   chmodSync,
   existsSync,
   mkdirSync,
@@ -25,6 +26,10 @@ import {
 } from "@oscharko-dev/keiko-server";
 import type { AuditResult } from "./audit.js";
 import type { CliIo } from "./runner.js";
+import {
+  INSTALL_LAYOUT_CORRELATION_ID_ENV,
+  INSTALL_LAYOUT_OVERRIDES_ENV,
+} from "./install-layout.js";
 import { parseSupportArgs, runSupportCli, type SupportCliDeps } from "./support.js";
 import { CURRENT_LOG_FILE_NAME } from "./support-export.js";
 
@@ -310,6 +315,45 @@ describe("runSupportCli export", () => {
     // "default vs. override" without the absolute path.
     expect(manifest.auditSummary).toEqual({ ok: HEALTHY_AUDIT.ok, classes: HEALTHY_AUDIT.classes });
     expect(written).not.toContain(HEALTHY_AUDIT.stateDir);
+  });
+
+  it("captures install-layout normalization before snapshotting support logs", async () => {
+    const c = makeIo();
+    const correlationId = "00000000-0000-4000-8000-000000000001";
+    const currentLog = join(stateDir, "logs", "server.log");
+    writeFileSync(currentLog, "");
+
+    const code = await runSupportCli(
+      ["export", "--state-dir", stateDir],
+      c.io,
+      {
+        ...AUDIT_ENV,
+        [INSTALL_LAYOUT_OVERRIDES_ENV]: "local-state-auditor",
+        [INSTALL_LAYOUT_CORRELATION_ID_ENV]: correlationId,
+      },
+      {
+        cwd: outDir,
+        now: () => new Date("2026-08-21T12:00:00.000Z"),
+        auditDeps: healthyAuditDeps(),
+        evidenceStore: seededEvidenceStore([]),
+        activityLogSinkFactory: (selectedStateDir) => {
+          expect(selectedStateDir).toBe(stateDir);
+          return {
+            write: (event): void => {
+              appendFileSync(currentLog, `${JSON.stringify(event)}\n`, "utf8");
+            },
+          };
+        },
+      },
+    );
+
+    expect(code).toBe(0);
+    const bundle = readFileSync(
+      join(outDir, "keiko-support-2026-08-21T12-00-00.000Z.jsonl"),
+      "utf8",
+    );
+    expect(bundle).toContain('"op":"cli.install-layout.normalized"');
+    expect(bundle).toContain(`"correlationId":"${correlationId}"`);
   });
 
   // Regression pin: `redactLogFields`'s field-NAME denylist matches only an exact normalized

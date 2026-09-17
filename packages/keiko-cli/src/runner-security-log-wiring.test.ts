@@ -40,11 +40,13 @@ type PersistedServerLogEvent = Parameters<
 
 const commandMocks = vi.hoisted(() => ({
   loadServer: vi.fn<() => Promise<ServerModule>>(),
-  audit: vi.fn<ActivityAwareCommand>(),
+  audit: vi.fn<SecurityAwareCommand>(),
   launcher: vi.fn<SecurityAwareCommand>(),
   lifecycle: vi.fn<SecurityAwareLifecycleCommand>(),
   portable: vi.fn<SecurityAwareCommand>(),
   repair: vi.fn<SecurityAwareCommand>(),
+  support: vi.fn<ActivityAwareCommand>(),
+  ui: vi.fn<ActivityAwareCommand>(),
   uninstall: vi.fn<SecurityAwareCommand>(),
 }));
 
@@ -57,6 +59,8 @@ vi.mock("./audit.js", () => ({ runAuditCli: commandMocks.audit }));
 vi.mock("./launcher.js", () => ({ runLauncherCli: commandMocks.launcher }));
 vi.mock("./lifecycle.js", () => ({ runLifecycleCli: commandMocks.lifecycle }));
 vi.mock("./repair.js", () => ({ runRepairCli: commandMocks.repair }));
+vi.mock("./support.js", () => ({ runSupportCli: commandMocks.support }));
+vi.mock("./ui.js", () => ({ runUiCli: commandMocks.ui }));
 vi.mock("./uninstall.js", () => ({ runUninstallCli: commandMocks.uninstall }));
 
 import { runCli } from "./runner.js";
@@ -105,6 +109,8 @@ beforeEach(() => {
   commandMocks.lifecycle.mockReset().mockResolvedValue(45);
   commandMocks.portable.mockReset().mockResolvedValue(43);
   commandMocks.repair.mockReset().mockReturnValue(41);
+  commandMocks.support.mockReset().mockResolvedValue(47);
+  commandMocks.ui.mockReset().mockResolvedValue(48);
   commandMocks.uninstall.mockReset().mockResolvedValue(42);
 });
 
@@ -114,7 +120,7 @@ afterEach(() => {
 });
 
 describe("Windows CLI security-log production wiring", () => {
-  it("persists normalized layout evidence for audit and repair on non-Windows hosts", async () => {
+  it("persists layout evidence for every mutating consumer while audit stays read-only", async () => {
     Object.defineProperty(process, "platform", { ...platform, value: "darwin" });
     const written: PersistedServerLogEvent[] = [];
     const createFileServerLogSink = vi.fn<ServerModule["createFileServerLogSink"]>(() => ({
@@ -123,14 +129,22 @@ describe("Windows CLI security-log production wiring", () => {
       },
     }));
     commandMocks.loadServer.mockResolvedValue({ createFileServerLogSink });
-    commandMocks.audit.mockImplementation((_args, _io, env, deps) => {
-      writeInstallLayoutOverrideEvidence(deps?.activityLogSinkFactory?.("/state"), env);
-      return 46;
-    });
     commandMocks.repair.mockImplementation((_args, _io, env, deps) => {
       writeInstallLayoutOverrideEvidence(deps?.securityLogSinkFactory?.("/state"), env);
       return 41;
     });
+    for (const command of [commandMocks.launcher, commandMocks.portable, commandMocks.uninstall]) {
+      command.mockImplementation((_args, _io, env, deps) => {
+        writeInstallLayoutOverrideEvidence(deps?.securityLogSinkFactory?.("/state"), env);
+        return 41;
+      });
+    }
+    for (const command of [commandMocks.support, commandMocks.ui]) {
+      command.mockImplementation((_args, _io, env, deps) => {
+        writeInstallLayoutOverrideEvidence(deps?.activityLogSinkFactory?.("/state"), env);
+        return 41;
+      });
+    }
     const evidenceEnv = (): EnvSource => ({
       [INSTALL_LAYOUT_OVERRIDES_ENV]: "cli-bin",
       [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
@@ -140,10 +154,26 @@ describe("Windows CLI security-log production wiring", () => {
       Promise.resolve(runCli(["audit", "local-state"], io(), evidenceEnv())),
     ).resolves.toBe(46);
     await expect(Promise.resolve(runCli(["repair"], io(), evidenceEnv()))).resolves.toBe(41);
+    await expect(
+      Promise.resolve(runCli(["launcher", "install"], io(), evidenceEnv())),
+    ).resolves.toBe(41);
+    await expect(Promise.resolve(runCli(["uninstall"], io(), evidenceEnv()))).resolves.toBe(41);
+    await expect(Promise.resolve(runCli(["portable", "setup"], io(), evidenceEnv()))).resolves.toBe(
+      41,
+    );
+    await expect(Promise.resolve(runCli(["support", "export"], io(), evidenceEnv()))).resolves.toBe(
+      41,
+    );
+    await expect(Promise.resolve(runCli(["ui"], io(), evidenceEnv()))).resolves.toBe(41);
 
-    expect(commandMocks.loadServer).toHaveBeenCalledTimes(2);
-    expect(createFileServerLogSink).toHaveBeenCalledTimes(2);
-    expect(written).toHaveLength(2);
+    expect(commandMocks.audit).toHaveBeenCalledWith(
+      ["local-state"],
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(commandMocks.loadServer).toHaveBeenCalledTimes(6);
+    expect(createFileServerLogSink).toHaveBeenCalledTimes(6);
+    expect(written).toHaveLength(6);
     expect(written.every(({ op }) => op === "cli.install-layout.normalized")).toBe(true);
   });
 

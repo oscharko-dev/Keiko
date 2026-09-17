@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -153,39 +153,28 @@ describe("runAuditCli", () => {
     expect(audited?.replaceAll("\\", "/")).toBe("/home/operator/.keiko");
   });
 
-  it("records install-layout normalization in the selected state directory before auditing", async () => {
+  it("does not mutate the audited tree when install-layout normalization evidence is present", async () => {
     const c = makeIo();
-    const events: unknown[] = [];
-    let evidencePresentBeforeAudit = false;
-    const stateDir = "/srv/keiko-state";
+    const root = mkdtempSync(join(tmpdir(), "keiko-audit-read-only-"));
+    const stateDir = join(root, "forensic-copy");
+    mkdirSync(stateDir);
     const runtimeEnv: NodeJS.ProcessEnv = {
       ...env,
       [INSTALL_LAYOUT_OVERRIDES_ENV]: "local-state-auditor",
       [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
     };
 
-    await runAuditCli(["local-state", "--state-dir", stateDir], c.io, runtimeEnv, {
-      activityLogSinkFactory: (selectedStateDir) => {
-        expect(selectedStateDir).toBe(stateDir);
-        return { write: (event): void => void events.push(event) };
-      },
-      loadAuditor: () =>
-        Promise.resolve({
-          auditLocalState: () => {
-            evidencePresentBeforeAudit = events.length === 1;
-            return HEALTHY;
-          },
+    try {
+      expect(
+        await runAuditCli(["local-state", "--state-dir", stateDir], c.io, runtimeEnv, {
+          loadAuditor: () => Promise.resolve({ auditLocalState: () => ({ ...HEALTHY, stateDir }) }),
         }),
-    });
-
-    expect(evidencePresentBeforeAudit).toBe(true);
-    expect(events).toEqual([
-      expect.objectContaining({
-        op: "cli.install-layout.normalized",
-        correlationId: "00000000-0000-4000-8000-000000000001",
-        extra: { overriddenCount: 1, overriddenKinds: ["local-state-auditor"] },
-      }),
-    ]);
+      ).toBe(0);
+      expect(existsSync(join(stateDir, "logs"))).toBe(false);
+      expect(runtimeEnv[INSTALL_LAYOUT_OVERRIDES_ENV]).toBe("local-state-auditor");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   // Review findings on #3159: the guard branches below were all reachable and none was covered.

@@ -42,7 +42,7 @@ import type { CliIo } from "./runner.js";
 import { collectDoctorReport } from "./doctor.js";
 import {
   resolvePreferredInstallLayout,
-  writeInstallLayoutOverrideEvidence,
+  writeInstallLayoutOverrideEvidenceWithFactory,
 } from "./install-layout.js";
 import { resolveConfigPathFromArgs } from "./gateway-config.js";
 import {
@@ -965,8 +965,6 @@ function collectRepairResults(
   resolved: ResolvedRepairDeps,
 ): readonly CheckResult[] {
   const stateDir = resolveStateDir(resolved.cwd, env, parsed.stateDirArg);
-  writeInstallLayoutOverrideEvidence(resolved.securityLogSinkFactory?.(stateDir), env);
-  const securityLogSink = createCliSecurityLogSink(stateDir, resolved.securityLogSinkFactory);
   const defaultConfigCandidates = defaultLocalGatewayConfigCandidates(
     env,
     resolved.homedir(),
@@ -974,6 +972,13 @@ function collectRepairResults(
   );
   const stateRoot = inspectStateRoot(stateDir);
   const stateRootAction = stateRootRefusal(stateRoot);
+  if (stateRootAction === undefined) {
+    writeInstallLayoutOverrideEvidenceWithFactory(resolved.securityLogSinkFactory, stateDir, env);
+  }
+  const securityLogSink =
+    stateRootAction === undefined
+      ? createCliSecurityLogSink(stateDir, resolved.securityLogSinkFactory)
+      : undefined;
   const stateResults =
     stateRootAction === undefined
       ? [

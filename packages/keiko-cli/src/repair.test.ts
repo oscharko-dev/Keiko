@@ -1342,11 +1342,26 @@ describe("runRepairCli — runtime state artifacts", () => {
     chmodSync(target, 0o755);
     chmodSync(outsideDb, 0o644);
     symlinkSync(target, stateDir, "dir");
+    let sinkFactoryCalls = 0;
+    const env: NodeJS.ProcessEnv = {
+      [INSTALL_LAYOUT_OVERRIDES_ENV]: "ui-static-root",
+      [INSTALL_LAYOUT_CORRELATION_ID_ENV]: "00000000-0000-4000-8000-000000000001",
+    };
 
     const c = makeIo();
-    expect(runRepairCli([], c.io, {}, healthyDeps(root))).toBe(1);
+    expect(
+      runRepairCli([], c.io, env, {
+        ...healthyDeps(root),
+        securityLogSinkFactory: () => {
+          sinkFactoryCalls += 1;
+          return { write: (): void => undefined };
+        },
+      }),
+    ).toBe(1);
     expect(c.out()).toContain("[action] State directory");
     expect(c.out()).toContain("refusing to inspect symlinked state directory");
+    expect(sinkFactoryCalls).toBe(0);
+    expect(existsSync(join(target, "logs"))).toBe(false);
     expect(modeOf(target)).toBe(0o755);
     expect(modeOf(outsideDb)).toBe(0o644);
   });

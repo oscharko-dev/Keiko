@@ -103,7 +103,6 @@ interface PendingSecurityLogEvent {
 function deferredSecurityLogCollector(): DeferredSecurityLogCollector {
   const pending: PendingSecurityLogEvent[] = [];
   const sinks = new Map<string, SecurityLogSink>();
-  let active = false;
   let drainPromise: Promise<void> | undefined;
   let fileSinkFactory: CliSecurityLogSinkFactory | undefined;
 
@@ -131,7 +130,7 @@ function deferredSecurityLogCollector(): DeferredSecurityLogCollector {
     if (drainPromise !== undefined) return drainPromise;
     drainPromise = drain().finally(() => {
       drainPromise = undefined;
-      if (active && pending.length > 0) void startDrain();
+      if (pending.length > 0) void startDrain();
     });
     return drainPromise;
   };
@@ -140,11 +139,10 @@ function deferredSecurityLogCollector(): DeferredSecurityLogCollector {
     factory: (stateDir): SecurityLogSink => ({
       write: (event): void => {
         pending.push({ stateDir, event });
-        if (active) void startDrain();
+        void startDrain();
       },
     }),
     flush: async (): Promise<void> => {
-      active = true;
       while (pending.length > 0 || drainPromise !== undefined) {
         await (drainPromise ?? startDrain());
       }
@@ -159,9 +157,8 @@ async function runWithDeferredSecurityLog(
   try {
     return await run(collector.factory);
   } finally {
-    // Activating the collector drains events already emitted without loading the server graph for
-    // eventless commands. Detached helpers retain their sink after settlement; any later child
-    // error therefore starts another serialized drain instead of being stranded in this queue.
+    // Eventless commands never load the server graph. Detached helpers retain their sink after
+    // settlement; any later child error starts another serialized drain instead of being stranded.
     await collector.flush();
   }
 }
@@ -209,9 +206,26 @@ function runLauncherCommand(
 ): number | Promise<number> {
   const command = rest[0];
   const needsWindowsHelper = process.platform === "win32" && command === "install";
-  if (!needsWindowsHelper) return runLauncherCli(rest, io, env);
+  const needsLayoutEvidence = installLayoutOverrideEvidence(env) !== undefined;
+  if (!needsWindowsHelper && !needsLayoutEvidence) return runLauncherCli(rest, io, env);
   return runWithDeferredSecurityLog((securityLogSinkFactory) =>
     runLauncherCli(rest, io, env, { securityLogSinkFactory }),
+  );
+}
+
+function runSupportCommand(rest: readonly string[], io: CliIo, env: EnvSource): Promise<number> {
+  if (rest[0] !== "export" || installLayoutOverrideEvidence(env) === undefined) {
+    return runSupportCli(rest, io, env);
+  }
+  return loadServer().then(({ createFileServerLogSink }) =>
+    runSupportCli(rest, io, env, { activityLogSinkFactory: createFileServerLogSink }),
+  );
+}
+
+function runUiCommand(rest: readonly string[], io: CliIo, env: EnvSource): Promise<number> {
+  if (installLayoutOverrideEvidence(env) === undefined) return runUiCli(rest, io, env);
+  return runWithDeferredSecurityLog((activityLogSinkFactory) =>
+    runUiCli(rest, io, env, { activityLogSinkFactory }),
   );
 }
 
@@ -230,24 +244,16 @@ function runLifecycleCommand(
   );
 }
 
-function runAuditCommand(
-  rest: readonly string[],
-  io: CliIo,
-  env: EnvSource,
-): number | Promise<number> {
-  if (installLayoutOverrideEvidence(env) === undefined) return runAuditCli(rest, io, env);
-  return runWithDeferredSecurityLog((activityLogSinkFactory) =>
-    runAuditCli(rest, io, env, { activityLogSinkFactory }),
-  );
-}
-
 function runUninstallCommand(
   rest: readonly string[],
   io: CliIo,
   env: EnvSource,
 ): number | Promise<number> {
   const help = rest[0] === "--help" || rest[0] === "-h";
-  if (process.platform !== "win32" || help) return runUninstallCli(rest, io, env);
+  const needsLayoutEvidence = installLayoutOverrideEvidence(env) !== undefined;
+  if ((!needsLayoutEvidence && process.platform !== "win32") || help) {
+    return runUninstallCli(rest, io, env);
+  }
   return runWithDeferredSecurityLog((securityLogSinkFactory) =>
     runUninstallCli(rest, io, env, { securityLogSinkFactory }),
   );
@@ -261,7 +267,10 @@ function runPortableCommand(
   const command = rest[0];
   const noShortcutOperation =
     command === undefined || command === "--help" || command === "-h" || command === "status";
-  if (process.platform !== "win32" || noShortcutOperation) return runPortableCli(rest, io, env);
+  const needsLayoutEvidence = installLayoutOverrideEvidence(env) !== undefined;
+  if ((!needsLayoutEvidence && process.platform !== "win32") || noShortcutOperation) {
+    return runPortableCli(rest, io, env);
+  }
   return runWithDeferredSecurityLog((securityLogSinkFactory) =>
     runPortableCli(rest, io, env, { securityLogSinkFactory }),
   );
@@ -288,8 +297,8 @@ const COMMAND_HANDLERS: ReadonlyMap<string, CommandHandler> = new Map<string, Co
   ["task-workspace", runTaskWorkspaceCli],
   ["init", runInitCli],
   ["doctor", runDoctorCli],
-  ["audit", runAuditCommand],
-  ["support", (rest, io, env): Promise<number> => runSupportCli(rest, io, env)],
+  ["audit", runAuditCli],
+  ["support", runSupportCommand],
   ["repair", runRepairCommand],
   ["uninstall", runUninstallCommand],
   ["update", runUpdateCli],
@@ -306,7 +315,7 @@ const COMMAND_HANDLERS: ReadonlyMap<string, CommandHandler> = new Map<string, Co
     "restart",
     (rest, io, env): number | Promise<number> => runLifecycleCommand("restart", rest, io, env),
   ],
-  ["ui", runUiCli],
+  ["ui", runUiCommand],
   ["launcher", runLauncherCommand],
   ["portable", runPortableCommand],
 ]);

@@ -6,6 +6,7 @@ import {
   INSTALL_LAYOUT_CORRELATION_ID_ENV,
   INSTALL_LAYOUT_OVERRIDES_ENV,
   writeInstallLayoutOverrideEvidence,
+  writeInstallLayoutOverrideEvidenceWithFactory,
   type AuthoritativeInstallLayout,
 } from "./install-layout.js";
 
@@ -80,6 +81,24 @@ describe("authoritative install layout", () => {
     expect(writeInstallLayoutOverrideEvidence({ write: (event) => events.push(event) }, {})).toBe(
       false,
     );
+    expect(events).toHaveLength(1);
+  });
+
+  it("does not open a state-dir sink until validated evidence exists", () => {
+    let factoryCalls = 0;
+    const events: unknown[] = [];
+    const factory = (): { readonly write: (event: unknown) => void } => {
+      factoryCalls += 1;
+      return { write: (event): void => void events.push(event) };
+    };
+
+    expect(writeInstallLayoutOverrideEvidenceWithFactory(factory, "/state", {})).toBe(false);
+    expect(factoryCalls).toBe(0);
+
+    const env: NodeJS.ProcessEnv = { KEIKO_CLI_BIN_PATH: "/stale/cli.js" };
+    applyAuthoritativeInstallLayout(env, LAYOUT);
+    expect(writeInstallLayoutOverrideEvidenceWithFactory(factory, "/state", env)).toBe(true);
+    expect(factoryCalls).toBe(1);
     expect(events).toHaveLength(1);
   });
 

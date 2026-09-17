@@ -18,6 +18,7 @@ import type { EnvSource } from "@oscharko-dev/keiko-model-gateway";
 import { type AuditCliDeps, AuditLoadError, auditLocalStateResult } from "./audit.js";
 // KEIKO-0655: shared argv-parsing helper replaces the byte-identical flagValue copy this file held.
 import { flagValue } from "./cli-arg-parsing.js";
+import { writeInstallLayoutOverrideEvidenceWithFactory } from "./install-layout.js";
 // GEN-PERF-CLI-001 — the evidence graph (and, below, the server module graph) load at dispatch,
 // and only for `export`; tool-lifecycle analysis lazily loads its narrow validator subpath. Store-fingerprint collection (ui,
 // local-knowledge, memory-vault) is owned by keiko-server (ADR-0019 direction rule 7: keiko-cli
@@ -25,7 +26,8 @@ import { flagValue } from "./cli-arg-parsing.js";
 // same lazily-loaded server module, via `server.collectStoreFingerprints`.
 import { loadEvidence, loadServer, loadToolLifecycle } from "./lazy-modules.js";
 import type { CliIo } from "./runner.js";
-import { resolveStateDir } from "./state-paths.js";
+import type { CliSecurityLogSinkFactory } from "./security-log.js";
+import { inspectStateRoot, resolveStateDir } from "./state-paths.js";
 import {
   analyzeLogText,
   buildReproductionSeed,
@@ -121,6 +123,7 @@ export interface SupportCliDeps {
   readonly evidenceStore?: EvidenceStore | undefined;
   /** Test seam for determining whether the newest raw-log process still exists. */
   readonly processIsRunning?: ((pid: number) => boolean) | undefined;
+  readonly activityLogSinkFactory?: CliSecurityLogSinkFactory | undefined;
 }
 
 type SupportLogFreshness = "current" | "stale" | "unknown";
@@ -143,6 +146,16 @@ interface SupportAnalysisReport extends AnalyzeAllResult {
 interface Assessment<T> {
   readonly value: T;
   readonly warning?: string | undefined;
+}
+
+function writeSupportInstallLayoutEvidence(
+  stateDir: string,
+  env: EnvSource,
+  factory: CliSecurityLogSinkFactory | undefined,
+): void {
+  const stateRoot = inspectStateRoot(stateDir);
+  if (stateRoot.status !== "absent" && stateRoot.status !== "directory") return;
+  writeInstallLayoutOverrideEvidenceWithFactory(factory, stateDir, env);
 }
 
 const SUPPORT_LOG_STALE_AFTER_MS = 5 * 60_000;
@@ -613,6 +626,7 @@ async function runSupportExport(
   const now = deps.now ?? ((): Date => new Date());
   const stateDir = resolveStateDir(cwd, env, args.stateDir);
   const stateDirSource = resolveStateDirSource(env, args.stateDir);
+  writeSupportInstallLayoutEvidence(stateDir, env, deps.activityLogSinkFactory);
   const logContent = collectLogContent(
     join(stateDir, "logs"),
     args.maxBytes ?? DEFAULT_MAX_BUNDLE_BYTES,
