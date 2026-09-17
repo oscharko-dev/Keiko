@@ -499,6 +499,29 @@ function reserveCall(
   return true;
 }
 
+function recordFailedCall(generation: Generation, error: unknown): false {
+  generation.reason = generation.cancellation.signal.aborted
+    ? cancellationReason(generation)
+    : "provider-failed";
+  generation.log.write(
+    activityLogEvent(
+      PR_DESCRIPTION_MODEL_FAILED_OPERATION,
+      {
+        level: "warn",
+        correlationId: generation.request.authority.correlationId,
+        errorKind: activityLogErrorKind(error),
+      },
+      {
+        reason: generation.reason,
+        callCount: generation.calls,
+        ...generation.deps.errorEvidence?.(error),
+      },
+    ),
+  );
+  generation.candidates.length = 0;
+  return false;
+}
+
 async function executeCall(
   generation: Generation,
   call: GatewayCallRequest,
@@ -531,26 +554,7 @@ async function executeCall(
     }
     return acceptResponse(generation, call, response, evidenceIds);
   } catch (error) {
-    generation.reason = generation.cancellation.signal.aborted
-      ? cancellationReason(generation)
-      : "provider-failed";
-    generation.log.write(
-      activityLogEvent(
-        PR_DESCRIPTION_MODEL_FAILED_OPERATION,
-        {
-          level: "warn",
-          correlationId: generation.request.authority.correlationId,
-          errorKind: activityLogErrorKind(error),
-        },
-        {
-          reason: generation.reason,
-          callCount: generation.calls,
-          ...generation.deps.errorEvidence?.(error),
-        },
-      ),
-    );
-    generation.candidates.length = 0;
-    return false;
+    return recordFailedCall(generation, error);
   }
 }
 

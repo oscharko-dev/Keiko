@@ -198,8 +198,9 @@ describe("openMemoryDatabase corruption path", () => {
       category: "diagnostic",
       op: "memory-vault.store.quarantined",
       errorKind: "internal",
-      extra: { failureKind: expect.any(String), reopened: true },
+      extra: { reopened: true },
     });
+    expect(typeof events[0]?.extra?.failureKind).toBe("string");
   });
 
   it("never lets a throwing sink surface as an open failure", () => {

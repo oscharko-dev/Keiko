@@ -1308,6 +1308,46 @@ interface DirectFetchPlan {
   readonly log: ModelGatewayLogSink;
 }
 
+function logTlsTrustFailure(
+  url: string,
+  plan: DirectFetchPlan,
+  error: unknown,
+  afterCaBundleFallback: boolean,
+): void {
+  const endpointDigest = logEndpointDigest(url);
+  const correlationId = logCorrelationId(plan.log);
+  plan.log.write(
+    activityLogEvent(
+      HTTP_GATEWAY_TLS_TRUST_FAILED_OPERATION,
+      {
+        level: "warn",
+        ...(correlationId === undefined ? {} : { correlationId }),
+        errorKind: activityLogErrorKind(error),
+      },
+      {
+        ...(endpointDigest === undefined ? {} : { endpointDigest }),
+        afterCaBundleFallback,
+      },
+    ),
+  );
+}
+
+function logTlsCaFallback(url: string, plan: DirectFetchPlan, error: unknown): void {
+  const endpointDigest = logEndpointDigest(url);
+  const correlationId = logCorrelationId(plan.log);
+  plan.log.write(
+    activityLogEvent(
+      HTTP_GATEWAY_TLS_CA_FALLBACK_OPERATION,
+      {
+        level: "warn",
+        ...(correlationId === undefined ? {} : { correlationId }),
+        errorKind: activityLogErrorKind(error),
+      },
+      endpointDigest === undefined ? {} : { endpointDigest },
+    ),
+  );
+}
+
 // Extracted from fetchDirectWithCaFallback to keep its cyclomatic complexity within the limit.
 async function attemptCaBundleFallback(
   url: string,
@@ -1324,23 +1364,7 @@ async function attemptCaBundleFallback(
     );
   } catch (fallbackError) {
     if (isRecoverableTlsTrustError(fallbackError)) {
-      const endpointDigest = logEndpointDigest(url);
-      plan.log.write(
-        activityLogEvent(
-          HTTP_GATEWAY_TLS_TRUST_FAILED_OPERATION,
-          {
-            level: "warn",
-            ...(logCorrelationId(plan.log) === undefined
-              ? {}
-              : { correlationId: logCorrelationId(plan.log) }),
-            errorKind: activityLogErrorKind(fallbackError),
-          },
-          {
-            ...(endpointDigest === undefined ? {} : { endpointDigest }),
-            afterCaBundleFallback: true,
-          },
-        ),
-      );
+      logTlsTrustFailure(url, plan, fallbackError, true);
       throw tlsCaFailureError();
     }
     throw fallbackError;
@@ -1366,40 +1390,11 @@ async function fetchDirectWithCaFallback(
     if (plan.useCaFallback && recoverable) {
       // Degradation: the default trust store rejected the peer, so the call is retried against
       // Keiko's assembled CA set. Silently, this shows up only as a doubled connect latency.
-      const endpointDigest = logEndpointDigest(url);
-      plan.log.write(
-        activityLogEvent(
-          HTTP_GATEWAY_TLS_CA_FALLBACK_OPERATION,
-          {
-            level: "warn",
-            ...(logCorrelationId(plan.log) === undefined
-              ? {}
-              : { correlationId: logCorrelationId(plan.log) }),
-            errorKind: activityLogErrorKind(error),
-          },
-          endpointDigest === undefined ? {} : { endpointDigest },
-        ),
-      );
+      logTlsCaFallback(url, plan, error);
       return attemptCaBundleFallback(url, init, plan);
     }
     if (recoverable) {
-      const endpointDigest = logEndpointDigest(url);
-      plan.log.write(
-        activityLogEvent(
-          HTTP_GATEWAY_TLS_TRUST_FAILED_OPERATION,
-          {
-            level: "warn",
-            ...(logCorrelationId(plan.log) === undefined
-              ? {}
-              : { correlationId: logCorrelationId(plan.log) }),
-            errorKind: activityLogErrorKind(error),
-          },
-          {
-            ...(endpointDigest === undefined ? {} : { endpointDigest }),
-            afterCaBundleFallback: false,
-          },
-        ),
-      );
+      logTlsTrustFailure(url, plan, error, false);
       throw tlsCaFailureError();
     }
     throw error;

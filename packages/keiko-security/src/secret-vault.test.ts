@@ -256,9 +256,11 @@ describe("resolveLocalVaultKey — security.vault.key-resolved sink wiring", () 
       sink,
     });
 
-    expect(events).toEqual([
-      expect.objectContaining({ op: "security.vault.key-resolved", extra: { source: "keychain" } }),
-    ]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "security.vault.key-resolved",
+      extra: { source: "keychain", completeness: "complete", loss: "none" },
+    });
   });
 
   it("emits source=keyfile when env and keychain are both absent", () => {
@@ -273,9 +275,11 @@ describe("resolveLocalVaultKey — security.vault.key-resolved sink wiring", () 
       sink,
     });
 
-    expect(events).toEqual([
-      expect.objectContaining({ op: "security.vault.key-resolved", extra: { source: "keyfile" } }),
-    ]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      op: "security.vault.key-resolved",
+      extra: { source: "keyfile", completeness: "complete", loss: "none" },
+    });
   });
 
   it("emits nothing when the tier computation throws (a malformed env key)", () => {
@@ -500,9 +504,10 @@ describe("createLocalSecretVault — setMany", () => {
       expect.objectContaining({
         level: "error",
         errorKind: "write-failed",
-        extra: { count: 1, failureKind: expect.any(String) },
       }),
     ]);
+    expect(events[0]?.extra?.count).toBe(1);
+    expect(typeof events[0]?.extra?.failureKind).toBe("string");
     expect(JSON.stringify(events)).not.toContain("SUPERSECRET");
     expect(JSON.stringify(events)).not.toContain("cred:a");
   });
@@ -582,13 +587,12 @@ describe("createLocalSecretVault — delete", () => {
     vault.set("cred:keep", "keep-secret");
     events.length = 0;
     vault.deleteMany(["cred:a", "cred:b"]);
-    expect(events).toEqual([
-      expect.objectContaining({
-        category: "security",
-        op: "security.vault.entries-deleted",
-        extra: { count: 2 },
-      }),
-    ]);
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      category: "security",
+      op: "security.vault.entries-deleted",
+      extra: { count: 2, completeness: "complete", loss: "none" },
+    });
   });
 
   it("deleteMany of an empty list does not read an unreadable store", () => {

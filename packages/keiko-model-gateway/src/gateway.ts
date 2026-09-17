@@ -24,6 +24,7 @@ import {
   activityLogErrorKind,
   logEndpointHost,
   logLevelEnabled,
+  logModelId,
   logTimer,
   resolveLogSink,
   type ModelGatewayLogContext,
@@ -1029,7 +1030,7 @@ export class Gateway {
     const endpointDigest = endpoint === undefined ? undefined : sha256Hex(endpoint);
     const commonFields = {
       ...callIdFields(ids),
-      modelId: route.provider.modelId,
+      modelId: logModelId(route.provider.modelId),
       ...(endpointDigest === undefined ? {} : { endpointDigest }),
       costClass: route.capability.costClass,
       timeoutMs: route.provider.timeoutMs,
@@ -1070,7 +1071,7 @@ export class Gateway {
           durationMs,
           errorKind: activityLogErrorKind(error),
         },
-        { ...callIdFields(ids), modelId: route.provider.modelId, streaming: false },
+        { ...callIdFields(ids), modelId: logModelId(route.provider.modelId), streaming: false },
       ),
     );
   }
@@ -1089,7 +1090,7 @@ export class Gateway {
         { level: "info", correlationId: ids.correlationId, durationMs },
         {
           ...callIdFields(ids),
-          modelId: route.provider.modelId,
+          modelId: logModelId(route.provider.modelId),
           costClass: route.capability.costClass,
           chunkCount,
           ...(firstTokenMs === undefined ? {} : { firstTokenMs }),
@@ -1115,7 +1116,7 @@ export class Gateway {
         { level: "info", correlationId: ids.correlationId, durationMs },
         {
           ...callIdFields(ids),
-          modelId: route.provider.modelId,
+          modelId: logModelId(route.provider.modelId),
           costClass: route.capability.costClass,
           streaming: true,
           chunkCount,
@@ -1143,7 +1144,7 @@ export class Gateway {
         },
         {
           ...callIdFields(ids),
-          modelId: route.provider.modelId,
+          modelId: logModelId(route.provider.modelId),
           streaming: true,
           chunkCount,
           // A mid-stream failure has already handed tokens to the caller and cannot be retried
@@ -1170,7 +1171,7 @@ export class Gateway {
         { level: "info", correlationId: ids.correlationId, durationMs },
         {
           ...callIdFields(ids),
-          modelId: route.provider.modelId,
+          modelId: logModelId(route.provider.modelId),
           costClass: route.capability.costClass,
           finishReason: result.finishReason,
           toolCallCount: result.toolCalls.length,
@@ -1201,7 +1202,7 @@ export class Gateway {
         { level: "warn", correlationId: ids.correlationId },
         {
           ...callIdFields(ids),
-          modelId: provider.modelId,
+          modelId: logModelId(provider.modelId),
           reason: "adapter-has-no-stream",
         },
       ),
@@ -1299,7 +1300,7 @@ export class Gateway {
           errorKind: routeRejectionErrorKind(reason),
           ...(correlationId === undefined ? {} : { correlationId }),
         },
-        { modelId, reason, ...(kind === undefined ? {} : { kind }) },
+        { modelId: logModelId(modelId), reason, ...(kind === undefined ? {} : { kind }) },
       ),
     );
   }

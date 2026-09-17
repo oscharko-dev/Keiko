@@ -48,11 +48,9 @@ describe("closed runtime lifecycle emission", () => {
         op: fixture.evidence.op,
         correlationId: fixture.evidence.correlationId,
         category: "security",
-        extra: {
-          profileId: expect.any(String),
-          profileVersion: expect.any(Number),
-        },
       });
+      expect(typeof port.primary.events[0]?.extra?.profileId).toBe("string");
+      expect(typeof port.primary.events[0]?.extra?.profileVersion).toBe("number");
       expect(port.primary.events[0]?.extra).not.toHaveProperty("profile");
       expect(port.primary.events[0]?.extra).not.toHaveProperty("op");
       expect(port.primary.events[0]?.extra).not.toHaveProperty("correlationId");

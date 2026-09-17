@@ -30,6 +30,7 @@ import {
   defineActivityLogOperation,
   type ActivityLogErrorKind,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 
 export type ModelGatewayLogLevel = "debug" | "info" | "warn" | "error";
 
@@ -241,10 +242,7 @@ export function logCorrelationId(sink: ModelGatewayLogSink): string | undefined 
   return sink.correlationId;
 }
 
-function correlatedEvent(
-  event: ModelGatewayLogEvent,
-  correlationId: string,
-): ModelGatewayLogEvent {
+function correlatedEvent(event: ModelGatewayLogEvent, correlationId: string): ModelGatewayLogEvent {
   const correlated = { ...event, correlationId };
   const registration = activityLogEventRegistration(event);
   if (registration !== undefined) {
@@ -302,19 +300,33 @@ export function logErrorKind(error: unknown): string {
   return errorKindProperty(error, "code") ?? errorKindProperty(error, "name") ?? "unknown";
 }
 
+const ACTIVITY_LOG_ERROR_KIND_RULES: readonly Readonly<{
+  pattern: RegExp;
+  result: ActivityLogErrorKind;
+}>[] = [
+  { pattern: /timeout|^etimedout$/u, result: "timeout" },
+  { pattern: /cancel|abort/u, result: "cancelled" },
+  { pattern: /rate|^429$/u, result: "rate-limited" },
+  { pattern: /valid|schema/u, result: "validation-failed" },
+  { pattern: /permission|forbidden|blocked/u, result: "permission-denied" },
+  { pattern: /authority/u, result: "authority-denied" },
+  { pattern: /conflict/u, result: "conflict" },
+  { pattern: /unavailable|econn/u, result: "unavailable" },
+];
+
 export function activityLogErrorKind(error: unknown): ActivityLogErrorKind {
   const kind = logErrorKind(error).toLowerCase();
-  if (kind.includes("timeout") || kind === "etimedout") return "timeout";
-  if (kind.includes("cancel") || kind.includes("abort")) return "cancelled";
-  if (kind.includes("rate") || kind === "429") return "rate-limited";
-  if (kind.includes("valid") || kind.includes("schema")) return "validation-failed";
-  if (kind.includes("permission") || kind.includes("forbidden") || kind.includes("blocked")) {
-    return "permission-denied";
-  }
-  if (kind.includes("authority")) return "authority-denied";
-  if (kind.includes("conflict")) return "conflict";
-  if (kind.includes("unavailable") || kind.includes("econn")) return "unavailable";
-  return kind === "unknown" ? "unknown" : "internal";
+  const matched = ACTIVITY_LOG_ERROR_KIND_RULES.find(({ pattern }) => pattern.test(kind));
+  return matched?.result ?? (kind === "unknown" ? "unknown" : "internal");
+}
+
+const BODY_FREE_MODEL_ID = /^(?![<{])[\x21-\x7e]{1,256}$/u;
+
+// Configured provider ids are routing data, not log data. Preserve already bounded printable ids
+// for operator readability; hash whitespace, Unicode, and oversized ids into a registry-safe token
+// without changing the id the adapter receives.
+export function logModelId(modelId: string): string {
+  return BODY_FREE_MODEL_ID.test(modelId) ? modelId : `model-${sha256Hex(modelId)}`;
 }
 
 // `scheme://host:port` and nothing else. Credentials, path, query, and fragment are dropped rather

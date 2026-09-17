@@ -721,17 +721,23 @@ function writeCompletionDiscarded(
 function writeLifecycle(sink: ServerLogSink, event: ToolLifecycleEvent): void {
   switch (event.op) {
     case "tool-catalog.projection":
-      return writeProjection(sink, event);
+      writeProjection(sink, event);
+      break;
     case "tool-catalog.bind-ready":
-      return writeBindingReady(sink, event);
+      writeBindingReady(sink, event);
+      break;
     case "tool-catalog.bind-unavailable":
-      return writeBindingUnavailable(sink, event);
+      writeBindingUnavailable(sink, event);
+      break;
     case "tool-catalog.invocation-started":
-      return writeInvocationStarted(sink, event);
+      writeInvocationStarted(sink, event);
+      break;
     case "tool-catalog.invocation-settled":
-      return writeInvocationSettled(sink, event);
+      writeInvocationSettled(sink, event);
+      break;
     case "tool-catalog.completion-discarded":
-      return writeCompletionDiscarded(sink, event);
+      writeCompletionDiscarded(sink, event);
+      break;
   }
 }
 

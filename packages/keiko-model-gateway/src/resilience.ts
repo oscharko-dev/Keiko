@@ -17,6 +17,7 @@ import { MAX_TIMER_DELAY_MS } from "./config.js";
 import {
   activityLogErrorKind,
   logLevelEnabled,
+  logModelId,
   logTimer,
   nullModelGatewayLogSink,
   resolveLogSink,
@@ -360,6 +361,10 @@ export interface RetryLogContext {
   readonly correlationId?: string | undefined;
 }
 
+function loggedRetryModel(context: RetryLogContext): Readonly<{ modelId?: string }> {
+  return context.modelId === undefined ? {} : { modelId: logModelId(context.modelId) };
+}
+
 // The provider-specific detail that turns "a retry happened" into "the provider said 503" or
 // "the provider said wait 2000ms", mirroring `logErrorKind`'s shape: it reads only fields these
 // error classes already type and already redact at construction (never `message`, which is where
@@ -419,7 +424,7 @@ function budgetExhaustedError(
         errorKind: activityLogErrorKind(error),
       },
       {
-        ...(context.modelId === undefined ? {} : { modelId: context.modelId }),
+        ...loggedRetryModel(context),
         attempt,
         hadPriorFailure: lastError !== undefined,
         ...providerErrorDetail(error),
@@ -427,6 +432,64 @@ function budgetExhaustedError(
     ),
   );
   return error;
+}
+
+interface RetryFailureLogInput {
+  readonly sink: ModelGatewayLogSink;
+  readonly context: RetryLogContext;
+  readonly attempt: number;
+  readonly maxRetries: number;
+  readonly error: Error;
+  readonly durationMs: number;
+}
+
+function logRetryExhausted(input: RetryFailureLogInput, decision: RetryStop): void {
+  input.sink.write(
+    activityLogEvent(
+      GATEWAY_RETRY_EXHAUSTED_OPERATION,
+      {
+        level: "warn",
+        ...(input.context.correlationId === undefined
+          ? {}
+          : { correlationId: input.context.correlationId }),
+        durationMs: input.durationMs,
+        errorKind: activityLogErrorKind(input.error),
+      },
+      {
+        ...loggedRetryModel(input.context),
+        attempt: input.attempt,
+        maxRetries: input.maxRetries,
+        ...retryStopDetail(decision),
+        ...providerErrorDetail(input.error),
+      },
+    ),
+  );
+}
+
+function logRetryScheduled(
+  input: RetryFailureLogInput,
+  decision: Readonly<{ sleepMs: number }>,
+): void {
+  input.sink.write(
+    activityLogEvent(
+      GATEWAY_RETRY_SCHEDULED_OPERATION,
+      {
+        level: "warn",
+        ...(input.context.correlationId === undefined
+          ? {}
+          : { correlationId: input.context.correlationId }),
+        durationMs: input.durationMs,
+        errorKind: activityLogErrorKind(input.error),
+      },
+      {
+        ...loggedRetryModel(input.context),
+        attempt: input.attempt,
+        maxRetries: input.maxRetries,
+        delayMs: decision.sleepMs,
+        ...providerErrorDetail(input.error),
+      },
+    ),
+  );
 }
 
 export async function executeWithRetry<T>(
@@ -455,49 +518,19 @@ export async function executeWithRetry<T>(
       lastError = asError(error);
       const remainingMs = remainingBudgetMs(start, config.timeoutMs, clock);
       const decision = retryDecision(lastError, attempt, config, remainingMs, random);
+      const failureLog: RetryFailureLogInput = {
+        sink,
+        context: logContext,
+        attempt,
+        maxRetries: config.maxRetries,
+        error: lastError,
+        durationMs: elapsed(),
+      };
       if (!("sleepMs" in decision)) {
-        sink.write(
-          activityLogEvent(
-            GATEWAY_RETRY_EXHAUSTED_OPERATION,
-            {
-              level: "warn",
-              ...(logContext.correlationId === undefined
-                ? {}
-                : { correlationId: logContext.correlationId }),
-              durationMs: elapsed(),
-              errorKind: activityLogErrorKind(lastError),
-            },
-            {
-              ...(logContext.modelId === undefined ? {} : { modelId: logContext.modelId }),
-              attempt,
-              maxRetries: config.maxRetries,
-              ...retryStopDetail(decision),
-              ...providerErrorDetail(lastError),
-            },
-          ),
-        );
+        logRetryExhausted(failureLog, decision);
         throw lastError;
       }
-      sink.write(
-        activityLogEvent(
-          GATEWAY_RETRY_SCHEDULED_OPERATION,
-          {
-            level: "warn",
-            ...(logContext.correlationId === undefined
-              ? {}
-              : { correlationId: logContext.correlationId }),
-            durationMs: elapsed(),
-            errorKind: activityLogErrorKind(lastError),
-          },
-          {
-            ...(logContext.modelId === undefined ? {} : { modelId: logContext.modelId }),
-            attempt,
-            maxRetries: config.maxRetries,
-            delayMs: decision.sleepMs,
-            ...providerErrorDetail(lastError),
-          },
-        ),
-      );
+      logRetryScheduled(failureLog, decision);
       await sleepWithCancellation(clock, decision.sleepMs, signal);
     }
   }
@@ -585,7 +618,7 @@ export class CircuitBreaker {
           ...(correlationId === undefined ? {} : { correlationId }),
         },
         {
-          modelId: this.modelId,
+          modelId: logModelId(this.modelId),
           state,
           reason,
           probesInFlight: this.probesInFlight,
@@ -630,7 +663,7 @@ export class CircuitBreaker {
             ...(correlationId === undefined ? {} : { correlationId }),
           },
           {
-            modelId: this.modelId,
+            modelId: logModelId(this.modelId),
             probes: this.config.halfOpenProbes,
             rejectedWhileOpen: this.takeRejectedCount(),
           },
@@ -702,7 +735,7 @@ export class CircuitBreaker {
           ...(correlationId === undefined ? {} : { correlationId }),
         },
         {
-          modelId: this.modelId,
+          modelId: logModelId(this.modelId),
           previousState,
           consecutiveFailures: this.consecutiveFailures,
           cooldownMs: this.config.cooldownMs,
@@ -727,7 +760,7 @@ export class CircuitBreaker {
           ...(correlationId === undefined ? {} : { correlationId }),
         },
         {
-          modelId: this.modelId,
+          modelId: logModelId(this.modelId),
           previousState,
           rejectedSincePreviousTransition: this.takeRejectedCount(),
         },

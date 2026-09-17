@@ -874,21 +874,35 @@ function legacyFromImportedRecord(
   return event?.importedId === record.eventId ? event : undefined;
 }
 
+function validCompletionRecord(record: Readonly<Record<string, unknown>>): boolean {
+  return (
+    validEnvelope(record, "update.runtime.legacy-snapshot-imported") &&
+    hasOnlyFields(record, COMPLETION_LOG_FIELD_SET) &&
+    record.historical === true &&
+    record.sourceSchemaVersion === 1 &&
+    record.completeness === "complete" &&
+    record.loss === "none"
+  );
+}
+
+function completionMatchesPrepared(
+  record: Readonly<Record<string, unknown>>,
+  prepared: PreparedImport,
+): boolean {
+  return (
+    record.sourceDigest === prepared.sourceDigest &&
+    record.importedIdSetDigest === prepared.importedIdSetDigest &&
+    record.importedCount === prepared.events.length
+  );
+}
+
 function matchingCompletion(
   record: Readonly<Record<string, unknown>>,
   prepared: PreparedImport,
 ): boolean | "conflict" {
   if (record.op !== "update.runtime.legacy-snapshot-imported") return false;
   if (record.importId !== prepared.importId) return false;
-  return validEnvelope(record, "update.runtime.legacy-snapshot-imported") &&
-    hasOnlyFields(record, COMPLETION_LOG_FIELD_SET) &&
-    record.historical === true &&
-    record.sourceSchemaVersion === 1 &&
-    record.sourceDigest === prepared.sourceDigest &&
-    record.importedIdSetDigest === prepared.importedIdSetDigest &&
-    record.importedCount === prepared.events.length &&
-    record.completeness === "complete" &&
-    record.loss === "none"
+  return validCompletionRecord(record) && completionMatchesPrepared(record, prepared)
     ? true
     : "conflict";
 }

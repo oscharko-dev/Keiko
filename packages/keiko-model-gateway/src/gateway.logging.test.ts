@@ -209,6 +209,33 @@ describe("Gateway routing — activity log", () => {
 });
 
 describe("Gateway.chat — activity log", () => {
+  it.each(["custom model", "custom-模型"])(
+    "routes configured model id %j while logging only a bounded digest token",
+    async (modelId) => {
+      const log = recorder();
+      let routedModelId: string | undefined;
+      const gateway = new Gateway(config([provider({ modelId })]), {
+        adapter: {
+          call: (_request, configuredProvider): Promise<NormalizedResponse> => {
+            routedModelId = configuredProvider.modelId;
+            return Promise.resolve(okResponse(configuredProvider.modelId));
+          },
+        },
+        clock: stubClock(),
+        log: log.sink,
+      });
+      log.events.length = 0;
+
+      await gateway.chat({ ...REQUEST, modelId });
+
+      const loggedModelId = `model-${sha256Hex(modelId)}`;
+      expect(routedModelId).toBe(modelId);
+      expect(eventFor(log.events, "gateway.chat.started").extra?.modelId).toBe(loggedModelId);
+      expect(eventFor(log.events, "gateway.chat.completed").extra?.modelId).toBe(loggedModelId);
+      expect(JSON.stringify(log.events)).not.toContain(modelId);
+    },
+  );
+
   // THE ATTEMPT LINE. A provider that accepts the request and then goes quiet produces neither a
   // completion nor a failure, so without a line written BEFORE the adapter is invoked the gateway
   // is silent for exactly the window an operator is trying to diagnose. `timeoutMs`/`maxRetries`

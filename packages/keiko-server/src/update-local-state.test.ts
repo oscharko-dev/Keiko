@@ -600,21 +600,21 @@ describe("update runtime state and audit events", () => {
         category: "diagnostic",
         op: "update.runtime.event",
         correlationId: "request-3405-0123456789abcdef",
-        extra: expect.objectContaining({
-          eventId: "event-3405-0123456789abcdef",
-          type: "portable-download-result",
-          occurredAt: "2026-06-30T12:00:00.000Z",
-          targetVersion: "0.2.12",
-          portableTarget: "windows-x64",
-          portableAssetName: "keiko-windows-x64.zip",
-          portableAssetSha256: "a".repeat(64),
-          portableAssetSizeBytes: 42,
-          status: "succeeded",
-          completeness: "complete",
-          loss: "none",
-        }),
       }),
     ]);
+    expect(events[0]?.extra).toMatchObject({
+      eventId: "event-3405-0123456789abcdef",
+      type: "portable-download-result",
+      occurredAt: "2026-06-30T12:00:00.000Z",
+      targetVersion: "0.2.12",
+      portableTarget: "windows-x64",
+      portableAssetName: "keiko-windows-x64.zip",
+      portableAssetSha256: "a".repeat(64),
+      portableAssetSizeBytes: 42,
+      status: "succeeded",
+      completeness: "complete",
+      loss: "none",
+    });
   });
 
   it("migrates legacy runtime facts without fabricating a terminal session", () => {
