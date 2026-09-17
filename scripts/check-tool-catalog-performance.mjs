@@ -56,19 +56,8 @@ import {
 import { loadToolCatalogProducer } from "./check-tool-catalog-conformance.mjs";
 import { KEIKO_PRODUCT_VERSION } from "@oscharko-dev/keiko-contracts/runtime/version";
 
-const LEGACY_TOOL_CATALOG_PERFORMANCE_PROCEDURE = Object.freeze({
-  warmups: CODING_PERFORMANCE_PROCEDURE.warmups,
-  batches: CODING_PERFORMANCE_PROCEDURE.batches,
-  samplesPerBatch: CODING_PERFORMANCE_PROCEDURE.samplesPerBatch,
-  freshCatalogPerSample: true,
-  lookupOperationBudget: 6_000,
-});
 export const TOOL_CATALOG_PERFORMANCE_PROCEDURE = Object.freeze({
-  // Fresh measurement processes need enough unretained work for V8 optimization and the first
-  // major collection to settle. Two samples left a repeatable 10-12-sample startup tail in the
-  // retained candidate while the identical calibration was already warm, producing false p95
-  // regressions. Twenty remains bounded and leaves the thirty retained samples untouched.
-  warmups: 20,
+  warmups: CODING_PERFORMANCE_PROCEDURE.warmups,
   batches: CODING_PERFORMANCE_PROCEDURE.batches,
   samplesPerBatch: CODING_PERFORMANCE_PROCEDURE.samplesPerBatch,
   freshCatalogPerSample: true,
@@ -76,15 +65,6 @@ export const TOOL_CATALOG_PERFORMANCE_PROCEDURE = Object.freeze({
   // work by operation count instead of a wall-clock duration (no flakiness on a slow runner).
   lookupOperationBudget: 6_000,
 });
-const SUPPORTED_TOOL_CATALOG_PERFORMANCE_PROCEDURES = Object.freeze([
-  LEGACY_TOOL_CATALOG_PERFORMANCE_PROCEDURE,
-  TOOL_CATALOG_PERFORMANCE_PROCEDURE,
-]);
-export function isSupportedToolCatalogPerformanceProcedure(procedure) {
-  return SUPPORTED_TOOL_CATALOG_PERFORMANCE_PROCEDURES.some((supported) =>
-    isDeepStrictEqual(procedure, supported),
-  );
-}
 // The largest synthetic catalog `createKeikoToolCatalog` accepts before
 // TOOL_CATALOG_LIMITS.maxArgumentBytes (262_144 bytes) rejects the snapshot, minus a safety
 // margin (empirically the ceiling for this fixture's minimal descriptor shape sits at 310-314;
@@ -518,7 +498,7 @@ function validatePerformanceDocumentContent(document) {
   );
   validateReferenceEnvironment(document.environment);
   assertEvidence(
-    isSupportedToolCatalogPerformanceProcedure(document.procedure),
+    isDeepStrictEqual(document.procedure, TOOL_CATALOG_PERFORMANCE_PROCEDURE),
     "catalog performance procedure differs",
   );
   assertEvidence(
@@ -658,9 +638,6 @@ function performancePairDefects(measurement, calibration, budget) {
       : []),
     ...(!isDeepStrictEqual(measurement.environment, calibration.environment)
       ? ["catalog performance environment differs from calibration"]
-      : []),
-    ...(!isDeepStrictEqual(measurement.procedure, calibration.procedure)
-      ? ["catalog performance procedure differs from calibration"]
       : []),
     ...(measurement.role !== "measurement" || calibration.role !== "calibration"
       ? ["catalog performance evidence roles differ"]
