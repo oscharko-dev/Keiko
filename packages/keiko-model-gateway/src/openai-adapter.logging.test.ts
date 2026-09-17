@@ -171,7 +171,7 @@ describe("OpenAiAdapter.call — activity log", () => {
     expect(log.events.map((event) => event.category)).toContain("gateway");
   });
 
-  it("leaves every line uncorrelated when the caller supplies no logContext", async () => {
+  it("uses the sanctioned fallback on every line when the caller supplies no logContext", async () => {
     const log = recorder();
     const fetchImpl: typeof fetch = () => Promise.resolve(jsonResponse(successBody()));
     const adapter = new OpenAiAdapter({
@@ -181,7 +181,9 @@ describe("OpenAiAdapter.call — activity log", () => {
       log: log.sink,
     });
     await adapter.call(REQUEST, CONFIG);
-    expect(log.events.map((event) => event.correlationId)).toEqual(log.events.map(() => undefined));
+    expect(log.events.map((event) => event.correlationId)).toEqual(
+      log.events.map(() => "unknown-correlation-id"),
+    );
   });
 
   it("stays silent — and behaviourally identical — when no sink is wired", async () => {

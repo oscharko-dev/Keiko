@@ -11,14 +11,9 @@
 //     browser cannot inject an arbitrary join key onto another request's timeline;
 //   * the optional Git-change response identity is a closed, body-free contract and is projected
 //     field-by-field; unknown browser fields can never enter the activity log;
-//   * the message text is written under `extra.clientNote`, NEVER `extra.message`: `"message"` is
-//     on `log-redaction.ts`'s `DENIED_FIELD_NAMES` and would collapse to `[redacted:key]` even
-//     though the value is already length-bounded by the wire guard. `clientNote` normalises to
-//     `"clientnote"`, which is not denied, so the existing per-value guards (length/secret/
-//     personal/prose/path) do the actual content-safety work on the value itself — the same
-//     "structural, not caller discipline" principle `log-redaction.ts`'s own header states. No new
-//     redaction path is written here; the existing choke point is applied a second time,
-//     server-side, exactly as it is for every other logged field.
+//   * the hostile message text is reduced to a domain-separated SHA-256 digest before it reaches
+//     the logger. Length bounds and generic redaction are useful defenses, but neither makes an
+//     arbitrary client sentence an opaque identifier; the raw message never enters the event.
 //
 // Rate limiting reuses `createInlineCompletionRateLimiter` (the editor's existing token-bucket
 // primitive — AGENTS.md §5 forbids a second one) as a single, process-wide bucket: a flapping tab
@@ -38,6 +33,7 @@ import {
   defineActivityLogOperation,
   type ActivityLogFields,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
+import { sha256Hex } from "@oscharko-dev/keiko-security/hashing";
 
 import {
   RequestBodyCancelledError,
@@ -90,7 +86,7 @@ const CLIENT_DIAGNOSTIC_OPERATION = defineActivityLogOperation({
   owner: "keiko-server",
   emitter: "client-diagnostics-routes.logClientDiagnostic",
   fields: {
-    clientNote: { type: "string", dataClass: "opaque-id", required: true, maxLength: 200 },
+    clientNoteDigest: { type: "string", dataClass: "digest", required: true, maxLength: 64 },
     readyState: { type: "integer", dataClass: "count", required: false },
     clientKind: {
       type: "string",
@@ -187,14 +183,19 @@ function noticeRateLimitedDrop(now: number, correlationId: string | undefined): 
   );
 }
 
-// Projects the validated request onto the activity log. `message` is admitted only as
-// `extra.clientNote` (see module header); `readyState`/`kind` ride along as bounded, closed-shape
-// fields the value guards pass through unchanged.
+export function clientDiagnosticNoteDigest(message: string): string {
+  return sha256Hex(`keiko-client-diagnostic-note-v1\0${message}`);
+}
+
+// Projects the validated request onto the activity log. `message` is admitted only as a digest;
+// `readyState`/`kind` ride along as bounded, closed-shape fields.
 function logClientDiagnostic(
   request: ClientDiagnosticIngestRequest,
   ingestCorrelationId: string | undefined,
 ): void {
-  const extra: Record<string, unknown> = { clientNote: request.message };
+  const extra: Record<string, unknown> = {
+    clientNoteDigest: clientDiagnosticNoteDigest(request.message),
+  };
   if (request.readyState !== undefined) extra.readyState = request.readyState;
   if (request.kind !== undefined) extra.clientKind = request.kind;
   if (request.gitChangeDescription !== undefined) {

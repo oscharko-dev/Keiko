@@ -468,12 +468,27 @@ describe("immutable Git change snapshot production", () => {
       });
       service.close();
     }
-    const service = createGitChangeSnapshotService();
+    const events: ServerLogEvent[] = [];
+    const service = createGitChangeSnapshotService({
+      logSink: { write: (event): void => void events.push(event) },
+    });
     expect(await service.capture({ ...input, headRef: "missing" })).toMatchObject({
       snapshot: { outcome: "unavailable", reason: "missing-ref" },
     });
     expect(await service.capture({ ...input, headRef: "--output=private" })).toMatchObject({
       snapshot: { outcome: "unavailable", reason: "invalid-ref" },
+    });
+    const captureEvents = events.filter((event) => event.op === "git.snapshot.capture");
+    expect(captureEvents).toHaveLength(2);
+    expect(captureEvents[0]).toMatchObject({
+      correlationId,
+      errorKind: "validation-failed",
+      extra: { outcome: "unavailable", reason: "missing-ref" },
+    });
+    expect(captureEvents[1]).toMatchObject({
+      correlationId,
+      errorKind: "validation-failed",
+      extra: { outcome: "unavailable", reason: "invalid-ref" },
     });
     service.close();
   });

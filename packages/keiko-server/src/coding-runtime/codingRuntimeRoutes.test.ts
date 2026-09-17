@@ -1126,12 +1126,29 @@ describe("coding runtime routes", () => {
 
   it("fails closed when runtime dependencies are absent and returns 404 for a stale run", async () => {
     const session = pairedAppSession();
+    const records: unknown[] = [];
     await expect(
       handleCreateCodingRuntimeRun(
-        context("{}", {}, "/api/coding-workbench/runtime/runs", session.cookie),
-        { codingAppSessionChannel: session.channel } as UiHandlerDeps,
+        context(
+          "{}",
+          {},
+          "/api/coding-workbench/runtime/runs",
+          session.cookie,
+          "runtime-unavailable-correlation",
+        ),
+        {
+          codingAppSessionChannel: session.channel,
+          activityLog: { write: (event: unknown) => void records.push(event) },
+        } as UiHandlerDeps,
       ),
     ).resolves.toMatchObject({ status: 503 });
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      op: "coding-runtime.operation.refused",
+      correlationId: "runtime-unavailable-correlation",
+      errorKind: "unavailable",
+      extra: { operation: "start", reason: "runtime-unavailable" },
+    });
     const stopRoute = CODING_RUNTIME_ROUTE_GROUP.find(({ pattern }) => pattern.endsWith("/stop"));
     if (!stopRoute) throw new Error("missing stop route");
     const stale = await stopRoute.handler(
@@ -1290,18 +1307,30 @@ describe("coding runtime routes", () => {
   it("rejects an over-budget mutation body with 413 without buffering it", async () => {
     const session = pairedAppSession();
     const oversized = "x".repeat(64 * 1024 + 1);
+    const records: unknown[] = [];
     const result = await handleCreateCodingRuntimeRun(
       context(
         JSON.stringify({ padding: oversized }),
         {},
         "/api/coding-workbench/runtime/runs",
         session.cookie,
+        "oversized-runtime-correlation",
       ),
-      runtime({ codingAppSessionChannel: session.channel }),
+      runtime({
+        codingAppSessionChannel: session.channel,
+        activityLog: { write: (event: unknown) => void records.push(event) },
+      }),
     );
     expect(result).toMatchObject({ status: 413 });
     expect(JSON.stringify(result.body)).toContain("PAYLOAD_TOO_LARGE");
     expect(JSON.stringify(result.body)).not.toContain("xxxx");
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      op: "coding-runtime.operation.refused",
+      correlationId: "oversized-runtime-correlation",
+      errorKind: "invalid-request",
+      extra: { operation: "start", reason: "payload-too-large" },
+    });
   });
 
   it("normalizes an empty mutation body to an empty object for the orchestrator", async () => {

@@ -214,6 +214,7 @@ describe("scalar embedding — activity log", () => {
       timeoutMs: 12_000,
       minimalShape: false,
     });
+    expect(dispatch.extra?.endpointDigest).toMatch(/^[a-f0-9]{64}$/u);
     expect(dispatch.extra).not.toHaveProperty("endpoint");
     expect(typeof dispatch.extra?.bodyBytes).toBe("number");
     expect(JSON.stringify(log.events)).not.toContain("some private document text");

@@ -566,10 +566,12 @@ function logCapture(
       GIT_SNAPSHOT_CAPTURE_OPERATION,
       {
         correlationId: input.correlationId,
-        ...(snapshot.outcome === "failed"
+        ...(snapshot.outcome === "failed" || snapshot.outcome === "unavailable"
           ? {
               level: "warn" as const,
-              errorKind: captureEnvelopeErrorKind(snapshot.errorKind),
+              errorKind: captureEnvelopeErrorKind(
+                snapshot.outcome === "failed" ? snapshot.errorKind : snapshot.reason,
+              ),
             }
           : {}),
       },

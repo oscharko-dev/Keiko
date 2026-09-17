@@ -97,6 +97,7 @@ const CODING_RUNTIME_OPERATION_REFUSED_OPERATION = defineActivityLogOperation({
         "issue-context-unavailable",
         "question-answer-rejected",
         "delivery-not-evidenced",
+        "payload-too-large",
       ],
     },
     runId: { type: "string", dataClass: "opaque-id", required: false, maxLength: 128 },
@@ -109,8 +110,10 @@ const CODING_RUNTIME_OPERATION_REFUSED_OPERATION = defineActivityLogOperation({
   releaseImpact: "patch",
 });
 
+type RuntimeMutationRefusalReason = CodingWorkbenchRuntimeFailureCode | "payload-too-large";
+
 const RUNTIME_REFUSAL_ERROR_KINDS: Partial<
-  Readonly<Record<CodingWorkbenchRuntimeFailureCode, ActivityLogErrorKind>>
+  Readonly<Record<RuntimeMutationRefusalReason, ActivityLogErrorKind>>
 > = {
   "runtime-unavailable": "unavailable",
   "issue-context-unavailable": "unavailable",
@@ -131,9 +134,10 @@ const RUNTIME_REFUSAL_ERROR_KINDS: Partial<
   revoked: "authority-denied",
   "invalid-intent": "invalid-request",
   "question-answer-rejected": "invalid-request",
+  "payload-too-large": "invalid-request",
 };
 
-function runtimeRefusalErrorKind(reason: CodingWorkbenchRuntimeFailureCode): ActivityLogErrorKind {
+function runtimeRefusalErrorKind(reason: RuntimeMutationRefusalReason): ActivityLogErrorKind {
   return RUNTIME_REFUSAL_ERROR_KINDS[reason] ?? "internal";
 }
 
@@ -226,7 +230,7 @@ function logRuntimeOperationRefusal(
   correlationId: string | undefined,
   operation: RuntimeMutationOperationName,
   runId: string | undefined,
-  reason: CodingWorkbenchRuntimeFailureCode,
+  reason: RuntimeMutationRefusalReason,
 ): void {
   (deps.activityLog ?? processServerLogSink()).write(
     activityLogEvent(
@@ -239,6 +243,16 @@ function logRuntimeOperationRefusal(
       { operation, reason, ...(runId === undefined ? {} : { runId }) },
     ),
   );
+}
+
+function logMutationRefusal(
+  deps: UiHandlerDeps,
+  ctx: RouteContext,
+  operation: RuntimeMutationOperationName,
+  runId: string | undefined,
+  reason: RuntimeMutationRefusalReason,
+): void {
+  logRuntimeOperationRefusal(deps, ctx.correlationId, operation, runId, reason);
 }
 
 function readBody(req: IncomingMessage): Promise<unknown> {
@@ -284,15 +298,18 @@ function readBody(req: IncomingMessage): Promise<unknown> {
 async function withBody(
   work: () => Promise<RouteResult>,
   correlationId?: string,
+  onTooLarge?: () => void,
 ): Promise<RouteResult> {
   try {
     return await work();
   } catch (error) {
-    if (error instanceof BodyTooLargeError)
+    if (error instanceof BodyTooLargeError) {
+      onTooLarge?.();
       return {
         status: 413,
         body: errorBody("PAYLOAD_TOO_LARGE", "Request body exceeds the size limit.", correlationId),
       };
+    }
     throw error;
   }
 }
@@ -361,41 +378,38 @@ async function mutation(
   if (denied !== undefined) {
     // The request is refused before a per-run identifier can be resolved. Keep the evidence
     // content-free by logging only the closed operation and reason, never the caller-supplied id.
-    logRuntimeOperationRefusal(
-      deps,
-      ctx.correlationId,
-      operationName,
-      undefined,
-      "authority-resolution-failed",
-    );
+    logMutationRefusal(deps, ctx, operationName, undefined, "authority-resolution-failed");
     return denied;
   }
   const required = requireRuntime(deps, ctx.correlationId);
-  if (isRouteResult(required)) return required;
+  if (isRouteResult(required)) {
+    logMutationRefusal(deps, ctx, operationName, runId, "runtime-unavailable");
+    return required;
+  }
   if (runId !== undefined && !required.orchestrator.getSnapshot(runId))
     return notFound(ctx.correlationId);
-  return withBody(async () => {
-    const body = await readBody(ctx.req);
-    if (body === undefined) {
-      logRuntimeOperationRefusal(deps, ctx.correlationId, operationName, runId, "invalid-intent");
-      return failureResult("invalid-intent", ctx.correlationId);
-    }
-    const result = await invoke(required.orchestrator, body, ctx.correlationId);
-    if (result.ok) return { status: 200, body: result.snapshot };
-    // The refusal line names the run the refusal happened under, so this request-scoped line joins
-    // the run-scoped lines that carry the cause (see CodingRuntimeOrchestratorResult.runId). The
-    // result's run id comes first: a refused start or retry minted a NEW run before it was refused,
-    // and a retry's URL names only the predecessor -- keyed on that, the refusal and its cause
-    // shared no key (review of PR #3452). The URL run is the fallback for a result without one.
-    logRuntimeOperationRefusal(
-      deps,
-      ctx.correlationId,
-      operationName,
-      result.runId ?? runId,
-      result.failureCode,
-    );
-    return failureResult(result.failureCode, ctx.correlationId, result.issueBindingFailure);
-  }, ctx.correlationId);
+  return withBody(
+    async () => {
+      const body = await readBody(ctx.req);
+      if (body === undefined) {
+        logMutationRefusal(deps, ctx, operationName, runId, "invalid-intent");
+        return failureResult("invalid-intent", ctx.correlationId);
+      }
+      const result = await invoke(required.orchestrator, body, ctx.correlationId);
+      if (result.ok) return { status: 200, body: result.snapshot };
+      // The refusal line names the run the refusal happened under, so this request-scoped line joins
+      // the run-scoped lines that carry the cause (see CodingRuntimeOrchestratorResult.runId). The
+      // result's run id comes first: a refused start or retry minted a NEW run before it was refused,
+      // and a retry's URL names only the predecessor -- keyed on that, the refusal and its cause
+      // shared no key (review of PR #3452). The URL run is the fallback for a result without one.
+      logMutationRefusal(deps, ctx, operationName, result.runId ?? runId, result.failureCode);
+      return failureResult(result.failureCode, ctx.correlationId, result.issueBindingFailure);
+    },
+    ctx.correlationId,
+    () => {
+      logMutationRefusal(deps, ctx, operationName, runId, "payload-too-large");
+    },
+  );
 }
 
 export function handleCreateCodingRuntimeRun(

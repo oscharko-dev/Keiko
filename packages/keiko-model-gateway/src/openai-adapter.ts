@@ -4,6 +4,7 @@
 // an error; only a redacted, status-level summary is surfaced.
 
 import {
+  ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
   activityLogEvent,
   defineActivityLogOperation,
 } from "@oscharko-dev/keiko-contracts/runtime/observability";
@@ -96,7 +97,7 @@ const CHAT_REQUEST_DISPATCH_OPERATION = defineActivityLogOperation({
     },
     readBudgetMs: { type: "number", dataClass: "duration", required: false },
   },
-  causal: "none",
+  causal: "correlation",
   lifecycle: "start",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-chat-provider-call"],
@@ -126,7 +127,7 @@ const CHAT_RESPONSE_STREAMED_OPERATION = defineActivityLogOperation({
     readBudgetMs: { type: "number", dataClass: "duration", required: false },
     silentForMs: { type: "number", dataClass: "duration", required: false },
   },
-  causal: "none",
+  causal: "correlation",
   lifecycle: "end",
   analyzerProjection: "timeline",
   failureClasses: ["gateway-stream-read"],
@@ -158,7 +159,7 @@ export interface AdapterDeps {
   readonly log?: ModelGatewayLogSink | undefined;
   // The enclosing operation's correlation id, stamped on every line this adapter produces —
   // including the transport lines, since the sink handed to `gatewayFetch` is already bound to
-  // it. Unset keeps the previous behaviour exactly.
+  // it. An unwired caller receives the contract's sanctioned unknown-correlation marker.
   readonly logContext?: ModelGatewayLogContext | undefined;
 }
 
@@ -946,7 +947,10 @@ export class OpenAiAdapter implements ProviderAdapter {
 
   constructor(private readonly deps: AdapterDeps) {
     this.now = deps.now ?? Date.now;
-    this.log = withCorrelationId(resolveLogSink(deps.log), deps.logContext?.correlationId);
+    this.log = withCorrelationId(
+      resolveLogSink(deps.log),
+      deps.logContext?.correlationId ?? ACTIVITY_LOG_UNKNOWN_CORRELATION_ID,
+    );
   }
 
   call = async (

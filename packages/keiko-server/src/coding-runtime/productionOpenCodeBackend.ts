@@ -610,7 +610,7 @@ function idempotentEventSink(
   };
 }
 
-function recordContextTelemetry(
+export function recordContextTelemetry(
   run: ProductionRuntimeBackendInput,
   event: OpenCodeReconciliationEvent,
   contextGeometry: OpenCodeRuntimeCompositionInput["contextGeometry"],
