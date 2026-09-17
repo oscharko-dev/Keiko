@@ -14,6 +14,10 @@
 // audio, the provider URL, and the credential never escape. Every failure is a coded, content-free
 // `kind` so the BFF can map it to a deterministic, secret-free HTTP response.
 
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { apiKeyHeaderValue, trimTrailingSlash } from "./config.js";
 import {
   gatewayFetch,
@@ -23,12 +27,86 @@ import {
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
 import {
-  logErrorKind,
+  activityLogErrorKind,
+  logCorrelationId,
   resolveLogSink,
   withCorrelationId,
   type ModelGatewayLogSink,
 } from "./observability.js";
 import type { OutboundHttpEgressConfig, ProviderEndpointStyle } from "./types.js";
+
+const SPEECH_TTS_MIME_CORRECTED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "speech.tts.mime.corrected",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "text-to-speech-adapter.resolveBufferedMimeType",
+  fields: {
+    declaredMimeClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["mp3", "opus", "aac", "flac", "wav", "pcm", "other-audio"],
+    },
+    resolvedMimeClass: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["opus"],
+    },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["speech-mime-correction"],
+  proofIds: ["speech.tts-mime-corrected.emitted-line"],
+  releaseImpact: "patch",
+});
+
+const SPEECH_TTS_STREAM_PEEK_FAILED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "speech.tts.stream.peek.failed",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "text-to-speech-adapter.requestTextToSpeechStream",
+  fields: {
+    phase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["response-prefix"],
+    },
+    outcomeKind: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: [
+        "wrong-header",
+        "rate-limited",
+        "unsupported-model",
+        "payload-too-large",
+        "timeout",
+        "cancelled",
+        "transport",
+        "proxy-unreachable",
+        "proxy-auth-required",
+        "proxy-egress-failed",
+        "proxy-blocked-by-policy",
+        "tls-ca-failure",
+        "invalid-response",
+        "empty-audio",
+      ],
+    },
+  },
+  causal: "none",
+  lifecycle: "failure",
+  analyzerProjection: "failure-cluster",
+  failureClasses: ["speech-stream-response"],
+  proofIds: ["speech.tts-stream-peek-failed.emitted-line"],
+  releaseImpact: "patch",
+});
 
 // Closed set of response formats the OpenAI-compatible `/audio/speech` contract accepts, mapped to
 // the audio container MIME type the provider returns. The adapter requests one of these and labels
@@ -288,12 +366,14 @@ function resolveBufferedMimeType(
   // container signature is authoritative in that disagreement; forwarding the wrong MIME makes a
   // valid clip fail browser playback and any later speech-to-text handoff.
   if (hasOggContainerSignature(audio) && declared !== "audio/ogg") {
-    log.write({
-      level: "info",
-      category: "gateway",
-      op: "speech.tts.mime.corrected",
-      extra: { declaredMimeClass: speechMimeClass(declared), resolvedMimeClass: "opus" },
-    });
+    const correlationId = logCorrelationId(log);
+    log.write(
+      activityLogEvent(
+        SPEECH_TTS_MIME_CORRECTED_OPERATION,
+        { level: "info", ...(correlationId === undefined ? {} : { correlationId }) },
+        { declaredMimeClass: speechMimeClass(declared), resolvedMimeClass: "opus" },
+      ),
+    );
     return "audio/ogg";
   }
   return declared;
@@ -488,13 +568,18 @@ export async function requestTextToSpeechStream(
     peeked = await peekBodyStream(dispatched.body, OGG_HEADER_PROBE_BYTES);
   } catch (error) {
     const kind = classifyDispatchError(error, built.timeoutSignal, built.callerSignal);
-    built.log.write({
-      level: "error",
-      category: "gateway",
-      op: "speech.tts.stream.peek.failed",
-      errorKind: logErrorKind(error),
-      extra: { phase: "response-prefix", outcomeKind: kind },
-    });
+    const correlationId = logCorrelationId(built.log);
+    built.log.write(
+      activityLogEvent(
+        SPEECH_TTS_STREAM_PEEK_FAILED_OPERATION,
+        {
+          level: "error",
+          errorKind: activityLogErrorKind(error),
+          ...(correlationId === undefined ? {} : { correlationId }),
+        },
+        { phase: "response-prefix", outcomeKind: kind },
+      ),
+    );
     return { ok: false, kind };
   }
   if (peeked.exhausted && peeked.peekedBytes === 0) return { ok: false, kind: "empty-audio" };

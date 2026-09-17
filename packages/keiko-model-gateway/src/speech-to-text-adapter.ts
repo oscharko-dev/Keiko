@@ -11,6 +11,10 @@
 // provider body, the provider URL, and the credential never do.
 
 import { randomUUID } from "node:crypto";
+import {
+  activityLogEvent,
+  defineActivityLogOperation,
+} from "@oscharko-dev/keiko-contracts/runtime/observability";
 import { apiKeyHeaderValue, trimTrailingSlash } from "./config.js";
 import {
   gatewayFetch,
@@ -18,9 +22,39 @@ import {
   readJsonCapped,
   type OutboundHttpEgressErrorCode,
 } from "./http.js";
-import { resolveLogSink, withCorrelationId, type ModelGatewayLogSink } from "./observability.js";
+import {
+  logCorrelationId,
+  resolveLogSink,
+  withCorrelationId,
+  type ModelGatewayLogSink,
+} from "./observability.js";
 import { providerSpeechLanguage } from "./provider-language.js";
 import type { OutboundHttpEgressConfig, ProviderEndpointStyle } from "./types.js";
+
+const SPEECH_STT_LANGUAGE_NORMALIZED_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "speech.stt.language.normalized",
+  category: "gateway",
+  owner: "keiko-model-gateway",
+  emitter: "speech-to-text-adapter.logLanguageNormalization",
+  fields: {
+    declaredSubtagCount: { type: "integer", dataClass: "count", required: true },
+    resolvedSubtagCount: { type: "integer", dataClass: "count", required: true },
+    primaryLanguagePreserved: {
+      type: "boolean",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["true"],
+    },
+  },
+  causal: "none",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["speech-language-normalization"],
+  proofIds: ["speech.stt-language-normalized.emitted-line"],
+  releaseImpact: "patch",
+});
 
 export interface SpeechToTextRequest {
   readonly endpoint: string;
@@ -143,16 +177,18 @@ function logLanguageNormalization(request: SpeechToTextRequest): void {
   const normalized = providerSpeechLanguage(request.language);
   if (normalized === request.language) return;
   const log = withCorrelationId(resolveLogSink(request.log), request.correlationId);
-  log.write({
-    level: "info",
-    category: "gateway",
-    op: "speech.stt.language.normalized",
-    extra: {
-      declaredSubtagCount: request.language.split("-").length,
-      resolvedSubtagCount: normalized.split("-").length,
-      primaryLanguagePreserved: true,
-    },
-  });
+  const correlationId = logCorrelationId(log);
+  log.write(
+    activityLogEvent(
+      SPEECH_STT_LANGUAGE_NORMALIZED_OPERATION,
+      { level: "info", ...(correlationId === undefined ? {} : { correlationId }) },
+      {
+        declaredSubtagCount: request.language.split("-").length,
+        resolvedSubtagCount: normalized.split("-").length,
+        primaryLanguagePreserved: true,
+      },
+    ),
+  );
 }
 
 // Strip the quote that delimits a field name plus CR/LF and every other C0/C1 control, bidirectional,

@@ -556,7 +556,7 @@ describe("requestTextToSpeechStream", () => {
       category: "gateway",
       op: "speech.tts.stream.peek.failed",
       correlationId: "corr-tts-stream-prefix",
-      errorKind: "TypeError",
+      errorKind: "internal",
       extra: { phase: "response-prefix", outcomeKind: "transport" },
     });
     expect(JSON.stringify(events)).not.toContain(ANSWER);
