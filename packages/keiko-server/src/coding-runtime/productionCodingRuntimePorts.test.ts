@@ -201,7 +201,7 @@ describe("production coding runtime turn ports", () => {
       true,
     );
     expect(replacementEvents[1]).toMatchObject({
-      errorKind: "Error",
+      errorKind: "unavailable",
       extra: {
         reason: "interrupt-exception",
         requestId: "follow-up-1",
@@ -1142,7 +1142,8 @@ describe("createProductionWorkbenchDescriptionDispatcher (#3401)", () => {
         expect.objectContaining({
           category: "security",
           op: "pr-description.workbench.egress.denied",
-          errorKind: "authority-expired",
+          errorKind: "authority-denied",
+          extra: { reason: "authority-expired" },
         }),
       );
     } finally {
