@@ -1861,10 +1861,17 @@ function publicationOwnerFailureKind(
   return intent.ownerExpiresAt > Date.now() ? "recovery-conflict" : "publish-unsupported";
 }
 
-function recoverPublicationOwner(root: string, slot: string): SafeArtifactDurabilityAssurance {
+function recoverPublicationOwner(
+  root: string,
+  slot: string,
+  receiptIntent: PublicationIntent | undefined,
+): SafeArtifactDurabilityAssurance {
   const path = ownerPath(root, slot);
   if (!pathExists(path, "manifest")) return "verified";
   const intent = readPublicationIntent(path, root);
+  if (receiptIntent !== undefined && !intentBytes(intent).equals(intentBytes(receiptIntent))) {
+    throw safeFileError("manifest", "recovery-conflict");
+  }
   const failureKind = publicationOwnerFailureKind(intent);
   if (failureKind !== undefined) throw safeFileError("manifest", failureKind);
   return releasePublicationOwner(intent, { publicationSlot: slot, trustedRoot: root });
@@ -1980,22 +1987,22 @@ function validateLinkedReceiptPair(
   slot: string,
   from: PublicationReceiptState,
   to: PublicationReceiptState,
-): void {
+): PublicationIntent {
   const fromPath = intentPath(root, slot, from);
   const toPath = intentPath(root, slot, to);
   if (!samePathNode(fromPath, toPath)) throw safeFileError("manifest", "recovery-conflict");
-  readLinkedPublicationIntent(fromPath, toPath, root);
+  return readLinkedPublicationIntent(fromPath, toPath, root);
 }
 
-function validateActiveConsumedPair(root: string, slot: string): void {
+function validateActiveConsumedPair(root: string, slot: string): PublicationIntent {
   const activePath = intentPath(root, slot, "active");
   const consumedPath = intentPath(root, slot, "consumed");
   if (samePathNode(activePath, consumedPath)) {
-    readLinkedPublicationIntent(activePath, consumedPath, root);
-    return;
+    return readLinkedPublicationIntent(activePath, consumedPath, root);
   }
-  readPublicationIntent(activePath, root);
+  const intent = readPublicationIntent(activePath, root);
   readPublicationIntent(consumedPath, root);
+  return intent;
 }
 
 function validateStableReceiptStates(
@@ -2004,13 +2011,14 @@ function validateStableReceiptStates(
   active: boolean,
   complete: boolean,
   consumed: boolean,
-): void {
-  if (active) readPublicationIntent(intentPath(root, slot, "active"), root);
-  if (complete) readPublicationIntent(intentPath(root, slot, "complete"), root);
-  if (consumed) readPublicationIntent(intentPath(root, slot, "consumed"), root);
+): PublicationIntent | undefined {
+  if (active) return readPublicationIntent(intentPath(root, slot, "active"), root);
+  if (complete) return readPublicationIntent(intentPath(root, slot, "complete"), root);
+  if (consumed) return readPublicationIntent(intentPath(root, slot, "consumed"), root);
+  return undefined;
 }
 
-function validateReceiptTopology(root: string, slot: string): void {
+function validateReceiptTopology(root: string, slot: string): PublicationIntent | undefined {
   const active = pathExists(intentPath(root, slot, "active"), "manifest");
   const complete = pathExists(intentPath(root, slot, "complete"), "manifest");
   const consumed = pathExists(intentPath(root, slot, "consumed"), "manifest");
@@ -2018,18 +2026,15 @@ function validateReceiptTopology(root: string, slot: string): void {
     throw safeFileError("manifest", "recovery-conflict");
   }
   if (active && complete) {
-    validateLinkedReceiptPair(root, slot, "active", "complete");
-    return;
+    return validateLinkedReceiptPair(root, slot, "active", "complete");
   }
   if (complete && consumed) {
-    validateLinkedReceiptPair(root, slot, "complete", "consumed");
-    return;
+    return validateLinkedReceiptPair(root, slot, "complete", "consumed");
   }
   if (active && consumed) {
-    validateActiveConsumedPair(root, slot);
-    return;
+    return validateActiveConsumedPair(root, slot);
   }
-  validateStableReceiptStates(root, slot, active, complete, consumed);
+  return validateStableReceiptStates(root, slot, active, complete, consumed);
 }
 
 /** Recovers or safely rolls back the bounded transaction named by a durable publication slot. */
@@ -2038,8 +2043,8 @@ export function recoverSafeArtifactFileSet(
 ): SafeArtifactRecoveryResult {
   validatePublicationSlot(options.publicationSlot, "manifest");
   const root = resolve(options.trustedRoot);
-  validateReceiptTopology(root, options.publicationSlot);
-  const ownerAssurance = recoverPublicationOwner(root, options.publicationSlot);
+  const receiptIntent = validateReceiptTopology(root, options.publicationSlot);
+  const ownerAssurance = recoverPublicationOwner(root, options.publicationSlot, receiptIntent);
   const state = recoveredReceiptState(root, options.publicationSlot);
   if (state.status === "none") return { status: "none" };
   if (state.status === "rolled-back") {

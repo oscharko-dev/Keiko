@@ -1078,6 +1078,52 @@ describe("publishSafeArtifactFileSet", () => {
     },
   );
 
+  it("preserves linked receipt state when a valid owner token does not match", () => {
+    const base = freshDir();
+    const report = join(base, "support.jsonl");
+    const slot = safeArtifactPublicationSlot("support-export", report);
+    publishSafeArtifactFileSet(
+      [{ path: report, contents: "report", artifactClass: "support-report" }],
+      { commitPath: report, trustedRoot: base, publicationSlot: slot },
+    );
+    const complete = join(base, `.keiko-publish-${slot}.complete`);
+    const active = join(base, `.keiko-publish-${slot}.active`);
+    const owner = join(base, `.keiko-publish-${slot}.owner`);
+    linkSync(complete, active);
+    const mismatchedOwner = JSON.parse(readFileSync(complete, "utf8")) as Record<string, unknown>;
+    const firstDifferentToken = "a".repeat(24);
+    mismatchedOwner.ownerToken =
+      mismatchedOwner.ownerToken === firstDifferentToken ? "b".repeat(24) : firstDifferentToken;
+    writeFileSync(owner, `${JSON.stringify(mismatchedOwner)}\n`, { mode: FILE_MODE });
+    const before = artifactDirectorySnapshot(base);
+
+    expect(() => recoverSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base })).toThrow(
+      expect.objectContaining({ kind: "recovery-conflict" }),
+    );
+    expect(artifactDirectorySnapshot(base)).toEqual(before);
+  });
+
+  it("recovers linked receipt state when the valid owner matches", () => {
+    const base = freshDir();
+    const report = join(base, "support.jsonl");
+    const slot = safeArtifactPublicationSlot("support-export", report);
+    publishSafeArtifactFileSet(
+      [{ path: report, contents: "report", artifactClass: "support-report" }],
+      { commitPath: report, trustedRoot: base, publicationSlot: slot },
+    );
+    const complete = join(base, `.keiko-publish-${slot}.complete`);
+    const active = join(base, `.keiko-publish-${slot}.active`);
+    const owner = join(base, `.keiko-publish-${slot}.owner`);
+    linkSync(complete, active);
+    writeFileSync(owner, readFileSync(complete), { mode: FILE_MODE });
+
+    expect(recoverSafeArtifactFileSet({ publicationSlot: slot, trustedRoot: base })).toEqual(
+      expect.objectContaining({ status: "recovered", commitPath: report }),
+    );
+    expect(readFileSync(report, "utf8")).toBe("report");
+    expect(publicationStages(base)).toEqual([`.keiko-publish-${slot}.complete`]);
+  });
+
   it.each([
     ["malformed", "not-json\n"],
     ["oversized", "x".repeat(64 * 1024 + 1)],
