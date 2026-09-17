@@ -372,14 +372,17 @@ export interface RetryLogContext {
 // restating it here costs one field and removes that inference entirely. `retryAfterMs` stays
 // `RateLimitError`-only: `ProviderError` never carries a server-supplied retry delay.
 export interface ProviderErrorDetail {
-  readonly httpStatus?: number | undefined;
-  readonly retryAfterMs?: number | undefined;
+  readonly httpStatus?: number;
+  readonly retryAfterMs?: number;
 }
 
 export function providerErrorDetail(error: unknown): ProviderErrorDetail {
+  const httpStatus = providerErrorHttpStatus(error);
+  const retryAfterMs =
+    error instanceof RateLimitError ? (error.retryAfterMs ?? undefined) : undefined;
   return {
-    httpStatus: providerErrorHttpStatus(error),
-    retryAfterMs: error instanceof RateLimitError ? (error.retryAfterMs ?? undefined) : undefined,
+    ...(httpStatus === undefined ? {} : { httpStatus }),
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
   };
 }
 

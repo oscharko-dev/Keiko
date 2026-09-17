@@ -15,16 +15,13 @@ import {
   createToolInvocationNormalizer,
   OPENCODE_NATIVE_EXTENSION_DEFINITIONS,
   ToolCatalogError,
+  type CatalogFailureReason,
   type ToolInvocationNormalizer,
   type CatalogSchemaMismatch,
 } from "@oscharko-dev/keiko-tool-catalog";
 import { MalformedToolCallError } from "@oscharko-dev/keiko-security/errors/gateway";
 import type { GatewayRequest, NormalizedToolCall, ToolDefinition, UsageMetadata } from "./types.js";
-import {
-  logCorrelationId,
-  resolveLogSink,
-  type ModelGatewayLogSink,
-} from "./observability.js";
+import { logCorrelationId, resolveLogSink, type ModelGatewayLogSink } from "./observability.js";
 
 const TOOL_CATALOG_REJECTED_OPERATION = defineActivityLogOperation({
   contractKind: "activity-log-operation",
@@ -189,7 +186,11 @@ function toolCatalogEnvelope(
   log: ModelGatewayLogSink,
   level: "info" | "warn",
   errorKind?: "validation-failed",
-): { readonly level: "info" | "warn"; readonly correlationId?: string; readonly errorKind?: "validation-failed" } {
+): {
+  readonly level: "info" | "warn";
+  readonly correlationId?: string;
+  readonly errorKind?: "validation-failed";
+} {
   const correlationId = logCorrelationId(log);
   return {
     level,
@@ -335,15 +336,15 @@ function captureCall(input: NormalizedToolCall): NormalizedToolCall {
   return object as unknown as NormalizedToolCall;
 }
 interface CatalogRejectionDetails {
-  readonly canonicalToolId?: string | undefined;
-  readonly contractVersion?: number | undefined;
-  readonly catalogReason?: string | undefined;
-  readonly missingRequired?: readonly string[] | undefined;
-  readonly missingRequiredCount?: number | undefined;
-  readonly invalidPaths?: readonly string[] | undefined;
-  readonly invalidPathCount?: number | undefined;
-  readonly unexpectedPropertyCount?: number | undefined;
-  readonly droppedPathCount?: number | undefined;
+  readonly canonicalToolId?: string;
+  readonly contractVersion?: number;
+  readonly catalogReason?: CatalogFailureReason;
+  readonly missingRequired?: readonly string[];
+  readonly missingRequiredCount?: number;
+  readonly invalidPaths?: readonly string[];
+  readonly invalidPathCount?: number;
+  readonly unexpectedPropertyCount?: number;
+  readonly droppedPathCount?: number;
 }
 
 // The schema's account of an `invalid-shape` rejection, in the schema's vocabulary only: declared
@@ -455,11 +456,10 @@ function bindCall(
     }
     const invocation = normalizer.bindAlias(call.name, call.arguments, now());
     log.write(
-      activityLogEvent(
-        TOOL_CATALOG_CALL_BOUND_OPERATION,
-        toolCatalogEnvelope(log, "info"),
-        { projectionDigest: invocation.projectionDigest, toolCount: 1 },
-      ),
+      activityLogEvent(TOOL_CATALOG_CALL_BOUND_OPERATION, toolCatalogEnvelope(log, "info"), {
+        projectionDigest: invocation.projectionDigest,
+        toolCount: 1,
+      }),
     );
     return Object.freeze({
       ...call,
@@ -559,19 +559,15 @@ function prepare(
   const tools = definitions(normalizer, now());
   requireBridge(oldTools === undefined, "projection-mismatch");
   log.write(
-    activityLogEvent(
-      TOOL_CATALOG_PROJECTED_OPERATION,
-      toolCatalogEnvelope(log, "info"),
-      {
+    activityLogEvent(TOOL_CATALOG_PROJECTED_OPERATION, toolCatalogEnvelope(log, "info"), {
       projectionDigest: normalizer.binding.projection.projectionDigest,
       toolCount: tools.length,
       compatibility: advertisement.kind,
       // How long the advertised offer stays bindable from this point. Read next to the fetch's own
       // `durationMs` it reconstructs an `expired-compatibility` rejection from the log alone: a
       // response that took longer than this window was bound against an offer that had run out.
-        offerRemainingMs: Math.max(0, Date.parse(advertisement.offered.expiresAt) - now()),
-      },
-    ),
+      offerRemainingMs: Math.max(0, Date.parse(advertisement.offered.expiresAt) - now()),
+    }),
   );
   return bridge(normalizer, tools, now, log);
 }
