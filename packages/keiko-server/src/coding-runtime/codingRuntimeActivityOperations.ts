@@ -235,3 +235,48 @@ export const RUNTIME_CONFINEMENT_SPAWNED_OPERATION = defineActivityLogOperation(
   proofIds: ["runtime.confinement.spawned.emitted-line"],
   releaseImpact: "patch",
 });
+
+export const GIT_VERIFIED_COMMIT_AUTHORITY_OPERATION = defineActivityLogOperation({
+  contractKind: "activity-log-operation",
+  schemaVersion: 1,
+  op: "git.verified-commit.authority",
+  category: "process",
+  owner: "keiko-server",
+  emitter: "coding-runtime.shared.gitVerifiedCommitAuthority",
+  fields: {
+    phase: {
+      type: "string",
+      dataClass: "closed-enum",
+      required: true,
+      values: ["retained", "read"],
+    },
+    runId: { type: "string", dataClass: "opaque-id", required: true, maxLength: 128 },
+    proposalId: {
+      type: "string",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 128,
+    },
+    headSha: { type: "string", dataClass: "digest", required: false, maxLength: 64 },
+    frames: {
+      type: "string-array",
+      dataClass: "opaque-id",
+      required: false,
+      maxLength: 512,
+      maxItems: 8,
+    },
+    causeChain: {
+      type: "string-array",
+      dataClass: "error-kind",
+      required: false,
+      maxLength: 128,
+      maxItems: 5,
+    },
+  },
+  causal: "correlation",
+  lifecycle: "state",
+  analyzerProjection: "timeline",
+  failureClasses: ["verified-commit-authority"],
+  proofIds: ["git.verified-commit.authority.emitted-line"],
+  releaseImpact: "patch",
+});
