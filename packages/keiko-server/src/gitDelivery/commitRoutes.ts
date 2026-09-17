@@ -172,7 +172,7 @@ const COMMIT_DRAFT_COMPLETED_OPERATION = defineActivityLogOperation({
 
 function commitDraftErrorKind(code: GitDeliveryCommitErrorCode): ActivityLogErrorKind {
   if (code === "GIT_DELIVERY_COMMIT_DRAFT_MODEL_UNAVAILABLE") return "unavailable";
-  if (code === "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT") return "invalid-input";
+  if (code === "GIT_DELIVERY_COMMIT_DRAFT_INVALID_OUTPUT") return "validation-failed";
   if (code === "GIT_DELIVERY_COMMIT_DRAFT_NO_CHANGES") return "conflict";
   return "internal";
 }
