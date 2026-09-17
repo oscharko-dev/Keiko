@@ -57,6 +57,7 @@ import {
 import { processServerLogSink } from "../process-log-sink.js";
 import { codingWorkbenchRemoteDigest } from "../coding-context/githubIssueResolution.js";
 import { produceCiReadinessSnapshot } from "./ciReadinessSnapshot.js";
+import { logGitDeliveryApprovalEvent } from "./approvalEvents.js";
 import { gitDeliveryTerminationHandler, logGitDeliveryNoSpawnRefusal } from "./execution.js";
 import {
   DEFAULT_GIT_DELIVERY_APPROVAL_STORE,
@@ -552,10 +553,14 @@ export const createHandlePrMarkReadyApprove = (
       approvedByUserId: GIT_DELIVERY_LOCAL_OPERATOR_ID,
       nowMs: (options.now ?? Date.now)(),
     });
-    log(options.activityLog, "git.delivery.pr-mark-ready.approval.minted", correlationId, 200, {
-      runId: authority.runId,
-      prExternalId: command.prExternalId,
-    });
+    logGitDeliveryApprovalEvent(
+      options.activityLog ?? processServerLogSink(),
+      "git.delivery.pr-mark-ready.approval.minted",
+      "pr-mark-ready",
+      correlationId,
+      authority.runId,
+      { prExternalId: command.prExternalId },
+    );
     const body: GitDeliveryPrMarkReadyApproveResponseBody = {
       schemaVersion: "1",
       approval: issued.approval,
@@ -797,10 +802,14 @@ async function handleMarkReadyExecute(
   if (verifiedApproval === undefined)
     return errResult(400, "GIT_DELIVERY_PR_MARK_READY_BAD_REQUEST");
   if (!verifiedApproval.required) {
-    log(options.activityLog, "git.delivery.pr-mark-ready.approval.required", correlationId, 200, {
-      runId: authority.runId,
-      prExternalId: command.prExternalId,
-    });
+    logGitDeliveryApprovalEvent(
+      options.activityLog ?? processServerLogSink(),
+      "git.delivery.pr-mark-ready.approval.required",
+      "pr-mark-ready",
+      correlationId,
+      authority.runId,
+      { prExternalId: command.prExternalId },
+    );
     return markReadyApprovalRequiredBlock(deps);
   }
   return dispatchOrBlock(ctx, deps, {

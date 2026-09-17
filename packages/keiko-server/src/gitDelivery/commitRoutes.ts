@@ -79,6 +79,7 @@ import {
   resolveProjectWorkspace,
   type GitDeliveryExecutionSeams,
 } from "./execution.js";
+import { logGitDeliveryApprovalEvent } from "./approvalEvents.js";
 import {
   hasOnlyAllowedKeys,
   isNonEmptyString,
@@ -989,13 +990,13 @@ function logCommitApprovalRequired(
   correlationId: string,
   runId: string,
 ): void {
-  activityLog.write({
-    category: "security",
-    op: "git.delivery.commit.approval.required",
+  logGitDeliveryApprovalEvent(
+    activityLog,
+    "git.delivery.commit.approval.required",
+    "commit",
     correlationId,
-    status: 200,
-    extra: { operation: "commit", runId },
-  });
+    runId,
+  );
 }
 
 function logUserInitiatedCommitAdmission(ctx: RouteContext, activityLog: ServerLogSink): void {
@@ -1135,13 +1136,13 @@ function logCommitApprovalMinted(
   correlationId: string,
   runId: string,
 ): void {
-  activityLog.write({
-    category: "security",
-    op: "git.delivery.commit.approval.minted",
+  logGitDeliveryApprovalEvent(
+    activityLog,
+    "git.delivery.commit.approval.minted",
+    "commit",
     correlationId,
-    status: 200,
-    extra: { operation: "commit", runId },
-  });
+    runId,
+  );
 }
 
 export const createHandleCommitApprove = (
