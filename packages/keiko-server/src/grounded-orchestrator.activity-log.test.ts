@@ -205,11 +205,75 @@ function nestedExtra(
   name: string,
 ): Readonly<Record<string, unknown>> {
   const value = fields?.[name];
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new TypeError(`expected ${name} activity object`);
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    return value as Readonly<Record<string, unknown>>;
   }
-  return value as Readonly<Record<string, unknown>>;
+  const mapping = COMPLETION_FIELD_GROUPS[name];
+  if (mapping === undefined) throw new TypeError(`expected ${name} activity object`);
+  return Object.fromEntries(
+    Object.entries(mapping).map(([projectedName, fieldName]) => [projectedName, fields?.[fieldName]]),
+  );
 }
+
+const COMPLETION_FIELD_GROUPS: Readonly<
+  Record<string, Readonly<Record<string, string>>>
+> = {
+  usage: {
+    searchCalls: "usageSearchCalls",
+    filesRead: "usageFilesRead",
+    excerptBytes: "usageExcerptBytes",
+    modelInputTokens: "usageModelInputTokens",
+    modelOutputTokens: "usageModelOutputTokens",
+    elapsedMs: "usageElapsedMs",
+    rerankCalls: "usageRerankCalls",
+  },
+  selectionCounts: { selectedFileCount: "selectedFileCount", omittedCount: "omittedCount" },
+  uncertainty: {
+    count: "uncertaintyCount",
+    scopeIncompleteUncertaintyCount: "scopeIncompleteUncertaintyCount",
+    budgetClippedUncertaintyCount: "budgetClippedUncertaintyCount",
+    toolUnavailableUncertaintyCount: "toolUnavailableUncertaintyCount",
+    unsupportedClaimUncertaintyCount: "unsupportedClaimUncertaintyCount",
+    entailmentUnavailableUncertaintyCount: "entailmentUnavailableUncertaintyCount",
+  },
+  coverage: {
+    coverageStatus: "coverageStatus",
+    coverageReasons: "coverageReasons",
+    coverageFilesDiscovered: "coverageFilesDiscovered",
+    coverageFilesScanned: "coverageFilesScanned",
+    coverageFilesSkipped: "coverageFilesSkipped",
+    coverageDepthPruned: "coverageDepthPruned",
+    coverageMaxFilesPruned: "coverageMaxFilesPruned",
+  },
+  retrievalStatus: {
+    readBudgetBlocked: "retrievalReadBudgetBlocked",
+    elapsedBudgetBlocked: "retrievalElapsedBudgetBlocked",
+    workspaceIndexProviderStatus: "retrievalWorkspaceIndexProviderStatus",
+  },
+  structural: {
+    contextCount: "structuralContextCount",
+    candidateInventoryBuildCount: "structuralCandidateInventoryBuildCount",
+    textSearchCount: "structuralTextSearchCount",
+  },
+  workspaceIndex: {
+    providerStatus: "indexProviderStatus",
+    searchMode: "indexSearchMode",
+    loadStatus: "indexLoadStatus",
+    saveStatus: "indexSaveStatus",
+    indexedRecords: "indexIndexedRecords",
+    reusedRecords: "indexReusedRecords",
+    staleRecords: "indexStaleRecords",
+    searchCount: "indexSearchCount",
+    reportCount: "indexReportCount",
+    fallbackSearchCount: "indexFallbackSearchCount",
+    loadFailures: "indexLoadFailures",
+    saveFailures: "indexSaveFailures",
+  },
+  workspaceIo: {
+    contentReadCalls: "workspaceIoContentReadCalls",
+    contentReadBytes: "workspaceIoContentReadBytes",
+  },
+};
 
 function lifecycleEvents(
   activityLog: BufferedServerLogSink,
@@ -228,6 +292,13 @@ function lifecycleEvents(
       started as unknown as Readonly<Record<PropertyKey, unknown>>,
     ),
   ).toBeDefined();
+  if (terminalOp === "search.connected-context.completed") {
+    expect(
+      activityLogEventRegistration(
+        terminal as unknown as Readonly<Record<PropertyKey, unknown>>,
+      ),
+    ).toBeDefined();
+  }
   return [started, terminal];
 }
 
@@ -264,51 +335,42 @@ function expectedCoverageExtra(output: RetrievalOnlyOutput): Readonly<Record<str
 }
 
 function expectedExtra(
-  input: OrchestratorInput,
   output: RetrievalOnlyOutput,
   readBudgetBlocked: boolean,
   elapsedBudgetBlocked = false,
 ): Readonly<Record<string, unknown>> {
   const retrievalBlocked = readBudgetBlocked || elapsedBudgetBlocked;
+  const coverage = retrievalBlocked
+    ? { coverageStatus: "not-reported", coverageReasons: [] }
+    : expectedCoverageExtra(output);
   return {
     activityDetailStatus: "complete",
-    scopeKind: input.scope.kind,
-    relativePathCount: input.scope.relativePaths.length,
-    explicitConnection: input.scope.explicitConnection === true,
     plannedRingCount: output.plan.rings.length,
-    usage: {
-      searchCalls: output.pack.usage.searchCalls,
-      filesRead: output.pack.usage.filesRead,
-      excerptBytes: output.pack.usage.excerptBytes,
-      modelInputTokens: output.pack.usage.modelInputTokens,
-      modelOutputTokens: output.pack.usage.modelOutputTokens,
-      elapsedMs: output.pack.usage.elapsedMs,
-      rerankCalls: output.pack.usage.rerankCalls,
-    },
-    selectionCounts: {
-      selectedFileCount: output.pack.files.length,
-      omittedCount: output.pack.omitted.length,
-    },
-    uncertainty: {
-      count: output.pack.uncertainty.length,
-      scopeIncompleteUncertaintyCount: output.pack.uncertainty.filter(
-        (marker) => marker.kind === "scope-incomplete",
-      ).length,
-      toolUnavailableUncertaintyCount: output.pack.uncertainty.filter(
-        (marker) => marker.kind === "tool-unavailable",
-      ).length,
-      budgetClippedUncertaintyCount: output.pack.uncertainty.filter(
-        (marker) => marker.kind === "budget-clipped",
-      ).length,
-    },
-    coverage: retrievalBlocked
-      ? { coverageStatus: "not-reported", coverageReasons: [] }
-      : expectedCoverageExtra(output),
-    retrievalStatus: {
-      readBudgetBlocked,
-      elapsedBudgetBlocked,
-      workspaceIndexProviderStatus: retrievalBlocked ? "not-evaluated" : "unavailable",
-    },
+    usageSearchCalls: output.pack.usage.searchCalls,
+    usageFilesRead: output.pack.usage.filesRead,
+    usageExcerptBytes: output.pack.usage.excerptBytes,
+    usageModelInputTokens: output.pack.usage.modelInputTokens,
+    usageModelOutputTokens: output.pack.usage.modelOutputTokens,
+    usageElapsedMs: output.pack.usage.elapsedMs,
+    usageRerankCalls: output.pack.usage.rerankCalls,
+    selectedFileCount: output.pack.files.length,
+    omittedCount: output.pack.omitted.length,
+    uncertaintyCount: output.pack.uncertainty.length,
+    scopeIncompleteUncertaintyCount: output.pack.uncertainty.filter(
+      (marker) => marker.kind === "scope-incomplete",
+    ).length,
+    toolUnavailableUncertaintyCount: output.pack.uncertainty.filter(
+      (marker) => marker.kind === "tool-unavailable",
+    ).length,
+    budgetClippedUncertaintyCount: output.pack.uncertainty.filter(
+      (marker) => marker.kind === "budget-clipped",
+    ).length,
+    ...coverage,
+    retrievalReadBudgetBlocked: readBudgetBlocked,
+    retrievalElapsedBudgetBlocked: elapsedBudgetBlocked,
+    retrievalWorkspaceIndexProviderStatus: retrievalBlocked ? "not-evaluated" : "unavailable",
+    completeness: "complete",
+    loss: "none",
   };
 }
 
@@ -338,20 +400,18 @@ function expectCommonExtra(
   expectSha256(started.extra?.scopeIdentitySha256);
   expectSha256(started.extra?.queryIdentitySha256);
   expect(started.extra?.queryIdentitySha256).not.toBe(started.extra?.scopeIdentitySha256);
-  expect(terminal.extra).toMatchObject(started.extra ?? {});
+  expect(terminal.extra).toMatchObject({
+    scopeIdentitySha256: started.extra?.scopeIdentitySha256,
+    queryIdentitySha256: started.extra?.queryIdentitySha256,
+    completeness: "complete",
+    loss: "none",
+  });
 }
 
 function expectZeroStructuralWork(event: ServerLogEvent): void {
   expect(nestedExtra(event.extra, "structural")).toMatchObject({
     contextCount: 0,
     candidateInventoryBuildCount: 0,
-    candidateFileCount: 0,
-    candidateDirectoryCount: 0,
-    codeIndexBuildCount: 0,
-    symbolGraphBuildCount: 0,
-    importGraphBuildCount: 0,
-    endpointGraphBuildCount: 0,
-    fileSearchCount: 0,
     textSearchCount: 0,
   });
 }
@@ -360,20 +420,10 @@ const WORKSPACE_INDEX_COUNTER_FIELDS = [
   "searchCount",
   "reportCount",
   "fallbackSearchCount",
-  "discoveredEntries",
-  "retainedEntries",
   "indexedRecords",
   "reusedRecords",
   "staleRecords",
-  "skippedEntries",
-  "deletedEntries",
-  "droppedRecords",
-  "loadAttempts",
-  "loadHits",
-  "loadMisses",
   "loadFailures",
-  "saveAttempts",
-  "saveSuccesses",
   "saveFailures",
 ] as const;
 
@@ -395,7 +445,12 @@ const WORKSPACE_IO_COUNTER_FIELDS = [
 ] as const;
 
 function expectWorkspaceIoCounters(event: Readonly<Record<string, unknown>>): void {
-  expectNonNegativeNumberFields(nestedExtra(event, "workspaceIo"), WORKSPACE_IO_COUNTER_FIELDS);
+  const workspaceIo = nestedExtra(event, "workspaceIo");
+  const fields =
+    "readDirCalls" in workspaceIo
+      ? WORKSPACE_IO_COUNTER_FIELDS
+      : (["contentReadCalls", "contentReadBytes"] as const);
+  expectNonNegativeNumberFields(workspaceIo, fields);
 }
 
 function emptyExpectedWorkspaceIoActivity(): Readonly<Record<string, number>> {
@@ -439,16 +494,12 @@ describe("retrieveConnectedContextPack activity log", () => {
         correlationId: CORRELATION_ID,
         scopeIdentitySha256: started.scopeIdentitySha256,
         queryIdentitySha256: started.queryIdentitySha256,
-        coverage: expectedCoverageExtra(output),
-        selectionCounts: {
-          selectedFileCount: output.pack.files.length,
-          omittedCount: output.pack.omitted.length,
-        },
-        retrievalStatus: {
-          readBudgetBlocked: false,
-          elapsedBudgetBlocked: false,
-          workspaceIndexProviderStatus: "unavailable",
-        },
+        ...expectedCoverageExtra(output),
+        selectedFileCount: output.pack.files.length,
+        omittedCount: output.pack.omitted.length,
+        retrievalReadBudgetBlocked: false,
+        retrievalElapsedBudgetBlocked: false,
+        retrievalWorkspaceIndexProviderStatus: "unavailable",
       });
       expectSha256(started.scopeIdentitySha256);
       expectSha256(started.queryIdentitySha256);
@@ -456,13 +507,6 @@ describe("retrieveConnectedContextPack activity log", () => {
       expectNonNegativeNumberFields(nestedExtra(completed, "structural"), [
         "contextCount",
         "candidateInventoryBuildCount",
-        "candidateFileCount",
-        "candidateDirectoryCount",
-        "codeIndexBuildCount",
-        "symbolGraphBuildCount",
-        "importGraphBuildCount",
-        "endpointGraphBuildCount",
-        "fileSearchCount",
         "textSearchCount",
       ]);
       expectNonNegativeNumberFields(nestedExtra(completed, "usage"), [
@@ -688,18 +732,11 @@ describe("retrieveConnectedContextPack activity log", () => {
     });
     expect(completed.durationMs).toBeGreaterThanOrEqual(0);
     expect(completed.extra).toMatchObject({
-      ...expectedExtra(input, output, false),
+      ...expectedExtra(output, false),
     });
     expectNonNegativeNumberFields(nestedExtra(completed.extra, "structural"), [
       "contextCount",
       "candidateInventoryBuildCount",
-      "candidateFileCount",
-      "candidateDirectoryCount",
-      "codeIndexBuildCount",
-      "symbolGraphBuildCount",
-      "importGraphBuildCount",
-      "endpointGraphBuildCount",
-      "fileSearchCount",
       "textSearchCount",
     ]);
     expectNonNegativeNumberFields(nestedExtra(completed.extra, "usage"), [
@@ -720,14 +757,9 @@ describe("retrieveConnectedContextPack activity log", () => {
     ]);
     expectNonNegativeNumberFields(nestedExtra(completed.extra, "uncertainty"), [
       "count",
-      "noEvidenceUncertaintyCount",
-      "staleEvidenceUncertaintyCount",
       "scopeIncompleteUncertaintyCount",
       "budgetClippedUncertaintyCount",
       "toolUnavailableUncertaintyCount",
-      "lowConfidenceUncertaintyCount",
-      "unsupportedCitationUncertaintyCount",
-      "incompleteAnswerUncertaintyCount",
       "unsupportedClaimUncertaintyCount",
       "entailmentUnavailableUncertaintyCount",
     ]);
@@ -823,20 +855,20 @@ describe("retrieveConnectedContextPack activity log", () => {
     });
     expect(completed.durationMs).toBeGreaterThanOrEqual(0);
     expect(completed.extra).toMatchObject({
-      ...expectedExtra(input, output, true),
-      structural: { contextCount: 0, candidateInventoryBuildCount: 0 },
-      workspaceIndex: {
-        providerStatus: "not-evaluated",
-        searchMode: "not-evaluated",
-        loadStatus: "not-attempted",
-        saveStatus: "not-attempted",
-      },
+      ...expectedExtra(output, true),
+      structuralContextCount: 0,
+      structuralCandidateInventoryBuildCount: 0,
+      indexProviderStatus: "not-evaluated",
+      indexSearchMode: "not-evaluated",
+      indexLoadStatus: "not-attempted",
+      indexSaveStatus: "not-attempted",
     });
     expectWorkspaceIndexCounters(completed.extra ?? {});
     expectWorkspaceIoCounters(completed.extra ?? {});
-    expect(nestedExtra(completed.extra, "workspaceIo")).toEqual(
-      admissionOnlyExpectedWorkspaceIoActivity(),
-    );
+    expect(nestedExtra(completed.extra, "workspaceIo")).toEqual({
+      contentReadCalls: 0,
+      contentReadBytes: 0,
+    });
     expectCommonExtra(started, completed, input);
     expectBodyFree(activityLog);
   });
@@ -853,15 +885,16 @@ describe("retrieveConnectedContextPack activity log", () => {
     );
 
     const [started, completed] = lifecycleEvents(activityLog, "search.connected-context.completed");
-    expect(completed.extra).toMatchObject({ ...expectedExtra(input, output, false, true) });
+    expect(completed.extra).toMatchObject({ ...expectedExtra(output, false, true) });
     expect(nestedExtra(completed.extra, "retrievalStatus")).toEqual({
       readBudgetBlocked: false,
       elapsedBudgetBlocked: true,
       workspaceIndexProviderStatus: "not-evaluated",
     });
-    expect(nestedExtra(completed.extra, "workspaceIo")).toEqual(
-      admissionOnlyExpectedWorkspaceIoActivity(),
-    );
+    expect(nestedExtra(completed.extra, "workspaceIo")).toEqual({
+      contentReadCalls: 0,
+      contentReadBytes: 0,
+    });
     expectCommonExtra(started, completed, input);
     expectBodyFree(activityLog);
   });

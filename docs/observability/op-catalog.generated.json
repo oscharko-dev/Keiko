@@ -9,7 +9,7 @@
   "typedRegistry": {
     "schemaVersion": 1,
     "schemaDigest": "205b1dc41337fe3b2841dca3dee729eb51c7027de380f8bf8b1f1391d61fd2a3",
-    "catalogDigest": "0e18f127eef1ef38de7bde6ef039c3ae7021b9622168b969e3e22c24c3959ba3",
+    "catalogDigest": "32afd5888d63f4abd0f6a17b8d1dc1a4be71f688342d66b6071daf68ffe0d339",
     "operations": [
       {
         "contractKind": "activity-log-operation",
@@ -2363,6 +2363,285 @@
       {
         "contractKind": "activity-log-operation",
         "schemaVersion": 1,
+        "op": "search.connected-context.completed",
+        "category": "search",
+        "owner": "keiko-server",
+        "emitter": "grounded-orchestrator.createConnectedContextActivity.completed",
+        "fields": {
+          "scopeIdentitySha256": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "queryIdentitySha256": {
+            "type": "string",
+            "dataClass": "digest",
+            "required": true,
+            "maxLength": 64
+          },
+          "activityDetailStatus": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": true,
+            "values": ["complete", "unavailable"]
+          },
+          "plannedRingCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "usageSearchCalls": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "usageFilesRead": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "usageExcerptBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "usageModelInputTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "usageModelOutputTokens": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "usageElapsedMs": {
+            "type": "integer",
+            "dataClass": "duration",
+            "required": false
+          },
+          "usageRerankCalls": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "selectedFileCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "omittedCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "uncertaintyCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "scopeIncompleteUncertaintyCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "budgetClippedUncertaintyCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "toolUnavailableUncertaintyCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "unsupportedClaimUncertaintyCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "entailmentUnavailableUncertaintyCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "coverageStatus": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["not-reported", "incomplete", "complete"]
+          },
+          "coverageReasons": {
+            "type": "string-array",
+            "dataClass": "closed-enum",
+            "required": false,
+            "maxItems": 5,
+            "values": ["aborted", "file-cap", "match-cap", "timeout", "depth-pruned"]
+          },
+          "coverageFilesDiscovered": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "coverageFilesScanned": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "coverageFilesSkipped": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "coverageDepthPruned": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "coverageMaxFilesPruned": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "retrievalReadBudgetBlocked": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          },
+          "retrievalElapsedBudgetBlocked": {
+            "type": "boolean",
+            "dataClass": "closed-enum",
+            "required": false
+          },
+          "retrievalWorkspaceIndexProviderStatus": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["not-evaluated", "available", "unavailable"]
+          },
+          "structuralContextCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "structuralCandidateInventoryBuildCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "structuralTextSearchCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "indexProviderStatus": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["not-evaluated", "available", "unavailable"]
+          },
+          "indexSearchMode": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": [
+              "not-evaluated",
+              "unused",
+              "live-fallback",
+              "persistent-cold",
+              "persistent-warm",
+              "persistent-reconciled",
+              "request-local-cold",
+              "request-local-warm",
+              "request-local-reconciled"
+            ]
+          },
+          "indexLoadStatus": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["not-attempted", "hit", "miss", "mixed", "failed"]
+          },
+          "indexSaveStatus": {
+            "type": "string",
+            "dataClass": "closed-enum",
+            "required": false,
+            "values": ["not-attempted", "succeeded", "unfinished", "failed"]
+          },
+          "indexIndexedRecords": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "indexReusedRecords": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "indexStaleRecords": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "indexSearchCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "indexReportCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "indexFallbackSearchCount": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "indexLoadFailures": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "indexSaveFailures": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "workspaceIoContentReadCalls": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "workspaceIoContentReadBytes": {
+            "type": "integer",
+            "dataClass": "count",
+            "required": false
+          },
+          "completeness": {
+            "type": "string",
+            "dataClass": "completeness-state",
+            "required": true
+          },
+          "loss": {
+            "type": "string",
+            "dataClass": "loss-state",
+            "required": true
+          }
+        },
+        "causal": "correlation",
+        "lifecycle": "end",
+        "analyzerProjection": "timeline",
+        "failureClasses": ["connected-context-retrieval"],
+        "proofIds": ["search.connected-context.completed.line"],
+        "releaseImpact": "patch",
+        "registrationSite": "packages/keiko-server/src/grounded-orchestrator.ts:216",
+        "emitterSites": ["packages/keiko-server/src/grounded-orchestrator.ts:5344"]
+      },
+      {
+        "contractKind": "activity-log-operation",
+        "schemaVersion": 1,
         "op": "search.connected-context.started",
         "category": "search",
         "owner": "keiko-server",
@@ -2470,8 +2749,8 @@
         "failureClasses": ["connected-context-retrieval"],
         "proofIds": ["search.connected-context.started.line"],
         "releaseImpact": "patch",
-        "registrationSite": "packages/keiko-server/src/grounded-orchestrator.ts:165",
-        "emitterSites": ["packages/keiko-server/src/grounded-orchestrator.ts:5166"]
+        "registrationSite": "packages/keiko-server/src/grounded-orchestrator.ts:166",
+        "emitterSites": ["packages/keiko-server/src/grounded-orchestrator.ts:5335"]
       },
       {
         "contractKind": "activity-log-operation",
@@ -6832,37 +7111,37 @@
     {
       "op": "search.connected-context.completed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5120",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:219",
       "package": "keiko-server"
     },
     {
       "op": "search.connected-context.completed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5176",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5289",
       "package": "keiko-server"
     },
     {
       "op": "search.connected-context.failed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5136",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5305",
       "package": "keiko-server"
     },
     {
       "op": "search.connected-context.failed",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5187",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5356",
       "package": "keiko-server"
     },
     {
       "op": "search.connected-context.started",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:168",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:169",
       "package": "keiko-server"
     },
     {
       "op": "search.connected-context.started",
       "category": "search",
-      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5227",
+      "site": "packages/keiko-server/src/grounded-orchestrator.ts:5396",
       "package": "keiko-server"
     },
     {
