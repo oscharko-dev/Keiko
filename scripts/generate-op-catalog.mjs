@@ -61,6 +61,14 @@ import { fileURLToPath } from "node:url";
 import { format } from "prettier";
 import ts from "typescript";
 
+import {
+  ACTIVITY_LOG_ANALYZER_PROJECTIONS,
+  ACTIVITY_LOG_CATEGORIES,
+  ACTIVITY_LOG_DATA_CLASSES,
+  ACTIVITY_LOG_FIELD_TYPES,
+  ACTIVITY_LOG_LIFECYCLE_PHASES,
+  ACTIVITY_LOG_RELEASE_IMPACTS,
+} from "../packages/keiko-contracts/dist/observability.js";
 import { serverDiagnosticFromError } from "../packages/keiko-server/dist/diagnostics-log.js";
 import { isMainModule } from "./lib/is-main-module.mjs";
 import {
@@ -71,6 +79,39 @@ import {
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = dirname(SCRIPT_DIR);
 const OUTPUT_RELATIVE_PATH = "docs/observability/op-catalog.generated.json";
+
+const REGISTRATION_KEYS = new Set([
+  "contractKind",
+  "schemaVersion",
+  "op",
+  "category",
+  "owner",
+  "emitter",
+  "fields",
+  "causal",
+  "lifecycle",
+  "analyzerProjection",
+  "failureClasses",
+  "proofIds",
+  "releaseImpact",
+]);
+const REGISTRATION_CATEGORIES = new Set(ACTIVITY_LOG_CATEGORIES);
+const REGISTRATION_CAUSAL = new Set(["none", "correlation", "parent-correlation"]);
+const REGISTRATION_LIFECYCLE = new Set(ACTIVITY_LOG_LIFECYCLE_PHASES);
+const REGISTRATION_PROJECTIONS = new Set(ACTIVITY_LOG_ANALYZER_PROJECTIONS);
+const REGISTRATION_RELEASE_IMPACTS = new Set(ACTIVITY_LOG_RELEASE_IMPACTS);
+const REGISTRATION_FIELD_TYPES = new Set(ACTIVITY_LOG_FIELD_TYPES);
+const REGISTRATION_DATA_CLASSES = new Set(ACTIVITY_LOG_DATA_CLASSES);
+const REGISTRATION_FIELD_KEYS = new Set([
+  "type",
+  "dataClass",
+  "required",
+  "maxLength",
+  "maxItems",
+  "values",
+]);
+const REGISTRATION_TOKEN = /^[A-Za-z][A-Za-z0-9._/-]{0,159}$/u;
+const REGISTRATION_FIELD_NAME = /^[A-Za-z][A-Za-z0-9]{0,63}$/u;
 
 // A well-formed op: lowercase dot-separated segments, each starting with a letter, hyphens
 // allowed within a segment, at most 6 segments and 32 characters per segment. Verified against
@@ -254,9 +295,31 @@ function stringLiteralType(checker, node, propertyName) {
   return type.isStringLiteral() ? type.value : undefined;
 }
 
+const CANONICAL_ACTIVITY_LOG_API =
+  /\/packages\/keiko-contracts\/(?:src|dist)\/observability(?:\.d)?\.ts$/u;
+
+function canonicalActivityLogApiName(checker, node) {
+  const declaration = checker.getResolvedSignature(node)?.declaration;
+  if (declaration === undefined) return undefined;
+  const sourcePath = declaration.getSourceFile().fileName.replaceAll("\\", "/");
+  if (!CANONICAL_ACTIVITY_LOG_API.test(sourcePath)) return undefined;
+  return declaration.name !== undefined && ts.isIdentifier(declaration.name)
+    ? declaration.name.text
+    : undefined;
+}
+
 function typedCallKind(checker, node) {
   if (!ts.isCallExpression(node)) return undefined;
-  return stringLiteralType(checker, node, "contractKind");
+  const apiName = canonicalActivityLogApiName(checker, node);
+  const expectedKind =
+    apiName === "defineActivityLogOperation"
+      ? "activity-log-operation"
+      : apiName === "activityLogEvent"
+        ? "activity-log-event"
+        : undefined;
+  return stringLiteralType(checker, node, "contractKind") === expectedKind
+    ? expectedKind
+    : undefined;
 }
 
 function propertyNameText(name) {
@@ -338,6 +401,103 @@ function typedRegistryProgram(repoRoot) {
   });
 }
 
+function relevantRegistrySource(sourceFile) {
+  return (
+    sourceFile.text.includes("defineActivityLogOperation") ||
+    sourceFile.text.includes("activityLogEvent")
+  );
+}
+
+function diagnosticSite(repoRoot, diagnostic) {
+  if (diagnostic.file === undefined || diagnostic.start === undefined) return "registry-program";
+  return registrySite(repoRoot, diagnostic.file, {
+    getStart: () => diagnostic.start,
+  });
+}
+
+function typedRegistryDiagnostics(program, repoRoot) {
+  const diagnostics = [...program.getSyntacticDiagnostics(), ...program.getSemanticDiagnostics()];
+  return diagnostics
+    .filter((diagnostic) => diagnostic.file !== undefined && relevantRegistrySource(diagnostic.file))
+    .map((diagnostic) => ({
+      ...registryViolation(
+        "typescript-diagnostic",
+        diagnosticSite(repoRoot, diagnostic),
+        "Repair the typed Activity Log registration or emission before generating the registry.",
+      ),
+      detail: `TS${String(diagnostic.code)}`,
+    }));
+}
+
+function invalidClosedStringArray(value) {
+  return (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > 64 ||
+    value.some((item) => typeof item !== "string" || !REGISTRATION_TOKEN.test(item))
+  );
+}
+
+function invalidOptionalBound(value, maximum) {
+  return value !== undefined && (!Number.isInteger(value) || value <= 0 || value > maximum);
+}
+
+function validFieldContractShape(contract) {
+  return typeof contract === "object" && contract !== null && !Array.isArray(contract);
+}
+
+function validFieldContractValues(contract) {
+  if (contract.values === undefined) return contract.dataClass !== "closed-enum";
+  return !invalidClosedStringArray(contract.values);
+}
+
+function invalidFieldContract(name, contract) {
+  if (!REGISTRATION_FIELD_NAME.test(name)) return name;
+  if (!validFieldContractShape(contract)) return name;
+  const valid = [
+    Object.keys(contract).every((key) => REGISTRATION_FIELD_KEYS.has(key)),
+    REGISTRATION_FIELD_TYPES.has(contract.type),
+    REGISTRATION_DATA_CLASSES.has(contract.dataClass),
+    typeof contract.required === "boolean",
+    !invalidOptionalBound(contract.maxLength, 8192),
+    !invalidOptionalBound(contract.maxItems, 64),
+    validFieldContractValues(contract),
+  ];
+  return valid.every(Boolean) ? undefined : name;
+}
+
+function invalidFields(fields) {
+  if (typeof fields !== "object" || fields === null || Array.isArray(fields)) return "fields";
+  const entries = Object.entries(fields);
+  if (entries.length > 48) return "fields";
+  for (const [name, contract] of entries) {
+    const invalid = invalidFieldContract(name, contract);
+    if (invalid !== undefined) return `fields.${invalid}`;
+  }
+  return undefined;
+}
+
+function invalidRegistrationField(value) {
+  const fields = invalidFields(value.fields);
+  if (fields !== undefined) return fields;
+  const checks = [
+    ["unknown-key", Object.keys(value).every((key) => REGISTRATION_KEYS.has(key))],
+    ["contractKind", value.contractKind === "activity-log-operation"],
+    ["schemaVersion", value.schemaVersion === 1],
+    ["op", typeof value.op === "string" && OP_NAME_PATTERN.test(value.op)],
+    ["category", REGISTRATION_CATEGORIES.has(value.category)],
+    ["owner", typeof value.owner === "string" && REGISTRATION_TOKEN.test(value.owner)],
+    ["emitter", typeof value.emitter === "string" && REGISTRATION_TOKEN.test(value.emitter)],
+    ["causal", REGISTRATION_CAUSAL.has(value.causal)],
+    ["lifecycle", REGISTRATION_LIFECYCLE.has(value.lifecycle)],
+    ["analyzerProjection", REGISTRATION_PROJECTIONS.has(value.analyzerProjection)],
+    ["failureClasses", !invalidClosedStringArray(value.failureClasses)],
+    ["proofIds", !invalidClosedStringArray(value.proofIds)],
+    ["releaseImpact", REGISTRATION_RELEASE_IMPACTS.has(value.releaseImpact)],
+  ];
+  return checks.find(([, valid]) => !valid)?.[0];
+}
+
 function collectTypedRegistration(context, sourceFile, node) {
   if (typedCallKind(context.checker, node) !== "activity-log-operation") return;
   const site = registrySite(context.repoRoot, sourceFile, node);
@@ -351,6 +511,18 @@ function collectTypedRegistration(context, sourceFile, node) {
         "Pass one closed object literal with a literal op to defineActivityLogOperation.",
       ),
     );
+    return;
+  }
+  const invalidField = invalidRegistrationField(value);
+  if (invalidField !== undefined) {
+    context.violations.push({
+      ...registryViolation(
+        "registration-invalid",
+        site,
+        "Use the closed ActivityLogOperationRegistration contract and literal bounded metadata.",
+      ),
+      detail: invalidField,
+    });
     return;
   }
   const operation = { ...value, registrationSite: site, emitterSites: [] };
@@ -385,18 +557,49 @@ function collectTypedSites(context, sourceFiles, collector) {
   }
 }
 
+function addDuplicateRegistrationViolations(context) {
+  const byOp = Map.groupBy(context.operations, (operation) => operation.op);
+  for (const [op, registrations] of byOp) {
+    if (registrations.length < 2) continue;
+    context.violations.push({
+      ...registryViolation(
+        "registration-duplicate",
+        registrations[0].registrationSite,
+        "Keep exactly one defineActivityLogOperation registration for each operation.",
+      ),
+      detail: op,
+    });
+  }
+}
+
+function addMissingEmitterViolations(context) {
+  for (const operation of context.operations) {
+    if (operation.emitterSites.length > 0) continue;
+    context.violations.push({
+      ...registryViolation(
+        "registration-not-emitted",
+        operation.registrationSite,
+        "Emit the registered operation through activityLogEvent at its production owner.",
+      ),
+      detail: operation.op,
+    });
+  }
+}
+
 export function generateTypedActivityLogRegistry(repoRoot = REPO_ROOT) {
   const program = typedRegistryProgram(repoRoot);
   const checker = program.getTypeChecker();
   const operations = [];
   const bySymbol = new Map();
-  const violations = [];
+  const violations = typedRegistryDiagnostics(program, repoRoot);
   const sourceFiles = program
     .getSourceFiles()
     .filter((sourceFile) => sourceFile.fileName.startsWith(join(repoRoot, "packages")));
   const context = { repoRoot, checker, operations, bySymbol, violations };
   collectTypedSites(context, sourceFiles, collectTypedRegistration);
   collectTypedSites(context, sourceFiles, collectTypedEmission);
+  addDuplicateRegistrationViolations(context);
+  addMissingEmitterViolations(context);
 
   return {
     schemaVersion: 1,
@@ -1160,11 +1363,22 @@ export function generateOpCatalog(repoRoot = REPO_ROOT) {
   }
   const sorted = entries.toSorted(compareEntries);
   const typedRegistry = generateTypedActivityLogRegistry(repoRoot);
+  const dynamicCount = sorted.filter((entry) => entry.op === "<dynamic>").length;
+  const unknownCategoryCount = sorted.filter((entry) => entry.category === "unknown").length;
   return {
-    $schema: "keiko-op-catalog/1",
+    $schema: "keiko-activity-log-registry/2",
     generatedBy: "scripts/generate-op-catalog.mjs",
     operationContracts: [TOOL_CATALOG_OPERATIONS_PATH],
+    authority: {
+      operationSource: "typedRegistry.operations",
+      legacyDiscovery: "non-authoritative-migration-input",
+    },
     typedRegistry,
+    legacyDiscovery: {
+      dynamicCount,
+      unknownCategoryCount,
+      authoritative: false,
+    },
     entries: sorted,
     operations: [
       ...new Set(sorted.map((entry) => entry.op).filter((op) => op !== "<dynamic>")),
@@ -1185,9 +1399,10 @@ async function main() {
   mkdirSync(dirname(outPath), { recursive: true });
   writeFileSync(outPath, catalogBytes, "utf8");
   writeFileSync(join(REPO_ROOT, TOOL_CATALOG_OPERATIONS_PATH), operationsBytes, "utf8");
-  const dynamicCount = catalog.entries.filter((entry) => entry.op === "<dynamic>").length;
+  const dynamicCount = catalog.legacyDiscovery.dynamicCount;
   console.log(
-    `generate:op-catalog OK — ${catalog.entries.length} entries (${dynamicCount} dynamic), ` +
+    `generate:op-catalog OK — ${catalog.entries.length} legacy entries ` +
+      `(${dynamicCount} dynamic, non-authoritative), ` +
       `${catalog.violations.length} operation-name violation(s), ` +
       `${catalog.typedRegistry.violations.length} typed-registry violation(s). ` +
       `Wrote ${OUTPUT_RELATIVE_PATH}.`,

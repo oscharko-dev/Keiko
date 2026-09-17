@@ -684,14 +684,13 @@ const SERVER_LOG_SAFE_OPEN_OPERATION = defineActivityLogOperation({
 function safeOpenEvidence(): ServerLogEvent {
   return activityLogEvent(SERVER_LOG_SAFE_OPEN_OPERATION, {
     correlationId: correlationIdOrUnknown(undefined),
-    extra: {
-      artifactClass: "activity-log",
-      persistenceStatus: "opened",
-      permissionAssurance: safeArtifactPermissionAssurance(),
-      containmentAssurance: safeArtifactContainmentAssurance(),
-      completeness: "complete",
-      loss: "none",
-    },
+  }, {
+    artifactClass: "activity-log",
+    persistenceStatus: "opened",
+    permissionAssurance: safeArtifactPermissionAssurance(),
+    containmentAssurance: safeArtifactContainmentAssurance(),
+    completeness: "complete",
+    loss: "none",
   });
 }
 

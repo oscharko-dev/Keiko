@@ -62,6 +62,22 @@ export const ACTIVITY_LOG_FIELD_TYPES = [
 
 export type ActivityLogFieldType = (typeof ACTIVITY_LOG_FIELD_TYPES)[number];
 
+export const ACTIVITY_LOG_CATEGORIES = [
+  "http",
+  "gateway",
+  "embedding",
+  "indexing",
+  "setup",
+  "search",
+  "memory",
+  "security",
+  "diagnostic",
+  "process",
+  "consolidation",
+] as const;
+
+export type ActivityLogCategory = (typeof ACTIVITY_LOG_CATEGORIES)[number];
+
 export const ACTIVITY_LOG_DATA_CLASSES = [
   "closed-enum",
   "completeness-state",
@@ -76,6 +92,17 @@ export const ACTIVITY_LOG_DATA_CLASSES = [
 ] as const;
 
 export type ActivityLogDataClass = (typeof ACTIVITY_LOG_DATA_CLASSES)[number];
+
+export const ACTIVITY_LOG_COMPLETENESS_STATES = ["complete", "partial", "unknown"] as const;
+export type ActivityLogCompletenessState = (typeof ACTIVITY_LOG_COMPLETENESS_STATES)[number];
+
+export const ACTIVITY_LOG_LOSS_STATES = [
+  "none",
+  "event-dropped",
+  "event-location-unknown",
+  "publication-unavailable",
+] as const;
+export type ActivityLogLossState = (typeof ACTIVITY_LOG_LOSS_STATES)[number];
 
 export interface ActivityLogFieldContract {
   readonly type: ActivityLogFieldType;
@@ -104,7 +131,7 @@ export interface ActivityLogOperationRegistration {
   readonly contractKind: "activity-log-operation";
   readonly schemaVersion: 1;
   readonly op: string;
-  readonly category: string;
+  readonly category: ActivityLogCategory;
   readonly owner: string;
   readonly emitter: string;
   readonly fields: Readonly<Record<string, ActivityLogFieldContract>>;
@@ -124,6 +151,55 @@ export interface RegisteredActivityLogEvent<
   readonly op: Registration["op"];
 }
 
+export interface ActivityLogEventEnvelope {
+  readonly level?: "debug" | "info" | "warn" | "error" | undefined;
+  readonly correlationId?: string | undefined;
+  readonly parentCorrelationId?: string | undefined;
+  readonly durationMs?: number | undefined;
+  readonly status?: number | undefined;
+  readonly errorKind?: string | undefined;
+}
+
+type ActivityLogPrimitiveValue<Contract extends ActivityLogFieldContract> =
+  Contract["type"] extends "boolean"
+    ? boolean
+    : Contract["type"] extends "integer" | "number"
+      ? number
+      : Contract["type"] extends "string-array"
+        ? readonly string[]
+        : string;
+
+type ActivityLogFieldValue<Contract extends ActivityLogFieldContract> =
+  Contract["dataClass"] extends "completeness-state"
+    ? ActivityLogCompletenessState
+    : Contract["dataClass"] extends "loss-state"
+      ? ActivityLogLossState
+      : Contract["values"] extends readonly string[]
+        ? Contract["values"][number]
+        : ActivityLogPrimitiveValue<Contract>;
+
+type RequiredActivityLogFieldNames<Fields extends Readonly<Record<string, ActivityLogFieldContract>>> = {
+  [Name in keyof Fields]: Fields[Name]["required"] extends true ? Name : never;
+}[keyof Fields];
+
+type OptionalActivityLogFieldNames<Fields extends Readonly<Record<string, ActivityLogFieldContract>>> =
+  Exclude<keyof Fields, RequiredActivityLogFieldNames<Fields>>;
+
+export type ActivityLogFields<Registration extends ActivityLogOperationRegistration> = {
+  readonly [Name in RequiredActivityLogFieldNames<Registration["fields"]>]: ActivityLogFieldValue<
+    Registration["fields"][Name]
+  >;
+} & {
+  readonly [Name in OptionalActivityLogFieldNames<Registration["fields"]>]?: ActivityLogFieldValue<
+    Registration["fields"][Name]
+  >;
+};
+
+type ExactActivityLogFields<
+  Registration extends ActivityLogOperationRegistration,
+  Fields extends ActivityLogFields<Registration>,
+> = Fields & Record<Exclude<keyof Fields, keyof ActivityLogFields<Registration>>, never>;
+
 /**
  * Declares one operation for the generated Activity Log registry. Keep the call at the production
  * emitter; the generator records that exact source site and rejects non-literal declarations.
@@ -139,14 +215,20 @@ export function defineActivityLogOperation<
  * the owning serializer in the next migration slice; this typed binding lets discovery fail
  * closed now instead of inferring operations from unrelated object literals.
  */
-export function activityLogEvent<const Registration extends ActivityLogOperationRegistration>(
+export function activityLogEvent<
+  const Registration extends ActivityLogOperationRegistration,
+  const Fields extends ActivityLogFields<Registration>,
+>(
   registration: Registration,
-  fields: Readonly<Record<string, unknown>>,
-): RegisteredActivityLogEvent<Registration> & Readonly<Record<string, unknown>> {
+  envelope: ActivityLogEventEnvelope,
+  fields: ExactActivityLogFields<Registration, Fields>,
+): RegisteredActivityLogEvent<Registration> &
+  ActivityLogEventEnvelope & { readonly extra: ActivityLogFields<Registration> } {
   return {
-    ...fields,
+    ...envelope,
     contractKind: "activity-log-event",
     category: registration.category,
     ["op"]: registration.op,
+    extra: fields,
   };
 }

@@ -48,15 +48,37 @@ function withFixturePackage(pkgName, fileContents, check) {
   }
 }
 
-describe("op catalog drift", () => {
-  it("discovers a typed registration and emission with its exact owning source sites", () => {
-    withFixturePackage(
-      "zzz-fixture-typed-registry",
+function withTypedRegistryFixture(pkgName, fileContents, check) {
+  const root = mkdtempSync(join(tmpdir(), "typed-op-registry-fixture-"));
+  try {
+    const contractsDir = join(root, "packages", "keiko-contracts", "src");
+    const emitterDir = join(root, "packages", pkgName, "src");
+    mkdirSync(contractsDir, { recursive: true });
+    mkdirSync(emitterDir, { recursive: true });
+    writeFileSync(
+      join(contractsDir, "observability.ts"),
       [
-        "function defineActivityLogOperation<const T>(value: T): T { return value; }",
-        "function activityLogEvent<const T>(registration: T, fields: Record<string, unknown>) {",
+        "export function defineActivityLogOperation<const T>(value: T): T { return value; }",
+        "export function activityLogEvent<const T>(registration: T, fields: Record<string, unknown>) {",
         '  return { ...fields, contractKind: "activity-log-event" as const, registration };',
         "}",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    writeFileSync(join(emitterDir, "fixture.ts"), fileContents, "utf8");
+    check(root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+describe("op catalog drift", () => {
+  it("discovers a typed registration and emission with its exact owning source sites", () => {
+    withTypedRegistryFixture(
+      "zzz-fixture-typed-registry",
+      [
+        'import { activityLogEvent, defineActivityLogOperation } from "../../keiko-contracts/src/observability.js";',
         "const operation = defineActivityLogOperation({",
         '  contractKind: "activity-log-operation" as const,',
         "  schemaVersion: 1 as const,",
@@ -82,8 +104,8 @@ describe("op catalog drift", () => {
           expect.objectContaining({
             op: "fixture.registry.completed",
             owner: "zzz-fixture-typed-registry",
-            registrationSite: "packages/zzz-fixture-typed-registry/src/fixture.ts:5",
-            emitterSites: ["packages/zzz-fixture-typed-registry/src/fixture.ts:20"],
+            registrationSite: "packages/zzz-fixture-typed-registry/src/fixture.ts:2",
+            emitterSites: ["packages/zzz-fixture-typed-registry/src/fixture.ts:17"],
           }),
         ]);
       },
@@ -91,10 +113,10 @@ describe("op catalog drift", () => {
   });
 
   it("fails closed with a corrective action for a dynamic typed registration", () => {
-    withFixturePackage(
+    withTypedRegistryFixture(
       "zzz-fixture-dynamic-registry",
       [
-        "function defineActivityLogOperation<const T>(value: T): T { return value; }",
+        'import { defineActivityLogOperation } from "../../keiko-contracts/src/observability.js";',
         'const runtimeOp = process.env["FIXTURE_OP"];',
         "defineActivityLogOperation({",
         '  contractKind: "activity-log-operation" as const,',
@@ -114,6 +136,107 @@ describe("op catalog drift", () => {
             correctiveAction: expect.stringContaining("defineActivityLogOperation"),
           }),
         ]);
+      },
+    );
+  });
+
+  it("rejects a literal registration with missing governed metadata", () => {
+    withTypedRegistryFixture(
+      "zzz-fixture-invalid-registration",
+      [
+        'import { defineActivityLogOperation } from "../../keiko-contracts/src/observability.js";',
+        "defineActivityLogOperation({",
+        '  contractKind: "activity-log-operation" as const,',
+        "  schemaVersion: 1 as const,",
+        '  op: "fixture.registry.invalid",',
+        '  category: "diagnostic",',
+        "});",
+        "",
+      ].join("\n"),
+      (root) => {
+        const registry = generateTypedActivityLogRegistry(root);
+        expect(registry.operations).toEqual([]);
+        expect(registry.violations).toEqual([
+          expect.objectContaining({ code: "registration-invalid", detail: "owner" }),
+        ]);
+      },
+    );
+  });
+
+  it("rejects an emitted event whose descriptor is not a discovered registration", () => {
+    withTypedRegistryFixture(
+      "zzz-fixture-unregistered-emission",
+      [
+        'import { activityLogEvent } from "../../keiko-contracts/src/observability.js";',
+        'const unregistered = { contractKind: "activity-log-operation" as const };',
+        "activityLogEvent(unregistered, {});",
+        "",
+      ].join("\n"),
+      (root) => {
+        const registry = generateTypedActivityLogRegistry(root);
+        expect(registry.operations).toEqual([]);
+        expect(registry.violations).toEqual([
+          expect.objectContaining({
+            code: "emission-unregistered",
+            site: "packages/zzz-fixture-unregistered-emission/src/fixture.ts:3",
+          }),
+        ]);
+      },
+    );
+  });
+
+  it("rejects duplicate operation registrations and registrations with no emitter", () => {
+    withTypedRegistryFixture(
+      "zzz-fixture-duplicate-registration",
+      [
+        'import { defineActivityLogOperation } from "../../keiko-contracts/src/observability.js";',
+        "defineActivityLogOperation({",
+        '  contractKind: "activity-log-operation" as const, schemaVersion: 1 as const,',
+        '  op: "fixture.registry.duplicate", category: "diagnostic",',
+        '  owner: "zzz-fixture-duplicate-registration", emitter: "fixture", fields: {},',
+        '  causal: "correlation", lifecycle: "end", analyzerProjection: "timeline",',
+        '  failureClasses: ["fixture-failure"], proofIds: ["fixture-proof"],',
+        '  releaseImpact: "patch",',
+        "});",
+        "defineActivityLogOperation({",
+        '  contractKind: "activity-log-operation" as const, schemaVersion: 1 as const,',
+        '  op: "fixture.registry.duplicate", category: "diagnostic",',
+        '  owner: "zzz-fixture-duplicate-registration", emitter: "fixture", fields: {},',
+        '  causal: "correlation", lifecycle: "end", analyzerProjection: "timeline",',
+        '  failureClasses: ["fixture-failure"], proofIds: ["fixture-proof"],',
+        '  releaseImpact: "patch",',
+        "});",
+        "",
+      ].join("\n"),
+      (root) => {
+        const registry = generateTypedActivityLogRegistry(root);
+        expect(registry.violations).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ code: "registration-duplicate" }),
+            expect.objectContaining({ code: "registration-not-emitted" }),
+          ]),
+        );
+      },
+    );
+  });
+
+  it("ignores a same-shape helper that is not the canonical contracts API", () => {
+    withFixturePackage(
+      "zzz-fixture-fake-registration",
+      [
+        "function defineActivityLogOperation<const T>(value: T): T { return value; }",
+        "defineActivityLogOperation({",
+        '  contractKind: "activity-log-operation" as const,',
+        '  op: "fixture.fake.registration", category: "diagnostic",',
+        "});",
+        "",
+      ].join("\n"),
+      (root) => {
+        expect(generateTypedActivityLogRegistry(root)).toEqual({
+          schemaVersion: 1,
+          operations: [],
+          violations: [],
+        });
       },
     );
   });
@@ -139,10 +262,29 @@ describe("op catalog drift", () => {
     expect(checkedIn.violations).toEqual([]);
   });
 
+  it("fails drift when the authoritative typed registry has any violation", () => {
+    expect(readCheckedInCatalog().typedRegistry.violations).toEqual([]);
+  });
+
   it("carries the schema and generator identity the catalog contract promises", () => {
     const checkedIn = readCheckedInCatalog();
-    expect(checkedIn.$schema).toBe("keiko-op-catalog/1");
+    expect(checkedIn.$schema).toBe("keiko-activity-log-registry/2");
     expect(checkedIn.generatedBy).toBe("scripts/generate-op-catalog.mjs");
+    expect(checkedIn.authority).toEqual({
+      operationSource: "typedRegistry.operations",
+      legacyDiscovery: "non-authoritative-migration-input",
+    });
+    expect(checkedIn.legacyDiscovery).toEqual({
+      dynamicCount: checkedIn.entries.filter((entry) => entry.op === "<dynamic>").length,
+      unknownCategoryCount: checkedIn.entries.filter((entry) => entry.category === "unknown")
+        .length,
+      authoritative: false,
+    });
+    expect(
+      checkedIn.typedRegistry.operations.some(
+        (operation) => operation.op === "<dynamic>" || operation.category === "unknown",
+      ),
+    ).toBe(false);
   });
 
   // PR #3394 regression: a stale regeneration dropped these 26 still-emitted operations while
