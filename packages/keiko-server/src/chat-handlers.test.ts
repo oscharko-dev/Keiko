@@ -266,8 +266,13 @@ describe("desktop chat production gateway reuse", () => {
           op: "chat.send.rejected",
           correlationId: "corr-grounding-changed",
           status: 409,
-          errorKind: "grounding-scope-changed",
-          extra: { reason: "grounding-scope", modelKind: "chat" },
+          errorKind: "conflict",
+          extra: {
+            reason: "grounding-scope",
+            modelKind: "chat",
+            completeness: "complete",
+            loss: "none",
+          },
         }),
       );
       expect(JSON.stringify(sink.events)).not.toContain("body must stay out of evidence");
@@ -348,8 +353,13 @@ describe("desktop chat production gateway reuse", () => {
           op: "chat.creation.rejected",
           correlationId: "corr-create-unready",
           status: 400,
-          errorKind: "model-not-ready",
-          extra: { reason: "readiness", modelKind: "chat" },
+          errorKind: "unavailable",
+          extra: {
+            reason: "readiness",
+            modelKind: "chat",
+            completeness: "complete",
+            loss: "none",
+          },
         }),
       );
       expect(sink.events).toContainEqual(
@@ -358,8 +368,13 @@ describe("desktop chat production gateway reuse", () => {
           op: "chat.send.rejected",
           correlationId: "corr-send-unready",
           status: 400,
-          errorKind: "model-not-ready",
-          extra: { reason: "readiness", modelKind: "chat" },
+          errorKind: "unavailable",
+          extra: {
+            reason: "readiness",
+            modelKind: "chat",
+            completeness: "complete",
+            loss: "none",
+          },
         }),
       );
       expect(JSON.stringify(sink.events)).not.toContain("must not leave the server");
@@ -391,8 +406,13 @@ describe("desktop chat production gateway reuse", () => {
           op: "chat.creation.rejected",
           correlationId: UNKNOWN_CORRELATION_ID,
           status: 400,
-          errorKind: "invalid-model",
-          extra: { reason: "configuration", modelKind: "unknown" },
+          errorKind: "invalid-request",
+          extra: {
+            reason: "configuration",
+            modelKind: "unknown",
+            completeness: "complete",
+            loss: "none",
+          },
         }),
       );
     } finally {
@@ -498,7 +518,9 @@ describe("chatTurnShapeFields", () => {
 
     expect(chatTurnShapeFields(messages, attachments)).toEqual({
       messageCount: 3,
-      roleCounts: { system: 1, user: 1, assistant: 1, tool: 0 },
+      systemCount: 1,
+      userCount: 1,
+      assistantCount: 1,
       toolCount: 0,
       imageAttachmentCount: 1,
       imageAttachmentBytes: 40_000,
@@ -514,7 +536,9 @@ describe("chatTurnShapeFields", () => {
 
     const fields = chatTurnShapeFields(messages, attachments);
     expect(fields.messageCount).toBe(3);
-    expect(fields.roleCounts).toEqual({ system: 1, user: 0, assistant: 0, tool: 1 });
+    expect(fields.systemCount).toBe(1);
+    expect(fields.userCount).toBe(0);
+    expect(fields.assistantCount).toBe(0);
     expect(fields.toolCount).toBe(1);
     expect(fields.imageAttachmentCount).toBe(2);
     expect(fields.imageAttachmentBytes).toBe(3_500);
@@ -523,7 +547,9 @@ describe("chatTurnShapeFields", () => {
   it("returns zeroed counts for an empty turn", () => {
     expect(chatTurnShapeFields([], [])).toEqual({
       messageCount: 0,
-      roleCounts: { system: 0, user: 0, assistant: 0, tool: 0 },
+      systemCount: 0,
+      userCount: 0,
+      assistantCount: 0,
       toolCount: 0,
       imageAttachmentCount: 0,
       imageAttachmentBytes: 0,
@@ -596,7 +622,7 @@ describe("chat.turn.started", () => {
     resetServerLogger();
   });
 
-  it("logs messageCount/roleCounts once per turn, keyed to the request correlation id", async () => {
+  it("logs scalar message and role counts once per turn with the request correlation id", async () => {
     const sink = createBufferedServerLogSink();
     setServerLogger(createServerLogger({ sink, level: "info" }));
     const modelId = "turn-shape-chat";
@@ -663,10 +689,14 @@ describe("chat.turn.started", () => {
       expect(event.category).toBe("gateway");
       expect(event.extra).toEqual({
         messageCount: 4,
-        roleCounts: { system: 1, user: 2, assistant: 1, tool: 0 },
+        systemCount: 1,
+        userCount: 2,
+        assistantCount: 1,
         toolCount: 0,
         imageAttachmentCount: 0,
         imageAttachmentBytes: 0,
+        completeness: "complete",
+        loss: "none",
       });
     } finally {
       rmSync(root, { recursive: true, force: true });
@@ -788,8 +818,13 @@ describe("git-change description-authority admission (#3400)", () => {
           category: "security",
           op: "pr-description.chat.turn.denied",
           correlationId: "corr-git-change-1",
-          errorKind: "model-egress-denied",
-          extra: { relationshipId: "rel-1" },
+          errorKind: "authority-denied",
+          extra: {
+            relationshipId: "rel-1",
+            reason: "model-egress-denied",
+            completeness: "complete",
+            loss: "none",
+          },
         }),
       );
     } finally {
@@ -851,8 +886,13 @@ describe("git-change description-authority admission (#3400)", () => {
           category: "security",
           op: "pr-description.chat.turn.denied",
           correlationId: "corr-git-change-expired",
-          errorKind: "authority-expired",
-          extra: { relationshipId: "rel-1" },
+          errorKind: "authority-denied",
+          extra: {
+            relationshipId: "rel-1",
+            reason: "authority-expired",
+            completeness: "complete",
+            loss: "none",
+          },
         }),
       );
     } finally {
@@ -924,7 +964,11 @@ describe("git-change description-authority admission (#3400)", () => {
           category: "security",
           op: "pr-description.chat.turn.admitted",
           correlationId: "corr-git-change-2",
-          extra: { relationshipId: "rel-description" },
+          extra: {
+            relationshipId: "rel-description",
+            completeness: "complete",
+            loss: "none",
+          },
         }),
       );
     } finally {
@@ -1228,7 +1272,12 @@ describe("createHandleGitChangeApplyDescription — the real handler Chat reache
       expect.objectContaining({
         op: "git-change.chat.description-target.denied",
         correlationId: "corr-reader-denied",
-        errorKind: "reader-unauthorized",
+        errorKind: "authority-denied",
+        extra: {
+          reason: "reader-unauthorized",
+          completeness: "complete",
+          loss: "none",
+        },
       }),
     );
   });
@@ -1247,7 +1296,8 @@ describe("createHandleGitChangeApplyDescription — the real handler Chat reache
   });
 
   it("reaches executeApproved with a one-use approval and applies the real body-only PATCH", async () => {
-    const deps = fixtureDeps();
+    const sink = createBufferedServerLogSink();
+    const deps = { ...fixtureDeps(), activityLog: sink };
     const chat = store.createChat(projectId, "t", "m");
     const relationshipId = "rel-apply-1";
     store.updateChat(chat.id, { gitChangeScopes: [connectedScope(relationshipId)] });
@@ -1262,6 +1312,18 @@ describe("createHandleGitChangeApplyDescription — the real handler Chat reache
     expect(result.status).toBe(200);
     expect((result.body as { outcome: string }).outcome).toBe("observed");
     expect(fixture.writes).toHaveLength(1);
+    expect(sink.events).toContainEqual(
+      expect.objectContaining({
+        category: "process",
+        op: "git-change.chat.apply",
+        correlationId: UNKNOWN_CORRELATION_ID,
+        extra: {
+          outcome: "observed",
+          completeness: "complete",
+          loss: "none",
+        },
+      }),
+    );
 
     // The SAME approval is one-use: a second apply with the SAME proposal id must not re-execute.
     const replay = await applyHandler(
